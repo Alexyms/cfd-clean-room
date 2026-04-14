@@ -6,27 +6,76 @@ computed values against hand-calculated analytical solutions.
 """
 
 import pytest
+import yaml
 
+from src.config import SimConfig
 from src.particles import ParticlePhysics
 
 # Standard conditions matching the analytical reference calculations
-PARTICLE_SIZES: list[float] = [0.1e-6, 0.3e-6, 0.5e-6, 1.0e-6, 5.0e-6]
-PARTICLE_DENSITY: float = 1000.0  # kg/m^3
-TEMPERATURE: float = 293.0  # K
-MU: float = 1.81e-5  # Pa*s
-MEAN_FREE_PATH: float = 67e-9  # m
+_STANDARD_CONFIG: dict = {
+    "domain": {"width": 4.0, "height": 3.0, "nx": 80, "ny": 60},
+    "fluid": {"density": 1.2, "viscosity": 1.81e-5, "temperature": 293.0},
+    "particles": {
+        "density": 1000.0,
+        "sizes": [0.1e-6, 0.3e-6, 0.5e-6, 1.0e-6, 5.0e-6],
+        "mean_free_path": 67.0e-9,
+        "boundary_layer_thickness": 1.0e-3,
+        "hepa_reference": {
+            "diameters": [0.1e-6, 0.3e-6, 0.5e-6, 1.0e-6, 5.0e-6],
+            "efficiencies": [0.99999, 0.99970, 0.99990, 0.99999, 0.99999],
+        },
+    },
+    "solver": {
+        "dt": 0.01,
+        "t_end": 60.0,
+        "output_interval": 10,
+        "convergence_tol": 1.0e-6,
+        "max_simple_iter": 500,
+    },
+    "boundaries": {
+        "supply": {
+            "type": "velocity_inlet",
+            "location": "top",
+            "x_start": 0.5,
+            "x_end": 3.5,
+            "velocity": 0.45,
+        },
+    },
+    "obstacles": [],
+    "sensors": [{"name": "center", "x": 2.0, "y": 1.5}],
+    "thresholds": {"0.5e-6": 3520.0},
+}
+
+
+def _make_config(tmp_path, overrides: dict | None = None) -> SimConfig:
+    """Write a YAML config and return a loaded SimConfig.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Pytest tmp_path fixture directory.
+    overrides : dict or None
+        Keys to replace in the base config dict before writing.
+
+    Returns
+    -------
+    SimConfig
+        Loaded and validated configuration.
+    """
+    base = {k: v for k, v in _STANDARD_CONFIG.items()}
+    if overrides:
+        for key, val in overrides.items():
+            base[key] = val
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.dump(base, default_flow_style=False), encoding="utf-8")
+    return SimConfig(str(path))
 
 
 @pytest.fixture()
-def physics() -> ParticlePhysics:
+def physics(tmp_path) -> ParticlePhysics:
     """Create a ParticlePhysics instance with standard conditions."""
-    return ParticlePhysics(
-        particle_sizes=PARTICLE_SIZES,
-        particle_density=PARTICLE_DENSITY,
-        temperature=TEMPERATURE,
-        mu=MU,
-        mean_free_path=MEAN_FREE_PATH,
-    )
+    config = _make_config(tmp_path)
+    return ParticlePhysics(config)
 
 
 # ---------------------------------------------------------------------------
@@ -149,39 +198,48 @@ class TestParticlePhysicsUnit:
         for k in range(physics.n_classes):
             assert physics.hepa_efficiency(k) >= eff_mpps
 
-    def test_hepa_interpolation_intermediate_diameter(self) -> None:
+    def test_hepa_interpolation_intermediate_diameter(self, tmp_path) -> None:
         """HEPA efficiency at 0.2 um falls between the 0.1 um and 0.3 um values."""
-        pp = ParticlePhysics(
-            particle_sizes=[0.2e-6],
-            particle_density=1000.0,
-            temperature=293.0,
-            mu=1.81e-5,
-            mean_free_path=67e-9,
+        config = _make_config(
+            tmp_path,
+            overrides={
+                "particles": {
+                    **_STANDARD_CONFIG["particles"],
+                    "sizes": [0.2e-6],
+                },
+            },
         )
+        pp = ParticlePhysics(config)
         eff = pp.hepa_efficiency(0)
         # 0.2 um sits between 0.1 um (0.99999) and 0.3 um (0.99970)
         assert 0.99970 < eff < 0.99999
 
-    def test_hepa_clamp_below_smallest_reference(self) -> None:
+    def test_hepa_clamp_below_smallest_reference(self, tmp_path) -> None:
         """HEPA efficiency at or below 0.1 um returns the 0.1 um reference value."""
-        pp = ParticlePhysics(
-            particle_sizes=[0.05e-6],
-            particle_density=1000.0,
-            temperature=293.0,
-            mu=1.81e-5,
-            mean_free_path=67e-9,
+        config = _make_config(
+            tmp_path,
+            overrides={
+                "particles": {
+                    **_STANDARD_CONFIG["particles"],
+                    "sizes": [0.05e-6],
+                },
+            },
         )
+        pp = ParticlePhysics(config)
         assert pp.hepa_efficiency(0) == 0.99999
 
-    def test_hepa_clamp_above_largest_reference(self) -> None:
+    def test_hepa_clamp_above_largest_reference(self, tmp_path) -> None:
         """HEPA efficiency above 5.0 um returns the 5.0 um reference value."""
-        pp = ParticlePhysics(
-            particle_sizes=[10.0e-6],
-            particle_density=1000.0,
-            temperature=293.0,
-            mu=1.81e-5,
-            mean_free_path=67e-9,
+        config = _make_config(
+            tmp_path,
+            overrides={
+                "particles": {
+                    **_STANDARD_CONFIG["particles"],
+                    "sizes": [10.0e-6],
+                },
+            },
         )
+        pp = ParticlePhysics(config)
         assert pp.hepa_efficiency(0) == 0.99999
 
 
@@ -341,15 +399,18 @@ class TestHepaEfficiencyValidation:
     reference points.
     """
 
-    def test_hepa_interpolation_accuracy(self) -> None:
+    def test_hepa_interpolation_accuracy(self, tmp_path) -> None:
         """HEPA efficiency at 0.2 um matches hand-calculated value within 0.1%."""
-        pp = ParticlePhysics(
-            particle_sizes=[0.2e-6],
-            particle_density=1000.0,
-            temperature=293.0,
-            mu=1.81e-5,
-            mean_free_path=67e-9,
+        config = _make_config(
+            tmp_path,
+            overrides={
+                "particles": {
+                    **_STANDARD_CONFIG["particles"],
+                    "sizes": [0.2e-6],
+                },
+            },
         )
+        pp = ParticlePhysics(config)
         computed = pp.hepa_efficiency(0)
         expected = 9.9980703037e-01
         relative_error = abs(computed - expected) / expected
