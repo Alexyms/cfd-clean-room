@@ -242,7 +242,9 @@ class SimConfig:
                     raise ValueError(
                         f"{ctx}: velocity_inlet requires a 'velocity' field"
                     )
-                if not isinstance(bc_velocity, (int, float)):
+                if isinstance(bc_velocity, bool) or not isinstance(
+                    bc_velocity, (int, float)
+                ):
                     raise TypeError(
                         f"{ctx}.velocity must be a number, "
                         f"got {type(bc_velocity).__name__}"
@@ -251,6 +253,7 @@ class SimConfig:
                     raise ValueError(
                         f"{ctx}.velocity must be positive, got {bc_velocity}"
                     )
+                bc_velocity = float(bc_velocity)
 
             # Coordinate validation based on boundary orientation
             bc_x_start = None

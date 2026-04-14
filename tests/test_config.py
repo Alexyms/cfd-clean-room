@@ -438,6 +438,25 @@ class TestSimConfigInvalidValues:
         with pytest.raises(ValueError, match=r"velocity.*positive"):
             SimConfig(path)
 
+    def test_velocity_inlet_bool_velocity_raises_type_error(self, tmp_path) -> None:
+        """velocity_inlet with boolean velocity raises TypeError."""
+        path = _write_config(
+            tmp_path,
+            overrides={
+                "boundaries": {
+                    "bad": {
+                        "type": "velocity_inlet",
+                        "location": "top",
+                        "x_start": 0.5,
+                        "x_end": 3.5,
+                        "velocity": True,
+                    }
+                }
+            },
+        )
+        with pytest.raises(TypeError, match=r"velocity.*number"):
+            SimConfig(path)
+
     def test_boundaries_as_list_raises(self, tmp_path) -> None:
         """Boundaries section as a list instead of mapping raises ValueError."""
         path = _write_config(
