@@ -76,28 +76,38 @@ General code quality observations:
 - Does this PR require a new or updated ADR?
 - Are docstrings present and accurate for new/changed functions?
 
+## Finding Severity
+
+Classify every finding into one of three severity levels. State the severity inline with each finding.
+
+**Critical** -- Architecture violations, broken interface contracts, incorrect physics or logic, missing tests for new functionality, hardcoded simulation parameters with no constructor or config path, security or data integrity risks. These create real problems downstream or violate project requirements.
+
+**Bug** -- Logic errors, off-by-one mistakes, incorrect indexing, unreachable code paths that mask failures, missing error handling on expected failure paths, test assertions that cannot catch the errors they claim to check.
+
+**Suggestion** -- Style improvements, docstring wording, class/variable naming tweaks, additional edge-case tests beyond the core validation, stale metadata (dates, status lines), minor inconsistencies that do not affect correctness or downstream consumers.
+
 ## Verdict Rules
 
-Issue **VERDICT: APPROVE** when:
-- No standards violations
-- No architecture violations
-- No unaddressed cascade impacts
-- No scope creep
-- Code quality is acceptable
-- Documentation is current or the PR includes necessary doc updates
+Issue **VERDICT: APPROVE** when there are no Critical or Bug findings. Suggestions may be present -- list them in the review so they can be addressed, but they do not block the merge.
 
-Issue **VERDICT: REQUEST_CHANGES** when any of the following are true:
-- Hardcoded parameters that should be in config
-- Missing type hints or docstrings on public interfaces
-- Interface contract violations (function signatures don't match SYSTEM.md)
-- Cascade impact on downstream modules not addressed
-- Work outside the current phase scope without justification
-- Extension point (v_ext) removed or broken
-- Separation of concerns violated (e.g., C code doing I/O, monitor modifying fields)
-- Missing tests for new functionality
-- AI writing patterns in documentation (em dashes, filler words, etc.)
+Issue **VERDICT: REQUEST_CHANGES** when there is at least one Critical or Bug finding. Be specific about what must change and why. Reference the exact standard, requirement, or architecture rule being violated.
 
-When requesting changes, be specific. Reference the exact standard, requirement, or architecture rule being violated. Quote the relevant section of claude.md or SYSTEM.md if helpful.
+**Exhaustiveness rule:** Assume this is the only review pass before the developer addresses your feedback and requests re-review. Find ALL issues (Critical, Bug, and Suggestion) in a single pass. Do not defer minor findings to later rounds. The developer should be able to address every finding in one commit, not discover new issues on each re-review.
+
+Examples of correctly classified findings:
+
+- Interface contract in SYSTEM.md does not match implementation -> Critical
+- Simulation parameter hardcoded in solver logic with no config path -> Critical
+- Missing validation test for a new public method -> Critical
+- Unit conversion inside a module that violates SI cross-cutting rule -> Critical
+- Off-by-one in array indexing -> Bug
+- Unreachable return that silently swallows errors -> Bug
+- Class name says "Validation" but marker is @pytest.mark.unit -> Suggestion
+- Last Updated date in SYSTEM.md is stale -> Suggestion
+- Docstring summary slightly inaccurate but not misleading -> Suggestion
+- HEPA reference data stored as module constant with documented TODO -> Suggestion (documented tech debt with clear resolution path is not a violation)
+
+**Constructor defaults with documented resolution paths** (e.g., a parameter that will flow from SimConfig once config.py exists) are not violations of REQ-C01 when the deviation is explicitly documented in the PR description and SYSTEM.md. Do not block merges for interim design decisions that are acknowledged and have a planned resolution.
 
 ## Tone
 
