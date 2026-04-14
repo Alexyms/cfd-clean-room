@@ -2,7 +2,7 @@
 
 **Project:** CFD Clean Room Simulation
 **Status:** Pre-development. Architecture defined, no code written.
-**Last Updated:** 2026-04-14
+**Last Updated:** 2026-04-15
 
 This document is the single reference for system architecture, requirements, module interfaces, and dependency relationships. The automated code review system reads this document on every PR to verify compliance. Keep it current.
 

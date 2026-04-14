@@ -15,13 +15,10 @@ _CUNNINGHAM_A1: float = 1.257
 _CUNNINGHAM_A2: float = 0.4
 _CUNNINGHAM_A3: float = 1.1
 
-# Typical laminar boundary layer thickness in clean room environments.
-# Used for estimating diffusive deposition velocity (v_diff = D / delta).
-_BOUNDARY_LAYER_THICKNESS: float = 1e-3  # m
-
 # HEPA filter reference efficiency data (diameter in um, single-pass efficiency).
 # Based on typical HEPA performance: minimum at MPPS (~0.3 um), higher at
 # smaller sizes (diffusion capture) and larger sizes (interception/impaction).
+# TODO: move to YAML config when SimConfig is implemented.
 _HEPA_REF_DIAMETERS: list[float] = [0.1, 0.3, 0.5, 1.0, 5.0]
 _HEPA_REF_EFFICIENCIES: list[float] = [0.99999, 0.99970, 0.99990, 0.99999, 0.99999]
 
@@ -45,6 +42,10 @@ class ParticlePhysics:
         Dynamic viscosity of air in Pa*s.
     mean_free_path : float
         Mean free path of air molecules in meters.
+    boundary_layer_thickness : float
+        Laminar boundary layer thickness in meters, used for
+        diffusive deposition velocity estimation (v_diff = D / delta).
+        Default 1e-3 m is typical for clean room environments.
     """
 
     def __init__(
@@ -54,12 +55,14 @@ class ParticlePhysics:
         temperature: float,
         mu: float,
         mean_free_path: float,
+        boundary_layer_thickness: float = 1e-3,
     ) -> None:
         self._particle_sizes = particle_sizes
         self._rho_p = particle_density
         self._temperature = temperature
         self._mu = mu
         self._lambda = mean_free_path
+        self._boundary_layer_thickness = boundary_layer_thickness
         self._n_classes = len(particle_sizes)
 
     @property
@@ -207,9 +210,8 @@ class ParticlePhysics:
         Notes
         -----
         The diffusive deposition velocity is estimated as
-        v_diff = D / delta, where delta is a boundary layer thickness.
-        A typical value of delta = 1e-3 m is used, consistent with
-        laminar boundary layers in clean room environments.
+        v_diff = D / delta, where delta is the boundary layer thickness
+        set at construction time.
         """
         valid_surfaces = ("floor", "ceiling", "wall")
         if surface not in valid_surfaces:
@@ -219,7 +221,7 @@ class ParticlePhysics:
 
         v_s = self.settling_velocity(size_class)
         d_coeff = self.diffusion_coeff(size_class)
-        v_diff = d_coeff / _BOUNDARY_LAYER_THICKNESS
+        v_diff = d_coeff / self._boundary_layer_thickness
 
         if surface == "floor":
             return v_s + v_diff
@@ -227,13 +229,11 @@ class ParticlePhysics:
         return v_diff
 
     def hepa_efficiency(self, size_class: int) -> float:
-        """Estimate HEPA filter single-pass collection efficiency.
+        """Estimate HEPA filter efficiency via log-space interpolation of reference data.
 
-        Uses the single-fiber efficiency model combining diffusion and
-        interception mechanisms. Real HEPA filters achieve >= 99.97%
-        efficiency at the most penetrating particle size (MPPS, ~0.3 um).
-        This model captures the size-dependent trend for use in
-        boundary condition calculations.
+        Real HEPA filters achieve >= 99.97% efficiency at the most
+        penetrating particle size (MPPS, ~0.3 um). This model captures
+        the size-dependent trend for use in boundary condition calculations.
 
         Parameters
         ----------

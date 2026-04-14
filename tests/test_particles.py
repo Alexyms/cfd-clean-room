@@ -173,6 +173,17 @@ class TestParticlePhysicsUnit:
         )
         assert pp.hepa_efficiency(0) == 0.99999
 
+    def test_hepa_clamp_above_largest_reference(self) -> None:
+        """HEPA efficiency above 5.0 um returns the 5.0 um reference value."""
+        pp = ParticlePhysics(
+            particle_sizes=[10.0e-6],
+            particle_density=1000.0,
+            temperature=293.0,
+            mu=1.81e-5,
+            mean_free_path=67e-9,
+        )
+        assert pp.hepa_efficiency(0) == 0.99999
+
 
 # ---------------------------------------------------------------------------
 # Validation tests
