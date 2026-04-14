@@ -191,6 +191,13 @@ class SimConfig:
                 "particles.hepa_reference.diameters and efficiencies "
                 "must have the same length"
             )
+        for i in range(len(hepa_diameters) - 1):
+            if hepa_diameters[i] >= hepa_diameters[i + 1]:
+                raise ValueError(
+                    "particles.hepa_reference.diameters must be sorted "
+                    f"ascending, but index {i} ({hepa_diameters[i]}) >= "
+                    f"index {i + 1} ({hepa_diameters[i + 1]})"
+                )
         for eff in hepa_efficiencies:
             if not 0.0 <= eff <= 1.0:
                 raise ValueError(f"HEPA efficiency must be in [0, 1], got {eff}")
@@ -235,24 +242,20 @@ class SimConfig:
                     f"{ctx}.location must be one of "
                     f"{sorted(_VALID_BOUNDARY_LOCATIONS)}, got '{bc_location}'"
                 )
-            bc_velocity = spec.get("velocity")
+            bc_velocity = None
             if bc_type == "velocity_inlet":
-                if bc_velocity is None:
+                raw_vel = spec.get("velocity")
+                if raw_vel is None:
                     raise ValueError(
                         f"{ctx}: velocity_inlet requires a 'velocity' field"
                     )
-                if isinstance(bc_velocity, bool) or not isinstance(
-                    bc_velocity, (int, float)
-                ):
+                if isinstance(raw_vel, bool) or not isinstance(raw_vel, (int, float)):
                     raise TypeError(
-                        f"{ctx}.velocity must be a number, "
-                        f"got {type(bc_velocity).__name__}"
+                        f"{ctx}.velocity must be a number, got {type(raw_vel).__name__}"
                     )
-                if bc_velocity <= 0:
-                    raise ValueError(
-                        f"{ctx}.velocity must be positive, got {bc_velocity}"
-                    )
-                bc_velocity = float(bc_velocity)
+                if raw_vel <= 0:
+                    raise ValueError(f"{ctx}.velocity must be positive, got {raw_vel}")
+                bc_velocity = float(raw_vel)
 
             # Coordinate validation based on boundary orientation
             bc_x_start = None

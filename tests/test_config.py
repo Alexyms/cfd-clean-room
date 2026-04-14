@@ -687,6 +687,45 @@ class TestSimConfigInvalidValues:
         with pytest.raises(ValueError, match="obstacles must be a list"):
             SimConfig(path)
 
+    def test_wall_boundary_ignores_velocity(self, tmp_path) -> None:
+        """Wall boundary with invalid velocity value does not store it."""
+        path = _write_config(
+            tmp_path,
+            overrides={
+                "boundaries": {
+                    "wall1": {
+                        "type": "wall",
+                        "location": "left",
+                        "y_start": 0.0,
+                        "y_end": 2.0,
+                        "velocity": "fast",
+                    }
+                }
+            },
+        )
+        config = SimConfig(path)
+        assert config.boundaries["wall1"].velocity is None
+
+    def test_hepa_diameters_unsorted_raises(self, tmp_path) -> None:
+        """Unsorted HEPA reference diameters raise ValueError."""
+        path = _write_config(
+            tmp_path,
+            overrides={
+                "particles": {
+                    "density": 1000.0,
+                    "sizes": [0.1e-6],
+                    "mean_free_path": 67e-9,
+                    "boundary_layer_thickness": 1e-3,
+                    "hepa_reference": {
+                        "diameters": [0.5e-6, 0.1e-6],
+                        "efficiencies": [0.99990, 0.99999],
+                    },
+                }
+            },
+        )
+        with pytest.raises(ValueError, match=r"sorted ascending"):
+            SimConfig(path)
+
     def test_missing_hepa_reference_raises(self, tmp_path) -> None:
         """Missing hepa_reference section raises ValueError."""
         path = _write_config(
