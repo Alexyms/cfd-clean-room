@@ -1,0 +1,96 @@
+# Clean Room CFD Simulation -- Default Configuration
+#
+# Base configuration for a vertical cross-section of a semiconductor
+# clean room. All values in SI units (meters, seconds, kilograms, Pascals).
+
+domain:
+  width: 4.0        # room width, meters
+  height: 3.0       # room height, meters
+  nx: 80            # grid cells in x direction
+  ny: 60            # grid cells in y direction
+
+fluid:
+  density: 1.2      # air density, kg/m^3
+  viscosity: 1.81e-5  # dynamic viscosity, Pa*s
+  temperature: 293.0   # air temperature, K
+
+particles:
+  density: 1000.0    # particle material density, kg/m^3
+  sizes: [0.1e-6, 0.3e-6, 0.5e-6, 1.0e-6, 5.0e-6]  # diameters, meters
+  mean_free_path: 67.0e-9  # mean free path of air, meters
+  boundary_layer_thickness: 1.0e-3  # laminar BL thickness for deposition, meters
+  hepa_reference:
+    diameters: [0.1e-6, 0.3e-6, 0.5e-6, 1.0e-6, 5.0e-6]  # meters
+    efficiencies: [0.99999, 0.99970, 0.99990, 0.99999, 0.99999]
+
+solver:
+  dt: 0.01           # time step, seconds
+  t_end: 60.0        # simulation end time, seconds
+  output_interval: 10  # write output every N timesteps
+  convergence_tol: 1.0e-6  # SIMPLE iteration convergence tolerance
+  max_simple_iter: 500     # max SIMPLE iterations per timestep
+
+boundaries:
+  hepa_supply:
+    type: velocity_inlet
+    location: top
+    x_start: 0.5
+    x_end: 3.5
+    velocity: 0.45    # face velocity, m/s (typical HEPA supply)
+
+  return_vent_left:
+    type: pressure_outlet
+    location: left
+    y_start: 0.0
+    y_end: 0.3
+
+  return_vent_right:
+    type: pressure_outlet
+    location: right
+    y_start: 0.0
+    y_end: 0.3
+
+  door:
+    type: wall
+    location: left
+    y_start: 0.3
+    y_end: 2.3
+
+  hood:
+    type: velocity_inlet
+    location: bottom
+    x_start: 2.5
+    x_end: 3.5
+    velocity: 0.3     # laminar flow hood downflow, m/s
+
+obstacles:
+  - name: process_equipment
+    x_start: 1.0
+    x_end: 2.0
+    y_start: 0.0
+    y_end: 1.0
+
+sensors:
+  - name: center_room
+    x: 2.0
+    y: 1.5
+
+  - name: near_door
+    x: 0.5
+    y: 1.3
+
+  - name: above_equipment
+    x: 1.5
+    y: 1.5
+
+  - name: under_hood
+    x: 3.0
+    y: 0.5
+
+# ISO 14644-1 Class 5 limits, particles per cubic meter
+thresholds:
+  "0.1e-6": 1.0e+5
+  "0.3e-6": 1.02e+4
+  "0.5e-6": 3.52e+3
+  "1.0e-6": 8.32e+2
+  "5.0e-6": 2.93e+1
