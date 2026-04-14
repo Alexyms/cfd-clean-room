@@ -19,6 +19,12 @@ _CUNNINGHAM_A3: float = 1.1
 # Used for estimating diffusive deposition velocity (v_diff = D / delta).
 _BOUNDARY_LAYER_THICKNESS: float = 1e-3  # m
 
+# HEPA filter reference efficiency data (diameter in um, single-pass efficiency).
+# Based on typical HEPA performance: minimum at MPPS (~0.3 um), higher at
+# smaller sizes (diffusion capture) and larger sizes (interception/impaction).
+_HEPA_REF_DIAMETERS: list[float] = [0.1, 0.3, 0.5, 1.0, 5.0]
+_HEPA_REF_EFFICIENCIES: list[float] = [0.99999, 0.99970, 0.99990, 0.99999, 0.99999]
+
 
 class ParticlePhysics:
     """Compute size-dependent particle transport properties.
@@ -258,26 +264,21 @@ class ParticlePhysics:
         d_p = self._diameter(size_class)
         d_um = d_p * 1e6  # convert to micrometers for lookup
 
-        # Reference efficiency data points (diameter in um, efficiency)
-        ref_diameters = [0.1, 0.3, 0.5, 1.0, 5.0]
-        ref_efficiencies = [0.99999, 0.99970, 0.99990, 0.99999, 0.99999]
-
         # Clamp to reference range
-        if d_um <= ref_diameters[0]:
-            return ref_efficiencies[0]
-        if d_um >= ref_diameters[-1]:
-            return ref_efficiencies[-1]
+        if d_um <= _HEPA_REF_DIAMETERS[0]:
+            return _HEPA_REF_EFFICIENCIES[0]
+        if d_um >= _HEPA_REF_DIAMETERS[-1]:
+            return _HEPA_REF_EFFICIENCIES[-1]
 
         # Linear interpolation in log-diameter space
         log_d = math.log(d_um)
-        for i in range(len(ref_diameters) - 1):
-            log_d_lo = math.log(ref_diameters[i])
-            log_d_hi = math.log(ref_diameters[i + 1])
+        for i in range(len(_HEPA_REF_DIAMETERS) - 1):
+            log_d_lo = math.log(_HEPA_REF_DIAMETERS[i])
+            log_d_hi = math.log(_HEPA_REF_DIAMETERS[i + 1])
             if log_d_lo <= log_d <= log_d_hi:
                 t = (log_d - log_d_lo) / (log_d_hi - log_d_lo)
-                return ref_efficiencies[i] + t * (
-                    ref_efficiencies[i + 1] - ref_efficiencies[i]
+                return _HEPA_REF_EFFICIENCIES[i] + t * (
+                    _HEPA_REF_EFFICIENCIES[i + 1] - _HEPA_REF_EFFICIENCIES[i]
                 )
 
-        # Should not reach here, but return MPPS value as fallback
-        return 0.99970
+        raise RuntimeError("interpolation loop failed to find enclosing interval")

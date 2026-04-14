@@ -149,6 +149,30 @@ class TestParticlePhysicsUnit:
         for k in range(physics.n_classes):
             assert physics.hepa_efficiency(k) >= eff_mpps
 
+    def test_hepa_interpolation_intermediate_diameter(self) -> None:
+        """HEPA efficiency at 0.2 um falls between the 0.1 um and 0.3 um values."""
+        pp = ParticlePhysics(
+            particle_sizes=[0.2e-6],
+            particle_density=1000.0,
+            temperature=293.0,
+            mu=1.81e-5,
+            mean_free_path=67e-9,
+        )
+        eff = pp.hepa_efficiency(0)
+        # 0.2 um sits between 0.1 um (0.99999) and 0.3 um (0.99970)
+        assert 0.99970 < eff < 0.99999
+
+    def test_hepa_clamp_below_smallest_reference(self) -> None:
+        """HEPA efficiency at or below 0.1 um returns the 0.1 um reference value."""
+        pp = ParticlePhysics(
+            particle_sizes=[0.05e-6],
+            particle_density=1000.0,
+            temperature=293.0,
+            mu=1.81e-5,
+            mean_free_path=67e-9,
+        )
+        assert pp.hepa_efficiency(0) == 0.99999
+
 
 # ---------------------------------------------------------------------------
 # Validation tests
