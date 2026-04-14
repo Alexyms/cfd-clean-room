@@ -170,12 +170,18 @@ SimConfig:
     room_width, room_height: float (meters)
     nx, ny: int
     rho, mu: float (SI)
+    temperature: float (K)
     particle_sizes: list[float] (meters)
     particle_density: float (kg/m^3)
+    mean_free_path: float (meters)
+    boundary_layer_thickness: float (meters)
+    hepa_reference: HepaReference (diameters + efficiencies)
     dt, t_end: float (seconds)
     output_interval: int
+    convergence_tol: float
+    max_simple_iter: int
     boundaries: dict[str, BoundarySpec]
-    scenarios: list[ScenarioSpec]
+    obstacles: list[ObstacleSpec]
     sensors: list[SensorSpec]
     thresholds: dict[str, float]
 ```

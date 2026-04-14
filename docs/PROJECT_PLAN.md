@@ -64,11 +64,11 @@ Status values: NOT STARTED, IN PROGRESS, GATE REVIEW, COMPLETE
 
 | Deliverable | Status | Notes |
 |-------------|--------|-------|
-| src/config.py | NOT STARTED | YAML loader with validation |
+| src/config.py | DONE | YAML loader with validation |
 | src/mesh.py | NOT STARTED | Structured grid generation, cell classification |
 | src/particles.py | DONE | Settling velocity, diffusion coeff, Cunningham correction, deposition velocity, HEPA efficiency |
-| configs/clean_room_default.yaml | NOT STARTED | Base configuration |
-| tests/test_config.py | NOT STARTED | Unit tests: validation, rejection of bad input |
+| configs/clean_room_default.yaml | DONE | Base configuration |
+| tests/test_config.py | DONE | Unit tests: validation, rejection of bad input |
 | tests/test_mesh.py | NOT STARTED | Unit tests: cell counts, classification, neighbors |
 | tests/test_particles.py | DONE | Unit + validation: VAL-005, VAL-006 |
 

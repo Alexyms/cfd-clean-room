@@ -6,6 +6,7 @@ load time, and provides typed attribute access. Satisfies REQ-C01
 """
 
 from dataclasses import dataclass, field
+from os import PathLike
 from pathlib import Path
 
 import yaml
@@ -103,6 +104,10 @@ class HepaReference:
     efficiencies: list[float] = field(default_factory=list)
 
 
+_VALID_BOUNDARY_TYPES: set[str] = {"velocity_inlet", "pressure_outlet", "wall"}
+_VALID_BOUNDARY_LOCATIONS: set[str] = {"top", "bottom", "left", "right"}
+
+
 class SimConfig:
     """Simulation configuration loaded and validated from a YAML file.
 
@@ -112,11 +117,11 @@ class SimConfig:
 
     Parameters
     ----------
-    yaml_path : str
+    yaml_path : str or Path
         Path to the YAML configuration file.
     """
 
-    def __init__(self, yaml_path: str) -> None:
+    def __init__(self, yaml_path: str | PathLike[str]) -> None:
         path = Path(yaml_path)
         if not path.exists():
             raise FileNotFoundError(f"Configuration file not found: {yaml_path}")
@@ -156,8 +161,6 @@ class SimConfig:
         self.particle_sizes: list[float] = self._require_positive_float_list(
             particles, "sizes", "particles"
         )
-        if len(self.particle_sizes) == 0:
-            raise ValueError("particles.sizes must not be empty")
         self.mean_free_path: float = self._require_positive_float(
             particles, "mean_free_path", "particles"
         )
@@ -208,14 +211,42 @@ class SimConfig:
         for name, spec in boundaries_raw.items():
             if not isinstance(spec, dict):
                 raise ValueError(f"boundaries.{name} must be a mapping")
+            bc_type = self._require_string(spec, "type", f"boundaries.{name}")
+            if bc_type not in _VALID_BOUNDARY_TYPES:
+                raise ValueError(
+                    f"boundaries.{name}.type must be one of "
+                    f"{sorted(_VALID_BOUNDARY_TYPES)}, got '{bc_type}'"
+                )
+            bc_location = self._require_string(spec, "location", f"boundaries.{name}")
+            if bc_location not in _VALID_BOUNDARY_LOCATIONS:
+                raise ValueError(
+                    f"boundaries.{name}.location must be one of "
+                    f"{sorted(_VALID_BOUNDARY_LOCATIONS)}, got '{bc_location}'"
+                )
+            bc_velocity = spec.get("velocity")
+            if bc_type == "velocity_inlet":
+                if bc_velocity is None:
+                    raise ValueError(
+                        f"boundaries.{name}: velocity_inlet requires a 'velocity' field"
+                    )
+                if not isinstance(bc_velocity, (int, float)):
+                    raise TypeError(
+                        f"boundaries.{name}.velocity must be a number, "
+                        f"got {type(bc_velocity).__name__}"
+                    )
+                if bc_velocity <= 0:
+                    raise ValueError(
+                        f"boundaries.{name}.velocity must be positive, "
+                        f"got {bc_velocity}"
+                    )
             self.boundaries[name] = BoundarySpec(
-                type=self._require_string(spec, "type", f"boundaries.{name}"),
-                location=self._require_string(spec, "location", f"boundaries.{name}"),
+                type=bc_type,
+                location=bc_location,
                 x_start=spec.get("x_start"),
                 x_end=spec.get("x_end"),
                 y_start=spec.get("y_start"),
                 y_end=spec.get("y_end"),
-                velocity=spec.get("velocity"),
+                velocity=bc_velocity,
             )
 
         # Obstacles (optional)
@@ -224,13 +255,35 @@ class SimConfig:
         for i, obs in enumerate(obstacles_raw):
             if not isinstance(obs, dict):
                 raise ValueError(f"obstacles[{i}] must be a mapping")
+            ctx = f"obstacles[{i}]"
+            x0 = self._require_float(obs, "x_start", ctx)
+            x1 = self._require_float(obs, "x_end", ctx)
+            y0 = self._require_float(obs, "y_start", ctx)
+            y1 = self._require_float(obs, "y_end", ctx)
+            if x0 >= x1:
+                raise ValueError(
+                    f"{ctx}: x_start ({x0}) must be less than x_end ({x1})"
+                )
+            if y0 >= y1:
+                raise ValueError(
+                    f"{ctx}: y_start ({y0}) must be less than y_end ({y1})"
+                )
+            if x0 < 0 or x1 > self.room_width:
+                raise ValueError(
+                    f"{ctx}: x range [{x0}, {x1}] outside domain [0, {self.room_width}]"
+                )
+            if y0 < 0 or y1 > self.room_height:
+                raise ValueError(
+                    f"{ctx}: y range [{y0}, {y1}] outside domain "
+                    f"[0, {self.room_height}]"
+                )
             self.obstacles.append(
                 ObstacleSpec(
-                    name=self._require_string(obs, "name", f"obstacles[{i}]"),
-                    x_start=self._require_float(obs, "x_start", f"obstacles[{i}]"),
-                    x_end=self._require_float(obs, "x_end", f"obstacles[{i}]"),
-                    y_start=self._require_float(obs, "y_start", f"obstacles[{i}]"),
-                    y_end=self._require_float(obs, "y_end", f"obstacles[{i}]"),
+                    name=self._require_string(obs, "name", ctx),
+                    x_start=x0,
+                    x_end=x1,
+                    y_start=y0,
+                    y_end=y1,
                 )
             )
 
@@ -242,11 +295,20 @@ class SimConfig:
         for i, sensor in enumerate(sensors_raw):
             if not isinstance(sensor, dict):
                 raise ValueError(f"sensors[{i}] must be a mapping")
+            ctx = f"sensors[{i}]"
+            sx = self._require_float(sensor, "x", ctx)
+            sy = self._require_float(sensor, "y", ctx)
+            if not 0 <= sx <= self.room_width:
+                raise ValueError(f"{ctx}: x={sx} outside domain [0, {self.room_width}]")
+            if not 0 <= sy <= self.room_height:
+                raise ValueError(
+                    f"{ctx}: y={sy} outside domain [0, {self.room_height}]"
+                )
             self.sensors.append(
                 SensorSpec(
-                    name=self._require_string(sensor, "name", f"sensors[{i}]"),
-                    x=self._require_float(sensor, "x", f"sensors[{i}]"),
-                    y=self._require_float(sensor, "y", f"sensors[{i}]"),
+                    name=self._require_string(sensor, "name", ctx),
+                    x=sx,
+                    y=sy,
                 )
             )
 

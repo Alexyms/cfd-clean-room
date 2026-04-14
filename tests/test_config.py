@@ -367,6 +367,146 @@ class TestSimConfigInvalidValues:
         with pytest.raises(ValueError, match="same length"):
             SimConfig(path)
 
+    def test_boundary_invalid_type_raises(self, tmp_path) -> None:
+        """Unrecognized boundary type raises ValueError."""
+        path = _write_config(
+            tmp_path,
+            overrides={
+                "boundaries": {
+                    "bad": {
+                        "type": "supersonic_inlet",
+                        "location": "top",
+                    }
+                }
+            },
+        )
+        with pytest.raises(ValueError, match=r"boundaries\.bad\.type"):
+            SimConfig(path)
+
+    def test_boundary_invalid_location_raises(self, tmp_path) -> None:
+        """Unrecognized boundary location raises ValueError."""
+        path = _write_config(
+            tmp_path,
+            overrides={
+                "boundaries": {
+                    "bad": {
+                        "type": "wall",
+                        "location": "diagonal",
+                    }
+                }
+            },
+        )
+        with pytest.raises(ValueError, match=r"boundaries\.bad\.location"):
+            SimConfig(path)
+
+    def test_velocity_inlet_missing_velocity_raises(self, tmp_path) -> None:
+        """velocity_inlet without velocity field raises ValueError."""
+        path = _write_config(
+            tmp_path,
+            overrides={
+                "boundaries": {
+                    "bad": {
+                        "type": "velocity_inlet",
+                        "location": "top",
+                    }
+                }
+            },
+        )
+        with pytest.raises(ValueError, match="velocity_inlet requires"):
+            SimConfig(path)
+
+    def test_velocity_inlet_negative_velocity_raises(self, tmp_path) -> None:
+        """velocity_inlet with negative velocity raises ValueError."""
+        path = _write_config(
+            tmp_path,
+            overrides={
+                "boundaries": {
+                    "bad": {
+                        "type": "velocity_inlet",
+                        "location": "top",
+                        "velocity": -0.5,
+                    }
+                }
+            },
+        )
+        with pytest.raises(ValueError, match=r"velocity.*positive"):
+            SimConfig(path)
+
+    def test_sensor_out_of_domain_x_raises(self, tmp_path) -> None:
+        """Sensor x coordinate outside domain raises ValueError."""
+        path = _write_config(
+            tmp_path,
+            overrides={"sensors": [{"name": "bad", "x": 10.0, "y": 1.0}]},
+        )
+        with pytest.raises(ValueError, match=r"sensors\[0\].*x=10"):
+            SimConfig(path)
+
+    def test_sensor_out_of_domain_y_raises(self, tmp_path) -> None:
+        """Sensor y coordinate outside domain raises ValueError."""
+        path = _write_config(
+            tmp_path,
+            overrides={"sensors": [{"name": "bad", "x": 1.0, "y": -1.0}]},
+        )
+        with pytest.raises(ValueError, match=r"sensors\[0\].*y=-1"):
+            SimConfig(path)
+
+    def test_obstacle_inverted_x_raises(self, tmp_path) -> None:
+        """Obstacle with x_start >= x_end raises ValueError."""
+        path = _write_config(
+            tmp_path,
+            overrides={
+                "obstacles": [
+                    {
+                        "name": "bad",
+                        "x_start": 2.0,
+                        "x_end": 1.0,
+                        "y_start": 0.0,
+                        "y_end": 1.0,
+                    }
+                ]
+            },
+        )
+        with pytest.raises(ValueError, match=r"x_start.*less than.*x_end"):
+            SimConfig(path)
+
+    def test_obstacle_inverted_y_raises(self, tmp_path) -> None:
+        """Obstacle with y_start >= y_end raises ValueError."""
+        path = _write_config(
+            tmp_path,
+            overrides={
+                "obstacles": [
+                    {
+                        "name": "bad",
+                        "x_start": 0.0,
+                        "x_end": 1.0,
+                        "y_start": 2.0,
+                        "y_end": 1.0,
+                    }
+                ]
+            },
+        )
+        with pytest.raises(ValueError, match=r"y_start.*less than.*y_end"):
+            SimConfig(path)
+
+    def test_obstacle_outside_domain_raises(self, tmp_path) -> None:
+        """Obstacle extending beyond domain bounds raises ValueError."""
+        path = _write_config(
+            tmp_path,
+            overrides={
+                "obstacles": [
+                    {
+                        "name": "bad",
+                        "x_start": 0.0,
+                        "x_end": 10.0,
+                        "y_start": 0.0,
+                        "y_end": 1.0,
+                    }
+                ]
+            },
+        )
+        with pytest.raises(ValueError, match=r"outside domain"):
+            SimConfig(path)
+
     def test_missing_file_raises(self) -> None:
         """Non-existent config file raises FileNotFoundError."""
         with pytest.raises(FileNotFoundError):
