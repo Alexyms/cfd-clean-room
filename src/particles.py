@@ -15,11 +15,11 @@ _CUNNINGHAM_A1: float = 1.257
 _CUNNINGHAM_A2: float = 0.4
 _CUNNINGHAM_A3: float = 1.1
 
-# HEPA filter reference efficiency data (diameter in um, single-pass efficiency).
+# HEPA filter reference efficiency data (diameter in meters, single-pass efficiency).
 # Based on typical HEPA performance: minimum at MPPS (~0.3 um), higher at
 # smaller sizes (diffusion capture) and larger sizes (interception/impaction).
 # TODO: move to YAML config when SimConfig is implemented.
-_HEPA_REF_DIAMETERS: list[float] = [0.1, 0.3, 0.5, 1.0, 5.0]
+_HEPA_REF_DIAMETERS: list[float] = [0.1e-6, 0.3e-6, 0.5e-6, 1.0e-6, 5.0e-6]
 _HEPA_REF_EFFICIENCIES: list[float] = [0.99999, 0.99970, 0.99990, 0.99999, 0.99999]
 
 
@@ -262,16 +262,15 @@ class ParticlePhysics:
         interpolation in log-diameter space is used.
         """
         d_p = self._diameter(size_class)
-        d_um = d_p * 1e6  # convert to micrometers for lookup
 
         # Clamp to reference range
-        if d_um <= _HEPA_REF_DIAMETERS[0]:
+        if d_p <= _HEPA_REF_DIAMETERS[0]:
             return _HEPA_REF_EFFICIENCIES[0]
-        if d_um >= _HEPA_REF_DIAMETERS[-1]:
+        if d_p >= _HEPA_REF_DIAMETERS[-1]:
             return _HEPA_REF_EFFICIENCIES[-1]
 
         # Linear interpolation in log-diameter space
-        log_d = math.log(d_um)
+        log_d = math.log(d_p)
         for i in range(len(_HEPA_REF_DIAMETERS) - 1):
             log_d_lo = math.log(_HEPA_REF_DIAMETERS[i])
             log_d_hi = math.log(_HEPA_REF_DIAMETERS[i + 1])
