@@ -146,9 +146,7 @@ def main() -> None:
     context_docs = {
         "claude.md (Coding Standards)": load_file("review_context/claude.md"),
         "SYSTEM.md (Architecture)": load_file("review_context/SYSTEM.md"),
-        "PROJECT_PLAN.md (Phase Tracking)": load_file(
-            "review_context/PROJECT_PLAN.md"
-        ),
+        "PROJECT_PLAN.md (Phase Tracking)": load_file("review_context/PROJECT_PLAN.md"),
     }
 
     # Build prompt
