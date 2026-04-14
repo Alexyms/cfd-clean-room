@@ -9,6 +9,37 @@ You are given three context documents alongside the PR diff:
 
 ## Review Structure
 
+**Before writing any findings**, perform a systematic pre-review scan of the entire diff. This prevents the pattern where round one catches three issues, round two discovers three more that existed all along, and the review cycle takes six rounds instead of two.
+
+### Pre-Review Checklist
+
+For every function, method, or code path in the diff that handles external input (config values, user parameters, file data, function arguments from other modules):
+
+1. Is the type validated? (isinstance guard, explicit type check)
+2. Is the range validated where applicable? (positive, non-negative, within bounds, non-empty)
+3. Are boolean values rejected where numeric types are expected? (bool is a subclass of int in Python)
+4. Are required fields checked for presence? (missing key, None where a value is needed)
+5. Does an optional fallback produce valid state, or does it silently create a downstream failure?
+6. Is there a test that exercises the rejection path?
+
+For every validation pattern that appears more than once in the diff (e.g., type guards, range checks, bool rejection):
+
+1. Is the pattern applied consistently everywhere it should be?
+2. If one instance is missing the pattern, are ALL other instances also checked?
+
+**Do not write findings until this scan is complete.** The scan prevents the single most common review failure mode: reporting one instance of a pattern bug per round instead of all instances in one round.
+
+### Pattern-Scanning Rule
+
+When you identify a pattern-based issue (e.g., a missing type guard, an inconsistent validation check, a missing bool rejection, a repeated anti-pattern), scan the ENTIRE diff for all instances of the same pattern before writing the finding. Report all instances together in a single finding. Do not report one instance and leave the others for the next review round.
+
+Examples:
+- "Missing bool guard on velocity validation" should trigger a scan of every numeric validation in the file. The finding should list ALL locations where the guard is missing, not just the first one found.
+- "HEPA reference data stored in micrometers instead of SI meters" should trigger a scan of every constant and data structure for unit consistency.
+- "Missing isinstance type guard before .items() call" should trigger a scan of every section that iterates over YAML data.
+
+### Review Sections
+
 Organize your review into these sections. Skip any section that has no findings.
 
 ### 1. Standards Compliance
@@ -92,7 +123,9 @@ Issue **VERDICT: APPROVE** when there are no Critical or Bug findings. Suggestio
 
 Issue **VERDICT: REQUEST_CHANGES** when there is at least one Critical or Bug finding. Be specific about what must change and why. Reference the exact standard, requirement, or architecture rule being violated.
 
-**Exhaustiveness rule:** Assume this is the only review pass before the developer addresses your feedback and requests re-review. Find ALL issues (Critical, Bug, and Suggestion) in a single pass. Do not defer minor findings to later rounds. The developer should be able to address every finding in one commit, not discover new issues on each re-review.
+**Exhaustiveness rule:** This review is the ONLY pass before the developer addresses feedback and requests re-review. Find ALL issues (Critical, Bug, and Suggestion) in a single pass. Do not defer minor findings to later rounds. The developer should be able to address every finding in one commit, not discover new issues on each re-review.
+
+**Anti-pattern to avoid:** Rounds 1-6 each find one or two new bugs that existed in the original code. This happens when the reviewer focuses on the most prominent issues and does not scan systematically. The pre-review checklist and pattern-scanning rule exist to prevent this. If your review finds a Bug or Critical, pause and re-scan the entire diff for related issues before finalizing.
 
 Examples of correctly classified findings:
 
