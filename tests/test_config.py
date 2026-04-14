@@ -643,6 +643,31 @@ class TestSimConfigInvalidValues:
         with pytest.raises(TypeError, match=r"domain\.width.*number"):
             SimConfig(path)
 
+    def test_bool_in_particle_sizes_raises_type_error(self, tmp_path) -> None:
+        """Boolean in particle sizes list raises TypeError."""
+        path = _write_config(
+            tmp_path,
+            overrides={
+                "particles": {
+                    "density": 1000.0,
+                    "sizes": [True],
+                    "mean_free_path": 67e-9,
+                    "boundary_layer_thickness": 1e-3,
+                }
+            },
+        )
+        with pytest.raises(TypeError, match=r"particles\.sizes\[0\].*number"):
+            SimConfig(path)
+
+    def test_obstacles_not_list_raises(self, tmp_path) -> None:
+        """Obstacles section as a mapping raises ValueError."""
+        path = _write_config(
+            tmp_path,
+            overrides={"obstacles": {"bad": "value"}},
+        )
+        with pytest.raises(ValueError, match="obstacles must be a list"):
+            SimConfig(path)
+
     def test_missing_file_raises(self) -> None:
         """Non-existent config file raises FileNotFoundError."""
         with pytest.raises(FileNotFoundError):

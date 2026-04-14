@@ -296,6 +296,8 @@ class SimConfig:
 
         # Obstacles (optional)
         obstacles_raw = raw.get("obstacles", [])
+        if not isinstance(obstacles_raw, list):
+            raise ValueError("obstacles must be a list")
         self.obstacles: list[ObstacleSpec] = []
         for i, obs in enumerate(obstacles_raw):
             if not isinstance(obs, dict):
@@ -440,7 +442,7 @@ class SimConfig:
             raise TypeError(f"{context}.{key} must be a list, got {type(val).__name__}")
         result = []
         for i, item in enumerate(val):
-            if not isinstance(item, (int, float)):
+            if isinstance(item, bool) or not isinstance(item, (int, float)):
                 raise TypeError(
                     f"{context}.{key}[{i}] must be a number, got {type(item).__name__}"
                 )
@@ -461,7 +463,7 @@ class SimConfig:
             raise ValueError(f"{context}.{key} must not be empty")
         result = []
         for i, item in enumerate(val):
-            if not isinstance(item, (int, float)):
+            if isinstance(item, bool) or not isinstance(item, (int, float)):
                 raise TypeError(
                     f"{context}.{key}[{i}] must be a number, got {type(item).__name__}"
                 )
