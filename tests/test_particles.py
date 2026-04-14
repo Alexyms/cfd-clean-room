@@ -266,6 +266,99 @@ class TestDiffusionCoefficientValidation:
         )
 
 
+# Deposition velocity reference values derived from validated D and v_s:
+# v_diff = D / delta (wall/ceiling), v_floor = v_s + D / delta
+REFERENCE_DEPOSITION_WALL: list[float] = [
+    6.9249996253e-07,  # 0.1 um
+    1.2463053172e-07,  # 0.3 um
+    6.3488710195e-08,  # 0.5 um
+    2.7708454096e-08,  # 1.0 um
+    4.9025327437e-09,  # 5.0 um
+]
+
+REFERENCE_DEPOSITION_FLOOR: list[float] = [
+    1.5714984932e-06,  # 0.1 um
+    4.3958964161e-06,  # 0.3 um
+    1.0136861633e-05,  # 0.5 um
+    3.5198382467e-05,  # 1.0 um
+    7.7786037387e-04,  # 5.0 um
+]
+
+
+@pytest.mark.validation
+class TestDepositionVelocityValidation:
+    """Deposition velocity < 0.1% error vs analytical values.
+
+    Expected values derived from the already-validated diffusion_coeff
+    and settling_velocity: v_diff = D / delta, v_floor = v_s + v_diff.
+    """
+
+    @pytest.mark.parametrize(
+        ("size_class", "expected"),
+        list(enumerate(REFERENCE_DEPOSITION_WALL)),
+        ids=["0.1um", "0.3um", "0.5um", "1.0um", "5.0um"],
+    )
+    def test_wall_deposition(
+        self,
+        physics: ParticlePhysics,
+        size_class: int,
+        expected: float,
+    ) -> None:
+        """Wall deposition velocity matches analytical value within 0.1%."""
+        computed = physics.deposition_velocity(size_class, "wall")
+        relative_error = abs(computed - expected) / expected
+        assert relative_error < 1e-3, (
+            f"Size class {size_class}: relative error {relative_error:.2e} "
+            f"exceeds 0.1% (computed={computed:.6e}, expected={expected:.6e})"
+        )
+
+    @pytest.mark.parametrize(
+        ("size_class", "expected"),
+        list(enumerate(REFERENCE_DEPOSITION_FLOOR)),
+        ids=["0.1um", "0.3um", "0.5um", "1.0um", "5.0um"],
+    )
+    def test_floor_deposition(
+        self,
+        physics: ParticlePhysics,
+        size_class: int,
+        expected: float,
+    ) -> None:
+        """Floor deposition velocity matches analytical value within 0.1%."""
+        computed = physics.deposition_velocity(size_class, "floor")
+        relative_error = abs(computed - expected) / expected
+        assert relative_error < 1e-3, (
+            f"Size class {size_class}: relative error {relative_error:.2e} "
+            f"exceeds 0.1% (computed={computed:.6e}, expected={expected:.6e})"
+        )
+
+
+@pytest.mark.validation
+class TestHepaEfficiencyValidation:
+    """HEPA efficiency validation at an intermediate diameter.
+
+    At 0.2 um, the expected efficiency is computed by log-space linear
+    interpolation between the 0.1 um (0.99999) and 0.3 um (0.99970)
+    reference points.
+    """
+
+    def test_hepa_interpolation_accuracy(self) -> None:
+        """HEPA efficiency at 0.2 um matches hand-calculated value within 0.1%."""
+        pp = ParticlePhysics(
+            particle_sizes=[0.2e-6],
+            particle_density=1000.0,
+            temperature=293.0,
+            mu=1.81e-5,
+            mean_free_path=67e-9,
+        )
+        computed = pp.hepa_efficiency(0)
+        expected = 9.9980703037e-01
+        relative_error = abs(computed - expected) / expected
+        assert relative_error < 1e-3, (
+            f"Relative error {relative_error:.2e} exceeds 0.1% "
+            f"(computed={computed:.10e}, expected={expected:.10e})"
+        )
+
+
 @pytest.mark.unit
 class TestCunninghamCorrectionValidation:
     """Cunningham correction factor verification against analytical values."""

@@ -190,8 +190,12 @@ Mesh:
 
 ### particles.py --> solver_transport
 
+Note: the constructor accepts raw parameters as an interim design.
+It will be refactored to accept SimConfig when config.py is implemented.
+
 ```
 ParticlePhysics:
+    __init__(particle_sizes, particle_density, temperature, mu, mean_free_path, boundary_layer_thickness=1e-3)
     settling_velocity(size_class: int) -> float
     diffusion_coeff(size_class: int) -> float
     cunningham_correction(size_class: int) -> float
