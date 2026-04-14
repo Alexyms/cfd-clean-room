@@ -1,0 +1,92 @@
+name: Code Review
+
+on:
+  pull_request:
+    types: [opened]
+  issue_comment:
+    types: [created]
+
+jobs:
+  review:
+    name: Claude Code Review
+    runs-on: ubuntu-latest
+
+    # Run on PR open, or on /review comment on a PR
+    if: >
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.pull_request &&
+       contains(github.event.comment.body, '/review'))
+
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install anthropic PyGithub
+
+      - name: Get PR number
+        id: pr
+        run: |
+          if [ "${{ github.event_name }}" == "pull_request" ]; then
+            echo "number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
+          else
+            echo "number=${{ github.event.issue.number }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Get PR diff
+        id: diff
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr diff ${{ steps.pr.outputs.number }} > pr_diff.txt
+          # Truncate if diff is too large (keep under 100k chars for context window)
+          if [ $(wc -c < pr_diff.txt) -gt 100000 ]; then
+            head -c 100000 pr_diff.txt > pr_diff_truncated.txt
+            echo "TRUNCATED=true" >> $GITHUB_OUTPUT
+            mv pr_diff_truncated.txt pr_diff.txt
+          else
+            echo "TRUNCATED=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Get PR metadata
+        id: meta
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr view ${{ steps.pr.outputs.number }} --json title,body,headRefName > pr_meta.json
+
+      - name: Gather context documents
+        run: |
+          mkdir -p review_context
+          # Copy project docs the reviewer needs
+          cp claude.md review_context/ 2>/dev/null || echo "claude.md not found"
+          cp docs/SYSTEM.md review_context/ 2>/dev/null || echo "SYSTEM.md not found"
+          cp docs/PROJECT_PLAN.md review_context/ 2>/dev/null || echo "PROJECT_PLAN.md not found"
+
+      - name: Run code review
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          DIFF_TRUNCATED: ${{ steps.diff.outputs.TRUNCATED }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO_FULL_NAME: ${{ github.repository }}
+        run: python .github/scripts/review.py
+
+      - name: Post acknowledgment on manual trigger
+        if: github.event_name == 'issue_comment'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr comment ${{ steps.pr.outputs.number }} \
+            --body "Review requested. Running analysis..."
