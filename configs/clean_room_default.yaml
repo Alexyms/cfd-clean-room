@@ -87,7 +87,9 @@ sensors:
     x: 3.0
     y: 0.5
 
-# ISO 14644-1 Class 5 limits, particles per cubic meter
+# ISO 14644-1 Class 5 limits, particles per cubic meter.
+# Keys must be quoted strings to prevent YAML from parsing them as
+# floats, which would change the key format (e.g. 0.1e-6 -> 1e-07).
 thresholds:
   "0.1e-6": 1.0e+5
   "0.3e-6": 1.02e+4

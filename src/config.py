@@ -207,45 +207,80 @@ class SimConfig:
 
         # Boundaries
         boundaries_raw = self._require_section(raw, "boundaries")
+        if not isinstance(boundaries_raw, dict):
+            raise ValueError("boundaries must be a mapping")
         self.boundaries: dict[str, BoundarySpec] = {}
         for name, spec in boundaries_raw.items():
             if not isinstance(spec, dict):
                 raise ValueError(f"boundaries.{name} must be a mapping")
-            bc_type = self._require_string(spec, "type", f"boundaries.{name}")
+            ctx = f"boundaries.{name}"
+            bc_type = self._require_string(spec, "type", ctx)
             if bc_type not in _VALID_BOUNDARY_TYPES:
                 raise ValueError(
-                    f"boundaries.{name}.type must be one of "
+                    f"{ctx}.type must be one of "
                     f"{sorted(_VALID_BOUNDARY_TYPES)}, got '{bc_type}'"
                 )
-            bc_location = self._require_string(spec, "location", f"boundaries.{name}")
+            bc_location = self._require_string(spec, "location", ctx)
             if bc_location not in _VALID_BOUNDARY_LOCATIONS:
                 raise ValueError(
-                    f"boundaries.{name}.location must be one of "
+                    f"{ctx}.location must be one of "
                     f"{sorted(_VALID_BOUNDARY_LOCATIONS)}, got '{bc_location}'"
                 )
             bc_velocity = spec.get("velocity")
             if bc_type == "velocity_inlet":
                 if bc_velocity is None:
                     raise ValueError(
-                        f"boundaries.{name}: velocity_inlet requires a 'velocity' field"
+                        f"{ctx}: velocity_inlet requires a 'velocity' field"
                     )
                 if not isinstance(bc_velocity, (int, float)):
                     raise TypeError(
-                        f"boundaries.{name}.velocity must be a number, "
+                        f"{ctx}.velocity must be a number, "
                         f"got {type(bc_velocity).__name__}"
                     )
                 if bc_velocity <= 0:
                     raise ValueError(
-                        f"boundaries.{name}.velocity must be positive, "
-                        f"got {bc_velocity}"
+                        f"{ctx}.velocity must be positive, got {bc_velocity}"
                     )
+
+            # Coordinate validation based on boundary orientation
+            bc_x_start = None
+            bc_x_end = None
+            bc_y_start = None
+            bc_y_end = None
+            if bc_location in ("top", "bottom"):
+                bc_x_start = self._require_float(spec, "x_start", ctx)
+                bc_x_end = self._require_float(spec, "x_end", ctx)
+                if bc_x_start >= bc_x_end:
+                    raise ValueError(
+                        f"{ctx}: x_start ({bc_x_start}) must be less "
+                        f"than x_end ({bc_x_end})"
+                    )
+                if bc_x_start < 0 or bc_x_end > self.room_width:
+                    raise ValueError(
+                        f"{ctx}: x range [{bc_x_start}, {bc_x_end}] "
+                        f"outside domain [0, {self.room_width}]"
+                    )
+            else:  # left, right
+                bc_y_start = self._require_float(spec, "y_start", ctx)
+                bc_y_end = self._require_float(spec, "y_end", ctx)
+                if bc_y_start >= bc_y_end:
+                    raise ValueError(
+                        f"{ctx}: y_start ({bc_y_start}) must be less "
+                        f"than y_end ({bc_y_end})"
+                    )
+                if bc_y_start < 0 or bc_y_end > self.room_height:
+                    raise ValueError(
+                        f"{ctx}: y range [{bc_y_start}, {bc_y_end}] "
+                        f"outside domain [0, {self.room_height}]"
+                    )
+
             self.boundaries[name] = BoundarySpec(
                 type=bc_type,
                 location=bc_location,
-                x_start=spec.get("x_start"),
-                x_end=spec.get("x_end"),
-                y_start=spec.get("y_start"),
-                y_end=spec.get("y_end"),
+                x_start=bc_x_start,
+                x_end=bc_x_end,
+                y_start=bc_y_start,
+                y_end=bc_y_end,
                 velocity=bc_velocity,
             )
 

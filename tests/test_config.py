@@ -376,6 +376,8 @@ class TestSimConfigInvalidValues:
                     "bad": {
                         "type": "supersonic_inlet",
                         "location": "top",
+                        "x_start": 0.5,
+                        "x_end": 3.5,
                     }
                 }
             },
@@ -408,6 +410,8 @@ class TestSimConfigInvalidValues:
                     "bad": {
                         "type": "velocity_inlet",
                         "location": "top",
+                        "x_start": 0.5,
+                        "x_end": 3.5,
                     }
                 }
             },
@@ -424,12 +428,129 @@ class TestSimConfigInvalidValues:
                     "bad": {
                         "type": "velocity_inlet",
                         "location": "top",
+                        "x_start": 0.5,
+                        "x_end": 3.5,
                         "velocity": -0.5,
                     }
                 }
             },
         )
         with pytest.raises(ValueError, match=r"velocity.*positive"):
+            SimConfig(path)
+
+    def test_boundaries_as_list_raises(self, tmp_path) -> None:
+        """Boundaries section as a list instead of mapping raises ValueError."""
+        path = _write_config(
+            tmp_path,
+            overrides={"boundaries": [{"type": "wall", "location": "top"}]},
+        )
+        with pytest.raises(ValueError, match="boundaries must be a mapping"):
+            SimConfig(path)
+
+    def test_boundary_top_missing_x_coords_raises(self, tmp_path) -> None:
+        """Top boundary missing x_start raises ValueError."""
+        path = _write_config(
+            tmp_path,
+            overrides={
+                "boundaries": {
+                    "bad": {
+                        "type": "wall",
+                        "location": "top",
+                        "x_end": 3.0,
+                    }
+                }
+            },
+        )
+        with pytest.raises(ValueError, match=r"boundaries\.bad\.x_start"):
+            SimConfig(path)
+
+    def test_boundary_left_missing_y_coords_raises(self, tmp_path) -> None:
+        """Left boundary missing y_start raises ValueError."""
+        path = _write_config(
+            tmp_path,
+            overrides={
+                "boundaries": {
+                    "bad": {
+                        "type": "wall",
+                        "location": "left",
+                        "y_end": 2.0,
+                    }
+                }
+            },
+        )
+        with pytest.raises(ValueError, match=r"boundaries\.bad\.y_start"):
+            SimConfig(path)
+
+    def test_boundary_top_inverted_x_raises(self, tmp_path) -> None:
+        """Top boundary with x_start >= x_end raises ValueError."""
+        path = _write_config(
+            tmp_path,
+            overrides={
+                "boundaries": {
+                    "bad": {
+                        "type": "wall",
+                        "location": "top",
+                        "x_start": 3.0,
+                        "x_end": 1.0,
+                    }
+                }
+            },
+        )
+        with pytest.raises(ValueError, match=r"x_start.*less than.*x_end"):
+            SimConfig(path)
+
+    def test_boundary_left_inverted_y_raises(self, tmp_path) -> None:
+        """Left boundary with y_start >= y_end raises ValueError."""
+        path = _write_config(
+            tmp_path,
+            overrides={
+                "boundaries": {
+                    "bad": {
+                        "type": "wall",
+                        "location": "left",
+                        "y_start": 2.0,
+                        "y_end": 0.5,
+                    }
+                }
+            },
+        )
+        with pytest.raises(ValueError, match=r"y_start.*less than.*y_end"):
+            SimConfig(path)
+
+    def test_boundary_top_x_outside_domain_raises(self, tmp_path) -> None:
+        """Top boundary with x_end beyond room_width raises ValueError."""
+        path = _write_config(
+            tmp_path,
+            overrides={
+                "boundaries": {
+                    "bad": {
+                        "type": "wall",
+                        "location": "top",
+                        "x_start": 0.0,
+                        "x_end": 10.0,
+                    }
+                }
+            },
+        )
+        with pytest.raises(ValueError, match=r"outside domain"):
+            SimConfig(path)
+
+    def test_boundary_right_y_outside_domain_raises(self, tmp_path) -> None:
+        """Right boundary with y_end beyond room_height raises ValueError."""
+        path = _write_config(
+            tmp_path,
+            overrides={
+                "boundaries": {
+                    "bad": {
+                        "type": "wall",
+                        "location": "right",
+                        "y_start": 0.0,
+                        "y_end": 10.0,
+                    }
+                }
+            },
+        )
+        with pytest.raises(ValueError, match=r"outside domain"):
             SimConfig(path)
 
     def test_sensor_out_of_domain_x_raises(self, tmp_path) -> None:
