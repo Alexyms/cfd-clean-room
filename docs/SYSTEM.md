@@ -182,6 +182,7 @@ SimConfig:
     max_simple_iter: int
     boundaries: dict[str, BoundarySpec]
     obstacles: list[ObstacleSpec]
+    # scenarios: deferred to Phase 4, loaded via separate scenario YAML files
     sensors: list[SensorSpec]
     thresholds: dict[str, float]
 ```

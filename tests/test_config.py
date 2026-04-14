@@ -628,6 +628,21 @@ class TestSimConfigInvalidValues:
         with pytest.raises(ValueError, match=r"outside domain"):
             SimConfig(path)
 
+    def test_domain_not_mapping_raises(self, tmp_path) -> None:
+        """Domain section as a scalar raises ValueError."""
+        path = _write_config(tmp_path, overrides={"domain": 5})
+        with pytest.raises(ValueError, match="domain must be a mapping"):
+            SimConfig(path)
+
+    def test_bool_domain_width_raises_type_error(self, tmp_path) -> None:
+        """Boolean where float expected raises TypeError."""
+        path = _write_config(
+            tmp_path,
+            overrides={"domain": {"width": True, "height": 3.0, "nx": 80, "ny": 60}},
+        )
+        with pytest.raises(TypeError, match=r"domain\.width.*number"):
+            SimConfig(path)
+
     def test_missing_file_raises(self) -> None:
         """Non-existent config file raises FileNotFoundError."""
         with pytest.raises(FileNotFoundError):

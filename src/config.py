@@ -138,6 +138,8 @@ class SimConfig:
         """Validate all parameters and store as typed attributes."""
         # Domain
         domain = self._require_section(raw, "domain")
+        if not isinstance(domain, dict):
+            raise ValueError("domain must be a mapping")
         self.room_width: float = self._require_positive_float(domain, "width", "domain")
         self.room_height: float = self._require_positive_float(
             domain, "height", "domain"
@@ -147,6 +149,8 @@ class SimConfig:
 
         # Fluid
         fluid = self._require_section(raw, "fluid")
+        if not isinstance(fluid, dict):
+            raise ValueError("fluid must be a mapping")
         self.rho: float = self._require_positive_float(fluid, "density", "fluid")
         self.mu: float = self._require_positive_float(fluid, "viscosity", "fluid")
         self.temperature: float = self._require_positive_float(
@@ -155,6 +159,8 @@ class SimConfig:
 
         # Particles
         particles = self._require_section(raw, "particles")
+        if not isinstance(particles, dict):
+            raise ValueError("particles must be a mapping")
         self.particle_density: float = self._require_positive_float(
             particles, "density", "particles"
         )
@@ -170,6 +176,8 @@ class SimConfig:
 
         # HEPA reference data (optional, with defaults matching standard HEPA)
         hepa_raw = particles.get("hepa_reference", {})
+        if hepa_raw and not isinstance(hepa_raw, dict):
+            raise ValueError("particles.hepa_reference must be a mapping")
         if hepa_raw:
             hepa_diameters = self._require_positive_float_list(
                 hepa_raw, "diameters", "particles.hepa_reference"
@@ -193,6 +201,8 @@ class SimConfig:
 
         # Solver
         solver = self._require_section(raw, "solver")
+        if not isinstance(solver, dict):
+            raise ValueError("solver must be a mapping")
         self.dt: float = self._require_positive_float(solver, "dt", "solver")
         self.t_end: float = self._require_positive_float(solver, "t_end", "solver")
         self.output_interval: int = self._require_positive_int(
@@ -386,7 +396,7 @@ class SimConfig:
         if key not in section:
             raise ValueError(f"Missing required key: '{context}.{key}'")
         val = section[key]
-        if not isinstance(val, (int, float)):
+        if isinstance(val, bool) or not isinstance(val, (int, float)):
             raise TypeError(
                 f"{context}.{key} must be a number, got {type(val).__name__}"
             )
@@ -398,7 +408,7 @@ class SimConfig:
         if key not in section:
             raise ValueError(f"Missing required key: '{context}.{key}'")
         val = section[key]
-        if not isinstance(val, (int, float)):
+        if isinstance(val, bool) or not isinstance(val, (int, float)):
             raise TypeError(
                 f"{context}.{key} must be a number, got {type(val).__name__}"
             )
