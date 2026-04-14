@@ -1,8 +1,8 @@
 # System Architecture Document
 
 **Project:** CFD Clean Room Simulation
-**Status:** Pre-development. Architecture defined, no code written.
-**Last Updated:** 2026-04-14
+**Status:** Phase 1 in progress. Foundation modules under development.
+**Last Updated:** 2026-04-15
 
 This document is the single reference for system architecture, requirements, module interfaces, and dependency relationships. The automated code review system reads this document on every PR to verify compliance. Keep it current.
 
@@ -43,6 +43,8 @@ Requirements are organized by subsystem. Each requirement has a unique ID, a rat
 | REQ-T06 | The transport solver shall accept an external force field parameter (v_ext) for future extension to electrostatic precipitation modeling. The parameter shall be structurally present but set to zero in v1. | Architectural extensibility per ADR-007. Avoids future refactoring of the solver interface. | Architecture review |
 | REQ-T07 | Pure diffusion from a point source shall produce a Gaussian concentration profile with L2 error < 1% vs the analytical solution. | Validates the diffusion discretization independently of advection. | VAL-003 |
 | REQ-T08 | Advection of a concentration pulse in a uniform flow shall preserve peak location to within 1 cell width and maintain pulse shape. | Validates advection discretization. Excessive numerical diffusion indicates the scheme is too dissipative. | VAL-004 |
+| REQ-T09 | The particles module shall compute gravitational and diffusional deposition velocity for each size class, parameterized by boundary layer thickness and surface orientation (floor, ceiling, wall). | Deposition velocity is a boundary condition input for the transport solver. Floor deposition includes gravitational settling; ceiling and wall deposition are diffusion-only. | VAL-010 |
+| REQ-T10 | The particles module shall estimate HEPA filter collection efficiency for each size class via interpolation of reference efficiency data. | HEPA efficiency determines the particle removal rate at supply vent boundaries. Efficiency varies by particle size with a minimum at the most-penetrating particle size (~0.3 um). | VAL-011 |
 
 ### 2.3 Configuration Requirements
 
@@ -190,11 +192,17 @@ Mesh:
 
 ### particles.py --> solver_transport
 
+Note: the constructor accepts raw parameters as an interim design.
+It will be refactored to accept SimConfig when config.py is implemented.
+
 ```
 ParticlePhysics:
+    __init__(particle_sizes, particle_density, temperature, mu, mean_free_path, boundary_layer_thickness=1e-3)
     settling_velocity(size_class: int) -> float
     diffusion_coeff(size_class: int) -> float
     cunningham_correction(size_class: int) -> float
+    deposition_velocity(size_class: int, surface: str) -> float
+    hepa_efficiency(size_class: int) -> float
 ```
 
 ### solver_ns.py --> solver_transport, time_integration
