@@ -2,7 +2,7 @@
 
 **Project:** CFD Clean Room Simulation
 **Last Updated:** 2026-04-14
-**Current Phase:** Pre-development (infrastructure setup)
+**Current Phase:** Phase 1 (Foundation)
 
 This document tracks development progress by phase. The automated code review system reads this document to determine the current phase and verify that PRs are in scope. Update this document as work progresses.
 
@@ -12,8 +12,8 @@ This document tracks development progress by phase. The automated code review sy
 
 | Phase | Name | Status | Gate Verdict | Report |
 |-------|------|--------|-------------|--------|
-| 0 | Infrastructure | IN PROGRESS | -- | -- |
-| 1 | Foundation | NOT STARTED | -- | -- |
+| 0 | Infrastructure | COMPLETE | PASS | -- |
+| 1 | Foundation | IN PROGRESS | -- | -- |
 | 2 | Navier-Stokes Solver | NOT STARTED | -- | -- |
 | 3 | Transport Solver | NOT STARTED | -- | -- |
 | 4 | Scenarios & Time Integration | NOT STARTED | -- | -- |
@@ -36,14 +36,14 @@ Status values: NOT STARTED, IN PROGRESS, GATE REVIEW, COMPLETE
 | claude.md (coding standards) | DONE |
 | docs/SYSTEM.md (architecture) | DONE |
 | docs/PROJECT_PLAN.md (this file) | DONE |
-| pyproject.toml (ruff config, pytest markers) | NOT STARTED |
-| requirements.txt | NOT STARTED |
-| requirements-dev.txt | NOT STARTED |
-| .gitignore | NOT STARTED |
-| .github/workflows/review.yml (code review action) | NOT STARTED |
-| .github/workflows/ci.yml (lint + test action) | NOT STARTED |
-| Review system prompt and script | NOT STARTED |
-| README.md | NOT STARTED |
+| pyproject.toml (ruff config, pytest markers) | DONE |
+| requirements.txt | DONE |
+| requirements-dev.txt | DONE |
+| .gitignore | DONE |
+| .github/workflows/review.yml (code review action) | DONE |
+| .github/workflows/ci.yml (lint + test action) | DONE |
+| Review system prompt and script | DONE |
+| README.md | DONE |
 
 ### Gate Criteria
 
@@ -278,3 +278,4 @@ Phase 3 completion is the minimum viable portfolio artifact. A working, validate
 | Date | Change |
 |------|--------|
 | 2026-04-14 | Initial plan created. All phases at NOT STARTED except Phase 0 (IN PROGRESS). |
+| 2026-04-14 | Phase 0 complete. All infrastructure deliverables DONE. CI and review bot validated on test PR #1. Phase 1 now IN PROGRESS. |
