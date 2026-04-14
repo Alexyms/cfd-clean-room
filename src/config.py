@@ -174,30 +174,29 @@ class SimConfig:
             particles, "boundary_layer_thickness", "particles"
         )
 
-        # HEPA reference data (optional, with defaults matching standard HEPA)
-        hepa_raw = particles.get("hepa_reference", {})
-        if hepa_raw and not isinstance(hepa_raw, dict):
+        # HEPA reference data
+        if "hepa_reference" not in particles:
+            raise ValueError("Missing required key: 'particles.hepa_reference'")
+        hepa_raw = particles["hepa_reference"]
+        if not isinstance(hepa_raw, dict):
             raise ValueError("particles.hepa_reference must be a mapping")
-        if hepa_raw:
-            hepa_diameters = self._require_positive_float_list(
-                hepa_raw, "diameters", "particles.hepa_reference"
+        hepa_diameters = self._require_positive_float_list(
+            hepa_raw, "diameters", "particles.hepa_reference"
+        )
+        hepa_efficiencies = self._require_float_list(
+            hepa_raw, "efficiencies", "particles.hepa_reference"
+        )
+        if len(hepa_diameters) != len(hepa_efficiencies):
+            raise ValueError(
+                "particles.hepa_reference.diameters and efficiencies "
+                "must have the same length"
             )
-            hepa_efficiencies = self._require_float_list(
-                hepa_raw, "efficiencies", "particles.hepa_reference"
-            )
-            if len(hepa_diameters) != len(hepa_efficiencies):
-                raise ValueError(
-                    "particles.hepa_reference.diameters and efficiencies "
-                    "must have the same length"
-                )
-            for eff in hepa_efficiencies:
-                if not 0.0 <= eff <= 1.0:
-                    raise ValueError(f"HEPA efficiency must be in [0, 1], got {eff}")
-            self.hepa_reference: HepaReference = HepaReference(
-                diameters=hepa_diameters, efficiencies=hepa_efficiencies
-            )
-        else:
-            self.hepa_reference = HepaReference()
+        for eff in hepa_efficiencies:
+            if not 0.0 <= eff <= 1.0:
+                raise ValueError(f"HEPA efficiency must be in [0, 1], got {eff}")
+        self.hepa_reference: HepaReference = HepaReference(
+            diameters=hepa_diameters, efficiencies=hepa_efficiencies
+        )
 
         # Solver
         solver = self._require_section(raw, "solver")
@@ -368,10 +367,12 @@ class SimConfig:
             raise ValueError("thresholds must be a mapping")
         self.thresholds: dict[str, float] = {}
         for key, val in thresholds_raw.items():
-            if not isinstance(val, (int, float)):
+            if isinstance(val, bool) or not isinstance(val, (int, float)):
                 raise TypeError(
                     f"thresholds.{key} must be a number, got {type(val).__name__}"
                 )
+            if val < 0:
+                raise ValueError(f"thresholds.{key} must be non-negative, got {val}")
             self.thresholds[str(key)] = float(val)
 
     # -- Validation helpers --------------------------------------------------

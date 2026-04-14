@@ -19,9 +19,9 @@ def _write_config(tmp_path, overrides: dict | None = None) -> str:
     tmp_path : pathlib.Path
         Pytest tmp_path fixture directory.
     overrides : dict or None
-        Keys to merge into (or replace within) the base config dict
-        before writing. Use a nested dict to override specific sections.
-        Set a section to None to remove it entirely.
+        Keys to replace in the base config dict before writing.
+        Each key replaces the entire top-level section (no nested
+        merge). Set a section to None to remove it entirely.
 
     Returns
     -------
@@ -685,6 +685,40 @@ class TestSimConfigInvalidValues:
             overrides={"obstacles": {"bad": "value"}},
         )
         with pytest.raises(ValueError, match="obstacles must be a list"):
+            SimConfig(path)
+
+    def test_missing_hepa_reference_raises(self, tmp_path) -> None:
+        """Missing hepa_reference section raises ValueError."""
+        path = _write_config(
+            tmp_path,
+            overrides={
+                "particles": {
+                    "density": 1000.0,
+                    "sizes": [0.1e-6],
+                    "mean_free_path": 67e-9,
+                    "boundary_layer_thickness": 1e-3,
+                }
+            },
+        )
+        with pytest.raises(ValueError, match=r"particles\.hepa_reference"):
+            SimConfig(path)
+
+    def test_negative_threshold_raises(self, tmp_path) -> None:
+        """Negative threshold value raises ValueError."""
+        path = _write_config(
+            tmp_path,
+            overrides={"thresholds": {"0.5e-6": -100.0}},
+        )
+        with pytest.raises(ValueError, match=r"thresholds.*non-negative"):
+            SimConfig(path)
+
+    def test_bool_threshold_raises_type_error(self, tmp_path) -> None:
+        """Boolean threshold value raises TypeError."""
+        path = _write_config(
+            tmp_path,
+            overrides={"thresholds": {"0.5e-6": True}},
+        )
+        with pytest.raises(TypeError, match=r"thresholds.*number"):
             SimConfig(path)
 
     def test_missing_file_raises(self) -> None:
