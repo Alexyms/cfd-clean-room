@@ -8,14 +8,16 @@ diffusion-dominated (0.1 um) to settling-dominated (5.0 um).
 
 import math
 
-# Physical constants (SI units)
-BOLTZMANN_CONSTANT: float = 1.380649e-23  # J/K, exact by 2019 SI redefinition
-GRAVITY: float = 9.80665  # m/s^2, standard gravity
+from src.constants import BOLTZMANN_CONSTANT, GRAVITY
 
 # Cunningham correction empirical coefficients (Allen and Raabe, 1985)
 _CUNNINGHAM_A1: float = 1.257
 _CUNNINGHAM_A2: float = 0.4
 _CUNNINGHAM_A3: float = 1.1
+
+# Typical laminar boundary layer thickness in clean room environments.
+# Used for estimating diffusive deposition velocity (v_diff = D / delta).
+_BOUNDARY_LAYER_THICKNESS: float = 1e-3  # m
 
 
 class ParticlePhysics:
@@ -211,10 +213,7 @@ class ParticlePhysics:
 
         v_s = self.settling_velocity(size_class)
         d_coeff = self.diffusion_coeff(size_class)
-
-        # Laminar boundary layer thickness for clean room conditions
-        delta = 1e-3  # m
-        v_diff = d_coeff / delta
+        v_diff = d_coeff / _BOUNDARY_LAYER_THICKNESS
 
         if surface == "floor":
             return v_s + v_diff

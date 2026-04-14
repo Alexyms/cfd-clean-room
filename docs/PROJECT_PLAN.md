@@ -66,18 +66,22 @@ Status values: NOT STARTED, IN PROGRESS, GATE REVIEW, COMPLETE
 |-------------|--------|-------|
 | src/config.py | NOT STARTED | YAML loader with validation |
 | src/mesh.py | NOT STARTED | Structured grid generation, cell classification |
-| src/particles.py | NOT STARTED | Settling velocity, diffusion coeff, Cunningham correction |
+| src/particles.py | DONE | Settling velocity, diffusion coeff, Cunningham correction, deposition velocity, HEPA efficiency |
 | configs/clean_room_default.yaml | NOT STARTED | Base configuration |
 | tests/test_config.py | NOT STARTED | Unit tests: validation, rejection of bad input |
 | tests/test_mesh.py | NOT STARTED | Unit tests: cell counts, classification, neighbors |
-| tests/test_particles.py | NOT STARTED | Unit + validation: VAL-005, VAL-006 |
+| tests/test_particles.py | DONE | Unit + validation: VAL-005, VAL-006 |
 
 ### Validation Gate
 
 | Test ID | Description | Criterion | Status |
 |---------|-------------|-----------|--------|
-| VAL-005 | Stokes settling velocity | < 0.1% error vs analytical for all 5 size classes | NOT RUN |
-| VAL-006 | Brownian diffusion coefficient | < 0.1% error vs analytical for all 5 size classes | NOT RUN |
+| VAL-005 | Stokes settling velocity | < 0.1% error vs analytical for all 5 size classes | PASS |
+| VAL-006 | Brownian diffusion coefficient | < 0.1% error vs analytical for all 5 size classes | PASS |
+
+### Scope Additions
+
+- `deposition_velocity` and `hepa_efficiency` added to `ParticlePhysics` in Phase 1. Rationale: pure particle physics with no external dependencies, avoids revisiting the module in Phase 3.
 
 ### Phase-Specific Risks
 

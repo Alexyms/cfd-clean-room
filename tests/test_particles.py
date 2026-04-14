@@ -231,9 +231,9 @@ class TestDiffusionCoefficientValidation:
         )
 
 
-@pytest.mark.validation
+@pytest.mark.unit
 class TestCunninghamCorrectionValidation:
-    """Cunningham correction factor validation against analytical values."""
+    """Cunningham correction factor verification against analytical values."""
 
     @pytest.mark.parametrize(
         ("size_class", "expected"),

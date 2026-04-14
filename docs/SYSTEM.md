@@ -195,6 +195,8 @@ ParticlePhysics:
     settling_velocity(size_class: int) -> float
     diffusion_coeff(size_class: int) -> float
     cunningham_correction(size_class: int) -> float
+    deposition_velocity(size_class: int, surface: str) -> float
+    hepa_efficiency(size_class: int) -> float
 ```
 
 ### solver_ns.py --> solver_transport, time_integration
