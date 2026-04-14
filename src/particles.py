@@ -8,19 +8,13 @@ diffusion-dominated (0.1 um) to settling-dominated (5.0 um).
 
 import math
 
+from src.config import SimConfig
 from src.constants import BOLTZMANN_CONSTANT, GRAVITY
 
 # Cunningham correction empirical coefficients (Allen and Raabe, 1985)
 _CUNNINGHAM_A1: float = 1.257
 _CUNNINGHAM_A2: float = 0.4
 _CUNNINGHAM_A3: float = 1.1
-
-# HEPA filter reference efficiency data (diameter in meters, single-pass efficiency).
-# Based on typical HEPA performance: minimum at MPPS (~0.3 um), higher at
-# smaller sizes (diffusion capture) and larger sizes (interception/impaction).
-# TODO: move to YAML config when SimConfig is implemented.
-_HEPA_REF_DIAMETERS: list[float] = [0.1e-6, 0.3e-6, 0.5e-6, 1.0e-6, 5.0e-6]
-_HEPA_REF_EFFICIENCIES: list[float] = [0.99999, 0.99970, 0.99990, 0.99999, 0.99999]
 
 
 class ParticlePhysics:
@@ -32,38 +26,22 @@ class ParticlePhysics:
 
     Parameters
     ----------
-    particle_sizes : list[float]
-        Particle diameters in meters for each size class.
-    particle_density : float
-        Particle material density in kg/m^3.
-    temperature : float
-        Air temperature in K.
-    mu : float
-        Dynamic viscosity of air in Pa*s.
-    mean_free_path : float
-        Mean free path of air molecules in meters.
-    boundary_layer_thickness : float
-        Laminar boundary layer thickness in meters, used for
-        diffusive deposition velocity estimation (v_diff = D / delta).
-        Default 1e-3 m is typical for clean room environments.
+    config : SimConfig
+        Simulation configuration containing particle sizes,
+        density, fluid properties, boundary layer thickness,
+        and HEPA reference data.
     """
 
-    def __init__(
-        self,
-        particle_sizes: list[float],
-        particle_density: float,
-        temperature: float,
-        mu: float,
-        mean_free_path: float,
-        boundary_layer_thickness: float = 1e-3,
-    ) -> None:
-        self._particle_sizes = particle_sizes
-        self._rho_p = particle_density
-        self._temperature = temperature
-        self._mu = mu
-        self._lambda = mean_free_path
-        self._boundary_layer_thickness = boundary_layer_thickness
-        self._n_classes = len(particle_sizes)
+    def __init__(self, config: SimConfig) -> None:
+        self._particle_sizes = list(config.particle_sizes)
+        self._rho_p = config.particle_density
+        self._temperature = config.temperature
+        self._mu = config.mu
+        self._lambda = config.mean_free_path
+        self._boundary_layer_thickness = config.boundary_layer_thickness
+        self._n_classes = len(self._particle_sizes)
+        self._hepa_ref_diameters = list(config.hepa_reference.diameters)
+        self._hepa_ref_efficiencies = list(config.hepa_reference.efficiencies)
 
     @property
     def n_classes(self) -> int:
@@ -249,14 +227,8 @@ class ParticlePhysics:
         -----
         This is a simplified model for boundary condition purposes.
         The minimum efficiency occurs near 0.3 um where neither
-        diffusion nor interception dominates. Efficiency values are
-        based on typical HEPA filter performance data:
-
-        - 0.1 um: 0.99999 (diffusion-dominated capture)
-        - 0.3 um: 0.99970 (MPPS, minimum by definition)
-        - 0.5 um: 0.99990 (interception begins to dominate)
-        - 1.0 um: 0.99999 (interception-dominated)
-        - 5.0 um: 0.99999 (inertial impaction dominant)
+        diffusion nor interception dominates. Reference diameters and
+        efficiencies are loaded from the simulation configuration.
 
         For particle sizes not in the reference table, linear
         interpolation in log-diameter space is used.
@@ -264,20 +236,20 @@ class ParticlePhysics:
         d_p = self._diameter(size_class)
 
         # Clamp to reference range
-        if d_p <= _HEPA_REF_DIAMETERS[0]:
-            return _HEPA_REF_EFFICIENCIES[0]
-        if d_p >= _HEPA_REF_DIAMETERS[-1]:
-            return _HEPA_REF_EFFICIENCIES[-1]
+        if d_p <= self._hepa_ref_diameters[0]:
+            return self._hepa_ref_efficiencies[0]
+        if d_p >= self._hepa_ref_diameters[-1]:
+            return self._hepa_ref_efficiencies[-1]
 
         # Linear interpolation in log-diameter space
         log_d = math.log(d_p)
-        for i in range(len(_HEPA_REF_DIAMETERS) - 1):
-            log_d_lo = math.log(_HEPA_REF_DIAMETERS[i])
-            log_d_hi = math.log(_HEPA_REF_DIAMETERS[i + 1])
+        for i in range(len(self._hepa_ref_diameters) - 1):
+            log_d_lo = math.log(self._hepa_ref_diameters[i])
+            log_d_hi = math.log(self._hepa_ref_diameters[i + 1])
             if log_d_lo <= log_d <= log_d_hi:
                 t = (log_d - log_d_lo) / (log_d_hi - log_d_lo)
-                return _HEPA_REF_EFFICIENCIES[i] + t * (
-                    _HEPA_REF_EFFICIENCIES[i + 1] - _HEPA_REF_EFFICIENCIES[i]
+                return self._hepa_ref_efficiencies[i] + t * (
+                    self._hepa_ref_efficiencies[i + 1] - self._hepa_ref_efficiencies[i]
                 )
 
         raise RuntimeError("interpolation loop failed to find enclosing interval")
