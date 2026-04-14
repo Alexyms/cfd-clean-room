@@ -287,7 +287,7 @@ REFERENCE_DEPOSITION_FLOOR: list[float] = [
 
 @pytest.mark.validation
 class TestDepositionVelocityValidation:
-    """Deposition velocity < 0.1% error vs analytical values.
+    """VAL-010: Deposition velocity < 0.1% error vs analytical values.
 
     Expected values derived from the already-validated diffusion_coeff
     and settling_velocity: v_diff = D / delta, v_floor = v_s + v_diff.
@@ -334,7 +334,7 @@ class TestDepositionVelocityValidation:
 
 @pytest.mark.validation
 class TestHepaEfficiencyValidation:
-    """HEPA efficiency validation at an intermediate diameter.
+    """VAL-011: HEPA interpolation < 0.1% error vs algebraic reference.
 
     At 0.2 um, the expected efficiency is computed by log-space linear
     interpolation between the 0.1 um (0.99999) and 0.3 um (0.99970)

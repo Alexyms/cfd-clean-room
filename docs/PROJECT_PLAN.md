@@ -78,6 +78,8 @@ Status values: NOT STARTED, IN PROGRESS, GATE REVIEW, COMPLETE
 |---------|-------------|-----------|--------|
 | VAL-005 | Stokes settling velocity | < 0.1% error vs analytical for all 5 size classes | PASS |
 | VAL-006 | Brownian diffusion coefficient | < 0.1% error vs analytical for all 5 size classes | PASS |
+| VAL-010 | Deposition velocity | < 0.1% error vs analytical (D/delta for ceiling/wall, D/delta + v_s for floor) for all 5 size classes | PASS |
+| VAL-011 | HEPA interpolation | < 0.1% error vs algebraic log-space linear interpolation at intermediate diameter | PASS |
 
 ### Scope Additions
 
