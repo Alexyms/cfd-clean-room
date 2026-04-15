@@ -151,6 +151,10 @@ class BoundaryManager:
     ) -> tuple[int, int]:
         """Find the nearest FLUID cell toward the domain interior.
 
+        If no FLUID cell exists along the inward direction (e.g., at
+        corners where the adjacent cell is SOLID), falls back to the
+        immediately adjacent interior cell regardless of type.
+
         Parameters
         ----------
         i : int
@@ -266,6 +270,9 @@ class BoundaryManager:
 
         if spec.type == "pressure_outlet":
             return ("pressure_outlet", 0.0, 0.0)
+
+        if spec.type != "velocity_inlet":
+            raise ValueError(f"Unrecognized boundary type: {spec.type}")
 
         # velocity_inlet: decompose velocity into u, v based on edge normal
         vel = spec.velocity if spec.velocity is not None else 0.0

@@ -11,7 +11,7 @@ import yaml
 
 from src.boundary import BoundaryManager
 from src.config import SimConfig
-from src.mesh import BOUNDARY, Mesh
+from src.mesh import BOUNDARY, FLUID, Mesh
 
 
 def _make_config(tmp_path, overrides: dict | None = None) -> SimConfig:
@@ -204,10 +204,9 @@ class TestVelocityBC:
         # Check non-corner wall entries whose interior neighbor is FLUID.
         # Corner cells may have boundary neighbors that were already
         # modified, so their values depend on processing order.
-        from src.mesh import FLUID as _FLUID
 
         for e in bm._entries:
-            if mesh.cell_type[e.nj, e.ni] != _FLUID:
+            if mesh.cell_type[e.nj, e.ni] != FLUID:
                 continue
             assert u[e.j, e.i] == pytest.approx(1.0), (
                 f"Wall u at ({e.i},{e.j}): expected 1.0, got {u[e.j, e.i]}"
@@ -250,8 +249,6 @@ class TestVelocityBC:
         mesh = Mesh(config)
         bm = BoundaryManager(mesh, config)
 
-        from src.mesh import FLUID as _FLUID
-
         u = np.zeros((10, 10), dtype=np.float64)
         v = np.ones((10, 10), dtype=np.float64) * 0.3
         bm.apply_velocity_bc(u, v)
@@ -261,7 +258,7 @@ class TestVelocityBC:
             for e in bm._entries
             if e.edge == "top"
             and e.bc_type == "velocity_inlet"
-            and mesh.cell_type[e.nj, e.ni] == _FLUID
+            and mesh.cell_type[e.nj, e.ni] == FLUID
         ]
         assert len(top_inlets) > 0
         for e in top_inlets:
@@ -282,8 +279,6 @@ class TestVelocityBC:
         mesh = Mesh(config)
         bm = BoundaryManager(mesh, config)
 
-        from src.mesh import FLUID as _FLUID
-
         u = np.ones((10, 10), dtype=np.float64) * 2.5
         v = np.ones((10, 10), dtype=np.float64) * 1.5
         bm.apply_velocity_bc(u, v)
@@ -291,7 +286,7 @@ class TestVelocityBC:
         outlet_entries = [
             e
             for e in bm._entries
-            if e.bc_type == "pressure_outlet" and mesh.cell_type[e.nj, e.ni] == _FLUID
+            if e.bc_type == "pressure_outlet" and mesh.cell_type[e.nj, e.ni] == FLUID
         ]
         assert len(outlet_entries) > 0
         for e in outlet_entries:

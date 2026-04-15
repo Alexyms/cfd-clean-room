@@ -14,7 +14,7 @@ This document tracks development progress by phase. The automated code review sy
 |-------|------|--------|-------------|--------|
 | 0 | Infrastructure | COMPLETE | PASS | -- |
 | 1 | Foundation | COMPLETE | PASS | phase1_foundation_report.md |
-| 2 | Navier-Stokes Solver | NOT STARTED | -- | -- |
+| 2 | Navier-Stokes Solver | IN PROGRESS | -- | -- |
 | 3 | Transport Solver | NOT STARTED | -- | -- |
 | 4 | Scenarios & Time Integration | NOT STARTED | -- | -- |
 | 5 | Alert Monitoring System | NOT STARTED | -- | -- |
@@ -106,7 +106,7 @@ Status values: NOT STARTED, IN PROGRESS, GATE REVIEW, COMPLETE
 | Deliverable | Status | Notes |
 |-------------|--------|-------|
 | src/solver_ns.py | NOT STARTED | SIMPLE algorithm, Python orchestration |
-| src/boundary.py (velocity/pressure BCs) | NOT STARTED | Inlet, outlet, no-slip wall |
+| src/boundary.py (velocity/pressure BCs) | DONE | Inlet, outlet, no-slip wall, ghost cell interpolation |
 | csolver/pressure_solve.c | NOT STARTED | C inner loop for pressure correction |
 | csolver/csolver.h | NOT STARTED | Shared header |
 | csolver/Makefile | NOT STARTED | Builds libcsolver.so |
