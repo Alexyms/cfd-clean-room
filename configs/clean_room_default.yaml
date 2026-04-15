@@ -1,13 +1,14 @@
 # Clean Room CFD Simulation -- Default Configuration
 #
-# Base configuration for a vertical cross-section of a semiconductor
-# clean room. All values in SI units (meters, seconds, kilograms, Pascals).
+# Vertical cross-section of a semiconductor clean room with HEPA ceiling
+# supply, floor return vents between equipment, and a fume hood with
+# exhaust on the right wall. All values in SI units.
 
 domain:
-  width: 4.0        # room width, meters
+  width: 8.0        # room width, meters
   height: 3.0       # room height, meters
-  nx: 80            # grid cells in x direction
-  ny: 60            # grid cells in y direction
+  nx: 200           # grid cells in x direction
+  ny: 75            # grid cells in y direction
 
 fluid:
   density: 1.2      # air density, kg/m^3
@@ -35,57 +36,86 @@ boundaries:
     type: velocity_inlet
     location: top
     x_start: 0.5
-    x_end: 3.5
-    velocity: 0.45    # face velocity, m/s (typical HEPA supply)
-
-  return_vent_left:
-    type: pressure_outlet
-    location: left
-    y_start: 0.0
-    y_end: 0.3
-
-  return_vent_right:
-    type: pressure_outlet
-    location: right
-    y_start: 0.0
-    y_end: 0.3
+    x_end: 7.5
+    velocity: 0.45    # downward laminar flow, m/s
 
   door:
     type: wall
     location: left
-    y_start: 0.3
-    y_end: 2.3
+    y_start: 0.0
+    y_end: 2.1
 
-  hood:
-    type: velocity_inlet
+  floor_return_1:
+    type: pressure_outlet
     location: bottom
-    x_start: 2.5
-    x_end: 3.5
-    velocity: 0.3     # laminar flow hood downflow, m/s
+    x_start: 0.5
+    x_end: 1.25
+
+  floor_return_2:
+    type: pressure_outlet
+    location: bottom
+    x_start: 2.4
+    x_end: 2.95
+
+  floor_return_3:
+    type: pressure_outlet
+    location: bottom
+    x_start: 4.6
+    x_end: 4.9
+
+  floor_return_4:
+    type: pressure_outlet
+    location: bottom
+    x_start: 5.7
+    x_end: 6.3
+
+  hood_exhaust:
+    type: pressure_outlet
+    location: right
+    y_start: 0.9
+    y_end: 1.8
 
 obstacles:
-  - name: process_equipment
-    x_start: 1.0
-    x_end: 2.0
+  - name: server_rack
+    x_start: 1.5
+    x_end: 2.3
     y_start: 0.0
-    y_end: 1.0
+    y_end: 2.0
+
+  - name: litho_tool
+    x_start: 3.2
+    x_end: 4.5
+    y_start: 0.0
+    y_end: 2.0
+
+  - name: etch_chamber
+    x_start: 5.0
+    x_end: 5.6
+    y_start: 0.0
+    y_end: 2.0
+
+  - name: hood_bench
+    x_start: 6.4
+    x_end: 7.6
+    y_start: 0.0
+    y_end: 0.9
 
 sensors:
-  - name: center_room
-    x: 2.0
-    y: 1.5
-
   - name: near_door
-    x: 0.5
-    y: 1.3
-
-  - name: above_equipment
-    x: 1.5
+    x: 1.0
     y: 1.5
 
-  - name: under_hood
-    x: 3.0
-    y: 0.5
+  - name: above_gap_1
+    x: 2.7
+    y: 2.5
+
+  - name: above_gap_2
+    x: 4.8
+    y: 2.5
+
+  - name: hood_entry
+    x: 6.2
+    y: 1.2
 
 # ISO 14644-1 Class 5 limits, particles per cubic meter.
 # Keys must be quoted strings to prevent YAML from parsing them as

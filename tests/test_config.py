@@ -174,8 +174,11 @@ class TestSimConfigValid:
     def test_default_yaml_loads(self) -> None:
         """The shipped clean_room_default.yaml loads without error."""
         config = SimConfig("configs/clean_room_default.yaml")
-        assert config.nx == 80
+        assert config.nx == 200
+        assert config.ny == 75
+        assert config.room_width == 8.0
         assert len(config.sensors) == 4
+        assert len(config.obstacles) == 4
 
 
 @pytest.mark.unit
