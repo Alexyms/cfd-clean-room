@@ -1,7 +1,7 @@
 # Project Plan
 
 **Project:** CFD Clean Room Simulation
-**Last Updated:** 2026-04-15
+**Last Updated:** 2026-04-16
 **Current Phase:** Phase 2 (Navier-Stokes Solver)
 
 This document tracks development progress by phase. The automated code review system reads this document to determine the current phase and verify that PRs are in scope. Update this document as work progresses.
@@ -18,7 +18,8 @@ This document tracks development progress by phase. The automated code review sy
 | 3 | Transport Solver | NOT STARTED | -- | -- |
 | 4 | Scenarios & Time Integration | NOT STARTED | -- | -- |
 | 5 | Alert Monitoring System | NOT STARTED | -- | -- |
-| 6 | Visualization & Portfolio | NOT STARTED | -- | -- |
+| 6 | CUDA Acceleration | NOT STARTED | -- | -- |
+| 7 | Visualization & Portfolio | NOT STARTED | -- | -- |
 
 Status values: NOT STARTED, IN PROGRESS, GATE REVIEW, COMPLETE
 
@@ -105,15 +106,13 @@ Status values: NOT STARTED, IN PROGRESS, GATE REVIEW, COMPLETE
 
 | Deliverable | Status | Notes |
 |-------------|--------|-------|
-| src/solver_ns.py | NOT STARTED | SIMPLE algorithm, Python orchestration |
-| src/boundary.py (velocity/pressure BCs) | DONE | Inlet, outlet, no-slip wall, ghost cell interpolation |
-| csolver/pressure_solve.c | NOT STARTED | C inner loop for pressure correction |
-| csolver/csolver.h | NOT STARTED | Shared header |
-| csolver/Makefile | NOT STARTED | Builds libcsolver.so |
+| src/boundary.py | DONE | Velocity/pressure BC application (no-slip, velocity inlet, pressure outlet) |
+| src/solver_ns.py | NOT STARTED | SIMPLE algorithm, pure NumPy, collocated grid with Rhie-Chow |
+| tests/test_boundary.py | DONE | Unit tests: BC application on known arrays |
+| tests/test_solver_ns.py | NOT STARTED | Unit tests: residuals, convergence, field shapes |
 | tests/test_poiseuille.py | NOT STARTED | VAL-001 |
 | tests/test_lid_cavity.py | NOT STARTED | VAL-002 |
-| tests/test_solver_ns.py | NOT STARTED | Unit tests: convergence, residuals, BC application |
-| tests/test_c_parity.py | NOT STARTED | Integration: C output matches NumPy reference |
+| configs/clean_room_default.yaml | DONE | Add solver parameters: under-relaxation factors |
 
 ### Validation Gate
 
@@ -122,12 +121,17 @@ Status values: NOT STARTED, IN PROGRESS, GATE REVIEW, COMPLETE
 | VAL-001 | Poiseuille flow | L2 error < 1% vs analytical parabolic profile | NOT RUN |
 | VAL-002 | Lid-driven cavity | Centerline profiles within 2% of Ghia et al. | NOT RUN |
 
+### Scope Changes
+
+- C solver deliverables (csolver/pressure_solve.c, csolver.h, Makefile, test_c_parity.py) moved to Phase 6 (CUDA Acceleration). REQ-N03 is now validated against CUDA C++ rather than plain C.
+
 ### Phase-Specific Risks
 
 | Risk | Mitigation |
 |------|------------|
-| SIMPLE convergence failure on clean room geometry | Start with empty channel, add obstacles incrementally. Implement under-relaxation. |
-| Python/C interface memory bugs | Validate C output against pure NumPy reference for all validation cases before switching to C path. |
+| SIMPLE convergence failure on clean room geometry | Start validation with simple geometries (empty channel for Poiseuille, square cavity for lid-driven). Add obstacles incrementally. Under-relaxation defaults 0.7/0.3. |
+| Checkerboard pressure oscillation from collocated grid | Rhie-Chow interpolation included in the solver. Checkerboard is visually obvious in pressure field plots. |
+| First-order upwind too diffusive for VAL-002 | Hybrid scheme (Spalding 1972) used instead. Adapts between central and upwind based on cell Peclet number. |
 
 ---
 
@@ -143,14 +147,12 @@ Status values: NOT STARTED, IN PROGRESS, GATE REVIEW, COMPLETE
 
 | Deliverable | Status | Notes |
 |-------------|--------|-------|
-| src/solver_transport.py | NOT STARTED | Advection-diffusion solver with v_ext interface |
+| src/solver_transport.py | NOT STARTED | Advection-diffusion solver with v_ext interface, pure NumPy |
 | src/boundary.py (concentration BCs) | NOT STARTED | Extension to existing boundary module |
-| csolver/advection_diffusion.c | NOT STARTED | C inner loop for transport stencil |
 | tests/test_diffusion.py | NOT STARTED | VAL-003 |
 | tests/test_advection.py | NOT STARTED | VAL-004 |
 | tests/test_conservation.py | NOT STARTED | VAL-007 |
 | tests/test_solver_transport.py | NOT STARTED | Unit tests: source terms, settling integration |
-| tests/test_c_transport_parity.py | NOT STARTED | Integration: C output matches NumPy reference |
 
 ### Validation Gate
 
@@ -242,11 +244,45 @@ Status values: NOT STARTED, IN PROGRESS, GATE REVIEW, COMPLETE
 
 ---
 
-## Phase 6: Visualization & Portfolio
+## Phase 6: CUDA Acceleration
+
+**Goal:** Implement CUDA C++ kernels for the performance-critical pressure correction and advection-diffusion inner loops. Validate against NumPy reference implementation.
+
+**Branch prefix:** `phase6/`
+
+**Depends on:** Phase 3 complete (both NS and transport solvers validated in NumPy)
+
+### Deliverables
+
+| Deliverable | Status | Notes |
+|-------------|--------|-------|
+| csolver/pressure_solve.cu | NOT STARTED | CUDA kernel for Jacobi pressure correction |
+| csolver/advection_diffusion.cu | NOT STARTED | CUDA kernel for transport stencil |
+| csolver/bindings.cpp | NOT STARTED | pybind11 Python interface |
+| csolver/CMakeLists.txt | NOT STARTED | Build system for nvcc + pybind11 |
+| tests/test_cuda_parity.py | NOT STARTED | REQ-N03: CUDA output matches NumPy reference |
+| Benchmark results | NOT STARTED | Timing comparison: NumPy vs CUDA on default grid |
+
+### Validation Gate
+
+| Test ID | Description | Criterion | Status |
+|---------|-------------|-----------|--------|
+| REQ-N03 | CUDA parity | Max absolute difference < 1e-10 vs NumPy for VAL-001 through VAL-008 | NOT RUN |
+
+### Phase-Specific Risks
+
+| Risk | Mitigation |
+|------|------------|
+| GPU not available in CI | CUDA parity tests marked with @pytest.mark.cuda, skipped in GitHub Actions. Run locally before merge. CI validates physics via NumPy tests. |
+| pybind11 + CUDA build complexity | CMake handles nvcc/pybind11 integration. Document build prerequisites in README. |
+
+---
+
+## Phase 7: Visualization & Portfolio
 
 **Goal:** Produce animated visualizations, build the portfolio website page, and finalize all documentation.
 
-**Branch prefix:** `phase6/`
+**Branch prefix:** `phase7/`
 
 **Depends on:** Phase 5 complete (alert data available for overlay)
 
@@ -285,3 +321,4 @@ Phase 3 completion is the minimum viable portfolio artifact. A working, validate
 |------|--------|
 | 2026-04-14 | Initial plan created. All phases at NOT STARTED except Phase 0 (IN PROGRESS). |
 | 2026-04-14 | Phase 0 complete. All infrastructure deliverables DONE. CI and review bot validated on test PR #1. Phase 1 now IN PROGRESS. |
+| 2026-04-15 | Phase 1 complete. Phase 2 architecture updates: replaced C/ctypes with NumPy reference + CUDA C++/pybind11 strategy. Added REQ-S07 through REQ-S10. C deliverables moved to new Phase 6 (CUDA Acceleration). Visualization renumbered to Phase 7. |

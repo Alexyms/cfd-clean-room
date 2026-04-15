@@ -1,8 +1,8 @@
 # System Architecture Document
 
 **Project:** CFD Clean Room Simulation
-**Status:** Phase 1 complete. Phase 2 (Navier-Stokes Solver) next.
-**Last Updated:** 2026-04-16
+**Status:** Phase 2 in progress. Navier-Stokes solver under development.
+**Last Updated:** 2026-04-15
 
 This document is the single reference for system architecture, requirements, module interfaces, and dependency relationships. The automated code review system reads this document on every PR to verify compliance. Keep it current.
 
@@ -29,7 +29,11 @@ Requirements are organized by subsystem. Each requirement has a unique ID, a rat
 | REQ-S03 | The NS solver shall reproduce lid-driven cavity centerline velocity profiles within 2% of Ghia et al. (1982) benchmark data. | Validates nonlinear advection, 2D pressure gradients, and recirculation handling. | VAL-002 |
 | REQ-S04 | The velocity field shall satisfy the incompressibility constraint (divergence-free) to within configurable tolerance at every cell. | Mass conservation is fundamental. FV enforces this by construction, but numerical errors can accumulate. | VAL-007 |
 | REQ-S05 | The solver shall use the SIMPLE algorithm for pressure-velocity coupling. | Industry-standard approach. Well-documented, stable, compatible with structured grids. | Architecture review |
-| REQ-S06 | The pressure correction inner loop shall be implemented in compiled C, called from Python via ctypes. | Compute-bound operation requires compiled performance. Python handles orchestration. | Integration test |
+| REQ-S06 | The pressure correction inner loop shall have a pure NumPy reference implementation for validation and a CUDA C++ accelerated implementation for production runs, called from Python via pybind11. The NumPy reference shall remain in the codebase permanently as the ground truth for equivalence testing (see REQ-N03). | NumPy reference validates physics independently of GPU code. CUDA acceleration is a separate deliverable after solver physics are validated. | Integration test |
+| REQ-S07 | The solver shall use a collocated variable arrangement with Rhie-Chow interpolation for face velocities. | Collocated grids store all variables at cell centers, giving uniform [ny, nx] array shapes across all fields. Rhie-Chow interpolation prevents checkerboard pressure oscillation. Modern industry standard (OpenFOAM, STAR-CCM+). | Architecture review, VAL-001, VAL-002 |
+| REQ-S08 | The pressure correction equation shall be solved using Jacobi iteration. | Jacobi iteration updates all cells independently from previous-iteration neighbors, enabling full vectorization in NumPy and direct parallelization in CUDA (one thread per cell). Converges slower per iteration than Gauss-Seidel but each iteration is a single array operation. | Unit test |
+| REQ-S09 | The advection term shall be discretized using the hybrid differencing scheme (Spalding 1972). | Hybrid scheme switches between central difference (second-order, accurate in diffusion-dominated regions) and upwind (first-order, stable in advection-dominated regions) based on the local cell Peclet number. Balances accuracy and stability for flows with sharp gradients (lid-driven cavity corners, flow around obstacles). | VAL-001, VAL-002 |
+| REQ-S10 | Under-relaxation factors for velocity (default 0.7) and pressure (default 0.3) shall be configurable via the YAML configuration. | SIMPLE requires under-relaxation for stability. Factors control convergence rate vs. stability tradeoff. Configurable per REQ-C01. | Unit test |
 
 ### 2.2 Transport Requirements
 
@@ -80,7 +84,7 @@ Requirements are organized by subsystem. Each requirement has a unique ID, a rat
 |----|-------------|-----------|-------------|
 | REQ-N01 | The simulation shall enforce the CFL condition for numerical stability at every timestep. | Explicit advection schemes are conditionally stable. Violating CFL produces divergent solutions. | Unit test |
 | REQ-N02 | The solution shall demonstrate grid convergence at the expected order of accuracy when the grid is refined. | Confirms numerical accuracy. Second-order scheme should reduce error by 4x when grid spacing is halved. | VAL-008 |
-| REQ-N03 | The C solver inner loop shall produce results identical to a pure NumPy reference implementation for all validation cases. | Verifies the Python-C interface is not introducing bugs through memory layout, dtype, or indexing errors. | Integration test |
+| REQ-N03 | The CUDA C++ solver inner loop shall produce results identical to the pure NumPy reference implementation for all validation cases. Equivalence is defined as maximum absolute element-wise difference below 1e-10 for all output arrays. | Verifies the Python-CUDA interface is not introducing bugs through memory layout, dtype, or indexing errors. | Integration test |
 
 ---
 
@@ -124,10 +128,10 @@ config.py
             |
             +--> time_integration.py (updated each timestep)
 
-csolver/ (C shared library)
+csolver/ (CUDA C++ shared library, optional)
     |
-    +--> solver_ns.py (calls pressure correction via ctypes)
-    +--> solver_transport.py (calls advection-diffusion via ctypes)
+    +--> solver_ns.py (calls pressure correction via pybind11)
+    +--> solver_transport.py (calls advection-diffusion via pybind11)
 ```
 
 ### 3.2 Cascade Rules
@@ -144,7 +148,7 @@ When a PR modifies a module, the reviewer verifies impact on downstream modules.
 | particles.py | solver_transport | Settling velocity, diffusion coefficient interface unchanged. Return types and units unchanged. |
 | scenarios.py | time_integration, boundary | Source term and BC modification interfaces unchanged. Event timing semantics unchanged. |
 | monitor.py | time_integration | Update and query interfaces unchanged. Alert output format unchanged. |
-| csolver/ | solver_ns, solver_transport | C function signatures match ctypes declarations. Memory layout assumptions (row-major, contiguous, double precision) unchanged. |
+| csolver/ | solver_ns, solver_transport | CUDA kernel signatures match pybind11 declarations. Memory layout assumptions (row-major, contiguous, double precision) unchanged. |
 | time_integration.py | io_manager | Timestep sequence and output trigger logic unchanged. |
 
 ### 3.3 Cross-Cutting Concerns
@@ -217,10 +221,14 @@ ParticlePhysics:
 
 ### solver_ns.py --> solver_transport, time_integration
 
+Phase 2 delivers solve_steady() only. solve_timestep() is delivered
+in Phase 4 (time integration).
+
 ```
 NavierStokesSolver:
     solve_steady() -> tuple[ndarray, ndarray, ndarray]  # u, v, p
     solve_timestep(u, v, p, dt) -> tuple[ndarray, ndarray, ndarray]
+    compute_residual() -> float
     All output arrays: shape [ny, nx], dtype float64, contiguous
 ```
 
@@ -265,7 +273,7 @@ ScenarioManager:
 - Alert monitoring with configurable sensors and ISO 14644 thresholds
 - Sensor placement comparison across scenarios
 - Animated visualizations per size class
-- Hybrid Python/C implementation
+- Hybrid Python/CUDA C++ implementation (NumPy reference solver for validation, CUDA for production)
 - Centralized YAML configuration
 - Phase-gated development with validation tests before code
 
@@ -278,7 +286,7 @@ ScenarioManager:
 - Unstructured meshes
 - Multi-room or multi-bay simulation
 - Real-time sensor hardware integration
-- GPU acceleration (architecture supports extension via structured grid)
+- GPU acceleration beyond CUDA C++ pressure/transport kernels (e.g., multi-GPU, tensor core exploitation)
 - Particle-particle interactions, coagulation, electrostatic effects
 - Thermophoresis
 
@@ -302,7 +310,7 @@ Full ADRs are in the development plan document. Summary reference:
 | ADR-002 | 2D vertical cross-section | Captures gravity, HVAC flow, stratification. 3D adds complexity without proportional insight. |
 | ADR-003 | Structured grid, staircase boundaries | Clean room geometry is rectangular. Staircase is exact for axis-aligned obstacles. |
 | ADR-004 | Laminar flow assumption | Clean rooms are engineered for laminar flow. Re well below transition. Physically correct, not a shortcut. |
-| ADR-005 | Hybrid Python/C | Python for orchestration, C for compute-bound inner loops. Mirrors production CFD architecture. |
+| ADR-005 | Hybrid Python/CUDA C++ | Python orchestration with pure NumPy reference solver for validation, CUDA C++ kernels via pybind11 for accelerated production runs. NumPy solver is the primary implementation through Phase 3 validation. CUDA acceleration is a separate deliverable after solver physics are validated. |
 | ADR-006 | Five particle size classes | Spans diffusion-dominated to settling-dominated regimes. Maps to ISO 14644. |
 | ADR-007 | Ionizer modeling deferred | Scope risk. Extension point (v_ext) preserved in transport solver interface. |
 
@@ -313,3 +321,4 @@ Full ADRs are in the development plan document. Summary reference:
 | Date | Change | Author |
 |------|--------|--------|
 | 2026-04-14 | Initial version. Architecture defined pre-development. | Alex Moroz-Smietana |
+| 2026-04-15 | Phase 2 architecture updates: collocated grid with Rhie-Chow (REQ-S07), Jacobi pressure solver (REQ-S08), hybrid advection scheme (REQ-S09), configurable under-relaxation (REQ-S10). ADR-005 amended from C/ctypes to CUDA C++/pybind11 with NumPy reference solver. REQ-S06 and REQ-N03 updated accordingly. | Alex Moroz-Smietana |
