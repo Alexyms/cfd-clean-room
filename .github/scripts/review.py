@@ -86,6 +86,7 @@ def run_review(message: str, system_prompt: str) -> str:
         system=system_prompt,
         tools=tools,
         messages=[{"role": "user", "content": message}],
+        output_config={"effort": "high"},
     )
 
     # Extract text content from response, handling advisor tool blocks
