@@ -31,6 +31,10 @@ _STANDARD_CONFIG: dict = {
         "output_interval": 10,
         "convergence_tol": 1.0e-6,
         "max_simple_iter": 500,
+        "alpha_velocity": 0.7,
+        "alpha_pressure": 0.3,
+        "max_pressure_iter": 200,
+        "pressure_tol": 1.0e-6,
     },
     "boundaries": {
         "supply": {

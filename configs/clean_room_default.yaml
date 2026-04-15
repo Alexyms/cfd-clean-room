@@ -30,6 +30,10 @@ solver:
   output_interval: 10  # write output every N timesteps
   convergence_tol: 1.0e-6  # SIMPLE iteration convergence tolerance
   max_simple_iter: 500     # max SIMPLE iterations per timestep
+  alpha_velocity: 0.7      # velocity under-relaxation factor (0, 1]
+  alpha_pressure: 0.3      # pressure under-relaxation factor (0, 1]
+  max_pressure_iter: 200   # max Jacobi iterations per SIMPLE step
+  pressure_tol: 1.0e-6     # Jacobi convergence tolerance
 
 boundaries:
   hepa_supply:
