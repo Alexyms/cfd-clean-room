@@ -107,13 +107,9 @@ Status values: NOT STARTED, IN PROGRESS, GATE REVIEW, COMPLETE
 |-------------|--------|-------|
 | src/solver_ns.py | DONE | SIMPLE algorithm, pure NumPy, collocated grid with Rhie-Chow |
 | src/boundary.py (velocity/pressure BCs) | DONE | Inlet, outlet, no-slip wall, ghost cell interpolation |
-| csolver/pressure_solve.c | NOT STARTED | C inner loop for pressure correction |
-| csolver/csolver.h | NOT STARTED | Shared header |
-| csolver/Makefile | NOT STARTED | Builds libcsolver.so |
 | tests/test_poiseuille.py | NOT STARTED | VAL-001 |
 | tests/test_lid_cavity.py | NOT STARTED | VAL-002 |
 | tests/test_solver_ns.py | DONE | Unit + integration tests: coefficients, sweeps, convergence |
-| tests/test_c_parity.py | NOT STARTED | Integration: C output matches NumPy reference |
 
 ### Validation Gate
 

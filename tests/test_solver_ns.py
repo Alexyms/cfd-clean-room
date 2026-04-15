@@ -6,6 +6,8 @@ monitoring. Integration tests verify initialization and basic
 convergence on a simple channel geometry.
 """
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 import yaml
@@ -16,7 +18,7 @@ from src.mesh import FLUID, SOLID, Mesh
 from src.solver_ns import NavierStokesSolver
 
 
-def _make_config(tmp_path, overrides: dict | None = None) -> SimConfig:
+def _make_config(tmp_path: Path, overrides: dict | None = None) -> SimConfig:
     """Write a YAML config and return a loaded SimConfig."""
     base = {
         "domain": {"width": 1.0, "height": 1.0, "nx": 10, "ny": 10},
@@ -69,7 +71,9 @@ def _make_config(tmp_path, overrides: dict | None = None) -> SimConfig:
     return SimConfig(str(path))
 
 
-def _make_solver(tmp_path, overrides=None):
+def _make_solver(
+    tmp_path: Path, overrides: dict | None = None
+) -> tuple[NavierStokesSolver, Mesh, SimConfig]:
     """Create a NavierStokesSolver from a test config."""
     config = _make_config(tmp_path, overrides)
     mesh = Mesh(config)
@@ -315,14 +319,10 @@ class TestResidual:
         residual = solver._compute_residual(u, v, p)
         assert residual > 0.0
 
-    def test_solve_timestep_raises(self, tmp_path) -> None:
-        """solve_timestep raises NotImplementedError."""
+    def test_public_compute_residual_before_solve(self, tmp_path) -> None:
+        """compute_residual() returns 0.0 before solve_steady is called."""
         solver, _, _ = _make_solver(tmp_path)
-        u = np.zeros((10, 10), dtype=np.float64)
-        v = np.zeros((10, 10), dtype=np.float64)
-        p = np.zeros((10, 10), dtype=np.float64)
-        with pytest.raises(NotImplementedError):
-            solver.solve_timestep(u, v, p, 0.01)
+        assert solver.compute_residual() == 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -422,3 +422,12 @@ class TestSolverIntegration:
         # Velocities should stay within a reasonable range
         # (inlet velocity is 0.1 m/s from the base config)
         assert max_vel < 10.0, f"Velocity diverged to {max_vel:.2f}"
+
+    def test_solve_timestep_raises(self, tmp_path) -> None:
+        """solve_timestep raises NotImplementedError."""
+        solver, _, _ = _make_solver(tmp_path)
+        u = np.zeros((10, 10), dtype=np.float64)
+        v = np.zeros((10, 10), dtype=np.float64)
+        p = np.zeros((10, 10), dtype=np.float64)
+        with pytest.raises(NotImplementedError):
+            solver.solve_timestep(u, v, p, 0.01)

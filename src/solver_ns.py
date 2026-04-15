@@ -149,6 +149,21 @@ class NavierStokesSolver:
             np.ascontiguousarray(p),
         )
 
+    def compute_residual(self) -> float:
+        """Return the most recent scaled mass imbalance residual.
+
+        Returns the last residual computed during solve_steady().
+        Returns 0.0 if solve_steady() has not been called.
+
+        Returns
+        -------
+        float
+            Scaled residual from the last SIMPLE iteration.
+        """
+        if not self.residual_history:
+            return 0.0
+        return self.residual_history[-1]
+
     def solve_timestep(
         self,
         u: np.ndarray,
