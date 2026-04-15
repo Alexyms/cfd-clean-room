@@ -22,10 +22,12 @@ select = [
 ]
 ignore = [
     "E501",  # line length handled by formatter
-    "N802",  # physics naming in test functions (test_a_P_ur_scaling)
-    "N803",  # physics naming in function args (a_P, a_E, etc.)
-    "N806",  # physics variable naming (a_P, F_e, D_ew) uses uppercase per convention
 ]
+
+[tool.ruff.lint.per-file-ignores]
+# Physics variable naming (a_P, F_e, D_ew) uses uppercase per convention
+"src/solver_ns.py" = ["N803", "N806"]
+"tests/test_solver_ns.py" = ["N802", "N803", "N806"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["src"]

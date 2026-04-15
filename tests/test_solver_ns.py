@@ -299,7 +299,7 @@ class TestResidual:
         v = np.zeros((10, 10), dtype=np.float64)
         p = np.zeros((10, 10), dtype=np.float64)
 
-        residual = solver.compute_residual(u, v, p)
+        residual = solver._compute_residual(u, v, p)
         assert residual == pytest.approx(0.0, abs=1e-15)
 
     def test_nonzero_divergence_gives_positive(self, tmp_path) -> None:
@@ -312,7 +312,7 @@ class TestResidual:
         u[:, 1] = 0.5
         p = np.zeros((10, 10), dtype=np.float64)
 
-        residual = solver.compute_residual(u, v, p)
+        residual = solver._compute_residual(u, v, p)
         assert residual > 0.0
 
     def test_solve_timestep_raises(self, tmp_path) -> None:

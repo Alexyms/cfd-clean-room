@@ -6,11 +6,15 @@ Rhie-Chow interpolation for face velocities, hybrid advection scheme
 correction.
 """
 
+import logging
+
 import numpy as np
 
 from src.boundary import BoundaryManager
 from src.config import SimConfig
 from src.mesh import FLUID, SOLID, Mesh
+
+logger = logging.getLogger(__name__)
 
 
 class NavierStokesSolver:
@@ -67,11 +71,7 @@ class NavierStokesSolver:
 
     def _compute_reference_flux(self) -> float:
         """Compute total inlet mass flux for residual scaling."""
-        total = 0.0
-        for name in self._boundary._boundaries:
-            flux = self._boundary.get_inlet_flux(name)
-            total += self._rho * flux
-        return max(total, 1e-30)
+        return max(self._rho * self._boundary.get_total_inlet_flux(), 1e-30)
 
     def solve_steady(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Solve for steady-state velocity and pressure fields.
@@ -133,14 +133,14 @@ class NavierStokesSolver:
             self._boundary.apply_pressure_bc(p)
 
             # Step 11: Convergence check
-            residual = self.compute_residual(u, v, p)
+            residual = self._compute_residual(u, v, p)
             self.residual_history.append(residual)
 
             if iteration % 50 == 0 or residual < self._convergence_tol:
-                print(f"  SIMPLE iter {iteration:4d}: residual = {residual:.6e}")
+                logger.info("SIMPLE iter %4d: residual = %.6e", iteration, residual)
 
             if residual < self._convergence_tol:
-                print(f"  Converged at iteration {iteration}")
+                logger.info("Converged at iteration %d", iteration)
                 break
 
         return (
@@ -165,7 +165,7 @@ class NavierStokesSolver:
         """
         raise NotImplementedError("solve_timestep is deferred to Phase 4")
 
-    def compute_residual(self, u: np.ndarray, v: np.ndarray, p: np.ndarray) -> float:
+    def _compute_residual(self, u: np.ndarray, v: np.ndarray, p: np.ndarray) -> float:
         """Compute scaled mass imbalance residual.
 
         Uses simple face interpolation to compute the mass flux through

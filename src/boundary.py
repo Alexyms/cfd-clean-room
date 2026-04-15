@@ -435,3 +435,20 @@ class BoundaryManager:
             and spec.y_end is not None
             and spec.y_start <= yc <= spec.y_end
         )
+
+    def get_total_inlet_flux(self) -> float:
+        """Compute total volumetric flux across all velocity inlet boundaries.
+
+        Returns the sum of get_inlet_flux(name) for all boundaries
+        of type velocity_inlet. Used by the solver for residual scaling.
+
+        Returns
+        -------
+        float
+            Total volumetric flux in m^2/s (per unit depth).
+        """
+        total = 0.0
+        for name, spec in self._boundaries.items():
+            if spec.type == "velocity_inlet":
+                total += self.get_inlet_flux(name)
+        return total
