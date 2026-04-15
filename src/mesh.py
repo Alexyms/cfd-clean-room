@@ -7,7 +7,7 @@ the domain geometry and obstacle positions from the simulation config.
 
 import numpy as np
 
-from src.config import SimConfig
+from src.config import ObstacleSpec, SimConfig
 
 # Cell type constants used as integer values in the cell_type array.
 # Not an Enum because these are stored in numpy arrays and compared
@@ -58,7 +58,7 @@ class Mesh:
         self,
         nx: int,
         ny: int,
-        obstacles: list,
+        obstacles: list[ObstacleSpec],
     ) -> np.ndarray:
         """Classify each cell as FLUID, SOLID, or BOUNDARY.
 
