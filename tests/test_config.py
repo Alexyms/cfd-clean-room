@@ -47,6 +47,10 @@ def _write_config(tmp_path, overrides: dict | None = None) -> str:
             "output_interval": 10,
             "convergence_tol": 1.0e-6,
             "max_simple_iter": 500,
+            "alpha_velocity": 0.7,
+            "alpha_pressure": 0.3,
+            "max_pressure_iter": 200,
+            "pressure_tol": 1.0e-6,
         },
         "boundaries": {
             "hepa_supply": {
@@ -142,6 +146,10 @@ class TestSimConfigValid:
         assert config.output_interval == 10
         assert config.convergence_tol == pytest.approx(1.0e-6)
         assert config.max_simple_iter == 500
+        assert config.alpha_velocity == pytest.approx(0.7)
+        assert config.alpha_pressure == pytest.approx(0.3)
+        assert config.max_pressure_iter == 200
+        assert config.pressure_tol == pytest.approx(1.0e-6)
 
     def test_boundaries_parsed(self, tmp_path) -> None:
         """Boundaries section produces BoundarySpec objects."""
@@ -762,6 +770,111 @@ class TestSimConfigInvalidValues:
         )
         with pytest.raises(TypeError, match=r"thresholds.*number"):
             SimConfig(path)
+
+    def test_alpha_velocity_zero_raises(self, tmp_path) -> None:
+        """Alpha velocity of zero raises ValueError (causes division by zero)."""
+        path = _write_config(
+            tmp_path,
+            overrides={
+                "solver": {
+                    "dt": 0.01,
+                    "t_end": 60.0,
+                    "output_interval": 10,
+                    "convergence_tol": 1e-6,
+                    "max_simple_iter": 500,
+                    "alpha_velocity": 0.0,
+                    "alpha_pressure": 0.3,
+                    "max_pressure_iter": 200,
+                    "pressure_tol": 1e-6,
+                }
+            },
+        )
+        with pytest.raises(ValueError, match=r"alpha_velocity.*\(0\.0, 1\.0\]"):
+            SimConfig(path)
+
+    def test_alpha_velocity_too_large_raises(self, tmp_path) -> None:
+        """Alpha velocity above 1.0 raises ValueError."""
+        path = _write_config(
+            tmp_path,
+            overrides={
+                "solver": {
+                    "dt": 0.01,
+                    "t_end": 60.0,
+                    "output_interval": 10,
+                    "convergence_tol": 1e-6,
+                    "max_simple_iter": 500,
+                    "alpha_velocity": 1.5,
+                    "alpha_pressure": 0.3,
+                    "max_pressure_iter": 200,
+                    "pressure_tol": 1e-6,
+                }
+            },
+        )
+        with pytest.raises(ValueError, match=r"alpha_velocity.*\(0\.0, 1\.0\]"):
+            SimConfig(path)
+
+    def test_alpha_pressure_negative_raises(self, tmp_path) -> None:
+        """Negative alpha pressure raises ValueError."""
+        path = _write_config(
+            tmp_path,
+            overrides={
+                "solver": {
+                    "dt": 0.01,
+                    "t_end": 60.0,
+                    "output_interval": 10,
+                    "convergence_tol": 1e-6,
+                    "max_simple_iter": 500,
+                    "alpha_velocity": 0.7,
+                    "alpha_pressure": -0.1,
+                    "max_pressure_iter": 200,
+                    "pressure_tol": 1e-6,
+                }
+            },
+        )
+        with pytest.raises(ValueError, match=r"alpha_pressure.*\(0\.0, 1\.0\]"):
+            SimConfig(path)
+
+    def test_alpha_bool_raises_type_error(self, tmp_path) -> None:
+        """Boolean alpha value raises TypeError."""
+        path = _write_config(
+            tmp_path,
+            overrides={
+                "solver": {
+                    "dt": 0.01,
+                    "t_end": 60.0,
+                    "output_interval": 10,
+                    "convergence_tol": 1e-6,
+                    "max_simple_iter": 500,
+                    "alpha_velocity": True,
+                    "alpha_pressure": 0.3,
+                    "max_pressure_iter": 200,
+                    "pressure_tol": 1e-6,
+                }
+            },
+        )
+        with pytest.raises(TypeError, match=r"alpha_velocity.*number"):
+            SimConfig(path)
+
+    def test_alpha_velocity_at_one_accepted(self, tmp_path) -> None:
+        """Alpha velocity of exactly 1.0 is valid (no under-relaxation)."""
+        path = _write_config(
+            tmp_path,
+            overrides={
+                "solver": {
+                    "dt": 0.01,
+                    "t_end": 60.0,
+                    "output_interval": 10,
+                    "convergence_tol": 1e-6,
+                    "max_simple_iter": 500,
+                    "alpha_velocity": 1.0,
+                    "alpha_pressure": 0.3,
+                    "max_pressure_iter": 200,
+                    "pressure_tol": 1e-6,
+                }
+            },
+        )
+        config = SimConfig(path)
+        assert config.alpha_velocity == 1.0
 
     def test_missing_file_raises(self) -> None:
         """Non-existent config file raises FileNotFoundError."""

@@ -184,6 +184,10 @@ SimConfig:
     output_interval: int
     convergence_tol: float
     max_simple_iter: int
+    alpha_velocity: float (0, 1]
+    alpha_pressure: float (0, 1]
+    max_pressure_iter: int
+    pressure_tol: float
     boundaries: dict[str, BoundarySpec]
     obstacles: list[ObstacleSpec]
     # scenarios: deferred to Phase 4, loaded via separate scenario YAML files

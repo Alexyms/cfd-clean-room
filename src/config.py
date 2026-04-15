@@ -220,6 +220,18 @@ class SimConfig:
         self.max_simple_iter: int = self._require_positive_int(
             solver, "max_simple_iter", "solver"
         )
+        self.alpha_velocity: float = self._require_relaxation_factor(
+            solver, "alpha_velocity", "solver"
+        )
+        self.alpha_pressure: float = self._require_relaxation_factor(
+            solver, "alpha_pressure", "solver"
+        )
+        self.max_pressure_iter: int = self._require_positive_int(
+            solver, "max_pressure_iter", "solver"
+        )
+        self.pressure_tol: float = self._require_positive_float(
+            solver, "pressure_tol", "solver"
+        )
 
         # Boundaries
         boundaries_raw = self._require_section(raw, "boundaries")
@@ -478,3 +490,21 @@ class SimConfig:
                 raise ValueError(f"{context}.{key}[{i}] must be positive, got {item}")
             result.append(float(item))
         return result
+
+    @staticmethod
+    def _require_relaxation_factor(section: dict, key: str, context: str) -> float:
+        """Require a relaxation factor in the range (0.0, 1.0].
+
+        Zero is rejected because it causes division by zero in
+        SIMPLE. Values above 1.0 cause divergence.
+        """
+        if key not in section:
+            raise ValueError(f"Missing required key: '{context}.{key}'")
+        val = section[key]
+        if isinstance(val, bool) or not isinstance(val, (int, float)):
+            raise TypeError(
+                f"{context}.{key} must be a number, got {type(val).__name__}"
+            )
+        if val <= 0.0 or val > 1.0:
+            raise ValueError(f"{context}.{key} must be in (0.0, 1.0], got {val}")
+        return float(val)
