@@ -1,8 +1,8 @@
 # Project Plan
 
 **Project:** CFD Clean Room Simulation
-**Last Updated:** 2026-04-14
-**Current Phase:** Phase 1 (Foundation)
+**Last Updated:** 2026-04-15
+**Current Phase:** Phase 2 (Navier-Stokes Solver)
 
 This document tracks development progress by phase. The automated code review system reads this document to determine the current phase and verify that PRs are in scope. Update this document as work progresses.
 
@@ -13,7 +13,7 @@ This document tracks development progress by phase. The automated code review sy
 | Phase | Name | Status | Gate Verdict | Report |
 |-------|------|--------|-------------|--------|
 | 0 | Infrastructure | COMPLETE | PASS | -- |
-| 1 | Foundation | IN PROGRESS | -- | -- |
+| 1 | Foundation | COMPLETE | PASS | phase1_foundation_report.md |
 | 2 | Navier-Stokes Solver | NOT STARTED | -- | -- |
 | 3 | Transport Solver | NOT STARTED | -- | -- |
 | 4 | Scenarios & Time Integration | NOT STARTED | -- | -- |
@@ -65,11 +65,11 @@ Status values: NOT STARTED, IN PROGRESS, GATE REVIEW, COMPLETE
 | Deliverable | Status | Notes |
 |-------------|--------|-------|
 | src/config.py | DONE | YAML loader with validation |
-| src/mesh.py | NOT STARTED | Structured grid generation, cell classification |
+| src/mesh.py | DONE | Structured grid generation, cell classification |
 | src/particles.py | DONE | Settling velocity, diffusion coeff, Cunningham correction, deposition velocity, HEPA efficiency |
-| configs/clean_room_default.yaml | DONE | Base configuration |
+| configs/clean_room_default.yaml | DONE | Updated with 8m x 3m room layout |
 | tests/test_config.py | DONE | Unit tests: validation, rejection of bad input |
-| tests/test_mesh.py | NOT STARTED | Unit tests: cell counts, classification, neighbors |
+| tests/test_mesh.py | DONE | Unit + integration: geometry, classification, neighbors |
 | tests/test_particles.py | DONE | Unit + validation: VAL-005, VAL-006 |
 
 ### Validation Gate

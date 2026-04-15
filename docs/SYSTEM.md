@@ -1,7 +1,7 @@
 # System Architecture Document
 
 **Project:** CFD Clean Room Simulation
-**Status:** Phase 1 in progress. Foundation modules under development.
+**Status:** Phase 1 complete. Phase 2 (Navier-Stokes Solver) next.
 **Last Updated:** 2026-04-16
 
 This document is the single reference for system architecture, requirements, module interfaces, and dependency relationships. The automated code review system reads this document on every PR to verify compliance. Keep it current.
@@ -195,6 +195,8 @@ Mesh:
     xc, yc: ndarray (cell center coordinates)
     dx, dy: float
     cell_type: ndarray[ny, nx] (FLUID=0, SOLID=1, BOUNDARY=2)
+    is_fluid(i: int, j: int) -> bool
+    get_neighbors(i: int, j: int) -> list[tuple[int, int]]
 ```
 
 ### particles.py --> solver_transport
