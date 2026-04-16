@@ -98,8 +98,10 @@ class NavierStokesSolver:
         cell face area.
         """
         vol_flux = self._boundary.get_total_inlet_flux()
-        if vol_flux > 0:
-            return self._rho * vol_flux
+        # Use abs() to handle edge cases where mixed inflow/outflow velocity_inlet
+        # boundaries could produce a net-zero or net-negative flux sum.
+        if abs(vol_flux) > 1e-30:
+            return self._rho * abs(vol_flux)
 
         # Fallback for closed domains: use max boundary velocity * face area
         max_vel = self._boundary.get_max_boundary_velocity()

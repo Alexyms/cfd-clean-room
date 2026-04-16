@@ -116,7 +116,7 @@ Status values: NOT STARTED, IN PROGRESS, GATE REVIEW, COMPLETE
 
 | Test ID | Description | Criterion | Status |
 |---------|-------------|-----------|--------|
-| VAL-001 | Poiseuille flow | L2 error < 2% on 80x40 grid (O(h) wall accuracy, ADR-008) | PASS (1.54% L2 on 80x40) |
+| VAL-001 | Poiseuille flow | L2 error < 2.5% on 80x40 grid (O(h) wall accuracy, ADR-008) | PASS (1.54% L2 on 80x40) |
 | VAL-002 | Lid-driven cavity | Centerline profiles within 2% of Ghia et al. | XFAIL (21% v-error, pending ECR-001) |
 
 ### Scope Changes

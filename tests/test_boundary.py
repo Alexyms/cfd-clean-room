@@ -425,6 +425,123 @@ class TestInletFlux:
 
 
 # ---------------------------------------------------------------------------
+# Unit tests -- Public query methods
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+class TestPublicQueries:
+    """Verify has_pressure_outlet and get_max_boundary_velocity."""
+
+    def test_has_pressure_outlet_true(self, tmp_path) -> None:
+        """Returns True when at least one entry is pressure_outlet.
+
+        The default config has bottom_outlet of type pressure_outlet,
+        so the method must return True.
+        """
+        config = _make_config(tmp_path)
+        mesh = Mesh(config)
+        bm = BoundaryManager(mesh, config)
+        assert bm.has_pressure_outlet() is True
+
+    def test_has_pressure_outlet_false_when_none(self, tmp_path) -> None:
+        """Returns False when no entries are pressure_outlet."""
+        config = _make_config(
+            tmp_path,
+            overrides={
+                "boundaries": {
+                    "top_wall": {
+                        "type": "wall",
+                        "location": "top",
+                        "x_start": 0.0,
+                        "x_end": 1.0,
+                    },
+                    "bottom_wall": {
+                        "type": "wall",
+                        "location": "bottom",
+                        "x_start": 0.0,
+                        "x_end": 1.0,
+                    },
+                }
+            },
+        )
+        mesh = Mesh(config)
+        bm = BoundaryManager(mesh, config)
+        assert bm.has_pressure_outlet() is False
+
+    def test_has_pressure_outlet_false_when_empty(self, tmp_path) -> None:
+        """Returns False when the entries list is empty."""
+        config = _make_config(tmp_path)
+        mesh = Mesh(config)
+        bm = BoundaryManager(mesh, config)
+        bm._entries = []
+        assert bm.has_pressure_outlet() is False
+
+    def test_get_max_boundary_velocity_picks_u(self, tmp_path) -> None:
+        """Returns the maximum |u_prescribed| when u dominates.
+
+        A left velocity_inlet with u_velocity=0.8 gives u_prescribed=0.8,
+        larger than the top inlet's v_prescribed=-0.45.
+        """
+        config = _make_config(
+            tmp_path,
+            overrides={
+                "boundaries": {
+                    "top_inlet": {
+                        "type": "velocity_inlet",
+                        "location": "top",
+                        "x_start": 0.0,
+                        "x_end": 1.0,
+                        "velocity": 0.45,
+                    },
+                    "left_inlet": {
+                        "type": "velocity_inlet",
+                        "location": "left",
+                        "y_start": 0.0,
+                        "y_end": 1.0,
+                        "u_velocity": 0.8,
+                    },
+                }
+            },
+        )
+        mesh = Mesh(config)
+        bm = BoundaryManager(mesh, config)
+        assert bm.get_max_boundary_velocity() == pytest.approx(0.8)
+
+    def test_get_max_boundary_velocity_picks_v(self, tmp_path) -> None:
+        """Returns the maximum |v_prescribed| when v dominates.
+
+        The default top inlet at velocity 0.45 decomposes to v_prescribed=-0.45
+        and u_prescribed=0. Outlet entries contribute 0 velocity.
+        """
+        config = _make_config(tmp_path)
+        mesh = Mesh(config)
+        bm = BoundaryManager(mesh, config)
+        assert bm.get_max_boundary_velocity() == pytest.approx(0.45)
+
+    def test_get_max_boundary_velocity_absolute(self, tmp_path) -> None:
+        """Returns absolute value; negative prescribed components count.
+
+        A top velocity_inlet always yields v_prescribed = -velocity (inflow
+        is downward). The max should be 0.45, not -0.45.
+        """
+        config = _make_config(tmp_path)
+        mesh = Mesh(config)
+        bm = BoundaryManager(mesh, config)
+        result = bm.get_max_boundary_velocity()
+        assert result > 0.0
+        assert result == pytest.approx(0.45)
+
+    def test_get_max_boundary_velocity_empty(self, tmp_path) -> None:
+        """Returns 0.0 when the entries list is empty."""
+        config = _make_config(tmp_path)
+        mesh = Mesh(config)
+        bm = BoundaryManager(mesh, config)
+        bm._entries = []
+        assert bm.get_max_boundary_velocity() == 0.0
+
+
+# ---------------------------------------------------------------------------
 # Unit tests -- Symmetry and misc
 # ---------------------------------------------------------------------------
 

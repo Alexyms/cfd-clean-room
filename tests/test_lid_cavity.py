@@ -108,8 +108,14 @@ def _make_cavity_config(tmp_path: Path) -> SimConfig:
         "domain": {
             "width": 1.0,
             "height": 1.0,
-            "nx": 80,
-            "ny": 80,
+            # 40x40 resolution keeps CI runtime bounded. At Re=100 with SIMPLE
+            # under-relaxation, 80x80 converges in ~5000 iterations which takes
+            # ~25 minutes on CI runners. The xfail status on this test applies
+            # at any resolution because the v-error is grid-independent per the
+            # diagnostic in ECR-001. Full-resolution validation is a manual
+            # activity until the staggered-grid rebuild resolves the defect.
+            "nx": 40,
+            "ny": 40,
         },
         "fluid": {
             "density": 1.0,
@@ -143,7 +149,6 @@ def _make_cavity_config(tmp_path: Path) -> SimConfig:
                 "location": "top",
                 "x_start": 0.0,
                 "x_end": 1.0,
-                "velocity": 1.0,
                 "u_velocity": 1.0,
                 "v_velocity": 0.0,
             },
