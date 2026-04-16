@@ -81,7 +81,7 @@ def run_review(message: str, system_prompt: str) -> str:
 
     response = client.beta.messages.create(
         model="claude-sonnet-4-6",
-        max_tokens=4096,
+        max_tokens=16000,
         betas=["advisor-tool-2026-03-01"],
         system=system_prompt,
         tools=tools,
