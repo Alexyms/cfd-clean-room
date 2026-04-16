@@ -3,7 +3,7 @@
 Verifies that the NS solver reproduces the analytical parabolic velocity
 profile for pressure-driven flow between two parallel plates. The L2
 error between the solver and analytical profiles at the channel midpoint
-must be below 1% (REQ-S02).
+must be below 2% (REQ-S02).
 """
 
 from pathlib import Path

@@ -181,8 +181,8 @@ def _interpolate_profile(
     return np.interp(target_coords, cell_coords, field_values)
 
 
-@pytest.mark.xfail(reason="Known v-velocity error pending solver rebuild per ECR-001")
 @pytest.mark.validation
+@pytest.mark.xfail(reason="Known v-velocity error pending solver rebuild per ECR-001")
 def test_lid_driven_cavity_val002(tmp_path: Path) -> None:
     """VAL-002: Lid-driven cavity -- centerline profiles within 2% of Ghia et al.
 

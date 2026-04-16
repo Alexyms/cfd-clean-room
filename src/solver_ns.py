@@ -87,10 +87,7 @@ class NavierStokesSolver:
         determined only up to a constant. Returns True if no pressure
         outlets exist and pinning is required.
         """
-        for entry in self._boundary._entries:
-            if entry.bc_type == "pressure_outlet":
-                return False
-        return True
+        return not self._boundary.has_pressure_outlet()
 
     def _compute_reference_flux(self) -> float:
         """Compute total inlet mass flux for residual scaling.
@@ -105,9 +102,7 @@ class NavierStokesSolver:
             return self._rho * vol_flux
 
         # Fallback for closed domains: use max boundary velocity * face area
-        max_vel = 0.0
-        for entry in self._boundary._entries:
-            max_vel = max(max_vel, abs(entry.u_prescribed), abs(entry.v_prescribed))
+        max_vel = self._boundary.get_max_boundary_velocity()
         face_area = max(self._dx, self._dy)
         return max(self._rho * max_vel * face_area, 1e-30)
 
