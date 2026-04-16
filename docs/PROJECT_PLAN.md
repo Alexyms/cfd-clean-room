@@ -106,13 +106,11 @@ Status values: NOT STARTED, IN PROGRESS, GATE REVIEW, COMPLETE
 
 | Deliverable | Status | Notes |
 |-------------|--------|-------|
-| src/boundary.py | DONE | Velocity/pressure BC application (no-slip, velocity inlet, pressure outlet) |
-| src/solver_ns.py | NOT STARTED | SIMPLE algorithm, pure NumPy, collocated grid with Rhie-Chow |
-| tests/test_boundary.py | DONE | Unit tests: BC application on known arrays |
-| tests/test_solver_ns.py | NOT STARTED | Unit tests: residuals, convergence, field shapes |
+| src/solver_ns.py | DONE | SIMPLE algorithm, pure NumPy, collocated grid with Rhie-Chow |
+| src/boundary.py (velocity/pressure BCs) | DONE | Inlet, outlet, no-slip wall, ghost cell interpolation |
 | tests/test_poiseuille.py | NOT STARTED | VAL-001 |
 | tests/test_lid_cavity.py | NOT STARTED | VAL-002 |
-| configs/clean_room_default.yaml | DONE | Add solver parameters: under-relaxation factors |
+| tests/test_solver_ns.py | DONE | Unit + integration tests: coefficients, sweeps, convergence |
 
 ### Validation Gate
 

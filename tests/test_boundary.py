@@ -390,6 +390,39 @@ class TestInletFlux:
         flux = bm.get_inlet_flux("bottom_outlet")
         assert flux == 0.0
 
+    def test_total_inlet_flux_with_inlet(self, tmp_path) -> None:
+        """get_total_inlet_flux returns expected flux for a velocity inlet."""
+        config = _make_config(tmp_path)  # V=0.45, width=1.0
+        mesh = Mesh(config)
+        bm = BoundaryManager(mesh, config)
+        total = bm.get_total_inlet_flux()
+        assert total == pytest.approx(0.45 * 1.0, rel=0.01)
+
+    def test_total_inlet_flux_no_inlets(self, tmp_path) -> None:
+        """get_total_inlet_flux returns 0.0 when no velocity inlets exist."""
+        config = _make_config(
+            tmp_path,
+            overrides={
+                "boundaries": {
+                    "top_wall": {
+                        "type": "wall",
+                        "location": "top",
+                        "x_start": 0.0,
+                        "x_end": 1.0,
+                    },
+                    "bottom_outlet": {
+                        "type": "pressure_outlet",
+                        "location": "bottom",
+                        "x_start": 0.0,
+                        "x_end": 1.0,
+                    },
+                }
+            },
+        )
+        mesh = Mesh(config)
+        bm = BoundaryManager(mesh, config)
+        assert bm.get_total_inlet_flux() == 0.0
+
 
 # ---------------------------------------------------------------------------
 # Unit tests -- Symmetry and misc
