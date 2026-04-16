@@ -28,8 +28,8 @@ def _make_poiseuille_config(tmp_path: Path) -> SimConfig:
         "domain": {
             "width": 1.0,
             "height": 0.5,
-            "nx": 100,
-            "ny": 50,
+            "nx": 80,
+            "ny": 40,
         },
         "fluid": {
             "density": 1.0,
