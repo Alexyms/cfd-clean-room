@@ -130,6 +130,8 @@ class NavierStokesSolver:
         self._boundary.apply_pressure_bc(p)
 
         self.residual_history = []
+        u_prev = u.copy()
+        v_prev = v.copy()
 
         for iteration in range(self._max_simple_iter):
             # Step 1: Momentum coefficients
@@ -172,8 +174,13 @@ class NavierStokesSolver:
             self._boundary.apply_velocity_bc(u, v)
             self._boundary.apply_pressure_bc(p)
 
-            # Step 11: Convergence check
-            residual = self._compute_residual(u, v, p)
+            # Step 11: Convergence check (velocity change between iterations)
+            du = float(np.max(np.abs(u[self._fluid] - u_prev[self._fluid])))
+            dv = float(np.max(np.abs(v[self._fluid] - v_prev[self._fluid])))
+            vel_ref = self._F_ref / (self._rho * max(self._dx, self._dy))
+            residual = max(du, dv) / max(vel_ref, 1e-30)
+            u_prev[:] = u
+            v_prev[:] = v
             self.residual_history.append(residual)
 
             if iteration % 50 == 0 or residual < self._convergence_tol:

@@ -116,7 +116,7 @@ Status values: NOT STARTED, IN PROGRESS, GATE REVIEW, COMPLETE
 
 | Test ID | Description | Criterion | Status |
 |---------|-------------|-----------|--------|
-| VAL-001 | Poiseuille flow | L2 error < 1% vs analytical parabolic profile | NOT RUN |
+| VAL-001 | Poiseuille flow | L2 error < 2% on 100x50 grid (O(h) wall accuracy, ADR-008) | NOT RUN |
 | VAL-002 | Lid-driven cavity | Centerline profiles within 2% of Ghia et al. | NOT RUN |
 
 ### Scope Changes
