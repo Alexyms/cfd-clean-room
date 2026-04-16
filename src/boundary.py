@@ -274,7 +274,14 @@ class BoundaryManager:
         if spec.type != "velocity_inlet":
             raise ValueError(f"Unrecognized boundary type: {spec.type}")
 
-        # velocity_inlet: decompose velocity into u, v based on edge normal
+        # If explicit u/v components are provided, use them directly.
+        # This supports tangential velocities (e.g., lid-driven cavity).
+        if spec.u_velocity is not None or spec.v_velocity is not None:
+            u_face = spec.u_velocity if spec.u_velocity is not None else 0.0
+            v_face = spec.v_velocity if spec.v_velocity is not None else 0.0
+            return ("velocity_inlet", u_face, v_face)
+
+        # Default: decompose velocity magnitude as normal to the wall
         vel = spec.velocity if spec.velocity is not None else 0.0
         if edge == "top":
             # Flow enters downward (negative v)

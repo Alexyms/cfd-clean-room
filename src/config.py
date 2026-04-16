@@ -33,6 +33,13 @@ class BoundarySpec:
         End of boundary segment along y axis (for left/right).
     velocity : float or None
         Prescribed velocity magnitude for velocity_inlet type.
+        Applied normal to the wall surface.
+    u_velocity : float or None
+        Explicit u-component for velocity_inlet. When present,
+        overrides the automatic normal decomposition of velocity.
+    v_velocity : float or None
+        Explicit v-component for velocity_inlet. When present,
+        overrides the automatic normal decomposition of velocity.
     """
 
     type: str
@@ -42,6 +49,8 @@ class BoundarySpec:
     y_start: float | None = None
     y_end: float | None = None
     velocity: float | None = None
+    u_velocity: float | None = None
+    v_velocity: float | None = None
 
 
 @dataclass(frozen=True)
@@ -255,19 +264,50 @@ class SimConfig:
                     f"{sorted(_VALID_BOUNDARY_LOCATIONS)}, got '{bc_location}'"
                 )
             bc_velocity = None
+            bc_u_velocity = None
+            bc_v_velocity = None
             if bc_type == "velocity_inlet":
+                # Support explicit u/v components or normal-direction magnitude
+                raw_u = spec.get("u_velocity")
+                raw_v = spec.get("v_velocity")
                 raw_vel = spec.get("velocity")
-                if raw_vel is None:
+
+                has_components = raw_u is not None or raw_v is not None
+                if not has_components and raw_vel is None:
                     raise ValueError(
-                        f"{ctx}: velocity_inlet requires a 'velocity' field"
+                        f"{ctx}: velocity_inlet requires 'velocity' or "
+                        f"'u_velocity'/'v_velocity' fields"
                     )
-                if isinstance(raw_vel, bool) or not isinstance(raw_vel, (int, float)):
-                    raise TypeError(
-                        f"{ctx}.velocity must be a number, got {type(raw_vel).__name__}"
-                    )
-                if raw_vel <= 0:
-                    raise ValueError(f"{ctx}.velocity must be positive, got {raw_vel}")
-                bc_velocity = float(raw_vel)
+
+                if raw_vel is not None:
+                    if isinstance(raw_vel, bool) or not isinstance(
+                        raw_vel, (int, float)
+                    ):
+                        raise TypeError(
+                            f"{ctx}.velocity must be a number, "
+                            f"got {type(raw_vel).__name__}"
+                        )
+                    if raw_vel <= 0:
+                        raise ValueError(
+                            f"{ctx}.velocity must be positive, got {raw_vel}"
+                        )
+                    bc_velocity = float(raw_vel)
+
+                for comp_name, raw_comp in [
+                    ("u_velocity", raw_u),
+                    ("v_velocity", raw_v),
+                ]:
+                    if raw_comp is not None and (
+                        isinstance(raw_comp, bool)
+                        or not isinstance(raw_comp, (int, float))
+                    ):
+                        raise TypeError(
+                            f"{ctx}.{comp_name} must be a number, "
+                            f"got {type(raw_comp).__name__}"
+                        )
+
+                bc_u_velocity = float(raw_u) if raw_u is not None else None
+                bc_v_velocity = float(raw_v) if raw_v is not None else None
 
             # Coordinate validation based on boundary orientation
             bc_x_start = None
@@ -309,6 +349,8 @@ class SimConfig:
                 y_start=bc_y_start,
                 y_end=bc_y_end,
                 velocity=bc_velocity,
+                u_velocity=bc_u_velocity,
+                v_velocity=bc_v_velocity,
             )
 
         # Obstacles (optional)
