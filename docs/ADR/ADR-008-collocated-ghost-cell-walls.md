@@ -1,7 +1,9 @@
 # ADR-008: Collocated Ghost Cell Wall Treatment
 
 ## Status
-Accepted
+Superseded by ADR-010 on 2026-04-16. See ECR-001 for decision rationale.
+
+Originally Accepted (2026-04-15). Retained as a historical record of the ghost-cell wall treatment decision.
 
 ## Context
 The collocated grid SIMPLE solver uses a ghost cell approach for no-slip walls: boundary cells are assigned velocity values (u_bnd = u_int/3) such that linear interpolation between the boundary cell center and the interior cell center places the wall velocity (zero) at the domain face.

@@ -30,10 +30,12 @@ Requirements are organized by subsystem. Each requirement has a unique ID, a rat
 | REQ-S04 | The velocity field shall satisfy the incompressibility constraint (divergence-free) to within configurable tolerance at every cell. | Mass conservation is fundamental. FV enforces this by construction, but numerical errors can accumulate. | VAL-007 |
 | REQ-S05 | The solver shall use the SIMPLE algorithm for pressure-velocity coupling. | Industry-standard approach. Well-documented, stable, compatible with structured grids. | Architecture review |
 | REQ-S06 | The pressure correction inner loop shall have a pure NumPy reference implementation for validation and a CUDA C++ accelerated implementation for production runs, called from Python via pybind11. The NumPy reference shall remain in the codebase permanently as the ground truth for equivalence testing (see REQ-N03). | NumPy reference validates physics independently of GPU code. CUDA acceleration is a separate deliverable after solver physics are validated. | Integration test |
-| REQ-S07 | The solver shall use a collocated variable arrangement with Rhie-Chow interpolation for face velocities. | Collocated grids store all variables at cell centers, giving uniform [ny, nx] array shapes across all fields. Rhie-Chow interpolation prevents checkerboard pressure oscillation. Modern industry standard (OpenFOAM, STAR-CCM+). | Architecture review, VAL-001, VAL-002 |
+| REQ-S07 | The solver shall use a staggered (MAC) variable arrangement with pressure at cell centers, u-velocity at east-west cell faces, and v-velocity at north-south cell faces. | Staggered arrangement provides natural pressure-velocity coupling without Rhie-Chow interpolation artifacts. Eliminates checkerboard modes by construction and enables exact discrete continuity enforcement. Required by ECR-001 to resolve the systematic v-velocity error in VAL-002. | Architecture review, VAL-001, VAL-002 |
 | REQ-S08 | The pressure correction equation shall be solved using Jacobi iteration. | Jacobi iteration updates all cells independently from previous-iteration neighbors, enabling full vectorization in NumPy and direct parallelization in CUDA (one thread per cell). Converges slower per iteration than Gauss-Seidel but each iteration is a single array operation. | Unit test |
-| REQ-S09 | The advection term shall be discretized using the hybrid differencing scheme (Spalding 1972). | Hybrid scheme switches between central difference (second-order, accurate in diffusion-dominated regions) and upwind (first-order, stable in advection-dominated regions) based on the local cell Peclet number. Balances accuracy and stability for flows with sharp gradients (lid-driven cavity corners, flow around obstacles). | VAL-001, VAL-002 |
+| REQ-S09 | The advection term shall be discretized using the QUICK scheme (Leonard 1979) with specialized stencils at boundary-adjacent cells. | QUICK provides second-order accuracy globally on smooth flows, appropriate for the moderate-Peclet regime of cleanroom flows. Does not require first-order upwind fallback of hybrid schemes. Required by ECR-001. | VAL-001, VAL-002 |
 | REQ-S10 | Under-relaxation factors for velocity (default 0.7) and pressure (default 0.3) shall be configurable via the YAML configuration. | SIMPLE requires under-relaxation for stability. Factors control convergence rate vs. stability tradeoff. Configurable per REQ-C01. | Unit test |
+| REQ-S11 | The mesh shall support independent geometric stretching in x and y directions, specified by minimum face spacing and geometric expansion ratio per wall. | Enables resolution clustering near walls and high-gradient regions without uniform refinement of the entire domain. Required by ECR-001. | Unit test |
+| REQ-S12 | Dirichlet velocity boundary conditions shall be imposed directly on the staggered velocity components at the physical wall location, without ghost cell interpolation. | Eliminates the O(h) wall accuracy limitation previously documented in ADR-008. Required by ECR-001. | Unit test, VAL-001 |
 
 ### 2.2 Transport Requirements
 
@@ -327,12 +329,13 @@ Full ADRs are in the development plan document. Summary reference:
 |-----|----------|---------------|
 | ADR-001 | Finite Volume discretization | Industry standard (Fluent, OpenFOAM). Conservation built into the method. |
 | ADR-002 | 2D vertical cross-section | Captures gravity, HVAC flow, stratification. 3D adds complexity without proportional insight. |
-| ADR-003 | Structured grid, staircase boundaries | Clean room geometry is rectangular. Staircase is exact for axis-aligned obstacles. |
+| ADR-003 | Structured grid with staggered layout, non-uniform spacing, staircase boundaries | Clean room geometry is rectangular. Staggered arrangement gives natural pressure-velocity coupling. Non-uniform spacing enables efficient near-wall resolution. |
 | ADR-004 | Laminar flow assumption | Clean rooms are engineered for laminar flow. Re well below transition. Physically correct, not a shortcut. |
 | ADR-005 | Hybrid Python/CUDA C++ | Python orchestration with pure NumPy reference solver for validation, CUDA C++ kernels via pybind11 for accelerated production runs. NumPy solver is the primary implementation through Phase 3 validation. CUDA acceleration is a separate deliverable after solver physics are validated. |
 | ADR-006 | Five particle size classes | Spans diffusion-dominated to settling-dominated regimes. Maps to ISO 14644. |
 | ADR-007 | Ionizer modeling deferred | Scope risk. Extension point (v_ext) preserved in transport solver interface. |
-| ADR-008 | Collocated ghost cell wall treatment | O(h) wall accuracy accepted for simplicity. Industry-standard approach. VAL-001 relaxed from 1% to 2%. |
+| ADR-008 | Collocated ghost cell wall treatment (Superseded by ADR-010) | O(h) wall accuracy accepted for simplicity. Industry-standard approach. VAL-001 relaxed from 1% to 2%. |
+| ADR-010 | Solver Architecture V2: Staggered Grid, Non-Uniform Mesh, QUICK Advection | Staggered MAC grid eliminates systematic v-error from Rhie-Chow inconsistency observed in VAL-002. Non-uniform mesh enables efficient resolution placement. QUICK provides globally second-order advection. See ECR-001. |
 
 ---
 
@@ -342,3 +345,4 @@ Full ADRs are in the development plan document. Summary reference:
 |------|--------|--------|
 | 2026-04-14 | Initial version. Architecture defined pre-development. | Alex Moroz-Smietana |
 | 2026-04-15 | Phase 2 architecture updates: collocated grid with Rhie-Chow (REQ-S07), Jacobi pressure solver (REQ-S08), hybrid advection scheme (REQ-S09), configurable under-relaxation (REQ-S10). ADR-005 amended from C/ctypes to CUDA C++/pybind11 with NumPy reference solver. REQ-S06 and REQ-N03 updated accordingly. | Alex Moroz-Smietana |
+| 2026-04-16 | ECR-001 approved: solver architecture rebuild. REQ-S07 and REQ-S09 replaced for staggered grid and QUICK advection. REQ-S11 and REQ-S12 added for non-uniform mesh and direct BC imposition. ADR-003 amended, ADR-008 superseded, ADR-010 added. | Alex Moroz-Smietana |

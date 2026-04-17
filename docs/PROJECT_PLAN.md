@@ -106,11 +106,12 @@ Status values: NOT STARTED, IN PROGRESS, GATE REVIEW, COMPLETE
 
 | Deliverable | Status | Notes |
 |-------------|--------|-------|
-| src/solver_ns.py | DONE | SIMPLE algorithm, pure NumPy, collocated grid with Rhie-Chow |
-| src/boundary.py (velocity/pressure BCs) | DONE | Inlet, outlet, no-slip wall, ghost cell interpolation |
+| src/solver_ns.py | REBUILDING (ECR-001) | SIMPLE algorithm, pure NumPy, collocated grid with Rhie-Chow. Rewriting on staggered MAC grid per ECR-001. |
+| src/boundary.py (velocity/pressure BCs) | REBUILDING (ECR-001) | Inlet, outlet, no-slip wall, ghost cell interpolation. Staggered BC imposition, no ghost cells. |
+| src/mesh.py | EXTENDING (ECR-001) | Adding non-uniform geometric stretching support per REQ-S11. |
 | tests/test_poiseuille.py | DONE | VAL-001 |
 | tests/test_lid_cavity.py | DONE (xfail pending ECR-001) | VAL-002 |
-| tests/test_solver_ns.py | DONE | Unit + integration tests: coefficients, sweeps, convergence |
+| tests/test_solver_ns.py | REWRITING (ECR-001) | Unit + integration tests: coefficients, sweeps, convergence |
 
 ### Validation Gate
 
@@ -128,8 +129,7 @@ Status values: NOT STARTED, IN PROGRESS, GATE REVIEW, COMPLETE
 | Risk | Mitigation |
 |------|------------|
 | SIMPLE convergence failure on clean room geometry | Start validation with simple geometries (empty channel for Poiseuille, square cavity for lid-driven). Add obstacles incrementally. Under-relaxation defaults 0.7/0.3. |
-| Checkerboard pressure oscillation from collocated grid | Rhie-Chow interpolation included in the solver. Checkerboard is visually obvious in pressure field plots. |
-| First-order upwind too diffusive for VAL-002 | Hybrid scheme (Spalding 1972) used instead. Adapts between central and upwind based on cell Peclet number. |
+| Staggered grid implementation bugs introduce new validation failures | Incremental development against reference implementations in Ferziger & Peric chapter 7. Uniform mesh validated before enabling stretching. |
 
 ---
 
@@ -320,3 +320,4 @@ Phase 3 completion is the minimum viable portfolio artifact. A working, validate
 | 2026-04-14 | Initial plan created. All phases at NOT STARTED except Phase 0 (IN PROGRESS). |
 | 2026-04-14 | Phase 0 complete. All infrastructure deliverables DONE. CI and review bot validated on test PR #1. Phase 1 now IN PROGRESS. |
 | 2026-04-15 | Phase 1 complete. Phase 2 architecture updates: replaced C/ctypes with NumPy reference + CUDA C++/pybind11 strategy. Added REQ-S07 through REQ-S10. C deliverables moved to new Phase 6 (CUDA Acceleration). Visualization renumbered to Phase 7. |
+| 2026-04-16 | ECR-001 approved. Phase 2 solver rebuild on staggered MAC grid with non-uniform mesh and QUICK advection. Related source modules marked REBUILDING. VAL-001 criterion tightened to < 1% under new BC treatment (will apply post-rebuild). |
