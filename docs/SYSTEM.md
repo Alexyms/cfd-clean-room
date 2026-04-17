@@ -251,6 +251,8 @@ NavierStokesSolver:
     solve_timestep(u, v, p, dt) -> tuple[ndarray, ndarray, ndarray]
     compute_residual() -> float
     All output arrays: shape [ny, nx], dtype float64, contiguous
+    Internal storage uses staggered layout per REQ-S07; cell-center
+    interpolation is applied at the solver boundary before return.
 ```
 
 ### solver_transport.py --> time_integration, monitor

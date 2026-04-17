@@ -1,18 +1,18 @@
-# ECR-001: Solver Architecture Rebuild — Staggered Grid, Non-Uniform Mesh, QUICK Advection
+# ECR-001: Solver Architecture Rebuild (Staggered Grid, Non-Uniform Mesh, QUICK Advection)
 
 **Project:** CFD Clean Room Simulation
 **Change Request ID:** ECR-001
-**Status:** Proposed
+**Status:** Approved
 **Author:** Alex Moroz-Smietana
 **Approver(s):** Alex Moroz-Smietana, Claude (pair)
 **Date Raised:** 2026-04-16
-**Phase Affected:** Phase 2 (Navier-Stokes Solver) — in progress
+**Phase Affected:** Phase 2 (Navier-Stokes Solver), in progress
 
 ---
 
 ## 1. Problem Statement
 
-VAL-002 (lid-driven cavity, Re=100) fails the acceptance criterion in REQ-S03 (centerline profiles within 2% of Ghia et al. 1982). The u-velocity profile along x=0.5 agrees with Ghia to a maximum absolute error of 1.6% and an L2 error of 0.77%, well within criterion. The v-velocity profile along y=0.5 disagrees with Ghia by a maximum absolute error of 20.1% and an L2 error of 9.3%, concentrated in the interior region x∈[0.28, 0.62]. The error does not decrease under grid refinement — it is present at 80×80 and remains at the same magnitude at 128×128 — ruling out discretization truncation as the cause.
+VAL-002 (lid-driven cavity, Re=100) fails the acceptance criterion in REQ-S03 (centerline profiles within 2% of Ghia et al. 1982). The u-velocity profile along x=0.5 agrees with Ghia to a maximum absolute error of 1.6% and an L2 error of 0.77%, well within criterion. The v-velocity profile along y=0.5 disagrees with Ghia by a maximum absolute error of 20.1% and an L2 error of 9.3%, concentrated in the interior region x∈[0.28, 0.62]. The error does not decrease under grid refinement (it is present at 80×80 and remains at the same magnitude at 128×128), ruling out discretization truncation as the cause.
 
 Related observations from diagnostic analysis:
 
@@ -30,25 +30,25 @@ The current solver combines three numerical choices that interact poorly and can
 
 **Hybrid differencing advection scheme (REQ-S09).** The Spalding 1972 hybrid scheme switches between central differencing and upwinding based on cell Péclet number, providing first-order accuracy in advection-dominated regions. At Re=100 the cavity sits in the transitional regime where the scheme is CDS-dominated but introduces dispersive error in high-gradient zones, contributing to the observed over-intense descending jet.
 
-**Ghost cell boundary treatment (ADR-008).** Wall and inlet BCs are imposed through the collocated ghost cell formula `u_bnd = (2·u_prescribed + u_int) / 3`, which places the physical BC at the domain face via linear interpolation. This scheme is O(h) accurate at walls — one order lower than the interior scheme — and was already documented as a known limitation requiring REQ-S02 to be relaxed from 1% to 2% for VAL-001 acceptance.
+**Ghost cell boundary treatment (ADR-008).** Wall and inlet BCs are imposed through the collocated ghost cell formula `u_bnd = (2·u_prescribed + u_int) / 3`, which places the physical BC at the domain face via linear interpolation. This scheme is O(h) accurate at walls (one order lower than the interior scheme) and was already documented as a known limitation requiring REQ-S02 to be relaxed from 1% to 2% for VAL-001 acceptance.
 
 These three decisions are coupled by the collocated-grid choice. Fixing the Rhie-Chow cell-center inconsistency in isolation would require replacing the velocity correction stencil, which in turn changes the pressure-correction equation derivation, which in turn changes how BCs interact with the coupled system. Fixing the ghost cell O(h) accuracy in isolation has been attempted (see handoff: "wall momentum treatment" experiment) and created secondary defects that forced a revert. The defects are structural to the architecture, not to specific lines of code.
 
 ## 3. Options Considered
 
-### 3.1 Option A — Relax REQ-S03 and document the defect
+### 3.1 Option A: Relax REQ-S03 and document the defect
 
 Revise REQ-S03 to accept the observed error pattern, with an ADR documenting the limitation of the current scheme. Similar to the precedent set by ADR-008 for REQ-S02.
 
-**Rejected because:** VAL-002 is the primary validation test for 2D nonlinear advection and recirculation — the exact physics the cleanroom simulation depends on for particle transport. A 20% systematic error in the centerline velocity directly corresponds to 20% errors in particle advection trajectories. The error is not a bounded approximation but a bias in the wrong direction across a large fraction of the domain. Accepting this error would render the cleanroom simulation results quantitatively unreliable and qualitatively misleading. Portfolio-wise, accepting a 20% error on a textbook validation against published data signals a willingness to ship broken tools, which is inconsistent with the project's demonstration purpose.
+**Rejected because:** VAL-002 is the primary validation test for 2D nonlinear advection and recirculation: the exact physics the cleanroom simulation depends on for particle transport. A 20% systematic error in the centerline velocity directly corresponds to 20% errors in particle advection trajectories. The error is not a bounded approximation but a bias in the wrong direction across a large fraction of the domain. Accepting this error would render the cleanroom simulation results quantitatively unreliable and qualitatively misleading. Portfolio-wise, accepting a 20% error on a textbook validation against published data signals a willingness to ship broken tools, which is inconsistent with the project's demonstration purpose.
 
-### 3.2 Option B — Targeted fix within the current architecture
+### 3.2 Option B: Targeted fix within the current architecture
 
 Attempt to reformulate the Rhie-Chow velocity correction to use compact gradients consistently, replace the ghost cell scheme with a wall-matched second-order BC, and retune the hybrid scheme parameters.
 
 **Rejected because:** The three defects are coupled. Fixing one in isolation creates secondary defects elsewhere, as previously demonstrated. A full reformulation touching all three is equivalent in engineering effort to Option C but produces a less numerically robust result. The collocated + Rhie-Chow architecture is known in the CFD literature to require substantial maintenance effort for correctness at moderate Re; the cleanroom application's target Re range (50 to 2000) sits squarely in the difficult zone for this approach.
 
-### 3.3 Option C — Rebuild solver on staggered grid with non-uniform mesh and QUICK advection
+### 3.3 Option C: Rebuild solver on staggered grid with non-uniform mesh and QUICK advection
 
 Replace the collocated layout with a staggered (MAC) arrangement (Harlow and Welch 1965). Extend the mesh to support per-axis geometric stretching. Replace the hybrid scheme with the QUICK scheme (Leonard 1979). Replace ghost cells with direct imposition of velocity BCs on physical faces.
 
@@ -56,9 +56,13 @@ Replace the collocated layout with a staggered (MAC) arrangement (Harlow and Wel
 
 ## 4. Recommended Change
 
-Rebuild the Navier-Stokes solver on a staggered (MAC) variable arrangement with a non-uniform Cartesian mesh and second-order QUICK advection. The change is executed as one coordinated rebuild because the four components are tightly coupled — staggered grid enables direct BC imposition, direct BC imposition enables second-order wall accuracy, second-order wall accuracy enables QUICK to deliver its design convergence order, and the non-uniform mesh leverages the new architecture's accuracy to place resolution efficiently.
+Rebuild the Navier-Stokes solver on a staggered (MAC) variable arrangement with a non-uniform Cartesian mesh and second-order QUICK advection. The change is executed as one coordinated rebuild because the four components are tightly coupled: staggered grid enables direct BC imposition, direct BC imposition enables second-order wall accuracy, second-order wall accuracy enables QUICK to deliver its design convergence order, and the non-uniform mesh leverages the new architecture's accuracy to place resolution efficiently.
 
-**Staggered MAC grid.** Pressure stored at cell centers (`p` shape [ny, nx]). u-velocity stored at east-west faces (`u` shape [ny, nx+1]). v-velocity stored at north-south faces (`v` shape [ny+1, nx]). Continuity at cell (j, i) becomes `(u[j, i+1] - u[j, i]) / dx_cell[i] + (v[j+1, i] - v[j, i]) / dy_cell[j] = 0` exactly, with no Rhie-Chow interpolation required. The pressure gradient driving u-momentum naturally lives at u-face locations, giving automatic pressure-velocity coupling and eliminating checkerboard modes by construction.
+**Staggered MAC grid.** Pressure stored at cell centers (`p` shape [ny, nx]). u-velocity stored at east-west faces (`u` shape [ny, nx+1]). v-velocity stored at north-south faces (`v` shape [ny+1, nx]).
+
+These are the internal storage shapes used by the solver. The public `solve_steady()` return contract is preserved: u, v, and p are interpolated to cell centers before return, so downstream consumers continue to receive `[ny, nx]` shaped arrays consistent with the existing cross-cutting array convention (SYSTEM.md Section 3.3). Interpolation is performed via simple face-to-center averaging, adding O(h²) interpolation error to the returned fields which is consistent with the staggered scheme's interior accuracy.
+
+Continuity at cell (j, i) becomes `(u[j, i+1] - u[j, i]) / dx_cell[i] + (v[j+1, i] - v[j, i]) / dy_cell[j] = 0` exactly, with no Rhie-Chow interpolation required. The pressure gradient driving u-momentum naturally lives at u-face locations, giving automatic pressure-velocity coupling and eliminating checkerboard modes by construction.
 
 **Non-uniform Cartesian mesh with geometric stretching.** Mesh stores explicit coordinate arrays `x_face[0..nx]`, `x_center[0..nx-1]`, `dx_cell[0..nx-1]`, and `dx_face[0..nx]` (the latter being the distance between adjacent cell centers, used for diffusive stencils across faces). Stretching is specified by geometric ratio and minimum spacing per wall, allowing independent refinement in x and y. This preserves the structured-grid i-j indexing so CUDA portability and vectorized NumPy operations are unaffected.
 
@@ -72,7 +76,7 @@ Rebuild the Navier-Stokes solver on a staggered (MAC) variable arrangement with 
 
 | ID | Current text | Proposed text | Reason |
 |----|-------------|---------------|--------|
-| REQ-S02 | The NS solver shall reproduce the Poiseuille flow parabolic velocity profile with L2 error < 1%. | No change to requirement text. Test criterion reverts from 2% (relaxed under ADR-008) to 1% as originally written. | Second-order wall accuracy under direct BC imposition eliminates the O(h) wall-accuracy limitation that motivated ADR-008's relaxation. |
+| REQ-S02 | The NS solver shall reproduce the Poiseuille flow parabolic velocity profile with L2 error < 2.5%. (Relaxed from originally-specified <1% per ADR-008 due to O(h) wall accuracy of collocated ghost-cell scheme.) | No change to requirement text. Test criterion tightens from 2.5% (current, ADR-008 relaxation) to < 1% (original specification) once the staggered-grid rebuild lands and is validated. Tightening is part of the rebuild PR, not this ECR. | Staggered grid with direct BC imposition provides O(h²) wall accuracy, restoring the original <1% target. Applied post-rebuild validation. |
 | REQ-S07 | The solver shall use a collocated variable arrangement with Rhie-Chow interpolation for face velocities. | The solver shall use a staggered (MAC) variable arrangement with pressure at cell centers, u-velocity at east-west cell faces, and v-velocity at north-south cell faces. | Staggered arrangement provides natural pressure-velocity coupling without interpolation artifacts. Resolves systemic bias causing VAL-002 failure. |
 | REQ-S09 | The advection term shall be discretized using the hybrid differencing scheme (Spalding 1972). | The advection term shall be discretized using the QUICK scheme (Leonard 1979) with specialized stencils at boundary-adjacent cells. | Second-order accuracy globally on smooth flows; appropriate for moderate-Péclet cleanroom regime. Hybrid's first-order-upwind fallback is unnecessary for the target application. |
 
@@ -102,7 +106,7 @@ Rebuild the Navier-Stokes solver on a staggered (MAC) variable arrangement with 
 | ADR-003 | Amend | Structured grid retained. Layout changes from collocated to staggered. Mesh extended to support per-axis non-uniform spacing. Staircase representation of internal obstacles preserved. |
 | ADR-008 | Supersede | Collocated ghost cell wall treatment no longer applicable. REQ-S02 criterion returns to < 1% (original wording). ADR-008 marked as superseded by ADR-010 in the registry. |
 | ADR-009 | Discard | Drafted but uncommitted ADR for "VAL-002 structural validation criteria" (alternative acceptance scheme) is no longer needed. Root cause identified; point-wise Ghia comparison retained as criterion. |
-| ADR-010 | New | "Solver Architecture V2: Staggered Grid, Non-Uniform Mesh, QUICK Advection." Documents the rebuild decision in detail. Pairs with this ECR. |
+| ADR-010 | New | "Solver Architecture V2: Staggered Grid, Non-Uniform Mesh, QUICK Advection." Documents the rebuild decision in detail. Pairs with this ECR. ADR-010 authoring is deferred to the rebuild PR (phase2/staggered-rebuild) because its technical content depends on implementation decisions made during the rebuild. This ECR establishes the intent; ADR-010 will record the executed design. |
 
 ## 7. Affected Artifacts
 
@@ -120,25 +124,25 @@ Rebuild the Navier-Stokes solver on a staggered (MAC) variable arrangement with 
 
 | Artifact | Impact |
 |----------|--------|
-| `tests/test_mesh.py` | Extend — add non-uniform mesh tests. |
-| `tests/test_boundary.py` | Rewrite — staggered BC imposition tests. |
-| `tests/test_solver_ns.py` | Rewrite — staggered coefficients, momentum sweep, pressure correction. |
-| `tests/test_poiseuille.py` | Update — criterion tightens to 1% L2. |
-| `tests/test_lid_cavity.py` | No change — same criterion, expected to pass under rebuilt solver. |
+| `tests/test_mesh.py` | Extend: add non-uniform mesh tests. |
+| `tests/test_boundary.py` | Rewrite: staggered BC imposition tests. |
+| `tests/test_solver_ns.py` | Rewrite: staggered coefficients, momentum sweep, pressure correction. |
+| `tests/test_poiseuille.py` | Update: criterion tightens to 1% L2. |
+| `tests/test_lid_cavity.py` | No change: same criterion, expected to pass under rebuilt solver. |
 
 ### 7.3 Documentation
 
 | Artifact | Impact |
 |----------|--------|
-| `docs/SYSTEM.md` | Update — REQ-S02 test criterion note, REQ-S07 text, REQ-S09 text, REQ-S11 and REQ-S12 added, ADR summary table updated. |
-| `docs/PROJECT_PLAN.md` | Update — Phase 2 deliverables marked as REBUILDING for affected modules. Phase 2 risks table revised. Phase 2 status remains IN PROGRESS. |
-| `docs/ADR/ADR-008-collocated-ghost-cell-walls.md` | Update — add "Superseded by ADR-010" header. |
+| `docs/SYSTEM.md` | Update: REQ-S02 test criterion note, REQ-S07 text, REQ-S09 text, REQ-S11 and REQ-S12 added, ADR summary table updated. |
+| `docs/PROJECT_PLAN.md` | Update: Phase 2 deliverables marked as REBUILDING for affected modules. Phase 2 risks table revised. Phase 2 status remains IN PROGRESS. |
+| `docs/ADR/ADR-008-collocated-ghost-cell-walls.md` | Update: add "Superseded by ADR-010" header. |
 | `docs/ADR/ADR-010-staggered-grid-architecture.md` | Create |
 | `docs/ECR/ECR-001-solver-architecture-rebuild.md` | Create (this document) |
 
 ### 7.4 Cascade impact
 
-No impact on Phase 1 modules (`config.py`, `mesh.py`, `particles.py`) beyond the mesh extension noted above. No impact on Phase 3+ deliverables — transport solver and downstream phases consume velocity and pressure fields through unchanged interfaces (`NavierStokesSolver.solve_steady()` returns `(u, v, p)` in the same shapes; the staggered layout is internal to the solver).
+No impact on Phase 1 modules (`config.py`, `mesh.py`, `particles.py`) beyond the mesh extension noted above. No impact on Phase 3+ deliverables: transport solver and downstream phases consume velocity and pressure fields through unchanged interfaces (`NavierStokesSolver.solve_steady()` returns `(u, v, p)` in the same shapes; the staggered layout is internal to the solver).
 
 ## 8. Implementation Plan
 
@@ -192,8 +196,8 @@ By signing below, approvers confirm:
 
 | Role | Name | Approval | Date |
 |------|------|----------|------|
-| Author | Alex Moroz-Smietana | | |
-| Reviewer | Claude | | |
+| Author | Alex Moroz-Smietana | Approved | 2026-04-16 |
+| Reviewer | Claude | Approved | 2026-04-16 |
 
 ---
 
