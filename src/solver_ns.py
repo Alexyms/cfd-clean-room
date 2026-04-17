@@ -66,12 +66,47 @@ class NavierStokesSolver:
         # Reference mass flux for residual scaling
         self._F_ref = self._compute_reference_flux()
 
+        # Detect if pressure pinning is needed (no pressure outlets)
+        self._pin_pressure = self._needs_pressure_pin()
+        self._pin_j: int = 0
+        self._pin_i: int = 0
+        if self._pin_pressure:
+            # Find the first FLUID cell as the reference point
+            fluid_idx = np.argwhere(self._fluid)
+            if fluid_idx.size > 0:
+                self._pin_j = int(fluid_idx[0, 0])
+                self._pin_i = int(fluid_idx[0, 1])
+
         # Residual history for convergence monitoring
         self.residual_history: list[float] = []
 
+    def _needs_pressure_pin(self) -> bool:
+        """Check if any pressure outlet boundary exists.
+
+        Without a Dirichlet pressure BC, the pressure correction is
+        determined only up to a constant. Returns True if no pressure
+        outlets exist and pinning is required.
+        """
+        return not self._boundary.has_pressure_outlet()
+
     def _compute_reference_flux(self) -> float:
-        """Compute total inlet mass flux for residual scaling."""
-        return max(self._rho * self._boundary.get_total_inlet_flux(), 1e-30)
+        """Compute total inlet mass flux for residual scaling.
+
+        For closed domains (lid-driven cavity) where no volumetric flux
+        crosses boundaries, falls back to a reference based on the
+        maximum prescribed boundary velocity and a characteristic
+        cell face area.
+        """
+        vol_flux = self._boundary.get_total_inlet_flux()
+        # Use abs() to handle edge cases where mixed inflow/outflow velocity_inlet
+        # boundaries could produce a net-zero or net-negative flux sum.
+        if abs(vol_flux) > 1e-30:
+            return self._rho * abs(vol_flux)
+
+        # Fallback for closed domains: use max boundary velocity * face area
+        max_vel = self._boundary.get_max_boundary_velocity()
+        face_area = max(self._dx, self._dy)
+        return max(self._rho * max_vel * face_area, 1e-30)
 
     def solve_steady(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Solve for steady-state velocity and pressure fields.
@@ -92,6 +127,8 @@ class NavierStokesSolver:
         self._boundary.apply_pressure_bc(p)
 
         self.residual_history = []
+        u_prev = u.copy()
+        v_prev = v.copy()
 
         for iteration in range(self._max_simple_iter):
             # Step 1: Momentum coefficients
@@ -129,11 +166,18 @@ class NavierStokesSolver:
 
             # Step 10: Update pressure
             p[self._fluid] += self._alpha_p * p_prime[self._fluid]
+            if self._pin_pressure:
+                p[self._fluid] -= p[self._pin_j, self._pin_i]
             self._boundary.apply_velocity_bc(u, v)
             self._boundary.apply_pressure_bc(p)
 
-            # Step 11: Convergence check
-            residual = self._compute_residual(u, v, p)
+            # Step 11: Convergence check (velocity change between iterations)
+            du = float(np.max(np.abs(u[self._fluid] - u_prev[self._fluid])))
+            dv = float(np.max(np.abs(v[self._fluid] - v_prev[self._fluid])))
+            vel_ref = self._F_ref / (self._rho * max(self._dx, self._dy))
+            residual = max(du, dv) / max(vel_ref, 1e-30)
+            u_prev[:] = u
+            v_prev[:] = v
             self.residual_history.append(residual)
 
             if iteration % 50 == 0 or residual < self._convergence_tol:

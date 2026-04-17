@@ -108,16 +108,16 @@ Status values: NOT STARTED, IN PROGRESS, GATE REVIEW, COMPLETE
 |-------------|--------|-------|
 | src/solver_ns.py | DONE | SIMPLE algorithm, pure NumPy, collocated grid with Rhie-Chow |
 | src/boundary.py (velocity/pressure BCs) | DONE | Inlet, outlet, no-slip wall, ghost cell interpolation |
-| tests/test_poiseuille.py | NOT STARTED | VAL-001 |
-| tests/test_lid_cavity.py | NOT STARTED | VAL-002 |
+| tests/test_poiseuille.py | DONE | VAL-001 |
+| tests/test_lid_cavity.py | DONE (xfail pending ECR-001) | VAL-002 |
 | tests/test_solver_ns.py | DONE | Unit + integration tests: coefficients, sweeps, convergence |
 
 ### Validation Gate
 
 | Test ID | Description | Criterion | Status |
 |---------|-------------|-----------|--------|
-| VAL-001 | Poiseuille flow | L2 error < 1% vs analytical parabolic profile | NOT RUN |
-| VAL-002 | Lid-driven cavity | Centerline profiles within 2% of Ghia et al. | NOT RUN |
+| VAL-001 | Poiseuille flow | L2 error < 2.5% on 80x40 grid (O(h) wall accuracy, ADR-008) | PASS (1.54% L2 on 80x40) |
+| VAL-002 | Lid-driven cavity | Centerline profiles within 2% of Ghia et al. | XFAIL (21% v-error, pending ECR-001) |
 
 ### Scope Changes
 

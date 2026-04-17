@@ -468,6 +468,113 @@ class TestSimConfigInvalidValues:
         with pytest.raises(TypeError, match=r"velocity.*number"):
             SimConfig(path)
 
+    def test_velocity_inlet_bool_u_velocity_raises_type_error(self, tmp_path) -> None:
+        """velocity_inlet with boolean u_velocity raises TypeError."""
+        path = _write_config(
+            tmp_path,
+            overrides={
+                "boundaries": {
+                    "bad": {
+                        "type": "velocity_inlet",
+                        "location": "top",
+                        "x_start": 0.5,
+                        "x_end": 3.5,
+                        "u_velocity": True,
+                    }
+                }
+            },
+        )
+        with pytest.raises(TypeError, match=r"u_velocity.*number"):
+            SimConfig(path)
+
+    def test_velocity_inlet_bool_v_velocity_raises_type_error(self, tmp_path) -> None:
+        """velocity_inlet with boolean v_velocity raises TypeError."""
+        path = _write_config(
+            tmp_path,
+            overrides={
+                "boundaries": {
+                    "bad": {
+                        "type": "velocity_inlet",
+                        "location": "top",
+                        "x_start": 0.5,
+                        "x_end": 3.5,
+                        "v_velocity": False,
+                    }
+                }
+            },
+        )
+        with pytest.raises(TypeError, match=r"v_velocity.*number"):
+            SimConfig(path)
+
+    def test_velocity_inlet_string_u_velocity_raises_type_error(self, tmp_path) -> None:
+        """velocity_inlet with non-numeric string u_velocity raises TypeError."""
+        path = _write_config(
+            tmp_path,
+            overrides={
+                "boundaries": {
+                    "bad": {
+                        "type": "velocity_inlet",
+                        "location": "top",
+                        "x_start": 0.5,
+                        "x_end": 3.5,
+                        "u_velocity": "fast",
+                    }
+                }
+            },
+        )
+        with pytest.raises(TypeError, match=r"u_velocity.*number"):
+            SimConfig(path)
+
+    def test_velocity_inlet_only_u_velocity_accepted(self, tmp_path) -> None:
+        """velocity_inlet with u_velocity only is accepted; v_velocity is None."""
+        path = _write_config(
+            tmp_path,
+            overrides={
+                "boundaries": {
+                    "lid": {
+                        "type": "velocity_inlet",
+                        "location": "top",
+                        "x_start": 0.0,
+                        "x_end": 4.0,
+                        "u_velocity": 1.0,
+                    }
+                }
+            },
+        )
+        config = SimConfig(path)
+        bc = config.boundaries["lid"]
+        assert bc.u_velocity == pytest.approx(1.0)
+        assert bc.v_velocity is None
+        assert bc.velocity is None
+
+    def test_velocity_inlet_components_override_magnitude(self, tmp_path) -> None:
+        """velocity_inlet with both velocity and components stores all three.
+
+        The loader accepts the config; the boundary layer uses the explicit
+        components and ignores the magnitude for decomposition.
+        """
+        path = _write_config(
+            tmp_path,
+            overrides={
+                "boundaries": {
+                    "lid": {
+                        "type": "velocity_inlet",
+                        "location": "top",
+                        "x_start": 0.0,
+                        "x_end": 4.0,
+                        "velocity": 2.0,
+                        "u_velocity": 1.0,
+                        "v_velocity": 0.0,
+                    }
+                }
+            },
+        )
+        config = SimConfig(path)
+        bc = config.boundaries["lid"]
+        assert bc.velocity == pytest.approx(2.0)
+        assert bc.u_velocity == pytest.approx(1.0)
+        assert bc.v_velocity == pytest.approx(0.0)
+
     def test_boundaries_as_list_raises(self, tmp_path) -> None:
         """Boundaries section as a list instead of mapping raises ValueError."""
         path = _write_config(

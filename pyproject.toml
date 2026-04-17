@@ -28,6 +28,8 @@ ignore = [
 # Physics variable naming (a_P, F_e, D_ew) uses uppercase per convention
 "src/solver_ns.py" = ["N803", "N806"]
 "tests/test_solver_ns.py" = ["N802", "N803", "N806"]
+"tests/test_poiseuille.py" = ["N806"]
+"tests/test_lid_cavity.py" = ["N806"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["src"]
@@ -37,6 +39,8 @@ quote-style = "double"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+strict_markers = true
+xfail_strict = true
 markers = [
     "unit: Unit tests -- isolated function and class behavior",
     "integration: Integration tests -- module interaction and data flow",

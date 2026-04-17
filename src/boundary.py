@@ -274,7 +274,14 @@ class BoundaryManager:
         if spec.type != "velocity_inlet":
             raise ValueError(f"Unrecognized boundary type: {spec.type}")
 
-        # velocity_inlet: decompose velocity into u, v based on edge normal
+        # If explicit u/v components are provided, use them directly.
+        # This supports tangential velocities (e.g., lid-driven cavity).
+        if spec.u_velocity is not None or spec.v_velocity is not None:
+            u_face = spec.u_velocity if spec.u_velocity is not None else 0.0
+            v_face = spec.v_velocity if spec.v_velocity is not None else 0.0
+            return ("velocity_inlet", u_face, v_face)
+
+        # Default: decompose velocity magnitude as normal to the wall
         vel = spec.velocity if spec.velocity is not None else 0.0
         if edge == "top":
             # Flow enters downward (negative v)
@@ -452,3 +459,33 @@ class BoundaryManager:
             if spec.type == "velocity_inlet":
                 total += self.get_inlet_flux(name)
         return total
+
+    def has_pressure_outlet(self) -> bool:
+        """Return True if any BOUNDARY cell is configured as a pressure_outlet BC.
+
+        Used by the solver to determine whether pressure pinning is required
+        for closed domains.
+
+        Returns
+        -------
+        bool
+            True if at least one entry has bc_type == "pressure_outlet".
+        """
+        return any(e.bc_type == "pressure_outlet" for e in self._entries)
+
+    def get_max_boundary_velocity(self) -> float:
+        """Return the maximum absolute prescribed velocity across all BOUNDARY cells.
+
+        Used by the solver as a reference scale for residual normalization
+        in closed-domain cases where total volumetric flux is zero.
+
+        Returns
+        -------
+        float
+            Maximum of |u_prescribed| and |v_prescribed| over all entries.
+            Returns 0.0 if there are no entries.
+        """
+        max_vel = 0.0
+        for e in self._entries:
+            max_vel = max(max_vel, abs(e.u_prescribed), abs(e.v_prescribed))
+        return max_vel
