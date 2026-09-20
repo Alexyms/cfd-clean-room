@@ -112,6 +112,7 @@ Status values: NOT STARTED, IN PROGRESS, GATE REVIEW, COMPLETE
 | tests/test_poiseuille.py | DONE | VAL-001 |
 | tests/test_lid_cavity.py | DONE (xfail pending ECR-001) | VAL-002 |
 | tests/test_solver_ns.py | REWRITING (ECR-001) | Unit + integration tests: coefficients, sweeps, convergence |
+| scripts/view_field.py | DONE (development instrument) | Streamlines, pressure and cavity centerline profiles against Ghia, for reading the field while the solver is rebuilt. Not the Phase 7 visualization deliverable; see Scope Changes. |
 
 ### Validation Gate
 
@@ -123,6 +124,7 @@ Status values: NOT STARTED, IN PROGRESS, GATE REVIEW, COMPLETE
 ### Scope Changes
 
 - C solver deliverables (csolver/pressure_solve.c, csolver.h, Makefile, test_c_parity.py) moved to Phase 6 (CUDA Acceleration). REQ-N03 is now validated against CUDA C++ rather than plain C.
+- scripts/view_field.py added as a Phase 2 development instrument (2026-09-19, PR #14). It exists so the velocity and pressure fields can be read against the Ghia reference while the solver is rebuilt under ECR-001. It is distinct from the Phase 7 visualization deliverable: no animation, no scenario output, no presentation quality, and it is not reused by scripts/visualize.py. Phase 7 remains NOT STARTED. The addition was made without a plan entry, which is a scope violation of the task prompt that introduced it, not of the build; recorded here on 2026-09-20 from the PR #14 review finding.
 
 ### Phase-Specific Risks
 
@@ -288,7 +290,7 @@ Status values: NOT STARTED, IN PROGRESS, GATE REVIEW, COMPLETE
 
 | Deliverable | Status | Notes |
 |-------------|--------|-------|
-| scripts/visualize.py | NOT STARTED | Matplotlib animations, streamlines, heatmaps |
+| scripts/visualize.py | NOT STARTED | Matplotlib animations, streamlines, heatmaps. Distinct from scripts/view_field.py, the Phase 2 development instrument. |
 | Animated output per scenario | NOT STARTED | MP4/WebM for each scenario, each size class |
 | Portfolio website page | NOT STARTED | Hosted on alexyms.github.io |
 | README.md (final version) | NOT STARTED | Project overview, setup instructions, results summary |
@@ -321,4 +323,5 @@ Phase 3 completion is the minimum viable portfolio artifact. A working, validate
 | 2026-04-14 | Phase 0 complete. All infrastructure deliverables DONE. CI and review bot validated on test PR #1. Phase 1 now IN PROGRESS. |
 | 2026-04-15 | Phase 1 complete. Phase 2 architecture updates: replaced C/ctypes with NumPy reference + CUDA C++/pybind11 strategy. Added REQ-S07 through REQ-S10. C deliverables moved to new Phase 6 (CUDA Acceleration). Visualization renumbered to Phase 7. |
 | 2026-04-16 | ECR-001 approved. Phase 2 solver rebuild on staggered MAC grid with non-uniform mesh and QUICK advection. Related source modules marked REBUILDING. VAL-001 criterion will tighten from the current 2.5% (ADR-008 relaxation) back to the originally-specified < 1% as part of the rebuild PR. This docs PR does not modify the live criterion; the change takes effect when the staggered-grid solver passes validation. |
+| 2026-09-20 | scripts/view_field.py recorded as a Phase 2 development instrument, distinct from the Phase 7 visualization deliverable, which remains NOT STARTED. It was introduced in PR #14 without a plan entry; the PR #14 review caught the omission. |
 | 2026-09-19 | VAL-001 recorded error corrected from 1.54% to 2.04% L2 on 80x40. The 1.54% figure was never reproducible: the test at commit d589b9f, whose message claims it, measures 2.036% and fails its own 2% assertion, and 2.036% is also what CI measured, so there is no platform difference between the two. The threshold moved from 2% to 2.5% in the same PR without a recorded reason. The reason is that the collocated ghost-cell scheme genuinely sits at 2.04% on this grid, above the 2% set on 2026-04-15. REQ-S02 keeps its 2.5% value. The ECR-001 plan to tighten it to < 1% after the rebuild is unaffected. |
