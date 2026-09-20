@@ -81,7 +81,12 @@ def run_review(message: str, system_prompt: str) -> str:
         }
     ]
 
-    response = client.beta.messages.create(
+    # Streamed, not because the output is consumed incrementally but because
+    # the SDK refuses a non-streaming call whose estimated duration exceeds ten
+    # minutes, and it estimates from max_tokens: 3600 * max_tokens / 128000
+    # seconds. That puts the non-streaming ceiling at 21333 tokens, which a
+    # high-effort review can exhaust on reasoning alone before emitting text.
+    with client.beta.messages.stream(
         model="claude-sonnet-5",
         max_tokens=32000,
         betas=["advisor-tool-2026-03-01"],
@@ -89,7 +94,8 @@ def run_review(message: str, system_prompt: str) -> str:
         tools=tools,
         messages=[{"role": "user", "content": message}],
         output_config={"effort": "high"},
-    )
+    ) as stream:
+        response = stream.get_final_message()
 
     # Extract text content from response, handling advisor tool blocks
     review_text = ""
