@@ -162,9 +162,9 @@ Generated. The responsibility and serves columns are editorial and come from `do
 | `src/constants.py` | 8 | Holds the physical constants shared by every module so that none of them defines its own copy. | C04 |
 | `src/mesh.py` | 173 | Builds the uniform structured grid and classifies each cell as FLUID, SOLID or BOUNDARY from the domain size and obstacle list. | none |
 | `src/particles.py` | 255 | Computes per-size-class transport properties: Cunningham correction, settling velocity, Brownian diffusion, deposition velocity and HEPA efficiency. | T03, T04, T09, T10 |
-| `src/solver_ns.py` | 794 | Solves steady incompressible flow with the SIMPLE algorithm on a collocated grid using Rhie-Chow face fluxes, hybrid advection and Jacobi pressure correction. | S01, S02, S03, S05, S08 |
+| `src/solver_ns.py` | 878 | Solves steady incompressible flow with the SIMPLE algorithm on a collocated grid using Rhie-Chow face fluxes, hybrid advection and Jacobi pressure correction. | S01, S02, S03, S05, S08 |
 
-Total 7 Python files, 2273 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
+Total 7 Python files, 2357 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
 
 `Declares it serves` is an EDITORIAL CLAIM read from `docs/system_map_annotations.toml`. It says which requirements a module is meant to satisfy, not that it does. Whether a requirement is met is answered by the tests named in the register's `Verified By` column.
 <!-- END GENERATED: components -->
@@ -280,7 +280,12 @@ in Phase 4 (time integration).
 
 ```
 NavierStokesSolver:
-    solve_steady() -> tuple[ndarray, ndarray, ndarray]  # u, v, p
+    solve_steady(on_iteration=None) -> tuple[ndarray, ndarray, ndarray]  # u, v, p
+    on_iteration: Callable[[IterationState], None] | None
+        Called after each SIMPLE iteration with iteration, residual,
+        pressure_sweeps and the current u, v, p (read-only).
+    last_pressure_sweeps: int   # Jacobi sweeps in the latest pressure solve
+    stage_seconds: dict[str, float]  # wall time per stage of the last solve
     solve_timestep(u, v, p, dt) -> tuple[ndarray, ndarray, ndarray]
     compute_residual() -> float
     All output arrays: shape [ny, nx], dtype float64, contiguous
@@ -382,3 +387,4 @@ Full ADRs are in the development plan document. Summary reference:
 | 2026-04-15 | Phase 2 architecture updates: collocated grid with Rhie-Chow (REQ-S07), Jacobi pressure solver (REQ-S08), hybrid advection scheme (REQ-S09), configurable under-relaxation (REQ-S10). ADR-005 amended from C/ctypes to CUDA C++/pybind11 with NumPy reference solver. REQ-S06 and REQ-N03 updated accordingly. | Alex Moroz-Smietana |
 | 2026-04-16 | ECR-001 approved: solver architecture rebuild. REQ-S07 and REQ-S09 replaced for staggered grid and QUICK advection. REQ-S11 and REQ-S12 added for non-uniform mesh and direct BC imposition. ADR-003 amended, ADR-008 superseded, ADR-010 added. | Alex Moroz-Smietana |
 | 2026-09-19 | Section 3.1 dependency graph replaced by a generated dependency matrix; 3.4 components, 3.5 runtime edges and 3.6 source fingerprint added as generated regions (scripts/gen_system_map.py). Section 2 untouched. | Alex Moroz-Smietana |
+| 2026-09-19 | solve_steady gains an optional on_iteration callback plus last_pressure_sweeps and stage_seconds attributes for the benchmark harness (scripts/benchmark.py). Observability only; solver logic unchanged. | Alex Moroz-Smietana |

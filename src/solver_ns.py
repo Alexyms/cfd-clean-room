@@ -7,6 +7,9 @@ correction.
 """
 
 import logging
+from collections.abc import Callable
+from dataclasses import dataclass
+from time import perf_counter
 
 import numpy as np
 
@@ -15,6 +18,33 @@ from src.config import SimConfig
 from src.mesh import FLUID, SOLID, Mesh
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class IterationState:
+    """Snapshot handed to the solve_steady callback after each SIMPLE iteration.
+
+    The arrays are the solver's working fields, not copies. A callback
+    that needs to keep them must copy them and must never modify them.
+
+    Parameters
+    ----------
+    iteration : int
+        Zero-based SIMPLE iteration index.
+    residual : float
+        Scaled velocity-change residual for this iteration.
+    pressure_sweeps : int
+        Jacobi sweeps performed by the pressure correction this iteration.
+    u, v, p : np.ndarray
+        Current velocity and pressure fields, each shape [ny, nx].
+    """
+
+    iteration: int
+    residual: float
+    pressure_sweeps: int
+    u: np.ndarray
+    v: np.ndarray
+    p: np.ndarray
 
 
 class NavierStokesSolver:
@@ -31,6 +61,17 @@ class NavierStokesSolver:
         pressure_tol).
     boundary : BoundaryManager
         Boundary condition handler for velocity and pressure fields.
+
+    Attributes
+    ----------
+    residual_history : list[float]
+        Scaled residual after each SIMPLE iteration of the last solve.
+    last_pressure_sweeps : int
+        Jacobi sweeps performed by the most recent pressure correction.
+    stage_seconds : dict[str, float]
+        Wall time accumulated by the last solve_steady call in each stage:
+        "momentum", "flux", "pressure", "correct". Observability only; the
+        solver never reads these.
     """
 
     def __init__(
@@ -80,6 +121,14 @@ class NavierStokesSolver:
         # Residual history for convergence monitoring
         self.residual_history: list[float] = []
 
+        # Observability for benchmarks and diagnostics; never read by the solver
+        self.last_pressure_sweeps: int = 0
+        self.stage_seconds: dict[str, float] = self._zero_stage_seconds()
+
+    @staticmethod
+    def _zero_stage_seconds() -> dict[str, float]:
+        return {"momentum": 0.0, "flux": 0.0, "pressure": 0.0, "correct": 0.0}
+
     def _needs_pressure_pin(self) -> bool:
         """Check if any pressure outlet boundary exists.
 
@@ -108,8 +157,18 @@ class NavierStokesSolver:
         face_area = max(self._dx, self._dy)
         return max(self._rho * max_vel * face_area, 1e-30)
 
-    def solve_steady(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def solve_steady(
+        self, on_iteration: Callable[[IterationState], None] | None = None
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Solve for steady-state velocity and pressure fields.
+
+        Parameters
+        ----------
+        on_iteration : Callable[[IterationState], None], optional
+            Called after every SIMPLE iteration with the current fields,
+            residual and pressure sweep count. The benchmark harness uses
+            it to sample error-versus-work trajectories. The callback must
+            not modify the arrays it receives.
 
         Returns
         -------
@@ -127,10 +186,12 @@ class NavierStokesSolver:
         self._boundary.apply_pressure_bc(p)
 
         self.residual_history = []
+        self.stage_seconds = self._zero_stage_seconds()
         u_prev = u.copy()
         v_prev = v.copy()
 
         for iteration in range(self._max_simple_iter):
+            t0 = perf_counter()
             # Step 1: Momentum coefficients
             a_P, a_E, a_W, a_N, a_S = self._compute_momentum_coefficients(u, v)
 
@@ -148,6 +209,8 @@ class NavierStokesSolver:
             u_star = self._jacobi_momentum_sweep(a_P_ur, a_E, a_W, a_N, a_S, b_u_ur, u)
             v_star = self._jacobi_momentum_sweep(a_P_ur, a_E, a_W, a_N, a_S, b_v_ur, v)
             self._boundary.apply_velocity_bc(u_star, v_star)
+            t1 = perf_counter()
+            self.stage_seconds["momentum"] += t1 - t0
 
             # Step 5: d-coefficient (uses ORIGINAL a_P, not under-relaxed)
             d = np.zeros((ny, nx), dtype=np.float64)
@@ -157,9 +220,13 @@ class NavierStokesSolver:
             F_e, F_w, F_n, F_s = self._compute_face_fluxes(u_star, v_star, p, d)
             mass_imbalance = F_e - F_w + F_n - F_s
             mass_imbalance[~self._fluid] = 0.0
+            t2 = perf_counter()
+            self.stage_seconds["flux"] += t2 - t1
 
             # Step 8: Pressure correction (Jacobi)
             p_prime = self._solve_pressure_correction(mass_imbalance, d)
+            t3 = perf_counter()
+            self.stage_seconds["pressure"] += t3 - t2
 
             # Step 9: Correct velocity
             u, v = self._correct_velocity(u_star, v_star, p_prime, d)
@@ -179,6 +246,19 @@ class NavierStokesSolver:
             u_prev[:] = u
             v_prev[:] = v
             self.residual_history.append(residual)
+            self.stage_seconds["correct"] += perf_counter() - t3
+
+            if on_iteration is not None:
+                on_iteration(
+                    IterationState(
+                        iteration=iteration,
+                        residual=residual,
+                        pressure_sweeps=self.last_pressure_sweeps,
+                        u=u,
+                        v=v,
+                        p=p,
+                    )
+                )
 
             if iteration % 50 == 0 or residual < self._convergence_tol:
                 logger.info("SIMPLE iter %4d: residual = %.6e", iteration, residual)
@@ -697,6 +777,7 @@ class NavierStokesSolver:
 
         p_prime = np.zeros((ny, nx), dtype=np.float64)
 
+        n_sweeps = 0
         for _ in range(self._max_pressure_iter):
             self._boundary.apply_pressure_bc(p_prime)
 
@@ -722,9 +803,12 @@ class NavierStokesSolver:
                 else 0.0
             )
             p_prime = p_prime_new
+            n_sweeps += 1
 
             if diff < self._pressure_tol:
                 break
+
+        self.last_pressure_sweeps = n_sweeps
 
         # Set BOUNDARY ghost values so the velocity correction reads
         # correct p' gradients at cells adjacent to boundaries
