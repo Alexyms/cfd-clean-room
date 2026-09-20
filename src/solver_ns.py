@@ -20,7 +20,11 @@ from src.mesh import FLUID, SOLID, Mesh
 logger = logging.getLogger(__name__)
 
 
-@dataclass(frozen=True)
+# eq=False because the default __eq__ compares the array fields elementwise
+# and raises on the ambiguous truth value, and the __hash__ that frozen=True
+# would then generate raises on an array. Identity is the only comparison that
+# makes sense for a snapshot of the solver's working fields.
+@dataclass(frozen=True, eq=False)
 class IterationState:
     """Snapshot handed to the solve_steady callback after each SIMPLE iteration.
 
