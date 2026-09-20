@@ -24,12 +24,16 @@ responsibility = "Holds the physical constants shared by every module so that no
 serves = ["REQ-C04"]
 
 [modules."src/mesh.py"]
-responsibility = "Builds the uniform structured grid and classifies each cell as FLUID, SOLID or BOUNDARY from the domain size and obstacle list."
-serves = []
+responsibility = "Builds the structured grid, uniform or geometrically clustered at the walls, with the face, center, width and center-to-center arrays a face-based stencil needs, and classifies each cell as FLUID, SOLID or BOUNDARY."
+serves = ["REQ-S11"]
 
 [modules."src/particles.py"]
 responsibility = "Computes per-size-class transport properties: Cunningham correction, settling velocity, Brownian diffusion, deposition velocity and HEPA efficiency."
 serves = ["REQ-T03", "REQ-T04", "REQ-T09", "REQ-T10"]
+
+[modules."src/staggered.py"]
+responsibility = "Defines the staggered (MAC) field layout: shapes and allocation of face-centered u and v and cell-centered p, and the face-to-center averaging the solver applies before returning."
+serves = ["REQ-S07"]
 
 [modules."src/solver_ns.py"]
 responsibility = "Solves steady incompressible flow with the SIMPLE algorithm on a collocated grid using Rhie-Chow face fluxes, hybrid advection and Jacobi pressure correction."

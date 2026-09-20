@@ -113,6 +113,28 @@ class HepaReference:
     efficiencies: list[float] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class StretchSpec:
+    """Geometric wall clustering for one mesh axis.
+
+    Exactly one of the two quantities is specified; the mesh derives the
+    other because the cell count fixes their relationship (see
+    src/mesh.py). The default is a uniform axis.
+
+    Parameters
+    ----------
+    ratio : float
+        Geometric ratio between adjacent cell widths from each wall toward
+        the center, >= 1. A ratio of 1 is a uniform axis.
+    min_spacing : float or None
+        Width of the wall-adjacent cell in meters. When given, the ratio
+        is derived from it and ``ratio`` is ignored.
+    """
+
+    ratio: float = 1.0
+    min_spacing: float | None = None
+
+
 _VALID_BOUNDARY_TYPES: set[str] = {"velocity_inlet", "pressure_outlet", "wall"}
 _VALID_BOUNDARY_LOCATIONS: set[str] = {"top", "bottom", "left", "right"}
 
@@ -184,6 +206,22 @@ class SimConfig:
         )
         self.nx: int = self._require_positive_int(domain, "nx", "domain")
         self.ny: int = self._require_positive_int(domain, "ny", "domain")
+
+        # Mesh stretching. Optional section; absent means uniform on both axes.
+        mesh_raw = raw.get("mesh", {})
+        if mesh_raw is None:
+            mesh_raw = {}
+        if not isinstance(mesh_raw, dict):
+            raise ValueError("mesh must be a mapping")
+        for key in mesh_raw:
+            if key not in ("x", "y"):
+                raise ValueError(f"mesh.{key} is not a recognised axis; use x or y")
+        self.stretch_x: StretchSpec = self._parse_stretch(
+            mesh_raw.get("x"), "mesh.x", self.room_width, self.nx
+        )
+        self.stretch_y: StretchSpec = self._parse_stretch(
+            mesh_raw.get("y"), "mesh.y", self.room_height, self.ny
+        )
 
         # Fluid
         fluid = self._require_section(raw, "fluid")
@@ -462,6 +500,50 @@ class SimConfig:
             self.thresholds[str(key)] = float(val)
 
     # -- Validation helpers --------------------------------------------------
+
+    @classmethod
+    def _parse_stretch(
+        cls, section: dict | None, context: str, length: float, n: int
+    ) -> StretchSpec:
+        """Parse one axis of the mesh section into a StretchSpec.
+
+        Accepts ``stretch_ratio`` (>= 1) or ``min_wall_spacing`` (in
+        (0, length / n]) but not both. An absent or empty axis is uniform.
+        """
+        if section is None:
+            return StretchSpec()
+        if not isinstance(section, dict):
+            raise ValueError(f"{context} must be a mapping")
+        for key in section:
+            if key not in ("stretch_ratio", "min_wall_spacing"):
+                raise ValueError(
+                    f"{context}.{key} is not recognised; use stretch_ratio or "
+                    "min_wall_spacing"
+                )
+        has_ratio = "stretch_ratio" in section
+        has_spacing = "min_wall_spacing" in section
+        if has_ratio and has_spacing:
+            raise ValueError(
+                f"{context}: give stretch_ratio or min_wall_spacing, not both; the "
+                "cell count fixes the other"
+            )
+        if has_spacing:
+            spacing = cls._require_positive_float(section, "min_wall_spacing", context)
+            uniform = length / n
+            if spacing > uniform:
+                raise ValueError(
+                    f"{context}.min_wall_spacing must not exceed the uniform spacing "
+                    f"{uniform} for {n} cells on {length}, got {spacing}"
+                )
+            return StretchSpec(ratio=1.0, min_spacing=spacing)
+        if has_ratio:
+            ratio = cls._require_positive_float(section, "stretch_ratio", context)
+            if ratio < 1.0:
+                raise ValueError(
+                    f"{context}.stretch_ratio must be >= 1 (1 is uniform), got {ratio}"
+                )
+            return StretchSpec(ratio=ratio, min_spacing=None)
+        return StretchSpec()
 
     @staticmethod
     def _require_section(raw: dict, key: str) -> dict | list:

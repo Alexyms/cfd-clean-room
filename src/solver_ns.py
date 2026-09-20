@@ -81,6 +81,12 @@ class NavierStokesSolver:
     def __init__(
         self, mesh: Mesh, config: SimConfig, boundary: BoundaryManager
     ) -> None:
+        if not mesh.is_uniform:
+            raise ValueError(
+                "the collocated solver uses the scalar spacings dx and dy and is "
+                "only valid on a uniform mesh; stretching arrives with the "
+                "staggered rebuild (ECR-001)"
+            )
         self._mesh = mesh
         self._boundary = boundary
 

@@ -16,6 +16,14 @@ domain:
   nx: 80
   ny: 40
 
+mesh:
+  # Geometric wall clustering per axis. stretch_ratio 1.0 is uniform. Give
+  # stretch_ratio or min_wall_spacing, not both; the cell count fixes the other.
+  x:
+    stretch_ratio: 1.0
+  y:
+    stretch_ratio: 1.0
+
 fluid:
   density: 1.0
   viscosity: 0.01

@@ -1022,3 +1022,64 @@ class TestFromDict:
         raw["fluid"]["viscosity"] = -1.0
         with pytest.raises(ValueError):
             SimConfig.from_dict(raw)
+
+
+@pytest.mark.unit
+class TestMeshStretching:
+    """The optional mesh section defaults to uniform and validates each axis."""
+
+    def _raw(self, tmp_path, mesh) -> dict:
+        path = _write_config(tmp_path)
+        with open(path, encoding="utf-8") as handle:
+            raw = yaml.safe_load(handle)
+        if mesh is not None:
+            raw["mesh"] = mesh
+        return raw
+
+    def test_absent_section_is_uniform(self, tmp_path) -> None:
+        config = SimConfig(_write_config(tmp_path))
+        assert config.stretch_x.ratio == 1.0 and config.stretch_x.min_spacing is None
+        assert config.stretch_y.ratio == 1.0 and config.stretch_y.min_spacing is None
+
+    def test_ratio_is_read_per_axis(self, tmp_path) -> None:
+        config = SimConfig.from_dict(
+            self._raw(
+                tmp_path, {"x": {"stretch_ratio": 1.05}, "y": {"stretch_ratio": 1.2}}
+            )
+        )
+        assert config.stretch_x.ratio == 1.05 and config.stretch_y.ratio == 1.2
+
+    def test_min_wall_spacing_is_read(self, tmp_path) -> None:
+        config = SimConfig.from_dict(
+            self._raw(tmp_path, {"y": {"min_wall_spacing": 0.01}})
+        )
+        assert config.stretch_y.min_spacing == 0.01
+        assert config.stretch_x.ratio == 1.0
+
+    def test_ratio_below_one_raises(self, tmp_path) -> None:
+        with pytest.raises(ValueError, match="stretch_ratio must be >= 1"):
+            SimConfig.from_dict(self._raw(tmp_path, {"x": {"stretch_ratio": 0.9}}))
+
+    def test_both_quantities_raise(self, tmp_path) -> None:
+        with pytest.raises(ValueError, match="not both"):
+            SimConfig.from_dict(
+                self._raw(
+                    tmp_path, {"x": {"stretch_ratio": 1.1, "min_wall_spacing": 0.01}}
+                )
+            )
+
+    def test_spacing_above_uniform_raises(self, tmp_path) -> None:
+        # base config: width 4.0, nx 80, uniform 0.05
+        with pytest.raises(ValueError, match="must not exceed the uniform spacing"):
+            SimConfig.from_dict(self._raw(tmp_path, {"x": {"min_wall_spacing": 0.06}}))
+
+    @pytest.mark.parametrize("bad", [0, -0.01, "0.01", True])
+    def test_non_positive_or_non_numeric_spacing_raises(self, tmp_path, bad) -> None:
+        with pytest.raises((TypeError, ValueError)):
+            SimConfig.from_dict(self._raw(tmp_path, {"x": {"min_wall_spacing": bad}}))
+
+    def test_unknown_axis_or_key_raises(self, tmp_path) -> None:
+        with pytest.raises(ValueError, match="not a recognised axis"):
+            SimConfig.from_dict(self._raw(tmp_path, {"z": {"stretch_ratio": 1.1}}))
+        with pytest.raises(ValueError, match="not recognised"):
+            SimConfig.from_dict(self._raw(tmp_path, {"x": {"ratio": 1.1}}))
