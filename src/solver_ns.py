@@ -191,6 +191,9 @@ class NavierStokesSolver:
 
         self.residual_history = []
         self.stage_seconds = self._zero_stage_seconds()
+        # Reset with the timers: a solve that performs no iteration must not
+        # report the previous call's sweep count as its own.
+        self.last_pressure_sweeps = 0
         u_prev = u.copy()
         v_prev = v.copy()
 
