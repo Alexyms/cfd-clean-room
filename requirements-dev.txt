@@ -1,5 +1,12 @@
 # Pinned to the minor. An unbounded linter version means CI can fail with no
 # change to this repository, which is what happened on PR #12.
 ruff~=0.16.8
+
+# The review workflow calls a beta API surface (advisor tool, output_config),
+# which sits outside the SDK's stability guarantees, so this is held to the
+# patch level rather than the minor.
+anthropic~=1.7.0
+# Used by review.py to post the review back to the pull request.
+PyGithub>=2.5
 pytest>=8.0
 pytest-cov>=5.0
