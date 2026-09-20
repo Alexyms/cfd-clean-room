@@ -124,12 +124,25 @@ class TestFaceToCenterAveraging:
         assert np.array_equal(u_c, np.full(p_shape(mesh), 0.7))
         assert np.array_equal(v_c, np.full(p_shape(mesh), -2.5))
 
-    @pytest.mark.parametrize("stretch", [None, STRETCHED], ids=["uniform", "stretched"])
-    def test_quadratic_field_error_falls_at_second_order(self, stretch) -> None:
+    @pytest.mark.parametrize("stretched", [False, True], ids=["uniform", "stretched"])
+    def test_quadratic_field_error_falls_at_second_order(self, stretched) -> None:
         """The control for the linear test: a curved field must not be exact,
-        and its error must halve twice per refinement."""
+        and its error must halve twice per refinement.
+
+        A refinement family on a stretched mesh keeps the mapping fixed: the
+        total growth of cell width from wall to center stays constant, so the
+        per-cell ratio is that growth to the power 1 / (cells per half).
+        Refining at a fixed per-cell ratio is not a refinement family; the
+        center cells then grow by r to the n and the error cannot converge.
+        """
         errors = []
-        for n in (8, 16, 32):
+        for n in (16, 32, 64):
+            stretch = None
+            if stretched:
+                stretch = {
+                    "x": {"stretch_ratio": 2.0 ** (1.0 / n)},
+                    "y": {"stretch_ratio": 3.0 ** (2.0 / n)},
+                }
             mesh = Mesh(_config(2 * n, n, stretch))
             xu, yu = u_face_coordinates(mesh)
             xv, yv = v_face_coordinates(mesh)
