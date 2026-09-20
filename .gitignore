@@ -40,3 +40,6 @@ Thumbs.db
 # Coverage
 .coverage
 htmlcov/
+
+# Working prompts for agent sessions (local only)
+docs/prompts/
