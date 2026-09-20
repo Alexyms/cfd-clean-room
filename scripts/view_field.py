@@ -100,7 +100,7 @@ def render(npz_path: Path, out_dir: Path) -> Path:
     ax.set_aspect("equal")
 
     ax = axes[2]
-    if kind == "cavity":
+    if kind.startswith("cavity"):
         y_prof, u_prof, x_prof, v_prof = cavity_centerline_profiles(config, mesh, u, v)
         ax.plot(y_prof, u_prof, "-", label="u along x = 0.5 (solver)")
         ax.plot(GHIA_U_Y, GHIA_U_VAL, "o", label="u Ghia 1982")
