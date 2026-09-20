@@ -83,7 +83,7 @@ def run_review(message: str, system_prompt: str) -> str:
 
     response = client.beta.messages.create(
         model="claude-sonnet-5",
-        max_tokens=16000,
+        max_tokens=32000,
         betas=["advisor-tool-2026-03-01"],
         system=system_prompt,
         tools=tools,
@@ -93,9 +93,20 @@ def run_review(message: str, system_prompt: str) -> str:
 
     # Extract text content from response, handling advisor tool blocks
     review_text = ""
+    kinds: dict[str, int] = {}
     for block in response.content:
+        kinds[block.type] = kinds.get(block.type, 0) + 1
         if block.type == "text":
             review_text += block.text
+
+    # An empty review has to be explainable from the log alone. Reporting only
+    # that nothing came back is what happened when the executor moved to
+    # Sonnet 5, and it left no way to tell a spent token budget apart from a
+    # response that carried no text block for some other reason.
+    print(f"stop_reason={response.stop_reason} blocks={kinds}")
+    usage = getattr(response, "usage", None)
+    if usage is not None:
+        print(f"usage in={usage.input_tokens} out={usage.output_tokens}")
 
     return review_text
 
