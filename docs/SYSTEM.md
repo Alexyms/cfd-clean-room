@@ -164,7 +164,7 @@ Generated. The responsibility and serves columns are editorial and come from `do
 | `src/particles.py` | 255 | Computes per-size-class transport properties: Cunningham correction, settling velocity, Brownian diffusion, deposition velocity and HEPA efficiency. | T03, T04, T09, T10 |
 | `src/solver_ns.py` | 885 | Solves steady incompressible flow with the SIMPLE algorithm on a collocated grid using Rhie-Chow face fluxes, hybrid advection and Jacobi pressure correction. | S01, S02, S03, S05, S08 |
 
-Total 7 Python files, 2364 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
+Total 7 Python files, 2393 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
 
 `Declares it serves` is an EDITORIAL CLAIM read from `docs/system_map_annotations.toml`. It says which requirements a module is meant to satisfy, not that it does. Whether a requirement is met is answered by the tests named in the register's `Verified By` column.
 <!-- END GENERATED: components -->
@@ -189,7 +189,7 @@ Generated. Static import analysis cannot see a function bound into a registry by
 |---|---|
 | Scope | `src/**/*.py` |
 | Files hashed | 7 |
-| Digest | `sha256:b6a886103f07dc65d13abdf736e47c04de4d5c1a08eefc410075d6f3d33242ac` |
+| Digest | `sha256:7efe9000927d3a8195f29b80e02b8641378d88d949ba0a2874a0dbae48ff9be3` |
 
 This is what lets the document answer whether it is current, which is the one question a stale table cannot be asked. `python scripts/gen_system_map.py --check` recomputes the whole set of generated regions, this digest included, and exits non-zero on any disagreement.
 
