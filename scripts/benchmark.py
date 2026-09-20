@@ -149,6 +149,95 @@ def git_state() -> tuple[str, bool]:
     return commit, dirty
 
 
+CELL_UPDATE_DEFINITION = (
+    "stencil evaluations at FLUID cells: two momentum sweeps per outer iteration "
+    "plus one per Jacobi pressure sweep; SOLID cells are not counted"
+)
+
+
+def fluid_cells_per_sweep(mesh: Mesh) -> int:
+    """Number of unknowns one solver sweep updates: the FLUID cells.
+
+    The work axis counts what the algorithm updates, not what a vectorised
+    implementation touches. Whether an implementation spends arithmetic on
+    masked SOLID cells is throughput, which the time axis already carries as
+    seconds per cell update; counting them here would put an implementation
+    detail inside the axis built to exclude it. The seed cases have no
+    obstacles, so for them this equals the interior count (ny - 2) * (nx - 2)
+    and the stored rows are unchanged.
+
+    Parameters
+    ----------
+    mesh : Mesh
+        Classified mesh of the case.
+
+    Returns
+    -------
+    int
+        Count of cells typed FLUID.
+    """
+    return int(np.count_nonzero(mesh.cell_type == FLUID))
+
+
+class WorkCounter:
+    """Accumulate the work record from the solver's per-iteration callbacks.
+
+    Parameters
+    ----------
+    cells_per_sweep : int
+        Unknowns updated by one sweep, from fluid_cells_per_sweep.
+    """
+
+    def __init__(self, cells_per_sweep: int) -> None:
+        self.cells_per_sweep = cells_per_sweep
+        self.work: dict[str, int] = {
+            "outer_iterations": 0,
+            "inner_sweeps": 0,
+            "cell_updates": 0,
+        }
+
+    def record(self, state: IterationState) -> None:
+        """Add one SIMPLE iteration: two momentum sweeps plus its pressure sweeps.
+
+        Parameters
+        ----------
+        state : IterationState
+            Snapshot handed to the solve_steady callback.
+        """
+        self.work["outer_iterations"] = state.iteration + 1
+        self.work["inner_sweeps"] += state.pressure_sweeps
+        self.work["cell_updates"] += self.cells_per_sweep * (2 + state.pressure_sweeps)
+
+
+def positive_int(text: str) -> int:
+    """Parse a command line integer that must be at least 1.
+
+    Parameters
+    ----------
+    text : str
+        The raw argument.
+
+    Returns
+    -------
+    int
+        The parsed value.
+
+    Raises
+    ------
+    argparse.ArgumentTypeError
+        When the value is not an integer or is below 1. A caller who asked
+        for zero samples or a negative repeat count hears about it instead
+        of getting a ZeroDivisionError or a silent no-op.
+    """
+    try:
+        value = int(text)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"{text!r} is not an integer") from exc
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"must be at least 1, got {value}")
+    return value
+
+
 def cpu_name() -> str:
     """Best available CPU model string without a third-party dependency."""
     name = ""
@@ -187,18 +276,16 @@ def run_case(
             return poiseuille_error(config, mesh, u)
         return cavity_error(config, mesh, u, v)
 
-    # One cell update = one stencil evaluation at one interior cell. Momentum
+    # One cell update = one stencil evaluation at one fluid cell. Momentum
     # counts two sweeps (u and v) per outer iteration, pressure one per Jacobi
     # sweep. Comparable across Jacobi, Krylov, multigrid, CPU and GPU.
-    cells_per_sweep = (ny - 2) * (nx - 2)
-    work = {"outer_iterations": 0, "inner_sweeps": 0, "cell_updates": 0}
+    counter = WorkCounter(fluid_cells_per_sweep(mesh))
+    work = counter.work
     trajectory: list[dict] = []
     t_start = time.perf_counter()
 
     def observe(state: IterationState) -> None:
-        work["outer_iterations"] = state.iteration + 1
-        work["inner_sweeps"] += state.pressure_sweeps
-        work["cell_updates"] += cells_per_sweep * (2 + state.pressure_sweeps)
+        counter.record(state)
         if state.iteration % sample_every == 0:
             trajectory.append(
                 {
@@ -250,7 +337,7 @@ def run_case(
             "stop_reason": "residual_below_tol" if converged else "max_simple_iter",
         },
         "accuracy": accuracy,
-        "work": {**work, "cell_update_definition": "interior stencil evaluations"},
+        "work": {**work, "cell_update_definition": CELL_UPDATE_DEFINITION},
         "time": {"wall_seconds": wall, "stages": dict(solver.stage_seconds)},
         "trajectory": trajectory,
     }
@@ -306,9 +393,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--cases", nargs="+", choices=sorted(CASES), default=DEFAULT_CASES
     )
-    parser.add_argument("--repeats", type=int, default=3)
+    parser.add_argument(
+        "--repeats", type=positive_int, default=3, help="Runs per case, at least 1"
+    )
     parser.add_argument("--method", default=DEFAULT_METHOD)
-    parser.add_argument("--sample-every", type=int, default=10)
+    parser.add_argument(
+        "--sample-every",
+        type=positive_int,
+        default=10,
+        help="Trajectory sample interval in outer iterations, at least 1",
+    )
     parser.add_argument(
         "--concurrent",
         type=int,
