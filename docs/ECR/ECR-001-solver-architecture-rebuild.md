@@ -2,7 +2,7 @@
 
 **Project:** CFD Clean Room Simulation
 **Change Request ID:** ECR-001
-**Status:** Approved
+**Status:** Approved (amended 2026-09-20, see Document History)
 **Author:** Alex Moroz-Smietana
 **Approver(s):** Alex Moroz-Smietana, Claude (pair)
 **Date Raised:** 2026-04-16
@@ -21,6 +21,10 @@ Related observations from diagnostic analysis:
 - The discrete velocity divergence using central differences is spatially uniform at 2.5×10⁻³ across the interior, with a 1.6 spike at the top-right lid-wall corner.
 
 The solver is converged to its configured tolerance (final residual 9.99×10⁻⁷, exited cleanly before max iterations) and the vortex macro-topology is correct. The 20% v-error represents a systematic defect in the discrete equations, not an implementation bug or an under-converged solution.
+
+**Refinement behaviour, measured 2026-09-19 (amendment).** The benchmark harness (`scripts/benchmark.py`, records in `benchmarks/results.jsonl` at commits 4063813 and dcddb39) measured the maximum normalized centerline errors at 20x20, 40x40 and 80x80 with the validation settings. The u-error falls from 0.106 to 0.041 to 0.013, an observed order of 1.4 then 1.6. The v-error rises from 0.1765 to 0.1893 to 0.2072. The scheme converges in u and moves the wrong way in v on the same grids. A scheme that improves in one component and degrades in the other under refinement is converging to a different answer, which is a structural defect rather than a resolution shortfall. This sharpens the statement above that the error does not decrease: it increases.
+
+**Independent confirmation by mass conservation, measured 2026-09-19 (amendment).** A second observation reaches the same wall treatment without reference to Ghia. The pressure solver probe (`docs/reports/pressure_solver_probe.md`, Tables B and E) measured the net mass flux through boundaries that should pass none. In the closed cavity the mass imbalance summed over all fluid cells settles at 2.90e-2, 9.23e-3 and 2.35e-3 (mass-flux units with rho = U = L = 1) at 20, 40 and 80 cells per side, and at convergence it is uniform over the domain: 9.02e-5, 6.46e-6 and 3.88e-7 per cell. Divided by the cell area, the 80x80 figure is the uniform divergence of 2.5e-3 already listed among the observations above, which the probe explains. The mechanism is the ghost-cell rule itself: the face flux at a wall is `0.5 (v_interior + v_ghost)` with `v_ghost = v_interior / 3`, which is `(2/3) v_interior` rather than zero, so mass crosses every wall. In a closed domain the pressure-correction system is then all-Neumann with a right-hand side that does not sum to zero, which has no solution; Jacobi drifts by a constant, the velocity correction reads only gradients, and the correction is a no-op at convergence. The wall treatment is therefore implicated by two independent routes: the velocity comparison against Ghia and the continuity measurement.
 
 ## 2. Root Cause Summary
 
@@ -114,7 +118,7 @@ Continuity at cell (j, i) becomes `(u[j, i+1] - u[j, i]) / dx_cell[i] + (v[j+1, 
 
 | Artifact | Impact | Scope |
 |----------|--------|-------|
-| `src/solver_ns.py` | Rewrite | Full solver replacement. ~800 lines → estimated ~600-900 lines after simplification. |
+| `src/solver_ns.py` | Rewrite | Full solver replacement. ~800 lines → estimated ~600-900 lines after simplification. **Interface obligation (amendment 2026-09-20):** `solve_steady(on_iteration=None)` must keep accepting a callback that receives an `IterationState` (iteration, residual, pressure_sweeps, u, v, p) after every outer iteration, and the solver must keep exposing `last_pressure_sweeps` and per-stage wall time in `stage_seconds`. `scripts/benchmark.py` depends on all three to record error-versus-work trajectories. If the rebuilt solver drops them, the comparison between the old and new solver breaks at the moment it is needed. |
 | `src/boundary.py` | Rewrite | Ghost cell logic removed. Direct BC imposition on staggered faces. |
 | `src/mesh.py` | Extend | Add non-uniform coordinate arrays (`x_face`, `x_center`, `dx_cell`, `dx_face`, and y equivalents). Existing uniform-mesh API preserved as a special case. |
 | `src/config.py` | Extend | Add mesh stretching parameters to YAML schema (min_spacing_{top,bottom,left,right}, stretch_ratio). |
@@ -165,11 +169,12 @@ Estimated effort: 10-15 working days, executed as a feature branch off `phase2/v
 The change is accepted when all of the following are demonstrated:
 
 1. VAL-001 (Poiseuille flow) passes at L2 error < 1% on 80×40 uniform mesh.
-2. VAL-001 passes at L2 error < 1% on a non-uniform mesh with wall clustering (geometric ratio 1.05, min spacing 0.1·L/ny).
+2. VAL-001 passes at L2 error < 1% on a non-uniform mesh with wall clustering (geometric ratio 1.05, min spacing 0.1·L/ny). *Note (amendment 2026-09-20): at a fixed cell count the ratio and the wall spacing are not independent; a symmetric geometric distribution that closes on the domain length has one free parameter. At ny = 40 a ratio of 1.05 gives a wall spacing of 0.605 L/ny, and a wall spacing of 0.1 L/ny requires a ratio of about 1.20. Step 1 of the implementation supports specifying either quantity with the other derived. Which one this criterion fixes is an open question recorded in `docs/STATUS.md` and must be settled before step 7.*
 3. VAL-002 (lid-driven cavity) passes at max centerline error < 2% for both u and v profiles on 80×80 uniform mesh.
+   3a. *(Amendment 2026-09-20.)* The VAL-002 maximum normalized centerline errors for u and for v each decrease monotonically across 20x20, 40x40 and 80x80 uniform meshes, with the observed order of convergence reported for both. Baseline to improve on, from `benchmarks/results.jsonl` (collocated solver, commits 4063813 and dcddb39): u 0.106, 0.041, 0.013; v 0.1765, 0.1893, 0.2072. The current scheme converges in u and moves the wrong way in v. A single-grid threshold can be met by luck while a directional defect remains; this criterion cannot.
 4. Grid convergence study shows observed order of accuracy ≥ 1.8 (target 2.0) under uniform mesh refinement on VAL-001.
 5. All existing Phase 1 validation tests (VAL-005, VAL-006, VAL-010, VAL-011) continue to pass.
-6. Discrete continuity constraint (REQ-S04) satisfied to < 10⁻¹⁰ per cell (exact by construction on staggered grid; this is a sanity check).
+6. Discrete continuity constraint (REQ-S04) satisfied to < 10⁻¹⁰ per cell, and the mass imbalance summed over the domain below the same bound. *(Amended 2026-09-20.)* Baseline to improve on, from `docs/reports/pressure_solver_probe.md` Tables B and E (collocated solver, VAL-002 at convergence): per-cell imbalance 9.02e-5, 6.46e-6 and 3.88e-7 at 20, 40 and 80 cells per side, uniform over the domain; net wall leak 2.90e-2, 9.23e-3 and 2.35e-3 (mass-flux units, rho = U = L = 1). The staggered grid satisfies this by construction, and with the baseline underneath it the criterion is a quantified improvement rather than a sanity check.
 7. Code review passes per existing CI/CD pipeline.
 8. SYSTEM.md, PROJECT_PLAN.md, ADR-010, and this ECR are updated and committed.
 
@@ -206,3 +211,4 @@ By signing below, approvers confirm:
 | Date | Change | Author |
 |------|--------|--------|
 | 2026-04-16 | Initial version. | Alex Moroz-Smietana |
+| 2026-09-20 | Amendments before implementation: refinement series and continuity measurement added to the problem statement as a second independent confirmation of the wall-treatment defect; acceptance criterion 3a (monotone refinement) added and criterion 6 given its measured baseline; note on the over-determined mesh specification in criterion 2; solve_steady callback, sweep count and stage timing recorded as an interface obligation in 7.1. REQ-S08 untouched. | Alex Moroz-Smietana |
