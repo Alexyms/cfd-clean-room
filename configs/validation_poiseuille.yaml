@@ -1,0 +1,66 @@
+# VAL-001: Poiseuille flow between parallel plates.
+#
+# Horizontal channel with a uniform velocity inlet on the left, a pressure
+# outlet on the right, and no-slip walls top and bottom. The analytical
+# solution is the parabolic profile with u_max = 1.5 * u_mean. Loaded by
+# validation/cases.py for tests/test_poiseuille.py and scripts/benchmark.py.
+#
+# The solver block is the one the validation test has always used. It
+# differs from configs/clean_room_default.yaml on purpose: a tighter
+# pressure tolerance and a higher sweep cap so the inner solve is not the
+# variable under test.
+
+domain:
+  width: 1.0
+  height: 0.5
+  nx: 80
+  ny: 40
+
+fluid:
+  density: 1.0
+  viscosity: 0.01
+  temperature: 293.0
+
+particles:
+  density: 1000.0
+  sizes: [0.1e-6]
+  mean_free_path: 67.0e-9
+  boundary_layer_thickness: 1.0e-3
+  hepa_reference:
+    diameters: [0.1e-6]
+    efficiencies: [0.99999]
+
+solver:
+  dt: 0.01
+  t_end: 1.0
+  output_interval: 10
+  convergence_tol: 1.0e-6
+  max_simple_iter: 20000
+  alpha_velocity: 0.7
+  alpha_pressure: 0.3
+  max_pressure_iter: 2000
+  pressure_tol: 1.0e-8
+
+boundaries:
+  inlet:
+    type: velocity_inlet
+    location: left
+    y_start: 0.0
+    y_end: 0.5
+    velocity: 0.1
+
+  outlet:
+    type: pressure_outlet
+    location: right
+    y_start: 0.0
+    y_end: 0.5
+
+obstacles: []
+
+sensors:
+  - name: center
+    x: 0.5
+    y: 0.25
+
+thresholds:
+  "0.1e-6": 100.0

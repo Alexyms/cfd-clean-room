@@ -29,13 +29,11 @@ import platform
 import statistics
 import subprocess
 import sys
-import tempfile
 import time
 import uuid
 from pathlib import Path
 
 import numpy as np
-import yaml
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
@@ -44,87 +42,39 @@ from src.boundary import BoundaryManager  # noqa: E402
 from src.config import SimConfig  # noqa: E402
 from src.mesh import FLUID, Mesh  # noqa: E402
 from src.solver_ns import IterationState, NavierStokesSolver  # noqa: E402
-from tests.test_lid_cavity import (  # noqa: E402
-    GHIA_U_VAL,
-    GHIA_U_Y,
-    GHIA_V_VAL,
-    GHIA_V_X,
-    _make_cavity_config,
+from validation.cases import CASE_GRIDS, load_case  # noqa: E402
+from validation.metrics import (  # noqa: E402
+    cavity_centerline_errors,
+    poiseuille_l2_error,
 )
-from tests.test_poiseuille import _make_poiseuille_config  # noqa: E402
 
 SCHEMA_VERSION = 1
 RESULTS_PATH = REPO_ROOT / "benchmarks" / "results.jsonl"
 DEFAULT_METHOD = "collocated-jacobi"
 
-# Case id -> (kind, nx, ny). Settings come from the validation tests themselves
-# so the harness and the tests cannot drift apart; only the grid is overridden.
-CASES: dict[str, tuple[str, int, int]] = {
-    "val001_80x40": ("poiseuille", 80, 40),
-    "val002_20x20": ("cavity", 20, 20),
-    "val002_40x40": ("cavity", 40, 40),
-    "val002_80x80": ("cavity", 80, 80),
-}
+# Grid presets come from validation.cases so the harness, the tests and the
+# field viewer name the same solve the same way. Every other setting comes
+# from the committed case file.
+CASES = CASE_GRIDS
 DEFAULT_CASES = ["val001_80x40", "val002_20x20", "val002_40x40"]
 
 
-def build_config(kind: str, nx: int, ny: int, workdir: Path) -> tuple[SimConfig, dict]:
-    """Build the validation test's config with the grid overridden.
-
-    Returns the loaded SimConfig and the raw solver block for the record.
-    """
-    if kind == "poiseuille":
-        _make_poiseuille_config(workdir)
-        path = workdir / "poiseuille.yaml"
-    else:
-        _make_cavity_config(workdir)
-        path = workdir / "cavity.yaml"
-    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
-    raw["domain"]["nx"] = nx
-    raw["domain"]["ny"] = ny
-    path.write_text(yaml.dump(raw, default_flow_style=False), encoding="utf-8")
-    return SimConfig(str(path)), raw["solver"]
+SOLVER_PARAMETERS = (
+    "dt",
+    "t_end",
+    "output_interval",
+    "convergence_tol",
+    "max_simple_iter",
+    "alpha_velocity",
+    "alpha_pressure",
+    "max_pressure_iter",
+    "pressure_tol",
+)
 
 
-def poiseuille_error(config: SimConfig, mesh: Mesh, u: np.ndarray) -> dict:
-    """L2 relative error of the mid-channel u profile against the parabola."""
-    i_mid = config.nx // 2
-    fluid = mesh.cell_type[:, i_mid] == FLUID
-    y = mesh.yc[fluid]
-    u_num = u[fluid, i_mid]
-    height = config.room_height
-    u_ref = 1.5 * 0.1 * 4.0 * y * (height - y) / height**2
-    value = float(np.sqrt(np.sum((u_num - u_ref) ** 2) / np.sum(u_ref**2)))
-    return {
-        "metric": "l2_relative_error_u_midchannel",
-        "value": value,
-        "reference": "analytical_poiseuille",
-    }
-
-
-def cavity_error(config: SimConfig, mesh: Mesh, u: np.ndarray, v: np.ndarray) -> dict:
-    """Max normalized centerline error against Ghia et al. (1982), Re=100."""
-    i_mid = config.nx // 2
-    fluid_col = mesh.cell_type[:, i_mid] == FLUID
-    y_profile = [0.0, *mesh.yc[fluid_col], 1.0]
-    u_profile = [0.0, *u[fluid_col, i_mid], 1.0]
-    u_err = float(
-        np.max(np.abs(np.interp(GHIA_U_Y, y_profile, u_profile) - GHIA_U_VAL))
-    )
-
-    j_mid = config.ny // 2
-    fluid_row = mesh.cell_type[j_mid, :] == FLUID
-    x_profile = [0.0, *mesh.xc[fluid_row], 1.0]
-    v_profile = [0.0, *v[j_mid, fluid_row], 0.0]
-    v_err = float(
-        np.max(np.abs(np.interp(GHIA_V_X, x_profile, v_profile) - GHIA_V_VAL))
-    )
-    return {
-        "metric": "max_normalized_centerline_error",
-        "value": max(u_err, v_err),
-        "components": {"u": u_err, "v": v_err},
-        "reference": "ghia_1982_re100",
-    }
+def solver_parameters(config: SimConfig) -> dict:
+    """Every solver parameter as loaded, read back from the config object."""
+    return {name: getattr(config, name) for name in SOLVER_PARAMETERS}
 
 
 def git_state() -> tuple[str, bool]:
@@ -261,20 +211,19 @@ def cpu_name() -> str:
     return name or platform.processor() or platform.machine()
 
 
-def run_case(
-    case_id: str, method: str, sample_every: int, concurrent: int, workdir: Path
-) -> dict:
+def run_case(case_id: str, method: str, sample_every: int, concurrent: int) -> dict:
     """Run one case once and return its record."""
     kind, nx, ny = CASES[case_id]
-    config, solver_block = build_config(kind, nx, ny, workdir)
+    config = load_case(kind, grid=(nx, ny))
+    solver_block = solver_parameters(config)
     mesh = Mesh(config)
     boundary = BoundaryManager(mesh, config)
     solver = NavierStokesSolver(mesh, config, boundary)
 
     def error_of(u: np.ndarray, v: np.ndarray) -> dict:
         if kind == "poiseuille":
-            return poiseuille_error(config, mesh, u)
-        return cavity_error(config, mesh, u, v)
+            return poiseuille_l2_error(config, mesh, u).as_dict()
+        return cavity_centerline_errors(config, mesh, u, v).as_dict()
 
     # One cell update = one stencil evaluation at one fluid cell. Momentum
     # counts two sweeps (u and v) per outer iteration, pressure one per Jacobi
@@ -420,10 +369,7 @@ def main(argv: list[str] | None = None) -> int:
     args.results.parent.mkdir(parents=True, exist_ok=True)
     for case_id in args.cases:
         for repeat in range(args.repeats):
-            with tempfile.TemporaryDirectory() as tmp:
-                record = run_case(
-                    case_id, args.method, args.sample_every, args.concurrent, Path(tmp)
-                )
+            record = run_case(case_id, args.method, args.sample_every, args.concurrent)
             with args.results.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(record) + "\n")
             print(

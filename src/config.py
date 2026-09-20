@@ -143,6 +143,35 @@ class SimConfig:
 
         self._validate_and_load(raw)
 
+    @classmethod
+    def from_dict(cls, raw: dict) -> "SimConfig":
+        """Build a configuration from an already-parsed mapping.
+
+        Applies exactly the validation the file constructor applies. Used
+        where a committed configuration needs one field overridden before
+        loading, such as the grid in a refinement study.
+
+        Parameters
+        ----------
+        raw : dict
+            Mapping with the same structure as a configuration file.
+
+        Returns
+        -------
+        SimConfig
+            Validated configuration.
+
+        Raises
+        ------
+        ValueError
+            If raw is not a mapping or any parameter fails validation.
+        """
+        if not isinstance(raw, dict):
+            raise ValueError("Configuration must be a mapping")
+        config = cls.__new__(cls)
+        config._validate_and_load(raw)
+        return config
+
     def _validate_and_load(self, raw: dict) -> None:
         """Validate all parameters and store as typed attributes."""
         # Domain

@@ -994,3 +994,31 @@ class TestSimConfigInvalidValues:
         path.write_text("- item1\n- item2\n", encoding="utf-8")
         with pytest.raises(ValueError, match="YAML mapping"):
             SimConfig(str(path))
+
+
+@pytest.mark.unit
+class TestFromDict:
+    """SimConfig.from_dict applies the file constructor's validation to a mapping."""
+
+    def test_matches_the_file_constructor(self, tmp_path) -> None:
+        """Loading a file and loading its parsed mapping give equal attributes."""
+        path = _write_config(tmp_path)
+        with open(path, encoding="utf-8") as handle:
+            raw = yaml.safe_load(handle)
+        from_file = SimConfig(path)
+        from_mapping = SimConfig.from_dict(raw)
+        for name in ("nx", "ny", "rho", "mu", "alpha_velocity", "max_pressure_iter"):
+            assert getattr(from_mapping, name) == getattr(from_file, name)
+
+    def test_rejects_non_mapping(self) -> None:
+        with pytest.raises(ValueError, match="mapping"):
+            SimConfig.from_dict(["not", "a", "mapping"])  # type: ignore[arg-type]
+
+    def test_validates_like_the_file_constructor(self, tmp_path) -> None:
+        """An invalid value fails in from_dict exactly as it fails from a file."""
+        path = _write_config(tmp_path)
+        with open(path, encoding="utf-8") as handle:
+            raw = yaml.safe_load(handle)
+        raw["fluid"]["viscosity"] = -1.0
+        with pytest.raises(ValueError):
+            SimConfig.from_dict(raw)

@@ -1,0 +1,63 @@
+# VAL-002: Lid-driven cavity at Re = 100.
+#
+# Square cavity with a moving lid (top wall, u = 1.0 tangential) and
+# stationary no-slip walls elsewhere. No pressure outlet; the solver pins
+# the pressure. Compared against the Ghia, Ghia and Shin (1982) centerline
+# profiles held in validation/metrics.py. Loaded by validation/cases.py for
+# tests/test_lid_cavity.py and scripts/benchmark.py.
+#
+# 40x40 keeps CI runtime bounded. At Re = 100 with SIMPLE under-relaxation,
+# 80x80 takes about 5300 outer iterations. The xfail status on the test
+# applies at any resolution because the v-error is grid-independent per the
+# diagnostic in ECR-001. Full-resolution runs are a manual activity until
+# the staggered-grid rebuild resolves the defect.
+
+domain:
+  width: 1.0
+  height: 1.0
+  nx: 40
+  ny: 40
+
+fluid:
+  density: 1.0
+  viscosity: 0.01
+  temperature: 293.0
+
+particles:
+  density: 1000.0
+  sizes: [0.1e-6]
+  mean_free_path: 67.0e-9
+  boundary_layer_thickness: 1.0e-3
+  hepa_reference:
+    diameters: [0.1e-6]
+    efficiencies: [0.99999]
+
+solver:
+  dt: 0.01
+  t_end: 1.0
+  output_interval: 10
+  convergence_tol: 1.0e-6
+  max_simple_iter: 10000
+  alpha_velocity: 0.5
+  alpha_pressure: 0.3
+  max_pressure_iter: 500
+  pressure_tol: 1.0e-8
+
+boundaries:
+  lid:
+    type: velocity_inlet
+    location: top
+    x_start: 0.0
+    x_end: 1.0
+    u_velocity: 1.0
+    v_velocity: 0.0
+
+obstacles: []
+
+sensors:
+  - name: center
+    x: 0.5
+    y: 0.5
+
+thresholds:
+  "0.1e-6": 100.0
