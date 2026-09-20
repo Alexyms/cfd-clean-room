@@ -165,9 +165,10 @@ Generated. The responsibility and serves columns are editorial and come from `do
 | `src/constants.py` | 8 | Holds the physical constants shared by every module so that none of them defines its own copy. | C04 |
 | `src/mesh.py` | 411 | Builds the structured grid, uniform or geometrically clustered at the walls, with the face, center, width and center-to-center arrays a face-based stencil needs, and classifies each cell as FLUID, SOLID or BOUNDARY. | S11 |
 | `src/particles.py` | 255 | Computes per-size-class transport properties: Cunningham correction, settling velocity, Brownian diffusion, deposition velocity and HEPA efficiency. | T03, T04, T09, T10 |
-| `src/solver_ns.py` | 885 | Solves steady incompressible flow with the SIMPLE algorithm on a collocated grid using Rhie-Chow face fluxes, hybrid advection and Jacobi pressure correction. | S01, S02, S03, S05, S08 |
+| `src/solver_ns.py` | 891 | Solves steady incompressible flow with the SIMPLE algorithm on a collocated grid using Rhie-Chow face fluxes, hybrid advection and Jacobi pressure correction. | S01, S02, S03, S05, S08 |
+| `src/staggered.py` | 152 | Defines the staggered (MAC) field layout: shapes and allocation of face-centered u and v and cell-centered p, and the face-to-center averaging the solver applies before returning. | S07 |
 
-Total 7 Python files, 2393 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
+Total 8 Python files, 2871 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
 
 `Declares it serves` is an EDITORIAL CLAIM read from `docs/system_map_annotations.toml`. It says which requirements a module is meant to satisfy, not that it does. Whether a requirement is met is answered by the tests named in the register's `Verified By` column.
 <!-- END GENERATED: components -->
@@ -191,8 +192,8 @@ Generated. Static import analysis cannot see a function bound into a registry by
 | Property | Value |
 |---|---|
 | Scope | `src/**/*.py` |
-| Files hashed | 7 |
-| Digest | `sha256:7efe9000927d3a8195f29b80e02b8641378d88d949ba0a2874a0dbae48ff9be3` |
+| Files hashed | 8 |
+| Digest | `sha256:b5139c825dbf0bacacba6f3fd2853ec05e7eec94ff7c62d3c4ac37698fb403cf` |
 
 This is what lets the document answer whether it is current, which is the one question a stale table cannot be asked. `python scripts/gen_system_map.py --check` recomputes the whole set of generated regions, this digest included, and exits non-zero on any disagreement.
 
