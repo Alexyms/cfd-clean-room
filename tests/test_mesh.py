@@ -10,7 +10,15 @@ import pytest
 import yaml
 
 from src.config import SimConfig
-from src.mesh import BOUNDARY, FLUID, SOLID, Mesh
+from src.mesh import (
+    BOUNDARY,
+    FLUID,
+    SOLID,
+    Mesh,
+    geometric_faces,
+    ratio_for_wall_spacing,
+    wall_spacing_for_ratio,
+)
 
 
 def _make_config(tmp_path, overrides: dict | None = None) -> SimConfig:
@@ -476,3 +484,155 @@ class TestMeshIntegration:
         n_solid = int(np.sum(mesh.cell_type == SOLID))
         n_boundary = int(np.sum(mesh.cell_type == BOUNDARY))
         assert n_fluid + n_solid + n_boundary == total
+
+
+# ---------------------------------------------------------------------------
+# Unit tests -- Non-uniform mesh (ECR-001 step 1, REQ-S11)
+# ---------------------------------------------------------------------------
+
+
+def _stretched(tmp_path, nx: int, ny: int, mesh: dict | None) -> Mesh:
+    overrides = {"domain": {"width": 1.0, "height": 1.0, "nx": nx, "ny": ny}}
+    if mesh is not None:
+        overrides["mesh"] = mesh
+    return Mesh(_make_config(tmp_path, overrides=overrides))
+
+
+@pytest.mark.unit
+class TestUniformArraysArePreserved:
+    """Ratio 1 must reproduce the historical arrays bit for bit, not approximately."""
+
+    def test_no_mesh_section_is_uniform(self, tmp_path) -> None:
+        mesh = _stretched(tmp_path, 40, 20, None)
+        assert mesh.is_uniform
+        assert mesh.stretch_ratio_x == 1.0 and mesh.stretch_ratio_y == 1.0
+        assert mesh.min_spacing_x == 1.0 / 40 and mesh.min_spacing_y == 1.0 / 20
+
+    def test_ratio_exactly_one_matches_no_section_bit_for_bit(self, tmp_path) -> None:
+        plain = _stretched(tmp_path, 40, 20, None)
+        explicit = _stretched(
+            tmp_path, 40, 20, {"x": {"stretch_ratio": 1.0}, "y": {"stretch_ratio": 1.0}}
+        )
+        for name in ("x", "y", "xc", "yc", "dx_cell", "dy_cell", "dx_face", "dy_face"):
+            assert np.array_equal(getattr(plain, name), getattr(explicit, name)), name
+        assert plain.dx == explicit.dx and plain.dy == explicit.dy
+
+    def test_uniform_arrays_are_the_linspace_construction(self, tmp_path) -> None:
+        """The exact expressions the mesh has always used."""
+        mesh = _stretched(tmp_path, 40, 20, {"x": {"stretch_ratio": 1.0}})
+        assert np.array_equal(mesh.x, np.linspace(0.0, 1.0, 41))
+        assert np.array_equal(mesh.y, np.linspace(0.0, 1.0, 21))
+        assert np.array_equal(mesh.xc, mesh.x[:-1] + mesh.dx / 2.0)
+        assert np.array_equal(mesh.yc, mesh.y[:-1] + mesh.dy / 2.0)
+
+    def test_min_wall_spacing_equal_to_uniform_is_uniform(self, tmp_path) -> None:
+        mesh = _stretched(tmp_path, 40, 20, {"x": {"min_wall_spacing": 1.0 / 40}})
+        assert mesh.stretch_ratio_x == 1.0
+        assert np.array_equal(mesh.x, np.linspace(0.0, 1.0, 41))
+
+
+@pytest.mark.unit
+class TestGeometricClustering:
+    """Closure exact, distribution symmetric, ratio honoured, derived spacing reported."""
+
+    def test_new_arrays_have_the_documented_shapes(self, tmp_path) -> None:
+        mesh = _stretched(tmp_path, 12, 7, {"x": {"stretch_ratio": 1.1}})
+        assert mesh.dx_cell.shape == (12,) and mesh.dy_cell.shape == (7,)
+        assert mesh.dx_face.shape == (13,) and mesh.dy_face.shape == (8,)
+
+    @pytest.mark.parametrize("n", [4, 5, 40, 41])
+    def test_closes_on_the_domain_length_exactly(self, tmp_path, n) -> None:
+        faces = geometric_faces(1.0, n, 1.05)
+        assert faces[0] == 0.0
+        assert faces[-1] == 1.0
+        assert np.all(np.diff(faces) > 0)
+        mesh = _stretched(tmp_path, n, 4, {"x": {"stretch_ratio": 1.05}})
+        assert mesh.x[-1] == 1.0 and mesh.x[0] == 0.0
+        assert mesh.dx_cell.sum() == pytest.approx(1.0, rel=0, abs=1e-15)
+
+    @pytest.mark.parametrize("n", [4, 5, 40, 41])
+    def test_distribution_is_symmetric(self, tmp_path, n) -> None:
+        mesh = _stretched(tmp_path, n, 4, {"x": {"stretch_ratio": 1.05}})
+        np.testing.assert_allclose(mesh.x + mesh.x[::-1], 1.0, rtol=0, atol=1e-15)
+        np.testing.assert_allclose(mesh.dx_cell, mesh.dx_cell[::-1], rtol=1e-14)
+        np.testing.assert_allclose(mesh.xc, 1.0 - mesh.xc[::-1], rtol=0, atol=1e-15)
+
+    def test_adjacent_widths_grow_by_the_ratio_from_each_wall(self, tmp_path) -> None:
+        mesh = _stretched(tmp_path, 40, 4, {"x": {"stretch_ratio": 1.05}})
+        left = mesh.dx_cell[:20]
+        np.testing.assert_allclose(left[1:] / left[:-1], 1.05, rtol=1e-12)
+        assert mesh.stretch_ratio_x == 1.05
+        assert mesh.min_spacing_x == mesh.dx_cell[0]
+
+    def test_ecr_case_ratio_1_05_derives_the_wall_spacing(self, tmp_path) -> None:
+        """ECR-001 criterion 2 names ratio 1.05 and spacing 0.1 of uniform together.
+
+        At ny = 40 they cannot both hold: with the ratio specified the closed
+        form gives 0.605 of the uniform spacing. The number is asserted so the
+        over-determination is on record rather than assumed away.
+        """
+        mesh = _stretched(tmp_path, 8, 40, {"y": {"stretch_ratio": 1.05}})
+        uniform = 1.0 / 40
+        expected = 0.5 * (1.05 - 1.0) / (1.05**20 - 1.0)
+        assert mesh.min_spacing_y == pytest.approx(expected, rel=1e-13)
+        assert mesh.min_spacing_y / uniform == pytest.approx(0.605, abs=0.001)
+
+    def test_ecr_case_spacing_0_1_derives_the_ratio(self, tmp_path) -> None:
+        """The other reading of criterion 2: wall spacing 0.1 L/ny at ny = 40."""
+        target = 0.1 / 40
+        mesh = _stretched(tmp_path, 8, 40, {"y": {"min_wall_spacing": target}})
+        assert mesh.min_spacing_y == pytest.approx(target, rel=1e-12)
+        assert mesh.stretch_ratio_y == pytest.approx(1.205, abs=0.005)
+        assert mesh.y[-1] == 1.0
+        np.testing.assert_allclose(mesh.y + mesh.y[::-1], 1.0, rtol=0, atol=1e-15)
+        assert wall_spacing_for_ratio(1.0, 40, mesh.stretch_ratio_y) == pytest.approx(
+            target, rel=1e-12
+        )
+
+    def test_ratio_and_spacing_round_trip(self) -> None:
+        for n in (6, 7, 40):
+            for ratio in (1.01, 1.05, 1.3):
+                h = wall_spacing_for_ratio(1.0, n, ratio)
+                assert ratio_for_wall_spacing(1.0, n, h) == pytest.approx(
+                    ratio, rel=1e-12
+                )
+
+    def test_centers_are_face_midpoints(self, tmp_path) -> None:
+        mesh = _stretched(
+            tmp_path,
+            40,
+            20,
+            {"x": {"stretch_ratio": 1.05}, "y": {"stretch_ratio": 1.2}},
+        )
+        assert np.array_equal(mesh.xc, 0.5 * (mesh.x[:-1] + mesh.x[1:]))
+        assert np.array_equal(mesh.yc, 0.5 * (mesh.y[:-1] + mesh.y[1:]))
+
+    def test_face_distances_convention(self, tmp_path) -> None:
+        mesh = _stretched(
+            tmp_path, 10, 6, {"x": {"stretch_ratio": 1.1}, "y": {"stretch_ratio": 1.1}}
+        )
+        for faces, centers, face_d in (
+            (mesh.x, mesh.xc, mesh.dx_face),
+            (mesh.y, mesh.yc, mesh.dy_face),
+        ):
+            assert face_d[0] == centers[0] - faces[0]
+            assert face_d[-1] == faces[-1] - centers[-1]
+            assert np.array_equal(face_d[1:-1], np.diff(centers))
+            assert face_d[0] == pytest.approx(0.5 * (faces[1] - faces[0]))
+
+    def test_axes_are_independent(self, tmp_path) -> None:
+        mesh = _stretched(tmp_path, 20, 20, {"x": {"stretch_ratio": 1.1}})
+        assert not mesh.is_uniform
+        assert mesh.stretch_ratio_x == 1.1 and mesh.stretch_ratio_y == 1.0
+        assert np.array_equal(mesh.y, np.linspace(0.0, 1.0, 21))
+        assert not np.allclose(np.diff(mesh.dx_cell), 0.0)
+
+    def test_cell_type_ignores_stretching_without_obstacles(self, tmp_path) -> None:
+        plain = _stretched(tmp_path, 12, 8, None)
+        clustered = _stretched(tmp_path, 12, 8, {"x": {"stretch_ratio": 1.3}})
+        assert np.array_equal(plain.cell_type, clustered.cell_type)
+
+    def test_dx_dy_scalars_stay_the_mean_spacing(self, tmp_path) -> None:
+        mesh = _stretched(tmp_path, 10, 5, {"x": {"stretch_ratio": 1.3}})
+        assert mesh.dx == 0.1 and mesh.dy == 0.2
+        assert mesh.dx_cell.mean() == pytest.approx(mesh.dx)

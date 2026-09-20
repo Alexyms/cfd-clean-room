@@ -100,22 +100,24 @@ Generated from the import statements in `src/` by `scripts/gen_system_map.py`. R
 
 <!-- BEGIN GENERATED: dsm -->
 ```
-            boundary  config  constants  mesh  particles  solver_ns
-boundary       .        X         .       X        .          .
-config         .        .         .       .        .          .
-constants      .        .         .       .        .          .
-mesh           .        X         .       .        .          .
-particles      .        X         X       .        .          .
-solver_ns      X        X         .       X        .          .
+            boundary  config  constants  mesh  particles  solver_ns  staggered
+boundary       .        X         .       X        .          .          .
+config         .        .         .       .        .          .          .
+constants      .        .         .       .        .          .          .
+mesh           .        X         .       .        .          .          .
+particles      .        X         X       .        .          .          .
+solver_ns      X        X         .       X        .          .          .
+staggered      .        .         .       X        .          .          .
 ```
 
-Rows import columns. Edges, 8 total:
+Rows import columns. Edges, 9 total:
 
 ```
 boundary  -> config, mesh
 mesh      -> config
 particles -> config, constants
 solver_ns -> boundary, config, mesh
+staggered -> mesh
 ```
 
 Cycles of any length: **none**. Checked by depth-first search over the whole graph, not by looking for mutual pairs. A three-module cycle is the one that actually happens and a pair check answers 'none' in its presence.
@@ -130,7 +132,8 @@ When a PR modifies a module, the reviewer verifies impact on downstream modules.
 | Modified Module | Check These Downstream Modules | What to Check |
 |-----------------|-------------------------------|---------------|
 | config.py | mesh, boundary, solver_ns, solver_transport, particles, monitor, scenarios, time_integration | New/changed/removed config fields are handled by all consumers. No module accesses a field that no longer exists. No module ignores a new field it should use. |
-| mesh.py | boundary, solver_ns, solver_transport, monitor | Grid dimensions, cell arrays, and coordinate arrays are consumed correctly. Shape assumptions still hold. |
+| mesh.py | boundary, solver_ns, solver_transport, monitor, staggered | Grid dimensions, cell arrays, and coordinate arrays are consumed correctly. Shape assumptions still hold. Centers stay face midpoints; staggered averaging depends on it. |
+| staggered.py | solver_ns | Face array shapes and the face-to-center averaging contract unchanged. |
 | boundary.py | solver_ns, solver_transport | BC application interface unchanged. New BC types handled in solvers if needed. |
 | solver_ns.py | solver_transport, time_integration | Velocity/pressure field output shape, dtype, and semantics unchanged. |
 | solver_transport.py | time_integration, monitor | Concentration field output shape, dtype, and semantics unchanged. |
@@ -158,9 +161,9 @@ Generated. The responsibility and serves columns are editorial and come from `do
 | Module | Lines | Responsibility | Declares it serves |
 |---|---|---|---|
 | `src/boundary.py` | 491 | Maps BOUNDARY cells to their configured condition and writes ghost-cell values that place wall, inlet and outlet conditions at the domain face. | none |
-| `src/config.py` | 581 | Loads the YAML configuration into typed dataclasses and rejects missing keys, wrong types and out-of-range values at load time. | A02, A03, C01, C02, S10 |
+| `src/config.py` | 663 | Loads the YAML configuration into typed dataclasses and rejects missing keys, wrong types and out-of-range values at load time. | A02, A03, C01, C02, S10 |
 | `src/constants.py` | 8 | Holds the physical constants shared by every module so that none of them defines its own copy. | C04 |
-| `src/mesh.py` | 173 | Builds the uniform structured grid and classifies each cell as FLUID, SOLID or BOUNDARY from the domain size and obstacle list. | none |
+| `src/mesh.py` | 411 | Builds the structured grid, uniform or geometrically clustered at the walls, with the face, center, width and center-to-center arrays a face-based stencil needs, and classifies each cell as FLUID, SOLID or BOUNDARY. | S11 |
 | `src/particles.py` | 255 | Computes per-size-class transport properties: Cunningham correction, settling velocity, Brownian diffusion, deposition velocity and HEPA efficiency. | T03, T04, T09, T10 |
 | `src/solver_ns.py` | 885 | Solves steady incompressible flow with the SIMPLE algorithm on a collocated grid using Rhie-Chow face fluxes, hybrid advection and Jacobi pressure correction. | S01, S02, S03, S05, S08 |
 
@@ -210,6 +213,7 @@ SimConfig:
     SimConfig.from_dict(raw: dict)  # same validation on a parsed mapping
     room_width, room_height: float (meters)
     nx, ny: int
+    stretch_x, stretch_y: StretchSpec (ratio >= 1, or min_spacing; one axis each)
     rho, mu: float (SI)
     temperature: float (K)
     particle_sizes: list[float] (meters)
@@ -255,12 +259,31 @@ edge (positive inward).
 
 ```
 Mesh:
-    x, y: ndarray (face coordinates)
-    xc, yc: ndarray (cell center coordinates)
-    dx, dy: float
+    x, y: ndarray (face coordinates, x[0] = 0 and x[nx] = width exactly)
+    xc, yc: ndarray (cell centers, midpoints of their two faces)
+    dx, dy: float (uniform spacing L / n; mean spacing on a stretched mesh)
+    dx_cell, dy_cell: ndarray (cell widths, shapes [nx] and [ny])
+    dx_face, dy_face: ndarray (center-to-center distance at each face, shapes
+        [nx+1] and [ny+1]; wall-to-first-center at the two boundary faces)
+    stretch_ratio_x, stretch_ratio_y: float (effective ratio, 1.0 uniform)
+    min_spacing_x, min_spacing_y: float (effective wall-adjacent width)
+    is_uniform: bool
     cell_type: ndarray[ny, nx] (FLUID=0, SOLID=1, BOUNDARY=2)
     is_fluid(i: int, j: int) -> bool
     get_neighbors(i: int, j: int) -> list[tuple[int, int]]
+```
+
+### staggered.py --> solver_ns
+
+Internal to the solver (REQ-S07). Layout: u on vertical faces [ny, nx+1],
+v on horizontal faces [ny+1, nx], p at cell centers [ny, nx].
+
+```
+u_shape(mesh), v_shape(mesh), p_shape(mesh) -> tuple[int, int]
+allocate_fields(mesh) -> (u, v, p) zeroed, float64, contiguous
+u_face_coordinates(mesh), v_face_coordinates(mesh),
+cell_center_coordinates(mesh) -> (X, Y) 2D coordinate arrays
+to_cell_centers(u, v) -> (u_c, v_c) each [ny, nx], plain two-face average
 ```
 
 ### particles.py --> solver_transport
@@ -389,5 +412,6 @@ Full ADRs are in the development plan document. Summary reference:
 | 2026-04-15 | Phase 2 architecture updates: collocated grid with Rhie-Chow (REQ-S07), Jacobi pressure solver (REQ-S08), hybrid advection scheme (REQ-S09), configurable under-relaxation (REQ-S10). ADR-005 amended from C/ctypes to CUDA C++/pybind11 with NumPy reference solver. REQ-S06 and REQ-N03 updated accordingly. | Alex Moroz-Smietana |
 | 2026-04-16 | ECR-001 approved: solver architecture rebuild. REQ-S07 and REQ-S09 replaced for staggered grid and QUICK advection. REQ-S11 and REQ-S12 added for non-uniform mesh and direct BC imposition. ADR-003 amended, ADR-008 superseded, ADR-010 added. | Alex Moroz-Smietana |
 | 2026-09-19 | Section 3.1 dependency graph replaced by a generated dependency matrix; 3.4 components, 3.5 runtime edges and 3.6 source fingerprint added as generated regions (scripts/gen_system_map.py). Section 2 untouched. | Alex Moroz-Smietana |
+| 2026-09-20 | ECR-001 steps 1 and 2: mesh contract extended with per-cell widths, center-to-center face distances and per-axis stretching (REQ-S11); staggered.py added with the MAC layout and face-to-center averaging (REQ-S07); SimConfig gains stretch_x and stretch_y from an optional mesh section. Solver logic unchanged. | Alex Moroz-Smietana |
 | 2026-09-19 | REQ-S02 rationale corrected: the measured VAL-001 error on 80x40 is 2.04%, identical on CI and locally, which is why the criterion is 2.5% rather than 2%. The 1.54% previously recorded in PROJECT_PLAN.md was not reproducible at the commit that claimed it. Requirement value unchanged; the ECR-001 tightening to < 1% after the rebuild is unaffected. | Alex Moroz-Smietana |
 | 2026-09-19 | solve_steady gains an optional on_iteration callback plus last_pressure_sweeps and stage_seconds attributes for the benchmark harness (scripts/benchmark.py). Observability only; solver logic unchanged. | Alex Moroz-Smietana |

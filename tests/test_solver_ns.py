@@ -507,3 +507,24 @@ class TestIterationHook:
         )
         u, v, p = solver.solve_steady()
         assert u.shape == v.shape == p.shape == (10, 10)
+
+
+@pytest.mark.unit
+class TestUniformMeshGuard:
+    """The collocated solver refuses a stretched mesh rather than mis-scaling it."""
+
+    def test_stretched_mesh_is_rejected(self, tmp_path) -> None:
+        config = _make_config(
+            tmp_path, overrides={"mesh": {"x": {"stretch_ratio": 1.1}}}
+        )
+        mesh = Mesh(config)
+        boundary = BoundaryManager(mesh, config)
+        with pytest.raises(ValueError, match="uniform mesh"):
+            NavierStokesSolver(mesh, config, boundary)
+
+    def test_uniform_mesh_is_accepted(self, tmp_path) -> None:
+        config = _make_config(
+            tmp_path, overrides={"mesh": {"x": {"stretch_ratio": 1.0}}}
+        )
+        mesh = Mesh(config)
+        assert NavierStokesSolver(mesh, config, BoundaryManager(mesh, config))
