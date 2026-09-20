@@ -12,6 +12,7 @@ from pathlib import Path
 
 import anthropic
 from github import Github
+from review_diff import DEFAULT_CHAR_LIMIT, PreparedDiff, prepare_diff
 
 
 def load_file(path: str) -> str:
@@ -32,12 +33,16 @@ def load_system_prompt() -> str:
 
 
 def build_review_message(
-    diff: str,
+    diff: PreparedDiff,
     pr_meta: dict,
     context_docs: dict[str, str],
-    truncated: bool,
 ) -> str:
-    """Assemble the user message for the review request."""
+    """Assemble the user message for the review request.
+
+    The diff arrives already prepared: generated data excluded and the
+    size bounded. Whatever was excluded or dropped is named above the
+    diff so the reviewer knows what it is not seeing.
+    """
     sections = []
 
     sections.append(f"# Pull Request: {pr_meta.get('title', 'Unknown')}")
@@ -56,13 +61,10 @@ def build_review_message(
     sections.append("---")
     sections.append("## PR Diff\n")
 
-    if truncated:
-        sections.append(
-            "*Note: This diff was truncated to fit context limits. "
-            "Review may be incomplete for very large PRs.*\n"
-        )
+    for note in diff.notes():
+        sections.append(f"*{note}*\n")
 
-    sections.append(f"```diff\n{diff}\n```")
+    sections.append(f"```diff\n{diff.text}\n```")
 
     return "\n\n".join(sections)
 
@@ -130,12 +132,22 @@ def post_review(review_text: str, verdict: str, pr_number: int) -> None:
 def main() -> None:
     """Run the full review pipeline."""
     pr_number = int(os.environ["PR_NUMBER"])
-    diff_truncated = os.environ.get("DIFF_TRUNCATED", "false") == "true"
+    char_limit = int(os.environ.get("REVIEW_DIFF_CHAR_LIMIT", DEFAULT_CHAR_LIMIT))
 
     # Load inputs
-    diff = load_file("pr_diff.txt")
-    if not diff.strip():
+    raw_diff = load_file("pr_diff.txt")
+    if not raw_diff.strip():
         print("No diff found. Skipping review.")
+        return
+
+    diff = prepare_diff(raw_diff, limit=char_limit)
+    print(f"Diff: {len(raw_diff)} chars raw, {len(diff.text)} chars sent")
+    for entry in diff.excluded:
+        print(f"  excluded {entry.path}: +{entry.added}/-{entry.removed} lines")
+    for entry in diff.dropped:
+        print(f"  DROPPED {entry.path}: {entry.chars} chars over the limit")
+    if not diff.text.strip():
+        print("Nothing left to review after exclusions. Skipping review.")
         return
 
     pr_meta = {}
@@ -152,7 +164,7 @@ def main() -> None:
 
     # Build prompt
     system_prompt = load_system_prompt()
-    message = build_review_message(diff, pr_meta, context_docs, diff_truncated)
+    message = build_review_message(diff, pr_meta, context_docs)
 
     # Check message size (rough token estimate: 4 chars per token)
     estimated_tokens = len(message) // 4
