@@ -293,36 +293,76 @@ def run_case(case_id: str, method: str, sample_every: int, concurrent: int) -> d
 
 
 def print_summary(path: Path) -> None:
-    """Group stored records by method and case and print one row per group."""
+    """Print one row per method, case and concurrency, and flag mixed-load cases.
+
+    Wall time is only comparable between runs that shared the machine with
+    the same number of processes, so ``concurrent_processes`` is part of the
+    grouping key and shown as a column. Accuracy, outer iterations and cell
+    updates are deterministic and do not depend on load. When the table
+    holds more than one load a note says so, and any single case recorded
+    under more than one load is named: the 80x80 cavity row was taken with
+    two processes where the 40x40 rows used one, and nothing noticed until a
+    reviewer read the raw file.
+    """
     if not path.exists():
         print(f"{path} does not exist; nothing recorded yet.")
         return
     records = [
         json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()
     ]
-    groups: dict[tuple[str, str], list[dict]] = {}
+    groups: dict[tuple[str, str, int], list[dict]] = {}
     for record in records:
-        groups.setdefault((record["method"], record["case"]), []).append(record)
+        key = (
+            record["method"],
+            record["case"],
+            record["environment"]["concurrent_processes"],
+        )
+        groups.setdefault(key, []).append(record)
 
     header = (
-        f"{'method':<20} {'case':<14} {'n':>2} {'outer':>10} {'wall s (min/med/max)':>24} "
-        f"{'cell updates':>14} {'error (min..max)':>20} {'conv':>5}"
+        f"{'method':<20} {'case':<14} {'procs':>5} {'n':>2} {'outer':>10} "
+        f"{'wall s (min/med/max)':>24} {'cell updates':>14} "
+        f"{'error (min..max)':>20} {'conv':>5}"
     )
     print(header)
     print("-" * len(header))
-    for (method, case), runs in sorted(groups.items()):
+    for (method, case, procs), runs in sorted(groups.items()):
         outer = [r["work"]["outer_iterations"] for r in runs]
         wall = [r["time"]["wall_seconds"] for r in runs]
         updates = [r["work"]["cell_updates"] for r in runs]
         error = [r["accuracy"]["value"] for r in runs]
         conv = sum(r["outcome"]["converged"] for r in runs)
         print(
-            f"{method:<20} {case:<14} {len(runs):>2} "
+            f"{method:<20} {case:<14} {procs:>5} {len(runs):>2} "
             f"{min(outer):>4}..{max(outer):<4} "
             f"{min(wall):>7.1f}/{statistics.median(wall):>7.1f}/{max(wall):>7.1f} "
             f"{statistics.median(updates):>14.3e} "
             f"{min(error):>9.3e}..{max(error):<9.3e} {conv:>2}/{len(runs)}"
         )
+
+    loads_seen = sorted({procs for _, _, procs in groups})
+    if len(loads_seen) > 1:
+        print(
+            f"note: rows above were recorded at concurrent_processes {loads_seen}; "
+            "compare wall times only within one value. Accuracy, outer iterations "
+            "and cell updates do not depend on load."
+        )
+    for method, case in sorted(mixed_load_cases(groups)):
+        loads = sorted(p for m, c, p in groups if (m, c) == (method, case))
+        print(
+            f"note: {method} {case} has rows at concurrent_processes "
+            f"{loads}; wall times are not comparable across them"
+        )
+
+
+def mixed_load_cases(
+    groups: dict[tuple[str, str, int], list[dict]],
+) -> set[tuple[str, str]]:
+    """Return the (method, case) pairs recorded under more than one load."""
+    loads: dict[tuple[str, str], set[int]] = {}
+    for method, case, procs in groups:
+        loads.setdefault((method, case), set()).add(procs)
+    return {key for key, seen in loads.items() if len(seen) > 1}
 
 
 def main(argv: list[str] | None = None) -> int:
