@@ -128,7 +128,14 @@ def cavity_error(config: SimConfig, mesh: Mesh, u: np.ndarray, v: np.ndarray) ->
 
 
 def git_state() -> tuple[str, bool]:
-    """Commit hash and whether tracked files other than the results file differ."""
+    """Identify the commit a run is measured on and whether the tree matches it.
+
+    Returns
+    -------
+    tuple[str, bool]
+        The HEAD commit hash, and True when any tracked file other than
+        benchmarks/results.jsonl differs from that commit.
+    """
     commit = subprocess.run(
         ["git", "rev-parse", "HEAD"], capture_output=True, text=True, cwd=REPO_ROOT
     ).stdout.strip()
@@ -283,6 +290,18 @@ def print_summary(path: Path) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Run the selected cases and append one record each, or print the summary.
+
+    Parameters
+    ----------
+    argv : list[str] | None
+        Command line arguments. None reads sys.argv.
+
+    Returns
+    -------
+    int
+        Process exit code, 0 on success.
+    """
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument(
         "--cases", nargs="+", choices=sorted(CASES), default=DEFAULT_CASES
