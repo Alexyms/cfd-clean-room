@@ -601,14 +601,22 @@ def source_fingerprint(modules: list[ModuleFacts], empty: list[ModuleFacts]) -> 
     Path and byte length are hashed alongside the content so that renaming a
     module, or moving a line between two files, changes the digest.
     Concatenating contents alone would not.
+
+    Line endings are normalised to LF before hashing, and the length is taken
+    from the normalised bytes. Without that the digest records the checkout
+    configuration of whichever machine generated it rather than the content,
+    so the same tree hashes differently on Windows and on a Linux runner and
+    the check fails for a reason unrelated to what it checks. A check that
+    fails spuriously gets deleted, and the staleness detection goes with it.
     """
     digest = hashlib.sha256()
     for module in sorted(modules + empty, key=lambda m: m.rel_path):
+        source = module.source.replace(b"\r\n", b"\n")
         digest.update(module.rel_path.encode("utf-8"))
         digest.update(b"\0")
-        digest.update(str(len(module.source)).encode("ascii"))
+        digest.update(str(len(source)).encode("ascii"))
         digest.update(b"\0")
-        digest.update(module.source)
+        digest.update(source)
         digest.update(b"\0")
     return digest.hexdigest()
 
