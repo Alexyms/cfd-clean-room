@@ -22,7 +22,7 @@ We retain the ghost cell approach and accept O(h) wall accuracy rather than impl
 - Vectorizes cleanly in NumPy and translates directly to CUDA kernels
 
 **Negative:**
-- VAL-001 Poiseuille criterion relaxed from 1% to 2.5% L2 error on 80x40 grid
+- VAL-001 Poiseuille criterion relaxed from 1% to 2.5% L2 error on 80x40 grid. The measured error on that grid is 2.04%, identical locally and on CI. A 2% criterion was tried first and fails on that value. The 1.54% once recorded for this grid in PROJECT_PLAN.md was not reproducible and was corrected on 2026-09-19.
 - Would need ~240x120 grid to achieve 1% error (impractical for CI test runtime)
 
 ## Alternatives Considered
