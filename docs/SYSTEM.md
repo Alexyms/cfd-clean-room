@@ -162,9 +162,9 @@ Generated. The responsibility and serves columns are editorial and come from `do
 | `src/constants.py` | 8 | Holds the physical constants shared by every module so that none of them defines its own copy. | C04 |
 | `src/mesh.py` | 173 | Builds the uniform structured grid and classifies each cell as FLUID, SOLID or BOUNDARY from the domain size and obstacle list. | none |
 | `src/particles.py` | 255 | Computes per-size-class transport properties: Cunningham correction, settling velocity, Brownian diffusion, deposition velocity and HEPA efficiency. | T03, T04, T09, T10 |
-| `src/solver_ns.py` | 882 | Solves steady incompressible flow with the SIMPLE algorithm on a collocated grid using Rhie-Chow face fluxes, hybrid advection and Jacobi pressure correction. | S01, S02, S03, S05, S08 |
+| `src/solver_ns.py` | 885 | Solves steady incompressible flow with the SIMPLE algorithm on a collocated grid using Rhie-Chow face fluxes, hybrid advection and Jacobi pressure correction. | S01, S02, S03, S05, S08 |
 
-Total 7 Python files, 2361 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
+Total 7 Python files, 2364 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
 
 `Declares it serves` is an EDITORIAL CLAIM read from `docs/system_map_annotations.toml`. It says which requirements a module is meant to satisfy, not that it does. Whether a requirement is met is answered by the tests named in the register's `Verified By` column.
 <!-- END GENERATED: components -->
@@ -189,7 +189,7 @@ Generated. Static import analysis cannot see a function bound into a registry by
 |---|---|
 | Scope | `src/**/*.py` |
 | Files hashed | 7 |
-| Digest | `sha256:885d87d78d00d5dbd769e08b15ae80e66d8e256fc541c89a97755540c14067cb` |
+| Digest | `sha256:b6a886103f07dc65d13abdf736e47c04de4d5c1a08eefc410075d6f3d33242ac` |
 
 This is what lets the document answer whether it is current, which is the one question a stale table cannot be asked. `python scripts/gen_system_map.py --check` recomputes the whole set of generated regions, this digest included, and exits non-zero on any disagreement.
 
