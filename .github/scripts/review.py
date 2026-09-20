@@ -77,12 +77,12 @@ def run_review(message: str, system_prompt: str) -> str:
         {
             "type": "advisor_20260301",
             "name": "advisor",
-            "model": "claude-opus-4-6",
+            "model": "claude-opus-5",
         }
     ]
 
     response = client.beta.messages.create(
-        model="claude-sonnet-4-6",
+        model="claude-sonnet-5",
         max_tokens=16000,
         betas=["advisor-tool-2026-03-01"],
         system=system_prompt,
