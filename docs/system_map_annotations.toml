@@ -1,0 +1,36 @@
+# Editorial columns of the generated component register in docs/SYSTEM.md.
+#
+# scripts/gen_system_map.py reads this file and refuses to run if any module
+# under src/ lacks an entry, any entry names a module that does not exist, or
+# any `serves` identifier is absent from the SYSTEM.md section 2 register.
+#
+# `responsibility` is one sentence a reader can check against the module.
+# `serves` is a declaration of which requirements the module is meant to
+# satisfy. It is not evidence that it does; the tests named in the register's
+# Verified By column are. Where the mapping is unclear the list is left short
+# rather than padded. Empty src/__init__.py has no entry: the generator gives
+# a package marker with no code no row.
+
+[modules."src/boundary.py"]
+responsibility = "Maps BOUNDARY cells to their configured condition and writes ghost-cell values that place wall, inlet and outlet conditions at the domain face."
+serves = []
+
+[modules."src/config.py"]
+responsibility = "Loads the YAML configuration into typed dataclasses and rejects missing keys, wrong types and out-of-range values at load time."
+serves = ["REQ-C01", "REQ-C02", "REQ-S10", "REQ-A02", "REQ-A03"]
+
+[modules."src/constants.py"]
+responsibility = "Holds the physical constants shared by every module so that none of them defines its own copy."
+serves = ["REQ-C04"]
+
+[modules."src/mesh.py"]
+responsibility = "Builds the uniform structured grid and classifies each cell as FLUID, SOLID or BOUNDARY from the domain size and obstacle list."
+serves = []
+
+[modules."src/particles.py"]
+responsibility = "Computes per-size-class transport properties: Cunningham correction, settling velocity, Brownian diffusion, deposition velocity and HEPA efficiency."
+serves = ["REQ-T03", "REQ-T04", "REQ-T09", "REQ-T10"]
+
+[modules."src/solver_ns.py"]
+responsibility = "Solves steady incompressible flow with the SIMPLE algorithm on a collocated grid using Rhie-Chow face fluxes, hybrid advection and Jacobi pressure correction."
+serves = ["REQ-S01", "REQ-S02", "REQ-S03", "REQ-S05", "REQ-S08"]

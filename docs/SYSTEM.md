@@ -96,45 +96,32 @@ This section defines which modules depend on which. When a PR modifies a module,
 
 ### 3.1 Dependency Graph
 
-```
-config.py
-    |
-    +--> mesh.py
-    |       |
-    |       +--> boundary.py
-    |       |       |
-    |       |       +--> solver_ns.py
-    |       |       |       |
-    |       |       |       +--> solver_transport.py
-    |       |       |               |
-    |       |       |               +--> time_integration.py
-    |       |       |                       |
-    |       |       |                       +--> io_manager.py
-    |       |       |
-    |       |       +--> solver_transport.py (also depends on boundary)
-    |       |
-    |       +--> solver_ns.py (also depends on mesh directly)
-    |       +--> solver_transport.py (also depends on mesh directly)
-    |       +--> monitor.py (reads mesh for coordinate mapping)
-    |
-    +--> particles.py
-    |       |
-    |       +--> solver_transport.py (uses settling velocity, diffusion coeff)
-    |
-    +--> scenarios.py
-    |       |
-    |       +--> time_integration.py (queries active sources each timestep)
-    |       +--> boundary.py (modifies BCs during events)
-    |
-    +--> monitor.py
-            |
-            +--> time_integration.py (updated each timestep)
+Generated from the import statements in `src/` by `scripts/gen_system_map.py`. Regenerate with `python scripts/gen_system_map.py`; CI runs it with `--check` and fails a PR that changes `src/` without regenerating.
 
-csolver/ (CUDA C++ shared library, optional)
-    |
-    +--> solver_ns.py (calls pressure correction via pybind11)
-    +--> solver_transport.py (calls advection-diffusion via pybind11)
+<!-- BEGIN GENERATED: dsm -->
 ```
+            boundary  config  constants  mesh  particles  solver_ns
+boundary       .        X         .       X        .          .
+config         .        .         .       .        .          .
+constants      .        .         .       .        .          .
+mesh           .        X         .       .        .          .
+particles      .        X         X       .        .          .
+solver_ns      X        X         .       X        .          .
+```
+
+Rows import columns. Edges, 8 total:
+
+```
+boundary  -> config, mesh
+mesh      -> config
+particles -> config, constants
+solver_ns -> boundary, config, mesh
+```
+
+Cycles of any length: **none**. Checked by depth-first search over the whole graph, not by looking for mutual pairs. A three-module cycle is the one that actually happens and a pair check answers 'none' in its presence.
+
+This matrix is generated from the import statements in `src/` and describes the modules that exist today. Section 3.2 (cascade rules) is hand-authored and stays that way: the generator owns what the structure is, and the cascade rules are a human judgment about what follows from it.
+<!-- END GENERATED: dsm -->
 
 ### 3.2 Cascade Rules
 
@@ -162,6 +149,52 @@ These concerns span multiple modules. Changes to any of them require checking al
 **Unit system:** SI throughout. Meters, seconds, kilograms, Pascals. No CGS, no imperial, no implicit unit conversions. All values in config are SI.
 
 **Coordinate system:** Origin at bottom-left of the domain. x increases left-to-right, y increases bottom-to-top. Gravity acts in the -y direction. Consistent across mesh, boundary, solver, and visualization.
+
+### 3.4 Components
+
+Generated. The responsibility and serves columns are editorial and come from `docs/system_map_annotations.toml`; the generator refuses to run when a module has no entry.
+
+<!-- BEGIN GENERATED: components -->
+| Module | Lines | Responsibility | Declares it serves |
+|---|---|---|---|
+| `src/boundary.py` | 491 | Maps BOUNDARY cells to their configured condition and writes ghost-cell values that place wall, inlet and outlet conditions at the domain face. | none |
+| `src/config.py` | 552 | Loads the YAML configuration into typed dataclasses and rejects missing keys, wrong types and out-of-range values at load time. | A02, A03, C01, C02, S10 |
+| `src/constants.py` | 8 | Holds the physical constants shared by every module so that none of them defines its own copy. | C04 |
+| `src/mesh.py` | 173 | Builds the uniform structured grid and classifies each cell as FLUID, SOLID or BOUNDARY from the domain size and obstacle list. | none |
+| `src/particles.py` | 255 | Computes per-size-class transport properties: Cunningham correction, settling velocity, Brownian diffusion, deposition velocity and HEPA efficiency. | T03, T04, T09, T10 |
+| `src/solver_ns.py` | 794 | Solves steady incompressible flow with the SIMPLE algorithm on a collocated grid using Rhie-Chow face fluxes, hybrid advection and Jacobi pressure correction. | S01, S02, S03, S05, S08 |
+
+Total 7 Python files, 2273 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
+
+`Declares it serves` is an EDITORIAL CLAIM read from `docs/system_map_annotations.toml`. It says which requirements a module is meant to satisfy, not that it does. Whether a requirement is met is answered by the tests named in the register's `Verified By` column.
+<!-- END GENERATED: components -->
+
+### 3.5 Runtime Edges
+
+Generated. Static import analysis cannot see a function bound into a registry by a decorator, so this table lists every non-inert decorator application in `src/`.
+
+<!-- BEGIN GENERATED: runtime-edges -->
+| Registry | Bound in | Applications | Functions |
+|---|---|---|---|
+
+**No runtime-bound edges.** Every decorator in `src/` is one of the inert set (`dataclass`, `staticmethod`, `property` and their kin), which bind nothing into a dispatch registry. The dependency matrix above is therefore the complete dispatch story for this system: nothing is bound at runtime that the import graph cannot see. This table exists so that the day a registry appears, it shows up here as a row rather than as silence.
+
+**Source-derived. Nothing here is evidence about a running process.** These are decorator applications counted in the source text. `Applications` exceeds `Functions` where one function carries several non-inert decorators.
+<!-- END GENERATED: runtime-edges -->
+
+### 3.6 Source Fingerprint
+
+<!-- BEGIN GENERATED: source-fingerprint -->
+| Property | Value |
+|---|---|
+| Scope | `src/**/*.py` |
+| Files hashed | 7 |
+| Digest | `sha256:e89ade8b272195189ca669bc69f27738b4bf08b83518e291ddffcd095bd24b46` |
+
+This is what lets the document answer whether it is current, which is the one question a stale table cannot be asked. `python scripts/gen_system_map.py --check` recomputes the whole set of generated regions, this digest included, and exits non-zero on any disagreement.
+
+A disagreement means the source tree moved and this document did not. It does not mean any hand-authored section is wrong, and in particular it says nothing about section 2, which no generator touches.
+<!-- END GENERATED: source-fingerprint -->
 
 ---
 
@@ -348,3 +381,4 @@ Full ADRs are in the development plan document. Summary reference:
 | 2026-04-14 | Initial version. Architecture defined pre-development. | Alex Moroz-Smietana |
 | 2026-04-15 | Phase 2 architecture updates: collocated grid with Rhie-Chow (REQ-S07), Jacobi pressure solver (REQ-S08), hybrid advection scheme (REQ-S09), configurable under-relaxation (REQ-S10). ADR-005 amended from C/ctypes to CUDA C++/pybind11 with NumPy reference solver. REQ-S06 and REQ-N03 updated accordingly. | Alex Moroz-Smietana |
 | 2026-04-16 | ECR-001 approved: solver architecture rebuild. REQ-S07 and REQ-S09 replaced for staggered grid and QUICK advection. REQ-S11 and REQ-S12 added for non-uniform mesh and direct BC imposition. ADR-003 amended, ADR-008 superseded, ADR-010 added. | Alex Moroz-Smietana |
+| 2026-09-19 | Section 3.1 dependency graph replaced by a generated dependency matrix; 3.4 components, 3.5 runtime edges and 3.6 source fingerprint added as generated regions (scripts/gen_system_map.py). Section 2 untouched. | Alex Moroz-Smietana |
