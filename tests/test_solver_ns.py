@@ -15,7 +15,7 @@ import yaml
 from src.boundary import BoundaryManager
 from src.config import SimConfig
 from src.mesh import FLUID, SOLID, Mesh
-from src.solver_ns import NavierStokesSolver
+from src.solver_ns import IterationState, NavierStokesSolver
 
 
 def _make_config(tmp_path: Path, overrides: dict | None = None) -> SimConfig:
@@ -431,3 +431,79 @@ class TestSolverIntegration:
         p = np.zeros((10, 10), dtype=np.float64)
         with pytest.raises(NotImplementedError):
             solver.solve_timestep(u, v, p, 0.01)
+
+
+@pytest.mark.unit
+class TestIterationHook:
+    """solve_steady reports per-iteration state through an optional callback."""
+
+    def test_callback_sees_every_iteration_in_order(self, tmp_path) -> None:
+        """Each SIMPLE iteration produces one IterationState with a sweep count."""
+        solver, _, _ = _make_solver(
+            tmp_path,
+            overrides={
+                "solver": {
+                    "dt": 0.01,
+                    "t_end": 1.0,
+                    "output_interval": 10,
+                    "convergence_tol": 1.0e-12,
+                    "max_simple_iter": 6,
+                    "alpha_velocity": 0.7,
+                    "alpha_pressure": 0.3,
+                    "max_pressure_iter": 8,
+                    "pressure_tol": 1.0e-12,
+                }
+            },
+        )
+        seen: list[IterationState] = []
+        solver.solve_steady(on_iteration=seen.append)
+
+        assert [s.iteration for s in seen] == list(range(6))
+        assert [s.residual for s in seen] == solver.residual_history
+        assert all(1 <= s.pressure_sweeps <= 8 for s in seen)
+        assert seen[-1].pressure_sweeps == solver.last_pressure_sweeps
+        assert seen[0].u.shape == (10, 10)
+
+    def test_stage_timers_cover_the_solve(self, tmp_path) -> None:
+        """Every stage accumulates time and the keys are fixed."""
+        solver, _, _ = _make_solver(
+            tmp_path,
+            overrides={
+                "solver": {
+                    "dt": 0.01,
+                    "t_end": 1.0,
+                    "output_interval": 10,
+                    "convergence_tol": 1.0,
+                    "max_simple_iter": 3,
+                    "alpha_velocity": 0.7,
+                    "alpha_pressure": 0.3,
+                    "max_pressure_iter": 5,
+                    "pressure_tol": 1.0e-9,
+                }
+            },
+        )
+        assert set(solver.stage_seconds) == {"momentum", "flux", "pressure", "correct"}
+        assert all(t == 0.0 for t in solver.stage_seconds.values())
+        solver.solve_steady()
+        assert all(t > 0.0 for t in solver.stage_seconds.values())
+
+    def test_no_callback_is_the_default(self, tmp_path) -> None:
+        """The hook is optional; the unhooked call still returns three fields."""
+        solver, _, _ = _make_solver(
+            tmp_path,
+            overrides={
+                "solver": {
+                    "dt": 0.01,
+                    "t_end": 1.0,
+                    "output_interval": 10,
+                    "convergence_tol": 1.0,
+                    "max_simple_iter": 2,
+                    "alpha_velocity": 0.7,
+                    "alpha_pressure": 0.3,
+                    "max_pressure_iter": 5,
+                    "pressure_tol": 1.0e-9,
+                }
+            },
+        )
+        u, v, p = solver.solve_steady()
+        assert u.shape == v.shape == p.shape == (10, 10)
