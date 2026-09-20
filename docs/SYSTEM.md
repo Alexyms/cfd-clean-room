@@ -2,7 +2,7 @@
 
 **Project:** CFD Clean Room Simulation
 **Status:** Phase 2 in progress. Navier-Stokes solver under development.
-**Last Updated:** 2026-04-16
+**Last Updated:** 2026-09-19
 
 This document is the single reference for system architecture, requirements, module interfaces, and dependency relationships. The automated code review system reads this document on every PR to verify compliance. Keep it current.
 
@@ -158,7 +158,7 @@ Generated. The responsibility and serves columns are editorial and come from `do
 | Module | Lines | Responsibility | Declares it serves |
 |---|---|---|---|
 | `src/boundary.py` | 491 | Maps BOUNDARY cells to their configured condition and writes ghost-cell values that place wall, inlet and outlet conditions at the domain face. | none |
-| `src/config.py` | 552 | Loads the YAML configuration into typed dataclasses and rejects missing keys, wrong types and out-of-range values at load time. | A02, A03, C01, C02, S10 |
+| `src/config.py` | 581 | Loads the YAML configuration into typed dataclasses and rejects missing keys, wrong types and out-of-range values at load time. | A02, A03, C01, C02, S10 |
 | `src/constants.py` | 8 | Holds the physical constants shared by every module so that none of them defines its own copy. | C04 |
 | `src/mesh.py` | 173 | Builds the uniform structured grid and classifies each cell as FLUID, SOLID or BOUNDARY from the domain size and obstacle list. | none |
 | `src/particles.py` | 255 | Computes per-size-class transport properties: Cunningham correction, settling velocity, Brownian diffusion, deposition velocity and HEPA efficiency. | T03, T04, T09, T10 |
@@ -206,6 +206,8 @@ Detailed interface contracts are in the development plan. This section provides 
 
 ```
 SimConfig:
+    SimConfig(yaml_path)            # load and validate a file
+    SimConfig.from_dict(raw: dict)  # same validation on a parsed mapping
     room_width, room_height: float (meters)
     nx, ny: int
     rho, mu: float (SI)
@@ -387,4 +389,5 @@ Full ADRs are in the development plan document. Summary reference:
 | 2026-04-15 | Phase 2 architecture updates: collocated grid with Rhie-Chow (REQ-S07), Jacobi pressure solver (REQ-S08), hybrid advection scheme (REQ-S09), configurable under-relaxation (REQ-S10). ADR-005 amended from C/ctypes to CUDA C++/pybind11 with NumPy reference solver. REQ-S06 and REQ-N03 updated accordingly. | Alex Moroz-Smietana |
 | 2026-04-16 | ECR-001 approved: solver architecture rebuild. REQ-S07 and REQ-S09 replaced for staggered grid and QUICK advection. REQ-S11 and REQ-S12 added for non-uniform mesh and direct BC imposition. ADR-003 amended, ADR-008 superseded, ADR-010 added. | Alex Moroz-Smietana |
 | 2026-09-19 | Section 3.1 dependency graph replaced by a generated dependency matrix; 3.4 components, 3.5 runtime edges and 3.6 source fingerprint added as generated regions (scripts/gen_system_map.py). Section 2 untouched. | Alex Moroz-Smietana |
+| 2026-09-19 | REQ-S02 rationale corrected: the measured VAL-001 error on 80x40 is 2.04%, identical on CI and locally, which is why the criterion is 2.5% rather than 2%. The 1.54% previously recorded in PROJECT_PLAN.md was not reproducible at the commit that claimed it. Requirement value unchanged; the ECR-001 tightening to < 1% after the rebuild is unaffected. | Alex Moroz-Smietana |
 | 2026-09-19 | solve_steady gains an optional on_iteration callback plus last_pressure_sweeps and stage_seconds attributes for the benchmark harness (scripts/benchmark.py). Observability only; solver logic unchanged. | Alex Moroz-Smietana |

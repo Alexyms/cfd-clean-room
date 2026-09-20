@@ -117,7 +117,7 @@ Status values: NOT STARTED, IN PROGRESS, GATE REVIEW, COMPLETE
 
 | Test ID | Description | Criterion | Status |
 |---------|-------------|-----------|--------|
-| VAL-001 | Poiseuille flow | L2 error < 2.5% on 80x40 grid (O(h) wall accuracy, ADR-008) | PASS (1.54% L2 on 80x40) |
+| VAL-001 | Poiseuille flow | L2 error < 2.5% on 80x40 grid (O(h) wall accuracy, ADR-008) | PASS (2.04% L2 on 80x40) |
 | VAL-002 | Lid-driven cavity | Centerline profiles within 2% of Ghia et al. | XFAIL (21% v-error, pending ECR-001) |
 
 ### Scope Changes
@@ -321,3 +321,4 @@ Phase 3 completion is the minimum viable portfolio artifact. A working, validate
 | 2026-04-14 | Phase 0 complete. All infrastructure deliverables DONE. CI and review bot validated on test PR #1. Phase 1 now IN PROGRESS. |
 | 2026-04-15 | Phase 1 complete. Phase 2 architecture updates: replaced C/ctypes with NumPy reference + CUDA C++/pybind11 strategy. Added REQ-S07 through REQ-S10. C deliverables moved to new Phase 6 (CUDA Acceleration). Visualization renumbered to Phase 7. |
 | 2026-04-16 | ECR-001 approved. Phase 2 solver rebuild on staggered MAC grid with non-uniform mesh and QUICK advection. Related source modules marked REBUILDING. VAL-001 criterion will tighten from the current 2.5% (ADR-008 relaxation) back to the originally-specified < 1% as part of the rebuild PR. This docs PR does not modify the live criterion; the change takes effect when the staggered-grid solver passes validation. |
+| 2026-09-19 | VAL-001 recorded error corrected from 1.54% to 2.04% L2 on 80x40. The 1.54% figure was never reproducible: the test at commit d589b9f, whose message claims it, measures 2.036% and fails its own 2% assertion, and 2.036% is also what CI measured, so there is no platform difference between the two. The threshold moved from 2% to 2.5% in the same PR without a recorded reason. The reason is that the collocated ghost-cell scheme genuinely sits at 2.04% on this grid, above the 2% set on 2026-04-15. REQ-S02 keeps its 2.5% value. The ECR-001 plan to tighten it to < 1% after the rebuild is unaffected. |
