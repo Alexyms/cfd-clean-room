@@ -27,6 +27,7 @@ cfd_clean_room/
 ├── tests/                  # Validation and unit tests
 ├── scripts/                # Simulation runners, visualization
 ├── results/                # Simulation output (gitignored)
+├── benchmarks/             # Harness records (results.jsonl), committed: the baselines the rebuild is measured against
 ├── docs/                   # Architecture docs, ADRs, system doc
 ├── .github/workflows/      # CI/CD and code review automation
 ├── claude.md               # This file
