@@ -4,7 +4,7 @@
 **Status:** Phase 2 in progress. Navier-Stokes solver under development.
 **Last Updated:** 2026-09-19
 
-This document is the single reference for system architecture, requirements, module interfaces, and dependency relationships. The automated code review system reads this document on every PR to verify compliance. Keep it current.
+This document is the single reference for system architecture, requirements, module interfaces, and dependency relationships. Code review, whether the GitHub Action's one run per pull request or a Claude Code context in VS Code, checks pull requests against this document under the policy in `docs/REVIEW_POLICY.md`. Keep it current.
 
 ---
 
