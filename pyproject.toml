@@ -9,7 +9,7 @@ line-length = 88
 target-version = "py312"
 # Markdown is documentation, not source. Ruff formats Python code blocks inside
 # .md files, which rewrites illustrative examples -- including ones that are
-# deliberately non-canonical, such as the counter-examples in claude.md.
+# deliberately non-canonical, such as the counter-examples in CLAUDE.md.
 extend-exclude = ["*.md"]
 
 [tool.ruff.lint]
