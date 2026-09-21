@@ -96,8 +96,15 @@ parameters live in committed YAML under `configs/`.
 ## Conventions
 
 Feature branches off main, one pull request per reviewable increment, rebase and merge.
-Every pull request triggers the automated review, ruff and the test suite. Task prompts live
-in `docs/prompts/` and are not tracked. Reports live in `docs/reports/` and are.
+Every pull request runs ruff and the test suite (`.github/workflows/ci.yml`). A pull
+request gets one automated review when it opens or leaves draft, posted on the pull
+request as a record rather than a gate and run on the Claude subscription
+(`.github/workflows/review.yml`). Review iteration happens in a Claude Code context in
+VS Code, the only reviewer that can check whether the previous round's findings were
+fixed. Both apply `docs/REVIEW_POLICY.md`. The hand-rolled review pipeline that
+preceded this was removed on 2026-09-21; its five review rounds on one pull request
+were almost entirely about the pipeline itself. Task prompts live in `docs/prompts/`
+and are not tracked. Reports live in `docs/reports/` and are.
 
 Measured values belong in the file the instrument wrote. A document may state what a
 measurement showed; it should not restate the measurement.

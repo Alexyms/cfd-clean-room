@@ -4,7 +4,7 @@
 **Last Updated:** 2026-04-16
 **Current Phase:** Phase 2 (Navier-Stokes Solver)
 
-This document tracks development progress by phase. The automated code review system reads this document to determine the current phase and verify that PRs are in scope. Update this document as work progresses.
+This document tracks development progress by phase. Code review reads this document to determine the current phase and verify that PRs are in scope; the policy is `docs/REVIEW_POLICY.md`. Update this document as work progresses.
 
 ---
 
@@ -34,7 +34,7 @@ Status values: NOT STARTED, IN PROGRESS, GATE REVIEW, COMPLETE
 | Deliverable | Status |
 |-------------|--------|
 | GitHub repository (public) | DONE |
-| claude.md (coding standards) | DONE |
+| CLAUDE.md (coding standards) | DONE |
 | docs/SYSTEM.md (architecture) | DONE |
 | docs/PROJECT_PLAN.md (this file) | DONE |
 | pyproject.toml (ruff config, pytest markers) | DONE |
@@ -43,7 +43,7 @@ Status values: NOT STARTED, IN PROGRESS, GATE REVIEW, COMPLETE
 | .gitignore | DONE |
 | .github/workflows/review.yml (code review action) | DONE |
 | .github/workflows/ci.yml (lint + test action) | DONE |
-| Review system prompt and script | DONE |
+| Review policy (docs/REVIEW_POLICY.md, replaced the system prompt and script on 2026-09-21) | DONE |
 | README.md | DONE |
 
 ### Gate Criteria
@@ -324,4 +324,5 @@ Phase 3 completion is the minimum viable portfolio artifact. A working, validate
 | 2026-04-15 | Phase 1 complete. Phase 2 architecture updates: replaced C/ctypes with NumPy reference + CUDA C++/pybind11 strategy. Added REQ-S07 through REQ-S10. C deliverables moved to new Phase 6 (CUDA Acceleration). Visualization renumbered to Phase 7. |
 | 2026-04-16 | ECR-001 approved. Phase 2 solver rebuild on staggered MAC grid with non-uniform mesh and QUICK advection. Related source modules marked REBUILDING. VAL-001 criterion will tighten from the current 2.5% (ADR-008 relaxation) back to the originally-specified < 1% as part of the rebuild PR. This docs PR does not modify the live criterion; the change takes effect when the staggered-grid solver passes validation. |
 | 2026-09-20 | scripts/view_field.py recorded as a Phase 2 development instrument, distinct from the Phase 7 visualization deliverable, which remains NOT STARTED. It was introduced in PR #14 without a plan entry; the PR #14 review caught the omission. |
+| 2026-09-21 | Hand-rolled review pipeline (review.py, review_diff.py, their tests, the system prompt under .github/prompts/) removed. review.yml now runs the Claude Code code-review plugin once per pull request on the subscription; the policy moved to docs/REVIEW_POLICY.md, imported by CLAUDE.md, and governs both that run and review in VS Code. |
 | 2026-09-19 | VAL-001 recorded error corrected from 1.54% to 2.04% L2 on 80x40. The 1.54% figure was never reproducible: the test at commit d589b9f, whose message claims it, measures 2.036% and fails its own 2% assertion, and 2.036% is also what CI measured, so there is no platform difference between the two. The threshold moved from 2% to 2.5% in the same PR without a recorded reason. The reason is that the collocated ghost-cell scheme genuinely sits at 2.04% on this grid, above the 2% set on 2026-04-15. REQ-S02 keeps its 2.5% value. The ECR-001 plan to tighten it to < 1% after the rebuild is unaffected. |
