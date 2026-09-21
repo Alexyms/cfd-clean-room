@@ -29,11 +29,14 @@ import matplotlib.pyplot as plt
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from src.boundary import BoundaryManager  # noqa: E402
-from src.mesh import Mesh  # noqa: E402
-from src.solver_ns import NavierStokesSolver  # noqa: E402
-from validation.cases import CASE_GRIDS, load_case  # noqa: E402
-from validation.metrics import (  # noqa: E402
+from src.boundary import BoundaryManager  # noqa: E402 -- follows sys.path.insert
+from src.mesh import Mesh  # noqa: E402 -- follows sys.path.insert
+from src.solver_ns import NavierStokesSolver  # noqa: E402 -- follows sys.path.insert
+from validation.cases import (  # noqa: E402 -- follows sys.path.insert
+    CASE_GRIDS,
+    load_case,
+)
+from validation.metrics import (  # noqa: E402 -- follows sys.path.insert
     GHIA_U_VAL,
     GHIA_U_Y,
     GHIA_V_VAL,
@@ -112,7 +115,7 @@ def render(npz_path: Path, out_dir: Path) -> Path:
         summary = (
             f"max err u {metric.components['u']:.3f}, v {metric.components['v']:.3f}"
         )
-    else:
+    elif kind.startswith("poiseuille"):
         y, u_num, u_ref = poiseuille_profiles(config, mesh, u)
         ax.plot(u_num, y, "-", label="u at x = L/2 (solver)")
         ax.plot(u_ref, y, "o", label="analytical parabola")
@@ -120,6 +123,13 @@ def render(npz_path: Path, out_dir: Path) -> Path:
         ax.set_ylabel("y")
         metric = poiseuille_l2_error(config, mesh, u)
         summary = f"L2 error {metric.value:.4f}"
+    else:
+        # A third family would otherwise be drawn against the parabola with a
+        # confident L2 error for it. Refusing is the useful behaviour.
+        raise ValueError(
+            f"unrecognised case kind {kind!r}: the viewer has reference panels "
+            "for cavity and poiseuille only"
+        )
     ax.legend(fontsize=8)
     ax.set_title(f"centerline vs reference: {summary}")
 

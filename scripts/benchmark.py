@@ -38,12 +38,18 @@ import numpy as np
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from src.boundary import BoundaryManager  # noqa: E402
-from src.config import SimConfig  # noqa: E402
-from src.mesh import FLUID, Mesh  # noqa: E402
-from src.solver_ns import IterationState, NavierStokesSolver  # noqa: E402
-from validation.cases import CASE_GRIDS, load_case  # noqa: E402
-from validation.metrics import (  # noqa: E402
+from src.boundary import BoundaryManager  # noqa: E402 -- follows sys.path.insert
+from src.config import SimConfig  # noqa: E402 -- follows sys.path.insert
+from src.mesh import FLUID, Mesh  # noqa: E402 -- follows sys.path.insert
+from src.solver_ns import (  # noqa: E402 -- follows sys.path.insert
+    IterationState,
+    NavierStokesSolver,
+)
+from validation.cases import (  # noqa: E402 -- follows sys.path.insert
+    CASE_GRIDS,
+    load_case,
+)
+from validation.metrics import (  # noqa: E402 -- follows sys.path.insert
     cavity_centerline_errors,
     poiseuille_l2_error,
 )
@@ -394,9 +400,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--concurrent",
-        type=int,
+        type=positive_int,
         default=1,
-        help="Processes this run shared the machine with, this one included",
+        help="Processes this run shared the machine with, itself included, at least 1",
     )
     parser.add_argument("--results", type=Path, default=RESULTS_PATH)
     parser.add_argument("--summary", action="store_true", help="Print stored results")
