@@ -112,3 +112,17 @@ def test_mixed_load_cases_detects_only_multi_load_pairs() -> None:
         ("m", "b", 1): [],
     }
     assert benchmark.mixed_load_cases(groups) == {("m", "a")}
+
+
+@pytest.mark.unit
+def test_concurrent_rejects_values_below_one(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """--concurrent counts this process too, so zero and negatives are refused at parse time."""
+    for value in ("0", "-1"):
+        with pytest.raises(SystemExit) as exc:
+            benchmark.main(["--concurrent", value, "--summary"])
+        assert exc.value.code == 2
+        err = capsys.readouterr().err
+        assert "--concurrent" in err
+        assert f"must be at least 1, got {value}" in err
