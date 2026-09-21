@@ -1,100 +1,58 @@
 name: Code Review
 
+# One review per pull request, when it opens or leaves draft, posted on the
+# pull request as a record rather than a gate. Deliberately not on synchronize:
+# the iteration loop runs in a Claude Code context in VS Code, which is the only
+# reviewer that can check whether last round's findings were fixed, and a run on
+# every push would reproduce the repeated blind rounds this workflow replaced.
+#
+# Runs on the Claude subscription through CLAUDE_CODE_OAUTH_TOKEN, not a
+# metered API key. The policy the review applies is docs/REVIEW_POLICY.md,
+# which CLAUDE.md imports; the code-review plugin reads project rules from
+# CLAUDE.md, so nothing here has to hand it any context.
 on:
   pull_request:
-    types: [opened]
-  workflow_dispatch:
-    inputs:
-      pr:
-        description: "Pull request number to review"
-        required: true
+    types: [opened, ready_for_review]
 
 jobs:
   review:
     name: Claude Code Review
     runs-on: ubuntu-latest
 
-    # Only review branches in this repository. A pull request from a fork gets
-    # no secrets, so the review step would fail on an empty API key anyway;
-    # skipping it avoids leaving a red X on a stranger's PR for a job that was
-    # never going to run.
-    #
-    # Manual re-runs go through workflow_dispatch, which requires write access
-    # by construction. The issue_comment trigger this replaces did not: any
-    # GitHub user can comment on a public repository, so anyone could fire
-    # /review and spend the API key.
-    if: >
-      github.event_name == 'workflow_dispatch' ||
-      github.event.pull_request.head.repo.full_name == github.repository
+    # Security, carried forward from the workflow this replaces. On a public
+    # repository GitHub withholds secrets from runs triggered by fork pull
+    # requests, so a fork PR could never authenticate; this guard skips the job
+    # rather than leaving a red X on a stranger's PR for a run that was never
+    # going to happen. Independently, the action refuses to start unless the
+    # triggering actor has write access to the repository and is not a bot, so
+    # nobody without push rights can spend the subscription by opening a pull
+    # request. Both checks stay: one is GitHub's, one is the action's.
+    if: github.event.pull_request.head.repo.full_name == github.repository
 
     permissions:
-      # contents: read is load-bearing. It is what stops an instruction hidden
-      # in a diff from reaching the code through the review job.
+      # contents: read is load-bearing. The review reads the checkout and
+      # posts through the Claude GitHub App; nothing in this job can commit,
+      # so an instruction hidden in a diff cannot reach the code through it.
       contents: read
-      pull-requests: write
+      pull-requests: read
+      issues: read
+      id-token: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
-          fetch-depth: 0
+          fetch-depth: 1
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: anthropics/claude-code-action@v1
         with:
-          python-version: "3.12"
-
-      - name: Install dependencies
-        run: pip install -r requirements-dev.txt
-
-      - name: Get PR number
-        id: pr
-        run: |
-          if [ "${{ github.event_name }}" == "pull_request" ]; then
-            echo "number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
-          else
-            echo "number=${{ github.event.inputs.pr }}" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Get PR diff
-        id: diff
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        # The full diff. Exclusion of generated data and the size bound happen
-        # in review.py (see .github/scripts/review_diff.py), file by file, so
-        # the reviewer is told which paths it did not see. A byte cut here
-        # dropped every source file behind benchmarks/results.jsonl on PR #13
-        # and PR #14 and reported only that "the diff was truncated".
-        run: gh pr diff ${{ steps.pr.outputs.number }} > pr_diff.txt
-
-      - name: Get PR metadata
-        id: meta
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh pr view ${{ steps.pr.outputs.number }} --json title,body,headRefName > pr_meta.json
-
-      - name: Gather context documents
-        run: |
-          mkdir -p review_context
-          # Copy project docs the reviewer needs
-          cp claude.md review_context/ 2>/dev/null || echo "claude.md not found"
-          cp docs/SYSTEM.md review_context/ 2>/dev/null || echo "SYSTEM.md not found"
-          cp docs/PROJECT_PLAN.md review_context/ 2>/dev/null || echo "PROJECT_PLAN.md not found"
-
-      - name: Run code review
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          PR_NUMBER: ${{ steps.pr.outputs.number }}
-          # Characters of diff handed to the reviewer, after exclusions.
-          REVIEW_DIFF_CHAR_LIMIT: "100000"
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO_FULL_NAME: ${{ github.repository }}
-        run: python .github/scripts/review.py
-
-      - name: Post acknowledgment on manual trigger
-        if: github.event_name == 'workflow_dispatch'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh pr comment ${{ steps.pr.outputs.number }} \
-            --body "Review requested. Running analysis..."
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          plugin_marketplaces: "https://github.com/anthropics/claude-code.git"
+          plugins: "code-review@claude-code-plugins"
+          # --comment posts the findings on the pull request, one inline
+          # comment per issue or one summary comment when there are none.
+          # Without it the review goes only to the run log.
+          prompt: "/code-review:code-review --comment ${{ github.repository }}/pull/${{ github.event.pull_request.number }}"
+          # Keep this even though the skill's own allowed-tools names the same
+          # tool: the action starts the MCP server that posts inline comments
+          # only when --allowedTools in claude_args names it.
+          claude_args: '--allowedTools "mcp__github_inline_comment__create_inline_comment"'
