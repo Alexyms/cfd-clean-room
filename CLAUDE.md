@@ -28,9 +28,9 @@ cfd_clean_room/
 ├── scripts/                # Simulation runners, visualization
 ├── results/                # Simulation output (gitignored)
 ├── benchmarks/             # Harness records (results.jsonl), committed: the baselines the rebuild is measured against
-├── docs/                   # Architecture docs, ADRs, system doc
+├── docs/                   # Architecture docs, ADRs, system doc, review policy
 ├── .github/workflows/      # CI/CD and code review automation
-├── claude.md               # This file
+├── CLAUDE.md               # This file
 ├── pyproject.toml          # Ruff config, project metadata
 ├── requirements.txt        # Runtime dependencies
 ├── requirements-dev.txt    # Dev dependencies (ruff, pytest, etc.)
@@ -562,7 +562,13 @@ PR description should include:
 - Which phase/validation case this relates to
 - Any open questions or known limitations
 
-The automated review system will check every PR against the architecture docs, coding standards, and development plan.
+A pull request gets one automated review when it opens or leaves draft, run
+by `.github/workflows/review.yml` on the Claude subscription and posted on the
+pull request as a record rather than a gate. Iteration on findings happens in
+a Claude Code context in VS Code. Both apply the policy below, which is imported
+here so the plugin that runs in the Action reads it as a project rule.
+
+@docs/REVIEW_POLICY.md
 
 ### What Gets Committed
 
