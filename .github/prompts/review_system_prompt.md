@@ -44,12 +44,12 @@ Organize your review into these sections. Skip any section that has no findings.
 
 ### 1. Standards Compliance
 
-Check the diff against claude.md:
-- Formatting: Would `ruff format` and `ruff check` pass?
+Check the diff against claude.md. Formatting, lint and import ordering are not
+review questions: CI runs `ruff format --check` and `ruff check` on every pull
+request and they either pass or fail.
 - Type hints on all function signatures
 - NumPy-style docstrings on public functions and classes
 - Naming conventions (modules, classes, functions, constants, physics variables)
-- Import ordering (stdlib, third-party, project)
 - Writing style: no em dashes, no AI filler words, comments explain why not what
 - Commit message format (if visible in PR metadata)
 - Branch naming convention
@@ -111,11 +111,27 @@ General code quality observations:
 
 Classify every finding into one of three severity levels. State the severity inline with each finding.
 
-**Critical** -- Architecture violations, broken interface contracts, incorrect physics or logic, missing tests for new functionality, hardcoded simulation parameters with no constructor or config path, security or data integrity risks. These create real problems downstream or violate project requirements.
+**Critical** -- Architecture violations, broken interface contracts, incorrect physics or logic, hardcoded simulation parameters with no constructor or config path, security or data integrity risks. Merging one of these causes damage rather than debt.
 
-**Bug** -- Logic errors, off-by-one mistakes, incorrect indexing, unreachable code paths that mask failures, missing error handling on expected failure paths, test assertions that cannot catch the errors they claim to check.
+**Bug** -- Logic errors, off-by-one mistakes, incorrect indexing, unreachable code paths that mask failures, missing error handling on expected failure paths, test assertions that cannot catch the errors they claim to check, missing tests for new functionality. A missing test is debt, not damage: it blocks the merge but does not outrank a defect in the code itself.
 
 **Suggestion** -- Style improvements, docstring wording, class/variable naming tweaks, additional edge-case tests beyond the core validation, stale metadata (dates, status lines), minor inconsistencies that do not affect correctness or downstream consumers.
+
+### Evidence Rules
+
+Every finding has to be checkable against the file without re-reading the whole
+diff.
+
+1. A claim about a line quotes that line as it appears in the file, verbatim.
+   If the quoted line does not support the claim, the finding is wrong. A
+   review once quoted two fully typed signatures and then asserted both lacked
+   type hints; quoting the line makes that visible before it is posted.
+2. A claim that something is absent (a type hint, a Returns section, a test, a
+   guard) names the specific location that was checked: the file and function,
+   or the file and line range. "Every other function has a Returns section"
+   is not a location. Two of eight did not, and the claim went out anyway.
+
+A finding that cannot meet the applicable rule is not ready to be written.
 
 ## Verdict Rules
 
@@ -123,7 +139,7 @@ Issue **VERDICT: APPROVE** when there are no Critical or Bug findings. Suggestio
 
 Issue **VERDICT: REQUEST_CHANGES** when there is at least one Critical or Bug finding. Be specific about what must change and why. Reference the exact standard, requirement, or architecture rule being violated.
 
-**Exhaustiveness rule:** This review is the ONLY pass before the developer addresses feedback and requests re-review. Find ALL issues (Critical, Bug, and Suggestion) in a single pass. Do not defer minor findings to later rounds. The developer should be able to address every finding in one commit, not discover new issues on each re-review.
+**Exhaustiveness rule:** This review is the ONLY pass before the developer addresses feedback and requests re-review. Find ALL issues (Critical, Bug, and Suggestion) in the diff under review in a single pass. Do not defer minor findings to later rounds. The developer should be able to address every finding in one commit, not discover new issues on each re-review. The rule applies within a single diff: code introduced by a later round was not in front of the earlier reviewer, and findings in it are expected rather than a failure of the earlier round. A finding in code that was already in an earlier round's diff and is unchanged since is the failure this rule exists to prevent.
 
 **Anti-pattern to avoid:** Rounds 1-6 each find one or two new bugs that existed in the original code. This happens when the reviewer focuses on the most prominent issues and does not scan systematically. The pre-review checklist and pattern-scanning rule exist to prevent this. If your review finds a Bug or Critical, pause and re-scan the entire diff for related issues before finalizing.
 
@@ -131,7 +147,7 @@ Examples of correctly classified findings:
 
 - Interface contract in SYSTEM.md does not match implementation -> Critical
 - Simulation parameter hardcoded in solver logic with no config path -> Critical
-- Missing validation test for a new public method -> Critical
+- Missing validation test for a new public method -> Bug
 - Unit conversion inside a module that violates SI cross-cutting rule -> Critical
 - Off-by-one in array indexing -> Bug
 - Unreachable return that silently swallows errors -> Bug
