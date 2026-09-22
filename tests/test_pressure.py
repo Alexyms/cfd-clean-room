@@ -14,7 +14,7 @@ import pytest
 
 from src.boundary_staggered import StaggeredBoundary
 from src.config import SimConfig
-from src.mesh import SOLID, Mesh
+from src.mesh import FLUID, SOLID, Mesh
 from src.momentum import MomentumPrediction, MomentumPredictor
 from src.pressure import PressureCorrector
 from src.staggered import allocate_fields
@@ -166,6 +166,7 @@ class TestMassImbalance:
         assert abs(float(b.sum())) <= bound
 
     def test_uniform_field_has_zero_imbalance_exactly(self) -> None:
+        """A constant field has identical face fluxes, so every cell closes exactly."""
         mesh, bc, _mp, pc = _build(
             _config(
                 {e: _inlet(e, 0.4, -0.2) for e in ("bottom", "top", "left", "right")}
@@ -192,6 +193,7 @@ class TestMassImbalance:
         )
 
     def test_solid_cells_carry_no_imbalance(self) -> None:
+        """SOLID cells are outside the solve and report zero imbalance."""
         block = {
             "name": "block",
             "x_start": 0.7,
@@ -214,6 +216,7 @@ class TestCoefficients:
     """a_nb = rho d_face A_face with the mesh's own face lengths."""
 
     def test_stretched_mesh_uses_the_real_face_lengths(self) -> None:
+        """Each coefficient is rho A_face^2 / a_P with the cell's own widths."""
         mesh, _bc, pc, pred, _p = _predicted(_config(CAVITY, mesh=STRETCHED))
         c = pc.coefficients(pred.a_p_u, pred.a_p_v)
         j, i = 2, 3
@@ -256,11 +259,12 @@ class TestCoefficients:
         assert np.all(c.a_p[~solid] > 0.0)
 
     def test_closed_domain_diagonal_is_the_neighbour_sum(self) -> None:
+        """With no outlet every row is pure Neumann and the domain is pinned."""
         _mesh, _bc, pc, pred, _p = _predicted(_config(CAVITY))
         c = pc.coefficients(pred.a_p_u, pred.a_p_v)
         assert np.array_equal(c.a_p, c.a_e + c.a_w + c.a_n + c.a_s)
         assert pc.needs_pin
-        assert pc.pin_cell == (0, 0)
+        assert pc.pin_cell == (1, 1)
 
     def test_outlet_cells_carry_the_outlet_term_in_the_diagonal(self) -> None:
         """p' = 0 at the outlet face: a coefficient in a_P with no neighbour."""
@@ -285,6 +289,7 @@ class TestCorrection:
     """p', the corrected velocities and the updated pressure."""
 
     def test_uniform_field_gives_zero_correction_exactly(self) -> None:
+        """A field with zero imbalance is returned bit for bit, after one sweep."""
         config = _config(
             {e: _inlet(e, 0.4, -0.2) for e in ("bottom", "top", "left", "right")}
         )
@@ -470,6 +475,7 @@ class TestCorrection:
         assert out.v[2, 1] == v[2, 1] - d_v * (out.p_prime[2, 1] - out.p_prime[1, 1])
 
     def test_open_domain_is_not_pinned_and_the_outlet_face_is_corrected(self) -> None:
+        """An outlet fixes the level, so no pin, and its face moves against p' = 0."""
         config = _config(CHANNEL)
         mesh, _bc, pc, pred, p = _predicted(config, outlet_right=True)
         out = pc.correct(pred, p)
@@ -482,22 +488,54 @@ class TestCorrection:
         )
 
     def test_closed_domain_pins_the_reference_cell(self) -> None:
+        """Both p' and the updated p are zero at the reference cell."""
         config = _config(CAVITY)
         _mesh, _bc, pc, pred, p = _predicted(config)
         p[:] = 5.0
         out = pc.correct(pred, p)
         assert pc.needs_pin
-        assert out.p_prime[0, 0] == 0.0
-        assert out.p[0, 0] == 0.0
+        assert out.p_prime[pc.pin_cell] == 0.0
+        assert out.p[pc.pin_cell] == 0.0
         assert np.abs(out.p_prime).max() > 0.0
 
+    def test_pinned_cell_is_typed_fluid(self) -> None:
+        """The reference cell is the first cell typed FLUID, as in the collocated solver."""
+        mesh, _bc, pc, _pred, _p = _predicted(_config(CAVITY))
+        assert pc.needs_pin
+        assert mesh.cell_type[pc.pin_cell] == FLUID
+        assert pc.pin_cell == tuple(np.argwhere(mesh.cell_type == FLUID)[0])
+
+    def test_pin_removes_a_nonzero_constant_mode(self) -> None:
+        """The pin acts on the solve: p' at the reference cell is exactly zero and
+        the whole field was shifted by the nonzero value Jacobi left there.
+
+        The constant vector is an exact eigenvector of the closed system, so
+        without the subtraction the level of p' is wherever the iteration
+        left it. The raw solve is taken by switching the pin off on the same
+        corrector; the pinned field must be that field minus its reference
+        value, bit for bit, and that value must not be zero.
+        """
+        _mesh, _bc, pc, pred, p = _predicted(_config(CAVITY))
+        pc.needs_pin = False
+        raw = pc.correct(pred, p).p_prime
+        pc.needs_pin = True
+        out = pc.correct(pred, p)
+        assert raw[pc.pin_cell] != 0.0
+        assert out.p_prime[pc.pin_cell] == 0.0
+        assert np.array_equal(out.p_prime, raw - raw[pc.pin_cell])
+        assert out.p_prime.mean() == pytest.approx(
+            raw.mean() - raw[pc.pin_cell], rel=1e-12
+        )
+
     def test_sweeps_are_capped_by_max_pressure_iter(self) -> None:
+        """The Jacobi loop stops at the configured cap and reports it."""
         config = _config(CAVITY, max_pressure_iter=7)
         _mesh, _bc, pc, pred, p = _predicted(config)
         out = pc.correct(pred, p)
         assert out.sweeps == 7
 
     def test_wrong_shapes_are_rejected(self) -> None:
+        """Mismatched p, velocity and diagonal shapes raise before any arithmetic."""
         config = _config(CAVITY)
         _mesh, _bc, pc, pred, p = _predicted(config)
         with pytest.raises(ValueError, match="expected p"):
