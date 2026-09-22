@@ -44,7 +44,7 @@ responsibility = "Defines the staggered (MAC) field layout: shapes and allocatio
 serves = ["REQ-S07"]
 
 [modules."src/pressure.py"]
-responsibility = "Assembles the staggered pressure correction equation from the momentum diagonals with the discrete divergence of u* as its right-hand side, solves it by Jacobi iteration, corrects the face velocities and updates the pressure."
+responsibility = "Assembles the staggered pressure correction equation from the momentum diagonals with the discrete divergence of u* as its right-hand side, solves it by weighted Jacobi iteration, corrects the face velocities and updates the pressure."
 serves = ["REQ-S04", "REQ-S08"]
 
 [modules."src/momentum.py"]

@@ -31,7 +31,7 @@ Requirements are organized by subsystem. Each requirement has a unique ID, a rat
 | REQ-S05 | The solver shall use the SIMPLE algorithm for pressure-velocity coupling. | Industry-standard approach. Well-documented, stable, compatible with structured grids. | Architecture review |
 | REQ-S06 | The pressure correction inner loop shall have a pure NumPy reference implementation for validation and a CUDA C++ accelerated implementation for production runs, called from Python via pybind11. The NumPy reference shall remain in the codebase permanently as the ground truth for equivalence testing (see REQ-N03). | NumPy reference validates physics independently of GPU code. CUDA acceleration is a separate deliverable after solver physics are validated. | Integration test |
 | REQ-S07 | The solver shall use a staggered (MAC) variable arrangement with pressure at cell centers, u-velocity at east-west cell faces, and v-velocity at north-south cell faces. | Staggered arrangement provides natural pressure-velocity coupling without Rhie-Chow interpolation artifacts. Eliminates checkerboard modes by construction and enables exact discrete continuity enforcement. Required by ECR-001 to resolve the systematic v-velocity error in VAL-002. | Architecture review, VAL-001, VAL-002 |
-| REQ-S08 | The pressure correction equation shall be solved using Jacobi iteration. | Jacobi iteration updates all cells independently from previous-iteration neighbors, enabling full vectorization in NumPy and direct parallelization in CUDA (one thread per cell). Converges slower per iteration than Gauss-Seidel but each iteration is a single array operation. | Unit test |
+| REQ-S08 | The pressure correction equation shall be solved using Jacobi iteration. | Jacobi iteration updates all cells independently from previous-iteration neighbors, enabling full vectorization in NumPy and direct parallelization in CUDA (one thread per cell). Converges slower per iteration than Gauss-Seidel but each iteration is a single array operation. Clarified 2026-09-22, not amended: weighted Jacobi, `p_new = (1 - w) p_old + w (Jacobi update)` with w = 2/3, satisfies this requirement, because every cell still reads only previous-iteration neighbors and a scalar weight does not change that. On a closed domain the weight is necessary: every row has a_P equal to its neighbor sum and the grid is bipartite, so the checkerboard is an exact eigenvector of the plain update with eigenvalue -1 and never decays. The weight maps it to 1 - 2w = -1/3. See `docs/reports/pressure_correction_step5.md`, sections 3 and 5. | Unit test |
 | REQ-S09 | The advection term shall be discretized using the QUICK scheme (Leonard 1979) with specialized stencils at boundary-adjacent cells. | QUICK provides second-order accuracy globally on smooth flows, appropriate for the moderate-Peclet regime of cleanroom flows. Does not require first-order upwind fallback of hybrid schemes. Required by ECR-001. | VAL-001, VAL-002 |
 | REQ-S10 | Under-relaxation factors for velocity (default 0.7) and pressure (default 0.3) shall be configurable via the YAML configuration. | SIMPLE requires under-relaxation for stability. Factors control convergence rate vs. stability tradeoff. Configurable per REQ-C01. | Unit test |
 | REQ-S11 | The mesh shall support independent geometric stretching in x and y directions, specified by minimum face spacing and geometric expansion ratio per wall. | Enables resolution clustering near walls and high-gradient regions without uniform refinement of the entire domain. Required by ECR-001. | Unit test |
@@ -181,11 +181,11 @@ Generated. The responsibility and serves columns are editorial and come from `do
 | `src/mesh.py` | 411 | Builds the structured grid, uniform or geometrically clustered at the walls, with the face, center, width and center-to-center arrays a face-based stencil needs, and classifies each cell as FLUID, SOLID or BOUNDARY. | S11 |
 | `src/momentum.py` | 522 | Predicts u* and v* on the staggered grid with QUICK advection by deferred correction over an upwind implicit matrix, one under-relaxed Jacobi sweep per call, and returns the diagonal coefficients the pressure correction needs. | S07, S09 |
 | `src/particles.py` | 255 | Computes per-size-class transport properties: Cunningham correction, settling velocity, Brownian diffusion, deposition velocity and HEPA efficiency. | T03, T04, T09, T10 |
-| `src/pressure.py` | 359 | Assembles the staggered pressure correction equation from the momentum diagonals with the discrete divergence of u* as its right-hand side, solves it by Jacobi iteration, corrects the face velocities and updates the pressure. | S04, S08 |
+| `src/pressure.py` | 441 | Assembles the staggered pressure correction equation from the momentum diagonals with the discrete divergence of u* as its right-hand side, solves it by weighted Jacobi iteration, corrects the face velocities and updates the pressure. | S04, S08 |
 | `src/solver_ns.py` | 891 | Solves steady incompressible flow with the SIMPLE algorithm on a collocated grid using Rhie-Chow face fluxes, hybrid advection and Jacobi pressure correction. | S01, S02, S03, S05, S08 |
 | `src/staggered.py` | 152 | Defines the staggered (MAC) field layout: shapes and allocation of face-centered u and v and cell-centered p, and the face-to-center averaging the solver applies before returning. | S07 |
 
-Total 12 Python files, 4259 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
+Total 12 Python files, 4341 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
 
 `Declares it serves` is an EDITORIAL CLAIM read from `docs/system_map_annotations.toml`. It says which requirements a module is meant to satisfy, not that it does. Whether a requirement is met is answered by the tests named in the register's `Verified By` column.
 <!-- END GENERATED: components -->
@@ -210,7 +210,7 @@ Generated. Static import analysis cannot see a function bound into a registry by
 |---|---|
 | Scope | `src/**/*.py` |
 | Files hashed | 12 |
-| Digest | `sha256:632b7bed1b51a2eaf206585517f16b129dea8714ce0b0747fa4ef29e44ab7d40` |
+| Digest | `sha256:5650f1d78d3a9c36e3f48ffca1cadfba826eca27f46775754f9150e7457c0831` |
 
 This is what lets the document answer whether it is current, which is the one question a stale table cannot be asked. `python scripts/gen_system_map.py --check` recomputes the whole set of generated regions, this digest included, and exits non-zero on any disagreement.
 
@@ -404,9 +404,12 @@ velocities, with no interpolation and no compatibility correction; walls
 contribute no coefficient (homogeneous Neumann by absence); a pressure
 outlet is ``p' = 0`` at its face; a closed domain is pinned at the first
 FLUID cell after the solve and after the pressure update, as the
-collocated solver does. Jacobi as REQ-S08 requires.
+collocated solver does. The solve is weighted Jacobi, REQ-S08 as clarified
+on 2026-09-22, with the weight a module constant rather than a
+configuration key.
 
 ```
+JACOBI_WEIGHT = 2/3                      # module constant
 PressureCorrector:
     __init__(mesh: Mesh, config: SimConfig, boundary: StaggeredBoundary)
     needs_pin: bool, pin_cell: (j, i)
@@ -416,11 +419,14 @@ PressureCorrector:
         d = A_face / a_P where a_P > 0, zero across walls, inlets and SOLID
         faces; an outlet face borrows the nearest interior diagonal and
         sits in a_p with no neighbour
+    sweep(p_prime, coefficients, b, weight: float) -> [ny, nx]
+        (1 - w) p' + w (sum(a_nb p'_nb) - b) / a_P where a_P > 0, zero
+        elsewhere; weight in (0, 1], 1 is plain Jacobi; input not modified
     correct(prediction: MomentumPrediction, p) -> PressureCorrection
         u [ny, nx+1], v [ny+1, nx]: u* - d (p'_(s+) - p'_(s-)) at correctable
             faces and outlet faces; walls, inlets and SOLID faces untouched
         p [ny, nx]: p + alpha_pressure p', pinned in a closed domain
-        p_prime [ny, nx], sweeps: int
+        p_prime [ny, nx], sweeps: int (sweeps with JACOBI_WEIGHT from p' = 0)
 ```
 
 ### particles.py --> solver_transport
@@ -553,5 +559,6 @@ Full ADRs are in the development plan document. Summary reference:
 | 2026-09-21 | ECR-001 step 3: boundary_registry.py extracted from boundary.py as the configuration interpretation both boundary layers share (REQ-S12.1, derived from REQ-S12); boundary_staggered.py added with exact normal-component imposition and the tangential and pressure conditions exposed as data (REQ-S12). Collocated interface and output unchanged. Cascade rules and contracts added for the three boundary modules. | Alex Moroz-Smietana |
 | 2026-09-22 | ECR-001 step 4: momentum.py added, the staggered momentum predictor with QUICK advection by deferred correction over an upwind implicit matrix (REQ-S07, REQ-S09). Its MomentumPrediction return is the coefficient contract for the step 5 pressure correction. Not integrated into solve_steady; collocated solver and harness rows unchanged. | Alex Moroz-Smietana |
 | 2026-09-22 | ECR-001 step 5: pressure.py added, the staggered pressure correction (REQ-S04, REQ-S08 as written). The closed-domain right-hand side sums to zero to rounding, measured directly (acceptance criterion 6). Undamped Jacobi found not to converge on the closed system (exact -1 eigenvalue); recorded in docs/reports/pressure_correction_step5.md, REQ-S08 not amended. Not integrated into solve_steady; collocated solver and harness rows unchanged. | Alex Moroz-Smietana |
+| 2026-09-22 | REQ-S08 clarified, not amended: weighted Jacobi with w = 2/3 satisfies it, since each cell still reads only previous-iteration neighbors. Rationale recorded in the requirement: the plain update has an exact -1 eigenvalue on the closed-domain system, which the weight maps to -1/3. pressure.py gains the JACOBI_WEIGHT constant and a public sweep(); correct() uses the weighted sweep, and the closed-cavity correction now converges. Not integrated into solve_steady; collocated solver and harness rows unchanged. | Alex Moroz-Smietana |
 | 2026-09-19 | REQ-S02 rationale corrected: the measured VAL-001 error on 80x40 is 2.04%, identical on CI and locally, which is why the criterion is 2.5% rather than 2%. The 1.54% previously recorded in PROJECT_PLAN.md was not reproducible at the commit that claimed it. Requirement value unchanged; the ECR-001 tightening to < 1% after the rebuild is unaffected. | Alex Moroz-Smietana |
 | 2026-09-19 | solve_steady gains an optional on_iteration callback plus last_pressure_sweeps and stage_seconds attributes for the benchmark harness (scripts/benchmark.py). Observability only; solver logic unchanged. | Alex Moroz-Smietana |
