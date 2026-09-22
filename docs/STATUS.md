@@ -16,22 +16,28 @@ project has already lost five months to exactly that.
 
 Phases 0 and 1 are complete. Phase 2 is in progress: the Navier-Stokes solver exists and
 runs, VAL-001 passes against its current criterion, VAL-002 is marked xfail against a
-documented defect, and an approved engineering change request to rebuild the solver has not
-yet been started. Phases 3 through 7 have not begun.
+documented defect, and the approved engineering change request to rebuild the solver is
+three steps into its eight-step plan. Phases 3 through 7 have not begun.
 
 `docs/PROJECT_PLAN.md` holds the phase detail, deliverables and validation gates.
 
 ## The open engineering change
 
 ECR-001 replaces the collocated grid with Rhie-Chow interpolation by a staggered MAC
-arrangement with non-uniform mesh support and QUICK advection. It was approved and merged as
-documentation; no implementation work has started. The change request itself is the source
-of truth for scope, requirement edits, acceptance criteria and the implementation plan:
-`docs/ECR/ECR-001-solver-architecture-rebuild.md`.
+arrangement with non-uniform mesh support and QUICK advection. The change request itself is
+the source of truth for scope, requirement edits, acceptance criteria and the implementation
+plan: `docs/ECR/ECR-001-solver-architecture-rebuild.md`.
 
-The rebuild decomposes into eight increments, each reviewable in isolation, beginning with
-the mesh module extension and the staggered field data structures. ADR-010 is deliberately
-deferred to the end so it records what was built rather than what was planned.
+The rebuild decomposes into eight increments, each reviewable in isolation. Steps 1 and 2,
+the mesh extension and the staggered field layout, and step 3, boundary conditions imposed
+directly on the staggered components, are implemented. Step 3 split the boundary module in
+two layers over one shared interpretation of the configuration (`src/boundary_registry.py`,
+REQ-S12.1): the collocated layer is unchanged in interface and output, and the staggered
+layer writes the normal components exactly and hands the tangential and pressure
+conditions to steps 4 and 5 as data rather than as a mirrored value outside the domain.
+The solver itself is untouched so far and the harness rows reproduce at every step.
+ADR-010 is deliberately deferred to the end so it records what was built rather than what
+was planned.
 
 Four amendments to ECR-001 landed on 2026-09-20, before implementation. The discrete
 continuity baseline for the collocated scheme is recorded under acceptance criterion 6, which
@@ -65,6 +71,12 @@ a directional defect rather than a resolution shortfall, and this is consistent 
 treatment above: the u-field is driven directly by the lid boundary condition, while the
 v-field depends on a continuity constraint that the inert pressure correction never enforces.
 Recorded in `benchmarks/results.jsonl`.
+
+The inlet flux the collocated layer prescribes on VAL-001 is short of the exact value by
+two rows of cells, because its edge map hands the corner ring cells to the top and bottom
+walls, and the flux its converged field actually carries through the walls is a third,
+independent measurement of the leak. The staggered layer's inlet flux is the exact sum over
+domain faces. See `docs/reports/inlet_flux_comparison.md`.
 
 Separately, a validation figure carried in the earlier session handoffs was checked against
 the code and found never to have been true of any committed state. The requirement history in
@@ -111,8 +123,9 @@ measurement showed; it should not restate the measurement.
 
 ## Next
 
-Authenticate the GitHub CLI and clear the outstanding branch stack bottom up through review.
-The ECR-001 amendments are applied; the rebuild begins at steps 1 and 2.
+Clear the outstanding branch stack bottom up through review. The rebuild continues at step
+4, the momentum predictor with QUICK advection, which consumes the tangential wall data and
+the wall distances step 3 exposes.
 
 ## Open questions
 
