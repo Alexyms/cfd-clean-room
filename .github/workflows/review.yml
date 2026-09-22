@@ -52,7 +52,15 @@ jobs:
           # comment per issue or one summary comment when there are none.
           # Without it the review goes only to the run log.
           prompt: "/code-review:code-review --comment ${{ github.repository }}/pull/${{ github.event.pull_request.number }}"
-          # Keep this even though the skill's own allowed-tools names the same
-          # tool: the action starts the MCP server that posts inline comments
-          # only when --allowedTools in claude_args names it.
-          claude_args: '--allowedTools "mcp__github_inline_comment__create_inline_comment"'
+          # Two permissions because the skill has two posting paths. Findings go
+          # through the inline-comment MCP tool, which the action starts only
+          # when --allowedTools names it, even though the skill's own
+          # allowed-tools lists it. A clean review posts its "No issues found"
+          # summary a different way, by shelling out to gh pr comment, spelled
+          # here as the skill's frontmatter spells it. With only the first
+          # allowed, the run on PR #23 succeeded, found nothing, was denied the
+          # comment, and posted nothing, so an empty thread could not be told
+          # apart from the action never having run. The action's configuration
+          # reference shows Bash(...) rules inside --allowedTools, so both stay
+          # on this one line rather than splitting into the settings input.
+          claude_args: '--allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*)"'
