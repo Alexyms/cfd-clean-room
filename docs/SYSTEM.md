@@ -2,7 +2,7 @@
 
 **Project:** CFD Clean Room Simulation
 **Status:** Phase 2 in progress. Navier-Stokes solver under development.
-**Last Updated:** 2026-09-19
+**Last Updated:** 2026-09-21
 
 This document is the single reference for system architecture, requirements, module interfaces, and dependency relationships. Code review, whether the GitHub Action's one run per pull request or a Claude Code context in VS Code, checks pull requests against this document under the policy in `docs/REVIEW_POLICY.md`. Keep it current.
 
@@ -139,7 +139,9 @@ When a PR modifies a module, the reviewer verifies impact on downstream modules.
 | config.py | mesh, boundary, solver_ns, solver_transport, particles, monitor, scenarios, time_integration | New/changed/removed config fields are handled by all consumers. No module accesses a field that no longer exists. No module ignores a new field it should use. |
 | mesh.py | boundary, solver_ns, solver_transport, monitor, staggered | Grid dimensions, cell arrays, and coordinate arrays are consumed correctly. Shape assumptions still hold. Centers stay face midpoints; staggered averaging depends on it. |
 | staggered.py | solver_ns | Face array shapes and the face-to-center averaging contract unchanged. |
-| boundary.py | solver_ns, solver_transport | BC application interface unchanged. New BC types handled in solvers if needed. |
+| boundary.py | solver_ns, solver_transport | Collocated BC application interface unchanged. New BC types handled in solvers if needed. Retired with the collocated solver at ECR-001 step 6. |
+| boundary_registry.py | boundary, boundary_staggered | Coverage rule (same edge, inclusive range, first match in configuration order, wall by default) and the prescribed-velocity decomposition unchanged. Both layers read them, so a change here moves both. |
+| boundary_staggered.py | solver_ns (from ECR-001 step 4) | Normal imposition writes domain faces only. Tangential data shape [n+1], outlet data shape [n], wall_distance semantics and the inward flux sign unchanged. |
 | solver_ns.py | solver_transport, time_integration | Velocity/pressure field output shape, dtype, and semantics unchanged. |
 | solver_transport.py | time_integration, monitor | Concentration field output shape, dtype, and semantics unchanged. |
 | particles.py | solver_transport | Settling velocity, diffusion coefficient interface unchanged. Return types and units unchanged. |
@@ -294,6 +296,69 @@ cell_center_coordinates(mesh) -> (X, Y) 2D coordinate arrays
 to_cell_centers(u, v) -> (u_c, v_c) each [ny, nx], plain two-face average
 ```
 
+### boundary_registry.py --> boundary, boundary_staggered
+
+Configuration interpretation shared by both boundary layers (REQ-S12.1).
+Reads the config only; no mesh and no field.
+
+```
+EDGES = ("bottom", "top", "left", "right")
+EdgeCondition: bc_type, u_prescribed, v_prescribed   # frozen
+covers(spec, edge, coordinate) -> bool       # same edge, inclusive range
+condition_of(spec, edge) -> EdgeCondition    # magnitude decomposed inward, or explicit u/v
+BoundaryRegistry:
+    __init__(config: SimConfig)
+    boundaries -> dict[str, BoundarySpec]
+    spec(name) -> BoundarySpec               # KeyError if absent
+    condition_at(edge, coordinate) -> EdgeCondition
+        first covering segment in configuration order; no-slip wall when none
+```
+
+### boundary.py --> solver_ns, solver_transport
+
+Collocated ghost-cell layer, built on the registry. Interface and output
+unchanged by ECR-001 step 3; retired with the collocated solver at step 6.
+
+```
+BoundaryManager:
+    __init__(mesh: Mesh, config: SimConfig)
+    apply_velocity_bc(u, v) -> None          # ghost values in BOUNDARY cells, [ny, nx]
+    apply_pressure_bc(p) -> None
+    apply_concentration_bc(c, size_class) -> None   # Phase 3
+    get_inlet_flux(name) -> float
+    get_total_inlet_flux() -> float
+    has_pressure_outlet() -> bool
+    get_max_boundary_velocity() -> float
+```
+
+### boundary_staggered.py --> solver_ns (from ECR-001 step 4)
+
+Direct imposition on the staggered layout (REQ-S12). Two deliverables kept
+apart: an imposer for the normal components, which are storage locations on
+the domain faces, and data for the tangential and pressure conditions, which
+have no storage location on the wall. Nothing is written outside the domain
+and nothing is written to p.
+
+```
+StaggeredBoundary:
+    __init__(mesh: Mesh, config: SimConfig)
+    apply_normal_velocity(u, v) -> None
+        writes u[:, 0], u[:, nx], v[0, :], v[ny, :] where the condition is
+        Dirichlet (wall 0, inlet prescribed), exactly; outlet faces and every
+        other entry untouched; ValueError on non-staggered shapes
+    tangential_conditions() -> dict[edge, TangentialCondition]
+        component ("u" on bottom/top, "v" on left/right), is_dirichlet [n+1],
+        value [n+1], wall_distance = dy_face[0], dy_face[ny], dx_face[0] or
+        dx_face[nx]; arrays read-only
+    pressure_outlets() -> dict[edge, PressureOutletCondition]
+        is_outlet [n], pressure (gauge datum, 0.0); arrays read-only
+    has_pressure_outlet() -> bool
+    get_inlet_flux(name) -> float            # sum of inward normal velocity times face width
+    get_total_inlet_flux() -> float
+    get_max_boundary_velocity() -> float
+    A SOLID cell on an edge is a wall on every query.
+```
+
 ### particles.py --> solver_transport
 
 ```
@@ -421,5 +486,6 @@ Full ADRs are in the development plan document. Summary reference:
 | 2026-04-16 | ECR-001 approved: solver architecture rebuild. REQ-S07 and REQ-S09 replaced for staggered grid and QUICK advection. REQ-S11 and REQ-S12 added for non-uniform mesh and direct BC imposition. ADR-003 amended, ADR-008 superseded, ADR-010 added. | Alex Moroz-Smietana |
 | 2026-09-19 | Section 3.1 dependency graph replaced by a generated dependency matrix; 3.4 components, 3.5 runtime edges and 3.6 source fingerprint added as generated regions (scripts/gen_system_map.py). Section 2 untouched. | Alex Moroz-Smietana |
 | 2026-09-20 | ECR-001 steps 1 and 2: mesh contract extended with per-cell widths, center-to-center face distances and per-axis stretching (REQ-S11); staggered.py added with the MAC layout and face-to-center averaging (REQ-S07); SimConfig gains stretch_x and stretch_y from an optional mesh section. Solver logic unchanged. | Alex Moroz-Smietana |
+| 2026-09-21 | ECR-001 step 3: boundary_registry.py extracted from boundary.py as the configuration interpretation both boundary layers share (REQ-S12.1, derived from REQ-S12); boundary_staggered.py added with exact normal-component imposition and the tangential and pressure conditions exposed as data (REQ-S12). Collocated interface and output unchanged. Cascade rules and contracts added for the three boundary modules. | Alex Moroz-Smietana |
 | 2026-09-19 | REQ-S02 rationale corrected: the measured VAL-001 error on 80x40 is 2.04%, identical on CI and locally, which is why the criterion is 2.5% rather than 2%. The 1.54% previously recorded in PROJECT_PLAN.md was not reproducible at the commit that claimed it. Requirement value unchanged; the ECR-001 tightening to < 1% after the rebuild is unaffected. | Alex Moroz-Smietana |
 | 2026-09-19 | solve_steady gains an optional on_iteration callback plus last_pressure_sweeps and stage_seconds attributes for the benchmark harness (scripts/benchmark.py). Observability only; solver logic unchanged. | Alex Moroz-Smietana |
