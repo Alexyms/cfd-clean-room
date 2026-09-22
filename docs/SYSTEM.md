@@ -2,7 +2,7 @@
 
 **Project:** CFD Clean Room Simulation
 **Status:** Phase 2 in progress. Navier-Stokes solver under development.
-**Last Updated:** 2026-09-21
+**Last Updated:** 2026-09-22
 
 This document is the single reference for system architecture, requirements, module interfaces, and dependency relationships. Code review, whether the GitHub Action's one run per pull request or a Claude Code context in VS Code, checks pull requests against this document under the policy in `docs/REVIEW_POLICY.md`. Keep it current.
 
@@ -101,25 +101,27 @@ Generated from the import statements in `src/` by `scripts/gen_system_map.py`. R
 
 <!-- BEGIN GENERATED: dsm -->
 ```
-                     boundary  boundary_registry  boundary_staggered  config  constants  mesh  particles  solver_ns  staggered
-boundary                .              X                  .             X         .       X        .          .          .
-boundary_registry       .              .                  .             X         .       .        .          .          .
-boundary_staggered      .              X                  .             X         .       X        .          .          X
-config                  .              .                  .             .         .       .        .          .          .
-constants               .              .                  .             .         .       .        .          .          .
-mesh                    .              .                  .             X         .       .        .          .          .
-particles               .              .                  .             X         X       .        .          .          .
-solver_ns               X              .                  .             X         .       X        .          .          .
-staggered               .              .                  .             .         .       X        .          .          .
+                     boundary  boundary_registry  boundary_staggered  config  constants  mesh  momentum  particles  solver_ns  staggered
+boundary                .              X                  .             X         .       X       .          .          .          .
+boundary_registry       .              .                  .             X         .       .       .          .          .          .
+boundary_staggered      .              X                  .             X         .       X       .          .          .          X
+config                  .              .                  .             .         .       .       .          .          .          .
+constants               .              .                  .             .         .       .       .          .          .          .
+mesh                    .              .                  .             X         .       .       .          .          .          .
+momentum                .              .                  X             X         .       X       .          .          .          X
+particles               .              .                  .             X         X       .       .          .          .          .
+solver_ns               X              .                  .             X         .       X       .          .          .          .
+staggered               .              .                  .             .         .       X       .          .          .          .
 ```
 
-Rows import columns. Edges, 15 total:
+Rows import columns. Edges, 19 total:
 
 ```
 boundary           -> boundary_registry, config, mesh
 boundary_registry  -> config
 boundary_staggered -> boundary_registry, config, mesh, staggered
 mesh               -> config
+momentum           -> boundary_staggered, config, mesh, staggered
 particles          -> config, constants
 solver_ns          -> boundary, config, mesh
 staggered          -> mesh
@@ -142,6 +144,7 @@ When a PR modifies a module, the reviewer verifies impact on downstream modules.
 | boundary.py | solver_ns, solver_transport | Collocated BC application interface unchanged. New BC types handled in solvers if needed. Retired with the collocated solver at ECR-001 step 6. |
 | boundary_registry.py | boundary, boundary_staggered | Coverage rule (same edge, inclusive range, first match in configuration order, wall by default) and the prescribed-velocity decomposition unchanged. Both layers read them, so a change here moves both. |
 | boundary_staggered.py | solver_ns (from ECR-001 step 4) | Normal imposition writes domain faces only. Tangential data shape [n+1], outlet data shape [n], wall_distance semantics and the inward flux sign unchanged. |
+| momentum.py | solver_ns (from ECR-001 step 5) | MomentumPrediction shapes and the meaning of a_p_u and a_p_v (un-relaxed diagonal, positive exactly at the unknown faces) unchanged; boundary entries of u and v read as given and never written. |
 | solver_ns.py | solver_transport, time_integration | Velocity/pressure field output shape, dtype, and semantics unchanged. |
 | solver_transport.py | time_integration, monitor | Concentration field output shape, dtype, and semantics unchanged. |
 | particles.py | solver_transport | Settling velocity, diffusion coefficient interface unchanged. Return types and units unchanged. |
@@ -173,11 +176,12 @@ Generated. The responsibility and serves columns are editorial and come from `do
 | `src/config.py` | 663 | Loads the YAML configuration into typed dataclasses and rejects missing keys, wrong types and out-of-range values at load time. | A02, A03, C01, C02, S10 |
 | `src/constants.py` | 8 | Holds the physical constants shared by every module so that none of them defines its own copy. | C04 |
 | `src/mesh.py` | 411 | Builds the structured grid, uniform or geometrically clustered at the walls, with the face, center, width and center-to-center arrays a face-based stencil needs, and classifies each cell as FLUID, SOLID or BOUNDARY. | S11 |
+| `src/momentum.py` | 522 | Predicts u* and v* on the staggered grid with QUICK advection by deferred correction over an upwind implicit matrix, one under-relaxed Jacobi sweep per call, and returns the diagonal coefficients the pressure correction needs. | S07, S09 |
 | `src/particles.py` | 255 | Computes per-size-class transport properties: Cunningham correction, settling velocity, Brownian diffusion, deposition velocity and HEPA efficiency. | T03, T04, T09, T10 |
 | `src/solver_ns.py` | 891 | Solves steady incompressible flow with the SIMPLE algorithm on a collocated grid using Rhie-Chow face fluxes, hybrid advection and Jacobi pressure correction. | S01, S02, S03, S05, S08 |
 | `src/staggered.py` | 152 | Defines the staggered (MAC) field layout: shapes and allocation of face-centered u and v and cell-centered p, and the face-to-center averaging the solver applies before returning. | S07 |
 
-Total 10 Python files, 3378 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
+Total 11 Python files, 3900 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
 
 `Declares it serves` is an EDITORIAL CLAIM read from `docs/system_map_annotations.toml`. It says which requirements a module is meant to satisfy, not that it does. Whether a requirement is met is answered by the tests named in the register's `Verified By` column.
 <!-- END GENERATED: components -->
@@ -201,8 +205,8 @@ Generated. Static import analysis cannot see a function bound into a registry by
 | Property | Value |
 |---|---|
 | Scope | `src/**/*.py` |
-| Files hashed | 10 |
-| Digest | `sha256:8cbf9e1ae330cfaff54047dd7fedd2a8c4716411edb5545164c18530a848793f` |
+| Files hashed | 11 |
+| Digest | `sha256:c09a166787af67d51528fe890d72d9cff4f65166ef8d8cfa5bb5e44cd953c95e` |
 
 This is what lets the document answer whether it is current, which is the one question a stale table cannot be asked. `python scripts/gen_system_map.py --check` recomputes the whole set of generated regions, this digest included, and exits non-zero on any disagreement.
 
@@ -359,6 +363,35 @@ StaggeredBoundary:
     A SOLID cell on an edge is a wall on every query.
 ```
 
+### momentum.py --> solver_ns (from ECR-001 step 5)
+
+Momentum predictor on the staggered layout (REQ-S07, REQ-S09): first-order
+upwind implicit matrix with the QUICK minus upwind advective flux carried as
+an explicit deferred-correction source, one under-relaxed Jacobi sweep per
+call with the collocated convention (diagonal divided by alpha_velocity,
+``(1 - alpha) / alpha * a_P * phi`` added to the source).
+
+```
+quick_face_values(phi, nodes, left, faces, positive) -> face values
+    quadratic through C, D and the next node upstream, Lagrange weights
+    from the node positions; Leonard boundary form at the ends
+MomentumPredictor:
+    __init__(mesh: Mesh, config: SimConfig, boundary: StaggeredBoundary)
+    momentum_coefficients(u, v) -> (MomentumCoefficients, MomentumCoefficients)
+        a_p, a_s_plus, a_s_minus, a_t_plus, a_t_minus, b_boundary, b_deferred,
+        each in the component's own shape; s is the component's axis
+    predict(u, v, p) -> MomentumPrediction
+        u_star [ny, nx+1], v_star [ny+1, nx]: boundary columns and rows are
+            the input values, faces of SOLID cells are zero
+        a_p_u [ny, nx+1], a_p_v [ny+1, nx]: un-relaxed diagonal, positive
+            exactly at the unknown faces and zero elsewhere, so a_p > 0 is
+            the mask of correctable faces and d = A_face / a_p is defined
+            precisely there (the step 5 contract)
+    Reads tangential_conditions for the wall values and wall distances;
+    boundary entries of u and v (Dirichlet from StaggeredBoundary, outlet
+    extrapolation by the caller) are read as given and never written.
+```
+
 ### particles.py --> solver_transport
 
 ```
@@ -487,5 +520,6 @@ Full ADRs are in the development plan document. Summary reference:
 | 2026-09-19 | Section 3.1 dependency graph replaced by a generated dependency matrix; 3.4 components, 3.5 runtime edges and 3.6 source fingerprint added as generated regions (scripts/gen_system_map.py). Section 2 untouched. | Alex Moroz-Smietana |
 | 2026-09-20 | ECR-001 steps 1 and 2: mesh contract extended with per-cell widths, center-to-center face distances and per-axis stretching (REQ-S11); staggered.py added with the MAC layout and face-to-center averaging (REQ-S07); SimConfig gains stretch_x and stretch_y from an optional mesh section. Solver logic unchanged. | Alex Moroz-Smietana |
 | 2026-09-21 | ECR-001 step 3: boundary_registry.py extracted from boundary.py as the configuration interpretation both boundary layers share (REQ-S12.1, derived from REQ-S12); boundary_staggered.py added with exact normal-component imposition and the tangential and pressure conditions exposed as data (REQ-S12). Collocated interface and output unchanged. Cascade rules and contracts added for the three boundary modules. | Alex Moroz-Smietana |
+| 2026-09-22 | ECR-001 step 4: momentum.py added, the staggered momentum predictor with QUICK advection by deferred correction over an upwind implicit matrix (REQ-S07, REQ-S09). Its MomentumPrediction return is the coefficient contract for the step 5 pressure correction. Not integrated into solve_steady; collocated solver and harness rows unchanged. | Alex Moroz-Smietana |
 | 2026-09-19 | REQ-S02 rationale corrected: the measured VAL-001 error on 80x40 is 2.04%, identical on CI and locally, which is why the criterion is 2.5% rather than 2%. The 1.54% previously recorded in PROJECT_PLAN.md was not reproducible at the commit that claimed it. Requirement value unchanged; the ECR-001 tightening to < 1% after the rebuild is unaffected. | Alex Moroz-Smietana |
 | 2026-09-19 | solve_steady gains an optional on_iteration callback plus last_pressure_sweeps and stage_seconds attributes for the benchmark harness (scripts/benchmark.py). Observability only; solver logic unchanged. | Alex Moroz-Smietana |
