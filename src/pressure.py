@@ -49,7 +49,7 @@ import numpy as np
 
 from src.boundary_staggered import StaggeredBoundary
 from src.config import SimConfig
-from src.mesh import SOLID, Mesh
+from src.mesh import FLUID, SOLID, Mesh
 from src.momentum import MomentumPrediction
 from src.staggered import p_shape, u_shape, v_shape
 
@@ -120,8 +120,9 @@ class PressureCorrector:
     needs_pin : bool
         True when no edge face is a pressure outlet, so p' is pinned.
     pin_cell : tuple[int, int]
-        (j, i) of the reference cell, the first FLUID cell; meaningful
-        only when ``needs_pin``.
+        (j, i) of the reference cell, the first cell typed FLUID, selected
+        as the collocated solver selects its own; meaningful only when
+        ``needs_pin``.
     """
 
     def __init__(
@@ -135,6 +136,7 @@ class PressureCorrector:
         self._u_shape = u_shape(mesh)
         self._v_shape = v_shape(mesh)
         self._p_shape = p_shape(mesh)
+        self._fluid = mesh.cell_type == FLUID
         self._solid = mesh.cell_type == SOLID
 
         outlets = boundary.pressure_outlets()
@@ -145,7 +147,7 @@ class PressureCorrector:
         self.needs_pin: bool = not boundary.has_pressure_outlet()
         self.pin_cell: tuple[int, int] = (0, 0)
         if self.needs_pin:
-            fluid_idx = np.argwhere(mesh.cell_type != SOLID)
+            fluid_idx = np.argwhere(self._fluid)
             if fluid_idx.size > 0:
                 self.pin_cell = (int(fluid_idx[0, 0]), int(fluid_idx[0, 1]))
 
