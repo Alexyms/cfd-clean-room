@@ -17,7 +17,7 @@ project has already lost five months to exactly that.
 Phases 0 and 1 are complete. Phase 2 is in progress: the Navier-Stokes solver exists and
 runs, VAL-001 passes against its current criterion, VAL-002 is marked xfail against a
 documented defect, and the approved engineering change request to rebuild the solver is
-three steps into its eight-step plan. Phases 3 through 7 have not begun.
+four steps into its eight-step plan. Phases 3 through 7 have not begun.
 
 `docs/PROJECT_PLAN.md` holds the phase detail, deliverables and validation gates.
 
@@ -35,6 +35,11 @@ two layers over one shared interpretation of the configuration (`src/boundary_re
 REQ-S12.1): the collocated layer is unchanged in interface and output, and the staggered
 layer writes the normal components exactly and hands the tangential and pressure
 conditions to steps 4 and 5 as data rather than as a mirrored value outside the domain.
+Step 4 added the momentum predictor (`src/momentum.py`): QUICK advection carried as a
+deferred-correction source over a first-order upwind implicit matrix, so the Jacobi
+sweep keeps its diagonal dominance while the converged answer is the QUICK one. It
+consumes step 3's tangential data without modification and returns the un-relaxed
+momentum diagonals as the contract step 5 builds the pressure correction on.
 The solver itself is untouched so far and the harness rows reproduce at every step.
 ADR-010 is deliberately deferred to the end so it records what was built rather than what
 was planned.
@@ -124,8 +129,8 @@ measurement showed; it should not restate the measurement.
 ## Next
 
 Clear the outstanding branch stack bottom up through review. The rebuild continues at step
-4, the momentum predictor with QUICK advection, which consumes the tangential wall data and
-the wall distances step 3 exposes.
+5, the pressure correction on the staggered grid, which consumes the momentum diagonals
+step 4 returns and the pressure outlet data step 3 exposes.
 
 ## Open questions
 
