@@ -81,3 +81,59 @@ asked for. The observation for the amendment discussion: weighted Jacobi,
 and leaves the update data-parallel per cell, which is the architectural content of
 REQ-S08. The eigenvalue argument, not the sweep count, is the reason an amendment is
 needed before step 6 can pass VAL-002.
+
+## 5. Addendum, 2026-09-22: weighted Jacobi
+
+REQ-S08 was clarified after this report, not amended (`docs/SYSTEM.md`, REQ-S08
+rationale). The sweep is now `p_new = (1 - w) p + w J`, with J the plain Jacobi update and
+w = `JACOBI_WEIGHT` = 2/3 in `src/pressure.py`. Same instrument as section 2, with the
+uncapped bound raised to 1,000,000. With the weight set to 1 the new sweep reproduces the
+section 2 fields bit for bit, so the weight is the only change.
+
+**The eigenvalues, one sweep.** A pure checkerboard `s` fed to the sweep with b = 0 on a
+closed 8x6 cavity (uniform, stretched, and with a SOLID block). The plain sweep returns
+exactly `-s` in every cell. The weighted sweep returns exactly `(1 - 2w) s` in every cell.
+Two thirds has no binary form, and the stored weight is the double nearest it, so the
+computed eigenvalue 1 - 2w is -0.33333333333333326, one ulp above the double nearest -1/3.
+`tests/test_pressure.py`, `TestJacobiWeight`, asserts both values bit for bit.
+
+**Cost on the seeded cases**, the case file's `pressure_tol` of 1e-8:
+
+| Case | Plain: sweeps to tol | Weighted: sweeps to tol | Seconds | max abs imbalance after |
+|---|---|---|---|---|
+| cavity 20x20 | never (200,000) | 2,563 | 0.1 | 3.66e-09 |
+| cavity 40x40 | never (200,000) | 10,044 | 0.6 | 9.32e-10 |
+| cavity 80x80 | never (200,000) | 38,428 | 4.8 | 2.34e-10 |
+| Poiseuille 80x40 | 126,277 | 183,134 | 17.3 | 2.34e-10 |
+
+The closed cavity converges. Its sweep count roughly quadruples each time h halves: the
+N-squared cost of Jacobi, now visible on the closed domain as it already was on the open
+one. With the case files' own caps (500 for the cavity, 2,000 for the channel) neither
+solve reaches its tolerance from rest.
+
+On the channel the count rose by a factor of 1.450, as the weighting predicts. An
+eigenvalue lam near +1 becomes 1 - w (1 - lam), so the slowest mode needs 1/w = 1.5 times
+the sweeps. The factor sits slightly below 1.5, consistent with the stopping test
+measuring the weighted change, which is w times the plain increment: the residual left
+at the stop is 2.34e-10 against the plain 1.56e-10, larger by the same 1.5.
+
+**The weight is not free on the smooth modes.** Any w in (0, 1) removes the -1, and the
+rate of the slow modes scales with w:
+
+| w | cavity 80x80 | Poiseuille 80x40 |
+|---|---|---|
+| 2/3 | 38,428 | 183,134 |
+| 0.9 | 29,311 | 139,099 |
+| 0.95 | 27,913 | 132,366 |
+
+Two thirds is the textbook weight for Jacobi as a smoother: it damps every mode with
+lam <= 0 by at least a factor of three. Used as the whole solver, as here, the slowest mode
+sets the cost, and a weight near one needs about a quarter fewer sweeps on both cases. The
+weight stays a constant at 2/3. Whether this makes it a tuning parameter is for step 6 to
+show.
+
+**Per-sweep time** rose by about 40% (65.7 to 94.5 microseconds on the channel). At
+80x80, about 9 microseconds of the increase is the blend itself, three extra array
+operations. About 15 microseconds is the mask, divisor, padding and validation the sweep
+now builds on each call. `correct` could hoist that setup if step 6 finds it matters.
+Sweeps, not seconds, are the harness's work measure.

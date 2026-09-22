@@ -52,11 +52,13 @@ same branch as the grid layout would make any improvement unattributable, and th
 comparison is the purpose of the rebuild; the cost was measured instead. The measurement
 showed more than cost: on a closed domain undamped Jacobi has an exact eigenvalue of -1 on
 the checkerboard mode, so it does not converge at all, and the two-cell case overshoots or
-does nothing depending on the parity of the sweep cap. Any amendment to REQ-S08 should
-keep its architectural content, the data-parallel per-cell update, rather than weaken it
-to a residual-reduction target; a weighting factor on the Jacobi update does that and
-moves the -1 to -1/3. The decision is step 6's, on the evidence in
-`docs/reports/pressure_correction_step5.md`.
+does nothing depending on the parity of the sweep cap. REQ-S08 has since been clarified
+rather than amended, in a separate change so the weighting is attributable by itself:
+the Jacobi update is weighted by two thirds, which keeps the requirement's architectural
+content, the data-parallel per-cell update, and moves the -1 to -1/3. The closed-cavity
+correction now converges. The weight is a constant in `src/pressure.py`, not a
+configuration key. What it costs on the slow modes is measured in
+`docs/reports/pressure_correction_step5.md`, section 5.
 The solver itself is untouched so far and the harness rows reproduce at every step.
 ADR-010 is deliberately deferred to the end so it records what was built rather than what
 was planned.
@@ -146,8 +148,10 @@ measurement showed; it should not restate the measurement.
 ## Next
 
 Clear the outstanding branch stack bottom up through review. The rebuild continues at step
-6, integration into `solve_steady`, which first needs a decision on REQ-S08: undamped
-Jacobi cannot converge the closed-domain pressure correction (see above).
+6, integration into `solve_steady`, on the weighted pressure sweep. Two measurements bear
+on it: the case files' pressure sweep caps are below what one correction from rest needs,
+and the slow modes' sweep count scales as 1/w, so the weight may need to become a tuning
+parameter (`docs/reports/pressure_correction_step5.md`, section 5).
 
 ## Open questions
 
@@ -156,11 +160,11 @@ Not pursued further on the current solver, because the staggered rebuild makes t
 consistent and changes that regime in kind. The harness records the outer count on every run,
 so the rebuild will surface it without a dedicated probe.
 
-How REQ-S08 should be amended. The rebuild exposed the N-squared cost of Jacobi (126,277
-sweeps for one Poiseuille correction at the case file's tolerance) and, worse, that
-undamped Jacobi has an exact -1 eigenvalue on the closed-domain system and never
-converges there. The amendment should preserve the data-parallel per-cell update rather
-than retreat to a residual-reduction target; see `docs/reports/pressure_correction_step5.md`.
+Closed 2026-09-22: how REQ-S08 should be amended. It was clarified, not amended. Weighted
+Jacobi with w = 2/3 keeps the data-parallel per-cell update and maps the closed-domain
+system's exact -1 eigenvalue to -1/3, and the closed cavity now converges. The rationale
+is recorded in the requirement in `docs/SYSTEM.md`; the evidence is in
+`docs/reports/pressure_correction_step5.md`, sections 3 and 5.
 
 Whether VAL-002 can return to the full grid in CI once the rebuild lands.
 
