@@ -19,6 +19,10 @@ serves = []
 responsibility = "Interprets the configured boundary segments once, answering which condition and prescribed velocity hold at a point on a domain edge, for both the collocated and the staggered layer."
 serves = ["REQ-S12.1"]
 
+[modules."src/boundary_staggered.py"]
+responsibility = "Writes Dirichlet normal velocities exactly into the staggered domain-face entries and exposes the tangential wall values, wall distances and pressure outlets as data for the momentum and pressure steps."
+serves = ["REQ-S12"]
+
 [modules."src/config.py"]
 responsibility = "Loads the YAML configuration into typed dataclasses and rejects missing keys, wrong types and out-of-range values at load time."
 serves = ["REQ-C01", "REQ-C02", "REQ-S10", "REQ-A02", "REQ-A03"]
