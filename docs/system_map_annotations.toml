@@ -43,6 +43,10 @@ serves = ["REQ-T03", "REQ-T04", "REQ-T09", "REQ-T10"]
 responsibility = "Defines the staggered (MAC) field layout: shapes and allocation of face-centered u and v and cell-centered p, and the face-to-center averaging the solver applies before returning."
 serves = ["REQ-S07"]
 
+[modules."src/pressure.py"]
+responsibility = "Assembles the staggered pressure correction equation from the momentum diagonals with the discrete divergence of u* as its right-hand side, solves it by Jacobi iteration, corrects the face velocities and updates the pressure."
+serves = ["REQ-S04", "REQ-S08"]
+
 [modules."src/momentum.py"]
 responsibility = "Predicts u* and v* on the staggered grid with QUICK advection by deferred correction over an upwind implicit matrix, one under-relaxed Jacobi sweep per call, and returns the diagonal coefficients the pressure correction needs."
 serves = ["REQ-S07", "REQ-S09"]
