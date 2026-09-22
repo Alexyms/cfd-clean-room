@@ -43,6 +43,10 @@ serves = ["REQ-T03", "REQ-T04", "REQ-T09", "REQ-T10"]
 responsibility = "Defines the staggered (MAC) field layout: shapes and allocation of face-centered u and v and cell-centered p, and the face-to-center averaging the solver applies before returning."
 serves = ["REQ-S07"]
 
+[modules."src/momentum.py"]
+responsibility = "Predicts u* and v* on the staggered grid with QUICK advection by deferred correction over an upwind implicit matrix, one under-relaxed Jacobi sweep per call, and returns the diagonal coefficients the pressure correction needs."
+serves = ["REQ-S07", "REQ-S09"]
+
 [modules."src/solver_ns.py"]
 responsibility = "Solves steady incompressible flow with the SIMPLE algorithm on a collocated grid using Rhie-Chow face fluxes, hybrid advection and Jacobi pressure correction."
 serves = ["REQ-S01", "REQ-S02", "REQ-S03", "REQ-S05", "REQ-S08"]
