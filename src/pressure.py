@@ -39,7 +39,11 @@ up to a constant. As the collocated solver does, the first FLUID cell is
 the reference and its value is subtracted from p after the update; p' is
 anchored there too so the returned correction has a definite level.
 
-Jacobi is kept as REQ-S08 requires. Its cost is now real because the
+The solve is weighted Jacobi, REQ-S08 as clarified on 2026-09-22: each
+sweep is the plain Jacobi update blended with the previous iterate by
+JACOBI_WEIGHT, the same under-relaxation alpha_velocity and alpha_pressure
+apply to the outer loop, here applied to the inner sweep. Every cell still
+reads only previous-sweep neighbours. Its cost is now real because the
 system is solvable; the sweep count is returned so it can be measured.
 """
 
@@ -52,6 +56,20 @@ from src.config import SimConfig
 from src.mesh import FLUID, SOLID, Mesh
 from src.momentum import MomentumPrediction
 from src.staggered import p_shape, u_shape, v_shape
+
+# Weight w of the Jacobi update, p_new = (1 - w) p_old + w * (Jacobi update).
+# On a closed domain every row has a_P equal to its neighbour sum and the grid
+# is bipartite, so the checkerboard (-1)^(i+j) is an exact eigenvector of the
+# plain update with eigenvalue -1: that error flips sign every sweep and never
+# decays (docs/reports/pressure_correction_step5.md). Weighting maps each
+# eigenvalue lam to 1 - w (1 - lam), which sends -1 to 1 - 2w = -1/3 and leaves
+# +1, the constant the pin removes, where it is. Two thirds is the textbook
+# weight that damps every mode with lam <= 0 by at least a factor of three.
+# It is fixed by that argument, not tuned per case, so it is a constant rather
+# than a configuration key. The slow modes near +1 converge at a rate
+# proportional to w, so the weight does cost sweeps there (step 5 report,
+# section 5); promote it to config if step 6 shows it needs tuning.
+JACOBI_WEIGHT: float = 2.0 / 3.0
 
 
 @dataclass(frozen=True)
@@ -93,7 +111,7 @@ class PressureCorrection:
     p_prime : np.ndarray
         The pressure correction, shape [ny, nx], zero at SOLID cells.
     sweeps : int
-        Jacobi sweeps performed; the harness records it.
+        Weighted Jacobi sweeps performed; the harness records it.
     """
 
     u: np.ndarray
@@ -271,6 +289,77 @@ class PressureCorrector:
     # Solve and correct
     # ------------------------------------------------------------------
 
+    def sweep(
+        self,
+        p_prime: np.ndarray,
+        coefficients: PressureCoefficients,
+        b: np.ndarray,
+        weight: float,
+    ) -> np.ndarray:
+        """One weighted Jacobi sweep of the p' equation.
+
+        Parameters
+        ----------
+        p_prime : np.ndarray
+            Current iterate, shape [ny, nx]; not modified.
+        coefficients : PressureCoefficients
+            The p' equation, from ``coefficients``.
+        b : np.ndarray
+            Right-hand side, shape [ny, nx], from ``mass_imbalance``.
+        weight : float
+            Weight w in (0, 1]. ``correct`` passes JACOBI_WEIGHT; 1 is
+            plain Jacobi.
+
+        Returns
+        -------
+        np.ndarray
+            ``(1 - w) p' + w (sum(a_nb p'_nb) - b) / a_P`` at every cell
+            with an equation (a_P > 0) and zero elsewhere, shape [ny, nx].
+
+        Raises
+        ------
+        ValueError
+            If a shape does not match the mesh, or the weight is not a
+            number in (0, 1].
+
+        Notes
+        -----
+        Every cell reads only the previous iterate, so the update is
+        data-parallel per cell as REQ-S08 requires; the scalar weight does
+        not change that. It is the same blend of new and old value as
+        alpha_velocity and alpha_pressure, applied to the inner sweep rather
+        than the outer loop. JACOBI_WEIGHT records why the plain update is
+        not enough on a closed domain.
+        """
+        c = coefficients
+        shapes = [a.shape for a in (p_prime, b, c.a_p, c.a_e, c.a_w, c.a_n, c.a_s)]
+        if any(shape != self._p_shape for shape in shapes):
+            raise ValueError(
+                f"expected p_prime, b and every coefficient of shape "
+                f"{self._p_shape}, got {shapes}"
+            )
+        if (
+            isinstance(weight, bool)
+            or not isinstance(weight, int | float)
+            or not 0.0 < weight <= 1.0
+        ):
+            raise ValueError(f"weight must be a number in (0, 1], got {weight!r}")
+        active = c.a_p > 0.0
+        padded = np.zeros(
+            (self._p_shape[0] + 2, self._p_shape[1] + 2), dtype=np.float64
+        )
+        padded[1:-1, 1:-1] = p_prime
+        jacobi = (
+            c.a_e * padded[1:-1, 2:]
+            + c.a_w * padded[1:-1, :-2]
+            + c.a_n * padded[2:, 1:-1]
+            + c.a_s * padded[:-2, 1:-1]
+            - b
+        ) / np.where(active, c.a_p, 1.0)
+        p_new = (1.0 - weight) * p_prime + weight * jacobi
+        p_new[~active] = 0.0
+        return p_new
+
     def correct(
         self, prediction: MomentumPrediction, p: np.ndarray
     ) -> PressureCorrection:
@@ -290,11 +379,13 @@ class PressureCorrector:
 
         Notes
         -----
-        Jacobi stops when the largest change of p' over the cells with an
-        equation falls below pressure_tol or after max_pressure_iter
-        sweeps. In a closed domain the reference cell's value is subtracted
-        after the solve, and from p after the update, matching the
-        collocated solver's pin at the end of each outer iteration.
+        The solve is ``sweep`` with JACOBI_WEIGHT from p' = 0. It stops
+        when the largest change of p' in one sweep, over the cells with an
+        equation, falls below pressure_tol or after max_pressure_iter
+        sweeps. That change is the weighted one, w times the plain Jacobi
+        increment. In a closed domain the reference cell's value is
+        subtracted after the solve, and from p after the update, matching
+        the collocated solver's pin at the end of each outer iteration.
         """
         u_star, v_star = prediction.u_star, prediction.v_star
         self._check_shapes(u_star, v_star)
@@ -304,24 +395,12 @@ class PressureCorrector:
         c = self.coefficients(prediction.a_p_u, prediction.a_p_v)
         b = self.mass_imbalance(u_star, v_star)
         active = c.a_p > 0.0
-        a_p_safe = np.where(active, c.a_p, 1.0)
         pin_j, pin_i = self.pin_cell
 
         p_prime = np.zeros(self._p_shape, dtype=np.float64)
-        padded = np.zeros(
-            (self._p_shape[0] + 2, self._p_shape[1] + 2), dtype=np.float64
-        )
         sweeps = 0
         for _ in range(self._max_iter):
-            padded[1:-1, 1:-1] = p_prime
-            p_new = (
-                c.a_e * padded[1:-1, 2:]
-                + c.a_w * padded[1:-1, :-2]
-                + c.a_n * padded[2:, 1:-1]
-                + c.a_s * padded[:-2, 1:-1]
-                - b
-            ) / a_p_safe
-            p_new[~active] = 0.0
+            p_new = self.sweep(p_prime, c, b, JACOBI_WEIGHT)
             diff = (
                 float(np.max(np.abs(p_new[active] - p_prime[active])))
                 if active.any()
@@ -335,6 +414,9 @@ class PressureCorrector:
             p_prime[active] -= p_prime[pin_j, pin_i]
 
         d_u, d_v = self._face_d(prediction.a_p_u, prediction.a_p_v)
+        padded = np.zeros(
+            (self._p_shape[0] + 2, self._p_shape[1] + 2), dtype=np.float64
+        )
         padded[1:-1, 1:-1] = p_prime
         u = u_star - d_u * (padded[1:-1, 1:] - padded[1:-1, :-1])
         v = v_star - d_v * (padded[1:, 1:-1] - padded[:-1, 1:-1])

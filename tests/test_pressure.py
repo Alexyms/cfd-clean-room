@@ -7,18 +7,24 @@ absolute face flux of the field, the quantity the telescoping sum cancels,
 not a tolerance chosen to pass. The collocated solver measured 2.90e-2,
 9.23e-3 and 2.35e-3 on the same three grids (docs/reports/pressure_solver_probe.md,
 table E).
+
+The second is why the Jacobi update is weighted: on the closed system the
+checkerboard is an exact eigenvector, with eigenvalue exactly -1 for the
+plain update and exactly 1 - 2w for the weighted one.
 """
 
 import numpy as np
 import pytest
+import yaml
 
+import src.pressure as pressure
 from src.boundary_staggered import StaggeredBoundary
 from src.config import SimConfig
 from src.mesh import FLUID, SOLID, Mesh
 from src.momentum import MomentumPrediction, MomentumPredictor
-from src.pressure import PressureCorrector
+from src.pressure import JACOBI_WEIGHT, PressureCoefficients, PressureCorrector
 from src.staggered import allocate_fields
-from validation.cases import load_case
+from validation.cases import case_path, load_case
 
 EPS = np.finfo(np.float64).eps
 STRETCHED = {"x": {"stretch_ratio": 1.15}, "y": {"stretch_ratio": 1.25}}
@@ -52,6 +58,13 @@ CHANNEL = {
     },
 }
 CAVITY = {"lid": _inlet("top", 1.0, 0.0)}
+BLOCK = {
+    "name": "block",
+    "x_start": 0.7,
+    "x_end": 1.3,
+    "y_start": 0.3,
+    "y_end": 0.7,
+}
 
 
 def _config(
@@ -125,6 +138,14 @@ def _predicted(
     return mesh, bc, pc, pred, p
 
 
+def _case_with_cap(name: str, n: int, max_pressure_iter: int) -> SimConfig:
+    """A committed case on an n x n grid with only the sweep cap raised."""
+    raw = yaml.safe_load(case_path(name).read_text(encoding="utf-8"))
+    raw["domain"]["nx"] = raw["domain"]["ny"] = n
+    raw["solver"]["max_pressure_iter"] = max_pressure_iter
+    return SimConfig.from_dict(raw)
+
+
 def _absolute_face_flux(mesh: Mesh, rho: float, u: np.ndarray, v: np.ndarray) -> float:
     """Sum of |rho u A| over every face: the scale the telescoping sum cancels."""
     return float(
@@ -194,14 +215,7 @@ class TestMassImbalance:
 
     def test_solid_cells_carry_no_imbalance(self) -> None:
         """SOLID cells are outside the solve and report zero imbalance."""
-        block = {
-            "name": "block",
-            "x_start": 0.7,
-            "x_end": 1.3,
-            "y_start": 0.3,
-            "y_end": 0.7,
-        }
-        mesh, _bc, pc, pred, _p = _predicted(_config(CAVITY, obstacles=[block]))
+        mesh, _bc, pc, pred, _p = _predicted(_config(CAVITY, obstacles=[BLOCK]))
         b = pc.mass_imbalance(pred.u_star, pred.v_star)
         assert np.all(b[mesh.cell_type == SOLID] == 0.0)
 
@@ -238,14 +252,7 @@ class TestCoefficients:
 
     def test_walls_inlets_and_solid_faces_contribute_nothing(self) -> None:
         """No coefficient across a fixed face: the Neumann condition by absence."""
-        block = {
-            "name": "block",
-            "x_start": 0.7,
-            "x_end": 1.3,
-            "y_start": 0.3,
-            "y_end": 0.7,
-        }
-        config = _config(CHANNEL, obstacles=[block])
+        config = _config(CHANNEL, obstacles=[BLOCK])
         mesh, _bc, pc, pred, _p = _predicted(config, outlet_right=True)
         c = pc.coefficients(pred.a_p_u, pred.a_p_v)
         assert np.all(c.a_w[:, 0] == 0.0)
@@ -354,7 +361,9 @@ class TestCorrection:
 
     def test_corrected_open_domain_satisfies_continuity(self) -> None:
         """With an outlet the system is nonsingular and every cell closes."""
-        config = _config(CHANNEL)
+        # The weight slows the slowest mode by about 1/w = 1.5, more than the
+        # default cap of 5000 allows for on this grid.
+        config = _config(CHANNEL, max_pressure_iter=20_000)
         _mesh, _bc, pc, pred, p = _predicted(config, outlet_right=True)
         before = pc.mass_imbalance(pred.u_star, pred.v_star)
         assert np.abs(before).max() > 1e-4
@@ -366,7 +375,7 @@ class TestCorrection:
 
     @pytest.mark.parametrize("cap", [999, 1000])
     def test_closed_domain_plain_jacobi_stalls_on_the_checkerboard_mode(
-        self, cap: int
+        self, cap: int, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """What undamped Jacobi leaves behind on the closed system, recorded.
 
@@ -375,10 +384,12 @@ class TestCorrection:
         with eigenvalue -1, so that component of the error never decays
         and flips sign every sweep. The residual after the solve is then
         exactly a checkerboard, r / a_P = +-constant, whichever way the
-        cap falls. REQ-S08 mandates Jacobi as written; this test pins the
-        consequence so the step 6 decision is taken on evidence. See
+        cap falls. This is the evidence JACOBI_WEIGHT answers, so the test
+        switches the weight off to keep it reproducible; the weighted solve
+        on the same field converges (TestJacobiWeight). See
         docs/reports/pressure_correction_step5.md.
         """
+        monkeypatch.setattr(pressure, "JACOBI_WEIGHT", 1.0)
         config = _config(CAVITY, max_pressure_iter=cap)
         _mesh, _bc, pc, pred, p = _predicted(config)
         out = pc.correct(pred, p)
@@ -408,7 +419,9 @@ class TestCorrection:
                 "y_end": 1.0,
             }
         }
-        config = _config(outlet, nx=2, ny=1)
+        # The weighted sweep contracts more slowly here than the plain one, so
+        # the tolerance is tightened until it no longer limits rel=1e-12 below.
+        config = _config(outlet, nx=2, ny=1, pressure_tol=1e-14)
         mesh = Mesh(config)
         bc = StaggeredBoundary(mesh, config)
         pc = PressureCorrector(mesh, config, bc)
@@ -544,3 +557,141 @@ class TestCorrection:
             pc.mass_imbalance(pred.v_star, pred.u_star)
         with pytest.raises(ValueError, match="diagonals"):
             pc.coefficients(pred.a_p_v, pred.a_p_u)
+
+
+# ---------------------------------------------------------------------------
+# The weighted sweep
+# ---------------------------------------------------------------------------
+
+CLOSED_GEOMETRIES: dict[str, dict] = {
+    "uniform": {},
+    "stretched": {"mesh": STRETCHED},
+    "obstacle": {"obstacles": [BLOCK]},
+}
+
+
+@pytest.mark.unit
+class TestJacobiWeight:
+    """Why the Jacobi update is weighted, and that the weight does its job (REQ-S08).
+
+    On a closed domain the checkerboard (-1)^(i+j) is an exact eigenvector
+    of the plain update with eigenvalue -1. The eigenvalues are compared
+    bit for bit, not with a tolerance: they are exact, so any tolerance
+    only widens the set of wrong weights that would pass.
+    """
+
+    def _closed_system(
+        self, geometry: str
+    ) -> tuple[PressureCorrector, PressureCoefficients, np.ndarray]:
+        """Closed-cavity coefficients and the checkerboard over the cells with an equation."""
+        _mesh, _bc, pc, pred, _p = _predicted(
+            _config(CAVITY, **CLOSED_GEOMETRIES[geometry])
+        )
+        c = pc.coefficients(pred.a_p_u, pred.a_p_v)
+        j, i = np.indices(c.a_p.shape)
+        s = np.where(c.a_p > 0.0, (-1.0) ** (j + i), 0.0)
+        return pc, c, s
+
+    @pytest.mark.parametrize("geometry", CLOSED_GEOMETRIES)
+    def test_plain_sweep_has_eigenvalue_exactly_minus_one(self, geometry: str) -> None:
+        """One plain sweep returns exactly -s, in every cell.
+
+        Exact rather than approximate because a_P is the same four-term sum
+        the sweep forms: negating every term is exact in floating point, so
+        the neighbour sum is -a_P s_P to the bit and the quotient is -s_P.
+        """
+        pc, c, s = self._closed_system(geometry)
+        assert np.array_equal(c.a_p, c.a_e + c.a_w + c.a_n + c.a_s)
+        out = pc.sweep(s, c, np.zeros_like(s), weight=1.0)
+        assert np.array_equal(out, -s)
+
+    @pytest.mark.parametrize("geometry", CLOSED_GEOMETRIES)
+    def test_weighted_sweep_has_eigenvalue_minus_one_third(self, geometry: str) -> None:
+        """One weighted sweep multiplies every cell by exactly 1 - 2w, which is -1/3.
+
+        Two thirds has no exact binary form, so the stored weight is the
+        nearest double and the eigenvalue of the iteration as computed is
+        1 - 2 fl(2/3), one ulp above fl(-1/3). The test pins both: every
+        cell's ratio equals 1 - 2w bit for bit, and that value is within
+        one ulp of -1/3. A weight of 0.7 would miss by 6.7e-2.
+        """
+        pc, c, s = self._closed_system(geometry)
+        before = s.copy()
+        out = pc.sweep(s, c, np.zeros_like(s), weight=JACOBI_WEIGHT)
+        assert np.array_equal(s, before), "the sweep must not modify its input"
+        active = c.a_p > 0.0
+        ratio = out[active] / s[active]
+        assert JACOBI_WEIGHT == 2.0 / 3.0
+        assert np.all(ratio == 1.0 - 2.0 * JACOBI_WEIGHT)
+        assert abs(ratio[0] + 1.0 / 3.0) <= np.spacing(1.0 / 3.0)
+        assert np.all(out[~active] == 0.0)
+
+    def test_correct_applies_the_weight(self) -> None:
+        """One sweep of correct from p' = 0 is the weighted sweep, not the plain one.
+
+        On an open domain nothing is pinned, so p' after a single sweep is
+        exactly w times the plain Jacobi update of zero.
+        """
+        config = _config(CHANNEL, max_pressure_iter=1)
+        _mesh, _bc, pc, pred, p = _predicted(config, outlet_right=True)
+        c = pc.coefficients(pred.a_p_u, pred.a_p_v)
+        b = pc.mass_imbalance(pred.u_star, pred.v_star)
+        zero = np.zeros_like(p)
+        plain = pc.sweep(zero, c, b, weight=1.0)
+        out = pc.correct(pred, p)
+        assert out.sweeps == 1
+        assert np.array_equal(out.p_prime, JACOBI_WEIGHT * plain)
+        assert np.abs(plain).max() > 0.0
+
+    def test_corrected_closed_domain_satisfies_continuity(self) -> None:
+        """The closed counterpart of the open-domain test, to the same bound.
+
+        This is the field and configuration on which plain Jacobi stalls at
+        any cap (test_closed_domain_plain_jacobi_stalls_on_the_checkerboard_mode).
+        """
+        config = _config(CAVITY, max_pressure_iter=20_000)
+        _mesh, _bc, pc, pred, p = _predicted(config)
+        before = pc.mass_imbalance(pred.u_star, pred.v_star)
+        assert np.abs(before).max() > 1e-4
+        out = pc.correct(pred, p)
+        after = pc.mass_imbalance(out.u, out.v)
+        c = pc.coefficients(pred.a_p_u, pred.a_p_v)
+        assert out.sweeps < config.max_pressure_iter
+        assert np.abs(after).max() < 1e-9 * c.a_p.max()
+
+    @pytest.mark.parametrize("n", [20, 40])
+    def test_seeded_cavity_converges_at_the_case_tolerance(self, n: int) -> None:
+        """The cavity the step 5 report found stuck at every cap now converges.
+
+        Five predictor sweeps from rest, then one correction at the case
+        file's pressure_tol, as in the report. Only the sweep cap is raised:
+        the case file's own cap is below what the solve needs, a step 6
+        concern. Plain Jacobi left 3.5e-3 and 8.4e-4 of the initial
+        imbalance after 200,000 sweeps; the weighted solve stops on its
+        tolerance and leaves less than 1e-6 of it. Sweep counts are in
+        docs/reports/pressure_correction_step5.md, section 5.
+        """
+        config = _case_with_cap("cavity", n, 50_000)
+        _mesh, _bc, pc, pred, p = _predicted(config)
+        before = np.abs(pc.mass_imbalance(pred.u_star, pred.v_star)).max()
+        out = pc.correct(pred, p)
+        after = np.abs(pc.mass_imbalance(out.u, out.v)).max()
+        assert out.sweeps < config.max_pressure_iter
+        assert after < 1e-6 * before
+
+    def test_sweep_rejects_bad_weights_and_shapes(self) -> None:
+        """The weight must be a number in (0, 1]; every array must match the mesh."""
+        pc, c, s = self._closed_system("uniform")
+        b = np.zeros_like(s)
+        for bad in (0.0, -0.5, 1.5, float("nan"), True, "0.5", None):
+            with pytest.raises(ValueError, match="weight"):
+                pc.sweep(s, c, b, weight=bad)
+        with pytest.raises(ValueError, match="expected p_prime"):
+            pc.sweep(s.T.copy(), c, b, weight=JACOBI_WEIGHT)
+        with pytest.raises(ValueError, match="expected p_prime"):
+            pc.sweep(s, c, b[:-1], weight=JACOBI_WEIGHT)
+        short = PressureCoefficients(
+            a_p=c.a_p, a_e=c.a_e[:, :-1], a_w=c.a_w, a_n=c.a_n, a_s=c.a_s
+        )
+        with pytest.raises(ValueError, match="expected p_prime"):
+            pc.sweep(s, short, b, weight=JACOBI_WEIGHT)
