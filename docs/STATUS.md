@@ -17,7 +17,7 @@ project has already lost five months to exactly that.
 Phases 0 and 1 are complete. Phase 2 is in progress: the Navier-Stokes solver exists and
 runs, VAL-001 passes against its current criterion, VAL-002 is marked xfail against a
 documented defect, and the approved engineering change request to rebuild the solver is
-four steps into its eight-step plan. Phases 3 through 7 have not begun.
+five steps into its eight-step plan. Phases 3 through 7 have not begun.
 
 `docs/PROJECT_PLAN.md` holds the phase detail, deliverables and validation gates.
 
@@ -40,6 +40,23 @@ deferred-correction source over a first-order upwind implicit matrix, so the Jac
 sweep keeps its diagonal dominance while the converged answer is the QUICK one. It
 consumes step 3's tangential data without modification and returns the un-relaxed
 momentum diagonals as the contract step 5 builds the pressure correction on.
+Step 5 added the pressure correction (`src/pressure.py`). Its right-hand side is the
+discrete divergence of u* read straight off the stored face velocities, and on the closed
+cavity it sums to zero to rounding at 20, 40 and 80 cells per side, where the collocated
+solver leaked 2.90e-2, 9.23e-3 and 2.35e-3. That is acceptance criterion 6 measured
+directly, and it is the number the rebuild was undertaken to obtain. Step 3's
+`pressure_outlets` contract was consumed unchanged.
+
+REQ-S08 was deliberately left as written in step 5. Changing the pressure solver in the
+same branch as the grid layout would make any improvement unattributable, and the baseline
+comparison is the purpose of the rebuild; the cost was measured instead. The measurement
+showed more than cost: on a closed domain undamped Jacobi has an exact eigenvalue of -1 on
+the checkerboard mode, so it does not converge at all, and the two-cell case overshoots or
+does nothing depending on the parity of the sweep cap. Any amendment to REQ-S08 should
+keep its architectural content, the data-parallel per-cell update, rather than weaken it
+to a residual-reduction target; a weighting factor on the Jacobi update does that and
+moves the -1 to -1/3. The decision is step 6's, on the evidence in
+`docs/reports/pressure_correction_step5.md`.
 The solver itself is untouched so far and the harness rows reproduce at every step.
 ADR-010 is deliberately deferred to the end so it records what was built rather than what
 was planned.
@@ -129,8 +146,8 @@ measurement showed; it should not restate the measurement.
 ## Next
 
 Clear the outstanding branch stack bottom up through review. The rebuild continues at step
-5, the pressure correction on the staggered grid, which consumes the momentum diagonals
-step 4 returns and the pressure outlet data step 3 exposes.
+6, integration into `solve_steady`, which first needs a decision on REQ-S08: undamped
+Jacobi cannot converge the closed-domain pressure correction (see above).
 
 ## Open questions
 
@@ -139,9 +156,11 @@ Not pursued further on the current solver, because the staggered rebuild makes t
 consistent and changes that regime in kind. The harness records the outer count on every run,
 so the rebuild will surface it without a dedicated probe.
 
-Whether REQ-S08 should be rewritten as a requirement on solver behaviour, stated as residual
-reduction, rather than mandating Jacobi by name. The N-squared cost of Jacobi is real and
-currently hidden by the inner solve being a no-op; the rebuild will expose it.
+How REQ-S08 should be amended. The rebuild exposed the N-squared cost of Jacobi (126,277
+sweeps for one Poiseuille correction at the case file's tolerance) and, worse, that
+undamped Jacobi has an exact -1 eigenvalue on the closed-domain system and never
+converges there. The amendment should preserve the data-parallel per-cell update rather
+than retreat to a residual-reduction target; see `docs/reports/pressure_correction_step5.md`.
 
 Whether VAL-002 can return to the full grid in CI once the rebuild lands.
 
