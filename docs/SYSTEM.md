@@ -36,6 +36,7 @@ Requirements are organized by subsystem. Each requirement has a unique ID, a rat
 | REQ-S10 | Under-relaxation factors for velocity (default 0.7) and pressure (default 0.3) shall be configurable via the YAML configuration. | SIMPLE requires under-relaxation for stability. Factors control convergence rate vs. stability tradeoff. Configurable per REQ-C01. | Unit test |
 | REQ-S11 | The mesh shall support independent geometric stretching in x and y directions, specified by minimum face spacing and geometric expansion ratio per wall. | Enables resolution clustering near walls and high-gradient regions without uniform refinement of the entire domain. Required by ECR-001. | Unit test |
 | REQ-S12 | Dirichlet velocity boundary conditions shall be imposed directly on the staggered velocity components at the physical wall location, without ghost cell interpolation. | Eliminates the O(h) wall accuracy limitation previously documented in ADR-008. Required by ECR-001. | Unit test, VAL-001 |
+| REQ-S12.1 | The interpretation of configured boundary segments (which segment covers a point on a domain edge, its type, and the velocity it prescribes there) shall be implemented once and shared by every boundary imposition layer. | Derived from REQ-S12, for modularity rather than physics: the collocated and the staggered layer are two consumers of one configuration interpretation, and a second copy could drift while both exist during the rebuild. | Unit test |
 
 ### 2.2 Transport Requirements
 
@@ -100,24 +101,26 @@ Generated from the import statements in `src/` by `scripts/gen_system_map.py`. R
 
 <!-- BEGIN GENERATED: dsm -->
 ```
-            boundary  config  constants  mesh  particles  solver_ns  staggered
-boundary       .        X         .       X        .          .          .
-config         .        .         .       .        .          .          .
-constants      .        .         .       .        .          .          .
-mesh           .        X         .       .        .          .          .
-particles      .        X         X       .        .          .          .
-solver_ns      X        X         .       X        .          .          .
-staggered      .        .         .       X        .          .          .
+                    boundary  boundary_registry  config  constants  mesh  particles  solver_ns  staggered
+boundary               .              X            X         .       X        .          .          .
+boundary_registry      .              .            X         .       .        .          .          .
+config                 .              .            .         .       .        .          .          .
+constants              .              .            .         .       .        .          .          .
+mesh                   .              .            X         .       .        .          .          .
+particles              .              .            X         X       .        .          .          .
+solver_ns              X              .            X         .       X        .          .          .
+staggered              .              .            .         .       X        .          .          .
 ```
 
-Rows import columns. Edges, 9 total:
+Rows import columns. Edges, 11 total:
 
 ```
-boundary  -> config, mesh
-mesh      -> config
-particles -> config, constants
-solver_ns -> boundary, config, mesh
-staggered -> mesh
+boundary          -> boundary_registry, config, mesh
+boundary_registry -> config
+mesh              -> config
+particles         -> config, constants
+solver_ns         -> boundary, config, mesh
+staggered         -> mesh
 ```
 
 Cycles of any length: **none**. Checked by depth-first search over the whole graph, not by looking for mutual pairs. A three-module cycle is the one that actually happens and a pair check answers 'none' in its presence.
@@ -160,7 +163,8 @@ Generated. The responsibility and serves columns are editorial and come from `do
 <!-- BEGIN GENERATED: components -->
 | Module | Lines | Responsibility | Declares it serves |
 |---|---|---|---|
-| `src/boundary.py` | 491 | Maps BOUNDARY cells to their configured condition and writes ghost-cell values that place wall, inlet and outlet conditions at the domain face. | none |
+| `src/boundary.py` | 380 | Maps BOUNDARY cells to the condition the shared registry reports and writes the collocated ghost-cell values that place wall, inlet and outlet conditions at the domain face. | none |
+| `src/boundary_registry.py` | 195 | Interprets the configured boundary segments once, answering which condition and prescribed velocity hold at a point on a domain edge, for both the collocated and the staggered layer. | S12.1 |
 | `src/config.py` | 663 | Loads the YAML configuration into typed dataclasses and rejects missing keys, wrong types and out-of-range values at load time. | A02, A03, C01, C02, S10 |
 | `src/constants.py` | 8 | Holds the physical constants shared by every module so that none of them defines its own copy. | C04 |
 | `src/mesh.py` | 411 | Builds the structured grid, uniform or geometrically clustered at the walls, with the face, center, width and center-to-center arrays a face-based stencil needs, and classifies each cell as FLUID, SOLID or BOUNDARY. | S11 |
@@ -168,7 +172,7 @@ Generated. The responsibility and serves columns are editorial and come from `do
 | `src/solver_ns.py` | 891 | Solves steady incompressible flow with the SIMPLE algorithm on a collocated grid using Rhie-Chow face fluxes, hybrid advection and Jacobi pressure correction. | S01, S02, S03, S05, S08 |
 | `src/staggered.py` | 152 | Defines the staggered (MAC) field layout: shapes and allocation of face-centered u and v and cell-centered p, and the face-to-center averaging the solver applies before returning. | S07 |
 
-Total 8 Python files, 2871 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
+Total 9 Python files, 2955 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
 
 `Declares it serves` is an EDITORIAL CLAIM read from `docs/system_map_annotations.toml`. It says which requirements a module is meant to satisfy, not that it does. Whether a requirement is met is answered by the tests named in the register's `Verified By` column.
 <!-- END GENERATED: components -->
@@ -192,8 +196,8 @@ Generated. Static import analysis cannot see a function bound into a registry by
 | Property | Value |
 |---|---|
 | Scope | `src/**/*.py` |
-| Files hashed | 8 |
-| Digest | `sha256:b5139c825dbf0bacacba6f3fd2853ec05e7eec94ff7c62d3c4ac37698fb403cf` |
+| Files hashed | 9 |
+| Digest | `sha256:742eb41988321d72c3fc3c6acae9b235e08886c4af943289958d310fd27b38b7` |
 
 This is what lets the document answer whether it is current, which is the one question a stale table cannot be asked. `python scripts/gen_system_map.py --check` recomputes the whole set of generated regions, this digest included, and exits non-zero on any disagreement.
 

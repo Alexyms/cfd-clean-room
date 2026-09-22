@@ -114,10 +114,12 @@ _LOOSE_MARKER_RE = re.compile(
 
 # Requirement identifiers, as they appear in the section 2 register and in the
 # annotations file. Derived from the register itself: every row identifier is
-# REQ-, one uppercase subsystem letter (S, T, C, A, V, N today), and exactly two
-# digits. A single letter class rather than the six seen, so a new subsystem
-# prefix is parsed instead of silently dropped from the register.
-REQ_RE = re.compile(r"REQ-([A-Z])(\d{2})")
+# REQ-, one uppercase subsystem letter (S, T, C, A, V, N today), exactly two
+# digits, and optionally a dot and a derived-requirement number that carries
+# the parent in the identifier (REQ-S12.1 is derived from REQ-S12). A single
+# letter class rather than the six seen, so a new subsystem prefix is parsed
+# instead of silently dropped from the register.
+REQ_RE = re.compile(r"REQ-([A-Z])(\d{2})(?:\.(\d+))?")
 
 # Decorators that bind nothing into a dispatch registry. THIS IS A DENY-LIST AND
 # THAT IS DELIBERATE, because the two directions fail differently here. An

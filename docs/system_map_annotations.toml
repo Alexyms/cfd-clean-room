@@ -12,8 +12,12 @@
 # a package marker with no code no row.
 
 [modules."src/boundary.py"]
-responsibility = "Maps BOUNDARY cells to their configured condition and writes ghost-cell values that place wall, inlet and outlet conditions at the domain face."
+responsibility = "Maps BOUNDARY cells to the condition the shared registry reports and writes the collocated ghost-cell values that place wall, inlet and outlet conditions at the domain face."
 serves = []
+
+[modules."src/boundary_registry.py"]
+responsibility = "Interprets the configured boundary segments once, answering which condition and prescribed velocity hold at a point on a domain edge, for both the collocated and the staggered layer."
+serves = ["REQ-S12.1"]
 
 [modules."src/config.py"]
 responsibility = "Loads the YAML configuration into typed dataclasses and rejects missing keys, wrong types and out-of-range values at load time."

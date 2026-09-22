@@ -503,14 +503,24 @@ class TestTheRequirementPatternMatchesThisRegister:
     """
 
     @pytest.mark.parametrize(
-        "identifier", ["REQ-S01", "REQ-T10", "REQ-C04", "REQ-A06", "REQ-V03", "REQ-N03"]
+        "identifier",
+        ["REQ-S01", "REQ-T10", "REQ-C04", "REQ-A06", "REQ-V03", "REQ-N03", "REQ-S12.1"],
     )
     def test_every_prefix_in_the_register_is_accepted(self, identifier):
         assert gen_system_map.REQ_RE.fullmatch(identifier)
 
     @pytest.mark.parametrize(
         "identifier",
-        ["REQ-AGORA-001", "REQ-S1", "REQ-S001", "REQ-s01", "REQ-01", "VAL-001"],
+        [
+            "REQ-AGORA-001",
+            "REQ-S1",
+            "REQ-S001",
+            "REQ-s01",
+            "REQ-01",
+            "VAL-001",
+            "REQ-S12.",
+            "REQ-S12.a",
+        ],
     )
     def test_shapes_outside_the_scheme_are_rejected(self, identifier):
         assert gen_system_map.REQ_RE.fullmatch(identifier) is None
@@ -594,6 +604,7 @@ class TestTheRealDocumentMatchesTheRealTree:
             ids = gen_system_map.parse_requirement_ids(handle.read())
         expected = (
             [f"REQ-S{n:02d}" for n in range(1, 13)]
+            + ["REQ-S12.1"]
             + [f"REQ-T{n:02d}" for n in range(1, 11)]
             + [f"REQ-C{n:02d}" for n in range(1, 5)]
             + [f"REQ-A{n:02d}" for n in range(1, 7)]

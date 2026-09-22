@@ -5,13 +5,26 @@ pressure_outlet) and applies ghost cell values using interpolation
 formulas that place the physical condition at the domain face, not
 at the cell center. This is required for second-order accuracy on
 the collocated grid.
+
+Which condition applies where is decided by src/boundary_registry.py,
+shared with the staggered layer in src/boundary_staggered.py. This module
+owns only what is specific to the collocated layout: the ring of BOUNDARY
+cells, the interior neighbor each ghost value reads from, and the ghost
+formulas themselves. It is retired with the collocated solver at ECR-001
+step 6.
 """
 
 from dataclasses import dataclass
 
 import numpy as np
 
-from src.config import BoundarySpec, SimConfig
+from src.boundary_registry import (
+    PRESSURE_OUTLET,
+    VELOCITY_INLET,
+    BoundaryRegistry,
+    covers,
+)
+from src.config import SimConfig
 from src.mesh import BOUNDARY, FLUID, Mesh
 
 
@@ -75,12 +88,13 @@ class BoundaryManager:
         self._ny = mesh.cell_type.shape[0]
         self._dx = mesh.dx
         self._dy = mesh.dy
-        self._boundaries = config.boundaries
+        self._registry = BoundaryRegistry(config)
+        self._boundaries = self._registry.boundaries
         self._entries: list[_BCEntry] = []
 
-        self._build_bc_map(mesh, config)
+        self._build_bc_map(mesh)
 
-    def _build_bc_map(self, mesh: Mesh, config: SimConfig) -> None:
+    def _build_bc_map(self, mesh: Mesh) -> None:
         """Map each BOUNDARY cell to its BC type and interior neighbor."""
         nx = self._nx
         ny = self._ny
@@ -95,7 +109,9 @@ class BoundaryManager:
                     i, j, edge, nx, ny, mesh.cell_type
                 )
 
-                bc_type, u_face, v_face = self._match_boundary(i, j, edge, mesh, config)
+                condition = self._registry.condition_at(
+                    edge, self._coordinate_along_edge(i, j, edge)
+                )
 
                 self._entries.append(
                     _BCEntry(
@@ -103,12 +119,18 @@ class BoundaryManager:
                         j=j,
                         ni=ni,
                         nj=nj,
-                        bc_type=bc_type,
-                        u_prescribed=u_face,
-                        v_prescribed=v_face,
+                        bc_type=condition.bc_type,
+                        u_prescribed=condition.u_prescribed,
+                        v_prescribed=condition.v_prescribed,
                         edge=edge,
                     )
                 )
+
+    def _coordinate_along_edge(self, i: int, j: int, edge: str) -> float:
+        """Cell-center coordinate along an edge: x on top/bottom, y on left/right."""
+        if edge in ("top", "bottom"):
+            return float(self._mesh.xc[i])
+        return float(self._mesh.yc[j])
 
     @staticmethod
     def _identify_edge(i: int, j: int, nx: int, ny: int) -> str:
@@ -196,105 +218,6 @@ class BoundaryManager:
                 return (ii, j)
         return (nx - 2, j)
 
-    def _match_boundary(
-        self,
-        i: int,
-        j: int,
-        edge: str,
-        mesh: Mesh,
-        config: SimConfig,
-    ) -> tuple[str, float, float]:
-        """Match a boundary cell to a named BC or default to wall.
-
-        Parameters
-        ----------
-        i : int
-            Cell x-index.
-        j : int
-            Cell y-index.
-        edge : str
-            Which domain edge.
-        mesh : Mesh
-            Mesh for coordinate lookup.
-        config : SimConfig
-            Config with boundary definitions.
-
-        Returns
-        -------
-        tuple[str, float, float]
-            (bc_type, u_prescribed, v_prescribed) at the domain face.
-        """
-        xc = mesh.xc[i]
-        yc = mesh.yc[j]
-
-        for spec in config.boundaries.values():
-            if spec.location != edge:
-                continue
-
-            if (
-                edge in ("top", "bottom")
-                and spec.x_start is not None
-                and spec.x_end is not None
-                and spec.x_start <= xc <= spec.x_end
-            ):
-                return self._bc_values(spec, edge)
-            if (
-                edge in ("left", "right")
-                and spec.y_start is not None
-                and spec.y_end is not None
-                and spec.y_start <= yc <= spec.y_end
-            ):
-                return self._bc_values(spec, edge)
-
-        # Default: no-slip wall
-        return ("wall", 0.0, 0.0)
-
-    @staticmethod
-    def _bc_values(spec: BoundarySpec, edge: str) -> tuple[str, float, float]:
-        """Extract face velocity components from a BoundarySpec.
-
-        Parameters
-        ----------
-        spec : BoundarySpec
-            The matched boundary specification.
-        edge : str
-            Which domain edge ("top", "bottom", "left", "right").
-
-        Returns
-        -------
-        tuple[str, float, float]
-            (bc_type, u_face, v_face).
-        """
-        if spec.type == "wall":
-            return ("wall", 0.0, 0.0)
-
-        if spec.type == "pressure_outlet":
-            return ("pressure_outlet", 0.0, 0.0)
-
-        if spec.type != "velocity_inlet":
-            raise ValueError(f"Unrecognized boundary type: {spec.type}")
-
-        # If explicit u/v components are provided, use them directly.
-        # This supports tangential velocities (e.g., lid-driven cavity).
-        if spec.u_velocity is not None or spec.v_velocity is not None:
-            u_face = spec.u_velocity if spec.u_velocity is not None else 0.0
-            v_face = spec.v_velocity if spec.v_velocity is not None else 0.0
-            return ("velocity_inlet", u_face, v_face)
-
-        # Default: decompose velocity magnitude as normal to the wall
-        vel = spec.velocity if spec.velocity is not None else 0.0
-        if edge == "top":
-            # Flow enters downward (negative v)
-            return ("velocity_inlet", 0.0, -vel)
-        if edge == "bottom":
-            # Flow enters upward (positive v)
-            return ("velocity_inlet", 0.0, vel)
-        if edge == "left":
-            # Flow enters rightward (positive u)
-            return ("velocity_inlet", vel, 0.0)
-        # right: flow enters leftward (negative u)
-        return ("velocity_inlet", -vel, 0.0)
-
     def apply_velocity_bc(self, u: np.ndarray, v: np.ndarray) -> None:
         """Set BOUNDARY cell velocities using ghost cell interpolation.
 
@@ -320,7 +243,7 @@ class BoundaryManager:
             u_int = u[e.nj, e.ni]
             v_int = v[e.nj, e.ni]
 
-            if e.bc_type == "pressure_outlet":
+            if e.bc_type == PRESSURE_OUTLET:
                 u[e.j, e.i] = u_int
                 v[e.j, e.i] = v_int
             else:
@@ -347,7 +270,7 @@ class BoundaryManager:
         for e in self._entries:
             p_int = p[e.nj, e.ni]
 
-            if e.bc_type == "pressure_outlet":
+            if e.bc_type == PRESSURE_OUTLET:
                 p[e.j, e.i] = p_int / 3.0
             else:
                 p[e.j, e.i] = p_int
@@ -390,17 +313,14 @@ class BoundaryManager:
         KeyError
             If boundary_name is not found in the config.
         """
-        if boundary_name not in self._boundaries:
-            raise KeyError(f"Boundary '{boundary_name}' not found in config")
-
-        spec = self._boundaries[boundary_name]
+        spec = self._registry.spec(boundary_name)
         flux = 0.0
 
         for e in self._entries:
-            if e.bc_type != "velocity_inlet":
+            if e.bc_type != VELOCITY_INLET:
                 continue
             # Check if this entry belongs to the named boundary
-            if not self._entry_matches_spec(e, spec):
+            if not covers(spec, e.edge, self._coordinate_along_edge(e.i, e.j, e.edge)):
                 continue
 
             if e.edge in ("top", "bottom"):
@@ -411,37 +331,6 @@ class BoundaryManager:
                 flux += abs(e.u_prescribed) * face_len
 
         return flux
-
-    def _entry_matches_spec(self, entry: _BCEntry, spec: BoundarySpec) -> bool:
-        """Check if a BC entry belongs to a specific named boundary.
-
-        Parameters
-        ----------
-        entry : _BCEntry
-            The boundary cell entry.
-        spec : BoundarySpec
-            The boundary specification to match against.
-
-        Returns
-        -------
-        bool
-            True if the entry's position and edge match the spec.
-        """
-        if entry.edge != spec.location:
-            return False
-        xc = self._mesh.xc[entry.i]
-        yc = self._mesh.yc[entry.j]
-        if entry.edge in ("top", "bottom"):
-            return (
-                spec.x_start is not None
-                and spec.x_end is not None
-                and spec.x_start <= xc <= spec.x_end
-            )
-        return (
-            spec.y_start is not None
-            and spec.y_end is not None
-            and spec.y_start <= yc <= spec.y_end
-        )
 
     def get_total_inlet_flux(self) -> float:
         """Compute total volumetric flux across all velocity inlet boundaries.
@@ -456,7 +345,7 @@ class BoundaryManager:
         """
         total = 0.0
         for name, spec in self._boundaries.items():
-            if spec.type == "velocity_inlet":
+            if spec.type == VELOCITY_INLET:
                 total += self.get_inlet_flux(name)
         return total
 
@@ -471,7 +360,7 @@ class BoundaryManager:
         bool
             True if at least one entry has bc_type == "pressure_outlet".
         """
-        return any(e.bc_type == "pressure_outlet" for e in self._entries)
+        return any(e.bc_type == PRESSURE_OUTLET for e in self._entries)
 
     def get_max_boundary_velocity(self) -> float:
         """Return the maximum absolute prescribed velocity across all BOUNDARY cells.
