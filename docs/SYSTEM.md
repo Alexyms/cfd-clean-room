@@ -101,20 +101,21 @@ Generated from the import statements in `src/` by `scripts/gen_system_map.py`. R
 
 <!-- BEGIN GENERATED: dsm -->
 ```
-                     boundary  boundary_registry  boundary_staggered  config  constants  mesh  momentum  particles  solver_ns  staggered
-boundary                .              X                  .             X         .       X       .          .          .          .
-boundary_registry       .              .                  .             X         .       .       .          .          .          .
-boundary_staggered      .              X                  .             X         .       X       .          .          .          X
-config                  .              .                  .             .         .       .       .          .          .          .
-constants               .              .                  .             .         .       .       .          .          .          .
-mesh                    .              .                  .             X         .       .       .          .          .          .
-momentum                .              .                  X             X         .       X       .          .          .          X
-particles               .              .                  .             X         X       .       .          .          .          .
-solver_ns               X              .                  .             X         .       X       .          .          .          .
-staggered               .              .                  .             .         .       X       .          .          .          .
+                     boundary  boundary_registry  boundary_staggered  config  constants  mesh  momentum  particles  pressure  solver_ns  staggered
+boundary                .              X                  .             X         .       X       .          .         .          .          .
+boundary_registry       .              .                  .             X         .       .       .          .         .          .          .
+boundary_staggered      .              X                  .             X         .       X       .          .         .          .          X
+config                  .              .                  .             .         .       .       .          .         .          .          .
+constants               .              .                  .             .         .       .       .          .         .          .          .
+mesh                    .              .                  .             X         .       .       .          .         .          .          .
+momentum                .              .                  X             X         .       X       .          .         .          .          X
+particles               .              .                  .             X         X       .       .          .         .          .          .
+pressure                .              .                  X             X         .       X       X          .         .          .          X
+solver_ns               X              .                  .             X         .       X       .          .         .          .          .
+staggered               .              .                  .             .         .       X       .          .         .          .          .
 ```
 
-Rows import columns. Edges, 19 total:
+Rows import columns. Edges, 24 total:
 
 ```
 boundary           -> boundary_registry, config, mesh
@@ -123,6 +124,7 @@ boundary_staggered -> boundary_registry, config, mesh, staggered
 mesh               -> config
 momentum           -> boundary_staggered, config, mesh, staggered
 particles          -> config, constants
+pressure           -> boundary_staggered, config, mesh, momentum, staggered
 solver_ns          -> boundary, config, mesh
 staggered          -> mesh
 ```
@@ -145,6 +147,7 @@ When a PR modifies a module, the reviewer verifies impact on downstream modules.
 | boundary_registry.py | boundary, boundary_staggered | Coverage rule (same edge, inclusive range, first match in configuration order, wall by default) and the prescribed-velocity decomposition unchanged. Both layers read them, so a change here moves both. |
 | boundary_staggered.py | solver_ns (from ECR-001 step 4) | Normal imposition writes domain faces only. Tangential data shape [n+1], outlet data shape [n], wall_distance semantics and the inward flux sign unchanged. |
 | momentum.py | solver_ns (from ECR-001 step 5) | MomentumPrediction shapes and the meaning of a_p_u and a_p_v (un-relaxed diagonal, positive exactly at the unknown faces) unchanged; boundary entries of u and v read as given and never written. |
+| pressure.py | solver_ns (from ECR-001 step 6) | PressureCorrection shapes, the right-hand side formed directly from face velocities with no compatibility correction, outlet faces corrected against p' = 0 with the nearest interior diagonal, closed-domain pin at the first FLUID cell, and the sweep count reported. |
 | solver_ns.py | solver_transport, time_integration | Velocity/pressure field output shape, dtype, and semantics unchanged. |
 | solver_transport.py | time_integration, monitor | Concentration field output shape, dtype, and semantics unchanged. |
 | particles.py | solver_transport | Settling velocity, diffusion coefficient interface unchanged. Return types and units unchanged. |
@@ -178,10 +181,11 @@ Generated. The responsibility and serves columns are editorial and come from `do
 | `src/mesh.py` | 411 | Builds the structured grid, uniform or geometrically clustered at the walls, with the face, center, width and center-to-center arrays a face-based stencil needs, and classifies each cell as FLUID, SOLID or BOUNDARY. | S11 |
 | `src/momentum.py` | 522 | Predicts u* and v* on the staggered grid with QUICK advection by deferred correction over an upwind implicit matrix, one under-relaxed Jacobi sweep per call, and returns the diagonal coefficients the pressure correction needs. | S07, S09 |
 | `src/particles.py` | 255 | Computes per-size-class transport properties: Cunningham correction, settling velocity, Brownian diffusion, deposition velocity and HEPA efficiency. | T03, T04, T09, T10 |
+| `src/pressure.py` | 357 | Assembles the staggered pressure correction equation from the momentum diagonals with the discrete divergence of u* as its right-hand side, solves it by Jacobi iteration, corrects the face velocities and updates the pressure. | S04, S08 |
 | `src/solver_ns.py` | 891 | Solves steady incompressible flow with the SIMPLE algorithm on a collocated grid using Rhie-Chow face fluxes, hybrid advection and Jacobi pressure correction. | S01, S02, S03, S05, S08 |
 | `src/staggered.py` | 152 | Defines the staggered (MAC) field layout: shapes and allocation of face-centered u and v and cell-centered p, and the face-to-center averaging the solver applies before returning. | S07 |
 
-Total 11 Python files, 3900 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
+Total 12 Python files, 4257 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
 
 `Declares it serves` is an EDITORIAL CLAIM read from `docs/system_map_annotations.toml`. It says which requirements a module is meant to satisfy, not that it does. Whether a requirement is met is answered by the tests named in the register's `Verified By` column.
 <!-- END GENERATED: components -->
@@ -205,8 +209,8 @@ Generated. Static import analysis cannot see a function bound into a registry by
 | Property | Value |
 |---|---|
 | Scope | `src/**/*.py` |
-| Files hashed | 11 |
-| Digest | `sha256:c09a166787af67d51528fe890d72d9cff4f65166ef8d8cfa5bb5e44cd953c95e` |
+| Files hashed | 12 |
+| Digest | `sha256:949d9df973d0aabccc612da177c2b76bf024a5e780fc7546bbc355e41dcef885` |
 
 This is what lets the document answer whether it is current, which is the one question a stale table cannot be asked. `python scripts/gen_system_map.py --check` recomputes the whole set of generated regions, this digest included, and exits non-zero on any disagreement.
 
@@ -392,6 +396,33 @@ MomentumPredictor:
     extrapolation by the caller) are read as given and never written.
 ```
 
+### pressure.py --> solver_ns (from ECR-001 step 6)
+
+Pressure correction on the staggered layout (REQ-S04, REQ-S08). The
+right-hand side is the discrete divergence of u* from the stored face
+velocities, with no interpolation and no compatibility correction; walls
+contribute no coefficient (homogeneous Neumann by absence); a pressure
+outlet is ``p' = 0`` at its face; a closed domain is pinned at the first
+FLUID cell after the solve and after the pressure update, as the
+collocated solver does. Jacobi as REQ-S08 requires.
+
+```
+PressureCorrector:
+    __init__(mesh: Mesh, config: SimConfig, boundary: StaggeredBoundary)
+    needs_pin: bool, pin_cell: (j, i)
+    mass_imbalance(u, v) -> [ny, nx]     # rho [(u_e - u_w) dy + (v_n - v_s) dx], 0 at SOLID
+    coefficients(a_p_u, a_p_v) -> PressureCoefficients
+        a_p, a_e, a_w, a_n, a_s [ny, nx]; a_nb = rho d_face A_face with
+        d = A_face / a_P where a_P > 0, zero across walls, inlets and SOLID
+        faces; an outlet face borrows the nearest interior diagonal and
+        sits in a_p with no neighbour
+    correct(prediction: MomentumPrediction, p) -> PressureCorrection
+        u [ny, nx+1], v [ny+1, nx]: u* - d (p'_(s+) - p'_(s-)) at correctable
+            faces and outlet faces; walls, inlets and SOLID faces untouched
+        p [ny, nx]: p + alpha_pressure p', pinned in a closed domain
+        p_prime [ny, nx], sweeps: int
+```
+
 ### particles.py --> solver_transport
 
 ```
@@ -521,5 +552,6 @@ Full ADRs are in the development plan document. Summary reference:
 | 2026-09-20 | ECR-001 steps 1 and 2: mesh contract extended with per-cell widths, center-to-center face distances and per-axis stretching (REQ-S11); staggered.py added with the MAC layout and face-to-center averaging (REQ-S07); SimConfig gains stretch_x and stretch_y from an optional mesh section. Solver logic unchanged. | Alex Moroz-Smietana |
 | 2026-09-21 | ECR-001 step 3: boundary_registry.py extracted from boundary.py as the configuration interpretation both boundary layers share (REQ-S12.1, derived from REQ-S12); boundary_staggered.py added with exact normal-component imposition and the tangential and pressure conditions exposed as data (REQ-S12). Collocated interface and output unchanged. Cascade rules and contracts added for the three boundary modules. | Alex Moroz-Smietana |
 | 2026-09-22 | ECR-001 step 4: momentum.py added, the staggered momentum predictor with QUICK advection by deferred correction over an upwind implicit matrix (REQ-S07, REQ-S09). Its MomentumPrediction return is the coefficient contract for the step 5 pressure correction. Not integrated into solve_steady; collocated solver and harness rows unchanged. | Alex Moroz-Smietana |
+| 2026-09-22 | ECR-001 step 5: pressure.py added, the staggered pressure correction (REQ-S04, REQ-S08 as written). The closed-domain right-hand side sums to zero to rounding, measured directly (acceptance criterion 6). Undamped Jacobi found not to converge on the closed system (exact -1 eigenvalue); recorded in docs/reports/pressure_correction_step5.md, REQ-S08 not amended. Not integrated into solve_steady; collocated solver and harness rows unchanged. | Alex Moroz-Smietana |
 | 2026-09-19 | REQ-S02 rationale corrected: the measured VAL-001 error on 80x40 is 2.04%, identical on CI and locally, which is why the criterion is 2.5% rather than 2%. The 1.54% previously recorded in PROJECT_PLAN.md was not reproducible at the commit that claimed it. Requirement value unchanged; the ECR-001 tightening to < 1% after the rebuild is unaffected. | Alex Moroz-Smietana |
 | 2026-09-19 | solve_steady gains an optional on_iteration callback plus last_pressure_sweeps and stage_seconds attributes for the benchmark harness (scripts/benchmark.py). Observability only; solver logic unchanged. | Alex Moroz-Smietana |
