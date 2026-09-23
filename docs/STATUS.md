@@ -178,6 +178,15 @@ metric should take its profiles on the centerlines rather than half a cell off t
 change of its own under a new metric name (`docs/reports/cavity_self_convergence.md`,
 section 7).
 
+The review workflow was changed on 2026-09-23: the code-review plugin's full declared tool
+set is allowed, the top-level model and the action are pinned, and the manual dispatch is
+back. Pending, because a pull request that modifies `.github/workflows/` cannot exercise
+the review it changes: on the next pull request, and on a manual dispatch against an
+existing one, the run's `modelUsage` lists an Opus model, the run takes minutes rather than
+seconds, and a comment appears on the pull request, findings or the no-issues summary. A
+dispatched run cannot post findings inline, because the action starts its inline-comment
+tool only for pull request events.
+
 ## Open questions
 
 What sets the outer iteration count once the pressure correction is active rather than inert.
