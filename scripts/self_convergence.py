@@ -22,6 +22,7 @@ import argparse
 import json
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
@@ -33,6 +34,7 @@ from src.boundary import BoundaryManager  # noqa: E402 -- follows sys.path.inser
 from src.boundary_staggered import (  # noqa: E402 -- follows sys.path.insert
     StaggeredBoundary,
 )
+from src.config import SimConfig  # noqa: E402 -- follows sys.path.insert
 from src.mesh import FLUID, Mesh  # noqa: E402 -- follows sys.path.insert
 from src.solver_ns import NavierStokesSolver  # noqa: E402 -- follows sys.path.insert
 from src.solver_staggered import (  # noqa: E402 -- follows sys.path.insert
@@ -45,6 +47,7 @@ from validation.metrics import (  # noqa: E402 -- follows sys.path.insert
     GHIA_V_VAL,
     GHIA_V_X,
     cavity_centerline_errors,
+    cavity_true_centerline_profiles,
 )
 
 GRIDS = (20, 40, 80)
@@ -342,6 +345,27 @@ def upwind_summary() -> dict:
     fig.savefig(MAP_DIR / "cavity_self_convergence_upwind.png", dpi=80)
     plt.close(fig)
     return out
+
+
+def face_gaps(
+    config: SimConfig,
+    mesh: Mesh,
+    u: np.ndarray,
+    v: np.ndarray,
+    profiles: Callable[..., tuple[list[float], ...]] = cavity_true_centerline_profiles,
+) -> dict[str, float]:
+    """Largest gap between a metric's centerline profiles and the exact staggered faces.
+
+    ``profiles`` is a validation.metrics profile function. Every interior column
+    and row of the cavity has the same FLUID cells, so one mask serves.
+    """
+    _y, u_prof, _x, v_prof = profiles(config, mesh, u, v)
+    u_line, v_line, _ = centerline_faces(u, v)
+    fluid = mesh.cell_type[:, u.shape[1] // 2] == FLUID
+    return {
+        "u": float(np.abs(np.asarray(u_prof[1:-1]) - u_line[fluid]).max()),
+        "v": float(np.abs(np.asarray(v_prof[1:-1]) - v_line[fluid]).max()),
+    }
 
 
 def main(argv: list[str] | None = None) -> int:
