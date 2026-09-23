@@ -6,12 +6,19 @@ import json
 import sys
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 import benchmark  # noqa: E402 -- scripts/ is not a package; path set above
+
+from src.mesh import Mesh  # noqa: E402 -- follows sys.path.insert
+from validation.cases import load_case  # noqa: E402 -- follows sys.path.insert
+from validation.metrics import (  # noqa: E402 -- follows sys.path.insert
+    cavity_true_centerline_errors,
+)
 
 
 def _record(case: str, procs: int, wall: float, outer: int = 100) -> dict:
@@ -195,3 +202,15 @@ def test_summary_never_pools_two_metrics(
         "['max_normalized_centerline_error', 'max_normalized_centerline_error_r2']"
     ) in out
     assert "scored against" not in out
+
+
+@pytest.mark.unit
+def test_harness_scores_the_cavity_on_the_true_centerlines() -> None:
+    """A cavity record's accuracy is the true-centerline metric, by name and value."""
+    config = load_case("cavity", grid=(16, 16))
+    mesh = Mesh(config)
+    x, y = np.meshgrid(np.asarray(mesh.xc), np.asarray(mesh.yc))
+    u, v = 0.3 + 0.8 * x, 0.3 + 0.8 * y
+    accuracy = benchmark.accuracy_of("cavity", config, mesh, u, v)
+    assert accuracy["metric"] == "max_normalized_centerline_error_r2"
+    assert accuracy == cavity_true_centerline_errors(config, mesh, u, v).as_dict()

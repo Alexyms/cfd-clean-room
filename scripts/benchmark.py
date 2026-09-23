@@ -287,6 +287,32 @@ def cpu_name() -> str:
     return name or platform.processor() or platform.machine()
 
 
+def accuracy_of(
+    kind: str, config: SimConfig, mesh: Mesh, u: np.ndarray, v: np.ndarray
+) -> dict:
+    """The accuracy a record carries for one field of one case family.
+
+    Parameters
+    ----------
+    kind : str
+        Case family, "poiseuille" or "cavity".
+    config : SimConfig
+        Case configuration.
+    mesh : Mesh
+        Mesh the field was computed on.
+    u, v : np.ndarray
+        Cell-centered velocity fields [ny, nx].
+
+    Returns
+    -------
+    dict
+        The metric's as_dict: its name, value, reference and components.
+    """
+    if kind == "poiseuille":
+        return poiseuille_l2_error(config, mesh, u).as_dict()
+    return cavity_true_centerline_errors(config, mesh, u, v).as_dict()
+
+
 def run_case(case_id: str, method: str, sample_every: int, concurrent: int) -> dict:
     """Run one case once with the solver the method names and return its record.
 
@@ -315,9 +341,7 @@ def run_case(case_id: str, method: str, sample_every: int, concurrent: int) -> d
         raise ValueError(f"unknown method {method!r}; known: {list(METHODS)}")
 
     def error_of(u: np.ndarray, v: np.ndarray) -> dict:
-        if kind == "poiseuille":
-            return poiseuille_l2_error(config, mesh, u).as_dict()
-        return cavity_true_centerline_errors(config, mesh, u, v).as_dict()
+        return accuracy_of(kind, config, mesh, u, v)
 
     work = counter.work
     trajectory: list[dict] = []

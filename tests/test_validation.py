@@ -189,10 +189,34 @@ class TestTrueCenterlineMetric:
         assert np.allclose(v_new[1:-1], A + B / 2, rtol=0.0, atol=1e-14)
 
     def test_bracket_weights_an_unequal_pair_by_distance(self) -> None:
-        """The mesh stretches symmetrically, so its middle pair always weighs 1/2;
-        an unequal pair shows the weight follows the distances."""
+        """An unequal pair is weighted by distance, not by one half.
+
+        The mesh stretches symmetrically, so its middle pair always weighs 1/2
+        and cannot show this.
+        """
         i, w = _bracket(np.array([0.1, 0.3, 0.45, 0.7, 0.9]), 0.5)
         assert (i, w) == (2, pytest.approx(0.2))
+
+    def test_error_function_reads_the_centerline_not_the_offset_column(self) -> None:
+        """A slope across the centerline leaves the new score unchanged.
+
+        u = g(y) + B (x - 0.5) and v = k(x) + B (y - 0.5), with g and k Ghia's
+        profiles, are g and k on the true centerlines at any B, so the new
+        score must not move when B is added. The old metric reads the offset
+        column, B h/2 away, and its score moves: that is the control.
+        """
+        config, mesh = _cavity(16)
+        x, y = np.meshgrid(np.asarray(mesh.xc), np.asarray(mesh.yc))
+        g = np.interp(y, GHIA_U_Y[::-1], GHIA_U_VAL[::-1])
+        k = np.interp(x, GHIA_V_X[::-1], GHIA_V_VAL[::-1])
+        fields = ((g, k), (g + B * (x - 0.5), k + B * (y - 0.5)))
+        flat, sloped = (cavity_true_centerline_errors(config, mesh, *f) for f in fields)
+        old_flat, old_sloped = (
+            cavity_centerline_errors(config, mesh, *f) for f in fields
+        )
+        for c in ("u", "v"):
+            assert sloped.components[c] == pytest.approx(flat.components[c], abs=1e-12)
+            assert abs(old_sloped.components[c] - old_flat.components[c]) > 1e-3
 
     def test_new_metric_has_its_own_name_and_can_be_small_or_large(self) -> None:
         """The old name stays with the old sampling; the new one scores both ways."""
