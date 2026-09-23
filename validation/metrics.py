@@ -236,7 +236,7 @@ def _bracket(centers: np.ndarray, target: float) -> tuple[int, float]:
 def cavity_true_centerline_profiles(
     config: SimConfig, mesh: Mesh, u: np.ndarray, v: np.ndarray
 ) -> tuple[list[float], list[float], list[float], list[float]]:
-    """Profiles on the true centerlines x = 0.5 and y = 0.5, walls appended.
+    """Profiles on the true centerlines of the cavity, walls appended.
 
     Parameters
     ----------
@@ -250,8 +250,8 @@ def cavity_true_centerline_profiles(
     Returns
     -------
     tuple[list[float], list[float], list[float], list[float]]
-        (y, u along x = 0.5, x, v along y = 0.5), in the layout of
-        cavity_centerline_profiles.
+        (y, u along the vertical midline, x, v along the horizontal
+        midline), in the layout of cavity_centerline_profiles.
 
     Notes
     -----
@@ -261,19 +261,24 @@ def cavity_true_centerline_profiles(
     centers bracket the midline, which is second order on any mesh: the mean
     of the two middle columns on an even uniform grid, the middle column on an
     odd one. A row is kept when both of its bracketing cells are FLUID.
+
+    Every position comes from the mesh: the midlines are halfway between its
+    first and last faces, and the wall values are appended at those faces. On
+    the unit cavity that is x = 0.5 and y = 0.5 with walls at 0 and 1, where
+    Ghia's stations lie.
     """
     u_lid = _lid_velocity(config)
     xc, yc = np.asarray(mesh.xc), np.asarray(mesh.yc)
     i, wx = _bracket(xc, 0.5 * (mesh.x[0] + mesh.x[-1]))
     col = (mesh.cell_type[:, i] == FLUID) & (mesh.cell_type[:, i + 1] == FLUID)
     u_line = (1.0 - wx) * u[:, i] + wx * u[:, i + 1]
-    y_profile = [0.0, *yc[col], 1.0]
+    y_profile = [mesh.y[0], *yc[col], mesh.y[-1]]
     u_profile = [0.0, *u_line[col], u_lid]
 
     j, wy = _bracket(yc, 0.5 * (mesh.y[0] + mesh.y[-1]))
     row = (mesh.cell_type[j, :] == FLUID) & (mesh.cell_type[j + 1, :] == FLUID)
     v_line = (1.0 - wy) * v[j, :] + wy * v[j + 1, :]
-    x_profile = [0.0, *xc[row], 1.0]
+    x_profile = [mesh.x[0], *xc[row], mesh.x[-1]]
     v_profile = [0.0, *v_line[row], 0.0]
     return y_profile, u_profile, x_profile, v_profile
 

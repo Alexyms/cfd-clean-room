@@ -47,3 +47,46 @@ def test_render_refuses_an_unrecognised_case_kind(
         view_field.render(npz, tmp_path)
     view_field.plt.close("all")
     assert not list(tmp_path.glob("*.png"))
+
+
+@pytest.mark.unit
+def test_render_draws_and_scores_a_cavity_on_the_true_centerlines(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The cavity panel takes its profiles and its score from the true centerlines.
+
+    Both functions are wrapped to record their calls. A viewer that went back
+    to the offset sampling for either would not call it.
+    """
+    calls: list[str] = []
+
+    def spy(name: str) -> None:
+        real = getattr(view_field, name)
+
+        def wrapped(*args: object) -> object:
+            calls.append(name)
+            return real(*args)
+
+        monkeypatch.setattr(view_field, name, wrapped)
+
+    spy("cavity_true_centerline_profiles")
+    spy("cavity_true_centerline_errors")
+    n = 8
+    ramp = np.tile(np.linspace(0.0, 1.0, n), (n, 1))
+    npz = tmp_path / "val002_8x8.npz"
+    np.savez(
+        npz,
+        kind=np.array("cavity"),
+        case_id=np.array("val002_8x8"),
+        nx=n,
+        ny=n,
+        u=0.3 + 0.8 * ramp,
+        v=0.3 + 0.8 * ramp.T,
+        p=ramp.T,
+        outer_iterations=np.array(1),
+    )
+
+    png = view_field.render(npz, tmp_path)
+    view_field.plt.close("all")
+    assert png.exists()
+    assert calls == ["cavity_true_centerline_profiles", "cavity_true_centerline_errors"]
