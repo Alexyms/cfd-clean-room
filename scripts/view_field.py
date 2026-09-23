@@ -9,9 +9,13 @@ Poiseuille). Phase 7 owns presentation-quality visuals.
 Run:
 
     python scripts/view_field.py val002_40x40            # solve, save, draw
+    python scripts/view_field.py val002_40x40 --method staggered-jacobi
     python scripts/view_field.py results/val002_40x40.npz  # draw a saved solve
 
-A solve writes results/<case_id>.npz so the next look costs no solver time.
+A solve writes results/<case_id>.npz, or results/<case_id>_<method>.npz for
+a method other than the default, so the next look costs no solver time and
+the two solvers' fields sit side by side. The method names are the
+benchmark harness's.
 """
 
 from __future__ import annotations
@@ -30,8 +34,14 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
 from src.boundary import BoundaryManager  # noqa: E402 -- follows sys.path.insert
+from src.boundary_staggered import (  # noqa: E402 -- follows sys.path.insert
+    StaggeredBoundary,
+)
 from src.mesh import Mesh  # noqa: E402 -- follows sys.path.insert
 from src.solver_ns import NavierStokesSolver  # noqa: E402 -- follows sys.path.insert
+from src.solver_staggered import (  # noqa: E402 -- follows sys.path.insert
+    StaggeredSolver,
+)
 from validation.cases import (  # noqa: E402 -- follows sys.path.insert
     CASE_GRIDS,
     load_case,
@@ -48,18 +58,34 @@ from validation.metrics import (  # noqa: E402 -- follows sys.path.insert
 )
 
 RESULTS_DIR = REPO_ROOT / "results"
+DEFAULT_METHOD = "collocated-jacobi"
+STAGGERED_METHOD = "staggered-jacobi"
+METHODS = (DEFAULT_METHOD, STAGGERED_METHOD)
 
 
-def solve_and_save(case_id: str, out_dir: Path) -> Path:
-    """Run a preset case and write its fields to <out_dir>/<case_id>.npz."""
+def solve_and_save(case_id: str, out_dir: Path, method: str = DEFAULT_METHOD) -> Path:
+    """Run a preset case with the named solver and write its fields to an .npz.
+
+    Raises
+    ------
+    ValueError
+        If the method is not one of METHODS.
+    """
     kind, nx, ny = CASE_GRIDS[case_id]
     config = load_case(kind, grid=(nx, ny))
     mesh = Mesh(config)
-    boundary = BoundaryManager(mesh, config)
-    solver = NavierStokesSolver(mesh, config, boundary)
+    solver: NavierStokesSolver | StaggeredSolver
+    if method == DEFAULT_METHOD:
+        solver = NavierStokesSolver(mesh, config, BoundaryManager(mesh, config))
+        stem = case_id
+    elif method == STAGGERED_METHOD:
+        solver = StaggeredSolver(mesh, config, StaggeredBoundary(mesh, config))
+        stem = f"{case_id}_{method}"
+    else:
+        raise ValueError(f"unknown method {method!r}; known: {list(METHODS)}")
     u, v, p = solver.solve_steady()
     out_dir.mkdir(parents=True, exist_ok=True)
-    path = out_dir / f"{case_id}.npz"
+    path = out_dir / f"{stem}.npz"
     np.savez(
         path,
         u=u,
@@ -67,6 +93,7 @@ def solve_and_save(case_id: str, out_dir: Path) -> Path:
         p=p,
         kind=np.array(kind),
         case_id=np.array(case_id),
+        method=np.array(method),
         nx=np.array(nx),
         ny=np.array(ny),
         outer_iterations=np.array(len(solver.residual_history)),
@@ -133,8 +160,11 @@ def render(npz_path: Path, out_dir: Path) -> Path:
     ax.legend(fontsize=8)
     ax.set_title(f"centerline vs reference: {summary}")
 
+    # Files saved before the method was recorded all came from the collocated solver.
+    method = str(data["method"]) if "method" in data.files else DEFAULT_METHOD
     fig.suptitle(
-        f"{case_id}  ({nx}x{ny}, {int(data['outer_iterations'])} outer iterations)"
+        f"{case_id}  ({method}, {nx}x{ny}, "
+        f"{int(data['outer_iterations'])} outer iterations)"
     )
     fig.tight_layout()
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -151,12 +181,18 @@ def main(argv: list[str] | None = None) -> int:
         help=f"a case id ({', '.join(sorted(CASE_GRIDS))}) or a path to a saved .npz",
     )
     parser.add_argument("--out", type=Path, default=RESULTS_DIR)
+    parser.add_argument(
+        "--method",
+        choices=METHODS,
+        default=DEFAULT_METHOD,
+        help="Solver for a case id; ignored when drawing a saved .npz",
+    )
     args = parser.parse_args(argv)
 
     if args.target.endswith(".npz"):
         npz_path = Path(args.target)
     elif args.target in CASE_GRIDS:
-        npz_path = solve_and_save(args.target, args.out)
+        npz_path = solve_and_save(args.target, args.out, args.method)
     else:
         parser.error(f"unknown case id {args.target!r}")
     render(npz_path, args.out)

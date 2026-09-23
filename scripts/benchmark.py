@@ -16,6 +16,7 @@ Run:
 
     python scripts/benchmark.py                       # seed cases, 3 repeats
     python scripts/benchmark.py --cases val002_20x20  # one case
+    python scripts/benchmark.py --method staggered-jacobi  # the staggered solver
     python scripts/benchmark.py --summary             # table of what is stored
 """
 
@@ -39,12 +40,21 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
 from src.boundary import BoundaryManager  # noqa: E402 -- follows sys.path.insert
+from src.boundary_staggered import (  # noqa: E402 -- follows sys.path.insert
+    StaggeredBoundary,
+)
 from src.config import SimConfig  # noqa: E402 -- follows sys.path.insert
 from src.mesh import FLUID, Mesh  # noqa: E402 -- follows sys.path.insert
+from src.momentum import MomentumPredictor  # noqa: E402 -- follows sys.path.insert
+from src.pressure import PressureCorrector  # noqa: E402 -- follows sys.path.insert
 from src.solver_ns import (  # noqa: E402 -- follows sys.path.insert
     IterationState,
     NavierStokesSolver,
 )
+from src.solver_staggered import (  # noqa: E402 -- follows sys.path.insert
+    StaggeredSolver,
+)
+from src.staggered import allocate_fields  # noqa: E402 -- follows sys.path.insert
 from validation.cases import (  # noqa: E402 -- follows sys.path.insert
     CASE_GRIDS,
     load_case,
@@ -56,7 +66,10 @@ from validation.metrics import (  # noqa: E402 -- follows sys.path.insert
 
 SCHEMA_VERSION = 1
 RESULTS_PATH = REPO_ROOT / "benchmarks" / "results.jsonl"
+# The method label selects the solver, so a row cannot claim one it did not run.
 DEFAULT_METHOD = "collocated-jacobi"
+STAGGERED_METHOD = "staggered-jacobi"
+METHODS = (DEFAULT_METHOD, STAGGERED_METHOD)
 
 # Grid presets come from validation.cases so the harness, the tests and the
 # field viewer name the same solve the same way. Every other setting comes
@@ -105,10 +118,18 @@ def git_state() -> tuple[str, bool]:
     return commit, dirty
 
 
-CELL_UPDATE_DEFINITION = (
-    "stencil evaluations at FLUID cells: two momentum sweeps per outer iteration "
-    "plus one per Jacobi pressure sweep; SOLID cells are not counted"
-)
+# Recorded with every row, so each row says what its cell_updates number counts.
+CELL_UPDATE_DEFINITIONS: dict[str, str] = {
+    DEFAULT_METHOD: (
+        "stencil evaluations at FLUID cells: two momentum sweeps per outer iteration "
+        "plus one per Jacobi pressure sweep; SOLID cells are not counted"
+    ),
+    STAGGERED_METHOD: (
+        "stencil evaluations at unknowns: the unknown u and v faces (a_p > 0) once "
+        "per outer iteration for momentum, plus the cells with a pressure equation "
+        "(a_P > 0) once per weighted Jacobi pressure sweep"
+    ),
+}
 
 
 def fluid_cells_per_sweep(mesh: Mesh) -> int:
@@ -135,17 +156,64 @@ def fluid_cells_per_sweep(mesh: Mesh) -> int:
     return int(np.count_nonzero(mesh.cell_type == FLUID))
 
 
+def staggered_updates(mesh: Mesh, config: SimConfig) -> tuple[int, int]:
+    """Unknowns the staggered solver updates, read from its own coefficient masks.
+
+    On the staggered grid the BOUNDARY ring cells are ordinary solution
+    cells, so the FLUID count would understate the work: a 20x20 cavity
+    has 400 cells with a pressure equation against 324 FLUID cells. The
+    masks are structural, so one prediction from the initial field gives
+    them for the whole solve.
+
+    Parameters
+    ----------
+    mesh : Mesh
+        Classified mesh of the case.
+    config : SimConfig
+        Case configuration.
+
+    Returns
+    -------
+    tuple[int, int]
+        (momentum updates per outer iteration, the unknown u faces plus the
+        unknown v faces with a_p > 0; cells per pressure sweep, those with
+        a_P > 0).
+    """
+    boundary = StaggeredBoundary(mesh, config)
+    u, v, p = allocate_fields(mesh)
+    boundary.apply_normal_velocity(u, v)
+    prediction = MomentumPredictor(mesh, config, boundary).predict(u, v, p)
+    coefficients = PressureCorrector(mesh, config, boundary).coefficients(
+        prediction.a_p_u, prediction.a_p_v
+    )
+    momentum = np.count_nonzero(prediction.a_p_u > 0.0) + np.count_nonzero(
+        prediction.a_p_v > 0.0
+    )
+    return int(momentum), int(np.count_nonzero(coefficients.a_p > 0.0))
+
+
 class WorkCounter:
     """Accumulate the work record from the solver's per-iteration callbacks.
 
     Parameters
     ----------
     cells_per_sweep : int
-        Unknowns updated by one sweep, from fluid_cells_per_sweep.
+        Unknowns updated by one pressure sweep: fluid_cells_per_sweep for
+        the collocated solver, the second value of staggered_updates for
+        the staggered one.
+    momentum_updates : int, optional
+        Unknowns the momentum step updates per outer iteration. Defaults to
+        ``2 * cells_per_sweep``, the collocated u and v sweeps over the
+        same cells.
     """
 
-    def __init__(self, cells_per_sweep: int) -> None:
+    def __init__(
+        self, cells_per_sweep: int, momentum_updates: int | None = None
+    ) -> None:
         self.cells_per_sweep = cells_per_sweep
+        self.momentum_updates = (
+            2 * cells_per_sweep if momentum_updates is None else momentum_updates
+        )
         self.work: dict[str, int] = {
             "outer_iterations": 0,
             "inner_sweeps": 0,
@@ -153,7 +221,7 @@ class WorkCounter:
         }
 
     def record(self, state: IterationState) -> None:
-        """Add one SIMPLE iteration: two momentum sweeps plus its pressure sweeps.
+        """Add one SIMPLE iteration: its momentum updates plus its pressure sweeps.
 
         Parameters
         ----------
@@ -162,7 +230,9 @@ class WorkCounter:
         """
         self.work["outer_iterations"] = state.iteration + 1
         self.work["inner_sweeps"] += state.pressure_sweeps
-        self.work["cell_updates"] += self.cells_per_sweep * (2 + state.pressure_sweeps)
+        self.work["cell_updates"] += (
+            self.momentum_updates + self.cells_per_sweep * state.pressure_sweeps
+        )
 
 
 def positive_int(text: str) -> int:
@@ -218,23 +288,37 @@ def cpu_name() -> str:
 
 
 def run_case(case_id: str, method: str, sample_every: int, concurrent: int) -> dict:
-    """Run one case once and return its record."""
+    """Run one case once with the solver the method names and return its record.
+
+    Raises
+    ------
+    ValueError
+        If the method is not one of METHODS.
+    """
     kind, nx, ny = CASES[case_id]
     config = load_case(kind, grid=(nx, ny))
     solver_block = solver_parameters(config)
     mesh = Mesh(config)
-    boundary = BoundaryManager(mesh, config)
-    solver = NavierStokesSolver(mesh, config, boundary)
+
+    # One cell update = one stencil evaluation at one unknown, counted per
+    # method as CELL_UPDATE_DEFINITIONS states. Comparable across Jacobi,
+    # Krylov, multigrid, CPU and GPU.
+    solver: NavierStokesSolver | StaggeredSolver
+    if method == DEFAULT_METHOD:
+        solver = NavierStokesSolver(mesh, config, BoundaryManager(mesh, config))
+        counter = WorkCounter(fluid_cells_per_sweep(mesh))
+    elif method == STAGGERED_METHOD:
+        solver = StaggeredSolver(mesh, config, StaggeredBoundary(mesh, config))
+        momentum_updates, pressure_cells = staggered_updates(mesh, config)
+        counter = WorkCounter(pressure_cells, momentum_updates)
+    else:
+        raise ValueError(f"unknown method {method!r}; known: {list(METHODS)}")
 
     def error_of(u: np.ndarray, v: np.ndarray) -> dict:
         if kind == "poiseuille":
             return poiseuille_l2_error(config, mesh, u).as_dict()
         return cavity_centerline_errors(config, mesh, u, v).as_dict()
 
-    # One cell update = one stencil evaluation at one fluid cell. Momentum
-    # counts two sweeps (u and v) per outer iteration, pressure one per Jacobi
-    # sweep. Comparable across Jacobi, Krylov, multigrid, CPU and GPU.
-    counter = WorkCounter(fluid_cells_per_sweep(mesh))
     work = counter.work
     trajectory: list[dict] = []
     t_start = time.perf_counter()
@@ -292,7 +376,7 @@ def run_case(case_id: str, method: str, sample_every: int, concurrent: int) -> d
             "stop_reason": "residual_below_tol" if converged else "max_simple_iter",
         },
         "accuracy": accuracy,
-        "work": {**work, "cell_update_definition": CELL_UPDATE_DEFINITION},
+        "work": {**work, "cell_update_definition": CELL_UPDATE_DEFINITIONS[method]},
         "time": {"wall_seconds": wall, "stages": dict(solver.stage_seconds)},
         "trajectory": trajectory,
     }
@@ -391,7 +475,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--repeats", type=positive_int, default=3, help="Runs per case, at least 1"
     )
-    parser.add_argument("--method", default=DEFAULT_METHOD)
+    parser.add_argument(
+        "--method",
+        choices=METHODS,
+        default=DEFAULT_METHOD,
+        help="Solver to run; the label is recorded with each row",
+    )
     parser.add_argument(
         "--sample-every",
         type=positive_int,
