@@ -10,10 +10,16 @@ because each grid pins it at a different point. The control, synthetic fields
 F + C h^q G with known q through the identical pipeline, runs first and stops
 the script if any estimate misses q by 0.05 or more.
 
+--extrapolate asks, from the saved fields and with no solve, whether the
+staggered solver's remaining distance to Ghia on the true centerlines is
+Ghia's: pointwise Richardson extrapolation at Ghia's stations, after its own
+control, with the true-centerline metric for both solvers.
+
 Run:
 
     python scripts/self_convergence.py             # control, solves, analysis
     python scripts/self_convergence.py --solve-only
+    python scripts/self_convergence.py --extrapolate
 """
 
 from __future__ import annotations
@@ -47,6 +53,7 @@ from validation.metrics import (  # noqa: E402 -- follows sys.path.insert
     GHIA_V_VAL,
     GHIA_V_X,
     cavity_centerline_errors,
+    cavity_true_centerline_errors,
     cavity_true_centerline_profiles,
 )
 
@@ -55,6 +62,9 @@ METHODS = ("collocated-jacobi", "staggered-jacobi")
 FIELD_DIR = REPO_ROOT / "results" / "self_convergence"
 MAP_DIR = REPO_ROOT / "docs" / "reports"
 CONTROL_TOL = 0.05
+# |p - 2| below this counts as second order. Inside it the Richardson factor
+# 1 / (2^p - 1) stays within 27% of the 1/3 the extrapolation applies.
+ORDER_BAND = 0.25
 
 
 def solve_and_save(method: str, n: int) -> Path:
@@ -368,11 +378,137 @@ def face_gaps(
     }
 
 
+def lagrange(
+    nodes: np.ndarray, values: np.ndarray, targets: np.ndarray, k: int = 4
+) -> np.ndarray:
+    """Evaluate at each target the degree k - 1 polynomial through the k nodes around it."""
+    out = np.empty(len(targets))
+    for t, target in enumerate(targets):
+        i = int(np.clip(np.searchsorted(nodes, target) - k // 2, 0, len(nodes) - k))
+        xs = nodes[i : i + k]
+        weights = [
+            np.prod([(target - xs[m]) / (xs[j] - xs[m]) for m in range(k) if m != j])
+            for j in range(k)
+        ]
+        out[t] = np.dot(weights, values[i : i + k])
+    return out
+
+
+def richardson(
+    profiles: dict[int, tuple[np.ndarray, np.ndarray]], stations: np.ndarray, k: int = 4
+) -> dict[str, np.ndarray]:
+    """Pointwise observed order at each station and, where it is second order, the limit.
+
+    ``profiles`` maps each n in GRIDS to (nodes, values). The order is NaN where
+    the two differences have opposite signs, and the limit f80 + (f80 - f40) / 3
+    is NaN wherever the order is not within ORDER_BAND of 2.
+    """
+    f20, f40, f80 = (lagrange(*profiles[n], stations, k) for n in GRIDS)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ratio = (f20 - f40) / (f40 - f80)
+        order = np.log2(np.where(ratio > 0, ratio, np.nan))
+        licensed = np.abs(order - 2.0) < ORDER_BAND
+    limit = np.where(licensed, f80 + (f80 - f40) / 3.0, np.nan)
+    return {"f20": f20, "f40": f40, "f80": f80, "order": order, "limit": limit}
+
+
+def synthetic_profiles(q: float) -> dict[int, tuple[np.ndarray, np.ndarray]]:
+    """Known limit s^3 - s/2 plus h^q (1 + s), at each grid's cell centers and walls.
+
+    Both parts are cubics, which four-point interpolation reproduces exactly, so
+    the control tests the order and extrapolation arithmetic by itself.
+    """
+    out = {}
+    for n in GRIDS:
+        s = np.array([0.0, *(np.arange(n) + 0.5) / n, 1.0])
+        out[n] = (s, s**3 - 0.5 * s + (1.0 / n) ** q * (1.0 + s))
+    return out
+
+
+def run_extrapolation_control(stations: np.ndarray) -> None:
+    """h^2 must give back the known limit to rounding; h must read as order 1, unlicensed."""
+    second = richardson(synthetic_profiles(2.0), stations)
+    first = richardson(synthetic_profiles(1.0), stations)
+    exact = stations**3 - 0.5 * stations
+    if not (
+        np.allclose(second["limit"], exact, rtol=0.0, atol=1e-13)
+        and np.allclose(first["order"], 1.0, rtol=0.0, atol=1e-9)
+        and np.isnan(first["limit"]).all()
+    ):
+        raise SystemExit("extrapolation control failed")
+
+
+def extrapolation() -> dict:
+    """Richardson on the staggered true centerlines, and the true-centerline metric.
+
+    The control runs first. Reads saved fields only and stops if any is
+    missing. The staggered profiles are the exact faces from centerline_faces,
+    every row, walls appended; Ghia's wall stations are left out because the
+    walls are exact on every grid.
+    """
+    for positions in (GHIA_U_Y, GHIA_V_X):
+        run_extrapolation_control(np.array(positions[1:-1]))
+    paths = [FIELD_DIR / f"{m}_{n}.npz" for m in METHODS for n in GRIDS]
+    if missing := [p.name for p in paths if not p.exists()]:
+        raise SystemExit(f"saved fields missing, nothing re-solved: {missing}")
+    fields = {}
+    for path in paths:
+        with np.load(path) as data:
+            fields[path.stem] = (data["u"], data["v"])
+    out: dict = {"metric": {}}
+    for stem, (u, v) in fields.items():
+        n = u.shape[0]
+        config = load_case("cavity", grid=(n, n))
+        mesh = Mesh(config)
+        out["metric"][stem] = cavity_true_centerline_errors(
+            config, mesh, u, v
+        ).components
+        if stem.startswith("staggered"):
+            out["metric"][stem]["face_gap"] = face_gaps(config, mesh, u, v)
+    lines = {}
+    for n in GRIDS:
+        u_line, v_line, _ = centerline_faces(*fields[f"staggered-jacobi_{n}"])
+        s = np.array([0.0, *(np.arange(n) + 0.5) / n, 1.0])
+        lines[n] = (
+            (s, np.array([0.0, *u_line, 1.0])),
+            (s, np.array([0.0, *v_line, 0.0])),
+        )
+    for axis, (positions, ghia) in enumerate(
+        ((GHIA_U_Y, GHIA_U_VAL), (GHIA_V_X, GHIA_V_VAL))
+    ):
+        stations, ref = np.array(positions[1:-1]), np.array(ghia[1:-1])
+        profiles = {n: lines[n][axis] for n in GRIDS}
+        cubic = richardson(profiles, stations)
+        quintic = richardson(profiles, stations, k=6)
+        out["uv"[axis]] = {
+            "station": stations.tolist(),
+            "order": cubic["order"].tolist(),
+            "f80_minus_ghia": (cubic["f80"] - ref).tolist(),
+            "step_40_to_80": (cubic["f80"] - cubic["f40"]).tolist(),
+            "limit_minus_ghia": (cubic["limit"] - ref).tolist(),
+            # Raising the interpolation from cubic to quintic bounds what the
+            # interpolation itself contributes to each value and order.
+            "quintic_shift": {
+                n: float(np.abs(quintic[f"f{n}"] - cubic[f"f{n}"]).max()) for n in GRIDS
+            },
+            "quintic_order_shift": float(
+                np.nanmax(np.abs(quintic["order"] - cubic["order"]))
+            ),
+        }
+    return out
+
+
 def main(argv: list[str] | None = None) -> int:
     """Run the control, the six solves, and the analysis; print and save a JSON summary."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--solve-only", action="store_true")
+    parser.add_argument("--extrapolate", action="store_true")
     args = parser.parse_args(argv)
+    if args.extrapolate:
+        text = json.dumps(extrapolation(), indent=2)
+        (FIELD_DIR / "extrapolation.json").write_text(text, encoding="utf-8")
+        print(text)
+        return 0
 
     # A difference spread evenly over the grid would put these shares in each region.
     masks = region_masks(GRIDS[1]) | wall_split_masks(GRIDS[1])
