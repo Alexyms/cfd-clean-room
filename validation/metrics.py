@@ -12,7 +12,20 @@ import numpy as np
 from src.config import SimConfig
 from src.mesh import FLUID, Mesh
 
-# Ghia, Ghia and Shin (1982), Re = 100.
+# Ghia, Ghia and Shin (1982), Re = 100: Table I (u) and Table II (v).
+#
+# Revision r2, 2026-09-22: the v table is replaced. The one that entered the
+# repository with the VAL-002 test on 2026-04-16 (d589b9f) was not Table II:
+# its stations were Table I's y stations, and six of its sixteen values appear
+# nowhere in Table II. It also failed a check that needs no source: the net
+# vertical flux through y = 0.5 of a closed cavity is zero, and that table
+# integrated to -0.095 (tests/test_validation.py, TestGhiaTables). The u table
+# was right and is unchanged. The reference name moves to ghia_1982_re100_r2
+# instead of keeping ghia_1982_re100, because every stored row carrying the
+# old name was scored against the old table; reusing the name would silently
+# change what those rows claim. See the ECR-001 erratum.
+GHIA_REFERENCE = "ghia_1982_re100_r2"
+
 # u-velocity along the vertical centerline (x = 0.5), sampled at these y.
 GHIA_U_Y: tuple[float, ...] = (
     1.0000,
@@ -59,17 +72,18 @@ GHIA_V_X: tuple[float, ...] = (
     0.9688,
     0.9609,
     0.9531,
-    0.8516,
-    0.7344,
-    0.6172,
+    0.9453,
+    0.9063,
+    0.8594,
+    0.8047,
     0.5000,
-    0.4531,
-    0.2813,
-    0.1719,
-    0.1016,
+    0.2344,
+    0.2266,
+    0.1563,
+    0.0938,
+    0.0781,
     0.0703,
     0.0625,
-    0.0547,
     0.0000,
 )
 GHIA_V_VAL: tuple[float, ...] = (
@@ -77,17 +91,18 @@ GHIA_V_VAL: tuple[float, ...] = (
     -0.05906,
     -0.07391,
     -0.08864,
-    -0.24533,
-    -0.22445,
-    -0.16914,
-    -0.11477,
     -0.10313,
-    -0.04272,
-    0.02135,
-    0.07156,
-    0.09515,
+    -0.16914,
+    -0.22445,
+    -0.24533,
+    0.05454,
+    0.17527,
+    0.17507,
+    0.16077,
+    0.12317,
+    0.10890,
     0.10091,
-    0.10643,
+    0.09233,
     0.00000,
 )
 
@@ -277,6 +292,6 @@ def cavity_centerline_errors(
     return ErrorMetric(
         metric="max_normalized_centerline_error",
         value=max(u_err, v_err),
-        reference="ghia_1982_re100",
+        reference=GHIA_REFERENCE,
         components={"u": u_err, "v": v_err},
     )
