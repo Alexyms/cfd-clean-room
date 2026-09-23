@@ -126,3 +126,32 @@ def test_concurrent_rejects_values_below_one(
         err = capsys.readouterr().err
         assert "--concurrent" in err
         assert f"must be at least 1, got {value}" in err
+
+
+@pytest.mark.unit
+def test_summary_never_pools_two_references(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """One case scored against the old and the corrected Ghia table gets two error ranges.
+
+    Without the reference in the row key the stored ghia_1982_re100 rows and
+    the ghia_1982_re100_r2 rows would print as one range spanning both tables.
+    """
+    old = _record("val002_40x40", 1, 85.0)
+    old["accuracy"] = {"value": 0.1893, "reference": "ghia_1982_re100"}
+    new = _record("val002_40x40", 1, 86.0)
+    new["accuracy"] = {"value": 0.0511, "reference": "ghia_1982_re100_r2"}
+    benchmark.print_summary(_write(tmp_path / "results.jsonl", [old, new]))
+    out = capsys.readouterr().out
+    rows = [line for line in out.splitlines() if line.startswith("collocated-jacobi")]
+    assert len(rows) == 2
+    old_row = next(line for line in rows if line.endswith(" ghia_1982_re100"))
+    new_row = next(line for line in rows if line.endswith(" ghia_1982_re100_r2"))
+    assert "1.893e-01" in old_row
+    assert "5.110e-02" not in old_row
+    assert "5.110e-02" in new_row
+    assert "1.893e-01" not in new_row
+    assert (
+        "note: collocated-jacobi val002_40x40 has rows scored against "
+        "['ghia_1982_re100', 'ghia_1982_re100_r2']"
+    ) in out
