@@ -21,6 +21,7 @@ import self_convergence  # noqa: E402 -- scripts/ is not a package; path set abo
 from src.mesh import Mesh  # noqa: E402 -- follows sys.path.insert
 from validation.cases import load_case  # noqa: E402 -- follows sys.path.insert
 from validation.metrics import (  # noqa: E402 -- follows sys.path.insert
+    GHIA_V_X,
     cavity_centerline_profiles,
     cavity_true_centerline_profiles,
 )
@@ -143,3 +144,36 @@ def test_true_centerline_meets_the_saved_staggered_faces_at_second_order() -> No
     print(f"gap orders [u, v] per step: {orders}")
     assert np.all(np.abs(orders["true"] - 2.0) < 0.5), orders
     assert np.all(np.abs(orders["offset"] - 1.0) < 0.5), orders
+
+
+@pytest.mark.unit
+def test_extrapolation_control_recovers_a_known_limit_and_refuses_first_order() -> None:
+    """h^2 returns the limit to rounding at order 2; h reads order 1 and is unlicensed."""
+    stations = np.array(GHIA_V_X[1:-1])
+    self_convergence.run_extrapolation_control(stations)
+    second = self_convergence.richardson(
+        self_convergence.synthetic_profiles(2.0), stations
+    )
+    first = self_convergence.richardson(
+        self_convergence.synthetic_profiles(1.0), stations
+    )
+    exact = stations**3 - 0.5 * stations
+    assert np.allclose(second["order"], 2.0, rtol=0.0, atol=1e-9)
+    assert np.allclose(second["limit"], exact, rtol=0.0, atol=1e-13)
+    assert np.allclose(first["order"], 1.0, rtol=0.0, atol=1e-9)
+    assert np.isnan(first["limit"]).all()
+
+
+@pytest.mark.unit
+def test_extrapolation_control_stops_on_a_wrong_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The planted failure: a profile whose limit is not the one the control expects."""
+    real = self_convergence.synthetic_profiles
+    monkeypatch.setattr(
+        self_convergence,
+        "synthetic_profiles",
+        lambda q: {n: (s, f + 1e-6) for n, (s, f) in real(q).items()},
+    )
+    with pytest.raises(SystemExit, match="extrapolation control failed"):
+        self_convergence.run_extrapolation_control(np.array(GHIA_V_X[1:-1]))

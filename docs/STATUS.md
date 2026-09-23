@@ -112,9 +112,12 @@ erratum in `docs/ECR/ECR-001-solver-architecture-rebuild.md`, section 12, and th
 in `benchmarks/results.jsonl`. Against the same table the staggered solver's v error is
 below the collocated one's on the coarse grids but falls more slowly, and at 80x80 it is the
 higher of the two. Measured against itself it converges at second order or better away from
-the lid corners. Its slow approach to Ghia is mostly the metric's own sampling, half a cell
-off the centerlines, plus a floor of unsettled origin. The collocated solver is not yet
-asymptotic on these grids. See `docs/reports/cavity_self_convergence.md`.
+the lid corners. Its slow approach to Ghia was mostly the metric's own sampling, half a cell
+off the centerlines. The harness, the viewer and VAL-002 now sample on the centerlines under
+a new metric name, `max_normalized_centerline_error_r2`, and the stored rows keep the old
+one. On the true centerlines what remains is a floor that stops falling between the two
+finer grids, of unsettled origin. The collocated solver is not yet asymptotic on these
+grids. See `docs/reports/cavity_self_convergence.md`.
 
 The inlet flux the collocated layer prescribes on VAL-001 is short of the exact value by
 two rows of cells, because its edge map hands the corner ring cells to the top and bottom
@@ -130,7 +133,9 @@ been corrected. REQ-S02's threshold is unchanged; only its recorded justificatio
 ## Tooling
 
 `scripts/self_convergence.py` measures each solver's order on the cavity against itself, with
-no reference, after a control on synthetic fields of known order.
+no reference, after a control on synthetic fields of known order. With `--extrapolate` it
+extrapolates the staggered centerline profiles pointwise from the saved fields, after a
+control of its own, where the observed order licenses it.
 
 `scripts/gen_system_map.py` regenerates sections of `docs/SYSTEM.md` from the source tree by
 AST parsing, never by importing. CI runs it with `--check`, so a change under `src/` that
@@ -173,10 +178,10 @@ measurement showed; it should not restate the measurement.
 Clear the outstanding branch stack bottom up through review. The rebuild continues at step
 7, VAL-001 revalidation on the staggered solver, which has to settle the criterion 2 mesh
 question below and whether the stopping rule needs a continuity term. Step 8 judges
-VAL-002 against the corrected reference, `ghia_1982_re100_r2`, and before it the cavity
-metric should take its profiles on the centerlines rather than half a cell off them, in a
-change of its own under a new metric name (`docs/reports/cavity_self_convergence.md`,
-section 7).
+VAL-002 against the corrected reference, `ghia_1982_re100_r2`, on the true centerlines;
+its harness run writes the first rows under `max_normalized_centerline_error_r2`. Whether
+the floor on the true centerline bears on ECR-001 criterion 3a is a decision that waits on
+the open question below.
 
 The review workflow was changed on 2026-09-23: the code-review plugin's full declared tool
 set is allowed, the top-level model and the action are pinned, and the manual dispatch is
@@ -213,10 +218,14 @@ not hold. See the ECR-001 erratum, section 12.
 
 Narrowed 2026-09-23: why the staggered solver's cavity error falls slowly toward Ghia.
 Not the scheme: against itself it converges at second order or better away from the lid
-corners. The metric's half-cell offset accounts for most of the slope. What remains open is
-the floor left on the true centerline, which is either Ghia's error or a consistent error
-in this solver's limit; the report names the observation that would settle it
-(`docs/reports/cavity_self_convergence.md`, section 7).
+corners. The metric's half-cell offset accounted for most of the slope, and is closed: the
+metric now samples on the centerlines. What remains open is the floor left on the true
+centerline, which is either Ghia's error or a consistent error in this solver's limit. A
+reference-free extrapolation from the three saved grids could not answer it: at most of
+Ghia's stations the pointwise order is not second order, and in the jet by the right wall
+the profile reverses direction between grids, so extrapolation is not licensed there. A
+fourth grid or an independent solution would settle it
+(`docs/reports/cavity_self_convergence.md`, sections 7 and 9).
 
 Which mesh quantity ECR-001 acceptance criterion 2 fixes. At a given cell count the
 geometric ratio and the wall spacing determine each other, so the criterion's ratio of 1.05
