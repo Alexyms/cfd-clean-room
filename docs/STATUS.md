@@ -111,7 +111,10 @@ The wall leak above stands on its own measurement, which uses no reference data.
 erratum in `docs/ECR/ECR-001-solver-architecture-rebuild.md`, section 12, and the r2 rows
 in `benchmarks/results.jsonl`. Against the same table the staggered solver's v error is
 below the collocated one's on the coarse grids but falls more slowly, and at 80x80 it is the
-higher of the two; why is an open question below.
+higher of the two. Measured against itself it converges at second order or better away from
+the lid corners. Its slow approach to Ghia is mostly the metric's own sampling, half a cell
+off the centerlines, plus a floor of unsettled origin. The collocated solver is not yet
+asymptotic on these grids. See `docs/reports/cavity_self_convergence.md`.
 
 The inlet flux the collocated layer prescribes on VAL-001 is short of the exact value by
 two rows of cells, because its edge map hands the corner ring cells to the top and bottom
@@ -125,6 +128,9 @@ the code and found never to have been true of any committed state. The requireme
 been corrected. REQ-S02's threshold is unchanged; only its recorded justification moved.
 
 ## Tooling
+
+`scripts/self_convergence.py` measures each solver's order on the cavity against itself, with
+no reference, after a control on synthetic fields of known order.
 
 `scripts/gen_system_map.py` regenerates sections of `docs/SYSTEM.md` from the source tree by
 AST parsing, never by importing. CI runs it with `--check`, so a change under `src/` that
@@ -167,7 +173,10 @@ measurement showed; it should not restate the measurement.
 Clear the outstanding branch stack bottom up through review. The rebuild continues at step
 7, VAL-001 revalidation on the staggered solver, which has to settle the criterion 2 mesh
 question below and whether the stopping rule needs a continuity term. Step 8 judges
-VAL-002 against the corrected reference, `ghia_1982_re100_r2`.
+VAL-002 against the corrected reference, `ghia_1982_re100_r2`, and before it the cavity
+metric should take its profiles on the centerlines rather than half a cell off them, in a
+change of its own under a new metric name (`docs/reports/cavity_self_convergence.md`,
+section 7).
 
 ## Open questions
 
@@ -193,9 +202,12 @@ Ghia table. The v reference was replaced by Table II as `ghia_1982_re100_r2`; th
 collocated v error falls under refinement, and the v refinement argument in ECR-001 does
 not hold. See the ECR-001 erratum, section 12.
 
-Why the staggered solver's cavity v error falls slowly under refinement. Against the
-corrected reference it is below the collocated v error at 20x20 and 40x40 and above it at
-80x80; the r2 rows in `benchmarks/results.jsonl` hold the series.
+Narrowed 2026-09-23: why the staggered solver's cavity error falls slowly toward Ghia.
+Not the scheme: against itself it converges at second order or better away from the lid
+corners. The metric's half-cell offset accounts for most of the slope. What remains open is
+the floor left on the true centerline, which is either Ghia's error or a consistent error
+in this solver's limit; the report names the observation that would settle it
+(`docs/reports/cavity_self_convergence.md`, section 7).
 
 Which mesh quantity ECR-001 acceptance criterion 2 fixes. At a given cell count the
 geometric ratio and the wall spacing determine each other, so the criterion's ratio of 1.05
