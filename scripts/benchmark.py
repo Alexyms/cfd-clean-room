@@ -60,7 +60,7 @@ from validation.cases import (  # noqa: E402 -- follows sys.path.insert
     load_case,
 )
 from validation.metrics import (  # noqa: E402 -- follows sys.path.insert
-    cavity_centerline_errors,
+    cavity_true_centerline_errors,
     poiseuille_l2_error,
 )
 
@@ -317,7 +317,7 @@ def run_case(case_id: str, method: str, sample_every: int, concurrent: int) -> d
     def error_of(u: np.ndarray, v: np.ndarray) -> dict:
         if kind == "poiseuille":
             return poiseuille_l2_error(config, mesh, u).as_dict()
-        return cavity_centerline_errors(config, mesh, u, v).as_dict()
+        return cavity_true_centerline_errors(config, mesh, u, v).as_dict()
 
     work = counter.work
     trajectory: list[dict] = []
@@ -383,7 +383,7 @@ def run_case(case_id: str, method: str, sample_every: int, concurrent: int) -> d
 
 
 def print_summary(path: Path) -> None:
-    """Print one row per method, case, concurrency and reference; flag mixed ones.
+    """Print one row per method, case, concurrency, metric and reference; flag mixed ones.
 
     Wall time is only comparable between runs that shared the machine with
     the same number of processes, so ``concurrent_processes`` is part of the
@@ -399,6 +399,10 @@ def print_summary(path: Path) -> None:
     case scored against more than one reference is named. The rows stored
     before revision r2 of the Ghia table carry ``ghia_1982_re100`` and would
     otherwise be pooled into one error range with the corrected rows.
+
+    The metric is part of the key for the same reason. The cavity rows stored
+    as ``max_normalized_centerline_error`` sample half a cell off the
+    centerlines; ``max_normalized_centerline_error_r2`` samples on them.
     """
     if not path.exists():
         print(f"{path} does not exist; nothing recorded yet.")
@@ -407,7 +411,7 @@ def print_summary(path: Path) -> None:
         json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()
     ]
     groups: dict[tuple[str, str, int], list[dict]] = {}
-    rows: dict[tuple[str, str, int, str], list[dict]] = {}
+    rows: dict[tuple[str, str, int, str, str], list[dict]] = {}
     for record in records:
         key = (
             record["method"],
@@ -415,18 +419,19 @@ def print_summary(path: Path) -> None:
             record["environment"]["concurrent_processes"],
         )
         groups.setdefault(key, []).append(record)
-        # Every harness row names its reference; a hand-built record may not.
+        # Every harness row names its metric and reference; a hand-built record may not.
+        metric = record["accuracy"].get("metric", "-")
         reference = record["accuracy"].get("reference", "-")
-        rows.setdefault((*key, reference), []).append(record)
+        rows.setdefault((*key, metric, reference), []).append(record)
 
     header = (
         f"{'method':<20} {'case':<14} {'procs':>5} {'n':>2} {'outer':>10} "
         f"{'wall s (min/med/max)':>24} {'cell updates':>14} "
-        f"{'error (min..max)':>20} {'conv':>5} reference"
+        f"{'error (min..max)':>20} {'conv':>5} {'metric':<34} reference"
     )
     print(header)
     print("-" * len(header))
-    for (method, case, procs, reference), runs in sorted(rows.items()):
+    for (method, case, procs, metric, reference), runs in sorted(rows.items()):
         outer = [r["work"]["outer_iterations"] for r in runs]
         wall = [r["time"]["wall_seconds"] for r in runs]
         updates = [r["work"]["cell_updates"] for r in runs]
@@ -438,17 +443,25 @@ def print_summary(path: Path) -> None:
             f"{min(wall):>7.1f}/{statistics.median(wall):>7.1f}/{max(wall):>7.1f} "
             f"{statistics.median(updates):>14.3e} "
             f"{min(error):>9.3e}..{max(error):<9.3e} {conv:>2}/{len(runs)} "
-            f"{reference}"
+            f"{metric:<34} {reference}"
         )
 
     references: dict[tuple[str, str], set[str]] = {}
-    for method, case, _procs, reference in rows:
+    metrics: dict[tuple[str, str], set[str]] = {}
+    for method, case, _procs, metric, reference in rows:
         references.setdefault((method, case), set()).add(reference)
+        metrics.setdefault((method, case), set()).add(metric)
     for (method, case), seen in sorted(references.items()):
         if len(seen) > 1:
             print(
                 f"note: {method} {case} has rows scored against {sorted(seen)}; "
                 "errors are comparable only within one reference"
+            )
+    for (method, case), seen in sorted(metrics.items()):
+        if len(seen) > 1:
+            print(
+                f"note: {method} {case} has rows measured by {sorted(seen)}; "
+                "errors are comparable only within one metric"
             )
 
     loads_seen = sorted({procs for _, _, procs in groups})

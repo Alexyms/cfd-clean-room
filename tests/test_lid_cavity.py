@@ -4,8 +4,8 @@ Verifies that the NS solver reproduces the Ghia et al. (1982) benchmark
 centerline velocity profiles for a lid-driven cavity at Re=100. The
 maximum normalized error must be below 2% for both u and v profiles
 (REQ-S03). The case configuration is configs/validation_cavity.yaml and
-the metric is validation.metrics.cavity_centerline_errors, both shared
-with the benchmark harness so the two cannot drift apart.
+the metric is validation.metrics.cavity_true_centerline_errors, both
+shared with the benchmark harness so the two cannot drift apart.
 """
 
 import pytest
@@ -14,15 +14,16 @@ from src.boundary import BoundaryManager
 from src.mesh import Mesh
 from src.solver_ns import NavierStokesSolver
 from validation.cases import load_case
-from validation.metrics import cavity_centerline_errors
+from validation.metrics import cavity_true_centerline_errors
 
 
 @pytest.mark.validation
 @pytest.mark.xfail(
     reason=(
         "The collocated solver fails the 2% criterion in both u and v against the "
-        "corrected reference ghia_1982_re100_r2; the staggered solver's VAL-002 "
-        "validation is ECR-001 steps 7 and 8"
+        "corrected reference ghia_1982_re100_r2, on the true centerlines as well as "
+        "half a cell off them; the staggered solver's VAL-002 validation is ECR-001 "
+        "steps 7 and 8"
     )
 )
 def test_lid_driven_cavity_val002() -> None:
@@ -42,7 +43,7 @@ def test_lid_driven_cavity_val002() -> None:
 
     n_iter = len(solver.residual_history)
     final_residual = solver.compute_residual()
-    metric = cavity_centerline_errors(config, mesh, u, v)
+    metric = cavity_true_centerline_errors(config, mesh, u, v)
     max_u_error = metric.components["u"]
     max_v_error = metric.components["v"]
 

@@ -222,6 +222,62 @@ def cavity_centerline_profiles(
     return y_profile, u_profile, x_profile, v_profile
 
 
+def _bracket(centers: np.ndarray, target: float) -> tuple[int, float]:
+    """Index i and weight w with target = (1 - w) centers[i] + w centers[i + 1].
+
+    A target that coincides with a center gets that center and w = 0, so an
+    odd grid reads its middle column exactly.
+    """
+    i = int(np.searchsorted(centers, target, side="right")) - 1
+    i = min(max(i, 0), len(centers) - 2)
+    return i, float((target - centers[i]) / (centers[i + 1] - centers[i]))
+
+
+def cavity_true_centerline_profiles(
+    config: SimConfig, mesh: Mesh, u: np.ndarray, v: np.ndarray
+) -> tuple[list[float], list[float], list[float], list[float]]:
+    """Profiles on the true centerlines x = 0.5 and y = 0.5, walls appended.
+
+    Parameters
+    ----------
+    config : SimConfig
+        Case configuration; supplies the lid speed.
+    mesh : Mesh
+        Mesh the solution was computed on.
+    u, v : np.ndarray
+        Cell-centered velocity fields [ny, nx].
+
+    Returns
+    -------
+    tuple[list[float], list[float], list[float], list[float]]
+        (y, u along x = 0.5, x, v along y = 0.5), in the layout of
+        cavity_centerline_profiles.
+
+    Notes
+    -----
+    cavity_centerline_profiles reads column nx // 2, whose center lies at
+    0.5 + h/2 on an even grid, a first-order error in position. Here each
+    profile is interpolated linearly between the two columns (rows) whose
+    centers bracket the midline, which is second order on any mesh: the mean
+    of the two middle columns on an even uniform grid, the middle column on an
+    odd one. A row is kept when both of its bracketing cells are FLUID.
+    """
+    u_lid = _lid_velocity(config)
+    xc, yc = np.asarray(mesh.xc), np.asarray(mesh.yc)
+    i, wx = _bracket(xc, 0.5 * (mesh.x[0] + mesh.x[-1]))
+    col = (mesh.cell_type[:, i] == FLUID) & (mesh.cell_type[:, i + 1] == FLUID)
+    u_line = (1.0 - wx) * u[:, i] + wx * u[:, i + 1]
+    y_profile = [0.0, *yc[col], 1.0]
+    u_profile = [0.0, *u_line[col], u_lid]
+
+    j, wy = _bracket(yc, 0.5 * (mesh.y[0] + mesh.y[-1]))
+    row = (mesh.cell_type[j, :] == FLUID) & (mesh.cell_type[j + 1, :] == FLUID)
+    v_line = (1.0 - wy) * v[j, :] + wy * v[j + 1, :]
+    x_profile = [0.0, *xc[row], 1.0]
+    v_profile = [0.0, *v_line[row], 0.0]
+    return y_profile, u_profile, x_profile, v_profile
+
+
 def poiseuille_l2_error(config: SimConfig, mesh: Mesh, u: np.ndarray) -> ErrorMetric:
     """L2 relative error of the mid-channel u profile against the parabola.
 
@@ -291,6 +347,50 @@ def cavity_centerline_errors(
     )
     return ErrorMetric(
         metric="max_normalized_centerline_error",
+        value=max(u_err, v_err),
+        reference=GHIA_REFERENCE,
+        components={"u": u_err, "v": v_err},
+    )
+
+
+def cavity_true_centerline_errors(
+    config: SimConfig, mesh: Mesh, u: np.ndarray, v: np.ndarray
+) -> ErrorMetric:
+    """Max normalized errors against Ghia et al. (1982), sampled on the true centerlines.
+
+    Parameters
+    ----------
+    config : SimConfig
+        Case configuration; supplies the lid speed.
+    mesh : Mesh
+        Mesh the solution was computed on.
+    u, v : np.ndarray
+        Cell-centered velocity fields [ny, nx].
+
+    Returns
+    -------
+    ErrorMetric
+        Value is the larger of the u and v errors; both are in components.
+
+    Notes
+    -----
+    The same comparison as cavity_centerline_errors, taken on the profiles
+    of cavity_true_centerline_profiles. The metric carries its own name
+    because every row stored under the old one was sampled half a cell off
+    the centerlines on an even grid.
+    """
+    y_profile, u_profile, x_profile, v_profile = cavity_true_centerline_profiles(
+        config, mesh, u, v
+    )
+    u_lid = _lid_velocity(config)
+    u_err = float(
+        np.max(np.abs(np.interp(GHIA_U_Y, y_profile, u_profile) / u_lid - GHIA_U_VAL))
+    )
+    v_err = float(
+        np.max(np.abs(np.interp(GHIA_V_X, x_profile, v_profile) / u_lid - GHIA_V_VAL))
+    )
+    return ErrorMetric(
+        metric="max_normalized_centerline_error_r2",
         value=max(u_err, v_err),
         reference=GHIA_REFERENCE,
         components={"u": u_err, "v": v_err},

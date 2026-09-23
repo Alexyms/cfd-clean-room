@@ -51,8 +51,8 @@ from validation.metrics import (  # noqa: E402 -- follows sys.path.insert
     GHIA_U_Y,
     GHIA_V_VAL,
     GHIA_V_X,
-    cavity_centerline_errors,
-    cavity_centerline_profiles,
+    cavity_true_centerline_errors,
+    cavity_true_centerline_profiles,
     poiseuille_l2_error,
     poiseuille_profiles,
 )
@@ -131,14 +131,16 @@ def render(npz_path: Path, out_dir: Path) -> Path:
 
     ax = axes[2]
     if kind.startswith("cavity"):
-        y_prof, u_prof, x_prof, v_prof = cavity_centerline_profiles(config, mesh, u, v)
+        y_prof, u_prof, x_prof, v_prof = cavity_true_centerline_profiles(
+            config, mesh, u, v
+        )
         ax.plot(y_prof, u_prof, "-", label="u along x = 0.5 (solver)")
         ax.plot(GHIA_U_Y, GHIA_U_VAL, "o", label="u Ghia 1982")
         ax.plot(x_prof, v_prof, "-", label="v along y = 0.5 (solver)")
         ax.plot(GHIA_V_X, GHIA_V_VAL, "s", label="v Ghia 1982")
         ax.set_xlabel("y for u, x for v")
         ax.set_ylabel("velocity / U_lid")
-        metric = cavity_centerline_errors(config, mesh, u, v)
+        metric = cavity_true_centerline_errors(config, mesh, u, v)
         summary = (
             f"max err u {metric.components['u']:.3f}, v {metric.components['v']:.3f}"
         )

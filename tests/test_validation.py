@@ -2,15 +2,21 @@
 
 import numpy as np
 import pytest
+import yaml
 
-from src.mesh import Mesh
+from src.config import SimConfig
+from src.mesh import FLUID, Mesh
 from validation.cases import CASE_FILES, CASE_GRIDS, case_path, load_case
 from validation.metrics import (
     GHIA_U_VAL,
     GHIA_U_Y,
     GHIA_V_VAL,
     GHIA_V_X,
+    _bracket,
     cavity_centerline_errors,
+    cavity_centerline_profiles,
+    cavity_true_centerline_errors,
+    cavity_true_centerline_profiles,
     poiseuille_l2_error,
     poiseuille_profiles,
 )
@@ -117,6 +123,92 @@ class TestCavityMetric:
         zero = cavity_centerline_errors(
             config, mesh, np.zeros_like(u), np.zeros_like(v)
         )
+        assert close.value < 0.05
+        assert zero.value > 0.3
+
+
+def _cavity(n: int, stretch: float = 1.0) -> tuple[SimConfig, Mesh]:
+    """The cavity case on an n x n grid, with the same stretch ratio on both axes."""
+    raw = yaml.safe_load(case_path("cavity").read_text(encoding="utf-8"))
+    raw["domain"]["nx"] = raw["domain"]["ny"] = n
+    raw["mesh"] = {"x": {"stretch_ratio": stretch}, "y": {"stretch_ratio": stretch}}
+    config = SimConfig.from_dict(raw)
+    return config, Mesh(config)
+
+
+# u = A + B x and v = A + B y read exactly A + B / 2 on the centerlines.
+A, B = 0.3, 0.8
+
+
+def _linear_fields(mesh: Mesh) -> tuple[np.ndarray, np.ndarray]:
+    """Cell-centered u = A + B x and v = A + B y, [ny, nx]."""
+    x, y = np.meshgrid(np.asarray(mesh.xc), np.asarray(mesh.yc))
+    return A + B * x, A + B * y
+
+
+@pytest.mark.unit
+class TestTrueCenterlineMetric:
+    """cavity_true_centerline_errors samples on x = 0.5 and y = 0.5, not half a cell off."""
+
+    def test_linear_field_is_read_on_the_centerline(self) -> None:
+        """The new sampling recovers A + B/2 to rounding; the old one misses by B h/2.
+
+        The old metric missing is the control: it shows the test can tell a
+        sample on the centerline from one half a cell off it. Only the sampled
+        values are compared; the wall values at each end are appended, not read.
+        """
+        n = 16
+        config, mesh = _cavity(n)
+        u, v = _linear_fields(mesh)
+        _y, u_new, _x, v_new = cavity_true_centerline_profiles(config, mesh, u, v)
+        _y, u_old, _x, v_old = cavity_centerline_profiles(config, mesh, u, v)
+        for new, old in ((u_new, u_old), (v_new, v_old)):
+            assert np.allclose(new[1:-1], A + B / 2, rtol=0.0, atol=1e-14)
+            miss = np.asarray(old[1:-1]) - (A + B / 2)
+            assert np.allclose(miss, B / (2 * n), rtol=0.0, atol=1e-14)
+
+    def test_odd_grid_reads_the_middle_column_exactly(self) -> None:
+        """x = 0.5 is a cell center on an odd grid, so both samplings read that column."""
+        n = 21
+        config, mesh = _cavity(n)
+        u, v = np.random.default_rng(1).standard_normal((2, n, n))
+        new = cavity_true_centerline_profiles(config, mesh, u, v)
+        fluid = mesh.cell_type[:, n // 2] == FLUID
+        assert np.array_equal(new[1][1:-1], u[fluid, n // 2])
+        assert np.array_equal(new[3][1:-1], v[n // 2, fluid])
+        assert new == cavity_centerline_profiles(config, mesh, u, v)
+
+    @pytest.mark.parametrize("n", [16, 15])
+    def test_stretched_mesh_is_read_on_the_centerline(self, n: int) -> None:
+        """A linear field on a wall-clustered mesh, even and odd, is read at A + B/2."""
+        config, mesh = _cavity(n, stretch=1.1)
+        assert not mesh.is_uniform
+        u, v = _linear_fields(mesh)
+        _y, u_new, _x, v_new = cavity_true_centerline_profiles(config, mesh, u, v)
+        assert np.allclose(u_new[1:-1], A + B / 2, rtol=0.0, atol=1e-14)
+        assert np.allclose(v_new[1:-1], A + B / 2, rtol=0.0, atol=1e-14)
+
+    def test_bracket_weights_an_unequal_pair_by_distance(self) -> None:
+        """The mesh stretches symmetrically, so its middle pair always weighs 1/2;
+        an unequal pair shows the weight follows the distances."""
+        i, w = _bracket(np.array([0.1, 0.3, 0.45, 0.7, 0.9]), 0.5)
+        assert (i, w) == (2, pytest.approx(0.2))
+
+    def test_new_metric_has_its_own_name_and_can_be_small_or_large(self) -> None:
+        """The old name stays with the old sampling; the new one scores both ways."""
+        config, mesh = _cavity(32)
+        x, y = np.meshgrid(np.asarray(mesh.xc), np.asarray(mesh.yc))
+        # Ghia's profiles, constant across each centerline, so both samplings see them.
+        u = np.interp(y, GHIA_U_Y[::-1], GHIA_U_VAL[::-1])
+        v = np.interp(x, GHIA_V_X[::-1], GHIA_V_VAL[::-1])
+        close = cavity_true_centerline_errors(config, mesh, u, v)
+        zero = cavity_true_centerline_errors(config, mesh, 0.0 * u, 0.0 * v)
+        assert close.metric == "max_normalized_centerline_error_r2"
+        assert cavity_centerline_errors(config, mesh, u, v).metric == (
+            "max_normalized_centerline_error"
+        )
+        assert close.reference == "ghia_1982_re100_r2"
+        assert close.value == max(close.components.values())
         assert close.value < 0.05
         assert zero.value > 0.3
 

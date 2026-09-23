@@ -155,3 +155,43 @@ def test_summary_never_pools_two_references(
         "note: collocated-jacobi val002_40x40 has rows scored against "
         "['ghia_1982_re100', 'ghia_1982_re100_r2']"
     ) in out
+
+
+@pytest.mark.unit
+def test_summary_never_pools_two_metrics(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """One case scored by the offset and the true-centerline metric gets two error ranges.
+
+    Both carry the same reference, so only the metric in the row key keeps
+    them apart.
+    """
+    old = _record("val002_40x40", 1, 85.0)
+    old["accuracy"] = {
+        "metric": "max_normalized_centerline_error",
+        "value": 0.0224,
+        "reference": "ghia_1982_re100_r2",
+    }
+    new = _record("val002_40x40", 1, 86.0)
+    new["accuracy"] = {
+        "metric": "max_normalized_centerline_error_r2",
+        "value": 0.0080,
+        "reference": "ghia_1982_re100_r2",
+    }
+    benchmark.print_summary(_write(tmp_path / "results.jsonl", [old, new]))
+    out = capsys.readouterr().out
+    rows = [line for line in out.splitlines() if line.startswith("collocated-jacobi")]
+    assert len(rows) == 2
+    old_row = next(line for line in rows if " max_normalized_centerline_error " in line)
+    new_row = next(
+        line for line in rows if " max_normalized_centerline_error_r2 " in line
+    )
+    assert "2.240e-02" in old_row
+    assert "8.000e-03" not in old_row
+    assert "8.000e-03" in new_row
+    assert "2.240e-02" not in new_row
+    assert (
+        "note: collocated-jacobi val002_40x40 has rows measured by "
+        "['max_normalized_centerline_error', 'max_normalized_centerline_error_r2']"
+    ) in out
+    assert "scored against" not in out
