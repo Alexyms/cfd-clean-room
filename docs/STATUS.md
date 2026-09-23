@@ -17,7 +17,7 @@ project has already lost five months to exactly that.
 Phases 0 and 1 are complete. Phase 2 is in progress: the Navier-Stokes solver exists and
 runs, VAL-001 passes against its current criterion, VAL-002 is marked xfail against a
 documented defect, and the approved engineering change request to rebuild the solver is
-five steps into its eight-step plan. Phases 3 through 7 have not begun.
+six steps into its nine-step plan. Phases 3 through 7 have not begun.
 
 `docs/PROJECT_PLAN.md` holds the phase detail, deliverables and validation gates.
 
@@ -28,7 +28,7 @@ arrangement with non-uniform mesh support and QUICK advection. The change reques
 the source of truth for scope, requirement edits, acceptance criteria and the implementation
 plan: `docs/ECR/ECR-001-solver-architecture-rebuild.md`.
 
-The rebuild decomposes into eight increments, each reviewable in isolation. Steps 1 and 2,
+The rebuild decomposes into nine increments, each reviewable in isolation. Steps 1 and 2,
 the mesh extension and the staggered field layout, and step 3, boundary conditions imposed
 directly on the staggered components, are implemented. Step 3 split the boundary module in
 two layers over one shared interpretation of the configuration (`src/boundary_registry.py`,
@@ -59,7 +59,17 @@ content, the data-parallel per-cell update, and moves the -1 to -1/3. The closed
 correction now converges. The weight is a constant in `src/pressure.py`, not a
 configuration key. What it costs on the slow modes is measured in
 `docs/reports/pressure_correction_step5.md`, section 5.
-The solver itself is untouched so far and the harness rows reproduce at every step.
+Step 6 put the three modules in one outer loop, `src/solver_staggered.py`, built
+alongside the collocated solver rather than in its place: `src/solver_ns.py` is
+unchanged, both run from one commit, and the harness `--method` label now selects which
+one runs, so a row can no longer claim a solver it did not run. The collocated rows still
+reproduce, and retiring the collocated solver moves to a later step. The staggered solver
+converges on all three default cases and is more accurate than the collocated one on the
+channel and in u on the cavity. On every case it stops with a per-cell mass imbalance
+above acceptance criterion 6's bound: the stopping rule reads the velocity change, and
+capped corrections make small steps before mass is conserved. Whether the rule needs a
+continuity term is step 7's decision. The measurements, and what the unchanged metric
+discards, are in `docs/reports/staggered_integration_step6.md`.
 ADR-010 is deliberately deferred to the end so it records what was built rather than what
 was planned.
 
@@ -94,7 +104,10 @@ u-component converges. A scheme that improves in one direction and degrades in t
 a directional defect rather than a resolution shortfall, and this is consistent with the wall
 treatment above: the u-field is driven directly by the lid boundary condition, while the
 v-field depends on a continuity constraint that the inert pressure correction never enforces.
-Recorded in `benchmarks/results.jsonl`.
+Recorded in `benchmarks/results.jsonl`. The v half of this is now in question: the Ghia v
+reference in `validation/metrics.py` does not match the published table and does not
+conserve mass along the centerline, so every stored v error, collocated and staggered, is
+measured against the wrong profile (`docs/reports/staggered_integration_step6.md`).
 
 The inlet flux the collocated layer prescribes on VAL-001 is short of the exact value by
 two rows of cells, because its edge map hands the corner ring cells to the top and bottom
@@ -148,10 +161,9 @@ measurement showed; it should not restate the measurement.
 ## Next
 
 Clear the outstanding branch stack bottom up through review. The rebuild continues at step
-6, integration into `solve_steady`, on the weighted pressure sweep. Two measurements bear
-on it: the case files' pressure sweep caps are below what one correction from rest needs,
-and the slow modes' sweep count scales as 1/w, so the weight may need to become a tuning
-parameter (`docs/reports/pressure_correction_step5.md`, section 5).
+7, VAL-001 revalidation on the staggered solver, which has to settle the criterion 2 mesh
+question below and whether the stopping rule needs a continuity term. The v reference
+table should be corrected in a change of its own before step 8 judges VAL-002 against it.
 
 ## Open questions
 
@@ -167,6 +179,14 @@ is recorded in the requirement in `docs/SYSTEM.md`; the evidence is in
 `docs/reports/pressure_correction_step5.md`, sections 3 and 5.
 
 Whether VAL-002 can return to the full grid in CI once the rebuild lands.
+
+Whether the stopping rule needs a continuity term. The staggered solver declares
+convergence with a per-cell imbalance above criterion 6's bound; step 6 records it and
+leaves the rule as the collocated one so the outer counts compare.
+
+What the VAL-002 v-component findings become against the published Ghia table. The
+stored reference fails mass conservation along the centerline; the ECR-001 problem
+statement's v refinement series was measured against it.
 
 Which mesh quantity ECR-001 acceptance criterion 2 fixes. At a given cell count the
 geometric ratio and the wall spacing determine each other, so the criterion's ratio of 1.05
