@@ -1,5 +1,7 @@
 # Pressure Solver Probe: Jacobi Convergence in the Collocated SIMPLE Solver
 
+*Erratum 2026-09-22: section 5 calls the wall leak "the same wall-treatment defect ECR-001 identified for the v-velocity error". That v error was an artifact: the Ghia v reference in use until 2026-09-22 was not Ghia's Table II and failed mass conservation along the centerline; see the ECR-001 erratum, section 12, and reference `ghia_1982_re100_r2`. The tables below are unchanged. The wall-leak measurements here use no reference data and stand.*
+
 **Date:** 2026-09-19
 **Branch:** `scratch/pressure-solver-probe` (instrumentation only, not for merge)
 **Baseline:** `main` at `ce097db`

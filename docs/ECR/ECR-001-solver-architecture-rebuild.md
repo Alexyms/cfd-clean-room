@@ -12,6 +12,8 @@
 
 ## 1. Problem Statement
 
+*Erratum 2026-09-22: every v figure in this section was measured against a v reference that is not Ghia's Table II. See section 12.*
+
 VAL-002 (lid-driven cavity, Re=100) fails the acceptance criterion in REQ-S03 (centerline profiles within 2% of Ghia et al. 1982). The u-velocity profile along x=0.5 agrees with Ghia to a maximum absolute error of 1.6% and an L2 error of 0.77%, well within criterion. The v-velocity profile along y=0.5 disagrees with Ghia by a maximum absolute error of 20.1% and an L2 error of 9.3%, concentrated in the interior region x∈[0.28, 0.62]. The error does not decrease under grid refinement (it is present at 80×80 and remains at the same magnitude at 128×128), ruling out discretization truncation as the cause.
 
 Related observations from diagnostic analysis:
@@ -171,7 +173,7 @@ The change is accepted when all of the following are demonstrated:
 1. VAL-001 (Poiseuille flow) passes at L2 error < 1% on 80×40 uniform mesh.
 2. VAL-001 passes at L2 error < 1% on a non-uniform mesh with wall clustering (geometric ratio 1.05, min spacing 0.1·L/ny). *Note (amendment 2026-09-20): at a fixed cell count the ratio and the wall spacing are not independent; a symmetric geometric distribution that closes on the domain length has one free parameter. At ny = 40 a ratio of 1.05 gives a wall spacing of 0.605 L/ny, and a wall spacing of 0.1 L/ny requires a ratio of about 1.20. Step 1 of the implementation supports specifying either quantity with the other derived. Which one this criterion fixes is an open question recorded in `docs/STATUS.md` and must be settled before step 7.*
 3. VAL-002 (lid-driven cavity) passes at max centerline error < 2% for both u and v profiles on 80×80 uniform mesh.
-   3a. *(Amendment 2026-09-20.)* The VAL-002 maximum normalized centerline errors for u and for v each decrease monotonically across 20x20, 40x40 and 80x80 uniform meshes, with the observed order of convergence reported for both. Baseline to improve on, from `benchmarks/results.jsonl` (collocated solver, commits 4063813 and dcddb39): u 0.106, 0.041, 0.013; v 0.1765, 0.1893, 0.2072. The current scheme converges in u and moves the wrong way in v. A single-grid threshold can be met by luck while a directional defect remains; this criterion cannot.
+   3a. *(Erratum 2026-09-22: the v baseline in this criterion is against the corrupted table; section 12 gives the corrected series.)* *(Amendment 2026-09-20.)* The VAL-002 maximum normalized centerline errors for u and for v each decrease monotonically across 20x20, 40x40 and 80x80 uniform meshes, with the observed order of convergence reported for both. Baseline to improve on, from `benchmarks/results.jsonl` (collocated solver, commits 4063813 and dcddb39): u 0.106, 0.041, 0.013; v 0.1765, 0.1893, 0.2072. The current scheme converges in u and moves the wrong way in v. A single-grid threshold can be met by luck while a directional defect remains; this criterion cannot.
 4. Grid convergence study shows observed order of accuracy ≥ 1.8 (target 2.0) under uniform mesh refinement on VAL-001.
 5. All existing Phase 1 validation tests (VAL-005, VAL-006, VAL-010, VAL-011) continue to pass.
 6. Discrete continuity constraint (REQ-S04) satisfied to < 10⁻¹⁰ per cell, and the mass imbalance summed over the domain below the same bound. *(Amended 2026-09-20.)* Baseline to improve on, from `docs/reports/pressure_solver_probe.md` Tables B and E (collocated solver, VAL-002 at convergence): per-cell imbalance 9.02e-5, 6.46e-6 and 3.88e-7 at 20, 40 and 80 cells per side, uniform over the domain; net wall leak 2.90e-2, 9.23e-3 and 2.35e-3 (mass-flux units, rho = U = L = 1). The staggered grid satisfies this by construction, and with the baseline underneath it the criterion is a quantified improvement rather than a sanity check.
@@ -204,6 +206,56 @@ By signing below, approvers confirm:
 | Author | Alex Moroz-Smietana | Approved | 2026-04-16 |
 | Reviewer | Claude | Approved | 2026-04-16 |
 
+## 12. Erratum, 2026-09-22: the Ghia v reference
+
+**What the table was.** Every VAL-002 v figure in this document was measured against a v
+reference that is not Ghia, Ghia and Shin (1982), Table II. It entered the repository with
+the VAL-002 test on 2026-04-16 (commit d589b9f) and moved unchanged to
+`validation/metrics.py` on 2026-09-19. Its sixteen stations were Table I's y stations
+without 0.9766. Ten of its values are Table II values, but only five sit at their Table II
+station, and six appear nowhere in Table II: it gave v(0.5) = -0.11477 where Table II gives
++0.05454. It fails a check that needs no source. The net vertical flux through y = 0.5 of a
+closed cavity is zero, and the table integrates to -0.095 there, where Table II gives
+-0.0004. It was found in the step 6 integration
+(`docs/reports/staggered_integration_step6.md`, section 4) and replaced by Table II under a
+new reference name, `ghia_1982_re100_r2`; stored rows scored against the old table keep the
+old name, `ghia_1982_re100`.
+
+**What it did to section 1.** The v figures there are a 20.1% maximum and 9.3% L2 error,
+"concentrated in the interior region x in [0.28, 0.62]" and unchanged at 80x80 and 128x128.
+The maximum is what the VAL-002 test that introduced the table in d589b9f scores at 80x80
+against it. The L2 and 128x128 figures came from diagnostics that name no reference and are
+presumed to use the same table. The interval is where four of the table's stations,
+0.2813, 0.4531, 0.5000 and 0.6172, carry values that are not Table II's. The conclusion that
+the 20% v error "represents a systematic defect in the discrete equations", and section
+3.1's use of the same 20% as a bias in particle trajectories, rested on these figures and
+are withdrawn as evidence. Section 1's u figures, the vortex-center location and the
+uniform-divergence observation did not use the v table.
+
+**What it did to the refinement argument.** The amendment's series in section 1, v 0.1765,
+0.1893, 0.2072 at 20x20, 40x40 and 80x80, rising, was measured against the same table, and
+so was criterion 3a's v baseline. Against Table II the collocated solver's v errors at the
+same grids are 0.146, 0.0511, 0.00981: they fall under refinement, at an observed order of
+1.5 then 2.4. The statement that the scheme "converges in u and moves the wrong way in v",
+and that this is "a structural defect rather than a resolution shortfall", does not hold.
+The u series, 0.106, 0.0408, 0.0134, is unchanged to every digit.
+
+**Corrected criterion 3a baseline.** Collocated solver, reference `ghia_1982_re100_r2`, the
+rows appended to `benchmarks/results.jsonl` by `fix/ghia-v-reference`: u 0.106, 0.0408,
+0.0134; v 0.146, 0.0511, 0.00981. The staggered solver's v errors on the same grids are
+0.0294, 0.0224, 0.0154.
+
+**What it means for criterion 3.** Against Table II the collocated solver's 80x80
+errors, u 0.0134 and v 0.00981, are both below criterion 3's 2%. VAL-002 in CI runs
+at 40x40, where the collocated solver fails in both components (u 0.0408, v
+0.0511), and it stays marked xfail on that basis.
+
+**What the correction does not invalidate.** The measured wall leak, the criterion 6
+baseline and section 1's second amendment, which reads the fields and no reference data;
+the collocated inlet flux shortfall (`docs/reports/inlet_flux_comparison.md`); the O(h)
+wall accuracy on VAL-001 recorded in ADR-008; and the staggered solver's VAL-001 and u
+results, which never touched the v table.
+
 ---
 
 ## Document History
@@ -212,3 +264,4 @@ By signing below, approvers confirm:
 |------|--------|--------|
 | 2026-04-16 | Initial version. | Alex Moroz-Smietana |
 | 2026-09-20 | Amendments before implementation: refinement series and continuity measurement added to the problem statement as a second independent confirmation of the wall-treatment defect; acceptance criterion 3a (monotone refinement) added and criterion 6 given its measured baseline; note on the over-determined mesh specification in criterion 2; solve_steady callback, sweep count and stage timing recorded as an interface obligation in 7.1. REQ-S08 untouched. | Alex Moroz-Smietana |
+| 2026-09-22 | Erratum (section 12): the Ghia v reference used for every VAL-002 v figure was not Table II. Pointers added at the top of section 1 and beside criterion 3a; corrected v series given against reference ghia_1982_re100_r2. No figure in sections 1 to 11 edited. | Alex Moroz-Smietana |
