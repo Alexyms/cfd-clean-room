@@ -18,7 +18,13 @@ from validation.metrics import cavity_centerline_errors
 
 
 @pytest.mark.validation
-@pytest.mark.xfail(reason="Known v-velocity error pending solver rebuild per ECR-001")
+@pytest.mark.xfail(
+    reason=(
+        "The collocated solver fails the 2% criterion in both u and v against the "
+        "corrected reference ghia_1982_re100_r2; the staggered solver's VAL-002 "
+        "validation is ECR-001 steps 7 and 8"
+    )
+)
 def test_lid_driven_cavity_val002() -> None:
     """VAL-002: Lid-driven cavity -- centerline profiles within 2% of Ghia et al.
 
