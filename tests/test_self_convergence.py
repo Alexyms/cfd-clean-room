@@ -120,7 +120,7 @@ def test_true_centerline_meets_smooth_faces_at_second_order() -> None:
     assert np.all(np.abs(orders["offset"] - 1.0) < tol), orders
 
 
-@pytest.mark.unit
+@pytest.mark.integration
 def test_true_centerline_meets_the_saved_staggered_faces_at_second_order() -> None:
     """The saved staggered solves: the gap is second order, the offset one first order.
 
@@ -162,6 +162,18 @@ def test_extrapolation_control_recovers_a_known_limit_and_refuses_first_order() 
     assert np.allclose(second["limit"], exact, rtol=0.0, atol=1e-13)
     assert np.allclose(first["order"], 1.0, rtol=0.0, atol=1e-9)
     assert np.isnan(first["limit"]).all()
+
+
+@pytest.mark.unit
+def test_order_change_names_a_station_undefined_under_one_reading() -> None:
+    """A NaN on one side is listed by station, not dropped from the maximum."""
+    stations = np.array([0.1, 0.2, 0.3])
+    change = self_convergence.order_change(
+        np.array([2.0, np.nan, 2.5]), np.array([2.1, 2.0, 2.0]), stations
+    )
+    assert change["max"] == pytest.approx(0.5)
+    assert change["at"] == 0.3
+    assert change["undefined_in_one"] == [0.2]
 
 
 @pytest.mark.unit

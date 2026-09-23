@@ -221,9 +221,11 @@ its own.
 
 ## 9. The true centerline, and whether the floor is Ghia's
 
-**Date:** 2026-09-23. Every number in this section comes from
-`python scripts/self_convergence.py --extrapolate`, which reads the six saved fields and
-solves nothing, or from the tests named below.
+**Date:** 2026-09-23, revised the same day after test 21 (section 9.3). Every number in this
+section comes from `python scripts/self_convergence.py --extrapolate` or from the tests
+named below. `--extrapolate` reads saved fields only: the six at the case's
+`convergence_tol` of 1e-6, and the three staggered fields that
+`python scripts/self_convergence.py --solve-tight` continued to 1e-9 (section 9.2).
 
 ### 9.1 The metric on the true centerline
 
@@ -233,8 +235,10 @@ profiles interpolate linearly in x between the two cell columns whose centers br
 x = 0.5, and in y between the two rows bracketing y = 0.5. On an even uniform grid that is
 the mean of the two middle columns, and on an odd grid it is the middle column. As before,
 only FLUID cells are sampled and the wall values are appended, so the only change is the
-sampling position. The old function and its name are unchanged, and the stored rows keep
-their meaning. The harness, the viewer and VAL-002 now use the new metric.
+sampling position. The midlines and the wall positions both come from the mesh. The old
+function and its name are unchanged, and the stored rows keep their meaning. The harness,
+the viewer and VAL-002 now use the new metric, and a test guards each of the three
+switches.
 
 One property of both metrics is easy to miss. The cavity's outer ring of cells is typed
 BOUNDARY, not FLUID, so both skip the wall-adjacent cell and interpolate straight from the
@@ -266,8 +270,8 @@ sampling runs at 0.81 then 0.93 in u and 1.00 then 1.01 in v, which is the first
 control. At 40x40 the largest gap is at y = 0.9125 in u and x = 0.9125 in v. On smooth
 synthetic faces the two orders are 2.00 and 0.97 to 0.99 (`tests/test_self_convergence.py`).
 
-The metric on the saved fields, MEASURED. The first two columns are the stored metric,
-repeated from section 5:
+The metric on the saved fields (`convergence_tol` 1e-6), MEASURED. The first two columns
+are the stored metric, repeated from section 5:
 
 | Solver | Grid | offset u | offset v | true centerline u | true centerline v |
 |---|---|---|---|---|---|
@@ -280,8 +284,21 @@ repeated from section 5:
 
 The collocated values equal section 5's centerline columns, which used the same two-cell
 mean. The staggered values differ from section 5's by no more than the second-order face
-gap above. On the true centerline the staggered error does not fall between 40x40 and 80x80
-in either component.
+gap above.
+
+**The staggered series is not monotone, which bears on ECR-001 criterion 3a.** MEASURED,
+true-centerline metric, staggered solver at 20x20, 40x40 and 80x80:
+
+| Fields | u | v |
+|---|---|---|
+| saved, `convergence_tol` 1e-6 | 0.00894, 0.00376, 0.00396 | 0.00656, 0.00803, 0.00813 |
+| continued to 1e-9 (section 9.2) | 0.00890, 0.00399, 0.00481 | 0.00649, 0.00825, 0.00894 |
+
+On both, u falls and then rises, and v rises at each refinement. Criterion 3a requires the
+u and v errors each to decrease monotonically across 20x20, 40x40 and 80x80. From step 8
+the harness scores VAL-002 with this metric, so on these fields the staggered solver does
+not meet 3a as written. The collocated series falls in both components on the saved
+fields; its iteration error was not measured. ECR-001 is not edited here.
 
 VAL-002 was run under the new metric and still xfails. The collocated solver at 40x40 has u
 0.04408 and v 0.06061, both above 2%, as they were under the old metric.
@@ -294,104 +311,163 @@ difference does not halve from 20x20 to 40x40 (0.0115, 0.0110, 0.0067). Its grad
 y = 0.5 at 20x20 differs from the 80x80 gradient by as much as the offset term itself,
 which fits section 6's finding that it is not yet asymptotic.
 
-### 9.2 Pointwise extrapolation of the staggered profile
+### 9.2 Iteration error in the saved fields
+
+The solves stop when the largest velocity change per outer iteration, over the reference
+velocity, falls below `convergence_tol`, 1e-6 for the cavity. That is not a bound on the
+distance to the converged answer. `--solve-tight` continues each staggered solve to 1e-9,
+with the tolerance and the iteration cap set in memory and the case file unchanged. It
+keeps u and v the first time the residual falls below 1e-6, 1e-7, 1e-8 and 1e-9.
+
+**The control:** at every grid the 1e-6 snapshot is bitwise identical to the saved field,
+so the tight solve is the saved computation continued. The script stops if it is not.
+
+MEASURED:
+
+| Grid | outer iterations at 1e-6 / 1e-7 / 1e-8 / 1e-9 | largest change in u, 1e-6 to 1e-9 | in v | wall time to 1e-9 |
+|---|---|---|---|---|
+| 20x20 | 629 / 809 / 989 / 1243 | 7.77e-5 | 7.66e-5 | 17 s |
+| 40x40 | 1891 / 2525 / 3158 / 3856 | 2.69e-4 | 2.74e-4 | 75 s |
+| 80x80 | 5728 / 8083 / 10437 / 12840 | 9.94e-4 | 1.02e-3 | 465 s |
+
+The iteration error left at 1e-6 grows 3.5 to 3.7 times per halving of h and reaches about
+1e-3 at 80x80, the same size as the grid-to-grid steps near the floor stations. Test 21
+measured the same values independently (`docs/prompts/test-21.md`, C20), and its 1e-8 and
+1e-9 fields are bitwise identical to these. Sections 1 to 8 were computed from the 1e-6
+fields and are left as written. Test 21, C23, reran section 3's orders on the converged
+fields and found that the functional orders above 2 fall toward 2.
+
+### 9.3 Pointwise extrapolation of the staggered profile
+
+**First reading, withdrawn 2026-09-23.** Part B was first run on the saved 1e-6 fields. It
+found 2 of 30 stations second order, and 9 whose steps reversed, and concluded that
+extrapolation was not licensed and that three grids had not reached the asymptotic range.
+Test 21 (`docs/prompts/test-21.md`, C20) showed that conclusion comes from iteration error.
+Every reversed step was 2.4e-4 or smaller, below the 40x40 fields' own iteration error. On
+the same three grids converged further, nothing reverses. That reading also said the
+cubic and quintic interpolations license the same stations. On the 1e-6 fields they
+license 2 and 1. The reading is withdrawn. What follows replaces it, on the 1e-9 fields.
 
 **Method.** The profiles are the staggered solver's exact faces on the true centerlines at
-20, 40 and 80, every row including the wall-adjacent cells, with the wall values appended.
-Each is interpolated onto Ghia's stations by the cubic through the four nearest nodes. That
-interpolation errs at O(h^4), two orders above the h^2 term being extrapolated. MEASURED:
-raising it to the quintic through six nodes moves the interpolated values by at most
-1.7e-3, 2.6e-4 and 2.6e-5 in u, and 3.9e-4, 2.1e-5 and 1.0e-6 in v, at 20, 40 and 80.
-Those shifts are largest at the stations nearest the lid in u and in the jet by the right
-wall in v. They move the orders by at most 0.41 in u (y = 0.9766) and 0.29 in v
-(x = 0.9688), and the same stations count as second order under either interpolation. The
-wall stations are left out because the walls are exact on every grid.
+20, 40 and 80, every row including the wall-adjacent cells, with the wall values appended
+at the mesh's walls and the whole profile divided by the lid speed from the case. Each is
+interpolated onto Ghia's stations by the cubic through the four nearest nodes, which errs
+at O(h^4), two orders above the h^2 term being extrapolated. The same is done with the
+quintic through six nodes. The difference between the two estimates the cubic's
+interpolation error; it does not bound it. MEASURED on the 1e-9 fields, the difference in
+value is at most:
 
-The order at each station is log2((f20 - f40) / (f40 - f80)). It is undefined ("reverses")
-where the two steps have opposite signs. A station counts as second order when
-abs(p - 2) < 0.25. That band was fixed before the fields were read: inside it the
-Richardson factor 1 / (2^p - 1) stays within 27% of the 1/3 applied. Only there is the
-extrapolated value f80 + (f80 - f40) / 3 formed.
+- in u: 1.7e-3, 2.6e-4 and 2.6e-5 at 20, 40 and 80 (y = 0.9531, 0.9766, 0.9766);
+- in v: 3.9e-4, 2.1e-5 and 1.1e-6 (x = 0.9063, 0.9688, 0.8594).
+
+It moves the orders by up to 0.37 in u (y = 0.9766) and 0.46 in v (x = 0.9063), more than
+the band's half-width. So near the lid and in the jet the classification depends on the
+interpolation. Both are reported, and no order is undefined under one and not the other.
+
+The order at each station is log2((f20 - f40) / (f40 - f80)), undefined where the two steps
+have opposite signs. A station counts as second order when abs(p - 2) < 0.25. That band was
+fixed before any field was read: inside it the Richardson factor 1 / (2^p - 1) stays within
+27% of the 1/3 applied. Only there is the extrapolated value f80 + (f80 - f40) / 3 used.
 
 **The control, which ran first.** MEASURED: a profile with a known cubic limit plus h^2
 times a cubic returns order 2 and the limit to 1e-13. The same limit plus h times the cubic
 returns order 1 at every station and licenses none. A profile shifted by 1e-6 from the
 limit the control expects stops the script.
 
-**The orders, MEASURED:**
+**The orders have settled.** MEASURED, stations second order under the cubic and the
+quintic, and undefined orders, at each snapshot:
 
-| y (u profile) | order | second order | f80 - Ghia | f80 - f40 | extrapolated - Ghia |
-|---|---|---|---|---|---|
-| 0.9766 | 3.50 | no | +0.0019 | +0.00084 | - |
-| 0.9688 | 2.75 | no | +0.0024 | +0.00150 | - |
-| 0.9609 | 2.25 | no | +0.0022 | +0.00216 | - |
-| 0.9531 | 2.23 | yes | +0.0027 | +0.00230 | +0.0034 |
-| 0.8516 | 2.55 | no | +0.0037 | +0.00118 | - |
-| 0.7344 | reverses | no | -0.0002 | -0.00013 | - |
-| 0.6172 | 1.26 | no | -0.0028 | -0.00100 | - |
-| 0.5000 | 2.15 | yes | -0.0027 | -0.00145 | -0.0031 |
-| 0.4531 | 2.35 | no | -0.0021 | -0.00139 | - |
-| 0.2813 | 3.37 | no | +0.0002 | -0.00048 | - |
-| 0.1719 | 5.84 | no | +0.0006 | -0.00005 | - |
-| 0.1016 | reverses | no | +0.0004 | +0.00007 | - |
-| 0.0703 | reverses | no | +0.0015 | +0.00011 | - |
-| 0.0625 | reverses | no | +0.0002 | +0.00011 | - |
-| 0.0547 | reverses | no | +0.0002 | +0.00012 | - |
+| Fields | second order, cubic | second order, quintic | undefined |
+|---|---|---|---|
+| 1e-6 | 2 / 30 | 1 / 30 | 9 / 30 |
+| 1e-7 | 15 / 30 | 12 / 30 | 0 / 30 |
+| 1e-8 | 16 / 30 | 17 / 30 | 0 / 30 |
+| 1e-9 | 16 / 30 | 18 / 30 | 0 / 30 |
 
-| x (v profile) | order | second order | f80 - Ghia | f80 - f40 | extrapolated - Ghia |
-|---|---|---|---|---|---|
-| 0.9688 | 3.58 | no | -0.0029 | -0.00008 | - |
-| 0.9609 | reverses | no | -0.0038 | +0.00002 | - |
-| 0.9531 | reverses | no | -0.0044 | +0.00007 | - |
-| 0.9453 | reverses | no | -0.0050 | +0.00012 | - |
-| 0.9063 | reverses | no | -0.0073 | +0.00024 | - |
-| 0.8594 | 5.88 | no | -0.0083 | -0.00006 | - |
-| 0.8047 | 3.08 | no | -0.0069 | -0.00083 | - |
-| 0.5000 | 1.46 | no | +0.0031 | +0.00012 | - |
-| 0.2344 | 2.88 | no | +0.0029 | +0.00092 | - |
-| 0.2266 | 2.90 | no | +0.0028 | +0.00092 | - |
-| 0.1563 | 2.98 | no | +0.0026 | +0.00081 | - |
-| 0.0938 | 3.26 | no | +0.0022 | +0.00046 | - |
-| 0.0781 | 3.48 | no | +0.0019 | +0.00032 | - |
-| 0.0703 | 3.60 | no | +0.0018 | +0.00024 | - |
-| 0.0625 | 3.79 | no | +0.0017 | +0.00016 | - |
+From 1e-8 to 1e-9 no station's cubic order moves by more than 0.039 in u (y = 0.0547) or
+0.028 in v (x = 0.5000), and none becomes undefined or defined.
 
-**The answer: extrapolation is not licensed, and the question stays open.** Every station
-here is at least 0.5 from a lid corner. Only 2 of the 30 stations are second order, both in
-u, and none of the floor's stations is among them. A band twice as wide admits 4 of 30.
-The orders are not scattered noise:
+**The orders on the 1e-9 fields, MEASURED.** "yes" marks a second-order station. An
+asterisk marks a station whose classification differs between the two interpolations. The
+extrapolated value is given where that interpolation licenses it.
 
-- On the left half of the v profile, seven stations from x = 0.0625 to 0.2344 agree on 2.9
-  to 3.8.
-- In the jet by the right wall, four v stations from x = 0.9063 to 0.9609 reverse. The
-  profile moves away from Ghia from 20x20 to 40x40 and slightly back from 40x40 to 80x80.
-- Near the floor, four u stations from y = 0.0547 to 0.1016 reverse, with steps of about
-  1e-4.
+| y (u profile) | order, cubic | order, quintic | f80 - Ghia | f80 - f40 | extrapolated - Ghia, cubic | quintic |
+|---|---|---|---|---|---|---|
+| 0.9766 | 3.27 | 2.91 | +0.0021 | +0.00098 | - | - |
+| 0.9688 | 2.59 | 2.48 | +0.0027 | +0.00169 | - | - |
+| 0.9609 | 2.11 yes | 2.25 yes | +0.0025 | +0.00239 | +0.0033 | +0.0034 |
+| 0.9531 | 2.07 yes | 2.14 yes | +0.0031 | +0.00258 | +0.0039 | +0.0040 |
+| 0.8516 | 1.98 yes | 1.98 yes | +0.0045 | +0.00180 | +0.0051 | +0.0051 |
+| 0.7344 | 2.05 yes | 1.98 yes | +0.0007 | +0.00056 | +0.0009 | +0.0009 |
+| 0.6172 | 1.98 yes | 1.97 yes | -0.0022 | -0.00058 | -0.0024 | -0.0024 |
+| 0.5000 | 2.04 yes | 2.03 yes | -0.0028 | -0.00157 | -0.0034 | -0.0034 |
+| 0.4531 | 2.06 yes | 2.06 yes | -0.0025 | -0.00173 | -0.0031 | -0.0031 |
+| 0.2813 | 2.18 yes | 2.18 yes | -0.0007 | -0.00115 | -0.0011 | -0.0011 |
+| 0.1719 | 2.33 | 2.32 | -0.0001 | -0.00055 | - | - |
+| 0.1016 | 2.49 | 2.55 | -0.0000 | -0.00025 | - | - |
+| 0.0703 | 2.65 | 2.70 | +0.0011 | -0.00012 | - | - |
+| 0.0625 | 2.52 | 2.73 | -0.0000 | -0.00009 | - | - |
+| 0.0547 | 2.43 | 2.54 | -0.0001 | -0.00006 | - | - |
 
-Three grids do not reach the asymptotic range of a single power of h at these stations.
+| x (v profile) | order, cubic | order, quintic | f80 - Ghia | f80 - f40 | extrapolated - Ghia, cubic | quintic |
+|---|---|---|---|---|---|---|
+| 0.9688 | 2.12 yes | 2.13 yes | -0.0031 | -0.00024 | -0.0032 | -0.0032 |
+| 0.9609 | 2.64 | 2.36 | -0.0040 | -0.00018 | - | - |
+| 0.9531 | 2.69 | 2.43 | -0.0047 | -0.00016 | - | - |
+| 0.9453 | 2.64 | 2.27 | -0.0054 | -0.00015 | - | - |
+| 0.9063 * | 2.49 | 2.03 yes | -0.0079 | -0.00021 | - | -0.0080 |
+| 0.8594 | 2.42 | 2.33 | -0.0091 | -0.00065 | - | - |
+| 0.8047 * | 2.26 | 2.24 yes | -0.0078 | -0.00150 | - | -0.0083 |
+| 0.5000 | 3.07 | 3.02 | +0.0030 | +0.00004 | - | - |
+| 0.2344 | 2.11 yes | 2.11 yes | +0.0038 | +0.00162 | +0.0043 | +0.0043 |
+| 0.2266 | 2.11 yes | 2.11 yes | +0.0038 | +0.00162 | +0.0043 | +0.0043 |
+| 0.1563 | 2.10 yes | 2.11 yes | +0.0036 | +0.00152 | +0.0041 | +0.0041 |
+| 0.0938 | 2.13 yes | 2.19 yes | +0.0030 | +0.00104 | +0.0033 | +0.0033 |
+| 0.0781 | 2.15 yes | 2.17 yes | +0.0026 | +0.00084 | +0.0029 | +0.0029 |
+| 0.0703 | 2.09 yes | 2.14 yes | +0.0025 | +0.00072 | +0.0027 | +0.0027 |
+| 0.0625 | 1.95 yes | 2.09 yes | +0.0023 | +0.00060 | +0.0025 | +0.0025 |
 
-**Reported as found, not as an answer.**
+**The floor stations**, the four section 5 found, MEASURED. The order-2 value is
+f80 + (f80 - f40) / 3 under the cubic, given whether or not the station is licensed:
 
-- At the two second-order stations the extrapolated profile differs from Ghia by +0.0034
-  (y = 0.9531) and -0.0031 (y = 0.5000). That is farther than at 80x80 (+0.0027 and
-  -0.0027), so there the extrapolation moves away from Ghia. Neither is a floor station.
-- At the four floor stations the last refinement moved the profile much less than the
-  distance left. At y = 0.8516, x = 0.8594 and x = 0.8047 it moved away from Ghia, by
-  0.00118, 0.00006 and 0.00083 against distances of 0.0037, 0.0083 and 0.0069. At
-  x = 0.9063 it moved toward Ghia, by 0.00024 against 0.0073. At y = 0.8516 the profile
-  crossed Ghia's value between 20x20 and 40x40 and has moved away since.
-- Reading "the gap is Ghia's" from those steps needs convergence to be monotone beyond
-  80x80. Four of the seven jet stations reversed direction across the three grids, so that
-  is not established. UNKNOWN. The two observations that section 7, candidate 4 names would
-  settle it: a 160x160 staggered solve, which gives the jet stations a fourth grid, or an
-  independent high-accuracy Re = 100 solution at x = 0.8047 to 0.9063 and y = 0.8516.
+| Station | order, cubic / quintic | f80 - Ghia | f80 - f40 | order-2 value - Ghia |
+|---|---|---|---|---|
+| u, y = 0.8516 | 1.98 / 1.98 | +0.0045 | +0.00180 | +0.0051 |
+| v, x = 0.9063 | 2.49 / 2.03 | -0.0079 | -0.00021 | -0.0080 |
+| v, x = 0.8594 | 2.42 / 2.33 | -0.0091 | -0.00065 | -0.0093 |
+| v, x = 0.8047 | 2.26 / 2.24 | -0.0078 | -0.00150 | -0.0083 |
 
-### 9.3 How each number in this section was taken
+These agree with test 21's table to within 1.3e-5, which is inside its four-decimal
+rounding.
 
-- **Metric values, face gaps and the extrapolation:** `python scripts/self_convergence.py
-  --extrapolate`, which writes `results/self_convergence/extrapolation.json`.
+**The answer, INFERRED.** At all four floor stations the order is between 1.98 and 2.49
+under either interpolation. Nothing reverses, and each step from 40x40 to 80x80 has the
+sign of the distance from Ghia. For any order in that range the Richardson correction is
+between 0.22 and 0.34 of the last step, which is at most 6.1e-4 here. So the converged
+staggered solution approaches values that differ from Ghia by about 0.5% of the lid speed
+in u at y = 0.8516, and by 0.8 to 0.9% in v at the jet stations by the right wall, x =
+0.8047 to 0.9063. Refinement moves the solution away from Ghia there, not toward it. At
+the other licensed stations the extrapolated values differ from Ghia by 0.09% to 0.43%.
+
+This does not say Ghia is wrong. Whether the gap is Ghia's or a systematic error of this
+scheme cannot be settled by this solver's own refinement. It needs an independent
+reference, and the planned one is Marchi, Suero and Araki (2009). Of the two observations
+section 7, candidate 4 names, that is the one that remains. A 160x160 solve would add a
+grid, but on converged fields the three existing grids already give orders near 2, and
+further refinement of this scheme cannot tell its own limit from Ghia's.
+
+### 9.4 How each number in this section was taken
+
+- **Tight solves and their control:** `python scripts/self_convergence.py --solve-tight`,
+  which writes `results/self_convergence/staggered-jacobi_<n>_tol1e-9.npz` and stops if the
+  1e-6 snapshot differs from the saved field.
+- **Metric values, face gaps, iteration error, station orders, interpolation estimates and
+  settling:** `python scripts/self_convergence.py --extrapolate`, which writes
+  `results/self_convergence/extrapolation.json`.
 - **Gap orders:** `pytest tests/test_self_convergence.py -s`, which prints them when the
   saved fields are present.
 - **VAL-002:** `pytest tests/test_lid_cavity.py -s`.
 - **Old against new per station, and the 40x40 station locations:** one-off evaluations of
   the two profile functions on the saved fields, not committed.
+- **Agreement with test 21:** a one-off comparison of these fields and floor values with
+  `results/tester21/`, not committed.

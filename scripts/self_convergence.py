@@ -10,15 +10,18 @@ because each grid pins it at a different point. The control, synthetic fields
 F + C h^q G with known q through the identical pipeline, runs first and stops
 the script if any estimate misses q by 0.05 or more.
 
---extrapolate asks, from the saved fields and with no solve, whether the
-staggered solver's remaining distance to Ghia on the true centerlines is
-Ghia's: pointwise Richardson extrapolation at Ghia's stations, after its own
-control, with the true-centerline metric for both solvers.
+--extrapolate asks, from saved fields and with no solve, whether the staggered
+solver's remaining distance to Ghia on the true centerlines is Ghia's:
+pointwise Richardson extrapolation at Ghia's stations, after its own control,
+with the true-centerline metric for both solvers. The fields saved at the
+case's convergence_tol carry iteration error as large as the steps it reads,
+so --solve-tight first continues the staggered solves to 1e-9.
 
 Run:
 
     python scripts/self_convergence.py             # control, solves, analysis
     python scripts/self_convergence.py --solve-only
+    python scripts/self_convergence.py --solve-tight   # staggered to 1e-9
     python scripts/self_convergence.py --extrapolate
 """
 
@@ -32,6 +35,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
+import yaml
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
@@ -42,16 +46,23 @@ from src.boundary_staggered import (  # noqa: E402 -- follows sys.path.insert
 )
 from src.config import SimConfig  # noqa: E402 -- follows sys.path.insert
 from src.mesh import FLUID, Mesh  # noqa: E402 -- follows sys.path.insert
-from src.solver_ns import NavierStokesSolver  # noqa: E402 -- follows sys.path.insert
+from src.solver_ns import (  # noqa: E402 -- follows sys.path.insert
+    IterationState,
+    NavierStokesSolver,
+)
 from src.solver_staggered import (  # noqa: E402 -- follows sys.path.insert
     StaggeredSolver,
 )
-from validation.cases import load_case  # noqa: E402 -- follows sys.path.insert
+from validation.cases import (  # noqa: E402 -- follows sys.path.insert
+    case_path,
+    load_case,
+)
 from validation.metrics import (  # noqa: E402 -- follows sys.path.insert
     GHIA_U_VAL,
     GHIA_U_Y,
     GHIA_V_VAL,
     GHIA_V_X,
+    _lid_velocity,
     cavity_centerline_errors,
     cavity_true_centerline_errors,
     cavity_true_centerline_profiles,
@@ -65,6 +76,13 @@ CONTROL_TOL = 0.05
 # |p - 2| below this counts as second order. Inside it the Richardson factor
 # 1 / (2^p - 1) stays within 27% of the 1/3 the extrapolation applies.
 ORDER_BAND = 0.25
+# The case's convergence_tol stops the staggered cavity with iteration error
+# larger than the grid-to-grid steps Richardson reads (test 21, C20), so those
+# solves are continued to TIGHT_TOL, set in memory. 80x80 needs about 12800
+# outer iterations to get there.
+TIGHT_TOL = 1.0e-9
+TIGHT_MAX_ITER = 40000
+SNAPSHOT_TOLS = (1.0e-7, 1.0e-8)
 
 
 def solve_and_save(method: str, n: int) -> Path:
@@ -85,6 +103,69 @@ def solve_and_save(method: str, n: int) -> Path:
     FIELD_DIR.mkdir(parents=True, exist_ok=True)
     np.savez(path, u=u, v=v, p=p, outer=len(solver.residual_history), seconds=seconds)
     print(f"solved {method} {n}x{n} in {seconds:.0f} s")
+    return path
+
+
+def solve_tight(n: int) -> Path:
+    """Continue the staggered n x n solve to TIGHT_TOL, snapshotting u and v on the way.
+
+    The tolerance and iteration cap are set in memory; the case file is not
+    touched. A snapshot is taken the first time the residual falls below the
+    case's own convergence_tol, each of SNAPSHOT_TOLS, and TIGHT_TOL.
+
+    Parameters
+    ----------
+    n : int
+        Cells per side.
+
+    Returns
+    -------
+    Path
+        results/self_convergence/staggered-jacobi_<n>_tol1e-9.npz, holding
+        u_<tol>, v_<tol> and outer_<tol> per snapshot (tol formatted as 1e-06)
+        and the wall time in seconds. An existing file is returned unsolved.
+
+    Raises
+    ------
+    SystemExit
+        If the solve stops before TIGHT_TOL, or if the snapshot at the case's
+        tolerance is not bitwise identical to the saved staggered field, in
+        which case this is not a continuation of that computation.
+    """
+    path = FIELD_DIR / f"staggered-jacobi_{n}_tol1e-9.npz"
+    if path.exists():
+        return path
+    raw = yaml.safe_load(case_path("cavity").read_text(encoding="utf-8"))
+    raw["domain"]["nx"] = raw["domain"]["ny"] = n
+    case_tol = float(raw["solver"]["convergence_tol"])
+    raw["solver"]["convergence_tol"] = TIGHT_TOL
+    raw["solver"]["max_simple_iter"] = TIGHT_MAX_ITER
+    config = SimConfig.from_dict(raw)
+    mesh = Mesh(config)
+    solver = StaggeredSolver(mesh, config, StaggeredBoundary(mesh, config))
+    levels = [case_tol, *SNAPSHOT_TOLS, TIGHT_TOL]
+    snaps: dict[str, np.ndarray] = {}
+
+    def snapshot(state: IterationState) -> None:
+        while levels and state.residual < levels[0]:
+            tag = f"{levels.pop(0):.0e}"
+            snaps[f"u_{tag}"], snaps[f"v_{tag}"] = state.u.copy(), state.v.copy()
+            snaps[f"outer_{tag}"] = np.array(state.iteration + 1)
+
+    start = time.perf_counter()
+    solver.solve_steady(on_iteration=snapshot)
+    seconds = time.perf_counter() - start
+    if levels:
+        raise SystemExit(f"{n}x{n} stopped before reaching {levels[0]:.0e}")
+    tag = f"{case_tol:.0e}"
+    with np.load(FIELD_DIR / f"staggered-jacobi_{n}.npz") as saved:
+        same = np.array_equal(snaps[f"u_{tag}"], saved["u"]) and np.array_equal(
+            snaps[f"v_{tag}"], saved["v"]
+        )
+    if not same:
+        raise SystemExit(f"{n}x{n}: the {tag} snapshot differs from the saved field")
+    np.savez(path, seconds=seconds, **snaps)
+    print(f"solved staggered {n}x{n} to {TIGHT_TOL:.0e} in {seconds:.0f} s")
     return path
 
 
@@ -314,8 +395,9 @@ def offset_errors(method: str, n: int, fields: dict[str, np.ndarray]) -> dict:
     col, row = mesh.cell_type[:, n // 2] == FLUID, mesh.cell_type[n // 2, :] == FLUID
     y = [0.0, *np.asarray(mesh.yc)[col], 1.0]
     x = [0.0, *np.asarray(mesh.xc)[row], 1.0]
-    u_err = np.interp(GHIA_U_Y, y, [0.0, *u_line[col], 1.0]) - GHIA_U_VAL
-    v_err = np.interp(GHIA_V_X, x, [0.0, *v_line[row], 0.0]) - GHIA_V_VAL
+    u_lid = _lid_velocity(config)
+    u_err = np.interp(GHIA_U_Y, y, [0.0, *u_line[col], u_lid]) / u_lid - GHIA_U_VAL
+    v_err = np.interp(GHIA_V_X, x, [0.0, *v_line[row], 0.0]) / u_lid - GHIA_V_VAL
     out["on_centerline"] = {
         "u": float(np.abs(u_err).max()),
         "v": float(np.abs(v_err).max()),
@@ -366,8 +448,25 @@ def face_gaps(
 ) -> dict[str, float]:
     """Largest gap between a metric's centerline profiles and the exact staggered faces.
 
-    ``profiles`` is a validation.metrics profile function. Every interior column
-    and row of the cavity has the same FLUID cells, so one mask serves.
+    Every interior column and row of the cavity has the same FLUID cells, so one
+    mask serves.
+
+    Parameters
+    ----------
+    config : SimConfig
+        Case configuration.
+    mesh : Mesh
+        Mesh of the solve.
+    u, v : np.ndarray
+        The staggered solver's cell-centered fields [n, n].
+    profiles : Callable
+        A validation.metrics profile function, the true-centerline one by
+        default.
+
+    Returns
+    -------
+    dict[str, float]
+        The largest abs(profile - face) over the sampled rows, for u and v.
     """
     _y, u_prof, _x, v_prof = profiles(config, mesh, u, v)
     u_line, v_line, _ = centerline_faces(u, v)
@@ -381,7 +480,25 @@ def face_gaps(
 def lagrange(
     nodes: np.ndarray, values: np.ndarray, targets: np.ndarray, k: int = 4
 ) -> np.ndarray:
-    """Evaluate at each target the degree k - 1 polynomial through the k nodes around it."""
+    """Evaluate at each target the degree k - 1 polynomial through the k nodes around it.
+
+    Parameters
+    ----------
+    nodes : np.ndarray
+        Increasing node positions.
+    values : np.ndarray
+        Values at the nodes.
+    targets : np.ndarray
+        Positions to evaluate at, in any order.
+    k : int
+        Number of nodes per stencil, about half on each side of the target and
+        shifted inward at the ends.
+
+    Returns
+    -------
+    np.ndarray
+        The interpolated values, one per target.
+    """
     out = np.empty(len(targets))
     for t, target in enumerate(targets):
         i = int(np.clip(np.searchsorted(nodes, target) - k // 2, 0, len(nodes) - k))
@@ -399,17 +516,67 @@ def richardson(
 ) -> dict[str, np.ndarray]:
     """Pointwise observed order at each station and, where it is second order, the limit.
 
-    ``profiles`` maps each n in GRIDS to (nodes, values). The order is NaN where
-    the two differences have opposite signs, and the limit f80 + (f80 - f40) / 3
-    is NaN wherever the order is not within ORDER_BAND of 2.
+    Parameters
+    ----------
+    profiles : dict[int, tuple[np.ndarray, np.ndarray]]
+        (nodes, values) of one profile for each n in GRIDS.
+    stations : np.ndarray
+        Positions to evaluate at.
+    k : int
+        Interpolation stencil width, passed to lagrange.
+
+    Returns
+    -------
+    dict[str, np.ndarray]
+        Per station: f20, f40 and f80; the order log2((f20 - f40) / (f40 - f80)),
+        NaN where the two steps have opposite signs; licensed, True where the
+        order is within ORDER_BAND of 2; value, the order-2 extrapolation
+        f80 + (f80 - f40) / 3 at every station; and limit, that value where
+        licensed and NaN elsewhere.
     """
     f20, f40, f80 = (lagrange(*profiles[n], stations, k) for n in GRIDS)
     with np.errstate(divide="ignore", invalid="ignore"):
         ratio = (f20 - f40) / (f40 - f80)
         order = np.log2(np.where(ratio > 0, ratio, np.nan))
         licensed = np.abs(order - 2.0) < ORDER_BAND
-    limit = np.where(licensed, f80 + (f80 - f40) / 3.0, np.nan)
-    return {"f20": f20, "f40": f40, "f80": f80, "order": order, "limit": limit}
+    value = f80 + (f80 - f40) / 3.0
+    return {
+        "f20": f20,
+        "f40": f40,
+        "f80": f80,
+        "order": order,
+        "licensed": licensed,
+        "value": value,
+        "limit": np.where(licensed, value, np.nan),
+    }
+
+
+def order_change(a: np.ndarray, b: np.ndarray, stations: np.ndarray) -> dict:
+    """Largest change between two readings of the orders at the same stations.
+
+    Parameters
+    ----------
+    a, b : np.ndarray
+        Orders at the same stations, NaN where the steps reversed.
+    stations : np.ndarray
+        The station positions, to name where the change is.
+
+    Returns
+    -------
+    dict
+        max, the largest abs(a - b) over stations where both orders are finite,
+        and at, its station (both None when there is none); undefined_in_one,
+        the stations where exactly one order is not finite. A maximum over the
+        differences alone would drop those silently.
+    """
+    both = np.isfinite(a) & np.isfinite(b)
+    change = np.where(both, np.abs(a - b), -1.0)
+    k = int(np.argmax(change))
+    return {
+        "max": float(change[k]) if both.any() else None,
+        "at": float(stations[k]) if both.any() else None,
+        "undefined_in_one": stations[np.isfinite(a) ^ np.isfinite(b)].tolist(),
+    }
 
 
 def synthetic_profiles(q: float) -> dict[int, tuple[np.ndarray, np.ndarray]]:
@@ -417,6 +584,16 @@ def synthetic_profiles(q: float) -> dict[int, tuple[np.ndarray, np.ndarray]]:
 
     Both parts are cubics, which four-point interpolation reproduces exactly, so
     the control tests the order and extrapolation arithmetic by itself.
+
+    Parameters
+    ----------
+    q : float
+        Order of the synthetic error term.
+
+    Returns
+    -------
+    dict[int, tuple[np.ndarray, np.ndarray]]
+        (nodes, values) for each n in GRIDS, in the layout richardson takes.
     """
     out = {}
     for n in GRIDS:
@@ -426,7 +603,19 @@ def synthetic_profiles(q: float) -> dict[int, tuple[np.ndarray, np.ndarray]]:
 
 
 def run_extrapolation_control(stations: np.ndarray) -> None:
-    """h^2 must give back the known limit to rounding; h must read as order 1, unlicensed."""
+    """Check richardson on synthetic profiles of known order before any real one.
+
+    Parameters
+    ----------
+    stations : np.ndarray
+        Positions to run the control at.
+
+    Raises
+    ------
+    SystemExit
+        Unless the h^2 profile gives back its known limit to rounding and the
+        h profile reads as order 1 with no station licensed.
+    """
     second = richardson(synthetic_profiles(2.0), stations)
     first = richardson(synthetic_profiles(1.0), stations)
     exact = stations**3 - 0.5 * stations
@@ -438,63 +627,152 @@ def run_extrapolation_control(stations: np.ndarray) -> None:
         raise SystemExit("extrapolation control failed")
 
 
-def extrapolation() -> dict:
-    """Richardson on the staggered true centerlines, and the true-centerline metric.
+def face_profiles(
+    mesh: Mesh, u: np.ndarray, v: np.ndarray, u_lid: float
+) -> tuple[tuple[np.ndarray, np.ndarray], tuple[np.ndarray, np.ndarray]]:
+    """The staggered faces on both centerlines, every row, walls appended, over u_lid.
 
-    The control runs first. Reads saved fields only and stops if any is
-    missing. The staggered profiles are the exact faces from centerline_faces,
-    every row, walls appended; Ghia's wall stations are left out because the
-    walls are exact on every grid.
+    Parameters
+    ----------
+    mesh : Mesh
+        Mesh of the solve; supplies the node and wall positions.
+    u, v : np.ndarray
+        The staggered solver's cell-centered fields [n, n].
+    u_lid : float
+        Lid speed, the normalization of Ghia's tables.
+
+    Returns
+    -------
+    tuple[tuple[np.ndarray, np.ndarray], tuple[np.ndarray, np.ndarray]]
+        (y nodes, u on x = 0.5) and (x nodes, v on y = 0.5).
+    """
+    u_line, v_line, _ = centerline_faces(u, v)
+    y = np.array([mesh.y[0], *mesh.yc, mesh.y[-1]])
+    x = np.array([mesh.x[0], *mesh.xc, mesh.x[-1]])
+    return (
+        (y, np.array([0.0, *u_line, u_lid]) / u_lid),
+        (x, np.array([0.0, *v_line, 0.0]) / u_lid),
+    )
+
+
+def station_orders(
+    profiles: dict[int, tuple[np.ndarray, np.ndarray]],
+    positions: tuple[float, ...],
+    ghia: tuple[float, ...],
+) -> dict:
+    """Richardson at Ghia's stations under the cubic and the quintic interpolation.
+
+    Parameters
+    ----------
+    profiles : dict[int, tuple[np.ndarray, np.ndarray]]
+        (nodes, values) of one normalized profile for each n in GRIDS.
+    positions, ghia : tuple[float, ...]
+        Ghia's stations and values. The two wall stations are left out: the
+        walls are exact on every grid.
+
+    Returns
+    -------
+    dict
+        Per station, as lists: the order and licensed under each interpolation,
+        f80 - Ghia, f80 - f40, and the order-2 value minus Ghia under each.
+        Then the largest cubic-to-quintic change in value per grid, and in
+        order. That change estimates the cubic's interpolation error; it does
+        not bound it.
+    """
+    stations, ref = np.array(positions[1:-1]), np.array(ghia[1:-1])
+    cubic = richardson(profiles, stations)
+    quintic = richardson(profiles, stations, k=6)
+    shift = {n: np.abs(quintic[f"f{n}"] - cubic[f"f{n}"]) for n in GRIDS}
+    return {
+        "station": stations.tolist(),
+        "order": cubic["order"].tolist(),
+        "order_quintic": quintic["order"].tolist(),
+        "licensed": cubic["licensed"].tolist(),
+        "licensed_quintic": quintic["licensed"].tolist(),
+        "f80_minus_ghia": (cubic["f80"] - ref).tolist(),
+        "step_40_to_80": (cubic["f80"] - cubic["f40"]).tolist(),
+        "order2_minus_ghia": (cubic["value"] - ref).tolist(),
+        "order2_quintic_minus_ghia": (quintic["value"] - ref).tolist(),
+        "interpolation_estimate": {
+            n: {"max": float(d.max()), "at": float(stations[d.argmax()])}
+            for n, d in shift.items()
+        },
+        "quintic_order_change": order_change(
+            cubic["order"], quintic["order"], stations
+        ),
+    }
+
+
+def extrapolation() -> dict:
+    """Richardson on the staggered true centerlines at every snapshot tolerance.
+
+    The control runs first. Reads saved fields only, the six at the case's
+    tolerance and the three staggered files from solve_tight, and stops if any
+    is missing.
+
+    Returns
+    -------
+    dict
+        metric: the true-centerline metric for both solvers at the case's
+        tolerance and for the staggered solver at TIGHT_TOL. iteration: per
+        grid, the outer count at each snapshot, the wall time, and the largest
+        change in u and v from the case's tolerance to TIGHT_TOL. stations:
+        station_orders at each snapshot tolerance. settling: order_change
+        between the last two tolerances.
     """
     for positions in (GHIA_U_Y, GHIA_V_X):
         run_extrapolation_control(np.array(positions[1:-1]))
-    paths = [FIELD_DIR / f"{m}_{n}.npz" for m in METHODS for n in GRIDS]
-    if missing := [p.name for p in paths if not p.exists()]:
+    saved = [FIELD_DIR / f"{m}_{n}.npz" for m in METHODS for n in GRIDS]
+    tight = [FIELD_DIR / f"staggered-jacobi_{n}_tol1e-9.npz" for n in GRIDS]
+    if missing := [p.name for p in saved + tight if not p.exists()]:
         raise SystemExit(f"saved fields missing, nothing re-solved: {missing}")
-    fields = {}
-    for path in paths:
+    configs = {n: load_case("cavity", grid=(n, n)) for n in GRIDS}
+    meshes = {n: Mesh(configs[n]) for n in GRIDS}
+    # The metric's own reader, so the script and the metric normalize alike.
+    u_lid = _lid_velocity(configs[GRIDS[0]])
+    case_tol = configs[GRIDS[0]].convergence_tol
+    tags = [f"{t:.0e}" for t in (case_tol, *SNAPSHOT_TOLS, TIGHT_TOL)]
+    out: dict = {"metric": {}, "iteration": {}, "stations": {}, "settling": {}}
+    for path in saved:
+        n = int(path.stem.rsplit("_", 1)[1])
         with np.load(path) as data:
-            fields[path.stem] = (data["u"], data["v"])
-    out: dict = {"metric": {}}
-    for stem, (u, v) in fields.items():
-        n = u.shape[0]
-        config = load_case("cavity", grid=(n, n))
-        mesh = Mesh(config)
-        out["metric"][stem] = cavity_true_centerline_errors(
-            config, mesh, u, v
-        ).components
-        if stem.startswith("staggered"):
-            out["metric"][stem]["face_gap"] = face_gaps(config, mesh, u, v)
-    lines = {}
-    for n in GRIDS:
-        u_line, v_line, _ = centerline_faces(*fields[f"staggered-jacobi_{n}"])
-        s = np.array([0.0, *(np.arange(n) + 0.5) / n, 1.0])
-        lines[n] = (
-            (s, np.array([0.0, *u_line, 1.0])),
-            (s, np.array([0.0, *v_line, 0.0])),
-        )
-    for axis, (positions, ghia) in enumerate(
-        ((GHIA_U_Y, GHIA_U_VAL), (GHIA_V_X, GHIA_V_VAL))
-    ):
-        stations, ref = np.array(positions[1:-1]), np.array(ghia[1:-1])
-        profiles = {n: lines[n][axis] for n in GRIDS}
-        cubic = richardson(profiles, stations)
-        quintic = richardson(profiles, stations, k=6)
-        out["uv"[axis]] = {
-            "station": stations.tolist(),
-            "order": cubic["order"].tolist(),
-            "f80_minus_ghia": (cubic["f80"] - ref).tolist(),
-            "step_40_to_80": (cubic["f80"] - cubic["f40"]).tolist(),
-            "limit_minus_ghia": (cubic["limit"] - ref).tolist(),
-            # Raising the interpolation from cubic to quintic bounds what the
-            # interpolation itself contributes to each value and order.
-            "quintic_shift": {
-                n: float(np.abs(quintic[f"f{n}"] - cubic[f"f{n}"]).max()) for n in GRIDS
-            },
-            "quintic_order_shift": float(
-                np.nanmax(np.abs(quintic["order"] - cubic["order"]))
-            ),
+            u, v = data["u"], data["v"]
+        entry = cavity_true_centerline_errors(configs[n], meshes[n], u, v).components
+        if path.stem.startswith("staggered"):
+            entry["face_gap"] = face_gaps(configs[n], meshes[n], u, v)
+        out["metric"][path.stem] = entry
+    snaps = {}
+    for n, path in zip(GRIDS, tight, strict=True):
+        with np.load(path) as data:
+            snaps[n] = s = {key: data[key] for key in data.files}
+        first, last = tags[0], tags[-1]
+        out["iteration"][n] = {
+            "outer": {t: int(s[f"outer_{t}"]) for t in tags},
+            "seconds": float(s["seconds"]),
+            "u_change": float(np.abs(s[f"u_{last}"] - s[f"u_{first}"]).max()),
+            "v_change": float(np.abs(s[f"v_{last}"] - s[f"v_{first}"]).max()),
         }
+        metric = cavity_true_centerline_errors(
+            configs[n], meshes[n], s[f"u_{last}"], s[f"v_{last}"]
+        )
+        out["metric"][f"staggered-jacobi_{n}_tol{last}"] = metric.components
+    references = {"u": (GHIA_U_Y, GHIA_U_VAL), "v": (GHIA_V_X, GHIA_V_VAL)}
+    for t in tags:
+        lines = {
+            n: face_profiles(meshes[n], snaps[n][f"u_{t}"], snaps[n][f"v_{t}"], u_lid)
+            for n in GRIDS
+        }
+        out["stations"][t] = {
+            axis: station_orders({n: lines[n][k] for n in GRIDS}, *references[axis])
+            for k, axis in enumerate("uv")
+        }
+    for axis in "uv":
+        before, after = (out["stations"][t][axis] for t in tags[-2:])
+        out["settling"][axis] = order_change(
+            np.array(before["order"]),
+            np.array(after["order"]),
+            np.array(after["station"]),
+        )
     return out
 
 
@@ -503,7 +781,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--solve-only", action="store_true")
     parser.add_argument("--extrapolate", action="store_true")
+    parser.add_argument("--solve-tight", action="store_true")
     args = parser.parse_args(argv)
+    if args.solve_tight:
+        for n in GRIDS:
+            solve_tight(n)
+        return 0
     if args.extrapolate:
         text = json.dumps(extrapolation(), indent=2)
         (FIELD_DIR / "extrapolation.json").write_text(text, encoding="utf-8")
