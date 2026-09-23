@@ -115,9 +115,12 @@ higher of the two. Measured against itself it converges at second order or bette
 the lid corners. Its slow approach to Ghia was mostly the metric's own sampling, half a cell
 off the centerlines. The harness, the viewer and VAL-002 now sample on the centerlines under
 a new metric name, `max_normalized_centerline_error_r2`, and the stored rows keep the old
-one. On the true centerlines what remains is a floor that stops falling between the two
-finer grids, of unsettled origin. The collocated solver is not yet asymptotic on these
-grids. See `docs/reports/cavity_self_convergence.md`.
+one. On the true centerlines, and on fields converged well past the case's stopping
+tolerance, the staggered solution converges toward values up to about 1% of the lid speed
+from Ghia's in the jet by the right wall, and refinement moves it away from Ghia there.
+Whether that gap is Ghia's or this scheme's is open. Under the new metric the staggered
+error series is not monotone, which bears on ECR-001 criterion 3a. The collocated solver is
+not yet asymptotic on these grids. See `docs/reports/cavity_self_convergence.md`.
 
 The inlet flux the collocated layer prescribes on VAL-001 is short of the exact value by
 two rows of cells, because its edge map hands the corner ring cells to the top and bottom
@@ -179,9 +182,11 @@ Clear the outstanding branch stack bottom up through review. The rebuild continu
 7, VAL-001 revalidation on the staggered solver, which has to settle the criterion 2 mesh
 question below and whether the stopping rule needs a continuity term. Step 8 judges
 VAL-002 against the corrected reference, `ghia_1982_re100_r2`, on the true centerlines;
-its harness run writes the first rows under `max_normalized_centerline_error_r2`. Whether
-the floor on the true centerline bears on ECR-001 criterion 3a is a decision that waits on
-the open question below.
+its harness run writes the first rows under `max_normalized_centerline_error_r2`. Under
+that metric the staggered error series is not monotone, on the saved fields and on fields
+converged to 1e-9, so the step 8 run tests ECR-001 criterion 3a on a series that does not
+meet it as written. What to do about 3a is decided then
+(`docs/reports/cavity_self_convergence.md`, section 9.1).
 
 The review workflow was changed on 2026-09-23: the code-review plugin's full declared tool
 set is allowed, the top-level model and the action are pinned, and the manual dispatch is
@@ -209,7 +214,12 @@ Whether VAL-002 can return to the full grid in CI once the rebuild lands.
 
 Whether the stopping rule needs a continuity term. The staggered solver declares
 convergence with a per-cell imbalance above criterion 6's bound; step 6 records it and
-leaves the rule as the collocated one so the outer counts compare.
+leaves the rule as the collocated one so the outer counts compare. A second input, measured
+2026-09-23: at `convergence_tol` 1e-6 the staggered cavity's velocity fields carry iteration
+error that grows about 3.5 times per halving of h, to about 1e-3 at 80x80, and continuing
+the 80x80 solve to 1e-9 took about 7.5 minutes. That and the step 6 continuity result are
+the evidence for the step 7 stopping decision (`docs/reports/cavity_self_convergence.md`,
+section 9.2).
 
 Closed 2026-09-22: what the VAL-002 v-component findings become against the published
 Ghia table. The v reference was replaced by Table II as `ghia_1982_re100_r2`; the
@@ -219,13 +229,14 @@ not hold. See the ECR-001 erratum, section 12.
 Narrowed 2026-09-23: why the staggered solver's cavity error falls slowly toward Ghia.
 Not the scheme: against itself it converges at second order or better away from the lid
 corners. The metric's half-cell offset accounted for most of the slope, and is closed: the
-metric now samples on the centerlines. What remains open is the floor left on the true
-centerline, which is either Ghia's error or a consistent error in this solver's limit. A
-reference-free extrapolation from the three saved grids could not answer it: at most of
-Ghia's stations the pointwise order is not second order, and in the jet by the right wall
-the profile reverses direction between grids, so extrapolation is not licensed there. A
-fourth grid or an independent solution would settle it
-(`docs/reports/cavity_self_convergence.md`, sections 7 and 9).
+metric now samples on the centerlines. On fields converged to 1e-9 the pointwise order at
+Ghia's stations is near 2 and nothing reverses. The converged staggered solution approaches
+values up to about 1% of the lid speed from Ghia's in the jet by the right wall, and
+refinement moves it away from Ghia there (INFERRED). A first reading from the fields saved
+at the case's tolerance, that extrapolation was not licensed, came from their iteration
+error and was withdrawn. What remains open is whether the gap is Ghia's or a systematic
+error of this scheme. An independent reference settles it; the planned one is Marchi, Suero
+and Araki (2009) (`docs/reports/cavity_self_convergence.md`, section 9.3).
 
 Which mesh quantity ECR-001 acceptance criterion 2 fixes. At a given cell count the
 geometric ratio and the wall spacing determine each other, so the criterion's ratio of 1.05
