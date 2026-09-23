@@ -1,5 +1,7 @@
 # Momentum Sweep Probe: Is the Momentum Inner Solve the Rate Limiter?
 
+*Erratum 2026-09-22: the v-error column was measured against the Ghia v reference in use until 2026-09-22 was not Ghia's Table II and failed mass conservation along the centerline; see the ECR-001 erratum, section 12, and reference `ghia_1982_re100_r2`. The tables below are unchanged. The column compares one solver's fields across sweep counts, so what it shows here, that k does not change the converged field, does not depend on the reference.*
+
 **Date:** 2026-09-19
 **Branch:** `scratch/momentum-sweeps` (experiment only, not for merge)
 **Baseline:** `feature/validation-consolidation` at `dcddb39`

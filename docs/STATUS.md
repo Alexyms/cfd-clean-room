@@ -15,9 +15,9 @@ project has already lost five months to exactly that.
 ## Where the project stands
 
 Phases 0 and 1 are complete. Phase 2 is in progress: the Navier-Stokes solver exists and
-runs, VAL-001 passes against its current criterion, VAL-002 is marked xfail against a
-documented defect, and the approved engineering change request to rebuild the solver is
-six steps into its nine-step plan. Phases 3 through 7 have not begun.
+runs, VAL-001 passes against its current criterion, VAL-002 is marked xfail because the
+collocated solver fails it at the 40x40 CI grid, and the approved engineering change request
+to rebuild the solver is six steps into its nine-step plan. Phases 3 through 7 have not begun.
 
 `docs/PROJECT_PLAN.md` holds the phase detail, deliverables and validation gates.
 
@@ -76,8 +76,9 @@ was planned.
 Four amendments to ECR-001 landed on 2026-09-20, before implementation. The discrete
 continuity baseline for the collocated scheme is recorded under acceptance criterion 6, which
 is now a quantified before-and-after rather than a sanity check. Criterion 3a requires the
-cavity error to fall monotonically under refinement in both components, with the measured
-series that moves the wrong way in v as the baseline. The problem statement carries the
+cavity error to fall monotonically under refinement in both components; the v half of the
+baseline it records was measured against a corrupted reference and is corrected in the
+ECR-001 erratum. The problem statement carries the
 continuity measurement as a second, independent confirmation of the wall-treatment defect.
 And the `solve_steady` callback, sweep count and stage timing that the benchmark harness
 depends on are recorded as an interface obligation on the rebuilt solver.
@@ -99,15 +100,18 @@ remains belongs to the pressure-velocity coupling or to the iterate-change conve
 criterion, and is not yet identified. See `docs/reports/pressure_solver_probe.md` and
 `docs/reports/momentum_sweep_probe.md`.
 
-The lid-driven cavity error diverges under grid refinement in the v-component while the
-u-component converges. A scheme that improves in one direction and degrades in the other has
-a directional defect rather than a resolution shortfall, and this is consistent with the wall
-treatment above: the u-field is driven directly by the lid boundary condition, while the
-v-field depends on a continuity constraint that the inert pressure correction never enforces.
-Recorded in `benchmarks/results.jsonl`. The v half of this is now in question: the Ghia v
-reference in `validation/metrics.py` does not match the published table and does not
-conserve mass along the centerline, so every stored v error, collocated and staggered, is
-measured against the wrong profile (`docs/reports/staggered_integration_step6.md`).
+It was believed that the lid-driven cavity error diverges under grid refinement in the
+v-component while the u-component converges, a directional defect tied to the wall
+treatment above. That is false. The Ghia v reference the metric used from 2026-04-16 to
+2026-09-22 was not Ghia's Table II and failed mass conservation along the centerline, so
+every v error measured against it, including the series that opens ECR-001, measured the
+distance from the wrong profile. Against the published table, now the reference
+`ghia_1982_re100_r2`, the collocated v error falls under refinement as its u error does.
+The wall leak above stands on its own measurement, which uses no reference data. See the
+erratum in `docs/ECR/ECR-001-solver-architecture-rebuild.md`, section 12, and the r2 rows
+in `benchmarks/results.jsonl`. Against the same table the staggered solver's v error is
+below the collocated one's on the coarse grids but falls more slowly, and at 80x80 it is the
+higher of the two; why is an open question below.
 
 The inlet flux the collocated layer prescribes on VAL-001 is short of the exact value by
 two rows of cells, because its edge map hands the corner ring cells to the top and bottom
@@ -162,8 +166,8 @@ measurement showed; it should not restate the measurement.
 
 Clear the outstanding branch stack bottom up through review. The rebuild continues at step
 7, VAL-001 revalidation on the staggered solver, which has to settle the criterion 2 mesh
-question below and whether the stopping rule needs a continuity term. The v reference
-table should be corrected in a change of its own before step 8 judges VAL-002 against it.
+question below and whether the stopping rule needs a continuity term. Step 8 judges
+VAL-002 against the corrected reference, `ghia_1982_re100_r2`.
 
 ## Open questions
 
@@ -184,9 +188,14 @@ Whether the stopping rule needs a continuity term. The staggered solver declares
 convergence with a per-cell imbalance above criterion 6's bound; step 6 records it and
 leaves the rule as the collocated one so the outer counts compare.
 
-What the VAL-002 v-component findings become against the published Ghia table. The
-stored reference fails mass conservation along the centerline; the ECR-001 problem
-statement's v refinement series was measured against it.
+Closed 2026-09-22: what the VAL-002 v-component findings become against the published
+Ghia table. The v reference was replaced by Table II as `ghia_1982_re100_r2`; the
+collocated v error falls under refinement, and the v refinement argument in ECR-001 does
+not hold. See the ECR-001 erratum, section 12.
+
+Why the staggered solver's cavity v error falls slowly under refinement. Against the
+corrected reference it is below the collocated v error at 20x20 and 40x40 and above it at
+80x80; the r2 rows in `benchmarks/results.jsonl` hold the series.
 
 Which mesh quantity ECR-001 acceptance criterion 2 fixes. At a given cell count the
 geometric ratio and the wall spacing determine each other, so the criterion's ratio of 1.05

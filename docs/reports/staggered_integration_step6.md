@@ -1,5 +1,7 @@
 # The staggered solver's first flow fields: ECR-001 step 6
 
+*Erratum 2026-09-22: sections 1 and 3 quote v errors under the unchanged metric, whose Ghia v reference in use until 2026-09-22 was not Ghia's Table II and failed mass conservation along the centerline; see the ECR-001 erratum, section 12, and reference `ghia_1982_re100_r2`. The tables below are unchanged. Section 4 is the finding that led to the correction.*
+
 **Date:** 2026-09-22
 **Context:** ECR-001 step 6, `src/solver_staggered.py` run alongside the unchanged
 collocated solver, before any validation test moves to it (steps 7 and 8)
