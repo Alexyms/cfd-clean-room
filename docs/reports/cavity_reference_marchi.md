@@ -199,8 +199,16 @@ In brief, MEASURED:
 - R(80, 100) lies within 1.7e-5 of Marchi in u and 1.9e-5 in v. R(40, 80) lies within 1.1e-4
   and 7.8e-5, and the unextrapolated 100x100 profile within 5.8e-4 and 3.8e-4.
 - At 29 of the 30 stations, R(80, 100) is nearer Marchi than R(40, 80) and on the same side,
-  by a median factor of 4.2. The exception is v at x = 0.5, where both are below 1e-6.
-- Measured in Marchi's own U, R(80, 100) is 100 to 630 times U away (median about 160).
+  by a median factor of 4.3. The exception is v at x = 0.5, where both are below 1e-6.
+- Measured in Marchi's own U, R(80, 100) is 40 to 622 times U away in u and 42 to 633 in v,
+  with a median of 168 over the 30 stations. Four stations are under 100: u at y = 0.5625 and
+  0.625, and v at x = 0.5 and 0.5625.
+- About 2.5e-6 of the 1.9e-5 is iteration error left in the 1e-9 fields. Test 22 (C9) formed
+  R(80, 100) from the 1e-7, 1e-8 and 1e-9 snapshots. The change shrinks tenfold per decade of
+  tolerance, from 2.1e-4 to 2.2e-5 in u and from 2.2e-4 to 2.3e-5 in v, which puts what
+  remains beyond 1e-9 at 2.4e-6 in u and 2.5e-6 in v. Interpolation (at most 9.1e-6, above) and iteration are the two sources this
+  comparison can put a number on. What they leave is truncation error that one order-2
+  extrapolation does not remove (INFERRED).
 
 **Ghia against Marchi without our solution.** This is a one-off, not committed:
 `results/reference/ghia_vs_marchi_interpolated.txt`. Marchi's table, walls appended, is
@@ -236,7 +244,7 @@ The readings were written into the prompt before any number was taken:
   Marchi's U at these points is at most 1.1e-7. Our extrapolation's own uncertainty, the
   change from R(40, 80) to R(80, 100), is up to 9.6e-5, nearly a thousand times larger. Our
   R(80, 100) differs from Marchi by at most 1.7e-5 in u and 1.9e-5 in v. That is inside our
-  uncertainty, but 100 to 630 times Marchi's. The comparison that decides between the
+  uncertainty, but 40 to 633 times Marchi's. The comparison that decides between the
   readings is with the gap: those largest differences are about 1/290 of the 0.005 gap in u
   and 1/480 of the 0.009 gap in v.
 - "Ghia off by about the gap at the jet points" is met with our solution used to carry Ghia's
@@ -289,3 +297,7 @@ reference, a metric or a criterion.
 - **Ghia against Marchi without a solver field:** one-off,
   `results/reference/ghia_vs_marchi_interpolated.txt`.
 - **Field sources and face recovery residuals:** one-off, `results/reference/field_checks.txt`.
+- **Iteration error in R(80, 100):** test 22, C9 (`docs/prompts/test-22.md`, not tracked), from
+  the snapshots in the saved field files; its output is `results/tester22/iteration_error.txt`.
+- **The comparison code's own guard:** `tests/test_self_convergence.py`, the three tests on
+  `tight_field` and `marchi_comparison`, which run on synthetic fields of known order and limit.
