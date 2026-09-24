@@ -30,7 +30,8 @@ Thumbs.db
 .vscode/settings.json
 .vscode/launch.json
 .idea/
-.claude/
+.claude/*
+!.claude/commands/
 
 # Temporary files
 *.tmp

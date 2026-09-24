@@ -2,9 +2,9 @@
 
 **Project:** CFD Clean Room Simulation
 **Status:** Phase 2 in progress. Navier-Stokes solver under development.
-**Last Updated:** 2026-09-22
+**Last Updated:** 2026-09-23
 
-This document is the single reference for system architecture, requirements, module interfaces, and dependency relationships. Code review, whether the GitHub Action's one run per pull request or a Claude Code context in VS Code, checks pull requests against this document under the policy in `docs/REVIEW_POLICY.md`. Keep it current.
+This document is the single reference for system architecture, requirements, module interfaces, and dependency relationships. Review and test, run before each pull request as `/cfd-review` and `/cfd-test` in fresh Claude Code sessions (`.claude/commands/`), check branches against this document under the policy in `docs/REVIEW_POLICY.md`. Keep it current.
 
 ---
 
@@ -598,3 +598,4 @@ Full ADRs are in the development plan document. Summary reference:
 | 2026-09-22 | REQ-S07 rationale and the ADR-010 summary no longer claim a VAL-002 v defect: that error was measured against a corrupted Ghia v table, replaced by Table II as reference ghia_1982_re100_r2 (ECR-001 erratum). Requirement text unchanged. | Alex Moroz-Smietana |
 | 2026-09-19 | REQ-S02 rationale corrected: the measured VAL-001 error on 80x40 is 2.04%, identical on CI and locally, which is why the criterion is 2.5% rather than 2%. The 1.54% previously recorded in PROJECT_PLAN.md was not reproducible at the commit that claimed it. Requirement value unchanged; the ECR-001 tightening to < 1% after the rebuild is unaffected. | Alex Moroz-Smietana |
 | 2026-09-19 | solve_steady gains an optional on_iteration callback plus last_pressure_sweeps and stage_seconds attributes for the benchmark harness (scripts/benchmark.py). Observability only; solver logic unchanged. | Alex Moroz-Smietana |
+| 2026-09-23 | The review Action (.github/workflows/review.yml) removed; the opening paragraph now names the local review and test commands that check branches against this document. No requirement, contract or module changed. | Alex Moroz-Smietana |
