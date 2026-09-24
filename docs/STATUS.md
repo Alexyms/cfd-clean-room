@@ -229,8 +229,9 @@ not hold. See the ECR-001 erratum, section 12.
 Narrowed 2026-09-23: why the staggered solver's cavity error falls slowly toward Ghia.
 Not the scheme: against itself it converges at second order or better away from the lid
 corners. The metric's half-cell offset accounted for most of the slope, and is closed: the
-metric now samples on the centerlines. On fields converged to 1e-9 the pointwise order at
-Ghia's stations is near 2 and nothing reverses. The converged staggered solution approaches
+metric now samples on the centerlines. On fields converged to 1e-9 nothing reverses, and
+16 of Ghia's 30 stations fall inside the report's band around order 2 (18 under the
+quintic interpolation). The converged staggered solution approaches
 values up to about 1% of the lid speed from Ghia's in the jet by the right wall, and
 refinement moves it away from Ghia there (INFERRED). A first reading from the fields saved
 at the case's tolerance, that extrapolation was not licensed, came from their iteration
