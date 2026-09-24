@@ -17,12 +17,16 @@ with the true-centerline metric for both solvers. The fields saved at the
 case's convergence_tol carry iteration error as large as the steps it reads,
 so --solve-tight first continues the staggered solves to 1e-9.
 
+--marchi asks the same question of an independent reference, Marchi, Suero and
+Araki (2009), from the 1e-9 fields at 20, 40, 80 and 100, with no solve.
+
 Run:
 
     python scripts/self_convergence.py             # control, solves, analysis
     python scripts/self_convergence.py --solve-only
     python scripts/self_convergence.py --solve-tight   # staggered to 1e-9
     python scripts/self_convergence.py --extrapolate
+    python scripts/self_convergence.py --marchi
 """
 
 from __future__ import annotations
@@ -62,6 +66,8 @@ from validation.metrics import (  # noqa: E402 -- follows sys.path.insert
     GHIA_U_Y,
     GHIA_V_VAL,
     GHIA_V_X,
+    MARCHI_U_ROWS,
+    MARCHI_V_ROWS,
     _lid_velocity,
     cavity_centerline_errors,
     cavity_true_centerline_errors,
@@ -83,6 +89,11 @@ ORDER_BAND = 0.25
 TIGHT_TOL = 1.0e-9
 TIGHT_MAX_ITER = 40000
 SNAPSHOT_TOLS = (1.0e-7, 1.0e-8)
+# Test 21b continued the 60x60 and 100x100 solves to TIGHT_TOL the same way.
+TESTER_DIR = REPO_ROOT / "results" / "tester21b"
+# Ghia's stations lie on his 1/128 grid, Marchi's on sixteenths. A Ghia station
+# within three of Ghia's spacings of a Marchi station is compared with it.
+GHIA_PAIR = 3.0 / 128.0
 
 
 def solve_and_save(method: str, n: int) -> Path:
@@ -776,20 +787,103 @@ def extrapolation() -> dict:
     return out
 
 
+def tight_field(n: int) -> tuple[np.ndarray, np.ndarray]:
+    """The staggered u and v at n x n converged to TIGHT_TOL, from either pass that saved it."""
+    path = FIELD_DIR / f"staggered-jacobi_{n}_tol1e-9.npz"
+    if not path.exists():
+        path = TESTER_DIR / f"staggered_{n}_tight.npz"
+    with np.load(path) as data:
+        return data["u_1e-09"], data["v_1e-09"]
+
+
+def marchi_comparison() -> dict:
+    """Order-2 values of the staggered true centerlines at Marchi's stations.
+
+    Profiles as face_profiles takes them, interpolated to each station by the
+    cubic (and, as a check, the quintic) through the nearest nodes. R(40, 80) is
+    f80 + (f80 - f40) / 3 and R(80, 100) is f100 + (f100 - f80) / (1.25^2 - 1).
+    Where a Ghia station lies within GHIA_PAIR of a Marchi station, Ghia's value
+    is carried to Marchi's station along R(80, 100) and compared, as an
+    indication only.
+
+    Returns
+    -------
+    dict
+        Per profile, lists over Marchi's 15 stations: Marchi's value and error
+        estimate; the cubic order from 20, 40 and 80; f100, R(40, 80) and
+        R(80, 100) minus Marchi, and R(80, 100) minus Marchi under the quintic;
+        the paired Ghia station, the carry R(station) - R(Ghia station), and Ghia
+        minus Marchi, each None where unpaired. Then the largest
+        cubic-to-quintic change in f80 and f100.
+    """
+    grids = (*GRIDS, 100)
+    configs = {n: load_case("cavity", grid=(n, n)) for n in grids}
+    u_lid = _lid_velocity(configs[GRIDS[0]])
+    lines = {n: face_profiles(Mesh(configs[n]), *tight_field(n), u_lid) for n in grids}
+    refs = {
+        "u": (MARCHI_U_ROWS, GHIA_U_Y, GHIA_U_VAL),
+        "v": (MARCHI_V_ROWS, GHIA_V_X, GHIA_V_VAL),
+    }
+    out: dict = {}
+    for k, axis in enumerate("uv"):
+        rows, ghia_at, ghia_val = refs[axis]
+        s, ref, err = (np.array(c) for c in zip(*rows, strict=True))
+        run_extrapolation_control(s)
+        prof = {n: lines[n][k] for n in grids}
+
+        def r80_100(at: np.ndarray, width: int = 4, prof: dict = prof) -> np.ndarray:
+            f80, f100 = (lagrange(*prof[n], at, width) for n in (80, 100))
+            return f100 + (f100 - f80) / ((100 / 80) ** 2 - 1.0)
+
+        fit = richardson({n: prof[n] for n in GRIDS}, s)
+        g_at, g_val = np.array(ghia_at[1:-1]), np.array(ghia_val[1:-1])
+        near = np.abs(g_at[None, :] - s[:, None]).argmin(axis=1)
+        paired = np.abs(g_at[near] - s) <= GHIA_PAIR
+        carry = r80_100(s) - r80_100(g_at[near])
+
+        def where_paired(a: np.ndarray, paired: np.ndarray = paired) -> list:
+            return [float(x) if p else None for x, p in zip(a, paired, strict=True)]
+
+        out[axis] = {
+            "station": s.tolist(),
+            "marchi": ref.tolist(),
+            "marchi_error": err.tolist(),
+            "order": fit["order"].tolist(),
+            "f100_minus_marchi": (lagrange(*prof[100], s) - ref).tolist(),
+            "r40_80_minus_marchi": (fit["value"] - ref).tolist(),
+            "r80_100_minus_marchi": (r80_100(s) - ref).tolist(),
+            "r80_100_quintic_minus_marchi": (r80_100(s, 6) - ref).tolist(),
+            "ghia_station": where_paired(g_at[near]),
+            "carry": where_paired(carry),
+            "ghia_minus_marchi": where_paired(g_val[near] + carry - ref),
+            "interpolation_estimate": {
+                n: float(np.abs(lagrange(*prof[n], s, 6) - lagrange(*prof[n], s)).max())
+                for n in (80, 100)
+            },
+        }
+    return out
+
+
 def main(argv: list[str] | None = None) -> int:
     """Run the control, the six solves, and the analysis; print and save a JSON summary."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--solve-only", action="store_true")
     parser.add_argument("--extrapolate", action="store_true")
     parser.add_argument("--solve-tight", action="store_true")
+    parser.add_argument("--marchi", action="store_true")
     args = parser.parse_args(argv)
     if args.solve_tight:
         for n in GRIDS:
             solve_tight(n)
         return 0
-    if args.extrapolate:
-        text = json.dumps(extrapolation(), indent=2)
-        (FIELD_DIR / "extrapolation.json").write_text(text, encoding="utf-8")
+    if args.extrapolate or args.marchi:
+        result, name = (
+            (marchi_comparison(), "marchi_comparison.json")
+            if args.marchi
+            else (extrapolation(), "extrapolation.json")
+        )
+        text = json.dumps(result, indent=2)
+        (FIELD_DIR / name).write_text(text, encoding="utf-8")
         print(text)
         return 0
 

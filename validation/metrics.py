@@ -107,6 +107,66 @@ GHIA_V_VAL: tuple[float, ...] = (
 )
 
 
+# Marchi, Suero and Araki (2009), "The lid-driven square cavity flow: numerical
+# solution with a 1024 x 1024 grid", J. Braz. Soc. Mech. Sci. & Eng. 31(3), DOI
+# 10.1590/S1678-58782009000300004. Second-order finite volumes on 1024 x 1024 with
+# multiple Richardson extrapolations, iterated to round-off. The Re = 100 column of
+# Table 6 (solution) and Table 7 (estimated discretization error U). Each profile
+# value is the mean of the two faces either side of its station, so it sits on the
+# true centerline, and every velocity is over the lid speed.
+#
+# Extracted 2026-09-23 from the PDF's text layer; nothing was typed. pdftotext
+# -layout (xpdf 4.00) and pypdf 6.19.0 agree digit for digit on every value in all
+# five Re columns of both tables. The -layout text prints each Table 7 label one
+# line below its own values. The glyph positions put every label within 1.5 pt of
+# its row's baseline, with rows 9.7 pt apart, and that pairing is the one used.
+# No metric or criterion uses this table: VAL-002 and the harness stay on
+# ghia_1982_re100_r2. tests/test_validation.py, TestMarchiTable, checks it.
+MARCHI_REFERENCE = "marchi_2009_re100"
+
+# (y, u on x = 0.5, U), one row per table row.
+MARCHI_U_ROWS: tuple[tuple[float, float, float], ...] = (
+    (0.0625, -4.1974991e-2, 4.5e-8),
+    (0.125, -7.7125399e-2, 7.2e-8),
+    (0.1875, -1.09816214e-1, 8.6e-8),
+    (0.25, -1.41930064e-1, 8.6e-8),
+    (0.3125, -1.72712391e-1, 7.3e-8),
+    (0.375, -1.98470859e-1, 5.0e-8),
+    (0.4375, -2.12962392e-1, 2.0e-8),
+    (0.5, -2.091491418e-1, 8.6e-9),
+    (0.5625, -1.82080595e-1, 2.8e-8),
+    (0.625, -1.31256301e-1, 3.5e-8),
+    (0.6875, -6.0245594e-2, 3.7e-8),
+    (0.75, 2.7874448e-2, 4.6e-8),
+    (0.8125, 1.40425325e-1, 7.1e-8),
+    (0.875, 3.1055709e-1, 1.1e-7),
+    (0.9375, 5.97466694e-1, 9.5e-8),
+)
+
+# (x, v on y = 0.5, U), one row per table row.
+MARCHI_V_ROWS: tuple[tuple[float, float, float], ...] = (
+    (0.0625, 9.4807616e-2, 7.2e-8),
+    (0.125, 1.4924300e-1, 1.0e-7),
+    (0.1875, 1.74342933e-1, 9.7e-8),
+    (0.25, 1.79243328e-1, 7.9e-8),
+    (0.3125, 1.69132064e-1, 5.5e-8),
+    (0.375, 1.45730201e-1, 2.9e-8),
+    (0.4375, 1.087758646e-1, 3.7e-9),
+    (0.5, 5.7536559e-2, 2.0e-8),
+    (0.5625, -7.748504e-3, 4.8e-8),
+    (0.625, -8.4066715e-2, 5.3e-8),
+    (0.6875, -1.63010143e-1, 5.0e-8),
+    (0.75, -2.27827313e-1, 5.2e-8),
+    (0.8125, -2.53768577e-1, 7.3e-8),
+    (0.875, -2.18690812e-1, 8.7e-8),
+    (0.9375, -1.23318170e-1, 5.8e-8),
+)
+
+# Mass flow rate through y = 0.5 between x = 0 and 0.5, the paper's Eq. (4), and U.
+MARCHI_M = 6.6547335e-2
+MARCHI_M_ERR = 2.7e-8
+
+
 @dataclass(frozen=True)
 class ErrorMetric:
     """One accuracy measurement against a named reference.

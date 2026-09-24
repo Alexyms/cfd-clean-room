@@ -118,9 +118,13 @@ a new metric name, `max_normalized_centerline_error_r2`, and the stored rows kee
 one. On the true centerlines, and on fields converged well past the case's stopping
 tolerance, the staggered solution converges toward values up to about 1% of the lid speed
 from Ghia's in the jet by the right wall, and refinement moves it away from Ghia there.
-Whether that gap is Ghia's or this scheme's is open. Under the new metric the staggered
+That gap is Ghia's (INFERRED). Against an independent reference, Marchi, Suero and Araki
+(2009), read from the paper's text layer and checked against its own published mass flow,
+the extrapolated staggered solution agrees at all thirty of its points to a small fraction
+of the gap, and Ghia's table differs from it by the gap. Under the new metric the staggered
 error series is not monotone, which bears on ECR-001 criterion 3a. The collocated solver is
-not yet asymptotic on these grids. See `docs/reports/cavity_self_convergence.md`.
+not yet asymptotic on these grids. See `docs/reports/cavity_self_convergence.md` and
+`docs/reports/cavity_reference_marchi.md`.
 
 The inlet flux the collocated layer prescribes on VAL-001 is short of the exact value by
 two rows of cells, because its edge map hands the corner ring cells to the top and bottom
@@ -138,7 +142,9 @@ been corrected. REQ-S02's threshold is unchanged; only its recorded justificatio
 `scripts/self_convergence.py` measures each solver's order on the cavity against itself, with
 no reference, after a control on synthetic fields of known order. With `--extrapolate` it
 extrapolates the staggered centerline profiles pointwise from the saved fields, after a
-control of its own, where the observed order licenses it.
+control of its own, where the observed order licenses it. With `--marchi` it sets the same
+extrapolation against the independent reference `marchi_2009_re100`, which no metric or
+criterion uses.
 
 `scripts/gen_system_map.py` regenerates sections of `docs/SYSTEM.md` from the source tree by
 AST parsing, never by importing. CI runs it with `--check`, so a change under `src/` that
@@ -186,7 +192,8 @@ its harness run writes the first rows under `max_normalized_centerline_error_r2`
 that metric the staggered error series is not monotone, on the saved fields and on fields
 converged to 1e-9, so the step 8 run tests ECR-001 criterion 3a on a series that does not
 meet it as written. What to do about 3a is decided then
-(`docs/reports/cavity_self_convergence.md`, section 9.1).
+(`docs/reports/cavity_self_convergence.md`, section 9.1), with the reference question
+below.
 
 The review workflow was changed on 2026-09-23: the code-review plugin's full declared tool
 set is allowed, the top-level model and the action are pinned, and the manual dispatch is
@@ -226,18 +233,24 @@ Ghia table. The v reference was replaced by Table II as `ghia_1982_re100_r2`; th
 collocated v error falls under refinement, and the v refinement argument in ECR-001 does
 not hold. See the ECR-001 erratum, section 12.
 
-Narrowed 2026-09-23: why the staggered solver's cavity error falls slowly toward Ghia.
+Closed 2026-09-23: why the staggered solver's cavity error falls slowly toward Ghia.
 Not the scheme: against itself it converges at second order or better away from the lid
 corners. The metric's half-cell offset accounted for most of the slope, and is closed: the
-metric now samples on the centerlines. On fields converged to 1e-9 nothing reverses, and
-16 of Ghia's 30 stations fall inside the report's band around order 2 (18 under the
-quintic interpolation). The converged staggered solution approaches
-values up to about 1% of the lid speed from Ghia's in the jet by the right wall, and
-refinement moves it away from Ghia there (INFERRED). A first reading from the fields saved
-at the case's tolerance, that extrapolation was not licensed, came from their iteration
-error and was withdrawn. What remains open is whether the gap is Ghia's or a systematic
-error of this scheme. An independent reference settles it; the planned one is Marchi, Suero
-and Araki (2009) (`docs/reports/cavity_self_convergence.md`, section 9.3).
+metric now samples on the centerlines. On fields converged to 1e-9 the converged staggered
+solution approaches values up to about 1% of the lid speed from Ghia's in the jet by the
+right wall (`docs/reports/cavity_self_convergence.md`, section 9.3). That remaining gap is
+Ghia's (INFERRED). At every one of the thirty points of Marchi, Suero and Araki (2009),
+the solution's extrapolated values lie a small fraction of the gap from theirs, and Ghia's
+table differs from theirs by the gap, with or without the solver's field used to compare
+them
+(`docs/reports/cavity_reference_marchi.md`).
+
+Which reference ECR-001 criterion 3a and VAL-002 score the cavity against. Both stay on
+`ghia_1982_re100_r2` until Alex decides. Against Ghia, a correctly converging scheme meets
+a floor set by Ghia's own error in the jet, below VAL-002's threshold but enough to make the
+error series rise under refinement, which criterion 3a forbids.
+`marchi_2009_re100` is stored with its guard and used by no metric
+(`docs/reports/cavity_reference_marchi.md`, section 5).
 
 Which mesh quantity ECR-001 acceptance criterion 2 fixes. At a given cell count the
 geometric ratio and the wall spacing determine each other, so the criterion's ratio of 1.05

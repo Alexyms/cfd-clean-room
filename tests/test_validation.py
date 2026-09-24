@@ -12,6 +12,9 @@ from validation.metrics import (
     GHIA_U_Y,
     GHIA_V_VAL,
     GHIA_V_X,
+    MARCHI_M,
+    MARCHI_U_ROWS,
+    MARCHI_V_ROWS,
     _bracket,
     cavity_centerline_errors,
     cavity_centerline_profiles,
@@ -340,3 +343,65 @@ class TestGhiaTables:
             assert np.all(np.diff(positions) < 0.0)
             assert (positions[0], positions[-1]) == (1.0, 0.0)
             assert len(set(positions)) == len(positions)
+
+
+# Marchi's stations are uniform at 1/16. The trapezoid error there, estimated from the
+# table alone as (T(h) - T(2h)) / 3, is at most 9.2e-4 over [0, 1/2] and 2.6e-3 over
+# [0, 1], the last from u's rise to the lid.
+MARCHI_FLUX_TOL = 0.005
+MARCHI_U = tuple(r[1] for r in MARCHI_U_ROWS)
+MARCHI_V = tuple(r[1] for r in MARCHI_V_ROWS)
+
+
+def _marchi_flux(
+    values: tuple[float, ...] | list[float], top: float, upto: float = 1.0
+) -> float:
+    """Trapezoid integral of a profile at Marchi's stations, walls appended, to upto."""
+    s = [0.0, *(k / 16 for k in range(1, 16)), 1.0]
+    f = [0.0, *values, top]
+    keep = [k for k, position in enumerate(s) if position <= upto]
+    return _centerline_flux(tuple(s[k] for k in keep), tuple(f[k] for k in keep))
+
+
+@pytest.mark.unit
+class TestMarchiTable:
+    """Marchi et al. (2009), Re = 100, checked against itself before anything uses it.
+
+    The net flux through each centerline is zero. The flux up through y = 0.5
+    left of x = 0.5 is the published M, and so is the flux leftward through
+    x = 0.5 below y = 0.5, since the two half-lines close the lower left
+    quadrant. On uniform stations the full-line trapezoid cannot see interior
+    stations swapped, so the M checks carry that control.
+    """
+
+    def test_stations_are_the_sixteenths(self) -> None:
+        """Both profiles hold the fifteen interior stations k / 16, in order."""
+        for rows in (MARCHI_U_ROWS, MARCHI_V_ROWS):
+            assert [r[0] for r in rows] == [k / 16 for k in range(1, 16)]
+
+    def test_both_profiles_conserve_mass_and_carry_the_published_m(self) -> None:
+        """Full lines give zero; v over [0, 1/2] gives M and u over [0, 1/2] gives -M.
+
+        M is a separate row of Table 6, so the last two tie both columns to it.
+        """
+        assert abs(_marchi_flux(MARCHI_U, 1.0)) < MARCHI_FLUX_TOL
+        assert abs(_marchi_flux(MARCHI_V, 0.0)) < MARCHI_FLUX_TOL
+        assert abs(_marchi_flux(MARCHI_V, 0.0, upto=0.5) - MARCHI_M) < MARCHI_FLUX_TOL
+        assert abs(_marchi_flux(MARCHI_U, 1.0, upto=0.5) + MARCHI_M) < MARCHI_FLUX_TOL
+
+    def test_m_check_fails_with_two_stations_swapped(self) -> None:
+        """v at x = 0.25 and 0.75 swapped misses M by 0.026 yet still conserves mass."""
+        v = list(MARCHI_V)
+        v[3], v[11] = v[11], v[3]
+        assert abs(_marchi_flux(v, 0.0)) < MARCHI_FLUX_TOL
+        assert abs(_marchi_flux(v, 0.0, upto=0.5) - MARCHI_M) > 4 * MARCHI_FLUX_TOL
+
+    def test_conservation_check_fails_on_a_one_row_offset(self) -> None:
+        """Each v value read from the row above it misses zero net flux by 0.045.
+
+        pdftotext -layout prints every Table 7 label one line below its values.
+        Read that way, Table 6 puts u(0.5; 0.9375), the row above v(0.0625; 0.5),
+        at the first v station and drops the last v value.
+        """
+        v = [MARCHI_U[-1], *MARCHI_V[:-1]]
+        assert abs(_marchi_flux(v, 0.0)) > 4 * MARCHI_FLUX_TOL
