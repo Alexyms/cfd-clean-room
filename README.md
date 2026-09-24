@@ -16,7 +16,7 @@ The simulation models a vertical cross-section of a semiconductor clean room, so
 
 ## Development Approach
 
-This project is planned before built. Architecture decisions, requirements, validation test cases, and module interfaces are defined before solver code is written. Development follows a phase-gated process with validation at each stage. Each pull request gets one automated review when it opens, run by the Claude Code GitHub Action against the policy in `docs/REVIEW_POLICY.md` and posted on the pull request as a record; iteration on findings happens in a Claude Code context in VS Code against the same policy.
+This project is planned before built. Architecture decisions, requirements, validation test cases, and module interfaces are defined before solver code is written. Development follows a phase-gated process with validation at each stage. Before each pull request opens, the branch is reviewed and tested in separate Claude Code sessions that did not build it (`/cfd-review` and `/cfd-test`, in `.claude/commands/`), against the policy in `docs/REVIEW_POLICY.md`, and their reports are posted on the pull request as its record.
 
 See `docs/` for the system architecture, project plan, and development phasing.
 

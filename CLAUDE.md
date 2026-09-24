@@ -562,11 +562,23 @@ PR description should include:
 - Which phase/validation case this relates to
 - Any open questions or known limitations
 
-A pull request gets one automated review when it opens or leaves draft, run
-by `.github/workflows/review.yml` on the Claude subscription and posted on the
-pull request as a record rather than a gate. Iteration on findings happens in
-a Claude Code context in VS Code. Both apply the policy below, which is imported
-here so the plugin that runs in the Action reads it as a project rule.
+Review and test happen before the pull request is opened, each in a fresh
+Claude Code session that did not build the branch:
+
+1. `/cfd-review NN` (`.claude/commands/cfd-review.md`) reviews the branch
+   against prompt NN and the policy below, and writes `docs/prompts/review-NN.md`.
+2. `/cfd-test NN` (`.claude/commands/cfd-test.md`) tests the branch's claims by
+   the method each names, and writes `docs/prompts/test-NN.md`.
+3. If either finds a Critical or Bug, a builder-fix pass adds commits to the
+   same branch, and the review and test run again.
+
+A round that finds at least as many findings as the round before it stops for a
+decision instead of starting another fix pass. Findings about work the branch
+does not contain yet are prospective: they go to a GitHub issue, not into the
+fix pass. The pull request is opened after the last round, and the review and
+test reports are posted on it as its record. Both passes apply the policy
+below, which is imported here so every session in this repository reads it as a
+project rule.
 
 @docs/REVIEW_POLICY.md
 

@@ -169,15 +169,17 @@ parameters live in committed YAML under `configs/`.
 ## Conventions
 
 Feature branches off main, one pull request per reviewable increment, rebase and merge.
-Every pull request runs ruff and the test suite (`.github/workflows/ci.yml`). A pull
-request gets one automated review when it opens or leaves draft, posted on the pull
-request as a record rather than a gate and run on the Claude subscription
-(`.github/workflows/review.yml`). Review iteration happens in a Claude Code context in
-VS Code, the only reviewer that can check whether the previous round's findings were
-fixed. Both apply `docs/REVIEW_POLICY.md`. The hand-rolled review pipeline that
-preceded this was removed on 2026-09-21; its five review rounds on one pull request
-were almost entirely about the pipeline itself. Task prompts live in `docs/prompts/`
-and are not tracked. Reports live in `docs/reports/` and are.
+Every pull request runs ruff and the test suite (`.github/workflows/ci.yml`). Review and
+test happen before the pull request, each in a fresh Claude Code session:
+`/cfd-review NN` and `/cfd-test NN`, tracked in `.claude/commands/`, write
+`docs/prompts/review-NN.md` and `test-NN.md`. A builder-fix pass follows if they find
+defects. A round that finds at least as many findings as the one before it stops for a
+decision, and prospective findings go to a GitHub issue. The reports are posted on the
+pull request as its record. Both commands apply `docs/REVIEW_POLICY.md`. The review
+Action that ran once on each pull request was removed on 2026-09-23: on its last three
+pull requests it ran for about a minute and never reached its review stage. The
+hand-rolled pipeline before it was removed on 2026-09-21. Task prompts live in
+`docs/prompts/` and are not tracked. Reports live in `docs/reports/` and are.
 
 Measured values belong in the file the instrument wrote. A document may state what a
 measurement showed; it should not restate the measurement.
@@ -195,14 +197,8 @@ meet it as written. What to do about 3a is decided then
 (`docs/reports/cavity_self_convergence.md`, section 9.1), with the reference question
 below.
 
-The review workflow was changed on 2026-09-23: the code-review plugin's full declared tool
-set is allowed, the top-level model and the action are pinned, and the manual dispatch is
-back. Pending, because a pull request that modifies `.github/workflows/` cannot exercise
-the review it changes: on the next pull request, and on a manual dispatch against an
-existing one, the run's `modelUsage` lists an Opus model, the run takes minutes rather than
-seconds, and a comment appears on the pull request, findings or the no-issues summary. A
-dispatched run cannot post findings inline, because the action starts its inline-comment
-tool only for pull request events.
+With the review Action removed, its repository secret and the GitHub App it used are
+still installed. Removing them is Alex's, after merge.
 
 ## Open questions
 

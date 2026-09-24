@@ -1,15 +1,15 @@
 # Code Review Policy
 
-This is the review policy for the CFD clean room simulation project. Two reviewers
-read it, and it lives at this one path so they cannot drift apart:
+This is the review policy for the CFD clean room simulation project. Two commands
+read it, and it lives at this one path so they cannot drift apart. Each runs in a
+fresh Claude Code session, before the pull request is opened:
 
-- The GitHub Action in `.github/workflows/review.yml`, which runs the Claude Code
-  `code-review` plugin once when a pull request opens or leaves draft and posts
-  its findings on the pull request. That run is a record, not a gate. The plugin
-  reads project rules from `CLAUDE.md`, which imports this file.
-- A Claude Code context in VS Code reviewing a branch before it is pushed or after
-  findings have been addressed. That context is the only reviewer that can check
-  whether last round's findings were fixed, so it carries the iteration loop.
+- `/cfd-review NN` (`.claude/commands/cfd-review.md`) reviews the branch against
+  prompt NN and follows this policy as written. It writes its findings and verdict
+  to `docs/prompts/review-NN.md`. A later round checks whether the last round's
+  findings were fixed.
+- `/cfd-test NN` (`.claude/commands/cfd-test.md`) tests the branch's claims by the
+  method each names, and classifies any defect it finds by the severities below.
 
 Either way the reviewer has the checked-out repository, not a diff excerpt. When a
 hunk raises a question about a signature, a caller, a test or a contract, open the
@@ -148,8 +148,8 @@ A finding that cannot meet the applicable rule is not ready to be written.
 
 ## Verdict Rules
 
-A verdict states whether the branch is mergeable as reviewed. The VS Code
-reviewer gives one; the GitHub record posts findings inline and carries none.
+A verdict states whether the branch is mergeable as reviewed. `/cfd-review`
+gives one; `/cfd-test` reports each check as PASS, FAIL or UNKNOWN instead.
 
 Issue **VERDICT: APPROVE** when there are no Critical or Bug findings. Suggestions may be present -- list them in the review so they can be addressed, but they do not block the merge.
 
