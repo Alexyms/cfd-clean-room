@@ -1,0 +1,173 @@
+# What the stopping rule should measure: evidence
+
+**Date:** 2026-09-24
+**Context:** the STATUS question of whether the stopping rule needs a continuity term. This
+report measures; it does not choose a rule.
+**Instrument:** `python scripts/stopping_probe.py`. Every value is from
+`results/stopping_probe/summary.json` (gitignored) unless section 8 says otherwise.
+
+**Answers.** (1) At the committed tolerance, 82% of VAL-001's stored 2.3e-3 is iteration
+error. The rest is the half-cell wall stencil's discretization error, less some incomplete
+development at x = L/2. (2) Step times rho_hat / (1 - rho_hat) is within 0.77 to 1.34 of the
+true error on the cavity at every snapshot from 1e-5 to 1e-10. On the channel it fails below
+1e-8 (40x20) and 1e-9 (80x40). The error left there is a flux drift that only the mass
+imbalance shows. (3) The worst per-cell imbalance crosses 1e-10 only when the velocity
+iteration error is far below any discretization error. (4) At 1e-6 the iteration error
+exceeds the discretization error on the 80x80 cavity and on VAL-001 80x40.
+
+## 1. Method
+
+Each case was solved once with its committed settings, except `convergence_tol` (1e-11, in
+memory) and the cap (20000 outer on the channel, 40000 on the cavity). The field at 1e-11 is
+the truth; u and v were kept when the residual first fell below each quarter decade from 1e-5.
+The corrector's `correct` was wrapped on the instance to record the worst per-cell imbalance
+and the sweeps; `src/` is unchanged. True error: the largest abs difference from the truth
+over FLUID cells, u or v. rho_hat: exp of the least-squares slope of log(residual) over the
+last W = 100 outer iterations, repeated at 50 and 200. Discretization error: the truth's
+`poiseuille_l2_error`, or the truth against `marchi_2009_re100` at its 30 stations through
+`face_profiles` and `lagrange`; iteration error in those terms is the snapshot's minus it.
+
+## 2. Controls
+
+- **Same computation.** Unwrapped solves at 1e-6 equal the wrapped snapshots bitwise: cavity
+  20x20 (629 outer) and VAL-001 80x40 (570 outer). The VAL-001 metric, 0.002306261116980951,
+  equals the stored row with `==`. The one commit under `src/` since its 0e7f5b0 is 9d3a5ea.
+- **Estimator.** The tests recover rho from geometric histories and a + 2 b m from a
+  quadratic log. A window one entry long, short or shifted, and a fit to raw values, each
+  fail the test, both as test variants and planted in the script.
+- **True error.** 2^-20 planted in a FLUID cell of u or v reads as exactly 2^-20, and in the
+  BOUNDARY ring as zero. Dropping the FLUID mask, or v, fails a test.
+
+## 3. Question 1: VAL-001's 2.3e-3
+
+**The premise failed on reading.** `src/momentum.py` gives the wall row the diffusive flux
+(u_0 - 0) / (dy / 2), which a parabola does not satisfy. With the interior three-point
+difference exact for a parabola, the fully developed discrete profile is (INFERRED, by hand)
+
+    u_j = C [y_j (H - y_j) + dy^2 / 4],   C = 6 U / (H^2 (1 + 2 / ny^2))
+
+so u_num / u_ref = (1 + dy^2 / (4 y (H - y))) / (1 + 2 / ny^2): below 1 at mid-channel,
+rising toward the walls, not flat. On a 16x8 smoke run its L2 is 0.01288 against the
+truth's 0.01290, where 1/(2 ny^2) gives 0.0078.
+Closed form from ny = 20 to 40: L2 2.152e-3 to 5.574e-4, ratio 3.86, observed order 1.95.
+
+| MEASURED | 40x20 | 80x40 |
+|---|---|---|
+| metric at the committed 1e-6 | 2.134e-3 | 2.306e-3 |
+| of which iteration error | 1.35e-4 | 1.90e-3 |
+| truth at x = L/4, L/2 (the metric), 3L/4 | 3.16e-2, 1.999e-3, 2.112e-3 | 3.27e-2, 4.108e-4, 5.183e-4 |
+| closed form; prompt's 1/(2 ny^2) | 2.152e-3; 1.25e-3 | 5.574e-4; 3.13e-4 |
+| u_num / u_ref at L/2, min to max | 0.99760 to 1.00297 | 0.99947 to 1.00158 |
+| max abs(truth - closed form) in u at L/2, 3L/4, last FLUID column | 4.3e-5, 1.2e-5, 1.5e-6 | 4.4e-5, 1.2e-5, 1.2e-6 |
+
+The truth approaches the closed form along the channel, identically on both grids, so the
+closed form is the fully developed discrete solution and the gap at L/2 is the flow's own
+development, which refinement does not remove. It lowers the metric at L/2. From 40x20 to
+80x40 the truth at L/2 gives ratio 4.87, order 2.28; at 3L/4, 4.07, order 2.03.
+
+**Readings.** R1 matches the composition. The metric falls from 2.3e-2 at 1e-5 to 2.3e-3 at
+1e-6 and settles at 4.1e-4 from 1e-8. Against the closed form in place of 1/(2 ny^2), the
+settled value is 7% below at 40x20 and 26% below at 80x40, and the ratio is not flat. R2
+matches: L/2 and 3L/4 differ by 1.13e-4 and 1.07e-4. R3 matches against the prompt's own
+prediction: the truth is 1.6 and 1.3 times it, and the ratio is highest at the wall-adjacent
+FLUID row, which points at the wall stencil. R4 does not: both grids reached 1e-11.
+
+## 4. Question 2: the estimate step times rho_hat / (1 - rho_hat)
+
+| Estimate / true error, W = 100 | 1e-5 to 1e-8 | 1e-5 to 1e-10 | first outside [0.5, 2] |
+|---|---|---|---|
+| Cavity 20x20 | 0.77 to 1.00 | 0.77 to 1.26 | 3.2e-11 (2.10) |
+| Cavity 40x40 | 0.92 to 1.01 | 0.90 to 1.34 | 5.6e-11 (3.23) |
+| Cavity 80x80 | 0.98 to 1.02 | 0.94 to 1.29 | 1.8e-11 (2.90) |
+| VAL-001 40x20 | 0.47 to 1.31 | 0.08 to 9.80 | 1e-8 (0.47, 2 sweeps) |
+| VAL-001 80x40 | 1.00 to 1.24 | 0.15 to 1.74 | 1e-9 (0.31, 1 sweep) |
+
+**Window.** From 1e-5 to 1e-8, halving or doubling W moves no ratio by more than 0.015
+(0.095 on VAL-001 80x40 near 1e-5). Off the geometric regime the three differ by up to 4x
+(80x40 at 5.6e-10: 1.86, 1.25, 0.43); on 40x20's first four snapshots W = 200 has no rate.
+From 1e-10 down the truth's own error (3.9e-9 to 4.7e-8 by rate) is 20% to 50% of the
+snapshot's or more, so those snapshots do not test the estimate.
+
+**The channel failure.** It begins as the pressure solve falls to one or two sweeps per
+outer iteration. The true error then levels off at 1.1e-6 to 1.5e-6 on both grids while the
+residual falls, with its maximum at the last FLUID column (`worst_cell`). A flux drift
+predicts it: worst imbalance times the cells upstream, (nx - 1) ny, over rho H. That is
+1.38e-6 against a true 1.30e-6 at 80x40 1e-9, and 1.35e-6 against 1.25e-6 at 40x20 1.78e-9.
+The true error is 0.70 to 1.07 times the drift from 1.8e-9 to the truth at 80x40, and 0.85
+to 0.97 from 1e-8 to 5.6e-11 at 40x20, except 0.55 at 1e-9; at the last two snapshots it is
+0.29 and 0.07. The rate estimate falls to 0.04. On the closed cavity the imbalance sums to zero.
+
+**Reading: E2** on the channel, a change of rate once the inner solve drops to one or two
+sweeps, at an iteration error of about 1.3e-5 of the inlet speed. **E1** on the cavity.
+
+## 5. Question 3: where the imbalance crosses 1e-10
+
+| MEASURED | at 1e-6 | first below: outer, residual | true error / velocity either side | discretization |
+|---|---|---|---|---|
+| Cavity 20x20 | 2.98e-9 | 1370, 2.6e-10 | 2.7e-8 to 1.5e-8 | 1.56e-2 |
+| Cavity 40x40 | 8.19e-10 | 3849, 1.0e-9 | 5.3e-7 to 2.9e-7 | 3.97e-3 |
+| Cavity 80x80 | 2.18e-10 | 11276, 4.4e-9 | 5.8e-6 to 3.3e-6 | 9.11e-4 |
+| VAL-001 40x20 | 8.93e-10 | 767, 1.2e-9 | 1.25e-5 to 3.9e-7 | 2.00e-3 |
+| VAL-001 80x40 | 2.31e-10 | 1805, 6.2e-10 | 1.1e-5 to 2.0e-6 | 4.11e-4 |
+
+From 1e-5 the imbalance stays within a factor of 3 of its 1e-6 value, which reproduces step
+6's, until the pressure solve falls to one or two sweeps. It then falls with the residual
+and, once below 1e-10, stays there. INFERRED: the plateau is what the inner solve leaves at
+`pressure_tol`, so on it the imbalance reads the inner tolerance, not the outer iteration.
+
+## 6. Question 4: iteration error against discretization error, and cost
+
+Iteration error in the metric's own terms over the discretization error, and the first
+snapshot below a tenth:
+
+| Case | Discretization | 1e-5 | 1e-6 | 1e-7 | 1e-8 | 1e-9 | Below a tenth from |
+|---|---|---|---|---|---|---|---|
+| Cavity 20x20 | 0.0156 | 0.048 | 0.0048 | 0.0005 | 6.4e-5 | 6.1e-6 | 1e-5 or looser |
+| Cavity 40x40 | 0.00397 | 0.68 | 0.068 | 0.0068 | 0.00072 | 7.2e-5 | 1e-6 |
+| Cavity 80x80 | 0.000911 | 11 | 1.1 | 0.11 | 0.011 | 0.0011 | 5.6e-8 |
+| VAL-001 40x20 | 0.00200 | 1.1 | 0.067 | 0.0022 | 0.0024 | 5.9e-5 | 1e-6 |
+| VAL-001 80x40 | 0.000411 | 55 | 4.6 | 0.25 | 0.00083 | 0.014 | 3.2e-8 |
+
+Outer iterations and seconds to reach each residual, one run each:
+
+| Case | 1e-5 | 1e-6 | 1e-7 | 1e-8 | 1e-9 | 1e-10 | 1e-11 |
+|---|---|---|---|---|---|---|---|
+| Cavity 20x20 | 449, 10 | 629, 11 | 809, 12 | 989, 12 | 1243, 13 | 1469, 13 | 1786, 13 |
+| Cavity 40x40 | 1257, 42 | 1891, 51 | 2525, 53 | 3158, 55 | 3856, 56 | 4553, 57 | 5384, 59 |
+| Cavity 80x80 | 3353, 209 | 5728, 300 | 8083, 322 | 10437, 335 | 12840, 346 | 15275, 357 | 17815, 368 |
+| VAL-001 40x20 | 142, 15 | 213, 19 | 284, 19 | 354, 19 | 800, 20 | 958, 20 | 1532, 21 |
+| VAL-001 80x40 | 298, 49 | 570, 83 | 841, 88 | 1113, 89 | 1371, 90 | 2331, 93 | 4282, 97 |
+
+To 1e-8 a decade costs a steady 180, 634 and about 2360 outer iterations on the cavity, 71
+and 272 on the channel; below, the cavity needs 10% to 40% more and the channel's rate
+changes. Seconds per decade fall with the sweeps: 91, 22, 14, 11 s on the 80x80 cavity from
+1e-5. The truths' own error by rate is 3.9e-9, 5.5e-9 and 4.7e-8 on the cavity; on the
+channel the drift puts it near 1e-8 and 3e-8 (INFERRED).
+
+## 7. What this establishes and what it does not
+
+On these five grids the committed 1e-6 leaves iteration error that dominates VAL-001
+80x40's stored metric and matches the 80x80 cavity's discretization error. The rate estimate
+holds while the iteration is geometric, whatever the window. On the open channel the error
+that outlasts the velocity step is flux drift, which the imbalance measures and the step
+does not. Tightening past 1e-6 costs outer iterations steadily but little wall time. The
+evidence supports two quantities: the rate estimate, and the imbalance accumulated along the
+flow. Not established: which rule to adopt; 160x80, stretched meshes or another
+`pressure_tol`; that `pressure_tol` sets the plateau; the channel truth's own error beyond
+the drift inference; harness-grade times (one run, wrapper inside; the unwrapped controls
+took 11.9 s and 85.5 s to 1e-6 against 11.4 s and 83.2 s wrapped).
+
+**Premises and stops.** The premise table's 1 / (1 - rho) of 89 at 20x20 should read 79
+(180 outer per decade; rho_hat at 1e-6 gives 78.7, and 276 and 1026 at 40 and 80). The
+others checked held; 160x80 was not built. No stop was reached: all five reached 1e-11 in
+657 s of solves. The pressure solve sat at its cap (2000, 500) at the 1e-5 snapshots of the
+channel and the 80x80 cavity.
+
+## 8. How each number was taken
+
+- Sections 2 to 7: `summary.json` and `run.log` from `python scripts/stopping_probe.py`.
+- The 16x8 check: the same script in the scratchpad with `CASES` set to the cavity at 8x8
+  and VAL-001 at 16x8, not committed.
+- The channel's late error growing from inlet to outlet: a one-off reading of the saved
+  fields, not committed (`worst_cell` records only the maximum's cell). The planted defects:
+  a one-off mutation run, logged in `results/builder23/`.
