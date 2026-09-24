@@ -385,7 +385,11 @@ quintic, and undefined orders, at each snapshot:
 | 1e-9 | 16 / 30 | 18 / 30 | 0 / 30 |
 
 From 1e-8 to 1e-9 no station's cubic order moves by more than 0.039 in u (y = 0.0547) or
-0.028 in v (x = 0.5000), and none becomes undefined or defined.
+0.028 in v (x = 0.5000), and none becomes undefined or defined. These settling figures,
+and `settling` in `extrapolation.json`, cover the cubic orders only. Under the quintic one
+classification flips between 1e-8 and 1e-9, and it is the change from 17 to 18 in the
+table: u at y = 0.9609, whose quintic order moves from 2.2510 to 2.2498 across the band
+edge. The 2.25 printed for that station below is 2.2498, inside the band.
 
 **The orders on the 1e-9 fields, MEASURED.** "yes" marks a second-order station. An
 asterisk marks a station whose classification differs between the two interpolations. The
@@ -453,8 +457,10 @@ This does not say Ghia is wrong. Whether the gap is Ghia's or a systematic error
 scheme cannot be settled by this solver's own refinement. It needs an independent
 reference, and the planned one is Marchi, Suero and Araki (2009). Of the two observations
 section 7, candidate 4 names, that is the one that remains. A 160x160 solve would add a
-grid, but on converged fields the three existing grids already give orders near 2, and
-further refinement of this scheme cannot tell its own limit from Ghia's.
+grid, but on converged fields the three existing grids already put 16 of the 30 stations
+inside the band around order 2 (18 under the quintic), with the cubic orders from 1.95 to
+3.27 and none reversed. Further refinement of this scheme cannot tell its own limit from
+Ghia's.
 
 ### 9.4 How each number in this section was taken
 
