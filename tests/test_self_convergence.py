@@ -29,6 +29,8 @@ from validation.metrics import (  # noqa: E402 -- follows sys.path.insert
     GHIA_U_Y,
     GHIA_V_VAL,
     GHIA_V_X,
+    MARCHI_U_ROWS,
+    MARCHI_V_ROWS,
     cavity_centerline_profiles,
     cavity_true_centerline_profiles,
 )
@@ -322,3 +324,137 @@ def test_extrapolation_carries_known_orders_through_to_its_output(
     for n in self_convergence.GRIDS:
         change = np.abs(fields[n, "1e-09"] - fields[n, "1e-06"]).max()
         assert out["iteration"][n]["u_change"] == change
+
+
+# The Marchi stations paired with a Ghia station under GHIA_PAIR = 3/128, as the
+# tables in docs/reports/cavity_reference_marchi.md list them.
+MARCHI_GHIA_PAIRS = {
+    "u": {
+        0.0625: 0.0625,
+        0.125: 0.1016,
+        0.1875: 0.1719,
+        0.4375: 0.4531,
+        0.5: 0.5,
+        0.625: 0.6172,
+        0.75: 0.7344,
+        0.875: 0.8516,
+        0.9375: 0.9531,
+    },
+    "v": {
+        0.0625: 0.0625,
+        0.25: 0.2344,
+        0.5: 0.5,
+        0.8125: 0.8047,
+        0.875: 0.8594,
+        0.9375: 0.9453,
+    },
+}
+MARCHI_CASES = (
+    ("u", MARCHI_U_ROWS, GHIA_U_Y, GHIA_U_VAL, lambda s: s**3),
+    ("v", MARCHI_V_ROWS, GHIA_V_X, GHIA_V_VAL, lambda s: s**2 * (1 - s)),
+)
+
+
+def _marchi_fields(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> dict[int, tuple[np.ndarray, np.ndarray]]:
+    """Fields of exact order 2 at 20, 40, 80 and 100, saved where tight_field looks.
+
+    The midline faces are y^3 + h^2 y(1 - y) and x(1 - x)(x + h^2). Both are
+    cubics, which both interpolations reproduce, so R(40, 80) and R(80, 100)
+    return the limits y^3 and x^2(1 - x) to rounding. 20, 40 and 80 go in
+    FIELD_DIR, and 100 only in TESTER_DIR, so the fallback runs. Two decoys hold
+    order-1 fields: an 80x80 file in TESTER_DIR, and a 1e-08 snapshot in every
+    file. Returns the order-2 fields by grid.
+    """
+    builder, tester = tmp_path / "builder", tmp_path / "tester"
+    builder.mkdir()
+    tester.mkdir()
+    monkeypatch.setattr(self_convergence, "FIELD_DIR", builder)
+    monkeypatch.setattr(self_convergence, "TESTER_DIR", tester)
+
+    def cells(n: int, q: float) -> tuple[np.ndarray, np.ndarray]:
+        c, e = (np.arange(n) + 0.5) / n, float(n) ** -q
+        return _cells(c**3 + e * c * (1 - c), c * (1 - c) * (c + e))
+
+    fields = {}
+    for n in (*self_convergence.GRIDS, 100):
+        fields[n] = cells(n, 2.0)
+        decoy = cells(n, 1.0)
+        snaps = {"u_1e-09": fields[n][0], "v_1e-09": fields[n][1]}
+        snaps |= {"u_1e-08": decoy[0], "v_1e-08": decoy[1]}
+        if n == 100:
+            path = tester / "staggered_100_tight.npz"
+        else:
+            path = builder / f"staggered-jacobi_{n}_tol1e-9.npz"
+        np.savez(path, **snaps)
+    u, v = cells(80, 1.0)
+    np.savez(tester / "staggered_80_tight.npz", **{"u_1e-09": u, "v_1e-09": v})
+    return fields
+
+
+@pytest.mark.unit
+def test_tight_field_prefers_the_builders_file_and_reads_the_1e_9_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """80 comes from FIELD_DIR though TESTER_DIR has one too; 100 falls back to TESTER_DIR."""
+    fields = _marchi_fields(tmp_path, monkeypatch)
+    for n in (80, 100):
+        u, v = self_convergence.tight_field(n)
+        assert np.array_equal(u, fields[n][0])
+        assert np.array_equal(v, fields[n][1])
+
+
+@pytest.mark.unit
+def test_marchi_comparison_returns_the_known_limit_from_both_pairs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Order 2 everywhere; R(40, 80), R(80, 100) and its quintic land on the limit."""
+    _marchi_fields(tmp_path, monkeypatch)
+    out = self_convergence.marchi_comparison()
+    for axis, rows, _positions, _values, limit in MARCHI_CASES:
+        s, ref, err = (np.array(c) for c in zip(*rows, strict=True))
+        got = out[axis]
+        assert (got["station"], got["marchi"]) == (s.tolist(), ref.tolist())
+        assert got["marchi_error"] == err.tolist()
+        assert np.allclose(got["order"], 2.0, rtol=0.0, atol=1e-8)
+        for key in (
+            "r40_80_minus_marchi",
+            "r80_100_minus_marchi",
+            "r80_100_quintic_minus_marchi",
+        ):
+            assert np.allclose(got[key], limit(s) - ref, rtol=0.0, atol=1e-12), key
+        f100 = limit(s) + 1e-4 * s * (1 - s)
+        assert np.allclose(got["f100_minus_marchi"], f100 - ref, rtol=0.0, atol=1e-12)
+        assert max(got["interpolation_estimate"].values()) < 1e-12
+
+
+@pytest.mark.unit
+def test_marchi_comparison_pairs_ghia_and_carries_it_along_the_extrapolation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The report's pairs, each Ghia value carried by limit(station) - limit(Ghia's).
+
+    The limits differ between paired stations, so a wrong carry moves every
+    pair except the shared stations 0.0625 and 0.5, where the carry is zero.
+    """
+    _marchi_fields(tmp_path, monkeypatch)
+    out = self_convergence.marchi_comparison()
+    for axis, rows, positions, values, limit in MARCHI_CASES:
+        ghia = dict(zip(positions, values, strict=True))
+        pairs, got = MARCHI_GHIA_PAIRS[axis], out[axis]
+        for k, s in enumerate(got["station"]):
+            entry = (
+                got["ghia_station"][k],
+                got["carry"][k],
+                got["ghia_minus_marchi"][k],
+            )
+            if s not in pairs:
+                assert entry == (None, None, None), (axis, s)
+                continue
+            g, carry = pairs[s], limit(s) - limit(pairs[s])
+            assert entry[0] == g
+            assert entry[1] == pytest.approx(carry, rel=0.0, abs=1e-12)
+            assert entry[2] == pytest.approx(
+                ghia[g] + carry - rows[k][1], rel=0.0, abs=1e-12
+            )
