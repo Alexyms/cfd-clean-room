@@ -8,7 +8,9 @@ carry an order other than the one it is told to expect.
 from __future__ import annotations
 
 import sys
+from collections.abc import Callable
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -18,9 +20,14 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 import self_convergence  # noqa: E402 -- scripts/ is not a package; path set above
 
+from src.config import SimConfig  # noqa: E402 -- follows sys.path.insert
 from src.mesh import Mesh  # noqa: E402 -- follows sys.path.insert
+from src.solver_ns import IterationState  # noqa: E402 -- follows sys.path.insert
 from validation.cases import load_case  # noqa: E402 -- follows sys.path.insert
 from validation.metrics import (  # noqa: E402 -- follows sys.path.insert
+    GHIA_U_VAL,
+    GHIA_U_Y,
+    GHIA_V_VAL,
     GHIA_V_X,
     cavity_centerline_profiles,
     cavity_true_centerline_profiles,
@@ -189,3 +196,129 @@ def test_extrapolation_control_stops_on_a_wrong_limit(
     )
     with pytest.raises(SystemExit, match="extrapolation control failed"):
         self_convergence.run_extrapolation_control(np.array(GHIA_V_X[1:-1]))
+
+
+def _cells(p: np.ndarray, q: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Cell means of faces u = sin(pi x) p(yc), v = sin(pi y) q(xc): p, q on the midlines."""
+    faces = np.arange(len(p) + 1) / len(p)
+    uf = np.sin(np.pi * faces)[None, :] * p[:, None]
+    vf = np.sin(np.pi * faces)[:, None] * q[None, :]
+    return 0.5 * (uf[:, :-1] + uf[:, 1:]), 0.5 * (vf[:-1, :] + vf[1:, :])
+
+
+class _ScriptedSolver:
+    """Stands in for StaggeredSolver: residual 5e-6 / 10^k and u = v = k at iteration k."""
+
+    def __init__(self, mesh: Mesh, config: SimConfig, boundary: object) -> None:
+        self.config = config
+
+    def solve_steady(self, on_iteration: Callable[[IterationState], None]) -> None:
+        n = self.config.nx
+        for k in range(self.config.max_simple_iter):
+            field, residual = np.full((n, n), float(k)), 5e-6 * 10.0**-k
+            on_iteration(IterationState(k, residual, 0, field, field, field))
+            if residual < self.config.convergence_tol:
+                return
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("cap", "ulps", "stops"),
+    [
+        (99, 0, None),
+        (99, 1, "differs from the saved field"),
+        (3, 0, "8x8 stopped before reaching 1e-08"),
+    ],
+)
+def test_solve_tight_keeps_only_a_whole_continuation_of_the_saved_field(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cap: int, ulps: int, stops: str
+) -> None:
+    """One ulp off the saved field, or a cap before 1e-9, stops it; else all is kept."""
+    monkeypatch.setattr(self_convergence, "FIELD_DIR", tmp_path)
+    monkeypatch.setattr(self_convergence, "StaggeredSolver", _ScriptedSolver)
+    monkeypatch.setattr(self_convergence, "TIGHT_MAX_ITER", cap)
+    saved = np.ones((8, 8))  # iteration 1 is the first below 1e-6
+    saved[0, 0] = np.nextafter(1.0, 2.0) if ulps else 1.0
+    np.savez(tmp_path / "staggered-jacobi_8.npz", u=saved, v=np.ones((8, 8)))
+    if stops:
+        with pytest.raises(SystemExit, match=stops):
+            self_convergence.solve_tight(8)
+        return
+    with np.load(self_convergence.solve_tight(8)) as data:
+        tags = ("1e-06", "1e-07", "1e-08", "1e-09")
+        assert [int(data[f"outer_{t}"]) for t in tags] == [2, 3, 4, 5]
+        assert np.array_equal(data["u_1e-09"], np.full((8, 8), 4.0))
+
+
+@pytest.mark.unit
+def test_face_profiles_divide_by_the_lid_and_take_nodes_from_the_mesh() -> None:
+    """At a lid speed of 2 every value halves and the lid reads 1; nodes are the mesh's."""
+    c, pos = (np.arange(8) + 0.5) / 8, np.arange(8.0)
+    u, v = _cells(2.0 * c, 2.0 * c * (1.0 - c))
+    mesh = SimpleNamespace(x=[-0.5, 1.5], y=[-1.0, 2.0], xc=pos**2, yc=pos**3)
+    (y, u_line), (x, v_line) = self_convergence.face_profiles(mesh, u, v, 2.0)
+    assert np.array_equal(y, [-1.0, *pos**3, 2.0])
+    assert np.array_equal(x, [-0.5, *pos**2, 1.5])
+    assert np.allclose(u_line, [0.0, *c, 1.0], rtol=0.0, atol=1e-14)
+    assert np.allclose(v_line, [0.0, *(c * (1.0 - c)), 0.0], rtol=0.0, atol=1e-14)
+
+
+@pytest.mark.unit
+def test_station_orders_keep_each_interpolation_under_its_own_key() -> None:
+    """No polynomial reproduces this profile, so the quintic orders differ from the cubic."""
+    profiles = {}
+    for n in self_convergence.GRIDS:
+        s = np.array([0.0, *(np.arange(n) + 0.5) / n, 1.0])
+        profiles[n] = (s, np.sin(3.0 * s) + np.cos(2.0 * s) / n**2)
+    out = self_convergence.station_orders(profiles, GHIA_U_Y, GHIA_U_VAL)
+    stations = np.array(GHIA_U_Y[1:-1])
+    cubic = self_convergence.richardson(profiles, stations)
+    quintic = self_convergence.richardson(profiles, stations, k=6)
+    assert not np.allclose(cubic["order"], quintic["order"], rtol=0.0, atol=1e-6)
+    assert out["station"] == stations.tolist()
+    np.testing.assert_array_equal(out["order"], cubic["order"])
+    np.testing.assert_array_equal(out["order_quintic"], quintic["order"])
+    assert out["licensed_quintic"] == quintic["licensed"].tolist()
+
+
+@pytest.mark.unit
+def test_extrapolation_carries_known_orders_through_to_its_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A different known order q at each tolerance, from the saved files to the dict.
+
+    The midline faces are cubics, y^3 + h^q y(1 - y) and x(1 - x)(x + h^q), so every
+    order is q exactly and the order-2 value at q = 2 is the limit.
+    """
+    monkeypatch.setattr(self_convergence, "FIELD_DIR", tmp_path)
+    q = {"1e-06": 1.0, "1e-07": 1.5, "1e-08": 2.0, "1e-09": 2.1}
+    fields = {}
+    for n in self_convergence.GRIDS:
+        snaps: dict[str, np.ndarray] = {}
+        c = (np.arange(n) + 0.5) / n
+        for t in q:
+            e = float(n) ** -q[t]
+            u, v = _cells(c**3 + e * c * (1 - c), c * (1 - c) * (c + e))
+            fields[n, t] = u
+            snaps |= {f"u_{t}": u, f"v_{t}": v, f"outer_{t}": np.array(1)}
+        np.savez(tmp_path / f"staggered-jacobi_{n}_tol1e-9.npz", seconds=1.0, **snaps)
+        for method in self_convergence.METHODS:
+            np.savez(tmp_path / f"{method}_{n}.npz", u=fields[n, "1e-06"], v=v)
+    out = self_convergence.extrapolation()
+    for axis, positions, ghia, limit in (
+        ("u", GHIA_U_Y, GHIA_U_VAL, lambda s: s**3),
+        ("v", GHIA_V_X, GHIA_V_VAL, lambda s: s**2 * (1 - s)),
+    ):
+        stations = np.array(positions[1:-1])
+        for tag in q:
+            got = out["stations"][tag][axis]
+            assert got["station"] == stations.tolist()
+            assert np.allclose(got["order"], q[tag], rtol=0.0, atol=1e-8)
+            assert np.allclose(got["order_quintic"], q[tag], rtol=0.0, atol=1e-8)
+        expected = limit(stations) - np.array(ghia[1:-1])
+        got = out["stations"]["1e-08"][axis]["order2_minus_ghia"]
+        assert np.allclose(got, expected, rtol=0.0, atol=1e-12)
+        assert out["settling"][axis]["max"] == pytest.approx(0.1, abs=1e-8)
+    for n in self_convergence.GRIDS:
+        change = np.abs(fields[n, "1e-09"] - fields[n, "1e-06"]).max()
+        assert out["iteration"][n]["u_change"] == change
