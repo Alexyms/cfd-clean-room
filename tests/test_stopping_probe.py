@@ -76,6 +76,13 @@ def test_rho_hat_is_nan_on_a_history_shorter_than_the_window() -> None:
 
 
 @pytest.mark.unit
+def test_rho_hat_reads_a_history_exactly_as_long_as_the_window() -> None:
+    """A history of exactly window entries is enough for a rate."""
+    history = 1e-3 * 0.9 ** np.arange(float(WINDOW))
+    assert stopping_probe.rho_hat(history, WINDOW) == pytest.approx(0.9, abs=1e-12)
+
+
+@pytest.mark.unit
 def test_estimate_is_the_geometric_tail() -> None:
     """step rho / (1 - rho) is the sum of every later step of a geometric iteration."""
     step, rho = 2.0**-20, 0.75
@@ -105,6 +112,18 @@ def test_true_error_returns_a_planted_offset_in_a_fluid_cell(
     planted = [truth[0].copy(), truth[1].copy()]
     planted[component][5, 7] += 2.0**-20
     assert stopping_probe.true_error(*planted, truth, fluid) == 2.0**-20
+
+
+@pytest.mark.unit
+def test_true_error_reads_a_negative_offset_as_its_size(
+    cavity: tuple[np.ndarray, tuple[np.ndarray, np.ndarray]],
+) -> None:
+    """Truth minus 2^-20 in one FLUID cell of u, then of v, reads as 2^-20."""
+    fluid, truth = cavity
+    for component in (0, 1):
+        planted = [truth[0].copy(), truth[1].copy()]
+        planted[component][5, 7] -= 2.0**-20
+        assert stopping_probe.true_error(*planted, truth, fluid) == 2.0**-20
 
 
 @pytest.mark.unit

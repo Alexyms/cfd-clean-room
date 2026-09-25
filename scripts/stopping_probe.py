@@ -56,8 +56,9 @@ CASES = (
 CONTROLS = ("cavity_20x20", "poiseuille_80x40")
 # The channel's committed cap is 20000, the count prompt 23 stops at for 80x40.
 MAX_OUTER = {"poiseuille": 20000, "cavity": 40000}
-# Trailing window of the rho_hat fit, in outer iterations: shorter than a decade
-# of the fastest case (about 180 at 20x20), long enough to average jitter.
+# Trailing window of the rho_hat fit, in outer iterations. It is below the outer count
+# at every case's first snapshot (142 on VAL-001 40x20, the fastest case at about 71 per
+# decade), so every snapshot has a rate. Halving and doubling it test the length.
 WINDOW = 100
 IMBALANCE_BOUND = 1.0e-10  # ECR-001 acceptance criterion 6
 BUDGET_SECONDS = 3600.0
@@ -294,10 +295,10 @@ def analyse(case: str, n: int) -> dict:
         gap = np.abs(truth[0] - dev[:, None]).max(axis=0)
         cols = (config.nx // 2, 3 * config.nx // 4, config.nx - 2)
         disc["wall_stencil_gap"] = [float(gap[i]) for i in cols]
-        _y, u_num, u_ref = poiseuille_profiles(config, mesh, truth[0])
+        _y, u_col_truth, u_ref = poiseuille_profiles(config, mesh, truth[0])
         out["discretization"], out["truth_ratio_profile"] = (
             disc,
-            (u_num / u_ref).tolist(),
+            (u_col_truth / u_ref).tolist(),
         )
     out["snapshots"] = []
     for k, it in enumerate(d["iteration"].tolist()):
@@ -325,15 +326,15 @@ def analyse(case: str, n: int) -> dict:
                 "estimate": est,
                 "ratio": est / err if err else None,
             }
-        # The truth still carries est_truth of its own; this ratio takes it out.
-        net = row[f"w{WINDOW}"]["estimate"] - est_truth
-        row["ratio_net"] = net / err if err else None
         if case == "cavity":
             at_snap = marchi_stations(config, mesh, u, v)
             row["metric_iteration_error"] = float(np.abs(at_snap - at_truth).max())
         else:
             row |= channel_readings(config, mesh, u)
-            row["metric_iteration_error"] = abs(row["l2"] - out["discretization"]["l2"])
+            # Relative L2 of the difference on the metric's column, over its u_ref norm.
+            _y, u_col, _u_ref = poiseuille_profiles(config, mesh, u)
+            diff = np.sum((u_col - u_col_truth) ** 2) / np.sum(u_ref**2)
+            row["metric_iteration_error"] = float(np.sqrt(diff))
         out["snapshots"].append(row)
     return out
 
