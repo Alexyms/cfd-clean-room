@@ -11,13 +11,19 @@ import pytest
 from src.stopping import RATE_WINDOW, ErrorEstimateRule
 
 SCALE = 0.1
+# VAL-001's flux scale, rho 1 times 0.1 m/s through 0.5 m. Not 1, so a rule
+# that forgot to divide by it would be caught.
+FLUX = 0.05
 
 
-def _feed(
-    rule: ErrorEstimateRule, steps: np.ndarray, imbalance: float = 0.0
-) -> list[bool]:
-    """Feed a history one step at a time with a fixed imbalance; each answer."""
-    return [rule.update(float(s), lambda: imbalance) for s in steps]
+def _rule() -> ErrorEstimateRule:
+    """The rule at the default tolerances, 1e-6 and 1e-10."""
+    return ErrorEstimateRule(SCALE, FLUX, 1e-6, 1e-10)
+
+
+def _feed(rule: ErrorEstimateRule, steps: np.ndarray, worst: float = 0.0) -> list[bool]:
+    """Feed a history one step at a time with a fixed worst and no summed imbalance."""
+    return [rule.update(float(s), lambda: (worst, 0.0)) for s in steps]
 
 
 def _geometric(rho: float, n: int, last: float) -> np.ndarray:
@@ -29,7 +35,7 @@ def _geometric(rho: float, n: int, last: float) -> np.ndarray:
 @pytest.mark.parametrize("rho", [0.5, 0.9, 0.9999])
 def test_estimate_is_step_rho_over_one_minus_rho(rho: float) -> None:
     """Defects caught: the step alone as the estimate; 1 + rho in the denominator."""
-    rule = ErrorEstimateRule(SCALE, 1e-6, 1e-10)
+    rule = _rule()
     _feed(rule, _geometric(rho, RATE_WINDOW + 20, 1e-7))
     expected = 1e-7 * rho / (1.0 - rho) / SCALE
     assert rule.estimate_history[-1] == pytest.approx(expected, rel=1e-9)
@@ -43,7 +49,7 @@ def test_small_steps_at_a_slow_rate_do_not_converge() -> None:
     """
     steps = _geometric(0.9999, 3 * RATE_WINDOW, 1e-9 * SCALE)
     assert np.all(steps / SCALE < 1e-6)
-    rule = ErrorEstimateRule(SCALE, 1e-6, 1e-10)
+    rule = _rule()
     assert not any(_feed(rule, steps))
     assert rule.estimate_history[-1] == pytest.approx(1e-9 * 0.9999 / 1e-4)
 
@@ -51,7 +57,7 @@ def test_small_steps_at_a_slow_rate_do_not_converge() -> None:
 @pytest.mark.unit
 def test_no_estimate_one_short_of_the_window_and_one_at_exactly_the_window() -> None:
     """Defects caught: the window guard's < as <=, and as < RATE_WINDOW - 1."""
-    rule = ErrorEstimateRule(SCALE, 1e-6, 1e-10)
+    rule = _rule()
     answers = _feed(rule, _geometric(0.5, RATE_WINDOW, 1e-30))
     assert answers == [False] * (RATE_WINDOW - 1) + [True]
 
@@ -74,7 +80,7 @@ def test_a_stall_never_converges(kind: str) -> None:
     }.get(kind, _geometric(0.5, RATE_WINDOW, 1e-30))
     if kind in ("zero", "nan"):
         steps[-40] = 0.0 if kind == "zero" else np.nan
-    rule = ErrorEstimateRule(SCALE, 1e-6, 1e-10)
+    rule = _rule()
     assert not any(_feed(rule, steps))
     assert kind == "flat" or rule.estimate_history[-1] == math.inf
 
@@ -87,24 +93,41 @@ def test_continuity_decides_once_the_estimate_is_met(
     """Defect caught: condition (b) dropped. The imbalance is asked for only under (a)."""
     calls: list[float] = []
 
-    def worst() -> float:
+    def worst() -> tuple[float, float]:
         calls.append(imbalance)
-        return imbalance
+        return imbalance, 0.0
 
-    rule = ErrorEstimateRule(SCALE, 1e-6, 1e-10)
+    rule = _rule()
     steps = _geometric(0.5, RATE_WINDOW + 5, 1e-30)
     assert [rule.update(float(s), worst) for s in steps][-1] is expected
     assert len(calls) == 6
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("position", [0, 1, 2])
+@pytest.mark.parametrize(("total", "expected"), [(1e-7, False), (2.5e-8, True)])
+def test_summed_imbalance_decides_once_the_estimate_and_worst_cell_are_met(
+    total: float, expected: bool
+) -> None:
+    """Defect caught: condition (c) dropped. Every cell is under 1e-10 in both.
+
+    Over FLUX the sums are 2e-6 and 5e-7 against the tolerance 1e-6. A rule
+    that did not divide by FLUX would pass both.
+    """
+    rule = _rule()
+    steps = _geometric(0.5, RATE_WINDOW, 1e-30)
+    assert [rule.update(float(s), lambda: (5e-11, total)) for s in steps][
+        -1
+    ] is expected
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("position", [0, 1, 2, 3])
 @pytest.mark.parametrize("bad", [0.0, -1.0, math.inf, math.nan, True])
 def test_a_scale_or_tolerance_not_positive_and_finite_is_rejected(
     position: int, bad: float
 ) -> None:
     """A zero scale would divide by zero, a NaN tolerance is never met, True is not 1.0."""
-    args = [SCALE, 1e-6, 1e-10]
+    args = [SCALE, FLUX, 1e-6, 1e-10]
     args[position] = bad
     with pytest.raises(ValueError, match="must be positive and finite"):
         ErrorEstimateRule(*args)

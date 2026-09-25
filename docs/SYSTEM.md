@@ -2,7 +2,7 @@
 
 **Project:** CFD Clean Room Simulation
 **Status:** Phase 2 in progress. Navier-Stokes solver under development.
-**Last Updated:** 2026-09-23
+**Last Updated:** 2026-09-24
 
 This document is the single reference for system architecture, requirements, module interfaces, and dependency relationships. Review and test, run before each pull request as `/cfd-review` and `/cfd-test` in fresh Claude Code sessions (`.claude/commands/`), check branches against this document under the policy in `docs/REVIEW_POLICY.md`. Keep it current.
 
@@ -27,7 +27,7 @@ Requirements are organized by subsystem. Each requirement has a unique ID, a rat
 | REQ-S01 | The NS solver shall converge to a steady-state velocity field with residuals below a configurable tolerance. | Velocity field accuracy depends on convergence. Divergent or under-converged solutions produce meaningless transport results. Clarified 2026-09-24, not amended: under the staggered solver's `error_estimate` stopping rule (`src/stopping.py`) the configurable tolerance, `iteration_error_tol`, applies to the estimated iteration error, the velocity step times rho_hat / (1 - rho_hat) over the largest prescribed boundary velocity, with rho_hat the step's fitted geometric rate. A small step is not a small error: the error left is about the step times rho / (1 - rho), and rho approaches 1 under refinement. The velocity-step residual against `convergence_tol` stays the default rule and keeps its meaning. See `docs/reports/stopping_rule_evidence.md`, sections 4 and 9. | VAL-001, VAL-002 |
 | REQ-S02 | The NS solver shall reproduce the Poiseuille flow parabolic velocity profile with L2 error < 2.5% on a 80x40 grid. The 2.5% criterion reflects the O(h) wall accuracy of the collocated ghost-cell boundary treatment (industry-standard approach, see ADR-008). Error decreases monotonically with grid refinement at the expected first-order rate. | Validates basic FV discretization and pressure-velocity coupling against an exact analytical solution. | VAL-001 |
 | REQ-S03 | The NS solver shall reproduce lid-driven cavity centerline velocity profiles within 2% of Ghia et al. (1982) benchmark data. | Validates nonlinear advection, 2D pressure gradients, and recirculation handling. | VAL-002 |
-| REQ-S04 | The velocity field shall satisfy the incompressibility constraint (divergence-free) to within configurable tolerance at every cell. | Mass conservation is fundamental. FV enforces this by construction, but numerical errors can accumulate. Clarified 2026-09-24, not amended: under the `error_estimate` stopping rule the per-cell tolerance, `mass_imbalance_tol`, is enforced at stopping. A solve is not converged until the worst absolute per-cell mass imbalance of its field is below it, which the velocity-step rule never checked. On an open domain the imbalance sets a drift of the through-flow that the velocity step does not see. See `docs/reports/stopping_rule_evidence.md`, sections 4, 5 and 9. | VAL-007 |
+| REQ-S04 | The velocity field shall satisfy the incompressibility constraint (divergence-free) to within configurable tolerance at every cell. | Mass conservation is fundamental. FV enforces this by construction, but numerical errors can accumulate. Clarified 2026-09-24, not amended: under the `error_estimate` stopping rule the per-cell tolerance, `mass_imbalance_tol`, is enforced at stopping. A solve is not converged until the worst absolute per-cell mass imbalance of its field is below it, which the velocity-step rule never checked. On an open domain the imbalance sets a drift of the through-flow that the velocity step does not see, and the per-cell bound alone lets that drift grow with the number of cells upstream, more on every finer grid. So the rule also requires the summed absolute imbalance, over rho times the inflow (on a closed domain rho times the velocity scale times the longer side), to be below `iteration_error_tol`. The flux through any cross-section differs from the inflow by at most the summed imbalance on one side of it, so this bounds the drift relative to the through-flow on any grid. See `docs/reports/stopping_rule_evidence.md`, sections 4, 5 and 9. | VAL-007 |
 | REQ-S05 | The solver shall use the SIMPLE algorithm for pressure-velocity coupling. | Industry-standard approach. Well-documented, stable, compatible with structured grids. | Architecture review |
 | REQ-S06 | The pressure correction inner loop shall have a pure NumPy reference implementation for validation and a CUDA C++ accelerated implementation for production runs, called from Python via pybind11. The NumPy reference shall remain in the codebase permanently as the ground truth for equivalence testing (see REQ-N03). | NumPy reference validates physics independently of GPU code. CUDA acceleration is a separate deliverable after solver physics are validated. | Integration test |
 | REQ-S07 | The solver shall use a staggered (MAC) variable arrangement with pressure at cell centers, u-velocity at east-west cell faces, and v-velocity at north-south cell faces. | Staggered arrangement provides natural pressure-velocity coupling without Rhie-Chow interpolation artifacts. Eliminates checkerboard modes by construction and enables exact discrete continuity enforcement. Required by ECR-001, whose motivating VAL-002 v-velocity error was later found to be measured against a corrupted Ghia table (ECR-001 erratum, 2026-09-22); the wall mass leak it also cites stands. | Architecture review, VAL-001, VAL-002 |
@@ -153,7 +153,7 @@ When a PR modifies a module, the reviewer verifies impact on downstream modules.
 | pressure.py | solver_staggered | PressureCorrection shapes, the right-hand side formed directly from face velocities with no compatibility correction, outlet faces corrected against p' = 0 with the nearest interior diagonal, closed-domain pin at the first FLUID cell, and the sweep count reported. |
 | solver_ns.py | solver_transport, time_integration | Velocity/pressure field output shape, dtype, and semantics unchanged. |
 | solver_staggered.py | scripts/benchmark.py, scripts/view_field.py, scripts/stopping_probe.py | The collocated solver's public shape: cell-centered [ny, nx] float64 contiguous returns, the IterationState callback once per outer iteration with cell-centered fields and the corrector's sweep count, last_pressure_sweeps and stage_seconds reset per solve. Under the default velocity_step rule the stop stays identical in definition to the collocated one so outer iteration counts compare; residual_history keeps that definition under both rules. converged and stop_reason are set by every solve and reset at its start; the harness records them. |
-| stopping.py | solver_staggered, scripts/stopping_probe.py | update(step, worst_imbalance) answers converged only when the estimate and the imbalance are both below their tolerances; the imbalance callable is not called until the estimate is met; no estimate (inf) while the window is short, a step in it is zero or not finite, or rho_hat is outside (0, 1). RATE_WINDOW stays a module constant. |
+| stopping.py | solver_staggered, scripts/stopping_probe.py | update(step, imbalance) answers converged only when the estimate, the worst imbalance and the summed imbalance over flux_scale are all below their tolerances; the imbalance callable, which returns (worst, summed) from one evaluation, is not called until the estimate is met; no estimate (inf) while the window is short, a step in it is zero or not finite, or rho_hat is outside (0, 1). RATE_WINDOW stays a module constant. |
 | solver_transport.py | time_integration, monitor | Concentration field output shape, dtype, and semantics unchanged. |
 | particles.py | solver_transport | Settling velocity, diffusion coefficient interface unchanged. Return types and units unchanged. |
 | scenarios.py | time_integration, boundary | Source term and BC modification interfaces unchanged. Event timing semantics unchanged. |
@@ -188,11 +188,11 @@ Generated. The responsibility and serves columns are editorial and come from `do
 | `src/particles.py` | 255 | Computes per-size-class transport properties: Cunningham correction, settling velocity, Brownian diffusion, deposition velocity and HEPA efficiency. | T03, T04, T09, T10 |
 | `src/pressure.py` | 441 | Assembles the staggered pressure correction equation from the momentum diagonals with the discrete divergence of u* as its right-hand side, solves it by weighted Jacobi iteration, corrects the face velocities and updates the pressure. | S04, S08 |
 | `src/solver_ns.py` | 904 | Solves steady incompressible flow with the SIMPLE algorithm on a collocated grid using Rhie-Chow face fluxes, hybrid advection and Jacobi pressure correction. | S01, S02, S03, S05, S08 |
-| `src/solver_staggered.py` | 265 | Runs steady SIMPLE on the staggered grid as one outer loop over the momentum predictor and the pressure correction, with the collocated solver's public shape, alongside the collocated solver; stops by the collocated velocity-step rule or, when configured, by the error-estimate rule. | S01, S04, S05, S07 |
+| `src/solver_staggered.py` | 277 | Runs steady SIMPLE on the staggered grid as one outer loop over the momentum predictor and the pressure correction, with the collocated solver's public shape, alongside the collocated solver; stops by the collocated velocity-step rule or, when configured, by the error-estimate rule. | S01, S04, S05, S07 |
 | `src/staggered.py` | 152 | Defines the staggered (MAC) field layout: shapes and allocation of face-centered u and v and cell-centered p, and the face-to-center averaging the solver applies before returning. | S07 |
-| `src/stopping.py` | 121 | Decides when the steady outer iteration has converged: the iteration error estimated from the step and its fitted geometric rate, over a physical velocity scale, and the worst per-cell mass imbalance, each against its own tolerance. | S01, S04 |
+| `src/stopping.py` | 144 | Decides when the steady outer iteration has converged: the iteration error estimated from the step and its fitted geometric rate, over a physical velocity scale, and the worst per-cell mass imbalance, each against its own tolerance. | S01, S04 |
 
-Total 14 Python files, 4797 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
+Total 14 Python files, 4832 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
 
 `Declares it serves` is an EDITORIAL CLAIM read from `docs/system_map_annotations.toml`. It says which requirements a module is meant to satisfy, not that it does. Whether a requirement is met is answered by the tests named in the register's `Verified By` column.
 <!-- END GENERATED: components -->
@@ -217,7 +217,7 @@ Generated. Static import analysis cannot see a function bound into a registry by
 |---|---|
 | Scope | `src/**/*.py` |
 | Files hashed | 14 |
-| Digest | `sha256:867d3ac000acd57507e29db9dbcfc42b8a7a51b3421c7eccba6117417b619252` |
+| Digest | `sha256:f9c0c01953ed81c8c48a73084d206cdca3a662edc139a94e7aaa8fd106daee90` |
 
 This is what lets the document answer whether it is current, which is the one question a stale table cannot be asked. `python scripts/gen_system_map.py --check` recomputes the whole set of generated regions, this digest included, and exits non-zero on any disagreement.
 
@@ -473,7 +473,10 @@ StaggeredSolver:
     collocated definition; F_ref uses the staggered layer's exact inlet flux.
     Stop under velocity_step (default): residual < convergence_tol. Under
     error_estimate: ErrorEstimateRule fed the largest change in m/s, scaled
-    by get_max_boundary_velocity(); a zero scale raises at construction.
+    by get_max_boundary_velocity(), with flux_scale rho times
+    get_total_inlet_flux() (closed: rho times that velocity times the longer
+    side), never reference_velocity; a zero velocity scale raises at
+    construction, naming stopping_rule.
 ```
 
 ### stopping.py --> solver_staggered (ECR-001, ahead of step 7)
@@ -483,15 +486,19 @@ tested on synthetic histories. REQ-S01 and REQ-S04 as clarified 2026-09-24.
 
 ```
 ErrorEstimateRule:
-    __init__(velocity_scale, iteration_error_tol, mass_imbalance_tol)
-        each positive and finite, else ValueError
-    update(step: float, worst_imbalance: Callable[[], float]) -> bool
+    __init__(velocity_scale, flux_scale, iteration_error_tol, mass_imbalance_tol)
+        each positive and finite and not bool, else ValueError
+        flux_scale: kg/s per unit depth
+    update(step: float, imbalance: Callable[[], tuple[float, float]]) -> bool
         step: largest velocity change of one outer iteration, m/s
+        imbalance(): (worst, summed) absolute per-cell imbalance, kg/s,
+            from one evaluation; called only when (a) holds
         (a) step rho_hat / (1 - rho_hat) / velocity_scale < iteration_error_tol,
             rho_hat = exp of the least-squares slope of log(step) over the
             last RATE_WINDOW steps
-        (b) worst_imbalance() < mass_imbalance_tol, called only when (a) holds
-        True when both hold
+        (b) worst < mass_imbalance_tol  (ECR-001 criterion 6)
+        (c) summed / flux_scale < iteration_error_tol  (bounds the flux drift)
+        True when all three hold
     estimate_history: list[float]  # (a)'s left side per step; inf when none
 RATE_WINDOW = 100  # module constant, not configuration
 ```
@@ -634,4 +641,4 @@ Full ADRs are in the development plan document. Summary reference:
 | 2026-09-19 | REQ-S02 rationale corrected: the measured VAL-001 error on 80x40 is 2.04%, identical on CI and locally, which is why the criterion is 2.5% rather than 2%. The 1.54% previously recorded in PROJECT_PLAN.md was not reproducible at the commit that claimed it. Requirement value unchanged; the ECR-001 tightening to < 1% after the rebuild is unaffected. | Alex Moroz-Smietana |
 | 2026-09-19 | solve_steady gains an optional on_iteration callback plus last_pressure_sweeps and stage_seconds attributes for the benchmark harness (scripts/benchmark.py). Observability only; solver logic unchanged. | Alex Moroz-Smietana |
 | 2026-09-23 | The review Action (.github/workflows/review.yml) removed; the opening paragraph now names the local review and test commands that check branches against this document. No requirement, contract or module changed. | Alex Moroz-Smietana |
-| 2026-09-24 | stopping.py added, the error_estimate stopping rule: the estimated iteration error over the largest prescribed boundary velocity and the worst per-cell mass imbalance, each below its own tolerance, with no pass at the iteration cap. REQ-S01 and REQ-S04 clarified, not amended: under error_estimate REQ-S01's tolerance applies to the estimated iteration error and REQ-S04's per-cell tolerance is enforced at stopping. SimConfig gains three optional solver keys (stopping_rule, default velocity_step; iteration_error_tol; mass_imbalance_tol). StaggeredSolver gains converged and stop_reason and is bitwise unchanged under the default rule; NavierStokesSolver refuses error_estimate. Contract, cascade rows and the system map updated. See docs/reports/stopping_rule_evidence.md, section 9. | Alex Moroz-Smietana |
+| 2026-09-24 | stopping.py added, the error_estimate stopping rule: the estimated iteration error over the largest prescribed boundary velocity, the worst per-cell mass imbalance, and the summed imbalance over the through-flow, each below its tolerance, with no pass at the iteration cap. REQ-S01 and REQ-S04 clarified, not amended: under error_estimate REQ-S01's tolerance applies to the estimated iteration error, and REQ-S04's per-cell tolerance is enforced at stopping together with the summed bound on the flux drift. SimConfig gains three optional solver keys (stopping_rule, default velocity_step; iteration_error_tol; mass_imbalance_tol) and rejects any unknown solver key. StaggeredSolver gains converged and stop_reason and is bitwise unchanged under the default rule; NavierStokesSolver refuses error_estimate. Contract, cascade rows and the system map updated. See docs/reports/stopping_rule_evidence.md, section 9. | Alex Moroz-Smietana |
