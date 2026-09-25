@@ -143,8 +143,13 @@ been corrected. REQ-S02's threshold is unchanged; only its recorded justificatio
 no reference, after a control on synthetic fields of known order. With `--extrapolate` it
 extrapolates the staggered centerline profiles pointwise from the saved fields, after a
 control of its own, where the observed order licenses it. With `--marchi` it sets the same
-extrapolation against the independent reference `marchi_2009_re100`, which no metric or
-criterion uses.
+extrapolation against the independent reference `marchi_2009_re100`, which ECR-001
+criteria 3 and 3a score against since the 2026-09-24 amendment; the metric moves to it in
+step 8.
+
+`scripts/stopping_probe.py` solves both validation cases far past their tolerance with the
+pressure correction observed, and measures the iteration error each tolerance leaves, its
+estimate from the residual's own rate, and the per-cell mass imbalance.
 
 `scripts/gen_system_map.py` regenerates sections of `docs/SYSTEM.md` from the source tree by
 AST parsing, never by importing. CI runs it with `--check`, so a change under `src/` that
@@ -219,11 +224,11 @@ error that grows about 3.5 times per halving of h, to about 1e-3 at 80x80, and c
 the 80x80 solve to 1e-9 took about 7.5 minutes. That and the step 6 continuity result are
 the evidence for the step 7 stopping decision (`docs/reports/cavity_self_convergence.md`,
 section 9.2). With both cases solved far past their tolerance,
-`docs/reports/stopping_rule_evidence.md` finds that the committed tolerance leaves iteration error as large as the discretization error on
-the finer grids, that an estimate from the residual's own rate tracks that error while the
-iteration is geometric, and that on the open channel the error left once the pressure solve
-falls to a sweep or two per outer iteration is a flux drift that only the mass imbalance
-shows.
+`docs/reports/stopping_rule_evidence.md` finds that the committed tolerance leaves
+iteration error as large as the discretization error on the finer grids, that an estimate
+from the residual's own rate tracks that error while the iteration is geometric, and that
+on the open channel the error left once the pressure solve falls to a sweep or two per
+outer iteration is a flux drift that only the mass imbalance shows.
 
 Closed 2026-09-22: what the VAL-002 v-component findings become against the published
 Ghia table. The v reference was replaced by Table II as `ghia_1982_re100_r2`; the
