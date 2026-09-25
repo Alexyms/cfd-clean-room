@@ -3,19 +3,30 @@
 Verifies that the NS solver reproduces the analytical parabolic velocity
 profile for pressure-driven flow between two parallel plates. The L2
 error between the solver and analytical profiles at the channel midpoint
-must be below 2.5% (REQ-S02). The case configuration is
-configs/validation_poiseuille.yaml and the metric is
+must be below 2.5% on the collocated solver (REQ-S02, ADR-008) and below
+1% on the staggered one (ECR-001 acceptance criteria 1 and 2). The case
+configuration is configs/validation_poiseuille.yaml and the metric is
 validation.metrics.poiseuille_l2_error, both shared with the benchmark
 harness so the two cannot drift apart.
 """
+
+import time
 
 import numpy as np
 import pytest
 
 from src.boundary import BoundaryManager
+from src.boundary_staggered import StaggeredBoundary
 from src.mesh import Mesh
 from src.solver_ns import NavierStokesSolver
-from validation.cases import load_case, with_velocity_step
+from src.solver_staggered import StaggeredSolver
+from validation.cases import (
+    CASE_GRIDS,
+    WALL_CLUSTERED_GRIDS,
+    load_case,
+    load_wall_clustered,
+    with_velocity_step,
+)
 from validation.metrics import poiseuille_l2_error
 
 
@@ -53,3 +64,40 @@ def test_poiseuille_flow_val001() -> None:
     print(f"  u_max (solver): {np.max(u[:, i_mid]):.6f}")
 
     assert metric.value < 0.025, f"L2 error {metric.value:.4e} exceeds 2.5% threshold"
+
+
+@pytest.mark.validation
+@pytest.mark.parametrize(
+    "case_id",
+    ["val001_80x40", "val001_80x40_stretched"],
+    ids=["criterion-1-uniform", "criterion-2-wall-clustered"],
+)
+def test_poiseuille_flow_staggered_val001(case_id: str) -> None:
+    """VAL-001 on the staggered solver: L2 error < 1%, ECR-001 criteria 1 and 2.
+
+    Criterion 1 is the 80x40 uniform grid. Criterion 2 is the same cell count
+    with y clustered toward both walls, the wall cell 0.1 H / ny and the ratio
+    derived. Both run the case file's error_estimate rule, so each must stop
+    by it, not at the cap. The metric reads column nx // 2, as the collocated
+    test does.
+    """
+    kind, nx, ny = CASE_GRIDS[case_id]
+    clustered = case_id in WALL_CLUSTERED_GRIDS
+    config = (load_wall_clustered if clustered else load_case)(kind, grid=(nx, ny))
+    mesh = Mesh(config)
+    assert mesh.is_uniform is not clustered
+    solver = StaggeredSolver(mesh, config, StaggeredBoundary(mesh, config))
+
+    start = time.perf_counter()
+    u, _v, _p = solver.solve_steady()
+    seconds = time.perf_counter() - start
+    metric = poiseuille_l2_error(config, mesh, u)
+
+    print(f"VAL-001 staggered, {case_id}:")
+    print(f"  Outer iterations: {len(solver.residual_history)} in {seconds:.1f} s")
+    print(f"  Stop: {solver.stop_reason}")
+    print(f"  L2 error: {metric.value:.6e}")
+
+    assert solver.converged is True
+    assert solver.stop_reason == "error_estimate_and_continuity"
+    assert metric.value < 0.01, f"L2 error {metric.value:.4e} exceeds 1% threshold"
