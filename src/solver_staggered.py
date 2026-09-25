@@ -108,6 +108,7 @@ class StaggeredSolver:
     ------
     ValueError
         Under error_estimate, if no boundary prescribes a velocity to scale by.
+        The message names stopping_rule and the boundaries.
     """
 
     def __init__(
@@ -156,6 +157,11 @@ class StaggeredSolver:
         if self._stopping_rule != ERROR_ESTIMATE:
             return None
         scale = self._boundary.get_max_boundary_velocity()
+        if scale <= 0.0:
+            raise ValueError(
+                "stopping_rule error_estimate needs a velocity scale, and no "
+                "boundary prescribes a velocity; give one or use velocity_step"
+            )
         return ErrorEstimateRule(scale, *self._rule_tols)
 
     def _worst_imbalance(self, u: np.ndarray, v: np.ndarray) -> float:

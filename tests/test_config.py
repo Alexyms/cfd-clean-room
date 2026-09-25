@@ -1100,6 +1100,7 @@ class TestStoppingRuleKeys:
     def test_absent_keys_give_the_defaults_and_present_ones_are_read(
         self, tmp_path: Path
     ) -> None:
+        """Absent keys give velocity_step, 1e-6 and 1e-10; given ones are read as given."""
         keys = ("stopping_rule", "iteration_error_tol", "mass_imbalance_tol")
         absent = SimConfig(_write_config(tmp_path))
         assert [getattr(absent, k) for k in keys] == ["velocity_step", 1e-6, 1e-10]
@@ -1125,5 +1126,13 @@ class TestStoppingRuleKeys:
     def test_bad_values_are_rejected(
         self, tmp_path: Path, key: str, bad: object, error: type[Exception]
     ) -> None:
+        """An unknown rule, a non-string rule, or a tolerance not positive is refused."""
         with pytest.raises(error, match=f"solver.{key}"):
             SimConfig.from_dict(self._raw(tmp_path, **{key: bad}))
+
+    def test_an_unknown_solver_key_is_rejected(self, tmp_path: Path) -> None:
+        """Review 24 B1: a misspelt optional key would otherwise run its default."""
+        with pytest.raises(
+            ValueError, match=r"solver\.stoping_rule is not a recognised"
+        ):
+            SimConfig.from_dict(self._raw(tmp_path, stoping_rule="error_estimate"))

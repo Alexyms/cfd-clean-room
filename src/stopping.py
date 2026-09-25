@@ -22,11 +22,12 @@ import numpy as np
 
 # Trailing window of the rate fit, in outer iterations. While the iteration is
 # geometric the length hardly matters: from 1e-5 to 1e-8, halving or doubling
-# it moved no estimate-to-error ratio by more than 0.015, once 0.095 near 1e-5
-# (evidence report, section 4). Off that regime a long window averages across
-# a change of rate, so it must be short against a decade. On the fastest case,
-# VAL-001 40x20 at about 71 outer iterations per decade, 100 spans 1.4 decades
-# and is full by outer iteration 142, the residual's 1e-5, where 200 was not.
+# it moved no estimate-to-error ratio by more than 0.015, except 0.095 on
+# VAL-001 80x40 near 1e-5 (evidence report, section 4). Off that regime a long
+# window averages across a change of rate, so it must be short against a
+# decade. On the fastest case, VAL-001 40x20 at about 71 outer iterations per
+# decade, 100 spans 1.4 decades and is full by outer iteration 142, the
+# residual's 1e-5, where 200 was not.
 RATE_WINDOW = 100
 
 
@@ -76,7 +77,8 @@ class ErrorEstimateRule:
             ("iteration_error_tol", iteration_error_tol),
             ("mass_imbalance_tol", mass_imbalance_tol),
         ):
-            if not (math.isfinite(value) and value > 0.0):
+            # bool is an int; True would pass as 1.0.
+            if isinstance(value, bool) or not (math.isfinite(value) and value > 0.0):
                 raise ValueError(f"{name} must be positive and finite, got {value}")
         self._scale = velocity_scale
         self._error_tol = iteration_error_tol

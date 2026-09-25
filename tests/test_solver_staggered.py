@@ -8,6 +8,8 @@ output at every iteration is observed by wrapping PressureCorrector.correct,
 which leaves the solver's code path untouched.
 """
 
+from collections.abc import Callable
+
 import numpy as np
 import pytest
 import yaml
@@ -316,6 +318,7 @@ class TestStoppingRule:
     def test_stop_is_reported_and_reset_at_the_start_of_each_solve(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """None before a solve, set by one, and cleared by a solve that fails early."""
         _mesh, _bc, solver = _build(_case("cavity", 6))
         assert (solver.converged, solver.stop_reason) == (False, None)
         solver.solve_steady()
@@ -349,6 +352,7 @@ class TestStoppingRule:
     def test_reaching_the_cap_is_reported_as_not_converged(
         self, rule: str, tol: float
     ) -> None:
+        """Twenty iterations and no stop is not convergence, under either rule."""
         config = _ruled(
             "cavity",
             (6, 6),
@@ -364,13 +368,22 @@ class TestStoppingRule:
     def test_error_estimate_scale_is_the_inlet_speed_not_the_reference_velocity(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """One rule at construction and one per solve, each on VAL-001's 0.1."""
+        """One rule at construction and one per solve, each on VAL-001's 0.1.
+
+        Test 24 T1: each update also gets the step in m/s, the residual times
+        the reference velocity (0.6 here), not the residual itself.
+        """
         scales: list[float] = []
+        steps: list[float] = []
 
         class Spy(ErrorEstimateRule):
             def __init__(self, velocity_scale: float, *tols: float) -> None:
                 scales.append(velocity_scale)
                 super().__init__(velocity_scale, *tols)
+
+            def update(self, step: float, imbalance: Callable[[], float]) -> bool:
+                steps.append(step)
+                return super().update(step, imbalance)
 
         monkeypatch.setattr("src.solver_staggered.ErrorEstimateRule", Spy)
         config = _ruled(
@@ -380,8 +393,11 @@ class TestStoppingRule:
         solver.solve_steady()
         assert solver.reference_velocity == pytest.approx(0.6)
         assert scales == [0.1, 0.1]
+        expected = [r * solver.reference_velocity for r in solver.residual_history]
+        assert steps == pytest.approx(expected, rel=1e-12)
 
     def test_error_estimate_without_a_boundary_velocity_raises(self) -> None:
+        """A closed box with no moving wall leaves the estimate without a scale."""
         config = _ruled("cavity", (6, 6), boundaries={}, stopping_rule="error_estimate")
-        with pytest.raises(ValueError, match="velocity_scale must be positive"):
+        with pytest.raises(ValueError, match="stopping_rule error_estimate needs"):
             _build(config)

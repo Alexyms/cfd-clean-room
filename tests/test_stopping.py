@@ -99,10 +99,11 @@ def test_continuity_decides_once_the_estimate_is_met(
 
 @pytest.mark.unit
 @pytest.mark.parametrize("position", [0, 1, 2])
-@pytest.mark.parametrize("bad", [0.0, -1.0, math.inf, math.nan])
+@pytest.mark.parametrize("bad", [0.0, -1.0, math.inf, math.nan, True])
 def test_a_scale_or_tolerance_not_positive_and_finite_is_rejected(
     position: int, bad: float
 ) -> None:
+    """A zero scale would divide by zero, a NaN tolerance is never met, True is not 1.0."""
     args = [SCALE, 1e-6, 1e-10]
     args[position] = bad
     with pytest.raises(ValueError, match="must be positive and finite"):
