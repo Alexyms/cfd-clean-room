@@ -70,6 +70,16 @@ above acceptance criterion 6's bound: the stopping rule reads the velocity chang
 capped corrections make small steps before mass is conserved. Whether the rule needs a
 continuity term is step 7's decision. The measurements, and what the unchanged metric
 discards, are in `docs/reports/staggered_integration_step6.md`.
+Ahead of step 7, `src/stopping.py` adds the rule step 7 will use, `error_estimate`: a solve
+stops when the iteration error estimated from the velocity step and its own geometric rate,
+over the largest prescribed boundary velocity, and the worst per-cell mass imbalance are both
+below their tolerances, and reaching the iteration cap is not convergence. It is opt-in by a
+solver configuration key. The velocity-step rule stays the default and reproduces the earlier
+fields bitwise, and the collocated solver refuses the new rule because its walls leak. On
+both validation cases it stops with the imbalance below criterion 6's bound. On the cavity it
+leaves about the iteration error it estimates; on the open channel what it leaves is bounded
+by the imbalance tolerance, and that bound loosens under refinement
+(`docs/reports/stopping_rule_evidence.md`, section 9).
 ADR-010 is deliberately deferred to the end so it records what was built rather than what
 was planned.
 
@@ -149,7 +159,8 @@ step 8.
 
 `scripts/stopping_probe.py` solves both validation cases far past their tolerance with the
 pressure correction observed, and measures the iteration error each tolerance leaves, its
-estimate from the residual's own rate, and the per-cell mass imbalance.
+estimate from the residual's own rate, and the per-cell mass imbalance. With `--verify-rule`
+it solves the same cases under the `error_estimate` rule and reads each stop against them.
 
 `scripts/gen_system_map.py` regenerates sections of `docs/SYSTEM.md` from the source tree by
 AST parsing, never by importing. CI runs it with `--check`, so a change under `src/` that
@@ -191,9 +202,13 @@ measurement showed; it should not restate the measurement.
 
 ## Next
 
-Choose the stopping rule from the evidence in `docs/reports/stopping_rule_evidence.md`. The
-rebuild continues at step 7, VAL-001 revalidation on the staggered solver, which has to
-settle the criterion 2 mesh question below and use that stopping rule. Step 8 judges
+The rebuild continues at step 7, VAL-001 revalidation on the staggered solver. It switches
+the validation cases to the `error_estimate` stopping rule and runs criterion 2 on the mesh
+the 2026-09-24 amendment fixes: the wall spacing given, the ratio derived. Two findings of
+the rule's check bear on it: on the open channel the imbalance tolerance, not the error
+tolerance, bounds what the rule leaves, and the 80x80 cavity needs more outer iterations
+under the rule than the committed cap allows (`docs/reports/stopping_rule_evidence.md`,
+section 9). Step 8 judges
 VAL-002 and criterion 3a against `marchi_2009_re100` on the true centerlines, with
 `ghia_1982_re100_r2` reported beside it and no threshold (the ECR-001 amendment of
 2026-09-24), and changes the metric and the VAL-002 test to match.
@@ -216,19 +231,17 @@ is recorded in the requirement in `docs/SYSTEM.md`; the evidence is in
 
 Whether VAL-002 can return to the full grid in CI once the rebuild lands.
 
-Whether the stopping rule needs a continuity term. The staggered solver declares
-convergence with a per-cell imbalance above criterion 6's bound; step 6 records it and
-leaves the rule as the collocated one so the outer counts compare. A second input, measured
-2026-09-23: at `convergence_tol` 1e-6 the staggered cavity's velocity fields carry iteration
-error that grows about 3.5 times per halving of h, to about 1e-3 at 80x80, and continuing
-the 80x80 solve to 1e-9 took about 7.5 minutes. That and the step 6 continuity result are
-the evidence for the step 7 stopping decision (`docs/reports/cavity_self_convergence.md`,
-section 9.2). With both cases solved far past their tolerance,
-`docs/reports/stopping_rule_evidence.md` finds that the committed tolerance leaves
-iteration error as large as the discretization error on the finer grids, that an estimate
-from the residual's own rate tracks that error while the iteration is geometric, and that
-on the open channel the error left once the pressure solve falls to a sweep or two per
-outer iteration is a flux drift that only the mass imbalance shows.
+Closed 2026-09-24: whether the stopping rule needs a continuity term. It does.
+`docs/reports/stopping_rule_evidence.md` found that the committed tolerance leaves iteration
+error as large as the discretization error on the finer grids, that an estimate from the
+residual's own rate tracks that error while the iteration is geometric, and that on the
+open channel the error left once the pressure solve falls to a sweep or two per outer
+iteration is a flux drift that only the mass imbalance shows. On that evidence Alex decided
+on a rule with two conditions and no pass at the cap: the estimated iteration error over a
+physical velocity scale, and the worst per-cell mass imbalance, each below its own
+tolerance. It is `error_estimate` in `src/stopping.py`, opt-in, with the velocity-step rule
+the default; REQ-S01 and REQ-S04 are clarified for it, not amended, and the validation
+cases switch to it in step 7. Section 9 of the report checks that it stops where it should.
 
 Closed 2026-09-22: what the VAL-002 v-component findings become against the published
 Ghia table. The v reference was replaced by Table II as `ghia_1982_re100_r2`; the
@@ -255,10 +268,11 @@ under refinement, which criterion 3a forbids (`docs/reports/cavity_reference_mar
 section 5). The decision is an amendment under criteria 3 and 3a in ECR-001 section 9. The
 metric and the VAL-002 test move to Marchi in step 8; until then they read Ghia.
 
-Which mesh quantity ECR-001 acceptance criterion 2 fixes. At a given cell count the
-geometric ratio and the wall spacing determine each other, so the criterion's ratio of 1.05
-and wall spacing of 0.1 of uniform cannot both hold on the 80x40 grid. The mesh module accepts
-either one with the other derived; the criterion must name one before step 7.
+Closed 2026-09-24: which mesh quantity ECR-001 acceptance criterion 2 fixes. At a given
+cell count the geometric ratio and the wall spacing determine each other, so the criterion
+could not hold both. Alex fixed the wall spacing and derives the ratio from it: the stricter
+test of the stretched stencils, and the quantity Phase 3 deposition depends on. The decision
+is an amendment under criterion 2 in ECR-001 section 9.
 
 ## Superseded
 
