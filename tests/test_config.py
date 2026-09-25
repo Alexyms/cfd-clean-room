@@ -1089,7 +1089,7 @@ class TestMeshStretching:
 
 @pytest.mark.unit
 class TestStoppingRuleKeys:
-    """The three optional stopping keys default when absent and validate when present."""
+    """The optional stopping keys default and validate; unknown solver keys are refused."""
 
     def _raw(self, tmp_path: Path, **keys: object) -> dict:
         with open(_write_config(tmp_path), encoding="utf-8") as handle:
@@ -1126,7 +1126,7 @@ class TestStoppingRuleKeys:
     def test_bad_values_are_rejected(
         self, tmp_path: Path, key: str, bad: object, error: type[Exception]
     ) -> None:
-        """An unknown rule, a non-string rule, or a tolerance not positive is refused."""
+        """An unknown rule, a rule or tolerance of the wrong type, or one not positive is refused."""
         with pytest.raises(error, match=f"solver.{key}"):
             SimConfig.from_dict(self._raw(tmp_path, **{key: bad}))
 
