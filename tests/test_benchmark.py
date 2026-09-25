@@ -8,14 +8,19 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import yaml
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 import benchmark  # noqa: E402 -- scripts/ is not a package; path set above
 
+from src.config import SimConfig  # noqa: E402 -- follows sys.path.insert
 from src.mesh import Mesh  # noqa: E402 -- follows sys.path.insert
-from validation.cases import load_case  # noqa: E402 -- follows sys.path.insert
+from validation.cases import (  # noqa: E402 -- follows sys.path.insert
+    case_path,
+    load_case,
+)
 from validation.metrics import (  # noqa: E402 -- follows sys.path.insert
     cavity_true_centerline_errors,
 )
@@ -214,3 +219,27 @@ def test_harness_scores_the_cavity_on_the_true_centerlines() -> None:
     accuracy = benchmark.accuracy_of("cavity", config, mesh, u, v)
     assert accuracy["metric"] == "max_normalized_centerline_error_r2"
     assert accuracy == cavity_true_centerline_errors(config, mesh, u, v).as_dict()
+
+
+@pytest.mark.integration
+def test_harness_row_takes_the_cap_from_the_solver(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A capped error_estimate solve is recorded as not converged, with its rule.
+
+    Its last residual is below convergence_tol 10, so the old computation from
+    the residual would have recorded it as converged.
+    """
+    raw = yaml.safe_load(case_path("cavity").read_text(encoding="utf-8"))
+    raw["domain"]["nx"] = raw["domain"]["ny"] = 6
+    raw["solver"].update(
+        stopping_rule="error_estimate", convergence_tol=10.0, max_simple_iter=20
+    )
+    config = SimConfig.from_dict(raw)
+    monkeypatch.setitem(benchmark.CASES, "tiny_cavity", ("cavity", 6, 6))
+    monkeypatch.setattr(benchmark, "load_case", lambda kind, grid: config)
+    row = benchmark.run_case("tiny_cavity", "staggered-jacobi", 10, 1)
+    assert row["outcome"] == {"converged": False, "stop_reason": "max_simple_iter"}
+    assert row["work"]["outer_iterations"] == 20
+    assert row["trajectory"][-1]["residual"] < 10.0
+    assert row["params"]["stopping_rule"] == "error_estimate"

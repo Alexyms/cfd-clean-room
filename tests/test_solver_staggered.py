@@ -21,6 +21,7 @@ from src.pressure import PressureCorrection, PressureCorrector
 from src.solver_ns import IterationState, NavierStokesSolver
 from src.solver_staggered import StaggeredSolver
 from src.staggered import allocate_fields, to_cell_centers
+from src.stopping import ErrorEstimateRule
 from validation.cases import CASE_GRIDS, case_path, load_case
 
 EPS = np.finfo(np.float64).eps
@@ -37,6 +38,18 @@ def _case(name: str, n: int, **overrides: object) -> SimConfig:
 def _channel(nx: int = 12, ny: int = 6) -> SimConfig:
     """The VAL-001 channel on a small grid."""
     return load_case("poiseuille", grid=(nx, ny))
+
+
+def _ruled(
+    name: str, grid: tuple[int, int], boundaries: dict | None = None, **keys: object
+) -> SimConfig:
+    """A committed case on a grid with solver keys, and optionally boundaries, replaced."""
+    raw = yaml.safe_load(case_path(name).read_text(encoding="utf-8"))
+    raw["domain"]["nx"], raw["domain"]["ny"] = grid
+    raw["solver"].update(keys)
+    if boundaries is not None:
+        raw["boundaries"] = boundaries
+    return SimConfig.from_dict(raw)
 
 
 def _build(config: SimConfig) -> tuple[Mesh, StaggeredBoundary, StaggeredSolver]:
@@ -294,3 +307,81 @@ class TestPhysics:
             assert np.all(np.isfinite(field))
         assert np.abs(u).max() > 0.0
         assert solver.residual_history[-1] < config.convergence_tol
+
+
+@pytest.mark.integration
+class TestStoppingRule:
+    """converged, stop_reason and the error_estimate rule's scale (src/stopping.py)."""
+
+    def test_stop_is_reported_and_reset_at_the_start_of_each_solve(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _mesh, _bc, solver = _build(_case("cavity", 6))
+        assert (solver.converged, solver.stop_reason) == (False, None)
+        solver.solve_steady()
+        assert solver.converged is True
+        assert solver.stop_reason == "velocity_step_below_tol"
+
+        def fail(
+            self: MomentumPredictor, u: np.ndarray, v: np.ndarray, p: np.ndarray
+        ) -> MomentumPrediction:
+            raise RuntimeError("stop before the first correction")
+
+        monkeypatch.setattr(MomentumPredictor, "predict", fail)
+        with pytest.raises(RuntimeError, match="first correction"):
+            solver.solve_steady()
+        assert (solver.converged, solver.stop_reason) == (False, None)
+
+    def test_error_estimate_stops_later_with_continuity_met(self) -> None:
+        """The velocity_step rule would have stopped earlier on the same trajectory."""
+        config = _ruled("cavity", (6, 6), stopping_rule="error_estimate")
+        _mesh, _bc, solver = _build(config)
+        solver.solve_steady()
+        assert solver.stop_reason == "error_estimate_and_continuity"
+        assert solver.converged is True
+        assert np.abs(solver.last_mass_imbalance).max() < config.mass_imbalance_tol
+        assert min(solver.residual_history[:-1]) < config.convergence_tol
+
+    # A step test at 10 passes at once; the cap is below the rule's window.
+    @pytest.mark.parametrize(
+        ("rule", "tol"), [("velocity_step", 1e-300), ("error_estimate", 10.0)]
+    )
+    def test_reaching_the_cap_is_reported_as_not_converged(
+        self, rule: str, tol: float
+    ) -> None:
+        config = _ruled(
+            "cavity",
+            (6, 6),
+            stopping_rule=rule,
+            convergence_tol=tol,
+            max_simple_iter=20,
+        )
+        _mesh, _bc, solver = _build(config)
+        solver.solve_steady()
+        assert len(solver.residual_history) == 20
+        assert (solver.converged, solver.stop_reason) == (False, "max_simple_iter")
+
+    def test_error_estimate_scale_is_the_inlet_speed_not_the_reference_velocity(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """One rule at construction and one per solve, each on VAL-001's 0.1."""
+        scales: list[float] = []
+
+        class Spy(ErrorEstimateRule):
+            def __init__(self, velocity_scale: float, *tols: float) -> None:
+                scales.append(velocity_scale)
+                super().__init__(velocity_scale, *tols)
+
+        monkeypatch.setattr("src.solver_staggered.ErrorEstimateRule", Spy)
+        config = _ruled(
+            "poiseuille", (12, 6), stopping_rule="error_estimate", max_simple_iter=2
+        )
+        _mesh, _bc, solver = _build(config)
+        solver.solve_steady()
+        assert solver.reference_velocity == pytest.approx(0.6)
+        assert scales == [0.1, 0.1]
+
+    def test_error_estimate_without_a_boundary_velocity_raises(self) -> None:
+        config = _ruled("cavity", (6, 6), boundaries={}, stopping_rule="error_estimate")
+        with pytest.raises(ValueError, match="velocity_scale must be positive"):
+            _build(config)

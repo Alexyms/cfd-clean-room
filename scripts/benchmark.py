@@ -88,6 +88,9 @@ SOLVER_PARAMETERS = (
     "alpha_pressure",
     "max_pressure_iter",
     "pressure_tol",
+    "stopping_rule",
+    "iteration_error_tol",
+    "mass_imbalance_tol",
 )
 
 
@@ -375,7 +378,13 @@ def run_case(case_id: str, method: str, sample_every: int, concurrent: int) -> d
             }
         )
 
-    converged = solver.residual_history[-1] < config.convergence_tol
+    # The staggered solver knows which rule it ran and whether the cap stopped
+    # it; the collocated one has only the velocity-step rule, read back here.
+    if isinstance(solver, StaggeredSolver):
+        converged, stop_reason = solver.converged, solver.stop_reason
+    else:
+        converged = solver.residual_history[-1] < config.convergence_tol
+        stop_reason = "residual_below_tol" if converged else "max_simple_iter"
     commit, dirty = git_state()
     return {
         "schema_version": SCHEMA_VERSION,
@@ -395,10 +404,7 @@ def run_case(case_id: str, method: str, sample_every: int, concurrent: int) -> d
             "numpy": np.__version__,
             "concurrent_processes": concurrent,
         },
-        "outcome": {
-            "converged": bool(converged),
-            "stop_reason": "residual_below_tol" if converged else "max_simple_iter",
-        },
+        "outcome": {"converged": bool(converged), "stop_reason": stop_reason},
         "accuracy": accuracy,
         "work": {**work, "cell_update_definition": CELL_UPDATE_DEFINITIONS[method]},
         "time": {"wall_seconds": wall, "stages": dict(solver.stage_seconds)},

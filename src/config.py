@@ -138,6 +138,15 @@ class StretchSpec:
 _VALID_BOUNDARY_TYPES: set[str] = {"velocity_inlet", "pressure_outlet", "wall"}
 _VALID_BOUNDARY_LOCATIONS: set[str] = {"top", "bottom", "left", "right"}
 
+# Stopping rules the solver block may name (src/stopping.py). velocity_step is
+# the default, the rule every stored result was produced under.
+VELOCITY_STEP = "velocity_step"
+ERROR_ESTIMATE = "error_estimate"
+STOPPING_RULES: tuple[str, ...] = (VELOCITY_STEP, ERROR_ESTIMATE)
+DEFAULT_ITERATION_ERROR_TOL = 1.0e-6
+# ECR-001 acceptance criterion 6: per-cell imbalance below 1e-10, absolute.
+DEFAULT_MASS_IMBALANCE_TOL = 1.0e-10
+
 
 class SimConfig:
     """Simulation configuration loaded and validated from a YAML file.
@@ -307,6 +316,21 @@ class SimConfig:
         )
         self.pressure_tol: float = self._require_positive_float(
             solver, "pressure_tol", "solver"
+        )
+        # Optional: absent keys give the velocity-step rule and its behaviour.
+        self.stopping_rule: str = VELOCITY_STEP
+        if "stopping_rule" in solver:
+            self.stopping_rule = self._require_string(solver, "stopping_rule", "solver")
+            if self.stopping_rule not in STOPPING_RULES:
+                raise ValueError(
+                    f"solver.stopping_rule must be one of {list(STOPPING_RULES)}, "
+                    f"got '{self.stopping_rule}'"
+                )
+        self.iteration_error_tol: float = self._optional_positive_float(
+            solver, "iteration_error_tol", "solver", DEFAULT_ITERATION_ERROR_TOL
+        )
+        self.mass_imbalance_tol: float = self._optional_positive_float(
+            solver, "mass_imbalance_tol", "solver", DEFAULT_MASS_IMBALANCE_TOL
         )
 
         # Boundaries
@@ -589,6 +613,15 @@ class SimConfig:
         if val <= 0:
             raise ValueError(f"{context}.{key} must be positive, got {val}")
         return float(val)
+
+    @classmethod
+    def _optional_positive_float(
+        cls, section: dict, key: str, context: str, default: float
+    ) -> float:
+        """A positive numeric value if the key is present, else the default."""
+        if key not in section:
+            return default
+        return cls._require_positive_float(section, key, context)
 
     @staticmethod
     def _require_positive_int(section: dict, key: str, context: str) -> int:

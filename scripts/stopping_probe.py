@@ -11,14 +11,21 @@ script if an unwrapped solve at the committed tolerance differs from the wrapped
 snapshot there. Fields go to results/stopping_probe/ (gitignored) and are never
 solved again once saved; the analysis writes summary.json there.
 
+With --verify-rule each case is solved once more under the error_estimate
+stopping rule (src/stopping.py) at its default tolerances, set in memory, and
+the stop is read against the truth into verify_rule.json.
+
     python scripts/stopping_probe.py
+    python scripts/stopping_probe.py --verify-rule
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 import time
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -32,6 +39,7 @@ sys.path.insert(0, str(REPO_ROOT))
 # this script uses, so they are read from it: sc.Mesh, sc.MARCHI_U_ROWS.
 import self_convergence as sc  # noqa: E402 -- path set above
 
+from src.stopping import ErrorEstimateRule  # noqa: E402 -- path set above
 from validation.metrics import (  # noqa: E402 -- path set above
     _inlet_velocity,
     poiseuille_l2_error,
@@ -70,12 +78,17 @@ def case_name(case: str, n: int) -> str:
     return f"{case}_{n}x{n if case == 'cavity' else n // 2}"
 
 
-def case_config(case: str, n: int, tol: float | None = None) -> sc.SimConfig:
-    """The committed case at n cells along x; tolerance and cap set in memory if tol is given."""
+def case_config(
+    case: str, n: int, tol: float | None = None, rule: str | None = None
+) -> sc.SimConfig:
+    """The committed case at n cells along x; tolerance or rule, and cap, set if given."""
     raw = yaml.safe_load(sc.case_path(case).read_text(encoding="utf-8"))
     raw["domain"]["nx"], raw["domain"]["ny"] = n, (n if case == "cavity" else n // 2)
     if tol is not None:
         raw["solver"]["convergence_tol"] = tol
+    if rule is not None:
+        raw["solver"]["stopping_rule"] = rule
+    if tol is not None or rule is not None:
         raw["solver"]["max_simple_iter"] = MAX_OUTER[case]
     return sc.SimConfig.from_dict(raw)
 
@@ -339,9 +352,82 @@ def analyse(case: str, n: int) -> dict:
     return out
 
 
-def main() -> int:
-    """Run the controls and the five solves, then analyse the saved fields into summary.json."""
+def verify_rule(case: str, n: int) -> dict:
+    """One error_estimate solve at the default tolerances, its stop read against the truth.
+
+    The corrector is wrapped as in the truth solve, so every iteration's
+    imbalance is known and the wall time compares with the default rule's
+    snapshot. A fresh rule replaying the saved history must stop where the
+    solver did; (a) and (b) are each met from the start of their final run.
+    """
+    name, config = case_name(case, n), case_config(case, n, rule="error_estimate")
+    mesh, path = sc.Mesh(config), OUT_DIR / f"{name}_rule.npz"
+    boundary = sc.StaggeredBoundary(mesh, config)
+    if not path.exists():
+        solver = sc.StaggeredSolver(mesh, config, boundary)
+        imbalance, _sweeps = instrument(solver)
+        start = time.perf_counter()
+        u, v, _p = solver.solve_steady()
+        np.savez(
+            path,
+            u=u,
+            v=v,
+            seconds=time.perf_counter() - start,
+            imbalance=np.array(imbalance),
+            residual=np.array(solver.residual_history),
+            reference_velocity=solver.reference_velocity,
+            stop_reason=solver.stop_reason,
+            returned=np.abs(solver.last_mass_imbalance).max(),
+        )
+    with np.load(path) as saved:
+        d = {k: saved[k] for k in saved.files}
+    with np.load(OUT_DIR / f"{name}.npz") as saved:
+        last = len(saved["level"]) - 1
+        truth = (saved[f"u_{last}"], saved[f"v_{last}"])
+        at_tol = saved["level"] == case_config(case, n).convergence_tol
+        default_outer = int(saved["iteration"][np.flatnonzero(at_tol)[0]]) + 1
+        default_seconds = float(saved["elapsed"][default_outer - 1])
+    scale = boundary.get_max_boundary_velocity()
+    tols = (config.iteration_error_tol, config.mass_imbalance_tol)
+    replay, res, imb = ErrorEstimateRule(scale, *tols), d["residual"], d["imbalance"]
+    steps = res * float(d["reference_velocity"])
+    stops = [
+        replay.update(s, partial(float, i)) for s, i in zip(steps, imb, strict=True)
+    ]
+    # Outer iteration (1-based) from which each condition held to the stop.
+    held = (np.array(replay.estimate_history) < tols[0], imb < tols[1])
+    since = [int(np.flatnonzero(~met)[-1]) + 2 if (~met).any() else 1 for met in held]
+    out = {"outer": len(res), "seconds": float(d["seconds"])}
+    out |= {"default_outer": default_outer, "default_seconds": default_seconds}
+    out |= {"stop_reason": str(d["stop_reason"]), "a_met_from": since[0]}
+    out |= {"b_met_from": since[1], "estimate": replay.estimate_history[-1]}
+    out["replay_stops_there"] = bool(stops[-1] and not any(stops[:-1]))
+    fluid = mesh.cell_type == sc.FLUID
+    out["true_error_rel"] = true_error(d["u"], d["v"], truth, fluid) / scale
+    out["imbalance"] = float(imb[-1])
+    out["imbalance_is_returned"] = float(imb[-1]) == float(d["returned"])
+    if case == "poiseuille":
+        out["metric"] = poiseuille_l2_error(config, mesh, d["u"]).value
+        out["metric_truth"] = poiseuille_l2_error(config, mesh, truth[0]).value
+    print(f"{name}: {out}", flush=True)
+    return out
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Run the controls and the five solves, then analyse the saved fields into summary.json.
+
+    With --verify-rule, solve and read each case under error_estimate instead.
+    """
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--verify-rule", action="store_true")
+    args = parser.parse_args(argv)
     OUT_DIR.mkdir(parents=True, exist_ok=True)
+    if args.verify_rule:
+        verified = {case_name(c, n): verify_rule(c, n) for c, n in CASES}
+        (OUT_DIR / "verify_rule.json").write_text(
+            json.dumps(verified, indent=2), encoding="utf-8"
+        )
+        return 0
     summary: dict = {"truth_tol": TRUTH_TOL, "window": WINDOW, "control": {}}
     spent = 0.0
     for case, n in CASES:

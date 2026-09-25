@@ -56,5 +56,9 @@ responsibility = "Solves steady incompressible flow with the SIMPLE algorithm on
 serves = ["REQ-S01", "REQ-S02", "REQ-S03", "REQ-S05", "REQ-S08"]
 
 [modules."src/solver_staggered.py"]
-responsibility = "Runs steady SIMPLE on the staggered grid as one outer loop over the momentum predictor and the pressure correction, with the collocated solver's public shape and stopping rule, alongside the collocated solver."
+responsibility = "Runs steady SIMPLE on the staggered grid as one outer loop over the momentum predictor and the pressure correction, with the collocated solver's public shape, alongside the collocated solver; stops by the collocated velocity-step rule or, when configured, by the error-estimate rule."
 serves = ["REQ-S01", "REQ-S04", "REQ-S05", "REQ-S07"]
+
+[modules."src/stopping.py"]
+responsibility = "Decides when the steady outer iteration has converged: the iteration error estimated from the step and its fitted geometric rate, over a physical velocity scale, and the worst per-cell mass imbalance, each against its own tolerance."
+serves = ["REQ-S01", "REQ-S04"]

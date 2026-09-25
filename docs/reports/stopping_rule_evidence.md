@@ -1,10 +1,10 @@
 # What the stopping rule should measure: evidence
 
 **Date:** 2026-09-24
-**Context:** the STATUS question of whether the stopping rule needs a continuity term. This
-report measures; it does not choose a rule.
+**Context:** the STATUS question of whether the stopping rule needs a continuity term.
+Sections 1 to 8 measure and do not choose a rule; section 9 checks the rule chosen from them.
 **Instrument:** `python scripts/stopping_probe.py`. Every value is from
-`results/stopping_probe/summary.json` (gitignored) unless section 8 says otherwise.
+`results/stopping_probe/summary.json` (gitignored) unless section 8 or 9 says otherwise.
 
 **Answers.** (1) 82% of VAL-001's stored 2.3e-3 is iteration error; the rest is the
 half-cell wall stencil's discretization error, less some development at x = L/2. (2) Step
@@ -182,3 +182,53 @@ truths. The pressure solve sat at its cap (2000, 500) at the channel's and 80x80
   8x8 and VAL-001 at 16x8), and the channel's late error growing from inlet to outlet
   (`worst_cell` records only the maximum's cell). Planted defects: `results/builder23/` and
   `results/builder23b/`.
+
+## 9. The rule as built
+
+Alex chose the rule on 2026-09-24 and `src/stopping.py` holds it. Under `stopping_rule:
+error_estimate` a solve stops when (a) step times rho_hat / (1 - rho_hat) over the largest
+prescribed boundary velocity is below `iteration_error_tol` (1e-6), rho_hat fitted over the
+last 100 steps, and (b) the worst per-cell imbalance is below `mass_imbalance_tol` (1e-10).
+The cap is not convergence. `velocity_step` stays the default: under it the 20x20 cavity
+equals `results/self_convergence/staggered-jacobi_20.npz` bitwise, 629 outer, on main and here.
+
+**Method.** `python scripts/stopping_probe.py --verify-rule` solves each case once under
+`error_estimate` at those defaults, set in memory with the truth solve's cap (40000, 20000),
+the corrector wrapped as in section 1, and writes `verify_rule.json`. True error: section 1's,
+over the velocity scale (lid 1.0, inlet 0.1). Each condition is dated from the start of its
+final unbroken run. Controls, both held on all five: a fresh rule replaying the saved history
+stops at the solver's iteration and no earlier, and the recorded imbalance at the stop equals
+the returned field's. The default rule's figures are the section 1 snapshot at 1e-6.
+
+| MEASURED | Outer (default) | Seconds (default) | (a), (b) from | Last | True error / U | Imbalance | Metric (truth) |
+|---|---|---|---|---|---|---|---|
+| Cavity 20x20 | 1370 (629) | 13.9 (11.4) | 973, 1370 | (b) | 2.26e-8 | 9.92e-11 | |
+| Cavity 40x40 | 3849 (1891) | 59.3 (50.8) | 3463, 3849 | (b) | 2.97e-7 | 9.98e-11 | |
+| Cavity 80x80 | 12849 (5728) | 370.5 (299.9) | 12849, 11276 | (a) | 1.02e-6 | 2.34e-11 | |
+| VAL-001 40x20 | 880 (213) | 22.0 (18.7) | 880, 767 | (a) | 7.56e-7 | 5.33e-11 | 1.9992e-3 (1.9989e-3) |
+| VAL-001 80x40 | 2286 (570) | 101.5 (83.2) | 2286, 1805 | (a) | 2.76e-6 | 5.58e-11 | 4.121e-4 (4.108e-4) |
+
+Every case stops with `error_estimate_and_continuity`, in 1.17 to 1.24 times the default
+rule's wall time. (b)'s dates are section 5's first crossings: the trajectory is the same.
+
+**Prediction check**, against the prediction written before the run. Stop reason, imbalance
+below 1e-10, and every 80x80 figure (a last, residual 9.9e-10, 12849 outer, 370.5 s):
+matched. VAL-001 80x40 at 2286 outer with its metric 0.32% above the truth's: matched. True
+error at most 2e-6: matched on four; missed on VAL-001 80x40, 2.76e-6, 1.38 times the
+prediction and under the 5e-6 stop. (b) last: matched on the 20 and 40 cavities; missed on
+both channels, where (a) was met 113 and 481 outer iterations after (b).
+
+**Reading.** On the cavity the estimate at the stop is 0.98 to 1.03 times the true error. The
+two channel misses share a cause (INFERRED): once the pressure solve drops to a sweep or two
+the residual slows (at 80x40 the decade from 1e-9 to 1e-10 takes 960 outer iterations against
+272 per decade to 1e-8, section 6), rho_hat rises, and the estimate reaches 1e-6 only after
+the imbalance has. What is left is section 4's flux drift, which (a) does not see: 5.58e-11
+times 79 x 40 over rho H is 3.5e-6 of the inlet speed, against a true 2.76e-6. The estimate is
+0.36 times the true error at the 80x40 stop and 1.31 at 40x20.
+
+**For step 7 (arithmetic, not measured).** On the open channel `mass_imbalance_tol` bounds
+the drift the rule can leave, 1e-10 (nx - 1) ny / (rho H U): 6.3e-6 of the inlet speed at
+80x40 and 2.5e-5 at 160x80, above `iteration_error_tol` and four times looser per refinement.
+And the 80x80 cavity needs 12849 outer iterations where the committed cap is 10000: with the
+committed file it would stop at the cap, reported as not converged. Planted defects for the
+rule's tests: `results/builder24/`.

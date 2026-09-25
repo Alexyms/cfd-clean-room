@@ -20,7 +20,7 @@ face takes the value of the interior face next to it, and the corrector then
 corrects it against p' = 0 so the outlet cell closes. The returned faces are
 the corrected ones.
 
-The stopping rule is the collocated one, identical in definition: the
+The residual is the collocated one, identical in definition: the
 largest change of the cell-centered u and v between outer iterations over
 FLUID cells, divided by the reference velocity ``F_ref / (rho h)``. F_ref is
 rho times the inlet volumetric flux, or for a closed domain rho times the
@@ -30,27 +30,40 @@ mesh. The inlet flux is the staggered layer's, the exact face sum. The
 collocated layer's is two corner cells short on VAL-001, so the two
 reference velocities differ by 40/38 there and agree exactly on a closed
 domain (docs/reports/staggered_integration_step6.md).
+
+``stopping_rule`` picks the stop. ``velocity_step``, the default, is the
+collocated rule: the residual below ``convergence_tol``. ``error_estimate``
+(src/stopping.py) needs the estimated iteration error over the largest
+prescribed boundary velocity below ``iteration_error_tol`` and the worst
+per-cell mass imbalance below ``mass_imbalance_tol``. Reaching
+``max_simple_iter`` is not convergence under either.
 """
 
 import logging
 from collections.abc import Callable
+from functools import partial
 from time import perf_counter
 
 import numpy as np
 
 from src.boundary_staggered import StaggeredBoundary
-from src.config import SimConfig
+from src.config import ERROR_ESTIMATE, VELOCITY_STEP, SimConfig
 from src.mesh import FLUID, Mesh
 from src.momentum import MomentumPredictor
 from src.pressure import PressureCorrector
 from src.solver_ns import IterationState
 from src.staggered import allocate_fields, p_shape, to_cell_centers
+from src.stopping import ErrorEstimateRule
 
 logger = logging.getLogger(__name__)
 
 # The collocated solver's guard against a zero flux or velocity scale, kept
 # identical so the two residuals are the same quantity.
 _ZERO_SCALE = 1e-30
+_STOP_REASONS = {
+    VELOCITY_STEP: "velocity_step_below_tol",
+    ERROR_ESTIMATE: "error_estimate_and_continuity",
+}
 
 
 class StaggeredSolver:
@@ -61,7 +74,7 @@ class StaggeredSolver:
     mesh : Mesh
         The computational mesh, uniform or stretched.
     config : SimConfig
-        Supplies rho, convergence_tol and max_simple_iter, and through the
+        Supplies rho, max_simple_iter and the stopping keys, and through the
         predictor and corrector every other solver parameter.
     boundary : StaggeredBoundary
         Imposes the normal velocities and supplies the outlet masks and the
@@ -70,9 +83,14 @@ class StaggeredSolver:
     Attributes
     ----------
     reference_velocity : float
-        The velocity the stopping rule divides the largest change by.
+        The velocity the residual divides the largest change by.
     residual_history : list[float]
         Scaled residual after each outer iteration of the last solve.
+    converged : bool
+        Whether the last solve met its stopping rule rather than the cap.
+    stop_reason : str or None
+        "velocity_step_below_tol", "error_estimate_and_continuity" or
+        "max_simple_iter"; None until a solve completes. Both reset per solve.
     last_pressure_sweeps : int
         Pressure sweeps performed by the most recent correction.
     stage_seconds : dict[str, float]
@@ -85,6 +103,11 @@ class StaggeredSolver:
     last_mass_imbalance : np.ndarray
         Per-cell mass imbalance of the returned face velocities, shape
         [ny, nx]. Observability only; the solver never reads it.
+
+    Raises
+    ------
+    ValueError
+        Under error_estimate, if no boundary prescribes a velocity to scale by.
     """
 
     def __init__(
@@ -97,6 +120,8 @@ class StaggeredSolver:
         self._rho = config.rho
         self._convergence_tol = config.convergence_tol
         self._max_simple_iter = config.max_simple_iter
+        self._stopping_rule = config.stopping_rule
+        self._rule_tols = (config.iteration_error_tol, config.mass_imbalance_tol)
         self._fluid = mesh.cell_type == FLUID
         self._outlets = boundary.pressure_outlets()
 
@@ -105,6 +130,10 @@ class StaggeredSolver:
         self.last_pressure_sweeps: int = 0
         self.stage_seconds: dict[str, float] = self._zero_stage_seconds()
         self.last_mass_imbalance: np.ndarray = np.zeros(p_shape(mesh))
+        self.converged: bool = False
+        self.stop_reason: str | None = None
+        # Built once here so a zero velocity scale raises at construction.
+        self._new_rule()
 
     @staticmethod
     def _zero_stage_seconds() -> dict[str, float]:
@@ -121,6 +150,17 @@ class StaggeredSolver:
             max_vel = self._boundary.get_max_boundary_velocity()
             f_ref = max(self._rho * max_vel * h, _ZERO_SCALE)
         return f_ref / (self._rho * h)
+
+    def _new_rule(self) -> ErrorEstimateRule | None:
+        """A fresh error_estimate rule on the largest boundary velocity; None otherwise."""
+        if self._stopping_rule != ERROR_ESTIMATE:
+            return None
+        scale = self._boundary.get_max_boundary_velocity()
+        return ErrorEstimateRule(scale, *self._rule_tols)
+
+    def _worst_imbalance(self, u: np.ndarray, v: np.ndarray) -> float:
+        """Largest absolute per-cell mass imbalance of the face velocities."""
+        return float(np.abs(self._corrector.mass_imbalance(u, v)).max())
 
     def _extrapolate_outlets(self, u: np.ndarray, v: np.ndarray) -> None:
         """Give each pressure outlet face the value of its interior neighbour, in place."""
@@ -160,6 +200,8 @@ class StaggeredSolver:
         # Reset with the timers: a solve that stops before its first
         # correction must not report the previous call's sweep count.
         self.last_pressure_sweeps = 0
+        self.converged, self.stop_reason = False, None
+        rule = self._new_rule()
         u_c, v_c = to_cell_centers(u, v)
         fluid = self._fluid
 
@@ -196,12 +238,22 @@ class StaggeredSolver:
                     )
                 )
 
-            if iteration % 50 == 0 or residual < self._convergence_tol:
+            if rule is None:
+                stop = residual < self._convergence_tol
+            else:
+                stop = rule.update(max(du, dv), partial(self._worst_imbalance, u, v))
+
+            if iteration % 50 == 0 or stop:
                 logger.info("SIMPLE iter %4d: residual = %.6e", iteration, residual)
 
-            if residual < self._convergence_tol:
+            if stop:
+                self.converged = True
+                self.stop_reason = _STOP_REASONS[self._stopping_rule]
                 logger.info("Converged at iteration %d", iteration)
                 break
 
+        if not self.converged:
+            self.stop_reason = "max_simple_iter"
+            logger.warning("Not converged: stopped at max_simple_iter")
         self.last_mass_imbalance = self._corrector.mass_imbalance(u, v)
         return u_c, v_c, np.ascontiguousarray(p)
