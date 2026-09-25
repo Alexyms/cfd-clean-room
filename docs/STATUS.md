@@ -15,9 +15,10 @@ project has already lost five months to exactly that.
 ## Where the project stands
 
 Phases 0 and 1 are complete. Phase 2 is in progress: the Navier-Stokes solver exists and
-runs, VAL-001 passes against its current criterion, VAL-002 is marked xfail because the
-collocated solver fails it at the 40x40 CI grid, and the approved engineering change request
-to rebuild the solver is six steps into its nine-step plan. Phases 3 through 7 have not begun.
+runs, VAL-001 passes on the collocated solver at its current criterion and on the staggered
+solver at the rebuild's 1%, VAL-002 is marked xfail because the collocated solver fails it at
+the 40x40 CI grid, and the approved engineering change request to rebuild the solver is seven
+steps into its nine-step plan. Phases 3 through 7 have not begun.
 
 `docs/PROJECT_PLAN.md` holds the phase detail, deliverables and validation gates.
 
@@ -82,6 +83,15 @@ bound, and on the cavity it leaves about the iteration error it estimates. On th
 channel the per-cell tolerance alone bounds the flux drift the rule can leave only loosely,
 and more loosely under refinement, so the summed condition bounds that drift on any grid
 (`docs/reports/stopping_rule_evidence.md`, section 9).
+Step 7 revalidated VAL-001 on the staggered solver. The channel case file now names the
+`error_estimate` rule, and every staggered VAL-001 solve stops by it. ECR-001 acceptance
+criteria 1, 2 and 4 pass: below 1% on the uniform 80x40 grid and on the same grid clustered
+toward the walls, and at second order under refinement judged without a reference, because
+the parabola is not the exact answer at the channel midpoint while the flow still develops.
+The clustered grid's error is its stencil's own error on the developed flow. The collocated
+solver refuses the new rule and keeps the old one through one helper, with its results
+unchanged; moving the case file reached two scripts beyond the plan, the stopping probe and
+the viewer, which now name their rule. See `docs/reports/val001_revalidation_step7.md`.
 ADR-010 is deliberately deferred to the end so it records what was built rather than what
 was planned.
 
@@ -164,6 +174,10 @@ pressure correction observed, and measures the iteration error each tolerance le
 estimate from the residual's own rate, and the per-cell mass imbalance. With `--verify-rule`
 it solves the same cases under the `error_estimate` rule and reads each stop against them.
 
+`scripts/val001_order.py` measures VAL-001's order under uniform refinement on the staggered
+solver, with no reference, after a control on synthetic fields of known order, and reports the
+orders against the parabola beside it.
+
 `scripts/gen_system_map.py` regenerates sections of `docs/SYSTEM.md` from the source tree by
 AST parsing, never by importing. CI runs it with `--check`, so a change under `src/` that
 leaves the document stale fails the build. Ported from the Agora project; the fork point is
@@ -204,16 +218,14 @@ measurement showed; it should not restate the measurement.
 
 ## Next
 
-The rebuild continues at step 7, VAL-001 revalidation on the staggered solver. It switches
-the validation cases to the `error_estimate` stopping rule and runs criterion 2 on the mesh
-the 2026-09-24 amendment fixes: the wall spacing given, the ratio derived. One finding of
-the rule's check bears on the switch: the 80x80 cavity needs more outer iterations under the
-rule than the committed cap allows (`docs/reports/stopping_rule_evidence.md`, section 9).
-Before step 7 stores an `error_estimate` row, the harness summary has to key its rows on the
-stopping rule (GitHub issue for review 24 S3). Step 8 judges
+The rebuild continues at step 8, VAL-002 revalidation on the staggered solver. It judges
 VAL-002 and criterion 3a against `marchi_2009_re100` on the true centerlines, with
 `ghia_1982_re100_r2` reported beside it and no threshold (the ECR-001 amendment of
-2026-09-24), and changes the metric and the VAL-002 test to match.
+2026-09-24), and changes the metric and the VAL-002 test to match. Switching the cavity case
+to the `error_estimate` rule, as step 7 did the channel, meets one known finding: the 80x80
+cavity needs more outer iterations under the rule than the committed cap allows
+(`docs/reports/stopping_rule_evidence.md`, section 9). The collocated solver needs
+`validation.cases.with_velocity_step` wherever it is built from a case that names the rule.
 
 With the review Action removed, its repository secret and the GitHub App it used are
 still installed. Removing them is Alex's, after merge.
