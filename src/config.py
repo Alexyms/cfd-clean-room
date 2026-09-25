@@ -146,6 +146,24 @@ STOPPING_RULES: tuple[str, ...] = (VELOCITY_STEP, ERROR_ESTIMATE)
 DEFAULT_ITERATION_ERROR_TOL = 1.0e-6
 # ECR-001 acceptance criterion 6: per-cell imbalance below 1e-10, absolute.
 DEFAULT_MASS_IMBALANCE_TOL = 1.0e-10
+# Every key the solver block accepts, nine required and three optional. With
+# optional keys a misspelt one would otherwise fall back to its default.
+_SOLVER_KEYS: frozenset[str] = frozenset(
+    {
+        "dt",
+        "t_end",
+        "output_interval",
+        "convergence_tol",
+        "max_simple_iter",
+        "alpha_velocity",
+        "alpha_pressure",
+        "max_pressure_iter",
+        "pressure_tol",
+        "stopping_rule",
+        "iteration_error_tol",
+        "mass_imbalance_tol",
+    }
+)
 
 
 class SimConfig:
@@ -294,6 +312,12 @@ class SimConfig:
         solver = self._require_section(raw, "solver")
         if not isinstance(solver, dict):
             raise ValueError("solver must be a mapping")
+        for key in solver:
+            if key not in _SOLVER_KEYS:
+                raise ValueError(
+                    f"solver.{key} is not a recognised solver key; "
+                    f"known: {sorted(_SOLVER_KEYS)}"
+                )
         self.dt: float = self._require_positive_float(solver, "dt", "solver")
         self.t_end: float = self._require_positive_float(solver, "t_end", "solver")
         self.output_interval: int = self._require_positive_int(

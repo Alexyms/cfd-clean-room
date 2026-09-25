@@ -181,18 +181,18 @@ Generated. The responsibility and serves columns are editorial and come from `do
 | `src/boundary.py` | 380 | Maps BOUNDARY cells to the condition the shared registry reports and writes the collocated ghost-cell values that place wall, inlet and outlet conditions at the domain face. | none |
 | `src/boundary_registry.py` | 195 | Interprets the configured boundary segments once, answering which condition and prescribed velocity hold at a point on a domain edge, for both the collocated and the staggered layer. | S12.1 |
 | `src/boundary_staggered.py` | 423 | Writes Dirichlet normal velocities exactly into the staggered domain-face entries and exposes the tangential wall values, wall distances and pressure outlets as data for the momentum and pressure steps. | S12 |
-| `src/config.py` | 696 | Loads the YAML configuration into typed dataclasses and rejects missing keys, wrong types and out-of-range values at load time. | A02, A03, C01, C02, S10 |
+| `src/config.py` | 720 | Loads the YAML configuration into typed dataclasses and rejects missing keys, wrong types and out-of-range values at load time. | A02, A03, C01, C02, S10 |
 | `src/constants.py` | 8 | Holds the physical constants shared by every module so that none of them defines its own copy. | C04 |
 | `src/mesh.py` | 411 | Builds the structured grid, uniform or geometrically clustered at the walls, with the face, center, width and center-to-center arrays a face-based stencil needs, and classifies each cell as FLUID, SOLID or BOUNDARY. | S11 |
 | `src/momentum.py` | 522 | Predicts u* and v* on the staggered grid with QUICK advection by deferred correction over an upwind implicit matrix, one under-relaxed Jacobi sweep per call, and returns the diagonal coefficients the pressure correction needs. | S07, S09 |
 | `src/particles.py` | 255 | Computes per-size-class transport properties: Cunningham correction, settling velocity, Brownian diffusion, deposition velocity and HEPA efficiency. | T03, T04, T09, T10 |
 | `src/pressure.py` | 441 | Assembles the staggered pressure correction equation from the momentum diagonals with the discrete divergence of u* as its right-hand side, solves it by weighted Jacobi iteration, corrects the face velocities and updates the pressure. | S04, S08 |
-| `src/solver_ns.py` | 896 | Solves steady incompressible flow with the SIMPLE algorithm on a collocated grid using Rhie-Chow face fluxes, hybrid advection and Jacobi pressure correction. | S01, S02, S03, S05, S08 |
-| `src/solver_staggered.py` | 259 | Runs steady SIMPLE on the staggered grid as one outer loop over the momentum predictor and the pressure correction, with the collocated solver's public shape, alongside the collocated solver; stops by the collocated velocity-step rule or, when configured, by the error-estimate rule. | S01, S04, S05, S07 |
+| `src/solver_ns.py` | 904 | Solves steady incompressible flow with the SIMPLE algorithm on a collocated grid using Rhie-Chow face fluxes, hybrid advection and Jacobi pressure correction. | S01, S02, S03, S05, S08 |
+| `src/solver_staggered.py` | 265 | Runs steady SIMPLE on the staggered grid as one outer loop over the momentum predictor and the pressure correction, with the collocated solver's public shape, alongside the collocated solver; stops by the collocated velocity-step rule or, when configured, by the error-estimate rule. | S01, S04, S05, S07 |
 | `src/staggered.py` | 152 | Defines the staggered (MAC) field layout: shapes and allocation of face-centered u and v and cell-centered p, and the face-to-center averaging the solver applies before returning. | S07 |
-| `src/stopping.py` | 119 | Decides when the steady outer iteration has converged: the iteration error estimated from the step and its fitted geometric rate, over a physical velocity scale, and the worst per-cell mass imbalance, each against its own tolerance. | S01, S04 |
+| `src/stopping.py` | 121 | Decides when the steady outer iteration has converged: the iteration error estimated from the step and its fitted geometric rate, over a physical velocity scale, and the worst per-cell mass imbalance, each against its own tolerance. | S01, S04 |
 
-Total 14 Python files, 4757 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
+Total 14 Python files, 4797 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
 
 `Declares it serves` is an EDITORIAL CLAIM read from `docs/system_map_annotations.toml`. It says which requirements a module is meant to satisfy, not that it does. Whether a requirement is met is answered by the tests named in the register's `Verified By` column.
 <!-- END GENERATED: components -->
@@ -217,7 +217,7 @@ Generated. Static import analysis cannot see a function bound into a registry by
 |---|---|
 | Scope | `src/**/*.py` |
 | Files hashed | 14 |
-| Digest | `sha256:22712ecb72953dbf5418ef170e1b135a0b1967378eaa88e7ec0d76963879ff11` |
+| Digest | `sha256:867d3ac000acd57507e29db9dbcfc42b8a7a51b3421c7eccba6117417b619252` |
 
 This is what lets the document answer whether it is current, which is the one question a stale table cannot be asked. `python scripts/gen_system_map.py --check` recomputes the whole set of generated regions, this digest included, and exits non-zero on any disagreement.
 
@@ -257,6 +257,7 @@ SimConfig:
     stopping_rule: str  # optional: "velocity_step" (default) or "error_estimate"
     iteration_error_tol: float  # optional, default 1e-6; error_estimate only
     mass_imbalance_tol: float  # optional, default 1e-10; error_estimate only
+    # any other key in the solver block raises ValueError at load
     boundaries: dict[str, BoundarySpec]
     obstacles: list[ObstacleSpec]
     # scenarios: deferred to Phase 4, loaded via separate scenario YAML files

@@ -76,6 +76,14 @@ class NavierStokesSolver:
         Wall time accumulated by the last solve_steady call in each stage:
         "momentum", "flux", "pressure", "correct". Observability only; the
         solver never reads these.
+
+    Raises
+    ------
+    ValueError
+        If the mesh is not uniform, since the stencils use the scalar
+        spacings dx and dy; or if the configuration's stopping_rule is
+        error_estimate, whose continuity condition leaking walls could never
+        meet.
     """
 
     def __init__(
