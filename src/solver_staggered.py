@@ -34,8 +34,9 @@ domain (docs/reports/staggered_integration_step6.md).
 ``stopping_rule`` picks the stop. ``velocity_step``, the default, is the
 collocated rule: the residual below ``convergence_tol``. ``error_estimate``
 (src/stopping.py) needs the estimated iteration error over the largest
-prescribed boundary velocity below ``iteration_error_tol`` and the worst
-per-cell mass imbalance below ``mass_imbalance_tol``. Reaching
+prescribed boundary velocity below ``iteration_error_tol``, the worst
+per-cell mass imbalance below ``mass_imbalance_tol``, and the summed
+imbalance over the through-flow below ``iteration_error_tol``. Reaching
 ``max_simple_iter`` is not convergence under either.
 """
 
@@ -153,7 +154,14 @@ class StaggeredSolver:
         return f_ref / (self._rho * h)
 
     def _new_rule(self) -> ErrorEstimateRule | None:
-        """A fresh error_estimate rule on the largest boundary velocity; None otherwise."""
+        """A fresh error_estimate rule; None under velocity_step.
+
+        The velocity scale is the largest prescribed boundary velocity. The
+        flux scale F is rho times the total inflow, or on a closed domain rho
+        times that velocity times the longer side. It is not built from
+        reference_velocity, the inflow over one cell spacing: that moves with
+        the grid, and so would the bound on the summed imbalance.
+        """
         if self._stopping_rule != ERROR_ESTIMATE:
             return None
         scale = self._boundary.get_max_boundary_velocity()
@@ -162,11 +170,15 @@ class StaggeredSolver:
                 "stopping_rule error_estimate needs a velocity scale, and no "
                 "boundary prescribes a velocity; give one or use velocity_step"
             )
-        return ErrorEstimateRule(scale, *self._rule_tols)
+        inflow = self._boundary.get_total_inlet_flux()
+        if inflow <= _ZERO_SCALE:
+            inflow = scale * max(float(self._mesh.x[-1]), float(self._mesh.y[-1]))
+        return ErrorEstimateRule(scale, self._rho * inflow, *self._rule_tols)
 
-    def _worst_imbalance(self, u: np.ndarray, v: np.ndarray) -> float:
-        """Largest absolute per-cell mass imbalance of the face velocities."""
-        return float(np.abs(self._corrector.mass_imbalance(u, v)).max())
+    def _imbalance_norms(self, u: np.ndarray, v: np.ndarray) -> tuple[float, float]:
+        """Worst and summed absolute per-cell mass imbalance, from one evaluation."""
+        imbalance = np.abs(self._corrector.mass_imbalance(u, v))
+        return float(imbalance.max()), float(imbalance.sum())
 
     def _extrapolate_outlets(self, u: np.ndarray, v: np.ndarray) -> None:
         """Give each pressure outlet face the value of its interior neighbour, in place."""
@@ -247,7 +259,7 @@ class StaggeredSolver:
             if rule is None:
                 stop = residual < self._convergence_tol
             else:
-                stop = rule.update(max(du, dv), partial(self._worst_imbalance, u, v))
+                stop = rule.update(max(du, dv), partial(self._imbalance_norms, u, v))
 
             if iteration % 50 == 0 or stop:
                 logger.info("SIMPLE iter %4d: residual = %.6e", iteration, residual)

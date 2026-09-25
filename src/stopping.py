@@ -9,9 +9,14 @@ the per-cell mass imbalance, which the step does not see. Both are measured
 in docs/reports/stopping_rule_evidence.md, sections 4 and 5.
 
 ErrorEstimateRule stops when (a) the estimated iteration error over a
-physical velocity scale and (b) the worst absolute per-cell mass imbalance
-are both below their tolerances. It knows nothing of the solver: it is fed
-one outer iteration at a time, so it can be tested on synthetic histories.
+physical velocity scale, (b) the worst absolute per-cell mass imbalance and
+(c) the summed absolute imbalance over the through-flow are all below their
+tolerances. (b) alone lets the through-flow drift by up to the per-cell
+bound times the cells upstream, more on every finer grid (section 9). The
+flux through any cross-section differs from the inflow by at most the summed
+imbalance on one side of it, so (c) bounds that drift on any grid. The rule
+knows nothing of the solver: it is fed one outer iteration at a time, so it
+can be tested on synthetic histories.
 """
 
 import math
@@ -32,19 +37,28 @@ RATE_WINDOW = 100
 
 
 class ErrorEstimateRule:
-    """Stop on the estimated iteration error and the worst per-cell mass imbalance.
+    """Stop on the estimated iteration error and on continuity, per cell and summed.
 
     Condition (a): ``step * rho_hat / (1 - rho_hat) / velocity_scale`` is below
     ``iteration_error_tol``, with rho_hat the exp of the least-squares slope of
     log(step) over the last RATE_WINDOW steps. Condition (b): the worst
-    absolute per-cell mass imbalance is below ``mass_imbalance_tol``. The
-    imbalance is asked for only when (a) holds.
+    absolute per-cell mass imbalance is below ``mass_imbalance_tol``, ECR-001
+    criterion 6. Condition (c): the summed absolute imbalance over
+    ``flux_scale`` is below ``iteration_error_tol``, the tolerance of (a),
+    since both bound a velocity error relative to its scale. The imbalance is
+    asked for only when (a) holds.
 
     Parameters
     ----------
     velocity_scale : float
         Physical velocity the estimate is divided by, m/s: the largest
         prescribed boundary velocity. Positive and finite.
+    flux_scale : float
+        Mass flux (c) is relative to, kg/s per unit depth: rho times the
+        inflow, or on a closed domain rho times velocity_scale times the
+        longer side. A flux through the domain, not one through a cell: a
+        scale that moved with the grid would move (c) with it. Positive and
+        finite.
     iteration_error_tol : float
         Bound on the estimate over velocity_scale, dimensionless. Positive
         and finite.
@@ -69,11 +83,13 @@ class ErrorEstimateRule:
     def __init__(
         self,
         velocity_scale: float,
+        flux_scale: float,
         iteration_error_tol: float,
         mass_imbalance_tol: float,
     ) -> None:
         for name, value in (
             ("velocity_scale", velocity_scale),
+            ("flux_scale", flux_scale),
             ("iteration_error_tol", iteration_error_tol),
             ("mass_imbalance_tol", mass_imbalance_tol),
         ):
@@ -81,6 +97,7 @@ class ErrorEstimateRule:
             if isinstance(value, bool) or not (math.isfinite(value) and value > 0.0):
                 raise ValueError(f"{name} must be positive and finite, got {value}")
         self._scale = velocity_scale
+        self._flux_scale = flux_scale
         self._error_tol = iteration_error_tol
         self._imbalance_tol = mass_imbalance_tol
         self._steps: deque[float] = deque(maxlen=RATE_WINDOW)
@@ -99,23 +116,29 @@ class ErrorEstimateRule:
             return math.inf
         return float(steps[-1]) * rho / (1.0 - rho) / self._scale
 
-    def update(self, step: float, worst_imbalance: Callable[[], float]) -> bool:
+    def update(self, step: float, imbalance: Callable[[], tuple[float, float]]) -> bool:
         """Record one outer iteration and answer whether the solve has converged.
 
         Parameters
         ----------
         step : float
             Largest change of the velocity over the outer iteration, m/s.
-        worst_imbalance : Callable[[], float]
-            Returns the worst absolute per-cell mass imbalance of the current
-            field. Called only when condition (a) holds.
+        imbalance : Callable[[], tuple[float, float]]
+            Returns the worst and the summed absolute per-cell mass imbalance
+            of the current field, kg/s per unit depth, from one evaluation.
+            Called only when condition (a) holds.
 
         Returns
         -------
         bool
-            True when conditions (a) and (b) both hold.
+            True when conditions (a), (b) and (c) all hold.
         """
         self._steps.append(float(step))
         estimate = self._estimate()
         self.estimate_history.append(estimate)
-        return estimate < self._error_tol and worst_imbalance() < self._imbalance_tol
+        if not estimate < self._error_tol:
+            return False
+        worst, total = imbalance()
+        return (
+            worst < self._imbalance_tol and total / self._flux_scale < self._error_tol
+        )

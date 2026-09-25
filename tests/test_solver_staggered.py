@@ -343,6 +343,9 @@ class TestStoppingRule:
         assert solver.stop_reason == "error_estimate_and_continuity"
         assert solver.converged is True
         assert np.abs(solver.last_mass_imbalance).max() < config.mass_imbalance_tol
+        # Condition (c): the flux scale of a closed unit cavity is rho * 1 * 1.
+        total = np.abs(solver.last_mass_imbalance).sum()
+        assert total / config.rho < config.iteration_error_tol
         assert min(solver.residual_history[:-1]) < config.convergence_tol
 
     # A step test at 10 passes at once; the cap is below the rule's window.
@@ -365,34 +368,51 @@ class TestStoppingRule:
         assert len(solver.residual_history) == 20
         assert (solver.converged, solver.stop_reason) == (False, "max_simple_iter")
 
-    def test_error_estimate_scale_is_the_inlet_speed_not_the_reference_velocity(
-        self, monkeypatch: pytest.MonkeyPatch
+    @pytest.mark.parametrize(
+        ("name", "grid", "speed", "flux", "reference"),
+        [("poiseuille", (12, 6), 0.1, 0.05, 0.6), ("cavity", (6, 6), 1.0, 1.0, 1.0)],
+    )
+    def test_error_estimate_scales_are_physical_and_the_step_is_in_m_per_s(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        name: str,
+        grid: tuple[int, int],
+        speed: float,
+        flux: float,
+        reference: float,
     ) -> None:
-        """One rule at construction and one per solve, each on VAL-001's 0.1.
+        """One rule at construction and one per solve, never on reference_velocity.
 
-        Test 24 T1: each update also gets the step in m/s, the residual times
-        the reference velocity (0.6 here), not the residual itself.
+        The velocity scale is the inlet or lid speed, and the flux scale is rho
+        times the inflow (0.1 through 0.5) or, closed, the lid speed times the
+        side. Test 24 T1: each update gets the step in m/s, the residual times
+        reference_velocity (0.6 on the channel), not the residual itself.
         """
-        scales: list[float] = []
+        speeds: list[float] = []
+        fluxes: list[float] = []
         steps: list[float] = []
 
         class Spy(ErrorEstimateRule):
-            def __init__(self, velocity_scale: float, *tols: float) -> None:
-                scales.append(velocity_scale)
-                super().__init__(velocity_scale, *tols)
+            def __init__(
+                self, velocity_scale: float, flux_scale: float, *tols: float
+            ) -> None:
+                speeds.append(velocity_scale)
+                fluxes.append(flux_scale)
+                super().__init__(velocity_scale, flux_scale, *tols)
 
-            def update(self, step: float, imbalance: Callable[[], float]) -> bool:
+            def update(
+                self, step: float, imbalance: Callable[[], tuple[float, float]]
+            ) -> bool:
                 steps.append(step)
                 return super().update(step, imbalance)
 
         monkeypatch.setattr("src.solver_staggered.ErrorEstimateRule", Spy)
-        config = _ruled(
-            "poiseuille", (12, 6), stopping_rule="error_estimate", max_simple_iter=2
-        )
+        config = _ruled(name, grid, stopping_rule="error_estimate", max_simple_iter=2)
         _mesh, _bc, solver = _build(config)
         solver.solve_steady()
-        assert solver.reference_velocity == pytest.approx(0.6)
-        assert scales == [0.1, 0.1]
+        assert solver.reference_velocity == pytest.approx(reference)
+        assert speeds == [speed, speed]
+        assert fluxes == pytest.approx([flux, flux], rel=1e-12)
         expected = [r * solver.reference_velocity for r in solver.residual_history]
         assert steps == pytest.approx(expected, rel=1e-12)
 

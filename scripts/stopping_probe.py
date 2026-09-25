@@ -39,7 +39,10 @@ sys.path.insert(0, str(REPO_ROOT))
 # this script uses, so they are read from it: sc.Mesh, sc.MARCHI_U_ROWS.
 import self_convergence as sc  # noqa: E402 -- path set above
 
-from src.stopping import ErrorEstimateRule  # noqa: E402 -- path set above
+from src.stopping import (  # noqa: E402 -- path set above
+    RATE_WINDOW,
+    ErrorEstimateRule,
+)
 from validation.metrics import (  # noqa: E402 -- path set above
     _inlet_velocity,
     poiseuille_l2_error,
@@ -71,6 +74,9 @@ WINDOW = 100
 IMBALANCE_BOUND = 1.0e-10  # ECR-001 acceptance criterion 6
 BUDGET_SECONDS = 3600.0
 STORED_VAL001 = 0.002306261116980951  # benchmarks/results.jsonl, commit 0e7f5b0
+# The 1e-11 channel truths carry their own flux drift, 9.0e-8 and 2.25e-7 of U
+# by test 24, so --verify-rule reads the channel against a truth at 1e-13.
+TIGHT_TRUTH_TOL = 1.0e-13
 
 
 def case_name(case: str, n: int) -> str:
@@ -93,8 +99,10 @@ def case_config(
     return sc.SimConfig.from_dict(raw)
 
 
-def instrument(solver: sc.StaggeredSolver) -> tuple[list[float], list[int]]:
-    """Record each outer iteration's worst per-cell imbalance and sweep count.
+def instrument(
+    solver: sc.StaggeredSolver,
+) -> tuple[list[float], list[int], list[float]]:
+    """Record each outer iteration's worst imbalance, sweeps and summed imbalance.
 
     The wrapper returns the corrector's own result object, so the solve is
     unchanged; the same-computation control checks that bitwise.
@@ -102,17 +110,18 @@ def instrument(solver: sc.StaggeredSolver) -> tuple[list[float], list[int]]:
     corrector, correct = solver._corrector, solver._corrector.correct
     imbalance: list[float] = []
     sweeps: list[int] = []
+    total: list[float] = []
 
     def recorded(prediction: MomentumPrediction, p: np.ndarray) -> PressureCorrection:
         result = correct(prediction, p)
-        imbalance.append(
-            float(np.abs(corrector.mass_imbalance(result.u, result.v)).max())
-        )
+        cells = np.abs(corrector.mass_imbalance(result.u, result.v))
+        imbalance.append(float(cells.max()))
+        total.append(float(cells.sum()))
         sweeps.append(result.sweeps)
         return result
 
     corrector.correct = recorded
-    return imbalance, sweeps
+    return imbalance, sweeps, total
 
 
 def solve_truth(case: str, n: int) -> Path:
@@ -123,7 +132,7 @@ def solve_truth(case: str, n: int) -> Path:
     config = case_config(case, n, TRUTH_TOL)
     mesh = sc.Mesh(config)
     solver = sc.StaggeredSolver(mesh, config, sc.StaggeredBoundary(mesh, config))
-    imbalance, sweeps = instrument(solver)
+    imbalance, sweeps, _total = instrument(solver)
     levels = sorted({*LEVELS, case_config(case, n).convergence_tol}, reverse=True)
     taken: list[tuple[float, int]] = []
     snaps: dict[str, np.ndarray] = {}
@@ -352,33 +361,71 @@ def analyse(case: str, n: int) -> dict:
     return out
 
 
+def tight_truth(case: str, n: int) -> Path:
+    """The case under the default rule to TIGHT_TRUTH_TOL, beside the probe's truth.
+
+    Solved once. Raises SystemExit if the cap stops it first.
+    """
+    path = OUT_DIR / f"{case_name(case, n)}_truth13.npz"
+    if not path.exists():
+        config = case_config(case, n, TIGHT_TRUTH_TOL)
+        mesh = sc.Mesh(config)
+        solver = sc.StaggeredSolver(mesh, config, sc.StaggeredBoundary(mesh, config))
+        u, v, _p = solver.solve_steady()
+        if not solver.converged:
+            raise SystemExit(f"{path.stem} did not reach {TIGHT_TRUTH_TOL:.0e}")
+        worst = np.abs(solver.last_mass_imbalance).max()
+        np.savez(path, u=u, v=v, outer=len(solver.residual_history), imbalance=worst)
+    return path
+
+
 def verify_rule(case: str, n: int) -> dict:
     """One error_estimate solve at the default tolerances, its stop read against the truth.
 
     The corrector is wrapped as in the truth solve, so every iteration's
     imbalance is known and the wall time compares with the default rule's
-    snapshot. A fresh rule replaying the saved history must stop where the
-    solver did; (a) and (b) are each met from the start of their final run.
+    snapshot. A saved solve is reused only if its rule parameters match. Each
+    condition is dated from the start of its final run. Raises SystemExit if
+    a fresh rule replaying the history does not stop where the solver did, or
+    the recorded imbalance at the stop is not the returned field's. The
+    channel is read against its TIGHT_TRUTH_TOL truth.
     """
     name, config = case_name(case, n), case_config(case, n, rule="error_estimate")
     mesh, path = sc.Mesh(config), OUT_DIR / f"{name}_rule.npz"
     boundary = sc.StaggeredBoundary(mesh, config)
-    if not path.exists():
+    scale, inflow = (
+        boundary.get_max_boundary_velocity(),
+        boundary.get_total_inlet_flux(),
+    )
+    side = max(config.room_width, config.room_height)
+    flux = config.rho * (inflow if inflow > 0.0 else scale * side)
+    tols = (config.iteration_error_tol, config.mass_imbalance_tol)
+    params = np.array([scale, flux, *tols, RATE_WINDOW])
+    stale = True
+    if path.exists():
+        with np.load(path) as saved:
+            stale = "params" not in saved.files or not np.array_equal(
+                saved["params"], params
+            )
+    if stale:
         solver = sc.StaggeredSolver(mesh, config, boundary)
-        imbalance, _sweeps = instrument(solver)
+        imbalance, _sweeps, total = instrument(solver)
         start = time.perf_counter()
         u, v, _p = solver.solve_steady()
         np.savez(
             path,
+            params=params,
             u=u,
             v=v,
             seconds=time.perf_counter() - start,
             imbalance=np.array(imbalance),
+            total=np.array(total),
             residual=np.array(solver.residual_history),
             reference_velocity=solver.reference_velocity,
             stop_reason=solver.stop_reason,
             returned=np.abs(solver.last_mass_imbalance).max(),
         )
+    print(f"{name}: {'solved' if stale else 'reused the saved solve'}", flush=True)
     with np.load(path) as saved:
         d = {k: saved[k] for k in saved.files}
     with np.load(OUT_DIR / f"{name}.npz") as saved:
@@ -387,25 +434,31 @@ def verify_rule(case: str, n: int) -> dict:
         at_tol = saved["level"] == case_config(case, n).convergence_tol
         default_outer = int(saved["iteration"][np.flatnonzero(at_tol)[0]]) + 1
         default_seconds = float(saved["elapsed"][default_outer - 1])
-    scale = boundary.get_max_boundary_velocity()
-    tols = (config.iteration_error_tol, config.mass_imbalance_tol)
-    replay, res, imb = ErrorEstimateRule(scale, *tols), d["residual"], d["imbalance"]
-    steps = res * float(d["reference_velocity"])
-    stops = [
-        replay.update(s, partial(float, i)) for s, i in zip(steps, imb, strict=True)
-    ]
-    # Outer iteration (1-based) from which each condition held to the stop.
-    held = (np.array(replay.estimate_history) < tols[0], imb < tols[1])
-    since = [int(np.flatnonzero(~met)[-1]) + 2 if (~met).any() else 1 for met in held]
-    out = {"outer": len(res), "seconds": float(d["seconds"])}
-    out |= {"default_outer": default_outer, "default_seconds": default_seconds}
-    out |= {"stop_reason": str(d["stop_reason"]), "a_met_from": since[0]}
-    out |= {"b_met_from": since[1], "estimate": replay.estimate_history[-1]}
-    out["replay_stops_there"] = bool(stops[-1] and not any(stops[:-1]))
     fluid = mesh.cell_type == sc.FLUID
+    out: dict = {}
+    if case == "poiseuille":
+        with np.load(tight_truth(case, n)) as saved:
+            tight = (saved["u"], saved["v"])
+        out["old_truth_gap"] = true_error(*truth, tight, fluid) / scale
+        truth = tight
+    res, imb, tot = d["residual"], d["imbalance"], d["total"]
+    replay = ErrorEstimateRule(scale, flux, *tols)
+    steps = res * float(d["reference_velocity"])
+    pairs = zip(steps, zip(imb, tot, strict=True), strict=True)
+    # partial(tuple, pair) returns the recorded (worst, summed) pair when called.
+    stops = [replay.update(s, partial(tuple, pair)) for s, pair in pairs]
+    if not (stops[-1] and not any(stops[:-1])) or imb[-1] != d["returned"]:
+        raise SystemExit(f"{name}: a verify_rule control failed")
+    # Outer iteration (1-based) from which each condition held to the stop.
+    est = np.array(replay.estimate_history)
+    held = (est < tols[0], imb < tols[1], tot / flux < tols[0])
+    since = [int(np.flatnonzero(~met)[-1]) + 2 if (~met).any() else 1 for met in held]
+    out |= {"outer": len(res), "seconds": float(d["seconds"])}
+    out |= {"default_outer": default_outer, "default_seconds": default_seconds}
+    out |= {"stop_reason": str(d["stop_reason"]), "met_from": since}
+    out |= {"estimate": float(est[-1]), "summed": float(tot[-1]) / flux}
     out["true_error_rel"] = true_error(d["u"], d["v"], truth, fluid) / scale
     out["imbalance"] = float(imb[-1])
-    out["imbalance_is_returned"] = float(imb[-1]) == float(d["returned"])
     if case == "poiseuille":
         out["metric"] = poiseuille_l2_error(config, mesh, d["u"]).value
         out["metric_truth"] = poiseuille_l2_error(config, mesh, truth[0]).value
