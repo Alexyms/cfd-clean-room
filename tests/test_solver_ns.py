@@ -16,6 +16,7 @@ from src.boundary import BoundaryManager
 from src.config import SimConfig
 from src.mesh import FLUID, SOLID, Mesh
 from src.solver_ns import IterationState, NavierStokesSolver
+from validation.cases import case_path
 
 
 def _make_config(tmp_path: Path, overrides: dict | None = None) -> SimConfig:
@@ -528,3 +529,15 @@ class TestUniformMeshGuard:
         )
         mesh = Mesh(config)
         assert NavierStokesSolver(mesh, config, BoundaryManager(mesh, config))
+
+
+@pytest.mark.unit
+def test_collocated_solver_refuses_the_error_estimate_rule() -> None:
+    """Its walls leak mass, so the rule's continuity condition could never hold."""
+    raw = yaml.safe_load(case_path("cavity").read_text(encoding="utf-8"))
+    raw["domain"]["nx"] = raw["domain"]["ny"] = 6
+    raw["solver"]["stopping_rule"] = "error_estimate"
+    config = SimConfig.from_dict(raw)
+    mesh = Mesh(config)
+    with pytest.raises(ValueError, match="only by velocity_step"):
+        NavierStokesSolver(mesh, config, BoundaryManager(mesh, config))

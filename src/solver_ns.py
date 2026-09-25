@@ -14,7 +14,7 @@ from time import perf_counter
 import numpy as np
 
 from src.boundary import BoundaryManager
-from src.config import SimConfig
+from src.config import ERROR_ESTIMATE, SimConfig
 from src.mesh import FLUID, SOLID, Mesh
 
 logger = logging.getLogger(__name__)
@@ -86,6 +86,11 @@ class NavierStokesSolver:
                 "the collocated solver uses the scalar spacings dx and dy and is "
                 "only valid on a uniform mesh; stretching arrives with the "
                 "staggered rebuild (ECR-001)"
+            )
+        if config.stopping_rule == ERROR_ESTIMATE:
+            raise ValueError(
+                "the collocated solver stops only by velocity_step: its walls leak "
+                "mass, so error_estimate's continuity condition could never hold"
             )
         self._mesh = mesh
         self._boundary = boundary

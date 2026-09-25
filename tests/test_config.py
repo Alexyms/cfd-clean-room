@@ -5,6 +5,8 @@ and rejects invalid configurations with clear error messages at load
 time (REQ-C02).
 """
 
+from pathlib import Path
+
 import pytest
 import yaml
 
@@ -1083,3 +1085,45 @@ class TestMeshStretching:
             SimConfig.from_dict(self._raw(tmp_path, {"z": {"stretch_ratio": 1.1}}))
         with pytest.raises(ValueError, match="not recognised"):
             SimConfig.from_dict(self._raw(tmp_path, {"x": {"ratio": 1.1}}))
+
+
+@pytest.mark.unit
+class TestStoppingRuleKeys:
+    """The three optional stopping keys default when absent and validate when present."""
+
+    def _raw(self, tmp_path: Path, **keys: object) -> dict:
+        with open(_write_config(tmp_path), encoding="utf-8") as handle:
+            raw = yaml.safe_load(handle)
+        raw["solver"].update(keys)
+        return raw
+
+    def test_absent_keys_give_the_defaults_and_present_ones_are_read(
+        self, tmp_path: Path
+    ) -> None:
+        keys = ("stopping_rule", "iteration_error_tol", "mass_imbalance_tol")
+        absent = SimConfig(_write_config(tmp_path))
+        assert [getattr(absent, k) for k in keys] == ["velocity_step", 1e-6, 1e-10]
+        given = ["error_estimate", 1e-7, 1e-12]
+        present = SimConfig.from_dict(
+            self._raw(tmp_path, **dict(zip(keys, given, strict=True)))
+        )
+        assert [getattr(present, k) for k in keys] == given
+
+    @pytest.mark.parametrize(
+        ("key", "bad", "error"),
+        [
+            ("stopping_rule", "residual", ValueError),
+            ("stopping_rule", 1, TypeError),
+            ("iteration_error_tol", 0.0, ValueError),
+            ("iteration_error_tol", -1e-6, ValueError),
+            ("iteration_error_tol", True, TypeError),
+            ("mass_imbalance_tol", 0, ValueError),
+            ("mass_imbalance_tol", -1e-10, ValueError),
+            ("mass_imbalance_tol", "1e-10", TypeError),
+        ],
+    )
+    def test_bad_values_are_rejected(
+        self, tmp_path: Path, key: str, bad: object, error: type[Exception]
+    ) -> None:
+        with pytest.raises(error, match=f"solver.{key}"):
+            SimConfig.from_dict(self._raw(tmp_path, **{key: bad}))
