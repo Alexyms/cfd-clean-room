@@ -364,10 +364,16 @@ def analyse(case: str, n: int) -> dict:
 def tight_truth(case: str, n: int) -> Path:
     """The case under the default rule to TIGHT_TRUTH_TOL, beside the probe's truth.
 
-    Solved once. Raises SystemExit if the cap stops it first.
+    Solved once, and again if the file does not hold TIGHT_TRUTH_TOL as its
+    tolerance. Raises SystemExit if the cap stops it first.
     """
     path = OUT_DIR / f"{case_name(case, n)}_truth13.npz"
-    if not path.exists():
+    stale = True
+    if path.exists():
+        with np.load(path) as saved:
+            stale = "tol" not in saved.files or float(saved["tol"]) != TIGHT_TRUTH_TOL
+    if stale:
+        print(f"{path.stem}: solving to {TIGHT_TRUTH_TOL:.0e}", flush=True)
         config = case_config(case, n, TIGHT_TRUTH_TOL)
         mesh = sc.Mesh(config)
         solver = sc.StaggeredSolver(mesh, config, sc.StaggeredBoundary(mesh, config))
@@ -375,7 +381,8 @@ def tight_truth(case: str, n: int) -> Path:
         if not solver.converged:
             raise SystemExit(f"{path.stem} did not reach {TIGHT_TRUTH_TOL:.0e}")
         worst = np.abs(solver.last_mass_imbalance).max()
-        np.savez(path, u=u, v=v, outer=len(solver.residual_history), imbalance=worst)
+        outer = len(solver.residual_history)
+        np.savez(path, tol=TIGHT_TRUTH_TOL, u=u, v=v, outer=outer, imbalance=worst)
     return path
 
 
@@ -393,12 +400,9 @@ def verify_rule(case: str, n: int) -> dict:
     name, config = case_name(case, n), case_config(case, n, rule="error_estimate")
     mesh, path = sc.Mesh(config), OUT_DIR / f"{name}_rule.npz"
     boundary = sc.StaggeredBoundary(mesh, config)
-    scale, inflow = (
-        boundary.get_max_boundary_velocity(),
-        boundary.get_total_inlet_flux(),
-    )
-    side = max(config.room_width, config.room_height)
-    flux = config.rho * (inflow if inflow > 0.0 else scale * side)
+    # The flux scale the solver built, so the stored parameters are the rule's own.
+    solver = sc.StaggeredSolver(mesh, config, boundary)
+    scale, flux = boundary.get_max_boundary_velocity(), solver.flux_scale
     tols = (config.iteration_error_tol, config.mass_imbalance_tol)
     params = np.array([scale, flux, *tols, RATE_WINDOW])
     stale = True
@@ -408,7 +412,6 @@ def verify_rule(case: str, n: int) -> dict:
                 saved["params"], params
             )
     if stale:
-        solver = sc.StaggeredSolver(mesh, config, boundary)
         imbalance, _sweeps, total = instrument(solver)
         start = time.perf_counter()
         u, v, _p = solver.solve_steady()

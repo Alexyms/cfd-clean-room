@@ -235,11 +235,13 @@ was met last on both channels.
 **Reading.** (c) never binds on the cavity: it holds from long before the stop, and the
 summed imbalance there is 20 to 80 times below its bound. On VAL-001 80x40 it moved the
 stop: at 2286, where the first build stopped, (a) and (b) held and the summed imbalance was
-2.3e-6 of F. The rule ran on, and (a) is dated last because the residual rose 2.6 times from
-2435 to 2779 (rho_hat at or above 1, no estimate) before falling again; (c) held from 2779. The true error
-fell from 2.99e-6 to 5.44e-7 of U, and the metric is 0.07% below the truth's. The estimate at
-the stop is 1.83 and 1.48 times the true error on the two channels, 0.98 to 1.03 on the
-cavity. VAL-001 40x20 met (c) before (a), so (c) changed nothing there.
+2.3e-6 of F. (c) held from 1948 to 2082 and then broke: the summed imbalance rose to 2.4e-6
+of F at 2371 while no cell passed 6.0e-11. (a) held from 2286 to 2434. The residual rose 4.0
+times from its minimum at 2377 to its peak at 2809, with no estimate from 2443 to 2858. (c)
+held again from 2779 and (a) from 3154. The true error fell from 2.99e-6 to 5.44e-7 of U,
+and the metric is 0.07% below the truth's. The estimate at the stop is 1.83 times the true
+error at 80x40 and 1.48 at 40x20, and 0.98 to 1.03 on the cavity. VAL-001 40x20 met (c)
+before (a), so (c) changed nothing there.
 
 **For step 7.** (c) bounds the channel's flux drift at `iteration_error_tol` of F on any grid
 (arithmetic); (b) stays ECR-001 criterion 6 as written. The 80x80 cavity needs 12849 outer
