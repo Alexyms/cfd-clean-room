@@ -44,7 +44,9 @@ from src.solver_staggered import (  # noqa: E402 -- follows sys.path.insert
 )
 from validation.cases import (  # noqa: E402 -- follows sys.path.insert
     CASE_GRIDS,
+    WALL_CLUSTERED_GRIDS,
     load_case,
+    with_velocity_step,
 )
 from validation.metrics import (  # noqa: E402 -- follows sys.path.insert
     GHIA_U_VAL,
@@ -69,13 +71,18 @@ def solve_and_save(case_id: str, out_dir: Path, method: str = DEFAULT_METHOD) ->
     Raises
     ------
     ValueError
-        If the method is not one of METHODS.
+        If the method is not one of METHODS, or the preset is wall-clustered:
+        streamplot needs evenly spaced points, and a uniform solve under the
+        preset's name would be a different mesh.
     """
+    if case_id in WALL_CLUSTERED_GRIDS:
+        raise ValueError(f"{case_id} is wall-clustered; the viewer draws uniform grids")
     kind, nx, ny = CASE_GRIDS[case_id]
     config = load_case(kind, grid=(nx, ny))
     mesh = Mesh(config)
     solver: NavierStokesSolver | StaggeredSolver
     if method == DEFAULT_METHOD:
+        config = with_velocity_step(config)
         solver = NavierStokesSolver(mesh, config, BoundaryManager(mesh, config))
         stem = case_id
     elif method == STAGGERED_METHOD:

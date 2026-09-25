@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
@@ -15,8 +16,16 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 import benchmark  # noqa: E402 -- scripts/ is not a package; path set above
 
+from src.boundary import BoundaryManager  # noqa: E402 -- follows sys.path.insert
 from src.config import SimConfig  # noqa: E402 -- follows sys.path.insert
 from src.mesh import Mesh  # noqa: E402 -- follows sys.path.insert
+from src.solver_ns import (  # noqa: E402 -- follows sys.path.insert
+    IterationState,
+    NavierStokesSolver,
+)
+from src.solver_staggered import (  # noqa: E402 -- follows sys.path.insert
+    StaggeredSolver,
+)
 from validation.cases import (  # noqa: E402 -- follows sys.path.insert
     case_path,
     load_case,
@@ -243,3 +252,92 @@ def test_harness_row_takes_the_cap_from_the_solver(
     assert row["work"]["outer_iterations"] == 20
     assert row["trajectory"][-1]["residual"] < 10.0
     assert row["params"]["stopping_rule"] == "error_estimate"
+
+
+@pytest.mark.unit
+def test_summary_never_pools_two_rules(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Rows that differ only in stopping rule get two rows; a row without the key ran velocity_step."""
+    old = _record("val001_80x40", 1, 85.0, outer=570)
+    new = _record("val001_80x40", 1, 96.0, outer=3154)
+    new["params"] = {"stopping_rule": "error_estimate"}
+    benchmark.print_summary(_write(tmp_path / "results.jsonl", [old, new]))
+    out = capsys.readouterr().out
+    rows = [line for line in out.splitlines() if line.startswith("collocated-jacobi")]
+    assert len(rows) == 2
+    old_row = next(line for line in rows if " velocity_step " in line)
+    new_row = next(line for line in rows if " error_estimate " in line)
+    assert " 570..570 " in old_row and "3154" not in old_row
+    assert " 3154..3154" in new_row and "570" not in new_row
+    assert (
+        "note: collocated-jacobi val001_80x40 has rows under "
+        "['error_estimate', 'velocity_step']"
+    ) in out
+
+
+@pytest.mark.integration
+def test_collocated_channel_row_is_the_pre_branch_solve(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The collocated channel runs velocity_step: its params and fields are the case's as
+    it was before it named a rule, and the stop carries the one velocity-step label."""
+    fields: list[tuple[np.ndarray, np.ndarray, np.ndarray]] = []
+
+    class Spy(NavierStokesSolver):
+        def solve_steady(
+            self, on_iteration: Callable[[IterationState], None] | None = None
+        ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+            fields.append(super().solve_steady(on_iteration))
+            return fields[-1]
+
+    monkeypatch.setattr(benchmark, "NavierStokesSolver", Spy)
+    monkeypatch.setitem(benchmark.CASES, "tiny_channel", ("poiseuille", 12, 6))
+    row = benchmark.run_case("tiny_channel", "collocated-jacobi", 10, 1)
+    raw = yaml.safe_load(case_path("poiseuille").read_text(encoding="utf-8"))
+    raw["domain"]["nx"], raw["domain"]["ny"] = 12, 6
+    for key in ("stopping_rule", "iteration_error_tol", "mass_imbalance_tol"):
+        raw["solver"].pop(key, None)
+    before = SimConfig.from_dict(raw)
+    mesh = Mesh(before)
+    expected = NavierStokesSolver(mesh, before, BoundaryManager(mesh, before))
+    for got, want in zip(fields[0], expected.solve_steady(), strict=True):
+        assert np.array_equal(got, want)
+    assert row["params"] == benchmark.solver_parameters(before)
+    assert row["params"]["stopping_rule"] == "velocity_step"
+    assert row["outcome"] == {"converged": True, "stop_reason": "residual_below_tol"}
+
+
+@pytest.mark.integration
+def test_staggered_velocity_step_stop_has_the_collocated_label(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The cavity still runs velocity_step; its staggered row says what every stored row says."""
+    monkeypatch.setitem(benchmark.CASES, "tiny_cavity", ("cavity", 6, 6))
+    row = benchmark.run_case("tiny_cavity", "staggered-jacobi", 10, 1)
+    assert row["params"]["stopping_rule"] == "velocity_step"
+    assert row["outcome"] == {"converged": True, "stop_reason": "residual_below_tol"}
+
+
+@pytest.mark.unit
+def test_harness_builds_a_wall_clustered_preset_on_its_clustered_mesh(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The preset's mesh reaches the solver; the solve is stopped at construction."""
+    meshes: list[Mesh] = []
+
+    class ConstructedError(Exception):
+        pass
+
+    class Spy(StaggeredSolver):
+        def __init__(self, mesh: Mesh, *args: object) -> None:
+            meshes.append(mesh)
+            raise ConstructedError
+
+    monkeypatch.setattr(benchmark, "StaggeredSolver", Spy)
+    monkeypatch.setitem(benchmark.CASES, "tiny_clustered", ("poiseuille", 12, 6))
+    monkeypatch.setattr(benchmark, "WALL_CLUSTERED_GRIDS", {"tiny_clustered"})
+    with pytest.raises(ConstructedError):
+        benchmark.run_case("tiny_clustered", "staggered-jacobi", 10, 1)
+    assert meshes[0].dy_cell[0] == pytest.approx(0.1 * 0.5 / 6, rel=1e-12)
+    assert meshes[0].stretch_ratio_x == 1.0

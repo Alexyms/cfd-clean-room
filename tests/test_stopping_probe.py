@@ -137,3 +137,15 @@ def test_true_error_ignores_an_offset_outside_the_fluid(
     planted = [truth[0].copy(), truth[1].copy()]
     planted[component][0, 7] += 2.0**-20
     assert stopping_probe.true_error(*planted, truth, fluid) == 0.0
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("tol", [None, 1e-11])
+def test_case_config_without_a_rule_is_velocity_step(tol: float | None) -> None:
+    """Truths and snapshots were solved under velocity_step, and the channel file now
+    names error_estimate; a named rule still reaches the solver block."""
+    assert stopping_probe.case_config("poiseuille", 40, tol).stopping_rule == (
+        "velocity_step"
+    )
+    named = stopping_probe.case_config("poiseuille", 40, rule="error_estimate")
+    assert named.stopping_rule == "error_estimate"

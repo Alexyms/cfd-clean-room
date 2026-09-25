@@ -90,3 +90,28 @@ def test_render_draws_and_scores_a_cavity_on_the_true_centerlines(
     view_field.plt.close("all")
     assert png.exists()
     assert calls == ["cavity_true_centerline_profiles", "cavity_true_centerline_errors"]
+
+
+@pytest.mark.integration
+def test_viewer_solves_the_channel_collocated_under_velocity_step(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The channel file names error_estimate, which the collocated solver refuses."""
+    monkeypatch.setitem(view_field.CASE_GRIDS, "tiny_channel", ("poiseuille", 12, 6))
+    assert view_field.solve_and_save("tiny_channel", tmp_path).exists()
+
+
+@pytest.mark.unit
+def test_viewer_refuses_a_wall_clustered_preset_before_solving(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """streamplot needs evenly spaced points; a uniform solve would be another mesh."""
+
+    def no_solver(*args: object) -> None:
+        raise AssertionError("a solver was built")
+
+    monkeypatch.setattr(view_field, "StaggeredSolver", no_solver)
+    with pytest.raises(ValueError, match="wall-clustered"):
+        view_field.solve_and_save(
+            "val001_80x40_stretched", tmp_path, "staggered-jacobi"
+        )

@@ -48,6 +48,12 @@ solver:
   alpha_pressure: 0.3
   max_pressure_iter: 2000
   pressure_tol: 1.0e-8
+  # The case says how it is validated (ECR-001 step 7). The tolerances are the
+  # defaults, written out. The collocated solver refuses this rule, so the
+  # harness and its VAL-001 test run it under velocity_step, set in memory.
+  stopping_rule: error_estimate
+  iteration_error_tol: 1.0e-6
+  mass_imbalance_tol: 1.0e-10
 
 boundaries:
   inlet:

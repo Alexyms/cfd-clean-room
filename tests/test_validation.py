@@ -6,7 +6,15 @@ import yaml
 
 from src.config import SimConfig
 from src.mesh import FLUID, Mesh
-from validation.cases import CASE_FILES, CASE_GRIDS, case_path, load_case
+from validation.cases import (
+    CASE_FILES,
+    CASE_GRIDS,
+    WALL_CLUSTERED_GRIDS,
+    case_path,
+    load_case,
+    load_wall_clustered,
+    with_velocity_step,
+)
 from validation.metrics import (
     GHIA_U_VAL,
     GHIA_U_Y,
@@ -63,6 +71,51 @@ class TestLoadCase:
         for case_id, (kind, nx, ny) in CASE_GRIDS.items():
             assert kind in CASE_FILES, case_id
             assert nx > 0 and ny > 0
+
+
+def _without(config: SimConfig, name: str) -> dict:
+    """Every attribute of a configuration but one."""
+    return {k: v for k, v in vars(config).items() if k != name}
+
+
+@pytest.mark.unit
+class TestStepSevenCases:
+    """ECR-001 step 7: VAL-001 names its rule, and criterion 2 has its own preset."""
+
+    def test_poiseuille_case_carries_the_error_estimate_rule(self) -> None:
+        """Decision 1: the case file names the rule, its tolerances at the defaults."""
+        config = load_case("poiseuille")
+        assert config.stopping_rule == "error_estimate"
+        assert (config.iteration_error_tol, config.mass_imbalance_tol) == (1e-6, 1e-10)
+
+    def test_with_velocity_step_changes_the_rule_and_nothing_else(self) -> None:
+        """The collocated override returns velocity_step and leaves its input alone."""
+        config = load_case("poiseuille")
+        before = dict(vars(config))
+        out = with_velocity_step(config)
+        assert out.stopping_rule == "velocity_step"
+        assert _without(out, "stopping_rule") == _without(config, "stopping_rule")
+        assert vars(config) == before
+
+    def test_stretched_preset_fixes_the_wall_spacing_and_derives_the_ratio(
+        self,
+    ) -> None:
+        """Criterion 2 at 80x40: y wall cell 0.1 H / ny = 0.00125, ratio about 1.20."""
+        kind, nx, ny = CASE_GRIDS["val001_80x40_stretched"]
+        assert "val001_80x40_stretched" in WALL_CLUSTERED_GRIDS
+        config = load_wall_clustered(kind, grid=(nx, ny))
+        mesh = Mesh(config)
+        for wall_cell in (mesh.dy_cell[0], mesh.dy_cell[-1]):
+            assert wall_cell == pytest.approx(0.00125, rel=1e-12)
+        assert mesh.stretch_ratio_y == pytest.approx(1.2057, abs=1e-4)
+        assert mesh.stretch_ratio_x == 1.0
+        base = load_case(kind, grid=(nx, ny))
+        assert _without(config, "stretch_y") == _without(base, "stretch_y")
+
+    def test_wall_spacing_follows_height_and_ny_not_width_and_nx(self) -> None:
+        """H / ny equals L / nx at 80x40, so a grid with unequal sides tells them apart."""
+        mesh = Mesh(load_wall_clustered("poiseuille", grid=(80, 20)))
+        assert mesh.dy_cell[0] == pytest.approx(0.1 * 0.5 / 20, rel=1e-12)
 
 
 @pytest.mark.unit

@@ -15,7 +15,7 @@ import pytest
 from src.boundary import BoundaryManager
 from src.mesh import Mesh
 from src.solver_ns import NavierStokesSolver
-from validation.cases import load_case
+from validation.cases import load_case, with_velocity_step
 from validation.metrics import poiseuille_l2_error
 
 
@@ -31,8 +31,10 @@ def test_poiseuille_flow_val001() -> None:
     The 2.5% threshold reflects the O(h) wall accuracy of the collocated
     ghost-cell boundary treatment (see ADR-008). Error decreases
     monotonically with grid refinement at the expected first-order rate.
+    The collocated solver refuses the case file's error_estimate rule and
+    runs velocity_step, as every collocated result was produced.
     """
-    config = load_case("poiseuille")
+    config = with_velocity_step(load_case("poiseuille"))
     mesh = Mesh(config)
     boundary = BoundaryManager(mesh, config)
     solver = NavierStokesSolver(mesh, config, boundary)
