@@ -10,9 +10,9 @@ report measures; it does not choose a rule.
 half-cell wall stencil's discretization error, less some development at x = L/2. (2) Step
 times rho_hat / (1 - rho_hat) is within 0.77 to 1.34 of the true error on the cavity from
 1e-5 to 1e-10. On the channel it fails below 1e-8 (40x20) and 1e-9 (80x40), where the error
-left is a flux drift only the imbalance shows. (3) The imbalance crosses 1e-10 only far below
-every discretization error. (4) At 1e-6 the iteration error exceeds the discretization
-error on the 80x80 cavity and on VAL-001 80x40.
+left is a flux drift only the imbalance shows. (3) The imbalance crosses 1e-10 only when the
+velocity iteration error is far below every discretization error. (4) At 1e-6 the iteration
+error exceeds the discretization error on the 80x80 cavity and on VAL-001 80x40.
 
 ## 1. Method
 
@@ -135,8 +135,9 @@ first snapshot below a tenth by it and by the prompt's true error (`true_error_r
 | VAL-001 40x20 | 0.00200 | 1.3 | 0.11 | 0.0079 | 0.0030 | 6.2e-5 | 5.6e-7 | 3.2e-7 |
 | VAL-001 80x40 | 0.000411 | 55 | 5.1 | 0.42 | 0.032 | 0.016 | 1.8e-8 | 1e-8 |
 
-On the cavity the two measures agree. On the channel the true error crosses half a decade
-later: it is a maximum over every FLUID cell, not a root mean square over one column.
+On the cavity the two measures agree. On the channel the true error crosses a quarter decade
+later in the table (about 0.4 decades interpolated): it is a maximum over every FLUID cell,
+not a root mean square over one column.
 Outer iterations and seconds to reach each residual, one run each:
 
 | Case | 1e-5 | 1e-6 | 1e-7 | 1e-8 | 1e-9 | 1e-10 | 1e-11 |
