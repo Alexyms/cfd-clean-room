@@ -72,13 +72,15 @@ continuity term is step 7's decision. The measurements, and what the unchanged m
 discards, are in `docs/reports/staggered_integration_step6.md`.
 Ahead of step 7, `src/stopping.py` adds the rule step 7 will use, `error_estimate`: a solve
 stops when the iteration error estimated from the velocity step and its own geometric rate,
-over the largest prescribed boundary velocity, and the worst per-cell mass imbalance are both
-below their tolerances, and reaching the iteration cap is not convergence. It is opt-in by a
-solver configuration key. The velocity-step rule stays the default and reproduces the earlier
-fields bitwise, and the collocated solver refuses the new rule because its walls leak. On
-both validation cases it stops with the imbalance below criterion 6's bound. On the cavity it
-leaves about the iteration error it estimates; on the open channel what it leaves is bounded
-by the imbalance tolerance, and that bound loosens under refinement
+over the largest prescribed boundary velocity, the worst per-cell mass imbalance, and the
+summed imbalance over the through-flow are all below their tolerances, and reaching the
+iteration cap is not convergence. It is opt-in by a solver configuration key, and the solver
+block now rejects any key it does not know. The velocity-step rule stays the default and
+reproduces the earlier fields bitwise, and the collocated solver refuses the new rule because
+its walls leak. On both validation cases it stops with the imbalance below criterion 6's
+bound, and on the cavity it leaves about the iteration error it estimates. On the open
+channel the per-cell tolerance alone bounds the flux drift the rule can leave only loosely,
+and more loosely under refinement, so the summed condition bounds that drift on any grid
 (`docs/reports/stopping_rule_evidence.md`, section 9).
 ADR-010 is deliberately deferred to the end so it records what was built rather than what
 was planned.
@@ -204,11 +206,11 @@ measurement showed; it should not restate the measurement.
 
 The rebuild continues at step 7, VAL-001 revalidation on the staggered solver. It switches
 the validation cases to the `error_estimate` stopping rule and runs criterion 2 on the mesh
-the 2026-09-24 amendment fixes: the wall spacing given, the ratio derived. Two findings of
-the rule's check bear on it: on the open channel the imbalance tolerance, not the error
-tolerance, bounds what the rule leaves, and the 80x80 cavity needs more outer iterations
-under the rule than the committed cap allows (`docs/reports/stopping_rule_evidence.md`,
-section 9). Step 8 judges
+the 2026-09-24 amendment fixes: the wall spacing given, the ratio derived. One finding of
+the rule's check bears on the switch: the 80x80 cavity needs more outer iterations under the
+rule than the committed cap allows (`docs/reports/stopping_rule_evidence.md`, section 9).
+Before step 7 stores an `error_estimate` row, the harness summary has to key its rows on the
+stopping rule (GitHub issue for review 24 S3). Step 8 judges
 VAL-002 and criterion 3a against `marchi_2009_re100` on the true centerlines, with
 `ghia_1982_re100_r2` reported beside it and no threshold (the ECR-001 amendment of
 2026-09-24), and changes the metric and the VAL-002 test to match.
@@ -239,9 +241,12 @@ open channel the error left once the pressure solve falls to a sweep or two per 
 iteration is a flux drift that only the mass imbalance shows. On that evidence Alex decided
 on a rule with two conditions and no pass at the cap: the estimated iteration error over a
 physical velocity scale, and the worst per-cell mass imbalance, each below its own
-tolerance. It is `error_estimate` in `src/stopping.py`, opt-in, with the velocity-step rule
-the default; REQ-S01 and REQ-S04 are clarified for it, not amended, and the validation
-cases switch to it in step 7. Section 9 of the report checks that it stops where it should.
+tolerance. The review of the first build added a third, the summed imbalance over the
+through-flow: the per-cell bound alone lets the flux drift grow with the cells upstream,
+which the continuity condition was chosen to prevent. It is `error_estimate` in
+`src/stopping.py`, opt-in, with the velocity-step rule the default; REQ-S01 and REQ-S04 are
+clarified for it, not amended, and the validation cases switch to it in step 7. Section 9 of
+the report checks that it stops where it should.
 
 Closed 2026-09-22: what the VAL-002 v-component findings become against the published
 Ghia table. The v reference was replaced by Table II as `ghia_1982_re100_r2`; the

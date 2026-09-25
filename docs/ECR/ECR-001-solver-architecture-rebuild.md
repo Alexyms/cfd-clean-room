@@ -2,7 +2,7 @@
 
 **Project:** CFD Clean Room Simulation
 **Change Request ID:** ECR-001
-**Status:** Approved (amended 2026-09-20, see Document History)
+**Status:** Approved (last amended 2026-09-24, see Document History)
 **Author:** Alex Moroz-Smietana
 **Approver(s):** Alex Moroz-Smietana, Claude (pair)
 **Date Raised:** 2026-04-16
@@ -166,7 +166,7 @@ Estimated effort: 10-15 working days, executed as a feature branch off `phase2/v
 | 8 | VAL-002 revalidation (expected PASS at < 2% criterion). | 0.5 day |
 | 9 | ADR-010 write-up, SYSTEM.md and PROJECT_PLAN.md updates, ADR-008 supersession note. | 1 day |
 
-*Note 2026-09-24, beside step 7:* the stopping rule is `error_estimate` (`src/stopping.py`), built ahead of step 7: the solve stops when the estimated iteration error over the largest prescribed boundary velocity and the worst per-cell mass imbalance are both below their tolerances, and reaching the iteration cap is reported as not converged. It is opt-in by the solver key `stopping_rule`, and the velocity-step rule stays the default, bitwise. The validation cases switch to it in step 7. Evidence and the check that it stops where it should: `docs/reports/stopping_rule_evidence.md`, sections 4 to 6 and 9.
+*Note 2026-09-24, beside step 7:* the stopping rule is `error_estimate` (`src/stopping.py`), built ahead of step 7: the solve stops when the estimated iteration error over the largest prescribed boundary velocity, the worst per-cell mass imbalance (criterion 6 as written), and the summed imbalance over the through-flow are all below their tolerances, and reaching the iteration cap is reported as not converged. The summed condition bounds the flux drift of an open domain on any grid, which the per-cell bound alone does more loosely on every finer grid. It is opt-in by the solver key `stopping_rule`, and the velocity-step rule stays the default, bitwise. The validation cases switch to it in step 7. Evidence and the check that it stops where it should: `docs/reports/stopping_rule_evidence.md`, sections 4 to 6 and 9.
 
 ## 9. Acceptance Criteria
 
