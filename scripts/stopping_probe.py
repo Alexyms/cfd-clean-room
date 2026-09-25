@@ -43,6 +43,7 @@ from src.stopping import (  # noqa: E402 -- path set above
     RATE_WINDOW,
     ErrorEstimateRule,
 )
+from validation.cases import with_velocity_step  # noqa: E402 -- path set above
 from validation.metrics import (  # noqa: E402 -- path set above
     _inlet_velocity,
     poiseuille_l2_error,
@@ -87,7 +88,11 @@ def case_name(case: str, n: int) -> str:
 def case_config(
     case: str, n: int, tol: float | None = None, rule: str | None = None
 ) -> sc.SimConfig:
-    """The committed case at n cells along x; tolerance or rule, and cap, set if given."""
+    """The committed case at n cells along x; tolerance or rule, and cap, set if given.
+
+    Without a rule it is velocity_step, the rule every truth and snapshot here
+    was solved under, whatever the case file now names.
+    """
     raw = yaml.safe_load(sc.case_path(case).read_text(encoding="utf-8"))
     raw["domain"]["nx"], raw["domain"]["ny"] = n, (n if case == "cavity" else n // 2)
     if tol is not None:
@@ -96,7 +101,8 @@ def case_config(
         raw["solver"]["stopping_rule"] = rule
     if tol is not None or rule is not None:
         raw["solver"]["max_simple_iter"] = MAX_OUTER[case]
-    return sc.SimConfig.from_dict(raw)
+    config = sc.SimConfig.from_dict(raw)
+    return config if rule is not None else with_velocity_step(config)
 
 
 def instrument(

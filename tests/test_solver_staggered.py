@@ -25,7 +25,7 @@ from src.solver_ns import IterationState, NavierStokesSolver
 from src.solver_staggered import StaggeredSolver
 from src.staggered import allocate_fields, to_cell_centers
 from src.stopping import ErrorEstimateRule
-from validation.cases import CASE_GRIDS, case_path, load_case
+from validation.cases import CASE_GRIDS, case_path, load_case, with_velocity_step
 
 EPS = np.finfo(np.float64).eps
 
@@ -252,7 +252,9 @@ class TestReferenceVelocity:
         kind, nx, ny = CASE_GRIDS["val001_80x40"]
         config = load_case(kind, grid=(nx, ny))
         mesh, bc, solver = _build(config)
-        collocated = NavierStokesSolver(mesh, config, BoundaryManager(mesh, config))
+        collocated = NavierStokesSolver(
+            mesh, with_velocity_step(config), BoundaryManager(mesh, config)
+        )
         collocated_ref = collocated._F_ref / (config.rho * max(mesh.dx, mesh.dy))
         exact_flux = 0.1 * 0.5
         assert bc.get_total_inlet_flux() == pytest.approx(exact_flux, rel=1e-14)

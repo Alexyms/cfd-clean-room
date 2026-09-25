@@ -12,6 +12,11 @@ comparison can be read off later without rerunning anything.
 The results file is append-only and never rewritten. Repeats are stored as
 separate records; averaging is a presentation decision.
 
+Each row runs the case file's stopping rule, except that the collocated
+solver, which refuses error_estimate, runs velocity_step
+(validation.cases.with_velocity_step) and its params say so. A velocity-step
+stop is labelled residual_below_tol whichever solver ran it.
+
 Run:
 
     python scripts/benchmark.py                       # seed cases, 3 repeats
@@ -43,7 +48,10 @@ from src.boundary import BoundaryManager  # noqa: E402 -- follows sys.path.inser
 from src.boundary_staggered import (  # noqa: E402 -- follows sys.path.insert
     StaggeredBoundary,
 )
-from src.config import SimConfig  # noqa: E402 -- follows sys.path.insert
+from src.config import (  # noqa: E402 -- follows sys.path.insert
+    VELOCITY_STEP,
+    SimConfig,
+)
 from src.mesh import FLUID, Mesh  # noqa: E402 -- follows sys.path.insert
 from src.momentum import MomentumPredictor  # noqa: E402 -- follows sys.path.insert
 from src.pressure import PressureCorrector  # noqa: E402 -- follows sys.path.insert
@@ -57,7 +65,10 @@ from src.solver_staggered import (  # noqa: E402 -- follows sys.path.insert
 from src.staggered import allocate_fields  # noqa: E402 -- follows sys.path.insert
 from validation.cases import (  # noqa: E402 -- follows sys.path.insert
     CASE_GRIDS,
+    WALL_CLUSTERED_GRIDS,
     load_case,
+    load_wall_clustered,
+    with_velocity_step,
 )
 from validation.metrics import (  # noqa: E402 -- follows sys.path.insert
     cavity_true_centerline_errors,
@@ -76,6 +87,10 @@ METHODS = (DEFAULT_METHOD, STAGGERED_METHOD)
 # from the committed case file.
 CASES = CASE_GRIDS
 DEFAULT_CASES = ["val001_80x40", "val002_20x20", "val002_40x40"]
+
+# One stop_reason per rule across both solvers. The velocity-step label is the
+# one every row stored before the staggered solver reported its own stop.
+STOP_LABELS = {"velocity_step_below_tol": "residual_below_tol"}
 
 
 SOLVER_PARAMETERS = (
@@ -325,7 +340,10 @@ def run_case(case_id: str, method: str, sample_every: int, concurrent: int) -> d
         If the method is not one of METHODS.
     """
     kind, nx, ny = CASES[case_id]
-    config = load_case(kind, grid=(nx, ny))
+    loader = load_wall_clustered if case_id in WALL_CLUSTERED_GRIDS else load_case
+    config = loader(kind, grid=(nx, ny))
+    if method == DEFAULT_METHOD:
+        config = with_velocity_step(config)
     solver_block = solver_parameters(config)
     mesh = Mesh(config)
 
@@ -381,7 +399,8 @@ def run_case(case_id: str, method: str, sample_every: int, concurrent: int) -> d
     # The staggered solver knows which rule it ran and whether the cap stopped
     # it; the collocated one has only the velocity-step rule, read back here.
     if isinstance(solver, StaggeredSolver):
-        converged, stop_reason = solver.converged, solver.stop_reason
+        converged = solver.converged
+        stop_reason = STOP_LABELS.get(solver.stop_reason, solver.stop_reason)
     else:
         converged = solver.residual_history[-1] < config.convergence_tol
         stop_reason = "residual_below_tol" if converged else "max_simple_iter"
@@ -413,7 +432,7 @@ def run_case(case_id: str, method: str, sample_every: int, concurrent: int) -> d
 
 
 def print_summary(path: Path) -> None:
-    """Print one row per method, case, concurrency, metric and reference; flag mixed ones.
+    """Print one row per method, case, concurrency, rule, metric and reference; flag mixed.
 
     Wall time is only comparable between runs that shared the machine with
     the same number of processes, so ``concurrent_processes`` is part of the
@@ -433,6 +452,11 @@ def print_summary(path: Path) -> None:
     The metric is part of the key for the same reason. The cavity rows stored
     as ``max_normalized_centerline_error`` sample half a cell off the
     centerlines; ``max_normalized_centerline_error_r2`` samples on them.
+
+    So is the stopping rule, ``params.stopping_rule``, shown after the case:
+    it sets how far each solve iterates, so outer counts, wall times and
+    errors compare only within one rule. A row without the key predates it
+    and ran velocity_step.
     """
     if not path.exists():
         print(f"{path} does not exist; nothing recorded yet.")
@@ -441,7 +465,7 @@ def print_summary(path: Path) -> None:
         json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()
     ]
     groups: dict[tuple[str, str, int], list[dict]] = {}
-    rows: dict[tuple[str, str, int, str, str], list[dict]] = {}
+    rows: dict[tuple[str, str, int, str, str, str], list[dict]] = {}
     for record in records:
         key = (
             record["method"],
@@ -452,23 +476,24 @@ def print_summary(path: Path) -> None:
         # Every harness row names its metric and reference; a hand-built record may not.
         metric = record["accuracy"].get("metric", "-")
         reference = record["accuracy"].get("reference", "-")
-        rows.setdefault((*key, metric, reference), []).append(record)
+        rule = record.get("params", {}).get("stopping_rule", VELOCITY_STEP)
+        rows.setdefault((*key, rule, metric, reference), []).append(record)
 
     header = (
-        f"{'method':<20} {'case':<14} {'procs':>5} {'n':>2} {'outer':>10} "
-        f"{'wall s (min/med/max)':>24} {'cell updates':>14} "
+        f"{'method':<20} {'case':<22} {'rule':<14} {'procs':>5} {'n':>2} "
+        f"{'outer':>10} {'wall s (min/med/max)':>24} {'cell updates':>14} "
         f"{'error (min..max)':>20} {'conv':>5} {'metric':<34} reference"
     )
     print(header)
     print("-" * len(header))
-    for (method, case, procs, metric, reference), runs in sorted(rows.items()):
+    for (method, case, procs, rule, metric, reference), runs in sorted(rows.items()):
         outer = [r["work"]["outer_iterations"] for r in runs]
         wall = [r["time"]["wall_seconds"] for r in runs]
         updates = [r["work"]["cell_updates"] for r in runs]
         error = [r["accuracy"]["value"] for r in runs]
         conv = sum(r["outcome"]["converged"] for r in runs)
         print(
-            f"{method:<20} {case:<14} {procs:>5} {len(runs):>2} "
+            f"{method:<20} {case:<22} {rule:<14} {procs:>5} {len(runs):>2} "
             f"{min(outer):>4}..{max(outer):<4} "
             f"{min(wall):>7.1f}/{statistics.median(wall):>7.1f}/{max(wall):>7.1f} "
             f"{statistics.median(updates):>14.3e} "
@@ -478,9 +503,11 @@ def print_summary(path: Path) -> None:
 
     references: dict[tuple[str, str], set[str]] = {}
     metrics: dict[tuple[str, str], set[str]] = {}
-    for method, case, _procs, metric, reference in rows:
+    rules: dict[tuple[str, str], set[str]] = {}
+    for method, case, _procs, rule, metric, reference in rows:
         references.setdefault((method, case), set()).add(reference)
         metrics.setdefault((method, case), set()).add(metric)
+        rules.setdefault((method, case), set()).add(rule)
     for (method, case), seen in sorted(references.items()):
         if len(seen) > 1:
             print(
@@ -492,6 +519,12 @@ def print_summary(path: Path) -> None:
             print(
                 f"note: {method} {case} has rows measured by {sorted(seen)}; "
                 "errors are comparable only within one metric"
+            )
+    for (method, case), seen in sorted(rules.items()):
+        if len(seen) > 1:
+            print(
+                f"note: {method} {case} has rows under {sorted(seen)}; outer "
+                "iterations, wall times and errors are comparable only within one rule"
             )
 
     loads_seen = sorted({procs for _, _, procs in groups})
