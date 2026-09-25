@@ -8,6 +8,7 @@ output at every iteration is observed by wrapping PressureCorrector.correct,
 which leaves the solver's code path untouched.
 """
 
+import dataclasses
 from collections.abc import Callable
 
 import numpy as np
@@ -43,15 +44,70 @@ def _channel(nx: int = 12, ny: int = 6) -> SimConfig:
 
 
 def _ruled(
-    name: str, grid: tuple[int, int], boundaries: dict | None = None, **keys: object
+    name: str,
+    grid: tuple[int, int],
+    boundaries: dict | None = None,
+    fluid: dict | None = None,
+    domain: dict | None = None,
+    **keys: object,
 ) -> SimConfig:
-    """A committed case on a grid with solver keys, and optionally boundaries, replaced."""
+    """A committed case on a grid with solver keys, and optionally more, replaced."""
     raw = yaml.safe_load(case_path(name).read_text(encoding="utf-8"))
     raw["domain"]["nx"], raw["domain"]["ny"] = grid
     raw["solver"].update(keys)
+    raw["fluid"].update(fluid or {})
+    raw["domain"].update(domain or {})
     if boundaries is not None:
         raw["boundaries"] = boundaries
     return SimConfig.from_dict(raw)
+
+
+# Spy cases in which no factor of the flux scale is 1: the channel at rho 1.2, and a
+# closed 2.0 by 1.0 box at rho 1.2 under a 0.5 m/s lid.
+_LID = dict(type="velocity_inlet", location="top", x_start=0, x_end=2, u_velocity=0.5)
+_RHO_CHANNEL = {"name": "poiseuille", "grid": (12, 6), "fluid": {"density": 1.2}}
+_BOX = _RHO_CHANNEL | {
+    "name": "cavity",
+    "domain": {"width": 2},
+    "boundaries": {"lid": _LID},
+}
+
+
+@dataclasses.dataclass
+class _RuleSeen:
+    """What the error_estimate rules a solver built were given."""
+
+    speeds: list[float] = dataclasses.field(default_factory=list)
+    fluxes: list[float] = dataclasses.field(default_factory=list)
+    steps: list[float] = dataclasses.field(default_factory=list)
+    pairs: list[tuple[float, float]] = dataclasses.field(default_factory=list)
+
+
+def _spy_rules(monkeypatch: pytest.MonkeyPatch) -> _RuleSeen:
+    """Record each rule's scales, each step and each (worst, summed) pair it receives."""
+    seen = _RuleSeen()
+
+    class Spy(ErrorEstimateRule):
+        def __init__(
+            self, velocity_scale: float, flux_scale: float, *tols: float
+        ) -> None:
+            seen.speeds.append(velocity_scale)
+            seen.fluxes.append(flux_scale)
+            super().__init__(velocity_scale, flux_scale, *tols)
+
+        def update(
+            self, step: float, imbalance: Callable[[], tuple[float, float]]
+        ) -> bool:
+            seen.steps.append(step)
+
+            def recorded() -> tuple[float, float]:
+                seen.pairs.append(imbalance())
+                return seen.pairs[-1]
+
+            return super().update(step, recorded)
+
+    monkeypatch.setattr("src.solver_staggered.ErrorEstimateRule", Spy)
+    return seen
 
 
 def _build(config: SimConfig) -> tuple[Mesh, StaggeredBoundary, StaggeredSolver]:
@@ -335,17 +391,28 @@ class TestStoppingRule:
             solver.solve_steady()
         assert (solver.converged, solver.stop_reason) == (False, None)
 
-    def test_error_estimate_stops_later_with_continuity_met(self) -> None:
-        """The velocity_step rule would have stopped earlier on the same trajectory."""
+    def test_error_estimate_stops_later_with_continuity_met(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The velocity_step rule would have stopped earlier on the same trajectory.
+
+        Review 24b B1: the last pair the rule received is the returned field's
+        worst and summed absolute imbalance, exactly; a zero, signed or swapped
+        sum fails. Test 24b T1: each step is the residual in m/s, and dv
+        exceeds du at 55 of this solve's iterations, so du alone fails.
+        """
+        seen = _spy_rules(monkeypatch)
         config = _ruled("cavity", (6, 6), stopping_rule="error_estimate")
         _mesh, _bc, solver = _build(config)
         solver.solve_steady()
         assert solver.stop_reason == "error_estimate_and_continuity"
         assert solver.converged is True
-        assert np.abs(solver.last_mass_imbalance).max() < config.mass_imbalance_tol
-        # Condition (c): the flux scale of a closed unit cavity is rho * 1 * 1.
-        total = np.abs(solver.last_mass_imbalance).sum()
-        assert total / config.rho < config.iteration_error_tol
+        cells = np.abs(solver.last_mass_imbalance)
+        assert seen.pairs[-1] == (cells.max(), cells.sum())
+        assert cells.max() < config.mass_imbalance_tol
+        assert cells.sum() / solver.flux_scale < config.iteration_error_tol
+        expected = [r * solver.reference_velocity for r in solver.residual_history]
+        assert seen.steps == pytest.approx(expected, rel=1e-12)
         assert min(solver.residual_history[:-1]) < config.convergence_tol
 
     # A step test at 10 passes at once; the cap is below the rule's window.
@@ -369,52 +436,41 @@ class TestStoppingRule:
         assert (solver.converged, solver.stop_reason) == (False, "max_simple_iter")
 
     @pytest.mark.parametrize(
-        ("name", "grid", "speed", "flux", "reference"),
-        [("poiseuille", (12, 6), 0.1, 0.05, 0.6), ("cavity", (6, 6), 1.0, 1.0, 1.0)],
+        ("case", "speed", "flux", "reference"),
+        [
+            ({"name": "poiseuille", "grid": (12, 6)}, 0.1, 0.05, 0.6),
+            ({"name": "cavity", "grid": (6, 6)}, 1.0, 1.0, 1.0),
+            (_RHO_CHANNEL, 0.1, 1.2 * 0.05, 0.6),
+            (_BOX, 0.5, 1.2 * 0.5 * 2.0, 0.5),
+        ],
+        ids=["channel", "cavity", "channel-rho-1.2", "box-2x1-lid-0.5"],
     )
     def test_error_estimate_scales_are_physical_and_the_step_is_in_m_per_s(
         self,
         monkeypatch: pytest.MonkeyPatch,
-        name: str,
-        grid: tuple[int, int],
+        case: dict,
         speed: float,
         flux: float,
         reference: float,
     ) -> None:
         """One rule at construction and one per solve, never on reference_velocity.
 
-        The velocity scale is the inlet or lid speed, and the flux scale is rho
-        times the inflow (0.1 through 0.5) or, closed, the lid speed times the
-        side. Test 24 T1: each update gets the step in m/s, the residual times
-        reference_velocity (0.6 on the channel), not the residual itself.
+        The velocity scale is the inlet or lid speed. The flux scale is rho
+        times the inflow (0.1 through 0.5), or closed, rho times the lid speed
+        times the longer side; the last two cases have no factor of 1, so a
+        dropped rho, a dropped speed or min for max fails. Test 24 T1: each
+        update gets the step in m/s, the residual times reference_velocity.
         """
-        speeds: list[float] = []
-        fluxes: list[float] = []
-        steps: list[float] = []
-
-        class Spy(ErrorEstimateRule):
-            def __init__(
-                self, velocity_scale: float, flux_scale: float, *tols: float
-            ) -> None:
-                speeds.append(velocity_scale)
-                fluxes.append(flux_scale)
-                super().__init__(velocity_scale, flux_scale, *tols)
-
-            def update(
-                self, step: float, imbalance: Callable[[], tuple[float, float]]
-            ) -> bool:
-                steps.append(step)
-                return super().update(step, imbalance)
-
-        monkeypatch.setattr("src.solver_staggered.ErrorEstimateRule", Spy)
-        config = _ruled(name, grid, stopping_rule="error_estimate", max_simple_iter=2)
+        seen = _spy_rules(monkeypatch)
+        config = _ruled(**case, stopping_rule="error_estimate", max_simple_iter=2)
         _mesh, _bc, solver = _build(config)
         solver.solve_steady()
         assert solver.reference_velocity == pytest.approx(reference)
-        assert speeds == [speed, speed]
-        assert fluxes == pytest.approx([flux, flux], rel=1e-12)
+        assert seen.speeds == [speed, speed]
+        assert seen.fluxes == pytest.approx([flux, flux], rel=1e-12)
+        assert solver.flux_scale == pytest.approx(flux, rel=1e-12)
         expected = [r * solver.reference_velocity for r in solver.residual_history]
-        assert steps == pytest.approx(expected, rel=1e-12)
+        assert seen.steps == pytest.approx(expected, rel=1e-12)
 
     def test_error_estimate_without_a_boundary_velocity_raises(self) -> None:
         """A closed box with no moving wall leaves the estimate without a scale."""

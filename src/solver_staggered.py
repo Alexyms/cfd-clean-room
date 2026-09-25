@@ -104,6 +104,9 @@ class StaggeredSolver:
     last_mass_imbalance : np.ndarray
         Per-cell mass imbalance of the returned face velocities, shape
         [ny, nx]. Observability only; the solver never reads it.
+    flux_scale : float or None
+        Read-only. The flux scale the error_estimate rule was built with, kg/s
+        per unit depth; None under velocity_step.
 
     Raises
     ------
@@ -134,8 +137,14 @@ class StaggeredSolver:
         self.last_mass_imbalance: np.ndarray = np.zeros(p_shape(mesh))
         self.converged: bool = False
         self.stop_reason: str | None = None
+        self._flux_scale: float | None = None
         # Built once here so a zero velocity scale raises at construction.
         self._new_rule()
+
+    @property
+    def flux_scale(self) -> float | None:
+        """The error_estimate rule's flux scale, kg/s per unit depth; None otherwise."""
+        return self._flux_scale
 
     @staticmethod
     def _zero_stage_seconds() -> dict[str, float]:
@@ -173,7 +182,8 @@ class StaggeredSolver:
         inflow = self._boundary.get_total_inlet_flux()
         if inflow <= _ZERO_SCALE:
             inflow = scale * max(float(self._mesh.x[-1]), float(self._mesh.y[-1]))
-        return ErrorEstimateRule(scale, self._rho * inflow, *self._rule_tols)
+        self._flux_scale = self._rho * inflow
+        return ErrorEstimateRule(scale, self._flux_scale, *self._rule_tols)
 
     def _imbalance_norms(self, u: np.ndarray, v: np.ndarray) -> tuple[float, float]:
         """Worst and summed absolute per-cell mass imbalance, from one evaluation."""

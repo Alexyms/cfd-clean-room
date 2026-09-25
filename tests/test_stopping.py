@@ -126,7 +126,7 @@ def test_summed_imbalance_decides_once_the_estimate_and_worst_cell_are_met(
 def test_a_scale_or_tolerance_not_positive_and_finite_is_rejected(
     position: int, bad: float
 ) -> None:
-    """A zero scale would divide by zero, a NaN tolerance is never met, True is not 1.0."""
+    """Defect caught: the constructor's validation removed (zero, NaN, inf, True)."""
     args = [SCALE, FLUX, 1e-6, 1e-10]
     args[position] = bad
     with pytest.raises(ValueError, match="must be positive and finite"):
