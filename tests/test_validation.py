@@ -145,6 +145,7 @@ class TestStepEightCases:
             assert (config.nx, config.ny) == (nx, ny)
 
     def test_load_preset_refuses_an_unknown_id(self) -> None:
+        """An id outside CASE_GRIDS raises KeyError naming the known ones."""
         with pytest.raises(KeyError, match="unknown grid preset"):
             load_preset("val002_60x60")
 
@@ -494,7 +495,7 @@ class TestMarchiTable:
 def _marchi_fields(
     u_lid: float,
 ) -> tuple[SimConfig, SimpleNamespace, np.ndarray, np.ndarray]:
-    """Marchi's values times the lid speed, on a stand-in mesh centred on his stations.
+    """Marchi's values times the lid speed, on a stand-in mesh centred on Marchi's stations.
 
     Fifteen centers at k / 16 put both midlines on the middle column and row,
     and every station on a node, where the cubic returns the node's value.
@@ -535,3 +536,34 @@ class TestMarchiMetric:
         assert metric.components["u"] == 0.0
         assert metric.components["v"] == pytest.approx(0.004, rel=1e-12)
         assert metric.value == metric.components["v"]
+
+    def test_between_nodes_the_cubic_reads_a_cubic_profile_exactly(self) -> None:
+        """Review 26 B1, test 26 T1: on a real 16x16 mesh no station is a node.
+
+        u = U (y^3 - 3 y (1 - y)) and v = U x (1 - x)(x - 1/2), U the lid speed,
+        are cubics that meet the wall values the profiles append, so the cubic
+        through four nodes reads them exactly at every station and linear
+        interpolation does not. u's worst error is negative and larger than
+        v's, so a signed error, or v's value in place of the larger, reads
+        differently. (U y^3 alone is y^3 over the lid, above Marchi everywhere.)
+        """
+        config = load_case("cavity", grid=(16, 16))
+        mesh = Mesh(config)
+        lid = config.boundaries["lid"].u_velocity
+        s = np.array([r[0] for r in MARCHI_U_ROWS])
+        assert not np.isin(s, mesh.yc).any() and not np.isin(s, mesh.xc).any()
+
+        def p(y: np.ndarray) -> np.ndarray:
+            return y**3 - 3.0 * y * (1.0 - y)
+
+        def q(x: np.ndarray) -> np.ndarray:
+            return x * (1.0 - x) * (x - 0.5)
+
+        x, y = np.meshgrid(np.asarray(mesh.xc), np.asarray(mesh.yc))
+        metric = cavity_marchi_centerline_errors(config, mesh, lid * p(y), lid * q(x))
+        err_u = p(s) - np.array([r[1] for r in MARCHI_U_ROWS])
+        err_v = q(s) - np.array([r[1] for r in MARCHI_V_ROWS])
+        assert err_u[np.abs(err_u).argmax()] < -np.abs(err_v).max()
+        assert metric.components["u"] == pytest.approx(np.abs(err_u).max(), rel=1e-12)
+        assert metric.components["v"] == pytest.approx(np.abs(err_v).max(), rel=1e-12)
+        assert metric.value == metric.components["u"]

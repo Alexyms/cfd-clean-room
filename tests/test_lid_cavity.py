@@ -29,11 +29,12 @@ from validation.metrics import (
 
 @pytest.mark.validation
 @pytest.mark.xfail(
+    raises=AssertionError,
     reason=(
         "The collocated solver fails the 2% criterion in both u and v against the "
         "corrected reference ghia_1982_re100_r2, on the true centerlines as well as "
         "half a cell off them; the staggered solver's VAL-002 is the test below"
-    )
+    ),
 )
 def test_lid_driven_cavity_val002() -> None:
     """VAL-002: Lid-driven cavity -- centerline profiles within 2% of Ghia et al.
