@@ -33,7 +33,7 @@ from validation.cases import (  # noqa: E402 -- follows sys.path.insert
     with_velocity_step,
 )
 from validation.metrics import (  # noqa: E402 -- follows sys.path.insert
-    cavity_true_centerline_errors,
+    cavity_marchi_centerline_errors,
 )
 
 
@@ -222,14 +222,14 @@ def test_summary_never_pools_two_metrics(
 
 @pytest.mark.unit
 def test_harness_scores_the_cavity_on_the_true_centerlines() -> None:
-    """A cavity record's accuracy is the true-centerline metric, by name and value."""
+    """A cavity record's accuracy is the Marchi metric on the true centerlines."""
     config = load_case("cavity", grid=(16, 16))
     mesh = Mesh(config)
     x, y = np.meshgrid(np.asarray(mesh.xc), np.asarray(mesh.yc))
     u, v = 0.3 + 0.8 * x, 0.3 + 0.8 * y
     accuracy = benchmark.accuracy_of("cavity", config, mesh, u, v)
-    assert accuracy["metric"] == "max_normalized_centerline_error_r2"
-    assert accuracy == cavity_true_centerline_errors(config, mesh, u, v).as_dict()
+    assert accuracy["metric"] == "max_normalized_centerline_error_cubic"
+    assert accuracy == cavity_marchi_centerline_errors(config, mesh, u, v).as_dict()
 
 
 @pytest.mark.integration

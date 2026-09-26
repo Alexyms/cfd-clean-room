@@ -1,5 +1,7 @@
 """Tests for the validation package: case loading and error metrics."""
 
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 import yaml
@@ -22,11 +24,13 @@ from validation.metrics import (
     GHIA_V_VAL,
     GHIA_V_X,
     MARCHI_M,
+    MARCHI_REFERENCE,
     MARCHI_U_ROWS,
     MARCHI_V_ROWS,
     _bracket,
     cavity_centerline_errors,
     cavity_centerline_profiles,
+    cavity_marchi_centerline_errors,
     cavity_true_centerline_errors,
     cavity_true_centerline_profiles,
     poiseuille_l2_error,
@@ -485,3 +489,49 @@ class TestMarchiTable:
         """
         v = [MARCHI_U[-1], *MARCHI_V[:-1]]
         assert abs(_marchi_flux(v, 0.0)) > 4 * MARCHI_FLUX_TOL
+
+
+def _marchi_fields(
+    u_lid: float,
+) -> tuple[SimConfig, SimpleNamespace, np.ndarray, np.ndarray]:
+    """Marchi's values times the lid speed, on a stand-in mesh centred on his stations.
+
+    Fifteen centers at k / 16 put both midlines on the middle column and row,
+    and every station on a node, where the cubic returns the node's value.
+    """
+    raw = yaml.safe_load(case_path("cavity").read_text(encoding="utf-8"))
+    raw["boundaries"]["lid"]["u_velocity"] = u_lid
+    s = np.array([k / 16 for k in range(1, 16)])
+    mesh = SimpleNamespace(
+        xc=s,
+        yc=s,
+        x=np.array([0.0, 1.0]),
+        y=np.array([0.0, 1.0]),
+        cell_type=np.full((15, 15), FLUID),
+    )
+    u = np.tile(u_lid * np.array([r[1] for r in MARCHI_U_ROWS])[:, None], (1, 15))
+    v = np.tile(u_lid * np.array([r[1] for r in MARCHI_V_ROWS])[None, :], (15, 1))
+    return SimConfig.from_dict(raw), mesh, u, v
+
+
+@pytest.mark.unit
+class TestMarchiMetric:
+    """cavity_marchi_centerline_errors: VAL-002 and criterion 3a since ECR-001 step 8."""
+
+    def test_marchi_own_values_at_the_stations_score_zero(self) -> None:
+        """Read at Ghia's stations, or with u and v swapped, this is not zero."""
+        metric = cavity_marchi_centerline_errors(*_marchi_fields(2.0))
+        assert metric.components == {"u": 0.0, "v": 0.0}
+        assert (metric.metric, metric.reference) == (
+            "max_normalized_centerline_error_cubic",
+            MARCHI_REFERENCE,
+        )
+
+    def test_an_offset_at_one_station_is_read_in_its_own_component(self) -> None:
+        """v at x = 0.8125 raised by 0.008 under a lid of 2 reads 0.004; u stays 0."""
+        config, mesh, u, v = _marchi_fields(2.0)
+        v[:, 12] += 0.008
+        metric = cavity_marchi_centerline_errors(config, mesh, u, v)
+        assert metric.components["u"] == 0.0
+        assert metric.components["v"] == pytest.approx(0.004, rel=1e-12)
+        assert metric.value == metric.components["v"]

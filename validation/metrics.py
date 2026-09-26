@@ -120,8 +120,9 @@ GHIA_V_VAL: tuple[float, ...] = (
 # five Re columns of both tables. The -layout text prints each Table 7 label one
 # line below its own values. The glyph positions put every label within 1.5 pt of
 # its row's baseline, with rows 9.7 pt apart, and that pairing is the one used.
-# No metric or criterion uses this table: VAL-002 and the harness stay on
-# ghia_1982_re100_r2. tests/test_validation.py, TestMarchiTable, checks it.
+# Since ECR-001 step 8, VAL-002, criterion 3a and the harness score the cavity
+# against it (cavity_marchi_centerline_errors), with ghia_1982_re100_r2 reported
+# beside it. tests/test_validation.py, TestMarchiTable, checks the table.
 MARCHI_REFERENCE = "marchi_2009_re100"
 
 # (y, u on x = 0.5, U), one row per table row.
@@ -293,6 +294,40 @@ def _bracket(centers: np.ndarray, target: float) -> tuple[int, float]:
     return i, float((target - centers[i]) / (centers[i + 1] - centers[i]))
 
 
+def lagrange(
+    nodes: np.ndarray, values: np.ndarray, targets: np.ndarray, k: int = 4
+) -> np.ndarray:
+    """Evaluate at each target the degree k - 1 polynomial through the k nodes around it.
+
+    Parameters
+    ----------
+    nodes : np.ndarray
+        Increasing node positions.
+    values : np.ndarray
+        Values at the nodes.
+    targets : np.ndarray
+        Positions to evaluate at, in any order.
+    k : int
+        Number of nodes per stencil, about half on each side of the target and
+        shifted inward at the ends.
+
+    Returns
+    -------
+    np.ndarray
+        The interpolated values, one per target.
+    """
+    out = np.empty(len(targets))
+    for t, target in enumerate(targets):
+        i = int(np.clip(np.searchsorted(nodes, target) - k // 2, 0, len(nodes) - k))
+        xs = nodes[i : i + k]
+        weights = [
+            np.prod([(target - xs[m]) / (xs[j] - xs[m]) for m in range(k) if m != j])
+            for j in range(k)
+        ]
+        out[t] = np.dot(weights, values[i : i + k])
+    return out
+
+
 def cavity_true_centerline_profiles(
     config: SimConfig, mesh: Mesh, u: np.ndarray, v: np.ndarray
 ) -> tuple[list[float], list[float], list[float], list[float]]:
@@ -459,4 +494,54 @@ def cavity_true_centerline_errors(
         value=max(u_err, v_err),
         reference=GHIA_REFERENCE,
         components={"u": u_err, "v": v_err},
+    )
+
+
+def cavity_marchi_centerline_errors(
+    config: SimConfig, mesh: Mesh, u: np.ndarray, v: np.ndarray
+) -> ErrorMetric:
+    """Max normalized errors against Marchi et al. (2009) on the true centerlines.
+
+    Parameters
+    ----------
+    config : SimConfig
+        Case configuration; supplies the lid speed.
+    mesh : Mesh
+        Mesh the solution was computed on.
+    u, v : np.ndarray
+        Cell-centered velocity fields [ny, nx].
+
+    Returns
+    -------
+    ErrorMetric
+        Value is the larger of the u and v errors; both are in components.
+
+    Notes
+    -----
+    The profiles are those of cavity_true_centerline_profiles, and each is
+    read at Marchi's fifteen stations by lagrange, the cubic through the four
+    nearest nodes, as scripts/self_convergence.py read them against the
+    table. Linear interpolation, which the Ghia metrics use, adds an O(h^2)
+    error of its own between nodes. Errors are over the lid speed, as
+    Marchi's velocities are. ECR-001 criteria 3 and 3a score against this
+    metric since the amendment of 2026-09-24.
+    """
+    y_profile, u_profile, x_profile, v_profile = cavity_true_centerline_profiles(
+        config, mesh, u, v
+    )
+    u_lid = _lid_velocity(config)
+    components: dict[str, float] = {}
+    for axis, nodes, values, rows in (
+        ("u", y_profile, u_profile, MARCHI_U_ROWS),
+        ("v", x_profile, v_profile, MARCHI_V_ROWS),
+    ):
+        stations = np.array([row[0] for row in rows])
+        reference = np.array([row[1] for row in rows])
+        at = lagrange(np.asarray(nodes), np.asarray(values), stations)
+        components[axis] = float(np.max(np.abs(at / u_lid - reference)))
+    return ErrorMetric(
+        metric="max_normalized_centerline_error_cubic",
+        value=max(components.values()),
+        reference=MARCHI_REFERENCE,
+        components=components,
     )
