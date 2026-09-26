@@ -47,7 +47,18 @@ and 16% higher in u, and 14%, 17% and 22% in v. On an even grid the metric's pro
 is the mean of two cell means, the face value plus h^2 / 4 times the second x-derivative of u
 (INFERRED), so the difference is second order: in u it falls by 10 and then 4.0 times. It is
 largest by the lid. The metric is solver-independent on purpose, and like the faces it converges
-at second order.
+at second order, with one exception at 20x20 (review 26 S1).
+
+**The dropped ring row.** The metric keeps a profile row only when both bracketing cells are
+FLUID, so it drops the cavity's wall-adjacent ring. At 20x20 the u station y = 0.9375 is then
+read on the nodes 0.825, 0.875, 0.925 and the lid, across the dropped cell at 0.975. With the ring
+rows kept the same field reads 1.787e-2 at 20x20 instead of 2.144e-2, 1.14 times the faces, and
+the same values to rounding at 40x40 and 80x80 and in v on every grid
+(`results/builder26b/s1_ring.py`). So the fall by 10 is the dropped row: kept, the metric minus
+the faces falls 3.9 and then 4.0 times, and the first u order is 1.97 instead of 2.24. Neither
+verdict moves: criterion 3 is judged at 80x80, which the ring does not reach, and u falls
+monotonically either way. Whether the metric should keep the ring rows is open
+(`docs/prompts/issue-deferred-pr26.md`); the recorded values are the metric's as built.
 
 ## 3. Prediction check
 
@@ -57,7 +68,8 @@ Against the orchestrator's prediction, written before the run.
   9.118e-4.
 - Criterion 3a series about 1.6e-2, 4.0e-3, 9.1e-4, orders about 2.0 and 2.1: **missed** in size
   for the same reason: 2.144e-2, 4.548e-3, 1.057e-3, orders 2.24 and 2.11. Each component falls
-  monotonically: matched. Neither falls unevenly: u 2.24 and 2.11, v 2.12 and 2.07.
+  monotonically: matched. Neither falls unevenly: u 2.24 and 2.11, v 2.12 and 2.07, where u's
+  2.24 carries the row the metric drops at 20x20 (1.97 with it kept, section 2).
 - Against Ghia, not monotone in v, 80x80 worst near 0.9% in the jet by the right wall: matched,
   0.894% at x = 0.8594. Not predicted: u is not monotone either.
 - 80x80 stops by the rule near 12849 under the new cap: matched, 12849 of 20000.
@@ -104,19 +116,23 @@ Against the orchestrator's prediction, written before the run.
 **Collocated unchanged.** A collocated harness row on a 16x16 cavity at decedb9 and at 1085f28:
 u, v and p are bitwise equal, and so is every field of the row except run id, time stamp, commit,
 wall times, `params.max_simple_iter` (10000 to 20000, decision 1; both stop at 234) and `grid`,
-which adds the axis clustering (test 25 T2).
+which adds the axis clustering (test 25 T2). From f3561ba on, a new collocated row is also scored
+differently: its accuracy and each trajectory sample's error read
+`max_normalized_centerline_error_cubic` against `marchi_2009_re100`, as decision 3 asks.
 
 ## 5. What this establishes and what it does not
 
 Established: criteria 3 and 3a pass on the staggered solver under `error_estimate`, against
-Marchi, each solve stopping by the rule; the metric converges at second order and reads 15% to
-22% above the face values at 40x40 and 80x80; Ghia's table would fail this solution under 3a;
-the collocated results and the saved self-convergence fields are untouched. Planted defects: 13
+Marchi, each solve stopping by the rule; the metric converges at second order, apart from u's
+first step, which carries the ring row it drops at 20x20, and reads 15% to 22% above the face
+values at 40x40 and 80x80; Ghia's table would fail this solution under 3a; the collocated
+fields, the stored rows and the saved self-convergence fields are untouched. Planted defects: 13
 of 13 caught.
 
 Not established: timing beyond single runs (F7); 3a on grids other than 20, 40 and 80. Not
-covered by any test: the metric's tests put every station on a node, so replacing the cubic with
-linear interpolation passes them; the `_channel` pin changes no assertion's outcome (section 6).
+covered by any test: the `_channel` pin changes no assertion's outcome (section 6). The metric's
+interpolation between nodes was untested in the first build; the fix pass added a test on a real
+mesh (review 26 B1).
 REQ-S03's text and the PROJECT_PLAN gate row change in step 9. Premises: all seven held.
 
 ## 6. How each number was taken
@@ -129,4 +145,6 @@ REQ-S03's text and the PROJECT_PLAN gate row change in step 9. Premises: all sev
   and collocated `solve_and_save` equal the saved fields bitwise, 629 and 380 outer;
   `collocated_row.py` on a worktree of decedb9 and on 1085f28, compared by `compare_rows.py`.
 - Planted defects: `mutate.py` and `mutations.log`: 13 caught, and 2 informational, linear
-  interpolation and an unpinned `_channel`, not caught.
+  interpolation and an unpinned `_channel`, not caught. In the fix pass,
+  `results/builder26b/mutations.log`: linear interpolation, the signed error, the value taken
+  from v, and the collocated test without its pin (test 26 X1 to X3 and X12) each fail a test.

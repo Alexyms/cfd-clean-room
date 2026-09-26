@@ -98,8 +98,9 @@ Step 8 revalidated VAL-002 on the staggered solver. The cavity case file names t
 centerlines against Marchi, Suero and Araki (2009) with Ghia's table reported beside it.
 ECR-001 acceptance criteria 3 and 3a pass: below 2% on 80x80, and falling in both components
 at second order across 20x20, 40x40 and 80x80. Against Ghia the same fields do not fall
-monotonically in either component, which is why the scoring moved. Every self-convergence field
-and collocated result is unchanged, the test fixtures now name their rule rather than take the
+monotonically in either component, which is why the scoring moved. Every self-convergence field,
+collocated field and stored row is unchanged, new collocated rows are scored against Marchi
+too, the test fixtures now name their rule rather than take the
 case file's, and a named grid preset loads through one function, so no consumer can build the
 stretched preset on a uniform mesh. See `docs/reports/val002_revalidation_step8.md`.
 ADR-010 is deliberately deferred to the end so it records what was built rather than what
@@ -145,16 +146,16 @@ in `benchmarks/results.jsonl`. Against the same table the staggered solver's v e
 below the collocated one's on the coarse grids but falls more slowly, and at 80x80 it is the
 higher of the two. Measured against itself it converges at second order or better away from
 the lid corners. Its slow approach to Ghia was mostly the metric's own sampling, half a cell
-off the centerlines. The harness, the viewer and VAL-002 now sample on the centerlines under
-a new metric name, `max_normalized_centerline_error_r2`, and the stored rows keep the old
-one. On the true centerlines, and on fields converged well past the case's stopping
+off the centerlines. From 2026-09-23 until step 8 the harness, the viewer and VAL-002 sampled
+on the centerlines under a new metric name, `max_normalized_centerline_error_r2`, and the
+stored rows keep the old one; the viewer and the collocated VAL-002 test still use it. On the true centerlines, and on fields converged well past the case's stopping
 tolerance, the staggered solution converges toward values up to about 1% of the lid speed
 from Ghia's in the jet by the right wall, and refinement moves it away from Ghia there.
 That gap is Ghia's (INFERRED). Against an independent reference, Marchi, Suero and Araki
 (2009), read from the paper's text layer and checked against its own published mass flow,
 the extrapolated staggered solution agrees at all thirty of its points to a small fraction
-of the gap, and Ghia's table differs from it by the gap. Under the new metric the staggered
-error series is not monotone, which bears on ECR-001 criterion 3a. The collocated solver is
+of the gap, and Ghia's table differs from it by the gap. Under the r2 metric, against Ghia,
+the staggered error series is not monotone, which is why criterion 3a moved to Marchi. The collocated solver is
 not yet asymptotic on these grids. See `docs/reports/cavity_self_convergence.md` and
 `docs/reports/cavity_reference_marchi.md`.
 
