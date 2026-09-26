@@ -25,22 +25,31 @@ from src.solver_ns import IterationState, NavierStokesSolver
 from src.solver_staggered import StaggeredSolver
 from src.staggered import allocate_fields, to_cell_centers
 from src.stopping import ErrorEstimateRule
-from validation.cases import CASE_GRIDS, case_path, load_case, with_velocity_step
+from validation.cases import (
+    CASE_GRIDS,
+    case_path,
+    load_case,
+    load_preset,
+    with_velocity_step,
+)
 
 EPS = np.finfo(np.float64).eps
 
 
+# _case and _channel stop by velocity_step whatever rule the case file names, so
+# a test's rule does not change when a case file does. A test that wants
+# error_estimate asks for it through _ruled.
 def _case(name: str, n: int, **overrides: object) -> SimConfig:
     """A committed case on an n x n grid, with top-level sections overridden."""
     raw = yaml.safe_load(case_path(name).read_text(encoding="utf-8"))
     raw["domain"]["nx"] = raw["domain"]["ny"] = n
     raw.update(overrides)
-    return SimConfig.from_dict(raw)
+    return with_velocity_step(SimConfig.from_dict(raw))
 
 
 def _channel(nx: int = 12, ny: int = 6) -> SimConfig:
     """The VAL-001 channel on a small grid."""
-    return load_case("poiseuille", grid=(nx, ny))
+    return with_velocity_step(load_case("poiseuille", grid=(nx, ny)))
 
 
 def _ruled(
@@ -234,10 +243,11 @@ class TestReferenceVelocity:
         self, case_id: str
     ) -> None:
         """Equal with ==: same lid speed, same h, same operations in the same order."""
-        kind, nx, ny = CASE_GRIDS[case_id]
-        config = load_case(kind, grid=(nx, ny))
+        config = load_preset(case_id)
         mesh, _bc, solver = _build(config)
-        collocated = NavierStokesSolver(mesh, config, BoundaryManager(mesh, config))
+        collocated = NavierStokesSolver(
+            mesh, with_velocity_step(config), BoundaryManager(mesh, config)
+        )
         # The velocity NavierStokesSolver.solve_steady divides its residual by
         expected = collocated._F_ref / (config.rho * max(mesh.dx, mesh.dy))
         assert solver.reference_velocity == expected
@@ -249,8 +259,7 @@ class TestReferenceVelocity:
         to the walls (docs/reports/inlet_flux_comparison.md), so its inlet
         flux, and with it its reference velocity, is 38/40 of the exact one.
         """
-        kind, nx, ny = CASE_GRIDS["val001_80x40"]
-        config = load_case(kind, grid=(nx, ny))
+        config = load_preset("val001_80x40")
         mesh, bc, solver = _build(config)
         collocated = NavierStokesSolver(
             mesh, with_velocity_step(config), BoundaryManager(mesh, config)

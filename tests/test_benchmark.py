@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import sys
 from collections.abc import Callable
@@ -29,6 +30,7 @@ from src.solver_staggered import (  # noqa: E402 -- follows sys.path.insert
 from validation.cases import (  # noqa: E402 -- follows sys.path.insert
     case_path,
     load_case,
+    with_velocity_step,
 )
 from validation.metrics import (  # noqa: E402 -- follows sys.path.insert
     cavity_true_centerline_errors,
@@ -246,7 +248,7 @@ def test_harness_row_takes_the_cap_from_the_solver(
     )
     config = SimConfig.from_dict(raw)
     monkeypatch.setitem(benchmark.CASES, "tiny_cavity", ("cavity", 6, 6))
-    monkeypatch.setattr(benchmark, "load_case", lambda kind, grid: config)
+    monkeypatch.setattr(benchmark, "load_preset", lambda case_id: config)
     row = benchmark.run_case("tiny_cavity", "staggered-jacobi", 10, 1)
     assert row["outcome"] == {"converged": False, "stop_reason": "max_simple_iter"}
     assert row["work"]["outer_iterations"] == 20
@@ -312,7 +314,14 @@ def test_collocated_channel_row_is_the_pre_branch_solve(
 def test_staggered_velocity_step_stop_has_the_collocated_label(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The cavity still runs velocity_step; its staggered row says what every stored row says."""
+    """A staggered velocity_step row says what every stored row says.
+
+    Both case files name error_estimate, so the rule is set in memory.
+    """
+    real = benchmark.load_preset
+    monkeypatch.setattr(
+        benchmark, "load_preset", lambda case_id: with_velocity_step(real(case_id))
+    )
     monkeypatch.setitem(benchmark.CASES, "tiny_cavity", ("cavity", 6, 6))
     row = benchmark.run_case("tiny_cavity", "staggered-jacobi", 10, 1)
     assert row["params"]["stopping_rule"] == "velocity_step"
@@ -336,8 +345,45 @@ def test_harness_builds_a_wall_clustered_preset_on_its_clustered_mesh(
 
     monkeypatch.setattr(benchmark, "StaggeredSolver", Spy)
     monkeypatch.setitem(benchmark.CASES, "tiny_clustered", ("poiseuille", 12, 6))
-    monkeypatch.setattr(benchmark, "WALL_CLUSTERED_GRIDS", {"tiny_clustered"})
+    monkeypatch.setattr(
+        "validation.cases.WALL_CLUSTERED_GRIDS", frozenset({"tiny_clustered"})
+    )
     with pytest.raises(ConstructedError):
         benchmark.run_case("tiny_clustered", "staggered-jacobi", 10, 1)
     assert meshes[0].dy_cell[0] == pytest.approx(0.1 * 0.5 / 6, rel=1e-12)
     assert meshes[0].stretch_ratio_x == 1.0
+
+
+@pytest.mark.integration
+def test_harness_row_records_each_axis_clustering(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test 25 T2: the stretched preset's row names its mesh, apart from its twin's.
+
+    The real presets are loaded and capped at two outer iterations in memory.
+    """
+    real = benchmark.load_preset
+
+    def capped(case_id: str) -> SimConfig:
+        config = copy.copy(real(case_id))
+        config.max_simple_iter = 2
+        return config
+
+    monkeypatch.setattr(benchmark, "load_preset", capped)
+    uniform, stretched = (
+        benchmark.run_case(case_id, "staggered-jacobi", 10, 1)["grid"]
+        for case_id in ("val001_80x40", "val001_80x40_stretched")
+    )
+    assert uniform == {
+        "nx": 80,
+        "ny": 40,
+        "x": {"stretch_ratio": 1.0, "min_wall_spacing": pytest.approx(1.0 / 80)},
+        "y": {"stretch_ratio": 1.0, "min_wall_spacing": pytest.approx(0.5 / 40)},
+    }
+    assert (stretched["nx"], stretched["ny"], stretched["x"]) == (
+        80,
+        40,
+        uniform["x"],
+    )
+    assert stretched["y"]["min_wall_spacing"] == pytest.approx(0.00125, rel=1e-12)
+    assert stretched["y"]["stretch_ratio"] == pytest.approx(1.2057, abs=1e-4)

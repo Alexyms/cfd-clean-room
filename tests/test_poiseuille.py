@@ -21,10 +21,9 @@ from src.mesh import Mesh
 from src.solver_ns import NavierStokesSolver
 from src.solver_staggered import StaggeredSolver
 from validation.cases import (
-    CASE_GRIDS,
     WALL_CLUSTERED_GRIDS,
     load_case,
-    load_wall_clustered,
+    load_preset,
     with_velocity_step,
 )
 from validation.metrics import poiseuille_l2_error
@@ -81,9 +80,8 @@ def test_poiseuille_flow_staggered_val001(case_id: str) -> None:
     by it, not at the cap. The metric reads column nx // 2, as the collocated
     test does.
     """
-    kind, nx, ny = CASE_GRIDS[case_id]
     clustered = case_id in WALL_CLUSTERED_GRIDS
-    config = (load_wall_clustered if clustered else load_case)(kind, grid=(nx, ny))
+    config = load_preset(case_id)
     mesh = Mesh(config)
     assert mesh.is_uniform is not clustered
     solver = StaggeredSolver(mesh, config, StaggeredBoundary(mesh, config))

@@ -65,8 +65,9 @@ restriction that samples every other row and an L/2 station read off column nx /
 | Metric (column nx // 2, FLUID rows) | 1.999e-3 | 4.104e-4 | 1.570e-4 | |
 
 **The development floor.** The profile at L/2 differs from the one at 3L/4 by 1.9e-4 of the
-parabola's norm on every grid from 80x40, flat under refinement, as the evidence report found on
-the metric's rows and columns (1.13e-4 and 1.07e-4, section 3). That difference is the flow still
+parabola's norm on every grid from 80x40, flat under refinement. The evidence report found a
+different quantity flat too: the metric's value at 3L/4 minus its value at L/2 (1.13e-4 and
+1.07e-4, section 3), a difference of two errors, not the norm of a difference. That difference is the flow still
 developing, which refinement does not remove, and at 160x80 it is larger than the whole error
 against the parabola at L/2. So the order against the parabola at L/2 falls from 2.28 to 1.53: it
 measures the approach to that floor, not the scheme. At 3L/4, further developed, it stays near 2.
@@ -97,7 +98,11 @@ Moving the case file to `error_estimate` (decision 1) reached callers the plan d
   the collocated solver from the channel case, which now raises. Alex decided on one helper,
   `validation.cases.with_velocity_step`, used by that test, the collocated VAL-001 test, the
   harness's collocated path and the viewer, with no assertion changed. No other existing test
-  builds the collocated solver from the channel.
+  builds the collocated solver from the channel. Two staggered tests take the channel from the
+  case file, `test_dirichlet_faces_hold_what_apply_normal_velocity_wrote[channel]` and
+  `test_outlet_faces_are_extrapolated_before_every_prediction`, so they solve it under
+  `error_estimate` from this step on, assertions unchanged (review 25 S9). Step 8 pins their
+  fixture back to `velocity_step`.
 - **F2.** `scripts/stopping_probe.py` `case_config` without a rule read the case file's. A fresh
   run would have solved its 1e-11 and 1e-13 truths under `error_estimate`, stopping once the
   estimated iteration error reached 1e-6 of U. It now pins `velocity_step` when no rule is named.

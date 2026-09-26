@@ -8,7 +8,9 @@ second-order for cell-centered values: d1 = R(f40) - f20, d2 = R(f80) - f40,
 and p = log2(||d1|| / ||R(d2)||). Pressure has its domain mean removed first,
 because each grid pins it at a different point. The control, synthetic fields
 F + C h^q G with known q through the identical pipeline, runs first and stops
-the script if any estimate misses q by 0.05 or more.
+the script if any estimate misses q by 0.05 or more. Every solve here runs
+velocity_step, the rule the saved fields were taken under, whatever rule the
+case file names.
 
 --extrapolate asks, from saved fields and with no solve, whether the staggered
 solver's remaining distance to Ghia on the true centerlines is Ghia's:
@@ -60,6 +62,7 @@ from src.solver_staggered import (  # noqa: E402 -- follows sys.path.insert
 from validation.cases import (  # noqa: E402 -- follows sys.path.insert
     case_path,
     load_case,
+    with_velocity_step,
 )
 from validation.metrics import (  # noqa: E402 -- follows sys.path.insert
     GHIA_U_VAL,
@@ -101,7 +104,7 @@ def solve_and_save(method: str, n: int) -> Path:
     path = FIELD_DIR / f"{method}_{n}.npz"
     if path.exists():
         return path
-    config = load_case("cavity", grid=(n, n))
+    config = with_velocity_step(load_case("cavity", grid=(n, n)))
     mesh = Mesh(config)
     solver: NavierStokesSolver | StaggeredSolver
     if method == "collocated-jacobi":
@@ -120,9 +123,10 @@ def solve_and_save(method: str, n: int) -> Path:
 def solve_tight(n: int) -> Path:
     """Continue the staggered n x n solve to TIGHT_TOL, snapshotting u and v on the way.
 
-    The tolerance and iteration cap are set in memory; the case file is not
-    touched. A snapshot is taken the first time the residual falls below the
-    case's own convergence_tol, each of SNAPSHOT_TOLS, and TIGHT_TOL.
+    The tolerance, the iteration cap and the velocity_step rule are set in
+    memory; the case file is not touched. A snapshot is taken the first time
+    the residual falls below the case's own convergence_tol, each of
+    SNAPSHOT_TOLS, and TIGHT_TOL.
 
     Parameters
     ----------
@@ -151,7 +155,7 @@ def solve_tight(n: int) -> Path:
     case_tol = float(raw["solver"]["convergence_tol"])
     raw["solver"]["convergence_tol"] = TIGHT_TOL
     raw["solver"]["max_simple_iter"] = TIGHT_MAX_ITER
-    config = SimConfig.from_dict(raw)
+    config = with_velocity_step(SimConfig.from_dict(raw))
     mesh = Mesh(config)
     solver = StaggeredSolver(mesh, config, StaggeredBoundary(mesh, config))
     levels = [case_tol, *SNAPSHOT_TOLS, TIGHT_TOL]

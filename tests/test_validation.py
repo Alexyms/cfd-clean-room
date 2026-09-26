@@ -12,6 +12,7 @@ from validation.cases import (
     WALL_CLUSTERED_GRIDS,
     case_path,
     load_case,
+    load_preset,
     load_wall_clustered,
     with_velocity_step,
 )
@@ -116,6 +117,32 @@ class TestStepSevenCases:
         """H / ny equals L / nx at 80x40, so a grid with unequal sides tells them apart."""
         mesh = Mesh(load_wall_clustered("poiseuille", grid=(80, 20)))
         assert mesh.dy_cell[0] == pytest.approx(0.1 * 0.5 / 20, rel=1e-12)
+
+
+@pytest.mark.unit
+class TestStepEightCases:
+    """ECR-001 step 8: the cavity names its rule, and a preset loads its own mesh."""
+
+    def test_cavity_case_carries_the_error_estimate_rule(self) -> None:
+        """Decision 1: the rule, its default tolerances, and a cap above 80x80's 12849."""
+        config = load_case("cavity")
+        assert config.stopping_rule == "error_estimate"
+        assert (config.iteration_error_tol, config.mass_imbalance_tol) == (1e-6, 1e-10)
+        assert config.max_simple_iter == 20000
+
+    def test_load_preset_builds_each_preset_on_its_own_mesh(self) -> None:
+        """Review 25 S5: the stretched preset and its twin share a tuple, not a mesh."""
+        assert CASE_GRIDS["val001_80x40_stretched"] == CASE_GRIDS["val001_80x40"]
+        stretched = Mesh(load_preset("val001_80x40_stretched"))
+        assert stretched.dy_cell[0] == pytest.approx(0.00125, rel=1e-12)
+        assert Mesh(load_preset("val001_80x40")).is_uniform
+        for case_id, (_kind, nx, ny) in CASE_GRIDS.items():
+            config = load_preset(case_id)
+            assert (config.nx, config.ny) == (nx, ny)
+
+    def test_load_preset_refuses_an_unknown_id(self) -> None:
+        with pytest.raises(KeyError, match="unknown grid preset"):
+            load_preset("val002_60x60")
 
 
 @pytest.mark.unit

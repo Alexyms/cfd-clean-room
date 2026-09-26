@@ -13,7 +13,7 @@ import pytest
 from src.boundary import BoundaryManager
 from src.mesh import Mesh
 from src.solver_ns import NavierStokesSolver
-from validation.cases import load_case
+from validation.cases import load_case, with_velocity_step
 from validation.metrics import cavity_true_centerline_errors
 
 
@@ -34,7 +34,7 @@ def test_lid_driven_cavity_val002() -> None:
     the vertical centerline and v-velocity along the horizontal
     centerline against the Ghia et al. (1982) benchmark data.
     """
-    config = load_case("cavity")
+    config = with_velocity_step(load_case("cavity"))
     mesh = Mesh(config)
     boundary = BoundaryManager(mesh, config)
     solver = NavierStokesSolver(mesh, config, boundary)
