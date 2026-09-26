@@ -75,6 +75,7 @@ from validation.metrics import (  # noqa: E402 -- follows sys.path.insert
     cavity_centerline_errors,
     cavity_true_centerline_errors,
     cavity_true_centerline_profiles,
+    lagrange,
 )
 
 GRIDS = (20, 40, 80)
@@ -490,40 +491,6 @@ def face_gaps(
         "u": float(np.abs(np.asarray(u_prof[1:-1]) - u_line[fluid]).max()),
         "v": float(np.abs(np.asarray(v_prof[1:-1]) - v_line[fluid]).max()),
     }
-
-
-def lagrange(
-    nodes: np.ndarray, values: np.ndarray, targets: np.ndarray, k: int = 4
-) -> np.ndarray:
-    """Evaluate at each target the degree k - 1 polynomial through the k nodes around it.
-
-    Parameters
-    ----------
-    nodes : np.ndarray
-        Increasing node positions.
-    values : np.ndarray
-        Values at the nodes.
-    targets : np.ndarray
-        Positions to evaluate at, in any order.
-    k : int
-        Number of nodes per stencil, about half on each side of the target and
-        shifted inward at the ends.
-
-    Returns
-    -------
-    np.ndarray
-        The interpolated values, one per target.
-    """
-    out = np.empty(len(targets))
-    for t, target in enumerate(targets):
-        i = int(np.clip(np.searchsorted(nodes, target) - k // 2, 0, len(nodes) - k))
-        xs = nodes[i : i + k]
-        weights = [
-            np.prod([(target - xs[m]) / (xs[j] - xs[m]) for m in range(k) if m != j])
-            for j in range(k)
-        ]
-        out[t] = np.dot(weights, values[i : i + k])
-    return out
 
 
 def richardson(

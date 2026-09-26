@@ -69,7 +69,7 @@ from validation.cases import (  # noqa: E402 -- follows sys.path.insert
     with_velocity_step,
 )
 from validation.metrics import (  # noqa: E402 -- follows sys.path.insert
-    cavity_true_centerline_errors,
+    cavity_marchi_centerline_errors,
     poiseuille_l2_error,
 )
 
@@ -353,11 +353,13 @@ def accuracy_of(
     Returns
     -------
     dict
-        The metric's as_dict: its name, value, reference and components.
+        The metric's as_dict: its name, value, reference and components. The
+        cavity is scored against Marchi et al. (2009), ECR-001 criteria 3
+        and 3a since step 8.
     """
     if kind == "poiseuille":
         return poiseuille_l2_error(config, mesh, u).as_dict()
-    return cavity_true_centerline_errors(config, mesh, u, v).as_dict()
+    return cavity_marchi_centerline_errors(config, mesh, u, v).as_dict()
 
 
 def run_case(case_id: str, method: str, sample_every: int, concurrent: int) -> dict:
@@ -479,7 +481,9 @@ def print_summary(path: Path) -> None:
 
     The metric is part of the key for the same reason. The cavity rows stored
     as ``max_normalized_centerline_error`` sample half a cell off the
-    centerlines; ``max_normalized_centerline_error_r2`` samples on them.
+    centerlines; ``max_normalized_centerline_error_r2`` samples on them, and
+    ``max_normalized_centerline_error_cubic`` reads the same profiles by the
+    cubic at Marchi's stations.
 
     So is the stopping rule, ``params.stopping_rule``, shown after the case:
     it sets how far each solve iterates, so outer counts, wall times and
