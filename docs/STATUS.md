@@ -16,9 +16,10 @@ project has already lost five months to exactly that.
 
 Phases 0 and 1 are complete. Phase 2 is in progress: the Navier-Stokes solver exists and
 runs, VAL-001 passes on the collocated solver at its current criterion and on the staggered
-solver at the rebuild's 1%, VAL-002 is marked xfail because the collocated solver fails it at
-the 40x40 CI grid, and the approved engineering change request to rebuild the solver is seven
-steps into its nine-step plan. Phases 3 through 7 have not begun.
+solver at the rebuild's 1%, VAL-002 passes on the staggered solver and stays marked xfail on
+the collocated one, which fails it at the 40x40 CI grid, and the approved engineering change
+request to rebuild the solver is eight steps into its nine-step plan. Phases 3 through 7 have
+not begun.
 
 `docs/PROJECT_PLAN.md` holds the phase detail, deliverables and validation gates.
 
@@ -92,6 +93,15 @@ The clustered grid's error is its stencil's own error on the developed flow. The
 solver refuses the new rule and keeps the old one through one helper, with its results
 unchanged; moving the case file reached two scripts beyond the plan, the stopping probe and
 the viewer, which now name their rule. See `docs/reports/val001_revalidation_step7.md`.
+Step 8 revalidated VAL-002 on the staggered solver. The cavity case file names the
+`error_estimate` rule, with a cap the 80x80 grid needs, and the VAL-002 metric scores the true
+centerlines against Marchi, Suero and Araki (2009) with Ghia's table reported beside it.
+ECR-001 acceptance criteria 3 and 3a pass: below 2% on 80x80, and falling in both components
+at second order across 20x20, 40x40 and 80x80. Against Ghia the same fields do not fall
+monotonically in either component, which is why the scoring moved. Every self-convergence field
+and collocated result is unchanged, the test fixtures now name their rule rather than take the
+case file's, and a named grid preset loads through one function, so no consumer can build the
+stretched preset on a uniform mesh. See `docs/reports/val002_revalidation_step8.md`.
 ADR-010 is deliberately deferred to the end so it records what was built rather than what
 was planned.
 
@@ -166,8 +176,8 @@ no reference, after a control on synthetic fields of known order. With `--extrap
 extrapolates the staggered centerline profiles pointwise from the saved fields, after a
 control of its own, where the observed order licenses it. With `--marchi` it sets the same
 extrapolation against the independent reference `marchi_2009_re100`, which ECR-001
-criteria 3 and 3a score against since the 2026-09-24 amendment; the metric moves to it in
-step 8.
+criteria 3 and 3a score against since the 2026-09-24 amendment, and which the VAL-002 metric
+reads since step 8.
 
 `scripts/stopping_probe.py` solves both validation cases far past their tolerance with the
 pressure correction observed, and measures the iteration error each tolerance leaves, its
@@ -218,14 +228,9 @@ measurement showed; it should not restate the measurement.
 
 ## Next
 
-The rebuild continues at step 8, VAL-002 revalidation on the staggered solver. It judges
-VAL-002 and criterion 3a against `marchi_2009_re100` on the true centerlines, with
-`ghia_1982_re100_r2` reported beside it and no threshold (the ECR-001 amendment of
-2026-09-24), and changes the metric and the VAL-002 test to match. Switching the cavity case
-to the `error_estimate` rule, as step 7 did the channel, meets one known finding: the 80x80
-cavity needs more outer iterations under the rule than the committed cap allows
-(`docs/reports/stopping_rule_evidence.md`, section 9). The collocated solver needs
-`validation.cases.with_velocity_step` wherever it is built from a case that names the rule.
+The rebuild continues at step 9, the last: the ADR-010 write-up, the requirement text for
+REQ-S02 and REQ-S03 and the PROJECT_PLAN validation gates, and the ADR-008 supersession note,
+as ECR-001 section 8 lists them.
 
 With the review Action removed, its repository secret and the GitHub App it used are
 still installed. Removing them is Alex's, after merge.
@@ -243,7 +248,10 @@ system's exact -1 eigenvalue to -1/3, and the closed cavity now converges. The r
 is recorded in the requirement in `docs/SYSTEM.md`; the evidence is in
 `docs/reports/pressure_correction_step5.md`, sections 3 and 5.
 
-Whether VAL-002 can return to the full grid in CI once the rebuild lands.
+Closed 2026-09-25: whether VAL-002 can return to the full grid in CI once the rebuild lands.
+It does not need to. CI runs the staggered VAL-002 on the case file's 40x40 in about a minute,
+below 2% in both components; ECR-001 criterion 3's 80x80 needs more than six minutes and is
+judged from a harness row and the step 8 report, not in CI.
 
 Closed 2026-09-24: whether the stopping rule needs a continuity term. It does.
 `docs/reports/stopping_rule_evidence.md` found that the committed tolerance leaves iteration
@@ -283,7 +291,7 @@ and no threshold. Against Ghia, a correctly converging scheme meets a floor set 
 own error in the jet, below VAL-002's threshold but enough to make the error series rise
 under refinement, which criterion 3a forbids (`docs/reports/cavity_reference_marchi.md`,
 section 5). The decision is an amendment under criteria 3 and 3a in ECR-001 section 9. The
-metric and the VAL-002 test move to Marchi in step 8; until then they read Ghia.
+metric and the VAL-002 test moved to Marchi in step 8.
 
 Closed 2026-09-24: which mesh quantity ECR-001 acceptance criterion 2 fixes. At a given
 cell count the geometric ratio and the wall spacing determine each other, so the criterion
