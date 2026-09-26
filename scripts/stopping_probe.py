@@ -46,6 +46,7 @@ from src.stopping import (  # noqa: E402 -- path set above
 from validation.cases import with_velocity_step  # noqa: E402 -- path set above
 from validation.metrics import (  # noqa: E402 -- path set above
     _inlet_velocity,
+    lagrange,
     poiseuille_l2_error,
     poiseuille_profiles,
 )
@@ -272,7 +273,7 @@ def marchi_stations(
     rows = (sc.MARCHI_U_ROWS, sc.MARCHI_V_ROWS)
     return np.concatenate(
         [
-            sc.lagrange(*ln, np.array([r[0] for r in rs]))
+            lagrange(*ln, np.array([r[0] for r in rs]))
             for ln, rs in zip(lines, rows, strict=True)
         ]
     )
