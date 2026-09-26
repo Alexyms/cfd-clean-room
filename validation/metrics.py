@@ -520,8 +520,9 @@ def cavity_marchi_centerline_errors(
     -----
     The profiles are those of cavity_true_centerline_profiles, and each is
     read at Marchi's fifteen stations by lagrange, the cubic through the four
-    nearest nodes, as scripts/self_convergence.py read them against the
-    table. Linear interpolation, which the Ghia metrics use, adds an O(h^2)
+    nearest nodes: the same cubic that marchi_comparison in
+    scripts/self_convergence.py applies to the staggered faces, here applied
+    to the cell-centered profiles. Linear interpolation, which the Ghia metrics use, adds an O(h^2)
     error of its own between nodes. Errors are over the lid speed, as
     Marchi's velocities are. ECR-001 criteria 3 and 3a score against this
     metric since the amendment of 2026-09-24.

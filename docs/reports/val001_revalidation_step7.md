@@ -67,9 +67,9 @@ restriction that samples every other row and an L/2 station read off column nx /
 **The development floor.** The profile at L/2 differs from the one at 3L/4 by 1.9e-4 of the
 parabola's norm on every grid from 80x40, flat under refinement. The evidence report found a
 different quantity flat too: the metric's value at 3L/4 minus its value at L/2 (1.13e-4 and
-1.07e-4, section 3), a difference of two errors, not the norm of a difference. That difference is the flow still
-developing, which refinement does not remove, and at 160x80 it is larger than the whole error
-against the parabola at L/2. So the order against the parabola at L/2 falls from 2.28 to 1.53: it
+1.07e-4, section 3), a difference of two errors, not the norm of a difference. The profile
+difference is the flow still developing, which refinement does not remove, and at 160x80 it is
+larger than the whole error against the parabola at L/2. So the order against the parabola at L/2 falls from 2.28 to 1.53: it
 measures the approach to that floor, not the scheme. At 3L/4, further developed, it stays near 2.
 
 **Limit of the instrument.** The two-column station and the pair restriction each carry an O(h^2)
