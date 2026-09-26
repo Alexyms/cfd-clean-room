@@ -253,6 +253,32 @@ def test_solve_tight_keeps_only_a_whole_continuation_of_the_saved_field(
 
 
 @pytest.mark.unit
+def test_every_solve_is_pinned_to_velocity_step(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The saved fields were taken under velocity_step; the case file now names another."""
+    assert load_case("cavity").stopping_rule == "error_estimate"
+    rules: list[str] = []
+
+    class BuiltError(Exception):
+        pass
+
+    def spy(mesh: Mesh, config: SimConfig, boundary: object) -> None:
+        rules.append(config.stopping_rule)
+        raise BuiltError
+
+    monkeypatch.setattr(self_convergence, "FIELD_DIR", tmp_path)
+    monkeypatch.setattr(self_convergence, "NavierStokesSolver", spy)
+    monkeypatch.setattr(self_convergence, "StaggeredSolver", spy)
+    for method in self_convergence.METHODS:
+        with pytest.raises(BuiltError):
+            self_convergence.solve_and_save(method, 8)
+    with pytest.raises(BuiltError):
+        self_convergence.solve_tight(8)
+    assert rules == ["velocity_step"] * 3
+
+
+@pytest.mark.unit
 def test_face_profiles_divide_by_the_lid_and_take_nodes_from_the_mesh() -> None:
     """At a lid speed of 2 every value halves and the lid reads 1; nodes are the mesh's."""
     c, pos = (np.arange(8) + 0.5) / 8, np.arange(8.0)

@@ -2,15 +2,13 @@
 #
 # Square cavity with a moving lid (top wall, u = 1.0 tangential) and
 # stationary no-slip walls elsewhere. No pressure outlet; the solver pins
-# the pressure. Compared against the Ghia, Ghia and Shin (1982) centerline
-# profiles held in validation/metrics.py. Loaded by validation/cases.py for
-# tests/test_lid_cavity.py and scripts/benchmark.py.
+# the pressure. Scored on the true centerlines against the reference tables
+# in validation/metrics.py; tests/test_lid_cavity.py names which. Loaded by
+# validation/cases.py for tests/test_lid_cavity.py and scripts/benchmark.py.
 #
-# 40x40 keeps CI runtime bounded. At Re = 100 with SIMPLE under-relaxation,
-# 80x80 takes about 5300 outer iterations. The xfail status on the test
-# applies at any resolution because the v-error is grid-independent per the
-# diagnostic in ECR-001. Full-resolution runs are a manual activity until
-# the staggered-grid rebuild resolves the defect.
+# 40x40 is the grid CI runs. ECR-001 criterion 3 names 80x80, which is
+# judged from a harness row, not in CI. Under the error_estimate rule 80x80
+# takes about 12800 outer iterations, hence the cap of 20000.
 
 domain:
   width: 1.0
@@ -45,11 +43,17 @@ solver:
   t_end: 1.0
   output_interval: 10
   convergence_tol: 1.0e-6
-  max_simple_iter: 10000
+  max_simple_iter: 20000
   alpha_velocity: 0.5
   alpha_pressure: 0.3
   max_pressure_iter: 500
   pressure_tol: 1.0e-8
+  # The case says how it is validated (ECR-001 step 8). The tolerances are the
+  # defaults, written out. The collocated solver refuses this rule, so the
+  # harness and its VAL-002 test run it under velocity_step, set in memory.
+  stopping_rule: error_estimate
+  iteration_error_tol: 1.0e-6
+  mass_imbalance_tol: 1.0e-10
 
 boundaries:
   lid:

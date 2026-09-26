@@ -65,9 +65,7 @@ from src.solver_staggered import (  # noqa: E402 -- follows sys.path.insert
 from src.staggered import allocate_fields  # noqa: E402 -- follows sys.path.insert
 from validation.cases import (  # noqa: E402 -- follows sys.path.insert
     CASE_GRIDS,
-    WALL_CLUSTERED_GRIDS,
-    load_case,
-    load_wall_clustered,
+    load_preset,
     with_velocity_step,
 )
 from validation.metrics import (  # noqa: E402 -- follows sys.path.insert
@@ -172,6 +170,37 @@ def fluid_cells_per_sweep(mesh: Mesh) -> int:
         Count of cells typed FLUID.
     """
     return int(np.count_nonzero(mesh.cell_type == FLUID))
+
+
+def axis_clustering(mesh: Mesh) -> dict[str, dict[str, float]]:
+    """Each axis's geometric ratio and wall cell as the mesh derived them.
+
+    A row's case id names a preset whose definition can change, and nx and
+    ny alone do not tell a clustered mesh from a uniform one of the same
+    size. Rows stored before this field record nx and ny only; every one of
+    them is uniform except val001_80x40_stretched, whose git_commit pins it.
+
+    Parameters
+    ----------
+    mesh : Mesh
+        Mesh of the solve.
+
+    Returns
+    -------
+    dict[str, dict[str, float]]
+        {"x": {"stretch_ratio", "min_wall_spacing"}, "y": the same}, in the
+        mesh's units; a uniform axis has ratio 1.0 and wall cell L / n.
+    """
+    return {
+        "x": {
+            "stretch_ratio": float(mesh.stretch_ratio_x),
+            "min_wall_spacing": float(mesh.min_spacing_x),
+        },
+        "y": {
+            "stretch_ratio": float(mesh.stretch_ratio_y),
+            "min_wall_spacing": float(mesh.min_spacing_y),
+        },
+    }
 
 
 def staggered_updates(mesh: Mesh, config: SimConfig) -> tuple[int, int]:
@@ -340,8 +369,7 @@ def run_case(case_id: str, method: str, sample_every: int, concurrent: int) -> d
         If the method is not one of METHODS.
     """
     kind, nx, ny = CASES[case_id]
-    loader = load_wall_clustered if case_id in WALL_CLUSTERED_GRIDS else load_case
-    config = loader(kind, grid=(nx, ny))
+    config = load_preset(case_id)
     if method == DEFAULT_METHOD:
         config = with_velocity_step(config)
     solver_block = solver_parameters(config)
@@ -413,7 +441,7 @@ def run_case(case_id: str, method: str, sample_every: int, concurrent: int) -> d
         "git_dirty": dirty,
         "method": method,
         "case": case_id,
-        "grid": {"nx": nx, "ny": ny},
+        "grid": {"nx": nx, "ny": ny, **axis_clustering(mesh)},
         "params": solver_block,
         "environment": {
             "cpu": cpu_name(),

@@ -46,6 +46,7 @@ from validation.cases import (  # noqa: E402 -- follows sys.path.insert
     CASE_GRIDS,
     WALL_CLUSTERED_GRIDS,
     load_case,
+    load_preset,
     with_velocity_step,
 )
 from validation.metrics import (  # noqa: E402 -- follows sys.path.insert
@@ -78,7 +79,7 @@ def solve_and_save(case_id: str, out_dir: Path, method: str = DEFAULT_METHOD) ->
     if case_id in WALL_CLUSTERED_GRIDS:
         raise ValueError(f"{case_id} is wall-clustered; the viewer draws uniform grids")
     kind, nx, ny = CASE_GRIDS[case_id]
-    config = load_case(kind, grid=(nx, ny))
+    config = load_preset(case_id)
     mesh = Mesh(config)
     solver: NavierStokesSolver | StaggeredSolver
     if method == DEFAULT_METHOD:
@@ -185,9 +186,10 @@ def render(npz_path: Path, out_dir: Path) -> Path:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    uniform = sorted(set(CASE_GRIDS) - WALL_CLUSTERED_GRIDS)
     parser.add_argument(
         "target",
-        help=f"a case id ({', '.join(sorted(CASE_GRIDS))}) or a path to a saved .npz",
+        help=f"a case id ({', '.join(uniform)}) or a path to a saved .npz",
     )
     parser.add_argument("--out", type=Path, default=RESULTS_DIR)
     parser.add_argument(
