@@ -1,8 +1,8 @@
 # Project Plan
 
 **Project:** CFD Clean Room Simulation
-**Last Updated:** 2026-09-30
-**Current Phase:** Phase 2 (Navier-Stokes Solver)
+**Last Updated:** 2026-10-01
+**Current Phase:** Phase 3 (Transport Solver), not started; Phase 2 complete
 
 This document tracks development progress by phase. Code review reads this document to determine the current phase and verify that PRs are in scope; the policy is `docs/REVIEW_POLICY.md`. Update this document as work progresses.
 
@@ -14,7 +14,7 @@ This document tracks development progress by phase. Code review reads this docum
 |-------|------|--------|-------------|--------|
 | 0 | Infrastructure | COMPLETE | PASS | -- |
 | 1 | Foundation | COMPLETE | PASS | phase1_foundation_report.md |
-| 2 | Navier-Stokes Solver | GATE REVIEW | -- | -- |
+| 2 | Navier-Stokes Solver | COMPLETE | PASS | phase2_navier_stokes_report.md |
 | 3 | Transport Solver | NOT STARTED | -- | -- |
 | 4 | Scenarios & Time Integration | NOT STARTED | -- | -- |
 | 5 | Alert Monitoring System | NOT STARTED | -- | -- |
@@ -354,3 +354,4 @@ Phase 3 completion is the minimum viable portfolio artifact. A working, validate
 | 2026-09-25 | ECR-001 step 8 delivered: VAL-002 revalidated on the staggered solver. configs/validation_cavity.yaml names stopping_rule error_estimate with max_simple_iter 20000; validation.metrics.cavity_marchi_centerline_errors (metric max_normalized_centerline_error_cubic) scores the true centerlines against marchi_2009_re100 at its stations by the cubic moved there from scripts/self_convergence.py, and the harness uses it; tests/test_lid_cavity.py adds the staggered test at < 2% on the case file's 40x40, asserting the stop by the rule. Criteria 3 and 3a pass from three rows at 20x20, 40x40 and 80x80, with Ghia reported beside them. The collocated test keeps its xfail and its Ghia metric through validation.cases.with_velocity_step, the self-convergence fields and collocated rows are unchanged, validation.cases.load_preset loads every named preset, and new harness rows record each axis's clustering. See docs/reports/val002_revalidation_step8.md. REQ-S03 text and the VAL-002 gate row unchanged until step 9. |
 | 2026-09-30 | Stopping rule condition (d) added (src/stopping.py): error_estimate also requires the absolute signed domain sum of the per-cell imbalance below mass_imbalance_tol, ECR-001 criterion 6's domain-sum clause, which nothing checked before (review 27 B1). No configuration key. Cavity stops unchanged; channel stops later and criteria 1, 2 and 4 still pass, with rows for val001_80x40, val001_80x40_stretched and val002_80x80 appended. REQ-S04 clarified again, not amended; note under ECR-001 criterion 6. See docs/reports/stopping_rule_evidence.md, section 10. |
 | 2026-09-30 | ECR-001 step 9: ADR-010 written, ADR-008 marked superseded, ECR-001 closed. REQ-S02 amended to < 1% and REQ-S03 to marchi_2009_re100 in docs/SYSTEM.md, REQ-S11 to the stretching built. Phase 2 deliverables and validation gate brought current: the staggered solver and its modules DONE, the collocated solver and boundary.py RETAINED as the harness baseline pending Alex's decision on retirement, VAL-001 and VAL-002 PASS at their amended criteria. Phase 2 at GATE REVIEW. A unit test now pins the cubic stencil of validation.metrics.lagrange (test 26b T1). |
+| 2026-10-01 | Phase 2 complete, gate PASS: all six gate criteria hold (docs/reports/phase2_navier_stokes_report.md). Line coverage 98.2% against Phase 1's 95%. ECR-001 criterion 6 decided: condition (d) accepted as built, met on the channel at a zero crossing of the net outflow (ECR-001 section 9). The SYSTEM.md cascade rows and contract headings brought in line with the import graph (review 27 B2). The collocated solver's retirement and an outer iteration that does not overshoot are the first questions of Phase 3. |
