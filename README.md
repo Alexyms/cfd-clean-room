@@ -4,7 +4,7 @@ A from-scratch Computational Fluid Dynamics engine simulating clean room airflow
 
 The simulation models a vertical cross-section of a semiconductor clean room, solving incompressible Navier-Stokes for the velocity field using the Finite Volume method, then solving advection-diffusion equations for particle contamination transport across five size classes. An alert monitoring layer tracks contamination against ISO 14644 thresholds for detection and sensor placement analysis.
 
-**Status:** Phase 2 in progress. Foundation modules (config, mesh, particles) complete and validated. Navier-Stokes solver under development.
+**Status:** Phase 2 complete. The Navier-Stokes solver is built on a staggered grid and validated against Poiseuille flow and the lid-driven cavity (`docs/reports/phase2_navier_stokes_report.md`). Phase 3, the transport solver, has not begun.
 
 ## Architecture
 
@@ -25,7 +25,7 @@ See `docs/` for the system architecture, project plan, and development phasing.
 Each phase passes a validation gate before the next begins. Test cases include:
 
 - Poiseuille flow (analytical parabolic velocity profile)
-- Lid-driven cavity (Ghia et al. 1982 benchmark)
+- Lid-driven cavity (Marchi, Suero and Araki 2009 benchmark, with Ghia et al. 1982 reported beside it)
 - Pure diffusion (analytical Gaussian spreading)
 - Pulse advection (transport without distortion)
 - Stokes settling velocity with Cunningham correction
