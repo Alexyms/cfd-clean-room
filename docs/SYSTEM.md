@@ -1,7 +1,7 @@
 # System Architecture Document
 
 **Project:** CFD Clean Room Simulation
-**Status:** Phase 2 in progress. Navier-Stokes solver under development.
+**Status:** ECR-001 closed; the staggered Navier-Stokes solver is built and validated and is the solver of record (ADR-010). Phase status is in `docs/PROJECT_PLAN.md`.
 **Last Updated:** 2026-10-01
 
 This document is the single reference for system architecture, requirements, module interfaces, and dependency relationships. Review and test, run before each pull request as `/cfd-review` and `/cfd-test` in fresh Claude Code sessions (`.claude/commands/`), check branches against this document under the policy in `docs/REVIEW_POLICY.md`. Keep it current.
@@ -22,19 +22,21 @@ Requirements are organized by subsystem. Each requirement has a unique ID, a rat
 
 ### 2.1 Solver Requirements
 
+Since ECR-001 step 9 (2026-09-30), "the NS solver" in this table is the staggered solver, `src/solver_staggered.py` (ADR-010). The collocated solver, `src/solver_ns.py`, is kept as the benchmark harness's before-and-after baseline while its retirement is decided; its own tests record its results at the criteria it was built to (ADR-008).
+
 | ID | Requirement | Rationale | Verified By |
 |----|-------------|-----------|-------------|
 | REQ-S01 | The NS solver shall converge to a steady-state velocity field with residuals below a configurable tolerance. | Velocity field accuracy depends on convergence. Divergent or under-converged solutions produce meaningless transport results. Clarified 2026-09-24, not amended: under the staggered solver's `error_estimate` stopping rule (`src/stopping.py`) the configurable tolerance, `iteration_error_tol`, applies to the estimated iteration error, the velocity step times rho_hat / (1 - rho_hat) over the largest prescribed boundary velocity, with rho_hat the step's fitted geometric rate. A small step is not a small error: the error left is about the step times rho / (1 - rho), and rho approaches 1 under refinement. The velocity-step residual against `convergence_tol` stays the default rule and keeps its meaning. See `docs/reports/stopping_rule_evidence.md`, sections 4 and 9. | VAL-001, VAL-002 |
-| REQ-S02 | The NS solver shall reproduce the Poiseuille flow parabolic velocity profile with L2 error < 2.5% on a 80x40 grid. The 2.5% criterion reflects the O(h) wall accuracy of the collocated ghost-cell boundary treatment (industry-standard approach, see ADR-008). Error decreases monotonically with grid refinement at the expected first-order rate. | Validates basic FV discretization and pressure-velocity coupling against an exact analytical solution. | VAL-001 |
-| REQ-S03 | The NS solver shall reproduce lid-driven cavity centerline velocity profiles within 2% of Ghia et al. (1982) benchmark data. | Validates nonlinear advection, 2D pressure gradients, and recirculation handling. | VAL-002 |
-| REQ-S04 | The velocity field shall satisfy the incompressibility constraint (divergence-free) to within configurable tolerance at every cell. | Mass conservation is fundamental. FV enforces this by construction, but numerical errors can accumulate. Clarified 2026-09-24, not amended: under the `error_estimate` stopping rule the per-cell tolerance, `mass_imbalance_tol`, is enforced at stopping. A solve is not converged until the worst absolute per-cell mass imbalance of its field is below it, which the velocity-step rule never checked. On an open domain the imbalance sets a drift of the through-flow that the velocity step does not see, and the per-cell bound alone lets that drift grow with the number of cells upstream, more on every finer grid. So the rule also requires the summed absolute imbalance, over rho times the inflow (on a closed domain rho times the velocity scale times the longer side), to be below `iteration_error_tol`. The flux through any cross-section differs from the inflow by at most the summed imbalance on one side of it, so this bounds the drift relative to the through-flow on any grid. Clarified again 2026-09-30: the rule also requires the absolute value of the signed imbalance summed over the domain, the net mass flux out of it, to be below `mass_imbalance_tol`. That is ECR-001 criterion 6's domain-sum clause at the bound the criterion names, beside the per-cell clause above. See `docs/reports/stopping_rule_evidence.md`, sections 4, 5, 9 and 10. | VAL-007 |
+| REQ-S02 | The NS solver shall reproduce the Poiseuille flow parabolic velocity profile with L2 error < 1% on an 80x40 grid. | Validates basic FV discretization and pressure-velocity coupling against an exact analytical solution. Amended 2026-09-30 (ECR-001 step 9): the criterion returns from 2.5% to the original 1%, as ECR-001 section 6 records for the supersession of ADR-008, now that wall conditions are imposed directly on the staggered components (REQ-S12). The staggered solver measures 4.104e-4 on the uniform 80x40 grid and 3.024e-3 on the same grid clustered to a wall cell of 0.1 H / ny, and converges at order 1.99 under uniform refinement, judged without a reference (ECR-001 criteria 1, 2 and 4; `docs/reports/val001_revalidation_step7.md`). The 2.5% and its O(h) rationale belonged to the collocated ghost-cell walls (ADR-008), and the collocated solver's own test keeps it. | VAL-001 |
+| REQ-S03 | The NS solver shall reproduce the lid-driven cavity centerline velocity profiles at Re = 100 with a maximum error below 2% of the lid speed against Marchi, Suero and Araki (2009), reference `marchi_2009_re100`. Ghia et al. (1982), reference `ghia_1982_re100_r2`, is reported beside it and is not scored. | Validates nonlinear advection, 2D pressure gradients, and recirculation handling. Amended 2026-09-30 (ECR-001 step 9), per the amendment of 2026-09-24 under ECR-001 criteria 3 and 3a: scored against Ghia, a correctly converging scheme meets a floor of about 0.005 in u and 0.009 in v in the jet by the right wall, which is Ghia's own error, and a series that must fall under refinement then fails the right answer (`docs/reports/cavity_reference_marchi.md`, section 5). The staggered solver measures u 1.057e-3 and v 7.356e-4 of the lid speed at 80x80 against Marchi, falling at second order from 20x20 (`docs/reports/val002_revalidation_step8.md`). Until 2026-09-22 the Ghia v table in use was not Ghia's (ECR-001 erratum, section 12). | VAL-002 |
+| REQ-S04 | The velocity field shall satisfy the incompressibility constraint (divergence-free) to within configurable tolerance at every cell. | Mass conservation is fundamental. FV enforces this by construction, but numerical errors can accumulate. Clarified 2026-09-24, not amended: under the `error_estimate` stopping rule the per-cell tolerance, `mass_imbalance_tol`, is enforced at stopping. A solve is not converged until the worst absolute per-cell mass imbalance of its field is below it, which the velocity-step rule never checked. On an open domain the imbalance sets a drift of the through-flow that the velocity step does not see, and the per-cell bound alone lets that drift grow with the number of cells upstream, more on every finer grid. So the rule also requires the summed absolute imbalance, over rho times the inflow (on a closed domain rho times the velocity scale times the longer side), to be below `iteration_error_tol`. The flux through any cross-section differs from the inflow by at most the summed imbalance on one side of it, so this bounds the drift relative to the through-flow on any grid. Clarified again 2026-09-30: the rule also requires the absolute value of the signed imbalance summed over the domain, the net mass flux out of it, to be below `mass_imbalance_tol`. That is ECR-001 criterion 6's domain-sum clause at the bound the criterion names, beside the per-cell clause above. See `docs/reports/stopping_rule_evidence.md`, sections 4, 5, 9 and 10. Verification corrected 2026-09-30 (ECR-001 step 9): VAL-007 is the transport solver's conservation test (REQ-T05) and does not exist before Phase 3. The staggered VAL-001 and VAL-002 tests assert the stop `error_estimate_and_continuity`, which this tolerance gates. | Unit test, VAL-001, VAL-002; VAL-007 from Phase 3 |
 | REQ-S05 | The solver shall use the SIMPLE algorithm for pressure-velocity coupling. | Industry-standard approach. Well-documented, stable, compatible with structured grids. | Architecture review |
 | REQ-S06 | The pressure correction inner loop shall have a pure NumPy reference implementation for validation and a CUDA C++ accelerated implementation for production runs, called from Python via pybind11. The NumPy reference shall remain in the codebase permanently as the ground truth for equivalence testing (see REQ-N03). | NumPy reference validates physics independently of GPU code. CUDA acceleration is a separate deliverable after solver physics are validated. | Integration test |
 | REQ-S07 | The solver shall use a staggered (MAC) variable arrangement with pressure at cell centers, u-velocity at east-west cell faces, and v-velocity at north-south cell faces. | Staggered arrangement provides natural pressure-velocity coupling without Rhie-Chow interpolation artifacts. Eliminates checkerboard modes by construction and enables exact discrete continuity enforcement. Required by ECR-001, whose motivating VAL-002 v-velocity error was later found to be measured against a corrupted Ghia table (ECR-001 erratum, 2026-09-22); the wall mass leak it also cites stands. | Architecture review, VAL-001, VAL-002 |
 | REQ-S08 | The pressure correction equation shall be solved using Jacobi iteration. | Jacobi iteration updates all cells independently from previous-iteration neighbors, enabling full vectorization in NumPy and direct parallelization in CUDA (one thread per cell). Converges slower per iteration than Gauss-Seidel but each iteration is a single array operation. Clarified 2026-09-22, not amended: weighted Jacobi, `p_new = (1 - w) p_old + w (Jacobi update)` with w = 2/3, satisfies this requirement, because every cell still reads only previous-iteration neighbors and a scalar weight does not change that. On a closed domain the weight is necessary: every row has a_P equal to its neighbor sum and the grid is bipartite, so the checkerboard is an exact eigenvector of the plain update with eigenvalue -1 and never decays. The weight maps it to 1 - 2w = -1/3. See `docs/reports/pressure_correction_step5.md`, sections 3 and 5. | Unit test |
 | REQ-S09 | The advection term shall be discretized using the QUICK scheme (Leonard 1979) with specialized stencils at boundary-adjacent cells. | QUICK provides second-order accuracy globally on smooth flows, appropriate for the moderate-Peclet regime of cleanroom flows. Does not require first-order upwind fallback of hybrid schemes. Required by ECR-001. | VAL-001, VAL-002 |
 | REQ-S10 | Under-relaxation factors for velocity (default 0.7) and pressure (default 0.3) shall be configurable via the YAML configuration. | SIMPLE requires under-relaxation for stability. Factors control convergence rate vs. stability tradeoff. Configurable per REQ-C01. | Unit test |
-| REQ-S11 | The mesh shall support independent geometric stretching in x and y directions, specified by minimum face spacing and geometric expansion ratio per wall. | Enables resolution clustering near walls and high-gradient regions without uniform refinement of the entire domain. Required by ECR-001. | Unit test |
+| REQ-S11 | The mesh shall support independent geometric stretching in x and y directions, clustered toward both walls of an axis and mirrored about its midpoint, specified per axis by either the wall-adjacent cell width or the geometric expansion ratio, the other derived from the cell count. | Enables resolution clustering near walls without uniform refinement of the entire domain. Required by ECR-001. Amended 2026-09-30 (ECR-001 step 9) to what step 1 built. The earlier text asked for the spacing and the ratio per wall, but at a fixed cell count a symmetric geometric distribution has one free parameter (ECR-001 criterion 2 note), and the two walls of an axis share it. Clustering toward one wall of an axis only, or toward an interior region, is not built. | Unit test |
 | REQ-S12 | Dirichlet velocity boundary conditions shall be imposed directly on the staggered velocity components at the physical wall location, without ghost cell interpolation. | Eliminates the O(h) wall accuracy limitation previously documented in ADR-008. Required by ECR-001. | Unit test, VAL-001 |
 | REQ-S12.1 | The interpretation of configured boundary segments (which segment covers a point on a domain edge, its type, and the velocity it prescribes there) shall be implemented once and shared by every boundary imposition layer. | Derived from REQ-S12, for modularity rather than physics: the collocated and the staggered layer are two consumers of one configuration interpretation, and a second copy could drift while both exist during the rebuild. | Unit test |
 
@@ -146,7 +148,7 @@ When a PR modifies a module, the reviewer verifies impact on downstream modules.
 | config.py | mesh, boundary, solver_ns, solver_transport, particles, monitor, scenarios, time_integration | New/changed/removed config fields are handled by all consumers. No module accesses a field that no longer exists. No module ignores a new field it should use. |
 | mesh.py | boundary, solver_ns, solver_transport, monitor, staggered | Grid dimensions, cell arrays, and coordinate arrays are consumed correctly. Shape assumptions still hold. Centers stay face midpoints; staggered averaging depends on it. |
 | staggered.py | solver_staggered, boundary_staggered, momentum, pressure | Face array shapes and the face-to-center averaging contract unchanged. |
-| boundary.py | solver_ns, solver_transport | Collocated BC application interface unchanged. New BC types handled in solvers if needed. Retired with the collocated solver in a step after ECR-001 step 6, which built the staggered solver alongside it. |
+| boundary.py | solver_ns, solver_transport | Collocated BC application interface unchanged. New BC types handled in solvers if needed. Kept with the collocated solver as the harness baseline; whether to retire both is open (docs/reports/phase2_navier_stokes_report.md, Deferred). |
 | boundary_registry.py | boundary, boundary_staggered | Coverage rule (same edge, inclusive range, first match in configuration order, wall by default) and the prescribed-velocity decomposition unchanged. Both layers read them, so a change here moves both. |
 | boundary_staggered.py | momentum, pressure, solver_staggered | Normal imposition writes domain faces only. Tangential data shape [n+1], outlet data shape [n], wall_distance semantics and the inward flux sign unchanged. |
 | momentum.py | pressure, solver_staggered | MomentumPrediction shapes and the meaning of a_p_u and a_p_v (un-relaxed diagonal, positive exactly at the unknown faces) unchanged; boundary entries of u and v read as given and never written. |
@@ -336,8 +338,8 @@ BoundaryRegistry:
 ### boundary.py --> solver_ns, solver_transport
 
 Collocated ghost-cell layer, built on the registry. Interface and output
-unchanged by ECR-001 step 3; retired with the collocated solver in a step
-after step 6.
+unchanged by ECR-001 step 3. Kept with the collocated solver as the
+harness baseline; whether to retire both is open (ADR-010).
 
 ```
 BoundaryManager:
@@ -444,11 +446,13 @@ PressureCorrector:
 ### solver_staggered.py --> scripts/benchmark.py, scripts/view_field.py (ECR-001 step 6)
 
 Steady SIMPLE on the staggered layout, built alongside the collocated solver
-rather than in its place so both run from one commit; the collocated solver
-is retired in a later step. One outer iteration is MomentumPredictor.predict
-then PressureCorrector.correct, keeping the corrected fields. The public
-shape is NavierStokesSolver's, so the harness drives either through one
-callback, and the harness ``--method`` label selects between them.
+rather than in its place so both run from one commit. It is the solver of
+record (ADR-010); the collocated solver is kept as the harness baseline
+while its retirement is decided. One outer iteration is
+MomentumPredictor.predict then PressureCorrector.correct, keeping the
+corrected fields. The public shape is NavierStokesSolver's, so the harness
+drives either through one callback, and the harness ``--method`` label
+selects between them.
 
 ```
 StaggeredSolver:
@@ -543,8 +547,11 @@ NavierStokesSolver:
     solve_timestep(u, v, p, dt) -> tuple[ndarray, ndarray, ndarray]
     compute_residual() -> float
     All output arrays: shape [ny, nx], dtype float64, contiguous
-    Internal storage uses staggered layout per REQ-S07; cell-center
-    interpolation is applied at the solver boundary before return.
+    Collocated storage: u, v and p at cell centers, Rhie-Chow face fluxes
+    (ADR-008). StaggeredSolver has the same public shape and is the
+    solver of record (ADR-010); this class is kept as the harness
+    baseline while its retirement is decided, and IterationState, which
+    both solvers use, lives here.
 ```
 
 ### solver_transport.py --> time_integration, monitor
@@ -617,7 +624,7 @@ Any change to scope boundaries during development must be:
 
 ## 6. Architecture Decision Records
 
-Full ADRs are in the development plan document. Summary reference:
+ADR-008 and ADR-010 are files in `docs/ADR/`; the others are in the development plan document. Summary reference:
 
 | ADR | Decision | Key Rationale |
 |-----|----------|---------------|
@@ -628,8 +635,8 @@ Full ADRs are in the development plan document. Summary reference:
 | ADR-005 | Hybrid Python/CUDA C++ | Python orchestration with pure NumPy reference solver for validation, CUDA C++ kernels via pybind11 for accelerated production runs. NumPy solver is the primary implementation through Phase 3 validation. CUDA acceleration is a separate deliverable after solver physics are validated. |
 | ADR-006 | Five particle size classes | Spans diffusion-dominated to settling-dominated regimes. Maps to ISO 14644. |
 | ADR-007 | Ionizer modeling deferred | Scope risk. Extension point (v_ext) preserved in transport solver interface. |
-| ADR-008 | Collocated ghost cell wall treatment (Superseded by ADR-010) | O(h) wall accuracy accepted for simplicity. Industry-standard approach. VAL-001 relaxed from 1% to 2%. |
-| ADR-010 | Solver Architecture V2: Staggered Grid, Non-Uniform Mesh, QUICK Advection | Staggered MAC grid removes the collocated ghost-cell wall leak and enforces discrete continuity exactly (ECR-001 acceptance criterion 6). The VAL-002 v error once cited here was measured against a corrupted Ghia table (ECR-001 erratum). Non-uniform mesh enables efficient resolution placement. QUICK provides globally second-order advection. See ECR-001. |
+| ADR-008 | Collocated ghost cell wall treatment (Superseded by ADR-010) | O(h) wall accuracy accepted for simplicity. Industry-standard approach. VAL-001 relaxed from 1% to 2.5%. |
+| ADR-010 | Solver Architecture V2: Staggered Grid, Non-Uniform Mesh, QUICK Advection | Staggered MAC grid removes the collocated ghost-cell wall leak and enforces discrete continuity exactly (ECR-001 acceptance criterion 6). The VAL-002 v error once cited here was measured against a corrupted Ghia table (ECR-001 erratum). Non-uniform mesh clusters cells toward the walls; on the VAL-001 stencil it costs accuracy at a fixed cell count. QUICK by deferred correction; weighted Jacobi; the error_estimate stopping rule. Records what ECR-001 built, with planned against built. |
 
 ---
 
@@ -656,3 +663,4 @@ Full ADRs are in the development plan document. Summary reference:
 | 2026-09-25 | Cascade row for solver_staggered.py lists scripts/val001_order.py (review 25 S1) and scripts/self_convergence.py (ECR-001 step 8 report, F8), the scripts that read the solver's public shape, and says the harness stores velocity_step_below_tol as residual_below_tol. No requirement, contract or module changed. | Alex Moroz-Smietana |
 | 2026-09-30 | REQ-S04 clarified again, not amended: error_estimate gains condition (d), the absolute signed domain sum of the per-cell imbalance below mass_imbalance_tol, ECR-001 criterion 6's domain-sum clause, which nothing checked before (review 27 B1). No configuration key. The imbalance callable returns an ImbalanceSummary (worst, absolute_sum, signed_sum) in place of a pair; stopping.py gains RULE_VERSION, which scripts/stopping_probe.py and scripts/val001_order.py (through its new reuse_key) store with saved solves. Contract and the stopping.py cascade row updated. Cavity stops bitwise unchanged; channel stops later. See docs/reports/stopping_rule_evidence.md, section 10. | Alex Moroz-Smietana |
 | 2026-10-01 | The harness records RULE_VERSION in the params of every error_estimate row and keys its summary on it; an error_estimate row without it reads as version 2, the three-condition rule (review 28 B1). The stopping.py cascade row names scripts/benchmark.py. The three rows taken at 8aac137, never on main, were replaced by rows that carry the version. Condition (d) accepted as built: it is met at a zero crossing of the net outflow's decaying oscillation (docs/reports/stopping_rule_evidence.md, section 10). No requirement, contract or rule behaviour changed. | Alex Moroz-Smietana |
+| 2026-09-30 | ECR-001 step 9. REQ-S02 amended to < 1% on 80x40 (ECR-001 section 6) and REQ-S03 to score against marchi_2009_re100 with ghia_1982_re100_r2 reported unscored (amendment of 2026-09-24), each with its measured value. REQ-S11 amended to the per-axis, mirrored stretching step 1 built; REQ-S04's Verified By corrected (VAL-007 is Phase 3's). REQ-S01, S07, S08, S09 and S12 checked against the build and unchanged. Section 2.1 names the staggered solver as the NS solver; the collocated solver and boundary.py are described as the kept harness baseline, no longer as retired in a later step, and the NavierStokesSolver contract no longer claims staggered storage. ADR-010 added as a file and its summary row updated; ADR-008's row corrected to 2.5%. No module, interface or generated region changed. | Alex Moroz-Smietana |
