@@ -33,6 +33,7 @@ from validation.metrics import (
     cavity_marchi_centerline_errors,
     cavity_true_centerline_errors,
     cavity_true_centerline_profiles,
+    lagrange,
     poiseuille_l2_error,
     poiseuille_profiles,
 )
@@ -567,3 +568,45 @@ class TestMarchiMetric:
         assert metric.components["u"] == pytest.approx(np.abs(err_u).max(), rel=1e-12)
         assert metric.components["v"] == pytest.approx(np.abs(err_v).max(), rel=1e-12)
         assert metric.value == metric.components["u"]
+
+
+@pytest.mark.unit
+class TestLagrange:
+    """lagrange: the cubic through the four nearest nodes, test 26b T1.
+
+    A single 1 among zeros is not a cubic, so unlike the cubic profiles of
+    TestMarchiMetric it reads differently through every choice of four nodes.
+    What it reads is the weight lagrange gives that node.
+    """
+
+    NODES = np.arange(8.0)
+
+    def _weights(self, target: float) -> list[float]:
+        """Each node's weight at target, read from a single 1 among zeros."""
+        at = np.array([target])
+        return [float(lagrange(self.NODES, e, at)[0]) for e in np.eye(len(self.NODES))]
+
+    def test_at_a_midpoint_the_stencil_is_centered(self) -> None:
+        """Between nodes 3 and 4 the weights are (-1, 9, 9, -1) / 16 on nodes 2 to 5.
+
+        A stencil started one node up reads (5, 15, -5, 1) / 16 on nodes 3 to 6,
+        and one node down (1, -5, 15, 5) / 16 on nodes 1 to 4.
+        """
+        expected = [0.0, 0.0, -1 / 16, 9 / 16, 9 / 16, -1 / 16, 0.0, 0.0]
+        assert self._weights(3.5) == pytest.approx(expected, abs=1e-15)
+
+    @pytest.mark.parametrize(
+        ("target", "expected"),
+        [
+            (0.5, [5 / 16, 15 / 16, -5 / 16, 1 / 16, 0.0, 0.0, 0.0, 0.0]),
+            (6.5, [0.0, 0.0, 0.0, 0.0, 1 / 16, -5 / 16, 15 / 16, 5 / 16]),
+        ],
+    )
+    def test_at_each_end_the_stencil_shifts_inward(
+        self, target: float, expected: list[float]
+    ) -> None:
+        """Between the first two nodes it is nodes 0 to 3, between the last two 4 to 7.
+
+        Centered, these stencils would start at node -1 and end at node 8.
+        """
+        assert self._weights(target) == pytest.approx(expected, abs=1e-15)
