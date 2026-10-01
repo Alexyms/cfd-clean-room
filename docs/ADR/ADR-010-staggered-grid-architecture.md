@@ -2,8 +2,9 @@
 
 ## Status
 Accepted. Written 2026-09-30 at ECR-001 step 9, after steps 1 to 8 were merged, so it records
-what was built rather than what was planned. Supersedes ADR-008. ECR-001 holds the decision to
-rebuild and its acceptance criteria. Bracketed numbers point at the sources listed at the end.
+what was built rather than what was planned; revised 2026-10-01 for the fourth condition of the
+stopping rule. Supersedes ADR-008. ECR-001 holds the decision to rebuild and its acceptance
+criteria. Bracketed numbers point at the sources listed at the end.
 
 ## Context
 The collocated SIMPLE solver (`src/solver_ns.py`, Rhie-Chow face fluxes, hybrid advection,
@@ -56,7 +57,7 @@ its physical location. One under-relaxed Jacobi sweep per outer iteration; the c
 probe found extra momentum sweeps cut its outer count by 1.8 times and then stopped helping
 [5]. Measured order: against the solver itself, the cavity's centerline extrema and interior
 energy converge at 2.1 to 3.1 on the saved fields, falling toward 2 on fields converged
-further [6, sections 3 and 9.2]; VAL-001 at 1.993 without a reference [7], and VAL-002
+further [6, sections 3 and 9.2]; VAL-001 at 1.992 without a reference [7], and VAL-002
 against Marchi at 2.24 and 2.11 in u, 2.12 and 2.07 in v [8].
 
 **4. Weighted Jacobi at w = 2/3 (REQ-S08, clarified 2026-09-22, not amended).** On a closed
@@ -70,11 +71,13 @@ correction rose from 126,277 to 183,134 sweeps, a factor of 1.450 against the 1.
 predicts for the slowest mode [3, section 5]. A weight of 0.95 needs about a quarter fewer
 sweeps; 2/3, the textbook smoother weight, was kept as a module constant, not a configuration key.
 
-**5. The `error_estimate` stopping rule (REQ-S01 and REQ-S04, clarified 2026-09-24).**
-Built in `src/stopping.py`, opt-in by the solver key `stopping_rule`, and named by both
-validation case files. The velocity-step rule stays the default and reproduces earlier fields
-bitwise. A solve stops when
-all three hold, and reaching the cap is reported as not converged [4, section 9]:
+**5. The `error_estimate` stopping rule (REQ-S01 and REQ-S04, clarified 2026-09-24 and
+2026-09-30).** Built in `src/stopping.py`, opt-in by the solver key `stopping_rule`, and named
+by both validation case files. The velocity-step rule stays the default and reproduces earlier
+fields bitwise. The rule carries a version, `RULE_VERSION`, stored with every saved solve and
+in the params of every `error_estimate` harness row; the four-condition rule is version 3. A
+solve stops when all four hold, and reaching the cap is reported as not converged [4, sections
+9 and 10]:
 
 - (a) the velocity step times rho_hat / (1 - rho_hat), over the largest prescribed boundary
   velocity, is below `iteration_error_tol` (1e-6), rho_hat fitted over the last 100 steps. A
@@ -83,8 +86,8 @@ all three hold, and reaching the cap is reported as not converged [4, section 9]
   error [4, sections 3 and 6]. On the cavity the estimate lies within 0.77 to 1.34 of the true
   error from 1e-5 to 1e-10 [4, section 4].
 - (b) the worst per-cell imbalance is below `mass_imbalance_tol` (1e-10, absolute), ECR-001
-  criterion 6 as written. The velocity-step rule had stopped all three step 6 cases 2 to 30
-  times above it, with the solver reporting convergence [9, section 2].
+  criterion 6's per-cell clause. The velocity-step rule had stopped all three step 6 cases 2 to
+  30 times above it, with the solver reporting convergence [9, section 2].
 - (c) the summed absolute imbalance over rho times the inflow (closed: rho times the velocity
   scale times the longer side) is below `iteration_error_tol`. On the open channel, once the
   pressure solve drops to one or two sweeps, the error left is a drift of the through-flow that
@@ -92,9 +95,21 @@ all three hold, and reaching the cap is reported as not converged [4, section 9]
   the inlet speed at 80x40 and four times that per refinement. (c) bounds it on any grid. It
   moved the VAL-001 80x40 stop from 2286 to 3154 outer iterations and the true error from
   2.99e-6 to 5.44e-7 of the inlet speed [4, section 9].
+- (d) the absolute value of the signed imbalance summed over the domain, the net mass flux out
+  of it, is below `mass_imbalance_tol`: criterion 6's domain-sum clause, which (b) and (c) did
+  not check (review 27). On the closed cavity it holds from the first outer iteration and the
+  cavity stops are unchanged. On the open channel the net outflow decays as an oscillation
+  about zero, and (d) is met at one of its zero crossings, not where the oscillation has
+  settled: after the 80x40 stop at 3988 the net outflow reaches 8.7e-9 again, and of the last
+  200 iterations only the stop is below 1e-10. Alex accepted that on 2026-10-01, with the
+  returned field meeting criterion 6 as written and (a) bounding its accuracy: the true error
+  at the 40x20 and 80x40 stops is 2.0e-8 and 6.1e-8 of the inlet speed, 34 and 9 times less
+  than under the three conditions [4, section 10].
 
-The rule costs 1.07 to 1.16 times the default rule's wall time on the five validation solves
-[4, section 9]. The 80x80 cavity needs 12849 outer iterations, so its case file's cap is 20000 [8].
+The three-condition rule cost 1.07 to 1.16 times the default rule's wall time on the five
+validation solves [4, section 9]; (d) moved every channel stop later, 1.26 to 1.58 times the
+three-condition outer count, and the cavity stops not at all [7, addendum]. The 80x80 cavity
+needs 12849 outer iterations, so its case file's cap is 20000 [8].
 
 **6. Non-uniform mesh (REQ-S11).** Each axis may be clustered toward both walls by a constant
 geometric ratio, mirrored about the midpoint (`src/mesh.py`). At a fixed cell count the ratio
@@ -105,27 +120,29 @@ ratio is 1.2057 [7]. The measured cost on this stencil: the clustered 80x40 chan
 it, 2.893e-3, is the clustered stencil's own error on the fully developed flow, which falls at
 order 1.98 then 2.02 on the clustered family and is above 1% at 40x20 [7, section 1]. A
 geometric mesh puts the midpoint of two centers (h_N - h_P) / 4 off their face, which changes
-the diffusion of a parabola by (r - 1)^2 / (4 r), 0.88% at r = 1.2057 (INFERRED); how the error
-splits between that offset and the wall stencil was not separated [7, section 5].
+the diffusion of a parabola by (r - 1)^2 / (4 r), 0.88% at r = 1.2057 (INFERRED) [7, section 1];
+how the error splits between that offset and the wall stencil was not separated [7, section 5].
 
 ## Validation results
 
 | ECR-001 criterion | Measured on the staggered solver | Source |
 |---|---|---|
-| 1. VAL-001 < 1% L2, 80x40 uniform | 4.104e-4 | [7] |
+| 1. VAL-001 < 1% L2, 80x40 uniform | 4.107e-4 (4.104e-4 under the three-condition rule) | [7] |
 | 2. VAL-001 < 1% L2, 80x40 clustered | 3.024e-3 | [7] |
 | 3. VAL-002 < 2%, 80x80, vs `marchi_2009_re100` | u 1.057e-3, v 7.356e-4 of the lid speed | [8] |
 | 3a. Falls at 20, 40, 80 | u 2.144e-2, 4.548e-3, 1.057e-3; v 1.337e-2, 3.080e-3, 7.356e-4 | [8] |
-| 4. Order >= 1.8, VAL-001 | 1.993, reference-free, 40x20 to 160x80 | [7] |
-| 6. Per cell < 1e-10 at the stop | cavity 9.92e-11, 9.98e-11, 2.34e-11; channel 5.33e-11, 1.11e-11; clustered 1.97e-11 | [4], [7] |
-| 6. Domain sum, closed cavity | rounding at every outer iteration (-2.81e-18 and 2.49e-18 at the step 6 stops) | [9] |
+| 4. Order >= 1.8, VAL-001 | 1.992 (1.993), reference-free, 40x20 to 160x80 | [7] |
+| 6. Per cell < 1e-10 at the stop | cavity 9.92e-11, 9.98e-11, 2.34e-11; channel 2.98e-12, 1.10e-12, 1.40e-13 at 40x20, 80x40, 160x80; clustered 2.61e-12 | [4, section 10], [7, addendum] |
+| 6. Signed domain sum < 1e-10 at the stop | cavity -3.1e-18, -1.8e-18, -1.1e-18; channel -8.2e-11, 5.6e-11, 9.5e-11; clustered -9.0e-11 | [4, section 10] |
 
 Every solve stopped by `error_estimate_and_continuity`, none at its cap [7, 8]. Criterion 5
-(the Phase 1 validation tests) is in the Phase 2 report. On the open channel the domain sum of
-the imbalance is the mismatch between outflow and inflow, which no construction makes zero.
-At the 80x40 stop the summed absolute imbalance, which bounds it, is 4.6e-7 of the inflow
-[4, section 9]; condition (c) holds it to 1e-6 of the inflow, not to criterion 6's absolute
-1e-10. The criterion's baseline and its "by construction" argument are the closed cavity's.
+(the Phase 1 validation tests) is in the Phase 2 report. Criterion 6 is met on every case, per
+cell and in the signed domain sum, by condition (d) [4, section 10]. On the open channel (d) is
+met at a zero crossing of a decaying oscillation of the net outflow, not where the oscillation
+has settled; Alex accepted that on 2026-10-01, with the returned field meeting the criterion as
+written and condition (a) bounding its accuracy. This solver has no outflow correction, which
+would make the signed sum zero by construction (decision 5, and Consequences). The criterion's
+baseline and its "by construction" argument are the closed cavity's.
 
 **The references.** VAL-001 is scored against the analytical parabola, but criterion 4 is judged
 against no reference: at x = L/2 the flow is still developing, and the profile there differs
@@ -133,14 +150,15 @@ from the one at 3L/4 by 1.9e-4 of the parabola's norm on every grid from 80x40 [
 VAL-002 was specified against Ghia et al. (1982). Its v table in the repository until
 2026-09-22 was not Ghia's Table II and failed mass conservation along the centerline; it was
 replaced as `ghia_1982_re100_r2` (ECR-001 section 12). Against that table the staggered solution
-converges to values about 0.005 (u) and 0.008 to 0.009 (v) of the lid speed away from Ghia's in
-the jet by the right wall [6, section 9]. Marchi, Suero and Araki (2009), co-located central
+converges to values away from Ghia's by about 0.005 of the lid speed in u on the vertical
+centerline near y = 0.85, and by 0.008 to 0.009 in v at the jet stations by the right wall
+[6, section 9]. Marchi, Suero and Araki (2009), co-located central
 differences on grids to 1024x1024 with Richardson extrapolation, shares no discretization with
 this solver. Extrapolated from 80x80 and 100x100, the staggered solution lies within 1.9e-5 of
 Marchi at all 30 of its points, and Ghia's table differs from Marchi by the gap [10]. Alex
 decided on 2026-09-24 to score VAL-002 and criterion 3a against Marchi, with Ghia reported
 beside it unscored. Against Ghia the same fields read u 8.90e-3, 3.99e-3, 4.81e-3 and v 6.49e-3,
-8.25e-3, 8.94e-3, falling in neither component [8].
+8.25e-3, 8.94e-3, not falling monotonically in either component [8].
 
 ## Planned against built
 
@@ -151,10 +169,10 @@ beside it unscored. Against Ghia the same fields read u 8.90e-3, 3.99e-3, 4.81e-
 | Stretching per wall by spacing and ratio; default config clustered (7.1, REQ-S11) | Per axis, mirrored, either quantity, the other derived; default config uniform | One free parameter at a fixed count (criterion 2 note); REQ-S11 amended; product mesh is Phase 3's |
 | QUICK boundary stencils from Ferziger and Peric ch. 4 (4) | Leonard's (1979) appendix form; deferred correction over upwind | The negative coefficient and Jacobi's diagonal dominance (decision 3) |
 | Pressure "integrated with existing Jacobi", REQ-S08 unchanged (5.2, 8) | Weighted Jacobi, w = 2/3; REQ-S08 clarified | Exact -1 eigenvalue on the closed domain [3] |
-| Step 6 "convergence tuning" (8) | `error_estimate` rule, three conditions; REQ-S01, S04 clarified | Iteration error and flux drift the step cannot see [4] |
-| Continuity "exactly" (4) | Closed-domain sum exact to rounding; per cell below 1e-10 at the stop | The inner solve stops at `pressure_tol`; the rule enforces (b) [4] |
+| Step 6 "convergence tuning" (8) | `error_estimate` rule, four conditions (version 3); REQ-S01, S04 clarified | Iteration error and flux drift the step cannot see, and criterion 6's domain sum [4] |
+| Continuity "exactly" (4) | Closed-domain sum exact to rounding; per cell and signed domain sum below 1e-10 at every stop | The inner solve stops at `pressure_tol`; the rule enforces (b) and (d) [4] |
 | VAL-002 against Ghia (5.2, criterion 3) | Against Marchi, Ghia unscored; metric `max_normalized_centerline_error_cubic` | Corrupted v table (section 12); Ghia's own error [10] |
-| Criterion 2: ratio 1.05 and spacing 0.1 L/ny | Spacing 0.1 H/ny fixed, ratio 1.2057 derived | Amendment of 2026-09-24 [7] |
+| Criterion 2: ratio 1.05 and spacing 0.1 L/ny | Spacing 0.1 H/ny fixed, ratio 1.2057 derived | Amendment of 2026-09-24, ECR-001 criterion 2; measured in [7] |
 | Criterion 4 order on VAL-001 | Reference-free; orders against the parabola reported beside | Development floor at L/2 [7] |
 | Tests rewritten or tightened in place (7.2) | Staggered tests added (1%, 2%, own module files); collocated tests kept at 2.5% and xfail | Collocated kept as baseline; VAL-002 runs at 40x40 in CI, 80x80 judged from its row [8] |
 | ADR-010 in the rebuild PR (6) | Written at step 9 | To record the build, not the plan |
@@ -168,12 +186,19 @@ an error estimate and a continuity bound rather than a small last step.
 
 **Negative.** The pressure solve is the cost: 92% to 98% of the staggered wall time at step 6
 [9], with sweeps growing as N^2 [3]. Under `error_estimate` the 80x80 cavity runs 12849 outer
-iterations, against 5728 under the old rule [4, section 9]. The returned cell means are O(h^2)
+iterations, against 5728 under the old rule [4, section 9], and condition (d) moved the channel
+stops 1.26 to 1.58 times later [7, addendum]. The returned cell means are O(h^2)
 from the faces: on the cavity the metric reads 15% to 22% above the face values at 40x40 and
 80x80 [8, section 2]. Two solvers and two boundary layers coexist, and `IterationState`, which
 both use, is defined in `solver_ns.py` [9, section 6].
 
 **For Phase 3.**
+- *An outer iteration that adapts rather than overshoots.* On the open channel the net outflow
+  decays as an oscillation about zero, an underdamped mode of the outer loop under fixed
+  under-relaxation, which is why (d) is met at a zero crossing [4, section 10]. Alex's direction
+  is an adaptive iteration that does not overshoot: an outflow correction that removes the
+  net-outflow mode, or under-relaxation that adapts to the damping the solver observes. A Phase
+  3 design question (`docs/STATUS.md`, open questions); nothing is built.
 - *Mass conservation is a particle-source concern.* A per-cell velocity imbalance is a source or
   sink of particle mass in the transport equation, and REQ-T05 asks for 0.01%. Continuity holds
   on the staggered faces; the returned cell-centered field is their average and does not carry
@@ -206,11 +231,12 @@ Each figure above is from one of these, by the section given.
 1. `docs/reports/pressure_solver_probe.md`: Tables B and E, sections 5.3 and 7.
 2. `docs/reports/inlet_flux_comparison.md`.
 3. `docs/reports/pressure_correction_step5.md`: sections 1 to 3 and 5 (the addendum).
-4. `docs/reports/stopping_rule_evidence.md`: sections 3 to 6 and 9.
+4. `docs/reports/stopping_rule_evidence.md`: sections 3 to 6, 9 and 10.
 5. `docs/reports/momentum_sweep_probe.md`.
 6. `docs/reports/cavity_self_convergence.md`: section 3 and section 9.
-7. `docs/reports/val001_revalidation_step7.md`: sections 1 to 3 and 5; rows b8a2f3df and
-   d2a57fe1 in `benchmarks/results.jsonl`.
+7. `docs/reports/val001_revalidation_step7.md`: sections 1 to 3 and 5, and the addendum of
+   2026-09-30; rows b8a2f3df and d2a57fe1 (three conditions), f56fce25 and 43b02c72 (version 3)
+   in `benchmarks/results.jsonl`.
 8. `docs/reports/val002_revalidation_step8.md`: sections 1 and 2; rows 5129231b, 6e1cf3fe and
    0d0d7efa in `benchmarks/results.jsonl`.
 9. `docs/reports/staggered_integration_step6.md`: sections 1, 2 and 6.
