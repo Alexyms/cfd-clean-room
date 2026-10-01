@@ -188,11 +188,11 @@ Generated. The responsibility and serves columns are editorial and come from `do
 | `src/particles.py` | 255 | Computes per-size-class transport properties: Cunningham correction, settling velocity, Brownian diffusion, deposition velocity and HEPA efficiency. | T03, T04, T09, T10 |
 | `src/pressure.py` | 441 | Assembles the staggered pressure correction equation from the momentum diagonals with the discrete divergence of u* as its right-hand side, solves it by weighted Jacobi iteration, corrects the face velocities and updates the pressure. | S04, S08 |
 | `src/solver_ns.py` | 904 | Solves steady incompressible flow with the SIMPLE algorithm on a collocated grid using Rhie-Chow face fluxes, hybrid advection and Jacobi pressure correction. | S01, S02, S03, S05, S08 |
-| `src/solver_staggered.py` | 287 | Runs steady SIMPLE on the staggered grid as one outer loop over the momentum predictor and the pressure correction, with the collocated solver's public shape, alongside the collocated solver; stops by the collocated velocity-step rule or, when configured, by the error-estimate rule. | S01, S04, S05, S07 |
+| `src/solver_staggered.py` | 293 | Runs steady SIMPLE on the staggered grid as one outer loop over the momentum predictor and the pressure correction, with the collocated solver's public shape, alongside the collocated solver; stops by the collocated velocity-step rule or, when configured, by the error-estimate rule. | S01, S04, S05, S07 |
 | `src/staggered.py` | 152 | Defines the staggered (MAC) field layout: shapes and allocation of face-centered u and v and cell-centered p, and the face-to-center averaging the solver applies before returning. | S07 |
-| `src/stopping.py` | 144 | Decides when the steady outer iteration has converged, on three conditions: (a) the iteration error estimated from the step and its fitted geometric rate, over a physical velocity scale; (b) the worst per-cell mass imbalance against its own tolerance; and (c) the summed imbalance over the through-flow, which shares the tolerance of (a). | S01, S04 |
+| `src/stopping.py` | 179 | Decides when the steady outer iteration has converged, on four conditions: (a) the iteration error estimated from the step and its fitted geometric rate, over a physical velocity scale; (b) the worst per-cell mass imbalance against its own tolerance; (c) the summed imbalance over the through-flow, which shares the tolerance of (a); and (d) the signed imbalance summed over the domain, which shares the tolerance of (b). | S01, S04 |
 
-Total 14 Python files, 4842 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
+Total 14 Python files, 4883 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
 
 `Declares it serves` is an EDITORIAL CLAIM read from `docs/system_map_annotations.toml`. It says which requirements a module is meant to satisfy, not that it does. Whether a requirement is met is answered by the tests named in the register's `Verified By` column.
 <!-- END GENERATED: components -->
@@ -217,7 +217,7 @@ Generated. Static import analysis cannot see a function bound into a registry by
 |---|---|
 | Scope | `src/**/*.py` |
 | Files hashed | 14 |
-| Digest | `sha256:22b1bc9329ce8a28ccc0fef7ba3f8e663b0235d6ea9edfb849b22df848cdbdbb` |
+| Digest | `sha256:6d4f5e8ad3d563c95ce4a5c76a122cd9ff2059c5bd00206f17c3c891e9ea5404` |
 
 This is what lets the document answer whether it is current, which is the one question a stale table cannot be asked. `python scripts/gen_system_map.py --check` recomputes the whole set of generated regions, this digest included, and exits non-zero on any disagreement.
 

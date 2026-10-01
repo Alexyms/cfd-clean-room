@@ -70,12 +70,36 @@ def test_saved_solve_is_reused_only_while_its_parameters_match(
     monkeypatch.setattr(val001_order, "FIELD_DIR", tmp_path)
     monkeypatch.setattr(val001_order, "StaggeredSolver", no_solver)
     config = val001_order.load_case("poiseuille", grid=(12, 6))
-    params = val001_order.json.dumps(
-        val001_order.solver_parameters(config), sort_keys=True
-    )
+    params = val001_order.reuse_key(config)
     path = tmp_path / "poiseuille_12x6.npz"
     np.savez(path, params=params, u=np.ones((6, 12)))
     assert np.array_equal(val001_order.solve(12, 6)["u"], np.ones((6, 12)))
     np.savez(path, params=params.replace("1e-06", "1e-07"), u=np.ones((6, 12)))
+    with pytest.raises(SolverBuiltError):
+        val001_order.solve(12, 6)
+
+
+@pytest.mark.unit
+def test_saved_solve_is_not_reused_under_another_rule_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A file saved under one RULE_VERSION builds a solver under another.
+
+    Defect caught: the version dropped from the key. A new stopping condition
+    changes no solver parameter, so without it the file would be reused.
+    """
+
+    class SolverBuiltError(Exception):
+        pass
+
+    def no_solver(*args: object) -> None:
+        raise SolverBuiltError
+
+    monkeypatch.setattr(val001_order, "FIELD_DIR", tmp_path)
+    monkeypatch.setattr(val001_order, "StaggeredSolver", no_solver)
+    config = val001_order.load_case("poiseuille", grid=(12, 6))
+    params = val001_order.reuse_key(config)
+    np.savez(tmp_path / "poiseuille_12x6.npz", params=params, u=np.ones((6, 12)))
+    monkeypatch.setattr(val001_order, "RULE_VERSION", val001_order.RULE_VERSION + 1)
     with pytest.raises(SolverBuiltError):
         val001_order.solve(12, 6)

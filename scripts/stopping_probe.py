@@ -41,7 +41,9 @@ import self_convergence as sc  # noqa: E402 -- path set above
 
 from src.stopping import (  # noqa: E402 -- path set above
     RATE_WINDOW,
+    RULE_VERSION,
     ErrorEstimateRule,
+    ImbalanceSummary,
 )
 from validation.cases import with_velocity_step  # noqa: E402 -- path set above
 from validation.metrics import (  # noqa: E402 -- path set above
@@ -108,8 +110,8 @@ def case_config(
 
 def instrument(
     solver: sc.StaggeredSolver,
-) -> tuple[list[float], list[int], list[float]]:
-    """Record each outer iteration's worst imbalance, sweeps and summed imbalance.
+) -> tuple[list[float], list[int], list[float], list[float]]:
+    """Record each outer iteration's worst imbalance, sweeps, absolute and signed sum.
 
     The wrapper returns the corrector's own result object, so the solve is
     unchanged; the same-computation control checks that bitwise.
@@ -118,17 +120,20 @@ def instrument(
     imbalance: list[float] = []
     sweeps: list[int] = []
     total: list[float] = []
+    signed: list[float] = []
 
     def recorded(prediction: MomentumPrediction, p: np.ndarray) -> PressureCorrection:
         result = correct(prediction, p)
-        cells = np.abs(corrector.mass_imbalance(result.u, result.v))
+        net = corrector.mass_imbalance(result.u, result.v)
+        cells = np.abs(net)
         imbalance.append(float(cells.max()))
         total.append(float(cells.sum()))
+        signed.append(float(net.sum()))
         sweeps.append(result.sweeps)
         return result
 
     corrector.correct = recorded
-    return imbalance, sweeps, total
+    return imbalance, sweeps, total, signed
 
 
 def solve_truth(case: str, n: int) -> Path:
@@ -139,7 +144,7 @@ def solve_truth(case: str, n: int) -> Path:
     config = case_config(case, n, TRUTH_TOL)
     mesh = sc.Mesh(config)
     solver = sc.StaggeredSolver(mesh, config, sc.StaggeredBoundary(mesh, config))
-    imbalance, sweeps, _total = instrument(solver)
+    imbalance, sweeps, _total, _signed = instrument(solver)
     levels = sorted({*LEVELS, case_config(case, n).convergence_tol}, reverse=True)
     taken: list[tuple[float, int]] = []
     snaps: dict[str, np.ndarray] = {}
@@ -398,11 +403,12 @@ def verify_rule(case: str, n: int) -> dict:
 
     The corrector is wrapped as in the truth solve, so every iteration's
     imbalance is known and the wall time compares with the default rule's
-    snapshot. A saved solve is reused only if its rule parameters match. Each
-    condition is dated from the start of its final run. Raises SystemExit if
-    a fresh rule replaying the history does not stop where the solver did, or
-    the recorded imbalance at the stop is not the returned field's. The
-    channel is read against its TIGHT_TRUTH_TOL truth.
+    snapshot. A saved solve is reused only if its rule parameters and
+    RULE_VERSION match. Each condition is dated from the start of its final
+    run. Raises SystemExit if a fresh rule replaying the history does not stop
+    where the solver did, or the recorded worst or signed sum at the stop is
+    not the returned field's. The channel is read against its TIGHT_TRUTH_TOL
+    truth.
     """
     name, config = case_name(case, n), case_config(case, n, rule="error_estimate")
     mesh, path = sc.Mesh(config), OUT_DIR / f"{name}_rule.npz"
@@ -411,7 +417,7 @@ def verify_rule(case: str, n: int) -> dict:
     solver = sc.StaggeredSolver(mesh, config, boundary)
     scale, flux = boundary.get_max_boundary_velocity(), solver.flux_scale
     tols = (config.iteration_error_tol, config.mass_imbalance_tol)
-    params = np.array([scale, flux, *tols, RATE_WINDOW])
+    params = np.array([scale, flux, *tols, RATE_WINDOW, RULE_VERSION])
     stale = True
     if path.exists():
         with np.load(path) as saved:
@@ -419,7 +425,7 @@ def verify_rule(case: str, n: int) -> dict:
                 saved["params"], params
             )
     if stale:
-        imbalance, _sweeps, total = instrument(solver)
+        imbalance, _sweeps, total, signed = instrument(solver)
         start = time.perf_counter()
         u, v, _p = solver.solve_steady()
         np.savez(
@@ -430,10 +436,12 @@ def verify_rule(case: str, n: int) -> dict:
             seconds=time.perf_counter() - start,
             imbalance=np.array(imbalance),
             total=np.array(total),
+            signed=np.array(signed),
             residual=np.array(solver.residual_history),
             reference_velocity=solver.reference_velocity,
             stop_reason=solver.stop_reason,
             returned=np.abs(solver.last_mass_imbalance).max(),
+            returned_signed=solver.last_mass_imbalance.sum(),
         )
     print(f"{name}: {'solved' if stale else 'reused the saved solve'}", flush=True)
     with np.load(path) as saved:
@@ -451,24 +459,29 @@ def verify_rule(case: str, n: int) -> dict:
             tight = (saved["u"], saved["v"])
         out["old_truth_gap"] = true_error(*truth, tight, fluid) / scale
         truth = tight
-    res, imb, tot = d["residual"], d["imbalance"], d["total"]
+    res, imb, tot, net = d["residual"], d["imbalance"], d["total"], d["signed"]
     replay = ErrorEstimateRule(scale, flux, *tols)
     steps = res * float(d["reference_velocity"])
-    pairs = zip(steps, zip(imb, tot, strict=True), strict=True)
-    # partial(tuple, pair) returns the recorded (worst, summed) pair when called.
-    stops = [replay.update(s, partial(tuple, pair)) for s, pair in pairs]
-    if not (stops[-1] and not any(stops[:-1])) or imb[-1] != d["returned"]:
+    # Each partial builds the recorded readings when the rule calls it.
+    stops = [
+        replay.update(
+            s, partial(ImbalanceSummary, worst=w, absolute_sum=a, signed_sum=n)
+        )
+        for s, w, a, n in zip(steps, imb, tot, net, strict=True)
+    ]
+    controls = (imb[-1] == d["returned"], net[-1] == d["returned_signed"])
+    if not (stops[-1] and not any(stops[:-1]) and all(controls)):
         raise SystemExit(f"{name}: a verify_rule control failed")
     # Outer iteration (1-based) from which each condition held to the stop.
     est = np.array(replay.estimate_history)
-    held = (est < tols[0], imb < tols[1], tot / flux < tols[0])
+    held = (est < tols[0], imb < tols[1], tot / flux < tols[0], np.abs(net) < tols[1])
     since = [int(np.flatnonzero(~met)[-1]) + 2 if (~met).any() else 1 for met in held]
     out |= {"outer": len(res), "seconds": float(d["seconds"])}
     out |= {"default_outer": default_outer, "default_seconds": default_seconds}
     out |= {"stop_reason": str(d["stop_reason"]), "met_from": since}
     out |= {"estimate": float(est[-1]), "summed": float(tot[-1]) / flux}
     out["true_error_rel"] = true_error(d["u"], d["v"], truth, fluid) / scale
-    out["imbalance"] = float(imb[-1])
+    out["imbalance"], out["signed_sum"] = float(imb[-1]), float(net[-1])
     if case == "poiseuille":
         out["metric"] = poiseuille_l2_error(config, mesh, d["u"]).value
         out["metric_truth"] = poiseuille_l2_error(config, mesh, truth[0]).value

@@ -2,9 +2,9 @@
 
 Solves the channel at 40x20, 80x40 and 160x80 with the staggered solver under
 the case file's stopping rule. Fields are saved under results/val001_order/
-(gitignored) with the solver parameters they were solved with, and a saved
-field is re-solved only when those differ from the case file's. A solve that
-reaches its cap stops the script.
+(gitignored) under reuse_key, the solver parameters they were solved with and
+the stopping rule's RULE_VERSION, and a saved field is re-solved only when that
+key differs from now. A solve that reaches its cap stops the script.
 
 Each profile is u at x = L/2 exactly, the mean of the two cell columns either
 side of that face, and at x = 3L/4 the same way; every nx here is a multiple
@@ -41,10 +41,12 @@ from benchmark import solver_parameters  # noqa: E402 -- scripts/ is on sys.path
 from src.boundary_staggered import (  # noqa: E402 -- follows sys.path.insert
     StaggeredBoundary,
 )
+from src.config import SimConfig  # noqa: E402 -- follows sys.path.insert
 from src.mesh import Mesh  # noqa: E402 -- follows sys.path.insert
 from src.solver_staggered import (  # noqa: E402 -- follows sys.path.insert
     StaggeredSolver,
 )
+from src.stopping import RULE_VERSION  # noqa: E402 -- follows sys.path.insert
 from validation.cases import load_case  # noqa: E402 -- follows sys.path.insert
 from validation.metrics import (  # noqa: E402 -- follows sys.path.insert
     _inlet_velocity,
@@ -57,13 +59,22 @@ FIELD_DIR = REPO_ROOT / "results" / "val001_order"
 CONTROL_TOL = 0.05
 
 
+def reuse_key(config: SimConfig) -> str:
+    """The key a saved solve is reused under: solver parameters and RULE_VERSION.
+
+    A new stopping condition changes no solver parameter, so the version joins them.
+    """
+    key = solver_parameters(config) | {"rule_version": RULE_VERSION}
+    return json.dumps(key, sort_keys=True)
+
+
 def solve(nx: int, ny: int) -> dict[str, np.ndarray]:
     """The saved staggered solve at nx x ny, solved first if absent or stale.
 
     Raises SystemExit if the solve reaches its cap.
     """
     config = load_case("poiseuille", grid=(nx, ny))
-    params = json.dumps(solver_parameters(config), sort_keys=True)
+    params = reuse_key(config)
     path = FIELD_DIR / f"poiseuille_{nx}x{ny}.npz"
     if path.exists():
         with np.load(path) as saved:
@@ -85,6 +96,7 @@ def solve(nx: int, ny: int) -> dict[str, np.ndarray]:
         seconds=seconds,
         stop_reason=solver.stop_reason,
         imbalance=np.abs(solver.last_mass_imbalance).max(),
+        signed_sum=solver.last_mass_imbalance.sum(),
         metric=poiseuille_l2_error(config, mesh, u).value,
     )
     print(f"solved {nx}x{ny}: {len(solver.residual_history)} outer, {seconds:.0f} s")

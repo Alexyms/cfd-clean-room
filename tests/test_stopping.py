@@ -8,7 +8,7 @@ import math
 import numpy as np
 import pytest
 
-from src.stopping import RATE_WINDOW, ErrorEstimateRule
+from src.stopping import RATE_WINDOW, ErrorEstimateRule, ImbalanceSummary
 
 SCALE = 0.1
 # VAL-001's flux scale, rho 1 times 0.1 m/s through 0.5 m. Not 1, so a rule
@@ -21,9 +21,18 @@ def _rule() -> ErrorEstimateRule:
     return ErrorEstimateRule(SCALE, FLUX, 1e-6, 1e-10)
 
 
+def _summary(
+    worst: float = 0.0, absolute_sum: float = 0.0, signed_sum: float = 0.0
+) -> ImbalanceSummary:
+    """Imbalance readings, zero unless given."""
+    return ImbalanceSummary(
+        worst=worst, absolute_sum=absolute_sum, signed_sum=signed_sum
+    )
+
+
 def _feed(rule: ErrorEstimateRule, steps: np.ndarray, worst: float = 0.0) -> list[bool]:
     """Feed a history one step at a time with a fixed worst and no summed imbalance."""
-    return [rule.update(float(s), lambda: (worst, 0.0)) for s in steps]
+    return [rule.update(float(s), lambda: _summary(worst)) for s in steps]
 
 
 def _geometric(rho: float, n: int, last: float) -> np.ndarray:
@@ -93,9 +102,9 @@ def test_continuity_decides_once_the_estimate_is_met(
     """Defect caught: condition (b) dropped. The imbalance is asked for only under (a)."""
     calls: list[float] = []
 
-    def worst() -> tuple[float, float]:
+    def worst() -> ImbalanceSummary:
         calls.append(imbalance)
-        return imbalance, 0.0
+        return _summary(imbalance)
 
     rule = _rule()
     steps = _geometric(0.5, RATE_WINDOW + 5, 1e-30)
@@ -115,9 +124,28 @@ def test_summed_imbalance_decides_once_the_estimate_and_worst_cell_are_met(
     """
     rule = _rule()
     steps = _geometric(0.5, RATE_WINDOW, 1e-30)
-    assert [rule.update(float(s), lambda: (5e-11, total)) for s in steps][
+    assert [rule.update(float(s), lambda: _summary(5e-11, total)) for s in steps][
         -1
     ] is expected
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("signed", "expected"), [(2e-10, False), (5e-11, True), (-2e-10, False)]
+)
+def test_signed_domain_sum_decides_once_the_other_three_are_met(
+    signed: float, expected: bool
+) -> None:
+    """Defects caught: condition (d) dropped; its absolute value dropped.
+
+    Every cell is under 1e-10 and the absolute sum is 5e-7 of FLUX, so (a),
+    (b) and (c) hold in all three. A net outflow and a net inflow of 2e-10
+    fail criterion 6's domain-sum bound alike.
+    """
+    rule = _rule()
+    steps = _geometric(0.5, RATE_WINDOW, 1e-30)
+    summary = _summary(5e-11, 2.5e-8, signed)
+    assert [rule.update(float(s), lambda: summary) for s in steps][-1] is expected
 
 
 @pytest.mark.unit
