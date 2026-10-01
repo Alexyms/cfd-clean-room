@@ -103,6 +103,11 @@ collocated field and stored row is unchanged, new collocated rows are scored aga
 too, the test fixtures now name their rule rather than take the
 case file's, and a named grid preset loads through one function, so no consumer can build the
 stretched preset on a uniform mesh. See `docs/reports/val002_revalidation_step8.md`.
+After step 8 the rule gained a fourth condition, the second clause of acceptance criterion 6,
+which nothing had checked: the signed mass imbalance summed over the domain, the net outflow,
+below the per-cell bound. The cavity stops are unchanged. The channel stops later, each where
+the net outflow passes through zero rather than once it has settled, with less iteration error
+left, and criteria 1, 2 and 4 still pass (`docs/reports/stopping_rule_evidence.md`, section 10).
 ADR-010 is deliberately deferred to the end so it records what was built rather than what
 was planned.
 

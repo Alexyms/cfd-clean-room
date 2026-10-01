@@ -2,7 +2,8 @@
 
 **Date:** 2026-09-24
 **Context:** the STATUS question of whether the stopping rule needs a continuity term.
-Sections 1 to 8 measure and do not choose a rule; section 9 checks the rule chosen from them.
+Sections 1 to 8 measure and do not choose a rule; section 9 checks the rule chosen from them;
+section 10 (2026-09-30) adds condition (d), criterion 6's domain-sum clause.
 **Instrument:** `python scripts/stopping_probe.py`. Every value is from
 `results/stopping_probe/summary.json` (gitignored) unless section 8 or 9 says otherwise.
 
@@ -248,3 +249,71 @@ before (a), so (c) changed nothing there.
 iterations where the committed cap is 10000: with the committed file it would stop at the cap,
 reported as not converged. Planted defects for the rule's tests: `results/builder24/` and
 `results/builder24b/`.
+
+## 10. Condition (d)
+
+ECR-001 criterion 6 asks for < 1e-10 per cell "and the mass imbalance summed over the domain below
+the same bound". (b) checks the first clause; (c) bounds the summed absolute imbalance at 1e-6 of
+F, a different quantity; nothing checked the second (review 27, B1). Alex decided on 2026-09-30:
+(d), the absolute signed domain sum below `mass_imbalance_tol`, with no new key, one evaluation
+serving (b) to (d), and no outflow correction (a Phase 3 question). The signed sum is the net mass
+flux out of the domain. Before (d), measured on 2026-09-30 through the bridge from the
+committed case file (prompt 28); this rerun's trajectories give the same signed sums at 880,
+2015, 2671 and 3154:
+
+| Case | Stop | Outer, seconds | Worst cell | Signed domain sum |
+|---|---|---|---|---|
+| VAL-001 40x20 | `error_estimate` defaults | 880, 19 | 5.3e-11 | -2.6e-8 |
+| VAL-001 80x40 | `error_estimate` defaults | 3154, 89 | 1.1e-11 | 2.2e-8 |
+| VAL-001 40x20 | `iteration_error_tol` 1e-8 | 2015, 21 | 3.4e-13 | -1.5e-10 |
+| VAL-001 40x20 | `iteration_error_tol` 1e-10 | 3146, 23 | 1.8e-15 | -7.4e-13 |
+| VAL-001 40x20 | `velocity_step` at 1e-13 | 2671, 22 | 4.7e-14 | 2.3e-11 |
+
+**Method.** Section 9's, at 8aac137. Its saved solves held no rule version, so the first run
+re-solved all five and a second reused them. 160x80 is `val001_order.py`'s solve and the clustered
+80x40 the harness row's; `results/builder28/` re-solves both for their imbalance, and
+`signed_history.py` and `signed_envelope.py` there follow the channel past its stop on the 1e-13
+truths' trajectories, bitwise the rule solves' to the stop. A dot is not measured.
+
+| MEASURED | Outer (s. 9) | Seconds (s. 9) | (a), (b), (c), (d) from | Last | True error / U (s. 9) | Worst cell | Signed sum | Summed / F | Metric (truth) |
+|---|---|---|---|---|---|---|---|---|---|
+| Cavity 20x20 | 1370 (1370) | 15.9 (13.1) | 973, 1370, 266, 1 | (b) | 2.26e-8 (same) | 9.92e-11 | -3.1e-18 | 1.2e-8 | |
+| Cavity 40x40 | 3849 (3849) | 65.0 (54.3) | 3463, 3849, 946, 1 | (b) | 2.97e-7 (same) | 9.98e-11 | -1.8e-18 | 4.9e-8 | |
+| Cavity 80x80 | 12849 (12849) | 418.0 (338.1) | 12849, 11276, 2946, 1 | (a) | 1.02e-6 (same) | 2.34e-11 | -1.1e-18 | 4.9e-8 | |
+| VAL-001 40x20 | 1389 (880) | 23.8 (20.3) | 1287, 767, 748, 1389 | (d) | 1.96e-8 (6.67e-7) | 2.98e-12 | -8.2e-11 | 1.5e-8 | 1.99895e-3 (1.99895e-3) |
+| VAL-001 80x40 | 3988 (3154) | 114.1 (96.1) | 3983, 1805, 2779, 3988 | (d) | 6.10e-8 (5.44e-7) | 1.10e-12 | 5.6e-11 | 2.1e-8 | 4.1068e-4 (4.1069e-4) |
+| VAL-001 160x80 | 13454 (10009) | 882 (676) | . | (d) | . | 1.40e-13 | 9.5e-11 | 1.1e-8 | 1.5690e-4 |
+| 80x40 clustered | 2253 (1523) | 42.2 (33.9) | . | . | . | 2.61e-12 | -9.0e-11 | 2.0e-8 | 3.0238e-3 |
+
+The cavity fields and histories are bitwise section 9's, and the channel histories equal section
+9's to its stops. The cavity's seconds rose 1.2 times on unchanged work: single-run timing.
+
+**Reading.** On the closed cavity (d) holds from the first iteration; the signed sum is rounding.
+On the channel (d) is met last, where the net outflow changes sign, not where it has settled. The
+signed sum decays as an oscillation about zero, changing sign every 575, 989 and about 1887 outer
+iterations at 40x20, 80x40 and 160x80; its peak falls by about 11.6 and 3.7 times per half-cycle
+on the first two. Each stop is just before a sign change (40x20 at 1389, change at 1391; 80x40 at
+3988, change at 3990), with the sum falling through 1e-10 by 5e-11 (1.3e-11 at 160x80) per
+iteration while the absolute sum stays near 7.6e-10, 1e-9 and 5e-10. Of the last 200
+iterations on each uniform grid only the stop is below 1e-10. After the stop the sum reaches
+3.3e-9 at outer 1558 (40x20) and 8.7e-9 at 4359 (80x40). It stays below 1e-10 from outer 2375 at 40x20. At 80x40 it is
+still 1.7e-10 at the truth's 7306; at the measured decay the next peak is 4.6e-11, so it settles
+before the change near 7947 (INFERRED).
+
+So the returned field meets both clauses of criterion 6 as written, but the second holds only
+for a few iterations around each sign change, and not between them. (d) moved every channel stop later, and on 40x20 and
+80x40 left 34 and 9 times less iteration error. Whether a stop at a sign change is what the
+criterion intends, or (d) should hold over a window or bound the envelope (on 40x20, 2375 outer
+against 1389; on 80x40 about twice 3988), is not decided here.
+
+**Prediction check**, against the prediction written before the run.
+- Cavity stops unchanged and bitwise at 1370, 3849, 12849: matched.
+- VAL-001 40x20 later than 880: matched, 1389. From about 1900 to 2300: **missed**. Under 30 s: matched, 23.8 s.
+- VAL-001 80x40 later than 3154: matched, 3988. From 4000 to 7500: **missed**, by 12. Under 3 minutes: matched, 114 s (row 128 s).
+- The clustered preset later: matched, 2253. Criterion 2 within 1% of itself: matched, 0.004%.
+- Criteria 1, 2 and 4 verdicts unchanged: matched. Criterion 1 within 1% of 4.104e-4: matched, 4.107e-4.
+- 160x80 may approach its cap of 20000: it stopped at 13454.
+
+Both misses have one cause. The prediction took the signed sum to fall monotonically, with (d)
+met where its magnitude settles below 1e-10 (40x20: 2375, inside the predicted range). It falls
+only in envelope, and (d) is met at the first sign change after (a), (b) and (c) hold.
