@@ -151,3 +151,34 @@ criteria 1 and 2 are scored half a cell downstream of L/2; the order study reads
   reused all three solves in 0.6 s. The restriction check: `results/builder25/restriction_bias.py`.
 - Section 4: `results/builder25/mutate.py` and `mutations.log`; `collocated_row.py` run on a
   worktree of 078bd32 and on 0ca4ace, compared by `compare_rows.py`.
+
+## Addendum 2026-09-30: criteria 1, 2 and 4 under the four-condition rule
+
+The stopping rule gained condition (d), ECR-001 criterion 6's domain-sum clause
+(`docs/reports/stopping_rule_evidence.md`, section 10). Sections 1 to 6 stand as written for the
+three-condition rule. Every solve below is at commit 8aac137 and stopped by
+`error_estimate_and_continuity`, none at its cap.
+
+| MEASURED | Mesh | Outer (sections 1, 2) | Row s | Worst cell | Signed sum | Metric (sections 1, 2) | Row run_id |
+|---|---|---|---|---|---|---|---|
+| Criterion 1 | 80x40 uniform | 3988 (3154) | 128.2 | 1.10e-12 | 5.6e-11 | 4.107e-4 (4.104e-4) | 8a47e7b839a0450a9dfa8e707e4a7b81 |
+| Criterion 2 | 80x40, y clustered | 2253 (1523) | 42.2 | 2.61e-12 | -9.0e-11 | 3.024e-3 (3.024e-3) | dded27210dab478abd49bfc9324a4a94 |
+
+| MEASURED, criterion 4 | 40x20 | 80x40 | 160x80 | Orders (section 2) |
+|---|---|---|---|---|
+| Outer, seconds | 1389, 27 | 3988, 126 | 13454, 882 | |
+| Reference-free, RMS (max) | | | | **1.992** (1.992); was 1.993 (1.991) |
+| L2 vs parabola at L/2, every row | 2.197e-3 | 4.543e-4 | 1.570e-4 | 2.27, 1.53 (2.28, 1.53) |
+| L2 vs parabola at 3L/4, every row | 2.272e-3 | 5.423e-4 | 1.161e-4 | 2.07, 2.22 (2.07, 2.22) |
+| Worst cell, signed sum at the stop | 2.98e-12, -8.2e-11 | 1.10e-12, 5.6e-11 | 1.40e-13, 9.5e-11 | |
+
+Verdicts unchanged. Criterion 1 passes 24 times inside 1%, its metric 0.06% above section 1's;
+criterion 2 passes 3.3 times inside, 0.004% below; criterion 4's order is 1.992. 160x80 stopped at
+13454 of its cap of 20000. Each grid ran 1.26 to 1.58 times its section 2 outer count; on 40x20
+and 80x40, the two with a truth, the iteration error left fell 34 and 9 times (evidence report,
+section 10).
+
+Sources: the two rows; `results/val001_order/summary.json` from `python scripts/val001_order.py`,
+which re-solved all three grids because its saved solves now carry the rule's version, and reused
+them on a second run in 1 s; criterion 2's imbalance from `results/builder28/stretched_stop.py`, a
+re-solve whose outer count and metric equal the row's.
