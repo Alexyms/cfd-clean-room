@@ -14,117 +14,50 @@ project has already lost five months to exactly that.
 
 ## Where the project stands
 
-Phases 0 and 1 are complete. Phase 2 is in progress: the Navier-Stokes solver exists and
-runs, VAL-001 passes on the collocated solver at its current criterion and on the staggered
-solver at the rebuild's 1%, VAL-002 passes on the staggered solver and stays marked xfail on
-the collocated one, which fails it at the 40x40 CI grid, and the approved engineering change
-request to rebuild the solver is eight steps into its nine-step plan. Phases 3 through 7 have
-not begun.
+Phases 0 and 1 are complete. Phase 2's Navier-Stokes solver is built and validated. ECR-001,
+the engineering change request that rebuilt it on a staggered grid, closed on 2026-09-30, and
+the phase gate is recorded in `docs/reports/phase2_navier_stokes_report.md`. VAL-001 and
+VAL-002 pass on the staggered solver at their amended criteria. The collocated solver it
+replaced as the solver of record still runs as the benchmark harness's baseline, and VAL-002
+stays marked xfail on it. Phases 3 through 7 have not begun.
 
 `docs/PROJECT_PLAN.md` holds the phase detail, deliverables and validation gates.
 
-## The open engineering change
+## The engineering change, closed
 
-ECR-001 replaces the collocated grid with Rhie-Chow interpolation by a staggered MAC
-arrangement with non-uniform mesh support and QUICK advection. The change request itself is
-the source of truth for scope, requirement edits, acceptance criteria and the implementation
-plan: `docs/ECR/ECR-001-solver-architecture-rebuild.md`.
+ECR-001 replaced the collocated grid with Rhie-Chow interpolation by a staggered MAC
+arrangement with non-uniform mesh support and QUICK advection. The change request holds the
+decision, its amendments and its acceptance criteria:
+`docs/ECR/ECR-001-solver-architecture-rebuild.md`. ADR-010 holds what was built, each decision
+with the report that measured it, and a table of where the build departed from the plan:
+`docs/ADR/ADR-010-staggered-grid-architecture.md`.
 
-The rebuild decomposes into nine increments, each reviewable in isolation. Steps 1 and 2,
-the mesh extension and the staggered field layout, and step 3, boundary conditions imposed
-directly on the staggered components, are implemented. Step 3 split the boundary module in
-two layers over one shared interpretation of the configuration (`src/boundary_registry.py`,
-REQ-S12.1): the collocated layer is unchanged in interface and output, and the staggered
-layer writes the normal components exactly and hands the tangential and pressure
-conditions to steps 4 and 5 as data rather than as a mirrored value outside the domain.
-Step 4 added the momentum predictor (`src/momentum.py`): QUICK advection carried as a
-deferred-correction source over a first-order upwind implicit matrix, so the Jacobi
-sweep keeps its diagonal dominance while the converged answer is the QUICK one. It
-consumes step 3's tangential data without modification and returns the un-relaxed
-momentum diagonals as the contract step 5 builds the pressure correction on.
-Step 5 added the pressure correction (`src/pressure.py`). Its right-hand side is the
-discrete divergence of u* read straight off the stored face velocities, and on the closed
-cavity it sums to zero to rounding at 20, 40 and 80 cells per side, where the collocated
-solver leaked 2.90e-2, 9.23e-3 and 2.35e-3. That is acceptance criterion 6 measured
-directly, and it is the number the rebuild was undertaken to obtain. Step 3's
-`pressure_outlets` contract was consumed unchanged.
+The rebuild ran in nine steps, each reviewed before it merged: the mesh, the staggered
+layout, boundary conditions imposed directly on the staggered faces over one shared reading of
+the configuration, the momentum predictor, the pressure correction, their integration as one
+solver, VAL-001, VAL-002, and the records. The staggered solver was built beside the
+collocated one, so both run from one commit and every comparison is a before-and-after on the
+same tree. On a closed domain its pressure correction is a solvable
+system, which the collocated one was not, because the collocated walls leak mass.
 
-REQ-S08 was deliberately left as written in step 5. Changing the pressure solver in the
-same branch as the grid layout would make any improvement unattributable, and the baseline
-comparison is the purpose of the rebuild; the cost was measured instead. The measurement
-showed more than cost: on a closed domain undamped Jacobi has an exact eigenvalue of -1 on
-the checkerboard mode, so it does not converge at all, and the two-cell case overshoots or
-does nothing depending on the parity of the sweep cap. REQ-S08 has since been clarified
-rather than amended, in a separate change so the weighting is attributable by itself:
-the Jacobi update is weighted by two thirds, which keeps the requirement's architectural
-content, the data-parallel per-cell update, and moves the -1 to -1/3. The closed-cavity
-correction now converges. The weight is a constant in `src/pressure.py`, not a
-configuration key. What it costs on the slow modes is measured in
-`docs/reports/pressure_correction_step5.md`, section 5.
-Step 6 put the three modules in one outer loop, `src/solver_staggered.py`, built
-alongside the collocated solver rather than in its place: `src/solver_ns.py` is
-unchanged, both run from one commit, and the harness `--method` label now selects which
-one runs, so a row can no longer claim a solver it did not run. The collocated rows still
-reproduce, and retiring the collocated solver moves to a later step. The staggered solver
-converges on all three default cases and is more accurate than the collocated one on the
-channel and in u on the cavity. On every case it stops with a per-cell mass imbalance
-above acceptance criterion 6's bound: the stopping rule reads the velocity change, and
-capped corrections make small steps before mass is conserved. Whether the rule needs a
-continuity term is step 7's decision. The measurements, and what the unchanged metric
-discards, are in `docs/reports/staggered_integration_step6.md`.
-Ahead of step 7, `src/stopping.py` adds the rule step 7 will use, `error_estimate`: a solve
-stops when the iteration error estimated from the velocity step and its own geometric rate,
-over the largest prescribed boundary velocity, the worst per-cell mass imbalance, and the
-summed imbalance over the through-flow are all below their tolerances, and reaching the
-iteration cap is not convergence. It is opt-in by a solver configuration key, and the solver
-block now rejects any key it does not know. The velocity-step rule stays the default and
-reproduces the earlier fields bitwise, and the collocated solver refuses the new rule because
-its walls leak. On both validation cases it stops with the imbalance below criterion 6's
-bound, and on the cavity it leaves about the iteration error it estimates. On the open
-channel the per-cell tolerance alone bounds the flux drift the rule can leave only loosely,
-and more loosely under refinement, so the summed condition bounds that drift on any grid
-(`docs/reports/stopping_rule_evidence.md`, section 9).
-Step 7 revalidated VAL-001 on the staggered solver. The channel case file now names the
-`error_estimate` rule, and every staggered VAL-001 solve stops by it. ECR-001 acceptance
-criteria 1, 2 and 4 pass: below 1% on the uniform 80x40 grid and on the same grid clustered
-toward the walls, and at second order under refinement judged without a reference, because
-the parabola is not the exact answer at the channel midpoint while the flow still develops.
-The clustered grid's error is its stencil's own error on the developed flow. The collocated
-solver refuses the new rule and keeps the old one through one helper, with its results
-unchanged; moving the case file reached two scripts beyond the plan, the stopping probe and
-the viewer, which now name their rule. See `docs/reports/val001_revalidation_step7.md`.
-Step 8 revalidated VAL-002 on the staggered solver. The cavity case file names the
-`error_estimate` rule, with a cap the 80x80 grid needs, and the VAL-002 metric scores the true
-centerlines against Marchi, Suero and Araki (2009) with Ghia's table reported beside it.
-ECR-001 acceptance criteria 3 and 3a pass: below 2% on 80x80, and falling in both components
-at second order across 20x20, 40x40 and 80x80. Against Ghia the same fields do not fall
-monotonically in either component, which is why the scoring moved. Every self-convergence field,
-collocated field and stored row is unchanged, new collocated rows are scored against Marchi
-too, the test fixtures now name their rule rather than take the
-case file's, and a named grid preset loads through one function, so no consumer can build the
-stretched preset on a uniform mesh. See `docs/reports/val002_revalidation_step8.md`.
-After step 8 the rule gained a fourth condition, the second clause of acceptance criterion 6,
-which nothing had checked: the signed mass imbalance summed over the domain, the net outflow,
-below the per-cell bound. The cavity stops are unchanged. The channel stops later, with less
-iteration error left. There the net outflow decays as an oscillation about zero, and the new
-condition is met at one of its zero crossings, not where the oscillation has settled: between
-crossings the outflow is well above the bound, and settling below it takes up to about twice
-as many outer iterations. That was accepted as built on 2026-10-01: the returned field meets
-the criterion as written, and the estimated-error condition bounds its accuracy. Criteria 1, 2
-and 4 still pass, and harness rows now record the rule's version, so the summary keeps the
-rule's versions apart (`docs/reports/stopping_rule_evidence.md`, section 10).
-ADR-010 is deliberately deferred to the end so it records what was built rather than what
-was planned.
-
-Four amendments to ECR-001 landed on 2026-09-20, before implementation. The discrete
-continuity baseline for the collocated scheme is recorded under acceptance criterion 6, which
-is now a quantified before-and-after rather than a sanity check. Criterion 3a requires the
-cavity error to fall monotonically under refinement in both components; the v half of the
-baseline it records was measured against a corrupted reference and is corrected in the
-ECR-001 erratum. The problem statement carries the
-continuity measurement as a second, independent confirmation of the wall-treatment defect.
-And the `solve_steady` callback, sweep count and stage timing that the benchmark harness
-depends on are recorded as an interface obligation on the rebuilt solver.
+Four decisions the plan did not anticipate were made during the build, each recorded where
+it was made. The pressure Jacobi sweep is weighted by two thirds, because the plain sweep has
+an exact -1 eigenvalue on a closed domain and never converges there (REQ-S08, clarified). The
+validation cases stop by an `error_estimate` rule that bounds the iteration error and the mass
+imbalance rather than the last velocity step, because the step rule left iteration error as
+large as the discretization error and could not see a flux drift on the open channel (REQ-S01
+and REQ-S04, clarified). The cavity is scored against Marchi, Suero and Araki (2009) rather
+than Ghia et al. (1982), whose table carries an error of its own that sets a floor under a
+correct scheme (REQ-S03, amended). And after step 8 the rule gained a fourth condition, the
+second clause of acceptance criterion 6, which nothing had checked: the signed mass imbalance
+summed over the domain, the net outflow, below the per-cell bound (REQ-S04, clarified again).
+The cavity stops are unchanged. The channel stops later, with less iteration error left, and
+there the condition is met at a zero crossing of a decaying oscillation of the net outflow, not
+where the oscillation has settled: between crossings the outflow is well above the bound. Alex
+accepted that as built on 2026-10-01: the returned field meets the criterion as written, and
+the estimated-error condition bounds its accuracy. Harness rows now record the rule's version,
+so the summary keeps the rule's versions apart (`docs/reports/stopping_rule_evidence.md`,
+section 10).
 
 ## What the diagnostics established
 
@@ -240,14 +173,29 @@ measurement showed; it should not restate the measurement.
 
 ## Next
 
-The rebuild continues at step 9, the last: the ADR-010 write-up, the requirement text for
-REQ-S02 and REQ-S03 and the PROJECT_PLAN validation gates, and the ADR-008 supersession note,
-as ECR-001 section 8 lists them.
+Phase 3, the transport solver, after one decision that comes first. Whether to retire the
+collocated solver is Alex's: keep `src/solver_ns.py` as the harness's before-and-after
+baseline, or retire it, `src/boundary.py` and their tests in a pull request of its own. Either
+way, `IterationState`, which both solvers use, is defined in `src/solver_ns.py` today.
+
+ADR-010 lists what Phase 3 inherits from the solver. Continuity is enforced on the staggered
+faces, and the cell-centered fields the solver returns are their averages, so how the
+transport solver reads face fluxes is an interface decision. The per-cell mass imbalance
+bound is absolute and was set on cases at unit density, so it needs restating for the product
+configuration. And wall clustering, which deposition wants, cost accuracy at a fixed cell
+count on the VAL-001 stencil, so the product mesh should be measured before it is chosen.
+
+Deferred findings from earlier pull requests are open as GitHub issues 33, 36, 38, 40 and 42.
 
 With the review Action removed, its repository secret and the GitHub App it used are
 still installed. Removing them is Alex's, after merge.
 
 ## Open questions
+
+Whether the cavity centerline metrics should keep the wall-adjacent ring rows. They drop
+them today. At 20x20 that moves the Marchi u value; at 80x80, where criterion 3 is judged, it
+does not, and no recorded verdict changes. GitHub issue 42 has the measurements and three
+options; two of them need a new metric name, and one waits on the retirement decision.
 
 What sets the outer iteration count once the pressure correction is active rather than inert.
 Not pursued further on the current solver, because the staggered rebuild makes the system
