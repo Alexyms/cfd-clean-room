@@ -15,7 +15,8 @@ separate records; averaging is a presentation decision.
 Each row runs the case file's stopping rule, except that the collocated
 solver, which refuses error_estimate, runs velocity_step
 (validation.cases.with_velocity_step) and its params say so. A velocity-step
-stop is labelled residual_below_tol whichever solver ran it.
+stop is labelled residual_below_tol whichever solver ran it. An error_estimate
+row also records the rule's RULE_VERSION in its params.
 
 Run:
 
@@ -49,6 +50,7 @@ from src.boundary_staggered import (  # noqa: E402 -- follows sys.path.insert
     StaggeredBoundary,
 )
 from src.config import (  # noqa: E402 -- follows sys.path.insert
+    ERROR_ESTIMATE,
     VELOCITY_STEP,
     SimConfig,
 )
@@ -63,6 +65,7 @@ from src.solver_staggered import (  # noqa: E402 -- follows sys.path.insert
     StaggeredSolver,
 )
 from src.staggered import allocate_fields  # noqa: E402 -- follows sys.path.insert
+from src.stopping import RULE_VERSION  # noqa: E402 -- follows sys.path.insert
 from validation.cases import (  # noqa: E402 -- follows sys.path.insert
     CASE_GRIDS,
     load_preset,
@@ -108,8 +111,11 @@ SOLVER_PARAMETERS = (
 
 
 def solver_parameters(config: SimConfig) -> dict:
-    """Every solver parameter as loaded, read back from the config object."""
-    return {name: getattr(config, name) for name in SOLVER_PARAMETERS}
+    """Every solver parameter as loaded, and under error_estimate the rule's version."""
+    params = {name: getattr(config, name) for name in SOLVER_PARAMETERS}
+    if config.stopping_rule == ERROR_ESTIMATE:
+        params["rule_version"] = RULE_VERSION
+    return params
 
 
 def git_state() -> tuple[str, bool]:
@@ -488,7 +494,8 @@ def print_summary(path: Path) -> None:
     So is the stopping rule, ``params.stopping_rule``, shown after the case:
     it sets how far each solve iterates, so outer counts, wall times and
     errors compare only within one rule. A row without the key predates it
-    and ran velocity_step.
+    and ran velocity_step. Under error_estimate so is the rule's version: an
+    added condition changes no parameter.
     """
     if not path.exists():
         print(f"{path} does not exist; nothing recorded yet.")
@@ -497,7 +504,7 @@ def print_summary(path: Path) -> None:
         json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()
     ]
     groups: dict[tuple[str, str, int], list[dict]] = {}
-    rows: dict[tuple[str, str, int, str, str, str], list[dict]] = {}
+    rows: dict[tuple[str, str, int, str, str, str, str], list[dict]] = {}
     for record in records:
         key = (
             record["method"],
@@ -508,24 +515,29 @@ def print_summary(path: Path) -> None:
         # Every harness row names its metric and reference; a hand-built record may not.
         metric = record["accuracy"].get("metric", "-")
         reference = record["accuracy"].get("reference", "-")
-        rule = record.get("params", {}).get("stopping_rule", VELOCITY_STEP)
-        rows.setdefault((*key, rule, metric, reference), []).append(record)
+        params = record.get("params", {})
+        rule = params.get("stopping_rule", VELOCITY_STEP)
+        # error_estimate rows from before rule_version (0ca4ace, f3561ba) ran version 2.
+        version = str(params.get("rule_version", 2)) if rule == ERROR_ESTIMATE else "-"
+        rows.setdefault((*key, rule, version, metric, reference), []).append(record)
 
     header = (
-        f"{'method':<20} {'case':<22} {'rule':<14} {'procs':>5} {'n':>2} "
+        f"{'method':<20} {'case':<22} {'rule':<14} {'ver':>3} {'procs':>5} {'n':>2} "
         f"{'outer':>10} {'wall s (min/med/max)':>24} {'cell updates':>14} "
         f"{'error (min..max)':>20} {'conv':>5} {'metric':<34} reference"
     )
     print(header)
     print("-" * len(header))
-    for (method, case, procs, rule, metric, reference), runs in sorted(rows.items()):
+    for (method, case, procs, rule, version, metric, reference), runs in sorted(
+        rows.items()
+    ):
         outer = [r["work"]["outer_iterations"] for r in runs]
         wall = [r["time"]["wall_seconds"] for r in runs]
         updates = [r["work"]["cell_updates"] for r in runs]
         error = [r["accuracy"]["value"] for r in runs]
         conv = sum(r["outcome"]["converged"] for r in runs)
         print(
-            f"{method:<20} {case:<22} {rule:<14} {procs:>5} {len(runs):>2} "
+            f"{method:<20} {case:<22} {rule:<14} {version:>3} {procs:>5} {len(runs):>2} "
             f"{min(outer):>4}..{max(outer):<4} "
             f"{min(wall):>7.1f}/{statistics.median(wall):>7.1f}/{max(wall):>7.1f} "
             f"{statistics.median(updates):>14.3e} "
@@ -536,10 +548,13 @@ def print_summary(path: Path) -> None:
     references: dict[tuple[str, str], set[str]] = {}
     metrics: dict[tuple[str, str], set[str]] = {}
     rules: dict[tuple[str, str], set[str]] = {}
-    for method, case, _procs, rule, metric, reference in rows:
+    versions: dict[tuple[str, str], set[str]] = {}
+    for method, case, _procs, rule, version, metric, reference in rows:
         references.setdefault((method, case), set()).add(reference)
         metrics.setdefault((method, case), set()).add(metric)
         rules.setdefault((method, case), set()).add(rule)
+        if rule == ERROR_ESTIMATE:
+            versions.setdefault((method, case), set()).add(version)
     for (method, case), seen in sorted(references.items()):
         if len(seen) > 1:
             print(
@@ -557,6 +572,12 @@ def print_summary(path: Path) -> None:
             print(
                 f"note: {method} {case} has rows under {sorted(seen)}; outer "
                 "iterations, wall times and errors are comparable only within one rule"
+            )
+    for (method, case), seen in sorted(versions.items()):
+        if len(seen) > 1:
+            print(
+                f"note: {method} {case} has error_estimate rows under rule versions "
+                f"{sorted(seen)}; compare them only within one version"
             )
 
     loads_seen = sorted({procs for _, _, procs in groups})

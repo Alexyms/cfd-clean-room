@@ -398,6 +398,11 @@ def tight_truth(case: str, n: int) -> Path:
     return path
 
 
+def rule_parameters(scale: float, flux: float, tols: tuple[float, float]) -> np.ndarray:
+    """What a saved rule solve is reused under; a new condition changes no tolerance."""
+    return np.array([scale, flux, *tols, RATE_WINDOW, RULE_VERSION])
+
+
 def verify_rule(case: str, n: int) -> dict:
     """One error_estimate solve at the default tolerances, its stop read against the truth.
 
@@ -417,7 +422,7 @@ def verify_rule(case: str, n: int) -> dict:
     solver = sc.StaggeredSolver(mesh, config, boundary)
     scale, flux = boundary.get_max_boundary_velocity(), solver.flux_scale
     tols = (config.iteration_error_tol, config.mass_imbalance_tol)
-    params = np.array([scale, flux, *tols, RATE_WINDOW, RULE_VERSION])
+    params = rule_parameters(scale, flux, tols)
     stale = True
     if path.exists():
         with np.load(path) as saved:
@@ -465,9 +470,9 @@ def verify_rule(case: str, n: int) -> dict:
     # Each partial builds the recorded readings when the rule calls it.
     stops = [
         replay.update(
-            s, partial(ImbalanceSummary, worst=w, absolute_sum=a, signed_sum=n)
+            s, partial(ImbalanceSummary, worst=w, absolute_sum=a, signed_sum=g)
         )
-        for s, w, a, n in zip(steps, imb, tot, net, strict=True)
+        for s, w, a, g in zip(steps, imb, tot, net, strict=True)
     ]
     controls = (imb[-1] == d["returned"], net[-1] == d["returned_signed"])
     if not (stops[-1] and not any(stops[:-1]) and all(controls)):

@@ -144,7 +144,8 @@ VELOCITY_STEP = "velocity_step"
 ERROR_ESTIMATE = "error_estimate"
 STOPPING_RULES: tuple[str, ...] = (VELOCITY_STEP, ERROR_ESTIMATE)
 DEFAULT_ITERATION_ERROR_TOL = 1.0e-6
-# ECR-001 acceptance criterion 6: per-cell imbalance below 1e-10, absolute.
+# ECR-001 acceptance criterion 6: the per-cell imbalance and its signed domain
+# sum each below 1e-10, absolute.
 DEFAULT_MASS_IMBALANCE_TOL = 1.0e-10
 # Every key the solver block accepts, nine required and three optional. With
 # optional keys a misspelt one would otherwise fall back to its default.

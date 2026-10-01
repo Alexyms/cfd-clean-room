@@ -149,6 +149,13 @@ def test_signed_domain_sum_decides_once_the_other_three_are_met(
 
 
 @pytest.mark.unit
+def test_imbalance_summary_refuses_positional_readings() -> None:
+    """Defect caught: kw_only removed, which lets two readings swap silently (test 28 S2)."""
+    with pytest.raises(TypeError):
+        ImbalanceSummary(5e-11, 2.5e-8, 1e-11)
+
+
+@pytest.mark.unit
 @pytest.mark.parametrize("position", [0, 1, 2, 3])
 @pytest.mark.parametrize("bad", [0.0, -1.0, math.inf, math.nan, True])
 def test_a_scale_or_tolerance_not_positive_and_finite_is_rejected(
