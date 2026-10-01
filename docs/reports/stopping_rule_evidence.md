@@ -5,7 +5,7 @@
 Sections 1 to 8 measure and do not choose a rule; section 9 checks the rule chosen from them;
 section 10 (2026-09-30) adds condition (d), criterion 6's domain-sum clause.
 **Instrument:** `python scripts/stopping_probe.py`. Every value is from
-`results/stopping_probe/summary.json` (gitignored) unless section 8 or 9 says otherwise.
+`results/stopping_probe/summary.json` (gitignored) unless section 8, 9 or 10 says otherwise.
 
 **Answers.** (1) 82% of VAL-001's stored 2.3e-3 is iteration error; the rest is the
 half-cell wall stencil's discretization error, less some development at x = L/2. (2) Step
@@ -283,10 +283,13 @@ truths' trajectories, bitwise the rule solves' to the stop. A dot is not measure
 | VAL-001 40x20 | 1389 (880) | 23.8 (20.3) | 1287, 767, 748, 1389 | (d) | 1.96e-8 (6.67e-7) | 2.98e-12 | -8.2e-11 | 1.5e-8 | 1.99895e-3 (1.99895e-3) |
 | VAL-001 80x40 | 3988 (3154) | 114.1 (96.1) | 3983, 1805, 2779, 3988 | (d) | 6.10e-8 (5.44e-7) | 1.10e-12 | 5.6e-11 | 2.1e-8 | 4.1068e-4 (4.1069e-4) |
 | VAL-001 160x80 | 13454 (10009) | 882 (676) | . | (d) | . | 1.40e-13 | 9.5e-11 | 1.1e-8 | 1.5690e-4 |
-| 80x40 clustered | 2253 (1523) | 42.2 (33.9) | . | . | . | 2.61e-12 | -9.0e-11 | 2.0e-8 | 3.0238e-3 |
+| 80x40 clustered | 2253 (1523) | 40.5 (33.9) | . | . | . | 2.61e-12 | -9.0e-11 | 2.0e-8 | 3.0238e-3 |
 
 The cavity fields and histories are bitwise section 9's, and the channel histories equal section
-9's to its stops. The cavity's seconds rose 1.2 times on unchanged work: single-run timing.
+9's to its stops. The cavity's seconds rose 1.2 times on unchanged work: single-run timing. The
+160x80 and clustered parentheses are from `docs/reports/val001_revalidation_step7.md`, sections
+2 and 1, not section 9. The clustered seconds are its harness row's, retaken on 2026-10-01 to
+record the rule's version.
 
 **Reading.** On the closed cavity (d) holds from the first iteration; the signed sum is rounding.
 On the channel (d) is met last, where the net outflow changes sign, not where it has settled. The
@@ -296,20 +299,29 @@ on the first two. Each stop is just before a sign change (40x20 at 1389, change 
 3988, change at 3990), with the sum falling through 1e-10 by 5e-11 (1.3e-11 at 160x80) per
 iteration while the absolute sum stays near 7.6e-10, 1e-9 and 5e-10. Of the last 200
 iterations on each uniform grid only the stop is below 1e-10. After the stop the sum reaches
-3.3e-9 at outer 1558 (40x20) and 8.7e-9 at 4359 (80x40). It stays below 1e-10 from outer 2375 at 40x20. At 80x40 it is
-still 1.7e-10 at the truth's 7306; at the measured decay the next peak is 4.6e-11, so it settles
-before the change near 7947 (INFERRED).
+3.3e-9 at outer 1558 (40x20) and 8.7e-9 at 4359 (80x40). It stays below 1e-10 from outer 2375
+at 40x20. At 80x40 it is still 1.7e-10 at the truth's 7306; at the measured decay the next peak
+is 4.6e-11, so it settles before the change near 7947 (INFERRED).
 
 So the returned field meets both clauses of criterion 6 as written, but the second holds only
-for a few iterations around each sign change, and not between them. (d) moved every channel stop later, and on 40x20 and
-80x40 left 34 and 9 times less iteration error. Whether a stop at a sign change is what the
-criterion intends, or (d) should hold over a window or bound the envelope (on 40x20, 2375 outer
-against 1389; on 80x40 about twice 3988), is not decided here.
+for a few iterations around each sign change, and not between them. (d) moved every channel
+stop later, and on 40x20 and 80x40 left 34 and 9 times less iteration error.
+
+**Decision, 2026-10-01 (Alex and the orchestrator).** (d) is accepted as built. It is met at a
+zero crossing of a decaying oscillation of the net outflow, not where the oscillation has
+settled: after the stop the net outflow reaches 3.3e-9 (40x20) and 8.7e-9 (80x40), and it stays
+below 1e-10 only from outer 2375 at 40x20 and from after the truth's 7306 at 80x40, against
+stops at 1389 and 3988. The returned field meets criterion 6 as written, and (a) bounds its
+accuracy: its estimated iteration error is below 1e-6 of U, and the true error at those two
+stops is 2.0e-8 and 6.1e-8. No window, no envelope condition, no further tuning. The
+oscillation is an underdamped mode of the outer loop under fixed under-relaxation. Removing it,
+by an outflow correction or by under-relaxation that adapts to the damping the solver observes,
+is a Phase 3 design question (`docs/STATUS.md`, open questions).
 
 **Prediction check**, against the prediction written before the run.
 - Cavity stops unchanged and bitwise at 1370, 3849, 12849: matched.
 - VAL-001 40x20 later than 880: matched, 1389. From about 1900 to 2300: **missed**. Under 30 s: matched, 23.8 s.
-- VAL-001 80x40 later than 3154: matched, 3988. From 4000 to 7500: **missed**, by 12. Under 3 minutes: matched, 114 s (row 128 s).
+- VAL-001 80x40 later than 3154: matched, 3988. From 4000 to 7500: **missed**, by 12. Under 3 minutes: matched, 114 s (row 111.5 s).
 - The clustered preset later: matched, 2253. Criterion 2 within 1% of itself: matched, 0.004%.
 - Criteria 1, 2 and 4 verdicts unchanged: matched. Criterion 1 within 1% of 4.104e-4: matched, 4.107e-4.
 - 160x80 may approach its cap of 20000: it stopped at 13454.

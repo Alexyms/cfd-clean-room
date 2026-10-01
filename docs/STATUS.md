@@ -105,9 +105,14 @@ case file's, and a named grid preset loads through one function, so no consumer 
 stretched preset on a uniform mesh. See `docs/reports/val002_revalidation_step8.md`.
 After step 8 the rule gained a fourth condition, the second clause of acceptance criterion 6,
 which nothing had checked: the signed mass imbalance summed over the domain, the net outflow,
-below the per-cell bound. The cavity stops are unchanged. The channel stops later, each where
-the net outflow passes through zero rather than once it has settled, with less iteration error
-left, and criteria 1, 2 and 4 still pass (`docs/reports/stopping_rule_evidence.md`, section 10).
+below the per-cell bound. The cavity stops are unchanged. The channel stops later, with less
+iteration error left. There the net outflow decays as an oscillation about zero, and the new
+condition is met at one of its zero crossings, not where the oscillation has settled: between
+crossings the outflow is well above the bound, and settling below it takes up to about twice
+as many outer iterations. That was accepted as built on 2026-10-01: the returned field meets
+the criterion as written, and the estimated-error condition bounds its accuracy. Criteria 1, 2
+and 4 still pass, and harness rows now record the rule's version, so the summary keeps the
+rule's versions apart (`docs/reports/stopping_rule_evidence.md`, section 10).
 ADR-010 is deliberately deferred to the end so it records what was built rather than what
 was planned.
 
@@ -247,6 +252,20 @@ What sets the outer iteration count once the pressure correction is active rathe
 Not pursued further on the current solver, because the staggered rebuild makes the system
 consistent and changes that regime in kind. The harness records the outer count on every run,
 so the rebuild will surface it without a dedicated probe.
+
+An outer iteration that adapts rather than overshoots, a Phase 3 design question recorded
+2026-10-01. On the open channel the net mass outflow decays as an oscillation about zero, an
+underdamped mode of the outer loop under fixed under-relaxation, and that is why the stopping
+rule's domain-sum condition is met at a zero crossing (`docs/reports/stopping_rule_evidence.md`,
+section 10). Alex's stated direction is an adaptive iteration that does not overshoot. There
+are two candidate fixes: an outflow correction that removes the net-outflow mode, or
+under-relaxation that adapts to the damping the solver observes. Nothing is built yet.
+
+Closed 2026-10-01: whether the domain-sum condition should hold over a window, or bound the
+oscillation's envelope, rather than be met at a zero crossing. It should not. Alex and the
+orchestrator accepted it as built: the returned field meets ECR-001 criterion 6 as written,
+and the estimated-error condition bounds its accuracy. Section 10 of the evidence report
+records the envelope it leaves.
 
 Closed 2026-09-22: how REQ-S08 should be amended. It was clarified, not amended. Weighted
 Jacobi with w = 2/3 keeps the data-parallel per-cell update and maps the closed-domain

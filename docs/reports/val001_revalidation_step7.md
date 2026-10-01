@@ -156,13 +156,14 @@ criteria 1 and 2 are scored half a cell downstream of L/2; the order study reads
 
 The stopping rule gained condition (d), ECR-001 criterion 6's domain-sum clause
 (`docs/reports/stopping_rule_evidence.md`, section 10). Sections 1 to 6 stand as written for the
-three-condition rule. Every solve below is at commit 8aac137 and stopped by
-`error_estimate_and_continuity`, none at its cap.
+three-condition rule. Every solve below stopped by `error_estimate_and_continuity`, none at its
+cap. The order study's solves are at 8aac137. The two rows are at bc65c43, retaken on 2026-10-01
+to record the rule's version; the rows first taken at 8aac137 never reached `main`.
 
 | MEASURED | Mesh | Outer (sections 1, 2) | Row s | Worst cell | Signed sum | Metric (sections 1, 2) | Row run_id |
 |---|---|---|---|---|---|---|---|
-| Criterion 1 | 80x40 uniform | 3988 (3154) | 128.2 | 1.10e-12 | 5.6e-11 | 4.107e-4 (4.104e-4) | 8a47e7b839a0450a9dfa8e707e4a7b81 |
-| Criterion 2 | 80x40, y clustered | 2253 (1523) | 42.2 | 2.61e-12 | -9.0e-11 | 3.024e-3 (3.024e-3) | dded27210dab478abd49bfc9324a4a94 |
+| Criterion 1 | 80x40 uniform | 3988 (3154) | 111.5 | 1.10e-12 | 5.6e-11 | 4.107e-4 (4.104e-4) | f56fce258f7b43acbb3ef03e61d878b0 |
+| Criterion 2 | 80x40, y clustered | 2253 (1523) | 40.5 | 2.61e-12 | -9.0e-11 | 3.024e-3 (3.024e-3) | 43b02c72ec614ca899e8c90d4d84c341 |
 
 | MEASURED, criterion 4 | 40x20 | 80x40 | 160x80 | Orders (section 2) |
 |---|---|---|---|---|
