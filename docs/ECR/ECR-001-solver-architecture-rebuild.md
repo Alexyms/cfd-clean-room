@@ -2,11 +2,11 @@
 
 **Project:** CFD Clean Room Simulation
 **Change Request ID:** ECR-001
-**Status:** Approved (last amended 2026-09-24, see Document History)
+**Status:** Closed 2026-09-30 at step 9 (approved 2026-04-16, last amended 2026-09-24; see Document History)
 **Author:** Alex Moroz-Smietana
 **Approver(s):** Alex Moroz-Smietana, Claude (pair)
 **Date Raised:** 2026-04-16
-**Phase Affected:** Phase 2 (Navier-Stokes Solver), in progress
+**Phase Affected:** Phase 2 (Navier-Stokes Solver)
 
 ---
 
@@ -282,3 +282,4 @@ results, which never touched the v table.
 | 2026-09-25 | Step 7 done: VAL-001 revalidated on the staggered solver under error_estimate. Criteria 1, 2 and 4 pass (docs/reports/val001_revalidation_step7.md). Note under criterion 4: the order is judged without a reference, the orders against the parabola reported beside it. No threshold changed; REQ-S02's text changes in step 9. | Alex Moroz-Smietana |
 | 2026-09-25 | Step 8 done: VAL-002 revalidated on the staggered solver under error_estimate, scored against marchi_2009_re100. Criteria 3 and 3a pass (docs/reports/val002_revalidation_step8.md). Note under criterion 3a with the series and orders, Ghia beside them. No threshold changed; REQ-S03's text changes in step 9. | Alex Moroz-Smietana |
 | 2026-09-30 | Note under criterion 6: the stopping rule now checks the domain-sum clause too (condition (d), src/stopping.py), with each validation stop's worst cell and signed sum. Cavity stops unchanged, channel stops later, criteria 1, 2 and 4 still pass. No threshold changed. | Alex Moroz-Smietana |
+| 2026-09-30 | Step 9 done, and the ECR closed. ADR-010 written (docs/ADR/ADR-010-staggered-grid-architecture.md): what was built, each decision with its evidence, and a table of planned against built. ADR-008 marked superseded. In docs/SYSTEM.md, REQ-S02 amended to < 1% on 80x40 (section 6, the ADR-008 row) and REQ-S03 to score against marchi_2009_re100 with ghia_1982_re100_r2 reported unscored (the amendment of 2026-09-24); REQ-S11 amended to the per-axis, mirrored stretching step 1 built. PROJECT_PLAN.md brought current. Acceptance: criteria 1, 2 and 4 at step 7; 3 and 3a at step 8; 5 in the full suite of docs/reports/phase2_navier_stokes_report.md; 7 by the review each step's pull request carried (the review Action until 2026-09-23, `/cfd-review` and `/cfd-test` before the pull request since); 8 here. Criterion 6 holds per cell at every validation stop, and in its domain sum on the closed cavity, where its baseline was measured. On the open channel the domain sum is the mismatch between outflow and inflow, which no construction makes zero; condition (c) of the stopping rule holds it to 1e-6 of the inflow, not to 1e-10 (ADR-010, Validation results). No threshold changed. | Alex Moroz-Smietana |

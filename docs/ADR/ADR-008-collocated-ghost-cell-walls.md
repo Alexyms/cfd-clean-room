@@ -1,5 +1,7 @@
 # ADR-008: Collocated Ghost Cell Wall Treatment
 
+**Superseded by ADR-010** (`docs/ADR/ADR-010-staggered-grid-architecture.md`).
+
 ## Status
 Superseded by ADR-010 on 2026-04-16. See ECR-001 for decision rationale.
 
