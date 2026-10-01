@@ -158,16 +158,17 @@ higher of the two. Measured against itself it converges at second order or bette
 the lid corners. Its slow approach to Ghia was mostly the metric's own sampling, half a cell
 off the centerlines. From 2026-09-23 until step 8 the harness, the viewer and VAL-002 sampled
 on the centerlines under a new metric name, `max_normalized_centerline_error_r2`, and the
-stored rows keep the old one; the viewer and the collocated VAL-002 test still use it. On the true centerlines, and on fields converged well past the case's stopping
+stored rows keep the old one; the viewer and the collocated VAL-002 test still use the r2
+metric. On the true centerlines, and on fields converged well past the case's stopping
 tolerance, the staggered solution converges toward values up to about 1% of the lid speed
 from Ghia's in the jet by the right wall, and refinement moves it away from Ghia there.
 That gap is Ghia's (INFERRED). Against an independent reference, Marchi, Suero and Araki
 (2009), read from the paper's text layer and checked against its own published mass flow,
 the extrapolated staggered solution agrees at all thirty of its points to a small fraction
 of the gap, and Ghia's table differs from it by the gap. Under the r2 metric, against Ghia,
-the staggered error series is not monotone, which is why criterion 3a moved to Marchi. The collocated solver is
-not yet asymptotic on these grids. See `docs/reports/cavity_self_convergence.md` and
-`docs/reports/cavity_reference_marchi.md`.
+the staggered error series is not monotone, which is why criterion 3a moved to Marchi. The
+collocated solver is not yet asymptotic on these grids. See
+`docs/reports/cavity_self_convergence.md` and `docs/reports/cavity_reference_marchi.md`.
 
 The inlet flux the collocated layer prescribes on VAL-001 is short of the exact value by
 two rows of cells, because its edge map hands the corner ring cells to the top and bottom
