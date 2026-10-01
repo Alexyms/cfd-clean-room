@@ -35,8 +35,9 @@ domain (docs/reports/staggered_integration_step6.md).
 collocated rule: the residual below ``convergence_tol``. ``error_estimate``
 (src/stopping.py) needs the estimated iteration error over the largest
 prescribed boundary velocity below ``iteration_error_tol``, the worst
-per-cell mass imbalance below ``mass_imbalance_tol``, and the summed
-imbalance over the through-flow below ``iteration_error_tol``. Reaching
+per-cell mass imbalance below ``mass_imbalance_tol``, the summed imbalance
+over the through-flow below ``iteration_error_tol``, and the absolute signed
+domain sum of the imbalance below ``mass_imbalance_tol``. Reaching
 ``max_simple_iter`` is not convergence under either.
 """
 
@@ -54,7 +55,7 @@ from src.momentum import MomentumPredictor
 from src.pressure import PressureCorrector
 from src.solver_ns import IterationState
 from src.staggered import allocate_fields, p_shape, to_cell_centers
-from src.stopping import ErrorEstimateRule
+from src.stopping import ErrorEstimateRule, ImbalanceSummary
 
 logger = logging.getLogger(__name__)
 
@@ -185,10 +186,15 @@ class StaggeredSolver:
         self._flux_scale = self._rho * inflow
         return ErrorEstimateRule(scale, self._flux_scale, *self._rule_tols)
 
-    def _imbalance_norms(self, u: np.ndarray, v: np.ndarray) -> tuple[float, float]:
-        """Worst and summed absolute per-cell mass imbalance, from one evaluation."""
-        imbalance = np.abs(self._corrector.mass_imbalance(u, v))
-        return float(imbalance.max()), float(imbalance.sum())
+    def _imbalance_summary(self, u: np.ndarray, v: np.ndarray) -> ImbalanceSummary:
+        """Worst, absolute-summed and signed-summed per-cell imbalance, one evaluation."""
+        imbalance = self._corrector.mass_imbalance(u, v)
+        cells = np.abs(imbalance)
+        return ImbalanceSummary(
+            worst=float(cells.max()),
+            absolute_sum=float(cells.sum()),
+            signed_sum=float(imbalance.sum()),
+        )
 
     def _extrapolate_outlets(self, u: np.ndarray, v: np.ndarray) -> None:
         """Give each pressure outlet face the value of its interior neighbour, in place."""
@@ -269,7 +275,7 @@ class StaggeredSolver:
             if rule is None:
                 stop = residual < self._convergence_tol
             else:
-                stop = rule.update(max(du, dv), partial(self._imbalance_norms, u, v))
+                stop = rule.update(max(du, dv), partial(self._imbalance_summary, u, v))
 
             if iteration % 50 == 0 or stop:
                 logger.info("SIMPLE iter %4d: residual = %.6e", iteration, residual)

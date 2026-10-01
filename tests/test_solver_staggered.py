@@ -24,7 +24,7 @@ from src.pressure import PressureCorrection, PressureCorrector
 from src.solver_ns import IterationState, NavierStokesSolver
 from src.solver_staggered import StaggeredSolver
 from src.staggered import allocate_fields, to_cell_centers
-from src.stopping import ErrorEstimateRule
+from src.stopping import ErrorEstimateRule, ImbalanceSummary
 from validation.cases import (
     CASE_GRIDS,
     case_path,
@@ -89,11 +89,11 @@ class _RuleSeen:
     speeds: list[float] = dataclasses.field(default_factory=list)
     fluxes: list[float] = dataclasses.field(default_factory=list)
     steps: list[float] = dataclasses.field(default_factory=list)
-    pairs: list[tuple[float, float]] = dataclasses.field(default_factory=list)
+    readings: list[ImbalanceSummary] = dataclasses.field(default_factory=list)
 
 
 def _spy_rules(monkeypatch: pytest.MonkeyPatch) -> _RuleSeen:
-    """Record each rule's scales, each step and each (worst, summed) pair it receives."""
+    """Record each rule's scales, each step and each imbalance summary it receives."""
     seen = _RuleSeen()
 
     class Spy(ErrorEstimateRule):
@@ -105,13 +105,13 @@ def _spy_rules(monkeypatch: pytest.MonkeyPatch) -> _RuleSeen:
             super().__init__(velocity_scale, flux_scale, *tols)
 
         def update(
-            self, step: float, imbalance: Callable[[], tuple[float, float]]
+            self, step: float, imbalance: Callable[[], ImbalanceSummary]
         ) -> bool:
             seen.steps.append(step)
 
-            def recorded() -> tuple[float, float]:
-                seen.pairs.append(imbalance())
-                return seen.pairs[-1]
+            def recorded() -> ImbalanceSummary:
+                seen.readings.append(imbalance())
+                return seen.readings[-1]
 
             return super().update(step, recorded)
 
@@ -407,10 +407,12 @@ class TestStoppingRule:
     ) -> None:
         """The velocity_step rule would have stopped earlier on the same trajectory.
 
-        Review 24b B1: the last pair the rule received is the returned field's
-        worst and summed absolute imbalance, exactly; a zero, signed or swapped
-        sum fails. Test 24b T1: each step is the residual in m/s, and dv
-        exceeds du at 55 of this solve's iterations, so du alone fails.
+        Review 24b B1: the last summary the rule received is the returned
+        field's worst, absolute-summed and signed-summed imbalance, exactly; a
+        zero, signed or swapped absolute sum fails, and so does a signed sum
+        replaced by the absolute one or by zero (here -1e-17 against 7.7e-10).
+        Test 24b T1: each step is the residual in m/s, and dv exceeds du at 55
+        of this solve's iterations, so du alone fails.
         """
         seen = _spy_rules(monkeypatch)
         config = _ruled("cavity", (6, 6), stopping_rule="error_estimate")
@@ -418,10 +420,14 @@ class TestStoppingRule:
         solver.solve_steady()
         assert solver.stop_reason == "error_estimate_and_continuity"
         assert solver.converged is True
-        cells = np.abs(solver.last_mass_imbalance)
-        assert seen.pairs[-1] == (cells.max(), cells.sum())
+        signed = solver.last_mass_imbalance
+        cells = np.abs(signed)
+        assert seen.readings[-1] == ImbalanceSummary(
+            worst=cells.max(), absolute_sum=cells.sum(), signed_sum=signed.sum()
+        )
         assert cells.max() < config.mass_imbalance_tol
         assert cells.sum() / solver.flux_scale < config.iteration_error_tol
+        assert abs(signed.sum()) < config.mass_imbalance_tol
         expected = [r * solver.reference_velocity for r in solver.residual_history]
         assert seen.steps == pytest.approx(expected, rel=1e-12)
         assert min(solver.residual_history[:-1]) < config.convergence_tol
