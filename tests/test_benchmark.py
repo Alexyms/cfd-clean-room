@@ -27,6 +27,7 @@ from src.solver_ns import (  # noqa: E402 -- follows sys.path.insert
 from src.solver_staggered import (  # noqa: E402 -- follows sys.path.insert
     StaggeredSolver,
 )
+from src.stopping import RULE_VERSION  # noqa: E402 -- follows sys.path.insert
 from validation.cases import (  # noqa: E402 -- follows sys.path.insert
     case_path,
     load_case,
@@ -239,7 +240,8 @@ def test_harness_row_takes_the_cap_from_the_solver(
     """A capped error_estimate solve is recorded as not converged, with its rule.
 
     Its last residual is below convergence_tol 10, so the old computation from
-    the residual would have recorded it as converged.
+    the residual would have recorded it as converged. The row carries the
+    rule's version (review 28 B1; defect caught: the harness omits it).
     """
     raw = yaml.safe_load(case_path("cavity").read_text(encoding="utf-8"))
     raw["domain"]["nx"] = raw["domain"]["ny"] = 6
@@ -254,6 +256,31 @@ def test_harness_row_takes_the_cap_from_the_solver(
     assert row["work"]["outer_iterations"] == 20
     assert row["trajectory"][-1]["residual"] < 10.0
     assert row["params"]["stopping_rule"] == "error_estimate"
+    assert row["params"]["rule_version"] == RULE_VERSION
+
+
+@pytest.mark.unit
+def test_summary_never_pools_two_rule_versions(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """error_estimate rows differing only in version get two rows and a note.
+
+    A row without rule_version ran version 2. Defect caught: the version
+    dropped from the summary key (review 28 B1).
+    """
+    old = _record("val001_80x40", 1, 100.9, outer=3154)
+    new = _record("val001_80x40", 1, 128.2, outer=3988)
+    old["params"] = {"stopping_rule": "error_estimate"}
+    new["params"] = {"stopping_rule": "error_estimate", "rule_version": 3}
+    benchmark.print_summary(_write(tmp_path / "results.jsonl", [old, new]))
+    out = capsys.readouterr().out
+    rows = [line for line in out.splitlines() if line.startswith("collocated-jacobi")]
+    assert len(rows) == 2
+    v2 = next(line for line in rows if " error_estimate   2 " in line)
+    v3 = next(line for line in rows if " error_estimate   3 " in line)
+    assert " 3154..3154" in v2 and "3988" not in v2
+    assert " 3988..3988" in v3 and "3154" not in v3
+    assert "has error_estimate rows under rule versions ['2', '3']" in out
 
 
 @pytest.mark.unit
@@ -325,6 +352,7 @@ def test_staggered_velocity_step_stop_has_the_collocated_label(
     monkeypatch.setitem(benchmark.CASES, "tiny_cavity", ("cavity", 6, 6))
     row = benchmark.run_case("tiny_cavity", "staggered-jacobi", 10, 1)
     assert row["params"]["stopping_rule"] == "velocity_step"
+    assert "rule_version" not in row["params"]
     assert row["outcome"] == {"converged": True, "stop_reason": "residual_below_tol"}
 
 

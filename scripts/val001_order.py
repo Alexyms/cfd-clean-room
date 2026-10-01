@@ -4,7 +4,7 @@ Solves the channel at 40x20, 80x40 and 160x80 with the staggered solver under
 the case file's stopping rule. Fields are saved under results/val001_order/
 (gitignored) under reuse_key, the solver parameters they were solved with and
 the stopping rule's RULE_VERSION, and a saved field is re-solved only when that
-key differs from now. A solve that reaches its cap stops the script.
+key differs from the current one. A solve that reaches its cap stops the script.
 
 Each profile is u at x = L/2 exactly, the mean of the two cell columns either
 side of that face, and at x = 3L/4 the same way; every nx here is a multiple

@@ -140,6 +140,20 @@ def test_true_error_ignores_an_offset_outside_the_fluid(
 
 
 @pytest.mark.unit
+def test_rule_parameters_change_with_the_rule_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A saved rule solve is solved again under another RULE_VERSION.
+
+    Defect caught: the version dropped from the stored parameters (test 28 S1).
+    """
+    before = stopping_probe.rule_parameters(0.1, 0.05, (1e-6, 1e-10))
+    monkeypatch.setattr(stopping_probe, "RULE_VERSION", stopping_probe.RULE_VERSION + 1)
+    after = stopping_probe.rule_parameters(0.1, 0.05, (1e-6, 1e-10))
+    assert not np.array_equal(before, after)
+
+
+@pytest.mark.unit
 @pytest.mark.parametrize("tol", [None, 1e-11])
 def test_case_config_without_a_rule_is_velocity_step(tol: float | None) -> None:
     """Truths and snapshots were solved under velocity_step, and the channel file now

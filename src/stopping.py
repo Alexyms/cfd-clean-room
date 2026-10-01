@@ -21,8 +21,8 @@ can be tested on synthetic histories.
 
 (b) and (d) are ECR-001 criterion 6, its per-cell and its domain-sum clause,
 at the bound it names; (a) and (c) are no clause of it. The signed sum is the
-net mass flux out of the domain: (c) holds it to iteration_error_tol of the
-inflow, (d) to criterion 6's absolute bound (section 10).
+net mass flux out of the domain: (c) holds it to iteration_error_tol of
+flux_scale, (d) to criterion 6's absolute bound (section 10).
 """
 
 import math
