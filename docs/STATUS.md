@@ -15,7 +15,7 @@ project has already lost five months to exactly that.
 ## Where the project stands
 
 Phases 0 and 1 are complete. Phase 2's Navier-Stokes solver is built and validated. ECR-001,
-the engineering change request that rebuilt it on a staggered grid, closed on 2026-09-30, and
+the engineering change request that rebuilt it on a staggered grid, closed on 2026-10-01, and
 the phase gate is recorded in `docs/reports/phase2_navier_stokes_report.md`. VAL-001 and
 VAL-002 pass on the staggered solver at their amended criteria. The collocated solver it
 replaced as the solver of record still runs as the benchmark harness's baseline, and VAL-002
@@ -112,7 +112,9 @@ domain faces. See `docs/reports/inlet_flux_comparison.md`.
 Separately, a validation figure carried in the earlier session handoffs was checked against
 the code and found never to have been true of any committed state. The requirement history in
 `docs/SYSTEM.md` and the rationale in `docs/ADR/ADR-008-collocated-ghost-cell-walls.md` have
-been corrected. REQ-S02's threshold is unchanged; only its recorded justification moved.
+been corrected. That correction left REQ-S02's threshold at 2.5% and moved only its recorded
+justification; ECR-001 step 9 then amended the threshold to 1% for the staggered solver
+(`docs/SYSTEM.md`, section 2.1).
 
 ## Tooling
 
@@ -198,9 +200,12 @@ does not, and no recorded verdict changes. GitHub issue 42 has the measurements 
 options; two of them need a new metric name, and one waits on the retirement decision.
 
 What sets the outer iteration count once the pressure correction is active rather than inert.
-Not pursued further on the current solver, because the staggered rebuild makes the system
-consistent and changes that regime in kind. The harness records the outer count on every run,
-so the rebuild will surface it without a dedicated probe.
+Asked of the collocated solver and not pursued there, because the rebuild changed that regime
+in kind. Open on the staggered solver, with no dedicated probe. What its records show so far:
+on the channel the count is set by the net outflow's underdamped oscillation, the next
+question; on the cavity the condition met last is the per-cell imbalance at 20x20 and 40x40
+and the estimated iteration error at 80x80 (`docs/reports/stopping_rule_evidence.md`, section
+10). The harness records the outer count on every run.
 
 An outer iteration that adapts rather than overshoots, a Phase 3 design question recorded
 2026-10-01. On the open channel the net mass outflow decays as an oscillation about zero, an

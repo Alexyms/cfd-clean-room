@@ -104,7 +104,7 @@ Status values: NOT STARTED, IN PROGRESS, GATE REVIEW, COMPLETE
 
 ### Deliverables
 
-ECR-001 rebuilt the solver on a staggered grid in nine steps (2026-09-20 to 2026-09-30). ADR-010 records what was built; the staggered solver is the solver of record.
+ECR-001 rebuilt the solver on a staggered grid in nine steps (2026-09-20 to 2026-10-01). ADR-010 records what was built; the staggered solver is the solver of record.
 
 | Deliverable | Status | Notes |
 |-------------|--------|-------|
@@ -129,13 +129,13 @@ ECR-001 rebuilt the solver on a staggered grid in nine steps (2026-09-20 to 2026
 
 | Test ID | Description | Criterion | Status |
 |---------|-------------|-----------|--------|
-| VAL-001 | Poiseuille flow | L2 error < 1% on 80x40 (REQ-S02 as amended 2026-09-30), uniform and wall-clustered to 0.1 H / ny (ECR-001 criteria 1 and 2); observed order >= 1.8 under uniform refinement (criterion 4) | PASS on the staggered solver: 4.104e-4 uniform, 3.024e-3 clustered, order 1.993 (docs/reports/val001_revalidation_step7.md). The collocated solver measures 2.036e-2 against its own 2.5% (ADR-008). |
+| VAL-001 | Poiseuille flow | L2 error < 1% on 80x40 (REQ-S02 as amended 2026-09-30), uniform and wall-clustered to 0.1 H / ny (ECR-001 criteria 1 and 2); observed order >= 1.8 under uniform refinement (criterion 4) | PASS on the staggered solver: 4.107e-4 uniform, 3.024e-3 clustered, order 1.992 under stopping rule version 3 (docs/reports/val001_revalidation_step7.md, addendum). The collocated solver measures 2.036e-2 against its own 2.5% (ADR-008). |
 | VAL-002 | Lid-driven cavity | Maximum centerline error < 2% of the lid speed against marchi_2009_re100 at 80x80 (REQ-S03 as amended 2026-09-30, ECR-001 criterion 3); u and v errors each falling across 20x20, 40x40 and 80x80 (criterion 3a); ghia_1982_re100_r2 reported, unscored | PASS on the staggered solver: u 1.057e-3, v 7.356e-4 at 80x80; orders 2.24 and 2.11 (u), 2.12 and 2.07 (v) (docs/reports/val002_revalidation_step8.md). CI runs the 40x40 case file. The collocated test stays xfail at 40x40 against Ghia, u 0.0441 and v 0.0606. |
 
 ### Scope Changes
 
 - C solver deliverables (csolver/pressure_solve.c, csolver.h, Makefile, test_c_parity.py) moved to Phase 6 (CUDA Acceleration). REQ-N03 is now validated against CUDA C++ rather than plain C.
-- ECR-001 (approved 2026-04-16, closed 2026-09-30) replaced the collocated solver as the solver of record with a staggered one built alongside it. The collocated solver was kept as the harness baseline rather than rewritten in place; its retirement is deferred to Alex's decision. REQ-S11 was amended to the per-axis, mirrored stretching that was built.
+- ECR-001 (approved 2026-04-16, closed 2026-10-01) replaced the collocated solver as the solver of record with a staggered one built alongside it. The collocated solver was kept as the harness baseline rather than rewritten in place; its retirement is deferred to Alex's decision. REQ-S11 was amended to the per-axis, mirrored stretching that was built.
 - Measurement instruments added during the rebuild, without plan entries: the benchmark harness and its results file (PR #13), the validation package shared by tests and harness (PR #14), the system map generator (PR #12), and the self-convergence, stopping-rule and VAL-001 order scripts. Each exists to measure the solver; none is a deliverable of a later phase.
 - scripts/view_field.py added as a Phase 2 development instrument (2026-09-19, PR #14). It exists so the velocity and pressure fields can be read against the Ghia reference while the solver is rebuilt under ECR-001. It is distinct from the Phase 7 visualization deliverable: no animation, no scenario output, no presentation quality, and it is not reused by scripts/visualize.py. Phase 7 remains NOT STARTED. The addition was made without a plan entry, which is a scope violation of the task prompt that introduced it, not of the build; recorded here on 2026-09-20 from the PR #14 review finding.
 
