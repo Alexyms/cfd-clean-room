@@ -579,7 +579,7 @@ class TestLagrange:
     What it reads is the weight lagrange gives that node.
     """
 
-    NODES = np.arange(8.0)
+    NODES: np.ndarray = np.arange(8.0)
 
     def _weights(self, target: float) -> list[float]:
         """Each node's weight at target, read from a single 1 among zeros."""
