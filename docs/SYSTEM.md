@@ -145,22 +145,23 @@ When a PR modifies a module, the reviewer verifies impact on downstream modules.
 
 | Modified Module | Check These Downstream Modules | What to Check |
 |-----------------|-------------------------------|---------------|
-| config.py | mesh, boundary, solver_ns, solver_transport, particles, monitor, scenarios, time_integration | New/changed/removed config fields are handled by all consumers. No module accesses a field that no longer exists. No module ignores a new field it should use. |
-| mesh.py | boundary, solver_ns, solver_transport, monitor, staggered | Grid dimensions, cell arrays, and coordinate arrays are consumed correctly. Shape assumptions still hold. Centers stay face midpoints; staggered averaging depends on it. |
+| config.py | boundary, boundary_registry, boundary_staggered, mesh, momentum, particles, pressure, solver_ns, solver_staggered; solver_transport, monitor, scenarios, time_integration (planned) | New/changed/removed config fields are handled by all consumers. No module accesses a field that no longer exists. No module ignores a new field it should use. |
+| constants.py | particles | Constant names and SI values unchanged; no module defines its own copy (REQ-C04). |
+| mesh.py | boundary, boundary_staggered, momentum, pressure, solver_ns, solver_staggered, staggered; solver_transport, monitor (planned) | Grid dimensions, cell arrays, and coordinate arrays are consumed correctly. Shape assumptions still hold. Centers stay face midpoints; staggered averaging depends on it. |
 | staggered.py | solver_staggered, boundary_staggered, momentum, pressure | Face array shapes and the face-to-center averaging contract unchanged. |
 | boundary.py | solver_ns, solver_transport | Collocated BC application interface unchanged. New BC types handled in solvers if needed. Kept with the collocated solver as the harness baseline; whether to retire both is open (docs/reports/phase2_navier_stokes_report.md, Deferred). |
 | boundary_registry.py | boundary, boundary_staggered | Coverage rule (same edge, inclusive range, first match in configuration order, wall by default) and the prescribed-velocity decomposition unchanged. Both layers read them, so a change here moves both. |
 | boundary_staggered.py | momentum, pressure, solver_staggered | Normal imposition writes domain faces only. Tangential data shape [n+1], outlet data shape [n], wall_distance semantics and the inward flux sign unchanged. |
 | momentum.py | pressure, solver_staggered | MomentumPrediction shapes and the meaning of a_p_u and a_p_v (un-relaxed diagonal, positive exactly at the unknown faces) unchanged; boundary entries of u and v read as given and never written. |
 | pressure.py | solver_staggered | PressureCorrection shapes, the right-hand side formed directly from face velocities with no compatibility correction, outlet faces corrected against p' = 0 with the nearest interior diagonal, closed-domain pin at the first FLUID cell, and the sweep count reported. |
-| solver_ns.py | solver_transport, time_integration | Velocity/pressure field output shape, dtype, and semantics unchanged. |
-| solver_staggered.py | scripts/benchmark.py, scripts/view_field.py, scripts/stopping_probe.py, scripts/val001_order.py, scripts/self_convergence.py | The collocated solver's public shape: cell-centered [ny, nx] float64 contiguous returns, the IterationState callback once per outer iteration with cell-centered fields and the corrector's sweep count, last_pressure_sweeps and stage_seconds reset per solve. Under the default velocity_step rule the stop stays identical in definition to the collocated one so outer iteration counts compare; residual_history keeps that definition under both rules. converged and stop_reason are set by every solve and reset at its start; the harness records them, with velocity_step_below_tol stored as residual_below_tol, the label every velocity-step row carries for either solver. |
+| solver_ns.py | solver_staggered (IterationState); scripts/benchmark.py, scripts/self_convergence.py, scripts/view_field.py | IterationState's fields, which solver_staggered imports and the harness callback reads, unchanged. Collocated output shape, dtype and semantics unchanged, so the stored baseline rows still reproduce. The transport and time-integration consumers of the NS solver are on the solver_staggered.py row (section 2.1). |
+| solver_staggered.py | solver_transport, time_integration (planned, Phases 3 and 4: the NS solver of section 2.1); scripts/benchmark.py, scripts/view_field.py, scripts/stopping_probe.py, scripts/val001_order.py, scripts/self_convergence.py | The collocated solver's public shape: cell-centered [ny, nx] float64 contiguous returns, the IterationState callback once per outer iteration with cell-centered fields and the corrector's sweep count, last_pressure_sweeps and stage_seconds reset per solve. Under the default velocity_step rule the stop stays identical in definition to the collocated one so outer iteration counts compare; residual_history keeps that definition under both rules. converged and stop_reason are set by every solve and reset at its start; the harness records them, with velocity_step_below_tol stored as residual_below_tol, the label every velocity-step row carries for either solver. |
 | stopping.py | solver_staggered, scripts/stopping_probe.py, scripts/val001_order.py, scripts/benchmark.py | update(step, imbalance) answers converged only when the estimate, the worst imbalance, the absolute sum over flux_scale and the absolute signed sum are all below their tolerances; the imbalance callable, which returns an ImbalanceSummary read by name from one evaluation, is not called until the estimate is met; no estimate (inf) while the window is short, a step in it is zero or not finite, or rho_hat is outside (0, 1). RATE_WINDOW stays a module constant. A change of condition raises RULE_VERSION, which stopping_probe and val001_order store with their saved solves, so that they solve again, and the harness records in every error_estimate row, so that its summary keeps the versions apart. |
 | solver_transport.py | time_integration, monitor | Concentration field output shape, dtype, and semantics unchanged. |
 | particles.py | solver_transport | Settling velocity, diffusion coefficient interface unchanged. Return types and units unchanged. |
 | scenarios.py | time_integration, boundary | Source term and BC modification interfaces unchanged. Event timing semantics unchanged. |
 | monitor.py | time_integration | Update and query interfaces unchanged. Alert output format unchanged. |
-| csolver/ | solver_ns, solver_transport | CUDA kernel signatures match pybind11 declarations. Memory layout assumptions (row-major, contiguous, double precision) unchanged. |
+| csolver/ | solver_staggered (REQ-N03's NumPy reference, ADR-010), solver_transport; both planned, Phase 6 | CUDA kernel signatures match pybind11 declarations. Memory layout assumptions (row-major, contiguous, double precision) unchanged. |
 | time_integration.py | io_manager | Timestep sequence and output trigger logic unchanged. |
 
 ### 3.3 Cross-Cutting Concerns
@@ -286,7 +287,7 @@ tangential inflow such as the moving lid in a lid-driven cavity. When
 both are None, the `velocity` magnitude is decomposed normal to the
 edge (positive inward).
 
-### mesh.py --> solver_ns, solver_transport, boundary, monitor
+### mesh.py --> staggered, boundary, boundary_staggered, momentum, pressure, solver_ns, solver_staggered (solver_transport, monitor planned)
 
 ```
 Mesh:
@@ -443,7 +444,7 @@ PressureCorrector:
         p_prime [ny, nx], sweeps: int (sweeps with JACOBI_WEIGHT from p' = 0)
 ```
 
-### solver_staggered.py --> scripts/benchmark.py, scripts/view_field.py (ECR-001 step 6)
+### solver_staggered.py --> solver_transport, time_integration (planned); scripts/benchmark.py, scripts/view_field.py, scripts/stopping_probe.py, scripts/val001_order.py, scripts/self_convergence.py
 
 Steady SIMPLE on the staggered layout, built alongside the collocated solver
 rather than in its place so both run from one commit. It is the solver of
@@ -452,7 +453,8 @@ while its retirement is decided. One outer iteration is
 MomentumPredictor.predict then PressureCorrector.correct, keeping the
 corrected fields. The public shape is NavierStokesSolver's, so the harness
 drives either through one callback, and the harness ``--method`` label
-selects between them.
+selects between them. It does not define the collocated compute_residual()
+or solve_timestep(); the second is Phase 4's.
 
 ```
 StaggeredSolver:
@@ -529,10 +531,10 @@ ParticlePhysics:
     hepa_efficiency(size_class: int) -> float
 ```
 
-### solver_ns.py --> solver_transport, time_integration
+### solver_ns.py --> solver_staggered (IterationState); the harness baseline
 
-Phase 2 delivers solve_steady() only. solve_timestep() is delivered
-in Phase 4 (time integration).
+The collocated solver. Phase 2 delivered solve_steady() only;
+solve_timestep() is Phase 4's (time integration), on the solver of record.
 
 ```
 NavierStokesSolver:
@@ -663,4 +665,5 @@ ADR-008 and ADR-010 are files in `docs/ADR/`; the others are in the development 
 | 2026-09-25 | Cascade row for solver_staggered.py lists scripts/val001_order.py (review 25 S1) and scripts/self_convergence.py (ECR-001 step 8 report, F8), the scripts that read the solver's public shape, and says the harness stores velocity_step_below_tol as residual_below_tol. No requirement, contract or module changed. | Alex Moroz-Smietana |
 | 2026-09-30 | REQ-S04 clarified again, not amended: error_estimate gains condition (d), the absolute signed domain sum of the per-cell imbalance below mass_imbalance_tol, ECR-001 criterion 6's domain-sum clause, which nothing checked before (review 27 B1). No configuration key. The imbalance callable returns an ImbalanceSummary (worst, absolute_sum, signed_sum) in place of a pair; stopping.py gains RULE_VERSION, which scripts/stopping_probe.py and scripts/val001_order.py (through its new reuse_key) store with saved solves. Contract and the stopping.py cascade row updated. Cavity stops bitwise unchanged; channel stops later. See docs/reports/stopping_rule_evidence.md, section 10. | Alex Moroz-Smietana |
 | 2026-10-01 | The harness records RULE_VERSION in the params of every error_estimate row and keys its summary on it; an error_estimate row without it reads as version 2, the three-condition rule (review 28 B1). The stopping.py cascade row names scripts/benchmark.py. The three rows taken at 8aac137, never on main, were replaced by rows that carry the version. Condition (d) accepted as built: it is met at a zero crossing of the net outflow's decaying oscillation (docs/reports/stopping_rule_evidence.md, section 10). No requirement, contract or rule behaviour changed. | Alex Moroz-Smietana |
+| 2026-10-01 | Section 3.2 rows for config.py, mesh.py, solver_ns.py, solver_staggered.py and csolver/ and the section 4 headings for mesh.py, solver_ns.py and solver_staggered.py brought in line with the generated import graph and with section 2.1 (review 27 B2): existing importers listed from the graph, planned consumers marked, the transport and time-integration consumers of the NS solver routed to solver_staggered, csolver/ to the solver of record. A constants.py row added. The solver_staggered contract says it lacks compute_residual and solve_timestep. No requirement, module or generated region changed. | Alex Moroz-Smietana |
 | 2026-09-30 | ECR-001 step 9. REQ-S02 amended to < 1% on 80x40 (ECR-001 section 6) and REQ-S03 to score against marchi_2009_re100 with ghia_1982_re100_r2 reported unscored (amendment of 2026-09-24), each with its measured value. REQ-S11 amended to the per-axis, mirrored stretching step 1 built; REQ-S04's Verified By corrected (VAL-007 is Phase 3's). REQ-S01, S07, S08, S09 and S12 checked against the build and unchanged. Section 2.1 names the staggered solver as the NS solver; the collocated solver and boundary.py are described as the kept harness baseline, no longer as retired in a later step, and the NavierStokesSolver contract no longer claims staggered storage. ADR-010 added as a file and its summary row updated; ADR-008's row corrected to 2.5%. No module, interface or generated region changed. | Alex Moroz-Smietana |
