@@ -177,6 +177,9 @@ beside it unscored. Against Ghia the same fields read u 8.90e-3, 3.99e-3, 4.81e-
 | Tests rewritten or tightened in place (7.2) | Staggered tests added (1%, 2%, own module files); collocated tests kept at 2.5% and xfail | Collocated kept as baseline; VAL-002 runs at 40x40 in CI, 80x80 judged from its row [8] |
 | ADR-010 in the rebuild PR (6) | Written at step 9 | To record the build, not the plan |
 
+Addendum 2026-10-02: the open decision in the first two rows is made. The collocated solver
+and `boundary.py` were retired in PR 29; tag `collocated-final` on 98f8b1f holds them.
+
 ## Consequences
 
 **Positive.** The pressure correction is a compatible system on a closed domain and does work
@@ -191,6 +194,8 @@ stops 1.26 to 1.58 times later [7, addendum]. The returned cell means are O(h^2)
 from the faces: on the cavity the metric reads 15% to 22% above the face values at 40x40 and
 80x80 [8, section 2]. Two solvers and two boundary layers coexist, and `IterationState`, which
 both use, is defined in `solver_ns.py` [9, section 6].
+Addendum: retired 2026-10-02, PR 29; tag `collocated-final`. One solver and one boundary layer
+remain, and `IterationState` is defined in `stopping.py`.
 
 **For Phase 3.**
 - *An outer iteration that adapts rather than overshoots.* On the open channel the net outflow

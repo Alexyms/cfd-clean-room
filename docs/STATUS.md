@@ -18,8 +18,10 @@ Phases 0 and 1 are complete. Phase 2's Navier-Stokes solver is built and validat
 the engineering change request that rebuilt it on a staggered grid, closed on 2026-10-01, and
 the phase gate is recorded in `docs/reports/phase2_navier_stokes_report.md`. VAL-001 and
 VAL-002 pass on the staggered solver at their amended criteria. The collocated solver it
-replaced as the solver of record still runs as the benchmark harness's baseline, and VAL-002
-stays marked xfail on it. Phases 3 through 7 have not begun.
+replaced was retired on 2026-10-02 in the first Phase 3 pull request: deleted from the tree,
+kept at the annotated tag `collocated-final`, its stored harness rows kept (`docs/SYSTEM.md`,
+section 4, Retired modules). Phase 3's transport code has not begun, and Phases 4 through 7
+have not begun.
 
 `docs/PROJECT_PLAN.md` holds the phase detail, deliverables and validation gates.
 
@@ -91,10 +93,11 @@ higher of the two. Measured against itself it converges at second order or bette
 the lid corners. Its slow approach to Ghia was mostly the metric's own sampling, half a cell
 off the centerlines. From 2026-09-23 until step 8 the harness, the viewer and VAL-002 sampled
 on the centerlines under a new metric name, `max_normalized_centerline_error_r2`, and the
-stored rows keep the old one; the viewer and the collocated VAL-002 test still use the r2
-metric. On the true centerlines, and on fields converged well past the case's stopping
-tolerance, the staggered solution converges toward values up to about 1% of the lid speed
-from Ghia's in the jet by the right wall, and refinement moves it away from Ghia there.
+stored rows keep the old one; the viewer still uses the r2 metric, as the collocated VAL-002
+test did until its retirement. On the true centerlines, and on fields converged well past
+the case's stopping tolerance, the staggered solution converges toward values up to about 1%
+of the lid speed from Ghia's in the jet by the right wall, and refinement moves it away from
+Ghia there.
 That gap is Ghia's (INFERRED). Against an independent reference, Marchi, Suero and Araki
 (2009), read from the paper's text layer and checked against its own published mass flow,
 the extrapolated staggered solution agrees at all thirty of its points to a small fraction
@@ -118,8 +121,9 @@ justification; ECR-001 step 9 then amended the threshold to 1% for the staggered
 
 ## Tooling
 
-`scripts/self_convergence.py` measures each solver's order on the cavity against itself, with
-no reference, after a control on synthetic fields of known order. With `--extrapolate` it
+`scripts/self_convergence.py` measures the staggered solver's order on the cavity against
+itself, with no reference, after a control on synthetic fields of known order; the collocated
+orders it measured before the retirement are in its report. With `--extrapolate` it
 extrapolates the staggered centerline profiles pointwise from the saved fields, after a
 control of its own, where the observed order licenses it. With `--marchi` it sets the same
 extrapolation against the independent reference `marchi_2009_re100`, which ECR-001
@@ -175,10 +179,12 @@ measurement showed; it should not restate the measurement.
 
 ## Next
 
-Phase 3, the transport solver, after one decision that comes first. Whether to retire the
-collocated solver is Alex's: keep `src/solver_ns.py` as the harness's before-and-after
-baseline, or retire it, `src/boundary.py` and their tests in a pull request of its own. Either
-way, `IterationState`, which both solvers use, is defined in `src/solver_ns.py` today.
+Phase 3, the transport solver. The decision that came first is made: Alex retired the
+collocated solver on 2026-10-02, with `src/boundary.py` and their tests, in a pull request of
+its own, and `IterationState` moved to `src/stopping.py`. Every shared-input change Phase 3
+makes now cascades to one solver. Next are the Phase 3 design document and the face-field
+interface, then the transport solver. Concentration boundary conditions will live beside the
+staggered boundary layer, in `src/boundary_concentration.py` over `src/boundary_registry.py`.
 
 ADR-010 lists what Phase 3 inherits from the solver. Continuity is enforced on the staggered
 faces, and the cell-centered fields the solver returns are their averages, so how the
@@ -197,7 +203,8 @@ still installed. Removing them is Alex's, after merge.
 Whether the cavity centerline metrics should keep the wall-adjacent ring rows. They drop
 them today. At 20x20 that moves the Marchi u value; at 80x80, where criterion 3 is judged, it
 does not, and no recorded verdict changes. GitHub issue 42 has the measurements and three
-options; two of them need a new metric name, and one waits on the retirement decision.
+options; two of them need a new metric name, and the one that waited on the retirement
+decision has been open to choose since 2026-10-02.
 
 What sets the outer iteration count once the pressure correction is active rather than inert.
 Asked of the collocated solver and not pursued there, because the rebuild changed that regime
@@ -214,6 +221,7 @@ rule's domain-sum condition is met at a zero crossing (`docs/reports/stopping_ru
 section 10). Alex's stated direction is an adaptive iteration that does not overshoot. There
 are two candidate fixes: an outflow correction that removes the net-outflow mode, or
 under-relaxation that adapts to the damping the solver observes. Nothing is built yet.
+Deferred on 2026-10-02 to a later efficiency and clean-up pass; it is not Phase 3 work.
 
 Closed 2026-10-01: whether the domain-sum condition should hold over a window, or bound the
 oscillation's envelope, rather than be met at a zero crossing. It should not. Alex and the

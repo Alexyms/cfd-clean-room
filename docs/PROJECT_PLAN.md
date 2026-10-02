@@ -1,7 +1,7 @@
 # Project Plan
 
 **Project:** CFD Clean Room Simulation
-**Last Updated:** 2026-10-01
+**Last Updated:** 2026-10-02
 **Current Phase:** Phase 3 (Transport Solver), not started; Phase 2 complete
 
 This document tracks development progress by phase. Code review reads this document to determine the current phase and verify that PRs are in scope; the policy is `docs/REVIEW_POLICY.md`. Update this document as work progresses.
@@ -108,19 +108,19 @@ ECR-001 rebuilt the solver on a staggered grid in nine steps (2026-09-20 to 2026
 
 | Deliverable | Status | Notes |
 |-------------|--------|-------|
-| src/solver_staggered.py | DONE (ECR-001 steps 6 to 8) | Steady SIMPLE on the staggered MAC grid with the collocated solver's public shape. Stops by the velocity-step rule or, as both validation cases configure it, by the error_estimate rule. The solver of record (ADR-010). |
+| src/solver_staggered.py | DONE (ECR-001 steps 6 to 8) | Steady SIMPLE on the staggered MAC grid. Stops by the velocity-step rule or, as both validation cases configure it, by the error_estimate rule. The solver of record (ADR-010). |
 | src/staggered.py | DONE (ECR-001 step 2) | MAC field layout and face-to-center averaging (REQ-S07). |
 | src/boundary_staggered.py, src/boundary_registry.py | DONE (ECR-001 step 3) | Direct Dirichlet imposition on the staggered faces (REQ-S12) over one shared reading of the configured boundaries (REQ-S12.1). |
 | src/momentum.py | DONE (ECR-001 step 4) | Momentum predictor, QUICK by deferred correction over an upwind implicit matrix (REQ-S09). |
 | src/pressure.py | DONE (ECR-001 step 5) | Pressure correction by weighted Jacobi, w = 2/3 (REQ-S08 as clarified 2026-09-22). |
 | src/stopping.py | DONE (ahead of ECR-001 step 7) | The error_estimate stopping rule (REQ-S01, REQ-S04 as clarified 2026-09-24). |
 | src/mesh.py | DONE (ECR-001 step 1) | Per-axis geometric wall clustering, mirrored about the midpoint (REQ-S11 as amended 2026-09-30). |
-| src/solver_ns.py | RETAINED (collocated baseline) | SIMPLE on the collocated grid with Rhie-Chow and ghost-cell walls (ADR-008). Kept as the harness's before-and-after baseline; whether to retire it is Alex's open decision (docs/reports/phase2_navier_stokes_report.md, Deferred). |
-| src/boundary.py (velocity/pressure BCs) | RETAINED (collocated baseline) | Collocated ghost-cell layer, now built on src/boundary_registry.py. Kept and decided with src/solver_ns.py. |
-| tests/test_poiseuille.py | DONE | VAL-001: staggered at < 1% on 80x40 uniform and wall-clustered; collocated at 2.5%. |
-| tests/test_lid_cavity.py | DONE | VAL-002: staggered at < 2% against marchi_2009_re100 on the case file's 40x40 in CI; collocated kept xfail against ghia_1982_re100_r2. |
+| src/solver_ns.py | RETIRED (2026-10-02, PR 29, tag collocated-final) | SIMPLE on the collocated grid with Rhie-Chow and ghost-cell walls (ADR-008). ECR-001's before-and-after baseline, deleted once the ECR closed; its 22 harness rows stay in benchmarks/results.jsonl. |
+| src/boundary.py (velocity/pressure BCs) | RETIRED (2026-10-02, PR 29, tag collocated-final) | Collocated ghost-cell layer over src/boundary_registry.py, which stays. Retired with src/solver_ns.py. |
+| tests/test_poiseuille.py | DONE | VAL-001: staggered at < 1% on 80x40 uniform and wall-clustered. |
+| tests/test_lid_cavity.py | DONE | VAL-002: staggered at < 2% against marchi_2009_re100 on the case file's 40x40 in CI. |
 | tests for the staggered modules | DONE | test_staggered.py, test_boundary_registry.py, test_boundary_staggered.py, test_momentum.py, test_pressure.py, test_solver_staggered.py, test_solver_selection.py, test_stopping.py. |
-| tests/test_solver_ns.py | DONE (collocated, kept) | Unit and integration tests of the collocated solver. Not rewritten: the collocated solver was kept rather than replaced. |
+| tests/test_solver_ns.py, tests/test_boundary.py | RETIRED (2026-10-02, PR 29, tag collocated-final) | Unit and integration tests of the collocated solver and its boundary layer, deleted with them. |
 | docs/ADR/ADR-010-staggered-grid-architecture.md | DONE (ECR-001 step 9) | The architecture as built, with planned against built. |
 | scripts/view_field.py | DONE (development instrument) | Streamlines, pressure and cavity centerline profiles, for reading the field during the rebuild. Not the Phase 7 visualization deliverable; see Scope Changes. |
 | Measurement instruments | DONE (development instruments) | scripts/benchmark.py and benchmarks/results.jsonl, validation/ (cases, references, metrics), scripts/self_convergence.py, scripts/stopping_probe.py, scripts/val001_order.py, scripts/gen_system_map.py. See Scope Changes. |
@@ -129,13 +129,13 @@ ECR-001 rebuilt the solver on a staggered grid in nine steps (2026-09-20 to 2026
 
 | Test ID | Description | Criterion | Status |
 |---------|-------------|-----------|--------|
-| VAL-001 | Poiseuille flow | L2 error < 1% on 80x40 (REQ-S02 as amended 2026-09-30), uniform and wall-clustered to 0.1 H / ny (ECR-001 criteria 1 and 2); observed order >= 1.8 under uniform refinement (criterion 4) | PASS on the staggered solver: 4.107e-4 uniform, 3.024e-3 clustered, order 1.992 under stopping rule version 3 (docs/reports/val001_revalidation_step7.md, addendum). The collocated solver measures 2.036e-2 against its own 2.5% (ADR-008). |
-| VAL-002 | Lid-driven cavity | Maximum centerline error < 2% of the lid speed against marchi_2009_re100 at 80x80 (REQ-S03 as amended 2026-09-30, ECR-001 criterion 3); u and v errors each falling across 20x20, 40x40 and 80x80 (criterion 3a); ghia_1982_re100_r2 reported, unscored | PASS on the staggered solver: u 1.057e-3, v 7.356e-4 at 80x80; orders 2.24 and 2.11 (u), 2.12 and 2.07 (v) (docs/reports/val002_revalidation_step8.md). CI runs the 40x40 case file. The collocated test stays xfail at 40x40 against Ghia, u 0.0441 and v 0.0606. |
+| VAL-001 | Poiseuille flow | L2 error < 1% on 80x40 (REQ-S02 as amended 2026-09-30), uniform and wall-clustered to 0.1 H / ny (ECR-001 criteria 1 and 2); observed order >= 1.8 under uniform refinement (criterion 4) | PASS on the staggered solver: 4.107e-4 uniform, 3.024e-3 clustered, order 1.992 under stopping rule version 3 (docs/reports/val001_revalidation_step7.md, addendum). |
+| VAL-002 | Lid-driven cavity | Maximum centerline error < 2% of the lid speed against marchi_2009_re100 at 80x80 (REQ-S03 as amended 2026-09-30, ECR-001 criterion 3); u and v errors each falling across 20x20, 40x40 and 80x80 (criterion 3a); ghia_1982_re100_r2 reported, unscored | PASS on the staggered solver: u 1.057e-3, v 7.356e-4 at 80x80; orders 2.24 and 2.11 (u), 2.12 and 2.07 (v) (docs/reports/val002_revalidation_step8.md). CI runs the 40x40 case file. |
 
 ### Scope Changes
 
 - C solver deliverables (csolver/pressure_solve.c, csolver.h, Makefile, test_c_parity.py) moved to Phase 6 (CUDA Acceleration). REQ-N03 is now validated against CUDA C++ rather than plain C.
-- ECR-001 (approved 2026-04-16, closed 2026-10-01) replaced the collocated solver as the solver of record with a staggered one built alongside it. The collocated solver was kept as the harness baseline rather than rewritten in place; its retirement is deferred to Alex's decision. REQ-S11 was amended to the per-axis, mirrored stretching that was built.
+- ECR-001 (approved 2026-04-16, closed 2026-10-01) replaced the collocated solver as the solver of record with a staggered one built alongside it. The collocated solver was kept as the harness baseline rather than rewritten in place; its retirement was deferred to Alex's decision, made on 2026-10-02 (retired in PR 29, tag collocated-final). REQ-S11 was amended to the per-axis, mirrored stretching that was built.
 - Measurement instruments added during the rebuild, without plan entries: the benchmark harness and its results file (PR #13), the validation package shared by tests and harness (PR #14), the system map generator (PR #12), and the self-convergence, stopping-rule and VAL-001 order scripts. Each exists to measure the solver; none is a deliverable of a later phase.
 - scripts/view_field.py added as a Phase 2 development instrument (2026-09-19, PR #14). It exists so the velocity and pressure fields can be read against the Ghia reference while the solver is rebuilt under ECR-001. It is distinct from the Phase 7 visualization deliverable: no animation, no scenario output, no presentation quality, and it is not reused by scripts/visualize.py. Phase 7 remains NOT STARTED. The addition was made without a plan entry, which is a scope violation of the task prompt that introduced it, not of the build; recorded here on 2026-09-20 from the PR #14 review finding.
 
@@ -161,7 +161,7 @@ ECR-001 rebuilt the solver on a staggered grid in nine steps (2026-09-20 to 2026
 | Deliverable | Status | Notes |
 |-------------|--------|-------|
 | src/solver_transport.py | NOT STARTED | Advection-diffusion solver with v_ext interface, pure NumPy |
-| src/boundary.py (concentration BCs) | NOT STARTED | Extension to existing boundary module |
+| src/boundary_concentration.py (concentration BCs) | NOT STARTED | Beside the staggered boundary layer, reading boundary_registry.py (decided 2026-10-02); design in the Phase 3 design document |
 | tests/test_diffusion.py | NOT STARTED | VAL-003 |
 | tests/test_advection.py | NOT STARTED | VAL-004 |
 | tests/test_conservation.py | NOT STARTED | VAL-007 |
@@ -355,3 +355,4 @@ Phase 3 completion is the minimum viable portfolio artifact. A working, validate
 | 2026-09-30 | Stopping rule condition (d) added (src/stopping.py): error_estimate also requires the absolute signed domain sum of the per-cell imbalance below mass_imbalance_tol, ECR-001 criterion 6's domain-sum clause, which nothing checked before (review 27 B1). No configuration key. Cavity stops unchanged; channel stops later and criteria 1, 2 and 4 still pass, with rows for val001_80x40, val001_80x40_stretched and val002_80x80 appended. REQ-S04 clarified again, not amended; note under ECR-001 criterion 6. See docs/reports/stopping_rule_evidence.md, section 10. |
 | 2026-09-30 | ECR-001 step 9: ADR-010 written, ADR-008 marked superseded, ECR-001 closed. REQ-S02 amended to < 1% and REQ-S03 to marchi_2009_re100 in docs/SYSTEM.md, REQ-S11 to the stretching built. Phase 2 deliverables and validation gate brought current: the staggered solver and its modules DONE, the collocated solver and boundary.py RETAINED as the harness baseline pending Alex's decision on retirement, VAL-001 and VAL-002 PASS at their amended criteria. Phase 2 at GATE REVIEW. A unit test now pins the cubic stencil of validation.metrics.lagrange (test 26b T1). |
 | 2026-10-01 | Phase 2 complete, gate PASS: all six gate criteria hold (docs/reports/phase2_navier_stokes_report.md). Line coverage 98.2% against Phase 1's 95%. ECR-001 criterion 6 decided: condition (d) accepted as built, met on the channel at a zero crossing of the net outflow (ECR-001 section 9). The SYSTEM.md cascade rows and contract headings brought in line with the import graph (review 27 B2). The collocated solver's retirement and an outer iteration that does not overshoot are the first questions of Phase 3. |
+| 2026-10-02 | Collocated solver retired (PR 29), the first Phase 3 pull request and Alex's decision of 2026-10-02: src/solver_ns.py, src/boundary.py, tests/test_solver_ns.py and tests/test_boundary.py deleted; annotated tag collocated-final on 98f8b1f, the last commit holding them; IterationState moved to src/stopping.py with its fields unchanged. The harness and the viewer default to staggered-jacobi, and the 22 stored collocated rows still summarize. The Phase 3 concentration boundary deliverable renamed to src/boundary_concentration.py, beside the staggered layer over boundary_registry.py. The adaptive outer iteration is deferred to a later efficiency and clean-up pass, not Phase 3. |
