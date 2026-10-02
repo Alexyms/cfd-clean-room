@@ -15,7 +15,8 @@ import yaml
 from src.boundary import BoundaryManager
 from src.config import SimConfig
 from src.mesh import FLUID, SOLID, Mesh
-from src.solver_ns import IterationState, NavierStokesSolver
+from src.solver_ns import NavierStokesSolver
+from src.stopping import IterationState
 from validation.cases import case_path
 
 

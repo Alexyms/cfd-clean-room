@@ -57,15 +57,15 @@ from src.config import (  # noqa: E402 -- follows sys.path.insert
 from src.mesh import FLUID, Mesh  # noqa: E402 -- follows sys.path.insert
 from src.momentum import MomentumPredictor  # noqa: E402 -- follows sys.path.insert
 from src.pressure import PressureCorrector  # noqa: E402 -- follows sys.path.insert
-from src.solver_ns import (  # noqa: E402 -- follows sys.path.insert
-    IterationState,
-    NavierStokesSolver,
-)
+from src.solver_ns import NavierStokesSolver  # noqa: E402 -- follows sys.path.insert
 from src.solver_staggered import (  # noqa: E402 -- follows sys.path.insert
     StaggeredSolver,
 )
 from src.staggered import allocate_fields  # noqa: E402 -- follows sys.path.insert
-from src.stopping import RULE_VERSION  # noqa: E402 -- follows sys.path.insert
+from src.stopping import (  # noqa: E402 -- follows sys.path.insert
+    RULE_VERSION,
+    IterationState,
+)
 from validation.cases import (  # noqa: E402 -- follows sys.path.insert
     CASE_GRIDS,
     load_preset,

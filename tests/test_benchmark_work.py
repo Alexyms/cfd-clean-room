@@ -16,7 +16,7 @@ import yaml
 
 from src.config import SimConfig
 from src.mesh import FLUID, Mesh
-from src.solver_ns import IterationState
+from src.stopping import IterationState
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))

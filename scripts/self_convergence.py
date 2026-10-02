@@ -52,13 +52,11 @@ from src.boundary_staggered import (  # noqa: E402 -- follows sys.path.insert
 )
 from src.config import SimConfig  # noqa: E402 -- follows sys.path.insert
 from src.mesh import FLUID, Mesh  # noqa: E402 -- follows sys.path.insert
-from src.solver_ns import (  # noqa: E402 -- follows sys.path.insert
-    IterationState,
-    NavierStokesSolver,
-)
+from src.solver_ns import NavierStokesSolver  # noqa: E402 -- follows sys.path.insert
 from src.solver_staggered import (  # noqa: E402 -- follows sys.path.insert
     StaggeredSolver,
 )
+from src.stopping import IterationState  # noqa: E402 -- follows sys.path.insert
 from validation.cases import (  # noqa: E402 -- follows sys.path.insert
     case_path,
     load_case,

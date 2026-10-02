@@ -8,7 +8,6 @@ correction.
 
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass
 from time import perf_counter
 
 import numpy as np
@@ -16,39 +15,9 @@ import numpy as np
 from src.boundary import BoundaryManager
 from src.config import ERROR_ESTIMATE, SimConfig
 from src.mesh import FLUID, SOLID, Mesh
+from src.stopping import IterationState
 
 logger = logging.getLogger(__name__)
-
-
-# eq=False because the default __eq__ compares the array fields elementwise
-# and raises on the ambiguous truth value, and the __hash__ that frozen=True
-# would then generate raises on an array. Identity is the only comparison that
-# makes sense for a snapshot of the solver's working fields.
-@dataclass(frozen=True, eq=False)
-class IterationState:
-    """Snapshot handed to the solve_steady callback after each SIMPLE iteration.
-
-    The arrays are the solver's working fields, not copies. A callback
-    that needs to keep them must copy them and must never modify them.
-
-    Parameters
-    ----------
-    iteration : int
-        Zero-based SIMPLE iteration index.
-    residual : float
-        Scaled velocity-change residual for this iteration.
-    pressure_sweeps : int
-        Jacobi sweeps performed by the pressure correction this iteration.
-    u, v, p : np.ndarray
-        Current velocity and pressure fields, each shape [ny, nx].
-    """
-
-    iteration: int
-    residual: float
-    pressure_sweeps: int
-    u: np.ndarray
-    v: np.ndarray
-    p: np.ndarray
 
 
 class NavierStokesSolver:

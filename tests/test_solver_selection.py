@@ -19,8 +19,9 @@ from src.boundary import BoundaryManager
 from src.boundary_staggered import StaggeredBoundary
 from src.config import SimConfig
 from src.mesh import FLUID, Mesh
-from src.solver_ns import IterationState, NavierStokesSolver
+from src.solver_ns import NavierStokesSolver
 from src.solver_staggered import StaggeredSolver
+from src.stopping import IterationState
 from validation.cases import load_case
 
 REPO_ROOT = Path(__file__).resolve().parent.parent

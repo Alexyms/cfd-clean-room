@@ -23,6 +23,10 @@ can be tested on synthetic histories.
 at the bound it names; (a) and (c) are no clause of it. The signed sum is the
 net mass flux out of the domain: (c) holds it to iteration_error_tol of
 flux_scale, (d) to criterion 6's absolute bound (section 10).
+
+IterationState, the snapshot a solver hands its on_iteration callback once
+per outer iteration, is defined here as well: the module that defines when
+an outer iteration ends also defines what each iteration reports.
 """
 
 import math
@@ -44,6 +48,41 @@ RATE_WINDOW = 100
 # Which conditions update applies: 1 was (a) and (b), 2 added (c), 3 added (d).
 # Scripts store it with saved solves; a new condition leaves the tolerances alike.
 RULE_VERSION = 3
+
+
+# eq=False because the default __eq__ compares the array fields elementwise
+# and raises on the ambiguous truth value, and the __hash__ that frozen=True
+# would then generate raises on an array. Identity is the only comparison that
+# makes sense for a snapshot of the solver's working fields.
+@dataclass(frozen=True, eq=False)
+class IterationState:
+    """Snapshot handed to the solve_steady callback after each SIMPLE iteration.
+
+    The arrays are the solver's working fields, not copies. A callback
+    that needs to keep them must copy them and must never modify them.
+
+    Parameters
+    ----------
+    iteration : int
+        Zero-based SIMPLE iteration index.
+    residual : float
+        Scaled velocity-change residual for this iteration.
+    pressure_sweeps : int
+        Jacobi sweeps performed by the pressure correction this iteration.
+    u, v, p : np.ndarray
+        Current velocity and pressure fields, each shape [ny, nx].
+
+    Notes
+    -----
+    Moved here from src/solver_ns.py on 2026-10-02 (PR 29), fields unchanged.
+    """
+
+    iteration: int
+    residual: float
+    pressure_sweeps: int
+    u: np.ndarray
+    v: np.ndarray
+    p: np.ndarray
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
