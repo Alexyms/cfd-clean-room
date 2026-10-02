@@ -22,7 +22,7 @@ import self_convergence  # noqa: E402 -- scripts/ is not a package; path set abo
 
 from src.config import SimConfig  # noqa: E402 -- follows sys.path.insert
 from src.mesh import Mesh  # noqa: E402 -- follows sys.path.insert
-from src.solver_ns import IterationState  # noqa: E402 -- follows sys.path.insert
+from src.stopping import IterationState  # noqa: E402 -- follows sys.path.insert
 from validation.cases import load_case  # noqa: E402 -- follows sys.path.insert
 from validation.metrics import (  # noqa: E402 -- follows sys.path.insert
     GHIA_U_VAL,

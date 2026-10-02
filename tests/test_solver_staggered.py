@@ -21,10 +21,10 @@ from src.config import SimConfig
 from src.mesh import Mesh
 from src.momentum import MomentumPrediction, MomentumPredictor
 from src.pressure import PressureCorrection, PressureCorrector
-from src.solver_ns import IterationState, NavierStokesSolver
+from src.solver_ns import NavierStokesSolver
 from src.solver_staggered import StaggeredSolver
 from src.staggered import allocate_fields, to_cell_centers
-from src.stopping import ErrorEstimateRule, ImbalanceSummary
+from src.stopping import ErrorEstimateRule, ImbalanceSummary, IterationState
 from validation.cases import (
     CASE_GRIDS,
     case_path,

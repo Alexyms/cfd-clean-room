@@ -20,14 +20,14 @@ import benchmark  # noqa: E402 -- scripts/ is not a package; path set above
 from src.boundary import BoundaryManager  # noqa: E402 -- follows sys.path.insert
 from src.config import SimConfig  # noqa: E402 -- follows sys.path.insert
 from src.mesh import Mesh  # noqa: E402 -- follows sys.path.insert
-from src.solver_ns import (  # noqa: E402 -- follows sys.path.insert
-    IterationState,
-    NavierStokesSolver,
-)
+from src.solver_ns import NavierStokesSolver  # noqa: E402 -- follows sys.path.insert
 from src.solver_staggered import (  # noqa: E402 -- follows sys.path.insert
     StaggeredSolver,
 )
-from src.stopping import RULE_VERSION  # noqa: E402 -- follows sys.path.insert
+from src.stopping import (  # noqa: E402 -- follows sys.path.insert
+    RULE_VERSION,
+    IterationState,
+)
 from validation.cases import (  # noqa: E402 -- follows sys.path.insert
     case_path,
     load_case,

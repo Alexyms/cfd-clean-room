@@ -53,9 +53,8 @@ from src.config import ERROR_ESTIMATE, VELOCITY_STEP, SimConfig
 from src.mesh import FLUID, Mesh
 from src.momentum import MomentumPredictor
 from src.pressure import PressureCorrector
-from src.solver_ns import IterationState
 from src.staggered import allocate_fields, p_shape, to_cell_centers
-from src.stopping import ErrorEstimateRule, ImbalanceSummary
+from src.stopping import ErrorEstimateRule, ImbalanceSummary, IterationState
 
 logger = logging.getLogger(__name__)
 

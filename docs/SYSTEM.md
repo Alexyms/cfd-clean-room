@@ -113,8 +113,8 @@ mesh                    .              .                  .             X       
 momentum                .              .                  X             X         .       X       .          .         .          .             .              X         .
 particles               .              .                  .             X         X       .       .          .         .          .             .              .         .
 pressure                .              .                  X             X         .       X       X          .         .          .             .              X         .
-solver_ns               X              .                  .             X         .       X       .          .         .          .             .              .         .
-solver_staggered        .              .                  X             X         .       X       X          .         X          X             .              X         X
+solver_ns               X              .                  .             X         .       X       .          .         .          .             .              .         X
+solver_staggered        .              .                  X             X         .       X       X          .         X          .             .              X         X
 staggered               .              .                  .             .         .       X       .          .         .          .             .              .         .
 stopping                .              .                  .             .         .       .       .          .         .          .             .              .         .
 ```
@@ -129,8 +129,8 @@ mesh               -> config
 momentum           -> boundary_staggered, config, mesh, staggered
 particles          -> config, constants
 pressure           -> boundary_staggered, config, mesh, momentum, staggered
-solver_ns          -> boundary, config, mesh
-solver_staggered   -> boundary_staggered, config, mesh, momentum, pressure, solver_ns, staggered, stopping
+solver_ns          -> boundary, config, mesh, stopping
+solver_staggered   -> boundary_staggered, config, mesh, momentum, pressure, staggered, stopping
 staggered          -> mesh
 ```
 
@@ -154,9 +154,9 @@ When a PR modifies a module, the reviewer verifies impact on downstream modules.
 | boundary_staggered.py | momentum, pressure, solver_staggered | Normal imposition writes domain faces only. Tangential data shape [n+1], outlet data shape [n], wall_distance semantics and the inward flux sign unchanged. |
 | momentum.py | pressure, solver_staggered | MomentumPrediction shapes and the meaning of a_p_u and a_p_v (un-relaxed diagonal, positive exactly at the unknown faces) unchanged; boundary entries of u and v read as given and never written. |
 | pressure.py | solver_staggered | PressureCorrection shapes, the right-hand side formed directly from face velocities with no compatibility correction, outlet faces corrected against p' = 0 with the nearest interior diagonal, closed-domain pin at the first FLUID cell, and the sweep count reported. |
-| solver_ns.py | solver_staggered (IterationState); scripts/benchmark.py, scripts/self_convergence.py, scripts/view_field.py | IterationState's fields, which solver_staggered imports and the harness callback reads, unchanged. Collocated output shape, dtype and semantics unchanged, so the stored baseline rows still reproduce. The transport and time-integration consumers of the NS solver are on the solver_staggered.py row (section 2.1). |
+| solver_ns.py | scripts/benchmark.py, scripts/self_convergence.py, scripts/view_field.py | Collocated output shape, dtype and semantics unchanged, so the stored baseline rows still reproduce. The transport and time-integration consumers of the NS solver are on the solver_staggered.py row (section 2.1). |
 | solver_staggered.py | solver_transport, time_integration (planned, Phases 3 and 4: the NS solver of section 2.1); scripts/benchmark.py, scripts/view_field.py, scripts/stopping_probe.py, scripts/val001_order.py, scripts/self_convergence.py | The collocated solver's public shape: cell-centered [ny, nx] float64 contiguous returns, the IterationState callback once per outer iteration with cell-centered fields and the corrector's sweep count, last_pressure_sweeps and stage_seconds reset per solve. Under the default velocity_step rule the stop stays identical in definition to the collocated one so outer iteration counts compare; residual_history keeps that definition under both rules. converged and stop_reason are set by every solve and reset at its start; the harness records them, with velocity_step_below_tol stored as residual_below_tol, the label every velocity-step row carries for either solver. |
-| stopping.py | solver_staggered, scripts/stopping_probe.py, scripts/val001_order.py, scripts/benchmark.py | update(step, imbalance) answers converged only when the estimate, the worst imbalance, the absolute sum over flux_scale and the absolute signed sum are all below their tolerances; the imbalance callable, which returns an ImbalanceSummary read by name from one evaluation, is not called until the estimate is met; no estimate (inf) while the window is short, a step in it is zero or not finite, or rho_hat is outside (0, 1). RATE_WINDOW stays a module constant. A change of condition raises RULE_VERSION, which stopping_probe and val001_order store with their saved solves, so that they solve again, and the harness records in every error_estimate row, so that its summary keeps the versions apart. |
+| stopping.py | solver_staggered, solver_ns (IterationState), scripts/stopping_probe.py, scripts/val001_order.py, scripts/benchmark.py, scripts/self_convergence.py | IterationState's fields, which both solvers hand their on_iteration callback and the harness reads, unchanged. update(step, imbalance) answers converged only when the estimate, the worst imbalance, the absolute sum over flux_scale and the absolute signed sum are all below their tolerances; the imbalance callable, which returns an ImbalanceSummary read by name from one evaluation, is not called until the estimate is met; no estimate (inf) while the window is short, a step in it is zero or not finite, or rho_hat is outside (0, 1). RATE_WINDOW stays a module constant. A change of condition raises RULE_VERSION, which stopping_probe and val001_order store with their saved solves, so that they solve again, and the harness records in every error_estimate row, so that its summary keeps the versions apart. |
 | solver_transport.py | time_integration, monitor | Concentration field output shape, dtype, and semantics unchanged. |
 | particles.py | solver_transport | Settling velocity, diffusion coefficient interface unchanged. Return types and units unchanged. |
 | scenarios.py | time_integration, boundary | Source term and BC modification interfaces unchanged. Event timing semantics unchanged. |
@@ -190,12 +190,12 @@ Generated. The responsibility and serves columns are editorial and come from `do
 | `src/momentum.py` | 522 | Predicts u* and v* on the staggered grid with QUICK advection by deferred correction over an upwind implicit matrix, one under-relaxed Jacobi sweep per call, and returns the diagonal coefficients the pressure correction needs. | S07, S09 |
 | `src/particles.py` | 255 | Computes per-size-class transport properties: Cunningham correction, settling velocity, Brownian diffusion, deposition velocity and HEPA efficiency. | T03, T04, T09, T10 |
 | `src/pressure.py` | 441 | Assembles the staggered pressure correction equation from the momentum diagonals with the discrete divergence of u* as its right-hand side, solves it by weighted Jacobi iteration, corrects the face velocities and updates the pressure. | S04, S08 |
-| `src/solver_ns.py` | 904 | Solves steady incompressible flow with the SIMPLE algorithm on a collocated grid using Rhie-Chow face fluxes, hybrid advection and Jacobi pressure correction. | S01, S02, S03, S05, S08 |
-| `src/solver_staggered.py` | 293 | Runs steady SIMPLE on the staggered grid as one outer loop over the momentum predictor and the pressure correction, with the collocated solver's public shape, alongside the collocated solver; stops by the collocated velocity-step rule or, when configured, by the error-estimate rule. | S01, S04, S05, S07 |
+| `src/solver_ns.py` | 873 | Solves steady incompressible flow with the SIMPLE algorithm on a collocated grid using Rhie-Chow face fluxes, hybrid advection and Jacobi pressure correction. | S01, S02, S03, S05, S08 |
+| `src/solver_staggered.py` | 292 | Runs steady SIMPLE on the staggered grid as one outer loop over the momentum predictor and the pressure correction, with the collocated solver's public shape, alongside the collocated solver; stops by the collocated velocity-step rule or, when configured, by the error-estimate rule. | S01, S04, S05, S07 |
 | `src/staggered.py` | 152 | Defines the staggered (MAC) field layout: shapes and allocation of face-centered u and v and cell-centered p, and the face-to-center averaging the solver applies before returning. | S07 |
-| `src/stopping.py` | 179 | Decides when the steady outer iteration has converged, on four conditions: (a) the iteration error estimated from the step and its fitted geometric rate, over a physical velocity scale; (b) the worst per-cell mass imbalance against its own tolerance; (c) the summed imbalance over the through-flow, which shares the tolerance of (a); and (d) the signed imbalance summed over the domain, which shares the tolerance of (b). | S01, S04 |
+| `src/stopping.py` | 218 | Decides when the steady outer iteration has converged, on four conditions: (a) the iteration error estimated from the step and its fitted geometric rate, over a physical velocity scale; (b) the worst per-cell mass imbalance against its own tolerance; (c) the summed imbalance over the through-flow, which shares the tolerance of (a); and (d) the signed imbalance summed over the domain, which shares the tolerance of (b). Also defines IterationState, the snapshot a solver hands its callback once per outer iteration. | S01, S04 |
 
-Total 14 Python files, 4884 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
+Total 14 Python files, 4891 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
 
 `Declares it serves` is an EDITORIAL CLAIM read from `docs/system_map_annotations.toml`. It says which requirements a module is meant to satisfy, not that it does. Whether a requirement is met is answered by the tests named in the register's `Verified By` column.
 <!-- END GENERATED: components -->
@@ -220,7 +220,7 @@ Generated. Static import analysis cannot see a function bound into a registry by
 |---|---|
 | Scope | `src/**/*.py` |
 | Files hashed | 14 |
-| Digest | `sha256:147ff53051edd512b934fcbd567550328d5b360e8238f2af0a21e34917d47dd5` |
+| Digest | `sha256:22e35674ea2a4acf01b8aee241c7e98ff1d24b5b7da15d6fe38bdf88ce30c4bf` |
 
 This is what lets the document answer whether it is current, which is the one question a stale table cannot be asked. `python scripts/gen_system_map.py --check` recomputes the whole set of generated regions, this digest included, and exits non-zero on any disagreement.
 
@@ -487,13 +487,22 @@ StaggeredSolver:
     construction, naming stopping_rule.
 ```
 
-### stopping.py --> solver_staggered (ECR-001, ahead of step 7)
+### stopping.py --> solver_staggered, solver_ns (IterationState); scripts/benchmark.py, scripts/self_convergence.py, scripts/stopping_probe.py, scripts/val001_order.py
 
 The error_estimate stopping rule, with no solver dependency so it can be
 tested on synthetic histories. REQ-S01 as clarified 2026-09-24, REQ-S04 as
-clarified 2026-09-24 and 2026-09-30.
+clarified 2026-09-24 and 2026-09-30. Also IterationState, the snapshot a
+solver hands its on_iteration callback once per outer iteration, moved here
+from solver_ns.py on 2026-10-02: the module that defines when an outer
+iteration ends also defines what each iteration reports.
 
 ```
+IterationState:  # frozen, eq=False: identity only, since the fields are arrays
+    iteration: int        # zero-based outer iteration index
+    residual: float       # scaled velocity-change residual of this iteration
+    pressure_sweeps: int  # Jacobi sweeps of this iteration's pressure correction
+    u, v, p: ndarray      # the solver's working fields, each [ny, nx], not
+                          # copies; a callback reads them and never writes
 ImbalanceSummary:  # frozen, keyword-only, read by name; kg/s per unit depth
     worst: float         # largest absolute per-cell imbalance
     absolute_sum: float  # sum of the absolute per-cell imbalances
@@ -531,7 +540,7 @@ ParticlePhysics:
     hepa_efficiency(size_class: int) -> float
 ```
 
-### solver_ns.py --> solver_staggered (IterationState); the harness baseline
+### solver_ns.py --> the harness baseline
 
 The collocated solver. Phase 2 delivered solve_steady() only;
 solve_timestep() is Phase 4's (time integration), on the solver of record.
@@ -552,8 +561,8 @@ NavierStokesSolver:
     Collocated storage: u, v and p at cell centers, Rhie-Chow face fluxes
     (ADR-008). StaggeredSolver has the same public shape and is the
     solver of record (ADR-010); this class is kept as the harness
-    baseline while its retirement is decided, and IterationState, which
-    both solvers use, lives here.
+    baseline while its retirement is decided. IterationState, which
+    both solvers hand their callback, is defined in stopping.py.
 ```
 
 ### solver_transport.py --> time_integration, monitor
