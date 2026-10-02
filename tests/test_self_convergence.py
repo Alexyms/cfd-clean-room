@@ -268,14 +268,15 @@ def test_every_solve_is_pinned_to_velocity_step(
         raise BuiltError
 
     monkeypatch.setattr(self_convergence, "FIELD_DIR", tmp_path)
-    monkeypatch.setattr(self_convergence, "NavierStokesSolver", spy)
     monkeypatch.setattr(self_convergence, "StaggeredSolver", spy)
     for method in self_convergence.METHODS:
         with pytest.raises(BuiltError):
             self_convergence.solve_and_save(method, 8)
     with pytest.raises(BuiltError):
         self_convergence.solve_tight(8)
-    assert rules == ["velocity_step"] * 3
+    # One solve per method, staggered-jacobi alone since the retirement, then
+    # solve_tight.
+    assert rules == ["velocity_step"] * 2
 
 
 @pytest.mark.unit

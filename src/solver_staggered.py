@@ -3,9 +3,9 @@
 ECR-001 step 6 (REQ-S04, REQ-S07, REQ-S08, REQ-S09, REQ-S12). Each outer
 iteration makes the two calls that already exist, MomentumPredictor.predict
 and PressureCorrector.correct, and keeps the corrected fields. Nothing is
-discretised here. The solver is built alongside the collocated one in
-src/solver_ns.py rather than in its place, so both run from one commit on
-one machine; retiring the collocated solver is a later step of its own.
+discretised here. The solver was built beside the collocated one it
+replaced, so the two could be compared from one commit; the collocated
+solver was retired on 2026-10-02 (tag collocated-final).
 
 The public shape is the collocated solver's: the constructor,
 ``solve_steady(on_iteration=None)`` returning cell-centered (u, v, p),

@@ -6,9 +6,9 @@ the same parameters. The overrides this module makes are the grid, which is
 the one axis a refinement study varies; the wall clustering ECR-001
 acceptance criterion 2 fixes, which load_wall_clustered derives from the
 case's own height and cell count rather than from a second file; and the
-stopping rule, which with_velocity_step sets to the one the collocated
-solver accepts. A named preset is loaded by load_preset, which picks the
-loader, so no consumer repeats that choice.
+stopping rule, which with_velocity_step pins to velocity_step for a solve
+that must reproduce a field saved under it. A named preset is loaded by
+load_preset, which picks the loader, so no consumer repeats that choice.
 """
 
 import copy
@@ -153,13 +153,11 @@ def load_preset(case_id: str) -> SimConfig:
 
 
 def with_velocity_step(config: SimConfig) -> SimConfig:
-    """A copy of a case configuration that stops by velocity_step, for the collocated solver.
+    """A copy of a case configuration that stops by velocity_step.
 
-    The collocated solver refuses error_estimate: its walls leak mass, so the
-    continuity condition could never hold. It keeps the rule every collocated
-    result was produced under until it is retired, and nothing else changes.
     A staggered solve that must reproduce a field saved under velocity_step
-    is pinned the same way.
+    is pinned to that rule this way (scripts/stopping_probe.py,
+    scripts/self_convergence.py). Nothing else changes.
 
     Parameters
     ----------

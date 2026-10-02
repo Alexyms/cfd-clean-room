@@ -3,66 +3,22 @@
 Verifies that the NS solver reproduces the analytical parabolic velocity
 profile for pressure-driven flow between two parallel plates. The L2
 error between the solver and analytical profiles at the channel midpoint
-must be below 2.5% on the collocated solver (REQ-S02, ADR-008) and below
-1% on the staggered one (ECR-001 acceptance criteria 1 and 2). The case
-configuration is configs/validation_poiseuille.yaml and the metric is
+must be below 1% on the 80x40 grid (REQ-S02 as amended 2026-09-30, ECR-001
+acceptance criteria 1 and 2). The case configuration is
+configs/validation_poiseuille.yaml and the metric is
 validation.metrics.poiseuille_l2_error, both shared with the benchmark
 harness so the two cannot drift apart.
 """
 
 import time
 
-import numpy as np
 import pytest
 
-from src.boundary import BoundaryManager
 from src.boundary_staggered import StaggeredBoundary
 from src.mesh import Mesh
-from src.solver_ns import NavierStokesSolver
 from src.solver_staggered import StaggeredSolver
-from validation.cases import (
-    WALL_CLUSTERED_GRIDS,
-    load_case,
-    load_preset,
-    with_velocity_step,
-)
+from validation.cases import WALL_CLUSTERED_GRIDS, load_preset
 from validation.metrics import poiseuille_l2_error
-
-
-@pytest.mark.validation
-def test_poiseuille_flow_val001() -> None:
-    """VAL-001: Poiseuille flow -- L2 error < 2.5% vs analytical parabolic profile.
-
-    Solves steady flow in a horizontal channel with uniform inlet
-    velocity and pressure outlet on the 80x40 grid the case file
-    specifies. Extracts the u-velocity profile at the channel midpoint
-    and compares against the analytical Poiseuille parabola.
-
-    The 2.5% threshold reflects the O(h) wall accuracy of the collocated
-    ghost-cell boundary treatment (see ADR-008). Error decreases
-    monotonically with grid refinement at the expected first-order rate.
-    The collocated solver refuses the case file's error_estimate rule and
-    runs velocity_step, as every collocated result was produced.
-    """
-    config = with_velocity_step(load_case("poiseuille"))
-    mesh = Mesh(config)
-    boundary = BoundaryManager(mesh, config)
-    solver = NavierStokesSolver(mesh, config, boundary)
-
-    u, _v, _p = solver.solve_steady()
-
-    n_iter = len(solver.residual_history)
-    final_residual = solver.compute_residual()
-    metric = poiseuille_l2_error(config, mesh, u)
-
-    i_mid = config.nx // 2
-    print("VAL-001 Poiseuille flow:")
-    print(f"  Iterations: {n_iter}")
-    print(f"  Final residual: {final_residual:.6e}")
-    print(f"  L2 error: {metric.value:.6e}")
-    print(f"  u_max (solver): {np.max(u[:, i_mid]):.6f}")
-
-    assert metric.value < 0.025, f"L2 error {metric.value:.4e} exceeds 2.5% threshold"
 
 
 @pytest.mark.validation
@@ -77,8 +33,7 @@ def test_poiseuille_flow_staggered_val001(case_id: str) -> None:
     Criterion 1 is the 80x40 uniform grid. Criterion 2 is the same cell count
     with y clustered toward both walls, the wall cell 0.1 H / ny and the ratio
     derived. Both run the case file's error_estimate rule, so each must stop
-    by it, not at the cap. The metric reads column nx // 2, as the collocated
-    test does.
+    by it, not at the cap. The metric reads column nx // 2.
     """
     clustered = case_id in WALL_CLUSTERED_GRIDS
     config = load_preset(case_id)

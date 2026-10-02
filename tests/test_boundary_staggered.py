@@ -11,7 +11,6 @@ that assumed dy/2 would fail.
 import numpy as np
 import pytest
 
-from src.boundary import BoundaryManager
 from src.boundary_staggered import StaggeredBoundary
 from src.config import SimConfig
 from src.mesh import SOLID, Mesh
@@ -403,29 +402,25 @@ class TestFluxAndScales:
 
 
 # ---------------------------------------------------------------------------
-# The seeded validation cases: staggered against collocated
+# The seeded validation cases
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.integration
 class TestSeededCases:
-    """Inlet flux on the harness cases, both layers from the same configuration."""
+    """Inlet flux on the harness cases, from the committed configurations."""
 
-    def test_val001_staggered_flux_is_exact_and_collocated_omits_two_corner_cells(
-        self,
-    ) -> None:
-        """The collocated map assigns corner ring cells to the bottom and top
-        edges, so its left inlet is two cells short. The staggered inlet spans
-        the full edge because every left face is a storage location."""
+    def test_val001_inlet_flux_is_the_exact_face_sum(self) -> None:
+        """The inlet spans the full left edge because every left face is a
+        storage location, so the flux is the prescribed velocity times the
+        height. The retired collocated layer was two corner cells short of it
+        (docs/reports/inlet_flux_comparison.md)."""
         config = load_case("poiseuille", grid=(80, 40))
         mesh = Mesh(config)
         staggered = StaggeredBoundary(mesh, config).get_inlet_flux("inlet")
-        collocated = BoundaryManager(mesh, config).get_inlet_flux("inlet")
         assert staggered == pytest.approx(0.1 * 0.5, rel=1e-14)
-        assert staggered - collocated == pytest.approx(2 * 0.1 * mesh.dy, rel=1e-12)
 
-    def test_val002_both_layers_report_no_inlet_flux(self) -> None:
+    def test_val002_reports_no_inlet_flux(self) -> None:
         config = load_case("cavity", grid=(20, 20))
         mesh = Mesh(config)
         assert StaggeredBoundary(mesh, config).get_total_inlet_flux() == 0.0
-        assert BoundaryManager(mesh, config).get_total_inlet_flux() == 0.0

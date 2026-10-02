@@ -31,8 +31,8 @@ FOUR PROPERTIES THIS SCRIPT IS BUILT AROUND. Each is asserted in
 tests/test_system_map.py.
 
 1. It parses; it never imports the code under analysis. A guard that runs
-   underneath the thing it guards is not a guard. Importing src.solver_ns to
-   describe it would make this generator fail exactly when the solver is
+   underneath the thing it guards is not a guard. Importing src.solver_staggered
+   to describe it would make this generator fail exactly when the solver is
    broken, which is the moment its output matters most. ast reads the file
    whatever state it is in.
 
@@ -171,7 +171,7 @@ class DecoratorFacts:
 @dataclass
 class ModuleFacts:
     rel_path: str  # posix, relative to the repository root
-    dotted: str  # e.g. "src.solver_ns"
+    dotted: str  # e.g. "src.solver_staggered"
     lines: int
     source: bytes
     imports: frozenset[str]

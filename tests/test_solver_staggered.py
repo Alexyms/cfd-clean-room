@@ -15,13 +15,11 @@ import numpy as np
 import pytest
 import yaml
 
-from src.boundary import BoundaryManager
 from src.boundary_staggered import StaggeredBoundary
 from src.config import SimConfig
 from src.mesh import Mesh
 from src.momentum import MomentumPrediction, MomentumPredictor
 from src.pressure import PressureCorrection, PressureCorrector
-from src.solver_ns import NavierStokesSolver
 from src.solver_staggered import StaggeredSolver
 from src.staggered import allocate_fields, to_cell_centers
 from src.stopping import ErrorEstimateRule, ImbalanceSummary, IterationState
@@ -154,10 +152,10 @@ def _absolute_face_flux(mesh: Mesh, rho: float, u: np.ndarray, v: np.ndarray) ->
 
 @pytest.mark.integration
 class TestContract:
-    """The collocated solver's public shape, which the harness depends on."""
+    """The public shape the harness depends on (SYSTEM.md, section 4)."""
 
     def test_returns_three_cell_centered_float64_contiguous_arrays(self) -> None:
-        """(u, v, p) are [ny, nx], float64 and C-contiguous, like the collocated return."""
+        """(u, v, p) are [ny, nx], float64 and C-contiguous, the array convention."""
         config = _case("cavity", 6)
         mesh, _bc, solver = _build(config)
         for field in solver.solve_steady():
@@ -234,44 +232,44 @@ class TestContract:
 
 @pytest.mark.integration
 class TestReferenceVelocity:
-    """The stopping rule divides by the collocated solver's reference velocity."""
+    """The residual divides by reference_velocity, F_ref / (rho h) (SYSTEM.md, section 4)."""
 
     @pytest.mark.parametrize(
         "case_id", [c for c, (kind, _nx, _ny) in CASE_GRIDS.items() if kind == "cavity"]
     )
-    def test_closed_domain_reference_equals_the_collocated_one(
+    def test_closed_domain_reference_is_the_largest_boundary_velocity(
         self, case_id: str
     ) -> None:
-        """Equal with ==: same lid speed, same h, same operations in the same order."""
+        """Equal with ==: F_ref is rho times that velocity times h, over rho h.
+
+        The expected value is formed from the staggered layer's own quantities
+        by the contract's formula, in the solver's order of operations.
+        """
         config = load_preset(case_id)
-        mesh, _bc, solver = _build(config)
-        collocated = NavierStokesSolver(
-            mesh, with_velocity_step(config), BoundaryManager(mesh, config)
+        mesh, bc, solver = _build(config)
+        nx, ny = mesh.xc.shape[0], mesh.yc.shape[0]
+        h = max(float(mesh.x[nx]) / nx, float(mesh.y[ny]) / ny)
+        assert bc.get_total_inlet_flux() == 0.0
+        f_ref = config.rho * bc.get_max_boundary_velocity() * h
+        assert solver.reference_velocity == f_ref / (config.rho * h)
+        assert solver.reference_velocity == pytest.approx(
+            bc.get_max_boundary_velocity(), rel=1e-14
         )
-        # The velocity NavierStokesSolver.solve_steady divides its residual by
-        expected = collocated._F_ref / (config.rho * max(mesh.dx, mesh.dy))
-        assert solver.reference_velocity == expected
 
-    def test_channel_reference_differs_by_the_collocated_corner_cells(self) -> None:
-        """The same formula on each layer's own inlet flux; the collocated one is 38/40.
+    def test_channel_reference_is_the_exact_inlet_flux_over_the_spacing(self) -> None:
+        """F_ref is rho times the exact face sum of the inlet flux, over rho h.
 
-        The collocated edge map gives the two corner cells of the inlet edge
-        to the walls (docs/reports/inlet_flux_comparison.md), so its inlet
-        flux, and with it its reference velocity, is 38/40 of the exact one.
+        The staggered inlet spans the whole left edge, so the flux is the
+        prescribed velocity times the height exactly. The retired collocated
+        layer's flux was two corner cells short of it
+        (docs/reports/inlet_flux_comparison.md).
         """
         config = load_preset("val001_80x40")
         mesh, bc, solver = _build(config)
-        collocated = NavierStokesSolver(
-            mesh, with_velocity_step(config), BoundaryManager(mesh, config)
-        )
-        collocated_ref = collocated._F_ref / (config.rho * max(mesh.dx, mesh.dy))
         exact_flux = 0.1 * 0.5
         assert bc.get_total_inlet_flux() == pytest.approx(exact_flux, rel=1e-14)
         assert solver.reference_velocity == pytest.approx(
             exact_flux / mesh.dx, rel=1e-14
-        )
-        assert solver.reference_velocity / collocated_ref == pytest.approx(
-            40.0 / 38.0, rel=1e-14
         )
 
 
@@ -366,7 +364,7 @@ class TestPhysics:
         assert all(np.all(gap == 0.0) for gap in seen)
 
     def test_stretched_cavity_runs_and_returns_finite_fields(self) -> None:
-        """Runs on a stretched mesh, which the collocated solver refuses. No accuracy claim."""
+        """Runs on a stretched mesh, which the retired collocated solver refused. No accuracy claim."""
         mesh_block = {"x": {"stretch_ratio": 1.2}, "y": {"stretch_ratio": 1.2}}
         config = _case("cavity", 8, mesh=mesh_block)
         mesh, _bc, solver = _build(config)

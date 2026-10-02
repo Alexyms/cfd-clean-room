@@ -3,8 +3,9 @@
 Before ECR-001 step 6 the harness ``--method`` flag was a free-text label that
 selected nothing, so a row could claim a solver it did not run. Each test
 here runs a real solve on a 6x6 cavity and checks which solver class was
-built, for both methods: a test of the staggered branch alone would pass if
-the flag did nothing and the default happened to be the one expected.
+built. Since the collocated solver's retirement (2026-10-02, tag
+collocated-final) one method runs; its old label is refused by name, apart
+from the unknown-method refusal, so a caller learns where the solver went.
 """
 
 from __future__ import annotations
@@ -15,11 +16,9 @@ from pathlib import Path
 
 import pytest
 
-from src.boundary import BoundaryManager
 from src.boundary_staggered import StaggeredBoundary
 from src.config import SimConfig
 from src.mesh import FLUID, Mesh
-from src.solver_ns import NavierStokesSolver
 from src.solver_staggered import StaggeredSolver
 from src.stopping import IterationState
 from validation.cases import load_case
@@ -40,13 +39,6 @@ def built(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     monkeypatch.setitem(view_field.CASE_GRIDS, TINY, ("cavity", 6, 6))
     names: list[str] = []
 
-    class SpyCollocated(NavierStokesSolver):
-        def __init__(
-            self, mesh: Mesh, config: SimConfig, boundary: BoundaryManager
-        ) -> None:
-            names.append("collocated")
-            super().__init__(mesh, config, boundary)
-
     class SpyStaggered(StaggeredSolver):
         def __init__(
             self, mesh: Mesh, config: SimConfig, boundary: StaggeredBoundary
@@ -55,27 +47,14 @@ def built(monkeypatch: pytest.MonkeyPatch) -> list[str]:
             super().__init__(mesh, config, boundary)
 
     for module in (benchmark, view_field):
-        monkeypatch.setattr(module, "NavierStokesSolver", SpyCollocated)
         monkeypatch.setattr(module, "StaggeredSolver", SpyStaggered)
     return names
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize(
-    ("method", "expected", "stages"),
-    [
-        (
-            "collocated-jacobi",
-            "collocated",
-            {"momentum", "flux", "pressure", "correct"},
-        ),
-        ("staggered-jacobi", "staggered", {"momentum", "pressure", "correct"}),
-    ],
-)
-def test_harness_method_selects_the_solver(
-    method: str, expected: str, stages: set[str], built: list[str], tmp_path: Path
-) -> None:
+def test_harness_method_selects_the_solver(built: list[str], tmp_path: Path) -> None:
     """The row's method, definition and stage keys all come from the solver that ran."""
+    method = "staggered-jacobi"
     results = tmp_path / "results.jsonl"
     code = benchmark.main(
         [
@@ -90,7 +69,7 @@ def test_harness_method_selects_the_solver(
         ]
     )
     assert code == 0
-    assert built == [expected]
+    assert built == ["staggered"]
     (row,) = [
         json.loads(line) for line in results.read_text(encoding="utf-8").splitlines()
     ]
@@ -99,7 +78,7 @@ def test_harness_method_selects_the_solver(
         row["work"]["cell_update_definition"]
         == benchmark.CELL_UPDATE_DEFINITIONS[method]
     )
-    assert set(row["time"]["stages"]) == stages
+    assert set(row["time"]["stages"]) == {"momentum", "pressure", "correct"}
 
 
 @pytest.mark.unit
@@ -113,6 +92,25 @@ def test_harness_rejects_an_unknown_method(
     assert "--method" in capsys.readouterr().err
     with pytest.raises(ValueError, match="unknown method"):
         benchmark.run_case(TINY, "staggered", sample_every=10, concurrent=1)
+    assert built == []
+
+
+@pytest.mark.unit
+def test_harness_refuses_the_retired_collocated_method_by_name(
+    capsys: pytest.CaptureFixture[str], built: list[str]
+) -> None:
+    """The refusal names the tag that holds the solver, not just an unknown label.
+
+    Defect caught: the refusal removed, so the label falls through to the
+    unknown-method error, which does not say where the solver went.
+    """
+    with pytest.raises(SystemExit) as exc:
+        benchmark.main(["--method", "collocated-jacobi", "--cases", TINY])
+    assert exc.value.code == 2
+    assert "--method" in capsys.readouterr().err
+    with pytest.raises(ValueError, match="collocated-final"):
+        benchmark.run_case(TINY, "collocated-jacobi", sample_every=10, concurrent=1)
+    assert "collocated-jacobi" not in benchmark.METHODS
     assert built == []
 
 
@@ -167,20 +165,12 @@ def test_staggered_work_excludes_the_outlet_faces() -> None:
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize(
-    ("method", "expected", "stem"),
-    [
-        ("collocated-jacobi", "collocated", TINY),
-        ("staggered-jacobi", "staggered", f"{TINY}_staggered-jacobi"),
-    ],
-)
-def test_viewer_method_selects_the_solver(
-    method: str, expected: str, stem: str, built: list[str], tmp_path: Path
-) -> None:
-    """The viewer builds the named solver and keeps the two solvers' files apart."""
+def test_viewer_method_selects_the_solver(built: list[str], tmp_path: Path) -> None:
+    """The viewer builds the named solver and names the file after the method."""
+    method = "staggered-jacobi"
     path = view_field.solve_and_save(TINY, tmp_path, method)
-    assert built == [expected]
-    assert path == tmp_path / f"{stem}.npz"
+    assert built == ["staggered"]
+    assert path == tmp_path / f"{TINY}_{method}.npz"
     with view_field.np.load(path) as data:
         assert str(data["method"]) == method
 

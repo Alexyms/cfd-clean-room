@@ -103,33 +103,29 @@ Generated from the import statements in `src/` by `scripts/gen_system_map.py`. R
 
 <!-- BEGIN GENERATED: dsm -->
 ```
-                     boundary  boundary_registry  boundary_staggered  config  constants  mesh  momentum  particles  pressure  solver_ns  solver_staggered  staggered  stopping
-boundary                .              X                  .             X         .       X       .          .         .          .             .              .         .
-boundary_registry       .              .                  .             X         .       .       .          .         .          .             .              .         .
-boundary_staggered      .              X                  .             X         .       X       .          .         .          .             .              X         .
-config                  .              .                  .             .         .       .       .          .         .          .             .              .         .
-constants               .              .                  .             .         .       .       .          .         .          .             .              .         .
-mesh                    .              .                  .             X         .       .       .          .         .          .             .              .         .
-momentum                .              .                  X             X         .       X       .          .         .          .             .              X         .
-particles               .              .                  .             X         X       .       .          .         .          .             .              .         .
-pressure                .              .                  X             X         .       X       X          .         .          .             .              X         .
-solver_ns               X              .                  .             X         .       X       .          .         .          .             .              .         X
-solver_staggered        .              .                  X             X         .       X       X          .         X          .             .              X         X
-staggered               .              .                  .             .         .       X       .          .         .          .             .              .         .
-stopping                .              .                  .             .         .       .       .          .         .          .             .              .         .
+                     boundary_registry  boundary_staggered  config  constants  mesh  momentum  particles  pressure  solver_staggered  staggered  stopping
+boundary_registry            .                  .             X         .       .       .          .         .             .              .         .
+boundary_staggered           X                  .             X         .       X       .          .         .             .              X         .
+config                       .                  .             .         .       .       .          .         .             .              .         .
+constants                    .                  .             .         .       .       .          .         .             .              .         .
+mesh                         .                  .             X         .       .       .          .         .             .              .         .
+momentum                     .                  X             X         .       X       .          .         .             .              X         .
+particles                    .                  .             X         X       .       .          .         .             .              .         .
+pressure                     .                  X             X         .       X       X          .         .             .              X         .
+solver_staggered             .                  X             X         .       X       X          .         X             .              X         X
+staggered                    .                  .             .         .       X       .          .         .             .              .         .
+stopping                     .                  .             .         .       .       .          .         .             .              .         .
 ```
 
-Rows import columns. Edges, 32 total:
+Rows import columns. Edges, 25 total:
 
 ```
-boundary           -> boundary_registry, config, mesh
 boundary_registry  -> config
 boundary_staggered -> boundary_registry, config, mesh, staggered
 mesh               -> config
 momentum           -> boundary_staggered, config, mesh, staggered
 particles          -> config, constants
 pressure           -> boundary_staggered, config, mesh, momentum, staggered
-solver_ns          -> boundary, config, mesh, stopping
 solver_staggered   -> boundary_staggered, config, mesh, momentum, pressure, staggered, stopping
 staggered          -> mesh
 ```
@@ -181,8 +177,7 @@ Generated. The responsibility and serves columns are editorial and come from `do
 <!-- BEGIN GENERATED: components -->
 | Module | Lines | Responsibility | Declares it serves |
 |---|---|---|---|
-| `src/boundary.py` | 380 | Maps BOUNDARY cells to the condition the shared registry reports and writes the collocated ghost-cell values that place wall, inlet and outlet conditions at the domain face. | none |
-| `src/boundary_registry.py` | 195 | Interprets the configured boundary segments once, answering which condition and prescribed velocity hold at a point on a domain edge, for both the collocated and the staggered layer. | S12.1 |
+| `src/boundary_registry.py` | 195 | Interprets the configured boundary segments once, answering which condition and prescribed velocity hold at a point on a domain edge, for every boundary imposition layer: the staggered velocity layer today, the Phase 3 concentration layer next. | S12.1 |
 | `src/boundary_staggered.py` | 423 | Writes Dirichlet normal velocities exactly into the staggered domain-face entries and exposes the tangential wall values, wall distances and pressure outlets as data for the momentum and pressure steps. | S12 |
 | `src/config.py` | 721 | Loads the YAML configuration into typed dataclasses and rejects missing keys, wrong types and out-of-range values at load time. | A02, A03, C01, C02, S10 |
 | `src/constants.py` | 8 | Holds the physical constants shared by every module so that none of them defines its own copy. | C04 |
@@ -190,12 +185,11 @@ Generated. The responsibility and serves columns are editorial and come from `do
 | `src/momentum.py` | 522 | Predicts u* and v* on the staggered grid with QUICK advection by deferred correction over an upwind implicit matrix, one under-relaxed Jacobi sweep per call, and returns the diagonal coefficients the pressure correction needs. | S07, S09 |
 | `src/particles.py` | 255 | Computes per-size-class transport properties: Cunningham correction, settling velocity, Brownian diffusion, deposition velocity and HEPA efficiency. | T03, T04, T09, T10 |
 | `src/pressure.py` | 441 | Assembles the staggered pressure correction equation from the momentum diagonals with the discrete divergence of u* as its right-hand side, solves it by weighted Jacobi iteration, corrects the face velocities and updates the pressure. | S04, S08 |
-| `src/solver_ns.py` | 873 | Solves steady incompressible flow with the SIMPLE algorithm on a collocated grid using Rhie-Chow face fluxes, hybrid advection and Jacobi pressure correction. | S01, S02, S03, S05, S08 |
-| `src/solver_staggered.py` | 292 | Runs steady SIMPLE on the staggered grid as one outer loop over the momentum predictor and the pressure correction, with the collocated solver's public shape, alongside the collocated solver; stops by the collocated velocity-step rule or, when configured, by the error-estimate rule. | S01, S04, S05, S07 |
+| `src/solver_staggered.py` | 292 | Runs steady SIMPLE on the staggered grid as one outer loop over the momentum predictor and the pressure correction, returning cell-centered fields through the harness's callback shape; stops by the velocity-step rule or, when configured, by the error-estimate rule. | S01, S02, S03, S04, S05, S07, S08 |
 | `src/staggered.py` | 152 | Defines the staggered (MAC) field layout: shapes and allocation of face-centered u and v and cell-centered p, and the face-to-center averaging the solver applies before returning. | S07 |
 | `src/stopping.py` | 218 | Decides when the steady outer iteration has converged, on four conditions: (a) the iteration error estimated from the step and its fitted geometric rate, over a physical velocity scale; (b) the worst per-cell mass imbalance against its own tolerance; (c) the summed imbalance over the through-flow, which shares the tolerance of (a); and (d) the signed imbalance summed over the domain, which shares the tolerance of (b). Also defines IterationState, the snapshot a solver hands its callback once per outer iteration. | S01, S04 |
 
-Total 14 Python files, 4891 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
+Total 12 Python files, 3638 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
 
 `Declares it serves` is an EDITORIAL CLAIM read from `docs/system_map_annotations.toml`. It says which requirements a module is meant to satisfy, not that it does. Whether a requirement is met is answered by the tests named in the register's `Verified By` column.
 <!-- END GENERATED: components -->
@@ -219,8 +213,8 @@ Generated. Static import analysis cannot see a function bound into a registry by
 | Property | Value |
 |---|---|
 | Scope | `src/**/*.py` |
-| Files hashed | 14 |
-| Digest | `sha256:22e35674ea2a4acf01b8aee241c7e98ff1d24b5b7da15d6fe38bdf88ce30c4bf` |
+| Files hashed | 12 |
+| Digest | `sha256:96c415bb19f0a4bbc92e37897e95ca4a59ee8d4afea8fe863b1105d0969cdbe9` |
 
 This is what lets the document answer whether it is current, which is the one question a stale table cannot be asked. `python scripts/gen_system_map.py --check` recomputes the whole set of generated regions, this digest included, and exits non-zero on any disagreement.
 
