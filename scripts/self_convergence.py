@@ -634,15 +634,14 @@ def station_orders(
 def extrapolation() -> dict:
     """Richardson on the staggered true centerlines at every snapshot tolerance.
 
-    The control runs first. Reads saved fields only, the six at the case's
-    tolerance and the three staggered files from solve_tight, and stops if any
-    is missing.
+    The control runs first. Reads saved fields only, the three at the case's
+    tolerance and the three from solve_tight, and stops if any is missing.
 
     Returns
     -------
     dict
-        metric: the true-centerline metric for both solvers at the case's
-        tolerance and for the staggered solver at TIGHT_TOL. iteration: per
+        metric: the true-centerline metric for the staggered solver at the
+        case's tolerance and at TIGHT_TOL. iteration: per
         grid, the outer count at each snapshot, the wall time, and the largest
         change in u and v from the case's tolerance to TIGHT_TOL. stations:
         station_orders at each snapshot tolerance. settling: order_change
@@ -666,8 +665,7 @@ def extrapolation() -> dict:
         with np.load(path) as data:
             u, v = data["u"], data["v"]
         entry = cavity_true_centerline_errors(configs[n], meshes[n], u, v).components
-        if path.stem.startswith("staggered"):
-            entry["face_gap"] = face_gaps(configs[n], meshes[n], u, v)
+        entry["face_gap"] = face_gaps(configs[n], meshes[n], u, v)
         out["metric"][path.stem] = entry
     snaps = {}
     for n, path in zip(GRIDS, tight, strict=True):
