@@ -4,8 +4,9 @@ Before ECR-001 step 6 the harness ``--method`` flag was a free-text label that
 selected nothing, so a row could claim a solver it did not run. Each test
 here runs a real solve on a 6x6 cavity and checks which solver class was
 built. Since the collocated solver's retirement (2026-10-02, tag
-collocated-final) one method runs; its old label is refused by name, apart
-from the unknown-method refusal, so a caller learns where the solver went.
+collocated-final) one method runs; its old label is refused by name with its
+own message, distinct from the unknown-method refusal, so a caller learns
+where the solver went.
 """
 
 from __future__ import annotations
