@@ -194,7 +194,7 @@ class TestIdempotence:
 class TestTheGeneratorParsesAndNeverImports:
     """A guard that runs underneath the thing it guards is not a guard.
 
-    Importing src.solver_ns to describe it would make the generator fail
+    Importing src.solver_staggered to describe it would make the generator fail
     exactly when the solver is broken, the moment its output matters most.
     """
 

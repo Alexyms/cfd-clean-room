@@ -3,12 +3,18 @@
 Each test names the planted defect it was shown to catch.
 """
 
+import dataclasses
 import math
 
 import numpy as np
 import pytest
 
-from src.stopping import RATE_WINDOW, ErrorEstimateRule, ImbalanceSummary
+from src.stopping import (
+    RATE_WINDOW,
+    ErrorEstimateRule,
+    ImbalanceSummary,
+    IterationState,
+)
 
 SCALE = 0.1
 # VAL-001's flux scale, rho 1 times 0.1 m/s through 0.5 m. Not 1, so a rule
@@ -146,6 +152,25 @@ def test_signed_domain_sum_decides_once_the_other_three_are_met(
     steps = _geometric(0.5, RATE_WINDOW, 1e-30)
     summary = _summary(5e-11, 2.5e-8, signed)
     assert [rule.update(float(s), lambda: summary) for s in steps][-1] is expected
+
+
+@pytest.mark.unit
+def test_iteration_state_has_its_six_fields_in_order() -> None:
+    """The callback snapshot moved here from solver_ns.py with its fields unchanged.
+
+    Defect caught: a field renamed, which every positional construction in
+    the harness and the tests would still accept.
+    """
+    names = [field.name for field in dataclasses.fields(IterationState)]
+    assert names == ["iteration", "residual", "pressure_sweeps", "u", "v", "p"]
+    u, v, p = np.zeros((2, 3)), np.ones((2, 3)), np.full((2, 3), 2.0)
+    state = IterationState(4, 1e-3, 7, u, v, p)
+    assert (state.iteration, state.residual, state.pressure_sweeps) == (4, 1e-3, 7)
+    assert state.u is u and state.v is v and state.p is p
+    # Frozen, and compared by identity only: the fields are arrays.
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        state.iteration = 5  # type: ignore[misc]
+    assert state != IterationState(4, 1e-3, 7, u, v, p)
 
 
 @pytest.mark.unit

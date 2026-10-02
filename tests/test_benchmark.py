@@ -5,7 +5,6 @@ from __future__ import annotations
 import copy
 import json
 import sys
-from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
@@ -17,17 +16,12 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 import benchmark  # noqa: E402 -- scripts/ is not a package; path set above
 
-from src.boundary import BoundaryManager  # noqa: E402 -- follows sys.path.insert
 from src.config import SimConfig  # noqa: E402 -- follows sys.path.insert
 from src.mesh import Mesh  # noqa: E402 -- follows sys.path.insert
-from src.solver_ns import NavierStokesSolver  # noqa: E402 -- follows sys.path.insert
 from src.solver_staggered import (  # noqa: E402 -- follows sys.path.insert
     StaggeredSolver,
 )
-from src.stopping import (  # noqa: E402 -- follows sys.path.insert
-    RULE_VERSION,
-    IterationState,
-)
+from src.stopping import RULE_VERSION  # noqa: E402 -- follows sys.path.insert
 from validation.cases import (  # noqa: E402 -- follows sys.path.insert
     case_path,
     load_case,
@@ -305,36 +299,26 @@ def test_summary_never_pools_two_rules(
     ) in out
 
 
-@pytest.mark.integration
-def test_collocated_channel_row_is_the_pre_branch_solve(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.unit
+def test_summary_prints_stored_collocated_rows_beside_staggered_ones(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """The collocated channel runs velocity_step: its params and fields are the case's as
-    it was before it named a rule, and the stop carries the one velocity-step label."""
-    fields: list[tuple[np.ndarray, np.ndarray, np.ndarray]] = []
+    """The retired method's stored rows still summarize beside the staggered rows.
 
-    class Spy(NavierStokesSolver):
-        def solve_steady(
-            self, on_iteration: Callable[[IterationState], None] | None = None
-        ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-            fields.append(super().solve_steady(on_iteration))
-            return fields[-1]
-
-    monkeypatch.setattr(benchmark, "NavierStokesSolver", Spy)
-    monkeypatch.setitem(benchmark.CASES, "tiny_channel", ("poiseuille", 12, 6))
-    row = benchmark.run_case("tiny_channel", "collocated-jacobi", 10, 1)
-    raw = yaml.safe_load(case_path("poiseuille").read_text(encoding="utf-8"))
-    raw["domain"]["nx"], raw["domain"]["ny"] = 12, 6
-    for key in ("stopping_rule", "iteration_error_tol", "mass_imbalance_tol"):
-        raw["solver"].pop(key, None)
-    before = SimConfig.from_dict(raw)
-    mesh = Mesh(before)
-    expected = NavierStokesSolver(mesh, before, BoundaryManager(mesh, before))
-    for got, want in zip(fields[0], expected.solve_steady(), strict=True):
-        assert np.array_equal(got, want)
-    assert row["params"] == benchmark.solver_parameters(before)
-    assert row["params"]["stopping_rule"] == "velocity_step"
-    assert row["outcome"] == {"converged": True, "stop_reason": "residual_below_tol"}
+    The results file is append-only, and its collocated-jacobi rows are
+    ECR-001's before-and-after evidence. Defect caught: the summary filtered
+    records to the runnable METHODS, which drops every one of them.
+    """
+    staggered = _record("val002_20x20", 1, 13.0) | {"method": "staggered-jacobi"}
+    path = _write(
+        tmp_path / "results.jsonl", [_record("val002_20x20", 1, 13.5), staggered]
+    )
+    benchmark.print_summary(path)
+    out = capsys.readouterr().out
+    rows = [line for line in out.splitlines() if "val002_20x20" in line]
+    assert [row.split()[0] for row in rows] == ["collocated-jacobi", "staggered-jacobi"]
+    assert "collocated-jacobi" in benchmark.CELL_UPDATE_DEFINITIONS
+    assert "collocated-jacobi" not in benchmark.METHODS
 
 
 @pytest.mark.integration

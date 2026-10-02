@@ -1,6 +1,6 @@
-"""Reference-free self-convergence of the lid-driven cavity, for both solvers.
+"""Reference-free self-convergence of the lid-driven cavity on the staggered solver.
 
-Measures each solver's observed order against itself, with no reference, at
+Measures the solver's observed order against itself, with no reference, at
 20x20, 40x40 and 80x80 with the committed case settings. Fields are saved under
 results/self_convergence/ (gitignored) and never re-solved once saved. Fine
 fields are restricted by averaging 2x2 blocks, which is exact tiling and
@@ -15,7 +15,7 @@ case file names.
 --extrapolate asks, from saved fields and with no solve, whether the staggered
 solver's remaining distance to Ghia on the true centerlines is Ghia's:
 pointwise Richardson extrapolation at Ghia's stations, after its own control,
-with the true-centerline metric for both solvers. The fields saved at the
+with the true-centerline metric. The fields saved at the
 case's convergence_tol carry iteration error as large as the steps it reads,
 so --solve-tight first continues the staggered solves to 1e-9.
 
@@ -29,6 +29,10 @@ Run:
     python scripts/self_convergence.py --solve-tight   # staggered to 1e-9
     python scripts/self_convergence.py --extrapolate
     python scripts/self_convergence.py --marchi
+
+The collocated solver's saved fields, its orders and its upwind-face map are
+in docs/reports/cavity_self_convergence.md, taken before its retirement on
+2026-10-02 (tag collocated-final); this script no longer solves or reads them.
 """
 
 from __future__ import annotations
@@ -46,13 +50,11 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from src.boundary import BoundaryManager  # noqa: E402 -- follows sys.path.insert
 from src.boundary_staggered import (  # noqa: E402 -- follows sys.path.insert
     StaggeredBoundary,
 )
 from src.config import SimConfig  # noqa: E402 -- follows sys.path.insert
 from src.mesh import FLUID, Mesh  # noqa: E402 -- follows sys.path.insert
-from src.solver_ns import NavierStokesSolver  # noqa: E402 -- follows sys.path.insert
 from src.solver_staggered import (  # noqa: E402 -- follows sys.path.insert
     StaggeredSolver,
 )
@@ -77,7 +79,7 @@ from validation.metrics import (  # noqa: E402 -- follows sys.path.insert
 )
 
 GRIDS = (20, 40, 80)
-METHODS = ("collocated-jacobi", "staggered-jacobi")
+METHODS = ("staggered-jacobi",)
 FIELD_DIR = REPO_ROOT / "results" / "self_convergence"
 MAP_DIR = REPO_ROOT / "docs" / "reports"
 CONTROL_TOL = 0.05
@@ -99,17 +101,13 @@ GHIA_PAIR = 3.0 / 128.0
 
 
 def solve_and_save(method: str, n: int) -> Path:
-    """Solve the n x n cavity with one solver and save u, v, p, unless already saved."""
+    """Solve the n x n cavity on the staggered grid and save u, v, p, unless saved."""
     path = FIELD_DIR / f"{method}_{n}.npz"
     if path.exists():
         return path
     config = with_velocity_step(load_case("cavity", grid=(n, n)))
     mesh = Mesh(config)
-    solver: NavierStokesSolver | StaggeredSolver
-    if method == "collocated-jacobi":
-        solver = NavierStokesSolver(mesh, config, BoundaryManager(mesh, config))
-    else:
-        solver = StaggeredSolver(mesh, config, StaggeredBoundary(mesh, config))
+    solver = StaggeredSolver(mesh, config, StaggeredBoundary(mesh, config))
     start = time.perf_counter()
     u, v, p = solver.solve_steady()
     seconds = time.perf_counter() - start
@@ -363,18 +361,6 @@ def save_map(method: str, d2: dict[str, np.ndarray], out: Path) -> None:
     plt.close(fig)
 
 
-def upwind_faces(u: np.ndarray, v: np.ndarray, re_h: float) -> dict[str, np.ndarray]:
-    """Faces where the collocated hybrid scheme is upwind: |F| / D >= 2.
-
-    F / D is rho |u_face| h / mu with u_face the two-cell mean, the solver's
-    own face value; ``re_h`` is rho h / mu. Shapes [n, n-1] (x) and [n-1, n] (y).
-    """
-    return {
-        "x": np.abs(0.5 * (u[:, :-1] + u[:, 1:])) * re_h >= 2.0,
-        "y": np.abs(0.5 * (v[:-1, :] + v[1:, :])) * re_h >= 2.0,
-    }
-
-
 def centerline_faces(
     u: np.ndarray, v: np.ndarray
 ) -> tuple[np.ndarray, np.ndarray, float]:
@@ -394,18 +380,14 @@ def centerline_faces(
     return uf[:, n // 2], vf[n // 2, :], residual
 
 
-def offset_errors(method: str, n: int, fields: dict[str, np.ndarray]) -> dict:
+def offset_errors(n: int, fields: dict[str, np.ndarray]) -> dict:
     """The Ghia errors as validation.metrics takes them, half a cell off the
     centerline, against the same profile taken on the centerline itself."""
     config = load_case("cavity", grid=(n, n))
     mesh = Mesh(config)
     u, v = fields["u"], fields["v"]
     out = {"metric": cavity_centerline_errors(config, mesh, u, v).components}
-    if method == "staggered-jacobi":
-        u_line, v_line, out["recovery_residual"] = centerline_faces(u, v)
-    else:  # no faces: the mean of the two cell columns or rows either side
-        u_line = 0.5 * (u[:, n // 2 - 1] + u[:, n // 2])
-        v_line = 0.5 * (v[n // 2 - 1, :] + v[n // 2, :])
+    u_line, v_line, out["recovery_residual"] = centerline_faces(u, v)
     col, row = mesh.cell_type[:, n // 2] == FLUID, mesh.cell_type[n // 2, :] == FLUID
     y = [0.0, *np.asarray(mesh.yc)[col], 1.0]
     x = [0.0, *np.asarray(mesh.xc)[row], 1.0]
@@ -416,40 +398,6 @@ def offset_errors(method: str, n: int, fields: dict[str, np.ndarray]) -> dict:
         "u": float(np.abs(u_err).max()),
         "v": float(np.abs(v_err).max()),
     }
-    return out
-
-
-def upwind_summary() -> dict:
-    """Where the collocated hybrid scheme is upwind at each grid, with a map."""
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    out: dict = {}
-    fig, axes = plt.subplots(1, len(GRIDS), figsize=(12, 3.8))
-    for ax, n in zip(axes, GRIDS, strict=True):
-        config = load_case("cavity", grid=(n, n))
-        with np.load(FIELD_DIR / f"collocated-jacobi_{n}.npz") as data:
-            faces = upwind_faces(data["u"], data["v"], config.rho / (config.mu * n))
-        cell = np.zeros((n, n), dtype=bool)
-        cell[:, :-1] |= faces["x"]
-        cell[:, 1:] |= faces["x"]
-        cell[:-1, :] |= faces["y"]
-        cell[1:, :] |= faces["y"]
-        rows = np.flatnonzero(cell.any(axis=1))
-        out[n] = {
-            "x_faces": float(faces["x"].mean()),
-            "y_faces": float(faces["y"].mean()),
-            "cells_touched": float(cell.mean()),
-            "lowest_row_center_y": float((rows.min() + 0.5) / n) if rows.size else None,
-        }
-        ax.imshow(cell, origin="lower", extent=(0, 1, 0, 1), cmap="Greys")
-        ax.set_title(f"{n}x{n}: {100 * cell.mean():.0f}% of cells touch an upwind face")
-    fig.suptitle("collocated hybrid scheme: cells with an upwind face (|F|/D >= 2)")
-    fig.tight_layout()
-    fig.savefig(MAP_DIR / "cavity_self_convergence_upwind.png", dpi=80)
-    plt.close(fig)
     return out
 
 
@@ -834,7 +782,7 @@ def marchi_comparison() -> dict:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Run the control, the six solves, and the analysis; print and save a JSON summary."""
+    """Run the control, the three solves, and the analysis; print and save a JSON summary."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--solve-only", action="store_true")
     parser.add_argument("--extrapolate", action="store_true")
@@ -877,9 +825,8 @@ def main(argv: list[str] | None = None) -> int:
         }
         save_map(method, d2, MAP_DIR / f"cavity_self_convergence_{method}.png")
         summary[method]["centerline_offset"] = {
-            n: offset_errors(method, n, fields[n]) for n in GRIDS
+            n: offset_errors(n, fields[n]) for n in GRIDS
         }
-    summary["upwind"] = upwind_summary()
     text = json.dumps(summary, indent=2)
     (FIELD_DIR / "summary.json").write_text(text, encoding="utf-8")
     print(text)

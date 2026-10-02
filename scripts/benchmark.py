@@ -12,17 +12,16 @@ comparison can be read off later without rerunning anything.
 The results file is append-only and never rewritten. Repeats are stored as
 separate records; averaging is a presentation decision.
 
-Each row runs the case file's stopping rule, except that the collocated
-solver, which refuses error_estimate, runs velocity_step
-(validation.cases.with_velocity_step) and its params say so. A velocity-step
-stop is labelled residual_below_tol whichever solver ran it. An error_estimate
-row also records the rule's RULE_VERSION in its params.
+Each row runs the case file's stopping rule, and its params say which. A
+velocity-step stop is labelled residual_below_tol, the label every stored
+velocity-step row carries, including the collocated-jacobi rows taken before
+that solver was retired (tag collocated-final). An error_estimate row also
+records the rule's RULE_VERSION in its params.
 
 Run:
 
     python scripts/benchmark.py                       # seed cases, 3 repeats
     python scripts/benchmark.py --cases val002_20x20  # one case
-    python scripts/benchmark.py --method staggered-jacobi  # the staggered solver
     python scripts/benchmark.py --summary             # table of what is stored
 """
 
@@ -45,7 +44,6 @@ import numpy as np
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from src.boundary import BoundaryManager  # noqa: E402 -- follows sys.path.insert
 from src.boundary_staggered import (  # noqa: E402 -- follows sys.path.insert
     StaggeredBoundary,
 )
@@ -57,7 +55,6 @@ from src.config import (  # noqa: E402 -- follows sys.path.insert
 from src.mesh import FLUID, Mesh  # noqa: E402 -- follows sys.path.insert
 from src.momentum import MomentumPredictor  # noqa: E402 -- follows sys.path.insert
 from src.pressure import PressureCorrector  # noqa: E402 -- follows sys.path.insert
-from src.solver_ns import NavierStokesSolver  # noqa: E402 -- follows sys.path.insert
 from src.solver_staggered import (  # noqa: E402 -- follows sys.path.insert
     StaggeredSolver,
 )
@@ -69,7 +66,6 @@ from src.stopping import (  # noqa: E402 -- follows sys.path.insert
 from validation.cases import (  # noqa: E402 -- follows sys.path.insert
     CASE_GRIDS,
     load_preset,
-    with_velocity_step,
 )
 from validation.metrics import (  # noqa: E402 -- follows sys.path.insert
     cavity_marchi_centerline_errors,
@@ -79,9 +75,12 @@ from validation.metrics import (  # noqa: E402 -- follows sys.path.insert
 SCHEMA_VERSION = 1
 RESULTS_PATH = REPO_ROOT / "benchmarks" / "results.jsonl"
 # The method label selects the solver, so a row cannot claim one it did not run.
-DEFAULT_METHOD = "collocated-jacobi"
 STAGGERED_METHOD = "staggered-jacobi"
-METHODS = (DEFAULT_METHOD, STAGGERED_METHOD)
+DEFAULT_METHOD = STAGGERED_METHOD
+METHODS = (STAGGERED_METHOD,)
+# The collocated solver was retired on 2026-10-02 (tag collocated-final). Its
+# label stays known so its stored rows still summarize; run_case refuses it.
+COLLOCATED_METHOD = "collocated-jacobi"
 
 # Grid presets come from validation.cases so the harness, the tests and the
 # field viewer name the same solve the same way. Every other setting comes
@@ -89,8 +88,8 @@ METHODS = (DEFAULT_METHOD, STAGGERED_METHOD)
 CASES = CASE_GRIDS
 DEFAULT_CASES = ["val001_80x40", "val002_20x20", "val002_40x40"]
 
-# One stop_reason per rule across both solvers. The velocity-step label is the
-# one every row stored before the staggered solver reported its own stop.
+# One stop_reason per rule. The velocity-step label is the one every row stored
+# before the staggered solver reported its own stop, and every collocated row has.
 STOP_LABELS = {"velocity_step_below_tol": "residual_below_tol"}
 
 
@@ -141,8 +140,9 @@ def git_state() -> tuple[str, bool]:
 
 
 # Recorded with every row, so each row says what its cell_updates number counts.
+# The collocated entry describes the stored rows; no new row can carry it.
 CELL_UPDATE_DEFINITIONS: dict[str, str] = {
-    DEFAULT_METHOD: (
+    COLLOCATED_METHOD: (
         "stencil evaluations at FLUID cells: two momentum sweeps per outer iteration "
         "plus one per Jacobi pressure sweep; SOLID cells are not counted"
     ),
@@ -251,13 +251,13 @@ class WorkCounter:
     Parameters
     ----------
     cells_per_sweep : int
-        Unknowns updated by one pressure sweep: fluid_cells_per_sweep for
-        the collocated solver, the second value of staggered_updates for
-        the staggered one.
+        Unknowns updated by one pressure sweep: the second value of
+        staggered_updates. The stored collocated-jacobi rows counted
+        fluid_cells_per_sweep here.
     momentum_updates : int, optional
         Unknowns the momentum step updates per outer iteration. Defaults to
-        ``2 * cells_per_sweep``, the collocated u and v sweeps over the
-        same cells.
+        ``2 * cells_per_sweep``, the convention the stored collocated-jacobi
+        rows were counted with: u and v sweeps over the same cells.
     """
 
     def __init__(
@@ -374,28 +374,28 @@ def run_case(case_id: str, method: str, sample_every: int, concurrent: int) -> d
     Raises
     ------
     ValueError
-        If the method is not one of METHODS.
+        If the method is not one of METHODS. The retired collocated-jacobi
+        is refused by name, with the tag that holds its solver.
     """
+    if method == COLLOCATED_METHOD:
+        raise ValueError(
+            f"method {method!r} was retired on 2026-10-02 and takes no new row; "
+            "its stored rows still summarize, and the solver is at tag "
+            "collocated-final"
+        )
+    if method != STAGGERED_METHOD:
+        raise ValueError(f"unknown method {method!r}; known: {list(METHODS)}")
     kind, nx, ny = CASES[case_id]
     config = load_preset(case_id)
-    if method == DEFAULT_METHOD:
-        config = with_velocity_step(config)
     solver_block = solver_parameters(config)
     mesh = Mesh(config)
 
     # One cell update = one stencil evaluation at one unknown, counted per
     # method as CELL_UPDATE_DEFINITIONS states. Comparable across Jacobi,
     # Krylov, multigrid, CPU and GPU.
-    solver: NavierStokesSolver | StaggeredSolver
-    if method == DEFAULT_METHOD:
-        solver = NavierStokesSolver(mesh, config, BoundaryManager(mesh, config))
-        counter = WorkCounter(fluid_cells_per_sweep(mesh))
-    elif method == STAGGERED_METHOD:
-        solver = StaggeredSolver(mesh, config, StaggeredBoundary(mesh, config))
-        momentum_updates, pressure_cells = staggered_updates(mesh, config)
-        counter = WorkCounter(pressure_cells, momentum_updates)
-    else:
-        raise ValueError(f"unknown method {method!r}; known: {list(METHODS)}")
+    solver = StaggeredSolver(mesh, config, StaggeredBoundary(mesh, config))
+    momentum_updates, pressure_cells = staggered_updates(mesh, config)
+    counter = WorkCounter(pressure_cells, momentum_updates)
 
     def error_of(u: np.ndarray, v: np.ndarray) -> dict:
         return accuracy_of(kind, config, mesh, u, v)
@@ -432,14 +432,10 @@ def run_case(case_id: str, method: str, sample_every: int, concurrent: int) -> d
             }
         )
 
-    # The staggered solver knows which rule it ran and whether the cap stopped
-    # it; the collocated one has only the velocity-step rule, read back here.
-    if isinstance(solver, StaggeredSolver):
-        converged = solver.converged
-        stop_reason = STOP_LABELS.get(solver.stop_reason, solver.stop_reason)
-    else:
-        converged = solver.residual_history[-1] < config.convergence_tol
-        stop_reason = "residual_below_tol" if converged else "max_simple_iter"
+    # The solver knows which rule it ran and whether the cap stopped it; a
+    # velocity-step stop is stored under the label every stored row carries.
+    converged = solver.converged
+    stop_reason = STOP_LABELS.get(solver.stop_reason, solver.stop_reason)
     commit, dirty = git_state()
     return {
         "schema_version": SCHEMA_VERSION,

@@ -1,14 +1,14 @@
-"""Configuration interpretation shared by the collocated and staggered boundary layers.
+"""Configuration interpretation shared by every boundary imposition layer.
 
 Which condition holds at a point on a domain edge is a question about the
 configuration and the geometry: which named boundary segment covers that
 point, what type it is, and what velocity it prescribes there. None of it
 depends on where a solver stores its unknowns. This module answers that
-question once, so the collocated ghost-cell layer in src/boundary.py and
-the staggered imposition layer in src/boundary_staggered.py read the same
-interpretation and cannot drift apart while both exist (REQ-S12.1).
+question once, so the staggered velocity layer in src/boundary_staggered.py
+and the Phase 3 concentration layer that will sit beside it read the same
+interpretation and cannot drift apart (REQ-S12.1).
 
-The rules are the ones the collocated layer has always applied. A segment
+The rules are the ones the project's first boundary layer applied. A segment
 covers a point when it sits on the same edge and the point's coordinate
 along that edge lies within [start, end], inclusive at both ends. The first
 covering segment in configuration order wins. A point no segment covers is

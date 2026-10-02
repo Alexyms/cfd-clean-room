@@ -30,8 +30,6 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 # Physics variable naming (a_P, F_e, D_ew) uses uppercase per convention
-"src/solver_ns.py" = ["N803", "N806"]
-"tests/test_solver_ns.py" = ["N802", "N803", "N806"]
 "tests/test_poiseuille.py" = ["N806"]
 "tests/test_lid_cavity.py" = ["N806"]
 

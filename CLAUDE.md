@@ -144,8 +144,8 @@ class ParticlePhysics:
 
 | Element | Convention | Example |
 |---------|-----------|---------|
-| Modules | `snake_case` | `solver_ns.py`, `time_integration.py` |
-| Classes | `PascalCase` | `NavierStokesSolver`, `ParticlePhysics` |
+| Modules | `snake_case` | `solver_staggered.py`, `time_integration.py` |
+| Classes | `PascalCase` | `StaggeredSolver`, `ParticlePhysics` |
 | Functions/methods | `snake_case` | `compute_residual`, `apply_velocity_bc` |
 | Constants | `UPPER_SNAKE_CASE` | `BOLTZMANN_CONSTANT`, `GRAVITY` |
 | Private methods | `_leading_underscore` | `_pressure_correction_step` |
@@ -325,7 +325,7 @@ Examples:
 - `config.py`: rejects missing keys, out-of-range values, wrong types, malformed YAML
 - `mesh.py`: correct cell counts, cell classification, neighbor lookup at boundaries and corners, degenerate grid dimensions
 - `particles.py`: returns correct types, handles edge-case diameters, zero-division guards
-- `boundary.py`: raises on unrecognized boundary types, applies BCs to correct cell faces
+- `boundary_staggered.py`: raises on unrecognized boundary types, applies BCs to correct cell faces
 - `monitor.py`: alert fires at exact threshold, no false positives below threshold, handles empty sensor list
 - `scenarios.py`: event activation at correct times, event expiration, overlapping events
 
