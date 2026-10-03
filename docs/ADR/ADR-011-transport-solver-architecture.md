@@ -109,7 +109,8 @@ section A). These six and the ten above are decisions; everything else here is t
    REQ-T09).
 7. Concentration conditions derived from the registry's velocity type with explicit overrides; a
    clean supply by default, the inlet value times one minus the HEPA efficiency when filtered, no
-   recirculation; obstacle faces deposit as oriented walls (E; decision 3).
+   recirculation; obstacle faces deposit as oriented walls; a `velocity_inlet` whose normal
+   velocity is zero is a wall to the scalar layer (E; decision 3; amendment of 2026-10-03).
 8. A `MassBudget` the solver updates from the fluxes and sources it applies, summed over
    non-SOLID cells, which the tests read (F).
 9. REQ-T11's text, per-cell bound and test (VAL-012); `mass_imbalance_tol <= 1e-4 rho V_min / T`,
@@ -405,6 +406,22 @@ domain and SOLID, zero elsewhere; `surface_u`, `surface_v`, small integers namin
 each depositing face is booked to; `settling_v` [ny+1, nx], the mask of horizontal faces that
 carry the settling increment (section D). There is no `settling_u`: settling acts in -y (premise
 review S6). Nothing here reads a concentration field or writes one.
+
+**Amendment, 2026-10-03 (Alex, on review 31 S9, S8 and S1; built in PR 31's fix pass).** Three
+rules the text above did not state. (1) A `velocity_inlet` whose prescribed normal velocity is
+zero, the cavity lid written as `u_velocity` with no normal component, admits no air and is a
+moving surface particles land on: the scalar layer treats its faces as a wall of the edge's
+orientation (`deposition_velocity` for that surface, no inflow), and a `concentration` or
+`hepa_filtered` key on such a segment is a load error, since nothing can flow through it. The
+two layers' inlet sets are then equal on every configuration, the cavity included, and the
+REQ-S12.1 test asserts that with no special case. (2) A key a boundary segment does not accept
+fails the load, as an unknown `solver` or `transport` key does: a misspelt `hepa_filtered`
+would otherwise load an unfiltered supply with no message (REQ-C02). (3) Two segments on one
+edge whose ranges overlap in more than a point fail the load, naming both: the registry would
+give the face to the first and a reader counting by segment would count it twice, so the file
+would describe two things to two readers; ranges that meet at one coordinate are allowed and the
+first segment in configuration order decides there. With (3), `get_inlet_flux` attributes flux
+by the name the shared coverage gives each face and no longer decides coverage on its own.
 
 ## F. The mass budget instrument
 VAL-007 and the deposition-as-tracked-sink test need one accounting, so the solver keeps it and

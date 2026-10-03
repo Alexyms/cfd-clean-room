@@ -203,8 +203,13 @@ The first build (PR 31) laid what the solver stands on, in the order the design 
 re-measured on VAL-001 40x20 from the faces alone); the `transport` configuration section and
 the three segment keys, with the product supply marked `hepa_filtered`; and
 `src/boundary_concentration.py`, which derives every face's scalar condition from the same
-coverage the velocity layer reads, `BoundaryRegistry.coverage_along`, so the two layers cannot
-disagree about an inlet face, and a test checks that on every committed configuration. Next:
+call the velocity layer makes, `BoundaryRegistry.coverage_along` on the coordinates and SOLID
+mask `staggered.edge_cell_inputs` derives once, so neither layer decides coverage or its inputs
+on its own; a test checks the two layers' inlet sets are equal on every committed configuration
+and on two with an obstacle on an edge under an inlet. The fix pass on review 31 and test 31
+added three load rules Alex decided on 2026-10-03: unknown segment keys, overlapping segments
+on one edge, and a concentration on a zero-normal inlet (a lid, a wall to the scalar layer)
+each fail the load. Next:
 `src/solver_transport.py` and the six Phase 3 tests, each from the ADR's sections, and the
 product configuration's move to `error_estimate` when the product case is measured.
 
