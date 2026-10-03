@@ -240,6 +240,18 @@ order of accuracy), so the validation cases run at Courant number 0.1, the produ
 deferred correction does not apply, since there is no implicit advection matrix to defer against;
 `quick_face_values` is reused for the face value, not the mechanism.
 
+**Recorded alternative, not chosen (orchestrator and Alex, 2026-10-03).** The steepening is forward
+Euler's, not the limiter's. Heun's method, the two-stage second-order member of the SSP
+Runge-Kutta family Shu and Osher (1988) describe, is a convex combination of two forward Euler
+steps, so a face value that is TVD under forward Euler at `c <= 1/2` stays TVD and positive under
+it at the same bound, and its time error is second order: the pulse no longer squares as `c`
+rises, and the scheme is second order under refinement at a fixed Courant number, so VAL-008
+would not need to refine the time step faster than the mesh. The cost is two advection
+evaluations per step. It is not chosen here because the product case runs at `c = 0.11`, where
+forward Euler's error is small (section H), and because the choice of step cost belongs to Phase
+6, where the step is paid for on the GPU. If a larger step is wanted there, this is the change to
+make, and it touches `solve_timestep` only.
+
 Second, Brownian diffusion is unresolved everywhere in the bulk of the product case. The cell
 Peclet number `U dx / D` is 2.6e7 for the 0.1 um class and 3.7e9 for 5 um, and the diffusion
 number `D dt / dx^2` at the configured step is 4.3e-9 and 3.1e-11 [2]. Explicit diffusion would
