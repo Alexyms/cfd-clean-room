@@ -179,19 +179,21 @@ measurement showed; it should not restate the measurement.
 
 ## Next
 
-Phase 3, the transport solver. The decision that came first is made: Alex retired the
-collocated solver on 2026-10-02, with `src/boundary.py` and their tests, in a pull request of
-its own, and `IterationState` moved to `src/stopping.py`. Every shared-input change Phase 3
-makes now cascades to one solver. Next are the Phase 3 design document and the face-field
-interface, then the transport solver. Concentration boundary conditions will live beside the
-staggered boundary layer, in `src/boundary_concentration.py` over `src/boundary_registry.py`.
+Phase 3, the transport solver. The collocated solver was retired on 2026-10-02 (PR 29), and
+the design is written: `docs/ADR/ADR-011-transport-solver-architecture.md`, status Proposed
+(PR 30), is what every Phase 3 module is built from. It answers the three questions ADR-010
+left to Phase 3. The transport solver reads the staggered face velocities, which the NS solver
+will expose under REQ-S13 (proposed); the per-cell imbalance bound becomes a drift rate of a
+uniform haze, tested under REQ-T11 (proposed) and tying `mass_imbalance_tol` to the scenario
+duration; the product mesh is still to be measured before it is chosen.
 
-ADR-010 lists what Phase 3 inherits from the solver. Continuity is enforced on the staggered
-faces, and the cell-centered fields the solver returns are their averages, so how the
-transport solver reads face fluxes is an interface decision. The per-cell mass imbalance
-bound is absolute and was set on cases at unit density, so it needs restating for the product
-configuration. And wall clustering, which deposition wants, cost accuracy at a fixed cell
-count on the VAL-001 stencil, so the product mesh should be measured before it is chosen.
+Three items are OPEN at the top of ADR-011 and wait on Alex before the build: the face
+concentration scheme and with it positivity (forward Euler with the unlimited QUICK face value
+is unstable at every Courant number, so the scheme and the integrator are one decision), a
+number for VAL-004's "shape preserved", and the HEPA supply concentration with or without
+recirculation. Next, once they are decided: the face-field interface (REQ-S13), then
+`src/solver_transport.py`, `src/boundary_concentration.py` and the four Phase 3 tests, each
+from the ADR's sections.
 
 Deferred findings from earlier pull requests are open as GitHub issues 33, 36, 38, 40 and 42.
 
