@@ -35,6 +35,7 @@ import numpy as np
 from src.boundary_concentration import SURFACE_FLOOR, ConcentrationFaces
 from src.config import UMIST, SimConfig
 from src.mesh import Mesh
+from src.particles import ParticlePhysics
 from src.staggered import FaceVelocities, u_shape, v_shape
 
 # The particle class every case carries: 5 um, the settling-dominated class
@@ -666,17 +667,26 @@ SEALED_BOX = {
 }
 
 
-def sealed_box_case(settling: float, floor_factor: float = 1.0) -> TransportCase:
+def sealed_box_case(
+    settling: float | None = None,
+    floor_factor: float = 1.0,
+    settle_floor_face: bool = False,
+) -> TransportCase:
     """VAL-014, the sealed box (ADR-011 D and H).
 
     Parameters
     ----------
-    settling : float
-        The class's settling velocity, m/s; the test takes it from
-        ParticlePhysics on this case's configuration.
+    settling : float, optional
+        The class's settling velocity, m/s. None takes the Stokes velocity of
+        the case's 5 um class from ParticlePhysics on its configuration
+        (REQ-T03), 7.78e-4 m/s.
     floor_factor : float
         The floor deposition velocity over ``settling``; 1 is the case, 2
         the doubled control of section H.
+    settle_floor_face : bool
+        False is the case. True plants section D's trap as data: the
+        settling increment marked on the floor face as well, the double
+        count test 30 B1 found.
 
     Returns
     -------
@@ -691,6 +701,8 @@ def sealed_box_case(settling: float, floor_factor: float = 1.0) -> TransportCase
     config = transport_config(
         p["width"], p["height"], p["nx"], p["ny"], cfl_number=p["cfl_number"]
     )
+    if settling is None:
+        settling = ParticlePhysics(config).settling_velocity(0)
     mesh = Mesh(config)
     deposition_v = np.zeros(v_shape(mesh))
     deposition_v[0, :] = floor_factor * settling
@@ -698,6 +710,7 @@ def sealed_box_case(settling: float, floor_factor: float = 1.0) -> TransportCase
     surface_v[0, :] = SURFACE_FLOOR
     settling_v = np.zeros(v_shape(mesh), dtype=bool)
     settling_v[1:-1, :] = True
+    settling_v[0, :] = settle_floor_face
     return TransportCase(
         name="VAL-014 sealed box",
         config=config,
