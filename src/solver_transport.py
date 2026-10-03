@@ -436,6 +436,20 @@ class TransportSolver:
         self._faces = [boundary.faces_for(k) for k in range(self._n_classes)]
         for k, faces in enumerate(self._faces):
             self._check_conditions(faces, k)
+        # Deposition per class: v_d A_f on every depositing face, and the sum
+        # over a cell's faces that sits in its implicit diagonal. Each
+        # depositing face has one non-SOLID neighbour, so adding a face to
+        # both its cells and zeroing SOLID cells books it once.
+        self._deposit_u = [f.deposition_u * self._area_u for f in self._faces]
+        self._deposit_v = [f.deposition_v * self._area_v for f in self._faces]
+        self._deposit_cell = [
+            np.where(
+                solid,
+                0.0,
+                du[:, :-1] + du[:, 1:] + dv[:-1, :] + dv[1:, :],
+            )
+            for du, dv in zip(self._deposit_u, self._deposit_v, strict=True)
+        ]
         self.budget: list[MassBudget] = [MassBudget() for _ in range(self._n_classes)]
         self.last_diffusion_sweeps: int = 0
         self.diffusion_converged: bool = True
@@ -542,8 +556,17 @@ class TransportSolver:
                 f"dt {dt} exceeds stable_dt {limit} for class {k}; the explicit "
                 "advection step is a convex combination only below it"
             )
+        rate = None
         if sources is not None:
-            raise ValueError("sources are not applied by this commit")
+            rate = np.asarray(sources, dtype=np.float64)
+            if rate.shape != self._p_shape:
+                raise ValueError(
+                    f"expected sources of shape {self._p_shape}, got {rate.shape}"
+                )
+            if np.any(rate < 0.0):
+                raise ValueError("sources must be non-negative (ADR-011 B)")
+            if np.any(rate[self._solid] != 0.0):
+                raise ValueError("a source sits in a SOLID cell")
         c[self._solid] = 0.0
         budget = self.budget[k]
         mesh = self._mesh
@@ -560,6 +583,11 @@ class TransportSolver:
         ).T
         divergence = adv_u[:, 1:] - adv_u[:, :-1] + adv_v[1:, :] - adv_v[:-1, :]
         c_star = c - dt * divergence / self._volume
+        if rate is not None:
+            # After the advection update and before the implicit solve, so a
+            # source in a floor cell deposits in the same step (ADR-011 C).
+            c_star += dt * rate
+            budget.source += float(np.sum(rate * self._volume)) * dt
         c_star[self._solid] = 0.0
 
         # Boundary bookkeeping from the fluxes just applied: a positive flux
@@ -580,7 +608,8 @@ class TransportSolver:
         budget.inflow += float(inflow) * dt
         budget.outflow += float(outflow) * dt
 
-        c_new = self._implicit_step(c_star, dt, self._diffusion[k])
+        c_new = self._implicit_step(c_star, dt, self._diffusion[k], k)
+        self._book_deposition(c_new, dt, k, conditions)
         budget.current = MassBudget.in_domain(c_new, mesh)
         return np.ascontiguousarray(c_new)
 
@@ -627,10 +656,14 @@ class TransportSolver:
     def _advecting_velocities(
         self, faces: FaceVelocities, k: int, v_ext: FaceVelocities | None
     ) -> tuple[np.ndarray, np.ndarray]:
-        """The class's advecting face velocities, zero on faces that carry no flux."""
+        """The class's advecting face velocities: the air's, masked, with settling and v_ext."""
         self._check_pair(faces.u, faces.v, "faces")
         u_adv = np.where(self._live_u, faces.u, 0.0)
         v_adv = np.where(self._live_v, faces.v, 0.0)
+        # Settling acts in -y on the faces the boundary layer marks, between
+        # two non-SOLID cells; every other horizontal face removes through
+        # deposition_v once (ADR-011 D).
+        v_adv = v_adv - np.where(self._faces[k].settling_v, self._settling[k], 0.0)
         if v_ext is not None:
             self._check_pair(v_ext.u, v_ext.v, "v_ext")
             u_adv = u_adv + np.where(self._inner_u, v_ext.u, 0.0)
@@ -681,19 +714,24 @@ class TransportSolver:
         return flux * face
 
     def _implicit_step(
-        self, c_star: np.ndarray, dt: float, diffusivity: float
+        self, c_star: np.ndarray, dt: float, diffusivity: float, k: int
     ) -> np.ndarray:
-        """Backward Euler diffusion by Jacobi; the explicit field when nothing diffuses.
+        """Backward Euler diffusion and deposition by Jacobi.
 
-        ``a_P C_P - sum_f G_f C_N = (V / dt) C*``, with ``G_f = D A_f / d_f``
-        on the interior faces between non-SOLID cells. Each sweep adds the
-        residual over the diagonal, so the stop reads the system's own
-        residual: its largest entry below ``diffusion_tol`` times the largest
-        right-hand side.
+        ``a_P C_P - sum_f G_f C_N = (V / dt) C*`` with ``a_P = V / dt + sum_f
+        G_f + sum_w v_d A_w``: ``G_f = D A_f / d_f`` on the interior faces
+        between non-SOLID cells, and the deposition sink of every wall face
+        of P in the diagonal, so the step cannot take a cell below zero
+        (ADR-011 C). Each sweep adds the residual over the diagonal, so the
+        stop reads the system's own residual: its largest entry below
+        ``diffusion_tol`` times the largest right-hand side. Returns the
+        explicit field when nothing diffuses or deposits.
         """
         g_u = diffusivity * self._conductance_u
         g_v = diffusivity * self._conductance_v
-        diag_extra = g_u[:, :-1] + g_u[:, 1:] + g_v[:-1, :] + g_v[1:, :]
+        diag_extra = (
+            g_u[:, :-1] + g_u[:, 1:] + g_v[:-1, :] + g_v[1:, :] + self._deposit_cell[k]
+        )
         if not diag_extra.any():
             self.last_diffusion_sweeps = 0
             self.diffusion_converged = True
@@ -730,3 +768,28 @@ class TransportSolver:
             sweeps += 1
         self.last_diffusion_sweeps = sweeps
         return c
+
+    def _book_deposition(
+        self, c_new: np.ndarray, dt: float, k: int, conditions: ConcentrationFaces
+    ) -> None:
+        """Add ``v_d A_f C_P dt`` of every depositing face to its surface's slot.
+
+        ``C_P`` is the depositing face's one non-SOLID neighbour, read as the
+        sum of its two neighbours over a zero-padded field, since the other
+        is SOLID or outside. Domain faces (index 0 and n along the normal)
+        book to the surface their code names; interior faces are obstacle
+        faces and book to ``obstacle`` whatever their code (ADR-011 F).
+        """
+        deposited = self.budget[k].deposited
+        padded_x = np.pad(c_new, ((0, 0), (1, 1)))
+        padded_y = np.pad(c_new, ((1, 1), (0, 0)))
+        flux_u = self._deposit_u[k] * dt * (padded_x[:, :-1] + padded_x[:, 1:])
+        flux_v = self._deposit_v[k] * dt * (padded_y[:-1, :] + padded_y[1:, :])
+        deposited[OBSTACLE] += float(flux_u[:, 1:-1].sum() + flux_v[1:-1, :].sum())
+        for code, name in _DOMAIN_SURFACE.items():
+            deposited[name] += float(
+                flux_u[:, 0][conditions.surface_u[:, 0] == code].sum()
+                + flux_u[:, -1][conditions.surface_u[:, -1] == code].sum()
+                + flux_v[0, :][conditions.surface_v[0, :] == code].sum()
+                + flux_v[-1, :][conditions.surface_v[-1, :] == code].sum()
+            )

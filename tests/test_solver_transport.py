@@ -16,7 +16,12 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from src.boundary_concentration import ConcentrationBoundary
+from src.boundary_concentration import (
+    SURFACE_CEILING,
+    SURFACE_FLOOR,
+    SURFACE_WALL,
+    ConcentrationBoundary,
+)
 from src.boundary_registry import BoundaryRegistry
 from src.config import SimConfig
 from src.mesh import SOLID, Mesh
@@ -652,3 +657,289 @@ class TestFieldHistory:
         history.record(1, 1.0, {1: np.zeros((2, 2))})
         with pytest.raises(ValueError, match="other classes"):
             history.save(tmp_path / "y.npz")
+
+
+# ---------------------------------------------------------------------------
+# Settling and deposition (ADR-011 D)
+# ---------------------------------------------------------------------------
+
+
+def _column(ny: int, settling: float, floor: float, settle_floor_face: bool = False):
+    """A one-column sealed box: settling inside, a floor deposition velocity.
+
+    ``settle_floor_face`` plants section D's trap as data: the settling
+    increment marked on the floor face as well.
+    """
+    config = transport_config(0.2, 0.1 * ny, 1, ny, cfl_number=0.4)
+    mesh = Mesh(config)
+    deposition_v = np.zeros(v_shape(mesh))
+    deposition_v[0, :] = floor
+    surface_v = np.zeros(v_shape(mesh), dtype=np.int32)
+    surface_v[0, :] = SURFACE_FLOOR
+    settling_v = np.zeros(v_shape(mesh), dtype=bool)
+    settling_v[1:-1, :] = True
+    settling_v[0, :] = settle_floor_face
+    solver = TransportSolver(
+        mesh,
+        config,
+        ScalarPhysics(settling=settling, diffusion=0.0),
+        FixedConditions(
+            conditions_with(
+                mesh,
+                deposition_v=deposition_v,
+                surface_v=surface_v,
+                settling_v=settling_v,
+            )
+        ),
+    )
+    return mesh, solver
+
+
+@pytest.mark.unit
+class TestSettlingAndDeposition:
+    def test_stable_dt_carries_the_settling_increment(self) -> None:
+        mesh, solver = _column(10, settling=1e-3, floor=1e-3)
+        still = uniform_face_field(mesh, 0.0, 0.0)
+        assert solver.stable_dt(still, 0) == pytest.approx(0.4 * mesh.dy / 1e-3)
+
+    def test_the_floor_removes_once_and_the_floor_row_is_stationary(self) -> None:
+        """Section D's composition on a column: settling feeds the floor row at
+        v_s C_0 and the floor removes v_d C_P with v_d = v_s, so the row stays
+        at C_0 and the deposit is v_s C_0 W T exactly. With the increment
+        planted on the floor face as well (test 30 B1), the floor face carries
+        an advective outflow beside the deposition, the row falls, and the
+        removal over the first step is 1.7 times the single one."""
+        v_s, c_0 = 1e-3, 1e6
+        mesh, solver = _column(10, settling=v_s, floor=v_s)
+        still = uniform_face_field(mesh, 0.0, 0.0)
+        dt = solver.stable_dt(still, 0)
+        c = np.full((10, 1), c_0)
+        for _ in range(5):
+            c = solver.solve_timestep(c, still, 0, dt)
+        budget = solver.budget[0]
+        assert c[0, 0] == pytest.approx(c_0, rel=1e-14)
+        assert budget.deposited["floor"] == pytest.approx(
+            v_s * c_0 * mesh.dx * 5 * dt, rel=1e-13
+        )
+        assert budget.outflow == 0.0
+        assert abs(budget.relative()) < 1e-14
+
+        _, planted = _column(10, settling=v_s, floor=v_s, settle_floor_face=True)
+        c = planted.solve_timestep(np.full((10, 1), c_0), still, 0, dt)
+        removal = planted.budget[0].deposited["floor"] + planted.budget[0].outflow
+        single = v_s * c_0 * mesh.dx * dt
+        assert c[0, 0] < c_0
+        assert planted.budget[0].outflow > 0.0
+        assert removal == pytest.approx(single * (1.0 + 1.0 / 1.4), rel=1e-12)
+
+    def test_the_deposition_sink_is_implicit_so_a_thin_cell_cannot_go_negative(
+        self,
+    ) -> None:
+        """v_d dt / dy = 5 on the floor cell: the implicit sink leaves C_0 / 6,
+        where an explicit one would leave -4 C_0 (REQ-T12). The deposit is
+        booked from the new value."""
+        mesh, solver = _column(4, settling=0.0, floor=1.0)
+        still = uniform_face_field(mesh, 0.0, 0.0)
+        c_0, dt = 100.0, 0.5
+        a = 1.0 * dt / mesh.dy
+        assert a == pytest.approx(5.0)
+        c = solver.solve_timestep(np.full((4, 1), c_0), still, 0, dt)
+        assert c[0, 0] == pytest.approx(c_0 / (1.0 + a), rel=1e-14)
+        assert c.min() >= 0.0
+        assert np.all(c[1:, 0] == c_0)
+        budget = solver.budget[0]
+        assert budget.deposited["floor"] == pytest.approx(
+            1.0 * mesh.dx * dt * c[0, 0], rel=1e-14
+        )
+        assert abs(budget.relative()) < 1e-14
+
+    def test_obstacle_faces_are_booked_as_obstacle_and_domain_faces_by_surface(
+        self,
+    ) -> None:
+        """A sealed box with an obstacle under the real ConcentrationBoundary
+        and the 5 um class: after one settling step every slot equals the sum
+        of v_d A dt C_P over the faces that surface owns, read off the new
+        field, and the budget closes."""
+        config = transport_config(
+            1.0,
+            0.5,
+            10,
+            5,
+            obstacles=[
+                {
+                    "name": "b",
+                    "x_start": 0.4,
+                    "x_end": 0.6,
+                    "y_start": 0.2,
+                    "y_end": 0.3,
+                }
+            ],
+        )
+        mesh = Mesh(config)
+        physics = ParticlePhysics(config)
+        boundary = ConcentrationBoundary(
+            mesh, config, physics, BoundaryRegistry(config)
+        )
+        solver = TransportSolver(mesh, config, physics, boundary)
+        solid = mesh.cell_type == SOLID
+        assert [tuple(c) for c in np.argwhere(solid)] == [(2, 4), (2, 5)]
+        faces = boundary.faces_for(0)
+        assert faces.surface_v[3, 4] == SURFACE_FLOOR  # top of the obstacle
+        assert faces.surface_v[2, 4] == SURFACE_CEILING  # its underside
+        assert (
+            faces.surface_u[2, 4] == SURFACE_WALL
+            and faces.surface_u[2, 6] == SURFACE_WALL
+        )
+
+        still = uniform_face_field(mesh, 0.0, 0.0)
+        dt = solver.stable_dt(still, 0)
+        c = solver.solve_timestep(np.full((5, 10), 1e6), still, 0, dt)
+        v_floor = physics.deposition_velocity(0, "floor")
+        v_ceiling = physics.deposition_velocity(0, "ceiling")
+        v_wall = physics.deposition_velocity(0, "wall")
+        dx, dy = mesh.dx, mesh.dy
+        budget = solver.budget[0]
+        expected_obstacle = dt * (
+            v_floor * dx * (c[3, 4] + c[3, 5])
+            + v_ceiling * dx * (c[1, 4] + c[1, 5])
+            + v_wall * dy * (c[2, 3] + c[2, 6])
+        )
+        assert budget.deposited["obstacle"] == pytest.approx(
+            expected_obstacle, rel=1e-13
+        )
+        assert budget.deposited["floor"] == pytest.approx(
+            v_floor * dx * dt * c[0, :].sum(), rel=1e-13
+        )
+        assert budget.deposited["ceiling"] == pytest.approx(
+            v_ceiling * dx * dt * c[-1, :].sum(), rel=1e-13
+        )
+        assert budget.deposited["wall"] == pytest.approx(
+            v_wall * dy * dt * (c[:, 0].sum() + c[:, -1].sum()), rel=1e-13
+        )
+        assert np.all(c[solid] == 0.0)
+        assert abs(budget.relative()) < 1e-14
+        # The cell above the obstacle lost through its floor-type face and
+        # gained nothing from below; the cell below it lost its settling
+        # inflow and deposits to its ceiling-type face.
+        assert c[3, 4] < 1e6 and c[1, 4] < 1e6
+
+
+# ---------------------------------------------------------------------------
+# Sources (ADR-011 C, decision 5)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+class TestSources:
+    def test_a_source_in_a_solid_cell_a_negative_source_or_a_wrong_shape_raises(
+        self,
+    ) -> None:
+        config = transport_config(
+            1.0,
+            0.5,
+            10,
+            5,
+            obstacles=[
+                {
+                    "name": "b",
+                    "x_start": 0.4,
+                    "x_end": 0.6,
+                    "y_start": 0.2,
+                    "y_end": 0.3,
+                }
+            ],
+        )
+        mesh, solver = _solver(config)
+        still = uniform_face_field(mesh, 0.0, 0.0)
+        c = np.zeros((5, 10))
+        in_solid = np.zeros((5, 10))
+        in_solid[2, 4] = 1.0
+        with pytest.raises(ValueError, match="SOLID cell"):
+            solver.solve_timestep(c, still, 0, 1.0, sources=in_solid)
+        negative = np.zeros((5, 10))
+        negative[0, 0] = -1.0
+        with pytest.raises(ValueError, match="non-negative"):
+            solver.solve_timestep(c, still, 0, 1.0, sources=negative)
+        with pytest.raises(ValueError, match="expected sources of shape"):
+            solver.solve_timestep(c, still, 0, 1.0, sources=np.zeros((10, 5)))
+
+    def test_a_source_is_added_over_the_step_and_booked(self) -> None:
+        mesh, solver = _solver(transport_config(1.0, 0.5, 8, 4))
+        still = uniform_face_field(mesh, 0.0, 0.0)
+        rate = np.zeros((4, 8))
+        rate[1, 3] = 250.0
+        c = solver.solve_timestep(np.zeros((4, 8)), still, 0, 0.2, sources=rate)
+        assert c[1, 3] == pytest.approx(250.0 * 0.2)
+        assert c.sum() == pytest.approx(250.0 * 0.2)
+        budget = solver.budget[0]
+        assert budget.source == pytest.approx(250.0 * mesh.dx * mesh.dy * 0.2)
+        assert abs(budget.relative()) < 1e-14
+
+    def test_a_source_in_a_floor_cell_deposits_in_the_same_step(self) -> None:
+        """Added after advection and before the implicit solve (ADR-011 C), so
+        the floor sink acts on it at once: the deposit after one step from an
+        empty field is v_d A dt times s dt / (1 + v_d dt / dy)."""
+        mesh, solver = _column(4, settling=0.0, floor=0.02)
+        still = uniform_face_field(mesh, 0.0, 0.0)
+        rate = np.zeros((4, 1))
+        rate[0, 0] = 1000.0
+        dt = 0.5
+        c = solver.solve_timestep(np.zeros((4, 1)), still, 0, dt, sources=rate)
+        a = 0.02 * dt / mesh.dy
+        assert c[0, 0] == pytest.approx(1000.0 * dt / (1.0 + a), rel=1e-14)
+        assert solver.budget[0].deposited["floor"] == pytest.approx(
+            0.02 * mesh.dx * dt * c[0, 0], rel=1e-14
+        )
+        assert abs(solver.budget[0].relative()) < 1e-14
+
+
+@pytest.mark.unit
+def test_the_budget_closes_with_everything_on_over_an_arbitrary_field() -> None:
+    """Inlet, outlet, walls, an obstacle, settling, deposition, diffusion and a
+    source on a seeded random face field that is not divergence-free: the
+    telescoping of ADR-011 F holds for any face velocities, so the residual
+    is rounding after 30 steps."""
+    config = transport_config(
+        1.6,
+        0.9,
+        16,
+        9,
+        boundaries={
+            "in": {
+                "type": "velocity_inlet",
+                "location": "left",
+                "y_start": 0.2,
+                "y_end": 0.7,
+                "velocity": 0.2,
+                "concentration": [3.0e5],
+            },
+            "out": {
+                "type": "pressure_outlet",
+                "location": "right",
+                "y_start": 0.1,
+                "y_end": 0.8,
+            },
+        },
+        obstacles=[
+            {"name": "b", "x_start": 0.6, "x_end": 0.9, "y_start": 0.3, "y_end": 0.5}
+        ],
+        diffusion_tol=1e-14,
+    )
+    mesh = Mesh(config)
+    physics = ParticlePhysics(config)
+    boundary = ConcentrationBoundary(mesh, config, physics, BoundaryRegistry(config))
+    solver = TransportSolver(mesh, config, physics, boundary)
+    faces = _random_faces(mesh, 21, scale=0.3)
+    rate = np.zeros((9, 16))
+    rate[4, 12] = 2.0e4
+    c = _random_field(mesh, 22) * 1e5
+    dt = solver.stable_dt(faces, 0)
+    for _ in range(30):
+        c = solver.solve_timestep(c, faces, 0, dt, sources=rate)
+    budget = solver.budget[0]
+    assert budget.inflow > 0.0 and budget.outflow > 0.0 and budget.source > 0.0
+    assert all(
+        budget.deposited[name] > 0.0
+        for name in ("floor", "ceiling", "wall", "obstacle")
+    )
+    assert abs(budget.relative()) < 1e-12
