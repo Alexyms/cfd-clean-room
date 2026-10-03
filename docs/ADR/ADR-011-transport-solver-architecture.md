@@ -584,8 +584,8 @@ zeros. Analytical solution: the initial field. Metrics as row 1, the centroid er
 
 | Metric | Measured | Threshold | Controls: unlimited QUICK under SSP-RK3; upwind |
 |---|---|---|---|
-| Peak retained | 75.3% | above 63% | 95.0%; 27.0% |
-| L2 error over the initial field's norm | 15.5% | below 23% | 7.4%; 66.7% |
+| Peak retained | 75.3% | above 62% | 95.0%; 27.0% |
+| L2 error over the initial field's norm | 15.5% | below 24% | 7.4%; 66.7% |
 | Minimum | 0 | no cell below zero | -3.9e-3 of the peak in 1851 cells; 0 |
 | Centroid error | 0.06 cells | within one cell | 0.00; 0.40 |
 
