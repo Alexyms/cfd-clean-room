@@ -26,6 +26,8 @@ behind them from the mesh and hands both in.
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+import numpy as np
+
 from src.config import BoundarySpec, SimConfig
 
 EDGES: tuple[str, str, str, str] = ("bottom", "top", "left", "right")
@@ -258,22 +260,26 @@ class BoundaryRegistry:
         return condition_of(found[1], edge)
 
     def coverage_along(
-        self, edge: str, coordinates: Sequence[float], solid: Sequence[bool]
+        self,
+        edge: str,
+        coordinates: np.ndarray | Sequence[float],
+        solid: np.ndarray | Sequence[bool],
     ) -> list[EdgeCoverage]:
         """Coverage at each of a run of points along an edge, SOLID cells read as walls.
 
         The one derivation of which faces a segment covers (REQ-S12.1).
-        Both boundary layers call it with the same coordinates and the same
-        SOLID mask, so they cannot disagree about a face.
+        Both boundary layers call it with the coordinates and SOLID mask
+        ``staggered.edge_cell_inputs`` derives once, so they cannot disagree
+        about a face.
 
         Parameters
         ----------
         edge : str
             One of "bottom", "top", "left", "right".
-        coordinates : Sequence[float]
+        coordinates : np.ndarray or Sequence[float]
             Positions along the edge in storage order: the cell centers for
             the edge's faces, or the face coordinates for its corners.
-        solid : Sequence[bool]
+        solid : np.ndarray or Sequence[bool]
             For each point, whether the cell behind it is SOLID. Same
             length as ``coordinates``.
 

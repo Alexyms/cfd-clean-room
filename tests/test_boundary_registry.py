@@ -230,7 +230,7 @@ COVERAGE_SEGMENTS = {
         "type": "velocity_inlet",
         "location": "top",
         "x_start": 0.25,
-        "x_end": 0.55,
+        "x_end": 0.5,
         "velocity": 0.3,
     },
     "later_inlet": {
@@ -255,8 +255,10 @@ class TestCoverageAlong:
 
     def test_segment_at_names_the_first_covering_segment_or_none(self) -> None:
         registry = BoundaryRegistry(_config(COVERAGE_SEGMENTS))
-        name, spec = registry.segment_at("top", 0.52)
+        name, spec = registry.segment_at("top", 0.45)
         assert name == "inlet" and spec is registry.spec("inlet")
+        # The two ranges meet at 0.5; the first in configuration order decides.
+        assert registry.segment_at("top", 0.5)[0] == "inlet"
         assert registry.segment_at("top", 0.7)[0] == "later_inlet"
         assert registry.segment_at("top", 0.9) is None
         assert registry.segment_at("bottom", 0.3) is None
@@ -275,7 +277,7 @@ class TestCoverageAlong:
             "inlet",
             None,
             "inlet",
-            "inlet",
+            "later_inlet",
             "later_inlet",
             "later_inlet",
             None,
@@ -289,7 +291,7 @@ class TestCoverageAlong:
             EdgeCondition("velocity_inlet", 0.0, -0.3),
             False,
         )
-        assert coverage[6].condition == EdgeCondition("velocity_inlet", 0.0, -0.7)
+        assert coverage[5].condition == EdgeCondition("velocity_inlet", 0.0, -0.7)
         for point, center in zip(coverage, centers, strict=True):
             if not point.solid:
                 assert point.condition == registry.condition_at("top", center)

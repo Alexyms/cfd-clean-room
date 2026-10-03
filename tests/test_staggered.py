@@ -7,12 +7,14 @@ import numpy as np
 import pytest
 
 from src.config import SimConfig
-from src.mesh import Mesh
+from src.mesh import SOLID, Mesh
 from src.staggered import (
     FaceVelocities,
     allocate_fields,
     cell_center_coordinates,
     check_staggered_pair,
+    edge_cell_inputs,
+    edge_cells,
     p_shape,
     to_cell_centers,
     u_face_coordinates,
@@ -22,7 +24,9 @@ from src.staggered import (
 )
 
 
-def _config(nx: int, ny: int, mesh: dict | None = None) -> SimConfig:
+def _config(
+    nx: int, ny: int, mesh: dict | None = None, obstacles: list[dict] | None = None
+) -> SimConfig:
     raw = {
         "domain": {"width": 2.0, "height": 1.0, "nx": nx, "ny": ny},
         "fluid": {"density": 1.2, "viscosity": 1.81e-5, "temperature": 293.0},
@@ -53,7 +57,7 @@ def _config(nx: int, ny: int, mesh: dict | None = None) -> SimConfig:
                 "velocity": 0.1,
             },
         },
-        "obstacles": [],
+        "obstacles": obstacles or [],
         "sensors": [{"name": "center", "x": 1.0, "y": 0.5}],
         "thresholds": {"0.1e-6": 100.0},
     }
@@ -220,3 +224,81 @@ class TestFaceVelocities:
         good = FaceVelocities.copy_of(u, v)
         again = FaceVelocities(good.u, good.v)
         assert again.u is good.u and again.v is good.v
+
+    def test_a_read_only_view_of_a_writeable_array_is_refused(self) -> None:
+        """Review 31 S4: the owner of the viewed array could still change the instance."""
+        u = np.zeros((5, 9))
+        v = np.zeros((6, 8))
+        u_view, v_view = u.view(), v.view()
+        u_view.flags.writeable = False
+        v_view.flags.writeable = False
+        with pytest.raises(ValueError, match="must own its data"):
+            FaceVelocities(u_view, v_view)
+        faces = FaceVelocities.copy_of(u_view, v_view)
+        u[0, 0] = 42.0
+        assert faces.u[0, 0] == 0.0
+
+    def test_instances_are_not_compared_or_hashed_by_value(self) -> None:
+        """eq=False: identity semantics, so == and hash never hit the ndarray truth value."""
+        a = FaceVelocities.copy_of(np.zeros((5, 9)), np.zeros((6, 8)))
+        b = FaceVelocities.copy_of(np.zeros((5, 9)), np.zeros((6, 8)))
+        assert a != b and a == a
+        assert len({a, b}) == 2
+
+
+@pytest.mark.unit
+class TestEdgeCells:
+    """The cells behind each edge's faces, and the inputs both boundary layers share."""
+
+    def test_each_edge_is_the_right_row_or_column_in_face_order(self) -> None:
+        """An asymmetric array, so a swapped or reversed edge shows."""
+        cell_type = np.arange(5 * 8).reshape(5, 8)
+        expected = {
+            "bottom": [0, 1, 2, 3, 4, 5, 6, 7],
+            "top": [32, 33, 34, 35, 36, 37, 38, 39],
+            "left": [0, 8, 16, 24, 32],
+            "right": [7, 15, 23, 31, 39],
+        }
+        for edge, cells in expected.items():
+            got = edge_cells(cell_type, edge)
+            assert got.tolist() == cells, edge
+            assert np.shares_memory(got, cell_type)
+
+    def test_unknown_edge_raises(self) -> None:
+        with pytest.raises(ValueError, match="unknown edge 'front'"):
+            edge_cells(np.zeros((2, 2)), "front")
+        with pytest.raises(ValueError, match="unknown edge"):
+            edge_cell_inputs(Mesh(_config(4, 3)), "north")
+
+    def test_edge_cell_inputs_are_the_centers_and_the_solid_mask(self) -> None:
+        """Against a mask built from the obstacle's own extents."""
+        raw_obstacles = [
+            {
+                "name": "floor",
+                "x_start": 0.62,
+                "x_end": 1.08,
+                "y_start": 0.0,
+                "y_end": 0.28,
+            },
+            {
+                "name": "right",
+                "x_start": 1.72,
+                "x_end": 2.0,
+                "y_start": 0.42,
+                "y_end": 0.78,
+            },
+        ]
+        mesh = Mesh(_config(20, 10, obstacles=raw_obstacles))
+        assert (mesh.cell_type == SOLID).sum() == 5 * 3 + 3 * 4
+        expected_solid = {
+            "bottom": [6 <= i <= 10 for i in range(20)],
+            "top": [False] * 20,
+            "left": [False] * 10,
+            "right": [4 <= j <= 7 for j in range(10)],
+        }
+        for edge, solid in expected_solid.items():
+            coordinates, mask = edge_cell_inputs(mesh, edge)
+            assert mask.tolist() == solid, edge
+            centers = mesh.xc if edge in ("bottom", "top") else mesh.yc
+            assert np.array_equal(coordinates, centers)
+            assert mask.shape == coordinates.shape

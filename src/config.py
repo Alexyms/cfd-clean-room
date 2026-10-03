@@ -5,6 +5,7 @@ load time, and provides typed attribute access. Satisfies REQ-C01
 (single source of truth) and REQ-C02 (fail-fast validation).
 """
 
+import math
 from dataclasses import dataclass, field
 from os import PathLike
 from pathlib import Path
@@ -40,10 +41,11 @@ class BoundarySpec:
     v_velocity : float or None
         Explicit v-component for velocity_inlet. When present,
         overrides the automatic normal decomposition of velocity.
-    concentration : list[float] or None
+    concentration : tuple[float, ...] or None
         Upstream concentration carried by a velocity_inlet, one
         non-negative value per configured particle class, particles per
-        cubic meter. None means a clean supply (ADR-011 E).
+        cubic meter. None means a clean supply (ADR-011 E). A tuple, so
+        the loaded configuration cannot be edited in place.
     hepa_filtered : bool
         velocity_inlet only. When True the carried concentration is
         reduced by the class's HEPA efficiency. Default False.
@@ -52,6 +54,11 @@ class BoundarySpec:
         edge's default surface for deposition. None means the edge
         decides (bottom is floor, top is ceiling, left and right are
         walls).
+
+    The three concentration keys are keyword-only. A velocity_inlet whose
+    prescribed normal component is zero (a tangential lid) admits no air
+    and is a wall to the scalar layer (ADR-011 E, amended 2026-10-03), so
+    it may carry neither ``concentration`` nor ``hepa_filtered``.
     """
 
     type: str
@@ -63,9 +70,9 @@ class BoundarySpec:
     velocity: float | None = None
     u_velocity: float | None = None
     v_velocity: float | None = None
-    concentration: list[float] | None = None
-    hepa_filtered: bool = False
-    deposition_surface: str | None = None
+    concentration: tuple[float, ...] | None = field(default=None, kw_only=True)
+    hepa_filtered: bool = field(default=False, kw_only=True)
+    deposition_surface: str | None = field(default=None, kw_only=True)
 
 
 @dataclass(frozen=True)
@@ -210,14 +217,33 @@ _SOLVER_KEYS: frozenset[str] = frozenset(
 # Transport section (ADR-011 I), optional: the velocity-only validation cases
 # do not carry it. The limited face scheme is bounded under forward Euler at
 # a Courant number of at most 1/2 (ADR-011 B); the bound is a property of the
-# scheme and lives here as a constant, and cfl_number is the fraction of it a
-# run uses.
+# scheme and lives here as a constant. cfl_number is the Courant number a run
+# advects at, at most the bound.
 CFL_NUMBER_BOUND = 0.5
 UMIST = "umist"
 UPWIND = "upwind"
 ADVECTION_SCHEMES: tuple[str, ...] = (UMIST, UPWIND)
 _TRANSPORT_KEYS: frozenset[str] = frozenset(
     {"cfl_number", "advection_scheme", "max_diffusion_iter", "diffusion_tol"}
+)
+
+# Every key a boundary segment accepts. With optional keys a misspelt one
+# would otherwise change the physics with no message (REQ-C02).
+_SEGMENT_KEYS: frozenset[str] = frozenset(
+    {
+        "type",
+        "location",
+        "x_start",
+        "x_end",
+        "y_start",
+        "y_end",
+        "velocity",
+        "u_velocity",
+        "v_velocity",
+        "concentration",
+        "hepa_filtered",
+        "deposition_surface",
+    }
 )
 
 # Surfaces a wall segment may name for deposition (ADR-011 E). The first
@@ -441,6 +467,12 @@ class SimConfig:
             if not isinstance(spec, dict):
                 raise ValueError(f"boundaries.{name} must be a mapping")
             ctx = f"boundaries.{name}"
+            for key in spec:
+                if key not in _SEGMENT_KEYS:
+                    raise ValueError(
+                        f"{ctx}.{key} is not a recognised boundary key; "
+                        f"known: {sorted(_SEGMENT_KEYS)}"
+                    )
             bc_type = self._require_string(spec, "type", ctx)
             if bc_type not in _VALID_BOUNDARY_TYPES:
                 raise ValueError(
@@ -499,6 +531,21 @@ class SimConfig:
                 bc_u_velocity = float(raw_u) if raw_u is not None else None
                 bc_v_velocity = float(raw_v) if raw_v is not None else None
 
+                # A zero normal component (a tangential lid) admits no air: the
+                # scalar layer treats the segment as a wall, so the inlet
+                # concentration keys have nothing to describe.
+                normal = (
+                    bc_v_velocity if bc_location in ("top", "bottom") else bc_u_velocity
+                )
+                if has_components and not normal:
+                    for key in ("concentration", "hepa_filtered"):
+                        if key in spec:
+                            raise ValueError(
+                                f"{ctx}.{key} is not valid on a velocity_inlet whose "
+                                "normal velocity is zero: no air crosses it and the "
+                                "scalar layer treats it as a wall"
+                            )
+
             # Coordinate validation based on boundary orientation
             bc_x_start = None
             bc_x_end = None
@@ -538,7 +585,9 @@ class SimConfig:
                 self._require_segment_type(
                     spec, "concentration", ctx, bc_type, "velocity_inlet"
                 )
-                bc_concentration = self._require_float_list(spec, "concentration", ctx)
+                bc_concentration = tuple(
+                    self._require_float_list(spec, "concentration", ctx)
+                )
                 n_classes = len(self.particle_sizes)
                 if len(bc_concentration) != n_classes:
                     raise ValueError(
@@ -591,6 +640,8 @@ class SimConfig:
                 hepa_filtered=bc_hepa_filtered,
                 deposition_surface=bc_deposition_surface,
             )
+
+        self._reject_overlapping_segments()
 
         # Obstacles (optional)
         obstacles_raw = raw.get("obstacles", [])
@@ -670,6 +721,38 @@ class SimConfig:
             if val < 0:
                 raise ValueError(f"thresholds.{key} must be non-negative, got {val}")
             self.thresholds[str(key)] = float(val)
+
+    def _reject_overlapping_segments(self) -> None:
+        """Raise if two segments on one edge overlap.
+
+        Where two ranges intersect in more than a point the file describes
+        two conditions for one face; the registry would give the face to
+        the first segment and a reader counting by segment would count it
+        twice. Ranges that meet at one coordinate are allowed, and the
+        first segment in configuration order decides there.
+        """
+        names = list(self.boundaries)
+        for i, a_name in enumerate(names):
+            a = self.boundaries[a_name]
+            a0, a1 = self._segment_range(a)
+            for b_name in names[i + 1 :]:
+                b = self.boundaries[b_name]
+                if b.location != a.location:
+                    continue
+                b0, b1 = self._segment_range(b)
+                if a0 < b1 and b0 < a1:
+                    raise ValueError(
+                        f"boundaries.{a_name} and boundaries.{b_name} overlap on "
+                        f"the {a.location} edge ([{a0}, {a1}] and [{b0}, {b1}]); "
+                        "segments on one edge must not overlap"
+                    )
+
+    @staticmethod
+    def _segment_range(spec: BoundarySpec) -> tuple[float, float]:
+        """The segment's range along its edge."""
+        if spec.location in ("top", "bottom"):
+            return spec.x_start, spec.x_end
+        return spec.y_start, spec.y_end
 
     # -- Validation helpers --------------------------------------------------
 
@@ -789,30 +872,35 @@ class SimConfig:
         return val
 
     @staticmethod
-    def _require_float(section: dict, key: str, context: str) -> float:
-        """Require a numeric value, return as float."""
-        if key not in section:
-            raise ValueError(f"Missing required key: '{context}.{key}'")
-        val = section[key]
+    def _finite_number(val: object, label: str) -> float:
+        """A finite float from a non-bool number; TypeError or ValueError otherwise.
+
+        Every numeric key passes through here (REQ-C02): a bool is an int in
+        Python and NaN compares false against every bound, so neither is
+        caught by a range check alone.
+        """
         if isinstance(val, bool) or not isinstance(val, (int, float)):
-            raise TypeError(
-                f"{context}.{key} must be a number, got {type(val).__name__}"
-            )
+            raise TypeError(f"{label} must be a number, got {type(val).__name__}")
+        if not math.isfinite(val):
+            raise ValueError(f"{label} must be finite, got {val}")
         return float(val)
 
-    @staticmethod
-    def _require_positive_float(section: dict, key: str, context: str) -> float:
-        """Require a positive numeric value, return as float."""
+    @classmethod
+    def _require_float(cls, section: dict, key: str, context: str) -> float:
+        """Require a finite numeric value, return as float."""
         if key not in section:
             raise ValueError(f"Missing required key: '{context}.{key}'")
-        val = section[key]
-        if isinstance(val, bool) or not isinstance(val, (int, float)):
-            raise TypeError(
-                f"{context}.{key} must be a number, got {type(val).__name__}"
-            )
+        return cls._finite_number(section[key], f"{context}.{key}")
+
+    @classmethod
+    def _require_positive_float(cls, section: dict, key: str, context: str) -> float:
+        """Require a positive finite numeric value, return as float."""
+        if key not in section:
+            raise ValueError(f"Missing required key: '{context}.{key}'")
+        val = cls._finite_number(section[key], f"{context}.{key}")
         if val <= 0:
             raise ValueError(f"{context}.{key} must be positive, got {val}")
-        return float(val)
+        return val
 
     @classmethod
     def _optional_positive_float(
@@ -837,28 +925,24 @@ class SimConfig:
             raise ValueError(f"{context}.{key} must be positive, got {val}")
         return val
 
-    @staticmethod
-    def _require_float_list(section: dict, key: str, context: str) -> list[float]:
-        """Require a list of numeric values, return as list of floats."""
+    @classmethod
+    def _require_float_list(cls, section: dict, key: str, context: str) -> list[float]:
+        """Require a list of finite numeric values, return as list of floats."""
         if key not in section:
             raise ValueError(f"Missing required key: '{context}.{key}'")
         val = section[key]
         if not isinstance(val, list):
             raise TypeError(f"{context}.{key} must be a list, got {type(val).__name__}")
-        result = []
-        for i, item in enumerate(val):
-            if isinstance(item, bool) or not isinstance(item, (int, float)):
-                raise TypeError(
-                    f"{context}.{key}[{i}] must be a number, got {type(item).__name__}"
-                )
-            result.append(float(item))
-        return result
+        return [
+            cls._finite_number(item, f"{context}.{key}[{i}]")
+            for i, item in enumerate(val)
+        ]
 
-    @staticmethod
+    @classmethod
     def _require_positive_float_list(
-        section: dict, key: str, context: str
+        cls, section: dict, key: str, context: str
     ) -> list[float]:
-        """Require a list of positive numeric values, return as list of floats."""
+        """Require a list of positive finite numeric values, return as list of floats."""
         if key not in section:
             raise ValueError(f"Missing required key: '{context}.{key}'")
         val = section[key]
@@ -868,17 +952,14 @@ class SimConfig:
             raise ValueError(f"{context}.{key} must not be empty")
         result = []
         for i, item in enumerate(val):
-            if isinstance(item, bool) or not isinstance(item, (int, float)):
-                raise TypeError(
-                    f"{context}.{key}[{i}] must be a number, got {type(item).__name__}"
-                )
-            if item <= 0:
+            number = cls._finite_number(item, f"{context}.{key}[{i}]")
+            if number <= 0:
                 raise ValueError(f"{context}.{key}[{i}] must be positive, got {item}")
-            result.append(float(item))
+            result.append(number)
         return result
 
-    @staticmethod
-    def _require_relaxation_factor(section: dict, key: str, context: str) -> float:
+    @classmethod
+    def _require_relaxation_factor(cls, section: dict, key: str, context: str) -> float:
         """Require a relaxation factor in the range (0.0, 1.0].
 
         Zero is rejected because it causes division by zero in
@@ -886,11 +967,7 @@ class SimConfig:
         """
         if key not in section:
             raise ValueError(f"Missing required key: '{context}.{key}'")
-        val = section[key]
-        if isinstance(val, bool) or not isinstance(val, (int, float)):
-            raise TypeError(
-                f"{context}.{key} must be a number, got {type(val).__name__}"
-            )
+        val = cls._finite_number(section[key], f"{context}.{key}")
         if val <= 0.0 or val > 1.0:
             raise ValueError(f"{context}.{key} must be in (0.0, 1.0], got {val}")
-        return float(val)
+        return val

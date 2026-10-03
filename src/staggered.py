@@ -33,7 +33,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from src.mesh import Mesh
+from src.mesh import SOLID, Mesh
 
 
 def u_shape(mesh: Mesh) -> tuple[int, int]:
@@ -157,6 +157,38 @@ def edge_cells(cell_type: np.ndarray, edge: str) -> np.ndarray:
     raise ValueError(f"unknown edge '{edge}'; use bottom, top, left or right")
 
 
+def edge_cell_inputs(mesh: Mesh, edge: str) -> tuple[np.ndarray, np.ndarray]:
+    """The cell coordinates along an edge and the SOLID mask behind its faces.
+
+    The two inputs ``BoundaryRegistry.coverage_along`` takes, derived here
+    once so that the velocity layer and the concentration layer ask the same
+    question of the registry and cannot disagree about which faces an edge
+    has or which of them sit behind an obstacle (REQ-S12.1).
+
+    Parameters
+    ----------
+    mesh : Mesh
+        Supplies ``xc``, ``yc`` and ``cell_type``.
+    edge : str
+        One of "bottom", "top", "left", "right".
+
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray]
+        ``(coordinates, solid)``: the cell-center coordinates along the edge
+        in face order (``xc`` on the bottom and top edges, ``yc`` on the left
+        and right) and, for each, whether the cell behind the face is SOLID.
+
+    Raises
+    ------
+    ValueError
+        On an unknown edge name.
+    """
+    solid = edge_cells(mesh.cell_type, edge) == SOLID
+    coordinates = mesh.xc if edge in ("bottom", "top") else mesh.yc
+    return coordinates, solid
+
+
 def check_staggered_pair(u: np.ndarray, v: np.ndarray) -> None:
     """Raise unless u and v are a consistent staggered pair.
 
@@ -183,7 +215,7 @@ def check_staggered_pair(u: np.ndarray, v: np.ndarray) -> None:
         )
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class FaceVelocities:
     """Face velocities on their staggered storage locations (REQ-S13, ADR-011 A).
 
@@ -207,7 +239,9 @@ class FaceVelocities:
     ------
     ValueError
         If the shapes are not a consistent staggered pair, or either array
-        is not float64, C-contiguous and read-only.
+        is not float64, C-contiguous, read-only and the owner of its data.
+        A read-only view of a writeable array is refused: its owner could
+        still change the instance.
     """
 
     u: np.ndarray
@@ -216,14 +250,23 @@ class FaceVelocities:
     def __post_init__(self) -> None:
         check_staggered_pair(self.u, self.v)
         for name, arr in (("u", self.u), ("v", self.v)):
-            if arr.dtype != np.float64 or not arr.flags["C_CONTIGUOUS"]:
+            if arr.dtype != np.float64:
                 raise ValueError(
-                    f"FaceVelocities.{name} must be float64 and C-contiguous, "
-                    f"got {arr.dtype} with flags {arr.flags['C_CONTIGUOUS']}"
+                    f"FaceVelocities.{name} must be float64, got {arr.dtype}"
+                )
+            if not arr.flags["C_CONTIGUOUS"]:
+                raise ValueError(
+                    f"FaceVelocities.{name} must be C-contiguous "
+                    f"(C_CONTIGUOUS is {arr.flags['C_CONTIGUOUS']})"
                 )
             if arr.flags.writeable:
                 raise ValueError(
                     f"FaceVelocities.{name} must be read-only; build with copy_of"
+                )
+            if not arr.flags.owndata:
+                raise ValueError(
+                    f"FaceVelocities.{name} must own its data, not view another "
+                    "array's; build with copy_of"
                 )
 
     @classmethod

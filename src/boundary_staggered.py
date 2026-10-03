@@ -33,8 +33,11 @@ On the staggered grid a BOUNDARY cell is an ordinary cell that touches an
 edge. A SOLID cell on an edge is a wall whatever segment the configuration
 puts there, because the obstacle is what bounds the flow at that face. Which
 segment covers each edge cell, with that rule applied, is read from the
-registry's ``coverage_along``, the derivation the concentration layer reads
-too (REQ-S12.1); nothing here decides coverage on its own.
+registry's ``coverage_along`` on the coordinates and SOLID mask
+``staggered.edge_cell_inputs`` derives, the same call the concentration
+layer makes (REQ-S12.1); nothing here decides coverage or its inputs on its
+own, and the inlet flux is attributed to a segment by the name that
+coverage gives each face.
 """
 
 from dataclasses import dataclass
@@ -47,11 +50,11 @@ from src.boundary_registry import (
     VELOCITY_INLET,
     BoundaryRegistry,
     EdgeCondition,
-    covers,
+    EdgeCoverage,
 )
 from src.config import SimConfig
-from src.mesh import SOLID, Mesh
-from src.staggered import edge_cells, u_shape, v_shape
+from src.mesh import Mesh
+from src.staggered import edge_cell_inputs, u_shape, v_shape
 
 # Sign that turns the prescribed normal component into flow into the domain.
 _INWARD_SIGN: dict[str, float] = {
@@ -137,16 +140,16 @@ class StaggeredBoundary:
         self._u_shape = u_shape(mesh)
         self._v_shape = v_shape(mesh)
 
-        # Conditions at the cell positions along each edge, from the shared
-        # coverage so every query below and the scalar layer see one answer.
-        self._cell_conditions: dict[str, list[EdgeCondition]] = {}
-        for edge in EDGES:
-            self._cell_conditions[edge] = [
-                point.condition
-                for point in self._registry.coverage_along(
-                    edge, self._cell_coordinates(edge), self._solid_along(edge)
-                )
-            ]
+        # Coverage at the cell positions along each edge, from the shared
+        # derivation so every query below and the scalar layer see one answer.
+        self._cell_coverage: dict[str, list[EdgeCoverage]] = {
+            edge: self._registry.coverage_along(edge, *edge_cell_inputs(mesh, edge))
+            for edge in EDGES
+        }
+        self._cell_conditions: dict[str, list[EdgeCondition]] = {
+            edge: [point.condition for point in coverage]
+            for edge, coverage in self._cell_coverage.items()
+        }
 
         self._normal_dirichlet: dict[str, np.ndarray] = {}
         self._normal_value: dict[str, np.ndarray] = {}
@@ -165,12 +168,6 @@ class StaggeredBoundary:
     # ------------------------------------------------------------------
     # Geometry helpers
     # ------------------------------------------------------------------
-
-    def _cell_coordinates(self, edge: str) -> np.ndarray:
-        """Cell-center coordinates along an edge: xc on top/bottom, yc on left/right."""
-        if edge in ("top", "bottom"):
-            return self._mesh.xc
-        return self._mesh.yc
 
     def _face_coordinates(self, edge: str) -> np.ndarray:
         """Tangential storage coordinates along an edge: x on top/bottom, y on left/right."""
@@ -196,7 +193,7 @@ class StaggeredBoundary:
 
     def _solid_along(self, edge: str) -> np.ndarray:
         """Boolean per cell along an edge, True where that cell is SOLID."""
-        return edge_cells(self._mesh.cell_type, edge) == SOLID
+        return edge_cell_inputs(self._mesh, edge)[1]
 
     @staticmethod
     def _normal_component(condition: EdgeCondition, edge: str) -> float:
@@ -345,10 +342,11 @@ class StaggeredBoundary:
     def get_inlet_flux(self, boundary_name: str) -> float:
         """Volumetric flux into the domain through a named velocity inlet.
 
-        The sum over the inlet's edge faces of the prescribed normal
-        velocity, signed into the domain, times the face width from the
-        mesh. Every term is a face value at the domain boundary, so the sum
-        is exact on uniform and stretched meshes alike.
+        The sum over the faces the shared coverage gives to this segment of
+        the prescribed normal velocity, signed into the domain, times the
+        face width from the mesh. Every term is a face value at the domain
+        boundary, so the sum is exact on uniform and stretched meshes alike,
+        and every face is counted for one segment at most.
 
         Parameters
         ----------
@@ -371,16 +369,14 @@ class StaggeredBoundary:
         edge = spec.location
         flux = 0.0
         widths = self._face_widths(edge)
-        for k, (coord, condition) in enumerate(
-            zip(self._cell_coordinates(edge), self._cell_conditions[edge], strict=True)
-        ):
-            if condition.bc_type != VELOCITY_INLET:
+        for k, point in enumerate(self._cell_coverage[edge]):
+            if point.name != boundary_name:
                 continue
-            if not covers(spec, edge, float(coord)):
+            if point.condition.bc_type != VELOCITY_INLET:
                 continue
             flux += (
                 _INWARD_SIGN[edge]
-                * self._normal_component(condition, edge)
+                * self._normal_component(point.condition, edge)
                 * float(widths[k])
             )
         return flux
