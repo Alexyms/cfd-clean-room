@@ -178,7 +178,7 @@ ECR-001 rebuilt the solver on a staggered grid in nine steps (2026-09-20 to 2026
 |---------|-------------|-----------|--------|
 | VAL-003 | Pure diffusion | L2 error < 1% vs analytical Gaussian | NOT RUN |
 | VAL-004 | Pulse advection, oblique channel pulse (ADR-011 H, row 1) | Centroid error < 1 cell; peak retained > 73% and L2 error vs the exact translate < 17% (1.5 times the measured 82.2% and 11.3% of the chosen scheme at Courant number 0.1, results/builder30b/pulse_2d.json); no cell below zero | NOT RUN |
-| VAL-004 | Pulse advection, rotating puff (row 2) | After one revolution: centroid error < 1 cell; peak retained > 63% and L2 error vs the initial field < 23% (1.5 times the measured 75.3% and 15.5%); no cell below zero | NOT RUN |
+| VAL-004 | Pulse advection, rotating puff (row 2) | After one revolution: centroid error < 1 cell; peak retained > 62% and L2 error vs the initial field < 24% (1.5 times the measured 75.3% and 15.5%, rounded outward); no cell below zero | NOT RUN |
 | VAL-007 | Mass conservation | Imbalance < 0.01% of total mass | NOT RUN |
 | VAL-012 | Constancy (REQ-T11) | Largest per-cell relative departure of a uniform field below max_P |b_P| T / (rho V_P) and above a tenth of it; a perturbed interior face must exceed the bound | NOT RUN |
 | VAL-013 | Smith-Hutton (REQ-T12) | Every cell within [1 - tanh(10), 1 + tanh(10)] of the reference concentration at every step, exact to rounding; outlet profile reported unscored | NOT RUN |
