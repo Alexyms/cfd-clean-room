@@ -36,8 +36,8 @@ responsibility = "Computes per-size-class transport properties: Cunningham corre
 serves = ["REQ-T03", "REQ-T04", "REQ-T09", "REQ-T10"]
 
 [modules."src/staggered.py"]
-responsibility = "Defines the staggered (MAC) field layout: shapes and allocation of face-centered u and v and cell-centered p, and the face-to-center averaging the solver applies before returning."
-serves = ["REQ-S07"]
+responsibility = "Defines the staggered (MAC) field layout: shapes and allocation of face-centered u and v and cell-centered p, the face-to-center averaging the solver applies before returning, and FaceVelocities, the read-only face pair the solver exposes and the transport solver advects with."
+serves = ["REQ-S07", "REQ-S13"]
 
 [modules."src/pressure.py"]
 responsibility = "Assembles the staggered pressure correction equation from the momentum diagonals with the discrete divergence of u* as its right-hand side, solves it by weighted Jacobi iteration, corrects the face velocities and updates the pressure."
