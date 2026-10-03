@@ -40,6 +40,18 @@ class BoundarySpec:
     v_velocity : float or None
         Explicit v-component for velocity_inlet. When present,
         overrides the automatic normal decomposition of velocity.
+    concentration : list[float] or None
+        Upstream concentration carried by a velocity_inlet, one
+        non-negative value per configured particle class, particles per
+        cubic meter. None means a clean supply (ADR-011 E).
+    hepa_filtered : bool
+        velocity_inlet only. When True the carried concentration is
+        reduced by the class's HEPA efficiency. Default False.
+    deposition_surface : str or None
+        wall only: "floor", "ceiling", "wall" or "none", overriding the
+        edge's default surface for deposition. None means the edge
+        decides (bottom is floor, top is ceiling, left and right are
+        walls).
     """
 
     type: str
@@ -51,6 +63,9 @@ class BoundarySpec:
     velocity: float | None = None
     u_velocity: float | None = None
     v_velocity: float | None = None
+    concentration: list[float] | None = None
+    hepa_filtered: bool = False
+    deposition_surface: str | None = None
 
 
 @dataclass(frozen=True)
@@ -135,6 +150,32 @@ class StretchSpec:
     min_spacing: float | None = None
 
 
+@dataclass(frozen=True)
+class TransportSpec:
+    """The transport section: what the scalar solver reads (ADR-011 I).
+
+    Parameters
+    ----------
+    cfl_number : float
+        Courant number the explicit advection step runs at, in
+        (0, CFL_NUMBER_BOUND]. An accuracy choice below the bound: the
+        forward Euler error grows with it.
+    advection_scheme : str
+        "umist" (QUICK bounded by the UMIST limiter, the default) or
+        "upwind" (first order, the comparison scheme).
+    max_diffusion_iter : int
+        Cap on Jacobi sweeps of the implicit diffusion and deposition
+        system per class per step.
+    diffusion_tol : float
+        Tolerance the implicit diffusion solve iterates to.
+    """
+
+    cfl_number: float
+    advection_scheme: str
+    max_diffusion_iter: int
+    diffusion_tol: float
+
+
 _VALID_BOUNDARY_TYPES: set[str] = {"velocity_inlet", "pressure_outlet", "wall"}
 _VALID_BOUNDARY_LOCATIONS: set[str] = {"top", "bottom", "left", "right"}
 
@@ -164,6 +205,33 @@ _SOLVER_KEYS: frozenset[str] = frozenset(
         "iteration_error_tol",
         "mass_imbalance_tol",
     }
+)
+
+# Transport section (ADR-011 I), optional: the velocity-only validation cases
+# do not carry it. The limited face scheme is bounded under forward Euler at
+# a Courant number of at most 1/2 (ADR-011 B); the bound is a property of the
+# scheme and lives here as a constant, and cfl_number is the fraction of it a
+# run uses.
+CFL_NUMBER_BOUND = 0.5
+UMIST = "umist"
+UPWIND = "upwind"
+ADVECTION_SCHEMES: tuple[str, ...] = (UMIST, UPWIND)
+_TRANSPORT_KEYS: frozenset[str] = frozenset(
+    {"cfl_number", "advection_scheme", "max_diffusion_iter", "diffusion_tol"}
+)
+
+# Surfaces a wall segment may name for deposition (ADR-011 E). The first
+# three are the orientations ParticlePhysics.deposition_velocity accepts;
+# "none" switches deposition off on the segment.
+DEPOSITION_FLOOR = "floor"
+DEPOSITION_CEILING = "ceiling"
+DEPOSITION_WALL = "wall"
+DEPOSITION_NONE = "none"
+DEPOSITION_SURFACES: tuple[str, ...] = (
+    DEPOSITION_FLOOR,
+    DEPOSITION_CEILING,
+    DEPOSITION_WALL,
+    DEPOSITION_NONE,
 )
 
 
@@ -358,6 +426,12 @@ class SimConfig:
             solver, "mass_imbalance_tol", "solver", DEFAULT_MASS_IMBALANCE_TOL
         )
 
+        # Transport (optional). Unknown keys raise as they do in the solver
+        # block, so a misspelt key cannot fall back to a default.
+        self.transport: TransportSpec | None = None
+        if "transport" in raw:
+            self.transport = self._parse_transport(raw["transport"])
+
         # Boundaries
         boundaries_raw = self._require_section(raw, "boundaries")
         if not isinstance(boundaries_raw, dict):
@@ -457,6 +531,52 @@ class SimConfig:
                         f"outside domain [0, {self.room_height}]"
                     )
 
+            # Concentration keys (ADR-011 E). Each is allowed on one segment
+            # type only, so a key on the wrong type is an error, not ignored.
+            bc_concentration = None
+            if "concentration" in spec:
+                self._require_segment_type(
+                    spec, "concentration", ctx, bc_type, "velocity_inlet"
+                )
+                bc_concentration = self._require_float_list(spec, "concentration", ctx)
+                n_classes = len(self.particle_sizes)
+                if len(bc_concentration) != n_classes:
+                    raise ValueError(
+                        f"{ctx}.concentration must have one value per particle "
+                        f"class ({n_classes}), got {len(bc_concentration)}"
+                    )
+                for i, value in enumerate(bc_concentration):
+                    if value < 0:
+                        raise ValueError(
+                            f"{ctx}.concentration[{i}] must be non-negative, "
+                            f"got {value}"
+                        )
+            bc_hepa_filtered = False
+            if "hepa_filtered" in spec:
+                self._require_segment_type(
+                    spec, "hepa_filtered", ctx, bc_type, "velocity_inlet"
+                )
+                raw_flag = spec["hepa_filtered"]
+                if not isinstance(raw_flag, bool):
+                    raise TypeError(
+                        f"{ctx}.hepa_filtered must be a bool, "
+                        f"got {type(raw_flag).__name__}"
+                    )
+                bc_hepa_filtered = raw_flag
+            bc_deposition_surface = None
+            if "deposition_surface" in spec:
+                self._require_segment_type(
+                    spec, "deposition_surface", ctx, bc_type, "wall"
+                )
+                bc_deposition_surface = self._require_string(
+                    spec, "deposition_surface", ctx
+                )
+                if bc_deposition_surface not in DEPOSITION_SURFACES:
+                    raise ValueError(
+                        f"{ctx}.deposition_surface must be one of "
+                        f"{list(DEPOSITION_SURFACES)}, got '{bc_deposition_surface}'"
+                    )
+
             self.boundaries[name] = BoundarySpec(
                 type=bc_type,
                 location=bc_location,
@@ -467,6 +587,9 @@ class SimConfig:
                 velocity=bc_velocity,
                 u_velocity=bc_u_velocity,
                 v_velocity=bc_v_velocity,
+                concentration=bc_concentration,
+                hepa_filtered=bc_hepa_filtered,
+                deposition_surface=bc_deposition_surface,
             )
 
         # Obstacles (optional)
@@ -593,6 +716,58 @@ class SimConfig:
                 )
             return StretchSpec(ratio=ratio, min_spacing=None)
         return StretchSpec()
+
+    @classmethod
+    def _parse_transport(cls, section: object) -> TransportSpec:
+        """Parse the transport section into a TransportSpec.
+
+        ``cfl_number`` must lie in (0, CFL_NUMBER_BOUND]; ``advection_scheme``
+        defaults to umist; the other two keys are required. Any other key
+        raises.
+        """
+        if not isinstance(section, dict):
+            raise ValueError("transport must be a mapping")
+        for key in section:
+            if key not in _TRANSPORT_KEYS:
+                raise ValueError(
+                    f"transport.{key} is not a recognised transport key; "
+                    f"known: {sorted(_TRANSPORT_KEYS)}"
+                )
+        cfl_number = cls._require_positive_float(section, "cfl_number", "transport")
+        if cfl_number > CFL_NUMBER_BOUND:
+            raise ValueError(
+                f"transport.cfl_number must be in (0, {CFL_NUMBER_BOUND}], the "
+                f"limited scheme's stability bound, got {cfl_number}"
+            )
+        scheme = UMIST
+        if "advection_scheme" in section:
+            scheme = cls._require_string(section, "advection_scheme", "transport")
+            if scheme not in ADVECTION_SCHEMES:
+                raise ValueError(
+                    f"transport.advection_scheme must be one of "
+                    f"{list(ADVECTION_SCHEMES)}, got '{scheme}'"
+                )
+        return TransportSpec(
+            cfl_number=cfl_number,
+            advection_scheme=scheme,
+            max_diffusion_iter=cls._require_positive_int(
+                section, "max_diffusion_iter", "transport"
+            ),
+            diffusion_tol=cls._require_positive_float(
+                section, "diffusion_tol", "transport"
+            ),
+        )
+
+    @staticmethod
+    def _require_segment_type(
+        section: dict, key: str, context: str, bc_type: str, allowed: str
+    ) -> None:
+        """Raise unless a segment key sits on the one segment type it is valid for."""
+        if key in section and bc_type != allowed:
+            raise ValueError(
+                f"{context}.{key} is only valid on a {allowed} segment, "
+                f"got type '{bc_type}'"
+            )
 
     @staticmethod
     def _require_section(raw: dict, key: str) -> dict | list:

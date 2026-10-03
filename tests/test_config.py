@@ -10,7 +10,8 @@ from pathlib import Path
 import pytest
 import yaml
 
-from src.config import SimConfig
+from src.config import CFL_NUMBER_BOUND, SimConfig, TransportSpec
+from validation.cases import CONFIG_DIR, load_case
 
 
 def _write_config(tmp_path, overrides: dict | None = None) -> str:
@@ -189,6 +190,26 @@ class TestSimConfigValid:
         assert config.room_width == 8.0
         assert len(config.sensors) == 4
         assert len(config.obstacles) == 4
+
+    def test_default_yaml_carries_the_transport_section_and_a_filtered_supply(
+        self,
+    ) -> None:
+        """The product case reads its transport block and marks hepa_supply filtered."""
+        config = SimConfig(CONFIG_DIR / "clean_room_default.yaml")
+        assert config.transport == TransportSpec(
+            cfl_number=0.1,
+            advection_scheme="umist",
+            max_diffusion_iter=200,
+            diffusion_tol=1e-8,
+        )
+        supply = config.boundaries["hepa_supply"]
+        assert supply.hepa_filtered is True
+        assert supply.concentration is None
+        for name, spec in config.boundaries.items():
+            if name != "hepa_supply":
+                assert spec.hepa_filtered is False
+            assert spec.concentration is None
+            assert spec.deposition_surface is None
 
 
 @pytest.mark.unit
@@ -1136,3 +1157,202 @@ class TestStoppingRuleKeys:
             ValueError, match=r"solver\.stoping_rule is not a recognised"
         ):
             SimConfig.from_dict(self._raw(tmp_path, stoping_rule="error_estimate"))
+
+
+@pytest.mark.unit
+class TestTransportSection:
+    """The optional transport section (ADR-011 I): defaults, ranges, types, unknown keys."""
+
+    def _raw(self, tmp_path: Path, transport: object = None, **keys: object) -> dict:
+        with open(_write_config(tmp_path), encoding="utf-8") as handle:
+            raw = yaml.safe_load(handle)
+        if transport is None:
+            transport = {
+                "cfl_number": 0.1,
+                "max_diffusion_iter": 200,
+                "diffusion_tol": 1e-8,
+            } | keys
+        raw["transport"] = transport
+        return raw
+
+    def test_absent_section_gives_none(self, tmp_path: Path) -> None:
+        """The velocity-only validation cases carry no transport block."""
+        assert SimConfig(_write_config(tmp_path)).transport is None
+        assert load_case("poiseuille").transport is None
+        assert load_case("cavity").transport is None
+
+    def test_present_section_is_read_with_umist_the_default(
+        self, tmp_path: Path
+    ) -> None:
+        spec = SimConfig.from_dict(self._raw(tmp_path)).transport
+        assert spec == TransportSpec(
+            cfl_number=0.1,
+            advection_scheme="umist",
+            max_diffusion_iter=200,
+            diffusion_tol=1e-8,
+        )
+        given = SimConfig.from_dict(
+            self._raw(tmp_path, advection_scheme="upwind", cfl_number=CFL_NUMBER_BOUND)
+        ).transport
+        assert (given.advection_scheme, given.cfl_number) == ("upwind", 0.5)
+
+    @pytest.mark.parametrize(
+        ("key", "bad", "error"),
+        [
+            ("cfl_number", 0.0, ValueError),
+            ("cfl_number", -0.1, ValueError),
+            ("cfl_number", 0.5000001, ValueError),
+            ("cfl_number", 1.0, ValueError),
+            ("cfl_number", True, TypeError),
+            ("cfl_number", "0.1", TypeError),
+            ("advection_scheme", "quick", ValueError),
+            ("advection_scheme", 1, TypeError),
+            ("max_diffusion_iter", 0, ValueError),
+            ("max_diffusion_iter", -5, ValueError),
+            ("max_diffusion_iter", 2.5, TypeError),
+            ("max_diffusion_iter", True, TypeError),
+            ("diffusion_tol", 0.0, ValueError),
+            ("diffusion_tol", -1e-8, ValueError),
+            ("diffusion_tol", False, TypeError),
+        ],
+    )
+    def test_bad_values_are_rejected(
+        self, tmp_path: Path, key: str, bad: object, error: type[Exception]
+    ) -> None:
+        """Out of range, the wrong type, or a bool where a number is expected."""
+        with pytest.raises(error, match=f"transport.{key}"):
+            SimConfig.from_dict(self._raw(tmp_path, **{key: bad}))
+
+    @pytest.mark.parametrize(
+        "key", ["cfl_number", "max_diffusion_iter", "diffusion_tol"]
+    )
+    def test_missing_required_key_raises(self, tmp_path: Path, key: str) -> None:
+        raw = self._raw(tmp_path)
+        del raw["transport"][key]
+        with pytest.raises(ValueError, match=f"transport.{key}"):
+            SimConfig.from_dict(raw)
+
+    def test_unknown_key_and_non_mapping_are_rejected(self, tmp_path: Path) -> None:
+        """A misspelt key would otherwise run its default, as review 24 B1 found for solver."""
+        with pytest.raises(
+            ValueError, match=r"transport\.cfl_numbre is not a recognised"
+        ):
+            SimConfig.from_dict(self._raw(tmp_path, cfl_numbre=0.1))
+        with pytest.raises(ValueError, match="transport must be a mapping"):
+            SimConfig.from_dict(self._raw(tmp_path, transport=[0.1]))
+
+
+WALL_SEGMENT = {"type": "wall", "location": "left", "y_start": 0.0, "y_end": 3.0}
+OUTLET_SEGMENT = {
+    "type": "pressure_outlet",
+    "location": "bottom",
+    "x_start": 0.0,
+    "x_end": 1.0,
+}
+
+
+@pytest.mark.unit
+class TestSegmentKeys:
+    """concentration, hepa_filtered and deposition_surface on a segment (ADR-011 E)."""
+
+    def _raw(self, tmp_path: Path, segment: str, **keys: object) -> dict:
+        with open(_write_config(tmp_path), encoding="utf-8") as handle:
+            raw = yaml.safe_load(handle)
+        raw["boundaries"]["door"] = dict(WALL_SEGMENT)
+        raw["boundaries"]["floor_return"] = dict(OUTLET_SEGMENT)
+        raw["boundaries"][segment].update(keys)
+        return raw
+
+    def test_absent_keys_give_the_defaults(self, tmp_path: Path) -> None:
+        """No concentration (a clean supply), not filtered, the edge decides the surface."""
+        config = SimConfig.from_dict(self._raw(tmp_path, "door"))
+        for spec in config.boundaries.values():
+            assert spec.concentration is None
+            assert spec.hepa_filtered is False
+            assert spec.deposition_surface is None
+
+    def test_present_keys_are_read(self, tmp_path: Path) -> None:
+        raw = self._raw(
+            tmp_path,
+            "hepa_supply",
+            concentration=[1, 2.5, 0, 4, 5e3],
+            hepa_filtered=True,
+        )
+        raw["boundaries"]["door"]["deposition_surface"] = "none"
+        config = SimConfig.from_dict(raw)
+        supply = config.boundaries["hepa_supply"]
+        assert supply.concentration == [1.0, 2.5, 0.0, 4.0, 5000.0]
+        assert all(isinstance(c, float) for c in supply.concentration)
+        assert supply.hepa_filtered is True
+        assert config.boundaries["door"].deposition_surface == "none"
+        for surface in ("floor", "ceiling", "wall"):
+            raw["boundaries"]["door"]["deposition_surface"] = surface
+            assert (
+                SimConfig.from_dict(raw).boundaries["door"].deposition_surface
+                == surface
+            )
+
+    @pytest.mark.parametrize(
+        ("segment", "key", "value"),
+        [
+            ("door", "concentration", [1, 2, 3, 4, 5]),
+            ("floor_return", "concentration", [1, 2, 3, 4, 5]),
+            ("door", "hepa_filtered", True),
+            ("floor_return", "hepa_filtered", False),
+            ("hepa_supply", "deposition_surface", "floor"),
+            ("floor_return", "deposition_surface", "none"),
+        ],
+    )
+    def test_a_key_on_the_wrong_segment_type_raises_naming_the_segment(
+        self, tmp_path: Path, segment: str, key: str, value: object
+    ) -> None:
+        """Each key is valid on one segment type; elsewhere it is an error, not ignored."""
+        with pytest.raises(
+            ValueError, match=rf"boundaries\.{segment}\.{key} is only valid"
+        ):
+            SimConfig.from_dict(self._raw(tmp_path, segment, **{key: value}))
+
+    @pytest.mark.parametrize(
+        ("segment", "key", "bad", "error"),
+        [
+            ("hepa_supply", "concentration", [1, 2, 3, 4], ValueError),
+            ("hepa_supply", "concentration", [1, 2, 3, 4, 5, 6], ValueError),
+            ("hepa_supply", "concentration", [], ValueError),
+            ("hepa_supply", "concentration", 5.0, TypeError),
+            ("hepa_supply", "concentration", [1, 2, -3, 4, 5], ValueError),
+            ("hepa_supply", "concentration", [1, 2, True, 4, 5], TypeError),
+            ("hepa_supply", "concentration", [1, 2, "3", 4, 5], TypeError),
+            ("hepa_supply", "hepa_filtered", 1, TypeError),
+            ("hepa_supply", "hepa_filtered", "true", TypeError),
+            ("door", "deposition_surface", "roof", ValueError),
+            ("door", "deposition_surface", 3, TypeError),
+            ("door", "deposition_surface", True, TypeError),
+        ],
+    )
+    def test_bad_values_are_rejected(
+        self,
+        tmp_path: Path,
+        segment: str,
+        key: str,
+        bad: object,
+        error: type[Exception],
+    ) -> None:
+        """A list of the wrong length, a bool or string where a number is expected, a negative value, a non-bool flag, an unknown surface."""
+        with pytest.raises(error, match=rf"boundaries\.{segment}\.{key}"):
+            SimConfig.from_dict(self._raw(tmp_path, segment, **{key: bad}))
+
+    def test_validation_case_files_load_unchanged(self) -> None:
+        """Neither validation case carries a transport block or a segment key."""
+        for name in ("poiseuille", "cavity"):
+            config = load_case(name)
+            assert config.transport is None
+            for spec in config.boundaries.values():
+                assert (
+                    spec.concentration,
+                    spec.hepa_filtered,
+                    spec.deposition_surface,
+                ) == (
+                    None,
+                    False,
+                    None,
+                )

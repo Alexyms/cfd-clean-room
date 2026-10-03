@@ -181,7 +181,7 @@ Generated. The responsibility and serves columns are editorial and come from `do
 |---|---|---|---|
 | `src/boundary_registry.py` | 195 | Interprets the configured boundary segments once, answering which condition and prescribed velocity hold at a point on a domain edge, for every boundary imposition layer: the staggered velocity layer today, the Phase 3 concentration layer next. | S12.1 |
 | `src/boundary_staggered.py` | 423 | Writes Dirichlet normal velocities exactly into the staggered domain-face entries and exposes the tangential wall values, wall distances and pressure outlets as data for the momentum and pressure steps. | S12 |
-| `src/config.py` | 721 | Loads the YAML configuration into typed dataclasses and rejects missing keys, wrong types and out-of-range values at load time. | A02, A03, C01, C02, S10 |
+| `src/config.py` | 896 | Loads the YAML configuration into typed dataclasses and rejects missing keys, wrong types and out-of-range values at load time. | A02, A03, C01, C02, S10 |
 | `src/constants.py` | 8 | Holds the physical constants shared by every module so that none of them defines its own copy. | C04 |
 | `src/mesh.py` | 411 | Builds the structured grid, uniform or geometrically clustered at the walls, with the face, center, width and center-to-center arrays a face-based stencil needs, and classifies each cell as FLUID, SOLID or BOUNDARY. | S11 |
 | `src/momentum.py` | 522 | Predicts u* and v* on the staggered grid with QUICK advection by deferred correction over an upwind implicit matrix, one under-relaxed Jacobi sweep per call, and returns the diagonal coefficients the pressure correction needs. | S07, S09 |
@@ -191,7 +191,7 @@ Generated. The responsibility and serves columns are editorial and come from `do
 | `src/staggered.py` | 246 | Defines the staggered (MAC) field layout: shapes and allocation of face-centered u and v and cell-centered p, the face-to-center averaging the solver applies before returning, and FaceVelocities, the read-only face pair the solver exposes and the transport solver advects with. | S07, S13 |
 | `src/stopping.py` | 218 | Decides when the steady outer iteration has converged, on four conditions: (a) the iteration error estimated from the step and its fitted geometric rate, over a physical velocity scale; (b) the worst per-cell mass imbalance against its own tolerance; (c) the summed imbalance over the through-flow, which shares the tolerance of (a); and (d) the signed imbalance summed over the domain, which shares the tolerance of (b). Also defines IterationState, the snapshot a solver hands its callback once per outer iteration. | S01, S04 |
 
-Total 12 Python files, 3746 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
+Total 12 Python files, 3921 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
 
 `Declares it serves` is an EDITORIAL CLAIM read from `docs/system_map_annotations.toml`. It says which requirements a module is meant to satisfy, not that it does. Whether a requirement is met is answered by the tests named in the register's `Verified By` column.
 <!-- END GENERATED: components -->
@@ -216,7 +216,7 @@ Generated. Static import analysis cannot see a function bound into a registry by
 |---|---|
 | Scope | `src/**/*.py` |
 | Files hashed | 12 |
-| Digest | `sha256:9755a9ef18e0d48019c51be0d507580d4f976cd7a5820818daa3f933c6c4e351` |
+| Digest | `sha256:45864e363492a565b60186352d92bba7a14de74e1c11a01544134019f1c6f2c4` |
 
 This is what lets the document answer whether it is current, which is the one question a stale table cannot be asked. `python scripts/gen_system_map.py --check` recomputes the whole set of generated regions, this digest included, and exits non-zero on any disagreement.
 
