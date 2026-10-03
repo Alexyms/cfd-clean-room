@@ -338,24 +338,27 @@ class TestSynthetic:
         assert a != b and a == a
         assert len({a, b}) == 2
 
-    @pytest.mark.parametrize("surface", ["floor", "ceiling", "wall"])
+    @pytest.mark.parametrize(
+        ("edge", "surface"),
+        [("right", "floor"), ("bottom", "ceiling"), ("bottom", "wall")],
+    )
     def test_deposition_surface_override_reaches_exactly_the_overridden_faces(
-        self, surface: str
+        self, edge: str, surface: str
     ) -> None:
-        """Review 31 B1 (3): a right wall segment booked as another surface.
+        """Review 31 B1 (3), test 31b B3: a wall segment booked as another surface.
 
-        The override segment covers rows 2 to 6 of the right edge; those
-        faces take the named surface and its deposition velocity, every
-        other face is as in the base case.
+        The named surface is never the edge's own default (right is wall,
+        bottom is floor), so an override that is ignored shows. The segment
+        covers rows 2 to 6 of the right edge or columns 7 to 11 of the
+        bottom edge; those faces take the named surface and its deposition
+        velocity, every other face is as in the base case.
         """
         base = _synthetic()
-        override = {
-            "type": "wall",
-            "location": "right",
-            "y_start": 0.22,
-            "y_end": 0.68,
-            "deposition_surface": surface,
-        }
+        override = {"type": "wall", "location": edge, "deposition_surface": surface}
+        if edge == "right":
+            override |= {"y_start": 0.22, "y_end": 0.68}
+        else:
+            override |= {"x_start": 0.72, "x_end": 1.18}
         config = SimConfig.from_dict(
             _raw(
                 {
@@ -375,19 +378,32 @@ class TestSynthetic:
             "wall": SURFACE_WALL,
         }[surface]
         nx = mesh.cell_type.shape[1]
-        rows = slice(2, 7)
+        index = (slice(2, 7), nx) if edge == "right" else (0, slice(7, 12))
         for k in (0, 4):
             got, expected = bc.faces_for(k), plain.faces_for(k)
-            assert np.all(got.surface_u[rows, nx] == code)
+            surfaces = {
+                "u": (got.surface_u, expected.surface_u),
+                "v": (got.surface_v, expected.surface_v),
+            }
+            depositions = {
+                "u": (got.deposition_u, expected.deposition_u),
+                "v": (got.deposition_v, expected.deposition_v),
+            }
+            own = "u" if edge == "right" else "v"
+            other = "v" if own == "u" else "u"
+            got_surface, plain_surface = surfaces[own]
+            got_deposition, plain_deposition = depositions[own]
+            assert np.all(got_surface[index] == code)
+            assert np.all(plain_surface[index] != code)
             assert np.all(
-                got.deposition_u[rows, nx] == physics.deposition_velocity(k, surface)
+                got_deposition[index] == physics.deposition_velocity(k, surface)
             )
-            mask = np.zeros_like(got.surface_u, dtype=bool)
-            mask[rows, nx] = True
-            assert np.array_equal(got.surface_u[~mask], expected.surface_u[~mask])
-            assert np.array_equal(got.deposition_u[~mask], expected.deposition_u[~mask])
-            assert np.array_equal(got.surface_v, expected.surface_v)
-            assert np.array_equal(got.deposition_v, expected.deposition_v)
+            mask = np.zeros_like(got_surface, dtype=bool)
+            mask[index] = True
+            assert np.array_equal(got_surface[~mask], plain_surface[~mask])
+            assert np.array_equal(got_deposition[~mask], plain_deposition[~mask])
+            assert np.array_equal(*surfaces[other])
+            assert np.array_equal(*depositions[other])
             assert np.array_equal(got.inflow_u, expected.inflow_u)
             assert np.array_equal(got.inflow_v, expected.inflow_v)
 

@@ -352,18 +352,22 @@ class TestFluxAndScales:
         assert bc.get_inlet_flux("inlet") == pytest.approx(expected, rel=1e-14)
 
     def test_adjacent_inlets_each_count_their_own_faces_once(self) -> None:
-        """Review 31 S1: the flux is attributed by the shared coverage, not re-derived.
+        """Review 31 S1 and test 31b B1: the flux is attributed by the shared coverage.
 
-        Two inlets meeting at 1.0 on 8 cells of 0.25: the center 0.875 is
-        the first's and 1.125 the second's; the meeting point is no cell
-        center, so neither face is in both. Each flux is that segment's
-        faces alone and the two sum to the face sum.
+        Two inlets meeting at 0.875 on 8 cells of 0.25, a cell center that
+        both ranges cover. The shared face is the first segment's (first
+        match in configuration order) and carries its velocity; the second
+        owns the three centers above it. A method that re-derived coverage
+        with ``covers`` would count the shared face for both segments, at
+        the first's velocity, and the total would exceed the face sum.
         """
-        first = dict(TOP_INLET, x_start=0.3, x_end=1.0, velocity=0.2)
-        second = dict(TOP_INLET, x_start=1.0, x_end=1.8, velocity=0.6)
+        first = dict(TOP_INLET, x_start=0.3, x_end=0.875, velocity=0.2)
+        second = dict(TOP_INLET, x_start=0.875, x_end=1.8, velocity=0.6)
         mesh, bc = _build(_config({"first": first, "second": second}))
+        assert mesh.xc[3] == 0.875
         u, v = _filled(mesh)
         bc.apply_normal_velocity(u, v)
+        assert v[-1, 3] == -0.2
         face_sum = float(np.sum(-v[-1, :] * mesh.dx_cell * (v[-1, :] != 3.0)))
         flux_first = bc.get_inlet_flux("first")
         flux_second = bc.get_inlet_flux("second")

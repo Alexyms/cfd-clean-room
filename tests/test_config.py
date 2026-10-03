@@ -1509,6 +1509,30 @@ class TestFiniteNumbers:
         ):
             SimConfig.from_dict(raw)
 
+    @pytest.mark.parametrize("bad", [float("nan"), float("inf"), -float("inf")])
+    @pytest.mark.parametrize(
+        "key", ["velocity", "u_velocity", "v_velocity", "thresholds"]
+    )
+    def test_velocity_and_threshold_keys_reject_non_finite(
+        self, tmp_path: Path, key: str, bad: float
+    ) -> None:
+        """Test 31b B2: the four keys with inline checks go through the same helper."""
+        raw = self._raw(tmp_path)
+        supply = raw["boundaries"]["hepa_supply"]
+        if key == "thresholds":
+            label = "thresholds.0.5e-6"
+            raw["thresholds"]["0.5e-6"] = bad
+        elif key == "velocity":
+            label = "boundaries.hepa_supply.velocity"
+            supply["velocity"] = bad
+        else:
+            label = f"boundaries.hepa_supply.{key}"
+            del supply["velocity"]
+            supply["u_velocity"], supply["v_velocity"] = 0.1, -0.45
+            supply[key] = bad
+        with pytest.raises(ValueError, match=rf"{label} must be finite"):
+            SimConfig.from_dict(raw)
+
     @pytest.mark.parametrize("bad", [float("nan"), float("inf")])
     @pytest.mark.parametrize(
         ("section", "key"),

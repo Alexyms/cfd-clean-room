@@ -502,34 +502,22 @@ class SimConfig:
                     )
 
                 if raw_vel is not None:
-                    if isinstance(raw_vel, bool) or not isinstance(
-                        raw_vel, (int, float)
-                    ):
-                        raise TypeError(
-                            f"{ctx}.velocity must be a number, "
-                            f"got {type(raw_vel).__name__}"
-                        )
-                    if raw_vel <= 0:
+                    bc_velocity = self._finite_number(raw_vel, f"{ctx}.velocity")
+                    if bc_velocity <= 0:
                         raise ValueError(
                             f"{ctx}.velocity must be positive, got {raw_vel}"
                         )
-                    bc_velocity = float(raw_vel)
 
-                for comp_name, raw_comp in [
-                    ("u_velocity", raw_u),
-                    ("v_velocity", raw_v),
-                ]:
-                    if raw_comp is not None and (
-                        isinstance(raw_comp, bool)
-                        or not isinstance(raw_comp, (int, float))
-                    ):
-                        raise TypeError(
-                            f"{ctx}.{comp_name} must be a number, "
-                            f"got {type(raw_comp).__name__}"
-                        )
-
-                bc_u_velocity = float(raw_u) if raw_u is not None else None
-                bc_v_velocity = float(raw_v) if raw_v is not None else None
+                bc_u_velocity = (
+                    self._finite_number(raw_u, f"{ctx}.u_velocity")
+                    if raw_u is not None
+                    else None
+                )
+                bc_v_velocity = (
+                    self._finite_number(raw_v, f"{ctx}.v_velocity")
+                    if raw_v is not None
+                    else None
+                )
 
                 # A zero normal component (a tangential lid) admits no air: the
                 # scalar layer treats the segment as a wall, so the inlet
@@ -714,13 +702,10 @@ class SimConfig:
             raise ValueError("thresholds must be a mapping")
         self.thresholds: dict[str, float] = {}
         for key, val in thresholds_raw.items():
-            if isinstance(val, bool) or not isinstance(val, (int, float)):
-                raise TypeError(
-                    f"thresholds.{key} must be a number, got {type(val).__name__}"
-                )
-            if val < 0:
+            number = self._finite_number(val, f"thresholds.{key}")
+            if number < 0:
                 raise ValueError(f"thresholds.{key} must be non-negative, got {val}")
-            self.thresholds[str(key)] = float(val)
+            self.thresholds[str(key)] = number
 
     def _reject_overlapping_segments(self) -> None:
         """Raise if two segments on one edge overlap.
