@@ -43,6 +43,15 @@ solver:
   max_pressure_iter: 200   # max Jacobi iterations per SIMPLE step
   pressure_tol: 1.0e-6     # Jacobi convergence tolerance
 
+transport:
+  # ADR-011 I. cfl_number is the fraction of the limited scheme's stability
+  # bound (1/2) the explicit advection step runs at; 0.1 is the product case's
+  # own Courant number at dt 0.01 and the value the validation cases use.
+  cfl_number: 0.1
+  advection_scheme: umist   # QUICK bounded by the UMIST limiter; or upwind
+  max_diffusion_iter: 200   # Jacobi sweep cap per class per step
+  diffusion_tol: 1.0e-8     # implicit diffusion convergence tolerance
+
 boundaries:
   hepa_supply:
     type: velocity_inlet
@@ -50,6 +59,7 @@ boundaries:
     x_start: 0.5
     x_end: 7.5
     velocity: 0.45    # downward laminar flow, m/s
+    hepa_filtered: true   # clean supply: no concentration key (ADR-011 E)
 
   door:
     type: wall
