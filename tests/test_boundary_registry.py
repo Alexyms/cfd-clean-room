@@ -1,17 +1,23 @@
 """Tests for the shared boundary registry (REQ-S12.1).
 
-The registry interprets configured boundary segments for both the collocated
-and the staggered layer. These tests pin the rules both layers rely on:
-inclusive coverage on the matching edge, first match in configuration order,
-wall by default, and the prescribed-velocity decomposition per edge.
+The registry interprets configured boundary segments for the staggered
+velocity layer and the concentration layer. These tests pin the rules both
+layers rely on: inclusive coverage on the matching edge, first match in
+configuration order, wall by default, the prescribed-velocity decomposition
+per edge, and coverage_along, the one derivation of which faces a segment
+covers (REQ-S12.1).
 """
 
+import numpy as np
 import pytest
 
 from src.boundary_registry import (
+    BEHIND_SOLID,
     NO_SLIP_WALL,
+    UNCOVERED,
     BoundaryRegistry,
     EdgeCondition,
+    EdgeCoverage,
     condition_of,
     covers,
 )
@@ -217,3 +223,90 @@ class TestRegistryLookup:
         with pytest.raises(KeyError, match="not_real"):
             registry.spec("not_real")
         assert list(registry.boundaries) == ["lid"]
+
+
+COVERAGE_SEGMENTS = {
+    "inlet": {
+        "type": "velocity_inlet",
+        "location": "top",
+        "x_start": 0.25,
+        "x_end": 0.55,
+        "velocity": 0.3,
+    },
+    "later_inlet": {
+        "type": "velocity_inlet",
+        "location": "top",
+        "x_start": 0.5,
+        "x_end": 0.8,
+        "velocity": 0.7,
+    },
+    "outlet": {
+        "type": "pressure_outlet",
+        "location": "right",
+        "y_start": 0.0,
+        "y_end": 0.4,
+    },
+}
+
+
+@pytest.mark.unit
+class TestCoverageAlong:
+    """Coverage at a run of points, the derivation both boundary layers read."""
+
+    def test_segment_at_names_the_first_covering_segment_or_none(self) -> None:
+        registry = BoundaryRegistry(_config(COVERAGE_SEGMENTS))
+        name, spec = registry.segment_at("top", 0.52)
+        assert name == "inlet" and spec is registry.spec("inlet")
+        assert registry.segment_at("top", 0.7)[0] == "later_inlet"
+        assert registry.segment_at("top", 0.9) is None
+        assert registry.segment_at("bottom", 0.3) is None
+
+    def test_points_carry_their_segment_its_condition_and_the_solid_rule(self) -> None:
+        """Centers of ten cells of 0.1 on the top edge; the fourth cell behind is SOLID."""
+        registry = BoundaryRegistry(_config(COVERAGE_SEGMENTS))
+        centers = np.arange(10) * 0.1 + 0.05
+        solid = np.zeros(10, dtype=bool)
+        solid[3] = True
+        coverage = registry.coverage_along("top", centers, solid)
+        assert len(coverage) == 10
+        assert [c.name for c in coverage] == [
+            None,
+            None,
+            "inlet",
+            None,
+            "inlet",
+            "inlet",
+            "later_inlet",
+            "later_inlet",
+            None,
+            None,
+        ]
+        assert coverage[3] is BEHIND_SOLID
+        assert coverage[0] is UNCOVERED and coverage[9] is UNCOVERED
+        assert coverage[2] == EdgeCoverage(
+            "inlet",
+            registry.spec("inlet"),
+            EdgeCondition("velocity_inlet", 0.0, -0.3),
+            False,
+        )
+        assert coverage[6].condition == EdgeCondition("velocity_inlet", 0.0, -0.7)
+        for point, center in zip(coverage, centers, strict=True):
+            if not point.solid:
+                assert point.condition == registry.condition_at("top", center)
+            else:
+                assert point.condition == NO_SLIP_WALL
+            assert point.solid is bool(solid[list(centers).index(center)])
+
+    def test_a_plain_sequence_and_an_outlet_edge_work_the_same(self) -> None:
+        registry = BoundaryRegistry(_config(COVERAGE_SEGMENTS))
+        coverage = registry.coverage_along(
+            "right", [0.1, 0.3, 0.5], [False, False, False]
+        )
+        assert [c.name for c in coverage] == ["outlet", "outlet", None]
+        assert coverage[0].condition.bc_type == "pressure_outlet"
+        assert coverage[2] is UNCOVERED
+
+    def test_mismatched_lengths_raise(self) -> None:
+        registry = BoundaryRegistry(_config(COVERAGE_SEGMENTS))
+        with pytest.raises(ValueError, match="one SOLID flag per point"):
+            registry.coverage_along("top", [0.1, 0.2], [False])

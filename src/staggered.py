@@ -122,6 +122,41 @@ def cell_center_coordinates(mesh: Mesh) -> tuple[np.ndarray, np.ndarray]:
     return np.meshgrid(mesh.xc, mesh.yc)
 
 
+def edge_cells(cell_type: np.ndarray, edge: str) -> np.ndarray:
+    """The cells along a domain edge, in the storage order of that edge's faces.
+
+    Parameters
+    ----------
+    cell_type : np.ndarray
+        ``mesh.cell_type``, shape [ny, nx].
+    edge : str
+        One of "bottom", "top", "left", "right".
+
+    Returns
+    -------
+    np.ndarray
+        A view: row 0 for the bottom edge, row ny-1 for the top, column 0
+        for the left and column nx-1 for the right, so entry k sits behind
+        the k-th face of that edge (``v[0, k]``, ``v[ny, k]``, ``u[k, 0]``,
+        ``u[k, nx]``). Both boundary layers read the SOLID cells along an
+        edge through this one function.
+
+    Raises
+    ------
+    ValueError
+        On an unknown edge name.
+    """
+    if edge == "bottom":
+        return cell_type[0, :]
+    if edge == "top":
+        return cell_type[-1, :]
+    if edge == "left":
+        return cell_type[:, 0]
+    if edge == "right":
+        return cell_type[:, -1]
+    raise ValueError(f"unknown edge '{edge}'; use bottom, top, left or right")
+
+
 def check_staggered_pair(u: np.ndarray, v: np.ndarray) -> None:
     """Raise unless u and v are a consistent staggered pair.
 

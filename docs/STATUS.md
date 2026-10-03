@@ -20,8 +20,9 @@ the phase gate is recorded in `docs/reports/phase2_navier_stokes_report.md`. VAL
 VAL-002 pass on the staggered solver at their amended criteria. The collocated solver it
 replaced was retired on 2026-10-02 in the first Phase 3 pull request: deleted from the tree,
 kept at the annotated tag `collocated-final`, its stored harness rows kept (`docs/SYSTEM.md`,
-section 4, Retired modules). Phase 3's transport code has not begun, and Phases 4 through 7
-have not begun.
+section 4, Retired modules). Phase 3 has begun: the face-velocity interface the transport
+solver reads (REQ-S13), the transport configuration and the concentration boundary module are
+built (PR 31); the transport solver itself is not. Phases 4 through 7 have not begun.
 
 `docs/PROJECT_PLAN.md` holds the phase detail, deliverables and validation gates.
 
@@ -195,9 +196,17 @@ pulse and a rotating puff, with thresholds set from prototype measurements at th
 case's Courant number of 0.1. The supply is clean by default and particles enter as sources
 through the solver's new `sources` argument. The sealed-box case VAL-014 guards the settling
 and deposition composition, after the test found settling counted twice on obstacle tops in the
-proposed text. Next: the face-field interface (REQ-S13), then `src/solver_transport.py`,
-`src/boundary_concentration.py` and the six Phase 3 tests, each from the ADR's sections, and
-the product configuration's move to `error_estimate` when the product case is measured.
+proposed text.
+
+The first build (PR 31) laid what the solver stands on, in the order the design gives them:
+`StaggeredSolver.face_velocities`, the read-only faces continuity was enforced on (REQ-S13,
+re-measured on VAL-001 40x20 from the faces alone); the `transport` configuration section and
+the three segment keys, with the product supply marked `hepa_filtered`; and
+`src/boundary_concentration.py`, which derives every face's scalar condition from the same
+coverage the velocity layer reads, `BoundaryRegistry.coverage_along`, so the two layers cannot
+disagree about an inlet face, and a test checks that on every committed configuration. Next:
+`src/solver_transport.py` and the six Phase 3 tests, each from the ADR's sections, and the
+product configuration's move to `error_estimate` when the product case is measured.
 
 Deferred findings from earlier pull requests are open as GitHub issues 33, 36, 38, 40 and 42.
 
