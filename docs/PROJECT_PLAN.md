@@ -1,8 +1,8 @@
 # Project Plan
 
 **Project:** CFD Clean Room Simulation
-**Last Updated:** 2026-10-02
-**Current Phase:** Phase 3 (Transport Solver), not started; Phase 2 complete
+**Last Updated:** 2026-10-03
+**Current Phase:** Phase 3 (Transport Solver), in progress: design document proposed (ADR-011); Phase 2 complete
 
 This document tracks development progress by phase. Code review reads this document to determine the current phase and verify that PRs are in scope; the policy is `docs/REVIEW_POLICY.md`. Update this document as work progresses.
 
@@ -15,7 +15,7 @@ This document tracks development progress by phase. Code review reads this docum
 | 0 | Infrastructure | COMPLETE | PASS | -- |
 | 1 | Foundation | COMPLETE | PASS | phase1_foundation_report.md |
 | 2 | Navier-Stokes Solver | COMPLETE | PASS | phase2_navier_stokes_report.md |
-| 3 | Transport Solver | NOT STARTED | -- | -- |
+| 3 | Transport Solver | IN PROGRESS | -- | -- |
 | 4 | Scenarios & Time Integration | NOT STARTED | -- | -- |
 | 5 | Alert Monitoring System | NOT STARTED | -- | -- |
 | 6 | CUDA Acceleration | NOT STARTED | -- | -- |
@@ -160,8 +160,10 @@ ECR-001 rebuilt the solver on a staggered grid in nine steps (2026-09-20 to 2026
 
 | Deliverable | Status | Notes |
 |-------------|--------|-------|
-| src/solver_transport.py | NOT STARTED | Advection-diffusion solver with v_ext interface, pure NumPy |
-| src/boundary_concentration.py (concentration BCs) | NOT STARTED | Beside the staggered boundary layer, reading boundary_registry.py (decided 2026-10-02); design in the Phase 3 design document |
+| docs/ADR/ADR-011-transport-solver-architecture.md | DONE | The Phase 3 design, status Proposed (PR 30); every module below is built from it. Three items OPEN for Alex at its top |
+| src/solver_transport.py | NOT STARTED | Advection-diffusion solver with v_ext interface, pure NumPy; contract in SYSTEM.md section 4 (planned) |
+| src/boundary_concentration.py (concentration BCs) | NOT STARTED | Beside the staggered boundary layer, reading boundary_registry.py (decided 2026-10-02); design in ADR-011 E |
+| tests/test_constancy.py | NOT STARTED | REQ-T11: a uniform field stays uniform to the bound the stopping rule's per-cell condition sets (ADR-011 G) |
 | tests/test_diffusion.py | NOT STARTED | VAL-003 |
 | tests/test_advection.py | NOT STARTED | VAL-004 |
 | tests/test_conservation.py | NOT STARTED | VAL-007 |
@@ -172,8 +174,9 @@ ECR-001 rebuilt the solver on a staggered grid in nine steps (2026-09-20 to 2026
 | Test ID | Description | Criterion | Status |
 |---------|-------------|-----------|--------|
 | VAL-003 | Pure diffusion | L2 error < 1% vs analytical Gaussian | NOT RUN |
-| VAL-004 | Pulse advection | Peak location error < 1 cell, shape preserved | NOT RUN |
+| VAL-004 | Pulse advection | Peak location error < 1 cell, shape preserved; shape quantification OPEN (ADR-011 H) | NOT RUN |
 | VAL-007 | Mass conservation | Imbalance < 0.01% of total mass | NOT RUN |
+| REQ-T11 | Constancy | Largest departure of a uniform field below b_max T / (rho V_min) and above a tenth of it; product bound at mass_imbalance_tol over t_end below 0.01% | NOT RUN |
 
 ### Phase-Specific Risks
 
@@ -356,3 +359,4 @@ Phase 3 completion is the minimum viable portfolio artifact. A working, validate
 | 2026-09-30 | ECR-001 step 9: ADR-010 written, ADR-008 marked superseded, ECR-001 closed. REQ-S02 amended to < 1% and REQ-S03 to marchi_2009_re100 in docs/SYSTEM.md, REQ-S11 to the stretching built. Phase 2 deliverables and validation gate brought current: the staggered solver and its modules DONE, the collocated solver and boundary.py RETAINED as the harness baseline pending Alex's decision on retirement, VAL-001 and VAL-002 PASS at their amended criteria. Phase 2 at GATE REVIEW. A unit test now pins the cubic stencil of validation.metrics.lagrange (test 26b T1). |
 | 2026-10-01 | Phase 2 complete, gate PASS: all six gate criteria hold (docs/reports/phase2_navier_stokes_report.md). Line coverage 98.2% against Phase 1's 95%. ECR-001 criterion 6 decided: condition (d) accepted as built, met on the channel at a zero crossing of the net outflow (ECR-001 section 9). The SYSTEM.md cascade rows and contract headings brought in line with the import graph (review 27 B2). The collocated solver's retirement and an outer iteration that does not overshoot are the first questions of Phase 3. |
 | 2026-10-02 | Collocated solver retired (PR 29), the first Phase 3 pull request and Alex's decision of 2026-10-02: src/solver_ns.py, src/boundary.py, tests/test_solver_ns.py and tests/test_boundary.py deleted; annotated tag collocated-final on 98f8b1f, the last commit holding them; IterationState moved to src/stopping.py with its fields unchanged. The harness and the viewer default to staggered-jacobi, and the 22 stored collocated rows still summarize. The Phase 3 concentration boundary deliverable renamed to src/boundary_concentration.py, beside the staggered layer over boundary_registry.py. The adaptive outer iteration is deferred to a later efficiency and clean-up pass, not Phase 3. Line coverage reads 97.7% at the retirement commit (1200 statements, 28 uncovered) against 98.2% at the Phase 2 gate: no line lost coverage; 480 fully covered statements left the denominator. Alex decided on 2026-10-02 that Phase 3's gate criterion 4 compares against 97.7%, the figure at the retirement commit (review 29, B1). |
+| 2026-10-03 | ADR-011, the Phase 3 transport design, proposed (PR 30): concentration at cell centres advected by the staggered face velocities, which the NS solver will expose (REQ-S13, proposed); explicit advection, implicit diffusion and deposition; settling as an interior face increment with the floor taking the deposition velocity whole; one mass budget; REQ-T11 (constancy) proposed with its bound and tests/test_constancy.py as a gate row; the product mass_imbalance_tol derived as 1e-4 rho V_min / t_end. Three items OPEN for Alex: the face scheme and positivity (forward Euler with unlimited QUICK is unstable at every Courant number), VAL-004's shape criterion, the supply concentration. Phase 3 IN PROGRESS. No module changed. |

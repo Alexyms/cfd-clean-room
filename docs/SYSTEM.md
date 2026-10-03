@@ -2,7 +2,7 @@
 
 **Project:** CFD Clean Room Simulation
 **Status:** ECR-001 closed; the staggered Navier-Stokes solver is built and validated and is the only solver (ADR-010; the collocated solver was retired on 2026-10-02, tag `collocated-final`). Phase status is in `docs/PROJECT_PLAN.md`.
-**Last Updated:** 2026-10-02
+**Last Updated:** 2026-10-03
 
 This document is the single reference for system architecture, requirements, module interfaces, and dependency relationships. Review and test, run before each pull request as `/cfd-review` and `/cfd-test` in fresh Claude Code sessions (`.claude/commands/`), check branches against this document under the policy in `docs/REVIEW_POLICY.md`. Keep it current.
 
@@ -39,6 +39,7 @@ Since ECR-001 step 9 (2026-09-30), "the NS solver" in this table is the staggere
 | REQ-S11 | The mesh shall support independent geometric stretching in x and y directions, clustered toward both walls of an axis and mirrored about its midpoint, specified per axis by either the wall-adjacent cell width or the geometric expansion ratio, the other derived from the cell count. | Enables resolution clustering near walls without uniform refinement of the entire domain. Required by ECR-001. Amended 2026-09-30 (ECR-001 step 9) to what step 1 built. The earlier text asked for the spacing and the ratio per wall, but at a fixed cell count a symmetric geometric distribution has one free parameter (ECR-001 criterion 2 note), and the two walls of an axis share it. Clustering toward one wall of an axis only, or toward an interior region, is not built. | Unit test |
 | REQ-S12 | Dirichlet velocity boundary conditions shall be imposed directly on the staggered velocity components at the physical wall location, without ghost cell interpolation. | Eliminates the O(h) wall accuracy limitation previously documented in ADR-008. Required by ECR-001. | Unit test, VAL-001 |
 | REQ-S12.1 | The interpretation of configured boundary segments (which segment covers a point on a domain edge, its type, and the velocity it prescribes there) shall be implemented once and shared by every boundary imposition layer. | Derived from REQ-S12, for modularity rather than physics: the staggered velocity layer reads one configuration interpretation today, and the Phase 3 concentration layer (`src/boundary_concentration.py`, decided 2026-10-02) will be its second reader; a second copy could drift between them. | Unit test |
+| REQ-S13 | The NS solver shall expose the face velocities of its last solve on their staggered storage locations: u on vertical faces [ny, nx+1], v on horizontal faces [ny+1, nx], float64, contiguous, read-only copies, whose two-face averages are the returned cell means and whose per-cell mass imbalance is `last_mass_imbalance`; when the solve stopped by `error_estimate`, that imbalance satisfies conditions (b) and (d) of REQ-S04. | Proposed by ADR-011 (PR 30), section A, status Proposed. Continuity is enforced on the faces and the returned cell means are their averages, which do not carry it (ADR-010, Consequences); the transport solver advects with the face fluxes, the constancy test (REQ-T11) predicts its drift from their imbalance, and reconstructing faces from the means would give an O(h^2) imbalance the stopping rule never bounded. Adding the attribute changes no existing signature. | Unit test (the three promises above, in tests/test_solver_staggered.py); tests/test_constancy.py |
 
 ### 2.2 Transport Requirements
 
@@ -54,6 +55,7 @@ Since ECR-001 step 9 (2026-09-30), "the NS solver" in this table is the staggere
 | REQ-T08 | Advection of a concentration pulse in a uniform flow shall preserve peak location to within 1 cell width and maintain pulse shape. | Validates advection discretization. Excessive numerical diffusion indicates the scheme is too dissipative. | VAL-004 |
 | REQ-T09 | The particles module shall compute gravitational and diffusional deposition velocity for each size class, parameterized by boundary layer thickness and surface orientation (floor, ceiling, wall). | Deposition velocity is a boundary condition input for the transport solver. Floor deposition includes gravitational settling; ceiling and wall deposition are diffusion-only. | VAL-010 |
 | REQ-T10 | The particles module shall estimate HEPA filter collection efficiency for each size class via interpolation of reference efficiency data. | HEPA efficiency determines the particle removal rate at supply vent boundaries. Efficiency varies by particle size with a minimum at the most-penetrating particle size (~0.3 um). | VAL-011 |
+| REQ-T11 | A spatially uniform concentration field advected by a face velocity field that meets REQ-S04 at its stop, with diffusion, settling, deposition and sources off, shall remain uniform: after a simulated time T the largest relative departure of any FLUID cell from its initial value shall not exceed b_max T / (rho V_min), where b_max is the worst per-cell mass imbalance of that field (condition (b)) and V_min the smallest FLUID cell volume; and for the product configuration the bound evaluated at `mass_imbalance_tol` over the scenario's `t_end` shall be below REQ-T05's 0.01%. | Proposed by ADR-011 (PR 30), section G, status Proposed. A per-cell velocity imbalance is a source or sink of particle mass (ADR-010, Consequences, For Phase 3), and a conservative face-flux scheme that is exact on a uniform field turns the stopping rule's bound into a drift rate, b_P / (rho V_P) per second in cell P. VAL-007's budget closes by telescoping on any face field and cannot see this; the two instruments are kept apart. Measured on the saved VAL-001 80x40 histories at the stop: 7.05e-9 per second in the worst cell, 0.0025% per hour (results/builder30/constancy_drift.json; the derivation is ADR-011 G). The second clause ties `mass_imbalance_tol` to the scenario duration: `mass_imbalance_tol <= 1e-4 rho V_min / t_end`. | tests/test_constancy.py |
 
 ### 2.3 Configuration Requirements
 
@@ -147,12 +149,13 @@ When a PR modifies a module, the reviewer verifies impact on downstream modules.
 | staggered.py | solver_staggered, boundary_staggered, momentum, pressure | Face array shapes and the face-to-center averaging contract unchanged. |
 | boundary_registry.py | boundary_staggered; boundary_concentration (planned, Phase 3) | Coverage rule (same edge, inclusive range, first match in configuration order, wall by default) and the prescribed-velocity decomposition unchanged. Every imposition layer reads them, so a change here moves each. |
 | boundary_staggered.py | momentum, pressure, solver_staggered | Normal imposition writes domain faces only. Tangential data shape [n+1], outlet data shape [n], wall_distance semantics and the inward flux sign unchanged. |
+| boundary_concentration.py (planned, Phase 3, ADR-011 E) | solver_transport | ConcentrationFaces array names and shapes (face-shaped, read-only), the surface codes the budget books deposition to, the settling mask, and the derivation of each condition from the registry's velocity type with the segment keys concentration, hepa_filtered and deposition_surface unchanged. |
 | momentum.py | pressure, solver_staggered | MomentumPrediction shapes and the meaning of a_p_u and a_p_v (un-relaxed diagonal, positive exactly at the unknown faces) unchanged; boundary entries of u and v read as given and never written. |
 | pressure.py | solver_staggered | PressureCorrection shapes, the right-hand side formed directly from face velocities with no compatibility correction, outlet faces corrected against p' = 0 with the nearest interior diagonal, closed-domain pin at the first FLUID cell, and the sweep count reported. |
 | solver_staggered.py | solver_transport, time_integration (planned, Phases 3 and 4: the NS solver of section 2.1); scripts/benchmark.py, scripts/view_field.py, scripts/stopping_probe.py, scripts/val001_order.py, scripts/self_convergence.py | The public shape: cell-centered [ny, nx] float64 contiguous returns, the IterationState callback once per outer iteration with cell-centered fields and the corrector's sweep count, last_pressure_sweeps and stage_seconds reset per solve, reference_velocity F_ref / (rho h). Under the default velocity_step rule the stop is the residual below convergence_tol, the definition every stored velocity-step row was taken under, so outer iteration counts compare with them; residual_history keeps that definition under both rules. converged and stop_reason are set by every solve and reset at its start; the harness records them, with velocity_step_below_tol stored as residual_below_tol, the label every stored velocity-step row carries. |
 | stopping.py | solver_staggered, scripts/stopping_probe.py, scripts/val001_order.py, scripts/benchmark.py, scripts/self_convergence.py | IterationState's fields, which the solver hands its on_iteration callback and the harness reads, unchanged. update(step, imbalance) answers converged only when the estimate, the worst imbalance, the absolute sum over flux_scale and the absolute signed sum are all below their tolerances; the imbalance callable, which returns an ImbalanceSummary read by name from one evaluation, is not called until the estimate is met; no estimate (inf) while the window is short, a step in it is zero or not finite, or rho_hat is outside (0, 1). RATE_WINDOW stays a module constant. A change of condition raises RULE_VERSION, which stopping_probe and val001_order store with their saved solves, so that they solve again, and the harness records in every error_estimate row, so that its summary keeps the versions apart. |
-| solver_transport.py | time_integration, monitor | Concentration field output shape, dtype, and semantics unchanged. |
-| particles.py | solver_transport | Settling velocity, diffusion coefficient interface unchanged. Return types and units unchanged. |
+| solver_transport.py (planned, Phase 3, ADR-011 C and F) | time_integration, monitor (planned, Phases 4 and 5); tests/test_constancy.py | solve_timestep takes FaceVelocities, not cell means, and returns a new [ny, nx] float64 contiguous field with SOLID cells zero; stable_dt's definition; v_ext a FaceVelocities-shaped per-class drift, None read as zero (REQ-T06); MassBudget field names and that only the solver writes them. |
+| particles.py | solver_transport, boundary_concentration (planned, Phase 3) | Settling velocity, diffusion coefficient and deposition velocity interface unchanged. Return types, units and signs unchanged (settling positive downward, deposition non-negative; the floor value includes settling, which the solver must not add again, ADR-011 D). |
 | scenarios.py | time_integration; the boundary layers (planned, Phase 4) | Source term and BC modification interfaces unchanged. Event timing semantics unchanged. |
 | monitor.py | time_integration | Update and query interfaces unchanged. Alert output format unchanged. |
 | csolver/ | solver_staggered (REQ-N03's NumPy reference, ADR-010), solver_transport; both planned, Phase 6 | CUDA kernel signatures match pybind11 declarations. Memory layout assumptions (row-major, contiguous, double precision) unchanged. |
@@ -308,6 +311,7 @@ allocate_fields(mesh) -> (u, v, p) zeroed, float64, contiguous
 u_face_coordinates(mesh), v_face_coordinates(mesh),
 cell_center_coordinates(mesh) -> (X, Y) 2D coordinate arrays
 to_cell_centers(u, v) -> (u_c, v_c) each [ny, nx], plain two-face average
+FaceVelocities: u [ny, nx+1], v [ny+1, nx]   # frozen; planned, ADR-011 A (REQ-S13)
 ```
 
 ### boundary_registry.py --> boundary_staggered (boundary_concentration planned, Phase 3)
@@ -449,6 +453,10 @@ StaggeredSolver:
     converged: bool             # met its stopping rule, not the cap; reset per solve
     stop_reason: str | None     # "velocity_step_below_tol",
                                 # "error_estimate_and_continuity" or "max_simple_iter"
+    face_velocities: FaceVelocities | None   # planned, ADR-011 A (REQ-S13): None until a
+                                # solve completes; read-only copies of the final faces;
+                                # to_cell_centers of them is the return, their
+                                # mass_imbalance is last_mass_imbalance
     Walls and inlets are written once by apply_normal_velocity and never
     again; outlet faces are extrapolated (zero gradient) before every
     prediction and corrected by the corrector. Residual: largest change of
@@ -517,12 +525,44 @@ ParticlePhysics:
     hepa_efficiency(size_class: int) -> float
 ```
 
-### solver_transport.py --> time_integration, monitor
+### boundary_concentration.py --> solver_transport (planned, Phase 3, ADR-011 E)
+
+The registry's second reader (REQ-S12.1). Derives the scalar condition at every
+face from the velocity type, with optional segment keys: `concentration`
+(one value per class, velocity_inlet), `hepa_filtered` (bool, velocity_inlet),
+`deposition_surface` (floor, ceiling, wall or none, wall; the edge decides by
+default). Reads no concentration field and writes none.
+
+```
+ConcentrationBoundary:
+    __init__(mesh: Mesh, config: SimConfig, physics: ParticlePhysics, registry: BoundaryRegistry)
+    faces_for(size_class) -> ConcentrationFaces   # frozen, read-only arrays
+        inflow_u [ny, nx+1], inflow_v [ny+1, nx]: concentration an inward flux carries
+        deposition_u, deposition_v: deposition velocity at wall faces, domain and SOLID
+        surface_u, surface_v: which surface each depositing face is booked to
+        settling_u, settling_v: faces that carry the class's settling increment
+```
+
+### solver_transport.py --> time_integration, monitor (planned, Phase 3, ADR-011 B, C, D, F)
+
+Draft, marked planned; OPEN 1 of ADR-011 decides the face scheme. Finite volume
+on the cell-centred field, advected by the face velocities of REQ-S13; explicit
+advection, implicit diffusion and deposition sink by Jacobi.
 
 ```
 TransportSolver:
-    solve_timestep(C_k, u, v, size_class, dt, v_ext=None) -> ndarray
-    Output array: shape [ny, nx], dtype float64, contiguous
+    __init__(mesh, config, physics: ParticlePhysics, boundary: ConcentrationBoundary)
+    stable_dt(faces: FaceVelocities, size_class, v_ext=None) -> float
+        cfl_number / max over FLUID cells of (max(|u_w|, |u_e|) / dx_cell
+        + max(|v_s|, |v_n|) / dy_cell), the vertical faces carrying the class's
+        settling increment and v_ext
+    solve_timestep(C_k, faces, size_class, dt, v_ext=None) -> ndarray
+        C_k [ny, nx] not modified; v_ext FaceVelocities-shaped per-class drift or
+        None (zero; REQ-T06, ADR-007); ValueError if dt > stable_dt or shapes differ
+        returns the new field, [ny, nx], float64, contiguous, SOLID cells zero;
+        updates budget[size_class] from the fluxes applied
+    budget: list[MassBudget]    # per class: initial, inflow, outflow, deposited by
+                                # surface, source; in_domain(C_k, mesh); residual()
 ```
 
 ### monitor.py --> time_integration
@@ -615,6 +655,7 @@ ADR-008 and ADR-010 are files in `docs/ADR/`; the others are in the development 
 | ADR-007 | Ionizer modeling deferred | Scope risk. Extension point (v_ext) preserved in transport solver interface. |
 | ADR-008 | Collocated ghost cell wall treatment (Superseded by ADR-010) | O(h) wall accuracy accepted for simplicity. Industry-standard approach. VAL-001 relaxed from 1% to 2.5%. |
 | ADR-010 | Solver Architecture V2: Staggered Grid, Non-Uniform Mesh, QUICK Advection | Staggered MAC grid removes the collocated ghost-cell wall leak; the closed-domain sum of the mass imbalance is exact to rounding, and the stopping rule holds the per-cell imbalance and the signed domain sum below 1e-10 at every validation stop (ECR-001 acceptance criterion 6, as ADR-010's planned-against-built table records it). The VAL-002 v error once cited here was measured against a corrupted Ghia table (ECR-001 erratum). Non-uniform mesh clusters cells toward the walls; on the VAL-001 stencil it costs accuracy at a fixed cell count. QUICK by deferred correction; weighted Jacobi; the error_estimate stopping rule. Records what ECR-001 built, with planned against built. |
+| ADR-011 | Transport Solver Architecture: Face-Advected Cell-Centred Concentration (Proposed) | Concentration at cell centres, advected by the staggered face velocities the NS solver exposes (REQ-S13), so a uniform haze drifts only at the rate the stopping rule bounds (REQ-T11). Explicit advection, implicit diffusion and deposition. Settling as a face increment on interior faces, the floor and ceiling taking the deposition velocity whole. One mass budget for every conservation claim. Three items OPEN for Alex: the face scheme and positivity, VAL-004's criterion, the supply concentration. Written before the build; gains planned against built at the Phase 3 gate. |
 
 ---
 
@@ -645,3 +686,4 @@ ADR-008 and ADR-010 are files in `docs/ADR/`; the others are in the development 
 | 2026-10-01 | Section 3.2 rows for config.py, mesh.py, solver_ns.py, solver_staggered.py and csolver/ and the section 4 headings for mesh.py, solver_ns.py and solver_staggered.py brought in line with the generated import graph and with section 2.1 (review 27 B2): existing importers listed from the graph, planned consumers marked, the transport and time-integration consumers of the NS solver routed to solver_staggered, csolver/ to the solver of record. A constants.py row added. The solver_staggered contract says it lacks compute_residual and solve_timestep. No requirement, module or generated region changed. | Alex Moroz-Smietana |
 | 2026-09-30 | ECR-001 step 9. REQ-S02 amended to < 1% on 80x40 (ECR-001 section 6) and REQ-S03 to score against marchi_2009_re100 with ghia_1982_re100_r2 reported unscored (amendment of 2026-09-24), each with its measured value. REQ-S11 amended to the per-axis, mirrored stretching step 1 built; REQ-S04's Verified By corrected (VAL-007 is Phase 3's). REQ-S01, S07, S08, S09 and S12 checked against the build and unchanged. Section 2.1 names the staggered solver as the NS solver; the collocated solver and boundary.py are described as the kept harness baseline, no longer as retired in a later step, and the NavierStokesSolver contract no longer claims staggered storage. ADR-010 added as a file and its summary row updated; ADR-008's row corrected to 2.5%. No module, interface or generated region changed. | Alex Moroz-Smietana |
 | 2026-10-02 | The collocated solver retired (PR 29, Alex's decision of 2026-10-02): src/solver_ns.py, src/boundary.py and their tests deleted; annotated tag collocated-final on 98f8b1f, the last commit holding them; IterationState moved to stopping.py with its fields unchanged. Section 2.1 names the staggered solver as the only solver; REQ-S02's rationale keeps the collocated measurement as history, and REQ-S12.1's names the staggered layer and the Phase 3 concentration layer as the registry's readers. Section 3.2 rows and section 4 contracts for the two modules removed; the solver_staggered row and contract state the public shape in its own terms; a Retired modules note added to section 4. The harness and the viewer default to staggered-jacobi, and the 22 stored collocated rows still summarize. The adaptive outer iteration is deferred to a later efficiency pass, not Phase 3. No staggered computation changed: val002_20x20 reproduces bitwise. REQ-S02 and REQ-S03 move from the deleted solver_ns.py annotation to solver_staggered.py's, which changes the generated traceability table; REQ-S08 stays with pressure.py alone, which does that work. The scenarios.py cascade row and section 4 heading name the boundary layers (planned, Phase 4) in place of the deleted boundary module. | Alex Moroz-Smietana |
+| 2026-10-03 | ADR-011, the Phase 3 transport design, added as a file with status Proposed (PR 30). REQ-S13 (the NS solver exposes its face velocities) and REQ-T11 (a uniform field stays uniform to the bound the stopping rule's per-cell condition sets) added as proposed, each with rationale and verification; no existing requirement's text changed. The solver_transport.py contract stub replaced by ADR-011's draft, marked planned, and a boundary_concentration.py contract added, marked planned; the staggered.py and solver_staggered.py contracts gain FaceVelocities and face_velocities, marked planned. Cascade rows for both planned modules; the particles.py row names its second consumer and the sign conventions. No module or generated region changed. | Alex Moroz-Smietana |
