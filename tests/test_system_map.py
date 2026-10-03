@@ -605,7 +605,7 @@ class TestTheRealDocumentMatchesTheRealTree:
         expected = (
             [f"REQ-S{n:02d}" for n in range(1, 13)]
             + ["REQ-S12.1", "REQ-S13"]
-            + [f"REQ-T{n:02d}" for n in range(1, 12)]
+            + [f"REQ-T{n:02d}" for n in range(1, 13)]
             + [f"REQ-C{n:02d}" for n in range(1, 5)]
             + [f"REQ-A{n:02d}" for n in range(1, 7)]
             + [f"REQ-V{n:02d}" for n in range(1, 4)]

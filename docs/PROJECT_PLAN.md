@@ -2,7 +2,7 @@
 
 **Project:** CFD Clean Room Simulation
 **Last Updated:** 2026-10-03
-**Current Phase:** Phase 3 (Transport Solver), in progress: design document proposed (ADR-011); Phase 2 complete
+**Current Phase:** Phase 3 (Transport Solver), in progress: design accepted (ADR-011, decisions of 2026-10-03); Phase 2 complete
 
 This document tracks development progress by phase. Code review reads this document to determine the current phase and verify that PRs are in scope; the policy is `docs/REVIEW_POLICY.md`. Update this document as work progresses.
 
@@ -160,13 +160,16 @@ ECR-001 rebuilt the solver on a staggered grid in nine steps (2026-09-20 to 2026
 
 | Deliverable | Status | Notes |
 |-------------|--------|-------|
-| docs/ADR/ADR-011-transport-solver-architecture.md | DONE | The Phase 3 design, status Proposed (PR 30); every module below is built from it. Three items OPEN for Alex at its top |
+| docs/ADR/ADR-011-transport-solver-architecture.md | DONE | The Phase 3 design, Accepted at merge (PR 30); every module below is built from it. Its three open items and seven further points were decided by Alex on 2026-10-03 and are listed at its top |
 | src/solver_transport.py | NOT STARTED | Advection-diffusion solver with v_ext interface, pure NumPy; contract in SYSTEM.md section 4 (planned) |
 | src/boundary_concentration.py (concentration BCs) | NOT STARTED | Beside the staggered boundary layer, reading boundary_registry.py (decided 2026-10-02); design in ADR-011 E |
-| tests/test_constancy.py | NOT STARTED | REQ-T11: a uniform field stays uniform to the bound the stopping rule's per-cell condition sets (ADR-011 G) |
+| configs/clean_room_default.yaml under error_estimate | NOT STARTED | Decision 6 of 2026-10-03: stopping_rule error_estimate with mass_imbalance_tol <= 1e-4 rho V_min / t_end and a cap above 500, set when the product case is solved and its stop measured; a precondition of REQ-T11 on the product case (ADR-011 G) |
+| tests/test_constancy.py | NOT STARTED | VAL-012, REQ-T11: a uniform field stays uniform to the per-cell bound the stopping rule's imbalance sets (ADR-011 G) |
 | tests/test_diffusion.py | NOT STARTED | VAL-003 |
-| tests/test_advection.py | NOT STARTED | VAL-004 |
+| tests/test_advection.py | NOT STARTED | VAL-004, both rows; records the rotating puff through FieldHistory for Phase 7 |
 | tests/test_conservation.py | NOT STARTED | VAL-007 |
+| tests/test_smith_hutton.py | NOT STARTED | VAL-013, REQ-T12: the field stays within the inlet's bounds at every step (ADR-011 H) |
+| tests/test_sealed_box.py | NOT STARTED | VAL-014: a sealed room loses mass at settling velocity over height, exact; guards the settling and deposition composition (ADR-011 D, H) |
 | tests/test_solver_transport.py | NOT STARTED | Unit tests: source terms, settling integration |
 
 ### Validation Gate
@@ -174,9 +177,12 @@ ECR-001 rebuilt the solver on a staggered grid in nine steps (2026-09-20 to 2026
 | Test ID | Description | Criterion | Status |
 |---------|-------------|-----------|--------|
 | VAL-003 | Pure diffusion | L2 error < 1% vs analytical Gaussian | NOT RUN |
-| VAL-004 | Pulse advection | Peak location error < 1 cell, shape preserved; shape quantification OPEN (ADR-011 H) | NOT RUN |
+| VAL-004 | Pulse advection, oblique channel pulse (ADR-011 H, row 1) | Centroid error < 1 cell; peak retained > 73% and L2 error vs the exact translate < 17% (1.5 times the measured 82.2% and 11.3% of the chosen scheme at Courant number 0.1, results/builder30b/pulse_2d.json); no cell below zero | NOT RUN |
+| VAL-004 | Pulse advection, rotating puff (row 2) | After one revolution: centroid error < 1 cell; peak retained > 63% and L2 error vs the initial field < 23% (1.5 times the measured 75.3% and 15.5%); no cell below zero | NOT RUN |
 | VAL-007 | Mass conservation | Imbalance < 0.01% of total mass | NOT RUN |
-| REQ-T11 | Constancy | Largest departure of a uniform field below b_max T / (rho V_min) and above a tenth of it; product bound at mass_imbalance_tol over t_end below 0.01% | NOT RUN |
+| VAL-012 | Constancy (REQ-T11) | Largest per-cell relative departure of a uniform field below max_P |b_P| T / (rho V_P) and above a tenth of it; a perturbed interior face must exceed the bound | NOT RUN |
+| VAL-013 | Smith-Hutton (REQ-T12) | Every cell within [1 - tanh(10), 1 + tanh(10)] of the reference concentration at every step, exact to rounding; outlet profile reported unscored | NOT RUN |
+| VAL-014 | Sealed-box decay (ADR-011 D) | Floor deposit equals v_s C_0 W t to 1e-10 relative before the front reaches the floor; budget closes to rounding; a doubled floor deposition velocity doubles the deposit | NOT RUN |
 
 ### Phase-Specific Risks
 
@@ -360,3 +366,4 @@ Phase 3 completion is the minimum viable portfolio artifact. A working, validate
 | 2026-10-01 | Phase 2 complete, gate PASS: all six gate criteria hold (docs/reports/phase2_navier_stokes_report.md). Line coverage 98.2% against Phase 1's 95%. ECR-001 criterion 6 decided: condition (d) accepted as built, met on the channel at a zero crossing of the net outflow (ECR-001 section 9). The SYSTEM.md cascade rows and contract headings brought in line with the import graph (review 27 B2). The collocated solver's retirement and an outer iteration that does not overshoot are the first questions of Phase 3. |
 | 2026-10-02 | Collocated solver retired (PR 29), the first Phase 3 pull request and Alex's decision of 2026-10-02: src/solver_ns.py, src/boundary.py, tests/test_solver_ns.py and tests/test_boundary.py deleted; annotated tag collocated-final on 98f8b1f, the last commit holding them; IterationState moved to src/stopping.py with its fields unchanged. The harness and the viewer default to staggered-jacobi, and the 22 stored collocated rows still summarize. The Phase 3 concentration boundary deliverable renamed to src/boundary_concentration.py, beside the staggered layer over boundary_registry.py. The adaptive outer iteration is deferred to a later efficiency and clean-up pass, not Phase 3. Line coverage reads 97.7% at the retirement commit (1200 statements, 28 uncovered) against 98.2% at the Phase 2 gate: no line lost coverage; 480 fully covered statements left the denominator. Alex decided on 2026-10-02 that Phase 3's gate criterion 4 compares against 97.7%, the figure at the retirement commit (review 29, B1). |
 | 2026-10-03 | ADR-011, the Phase 3 transport design, proposed (PR 30): concentration at cell centres advected by the staggered face velocities, which the NS solver will expose (REQ-S13, proposed); explicit advection, implicit diffusion and deposition; settling as an interior face increment with the floor taking the deposition velocity whole; one mass budget; REQ-T11 (constancy) proposed with its bound and tests/test_constancy.py as a gate row; the product mass_imbalance_tol derived as 1e-4 rho V_min / t_end. Three items OPEN for Alex: the face scheme and positivity (forward Euler with unlimited QUICK is unstable at every Courant number), VAL-004's shape criterion, the supply concentration. Phase 3 IN PROGRESS. No module changed. |
+| 2026-10-03 | ADR-011's three OPEN items closed and the document Accepted at merge (PR 30, builder-fix pass on premise review 30 and test 30; Alex's decisions of 2026-10-03). The face scheme: QUICK bounded by the UMIST limiter, forward Euler, Courant number at most 1/2; the validation cases run at 0.1 because the shape error grows with the Courant number (1D L2 8.6% at 0.1, 31% at 0.4, results/builder30b). VAL-004 split into two rows, an oblique channel pulse and a rotating puff, with thresholds at 1.5 times the measured error. Clean supply by default, no recirculation; particles enter as sources through a new sources argument on solve_timestep. REQ-T12 (positivity) added with VAL-013 Smith-Hutton; VAL-014 the sealed box guards the settling composition after test 30 found settling counted twice on obstacle tops; VAL-012 names the constancy test, replacing the REQ-T11 gate row. The product configuration moves to error_estimate when the product case is measured. A FieldHistory writer for Phase 7. No module changed; the register pin widened for REQ-T12. |
