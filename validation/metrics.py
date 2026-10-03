@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from src.config import SimConfig
-from src.mesh import FLUID, Mesh
+from src.mesh import FLUID, SOLID, Mesh
 
 # Ghia, Ghia and Shin (1982), Re = 100: Table I (u) and Table II (v).
 #
@@ -546,3 +546,107 @@ def cavity_marchi_centerline_errors(
         reference=MARCHI_REFERENCE,
         components=components,
     )
+
+
+# ---------------------------------------------------------------------------
+# Transport field metrics (ADR-011 H). Each takes cell-centred [ny, nx] fields
+# and reads them on the non-SOLID cells of the mesh, where concentration lives.
+# ---------------------------------------------------------------------------
+
+
+def _non_solid(mesh: Mesh) -> np.ndarray:
+    """Mask of the cells that hold concentration: FLUID and the BOUNDARY ring."""
+    return mesh.cell_type != SOLID
+
+
+def relative_l2(field: np.ndarray, exact: np.ndarray, mesh: Mesh) -> float:
+    """L2 norm of the cell error over the L2 norm of the exact cell values.
+
+    Parameters
+    ----------
+    field : np.ndarray
+        Computed field, shape [ny, nx].
+    exact : np.ndarray
+        Reference field, same shape.
+    mesh : Mesh
+        Supplies ``cell_type``; SOLID cells are left out of both norms.
+
+    Returns
+    -------
+    float
+        ``||field - exact||_2 / ||exact||_2`` over non-SOLID cells. Zero
+        when the two agree; raises if the exact field is zero everywhere,
+        since the ratio is then undefined.
+    """
+    mask = _non_solid(mesh)
+    norm = float(np.linalg.norm(exact[mask]))
+    if norm == 0.0:
+        raise ValueError("relative_l2 needs a nonzero exact field")
+    return float(np.linalg.norm(field[mask] - exact[mask]) / norm)
+
+
+def centroid(field: np.ndarray, mesh: Mesh) -> tuple[float, float]:
+    """Volume-weighted centre of a cell-centred field.
+
+    Parameters
+    ----------
+    field : np.ndarray
+        Cell values, shape [ny, nx]; a translated Gaussian's centroid is its
+        centre, which is why VAL-004 reads the peak location this way.
+    mesh : Mesh
+        Supplies the cell centres and widths.
+
+    Returns
+    -------
+    tuple[float, float]
+        (x, y) of ``sum(C V r) / sum(C V)`` over non-SOLID cells, in metres.
+        Raises if the field has zero net content.
+    """
+    mask = _non_solid(mesh)
+    weight = np.where(mask, field * np.outer(mesh.dy_cell, mesh.dx_cell), 0.0)
+    total = float(weight.sum())
+    if total == 0.0:
+        raise ValueError("centroid needs a field with nonzero content")
+    x = float((weight.sum(axis=0) * mesh.xc).sum() / total)
+    y = float((weight.sum(axis=1) * mesh.yc).sum() / total)
+    return x, y
+
+
+def peak_retention(field: np.ndarray, exact: np.ndarray, mesh: Mesh) -> float:
+    """The computed field's largest value over the exact field's largest value.
+
+    Parameters
+    ----------
+    field, exact : np.ndarray
+        Cell values, shape [ny, nx].
+    mesh : Mesh
+        Supplies ``cell_type``; SOLID cells are left out.
+
+    Returns
+    -------
+    float
+        ``max(field) / max(exact)`` over non-SOLID cells; 1 is no clipping.
+    """
+    mask = _non_solid(mesh)
+    peak = float(exact[mask].max())
+    if peak <= 0.0:
+        raise ValueError("peak_retention needs an exact field with a positive peak")
+    return float(field[mask].max() / peak)
+
+
+def field_minimum(field: np.ndarray, mesh: Mesh) -> float:
+    """The smallest value over non-SOLID cells, the quantity REQ-T12 bounds below.
+
+    Parameters
+    ----------
+    field : np.ndarray
+        Cell values, shape [ny, nx].
+    mesh : Mesh
+        Supplies ``cell_type``.
+
+    Returns
+    -------
+    float
+        ``min(field)`` over non-SOLID cells.
+    """
+    return float(field[_non_solid(mesh)].min())

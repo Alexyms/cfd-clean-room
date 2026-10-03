@@ -6,8 +6,9 @@ import numpy as np
 import pytest
 import yaml
 
+from src.boundary_concentration import SURFACE_FLOOR
 from src.config import SimConfig
-from src.mesh import FLUID, Mesh
+from src.mesh import FLUID, SOLID, Mesh
 from validation.cases import (
     CASE_FILES,
     CASE_GRIDS,
@@ -33,9 +34,27 @@ from validation.metrics import (
     cavity_marchi_centerline_errors,
     cavity_true_centerline_errors,
     cavity_true_centerline_profiles,
+    centroid,
+    field_minimum,
     lagrange,
+    peak_retention,
     poiseuille_l2_error,
     poiseuille_profiles,
+    relative_l2,
+)
+from validation.transport_cases import (
+    FixedConditions,
+    ScalarPhysics,
+    conditions_with,
+    diffusion_case,
+    gaussian_cell_averages,
+    gaussian_mass,
+    oblique_pulse_case,
+    rotating_puff_case,
+    sealed_box_case,
+    smith_hutton_case,
+    transport_config,
+    zero_conditions,
 )
 
 
@@ -610,3 +629,174 @@ class TestLagrange:
         Centered, these stencils would start at node -1 and end at node 8.
         """
         assert self._weights(target) == pytest.approx(expected, abs=1e-15)
+
+
+# ---------------------------------------------------------------------------
+# Transport metrics and cases (ADR-011 H; prompt 32 decision 2)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+class TestTransportMetrics:
+    """The four field metrics on a mesh with an obstacle, so SOLID cells count for nothing."""
+
+    def setup_method(self) -> None:
+        self.config = transport_config(
+            2.0,
+            1.2,
+            40,
+            24,
+            obstacles=[
+                {
+                    "name": "b",
+                    "x_start": 0.1,
+                    "x_end": 0.3,
+                    "y_start": 0.1,
+                    "y_end": 0.2,
+                }
+            ],
+        )
+        self.mesh = Mesh(self.config)
+        assert (self.mesh.cell_type == SOLID).sum() == 8
+        self.field = gaussian_cell_averages(self.mesh.x, self.mesh.y, (1.1, 0.7), 0.1)
+
+    def test_a_field_against_itself_scores_zero(self) -> None:
+        assert relative_l2(self.field, self.field, self.mesh) == 0.0
+
+    def test_relative_l2_ignores_solid_cells_and_is_the_ratio_of_norms(self) -> None:
+        other = self.field.copy()
+        other[0, 0] += 0.3  # a BOUNDARY-ring cell, which counts
+        solid = self.mesh.cell_type == SOLID
+        other[solid] += 100.0  # must not count
+        mask = ~solid
+        expected = 0.3 / np.linalg.norm(self.field[mask])
+        assert relative_l2(other, self.field, self.mesh) == pytest.approx(expected)
+
+    def test_relative_l2_refuses_a_zero_reference(self) -> None:
+        with pytest.raises(ValueError, match="nonzero exact field"):
+            relative_l2(self.field, np.zeros_like(self.field), self.mesh)
+
+    def test_the_centroid_of_a_translated_field_moves_by_the_translation(self) -> None:
+        # sigma 0.06 keeps both pulses over seven sigma from every edge, so
+        # the tail the domain cuts moves the centroid by less than 1e-12.
+        a = gaussian_cell_averages(self.mesh.x, self.mesh.y, (0.9, 0.6), 0.06)
+        b = gaussian_cell_averages(self.mesh.x, self.mesh.y, (1.3, 0.75), 0.06)
+        xa, ya = centroid(a, self.mesh)
+        xb, yb = centroid(b, self.mesh)
+        assert xa == pytest.approx(0.9, abs=1e-9) and ya == pytest.approx(0.6, abs=1e-9)
+        assert xb - xa == pytest.approx(0.4, abs=1e-9)
+        assert yb - ya == pytest.approx(0.15, abs=1e-9)
+
+    def test_centroid_refuses_an_empty_field(self) -> None:
+        with pytest.raises(ValueError, match="nonzero content"):
+            centroid(np.zeros_like(self.field), self.mesh)
+
+    def test_peak_retention_and_minimum(self) -> None:
+        clipped = 0.8 * self.field
+        clipped[10, 10] = -1e-3
+        clipped[2, 2] = -5.0  # a SOLID cell: not read
+        assert self.mesh.cell_type[2, 2] == SOLID
+        assert peak_retention(clipped, self.field, self.mesh) == pytest.approx(0.8)
+        assert field_minimum(clipped, self.mesh) == -1e-3
+        assert field_minimum(self.field, self.mesh) >= 0.0
+        with pytest.raises(ValueError, match="positive peak"):
+            peak_retention(self.field, np.zeros_like(self.field), self.mesh)
+
+
+@pytest.mark.unit
+class TestTransportCases:
+    def test_gaussian_cell_averages_integrate_to_the_analytical_mass(self) -> None:
+        config = transport_config(2.0, 1.2, 100, 60)
+        mesh = Mesh(config)
+        field = gaussian_cell_averages(mesh.x, mesh.y, (0.93, 0.61), 0.08, 2.5)
+        content = (field * mesh.dx * mesh.dy).sum()
+        assert content == pytest.approx(gaussian_mass(0.08, 2.5), rel=1e-12)
+        # The peak cell average is below the continuous peak, which is off node.
+        assert field.max() < 2.5
+
+    def test_the_heat_kernel_keeps_its_mass_and_doubles_sigma_at_the_design_time(
+        self,
+    ) -> None:
+        case = diffusion_case()
+        mesh = case.mesh
+        volume = mesh.dx * mesh.dy
+        assert (case.initial * volume).sum() == pytest.approx(
+            gaussian_mass(0.05), rel=1e-12
+        )
+        # At t_end the wall is 5.9 sigma from the centre, so the tail the
+        # domain cuts is a few 1e-9 of the content (ADR-011 H).
+        assert (case.exact * volume).sum() == pytest.approx(
+            gaussian_mass(0.05), rel=1e-8
+        )
+        # The continuous amplitude is sigma_0^2 / sigma^2 = 1/4; the peak cell
+        # average of a ten-cell sigma is within 0.4% of it.
+        assert case.exact.max() == pytest.approx(0.25, rel=5e-3)
+        assert case.t_end == pytest.approx(3.75)
+
+    def test_the_rotation_and_smith_hutton_fields_are_divergence_free(self) -> None:
+        for case in (rotating_puff_case(), smith_hutton_case()):
+            mesh = case.mesh
+            div = (case.faces.u[:, 1:] - case.faces.u[:, :-1]) * mesh.dy + (
+                case.faces.v[1:, :] - case.faces.v[:-1, :]
+            ) * mesh.dx
+            scale = np.abs(case.faces.u).max() * mesh.dy
+            assert np.abs(div).max() <= 1e-14 * scale, case.name
+
+    def test_smith_hutton_walls_have_zero_normal_velocity_and_the_inlet_its_profile(
+        self,
+    ) -> None:
+        case = smith_hutton_case()
+        faces = case.faces
+        assert np.all(faces.u[:, 0] == 0.0) and np.all(faces.u[:, -1] == 0.0)
+        assert np.all(faces.v[-1, :] == 0.0)
+        inflow = case.conditions.faces_for(0).inflow_v
+        x_prime = case.mesh.xc - 1.0
+        assert np.all(faces.v[0, x_prime < 0.0] > 0.0)
+        assert np.all(faces.v[0, x_prime > 0.0] < 0.0)
+        assert np.all(inflow[0, x_prime > 0.0] == 0.0)
+        assert inflow[0, 0] == pytest.approx(1.0 - np.tanh(10.0 * 0.98), rel=1e-12)
+        assert np.all(inflow[1:, :] == 0.0)
+
+    def test_the_oblique_pulse_travels_one_metre_in_its_time(self) -> None:
+        case = oblique_pulse_case()
+        x0, y0 = centroid(case.initial, case.mesh)
+        x1, y1 = centroid(case.exact, case.mesh)
+        # The end is 4.4 sigma from the ceiling; the tail the domain cuts is
+        # below 1e-4 of the peak (ADR-011 H) and moves the centroid by 2e-5.
+        assert np.hypot(x1 - x0, y1 - y0) == pytest.approx(1.0, abs=1e-4)
+        assert case.faces.u[0, 0] == pytest.approx(0.45 * np.cos(np.radians(30.0)))
+        assert case.config.transport.cfl_number == 0.1
+
+    def test_the_sealed_box_conditions_settle_inside_and_deposit_on_the_floor_only(
+        self,
+    ) -> None:
+        case = sealed_box_case(settling=1e-3, floor_factor=2.0)
+        faces = case.conditions.faces_for(0)
+        assert np.all(faces.deposition_v[0, :] == 2e-3)
+        assert np.all(faces.deposition_v[1:, :] == 0.0)
+        assert np.all(faces.surface_v[0, :] == SURFACE_FLOOR)
+        assert faces.settling_v[1:-1, :].all()
+        assert not faces.settling_v[0, :].any() and not faces.settling_v[-1, :].any()
+        assert case.t_end == pytest.approx(3.0 / 1e-3)
+
+    def test_conditions_with_rejects_an_unknown_field_or_shape(self) -> None:
+        mesh = Mesh(transport_config(1.0, 0.5, 4, 2))
+        with pytest.raises(ValueError, match="not a ConcentrationFaces field"):
+            conditions_with(mesh, settling_u=np.zeros((3, 4)))
+        with pytest.raises(ValueError, match="must have shape"):
+            conditions_with(mesh, inflow_u=np.zeros((2, 4)))
+
+    def test_scalar_physics_checks_the_class_and_fixed_conditions_the_type(
+        self,
+    ) -> None:
+        physics = ScalarPhysics(settling=1.0, diffusion=2.0)
+        assert physics.settling_velocity(0) == 1.0 and physics.diffusion_coeff(0) == 2.0
+        with pytest.raises(IndexError):
+            physics.settling_velocity(1)
+        conditions = FixedConditions(
+            zero_conditions(Mesh(transport_config(1.0, 0.5, 4, 2)))
+        )
+        with pytest.raises(TypeError):
+            conditions.faces_for(True)
+        with pytest.raises(IndexError):
+            conditions.faces_for(-1)
