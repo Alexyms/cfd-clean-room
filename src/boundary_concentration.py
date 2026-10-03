@@ -230,9 +230,11 @@ class ConcentrationBoundary:
                 inlet_positions.setdefault(point.name, []).append(k)
                 inlet_specs[point.name] = point.spec
             elif bc_type in (WALL, VELOCITY_INLET):
+                # deposition_surface is a wall-segment key (config rejects it on
+                # an inlet), so a zero-normal inlet takes the edge's surface.
                 surface = EDGE_SURFACES[edge]
-                if point.spec is not None and point.spec.deposition_surface is not None:
-                    surface = point.spec.deposition_surface
+                if bc_type == WALL and point.spec is not None:
+                    surface = point.spec.deposition_surface or surface
                 component, rows, cols = self._edge_face_index(
                     edge, np.array([k]), ny, nx
                 )
