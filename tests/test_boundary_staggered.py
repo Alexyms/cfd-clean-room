@@ -351,6 +351,27 @@ class TestFluxAndScales:
         assert covered.sum() == 4
         assert bc.get_inlet_flux("inlet") == pytest.approx(expected, rel=1e-14)
 
+    def test_adjacent_inlets_each_count_their_own_faces_once(self) -> None:
+        """Review 31 S1: the flux is attributed by the shared coverage, not re-derived.
+
+        Two inlets meeting at 1.0 on 8 cells of 0.25: the center 0.875 is
+        the first's and 1.125 the second's; the meeting point is no cell
+        center, so neither face is in both. Each flux is that segment's
+        faces alone and the two sum to the face sum.
+        """
+        first = dict(TOP_INLET, x_start=0.3, x_end=1.0, velocity=0.2)
+        second = dict(TOP_INLET, x_start=1.0, x_end=1.8, velocity=0.6)
+        mesh, bc = _build(_config({"first": first, "second": second}))
+        u, v = _filled(mesh)
+        bc.apply_normal_velocity(u, v)
+        face_sum = float(np.sum(-v[-1, :] * mesh.dx_cell * (v[-1, :] != 3.0)))
+        flux_first = bc.get_inlet_flux("first")
+        flux_second = bc.get_inlet_flux("second")
+        assert flux_first == pytest.approx(0.2 * 0.25 * 3, rel=1e-14)
+        assert flux_second == pytest.approx(0.6 * 0.25 * 3, rel=1e-14)
+        assert flux_first + flux_second == pytest.approx(face_sum, rel=1e-14)
+        assert bc.get_total_inlet_flux() == pytest.approx(face_sum, rel=1e-14)
+
     def test_tangential_lid_carries_no_flux(self) -> None:
         _mesh, bc = _build(_config(CAVITY))
         assert bc.get_inlet_flux("lid") == 0.0

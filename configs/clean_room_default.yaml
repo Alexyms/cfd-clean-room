@@ -44,9 +44,10 @@ solver:
   pressure_tol: 1.0e-6     # Jacobi convergence tolerance
 
 transport:
-  # ADR-011 I. cfl_number is the fraction of the limited scheme's stability
-  # bound (1/2) the explicit advection step runs at; 0.1 is the product case's
-  # own Courant number at dt 0.01 and the value the validation cases use.
+  # ADR-011 I. cfl_number is the Courant number the explicit advection step
+  # runs at, at most the limited scheme's stability bound of 1/2. The product
+  # case's own Courant number at dt 0.01 is 0.1125 (0.45 m/s over 0.04 m);
+  # 0.1 is the value the validation cases use and the solver steps at.
   cfl_number: 0.1
   advection_scheme: umist   # QUICK bounded by the UMIST limiter; or upwind
   max_diffusion_iter: 200   # Jacobi sweep cap per class per step

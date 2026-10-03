@@ -6,8 +6,13 @@ edges, an inlet whose ends sit off the mesh nodes, and a wall segment with
 deposition switched off. Expected arrays are built face by face in the
 tests from the obstacle's cell extents and the segment ranges, not from the
 module's own classification, and compared whole, so a face booked where
-nothing should be is as visible as one missing.
+nothing should be is as visible as one missing. Two further configurations
+put an obstacle on a domain edge under an inlet (test 31's cases), so the
+SOLID rule is exercised and the agreement test can see a mask that differs
+between the layers.
 """
+
+import copy
 
 import numpy as np
 import pytest
@@ -27,7 +32,7 @@ from src.config import SimConfig
 from src.mesh import SOLID, Mesh
 from src.particles import ParticlePhysics
 from src.staggered import allocate_fields
-from validation.cases import CONFIG_DIR, case_path
+from validation.cases import CONFIG_DIR, case_path, load_case
 
 SIZES = [0.1e-6, 0.3e-6, 0.5e-6, 1.0e-6, 5.0e-6]
 SURFACES = ("floor", "ceiling", "wall")
@@ -115,6 +120,69 @@ def _synthetic() -> SimConfig:
             {"supply": TOP_INLET, "dead": DEAD_WALL, "drain": FLOOR_OUTLET},
             obstacles=[OBSTACLE],
         )
+    )
+
+
+# Test 31's cases: an obstacle standing on the bottom edge under a bottom
+# inlet (SOLID columns 6 to 10 of the inlet's 4 to 15), and one against the
+# left edge behind a full-height left inlet (SOLID rows 3 to 7).
+FLOOR_OBSTACLE_UNDER_INLET = {
+    "supply": {
+        "type": "velocity_inlet",
+        "location": "bottom",
+        "x_start": 0.37,
+        "x_end": 1.63,
+        "velocity": 0.3,
+        "concentration": [10.0, 20.0, 30.0, 40.0, 50.0],
+    },
+    "exhaust": {
+        "type": "pressure_outlet",
+        "location": "top",
+        "x_start": 0.0,
+        "x_end": 2.0,
+    },
+}
+FLOOR_BENCH = {
+    "name": "bench",
+    "x_start": 0.62,
+    "x_end": 1.08,
+    "y_start": 0.0,
+    "y_end": 0.48,
+}
+LEFT_OBSTACLE_BEHIND_INLET = {
+    "supply": {
+        "type": "velocity_inlet",
+        "location": "left",
+        "y_start": 0.0,
+        "y_end": 1.2,
+        "velocity": 0.3,
+        "concentration": [10.0, 20.0, 30.0, 40.0, 50.0],
+    },
+    "exhaust": {
+        "type": "pressure_outlet",
+        "location": "right",
+        "y_start": 0.0,
+        "y_end": 1.2,
+    },
+}
+LEFT_CABINET = {
+    "name": "cabinet",
+    "x_start": 0.0,
+    "x_end": 0.48,
+    "y_start": 0.32,
+    "y_end": 0.78,
+}
+
+
+def _floor_obstacle_case() -> SimConfig:
+    return SimConfig.from_dict(
+        _raw(FLOOR_OBSTACLE_UNDER_INLET, obstacles=[FLOOR_BENCH])
+    )
+
+
+def _left_obstacle_case() -> SimConfig:
+    return SimConfig.from_dict(
+        _raw(LEFT_OBSTACLE_BEHIND_INLET, obstacles=[LEFT_CABINET])
     )
 
 
@@ -252,12 +320,76 @@ class TestSynthetic:
         floor = first.surface_v == SURFACE_FLOOR
         assert np.allclose(last.deposition_v[floor] / first.deposition_v[floor], ratio)
 
-    def test_a_class_out_of_range_raises(self) -> None:
+    def test_a_class_out_of_range_or_of_the_wrong_type_raises(self) -> None:
         _mesh, _physics, bc = _build(_synthetic())
         with pytest.raises(IndexError, match="size_class"):
             bc.faces_for(5)
         with pytest.raises(IndexError, match="size_class"):
             bc.faces_for(-1)
+        with pytest.raises(TypeError, match="size_class must be an int"):
+            bc.faces_for(True)
+        with pytest.raises(TypeError, match="size_class must be an int"):
+            bc.faces_for(1.0)
+
+    def test_faces_are_not_compared_or_hashed_by_value(self) -> None:
+        """eq=False, so == and hash never hit the ndarray truth value."""
+        _mesh, _physics, bc = _build(_synthetic())
+        a, b = bc.faces_for(0), bc.faces_for(0)
+        assert a != b and a == a
+        assert len({a, b}) == 2
+
+    @pytest.mark.parametrize("surface", ["floor", "ceiling", "wall"])
+    def test_deposition_surface_override_reaches_exactly_the_overridden_faces(
+        self, surface: str
+    ) -> None:
+        """Review 31 B1 (3): a right wall segment booked as another surface.
+
+        The override segment covers rows 2 to 6 of the right edge; those
+        faces take the named surface and its deposition velocity, every
+        other face is as in the base case.
+        """
+        base = _synthetic()
+        override = {
+            "type": "wall",
+            "location": "right",
+            "y_start": 0.22,
+            "y_end": 0.68,
+            "deposition_surface": surface,
+        }
+        config = SimConfig.from_dict(
+            _raw(
+                {
+                    "supply": TOP_INLET,
+                    "dead": DEAD_WALL,
+                    "drain": FLOOR_OUTLET,
+                    "ov": override,
+                },
+                obstacles=[OBSTACLE],
+            )
+        )
+        mesh, physics, bc = _build(config)
+        _mesh, _physics, plain = _build(base)
+        code = {
+            "floor": SURFACE_FLOOR,
+            "ceiling": SURFACE_CEILING,
+            "wall": SURFACE_WALL,
+        }[surface]
+        nx = mesh.cell_type.shape[1]
+        rows = slice(2, 7)
+        for k in (0, 4):
+            got, expected = bc.faces_for(k), plain.faces_for(k)
+            assert np.all(got.surface_u[rows, nx] == code)
+            assert np.all(
+                got.deposition_u[rows, nx] == physics.deposition_velocity(k, surface)
+            )
+            mask = np.zeros_like(got.surface_u, dtype=bool)
+            mask[rows, nx] = True
+            assert np.array_equal(got.surface_u[~mask], expected.surface_u[~mask])
+            assert np.array_equal(got.deposition_u[~mask], expected.deposition_u[~mask])
+            assert np.array_equal(got.surface_v, expected.surface_v)
+            assert np.array_equal(got.deposition_v, expected.deposition_v)
+            assert np.array_equal(got.inflow_u, expected.inflow_u)
+            assert np.array_equal(got.inflow_v, expected.inflow_v)
 
     def test_physics_built_for_another_class_count_is_refused(self) -> None:
         config = _synthetic()
@@ -278,6 +410,66 @@ class TestSynthetic:
             ConcentrationBoundary(
                 Mesh(config), config, ParticlePhysics(other), BoundaryRegistry(config)
             )
+
+
+@pytest.mark.unit
+class TestSolidEdgeCells:
+    """Review 31 B1 (1): a SOLID cell on a domain edge has no scalar face."""
+
+    @pytest.mark.parametrize(
+        ("build", "edge_axis", "solid_run"),
+        [
+            (_floor_obstacle_case, "v", slice(6, 11)),
+            (_left_obstacle_case, "u", slice(3, 8)),
+        ],
+        ids=["floor-obstacle-under-bottom-inlet", "left-obstacle-behind-left-inlet"],
+    )
+    def test_faces_behind_solid_edge_cells_carry_nothing(
+        self, build: object, edge_axis: str, solid_run: slice
+    ) -> None:
+        config = build()
+        mesh, _physics, bc = _build(config)
+        solid_edge = mesh.cell_type[0, :] if edge_axis == "v" else mesh.cell_type[:, 0]
+        expected = np.zeros(solid_edge.shape, dtype=bool)
+        expected[solid_run] = True
+        assert np.array_equal(solid_edge == SOLID, expected)
+        for k in range(len(SIZES)):
+            faces = bc.faces_for(k)
+            if edge_axis == "v":
+                behind = (
+                    faces.surface_v[0, solid_run],
+                    faces.deposition_v[0, solid_run],
+                    faces.inflow_v[0, solid_run],
+                )
+                beside = faces.inflow_v[0, INLET_COLS]
+            else:
+                behind = (
+                    faces.surface_u[solid_run, 0],
+                    faces.deposition_u[solid_run, 0],
+                    faces.inflow_u[solid_run, 0],
+                )
+                beside = faces.inflow_u[:, 0]
+            for arr in behind:
+                assert not arr.any()
+            # The inlet still carries its concentration on the faces that are not behind the obstacle.
+            carried = beside[beside != 0.0]
+            assert carried.size == beside.size - (solid_run.stop - solid_run.start)
+            assert np.all(carried == [10.0, 20.0, 30.0, 40.0, 50.0][k])
+
+    def test_product_floor_faces_under_the_obstacles_take_no_condition(self) -> None:
+        """Test 31: 98 floor faces on the product's own 200x75 grid sit under obstacles."""
+        config = SimConfig(CONFIG_DIR / "clean_room_default.yaml")
+        mesh, _physics, bc = _build(config)
+        under = mesh.cell_type[0, :] == SOLID
+        assert int(under.sum()) == 98
+        faces = bc.faces_for(4)
+        assert not faces.surface_v[0, under].any()
+        assert not faces.deposition_v[0, under].any()
+        assert not faces.inflow_v[0, under].any()
+        assert np.all(
+            faces.surface_v[0, ~under & (faces.surface_v[0, :] != SURFACE_NONE)]
+            == SURFACE_FLOOR
+        )
 
 
 def _product_raw(**supply_keys: object) -> dict:
@@ -352,34 +544,62 @@ COMMITTED = {
 }
 
 
-def _marked_inlets(path: object) -> SimConfig:
-    """The committed file with every velocity_inlet carrying a unit concentration."""
-    with open(path, encoding="utf-8") as handle:
-        raw = yaml.safe_load(handle)
+def _normal_is_zero(spec: dict) -> bool:
+    """A velocity_inlet written with components whose normal one is absent or zero."""
+    if "velocity" in spec:
+        return False
+    normal = "v_velocity" if spec["location"] in ("bottom", "top") else "u_velocity"
+    return not spec.get(normal)
+
+
+def _marked_inlets(raw: dict) -> SimConfig:
+    """A configuration with every air-admitting velocity_inlet carrying a unit concentration.
+
+    ``hepa_filtered`` is cleared so the set does not depend on reference data
+    (review 31 S14). A zero-normal inlet may not carry a concentration and is
+    left as it is.
+    """
     n = len(raw["particles"]["sizes"])
     for spec in raw["boundaries"].values():
-        if spec["type"] == "velocity_inlet":
+        if spec["type"] == "velocity_inlet" and not _normal_is_zero(spec):
             spec["concentration"] = [1.0] * n
+            spec["hepa_filtered"] = False
     return SimConfig.from_dict(raw)
 
 
+def _agreement_configs() -> dict[str, SimConfig]:
+    configs = {}
+    for name, path in COMMITTED.items():
+        with open(path, encoding="utf-8") as handle:
+            configs[name] = _marked_inlets(yaml.safe_load(handle))
+    # Deep copies: _marked_inlets edits the segment dicts it is handed.
+    configs["floor-obstacle-under-inlet"] = _marked_inlets(
+        copy.deepcopy(_raw(FLOOR_OBSTACLE_UNDER_INLET, obstacles=[FLOOR_BENCH]))
+    )
+    configs["left-obstacle-behind-inlet"] = _marked_inlets(
+        copy.deepcopy(_raw(LEFT_OBSTACLE_BEHIND_INLET, obstacles=[LEFT_CABINET]))
+    )
+    return configs
+
+
+AGREEMENT = _agreement_configs()
+
+
 @pytest.mark.integration
-@pytest.mark.parametrize("name", list(COMMITTED))
+@pytest.mark.parametrize("name", list(AGREEMENT))
 def test_both_layers_agree_on_which_faces_are_inlets(name: str) -> None:
-    """REQ-S12.1, the trap of prompt 31.
+    """REQ-S12.1, the trap of prompt 31, exact on every configuration.
 
     S: faces the staggered layer writes a nonzero normal velocity to. T:
     faces the concentration layer marks as inlets, made visible through
-    the contract by giving every velocity_inlet segment a concentration.
-    Z: faces the staggered layer writes exactly zero to (walls, SOLID edge
-    cells, and inlets with no normal component such as the cavity lid).
-    S must lie inside T, so no face drives air in without a concentration
-    condition, and T inside S or Z, so no scalar inlet is an outlet or an
-    unwritten face. The faces in T but not S are the zero-normal inlets,
-    reported; on the product case and the channel there are none and the
-    two sets are equal.
+    the contract by giving every air-admitting velocity_inlet segment a
+    concentration. The two sets are equal: no face drives air in without a
+    concentration condition, and no scalar inlet is a wall, an outlet, a
+    face behind a SOLID cell or a zero-normal inlet (which is a wall to the
+    scalar layer, ADR-011 E as amended). The three committed configurations
+    and test 31's two SOLID-edge cases.
     """
-    config = _marked_inlets(COMMITTED[name])
+    config = AGREEMENT[name]
     mesh = Mesh(config)
     staggered = StaggeredBoundary(mesh, config)
     u, v, _p = allocate_fields(mesh)
@@ -395,21 +615,30 @@ def test_both_layers_agree_on_which_faces_are_inlets(name: str) -> None:
     ).faces_for(0)
     t_u, t_v = faces.inflow_u != 0.0, faces.inflow_v != 0.0
 
-    driven_without_condition = int((s_u & ~t_u).sum() + (s_v & ~t_v).sum())
-    condition_without_dirichlet = int(
-        (t_u & ~(s_u | z_u)).sum() + (t_v & ~(s_v | z_v)).sum()
-    )
-    zero_normal_inlets = int((t_u & z_u).sum() + (t_v & z_v).sum())
+    dispute = int((s_u ^ t_u).sum() + (s_v ^ t_v).sum())
+    zero_normal = int((t_u & z_u).sum() + (t_v & z_v).sum())
     print(
         f"{name}: staggered nonzero {int(s_u.sum() + s_v.sum())}, scalar inlet "
-        f"{int(t_u.sum() + t_v.sum())}, zero-normal inlet faces {zero_normal_inlets}, "
-        f"in dispute {driven_without_condition + condition_without_dirichlet}"
+        f"{int(t_u.sum() + t_v.sum())}, in dispute {dispute}"
     )
-    assert driven_without_condition == 0
-    assert condition_without_dirichlet == 0
-    assert np.array_equal(s_u, t_u & ~z_u)
-    assert np.array_equal(s_v, t_v & ~z_v)
+    assert dispute == 0
+    assert zero_normal == 0
+    assert np.array_equal(s_u, t_u) and np.array_equal(s_v, t_v)
     if name != "val002":
-        assert zero_normal_inlets == 0
-        assert np.array_equal(s_u, t_u) and np.array_equal(s_v, t_v)
         assert int(s_u.sum() + s_v.sum()) > 0
+
+
+@pytest.mark.integration
+def test_the_cavity_lid_is_a_ceiling_to_the_scalar_layer() -> None:
+    """Decision 2 of 2026-10-03: a zero-normal inlet deposits and admits nothing."""
+    config = load_case("cavity", grid=(10, 10))
+    mesh, physics, bc = _build(config)
+    ny = mesh.cell_type.shape[0]
+    for k in range(len(config.particle_sizes)):
+        faces = bc.faces_for(k)
+        assert np.all(faces.surface_v[ny, :] == SURFACE_CEILING)
+        assert np.all(
+            faces.deposition_v[ny, :] == physics.deposition_velocity(k, "ceiling")
+        )
+        assert not faces.inflow_v.any() and not faces.inflow_u.any()
+        assert not faces.settling_v[ny, :].any()

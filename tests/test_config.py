@@ -1281,7 +1281,8 @@ class TestSegmentKeys:
         raw["boundaries"]["door"]["deposition_surface"] = "none"
         config = SimConfig.from_dict(raw)
         supply = config.boundaries["hepa_supply"]
-        assert supply.concentration == [1.0, 2.5, 0.0, 4.0, 5000.0]
+        assert supply.concentration == (1.0, 2.5, 0.0, 4.0, 5000.0)
+        assert isinstance(supply.concentration, tuple)
         assert all(isinstance(c, float) for c in supply.concentration)
         assert supply.hepa_filtered is True
         assert config.boundaries["door"].deposition_surface == "none"
@@ -1356,3 +1357,181 @@ class TestSegmentKeys:
                     False,
                     None,
                 )
+
+
+RULE_SUPPLY = {
+    "type": "velocity_inlet",
+    "location": "top",
+    "x_start": 0.5,
+    "x_end": 3.5,
+    "velocity": 0.45,
+}
+RULE_LID = {
+    "type": "velocity_inlet",
+    "location": "top",
+    "x_start": 0.0,
+    "x_end": 4.0,
+    "u_velocity": 1.0,
+    "v_velocity": 0.0,
+}
+
+
+@pytest.mark.unit
+class TestSegmentRules:
+    """Decisions 1 to 3 of 2026-10-03: unknown keys, zero-normal inlets, overlap."""
+
+    def _raw(self, tmp_path: Path, boundaries: dict) -> dict:
+        with open(_write_config(tmp_path), encoding="utf-8") as handle:
+            raw = yaml.safe_load(handle)
+        raw["boundaries"] = boundaries
+        return raw
+
+    @pytest.mark.parametrize(
+        ("key", "value"),
+        [
+            ("hepa_filterd", True),
+            ("concentrations", [1, 2, 3, 4, 5]),
+            ("deposition_surfce", "none"),
+        ],
+    )
+    def test_an_unknown_segment_key_raises_naming_the_segment(
+        self, tmp_path: Path, key: str, value: object
+    ) -> None:
+        """A misspelt key would otherwise change the physics with no message (REQ-C02)."""
+        raw = self._raw(tmp_path, {"hepa_supply": {**RULE_SUPPLY, key: value}})
+        with pytest.raises(
+            ValueError, match=rf"boundaries\.hepa_supply\.{key} is not a recognised"
+        ):
+            SimConfig.from_dict(raw)
+
+    @pytest.mark.parametrize(
+        ("key", "value"), [("concentration", [1, 2, 3, 4, 5]), ("hepa_filtered", True)]
+    )
+    def test_a_concentration_key_on_a_zero_normal_inlet_raises(
+        self, tmp_path: Path, key: str, value: object
+    ) -> None:
+        """A tangential lid admits no air; the scalar layer treats it as a wall."""
+        raw = self._raw(tmp_path, {"lid": {**RULE_LID, key: value}})
+        with pytest.raises(
+            ValueError,
+            match=rf"boundaries\.lid\.{key} is not valid on a velocity_inlet whose",
+        ):
+            SimConfig.from_dict(raw)
+        # The same keys on an oblique inlet with a nonzero normal are fine.
+        oblique = {**RULE_LID, "v_velocity": -0.2, key: value}
+        SimConfig.from_dict(self._raw(tmp_path, {"lid": oblique}))
+        # And a one-component inlet whose only component is tangential is a lid.
+        tangential = {k: v for k, v in RULE_LID.items() if k != "v_velocity"} | {
+            key: value
+        }
+        with pytest.raises(ValueError, match="normal velocity is zero"):
+            SimConfig.from_dict(self._raw(tmp_path, {"lid": tangential}))
+
+    def test_overlapping_segments_on_one_edge_raise_naming_both(
+        self, tmp_path: Path
+    ) -> None:
+        """Two conditions for one face: the file would say two things to two readers."""
+        a = {**RULE_SUPPLY, "x_start": 0.25, "x_end": 0.85}
+        b = {**RULE_SUPPLY, "x_start": 0.55, "x_end": 1.25}
+        with pytest.raises(
+            ValueError, match=r"boundaries\.a and boundaries\.b overlap on the top edge"
+        ):
+            SimConfig.from_dict(self._raw(tmp_path, {"a": a, "b": b}))
+        wall = {"type": "wall", "location": "top", "x_start": 0.8, "x_end": 1.0}
+        with pytest.raises(
+            ValueError, match=r"boundaries\.a and boundaries\.door overlap"
+        ):
+            SimConfig.from_dict(self._raw(tmp_path, {"a": a, "door": wall}))
+        left = {"type": "wall", "location": "left", "y_start": 0.0, "y_end": 2.0}
+        hood = {
+            "type": "pressure_outlet",
+            "location": "left",
+            "y_start": 1.0,
+            "y_end": 3.0,
+        }
+        with pytest.raises(
+            ValueError,
+            match=r"boundaries\.left and boundaries\.hood overlap on the left edge",
+        ):
+            SimConfig.from_dict(self._raw(tmp_path, {"left": left, "hood": hood}))
+
+    def test_touching_segments_and_other_edges_load(self, tmp_path: Path) -> None:
+        """Ranges that meet at one coordinate are not an overlap; the first decides there."""
+        a = {**RULE_SUPPLY, "x_start": 0.25, "x_end": 0.85}
+        b = {**RULE_SUPPLY, "x_start": 0.85, "x_end": 1.25}
+        bottom = {**RULE_SUPPLY, "location": "bottom", "x_start": 0.5, "x_end": 1.0}
+        config = SimConfig.from_dict(self._raw(tmp_path, {"a": a, "b": b, "c": bottom}))
+        assert list(config.boundaries) == ["a", "b", "c"]
+
+    def test_the_committed_configurations_still_load(self) -> None:
+        for path in (CONFIG_DIR / "clean_room_default.yaml",):
+            SimConfig(path)
+        for name in ("poiseuille", "cavity"):
+            load_case(name)
+
+
+@pytest.mark.unit
+class TestFiniteNumbers:
+    """NaN and infinity are rejected wherever a number is expected (review 31 S7)."""
+
+    def _raw(self, tmp_path: Path) -> dict:
+        with open(_write_config(tmp_path), encoding="utf-8") as handle:
+            raw = yaml.safe_load(handle)
+        raw["transport"] = {
+            "cfl_number": 0.1,
+            "max_diffusion_iter": 200,
+            "diffusion_tol": 1e-8,
+        }
+        raw["boundaries"]["hepa_supply"]["concentration"] = [1.0, 2.0, 3.0, 4.0, 5.0]
+        return raw
+
+    @pytest.mark.parametrize("bad", [float("nan"), float("inf"), -float("inf")])
+    @pytest.mark.parametrize(
+        ("section", "key", "helper"),
+        [
+            (("transport",), "cfl_number", "_require_positive_float"),
+            (("transport",), "diffusion_tol", "_require_positive_float"),
+            (("domain",), "width", "_require_positive_float"),
+            (("boundaries", "hepa_supply"), "x_start", "_require_float"),
+            (("solver",), "alpha_velocity", "_require_relaxation_factor"),
+        ],
+    )
+    def test_scalar_helpers_reject_non_finite(
+        self, tmp_path: Path, section: tuple, key: str, helper: str, bad: float
+    ) -> None:
+        raw = self._raw(tmp_path)
+        target = raw
+        for part in section:
+            target = target[part]
+        target[key] = bad
+        with pytest.raises(
+            ValueError, match=rf"{'.'.join(section)}\.{key} must be finite"
+        ):
+            SimConfig.from_dict(raw)
+
+    @pytest.mark.parametrize("bad", [float("nan"), float("inf")])
+    @pytest.mark.parametrize(
+        ("section", "key"),
+        [
+            (("boundaries", "hepa_supply"), "concentration"),
+            (("particles", "hepa_reference"), "efficiencies"),
+            (("particles",), "sizes"),
+        ],
+        ids=[
+            "concentration-float-list",
+            "efficiencies-float-list",
+            "sizes-positive-float-list",
+        ],
+    )
+    def test_list_helpers_reject_non_finite_items(
+        self, tmp_path: Path, section: tuple, key: str, bad: float
+    ) -> None:
+        raw = self._raw(tmp_path)
+        target = raw
+        for part in section:
+            target = target[part]
+        target[key][1] = bad
+        with pytest.raises(
+            ValueError, match=rf"{'.'.join(section)}\.{key}\[1\] must be finite"
+        ):
+            SimConfig.from_dict(raw)

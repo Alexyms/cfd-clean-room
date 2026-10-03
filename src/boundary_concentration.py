@@ -2,19 +2,22 @@
 
 The registry's second reader (REQ-S12.1). The velocity layer in
 src/boundary_staggered.py decides which domain faces are walls, inlets and
-outlets by asking ``BoundaryRegistry.coverage_along``; this module asks the
-same question of the same function, with the same cell coordinates and the
-same SOLID mask, and derives from the answer the scalar condition the
+outlets by asking ``BoundaryRegistry.coverage_along`` on the coordinates
+and SOLID mask ``staggered.edge_cell_inputs`` derives; this module makes
+the same call, and derives from the answer the scalar condition the
 transport solver applies at every face. It never reads or writes a
 concentration field, and it imposes nothing: it hands the solver arrays
 shaped like the staggered faces and the solver forms the fluxes.
 
 The conditions, per face, for particle class k:
 
-- Inlet (a ``velocity_inlet`` segment): the inward flux carries
-  ``concentration[k]``, times one minus ``hepa_efficiency(k)`` when the
-  segment is ``hepa_filtered``; zero when the key is absent, which is the
-  clean supply of ADR-011 decision 3. ``inflow_u``, ``inflow_v``.
+- Inlet (a ``velocity_inlet`` segment with a nonzero normal velocity): the
+  inward flux carries ``concentration[k]``, times one minus
+  ``hepa_efficiency(k)`` when the segment is ``hepa_filtered``; zero when
+  the key is absent, which is the clean supply of ADR-011 decision 3.
+  ``inflow_u``, ``inflow_v``. A ``velocity_inlet`` whose normal velocity
+  is zero (a tangential lid) admits no air and is a moving surface
+  particles land on: a wall below (ADR-011 E, amended 2026-10-03).
 - Outlet (``pressure_outlet``): nothing is carried in; a reversed outlet
   face brings clean air. The outflow is the solver's, from the upwind cell.
 - Wall: a deposition flux at ``deposition_velocity(k, surface)`` where the
@@ -61,7 +64,7 @@ from src.config import (
 )
 from src.mesh import SOLID, Mesh
 from src.particles import ParticlePhysics
-from src.staggered import edge_cells, u_shape, v_shape
+from src.staggered import edge_cell_inputs, u_shape, v_shape
 
 # The small integers surface_u and surface_v carry (ADR-011 E).
 SURFACE_NONE: int = 0
@@ -74,7 +77,6 @@ SURFACE_CODES: dict[str, int] = {
     DEPOSITION_CEILING: SURFACE_CEILING,
     DEPOSITION_WALL: SURFACE_WALL,
 }
-SURFACE_NAMES: dict[int, str] = {code: name for name, code in SURFACE_CODES.items()}
 
 # The surface a domain edge deposits to unless a wall segment overrides it.
 EDGE_SURFACES: dict[str, str] = {
@@ -85,7 +87,7 @@ EDGE_SURFACES: dict[str, str] = {
 }
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class ConcentrationFaces:
     """The scalar conditions of one particle class on every staggered face.
 
@@ -181,10 +183,7 @@ class ConcentrationBoundary:
         surface_v = np.zeros(self._v_shape, dtype=np.int32)
         self._inlets: list[_InletRun] = []
         for edge in EDGES:
-            coordinates = mesh.xc if edge in ("bottom", "top") else mesh.yc
-            coverage = registry.coverage_along(
-                edge, coordinates, edge_cells(mesh.cell_type, edge) == SOLID
-            )
+            coverage = registry.coverage_along(edge, *edge_cell_inputs(mesh, edge))
             self._classify_edge(edge, coverage, surface_u, surface_v, ny, nx)
 
         # Faces between a non-SOLID and a SOLID cell: walls of the orientation
@@ -217,7 +216,8 @@ class ConcentrationBoundary:
 
         A SOLID edge cell has no scalar face. An outlet face carries
         nothing in. A wall face takes the segment's ``deposition_surface``
-        when one is named, else the edge's default.
+        when one is named, else the edge's default. An inlet whose normal
+        velocity is zero is a wall here, with the edge's default surface.
         """
         inlet_positions: dict[str, list[int]] = {}
         inlet_specs: dict[str, BoundarySpec] = {}
@@ -225,11 +225,11 @@ class ConcentrationBoundary:
             if point.solid:
                 continue
             bc_type = point.condition.bc_type
-            if bc_type == VELOCITY_INLET:
+            if bc_type == VELOCITY_INLET and self._normal(point, edge) != 0.0:
                 assert point.name is not None and point.spec is not None
                 inlet_positions.setdefault(point.name, []).append(k)
                 inlet_specs[point.name] = point.spec
-            elif bc_type == WALL:
+            elif bc_type in (WALL, VELOCITY_INLET):
                 surface = EDGE_SURFACES[edge]
                 if point.spec is not None and point.spec.deposition_surface is not None:
                     surface = point.spec.deposition_surface
@@ -243,6 +243,13 @@ class ConcentrationBoundary:
                 edge, np.array(positions), ny, nx
             )
             self._inlets.append(_InletRun(component, rows, cols, inlet_specs[name]))
+
+    @staticmethod
+    def _normal(point: EdgeCoverage, edge: str) -> float:
+        """The prescribed component normal to an edge: v on top/bottom, u on left/right."""
+        if edge in ("bottom", "top"):
+            return point.condition.v_prescribed
+        return point.condition.u_prescribed
 
     @staticmethod
     def _edge_face_index(
@@ -282,9 +289,15 @@ class ConcentrationBoundary:
 
         Raises
         ------
+        TypeError
+            If ``size_class`` is not an int (a bool is not one here).
         IndexError
             If ``size_class`` is outside the configured range.
         """
+        if isinstance(size_class, bool) or not isinstance(size_class, int):
+            raise TypeError(
+                f"size_class must be an int, got {type(size_class).__name__}"
+            )
         if not 0 <= size_class < self._n_classes:
             raise IndexError(
                 f"size_class {size_class} out of range [0, {self._n_classes - 1}]"
