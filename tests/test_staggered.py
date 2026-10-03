@@ -9,8 +9,10 @@ import pytest
 from src.config import SimConfig
 from src.mesh import Mesh
 from src.staggered import (
+    FaceVelocities,
     allocate_fields,
     cell_center_coordinates,
+    check_staggered_pair,
     p_shape,
     to_cell_centers,
     u_face_coordinates,
@@ -156,3 +158,65 @@ class TestFaceToCenterAveraging:
         assert errors[0] > 1e-6, "quadratic field was reproduced exactly; not a test"
         orders = [math.log2(a / b) for a, b in pairwise(errors)]
         assert all(order > 1.9 for order in orders), orders
+
+
+@pytest.mark.unit
+class TestFaceVelocities:
+    """The read-only face pair the velocity solver exposes (REQ-S13, ADR-011 A)."""
+
+    def test_copy_of_gives_read_only_float64_contiguous_copies(self) -> None:
+        """Writes to the copies raise, and writes to the sources do not reach them."""
+        u = np.arange(5 * 9, dtype=np.float32).reshape(5, 9)
+        v = np.asfortranarray(np.arange(6 * 8, dtype=np.float64).reshape(6, 8))
+        faces = FaceVelocities.copy_of(u, v)
+        for arr, source in ((faces.u, u), (faces.v, v)):
+            assert arr.dtype == np.float64
+            assert arr.flags["C_CONTIGUOUS"]
+            assert not arr.flags.writeable
+            assert not np.shares_memory(arr, source)
+            assert np.array_equal(arr, source)
+            with pytest.raises(ValueError, match="read-only"):
+                arr[0, 0] = 1.0
+        u[0, 0] = -7.0
+        v[0, 0] = -7.0
+        assert faces.u[0, 0] == 0.0
+        assert faces.v[0, 0] == 0.0
+        assert u.flags.writeable and v.flags.writeable
+
+    def test_the_pair_averages_like_any_other(self) -> None:
+        """to_cell_centers accepts the read-only pair and gives the same means."""
+        mesh = Mesh(_config(8, 5))
+        u, v, _p = allocate_fields(mesh)
+        u[:] = np.random.default_rng(3).standard_normal(u.shape)
+        v[:] = np.random.default_rng(4).standard_normal(v.shape)
+        faces = FaceVelocities.copy_of(u, v)
+        expected = to_cell_centers(u, v)
+        got = to_cell_centers(faces.u, faces.v)
+        assert np.array_equal(got[0], expected[0])
+        assert np.array_equal(got[1], expected[1])
+
+    def test_inconsistent_shapes_are_rejected(self) -> None:
+        with pytest.raises(ValueError, match="inconsistent"):
+            FaceVelocities.copy_of(np.zeros((5, 9)), np.zeros((7, 8)))
+        with pytest.raises(ValueError, match="2D"):
+            check_staggered_pair(np.zeros(9), np.zeros((6, 8)))
+
+    def test_constructor_refuses_arrays_that_break_the_contract(self) -> None:
+        """A writeable, non-float64 or non-contiguous array cannot become a member."""
+        u = np.zeros((5, 9))
+        v = np.zeros((6, 8))
+        with pytest.raises(ValueError, match="read-only"):
+            FaceVelocities(u, v)
+        u_ro = np.zeros((5, 9), dtype=np.float32)
+        u_ro.flags.writeable = False
+        v_ro = np.zeros((6, 8))
+        v_ro.flags.writeable = False
+        with pytest.raises(ValueError, match="float64"):
+            FaceVelocities(u_ro, v_ro)
+        u_f = np.asfortranarray(np.zeros((5, 9)))
+        u_f.flags.writeable = False
+        with pytest.raises(ValueError, match="C-contiguous"):
+            FaceVelocities(u_f, v_ro)
+        good = FaceVelocities.copy_of(u, v)
+        again = FaceVelocities(good.u, good.v)
+        assert again.u is good.u and again.v is good.v

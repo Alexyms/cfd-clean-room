@@ -10,6 +10,7 @@ which leaves the solver's code path untouched.
 
 import dataclasses
 from collections.abc import Callable
+from time import perf_counter
 
 import numpy as np
 import pytest
@@ -21,7 +22,7 @@ from src.mesh import Mesh
 from src.momentum import MomentumPrediction, MomentumPredictor
 from src.pressure import PressureCorrection, PressureCorrector
 from src.solver_staggered import StaggeredSolver
-from src.staggered import allocate_fields, to_cell_centers
+from src.staggered import FaceVelocities, allocate_fields, to_cell_centers
 from src.stopping import ErrorEstimateRule, ImbalanceSummary, IterationState
 from validation.cases import (
     CASE_GRIDS,
@@ -228,6 +229,116 @@ class TestContract:
         last = corrections[-1]
         expected = PressureCorrector(mesh, config, bc).mass_imbalance(last.u, last.v)
         assert np.array_equal(solver.last_mass_imbalance, expected)
+
+
+@pytest.mark.integration
+class TestFaceVelocities:
+    """The face-field contract of REQ-S13 (ADR-011 A, SYSTEM.md section 4).
+
+    Each promise is checked bitwise, not to a tolerance: the faces exposed
+    must be the faces the stopping rule judged, and an average or an
+    imbalance that differed in the last bit would show a different array.
+    """
+
+    def test_none_before_the_first_solve_and_set_by_a_solve_that_hits_the_cap(
+        self,
+    ) -> None:
+        """Set at the end of every solve, converged or not."""
+        config = _ruled("cavity", (6, 6), convergence_tol=1e-300, max_simple_iter=20)
+        _mesh, _bc, solver = _build(config)
+        assert solver.face_velocities is None
+        solver.solve_steady()
+        assert solver.converged is False
+        assert isinstance(solver.face_velocities, FaceVelocities)
+
+    @pytest.mark.parametrize("case", ["cavity", "channel"])
+    def test_two_face_averages_are_the_returned_cell_means_bitwise(
+        self, case: str
+    ) -> None:
+        """A swap of u and v, or a copy from before the last correction, shows here."""
+        config = _case("cavity", 6) if case == "cavity" else _channel()
+        mesh, _bc, solver = _build(config)
+        u, v, _p = solver.solve_steady()
+        faces = solver.face_velocities
+        assert faces.u.shape == (mesh.yc.shape[0], mesh.x.shape[0])
+        assert faces.v.shape == (mesh.y.shape[0], mesh.xc.shape[0])
+        u_c, v_c = to_cell_centers(faces.u, faces.v)
+        assert np.array_equal(u_c, u)
+        assert np.array_equal(v_c, v)
+        assert not np.array_equal(faces.u[:, :-1], 0.0)
+
+    def test_mass_imbalance_of_the_faces_is_last_mass_imbalance_bitwise(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The faces are the last correction's, the ones the imbalance was read from."""
+        corrections = _record_corrections(monkeypatch)
+        config = _channel()
+        mesh, bc, solver = _build(config)
+        solver.solve_steady()
+        faces = solver.face_velocities
+        corrector = PressureCorrector(mesh, config, bc)
+        assert np.array_equal(
+            corrector.mass_imbalance(faces.u, faces.v), solver.last_mass_imbalance
+        )
+        assert np.array_equal(faces.u, corrections[-1].u)
+        assert np.array_equal(faces.v, corrections[-1].v)
+        assert len(corrections) > 1
+        assert not np.array_equal(faces.u, corrections[-2].u)
+
+    def test_arrays_are_owned_read_only_copies(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Writing raises; the solver's working arrays are not shared; a second solve leaves the first object alone."""
+        corrections = _record_corrections(monkeypatch)
+        config = _case("cavity", 6)
+        _mesh, _bc, solver = _build(config)
+        solver.solve_steady()
+        first = solver.face_velocities
+        for arr in (first.u, first.v):
+            assert arr.dtype == np.float64
+            assert arr.flags["C_CONTIGUOUS"]
+            with pytest.raises(ValueError, match="read-only"):
+                arr[0, 0] = 1.0
+        last = corrections[-1]
+        assert not np.shares_memory(first.u, last.u)
+        assert not np.shares_memory(first.v, last.v)
+        u_snapshot, v_snapshot = first.u.copy(), first.v.copy()
+        solver.solve_steady()
+        assert solver.face_velocities is not first
+        assert np.array_equal(first.u, u_snapshot)
+        assert np.array_equal(first.v, v_snapshot)
+
+
+@pytest.mark.validation
+def test_val001_40x20_continuity_remeasured_from_the_exposed_faces() -> None:
+    """REQ-S13's continuity promise, re-measured from face_velocities alone.
+
+    The committed VAL-001 case at 40x20 under its own error_estimate rule.
+    The imbalance recomputed from the exposed faces must meet REQ-S04's
+    per-cell and domain-sum clauses at mass_imbalance_tol, and its absolute
+    sum over the flux scale the summed bound: the faces exposed are the
+    faces the rule judged. About 25 s.
+    """
+    config = load_case("poiseuille", grid=(40, 20))
+    assert config.stopping_rule == "error_estimate"
+    mesh, bc, solver = _build(config)
+    start = perf_counter()
+    solver.solve_steady()
+    seconds = perf_counter() - start
+    assert solver.stop_reason == "error_estimate_and_continuity"
+
+    faces = solver.face_velocities
+    imbalance = PressureCorrector(mesh, config, bc).mass_imbalance(faces.u, faces.v)
+    worst = float(np.abs(imbalance).max())
+    signed_sum = float(imbalance.sum())
+    absolute_sum = float(np.abs(imbalance).sum())
+    print(f"VAL-001 40x20 from face_velocities, {len(solver.residual_history)} outer")
+    print(f"  in {seconds:.1f} s; worst cell {worst:.3e}; signed sum {signed_sum:.3e}")
+    print(f"  absolute sum {absolute_sum:.3e} over flux scale {solver.flux_scale:.3e}")
+    assert worst < config.mass_imbalance_tol
+    assert abs(signed_sum) < config.mass_imbalance_tol
+    assert absolute_sum / solver.flux_scale < config.iteration_error_tol
+    assert np.array_equal(imbalance, solver.last_mass_imbalance)
 
 
 @pytest.mark.integration

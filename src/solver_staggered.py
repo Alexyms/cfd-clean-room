@@ -31,6 +31,10 @@ collocated layer's is two corner cells short on VAL-001, so the two
 reference velocities differ by 40/38 there and agree exactly on a closed
 domain (docs/reports/staggered_integration_step6.md).
 
+The faces of the last solve are kept as ``face_velocities`` (REQ-S13):
+the transport solver advects with them because the cell means the contract
+returns do not carry the continuity the stopping rule enforced on the faces.
+
 ``stopping_rule`` picks the stop. ``velocity_step``, the default, is the
 collocated rule: the residual below ``convergence_tol``. ``error_estimate``
 (src/stopping.py) needs the estimated iteration error over the largest
@@ -53,7 +57,7 @@ from src.config import ERROR_ESTIMATE, VELOCITY_STEP, SimConfig
 from src.mesh import FLUID, Mesh
 from src.momentum import MomentumPredictor
 from src.pressure import PressureCorrector
-from src.staggered import allocate_fields, p_shape, to_cell_centers
+from src.staggered import FaceVelocities, allocate_fields, p_shape, to_cell_centers
 from src.stopping import ErrorEstimateRule, ImbalanceSummary, IterationState
 
 logger = logging.getLogger(__name__)
@@ -104,6 +108,14 @@ class StaggeredSolver:
     last_mass_imbalance : np.ndarray
         Per-cell mass imbalance of the returned face velocities, shape
         [ny, nx]. Observability only; the solver never reads it.
+    face_velocities : FaceVelocities or None
+        The final faces of the last solve, converged or not, as read-only
+        copies (REQ-S13, ADR-011 A); None until a solve completes. Their
+        two-face averages are the returned cell means bitwise and their
+        ``mass_imbalance`` is ``last_mass_imbalance`` bitwise. When
+        ``stop_reason`` is "error_estimate_and_continuity" that imbalance
+        meets REQ-S04's per-cell and domain-sum clauses; under
+        velocity_step the faces carry no continuity promise.
     flux_scale : float or None
         Read-only. The flux scale the error_estimate rule was built with, kg/s
         per unit depth; None under velocity_step.
@@ -135,6 +147,7 @@ class StaggeredSolver:
         self.last_pressure_sweeps: int = 0
         self.stage_seconds: dict[str, float] = self._zero_stage_seconds()
         self.last_mass_imbalance: np.ndarray = np.zeros(p_shape(mesh))
+        self.face_velocities: FaceVelocities | None = None
         self.converged: bool = False
         self.stop_reason: str | None = None
         self._flux_scale: float | None = None
@@ -289,4 +302,5 @@ class StaggeredSolver:
             self.stop_reason = "max_simple_iter"
             logger.warning("Not converged: stopped at max_simple_iter")
         self.last_mass_imbalance = self._corrector.mass_imbalance(u, v)
+        self.face_velocities = FaceVelocities.copy_of(u, v)
         return u_c, v_c, np.ascontiguousarray(p)
