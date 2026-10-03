@@ -11,8 +11,12 @@
 # rather than padded. Empty src/__init__.py has no entry: the generator gives
 # a package marker with no code no row.
 
+[modules."src/boundary_concentration.py"]
+responsibility = "Derives the per-face concentration conditions of each particle class from the registry's shared coverage and ParticlePhysics: the concentration an inlet carries, the deposition velocity and surface code at every wall and obstacle face, and the mask of faces that carry the settling increment, as read-only face-shaped data for the transport solver."
+serves = ["REQ-S12.1", "REQ-T09", "REQ-T10"]
+
 [modules."src/boundary_registry.py"]
-responsibility = "Interprets the configured boundary segments once, answering which condition and prescribed velocity hold at a point on a domain edge, for every boundary imposition layer: the staggered velocity layer today, the Phase 3 concentration layer next."
+responsibility = "Interprets the configured boundary segments once, answering which segment covers each point along a domain edge and which condition and prescribed velocity hold there, SOLID cells read as walls, for both boundary imposition layers: the staggered velocity layer and the concentration layer."
 serves = ["REQ-S12.1"]
 
 [modules."src/boundary_staggered.py"]
@@ -48,8 +52,8 @@ responsibility = "Predicts u* and v* on the staggered grid with QUICK advection 
 serves = ["REQ-S07", "REQ-S09"]
 
 [modules."src/solver_staggered.py"]
-responsibility = "Runs steady SIMPLE on the staggered grid as one outer loop over the momentum predictor and the pressure correction, returning cell-centered fields through the harness's callback shape; stops by the velocity-step rule or, when configured, by the error-estimate rule."
-serves = ["REQ-S01", "REQ-S02", "REQ-S03", "REQ-S04", "REQ-S05", "REQ-S07"]
+responsibility = "Runs steady SIMPLE on the staggered grid as one outer loop over the momentum predictor and the pressure correction, returning cell-centered fields through the harness's callback shape and exposing the final faces as FaceVelocities; stops by the velocity-step rule or, when configured, by the error-estimate rule."
+serves = ["REQ-S01", "REQ-S02", "REQ-S03", "REQ-S04", "REQ-S05", "REQ-S07", "REQ-S13"]
 
 [modules."src/stopping.py"]
 responsibility = "Decides when the steady outer iteration has converged, on four conditions: (a) the iteration error estimated from the step and its fitted geometric rate, over a physical velocity scale; (b) the worst per-cell mass imbalance against its own tolerance; (c) the summed imbalance over the through-flow, which shares the tolerance of (a); and (d) the signed imbalance summed over the domain, which shares the tolerance of (b). Also defines IterationState, the snapshot a solver hands its callback once per outer iteration."

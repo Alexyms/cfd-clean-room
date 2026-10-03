@@ -31,7 +31,10 @@ every index it writes is a domain face.
 so both solvers run on one mesh until step 6 retires the collocated solver.
 On the staggered grid a BOUNDARY cell is an ordinary cell that touches an
 edge. A SOLID cell on an edge is a wall whatever segment the configuration
-puts there, because the obstacle is what bounds the flow at that face.
+puts there, because the obstacle is what bounds the flow at that face. Which
+segment covers each edge cell, with that rule applied, is read from the
+registry's ``coverage_along``, the derivation the concentration layer reads
+too (REQ-S12.1); nothing here decides coverage on its own.
 """
 
 from dataclasses import dataclass
@@ -40,7 +43,6 @@ import numpy as np
 
 from src.boundary_registry import (
     EDGES,
-    NO_SLIP_WALL,
     PRESSURE_OUTLET,
     VELOCITY_INLET,
     BoundaryRegistry,
@@ -49,7 +51,7 @@ from src.boundary_registry import (
 )
 from src.config import SimConfig
 from src.mesh import SOLID, Mesh
-from src.staggered import u_shape, v_shape
+from src.staggered import edge_cells, u_shape, v_shape
 
 # Sign that turns the prescribed normal component into flow into the domain.
 _INWARD_SIGN: dict[str, float] = {
@@ -135,14 +137,15 @@ class StaggeredBoundary:
         self._u_shape = u_shape(mesh)
         self._v_shape = v_shape(mesh)
 
-        # Conditions at the cell positions along each edge, the SOLID rule
-        # applied once here so every query below sees the same answer.
+        # Conditions at the cell positions along each edge, from the shared
+        # coverage so every query below and the scalar layer see one answer.
         self._cell_conditions: dict[str, list[EdgeCondition]] = {}
         for edge in EDGES:
-            solid = self._solid_along(edge)
             self._cell_conditions[edge] = [
-                NO_SLIP_WALL if is_solid else self._registry.condition_at(edge, c)
-                for c, is_solid in zip(self._cell_coordinates(edge), solid, strict=True)
+                point.condition
+                for point in self._registry.coverage_along(
+                    edge, self._cell_coordinates(edge), self._solid_along(edge)
+                )
             ]
 
         self._normal_dirichlet: dict[str, np.ndarray] = {}
@@ -193,14 +196,7 @@ class StaggeredBoundary:
 
     def _solid_along(self, edge: str) -> np.ndarray:
         """Boolean per cell along an edge, True where that cell is SOLID."""
-        ct = self._mesh.cell_type
-        if edge == "bottom":
-            return ct[0, :] == SOLID
-        if edge == "top":
-            return ct[-1, :] == SOLID
-        if edge == "left":
-            return ct[:, 0] == SOLID
-        return ct[:, -1] == SOLID
+        return edge_cells(self._mesh.cell_type, edge) == SOLID
 
     @staticmethod
     def _normal_component(condition: EdgeCondition, edge: str) -> float:
@@ -234,9 +230,9 @@ class StaggeredBoundary:
         solid_face[1:] |= solid
 
         conditions = [
-            NO_SLIP_WALL if is_solid else self._registry.condition_at(edge, c)
-            for c, is_solid in zip(
-                self._face_coordinates(edge), solid_face, strict=True
+            point.condition
+            for point in self._registry.coverage_along(
+                edge, self._face_coordinates(edge), solid_face
             )
         ]
         is_dirichlet = np.array(
