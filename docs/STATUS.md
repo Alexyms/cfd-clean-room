@@ -31,19 +31,26 @@ The product room itself has never been solved, and on 2026-10-04 it was found th
 flow solver does not solve it. Its Reynolds number on the room height is
 about ninety thousand and its cell Reynolds number on the product mesh about twelve hundred; the
 solver was validated at 5 and 100. As committed the solve diverges within sixty outer
-iterations, and on a coarse copy of the room it diverges at the real viscosity and at ten times
-it, while it converges at a thousand times; heavier under-relaxation keeps it bounded without
-converging. ADR-004's "laminar flow" is the clean-room sense,
+iterations, and on a coarse copy of the room it diverges at the real viscosity, at ten times it
+and, given long enough, at a hundred times, while at a thousand times its residual keeps
+falling; heavier under-relaxation keeps it bounded without converging. The pressure outlets let
+air into the room with no condition of its own, and the outlet measurement of prompt 33b (the
+report, section 8) found air entering through them in every run that diverges, the divergence
+sitting at the hood exhaust at ten times the viscosity. Giving the entering air a condition, or
+fixing the hood's flow, moves and delays the divergence and converges nothing above a hundred
+times the viscosity, and on the product mesh the growth starts inside the room before any outlet
+face reverses. The outlets are part of how the solve diverges, not why it does not converge. ADR-004's "laminar flow" is the clean-room sense,
 a unidirectional supply, not the Navier-Stokes one. The evidence, with the controls the probes
 lack, is `docs/reports/product_case_reynolds.md`. Alex decided the same day to add a k-epsilon
 turbulence model: ECR-002 (`docs/ECR/ECR-002-turbulence-model.md`) is the change request and
-ADR-012 (`docs/ADR/ADR-012-turbulence-model.md`) its design, both proposed, with seven decisions
-open. The product case, and with it Phase 3's last deliverable, waits for that change. The
+ADR-012 (`docs/ADR/ADR-012-turbulence-model.md`) its design, both proposed, with eight decisions
+open; ECR-002 now fixes the outlets and measures convergence at the core's effective viscosity
+before its first coupled solve, since the model's convergence is a hypothesis, not a given. The product case, and with it Phase 3's last deliverable, waits for that change. The
 seven transport gate rows stand: they were judged on prescribed or laminar face fields, and the
 scheme does not change. A second finding in the same report: one pressure correction on the
 product mesh needs about a hundred and forty times the committed sweep cap at the committed
 tolerance, growing as the square of the cells per side, so the pressure solve has to change too
-(ADR-012, decision 4).
+(ADR-012, decision 5).
 
 `docs/PROJECT_PLAN.md` holds the phase detail, deliverables and validation gates.
 
@@ -260,11 +267,14 @@ The product case now waits for ECR-002. Before ADR-012 named a turbulent validat
 Annex 20 benchmark's data were checked against the property they cannot fake: in a flat room
 every vertical section carries the inlet's flow. The measured middle plane carries about the
 inlet's flow at the first section and six tenths of it at the second, while the measured plane
-near the side wall carries a tenth more than all of it there; the model room was
-three-dimensional, measured rather than assumed (the report, section 6). The design scores the
-room where that does not bite, its threshold left to Alex. Next: the premise review of ECR-002
-and ADR-012 and `/cfd-test 33`, then Alex's decisions, then ECR-002's steps, the first being k
-and epsilon on a prescribed velocity field.
+near the side wall carries a tenth more than all of it there; that the model room was
+three-dimensional there is inferred from the two planes and the specification's hot-wire profiles
+(the report, section 6). The design scores the room where that does not bite, against the one
+published standard k-epsilon prediction on the same lines, its threshold left to Alex; the
+backward-facing step joins the validation, its threshold also OPEN for want of a sourced range.
+The premise review of ECR-002 and ADR-012 and `/cfd-test 33` ran, and the fix pass of prompt 33b
+answered them. Next: `/cfd-test 33b`, then the pull request, then Alex's decisions, then
+ECR-002's steps, the first being k and epsilon on a prescribed velocity field.
 
 Deferred findings from earlier pull requests are open as GitHub issues 33, 36, 38, 40 and 42.
 
@@ -273,13 +283,15 @@ still installed. Removing them is Alex's, after merge.
 
 ## Open questions
 
-ECR-002's seven design decisions, each put to Alex as a picture before its options at the top
-of ADR-012: the k-epsilon variant (standard ranked first, RNG beside it as a configuration
-variant); the wall treatment (scalable wall functions first); how k and epsilon are kept positive
-(the transport scheme in pseudo-time first); the pressure solve (multigrid with the weighted
-Jacobi sweep as its smoother, as a separate ECR-003, first); what the Annex 20 room is scored on,
-its threshold OPEN; whether turbulent deposition joins this change (deferral first); and the
-turbulent Schmidt number and the supply's inlet turbulence. The requirement and scope text in
+ECR-002's eight design decisions, each put to Alex as a picture before its options at the top
+of ADR-012: how the air leaves the room (the hood at its set flow and the floor returns' inward
+faces held shut, first); the k-epsilon variant (both built, RNG ranked first for the product and
+the standard model for the published comparisons); the wall treatment (scalable wall functions
+first); how k and epsilon are kept positive (the transport scheme in pseudo-time first); the
+pressure solve (a separate ECR-003 choosing between conjugate gradients and multigrid by
+measurement, first); the thresholds for the Annex 20 room and the backward-facing step, both
+OPEN; whether turbulent deposition joins this change (deferral first); and the turbulent Schmidt
+number and the supply's inlet turbulence. The requirement and scope text in
 `docs/SYSTEM.md` changes when Alex accepts ECR-002, not before.
 
 Closed 2026-10-03: the three questions ADR-011 left open, the face concentration scheme and
