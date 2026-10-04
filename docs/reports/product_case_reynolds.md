@@ -15,8 +15,9 @@ and named as its.
 The product room runs at a Reynolds number of 89,500 on its height and a cell Reynolds number of
 1,190 on its 0.04 m mesh. The flow solver was validated at 5 and 100. As committed, the solve
 diverges by outer iteration 58. On a 40x15 copy of the room with the pressure solved toward 1e-8,
-the real viscosity diverges, as does ten times it; a hundred times stalls; a thousand times
-converges. Removing the four obstacles does not stop the divergence. With heavier
+the real viscosity diverges, as does ten times it; a hundred times stalls and, run
+long enough, diverges; at a thousand times the residual falls without converging in 3,000
+iterations. Removing the four obstacles does not stop the divergence. With heavier
 under-relaxation (alpha_velocity 0.2) the runs have not diverged, nor converged: the residual of
 the 40x15 run falls to 4.8e-6 by outer 2,809 and then rises again, never reaching the stopping
 tolerance in 3,000 iterations (section 4, row 7), and the 200x75 run plateaus near 6e-4 over
@@ -113,7 +114,7 @@ speed was already past 5 m/s at 202 and rising.
 
 **What the probes show.** At the room's Reynolds number the solver, as committed and with the
 pressure solved further, does not converge; the same geometry, boundaries, outlets and initial
-field converge at Re 90, stall at 895 and diverge at 8,950; the divergence needs neither an
+field fall without converging at Re 90, stall and then diverge at 895, and diverge at 8,950; the divergence needs neither an
 unconverged pressure solve (row 6) nor the obstacles (row 10). Heavier under-relaxation keeps the
 iterate bounded on both grids over the lengths run.
 
@@ -361,10 +362,14 @@ After today's extrapolation it applies one of four treatments:
   and 220.
 - **T1**, a backflow condition at every pressure outlet: a face whose extrapolated velocity
   points into the room is held at zero normal velocity for that outer iteration and taken out of
-  the pressure correction's outlet mask (`PressureCorrector._out_bottom`, `_out_right`), so it is
-  a wall for that iteration; OpenFOAM's `inletOutlet` switch.
+  the pressure correction's outlet mask (`PressureCorrector._out_bottom`, `_out_right`), so for
+  its normal component it is a wall for that iteration, its tangential condition staying the
+  pressure outlet's zero gradient (appendix G's "a wall" means the same); OpenFOAM's
+  `inletOutlet` switch.
 - **T2**, the hood exhaust as a fixed-flow exhaust: its faces hold 0.5 m/s outward and leave the
-  outlet mask, so they are a Dirichlet velocity like an inlet's; the floor returns as today. On
+  outlet mask, so their normal component is a Dirichlet velocity like an inlet's; their
+  tangential condition stays the pressure outlet's zero gradient, where a built segment holds it
+  at zero (test 33b, B2; section 8.6). The floor returns as today. On
   40x15 the hood covers 5 faces (1.0 m), on 200x75 23 faces (0.92 m), against the 0.9 m opening.
 - **T3**, T1 at the floor returns and T2 at the hood.
 
@@ -375,9 +380,11 @@ room and the faces T1 held closed. A run stops when the speed passes 100 m/s (di
 solver's own stop, or at the outer cap. The ladder ran 40x15 with the pressure toward 1e-8 (cap
 40,000) and alpha_velocity 0.5, as prompt 33's rows 3, 4, 6 and 9 did, up to 3,000 outer
 iterations. Sixteen ladder runs, two real-room diagnostics, two real-room treatment runs and four
-hood-sensitivity runs ran in parallel on one machine; the slowest (fixed-flow hood, real air or
-Re 8,950: about 2.7 s per iteration, the pressure at its cap) were stopped by cost where marked,
-their state read from the log, which prints every 25th iteration. On 40x15 the floor returns have
+hood-sensitivity runs ran in parallel on one machine. The runs marked cut were stopped together,
+about 25 minutes after the ladder started, one stop for cost: the slowest, the fixed-flow hood at
+real air or Re 8,950, ran at about 2.7 s per iteration with the pressure at its cap, while T2 and
+T3 at Re 90 and 895 never reached the cap and ran at 0.9 to 1.5 s. Their state is read from the
+log, which prints every 25th iteration. On 40x15 the floor returns have
 4, 3, 2 and 4 faces and the hood 5; on 200x75 19, 14, 8, 15 and 23.
 
 ### 8.3 The real room: where the growth sits
@@ -401,14 +408,17 @@ R_T3) the growth first shows at the supply's left end, (0.3, 2.34), at the same 
 first reversal, and the run still diverges: at 292 under T2 and 427 under T3, against 267 under
 today's outlets. On the product mesh, then, air drawn in through the openings arrives with the
 divergence and speeds it up, the fixed-flow hood and the closed faces delay it, and none of the
-treatments stops it.
+treatments stops it. These runs stopped each pressure correction at its 5,000-sweep cap; with the
+pressure solved to the committed 1e-6 at every iteration, test 33b finds the same start of growth
+(section 8.6).
 
 ### 8.4 The ladder
 
 40x15, the pressure toward 1e-8, alpha_velocity 0.5. Residuals are the solver's (section 4); a
 run cut by cost gives its state at the last logged iteration, and its least residual is over the
 logged iterations. Reversed faces are those whose corrected velocity points into the room, the
-most at one time on returns 1 to 4 and the hood; under T1 and T3 they are faces the extrapolation
+most at one time on returns 1 to 4 and the hood among the logged iterations, every 25th (counted
+at every iteration in test 33b for two runs, in brackets); under T1 and T3 they are faces the extrapolation
 left open and the correction turned inward. The cells named: (4.7, 2.1) is over the litho tool's
 right corner, where the converging runs' fastest air passes down to return 3; (6.1, y) is the gap
 between the etch chamber and the hood bench, over return 4; (7.7, 1.1) is the cell in front of
@@ -427,17 +437,17 @@ the hood.
 | 8,950 | T0 | 296 | diverged | 4.7e-3, 7.9e-1 | 102, (7.7, 1.1) | 0, 0, 0, 1, 5: the hood from 102 |
 | 8,950 | T1 | 926 | cut, growing | 6.4e-3, 1.5e-1 | 13.5 (17.0 at 850), (6.3, 1.1) | 2, 3, 1, 1, 4 |
 | 8,950 | T2 | 576 | cut while diverging | 7.7e-3, 8.4e-1 | 66.8, (2.9, 0.1) over return 2 | 4, 3, 0, 1, 0 |
-| 8,950 | T3 | 551 | cut, oscillating | 7.7e-3, 1.5e-1 | 8.5 (8.5 to 12.6 from 400), (6.1, 0.9) | 2, 2, 1, 1, 0 |
+| 8,950 | T3 | 551 | cut, growing and oscillating | 7.7e-3, 1.5e-1 | 8.5 (4.8 at 300, 8.1 to 14.4 from 400), (6.1, 0.9) | 2, 2, 1, 1, 0 (3, 3, 2, 2, 0) |
 | 89,500 | T0 | 220 | diverged | 3.1e-2, 1.2 | 104, (0.7, 0.3) over return 1 | 3, 3, 0, 2, 5 |
 | 89,500 | T1 | 676 | cut, bounded | 5.9e-2, 1.4e-1 | 11.8 (10 to 16 from 250), (6.1, 1.3) | 2, 2, 1, 1, 2 |
 | 89,500 | T2 | 340 | diverged | 3.3e-2, 9.9e-1 | 102, (2.5, 0.3) over return 2 | 3, 3, 0, 2, 0 |
-| 89,500 | T3 | 576 | cut, growing | 5.3e-2, 2.1e-1 | 17.1 (3.8 at 100), (7.3, 1.1) | 2, 2, 1, 1, 0 |
+| 89,500 | T3 | 576 | cut, growing | 5.3e-2, 2.1e-1 | 17.1 (3.8 at 100), (7.3, 1.1) | 2, 2, 1, 1, 0 (3, 3, 1, 2, 0 to outer 700) |
 
 Reading.
 
 *Re 90.* Every treatment's residual falls, slowly, as today's outlets' does; no treatment made
 the control diverge. Over 3,000 iterations today's hood turns inward from outer 1,228 until all
-five faces draw air in, and the run goes on converging through it: a reversed outlet face is not
+five faces draw air in, and the residual goes on falling through it: a reversed outlet face is not
 by itself a divergence. Holding those faces closed (T1) or fixing the hood's flow (T2, T3) lowers
 the residual faster: 1.0e-5 and 6.2e-6 at outer 1,675, against 1.27e-5 with today's outlets.
 
@@ -449,19 +459,23 @@ about 650, past 5 m/s near 1,100, 8 to 12 m/s and rising when cut at 1,976. T2 a
 the converging runs' speed, 3.5 to 3.6 m/s, with residuals between 2.3e-3 and 7.1e-3 from outer
 100 until they were cut at 1,001. Today's outlets were in the same state at that point (3.74 m/s,
 residual 4.9e-3 and rising), and their speed left that level only from about 1,200, so whether a
-fixed-flow hood removes the Re 895 divergence is not measured.
+fixed-flow hood removes the Re 895 divergence was not measured here. Test 33b continued both
+runs: the fixed-flow hood delays the departure and does not remove it (section 8.6).
 
 *Re 8,950.* Today's hood draws air in from outer 102 and the run diverges there at 296, the
 premise review's reading. Fixing the hood's flow (T2) removes that: the hood has no reversed face,
 and the run diverges over returns 1 and 2 instead, past 20 m/s by 500 and at 67 m/s at 576.
 Holding the reversed faces closed, alone (T1) or with the fixed hood (T3), keeps the speed from
 running away over the iterations run, 926 and 551, and neither converges: T1 grows to 17 m/s by
-850 in the gap over return 4, T3 swings between 8.5 and 12.6 m/s from 400, residuals 0.1 to 0.35.
+850 in the gap over return 4, T3 rises from 4.8 m/s at 300 to 14.4 at 475 and then swings between
+8.1 and 14.4 m/s, residuals 0.1 to 0.35.
 
 *Real air.* Every run is far from the fixed point from its first iteration, which reaches 14 m/s
-at the supply's left corner. Today's outlets diverge at 220 over return 1 and T2 at 340 over
+at a corner of the supply: the left under today's outlets, the right, (7.5, 2.9), with the hood's
+flow fixed (T2, T3; test 33b). Today's outlets diverge at 220 over return 1 and T2 at 340 over
 return 2; T1 holds between 10 and 16 m/s from 250 to its cut at 676; T3 grows from 3.8 m/s at 100
-to 17 m/s at its cut at 576. T1's and T3's residuals stay between 0.06 and 0.25. Heavier
+to 17 m/s at its cut at 576, and continued in test 33b holds at 10 to 20 m/s to outer 700
+without diverging (section 8.6). T1's and T3's residuals stay between 0.06 and 0.25. Heavier
 under-relaxation with today's outlets (section 4, rows 5 and 7, alpha_velocity 0.2) did more than
 any outlet treatment here: 3.9 m/s and a residual down to 4.8e-6.
 
@@ -491,8 +505,9 @@ the runs still do not converge above Re 895, and on the product mesh the growth 
 room, at the supply's ends and above the hood bench, before any outlet face reverses (D2). Premise
 review B1's location of the divergence is confirmed at Re 8,950 and, for where it ends, at real
 air; its attribution of the non-convergence to the outlets is refuted by measurement. The Re 895
-rung, where the hood reverses a few iterations before the growth begins, is the one the cost left
-open: T2 and T3 were cut before today's outlets departed.
+rung, where the hood reverses a few iterations before the growth begins, was left open by the
+cost: T2 and T3 were cut before today's outlets departed. Test 33b closed it (section 8.6): the
+fixed-flow hood delays the departure by about 900 to 1,000 iterations and does not remove it.
 
 What this leaves for ECR-002: the outlets need a condition for entering air before any coupled
 solve, because today's let the divergence concentrate at the hood and the returns, and a turbulent
@@ -507,15 +522,39 @@ outlets, so it stays the hypothesis ECR-002 step 5 measures.
 | T1 removes the divergence at Re 8,950 | Missed: not diverged at its cut, 926, but growing, 17 m/s at 850, residual 0.15 to 0.35 |
 | T1 slows it at real air without converging | Held: 10 to 16 m/s from 250 to 676, not converging |
 | T2 alone helps only at the hood | Held: at Re 8,950 the hood's divergence goes and the floor returns diverge instead; at real air the divergence is delayed from 220 to 340 |
-| T3 converges at Re 8,950 | Missed: it swings between 8.5 and 12.6 m/s, residual 0.15 at its cut, 551 |
+| T3 converges at Re 8,950 | Missed: it rises to 14.4 m/s at 475 and swings between 8.1 and 14.4 m/s, residual 0.15 at its cut, 551 |
 | T3 stalls at real air | Missed on 200x75, where it diverges at 427; on 40x15 it grows slowly, 17 m/s at its cut, 576 |
 | The outcome is "outlets are part, the Reynolds number the rest" | Missed: no treatment converges Re 8,950 |
 
-**Cut by cost.** At about 2.7 s per iteration with the pressure at its cap, eleven runs were
-stopped before 3,000 iterations: T2 and T3 at Re 90 (1,676 and 1,701), T1 at Re 895 (1,976), T2
+**Cut by cost.** Fourteen runs were stopped together before 3,000 iterations, about 25 minutes
+after the ladder started, one stop for cost (section 8.2): T2 and T3 at Re 90 (1,676 and 1,701), T1 at Re 895 (1,976), T2
 and T3 at Re 895 (1,001), T1, T2 and T3 at Re 8,950 (926, 576, 551), T1 and T3 at real air (676,
-576), and the four hood-sensitivity runs at 251. None of them had converged; the Re 895 pair is
-the one whose cut leaves a question open.
+576), and the four hood-sensitivity runs at 251. None of them had converged. Test 33b continued
+the runs whose cut left a question open (section 8.6).
+
+### 8.6 Continued in test 33b
+
+`/cfd-test 33b` (`docs/prompts/test-33b.md`) reimplemented T0, T1 and T3, reproduced the histories
+above bit for bit wherever both exist, and continued the runs the cost cut. What it adds:
+
+- Re 895 with the hood's flow fixed. The residual rises from outer 103 (T2) or 601 (T3); the speed
+  leaves 3.5 m/s near 2,000 and passes 5 m/s at 2,165 (T2) and 2,284 (T3), against 1,277 under
+  today's outlets, the growth starting in the gap over return 4 as today's did. The fixed-flow
+  hood delays the Re 895 departure by about 900 to 1,000 iterations and does not remove it.
+- T2 at Re 8,950 diverges at outer 615, over return 2.
+- T3 at Re 8,950 and at real air, and T1 at Re 8,950, run to outer 700 or 1,000: none diverges;
+  each grows to 10 to 20 m/s, four or five times the speed of the runs that converge on this
+  grid, and holds there, residuals 0.1 to 0.35. That is not convergence.
+- Reversed faces counted at every iteration rather than every 25th: T3 at Re 8,950 has at most 3,
+  3, 2 and 2 faces of returns 1 to 4 inward at once, T3 at real air 3, 3, 1 and 2 by outer 700.
+- The 200x75 room under today's outlets with the pressure solved to the committed 1e-6 at every
+  iteration, where section 8.3's runs stopped each correction at 5,000 sweeps: the speed grows
+  inside the room from 1.46 m/s at outer 13 to 5.63 at 116 before the first outlet face reverses,
+  the hood's at 116. Section 8.3's reading does not hang on the cap.
+- The hood's tangential condition. The probes kept the hood's tangential velocity at the pressure
+  outlet's zero gradient. Holding it at zero instead, as a built segment does, moves T3's residual
+  at Re 8,950 by 6.5e-8 relative at outer 0 and 9.3e-7 at 25, with a different sweep count, so
+  ECR-002 criterion 6 compares against the probe rerun that way.
 
 ## Appendix A: probe33.py
 
