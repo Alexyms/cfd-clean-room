@@ -155,7 +155,7 @@ When a PR modifies a module, the reviewer verifies impact on downstream modules.
 | boundary_registry.py | boundary_staggered, boundary_concentration | Coverage rule (same edge, inclusive range, first match in configuration order, wall by default, SOLID cells walls) and the prescribed-velocity decomposition unchanged. coverage_along is the one derivation of which faces a segment covers; both layers call it on staggered.edge_cell_inputs, and tests/test_boundary_concentration.py checks they agree on every committed configuration and on two with an obstacle on an edge under an inlet. A change here moves both layers. |
 | boundary_staggered.py | momentum, pressure, solver_staggered | Normal imposition writes domain faces only. Tangential data shape [n+1], outlet data shape [n], wall_distance semantics and the inward flux sign unchanged. |
 | boundary_concentration.py | solver_transport | ConcentrationFaces array names, shapes and dtypes (face-shaped, read-only; float64 inflow and deposition, int32 surface codes, bool settling_v), the surface codes SURFACE_NONE 0, SURFACE_FLOOR 1, SURFACE_CEILING 2, SURFACE_WALL 3 the budget books deposition to, the settling_v mask (there is no settling_u; settling acts in -y), and the derivation of each condition from the registry's velocity type with the segment keys concentration, hepa_filtered and deposition_surface unchanged (ADR-011 E). |
-| momentum.py | pressure, solver_staggered | MomentumPrediction shapes and the meaning of a_p_u and a_p_v (un-relaxed diagonal, positive exactly at the unknown faces) unchanged; boundary entries of u and v read as given and never written. |
+| momentum.py | pressure, solver_staggered, solver_transport | MomentumPrediction shapes and the meaning of a_p_u and a_p_v (un-relaxed diagonal, positive exactly at the unknown faces) unchanged; boundary entries of u and v read as given and never written. solver_transport reads quick_face_values only: its signature, the `left` index of the low-side node of each face, the `positive` flow mask, the far node one past the upstream node (or one past the downstream node where that does not exist) and the caller placing the boundary value at its physical location as the end node; a change to any of these changes the transport face value. |
 | pressure.py | solver_staggered | PressureCorrection shapes, the right-hand side formed directly from face velocities with no compatibility correction, outlet faces corrected against p' = 0 with the nearest interior diagonal, closed-domain pin at the first FLUID cell, and the sweep count reported. |
 | solver_staggered.py | face_velocities is the transport solver's input, read by tests/test_constancy.py and tests/test_conservation.py (no import: solver_transport takes a FaceVelocities); time_integration (planned, Phase 4: the NS solver of section 2.1); scripts/benchmark.py, scripts/view_field.py, scripts/stopping_probe.py, scripts/val001_order.py, scripts/self_convergence.py | The public shape: cell-centered [ny, nx] float64 contiguous returns, the IterationState callback once per outer iteration with cell-centered fields and the corrector's sweep count, last_pressure_sweeps and stage_seconds reset per solve, reference_velocity F_ref / (rho h). Under the default velocity_step rule the stop is the residual below convergence_tol, the definition every stored velocity-step row was taken under, so outer iteration counts compare with them; residual_history keeps that definition under both rules. converged and stop_reason are set by every solve and reset at its start; the harness records them, with velocity_step_below_tol stored as residual_below_tol, the label every stored velocity-step row carries. face_velocities is None before the first solve and set at the end of every solve, converged or not (REQ-S13). |
 | stopping.py | solver_staggered, scripts/stopping_probe.py, scripts/val001_order.py, scripts/benchmark.py, scripts/self_convergence.py | IterationState's fields, which the solver hands its on_iteration callback and the harness reads, unchanged. update(step, imbalance) answers converged only when the estimate, the worst imbalance, the absolute sum over flux_scale and the absolute signed sum are all below their tolerances; the imbalance callable, which returns an ImbalanceSummary read by name from one evaluation, is not called until the estimate is met; no estimate (inf) while the window is short, a step in it is zero or not finite, or rho_hat is outside (0, 1). RATE_WINDOW stays a module constant. A change of condition raises RULE_VERSION, which stopping_probe and val001_order store with their saved solves, so that they solve again, and the harness records in every error_estimate row, so that its summary keeps the versions apart. |
@@ -411,7 +411,7 @@ StaggeredBoundary:
     A SOLID cell on an edge is a wall on every query.
 ```
 
-### momentum.py --> pressure, solver_staggered
+### momentum.py --> pressure, solver_staggered, solver_transport (quick_face_values)
 
 Momentum predictor on the staggered layout (REQ-S07, REQ-S09): first-order
 upwind implicit matrix with the QUICK minus upwind advective flux carried as
@@ -639,31 +639,51 @@ limited_face_values(c_up, c_c, c_d, quick) -> ndarray
     r = (c_c - c_up) / (c_d - c_c), psi_quick = 2 (quick - c_c) / (c_d - c_c); c_c where
     c_d == c_c
 
+ParticleProperties(Protocol):   # what the solver reads of a particle model
+    settling_velocity(size_class) -> float
+    diffusion_coeff(size_class) -> float
+ScalarConditions(Protocol):     # what the solver reads of a boundary layer
+    faces_for(size_class) -> ConcentrationFaces
+
 TransportSolver:
-    __init__(mesh, config, physics: ParticlePhysics, boundary: ConcentrationBoundary)
+    __init__(mesh, config, physics: ParticlePhysics | ParticleProperties,
+             boundary: ConcentrationBoundary | ScalarConditions)
         ValueError without config.transport, or when a class's ConcentrationFaces
-        is not shaped for the mesh. Reads physics.settling_velocity(k),
-        physics.diffusion_coeff(k) and boundary.faces_for(k) for every class at
-        construction, and nothing else of either.
+        is not shaped for the mesh, not float64 / int32 / bool as the
+        boundary_concentration contract names, or holds a value that is not
+        finite or a negative inflow or deposition velocity. Reads
+        physics.settling_velocity(k), physics.diffusion_coeff(k) and
+        boundary.faces_for(k) for every class at construction, and nothing else
+        of either; ParticlePhysics and ConcentrationBoundary are the production
+        types, and validation/transport_cases.py hands stand-ins.
     stable_dt(faces: FaceVelocities, size_class, v_ext=None) -> float
         cfl_number / max over non-SOLID cells of (max(|u_w|, |u_e|) / dx_cell
         + max(|v_s|, |v_n|) / dy_cell), the face velocities masked on faces that
         carry no flux and carrying the class's settling increment and v_ext;
         inf when nothing moves. TypeError for a bool or non-int size_class,
-        IndexError outside the configured classes, ValueError on a shape.
+        IndexError outside the configured classes, ValueError on a shape or a
+        face value that is not finite.
     solve_timestep(C_k, faces, size_class, dt, v_ext=None, sources=None) -> ndarray
         C_k [ny, nx] not modified; v_ext FaceVelocities-shaped per-class drift or
         None (zero; REQ-T06, ADR-007); sources [ny, nx] non-negative rate of the
         class or None (zero), added as sources * dt after the advection update
         and before the implicit solve, sum(sources * V) * dt booked;
-        ValueError if dt is not positive or exceeds stable_dt, a shape differs,
-        a source is negative or sits in a SOLID cell
+        TypeError for a bool or non-int size_class or a bool dt; IndexError
+        outside the configured classes; ValueError if dt is not finite and
+        positive or exceeds stable_dt, a shape differs, C_k, faces, v_ext or
+        sources holds a value that is not finite, or a source is negative or
+        sits in a SOLID cell. Every check runs before any arithmetic, so a
+        refused call leaves the budget untouched.
         returns the new field, [ny, nx], float64, contiguous, SOLID cells zero;
         updates budget[size_class] from the fluxes and sources applied
     budget: list[MassBudget]        # one per class, written here only
     last_diffusion_sweeps: int      # Jacobi sweeps of the last implicit solve
     diffusion_converged: bool       # whether it met diffusion_tol within the cap
-                                    # (a warning is logged when it did not)
+                                    # (a warning naming the cap is logged when it
+                                    # did not). diffusion_tol is relative: the
+                                    # solve stops when the largest cell residual
+                                    # of the implicit system is below it times
+                                    # the largest right-hand side (V / dt) C*.
 
 MassBudget:                         # dataclass; particles per metre of depth
     initial: float | None           # in_domain of the first field stepped
@@ -672,8 +692,10 @@ MassBudget:                         # dataclass; particles per metre of depth
     current: float | None           # in_domain of the field the last step returned
     in_domain(C_k, mesh) -> float   # static; sum(C V) over non-SOLID cells
     residual() -> float             # initial + inflow + source - outflow - deposited - current
-    relative() -> float             # residual over initial + inflow + source
-                                    # both ValueError before the first step
+    relative() -> float             # residual over initial + inflow + source;
+                                    # both ValueError before the first step, and
+                                    # relative() ValueError when nothing was
+                                    # supplied
 
 FieldHistory:                       # output contract for Phase 7's animation
     __init__(every: int)            # every = config.output_interval; TypeError on a
@@ -814,3 +836,4 @@ ADR-008 and ADR-010 are files in `docs/ADR/`; the others are in the development 
 | 2026-10-03 | The first Phase 3 build (PR 31): staggered.py gains FaceVelocities, check_staggered_pair and edge_cells, and StaggeredSolver sets face_velocities at the end of every solve (REQ-S13 built; its Verified By names the tests). SimConfig gains the optional transport section as a TransportSpec and BoundarySpec the three segment keys, each allowed on one segment type; the product supply is hepa_filtered. boundary_registry.py gains segment_at and coverage_along, the one derivation of which faces a segment covers with SOLID cells read as walls, and boundary_staggered.py reads its cell and corner conditions from it with its public contract unchanged. boundary_concentration.py built to its contract, which moves from planned to built with the surface codes; cascade rows for config, staggered, boundary_registry, boundary_concentration, particles and solver_staggered updated. No requirement's text changed. | Alex Moroz-Smietana |
 | 2026-10-03 | PR 31's fix pass on review 31 and test 31 (Alex's decisions 1 to 3 of 2026-10-03): a boundary segment with an unknown key, two overlapping segments on one edge, and a concentration key on a zero-normal velocity_inlet fail the load, and NaN or infinity is rejected wherever a number is expected; REQ-C02's rationale names them. A zero-normal velocity_inlet is a wall to the scalar layer (ADR-011 E amended). staggered.edge_cell_inputs derives the coordinates and SOLID mask both boundary layers hand coverage_along, and get_inlet_flux attributes flux by the name coverage gives each face. BoundarySpec.concentration is a tuple and the three keys are keyword-only; FaceVelocities owns its data and, with ConcentrationFaces, has eq=False; SURFACE_NAMES removed. Contracts for config.py, staggered.py, boundary_registry.py, boundary_staggered.py and boundary_concentration.py updated; cascade rows for staggered.py and boundary_registry.py. No requirement's text changed. | Alex Moroz-Smietana |
 | 2026-10-03 | The transport solver built (PR 32, branch phase3/transport-solver): src/solver_transport.py to ADR-011 B, C, D and F, its contract from planned to built with the built signatures (limited_face_values, stable_dt infinite at rest, sources validated, last_diffusion_sweeps and diffusion_converged, MassBudget.current, FieldHistory.every and the npz keys). Cascade rows for config, mesh, staggered, boundary_concentration, solver_staggered, particles and solver_transport name the built consumer and the seven test files; the section 4 headings likewise. REQ-T01, T03 to T08, T11, T12 and N01 Verified By name the test files. VAL-003, VAL-004 (two rows), VAL-007, VAL-012, VAL-013 and VAL-014 measured (docs/PROJECT_PLAN.md). validation/metrics.py and validation/transport_cases.py are the tests' shared instrument. No requirement's text changed. | Alex Moroz-Smietana |
+| 2026-10-03 | PR 32's fix pass on review 32 and test 32 (Alex's decisions 1 to 3 of 2026-10-03): ADR-011 H amended twice, VAL-014's doubled-floor control dropped with the floor-face control named as the composition's guard, and VAL-003's gate step moved to a diffusion number of 0.1 by the measured error split. The transport solver's contract gains the ParticleProperties and ScalarConditions protocols, finiteness and dtype checks on every input before any arithmetic, a bool dt refused, IndexError named, diffusion_tol stated as relative, and relative() ValueError before the first step (review B2). The momentum.py cascade row and heading name solver_transport and the quick_face_values conventions it depends on. Five behaviours of the solver that no test could fail on (review B1) each gain a test that its removal fails. No requirement's text changed. | Alex Moroz-Smietana |

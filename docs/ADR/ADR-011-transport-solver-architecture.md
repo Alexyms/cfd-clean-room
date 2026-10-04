@@ -49,7 +49,9 @@ its test; each names the section that carries it.
    as a precondition and a deliverable.
 7. **VAL-014, the sealed box.** A closed room with no flow and a uniform initial concentration
    loses mass at the rate settling velocity over room height; exact, one line. It guards section
-   D: a doubled removal doubles the rate. Section H designs it; it joins the gate.
+   D: a doubled removal doubles the rate. Section H designs it; it joins the gate. (The doubled-floor
+   control was dropped on 2026-10-03; section H's amendment under VAL-014 says why and names the
+   floor-face control as the guard.)
 8. **A field-history hook.** The output contract gains a writer that records the concentration
    fields every N steps, for Phase 7's animation; the rotating puff is what animates. Section C.
 9. **Status Accepted at merge**, with the planned-against-built table added at the Phase 3 gate
@@ -547,6 +549,16 @@ non-SOLID cells. Criterion: below 1% (the plan row). The time step is the build'
 that the backward Euler error is below the spatial one; a diffusion number of 0.25 (dt = 0.025
 s, 150 steps) is the design's starting point, and the budget must close to rounding over the run.
 
+**Amendment, 2026-10-03 (Alex, on review 32 S2 and test 32; built in PR 32's fix pass).** At
+the starting point of 0.25 the backward Euler error is about twice the spatial one, not below
+it: the branch measured a relative L2 of 3.45e-3 at 0.25 and 2.31e-3 at 0.125, and since both
+errors are first order in their own quantity and add, the fit `error = spatial + time * d` puts
+the time error at 2.28e-3 (66%) and the spatial error at 1.17e-3 at 0.25, and at 49% of the total
+at 0.125. The gate therefore runs at a diffusion number of 0.1 (dt = 0.01 s, 375 steps), where
+the fit puts the time share at 44% and the spatial share at 56%; the measured error there is
+2.08e-3, on the fit to a tenth of a percent. `tests/test_diffusion.py` runs the two split steps
+first, fits the shares, prints them, and runs the gate at 0.1. The criterion stays 1%.
+
 **VAL-004, pulse advection (REQ-T08; REQ-T12's no-negative clause), two rows.** Both rows run
 at `cfl_number` 0.1, the product case's Courant number, because the limited scheme's shape error
 grows with the Courant number under forward Euler (section B). Measured over VAL-004's travel
@@ -658,6 +670,22 @@ the front has moved 12 of the 30 cells). Criteria: `deposited["floor"]` equals `
 zero (REQ-T12 on a step front). Planted control: the floor `deposition_v` doubled must double the
 deposited mass to the same tolerance, the double count of test 30 B1 made visible; a build that
 adds the settling increment at the floor face fails the primary run by a factor of two.
+
+**Amendment, 2026-10-03 (Alex, on review 32 S1 and test 32; built in PR 32's fix pass).** The
+doubled-floor control is dropped. Under the implicit deposition sink of section C the deposit over
+a run is set by the settling supply from above, not by the floor's deposition velocity: with
+`deposition_v` doubled the floor row is no longer stationary, since settling feeds it at
+`v_s C_0` while it drains at `2 v_s C_P`; it relaxes toward `C_0 / 2` with time constant
+`dy / (2 v_s)` and the deposit rate returns to the supply rate. Over the test's 20 steps at
+`a = v_s dt / dy = 0.4` the ratio to the single run is `1 + (1/20) sum_{n=1..20} 1.8^-n = 1.0625`,
+measured and by hand; the continuous problem cannot double either. The composition's guard is the
+floor-face control: the settling increment planted on the floor face as data, the double count of
+test 30 B1, under which the floor face carries an advective outflow beside the deposition, the
+floor row falls at the first step, and the deposit misses the exact line by 48%. The run is 20
+steps rather than 30 (PR 30 deferred D1): the scheme's leading edge moves one cell per step, so
+at 30 the floor row would change at the last step, and at 20 it stays ten rows clear. The
+criteria are the exact line to 1e-10, the closed budget and the bounds; the plan's gate row says
+the same.
 
 ## I. Configuration and modules
 **Configuration (REQ-C01 to C04).** A new `transport` section: `cfl_number`, a float in (0, 1/2],
