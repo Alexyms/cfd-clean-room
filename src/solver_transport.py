@@ -590,8 +590,8 @@ class TransportSolver:
         Raises
         ------
         TypeError
-            If ``size_class`` or ``dt`` is a bool, or ``size_class`` is not
-            an int.
+            If ``size_class`` or ``dt`` is a bool (Python's or numpy's), or
+            ``size_class`` is not an int.
         IndexError
             If ``size_class`` is outside the configured classes.
         ValueError
@@ -607,7 +607,7 @@ class TransportSolver:
             raise ValueError(f"expected C_k of shape {self._p_shape}, got {c.shape}")
         if not np.isfinite(c).all():
             raise ValueError("C_k must be finite")
-        if isinstance(dt, bool):
+        if isinstance(dt, (bool, np.bool_)):
             raise TypeError("dt must be a number, not a bool")
         if not math.isfinite(dt):
             raise ValueError(f"dt must be finite, got {dt}")
@@ -706,12 +706,17 @@ class TransportSolver:
             raise ValueError(f"{what} must be finite")
 
     def _check_conditions(self, faces: ConcentrationFaces, k: int) -> None:
-        """Shapes, dtypes and finiteness of a class's faces, before any arithmetic."""
-        kinds = {
-            "inflow": "f",
-            "deposition": "f",
-            "surface": "i",
-            "settling": "b",
+        """Shapes, dtypes and finiteness of a class's faces, before any arithmetic.
+
+        The dtypes are exactly the boundary_concentration contract's: float64
+        for the carried and deposition velocities, int32 for the surface
+        codes, bool for the settling mask.
+        """
+        dtypes = {
+            "inflow": np.dtype(np.float64),
+            "deposition": np.dtype(np.float64),
+            "surface": np.dtype(np.int32),
+            "settling": np.dtype(np.bool_),
         }
         for name in (
             "inflow_u",
@@ -728,12 +733,14 @@ class TransportSolver:
                 raise ValueError(
                     f"class {k}: {name} must have shape {shape}, got {array.shape}"
                 )
-            kind = kinds[name.rsplit("_", 1)[0]]
-            if array.dtype.kind != kind:
+            expected = dtypes[name.rsplit("_", 1)[0]]
+            if array.dtype != expected:
                 raise ValueError(
-                    f"class {k}: {name} must have dtype kind '{kind}', got {array.dtype}"
+                    f"class {k}: {name} must have dtype {expected.name}, got {array.dtype}"
                 )
-            if kind == "f" and not (np.isfinite(array).all() and (array >= 0.0).all()):
+            if expected.kind == "f" and not (
+                np.isfinite(array).all() and (array >= 0.0).all()
+            ):
                 raise ValueError(f"class {k}: {name} must be finite and non-negative")
 
     # ------------------------------------------------------------------

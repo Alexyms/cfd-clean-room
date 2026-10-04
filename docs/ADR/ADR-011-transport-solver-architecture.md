@@ -341,8 +341,10 @@ ceiling-type where fluid sits below a solid or below the domain ceiling; wall-ty
 faces. So the top of an obstacle removes `(v_s + D / delta) C_P` through one flux, the floor
 rule, and nothing else. The earlier draft added the settling flux there as well and removed
 settling twice on every obstacle top (test 30 B1, premise review B1), which VAL-007 could not see
-because both removals were booked as deposition; VAL-014 (section H) now guards the composition,
-since a doubled removal doubles its rate.
+because both removals were booked as deposition; VAL-014 (section H) now guards the composition
+through its floor-face control, the increment planted on the floor face as data, which misses the
+exact line by half (the doubled-floor control first written there could not double the deposit
+under the implicit sink; section H's amendment of 2026-10-03 under VAL-014).
 
 The trap is REQ-T09: the floor deposition velocity `deposition_velocity(k, "floor")` is
 `v_s + D / delta`, "includes gravitational settling", so a settling increment at a floor face

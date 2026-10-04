@@ -25,10 +25,11 @@ L2_CRITERION = 0.01
 # ADR-011 H asks for the budget to close to rounding. The implicit solve stops
 # at a cell residual of 1e-13 of the largest right-hand side, so a step's
 # budget error is at most that times the number of cells times the largest
-# cell content, about 2e-9 of the Gaussian's content over 150 steps in the
-# worst case where every residual has the same sign; the measured value is
-# 5e-15 (test 32 confirmed the derivation). The criterion is the measured
-# order with margin, not the worst case.
+# cell content: about 1.5e-11 of the Gaussian's content per step, 2e-9 over the
+# 150 steps at 0.25 and 6e-9 over the gate's 375, in the worst case where every
+# residual has the same sign (review 32 S10's bound, checked by test 32b). The
+# measured values are a few 1e-15, so the criterion is the measured order with
+# margin, not the worst case.
 BUDGET_CRITERION = 1e-10
 # The two runs the split is fitted from, and the gate's step from the fit.
 SPLIT_DIFFUSION_NUMBERS = (0.25, 0.125)
