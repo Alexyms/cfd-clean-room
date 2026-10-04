@@ -22,10 +22,10 @@ replaced was retired on 2026-10-02 in the first Phase 3 pull request: deleted fr
 kept at the annotated tag `collocated-final`, its stored harness rows kept (`docs/SYSTEM.md`,
 section 4, Retired modules). Phase 3 is most of the way through: the face-velocity interface
 the transport solver reads (REQ-S13), the transport configuration and the concentration
-boundary module were built in PR 31, and the transport solver itself in PR 32, with six of its
-seven gate rows measured and passing (VAL-003, VAL-004 in two rows, VAL-007, VAL-012, VAL-013,
-VAL-014's exact line and budget). What remains of the phase is the product configuration's move
-to `error_estimate` and the gate report. Phases 4 through 7 have not begun.
+boundary module were built in PR 31, and the transport solver itself in PR 32, with all seven
+of its gate rows measured and passing (VAL-003, VAL-004 in two rows, VAL-007, VAL-012, VAL-013,
+VAL-014). What remains of the phase is the product configuration's move to `error_estimate` and
+the gate report with ADR-011's planned-against-built table. Phases 4 through 7 have not begun.
 
 `docs/PROJECT_PLAN.md` holds the phase detail, deliverables and validation gates.
 
@@ -222,17 +222,21 @@ field-history writer for Phase 7. Before any gate test was written the real solv
 VAL-004's two rows against the prototype that set their thresholds, and reproduced its figures
 to four figures (`results/builder32/item0.md`, untracked). Every gate row then passed at its
 criterion, with the measured value beside it in `docs/PROJECT_PLAN.md`: the diffusion error is
-a third of the criterion, the two pulses keep 82% and 75% of their peak with no cell below
-zero, the uniform haze drifts at 0.15 of the bound REQ-T11 states, the Smith-Hutton front stays
-inside its inlet's bounds at every step over 20 s, the budget closes to rounding on a random
-face field and on the VAL-001 faces, and the sealed box deposits exactly `v_s C_0 W T`. One
-finding is for decision: ADR-011 H's doubled-floor control for VAL-014 cannot double the
-deposit under the implicit sink the ADR itself chooses, because the floor row is then no longer
-stationary; the test runs it, reports the ratio (about 1.06) and marks the clause xfail, and the
-composition it was meant to guard is guarded by planting the increment on the floor face
-instead, which fails the exact line by half. Next: the product configuration's move to
-`error_estimate` when the product case is measured, and the Phase 3 gate report with ADR-011's
-planned-against-built table.
+a fifth of the criterion at a step where the time error is below the spatial one, the two pulses
+keep 82% and 75% of their peak with no cell below zero, the uniform haze drifts at 0.15 of the
+bound REQ-T11 states, the Smith-Hutton front stays inside its inlet's bounds at every step over
+20 s, the budget closes to rounding on a random face field and on the VAL-001 faces, and the
+sealed box deposits exactly `v_s C_0 W T`. The build found one error in the design: ADR-011 H's
+doubled-floor control for VAL-014 cannot double the deposit under the implicit sink the ADR
+itself chooses, because the floor row is then no longer stationary and the deposit is set by the
+settling supply from above. Alex dropped the clause on 2026-10-03 (ADR-011 H as amended); the
+composition it was meant to guard is guarded by planting the settling increment on the floor face
+instead, which fails the exact line by half. The fix pass on review 32 and test 32 added the
+tests five documented solver behaviours lacked, refused NaN and bool inputs before any
+arithmetic, and moved VAL-003's gate step to where the measured error split puts the time error
+below the spatial one. Next: the product configuration's move to `error_estimate` when the
+product case is measured, and the Phase 3 gate report with ADR-011's planned-against-built
+table.
 
 Deferred findings from earlier pull requests are open as GitHub issues 33, 36, 38, 40 and 42.
 
