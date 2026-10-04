@@ -27,6 +27,24 @@ of its gate rows measured and passing (VAL-003, VAL-004 in two rows, VAL-007, VA
 VAL-014). What remains of the phase is the product configuration's move to `error_estimate` and
 the gate report with ADR-011's planned-against-built table. Phases 4 through 7 have not begun.
 
+The product room itself has never been solved, and on 2026-10-04 it was found that the laminar
+flow solver does not solve it. Its Reynolds number on the room height is
+about ninety thousand and its cell Reynolds number on the product mesh about twelve hundred; the
+solver was validated at 5 and 100. As committed the solve diverges within sixty outer
+iterations, and on a coarse copy of the room it diverges at the real viscosity and at ten times
+it, while it converges at a thousand times; heavier under-relaxation keeps it bounded without
+converging. ADR-004's "laminar flow" is the clean-room sense,
+a unidirectional supply, not the Navier-Stokes one. The evidence, with the controls the probes
+lack, is `docs/reports/product_case_reynolds.md`. Alex decided the same day to add a k-epsilon
+turbulence model: ECR-002 (`docs/ECR/ECR-002-turbulence-model.md`) is the change request and
+ADR-012 (`docs/ADR/ADR-012-turbulence-model.md`) its design, both proposed, with seven decisions
+open. The product case, and with it Phase 3's last deliverable, waits for that change. The
+seven transport gate rows stand: they were judged on prescribed or laminar face fields, and the
+scheme does not change. A second finding in the same report: one pressure correction on the
+product mesh needs about a hundred and forty times the committed sweep cap at the committed
+tolerance, growing as the square of the cells per side, so the pressure solve has to change too
+(ADR-012, decision 4).
+
 `docs/PROJECT_PLAN.md` holds the phase detail, deliverables and validation gates.
 
 ## The engineering change, closed
@@ -238,12 +256,31 @@ below the spatial one. Next: the product configuration's move to `error_estimate
 product case is measured, and the Phase 3 gate report with ADR-011's planned-against-built
 table.
 
+The product case now waits for ECR-002. Before ADR-012 named a turbulent validation case, the
+Annex 20 benchmark's data were checked against the property they cannot fake: in a flat room
+every vertical section carries the inlet's flow. The measured middle plane carries about the
+inlet's flow at the first section and six tenths of it at the second, while the measured plane
+near the side wall carries a tenth more than all of it there; the model room was
+three-dimensional, measured rather than assumed (the report, section 6). The design scores the
+room where that does not bite, its threshold left to Alex. Next: the premise review of ECR-002
+and ADR-012 and `/cfd-test 33`, then Alex's decisions, then ECR-002's steps, the first being k
+and epsilon on a prescribed velocity field.
+
 Deferred findings from earlier pull requests are open as GitHub issues 33, 36, 38, 40 and 42.
 
 With the review Action removed, its repository secret and the GitHub App it used are
 still installed. Removing them is Alex's, after merge.
 
 ## Open questions
+
+ECR-002's seven design decisions, each put to Alex as a picture before its options at the top
+of ADR-012: the k-epsilon variant (standard ranked first, RNG beside it as a configuration
+variant); the wall treatment (scalable wall functions first); how k and epsilon are kept positive
+(the transport scheme in pseudo-time first); the pressure solve (multigrid with the weighted
+Jacobi sweep as its smoother, as a separate ECR-003, first); what the Annex 20 room is scored on,
+its threshold OPEN; whether turbulent deposition joins this change (deferral first); and the
+turbulent Schmidt number and the supply's inlet turbulence. The requirement and scope text in
+`docs/SYSTEM.md` changes when Alex accepts ECR-002, not before.
 
 Closed 2026-10-03: the three questions ADR-011 left open, the face concentration scheme and
 with it positivity, a number for VAL-004's "shape preserved", and the HEPA supply
