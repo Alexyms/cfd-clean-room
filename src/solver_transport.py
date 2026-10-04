@@ -57,14 +57,18 @@ output contract for Phase 7's animation; the solver never calls it, since it
 does not own the loop.
 
 The solver reads ``settling_velocity`` and ``diffusion_coeff`` of ``physics``
-and ``faces_for`` of ``boundary``, and nothing else of either, so a
+and ``faces_for`` of ``boundary``, and nothing else of either; the protocols
+``ParticleProperties`` and ``ScalarConditions`` say so in the signature, so a
 validation case may hand it objects of its own that answer those calls
-(validation/transport_cases.py).
+(validation/transport_cases.py). ParticlePhysics and ConcentrationBoundary
+are the production types.
 """
 
 import logging
+import math
 from dataclasses import dataclass, field
 from os import PathLike
+from typing import Protocol
 
 import numpy as np
 
@@ -181,11 +185,19 @@ class MassBudget:
         )
 
     def relative(self) -> float:
-        """``residual()`` over ``initial + inflow + source``, the particles supplied."""
+        """``residual()`` over ``initial + inflow + source``, the particles supplied.
+
+        Raises
+        ------
+        ValueError
+            Before the first step, or when nothing was supplied and the
+            ratio is undefined.
+        """
+        residual = self.residual()
         supplied = self.initial + self.inflow + self.source
         if supplied == 0.0:
             raise ValueError("no particles were supplied; the ratio is undefined")
-        return self.residual() / supplied
+        return residual / supplied
 
 
 class FieldHistory:
@@ -310,6 +322,34 @@ def limited_face_values(
     return np.where(defined, c_c + 0.5 * psi * d_down, c_c)
 
 
+class ParticleProperties(Protocol):
+    """What the solver reads of a particle model: ParticlePhysics satisfies it.
+
+    A validation case may hand the solver a stand-in that fixes both values
+    (validation.transport_cases.ScalarPhysics).
+    """
+
+    def settling_velocity(self, size_class: int) -> float:
+        """Settling velocity of the class in m/s, positive downward."""
+        ...
+
+    def diffusion_coeff(self, size_class: int) -> float:
+        """Diffusion coefficient of the class in m^2/s."""
+        ...
+
+
+class ScalarConditions(Protocol):
+    """What the solver reads of a boundary layer: ConcentrationBoundary satisfies it.
+
+    A validation case may hand the solver a stand-in that returns the faces
+    it built (validation.transport_cases.FixedConditions).
+    """
+
+    def faces_for(self, size_class: int) -> ConcentrationFaces:
+        """The scalar condition at every face for one class."""
+        ...
+
+
 @dataclass(frozen=True)
 class _Axis:
     """One advection direction with that axis last, for ``_advective_flux``.
@@ -337,11 +377,12 @@ class TransportSolver:
     config : SimConfig
         Must carry a ``transport`` section: cfl_number, advection_scheme,
         max_diffusion_iter, diffusion_tol. Supplies the class count.
-    physics : ParticlePhysics
-        Supplies ``settling_velocity`` and ``diffusion_coeff`` per class.
-    boundary : ConcentrationBoundary
+    physics : ParticlePhysics or ParticleProperties
+        Supplies ``settling_velocity`` and ``diffusion_coeff`` per class;
+        nothing else of it is read.
+    boundary : ConcentrationBoundary or ScalarConditions
         Supplies ``faces_for(size_class)``, the scalar condition at every
-        face.
+        face; nothing else of it is read.
 
     Attributes
     ----------
@@ -356,15 +397,16 @@ class TransportSolver:
     ------
     ValueError
         Without a transport section, or when a class's ConcentrationFaces
-        is not shaped for the mesh.
+        is not shaped for the mesh, not of the dtype the contract names, or
+        not finite.
     """
 
     def __init__(
         self,
         mesh: Mesh,
         config: SimConfig,
-        physics: ParticlePhysics,
-        boundary: ConcentrationBoundary,
+        physics: ParticlePhysics | ParticleProperties,
+        boundary: ConcentrationBoundary | ScalarConditions,
     ) -> None:
         if config.transport is None:
             raise ValueError(
@@ -485,6 +527,16 @@ class TransportSolver:
             rates: the unsplit update is a convex combination only when
             their sum is at most 1/2 (ADR-011 B). Infinite when nothing
             moves.
+
+        Raises
+        ------
+        TypeError
+            If ``size_class`` is not an int (a bool is not one here).
+        IndexError
+            If ``size_class`` is outside the configured classes.
+        ValueError
+            If ``faces`` or ``v_ext`` is not shaped for the mesh or holds a
+            value that is not finite.
         """
         k = self._check_class(size_class)
         u_adv, v_adv = self._advecting_velocities(faces, k, v_ext)
@@ -538,20 +590,34 @@ class TransportSolver:
         Raises
         ------
         TypeError
-            If ``size_class`` is not an int.
+            If ``size_class`` or ``dt`` is a bool, or ``size_class`` is not
+            an int.
+        IndexError
+            If ``size_class`` is outside the configured classes.
         ValueError
-            If ``dt`` is not positive or exceeds ``stable_dt``, a shape does
-            not fit the mesh, or a source is negative or sits in a SOLID
-            cell.
+            If ``dt`` is not finite and positive or exceeds ``stable_dt``, a
+            shape does not fit the mesh, an array holds a value that is not
+            finite, or a source is negative or sits in a SOLID cell. Every
+            check runs before any arithmetic, so a bad input leaves the
+            budget untouched.
         """
         k = self._check_class(size_class)
         c = np.array(C_k, dtype=np.float64, order="C", copy=True)
         if c.shape != self._p_shape:
             raise ValueError(f"expected C_k of shape {self._p_shape}, got {c.shape}")
+        if not np.isfinite(c).all():
+            raise ValueError("C_k must be finite")
+        if isinstance(dt, bool):
+            raise TypeError("dt must be a number, not a bool")
+        if not math.isfinite(dt):
+            raise ValueError(f"dt must be finite, got {dt}")
         if not dt > 0.0:
             raise ValueError(f"dt must be positive, got {dt}")
         limit = self.stable_dt(faces, k, v_ext)
-        if dt > limit:
+        # Written as "not dt <= limit" so that a limit that is not a number
+        # could never let a step through; the finite checks on the faces make
+        # such a limit impossible, and this form costs nothing.
+        if not dt <= limit:
             raise ValueError(
                 f"dt {dt} exceeds stable_dt {limit} for class {k}; the explicit "
                 "advection step is a convex combination only below it"
@@ -563,6 +629,8 @@ class TransportSolver:
                 raise ValueError(
                     f"expected sources of shape {self._p_shape}, got {rate.shape}"
                 )
+            if not np.isfinite(rate).all():
+                raise ValueError("sources must be finite")
             if np.any(rate < 0.0):
                 raise ValueError("sources must be non-negative (ADR-011 B)")
             if np.any(rate[self._solid] != 0.0):
@@ -634,20 +702,39 @@ class TransportSolver:
                 f"{what} must have shapes u {self._u_shape} and v {self._v_shape}, "
                 f"got u {u.shape} and v {v.shape}"
             )
+        if not (np.isfinite(u).all() and np.isfinite(v).all()):
+            raise ValueError(f"{what} must be finite")
 
     def _check_conditions(self, faces: ConcentrationFaces, k: int) -> None:
-        for name in ("inflow_u", "deposition_u", "surface_u"):
-            if getattr(faces, name).shape != self._u_shape:
+        """Shapes, dtypes and finiteness of a class's faces, before any arithmetic."""
+        kinds = {
+            "inflow": "f",
+            "deposition": "f",
+            "surface": "i",
+            "settling": "b",
+        }
+        for name in (
+            "inflow_u",
+            "inflow_v",
+            "deposition_u",
+            "deposition_v",
+            "surface_u",
+            "surface_v",
+            "settling_v",
+        ):
+            array = getattr(faces, name)
+            shape = self._u_shape if name.endswith("_u") else self._v_shape
+            if array.shape != shape:
                 raise ValueError(
-                    f"class {k}: {name} must have shape {self._u_shape}, "
-                    f"got {getattr(faces, name).shape}"
+                    f"class {k}: {name} must have shape {shape}, got {array.shape}"
                 )
-        for name in ("inflow_v", "deposition_v", "surface_v", "settling_v"):
-            if getattr(faces, name).shape != self._v_shape:
+            kind = kinds[name.rsplit("_", 1)[0]]
+            if array.dtype.kind != kind:
                 raise ValueError(
-                    f"class {k}: {name} must have shape {self._v_shape}, "
-                    f"got {getattr(faces, name).shape}"
+                    f"class {k}: {name} must have dtype kind '{kind}', got {array.dtype}"
                 )
+            if kind == "f" and not (np.isfinite(array).all() and (array >= 0.0).all()):
+                raise ValueError(f"class {k}: {name} must be finite and non-negative")
 
     # ------------------------------------------------------------------
     # The step's parts

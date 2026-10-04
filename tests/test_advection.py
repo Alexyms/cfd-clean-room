@@ -7,7 +7,9 @@ case's Courant number of 0.1. Thresholds are 1.5 times the error the chosen
 scheme measured on the prototype (results/builder30b/pulse_2d.json), which
 results/builder32/item0.md reproduces with this solver to four figures. Row 2
 is recorded through FieldHistory every output_interval steps and saved under
-results/builder32/, Phase 7's first animation input.
+pytest's tmp_path, so the format has its Phase 3 consumer; the deliverable
+under results/builder32/ is written by results/builder32/puff_visual.py, which
+runs the case itself. A test writes no deliverable (prompt 32b, decision 3).
 
 The planted control switches the limiter off in the solver by monkeypatch, so
 the face value is QUICK's unlimited quadratic on the same fields: the field
@@ -30,7 +32,6 @@ from validation.transport_cases import (
     rotating_puff_case,
 )
 
-RESULTS = Path(__file__).resolve().parent.parent / "results" / "builder32"
 # The plan's gate rows: 1.5 times the measured 82.2% / 11.3% and 75.3% / 15.5%.
 ROW_1 = {"peak_min": 0.73, "l2_max": 0.17}
 ROW_2 = {"peak_min": 0.62, "l2_max": 0.24}
@@ -109,7 +110,7 @@ def test_oblique_channel_pulse_val004_row1() -> None:
 
 
 @pytest.mark.validation
-def test_rotating_puff_val004_row2() -> None:
+def test_rotating_puff_val004_row2(tmp_path: Path) -> None:
     """VAL-004 row 2: after one revolution, peak > 62%, L2 < 24% against the
     initial field, no cell below zero, centroid within a cell; the puff is
     recorded through FieldHistory and saved for Phase 7."""
@@ -125,8 +126,7 @@ def test_rotating_puff_val004_row2() -> None:
 
     assert len(history.frames) == steps // case.config.output_interval + 1
     assert history.frames[0][0] == 0 and history.frames[-1][0] <= steps
-    RESULTS.mkdir(parents=True, exist_ok=True)
-    path = RESULTS / "puff_frames.npz"
+    path = tmp_path / "puff_frames.npz"
     history.save(path)
     with np.load(path) as data:
         assert data["C_0"].shape == (len(history.frames), 64, 64)

@@ -124,8 +124,9 @@ def test_uniform_field_drifts_within_the_imbalance_bound_val012() -> None:
     assert departure >= bound / 10.0
 
     # The planted control: one interior face perturbed by 1e-6 m/s, an
-    # imbalance of rho dy 1e-6 in two cells, whose drift 1e-6 T / dx is four
-    # orders above the bound.
+    # imbalance of rho dy 1e-6 in two cells. A closed cell would drift by
+    # 1e-6 T / dx, 1.6e-3; on the open channel the perturbed cells are flushed
+    # and the measured departure is 6.7e-6, 35 times the bound (test 32).
     u = faces.u.copy()
     u[GRID[1] // 2, GRID[0] // 2] += 1.0e-6
     perturbed = FaceVelocities.copy_of(u, faces.v)

@@ -90,18 +90,58 @@ class ScalarPhysics:
     n_classes: int = 1
 
     def _check(self, size_class: int) -> None:
+        if isinstance(size_class, bool) or not isinstance(size_class, int):
+            raise TypeError(
+                f"size_class must be an int, got {type(size_class).__name__}"
+            )
         if not 0 <= size_class < self.n_classes:
             raise IndexError(
                 f"size_class {size_class} out of range [0, {self.n_classes - 1}]"
             )
 
     def settling_velocity(self, size_class: int) -> float:
-        """The fixed settling velocity, m/s, positive downward."""
+        """The fixed settling velocity.
+
+        Parameters
+        ----------
+        size_class : int
+            Index into the case's classes.
+
+        Returns
+        -------
+        float
+            ``settling``, m/s, positive downward.
+
+        Raises
+        ------
+        TypeError
+            If ``size_class`` is not an int (a bool is not one here).
+        IndexError
+            If ``size_class`` is outside the case's classes.
+        """
         self._check(size_class)
         return self.settling
 
     def diffusion_coeff(self, size_class: int) -> float:
-        """The fixed diffusion coefficient, m^2/s."""
+        """The fixed diffusion coefficient.
+
+        Parameters
+        ----------
+        size_class : int
+            Index into the case's classes.
+
+        Returns
+        -------
+        float
+            ``diffusion``, m^2/s.
+
+        Raises
+        ------
+        TypeError
+            If ``size_class`` is not an int (a bool is not one here).
+        IndexError
+            If ``size_class`` is outside the case's classes.
+        """
         self._check(size_class)
         return self.diffusion
 
@@ -119,7 +159,25 @@ class FixedConditions:
     faces: ConcentrationFaces
 
     def faces_for(self, size_class: int) -> ConcentrationFaces:
-        """The fixed conditions; ``size_class`` must be a non-negative int."""
+        """The fixed conditions, the same for every class.
+
+        Parameters
+        ----------
+        size_class : int
+            Index of the class; any non-negative int.
+
+        Returns
+        -------
+        ConcentrationFaces
+            ``faces``.
+
+        Raises
+        ------
+        TypeError
+            If ``size_class`` is not an int (a bool is not one here).
+        IndexError
+            If ``size_class`` is negative.
+        """
         if isinstance(size_class, bool) or not isinstance(size_class, int):
             raise TypeError(
                 f"size_class must be an int, got {type(size_class).__name__}"
@@ -242,7 +300,18 @@ def transport_config(
 
 
 def erf_values(z: np.ndarray) -> np.ndarray:
-    """math.erf over an array, since the project has no scipy dependency."""
+    """The error function over an array, since the project has no scipy dependency.
+
+    Parameters
+    ----------
+    z : np.ndarray
+        Any shape.
+
+    Returns
+    -------
+    np.ndarray
+        ``math.erf`` of every entry, in the same shape.
+    """
     flat = np.asarray(z, dtype=np.float64).ravel()
     return np.array([math.erf(v) for v in flat]).reshape(np.shape(z))
 
@@ -288,7 +357,20 @@ def gaussian_cell_averages(
 
 
 def gaussian_mass(sigma: float, amplitude: float = 1.0) -> float:
-    """The integral of a two-dimensional Gaussian over the plane."""
+    """The integral of a two-dimensional Gaussian over the plane.
+
+    Parameters
+    ----------
+    sigma : float
+        Standard deviation on both axes.
+    amplitude : float
+        Peak value.
+
+    Returns
+    -------
+    float
+        ``2 pi sigma^2 amplitude``.
+    """
     return 2.0 * math.pi * sigma**2 * amplitude
 
 
@@ -390,7 +472,20 @@ def conditions_with(mesh: Mesh, **arrays: np.ndarray) -> ConcentrationFaces:
 
 
 def uniform_face_field(mesh: Mesh, u: float, v: float) -> FaceVelocities:
-    """The same velocity on every face."""
+    """The same velocity on every face.
+
+    Parameters
+    ----------
+    mesh : Mesh
+        Fixes the face shapes.
+    u, v : float
+        The velocity components, m/s.
+
+    Returns
+    -------
+    FaceVelocities
+        ``u`` on every vertical face and ``v`` on every horizontal face.
+    """
     return FaceVelocities.copy_of(np.full(u_shape(mesh), u), np.full(v_shape(mesh), v))
 
 
@@ -399,8 +494,20 @@ def rotation_face_field(
 ) -> FaceVelocities:
     """Solid-body rotation set on the faces, ``u = -omega (y - y_c)``, ``v = omega (x - x_c)``.
 
-    u varies only along y and v only along x, so the discrete divergence of
-    every cell is zero exactly, not to rounding (ADR-011 H, row 2).
+    Parameters
+    ----------
+    mesh : Mesh
+        Fixes the face positions and shapes.
+    omega : float
+        Angular velocity, rad/s, positive anticlockwise.
+    centre : tuple[float, float]
+        (x_c, y_c) of the axis.
+
+    Returns
+    -------
+    FaceVelocities
+        u varies only along y and v only along x, so the discrete divergence
+        of every cell is zero exactly, not to rounding (ADR-011 H, row 2).
     """
     u = np.broadcast_to(-omega * (mesh.yc - centre[1])[:, None], u_shape(mesh))
     v = np.broadcast_to(omega * (mesh.xc - centre[0])[None, :], v_shape(mesh))
@@ -410,6 +517,20 @@ def rotation_face_field(
 def smith_hutton_face_field(mesh: Mesh, speed: float) -> FaceVelocities:
     """The Smith and Hutton (1982) field on a 2 by 1 domain, scaled by ``speed``.
 
+    Parameters
+    ----------
+    mesh : Mesh
+        A 2.0 m by 1.0 m domain's mesh.
+    speed : float
+        U, m/s.
+
+    Returns
+    -------
+    FaceVelocities
+        The field below on the faces.
+
+    Notes
+    -----
     With ``x' = x - 1`` in [-1, 1] and ``y' = y`` in [0, 1]:
     ``u = 2 U y' (1 - x'^2)`` on the u faces and ``v = -2 U x' (1 - y'^2)``
     on the v faces. The normal velocity is zero exactly on the left, right
@@ -426,12 +547,41 @@ def smith_hutton_face_field(mesh: Mesh, speed: float) -> FaceVelocities:
 
 
 def smith_hutton_inlet(x_prime: np.ndarray, alpha: float) -> np.ndarray:
-    """The inlet profile ``1 + tanh(alpha (2 x' + 1))`` for x' in [-1, 0]."""
+    """The inlet profile ``1 + tanh(alpha (2 x' + 1))`` for x' in [-1, 0].
+
+    Parameters
+    ----------
+    x_prime : np.ndarray
+        Positions along the inlet, ``x - 1``.
+    alpha : float
+        The profile's steepness; 10 in ADR-011 H.
+
+    Returns
+    -------
+    np.ndarray
+        The profile at each position, from ``1 - tanh(alpha)`` to
+        ``1 + tanh(alpha)``.
+    """
     return 1.0 + np.tanh(alpha * (2.0 * np.asarray(x_prime) + 1.0))
 
 
 def random_face_field(mesh: Mesh, seed: int, scale: float) -> FaceVelocities:
-    """A seeded uniform random field on every face, in [-scale, scale), not divergence-free."""
+    """A seeded uniform random field on every face, not divergence-free.
+
+    Parameters
+    ----------
+    mesh : Mesh
+        Fixes the face shapes.
+    seed : int
+        The generator's seed, so the field is the same on every run.
+    scale : float
+        Every component is drawn from [-scale, scale), m/s.
+
+    Returns
+    -------
+    FaceVelocities
+        The drawn field.
+    """
     rng = np.random.default_rng(seed)
     u = rng.uniform(-scale, scale, size=u_shape(mesh))
     v = rng.uniform(-scale, scale, size=v_shape(mesh))
@@ -669,7 +819,6 @@ SEALED_BOX = {
 
 def sealed_box_case(
     settling: float | None = None,
-    floor_factor: float = 1.0,
     settle_floor_face: bool = False,
 ) -> TransportCase:
     """VAL-014, the sealed box (ADR-011 D and H).
@@ -680,9 +829,6 @@ def sealed_box_case(
         The class's settling velocity, m/s. None takes the Stokes velocity of
         the case's 5 um class from ParticlePhysics on its configuration
         (REQ-T03), 7.78e-4 m/s.
-    floor_factor : float
-        The floor deposition velocity over ``settling``; 1 is the case, 2
-        the doubled control of section H.
     settle_floor_face : bool
         False is the case. True plants section D's trap as data: the
         settling increment marked on the floor face as well, the double
@@ -692,8 +838,8 @@ def sealed_box_case(
     -------
     TransportCase
         A zero face field; the settling increment on every interior
-        horizontal face; the floor's ``deposition_v`` equal to
-        ``floor_factor * settling`` booked as floor; nothing else deposits.
+        horizontal face; the floor's ``deposition_v`` equal to ``settling``
+        booked as floor; nothing else deposits.
         ``t_end`` is the time the front takes to reach the floor, H / v_s;
         the test runs a fraction of it.
     """
@@ -705,7 +851,7 @@ def sealed_box_case(
         settling = ParticlePhysics(config).settling_velocity(0)
     mesh = Mesh(config)
     deposition_v = np.zeros(v_shape(mesh))
-    deposition_v[0, :] = floor_factor * settling
+    deposition_v[0, :] = settling
     surface_v = np.zeros(v_shape(mesh), dtype=np.int32)
     surface_v[0, :] = SURFACE_FLOOR
     settling_v = np.zeros(v_shape(mesh), dtype=bool)

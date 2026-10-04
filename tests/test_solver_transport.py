@@ -11,6 +11,7 @@ Meshes are small and, where it matters, non-square and stretched, so an
 index that works only on a square uniform grid shows.
 """
 
+import logging
 from pathlib import Path
 
 import numpy as np
@@ -21,6 +22,7 @@ from src.boundary_concentration import (
     SURFACE_FLOOR,
     SURFACE_WALL,
     ConcentrationBoundary,
+    ConcentrationFaces,
 )
 from src.boundary_registry import BoundaryRegistry
 from src.config import SimConfig
@@ -179,6 +181,8 @@ class TestConstruction:
         assert set(budget.deposited) == {"floor", "ceiling", "wall", "obstacle"}
         with pytest.raises(ValueError, match="no field yet"):
             budget.residual()
+        with pytest.raises(ValueError, match="no field yet"):
+            budget.relative()
 
 
 @pytest.mark.unit
@@ -230,6 +234,69 @@ class TestArgumentChecks:
         with pytest.raises(IndexError, match="out of range"):
             self.solver.stable_dt(self.faces, size_class)
 
+    def test_a_nan_face_velocity_is_refused_before_any_arithmetic(self) -> None:
+        """A diverged velocity solve can hand over NaN faces (face_velocities is
+        set converged or not); stable_dt and the step both refuse them, and
+        the budget stays untouched."""
+        u = self.faces.u.copy()
+        u[1, 2] = np.nan
+        bad = FaceVelocities.copy_of(u, self.faces.v)
+        with pytest.raises(ValueError, match="faces must be finite"):
+            self.solver.stable_dt(bad, 0)
+        with pytest.raises(ValueError, match="faces must be finite"):
+            self.solver.solve_timestep(self.c, bad, 0, 1e-3)
+        assert self.solver.budget[0].initial is None
+
+    def test_a_nan_v_ext_field_or_source_is_refused(self) -> None:
+        v = np.zeros(v_shape(self.mesh))
+        v[1, 1] = np.inf
+        with pytest.raises(ValueError, match="v_ext must be finite"):
+            self.solver.stable_dt(
+                self.faces,
+                0,
+                v_ext=FaceVelocities.copy_of(np.zeros(u_shape(self.mesh)), v),
+            )
+        field = self.c.copy()
+        field[0, 0] = np.nan
+        with pytest.raises(ValueError, match="C_k must be finite"):
+            self.solver.solve_timestep(field, self.faces, 0, 1e-3)
+        rate = np.zeros((3, 6))
+        rate[1, 1] = np.nan
+        with pytest.raises(ValueError, match="sources must be finite"):
+            self.solver.solve_timestep(self.c, self.faces, 0, 1e-3, sources=rate)
+        assert self.solver.budget[0].initial is None
+
+    def test_a_bool_or_non_finite_dt_is_refused(self) -> None:
+        with pytest.raises(TypeError, match="dt must be a number"):
+            self.solver.solve_timestep(self.c, self.faces, 0, True)
+        for dt in (float("nan"), float("inf")):
+            with pytest.raises(ValueError, match="dt must be finite"):
+                self.solver.solve_timestep(self.c, self.faces, 0, dt)
+
+    def test_conditions_with_a_nan_or_the_wrong_dtype_are_refused(self) -> None:
+        inflow_u = np.zeros(u_shape(self.mesh))
+        inflow_u[0, 0] = np.nan
+        with pytest.raises(ValueError, match="inflow_u must be finite"):
+            _solver(self.config, inflow_u=inflow_u)
+        deposition_v = np.zeros(v_shape(self.mesh))
+        deposition_v[0, 0] = -1.0
+        with pytest.raises(
+            ValueError, match="deposition_v must be finite and non-negative"
+        ):
+            _solver(self.config, deposition_v=deposition_v)
+        faces = conditions_with(self.mesh)
+        wrong = ConcentrationFaces(
+            inflow_u=faces.inflow_u.astype(bool),
+            inflow_v=faces.inflow_v,
+            deposition_u=faces.deposition_u,
+            deposition_v=faces.deposition_v,
+            surface_u=faces.surface_u,
+            surface_v=faces.surface_v,
+            settling_v=faces.settling_v,
+        )
+        with pytest.raises(ValueError, match="inflow_u must have dtype kind 'f'"):
+            TransportSolver(self.mesh, self.config, INERT, FixedConditions(wrong))
+
     def test_the_input_field_is_not_modified_and_the_output_is_fresh(self) -> None:
         before = self.c.copy()
         dt = self.solver.stable_dt(self.faces, 0)
@@ -276,7 +343,8 @@ class TestStableDt:
         mesh, solver = _solver(transport_config(1.0, 0.5, 8, 4, cfl_number=0.2))
         still = uniform_face_field(mesh, 0.0, 0.0)
         drift = uniform_face_field(mesh, 0.0, -0.05)
-        # Only the interior faces carry v_ext, so the bound is the interior rate.
+        # A uniform drift gives every cell the same rate, so this checks that
+        # v_ext enters the bound; which faces carry it is TestVExt's.
         assert solver.stable_dt(still, 0, v_ext=drift) == pytest.approx(
             0.2 * mesh.dy / 0.05
         )
@@ -375,8 +443,9 @@ class TestAdvection:
     def test_an_inlet_carries_its_concentration_and_the_budget_books_it(self) -> None:
         """Left inlet carrying 2.0 into a zero field: after one step the inlet
         cells hold exactly u dt / dx times 2, and inflow is u dy dt times 2
-        per face. The far node of the first interior face is the carried
-        value at the face, so nothing beyond the first column changes."""
+        per face. Nothing beyond the first column changes because the field
+        there is uniform, whatever the far node holds; the far node itself
+        is checked by test_the_inlet_value_is_the_far_node_of_the_first_interior_face."""
         config = transport_config(1.0, 0.5, 8, 4)
         mesh = Mesh(config)
         inflow_u = np.zeros(u_shape(mesh))
@@ -424,65 +493,172 @@ class TestAdvection:
         assert y1 - y0 == pytest.approx(-0.05 * steps * dt, rel=1e-3)
         assert solver.budget[0].relative() == pytest.approx(0.0, abs=1e-13)
 
-    def test_solid_cells_are_zero_after_a_step_and_carry_no_flux(self) -> None:
-        """An obstacle in a uniform flow with the real ConcentrationBoundary:
-        the SOLID cells are zero after the step although the input held mass
-        there, and the budget still closes, so the mass went nowhere."""
+    def test_the_inlet_value_is_the_far_node_of_the_first_interior_face(
+        self,
+    ) -> None:
+        """Leonard's boundary form (ADR-011 B): the quadratic through the inlet
+        value at the face and the first two cells. A linear field with the
+        inlet carrying 0.8 puts r = 2 at the first interior face, where the
+        limiter keeps part of the quadratic, so the face value depends on
+        the far node: 1.0875 with the inlet value, 1.1 with a zero ghost
+        (the prompt's named trap), 1.0 with the edge cell. The first cell's
+        update is checked against the value written out by hand."""
+        config = transport_config(1.0, 0.5, 8, 4)
+        mesh = Mesh(config)
+        inflow_u = np.zeros(u_shape(mesh))
+        carried = 0.8
+        inflow_u[:, 0] = carried
+        mesh, solver = _solver(config, inflow_u=inflow_u)
+        faces = uniform_face_field(mesh, 0.1, 0.0)
+        c = np.ones((4, 1)) * (1.0 + 0.1 * np.arange(8))[None, :]
+        dt = solver.stable_dt(faces, 0)
+        courant = 0.1 * dt / mesh.dx
+        c0, c1 = c[0, 0], c[0, 1]
+        # The quadratic through (x[0], carried), (xc[0], c0), (xc[1], c1) at x[1]
+        # on a uniform mesh is c0 + (c1 - carried) / 3; then the UMIST clamp.
+        quick = c0 + (c1 - carried) / 3.0
+        r = (c0 - carried) / (c1 - c0)
+        psi = max(
+            0.0,
+            min(2.0 * r, (1.0 + 3.0 * r) / 4.0, 2.0 * (quick - c0) / (c1 - c0), 2.0),
+        )
+        face_1 = c0 + 0.5 * psi * (c1 - c0)
+        assert face_1 == pytest.approx(1.0875)
+        out = solver.solve_timestep(c, faces, 0, dt)
+        expected = c0 - courant * (face_1 - carried)
+        assert np.allclose(out[:, 0], expected, rtol=1e-12, atol=0.0)
+        # A zero ghost or the edge cell as the far node moves the face value
+        # by at least 0.0125, which the first cell shows at courant times that.
+        assert (
+            abs(out[0, 0] - (c0 - courant * (1.1 - carried))) > 0.5 * courant * 0.0125
+        )
+        assert (
+            abs(out[0, 0] - (c0 - courant * (1.0 - carried))) > 0.5 * courant * 0.0125
+        )
+
+    def test_a_far_node_inside_an_obstacle_reads_as_the_upstream_value(self) -> None:
+        """One cell past an obstacle in a uniform flow, on a field linear in x:
+        the far node of the face east of that cell is the SOLID cell. Read as
+        the upstream value it makes r = 0 and the face upwind, so the cell
+        loses one Courant number of its own value; read as the obstacle's
+        zero it makes r = 15, the clamp returns the downstream value, and
+        the cell would lose the downstream value instead."""
         config = transport_config(
             1.0,
             0.5,
             10,
             5,
-            boundaries={
-                "in": {
-                    "type": "velocity_inlet",
-                    "location": "left",
-                    "y_start": 0.0,
-                    "y_end": 0.5,
-                    "velocity": 0.1,
-                },
-                "out": {
-                    "type": "pressure_outlet",
-                    "location": "right",
-                    "y_start": 0.0,
-                    "y_end": 0.5,
-                },
-            },
             obstacles=[
                 {
                     "name": "b",
                     "x_start": 0.4,
-                    "x_end": 0.6,
-                    "y_start": 0.15,
-                    "y_end": 0.35,
+                    "x_end": 0.5,
+                    "y_start": 0.2,
+                    "y_end": 0.3,
+                }
+            ],
+        )
+        mesh, solver = _solver(config)
+        solid = mesh.cell_type == SOLID
+        assert [tuple(cell) for cell in np.argwhere(solid)] == [(2, 4)]
+        faces = uniform_face_field(mesh, 0.1, 0.0)
+        c = np.ones((5, 1)) * (1.0 + 0.1 * np.arange(10))[None, :]
+        dt = solver.stable_dt(faces, 0)
+        courant = 0.1 * dt / mesh.dx
+        out = solver.solve_timestep(c, faces, 0, dt)
+        # West face of (2, 5) is the obstacle face: no flux. East face: upwind.
+        assert out[2, 5] == pytest.approx(c[2, 5] * (1.0 - courant), rel=1e-12)
+        assert abs(out[2, 5] - (c[2, 5] - courant * c[2, 6])) > 0.5 * courant * 0.1
+        # The row above the obstacle has no SOLID far node and is the plain scheme.
+        assert out[3, 5] != pytest.approx(c[3, 5] * (1.0 - courant), rel=1e-6)
+
+    def test_a_domain_face_behind_an_edge_obstacle_carries_no_flux(self) -> None:
+        """An obstacle on the bottom edge under an inlet whose faces all carry
+        3.0, the SOLID column's face included: data the boundary layer never
+        produces, so the solver's own mask is what is tested. The face behind
+        the SOLID cell carries nothing: inflow is booked for the nine live
+        faces, the SOLID cell and the cell above it stay empty, and the
+        budget closes. With the mask removed the tenth face's mass is booked
+        in and then zeroed with the SOLID cell, a tenth of the supply lost."""
+        config = transport_config(
+            1.0,
+            0.5,
+            10,
+            5,
+            obstacles=[
+                {
+                    "name": "b",
+                    "x_start": 0.4,
+                    "x_end": 0.5,
+                    "y_start": 0.0,
+                    "y_end": 0.1,
                 }
             ],
         )
         mesh = Mesh(config)
-        physics = ParticlePhysics(config)
-        boundary = ConcentrationBoundary(
-            mesh, config, physics, BoundaryRegistry(config)
-        )
-        solver = TransportSolver(mesh, config, INERT, boundary)
-        solid = mesh.cell_type == SOLID
-        assert solid.sum() == 4
-        faces = uniform_face_field(mesh, 0.1, 0.0)
-        c = np.ones((5, 10))
+        assert mesh.cell_type[0, 4] == SOLID
+        inflow_v = np.zeros(v_shape(mesh))
+        inflow_v[0, :] = 3.0
+        mesh, solver = _solver(config, inflow_v=inflow_v)
+        faces = uniform_face_field(mesh, 0.0, 0.2)
         dt = solver.stable_dt(faces, 0)
-        out = solver.solve_timestep(c, faces, 0, dt)
-        assert np.all(out[solid] == 0.0)
-        assert solver.budget[0].initial == pytest.approx(MassBudget.in_domain(c, mesh))
-        assert abs(solver.budget[0].relative()) < 1e-14
-        # The inflow face carries zero into a field of ones, so the first
-        # column falls. The handed field is uniform, so it points into the
-        # obstacle; those faces carry nothing, so the cell west of it keeps
-        # its west inflow and loses nothing east (one Courant number gained)
-        # and the cell east of it loses its east outflow and gains nothing.
-        assert np.all(out[:, 0] < 1.0)
-        j, i = np.argwhere(solid)[0]
-        courant = 0.1 * dt / mesh.dx
-        assert out[j, i - 1] == pytest.approx(1.0 + courant)
-        assert out[j, i + 2] == pytest.approx(1.0 - courant)
+        courant = 0.2 * dt / mesh.dy
+        out = solver.solve_timestep(np.zeros((5, 10)), faces, 0, dt)
+        budget = solver.budget[0]
+        assert budget.inflow == pytest.approx(9 * 0.2 * mesh.dx * dt * 3.0, rel=1e-13)
+        assert out[0, 4] == 0.0 and out[1, 4] == 0.0
+        live = [i for i in range(10) if i != 4]
+        assert np.allclose(out[0, live], 3.0 * courant, rtol=1e-13, atol=0.0)
+        assert abs(budget.relative()) < 1e-14
+
+
+# ---------------------------------------------------------------------------
+# v_ext (REQ-T06): both components, interior faces only
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+class TestVExt:
+    def test_the_horizontal_component_drifts_a_pulse_at_its_velocity(self) -> None:
+        """A rightward v_ext on still air moves the centroid by w T in x and
+        nothing in y."""
+        config = transport_config(1.0, 1.0, 40, 20)
+        mesh, solver = _solver(config)
+        still = uniform_face_field(mesh, 0.0, 0.0)
+        drift = uniform_face_field(mesh, 0.05, 0.0)
+        c = gaussian_cell_averages(mesh.x, mesh.y, (0.3, 0.5), 0.08)
+        x0, y0 = centroid(c, mesh)
+        dt = solver.stable_dt(still, 0, v_ext=drift)
+        steps = 40
+        for _ in range(steps):
+            c = solver.solve_timestep(c, still, 0, dt, v_ext=drift)
+        x1, y1 = centroid(c, mesh)
+        assert x1 - x0 == pytest.approx(0.05 * steps * dt, rel=1e-3)
+        assert y1 == pytest.approx(y0, abs=1e-12)
+
+    def test_it_acts_on_interior_faces_only(self) -> None:
+        """A drift toward the floor and the right wall on a field of ones in a
+        closed box: mass piles into the floor row and the right column and
+        none leaves, since the domain faces carry no drift. With a domain
+        face carrying it, the floor or the right wall would book an outflow."""
+        config = transport_config(1.0, 0.5, 8, 4)
+        mesh, solver = _solver(config)
+        still = uniform_face_field(mesh, 0.0, 0.0)
+        drift = uniform_face_field(mesh, 0.03, -0.05)
+        dt = solver.stable_dt(still, 0, v_ext=drift)
+        c = np.ones((4, 8))
+        for _ in range(5):
+            c = solver.solve_timestep(c, still, 0, dt, v_ext=drift)
+        budget = solver.budget[0]
+        assert budget.outflow == 0.0 and budget.inflow == 0.0
+        assert budget.current == pytest.approx(budget.initial, rel=1e-14)
+        # The corner the drift points at collects from both faces, the
+        # opposite corner loses through both, and the column and row sums
+        # shift with each component.
+        assert c[0, -1] > 1.0 and c[-1, 0] < 1.0
+        assert c.sum(axis=0)[-1] > c.sum(axis=0)[0]
+        assert c.sum(axis=1)[0] > c.sum(axis=1)[-1]
+        assert c.min() >= 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -543,18 +719,24 @@ class TestDiffusion:
         assert np.allclose(got, expected, rtol=1e-12, atol=1e-14)
         assert abs(solver.budget[0].relative()) < 1e-13
 
-    def test_the_sweep_cap_is_honoured_and_reported(self) -> None:
+    def test_the_sweep_cap_is_honoured_reported_and_logged(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Two sweeps cannot reach 1e-14 on a resolved coefficient: the counters
+        say so and a warning names the cap (SYSTEM.md section 4)."""
         config = transport_config(
             1.0, 0.5, 8, 4, max_diffusion_iter=2, diffusion_tol=1e-14
         )
         mesh, solver = _solver(
             config, physics=ScalarPhysics(settling=0.0, diffusion=1.0e-2)
         )
-        solver.solve_timestep(
-            _random_field(mesh, 9), uniform_face_field(mesh, 0.0, 0.0), 0, 1.0
-        )
+        with caplog.at_level(logging.WARNING, logger="src.solver_transport"):
+            solver.solve_timestep(
+                _random_field(mesh, 9), uniform_face_field(mesh, 0.0, 0.0), 0, 1.0
+            )
         assert solver.last_diffusion_sweeps == 2
         assert not solver.diffusion_converged
+        assert "max_diffusion_iter 2" in caplog.text
 
     def test_no_diffusion_takes_no_sweeps(self) -> None:
         mesh, solver = _solver(transport_config(1.0, 0.5, 8, 4))
@@ -592,6 +774,12 @@ class TestMassBudget:
         c = np.ones((5, 10))
         expected = (50 - 4) * mesh.dx * mesh.dy
         assert MassBudget.in_domain(c, mesh) == pytest.approx(expected)
+
+    def test_relative_refuses_a_budget_that_was_supplied_nothing(self) -> None:
+        budget = MassBudget(initial=0.0, current=0.0)
+        assert budget.residual() == 0.0
+        with pytest.raises(ValueError, match="no particles were supplied"):
+            budget.relative()
 
     def test_relative_is_the_residual_over_what_was_supplied(self) -> None:
         budget = MassBudget(
@@ -664,7 +852,9 @@ class TestFieldHistory:
 # ---------------------------------------------------------------------------
 
 
-def _column(ny: int, settling: float, floor: float, settle_floor_face: bool = False):
+def _column(
+    ny: int, settling: float, floor: float, settle_floor_face: bool = False
+) -> tuple[Mesh, TransportSolver]:
     """A one-column sealed box: settling inside, a floor deposition velocity.
 
     ``settle_floor_face`` plants section D's trap as data: the settling
@@ -753,76 +943,6 @@ class TestSettlingAndDeposition:
         )
         assert abs(budget.relative()) < 1e-14
 
-    def test_obstacle_faces_are_booked_as_obstacle_and_domain_faces_by_surface(
-        self,
-    ) -> None:
-        """A sealed box with an obstacle under the real ConcentrationBoundary
-        and the 5 um class: after one settling step every slot equals the sum
-        of v_d A dt C_P over the faces that surface owns, read off the new
-        field, and the budget closes."""
-        config = transport_config(
-            1.0,
-            0.5,
-            10,
-            5,
-            obstacles=[
-                {
-                    "name": "b",
-                    "x_start": 0.4,
-                    "x_end": 0.6,
-                    "y_start": 0.2,
-                    "y_end": 0.3,
-                }
-            ],
-        )
-        mesh = Mesh(config)
-        physics = ParticlePhysics(config)
-        boundary = ConcentrationBoundary(
-            mesh, config, physics, BoundaryRegistry(config)
-        )
-        solver = TransportSolver(mesh, config, physics, boundary)
-        solid = mesh.cell_type == SOLID
-        assert [tuple(c) for c in np.argwhere(solid)] == [(2, 4), (2, 5)]
-        faces = boundary.faces_for(0)
-        assert faces.surface_v[3, 4] == SURFACE_FLOOR  # top of the obstacle
-        assert faces.surface_v[2, 4] == SURFACE_CEILING  # its underside
-        assert (
-            faces.surface_u[2, 4] == SURFACE_WALL
-            and faces.surface_u[2, 6] == SURFACE_WALL
-        )
-
-        still = uniform_face_field(mesh, 0.0, 0.0)
-        dt = solver.stable_dt(still, 0)
-        c = solver.solve_timestep(np.full((5, 10), 1e6), still, 0, dt)
-        v_floor = physics.deposition_velocity(0, "floor")
-        v_ceiling = physics.deposition_velocity(0, "ceiling")
-        v_wall = physics.deposition_velocity(0, "wall")
-        dx, dy = mesh.dx, mesh.dy
-        budget = solver.budget[0]
-        expected_obstacle = dt * (
-            v_floor * dx * (c[3, 4] + c[3, 5])
-            + v_ceiling * dx * (c[1, 4] + c[1, 5])
-            + v_wall * dy * (c[2, 3] + c[2, 6])
-        )
-        assert budget.deposited["obstacle"] == pytest.approx(
-            expected_obstacle, rel=1e-13
-        )
-        assert budget.deposited["floor"] == pytest.approx(
-            v_floor * dx * dt * c[0, :].sum(), rel=1e-13
-        )
-        assert budget.deposited["ceiling"] == pytest.approx(
-            v_ceiling * dx * dt * c[-1, :].sum(), rel=1e-13
-        )
-        assert budget.deposited["wall"] == pytest.approx(
-            v_wall * dy * dt * (c[:, 0].sum() + c[:, -1].sum()), rel=1e-13
-        )
-        assert np.all(c[solid] == 0.0)
-        assert abs(budget.relative()) < 1e-14
-        # The cell above the obstacle lost through its floor-type face and
-        # gained nothing from below; the cell below it lost its settling
-        # inflow and deposits to its ceiling-type face.
-        assert c[3, 4] < 1e6 and c[1, 4] < 1e6
-
 
 # ---------------------------------------------------------------------------
 # Sources (ADR-011 C, decision 5)
@@ -893,53 +1013,200 @@ class TestSources:
         assert abs(solver.budget[0].relative()) < 1e-14
 
 
-@pytest.mark.unit
-def test_the_budget_closes_with_everything_on_over_an_arbitrary_field() -> None:
-    """Inlet, outlet, walls, an obstacle, settling, deposition, diffusion and a
-    source on a seeded random face field that is not divergence-free: the
-    telescoping of ADR-011 F holds for any face velocities, so the residual
-    is rounding after 30 steps."""
-    config = transport_config(
-        1.6,
-        0.9,
-        16,
-        9,
-        boundaries={
-            "in": {
-                "type": "velocity_inlet",
-                "location": "left",
-                "y_start": 0.2,
-                "y_end": 0.7,
-                "velocity": 0.2,
-                "concentration": [3.0e5],
+# ---------------------------------------------------------------------------
+# Through the real boundary layer (integration: ConcentrationBoundary,
+# BoundaryRegistry and ParticlePhysics feed the solver)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+class TestWithTheRealBoundaryLayer:
+    def test_solid_cells_are_zero_after_a_step_and_carry_no_flux(self) -> None:
+        """An obstacle in a uniform flow with the real ConcentrationBoundary:
+        the SOLID cells are zero after the step although the input held mass
+        there, and the budget still closes, so the mass went nowhere."""
+        config = transport_config(
+            1.0,
+            0.5,
+            10,
+            5,
+            boundaries={
+                "in": {
+                    "type": "velocity_inlet",
+                    "location": "left",
+                    "y_start": 0.0,
+                    "y_end": 0.5,
+                    "velocity": 0.1,
+                },
+                "out": {
+                    "type": "pressure_outlet",
+                    "location": "right",
+                    "y_start": 0.0,
+                    "y_end": 0.5,
+                },
             },
-            "out": {
-                "type": "pressure_outlet",
-                "location": "right",
-                "y_start": 0.1,
-                "y_end": 0.8,
+            obstacles=[
+                {
+                    "name": "b",
+                    "x_start": 0.4,
+                    "x_end": 0.6,
+                    "y_start": 0.15,
+                    "y_end": 0.35,
+                }
+            ],
+        )
+        mesh = Mesh(config)
+        physics = ParticlePhysics(config)
+        boundary = ConcentrationBoundary(
+            mesh, config, physics, BoundaryRegistry(config)
+        )
+        solver = TransportSolver(mesh, config, INERT, boundary)
+        solid = mesh.cell_type == SOLID
+        assert solid.sum() == 4
+        faces = uniform_face_field(mesh, 0.1, 0.0)
+        c = np.ones((5, 10))
+        dt = solver.stable_dt(faces, 0)
+        out = solver.solve_timestep(c, faces, 0, dt)
+        assert np.all(out[solid] == 0.0)
+        assert solver.budget[0].initial == pytest.approx(MassBudget.in_domain(c, mesh))
+        assert abs(solver.budget[0].relative()) < 1e-14
+        # The inflow face carries zero into a field of ones, so the first
+        # column falls. The handed field is uniform, so it points into the
+        # obstacle; those faces carry nothing, so the cell west of it keeps
+        # its west inflow and loses nothing east (one Courant number gained)
+        # and the cell east of it loses its east outflow and gains nothing.
+        assert np.all(out[:, 0] < 1.0)
+        j, i = np.argwhere(solid)[0]
+        courant = 0.1 * dt / mesh.dx
+        assert out[j, i - 1] == pytest.approx(1.0 + courant)
+        assert out[j, i + 2] == pytest.approx(1.0 - courant)
+
+    def test_obstacle_faces_are_booked_as_obstacle_and_domain_faces_by_surface(
+        self,
+    ) -> None:
+        """A sealed box with an obstacle under the real ConcentrationBoundary
+        and the 5 um class: after one settling step every slot equals the sum
+        of v_d A dt C_P over the faces that surface owns, read off the new
+        field, and the budget closes."""
+        config = transport_config(
+            1.0,
+            0.5,
+            10,
+            5,
+            obstacles=[
+                {
+                    "name": "b",
+                    "x_start": 0.4,
+                    "x_end": 0.6,
+                    "y_start": 0.2,
+                    "y_end": 0.3,
+                }
+            ],
+        )
+        mesh = Mesh(config)
+        physics = ParticlePhysics(config)
+        boundary = ConcentrationBoundary(
+            mesh, config, physics, BoundaryRegistry(config)
+        )
+        solver = TransportSolver(mesh, config, physics, boundary)
+        solid = mesh.cell_type == SOLID
+        assert [tuple(c) for c in np.argwhere(solid)] == [(2, 4), (2, 5)]
+        faces = boundary.faces_for(0)
+        assert faces.surface_v[3, 4] == SURFACE_FLOOR  # top of the obstacle
+        assert faces.surface_v[2, 4] == SURFACE_CEILING  # its underside
+        assert (
+            faces.surface_u[2, 4] == SURFACE_WALL
+            and faces.surface_u[2, 6] == SURFACE_WALL
+        )
+
+        still = uniform_face_field(mesh, 0.0, 0.0)
+        dt = solver.stable_dt(still, 0)
+        c = solver.solve_timestep(np.full((5, 10), 1e6), still, 0, dt)
+        v_floor = physics.deposition_velocity(0, "floor")
+        v_ceiling = physics.deposition_velocity(0, "ceiling")
+        v_wall = physics.deposition_velocity(0, "wall")
+        dx, dy = mesh.dx, mesh.dy
+        budget = solver.budget[0]
+        expected_obstacle = dt * (
+            v_floor * dx * (c[3, 4] + c[3, 5])
+            + v_ceiling * dx * (c[1, 4] + c[1, 5])
+            + v_wall * dy * (c[2, 3] + c[2, 6])
+        )
+        assert budget.deposited["obstacle"] == pytest.approx(
+            expected_obstacle, rel=1e-13
+        )
+        assert budget.deposited["floor"] == pytest.approx(
+            v_floor * dx * dt * c[0, :].sum(), rel=1e-13
+        )
+        assert budget.deposited["ceiling"] == pytest.approx(
+            v_ceiling * dx * dt * c[-1, :].sum(), rel=1e-13
+        )
+        assert budget.deposited["wall"] == pytest.approx(
+            v_wall * dy * dt * (c[:, 0].sum() + c[:, -1].sum()), rel=1e-13
+        )
+        assert np.all(c[solid] == 0.0)
+        assert abs(budget.relative()) < 1e-14
+        # The cell above the obstacle lost through its floor-type face and
+        # gained nothing from below; the cell below it lost its settling
+        # inflow and deposits to its ceiling-type face.
+        assert c[3, 4] < 1e6 and c[1, 4] < 1e6
+
+    def test_the_budget_closes_with_everything_on_over_an_arbitrary_field(
+        self,
+    ) -> None:
+        """Inlet, outlet, walls, an obstacle, settling, deposition, diffusion and a
+        source on a seeded random face field that is not divergence-free: the
+        telescoping of ADR-011 F holds for any face velocities, so the residual
+        is rounding after 30 steps."""
+        config = transport_config(
+            1.6,
+            0.9,
+            16,
+            9,
+            boundaries={
+                "in": {
+                    "type": "velocity_inlet",
+                    "location": "left",
+                    "y_start": 0.2,
+                    "y_end": 0.7,
+                    "velocity": 0.2,
+                    "concentration": [3.0e5],
+                },
+                "out": {
+                    "type": "pressure_outlet",
+                    "location": "right",
+                    "y_start": 0.1,
+                    "y_end": 0.8,
+                },
             },
-        },
-        obstacles=[
-            {"name": "b", "x_start": 0.6, "x_end": 0.9, "y_start": 0.3, "y_end": 0.5}
-        ],
-        diffusion_tol=1e-14,
-    )
-    mesh = Mesh(config)
-    physics = ParticlePhysics(config)
-    boundary = ConcentrationBoundary(mesh, config, physics, BoundaryRegistry(config))
-    solver = TransportSolver(mesh, config, physics, boundary)
-    faces = _random_faces(mesh, 21, scale=0.3)
-    rate = np.zeros((9, 16))
-    rate[4, 12] = 2.0e4
-    c = _random_field(mesh, 22) * 1e5
-    dt = solver.stable_dt(faces, 0)
-    for _ in range(30):
-        c = solver.solve_timestep(c, faces, 0, dt, sources=rate)
-    budget = solver.budget[0]
-    assert budget.inflow > 0.0 and budget.outflow > 0.0 and budget.source > 0.0
-    assert all(
-        budget.deposited[name] > 0.0
-        for name in ("floor", "ceiling", "wall", "obstacle")
-    )
-    assert abs(budget.relative()) < 1e-12
+            obstacles=[
+                {
+                    "name": "b",
+                    "x_start": 0.6,
+                    "x_end": 0.9,
+                    "y_start": 0.3,
+                    "y_end": 0.5,
+                }
+            ],
+            diffusion_tol=1e-14,
+        )
+        mesh = Mesh(config)
+        physics = ParticlePhysics(config)
+        boundary = ConcentrationBoundary(
+            mesh, config, physics, BoundaryRegistry(config)
+        )
+        solver = TransportSolver(mesh, config, physics, boundary)
+        faces = _random_faces(mesh, 21, scale=0.3)
+        rate = np.zeros((9, 16))
+        rate[4, 12] = 2.0e4
+        c = _random_field(mesh, 22) * 1e5
+        dt = solver.stable_dt(faces, 0)
+        for _ in range(30):
+            c = solver.solve_timestep(c, faces, 0, dt, sources=rate)
+        budget = solver.budget[0]
+        assert budget.inflow > 0.0 and budget.outflow > 0.0 and budget.source > 0.0
+        assert all(
+            budget.deposited[name] > 0.0
+            for name in ("floor", "ceiling", "wall", "obstacle")
+        )
+        assert abs(budget.relative()) < 1e-12

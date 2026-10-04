@@ -770,9 +770,9 @@ class TestTransportCases:
     def test_the_sealed_box_conditions_settle_inside_and_deposit_on_the_floor_only(
         self,
     ) -> None:
-        case = sealed_box_case(settling=1e-3, floor_factor=2.0)
+        case = sealed_box_case(settling=1e-3)
         faces = case.conditions.faces_for(0)
-        assert np.all(faces.deposition_v[0, :] == 2e-3)
+        assert np.all(faces.deposition_v[0, :] == 1e-3)
         assert np.all(faces.deposition_v[1:, :] == 0.0)
         assert np.all(faces.surface_v[0, :] == SURFACE_FLOOR)
         assert faces.settling_v[1:-1, :].all()
@@ -793,6 +793,8 @@ class TestTransportCases:
         assert physics.settling_velocity(0) == 1.0 and physics.diffusion_coeff(0) == 2.0
         with pytest.raises(IndexError):
             physics.settling_velocity(1)
+        with pytest.raises(TypeError):
+            physics.diffusion_coeff(True)
         conditions = FixedConditions(
             zero_conditions(Mesh(transport_config(1.0, 0.5, 4, 2)))
         )
