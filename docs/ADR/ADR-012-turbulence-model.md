@@ -3,125 +3,162 @@
 ## Status
 Proposed. Written 2026-10-04, before the build, as the design for ECR-002
 (`docs/ECR/ECR-002-turbulence-model.md`), from the evidence in
-`docs/reports/product_case_reynolds.md`. Seven questions are put to Alex and listed first; the
-sections carry them with their ranking and do not choose. When accepted this ADR supersedes
-ADR-004 (laminar flow assumption) and gains a planned-against-built table when ECR-002 closes,
-as ADR-010's was added at ECR-001 step 9. Bracketed numbers point at the sources at the end.
+`docs/reports/product_case_reynolds.md`; revised the same day after premise review 33, test 33 and
+the outlet measurement of prompt 33b (that report's section 8). Eight questions are put to Alex and
+listed first; the sections carry them with their ranking and do not choose. When accepted this ADR
+supersedes ADR-004 (laminar flow assumption) and gains a planned-against-built table when ECR-002
+closes, as ADR-010's was added at ECR-001 step 9. Bracketed numbers point at the sources at the
+end.
 
 ## Decisions for Alex
-Each decision is a picture first, then the options ranked with their consequence, then the
-detail and the section that carries it. Decision 1 of 2026-10-04 (a k-epsilon model, not an
-algebraic one) is taken; these are what it leaves open.
+Rewritten on 2026-10-04 after the outlet measurement of prompt 33b ([1], section 8), the premise
+review and the test. Each decision is a picture first, then the options ranked with their
+consequence, then the section that carries the detail. Decision 1 of 2026-10-04 (a k-epsilon
+model, not an algebraic one) is taken; these are what it leaves open. The measurement settled
+none of the earlier seven and added one, the outlets, which comes first because ECR-002's
+outlet step comes before any coupled solve.
 
-**1. Which k-epsilon (section A).**
+**1. How the air leaves the room (section D; ECR-002 step 3).**
+*Picture.* Air leaves through four grilles in the floor and the hood's opening in the right
+wall. Today each opening is told only that the room's pressure there is zero, so air may flow out
+or in, and where it flows in nothing says how. You set the hood as fan-driven at a set flow
+(decision 2 of 2026-10-04); the grilles keep the room's pressure and take the rest of the supply.
+Measured on the laminar solver ([1], section 8): air comes in through the openings in every run
+that diverges, and at ten times the room's viscosity the divergence sits at the hood while it
+draws air in. Fixing the hood's flow removes that, and shutting a grille face the air turns back
+through slows the growth, but nothing tried makes the room converge above a hundred times the
+viscosity, and at the real viscosity the solve goes wrong inside the room before any opening
+draws air in. The openings need a rule for entering air whatever else is done, and that rule
+will not by itself make the room solvable.
+*Options, ranked.*
+(1) The hood at its set flow; a grille face the air turns inward through held shut for that
+iteration (the report's T3). Measured: the hood never draws air in; on the product mesh the solve
+diverges latest, at outer iteration 427 against 267 today; on the coarse room it stays bounded,
+unconverged, at ten times and at the real viscosity over the iterations run; at Re 90 it
+converges faster than today's. Needs a segment type for the hood and the pressure step told each
+iteration which grille faces are open.
+(2) Every opening at a set flow: the grilles' shares given in the configuration and the pressure
+pinned at one cell, as the closed cavity's is. Nothing can draw air in, but the grilles' split,
+which the room sets today, becomes an input that must add up to the supply exactly. Not
+measured.
+(3) The hood at its set flow, the grilles as today (T2). Measured: the hood's divergence goes and
+the grilles diverge instead, at ten times and at the real viscosity.
+(4) Today's openings. At ten times the viscosity the hood draws air in and the divergence sits
+there.
+*Recommendation.* (1): it keeps the split you set, it did best of those measured on the product
+mesh, and it is the condition CFD codes ship for openings air can turn back through (OpenFOAM's
+`inletOutlet`). It is recommended for what the openings do, not for convergence, which ECR-002
+step 5 measures.
+
+**2. Which k-epsilon (section A).**
 *Picture.* The model keeps two extra numbers in every cell: how much churning energy the air
 carries there, and how fast that churning dies away. From the two it works out how strongly the
 cell mixes momentum and particles with its neighbours. The variants differ in the rule for how
-fast the churning dies, and they differ most where the downflow hits the top of a piece of
-equipment and stops.
-*Options, ranked.*
-(1) Standard k-epsilon. The most published model in rooms like this one, the Annex 20 room
-included, so a reader can set our result beside many others. Known to overstate the churning
-where flow strikes a surface head on: the equipment tops will look more mixed than they are.
-(2) RNG k-epsilon. The same equations with different constants and one extra term that lowers
-the mixing where the flow is strained hard, which is the equipment tops; the survey calls it
-similar or slightly better [2]. Fewer published results in this exact room.
-(3) The low-Reynolds variants. They need millimetre cells at every wall and gave no or marginal
-improvement with case-dependent stability problems [2]. Last.
-*Recommendation.* Build (1) with (2) as a configuration variant: they share every line but the
-constants and one source term, and the Annex 20 comparison (decision 5) then measures the
-difference in this room rather than taking it from the literature. The product runs use (1)
-unless that comparison favours (2).
+fast the churning dies, most where the downflow hits the top of a piece of equipment and stops.
+*Options, ranked for the product.*
+(1) RNG k-epsilon. The evaluations of indoor flows rank it among the best overall, and "very
+well" in low-turbulence forced convection, which the room's core is; its extra term lowers the
+mixing where the flow is strained hard, the equipment tops.
+(2) Standard k-epsilon. The larger published record, the Annex 20 room and the backward-facing step
+included, so it is the variant to compare with those published predictions; known to overstate the
+churning where flow strikes a surface head on.
+(3) The low-Reynolds variants. Millimetre cells at every wall, "no or marginal improvements" and
+"strong case-dependent stability problems" in the survey. Last.
+*Recommendation.* Build both (they share every line but the constants and one term): (1) for the
+product, (2) for the published comparisons, and run both on the product to report how much they
+differ over the equipment tops. No planned case can say which is right where the supply strikes:
+none has impingement with measurements (section A).
 
-**2. The wall treatment (section B).**
+**3. The wall treatment (section B).**
 *Picture.* At every wall the air slows to rest in a layer a few millimetres thick, far thinner
 than one of our 4 cm cells. Either we cut the space next to every wall into millimetre cells and
 compute that layer, or we use the shape such layers are measured to take, the law of the wall,
 to tell the first cell how hard the wall drags on it.
 *Options, ranked.*
 (1) Wall functions with a floor on the first node's distance in wall units (the scalable form).
-Works on the product mesh as it stands. Where the air by a wall is slow, the first node sits
-inside the layer's innermost part, and the floor treats it as sitting at that part's edge, which
-misstates the drag there by a bounded amount instead of failing.
-(2) Wall functions without the floor. Invalid wherever the first node is closer than the log
-layer, which on the product mesh is the slow corners and the middle of each equipment top.
-(3) Resolve the layer to the wall (a two-layer or low-Reynolds treatment). Needs wall cells of 1
-to 3 mm, 13 to 40 times finer than today, at every wall and every obstacle face. The mesh can
-cluster only toward the domain walls, not toward an obstacle's top, and clustering costs
-accuracy and pressure sweeps on this stencil (ADR-010 decision 6).
+Works on the product mesh as it stands, where the first node sits at y+ of about 7 to 70; where
+the air is slow, the floor treats a node inside the layer's innermost part as at its edge, which
+misstates the drag by a bounded amount instead of failing.
+(2) Wall functions without the floor. Invalid in the slow corners and the middle of each
+equipment top.
+(3) Resolve the layer. Wall cells of 1 to 3 mm at every wall and obstacle face, which the mesh
+cannot place on an obstacle's top, at a measured cost in accuracy and pressure sweeps.
 *Recommendation.* (1).
 
-**3. How k and epsilon are computed and kept positive (section C).**
-*Picture.* Neither new number may go below zero. A negative churning energy means nothing, and
-it would make the mixing strength negative, which makes the solve blow up. The transport solver
-already moves particle concentrations in a way that cannot go below zero; the question is
-whether to move these two numbers the same way.
+**4. How k and epsilon are computed and kept positive (section C).**
+*Picture.* Neither new number may go below zero: a negative churning energy means nothing and
+makes the mixing strength negative, which blows the solve up. The transport solver already moves
+particle concentrations in a way that cannot go below zero; the question is whether to move these
+two numbers the same way.
 *Options, ranked.*
-(1) Move them with the transport scheme: the bounded face value of ADR-011, one explicit
-pseudo-time step per outer iteration at a local Courant number of at most 1/2, the growth terms
-added explicitly and the decay terms taken implicitly. Positive at every step by ADR-011's
-argument, which section C shows carries over with these sources; reuses built and tested code.
-(2) Solve them the way the momentum equation is solved, steady and implicit with a deferred
-QUICK correction. Reaches the same answer, but an intermediate iterate can go negative and needs
-clipping.
-(3) First-order upwind, steady. Positive, but it smears k and epsilon across the shear layers
-that make them.
+(1) The transport scheme in pseudo-time, growth explicit and decay implicit: positive at every
+step by ADR-011's argument, reused code.
+(2) The momentum equation's way, steady with a deferred correction: an intermediate iterate can go
+negative and needs clipping.
+(3) First-order upwind, steady: positive, but it smears k and eps across the shear layers.
 *Recommendation.* (1).
 
-**4. The pressure solve (section H).**
+**5. The pressure solve (section H).**
 *Picture.* Every outer iteration solves for a pressure correction by passing information one
 cell per sweep. On the 200x75 room one correction took 27,000 sweeps to the committed tolerance
 and 112,000 to the probes' tighter one, and a converged solve needs thousands of corrections.
-Multigrid passes the same information on coarser copies of the grid as well, and typically needs
-some tens of sweeps' worth of work per correction whatever the grid (typical, not measured here).
+Two methods pass the information much faster and keep the per-cell update the GPU port wants.
 *Options, ranked.*
-(1) Multigrid with the weighted Jacobi sweep as its smoother, as a separate change (ECR-003,
-REQ-S08 amended), done before ECR-002's product step. The laminar solver needs it too, and
-ECR-002 stays about the model.
-(2) The same multigrid as a step inside ECR-002.
-(3) Keep plain weighted Jacobi. Hours per steady product solve in NumPy (section H), and every
-scenario that changes a boundary needs a new solve.
+(1) A separate change, ECR-003, done before ECR-002's product step, choosing between
+Jacobi-preconditioned conjugate gradients (iterations growing with the cells per side, nothing
+to build over the obstacles) and multigrid with the present sweep as its smoother (fastest on a
+smooth problem, but this one's coefficients vary by orders of magnitude and the obstacles cut the
+grid) by measuring both on the product mesh. REQ-S08 is amended either way. The laminar solver
+needs it too.
+(2) The same inside ECR-002.
+(3) Keep plain weighted Jacobi: at least hours per steady product solve, a lower bound.
 *Recommendation.* (1).
 
-**5. What the Annex 20 room is scored on (section G (iii)).**
-*Picture.* The Annex 20 room is a published test room with measured air speeds along two
-vertical lines. Before building on it we checked that the measured speeds carry as much air
-through each line as enters the room, which they must in a flat room. At the first line they
-carry about the right amount, between all of it and a third more depending on how the readings
-are extended to the walls. At the second line the middle plane of the measured room carries six
-tenths of it while a plane near its side wall carries a tenth more than all of it: the model
-room was not flat there. No flat model can match the middle plane at the second line.
-*Options, ranked.*
-(1) Score the first line and the line along the jet under the ceiling; report the second line
-unscored, with the flux finding beside it. The threshold is set from the spread of published
-two-dimensional standard k-epsilon results against the same data, measured in the build.
+**6. The validation thresholds: the Annex 20 room and the backward-facing step (section G).**
+*Picture.* Two published rooms or channels with measured air speeds are the model's tests against
+reality. For the Annex 20 room, the measured speeds were checked against the air the room takes
+in: at the first measuring line they carry about the right amount, at the second the middle
+plane carries six tenths of it while a plane near the side wall carries a tenth more than all
+of it, so the measured room was not flat there and a flat model cannot match its middle plane.
+For both cases the pass mark has to come from how well published runs of the same model did,
+and only one such run is in hand.
+*Options, ranked, for the Annex 20 room.*
+(1) Score the first line and the line along the ceiling jet; report the second unscored. The
+pass mark: no worse than the one published standard k-epsilon run on the same lines (Rong and
+Nielsen 2008) by an allowance you set, or the spread across that report's four models.
 (2) Score both lines against the mean of the two measured planes.
 (3) Score the middle plane at both lines with an allowance equal to the measured shortfall.
-(4) No turbulent room comparison; the channel check (G (ii)) and the product's convergence only.
-*Recommendation.* (1), its number OPEN until the build has measured the published spread.
+(4) Add the hot-wire profile from the widest model (W/H 4.7) at the second line, the measurement
+nearest a flat room, as a reported reference.
+(5) No room comparison.
+*For the backward-facing step.* The reattachment length is measured at 6.26 +/- 0.10 step heights;
+standard k-epsilon is known to reattach short, by 12 to 15% on a different step in the one
+primary source found, and no primary source for this step's standard k-epsilon value was found.
+The step reports its result against the measurement until a sourced range exists.
+*Recommendation.* Annex 20 (1), with (4) reported; both pass marks OPEN.
 
-**6. Turbulent deposition (section F).**
+**7. Turbulent deposition (section F).**
 *Picture.* Particles reach a wall by drifting across the thin still layer next to it. Today that
-layer is a fixed 1 mm thick everywhere. With turbulence, how thin the layer is depends on how
-hard the air scrubs that wall, which the wall treatment (decision 2) computes.
+layer is a fixed 1 mm thick everywhere. With turbulence, how thin it is depends on how hard the
+air scrubs that wall, which the wall treatment computes.
 *Options, ranked.*
-(1) Defer to a follow-on change after ECR-002. Deposition keeps its present rule; the bulk of the
-room gains turbulent mixing and the walls do not, which understates deposition of the smallest
-classes by an amount this change does not measure.
+(1) Defer to a follow-on change. Deposition keeps its present rule; the smallest classes'
+deposition is understated by an amount this change does not measure.
 (2) Include it as ECR-002's last step: a turbulent deposition model, REQ-T09 changed, its own
 validation data.
-*Recommendation.* (1), because the model needs the wall treatment's friction velocity, which
-exists only once decision 2 is built.
+*Recommendation.* (1): the model needs the wall treatment's friction velocity, which exists only
+once decision 3 is built.
 
-**7. Two model inputs (sections F and I).**
+**8. Two model inputs (sections D, F and I).**
 *Picture.* (a) How strongly the churning spreads particles compared with how strongly it spreads
-momentum. (b) How much churning the filtered supply air already carries when it enters through
-the ceiling.
+momentum. (b) How much churning the filtered supply air carries when it enters through the
+ceiling. (b) matters more than it looks: below the ceiling nothing makes new churning until the
+air reaches the equipment, so the supply's own churning sets the room's mixing strength there,
+and that is the value the solve's convergence depends on (section D).
 *Options, ranked.* (a) A turbulent Schmidt number of 0.7, the conventional value, inside the 0.2
-to 1.3 the literature spans [7]; or 1.0; or a variable form (outside this change). (b) No value
-in code; every inlet states its intensity and dissipation length in the configuration, the
-product's set from a sensitivity pair in the product step (section J); or Annex 20's convention
-of 4% copied to the product supply now.
+to 1.3 the literature spans; or 1.0. (b) No value in code; each inlet states its intensity and
+its dissipation length (in the specification's convention, eps = k^(3/2) / l_e), the product's
+set from a sensitivity pair in the product step; or Annex 20's 4% copied to the product now.
 *Recommendation.* (a) 0.7, configurable. (b) The first.
 
 ## Context
@@ -130,10 +167,14 @@ the room height is 89,500 and its cell Reynolds number on the 0.04 m mesh 1,190;
 flow solver was validated on ran at 5 (VAL-001) or 100 (VAL-002) [1, section 2]. As committed,
 the solve diverges by outer 58; with the pressure solved toward 1e-8 on a coarse copy of the
 room it diverges at the real viscosity and at ten times it, stalls at a hundred times and
-converges at a thousand times [1, section 4].
+diverges there after 1,633 iterations, and at a thousand times its residual falls, still above
+the tolerance after 3,000 [1, sections 4 and 8]. Air enters through the pressure outlets in every
+run that diverges; giving it a condition moves and delays the divergence and converges nothing
+above a hundred times the viscosity [1, section 8].
 ADR-004 calls the room laminar; in the clean-room sense, unidirectional and low in turbulence
 intensity, it is, but not in the Navier-Stokes sense [1, section 3]. Alex decided on 2026-10-04 to
-add k-epsilon (ECR-002 decision 1). This document is the design ECR-002's steps are built from.
+add k-epsilon (decision 1 of 2026-10-04, ECR-002 section 3.3). This document is the design
+ECR-002's steps are built from.
 
 What it plugs into. The staggered solver (ADR-010): p at cell centres, u and v on faces, QUICK by
 deferred correction over an upwind implicit matrix with one under-relaxed Jacobi sweep per outer
@@ -144,7 +185,7 @@ concentration at cell centres advected by the faces continuity was enforced on, 
 face value under forward Euler, and implicit diffusion and deposition by Jacobi; its diffusivity
 is one scalar per class (`src/solver_transport.py`, lines 475 and 824).
 
-## A. The variant (REQ-S14, proposed; decision 1)
+## A. The variant (REQ-S14, proposed; decision 2)
 Both variants carry, at cell centres, the turbulent kinetic energy k and its dissipation rate
 eps, and form the eddy viscosity `mu_t = rho C_mu k^2 / eps`. Standard k-epsilon (Launder and
 Spalding 1974):
@@ -154,47 +195,85 @@ Spalding 1974):
     P_k = mu_t S^2,  S^2 = 2 S_ij S_ij
     C_mu 0.09, C_1 1.44, C_2 1.92, sigma_k 1.0, sigma_e 1.3
 
-RNG (Yakhot and Orszag 1986; Yakhot et al. 1992) keeps the form with C_mu 0.0845, C_1 1.42,
-C_2 1.68, sigma_k = sigma_e = 0.7194, and subtracts from the eps equation
-`R = C_mu rho eta^3 (1 - eta / eta_0) / (1 + beta eta^3) eps^2 / k`, `eta = S k / eps`,
-eta_0 4.38, beta 0.012. These are the values as usually tabulated; the build checks them
-against the primary papers before step 1 merges.
+RNG (Yakhot et al. 1992) keeps the form with C_mu 0.0845, C_1 1.42, C_2 1.68, sigma_k =
+sigma_e = 0.7194, and subtracts from the eps equation `R = C_mu rho eta^3 (1 - eta / eta_0) /
+(1 + beta eta^3) eps^2 / k`, `eta = S k / eps`, eta_0 4.38, beta 0.012. These are the values as
+usually tabulated; the build checks them against the primary papers before step 1 merges. The
+1992 form is not Yakhot and Orszag's 1986 one: Thangam and Speziale (1991) found the 1986 form,
+with C_1 = 1.063, reattaching at X/H of about 4 on a backward-facing step measured at 7.1, "overly
+dissipative" because C_1 is too close to 1 [12, page 14 and conclusion 3]. The design uses the
+1992 constants.
 
 **What each misjudges here.** The supply strikes four equipment tops and stops: a stagnation
 region, where the strain is normal rather than shear. P_k = mu_t S^2 grows with any strain, so
 the standard model produces k there that a real stagnation flow does not have, the stagnation
 point anomaly of the k-epsilon family; the equipment tops will read more turbulent and more
 mixed than they are. RNG's R term changes sign where eta exceeds eta_0, which strong strain
-produces, and raises eps there, so it lowers mu_t where the standard model overshoots; Chen
-(1995), as the survey reports it, found RNG best overall on an impinging case with the standard
-model competitive [2]. The zone above the equipment is the supply flowing down at a few percent
-intensity: weakly turbulent, and both high-Reynolds forms only let k and eps decay there, which
-is the right direction and is not transition modelling. The low-Reynolds variants add damping
-functions for the near-wall region and need a first node near y+ = 1; the survey found "no or
-marginal improvements on prediction accuracy" with "strong case-dependent stability problems"
-[2], which ranks them last. A production limiter (Kato and Launder 1993) addresses the
-stagnation overshoot in either variant; it is not ranked, and is the change to make if the
-equipment tops show it.
+produces, and raises eps there, so it lowers mu_t where the standard model overshoots. The zone
+above the equipment is the supply flowing down at a few percent intensity: weakly turbulent,
+and both high-Reynolds forms only let k and eps decay there, which is the right direction and is
+not transition modelling. The low-Reynolds variants add damping functions for the near-wall
+region and need a first node near y+ = 1; the survey found that "Most LRN k-eps models and
+nonlinear RANS models provide no or marginal improvements on prediction accuracy but suffer from
+strong case-dependent stability problems and has long computing time" [2, page 14, remark 4],
+which ranks them last. A
+production limiter (Kato and Launder 1993) addresses the stagnation overshoot in either variant;
+it is not ranked, and is the change to make if the equipment tops show it.
+
+**The record, read whole.** For RNG: the survey reports that "the majority of comparison studies
+indicated that the RNG k-eps model is slightly better than the standard k-eps model in terms of
+the overall simulation performance", and that Chen (1995) "compared five k-eps based turbulence
+models in predicting various convective airflows and an impinging flow. The results showed that
+the RNG k-eps model had the best overall performance in terms of accuracy, numerical stability,
+and computing time, while the standard k-eps model had competitive performance" [2, page 8]:
+a ranking over that set of cases, not on the impinging case alone. Part 2 of the same study,
+which tested eight models against measurements in four enclosed flows (a tall cavity, a room
+with partitions, a square cavity in mixed convection, a fire room) and not the standard model,
+concludes that "the v2f-dav and RNG k-eps models have the best overall performance compared to
+the other models in terms of accuracy, computing efficiency, and robustness" and that "In the
+forced convection flow with low turbulence levels, the RNG k-eps, the LRN-LS, the v2f-dav, and
+the LES all performed very well" [11, pages 15 and 16]; the product's core is forced convection
+at low turbulence. For the standard model: the survey's remark 1, that with wall functions it
+"provides acceptable results (especially for global flow and temperature patterns) with good
+computational economy" [2, page 14]; on the Annex 20 room, Susin et al. (2009), in three
+dimensions, found it best against RNG and k-omega [3, page 8], and Rong and Nielsen (2008), in
+two dimensions, found it the best of four models (with k-omega, BSL and SST) along both
+horizontal lines except in the upper right corner [10, section 2.3].
+
+**Which case can tell the variants apart on impingement.** None in the plan. The Annex 20 room is
+a ceiling wall jet that turns down the far wall; nothing strikes a surface head on. The channel
+and plane Couette flow have no stagnation point, and the backward-facing step (decision 3 of
+2026-10-04, G (ii)) separates and reattaches but has no jet striking a surface. Part 2's four
+cases have no downflow onto a surface either. The product room has the impingement and no
+measurement. So the plan can measure how much the variants differ on the equipment tops (both on
+the product, step 8), and the backward-facing step can rank them on separation and
+reattachment against data, but no planned case says which is right where the supply strikes. An
+impinging-jet case with published measurements would; none is sourced in this pass.
+
+**Ranking, re-derived (premise B4).** For the product: (1) RNG, on the evidence over indoor
+flows, the low-turbulence forced convection of the product's core, and its correction where the
+strain is strong; (2) the standard model, whose record in this kind of room is the largest. Both
+are built (they share every line but the constants and the R term). The standard model is kept
+for the comparisons whose published predictions are standard k-epsilon ones (Annex 20 [10], the
+backward-facing step [12]); step 8 runs both on the product and reports k, nu_t and the
+concentration over the equipment tops and at the two sensors half a metre above them
+(`above_gap_1`, `above_gap_2`, y = 2.5 m).
 
 **Cost.** Two scalar equations per outer iteration on the cell field, each the transport step of
 section C; RNG adds one source term. Against the pressure solve both are small (section H).
 
-**Record.** The survey's summary: standard k-epsilon with wall functions "provides acceptable
-results (especially for global flow and temperature patterns) with good computational economy";
-RNG "provides similar (or slightly better) results" [2, page 14, remarks 1, 2 and 4]. On the
-Annex 20 room Susin et al. (2009), in three dimensions, found the standard model best against
-RNG and k-omega [3, page 8]. This record is the reason for decision 1 and for ranking the
-standard model first.
-
-## B. Wall treatment (REQ-S17, proposed; decision 2)
+## B. Wall treatment (REQ-S17, proposed; decision 3)
 **y+ on the product mesh.** The tangential velocity's first node sits half a cell from the wall,
 0.02 m on the 0.04 m mesh (`wall_distance`, ADR-010 decision 2). With air's nu = mu / rho =
 1.508e-5 m^2/s, `y+ = u_tau 0.02 / nu = 1326 u_tau`. The friction velocity is estimated from a
 flat plate, because no field exists: outer speeds 0.1 to 0.45 m/s (the supply, and the slower
 flow turning along floors and equipment tops), run lengths 0.3 to 3 m (an equipment top is 0.6
 to 1.3 m), Cf from the turbulent correlation `0.0592 Re_x^-0.2` and the laminar `0.664
-Re_x^-0.5`. Both give u_tau from 0.005 to 0.031 m/s, the run Reynolds numbers being 2,000 to
-90,000 [9]. Hence:
+Re_x^-0.5`. Together they give u_tau from 0.005 to 0.031 m/s, the run Reynolds numbers being
+2,000 to 90,000, below the turbulent correlation's range, which an estimate made without a field
+cannot avoid [9]. The floor returns and the hood carry the supply's 3.8 kg/s through 3.1 m of
+openings, about 1 m/s, and at 1 m/s over 2 m the same correlation gives u_tau 0.053 m/s
+(premise review S9; [14]). Hence:
 
 | u_tau (m/s) | where | y+ at 0.02 m |
 |---|---|---|
@@ -202,16 +281,17 @@ Re_x^-0.5`. Both give u_tau from 0.005 to 0.031 m/s, the run Reynolds numbers be
 | 0.01 | 0.1 to 0.2 m/s flows | 13 |
 | 0.02 | 0.2 to 0.45 m/s over 1 to 3 m | 27 |
 | 0.03 | 0.45 m/s over 0.3 to 0.6 m | 40 |
+| 0.053 | the outlet flows, 1 m/s over 2 m | 70 |
 
 and toward zero at each stagnation point. Standard wall functions want the first node in the
 log layer, y+ above about 30; below about 11 the node sits in the viscous sublayer, where the
-log law is not the profile. The product mesh is between: in the tens over most surfaces, below
-11 in the slow corners and near the middle of each equipment top.
+log law is not the profile. The product mesh spans that range: about 7 to 70, below 11 in the
+slow corners and near the middle of each equipment top.
 
 **On the Annex 20 grid** (section G): along the ceiling jet the outer speed is 0.82 u0 at x/H 1
-and 0.64 u0 at x/H 2 (the measured y = h/2 line [1, section 6]), u_tau about 0.02 m/s by the
-same correlation at 0.37 m/s over 3 m. A wall cell of h/4 = 0.042 m puts the first node at
-y+ 27; h/8 = 0.021 m at 14 [9]. The proposed grid (section G) uses 0.042 m.
+and 0.64 u0 at x/H 2 (the workbook's y = h/2 line [5]), u_tau about 0.02 m/s by the same
+correlation at 0.37 m/s over 3 m. A wall cell of h/4 = 0.042 m puts the first node at y+ 27;
+h/8 = 0.021 m at 14 [9]. The proposed grid (section G) uses 0.042 m.
 
 **What each treatment asks of the mesh.** Wall functions (Launder and Spalding 1974) bridge the
 layer: the wall shear on the first node is `tau_w = rho C_mu^(1/4) k_P^(1/2) kappa u_P /
@@ -219,12 +299,16 @@ ln(E y*)`, `y* = rho C_mu^(1/4) k_P^(1/2) y_P / mu`, kappa 0.41, E 9.793, with k
 its production in the wall cell taken from tau_w, and eps in the wall cell set to `C_mu^(3/4)
 k_P^(3/2) / (kappa y_P)`. Using k rather than u_tau as the velocity scale keeps the shear finite
 at a stagnation point, where u_P falls to zero. The scalable form (Grotjans and Menter 1998)
-evaluates the log law at `max(y*, 11.06)`, so a node inside the sublayer is treated as at its
-edge: the error is bounded where (2) would be undefined. The mesh keeps its 0.04 m cells. In
-code the wall function is a per-face wall viscosity, `mu_w = rho C_mu^(1/4) k_P^(1/2) kappa
-y_P / ln(E max(y*, 11.06))`, put where `mu` now stands in the two wall rows of `_assemble`
-(`src/momentum.py`, lines 389 to 394), so the existing wall stencil `(phi_P - phi_wall) /
-wall_distance` carries it unchanged.
+evaluates the log law at `max(y*, y*_0)`, so a node inside the sublayer is treated as at its
+edge: the error is bounded where (2) would be undefined. The floor y*_0 is where the linear law
+`u+ = y+` meets the log law `u+ = ln(E y+) / kappa`; for kappa 0.41 and E 9.793 that is 11.53
+[14]. The 11.06 first written here belongs to kappa 0.41 with B = 5.2 (E = 8.43), and at 11.06
+the stated log law gives u+ = 11.43, 3% off the sublayer edge it stands for (premise review S1);
+the build takes the floor from the constants it codes, one consistent set. The mesh keeps its
+0.04 m cells. In code the wall function is a per-face wall viscosity, `mu_w = rho C_mu^(1/4)
+k_P^(1/2) kappa y_P / ln(E max(y*, y*_0))`, put where `mu` now stands in the two wall rows of
+`_assemble` (`src/momentum.py`, lines 389 to 394), so the existing wall stencil `(phi_P -
+phi_wall) / wall_distance` carries it unchanged.
 
 Resolving the layer needs the first node near y+ = 1: a wall cell of `2 nu / u_tau`, 3.0 mm at
 u_tau 0.01 and 1.0 mm at 0.03, against 40 mm now [9]. Clustered at ratio 1.2 from 1.5 mm to 40
@@ -238,10 +322,10 @@ grow with the cells per side (section H).
 location with no half-cell wall distance; obstacle accuracy was not a Phase 2 target (ADR-010,
 Consequences). With wall functions the equipment tops are where the supply strikes, so the
 obstacle faces need the wall stencil the domain edges have, with the half-cell distance, and
-the wall function on it. That is part of step 3 of ECR-002, and it changes the laminar solver
-only in rooms with obstacles, which no validation case has.
+the wall function on it. That is part of ECR-002's momentum step, and it changes the laminar
+solver only in rooms with obstacles, none of which has a validated result.
 
-## C. Discretization of k and eps (REQ-S15, proposed; decision 3)
+## C. Discretization of k and eps (REQ-S15, proposed; decision 4)
 **Where they live.** At cell centres, beside p and the concentrations, so that the corrected
 faces advect them with the fluxes continuity was enforced on (ADR-011 A), the scheme is exact on
 a uniform field (ADR-011 B), and the production term reads the velocity gradients where the
@@ -251,8 +335,9 @@ du/dy and dv/dx live at the cell corners and are averaged from the four corners 
 **The step.** Recommended option (1): each outer iteration advances k and eps by one
 pseudo-time step of the transport solver's scheme. Per cell P with local step `dt_P = cfl_t /
 (max(|u_w|, |u_e|) / dx + max(|v_s|, |v_n|) / dy)`, `cfl_t <= 1/2`, capped at the largest finite
-dt_P in the field so that a cell at rest takes a finite step (steps 2 and 3 are implicit in the
-decay and would stay positive without the cap):
+dt_P in the field so that a cell at rest takes a finite step. Step 3 is implicit in the decay and
+would stay positive without the cap; step 2's explicit growth would not stay bounded where the
+corner gradients give P_k > 0, so the cap serves steps 1 and 2 (test 33 S4):
 
 1. advect with the UMIST-limited QUICK face value, forward Euler (ADR-011 B), giving k*, eps*;
 2. add the explicit growth: `k* + dt_P P_k / rho`, `eps* + dt_P C_1 (eps / k) P_k / rho`, with
@@ -287,14 +372,20 @@ reduced to a third over 50 cells); k and eps are made in thin shear layers.
 
 **Boundary values.** Inlet: `k = 1.5 (I |u_n|)^2` and `eps = k^(3/2) / l_e` from the segment's
 intensity I and dissipation length l_e, configured per inlet (section I); the Annex 20 test sets
-I = 0.04 and l_e = h / 10, its specification's equations (5) to (7) as written [4, page 2].
-Outlet: the upwind cell's value on outflow; on a reversed face the adjacent cell's value
-(zero gradient), where ADR-011 E brings clean air for a concentration, since k has no clean
-state. Walls and obstacle faces: no advective flux (the normal velocity is zero, REQ-S12), zero
-diffusive flux of k, eps in the wall cell held at the wall function's value (section B) by a
-dominant diagonal, P_k in the wall cell from the wall shear.
+I = 0.04 and l_e = h / 10, its specification's equations (5) to (7) as written [4, page 2]. The
+convention is named because the other one is common: a source writing `eps = C_mu^(3/4)
+k^(3/2) / l`, as commercial-code documentation often does, maps to `l_e = l / C_mu^(3/4) =
+6.09 l`, and read into this key unconverted it would set eps 6.1 times too high and the inlet
+eddy viscosity 6.1 times too low (premise review S3).
+Outlet: the upwind cell's value on outflow, which every face of a fixed-flow exhaust carries. A
+pressure-outlet face the air turns inward through takes what decision 1 gives it: held shut (option
+1), it carries no advective flux and k and eps see a face with zero diffusive flux; left open
+(options 3 and 4), it takes the adjacent cell's value (zero gradient), where ADR-011 E brings clean
+air for a concentration, since k has no clean state. Walls and obstacle faces: no advective flux
+(the normal velocity is zero, REQ-S12), zero diffusive flux of k, eps in the wall cell held at the
+wall function's value (section B) by a dominant diagonal, P_k in the wall cell from the wall shear.
 
-## D. Coupling into the flow solver (REQ-S14, S16 and S01, proposed)
+## D. Coupling into the flow solver (REQ-S14, S16, S18 and S01, proposed; decision 1)
 **The viscosity field.** `mu_e = mu + mu_t` per cell. `MomentumPredictor` gains an optional
 cell field, None by default; with None the assembly runs the present scalar lines unchanged, so
 the validated laminar results are the same bits (G (i), REQ-S16), not equal to rounding. The
@@ -319,22 +410,66 @@ constant mu_e on a divergence-free field. They are added as an explicit source o
 field, beside the deferred correction, from the same staggered differences (du/dx at centres,
 dv/dx at corners). The Boussinesq stress also carries `-(2/3) rho k` on the diagonal, which is a
 gradient and goes into the pressure: the solver's p becomes `p + (2/3) rho k`. Nothing reads p
-but the views; the contract says which p is returned.
+but the views; the contract says which p is returned. The pressure outlets then hold the
+modified pressure at their datum, so the static pressure at each differs from it by `-(2/3) rho
+k` of the cell behind it: about 0.012 Pa at 10% intensity on a 1 m/s outlet, 2% of its dynamic
+pressure, and different at each outlet (premise review S2). It concerns only the outlets held
+at a pressure: a fixed-flow exhaust (decision 1) holds a velocity. ECR-002 step 4 decides whether
+to correct the datum per face; VAL-018 records the value at every pressure outlet either way.
 
 **Diagonal dominance and Jacobi.** The upwind matrix's coefficients are `a_nb = D_f + max(+-F_f,
 0)` with `D_f = mu_e A_f / d_f >= 0`, and `a_P = sum a_nb + net F`. A larger mu_e raises D_f in
 a_nb and a_P alike, so dominance holds for any non-negative mu_t, and the one Jacobi sweep per
-outer iteration is unchanged in kind. What changes is the cell Peclet number: with nu_t of 1e-3
-m^2/s, `U dx / nu_e` is 18 instead of 1,190 [9], so the implicit diffusion carries the face
-coupling that the explicit deferred correction carries now. That is the expected reason the
-outer iteration converges where it diverges laminar, a hypothesis that steps 3 and 6 measure.
+outer iteration is unchanged in kind. What changes is the cell Peclet number. In the room's core,
+below the ceiling and above the equipment, little produces k, so nu_t there is the supply's: 5.0e-5
+to 1.5e-3 m^2/s for intensities of 2% to 10% and dissipation lengths of 5 to 30 cm in the design's
+convention (section C), and `U dx / nu_e` at 0.45 m/s on 0.04 m is 12 to 280 instead of 1,190 (12
+to 363 on nu_t alone) [14]. The first version took nu_t as 1e-3 m^2/s and the cell Peclet number as
+18; that 1e-3 was the other convention's, 6.1 times larger for the same inputs (premise review B2).
+The hypothesis: with the implicit diffusion carrying more of the face coupling than the explicit
+deferred correction, the outer iteration converges where it diverges laminar. The laminar
+measurement leans against it: on the 40x15 room at uniform viscosities of 1.5e-4 and 1.5e-3 m^2/s,
+inside that range, nothing converged under any outlet treatment measured. At 1.5e-4 every run
+diverged, grew or oscillated; at 1.5e-3 today's outlets stalled from about outer 600 and diverged
+at 1,633, and the fixed-flow hood stayed bounded and unconverged to its cut at 1,001 [1, sections 4
+and 8]. Those runs are on a grid five times coarser, so their cell Peclet numbers are five times
+the product mesh's at the same viscosity, and a field large in the shear layers is not a uniform
+one. ECR-002 step 5 measures the hypothesis before any coupled solve, and VAL-018 is conditional on
+it (G (iv)).
 
-**The outer iteration.** Momentum prediction, pressure correction (unchanged), then the k and
-eps step of section C on the corrected faces, then `mu_t = (1 - a_t) mu_t_old + a_t rho C_mu
-k^2 / eps` with `alpha_turbulence` = a_t. The k and eps step reads the corrected faces for the
-reason the transport solver does. `alpha_velocity` keeps its meaning; a value for the turbulent
-cases is a measurement of step 3, not a guess here. The pressure correction's d = A / a_P reads
-the larger a_P and needs no change.
+**The outlets (decision 1; premise review B1).** Today each pressure outlet face takes its interior
+neighbour's velocity whatever its sign (`StaggeredSolver._extrapolate_outlets`) and is corrected
+against p' = 0 (`PressureCorrector._face_d` borrows the interior d), so air entering through an
+outlet has no condition of its own. The design assumed outflow there; the measurement [1, section
+8] found air entering in every diverging run, at the hood at Re 8,950 where the divergence sits
+under today's outlets, and found that no condition tried converges the room above Re 895. The
+outlets need a condition for entering air before any coupled solve: the turbulent iteration would
+inherit today's, and k and eps need a defined value on every face air crosses (section C). Option
+(1) of decision 1, as it would be built: the hood exhaust becomes a segment type of its own, a
+fixed-flow exhaust whose faces hold a configured outward velocity in the staggered layer, as an
+inlet's hold an inward one; in the concentration layer it is an outflow, the upwind cell's value
+carried out; `get_total_inlet_flux` does not count it, and the configuration refuses exhausts whose
+total reaches the supply, so the floor returns at room pressure carry the rest as outflow. At the
+floor returns, each outer iteration `_extrapolate_outlets` holds at zero normal velocity every face
+whose extrapolated velocity points into the room and gives the pressure corrector the faces left
+open; today the corrector fixes its outlet masks at construction (`src/pressure.py`, lines 161 to
+164), so the open faces become an argument of the correction. A face the extrapolation leaves open
+can still be turned inward by the correction (up to two per return at a time on 40x15); it is
+reconsidered the next iteration. Option (2) adds the floor returns' shares as configured velocities
+and leaves no Dirichlet pressure row, so the corrector's system is singular and compatible only
+when the shares sum to the supply exactly, the closed cavity's case. Not ranked: the backflow
+condition at the hood as well, with the hood at room pressure (the report's T1), which contradicts
+decision 2 of 2026-10-04 and departed earlier at Re 895; and a total-pressure inflow, where
+entering air takes the room's pressure less its dynamic head, which was not measured. VAL-001's
+outlet is expected to carry outflow at every face in every iteration and VAL-002 has no outlet, so
+both would stay bitwise under (1); the step checks it.
+
+**The outer iteration.** Momentum prediction, pressure correction (unchanged but for the open
+outlet faces), then the k and eps step of section C on the corrected faces, then `mu_t = (1 - a_t)
+mu_t_old + a_t rho C_mu k^2 / eps` with `alpha_turbulence` = a_t. The k and eps step reads the
+corrected faces for the reason the transport solver does. `alpha_velocity` keeps its meaning; a
+value for the turbulent cases is a measurement of ECR-002 step 5, not a guess here. The pressure
+correction's d = A / a_P reads the larger a_P and needs no change.
 
 ## E. The stopping rule (REQ-S01, clarified; rule version 4)
 ADR-010's conditions (a) to (d) bound the velocity's iteration error, the per-cell imbalance, the
@@ -346,7 +481,12 @@ slowly, and the velocity's rate can understate it.
 
 Condition (e): the same estimate on the eddy viscosity, `step_nu * rho_hat / (1 - rho_hat) /
 nu_scale < iteration_error_tol`, with step_nu the largest change of nu_t over one outer iteration,
-rho_hat fitted over RATE_WINDOW steps as in (a), and nu_scale the largest nu_e in the field. It
+rho_hat fitted over RATE_WINDOW steps as in (a), and nu_scale from boundary data fixed per
+solve: the molecular nu plus the largest inlet eddy viscosity `C_mu k_in^2 / eps_in`. A field
+maximum would move with the iterate and the grid, and one cell's overshoot (the stagnation
+anomaly of section A) would loosen (e) everywhere; the rule's existing scales are boundary data
+for the reason `src/stopping.py` gives for the flux scale, "A flux through the domain, not one
+through a cell: a scale that moved with the grid would move (c) with it" (premise review S4). It
 shares (a)'s tolerance because it bounds the same kind of relative error. The rule needs all five,
 with (e) not evaluated when the model is off, so laminar stops are unchanged. The version a solve
 records becomes a property of the solve rather than the module constant `RULE_VERSION`: 3
@@ -359,7 +499,7 @@ momentum and transport read only nu_t; and no fifth condition, which would let a
 the viscosity still moving. On the product case `mass_imbalance_tol` follows ADR-011 G's formula
 `1e-4 rho V_min / t_end`, unchanged.
 
-## F. Coupling into transport (REQ-T13, proposed; decisions 6 and 7)
+## F. Coupling into transport (REQ-T13, proposed; decisions 7 and 8)
 **The diffusivity.** `D_k = D_B,k + nu_t / Sc_t` per face: the class's Brownian coefficient plus
 the turbulent particle diffusivity, the same for every class. The classes are tracers to the
 turbulence: the 5 um class has a relaxation time of 7.9e-5 s against a Kolmogorov time of about
@@ -381,32 +521,40 @@ the implicit matrix keeps its form, diagonal `V / dt + sum G_f + deposition` aga
 off-diagonals `-G_f`, an M-matrix for any `G_f >= 0`, which holds because nu_t >= 0 (section C).
 Conservation (VAL-007): every face flux still leaves one cell and enters the next, whatever its
 conductance. `stable_dt` bounds the explicit advection only and is unchanged. Jacobi on the
-implicit system: with D_t near 1e-3 m^2/s, dt 0.01 s and dx 0.04 m the diffusion number is
-6e-3 and a sweep contracts the error by about 0.02, so a few sweeps suffice. What changes in
-kind: Brownian diffusion was unresolved everywhere, cell Peclet numbers 2.6e7 to 3.7e9 (ADR-011
-G); with D_t near 1e-3 the cell Peclet number is about 18, and diffusion now shapes the bulk
-field. VAL-003 already tests the operator at D = 1e-3 m^2/s and a diffusion number of 0.1;
-a per-face coefficient needs the dense-solve unit test extended to a piecewise D.
+implicit system: in the room's core nu_t is 5.0e-5 to 1.5e-3 m^2/s for inlet intensities of 2%
+to 10% and dissipation lengths of 5 to 30 cm in the design's convention (section D; [14]), so D_t
+is 7e-5 to 2.1e-3 m^2/s at Sc_t 0.7; at the top of that range, with dt 0.01 s and dx 0.04 m, the
+diffusion number is 1.3e-2 and a sweep contracts the error by about 0.05, so a few sweeps
+suffice. What changes in kind: Brownian diffusion was unresolved everywhere, cell Peclet numbers
+2.6e7 to 3.7e9 (ADR-011 G); with D_t in that range the core's cell Peclet number is about 8 to
+250, and in the shear layers, where nu_t is larger, lower; diffusion now shapes the bulk field.
+VAL-003 already tests the operator at D = 1e-3 m^2/s and a diffusion number of 0.1; a per-face
+coefficient needs the dense-solve unit test extended to a piecewise D.
 
-**Deposition (decision 6).** ADR-011 deposits through `D / delta` with delta 1 mm fixed
+**Deposition (decision 7).** ADR-011 deposits through `D / delta` with delta 1 mm fixed
 (REQ-T09), plus settling on floors. In turbulent flow the near-wall concentration layer thins as
 the wall shear grows, and indoor deposition models make the deposition velocity a function of
 the friction velocity, Lai and Nazaroff (2000) the usual one [8]. That needs u_tau at every wall
-face, which only the wall treatment of decision 2 provides once built, and it changes REQ-T09's
+face, which only the wall treatment of decision 3 provides once built, and it changes REQ-T09's
 parameterization and needs its own validation data. Recommended: defer to a follow-on change;
 D_t is zero at a wall face, so the wall flux keeps today's rule and the change stays separable.
 
-## G. Validation (REQ-S14 to S17, REQ-T13; decision 5)
-Every case has non-unit density, a non-square domain, and inputs off grid nodes, the Phase 2
-lessons. The VAL identifiers are proposed and fixed when Alex accepts ECR-002.
+## G. Validation (REQ-S14 to S18, REQ-T13; decision 6, and decision 3 of 2026-10-04)
+Cases (ii) to (v) have non-unit density, a non-square domain and inputs off grid nodes, the
+Phase 2 lessons. Case (i) reproduces VAL-001 and VAL-002 as they stand, at unit density and, for
+the cavity, on a square domain, so it cannot honour them (test 33 S2). The VAL identifiers are
+proposed and fixed when Alex accepts ECR-002.
 
 **(i) The laminar limit.** With the model off, `val001_80x40`, `val001_80x40_stretched` and
 `val002_80x80` reproduce their stored rows bitwise: the same outer count and stop, and a hash of
-the returned faces equal to one taken at main before the change. The transport gate tests pass
-unchanged with `eddy_viscosity` None. Criterion: equal bits (REQ-S16). Verified in every
-step that touches momentum.py, solver_staggered.py or solver_transport.py.
+the returned faces equal to one taken at the step's base. The transport gate tests pass
+unchanged with `eddy_viscosity` None. Criterion: equal bits (REQ-S16). Verified in every step
+that touches momentum.py, solver_staggered.py or solver_transport.py. The baseline is the main
+branch at each step's base: ECR-003 (decision 5), if it goes first, changes every laminar bit
+and every stored outer count, the rows are retaken under it, and those are what later steps
+reproduce (premise review S11).
 
-**(ii) The model's implementation, with known answers.** Two checks, each with an exact answer.
+**(ii) The model's implementation, with known answers.**
 *VAL-015, decaying turbulence.* A closed 2.4 m by 1.5 m box, rho 1.2, zero velocity, uniform
 initial k0 and eps0: the k-epsilon equations reduce to `dk/dt = -eps`, `deps/dt = -C_2 eps^2 /
 k`, whose solution is `k = k0 (1 + (C_2 - 1) eps0 t / k0)^(-1 / (C_2 - 1))` with eps from it.
@@ -415,22 +563,54 @@ falls at first order in dt (observed order between 0.9 and 1.1 over three steps)
 uniform to rounding. It tests the decay terms and their implicit treatment against an exact
 answer; at rest the production is zero.
 
-*VAL-016, the channel.* A plane channel H = 0.3 m, L = 18 m (60 H, since a turbulent channel
-develops over tens of heights), rho 1.2, air, bulk velocity chosen off the grid's rounding
-(U = 1.37 m/s, Re on H about 27,000), wall functions, compared near the outlet where the profile
-has stopped changing along x to within the comparison's allowance, which the step measures. The
-k-epsilon log layer is an exact solution of the model: with constant shear stress `k = u_tau^2 /
-sqrt(C_mu)`, `eps = u_tau^3 / (kappa_m y)` and `u+ = (1 / kappa_m) ln y+ + B`, u_tau from the
-pressure gradient, where the model's own `kappa_m^2 = (C_2 - C_1) sigma_e sqrt(C_mu)` gives 0.433
-for the standard constants [9]. Compared: the slope of u+ against ln y+ over the nodes between
-y+ 30 and 0.2 of the half-height in wall units, against 1 / kappa_m, and k against `u_tau^2 /
-sqrt(C_mu)` over the same nodes. Criterion: within 3% on the finer of two grids, the gap
-falling under refinement. The answer is the model's, so the allowance is for discretization; 3%
-is about half the gap between 1 / 0.433 and the wall function's 1 / 0.41, so the check tells a
-log layer the model made from one copied off the wall function. Reported beside it, unscored:
-the skin friction against Dean's (1978) correlation `Cf = 0.073 Re_m^-0.25` for two-dimensional
-channels, which the build fetches and checks before quoting. The log-layer check tests the model
-as built; Dean tests the model against physics.
+*VAL-016, plane Couette flow (premise review B3).* The channel first proposed here assumed the
+shear stress constant over its comparison window, and in a channel it falls as `tau_w (1 -
+y/delta)`. A one-dimensional solve of the same model with the wall-function values at y+ = 30
+[15] puts the slope of u+ against ln y+ over that window (y+ 30 to 0.2 delta in wall units, ADR
+case: H 0.3 m, u_tau 0.073 m/s, Re_tau 726) at 1.10 of 1 / kappa_m, and k at 0.76 to 1.00 of
+`u_tau^2 / sqrt(C_mu)`: a correct implementation fails a 3% criterion on both, on every grid.
+The review reached the same conclusion under local equilibrium (slope 0.95, k 0.80 to 0.96). In
+plane Couette flow the total stress is constant across the gap, and the model's answer has a
+sharp, exact property: wherever k is uniform the k equation reduces to production equal to
+dissipation, which with constant stress makes `k = u_tau^2 / sqrt(C_mu)` whatever eps does, and
+the wall function's balance in the wall cell gives the same value. The same one-dimensional
+solve gives k within 0.5% of it across the core at Re_tau 2,984 (1.7% at 726, the molecular
+viscosity's share), and the log-layer slope within 2% of 1 / kappa_m [15]. Case: a 0.3 m gap,
+the lower wall at rest and the upper wall moving at U_w, both walls with wall functions (the
+moving wall is a zero-normal velocity inlet, as the cavity's lid is), rho 1.2, air, the channel
+long enough for the profile to stop changing (about 40 gaps; the step measures it), inlet
+uniform at U_w / 2 (an antisymmetric Couette profile carries exactly that, so the developed
+section has no pressure gradient), U_w of order 15 m/s for Re_tau about 3,000 on this gap (a
+log-law estimate), chosen off the grid's rounding. Compared in the developed section: u / U_w and
+k / u_tau^2 against a one-dimensional solve of the same equations with the same wall treatment,
+written for the test
+as the reference, and the core k against `u_tau^2 / sqrt(C_mu)` with u_tau from the constant
+stress `(nu + nu_t) du/dy` at mid-gap. Criteria: the core k within 1%; the profiles within an
+allowance set from the measured difference on the coarser of two grids, stated in the step
+before the finer one runs, the gap falling under refinement. The plane channel stays as a
+reported physics case: its skin friction against Dean's (1978) correlation `Cf = 0.073
+Re_m^-0.25`, which the build fetches and checks before quoting, unscored. Couette tests the model
+as built; the channel and the step below test it against physics.
+
+*VAL-019, the backward-facing step (decision 3 of 2026-10-04).* The NASA Turbulence Modeling
+Resource's case of Driver and Seegmiller (1985) [13]: Reynolds number about 36,000 on the step
+height H, the inflow boundary layer about 1.5 H thick before the step, Mach number about 0.128
+(incompressible here), reattachment at x/H = 6.26 +/- 0.10, velocity and turbulence profiles at
+x/H = 1, 4, 6 and 10, with data files for the profiles, the pressure and the skin friction.
+Standard k-epsilon reattaches short; what is sourced: on the Kim, Kline and Johnston step
+(measured X/H about 7.1), Thangam and Speziale (1991) found the standard model with wall
+functions at X/H about 6.0, "approximately a 15% underprediction", and 6.25 with three-layer
+wall functions, within 12%; the 1986 RNG at about 4; and earlier reports of 20 to 25% short
+traced to under-resolution and to outflow conditions closer than X/H 25 to the step [12, file
+pages 11, 14 and 15]. On Driver and Seegmiller's step itself the Resource lists computed results
+for one k-epsilon variant (k-e-Rt) and none for the standard model, and this pass found no
+primary source for a standard k-epsilon reattachment length on it (figures of 4.5 to 5 appear
+in search results from tutorial pages and are not used). The criterion is therefore OPEN: it is
+set against a sourced range of standard k-epsilon results on this step, the route being the
+Resource's files and a primary standard k-epsilon result; until then the step reports the
+reattachment length and the four profiles, with [12]'s 12 to 15% as context. From [12] the case
+takes an outflow boundary at least 30 H downstream and a resolution study before any number is
+read. It ranks the variants on separation and reattachment (section A), not on impingement.
 
 **(iii) The Annex 20 room, conditional on item 0.** The specification [4, pages 2 and 3] and
 the measurements [5] are in hand and their check is in [1, section 6]: at x/H = 1.0 the measured
@@ -438,30 +618,58 @@ symmetry-plane profile carries 1.02 to 1.32 of the inlet flux u0 h, depending on
 between the outermost readings and the walls are closed (1.17 with no slip); at x/H = 2.0 it
 carries 0.60 to 0.64 under any closure, while the plane z/W = 0.4, digitized by the builder from
 the specification's figure 6, carries 1.11 to 1.13. The two planes differ by half the inlet flux
-at the same section. The shortfall is the model room's three-dimensionality, the specification's
-"slightly three-dimensional" flow [4, page 5], and a two-dimensional solution, which carries u0
-h through every section, cannot match the symmetry plane at x/H = 2.0 closer than an integrated
-0.021 u0 H, about 0.04 u0 if it sits in the return flow below mid-height. It is consistent with
-the text under [3] figure 5, where a two-dimensional low-Reynolds k-epsilon prediction leaves the
+at the same section. That the shortfall is air crossing the width is inferred from the two
+planes and consistent with the specification's figure 10, the hot-wire profiles at x/H = 2.0
+for W/H = 4.7, 1.0 and 0.5 [4, page 13; 1, section 6]. A two-dimensional solution carries u0 h
+through every section, so it cannot match the symmetry plane at x/H = 2.0 closer than an
+integrated 0.021 u0 H, about 0.04 u0 if it sits in the return flow below mid-height; the text
+introducing [3]'s figure 5 says a two-dimensional low-Reynolds k-epsilon prediction leaves the
 counter flow "slightly underestimated" [6].
 
 Case: L 9.0 m, H 3.0 m, slot h 0.168 m at the top of the left wall, outlet t 0.48 m at the foot
-of the right wall, u0 0.455 m/s, nu 15.3e-6 m^2/s (Re 5,000 on h, 89,200 on H, the product
-room's within 0.4%), inlet k and eps from I = 0.04 and l_e = h / 10. Grid 216 x 72, uniform
-0.0417 m, so the slot spans 4.03 cells and its edge falls off a face; the inlet velocity is
-scaled so the covered faces carry u0 h exactly. Compared: u / u0 along x/H 1.0 and 2.0 and along
-y = h/2 and y = H - h/2, the four lines the specification names [4, page 3]. Criterion OPEN
-(decision 5): its number is set from the spread of published two-dimensional standard k-epsilon
-predictions against the same data, which the build measures by digitizing the predictions in
-[6] figures 4 and 5 and [10] with the method of [1, section 6], not a round number.
+of the right wall, u0 0.455 m/s, nu 15.3e-6 m^2/s (Re 5,000 on h; 89,200 on H, within 0.4% of
+the product room's, a coincidence of numbers and not a similarity, since Nielsen bases the
+Reynolds number on the slot "because the flow in the ceiling region and in the rest of the room
+is strongly influenced by the inlet conditions" [4, page 2]), inlet k and eps from I = 0.04 and
+l_e = h / 10. Grid 216 x 72, uniform 0.0417 m, so the slot spans 4.03 cells and its edge falls
+off a face; the inlet velocity is scaled so the covered faces carry u0 h exactly. Compared: u /
+u0 along x/H 1.0 and 2.0 and along y = h/2 and y = H - h/2, the four lines the specification
+names [4, page 3].
+
+The threshold's source, checked (test 33 B1). [3]'s figure 4 is x/H = 2.0 only (standard and
+stream-function k-epsilon and a one-equation model) and its figure 5 one low-Reynolds model at
+x/H 1.0 and 2.0; neither has the y = h/2 line. Rong and Nielsen (2008) [10], fetched for this
+pass, holds one standard k-epsilon prediction (Ansys CFX 11.0, wall functions with y+ above 11,
+4,736 cells after a three-grid independence study) beside k-omega, BSL and SST, on all four lines
+(x = 3 and 6 m, and y = 0.084 and 2.916 m measured up from the floor, the last being the
+specification's ceiling-jet line y = h/2). So one published standard k-epsilon prediction exists
+at the lines option (1) scores, and no spread of standard k-epsilon results does. The route
+changes: the published prediction's own departure from the data, line by line, digitized from
+[10]'s figures 5 and 9 with the method of [1, section 6], is the reference a standard k-epsilon
+run here is held to (no worse than it by an allowance Alex sets), or the spread across [10]'s
+four models is. Voigt (2000), which [10] cites for the same room, was not fetched. The number
+stays OPEN (decision 6). A further reference the decision did not list: the W/H = 4.7 hot-wire
+profile at x/H = 2.0 and Re 7,100 ([4] figure 10), the measurement nearest two dimensions at that
+section, jet and floor return only (premise review S5).
 
 **(iv) The product room converges.** VAL-018: `configs/clean_room_default.yaml` with the model
 on, `stopping_rule: error_estimate`, `mass_imbalance_tol` from ADR-011 G's formula at its t_end,
 stops by `error_estimate_and_continuity` under rule version 4 within its cap, on the product
 mesh. Reported: the outer count, wall time, the stop's five readings, nu_t / nu over the room,
-and y+ at every wall node, which section B estimated without a field.
+both variants' k, nu_t and concentration over the equipment tops and at the two sensors above
+them (section A), and y+ at every wall node, which section B estimated without a field. VAL-018
+is conditional on the convergence hypothesis of section D: ECR-002 step 5 measures convergence
+at the core's effective viscosity before the coupled solve, and if that measurement fails, VAL-018
+changes rather than the tolerance.
 
-## H. Cost (REQ-S08; decision 4)
+**(v) Grid convergence under wall functions (premise review S10).** VAL-008 (Phase 4) asks for an
+observed order within 0.2 of the theoretical one. Under wall functions refinement moves the
+first node's y+, and below the scalable floor the model itself changes, so an observed order is
+not defined in the usual way. VAL-008 applies to the laminar solver and the transport scheme;
+turbulent runs report a grid sensitivity on two meshes with every first node inside the
+wall-function range, not an observed order.
+
+## H. Cost (REQ-S08; decision 5)
 Measured: one first-outer-iteration pressure correction to tolerance, the sweep cap lifted
 [1, section 5]:
 
@@ -477,42 +685,65 @@ Measured: one first-outer-iteration pressure correction to tolerance, the sweep 
 Doubling the cells per side multiplies the count by 3.3 to 4.0, ADR-010's N^2. The committed
 cap of 200 sweeps is 137 times short of one correction at the committed tolerance. On the Re 90
 probe the correction's count fell from 9,748 to 4,048 over 1,000 outer iterations, a factor of
-2.4 [1, section 4]. A converged product solve needs thousands of outer iterations: VAL-001 80x40
-needed 3,988 (ADR-010). At a third of the first correction's count and 0.28 ms a sweep, 4,000
-iterations at 1e-8 are 4,000 x 37,000 x 0.28 ms, about 11.5 hours per steady solve; at 1e-6,
-about 3 hours; the 216 x 72 Annex 20 grid is of the same order. k and eps add two scalar steps
-of a few array passes and a few sweeps each per outer iteration, small beside that. Weighted
-Jacobi is workable at 40 x 15 and not at the product mesh: decision 4 brings the deferred
-multigrid question forward. A V-cycle whose smoother is the present weighted Jacobi sweep keeps
-the per-cell, data-parallel update REQ-S08 asks for on every level and removes the N^2 factor;
-REQ-S08's text names the algorithm, so it is amended, and the recommended route is a separate
-ECR-003 that ECR-002's product step depends on. The laminar product solve has the same need: in
-the 200 x 75 probe with a 5,000-sweep cap every correction stopped at its cap.
+2.4 [1, section 4]. A converged product solve needs at least thousands of outer iterations: the
+laminar VAL-001 channel at Re 5 needed 3,988 on 80x40 and the Re 100 cavity 12,849 on 80x80
+(ADR-010), and the product case is coupled, on 15,000 cells, at a higher effective Reynolds
+number. At a third of the first correction's count and 0.28 ms a sweep, 4,000 iterations at 1e-8
+are 4,000 x 37,000 x 0.28 ms, about 11.5 hours per steady solve, and at 1e-6 about 3 hours: a
+lower bound, three times larger at the cavity's count (premise review S8). The 216 x 72 Annex 20
+grid is of the same order. k and eps add two scalar steps of a few array passes and a few sweeps
+each per outer iteration, small beside that. Weighted Jacobi is workable at 40 x 15 and not at
+the product mesh: decision 5 brings the deferred pressure-solver question forward, and REQ-S08,
+whose text names Jacobi, is amended whichever replacement is chosen. The laminar product solve
+has the same need: in the 200 x 75 probes with a 5,000-sweep cap every correction stopped at its
+cap.
+
+**The candidates (premise review S7).** Two keep the per-cell, data-parallel update REQ-S08 was
+written for and map to one thread per cell on Phase 6's GPU:
+- *Jacobi-preconditioned conjugate gradients.* The p' system is symmetric (each face coefficient
+  `rho d_face A_face` is shared by its two cells) and positive definite with the outlets'
+  Dirichlet rows; on the closed validation cavity it is singular and compatible, on which
+  conjugate gradients converges, the pin applied after the solve as it is now. Each iteration
+  is a matrix-vector product and two global reductions; the iteration count grows as the cells
+  per side rather than its square; nothing has to be built over the staircase obstacles.
+- *Multigrid with the weighted Jacobi sweep as its smoother.* A V-cycle removes the N^2 factor
+  for a constant-coefficient Poisson problem in a few tens of sweeps' worth of work per
+  correction. Here d = A / a_P varies by orders of magnitude between the outlet jets and the dead
+  corners and SOLID cells cut the grid, so a geometric multigrid needs operator-dependent coarse
+  grids to come near that figure; the figure is typical of the textbook problem, not measured
+  here.
+The ranking between them is ECR-003's, measured on the product mesh; this design needs one of
+them before ECR-002's product step.
 
 ## I. Configuration and modules (REQ-C01, C02)
 **Keys.** A new optional `turbulence` section, absent meaning the model is off and the
 validation cases unchanged: `model`, `k_epsilon`; `variant`, `standard` (default) or `rng`;
-`wall_treatment`, `scalable_wall_functions` (decision 2); `cfl_number`, the pseudo-time Courant
+`wall_treatment`, `scalable_wall_functions` (decision 3); `cfl_number`, the pseudo-time Courant
 number of section C in (0, 1/2]; `alpha_turbulence` in (0, 1]; `max_iter` and `tol` for the
 implicit k and eps solves. In `transport`: `turbulent_schmidt`, a positive float. On a
 `velocity_inlet`: `turbulence_intensity` (a fraction in (0, 1)) and `dissipation_length` (m,
-positive), each required on every velocity inlet with a nonzero normal velocity when the model is
-on and refused otherwise, as `concentration` is. Every key validated for type, range, NaN and
-bool (REQ-C02); unknown keys refused. The model constants of section A are module constants of
-`src/turbulence.py`, one table per variant, as `JACOBI_WEIGHT` is in `pressure.py`: they define
-the published model, and a configured C_mu would be a different model under the same name.
+positive; l_e in `eps = k^(3/2) / l_e`, with no C_mu^(3/4), section C), each required on every
+velocity inlet with a nonzero normal velocity when the model is on and refused otherwise, as
+`concentration` is. Under decision 1's options (1) to (3), a segment type for a fixed-flow exhaust
+with its outward face velocity (m/s, positive), refused when the exhausts' total reaches the
+supply's. Every key validated for type, range, NaN and bool (REQ-C02); unknown keys refused. The
+model constants of section A are module constants of `src/turbulence.py`, one table per variant, as
+`JACOBI_WEIGHT` is in `pressure.py`: they define the published model, and a configured C_mu would
+be a different model under the same name.
 
 **Modules.** `src/turbulence.py` (new): the k and eps step of section C on a face field, the wall
-function values of section B as data, the eddy viscosity; it reuses `limited_face_values` and
-the implicit Jacobi of `solver_transport.py` by import rather than copy, which moves the
-explicit advection and `_implicit_step` out of `TransportSolver` into module functions both
-call, a refactor the transport gate tests must pass bitwise. `src/momentum.py`: the optional
-mu_e field, the face rule of D, the stress source, the wall viscosity and the obstacle wall
-stencil. `src/solver_staggered.py`: the k and eps step in the outer loop, and a read-only
-`eddy_viscosity` beside `face_velocities`. `src/stopping.py`: condition (e), and the recorded
-version moved into the rule (section E). `src/solver_transport.py`: the `eddy_viscosity`
-argument. `src/config.py`: the keys. `src/boundary_staggered.py`: unchanged; wall distances and
-tangential conditions already reach the stencil as data.
+function values of section B as data, the eddy viscosity; it reuses `limited_face_values` and the
+implicit Jacobi of `solver_transport.py` by import rather than copy, which moves the explicit
+advection and `_implicit_step` out of `TransportSolver` into module functions both call, a refactor
+the transport gate tests must pass bitwise. `src/momentum.py`: the optional mu_e field, the face
+rule of D, the stress source, the wall viscosity and the obstacle wall stencil.
+`src/solver_staggered.py`: the outlet condition per outer iteration (D), the k and eps step in the
+outer loop, and a read-only `eddy_viscosity` beside `face_velocities`. `src/pressure.py`: the open
+outlet faces as an argument of the correction. `src/stopping.py`: condition (e), and the recorded
+version moved into the rule (section E). `src/solver_transport.py`: the `eddy_viscosity` argument.
+`src/config.py`: the keys and the exhaust segment type. `src/boundary_registry.py`,
+`src/boundary_staggered.py`, `src/boundary_concentration.py`: the fixed-flow exhaust (D); wall
+distances and tangential conditions already reach the stencil as data.
 
 **Draft contracts** (SYSTEM.md section 4 gains them when ECR-002 is accepted).
 
@@ -533,6 +764,10 @@ momentum.py:
         edges and obstacle faces, or None
 solver_staggered.py:
     StaggeredSolver.eddy_viscosity: ndarray | None   # nu_t of the last solve, read-only
+pressure.py:
+    PressureCorrector.correct(prediction, p, open_outlets=None) -> PressureCorrection
+        open_outlets: per edge, the pressure-outlet faces open this outer iteration
+        (decision 1); None is every outlet face, today's path bitwise
 stopping.py:
     ErrorEstimateRule.update(step, imbalance, viscosity_step=None)   # (e) when given
     ErrorEstimateRule.version -> int   # 3 without (e), 4 with it; the solver exposes it
@@ -545,16 +780,19 @@ positivity promise. `momentum.py -> pressure, solver_staggered, solver_transport
 optional arguments; with None the coefficients are bitwise today's. `solver_staggered.py ->
 solver_transport (through time_integration), the harness, the viewer`: `eddy_viscosity` and the
 modified pressure. `stopping.py -> solver_staggered, scripts/benchmark.py,
-scripts/stopping_probe.py, scripts/val001_order.py`: (e), and the version read from the rule rather
-than the module constant. `config.py -> turbulence, momentum, solver_staggered, solver_transport,
-boundary layers`: the section and the segment keys. `solver_transport.py -> time_integration`: the
-new keyword.
+scripts/stopping_probe.py, scripts/val001_order.py, tests/test_benchmark.py (which imports the
+constant and asserts on it), tests/test_stopping_probe.py (which monkeypatches it)`: (e), and the
+version read from the rule rather than the module constant (test 33 S3). `config.py ->
+turbulence, momentum, solver_staggered, solver_transport, boundary layers`: the section, the
+segment keys and the exhaust type. `pressure.py -> solver_staggered`: the open outlet faces.
+`boundary_staggered.py, boundary_concentration.py -> solver_staggered, solver_transport`: the
+exhaust's faces. `solver_transport.py -> time_integration`: the new keyword.
 
 **Phase 6.** The k and eps step is the transport solver's three loops (the face value per face,
 the explicit update per cell with the growth added, the Jacobi sweep per cell with the decay in
 the diagonal), run twice, plus a per-cell eddy viscosity and a per-face average for the momentum
-conductances. All are data-parallel; the multigrid of decision 4 adds restriction and
-prolongation, also per cell.
+conductances. All are data-parallel; the pressure solver of decision 5 adds restriction and
+prolongation (multigrid) or global reductions (conjugate gradients).
 
 ## J. What this design does not decide
 The product mesh: ADR-010 and ADR-011 left it to a measurement on the product case, and the wall
@@ -562,35 +800,47 @@ treatment now adds a y+ to that measurement; the 200 x 75 mesh is the default, n
 Thermal effects: buoyancy from hot equipment stays out of scope (SYSTEM.md section 5); a k
 equation is where a buoyancy production term would go. Three dimensions: out of scope; item 0
 shows what a two-dimensional comparison cannot see. The supply's inlet turbulence: no value is
-assumed (decision 7); step 6 runs the product case at two intensities and two dissipation
+assumed (decision 8); step 8 runs the product case at two intensities and two dissipation
 lengths and records how much the field moves. A time-accurate (unsteady RANS) solve: the
-design is steady; if step 6 finds no steady RANS solution, that is a finding to report, not
-something to tune away.
+design is steady; if step 8 finds no steady RANS solution, that is a finding to report, not
+something to tune away. Convergence: whether the coupled iteration converges at the core's
+effective viscosity is measured by ECR-002 step 5, not decided here (section D).
 
 ## Consequences
 **Positive.** The product room gains a flow model a reader can judge against the published
 record. The laminar validation stays bitwise. k and eps are positive by the same argument that
 makes concentration positive, with one scalar step serving both. The transport solver's
 guarantees all carry over; particle mixing becomes turbulent in the bulk, the dominant physics
-of the product case. Wall functions keep the product mesh.
+of the product case. Wall functions keep the product mesh. Air turning back through an outlet
+gets a condition of its own, which the laminar solver gains too.
 
 **Negative.** The equipment tops are a stagnation flow the model overstates. Wall functions are
 used below their range in the slow corners. The model's validation has no clean room-scale
 benchmark: the Annex 20 data are three-dimensional where a flat model is compared. Deposition
 stays laminar at the walls until the follow-on change. A fifth stopping condition lengthens
 every turbulent solve. The pressure solve must change first, and that is a second requirement
-change.
+change. The outlet condition changes the laminar product solve, which has no validated result,
+and does not by itself make it converge.
 
 ## Alternatives considered
 At the level of the ECR: an algebraic indoor model, the viscosity raised to a laminar-solvable
 value, and laminar with heavier damping (ECR-002 section 3, with the reasons). Within the k-epsilon
-family: k-omega and SST, which the survey rates well [2, page 14, remark 6] and decision 1 of
-2026-10-04 excludes; a Reynolds-stress model ("marginal improvements ... not well justified by
-the severe penalty on computing time", [2]). Each section names its own.
+family: k-omega and SST, which decision 1 of 2026-10-04 excludes. The survey's remark 6 is
+stronger than "rates well": "Most existing studies indicate that the SST k-omega model (Menter,
+1994) has a better overall performance than the standard k-eps and the RNG k-eps models, but a
+systematic evaluation (especially for modeling indoor airflows) is needed before a solid
+conclusion can be reached" [2, page 14]. The reasons it is not put to Alex are in the sources this
+design holds: two-dimensional SST on the Annex 20 benchmark shows "a large recirculating flow in
+the occupied zone below the supply slot" that "does not corresponds to the Laser-Doppler
+measurements" [3, page 6], and is furthest from the measurements along the floor line in [10]
+(section 2.3); Part 2 finds that "the SST k-omega model has exhibited problems for low turbulence
+flows" [11, page 16], which the product's core is (premise review S6). A Reynolds-stress model
+("marginal improvements ... not well justified by the severe penalty on computing time", [2]).
+Each section names its own.
 
 ## Sources
 1. `docs/reports/product_case_reynolds.md`: sections 2 to 6, the probes, the pressure cost and
-   item 0.
+   item 0; section 8, the outlet measurement of prompt 33b.
 2. Zhai, Zhang, Zhang and Chen (2007), "Evaluation of various turbulence models in predicting
    airflow and turbulence in enclosed environments by CFD: Part 1", HVAC&R Research 13(6),
    https://engineering.purdue.edu/~yanchen/paper/2007-8.pdf; the summary remarks on page 14 of
@@ -603,7 +853,7 @@ the severe penalty on computing time", [2]). Each section names its own.
 5. The Aalborg measurement workbook, "Laser-doppler measurements of the isothermal two
    dimensional test case", digitized in 2005 from [4] figure 5; location and checksum in [1,
    section 6].
-6. [3], figures 4 and 5 and the text under figure 5.
+6. [3], figures 4 and 5 and the paragraph introducing figure 5 (file page 4, above it).
 7. Tominaga and Stathopoulos (2007), "Turbulent Schmidt numbers for CFD analysis with various
    types of flowfield", Atmospheric Environment 41; the 0.2 to 1.3 range is from the abstract as
    search results quote it, the paper not fetched (HTTP 403).
@@ -611,9 +861,33 @@ the severe penalty on computing time", [2]). Each section names its own.
    surfaces", Journal of Aerosol Science 31; cited for its role, not checked here.
 9. `results/builder33/calc33.py` and `calc33.json` (untracked): the Reynolds numbers, the inlet
    values, the friction-velocity and y+ estimates, the implied kappa, the eddy-viscosity scale and
-   the particle relaxation time.
-10. Rong and Nielsen (2008), DCE Technical Report 46, Aalborg University, as [3] cites it; not
-    fetched.
+   the particle relaxation time. Its eddy-viscosity scale is in the C_mu^(3/4) convention, 6.1
+   times the design's for the same inputs; [14] restates it in the design's (premise review B2).
+10. Rong and Nielsen (2008), "Simulation with different turbulence models in an annex 20 room
+    benchmark test using Ansys CFX 11.0", DCE Technical Report 46, Aalborg University,
+    https://homes.civil.aau.dk/pvn/cfd-benchmarks/two_d_literature/2005_2010/Rong_l_and_P_V_Nielsen_2008.pdf
+    (the address the benchmark page's literature list links), SHA-256
+    07d2ceba2fdefffce5fd02ba97a1da479c885cac3785de17fbddead3274722d4; fetched for prompt 33b.
+11. Zhang, Zhang, Zhai and Chen (2007), "Evaluation of various turbulence models in predicting
+    airflow and turbulence in enclosed environments by CFD: Part 2", HVAC&R Research 13(6),
+    https://engineering.purdue.edu/~yanchen/paper/2007-9.pdf, SHA-256
+    2417c037420a657c0efa17cafc1ea6b5250ee52f9bdaefc17e74a29548a0f89c; page numbers are the
+    file's.
+12. Thangam and Speziale (1991), "Turbulent separated flow past a backward-facing step: a
+    critical evaluation of two-equation turbulence models", ICASE Report 91-23 (NASA CR-187532),
+    https://ntrs.nasa.gov/api/citations/19910012138/downloads/19910012138.pdf, SHA-256
+    15e23b8043b373dea9e00d91768287cc35773b5d75fc278873a9203a9ed7d0a5; the journal version is
+    AIAA Journal 30(5), 1992. Page numbers are the file's.
+13. NASA Turbulence Modeling Resource, "2D Backward Facing Step",
+    https://tmbwg.github.io/turbmodels/backstep_val.html, read 2026-10-04: Driver and Seegmiller
+    (1985), the flow conditions, the reattachment location and the profile stations quoted in
+    G (ii).
+14. `results/builder33b/calc33b.py` and `calc33b.json` (untracked; the script is in [1]'s
+    appendix): the core eddy viscosity in the design's convention, the scalable floor for the
+    stated constants, y+ at the outlet flows.
+15. `results/builder33b/oned_keps.py` and `oned_keps.json` (untracked; in [1]'s appendix): the
+    standard model across a plane channel and plane Couette flow in one dimension, with the
+    wall-function values at y+ = 30.
 
 Launder and Spalding (1974), the standard model and wall functions; Yakhot and Orszag (1986) and
 Yakhot et al. (1992), RNG; Kato and Launder (1993), the production limiter; Grotjans and Menter
