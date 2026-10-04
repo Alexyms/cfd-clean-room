@@ -17,8 +17,9 @@ above the floor (deferred D1 of PR 30 asked for this margin to be stated).
 The control that guards section D's composition plants the settling increment
 on the floor face as well, the double count test 30 B1 found: the floor face
 then carries an advective outflow beside the deposition, the floor row falls,
-and the line fails at the first step. The doubled-floor control of section H
-is run and reported too; see its test for why it cannot hold as written.
+and the line fails at the first step (ADR-011 H as amended 2026-10-03; the
+earlier doubled-floor control was dropped, since the deposit over a long run
+is set by the settling supply from above and not by the floor's velocity).
 """
 
 from time import perf_counter
@@ -108,22 +109,3 @@ def test_the_settling_increment_on_the_floor_face_breaks_the_line_val014() -> No
     assert abs(miss) > 1e-2
     assert budget.outflow > 0.0
     assert c[0, 0] < SEALED_BOX["c_0"]
-
-
-@pytest.mark.validation
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "ADR-011 H's doubled-floor control cannot hold under the implicit sink the "
-        "same section C chooses: with v_d = 2 v_s the floor row is no longer "
-        "stationary, settling feeds it at v_s C_0 and it relaxes toward C_0 / 2, so "
-        "the deposit over the run is about 1.06 times the single one, not 2. Reported "
-        "for decision in prompt 32; the composition is guarded by the floor-face test."
-    ),
-)
-def test_doubled_floor_deposition_doubles_the_deposit_val014() -> None:
-    """ADR-011 H as written: the floor deposition_v doubled doubles the deposit."""
-    single = _run(sealed_box_case())[1].budget[0].deposited["floor"]
-    doubled = _run(sealed_box_case(floor_factor=2.0))[1].budget[0].deposited["floor"]
-    print(f"VAL-014 doubled-floor control: deposit ratio {doubled / single:.6f}")
-    assert doubled / single == pytest.approx(2.0, rel=LINE_TOLERANCE)

@@ -2,9 +2,12 @@
 
 A closed 2.0 m by 1.2 m box on 200x120 cells, a zero face field, a synthetic
 D = 1e-3 m^2/s, and the Gaussian of standard deviation five cells centred off
-every node, as exact cell averages, run until sigma has doubled. The time step
-is the test's: a diffusion number of 0.25 is the design's starting point, and
-0.125 is run beside it so backward Euler's share of the error is visible.
+every node, as exact cell averages, run until sigma has doubled. Section H
+leaves the time step to the build "so that the backward Euler error is below
+the spatial one". The test measures that split itself: two runs at diffusion
+numbers 0.25 and 0.125 fit the first-order model error = spatial + time * d,
+and the gate runs at 0.1, where the fit puts the time share under half. The
+shares are printed (prompt 32b, decision 2).
 """
 
 import math
@@ -19,10 +22,18 @@ from validation.transport_cases import DIFFUSION, TransportCase, diffusion_case
 
 # The plan's gate row.
 L2_CRITERION = 0.01
-# "The budget must close to rounding over the run" (ADR-011 H): the implicit
-# solve stops at a residual of 1e-13 of the right-hand side, so the budget's
-# relative residual is bounded by that times the number of steps.
+# ADR-011 H asks for the budget to close to rounding. The implicit solve stops
+# at a cell residual of 1e-13 of the largest right-hand side, so a step's
+# budget error is at most that times the number of cells times the largest
+# cell content, about 2e-9 of the Gaussian's content over 150 steps in the
+# worst case where every residual has the same sign; the measured value is
+# 5e-15 (test 32 confirmed the derivation). The criterion is the measured
+# order with margin, not the worst case.
 BUDGET_CRITERION = 1e-10
+# The two runs the split is fitted from, and the gate's step from the fit.
+SPLIT_DIFFUSION_NUMBERS = (0.25, 0.125)
+GATE_DIFFUSION_NUMBER = 0.1
+TIME_SHARE_LIMIT = 0.5
 
 
 def _run(case: TransportCase, diffusion_number: float) -> dict[str, float]:
@@ -50,35 +61,58 @@ def _run(case: TransportCase, diffusion_number: float) -> dict[str, float]:
     }
 
 
+def _report(d: float, r: dict[str, float]) -> None:
+    print(
+        f"VAL-003 diffusion number {d}: {r['steps']} steps of {r['dt']:.4f} s in "
+        f"{r['seconds']:.1f} s, {r['sweeps_per_step']:.1f} Jacobi sweeps per step"
+    )
+    print(
+        f"  relative L2 {r['l2']:.4e} (criterion < {L2_CRITERION}); peak ratio "
+        f"{r['peak_ratio']:.5f}; minimum {r['minimum']:.2e}; budget relative "
+        f"residual {r['budget_relative']:.2e}"
+    )
+
+
 @pytest.mark.validation
 def test_pure_diffusion_gaussian_val003() -> None:
-    """VAL-003: relative L2 of the cell field against the heat kernel below 1%.
+    """VAL-003: relative L2 against the heat kernel below 1% at a step whose
+    time error is below the spatial one.
 
-    Run at diffusion numbers 0.25 and 0.125 over the same 3.75 s; the first
-    is the gate, the second shows the time error's share. The budget closes to
-    rounding on both, and no cell goes negative (REQ-T12).
+    Backward Euler is first order in dt at a fixed mesh and both errors
+    under-diffuse, so error(d) = spatial + time_per_unit * d. The two split
+    runs give the fit; the gate step is where the fit's time share is under
+    half, and the gate run must land on the fit. The budget closes to
+    rounding on every run and no cell goes negative (REQ-T12).
     """
     case = diffusion_case()
-    results = {d: _run(case, d) for d in (0.25, 0.125)}
-    for d, r in results.items():
+    split = {d: _run(case, d) for d in SPLIT_DIFFUSION_NUMBERS}
+    d_a, d_b = SPLIT_DIFFUSION_NUMBERS
+    time_per_unit = (split[d_a]["l2"] - split[d_b]["l2"]) / (d_a - d_b)
+    spatial = split[d_a]["l2"] - time_per_unit * d_a
+    assert time_per_unit > 0.0 and spatial > 0.0
+    for d in SPLIT_DIFFUSION_NUMBERS:
+        _report(d, split[d])
+        share = time_per_unit * d / split[d]["l2"]
         print(
-            f"VAL-003 diffusion number {d}: {r['steps']} steps of {r['dt']:.4f} s in "
-            f"{r['seconds']:.1f} s, {r['sweeps_per_step']:.1f} Jacobi sweeps per step"
+            f"  fit: time error {time_per_unit * d:.3e} ({share:.0%}), spatial {spatial:.3e}"
         )
-        print(
-            f"  relative L2 {r['l2']:.4e} (criterion < {L2_CRITERION}); peak ratio "
-            f"{r['peak_ratio']:.5f}; minimum {r['minimum']:.2e}; budget relative "
-            f"residual {r['budget_relative']:.2e}"
-        )
-    gate = results[0.25]
+    gate_time = time_per_unit * GATE_DIFFUSION_NUMBER
+    predicted = spatial + gate_time
+    time_share = gate_time / predicted
+    print(
+        f"VAL-003 gate step: diffusion number {GATE_DIFFUSION_NUMBER}, fit predicts "
+        f"{predicted:.3e} with time share {time_share:.0%} (limit {TIME_SHARE_LIMIT:.0%}), "
+        f"spatial share {1 - time_share:.0%}"
+    )
+    assert time_share < TIME_SHARE_LIMIT
+
+    gate = _run(case, GATE_DIFFUSION_NUMBER)
+    _report(GATE_DIFFUSION_NUMBER, gate)
     assert gate["l2"] < L2_CRITERION
-    assert results[0.125]["l2"] < gate["l2"]
-    for r in results.values():
+    assert gate["l2"] == pytest.approx(predicted, rel=0.05)
+    for r in (*split.values(), gate):
         assert abs(r["budget_relative"]) < BUDGET_CRITERION
         assert r["minimum"] >= 0.0
-    # Backward Euler is first order in dt at a fixed mesh, so halving the
-    # step must remove a visible share of the error, not a rounding's worth.
-    assert gate["l2"] - results[0.125]["l2"] > 0.1 * results[0.125]["l2"]
 
 
 @pytest.mark.validation
