@@ -72,6 +72,83 @@ def _random_faces(mesh: Mesh, seed: int, scale: float = 0.3) -> FaceVelocities:
     )
 
 
+# The stencil tests run in four flow directions with one set of hand-computed
+# numbers. The "along" frame has the flow toward +s along the last axis and
+# the transverse index first; _orient maps an along-frame array into the
+# domain for a direction and _to_along maps a domain array back.
+DIRECTIONS = ("right", "left", "up", "down")
+
+
+def _orient(along: np.ndarray, direction: str) -> np.ndarray:
+    """An along-frame array [nt, ns] placed in the domain for ``direction``."""
+    if direction == "right":
+        return np.ascontiguousarray(along)
+    if direction == "left":
+        return np.ascontiguousarray(along[:, ::-1])
+    if direction == "up":
+        return np.ascontiguousarray(along.T)
+    return np.ascontiguousarray(along.T[::-1, :])
+
+
+def _to_along(domain: np.ndarray, direction: str) -> np.ndarray:
+    """The inverse of ``_orient``."""
+    if direction == "right":
+        return np.ascontiguousarray(domain)
+    if direction == "left":
+        return np.ascontiguousarray(domain[:, ::-1])
+    if direction == "up":
+        return np.ascontiguousarray(domain.T)
+    return np.ascontiguousarray(domain[::-1, :].T)
+
+
+def _directed_config(
+    direction: str, ns: int, nt: int, obstacle: dict | None = None
+) -> SimConfig:
+    """A domain of square 0.1 m cells, ``ns`` along the flow and ``nt`` across it."""
+    along_x = direction in ("right", "left")
+    nx, ny = (ns, nt) if along_x else (nt, ns)
+    return transport_config(
+        0.1 * nx, 0.1 * ny, nx, ny, obstacles=[obstacle] if obstacle else None
+    )
+
+
+def _directed_obstacle(direction: str, s: int, t: int, ns: int, nt: int) -> dict:
+    """The one-cell obstacle at along-frame cell (t, s), in domain coordinates."""
+    if direction == "left":
+        s = ns - 1 - s
+    if direction == "down":
+        s = ns - 1 - s
+    i, j = (s, t) if direction in ("right", "left") else (t, s)
+    return {
+        "name": "b",
+        "x_start": 0.1 * i,
+        "x_end": 0.1 * (i + 1),
+        "y_start": 0.1 * j,
+        "y_end": 0.1 * (j + 1),
+    }
+
+
+def _directed_faces(mesh: Mesh, direction: str, speed: float) -> FaceVelocities:
+    """A uniform face field of ``speed`` toward +s."""
+    sign = 1.0 if direction in ("right", "up") else -1.0
+    if direction in ("right", "left"):
+        return uniform_face_field(mesh, sign * speed, 0.0)
+    return uniform_face_field(mesh, 0.0, sign * speed)
+
+
+def _inlet_conditions(
+    mesh: Mesh, direction: str, carried: float
+) -> dict[str, np.ndarray]:
+    """The upstream edge carrying ``carried`` on every face."""
+    if direction in ("right", "left"):
+        inflow_u = np.zeros(u_shape(mesh))
+        inflow_u[:, 0 if direction == "right" else -1] = carried
+        return {"inflow_u": inflow_u}
+    inflow_v = np.zeros(v_shape(mesh))
+    inflow_v[0 if direction == "up" else -1, :] = carried
+    return {"inflow_v": inflow_v}
+
+
 # ---------------------------------------------------------------------------
 # The limiter
 # ---------------------------------------------------------------------------
@@ -284,18 +361,50 @@ class TestArgumentChecks:
             ValueError, match="deposition_v must be finite and non-negative"
         ):
             _solver(self.config, deposition_v=deposition_v)
+
+    @pytest.mark.parametrize(
+        ("name", "dtype", "stated"),
+        [
+            ("inflow_u", np.bool_, "float64"),
+            ("inflow_v", np.float32, "float64"),
+            ("deposition_u", np.float32, "float64"),
+            ("deposition_v", np.int32, "float64"),
+            ("surface_u", np.int64, "int32"),
+            ("surface_v", np.int8, "int32"),
+            ("settling_v", np.int32, "bool"),
+        ],
+    )
+    def test_conditions_of_a_dtype_the_contract_does_not_name_are_refused(
+        self, name: str, dtype: type, stated: str
+    ) -> None:
+        """Exactly float64, int32 and bool, as the boundary_concentration
+        contract names them (test 32b check 21): a narrower float, a wider or
+        narrower int and an int mask are refused, not only another kind."""
         faces = conditions_with(self.mesh)
-        wrong = ConcentrationFaces(
-            inflow_u=faces.inflow_u.astype(bool),
-            inflow_v=faces.inflow_v,
-            deposition_u=faces.deposition_u,
-            deposition_v=faces.deposition_v,
-            surface_u=faces.surface_u,
-            surface_v=faces.surface_v,
-            settling_v=faces.settling_v,
-        )
-        with pytest.raises(ValueError, match="inflow_u must have dtype kind 'f'"):
+        fields = {
+            field: getattr(faces, field)
+            for field in (
+                "inflow_u",
+                "inflow_v",
+                "deposition_u",
+                "deposition_v",
+                "surface_u",
+                "surface_v",
+                "settling_v",
+            )
+        }
+        fields[name] = fields[name].astype(dtype)
+        wrong = ConcentrationFaces(**fields)
+        with pytest.raises(ValueError, match=f"{name} must have dtype {stated}"):
             TransportSolver(self.mesh, self.config, INERT, FixedConditions(wrong))
+
+    def test_a_numpy_bool_dt_is_refused_like_a_python_one(self) -> None:
+        """np.True_ is not a bool subclass; at rest stable_dt is infinite and
+        the step would otherwise run with dt = 1.0 (test 32b check 21)."""
+        still = uniform_face_field(self.mesh, 0.0, 0.0)
+        with pytest.raises(TypeError, match="dt must be a number"):
+            self.solver.solve_timestep(self.c, still, 0, np.True_)
+        assert self.solver.budget[0].initial is None
 
     def test_the_input_field_is_not_modified_and_the_output_is_fresh(self) -> None:
         before = self.c.copy()
@@ -493,8 +602,9 @@ class TestAdvection:
         assert y1 - y0 == pytest.approx(-0.05 * steps * dt, rel=1e-3)
         assert solver.budget[0].relative() == pytest.approx(0.0, abs=1e-13)
 
+    @pytest.mark.parametrize("direction", DIRECTIONS)
     def test_the_inlet_value_is_the_far_node_of_the_first_interior_face(
-        self,
+        self, direction: str
     ) -> None:
         """Leonard's boundary form (ADR-011 B): the quadratic through the inlet
         value at the face and the first two cells. A linear field with the
@@ -502,18 +612,20 @@ class TestAdvection:
         limiter keeps part of the quadratic, so the face value depends on
         the far node: 1.0875 with the inlet value, 1.1 with a zero ghost
         (the prompt's named trap), 1.0 with the edge cell. The first cell's
-        update is checked against the value written out by hand."""
-        config = transport_config(1.0, 0.5, 8, 4)
+        update is checked against the value written out by hand, in each of
+        the four flow directions: the same field, carried value and expected
+        numbers rotated into the domain (prompt 32c; test 32b check 20). The
+        top inlet, flow downward, is the product supply's side."""
+        config = _directed_config(direction, 8, 4)
         mesh = Mesh(config)
-        inflow_u = np.zeros(u_shape(mesh))
         carried = 0.8
-        inflow_u[:, 0] = carried
-        mesh, solver = _solver(config, inflow_u=inflow_u)
-        faces = uniform_face_field(mesh, 0.1, 0.0)
-        c = np.ones((4, 1)) * (1.0 + 0.1 * np.arange(8))[None, :]
+        mesh, solver = _solver(config, **_inlet_conditions(mesh, direction, carried))
+        faces = _directed_faces(mesh, direction, 0.1)
+        along = np.ones((4, 1)) * (1.0 + 0.1 * np.arange(8))[None, :]
+        c = _orient(along, direction)
         dt = solver.stable_dt(faces, 0)
         courant = 0.1 * dt / mesh.dx
-        c0, c1 = c[0, 0], c[0, 1]
+        c0, c1 = along[0, 0], along[0, 1]
         # The quadratic through (x[0], carried), (xc[0], c0), (xc[1], c1) at x[1]
         # on a uniform mesh is c0 + (c1 - carried) / 3; then the UMIST clamp.
         quick = c0 + (c1 - carried) / 3.0
@@ -524,7 +636,7 @@ class TestAdvection:
         )
         face_1 = c0 + 0.5 * psi * (c1 - c0)
         assert face_1 == pytest.approx(1.0875)
-        out = solver.solve_timestep(c, faces, 0, dt)
+        out = _to_along(solver.solve_timestep(c, faces, 0, dt), direction)
         expected = c0 - courant * (face_1 - carried)
         assert np.allclose(out[:, 0], expected, rtol=1e-12, atol=0.0)
         # A zero ghost or the edge cell as the far node moves the face value
@@ -536,41 +648,40 @@ class TestAdvection:
             abs(out[0, 0] - (c0 - courant * (1.0 - carried))) > 0.5 * courant * 0.0125
         )
 
-    def test_a_far_node_inside_an_obstacle_reads_as_the_upstream_value(self) -> None:
-        """One cell past an obstacle in a uniform flow, on a field linear in x:
-        the far node of the face east of that cell is the SOLID cell. Read as
-        the upstream value it makes r = 0 and the face upwind, so the cell
-        loses one Courant number of its own value; read as the obstacle's
-        zero it makes r = 15, the clamp returns the downstream value, and
-        the cell would lose the downstream value instead."""
-        config = transport_config(
-            1.0,
-            0.5,
-            10,
-            5,
-            obstacles=[
-                {
-                    "name": "b",
-                    "x_start": 0.4,
-                    "x_end": 0.5,
-                    "y_start": 0.2,
-                    "y_end": 0.3,
-                }
-            ],
+    @pytest.mark.parametrize("direction", DIRECTIONS)
+    def test_a_far_node_inside_an_obstacle_reads_as_the_upstream_value(
+        self, direction: str
+    ) -> None:
+        """One cell past an obstacle in a uniform flow, on a field linear along
+        the flow: the far node of the face downstream of that cell is the
+        SOLID cell. Read as the upstream value it makes r = 0 and the face
+        upwind, so the cell loses one Courant number of its own value; read
+        as the obstacle's zero it makes r = 15, the clamp returns the
+        downstream value, and the cell would lose the downstream value
+        instead. Run in each of the four flow directions with the same
+        numbers rotated (prompt 32c; test 32b check 20): the product's
+        obstacles are left in -x and upward."""
+        config = _directed_config(
+            direction, 10, 5, obstacle=_directed_obstacle(direction, 4, 2, 10, 5)
         )
         mesh, solver = _solver(config)
-        solid = mesh.cell_type == SOLID
+        solid = _to_along(mesh.cell_type == SOLID, direction)
         assert [tuple(cell) for cell in np.argwhere(solid)] == [(2, 4)]
-        faces = uniform_face_field(mesh, 0.1, 0.0)
-        c = np.ones((5, 1)) * (1.0 + 0.1 * np.arange(10))[None, :]
+        faces = _directed_faces(mesh, direction, 0.1)
+        along = np.ones((5, 1)) * (1.0 + 0.1 * np.arange(10))[None, :]
         dt = solver.stable_dt(faces, 0)
         courant = 0.1 * dt / mesh.dx
-        out = solver.solve_timestep(c, faces, 0, dt)
-        # West face of (2, 5) is the obstacle face: no flux. East face: upwind.
-        assert out[2, 5] == pytest.approx(c[2, 5] * (1.0 - courant), rel=1e-12)
-        assert abs(out[2, 5] - (c[2, 5] - courant * c[2, 6])) > 0.5 * courant * 0.1
-        # The row above the obstacle has no SOLID far node and is the plain scheme.
-        assert out[3, 5] != pytest.approx(c[3, 5] * (1.0 - courant), rel=1e-6)
+        out = _to_along(
+            solver.solve_timestep(_orient(along, direction), faces, 0, dt), direction
+        )
+        # The upstream face of cell (2, 5) is the obstacle face: no flux. Its
+        # downstream face: upwind.
+        assert out[2, 5] == pytest.approx(along[2, 5] * (1.0 - courant), rel=1e-12)
+        assert (
+            abs(out[2, 5] - (along[2, 5] - courant * along[2, 6])) > 0.5 * courant * 0.1
+        )
+        # The row beside the obstacle has no SOLID far node and is the plain scheme.
+        assert out[3, 5] != pytest.approx(along[3, 5] * (1.0 - courant), rel=1e-6)
 
     def test_a_domain_face_behind_an_edge_obstacle_carries_no_flux(self) -> None:
         """An obstacle on the bottom edge under an inlet whose faces all carry

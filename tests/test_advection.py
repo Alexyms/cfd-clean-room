@@ -113,7 +113,8 @@ def test_oblique_channel_pulse_val004_row1() -> None:
 def test_rotating_puff_val004_row2(tmp_path: Path) -> None:
     """VAL-004 row 2: after one revolution, peak > 62%, L2 < 24% against the
     initial field, no cell below zero, centroid within a cell; the puff is
-    recorded through FieldHistory and saved for Phase 7."""
+    recorded through FieldHistory and saved under tmp_path to check the
+    format. The deliverable under results/builder32/ is puff_visual.py's."""
     case = rotating_puff_case()
     history = FieldHistory(case.config.output_interval)
     start = perf_counter()
