@@ -4,8 +4,10 @@
 Proposed. Written 2026-10-04, before the build, as the design for ECR-002
 (`docs/ECR/ECR-002-turbulence-model.md`), from the evidence in
 `docs/reports/product_case_reynolds.md`; revised the same day after premise review 33, test 33 and
-the outlet measurement of prompt 33b (that report's section 8). Eight questions are put to Alex and
-listed first; the sections carry them with their ranking and do not choose. When accepted this ADR
+the outlet measurement of prompt 33b (that report's section 8), and again after `/cfd-test 33b`.
+Alex took the decisions listed first on 2026-10-04: the eight put to him, each as ranked first,
+and a ninth, a risk-retirement probe before anything is built (ECR-002 step 0). The sections carry
+the options with their ranking; the record of what was taken is at the head of the decisions. When accepted this ADR
 supersedes ADR-004 (laminar flow assumption) and gains a planned-against-built table when ECR-002
 closes, as ADR-010's was added at ECR-001 step 9. Bracketed numbers point at the sources at the
 end.
@@ -17,6 +19,37 @@ consequence, then the section that carries the detail. Decision 1 of 2026-10-04 
 model, not an algebraic one) is taken; these are what it leaves open. The measurement settled
 none of the earlier seven and added one, the outlets, which comes first because ECR-002's
 outlet step comes before any coupled solve.
+
+**Taken by Alex, 2026-10-04.** Every recommendation below, and a ninth decision. The options stay
+as they were put.
+
+1. The outlets: option (1), the report's T3. The hood exhaust's tangential velocity is held at
+   zero, as the segment layer holds it on every segment that is not a pressure outlet
+   (`src/boundary_staggered.py`, `_build_tangential`). A floor-return face held shut has only its
+   normal velocity held; its tangential condition stays the pressure outlet's zero gradient.
+   ECR-002 criterion 6 compares the built treatment against the probe rerun with the hood's
+   tangential velocity held at zero, not against the probe as run, which kept it at zero gradient
+   (test 33b, B2).
+2. The variant: both built; RNG for the product, standard for the published comparisons, both
+   run on the product and their difference reported.
+3. The wall treatment: scalable wall functions.
+4. k and eps: the transport scheme in pseudo-time, growth explicit and decay implicit.
+5. The pressure solve: ECR-003, conjugate gradients against multigrid measured on the product
+   mesh, landing before ECR-002 step 5, the first step that solves the 200x75 room to tolerance.
+   Steps 0 to 4 do not wait for it.
+6. The thresholds: Annex 20 option (1), with (4) reported. Both pass marks, the room's and the
+   backward-facing step's, stay OPEN until the first coupled results exist, and are then set,
+   each with its rationale, against the measurements and the published predictions (Rong and
+   Nielsen 2008 for the room), before step 7 scores anything. What is not scored is reported.
+7. Turbulent deposition: deferred to a follow-on change.
+8. The inputs: Sc_t 0.7, configurable; each inlet states its intensity and dissipation length,
+   no value in code.
+9. Risk retirement before the build (ECR-002 step 0). The committed laminar solver, through a
+   probe-only subclass as prompt 33b's outlets were, with the T3 outlets and a frozen non-uniform
+   eddy viscosity from the indoor zero-equation model added to the molecular viscosity: does the
+   room's iteration converge at a realistic effective viscosity? Asked before eight steps of model
+   are built on the assumption that it does. The outcome decides whether a convergence aid comes
+   before step 1.
 
 **1. How the air leaves the room (section D; ECR-002 step 3).**
 *Picture.* Air leaves through four grilles in the floor and the hood's opening in the right
@@ -33,9 +66,11 @@ will not by itself make the room solvable.
 *Options, ranked.*
 (1) The hood at its set flow; a grille face the air turns inward through held shut for that
 iteration (the report's T3). Measured: the hood never draws air in; on the product mesh the solve
-diverges latest, at outer iteration 427 against 267 today; on the coarse room it stays bounded,
-unconverged, at ten times and at the real viscosity over the iterations run; at Re 90 it
-converges faster than today's. Needs a segment type for the hood and the pressure step told each
+diverges latest, at outer iteration 427 against 267 today; on the coarse room, at ten times and
+at the real viscosity, it grows to four or five times the converging runs' speed and holds there,
+at 10 to 20 m/s, without diverging over the iterations run (to 1,000 in test 33b); at Re 90 its
+residual falls faster than today's (6.0e-6 at outer 1,701 against 1.27e-5 at 1,675), not
+converged. Needs a segment type for the hood and the pressure step told each
 iteration which grille faces are open.
 (2) Every opening at a set flow: the grilles' shares given in the configuration and the pressure
 pinned at one cell, as the closed cavity's is. Nothing can draw air in, but the grilles' split,
@@ -431,11 +466,11 @@ deferred correction, the outer iteration converges where it diverges laminar. Th
 measurement leans against it: on the 40x15 room at uniform viscosities of 1.5e-4 and 1.5e-3 m^2/s,
 inside that range, nothing converged under any outlet treatment measured. At 1.5e-4 every run
 diverged, grew or oscillated; at 1.5e-3 today's outlets stalled from about outer 600 and diverged
-at 1,633, and the fixed-flow hood stayed bounded and unconverged to its cut at 1,001 [1, sections 4
-and 8]. Those runs are on a grid five times coarser, so their cell Peclet numbers are five times
+at 1,633, and the fixed-flow hood stayed bounded and unconverged to its cut at 1,001 and, continued in
+test 33b, departed near outer 2,000, past 5 m/s at 2,165 against 1,277 [1, sections 4 and 8]. Those runs are on a grid five times coarser, so their cell Peclet numbers are five times
 the product mesh's at the same viscosity, and a field large in the shear layers is not a uniform
-one. ECR-002 step 5 measures the hypothesis before any coupled solve, and VAL-018 is conditional on
-it (G (iv)).
+one. ECR-002 step 0 probes the hypothesis before anything is built, step 5 measures it with the
+built code before any coupled solve, and VAL-018 is conditional on it (G (iv)).
 
 **The outlets (decision 1; premise review B1).** Today each pressure outlet face takes its interior
 neighbour's velocity whatever its sign (`StaggeredSolver._extrapolate_outlets`) and is corrected
@@ -447,15 +482,16 @@ outlets need a condition for entering air before any coupled solve: the turbulen
 inherit today's, and k and eps need a defined value on every face air crosses (section C). Option
 (1) of decision 1, as it would be built: the hood exhaust becomes a segment type of its own, a
 fixed-flow exhaust whose faces hold a configured outward velocity in the staggered layer, as an
-inlet's hold an inward one; in the concentration layer it is an outflow, the upwind cell's value
+inlet's hold an inward one, and whose tangential velocity is held at zero, as on every segment
+that is not a pressure outlet (`_build_tangential`; decision 1 as taken); in the concentration layer it is an outflow, the upwind cell's value
 carried out; `get_total_inlet_flux` does not count it, and the configuration refuses exhausts whose
 total reaches the supply, so the floor returns at room pressure carry the rest as outflow. At the
 floor returns, each outer iteration `_extrapolate_outlets` holds at zero normal velocity every face
-whose extrapolated velocity points into the room and gives the pressure corrector the faces left
-open; today the corrector fixes its outlet masks at construction (`src/pressure.py`, lines 161 to
+whose extrapolated velocity points into the room, leaving its tangential condition the pressure
+outlet's zero gradient, and gives the pressure corrector the faces left open; today the corrector fixes its outlet masks at construction (`src/pressure.py`, lines 161 to
 164), so the open faces become an argument of the correction. A face the extrapolation leaves open
-can still be turned inward by the correction (up to two per return at a time on 40x15); it is
-reconsidered the next iteration. Option (2) adds the floor returns' shares as configured velocities
+can still be turned inward by the correction (up to three per return at once on 40x15, counted
+at every iteration in test 33b); it is reconsidered the next iteration. Option (2) adds the floor returns' shares as configured velocities
 and leaves no Dirichlet pressure row, so the corrector's system is singular and compatible only
 when the shares sum to the supply exactly, the closed cavity's case. Not ranked: the backflow
 condition at the hood as well, with the hood at room pressure (the report's T1), which contradicts
