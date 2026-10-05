@@ -551,7 +551,7 @@ missing departure is not explained by it either.
 
 Section 4's limits stand: one coarse grid, a frozen field whose shape is the zero-equation model's
 and not k-epsilon's, and a converged iterate stopped by the velocity-step rule. Two more, from the
-results: the sweep aid is measured at one rung, and no run here continued from a converged field
+results: the sweep aid is measured at one rung here (section 7 adds two), and no run here continued from a converged field
 (test 34's check 19 did; section 6.5).
 
 Two constructions of this probe were not varied, and are ratified by the orchestrator after review
@@ -754,6 +754,28 @@ a tenfold range. The momentum sweep probe's reading (`docs/reports/momentum_swee
 fits the three nearly coincident histories better: once the momentum solve is exhausted, the
 pressure-velocity coupling under alpha_velocity 0.5 sets the outer count, and the mixing barely
 enters it. That is an inference from these three runs, not a measurement of the coupling.
+
+### 7.6 The laminar room with ten sweeps (test 34b)
+
+`/cfd-test 34b` (`docs/prompts/test-34b.md`, checks 16 and 17) ran the same settings with ten
+sweeps and no eddy viscosity. Under T3 on 40x15 the laminar room converges by the solver's own
+stop at real air (1,208 outer iterations, Re 89,500) and at a uniform 1.5e-4 m^2/s (1,310, Re
+8,950). Started on either converged field, the committed one-sweep iteration leaves it at 1.035
+and 1.034 per outer iteration, the rate at which it leaves Z2's, Z3's and Z4's (1.033 to 1.036).
+At a uniform 1.5e-3 m^2/s (Re 895) ten and fifty sweeps both stall below 5e-6 on one history over
+3,000 iterations, so that stall is neither the inner solve nor shown to be the Reynolds number; it
+is open. The laminar field at real air lies within the iteration error of Z4-sw's, 1.3e-3 m/s in
+the median cell.
+
+So on this grid the frozen eddy viscosity at the bottom of k-epsilon's range neither enables
+convergence nor changes the answer measurably, and the failure of the laminar runs in
+`docs/reports/product_case_reynolds.md` sections 4 and 8 to converge above Re 895 was the
+one-sweep iteration repelling a steady solution that exists, not the Reynolds number. Limits: one
+grid of 0.2 m cells, where real air's cell Reynolds number is about 6,000; the T3 outlets; a
+converged discrete steady state, which does not show the flow is steady in time; the velocity-step
+stop. It says nothing for or against k-epsilon's convergence on 200x75, which stays step 5's
+measurement, and nothing against the k-epsilon decision, which rests on the particle physics
+(ECR-002 section 2, first paragraph).
 
 ## Appendix A: base34.py
 
