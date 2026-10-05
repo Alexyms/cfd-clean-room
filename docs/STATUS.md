@@ -43,8 +43,8 @@ face reverses. The outlets are part of how the solve diverges, not why it does n
 a unidirectional supply, not the Navier-Stokes one. The evidence, with the controls the probes
 lack, is `docs/reports/product_case_reynolds.md`. Alex decided the same day to add a k-epsilon
 turbulence model: ECR-002 (`docs/ECR/ECR-002-turbulence-model.md`) is the change request and
-ADR-012 (`docs/ADR/ADR-012-turbulence-model.md`) its design, both proposed, their decisions
-taken by Alex on 2026-10-04; ECR-002 fixes the outlets and probes convergence at a realistic
+ADR-012 (`docs/ADR/ADR-012-turbulence-model.md`) its design, both accepted by Alex on
+2026-10-04 with their decisions; ECR-002 fixes the outlets and probes convergence at a realistic
 effective viscosity before anything is built (step 0), then measures it with the built code
 before its first coupled solve, since the model's convergence is a hypothesis, not a given. The product case, and with it Phase 3's last deliverable, waits for that change. The
 seven transport gate rows stand: they were judged on prescribed or laminar face fields, and the
@@ -275,7 +275,7 @@ published standard k-epsilon prediction on the same lines, its threshold left to
 backward-facing step joins the validation, its threshold also OPEN for want of a sourced range.
 The premise review of ECR-002 and ADR-012 and `/cfd-test 33` ran, the fix pass of prompt 33b
 answered them, and `/cfd-test 33b`'s findings, all in the text, were applied directly. Alex took
-the design's decisions on 2026-10-04. Next: the pull request; then ECR-002 step 0, the
+the design's decisions and accepted the request on 2026-10-04. Next: ECR-002 step 0, the
 risk-retirement probe, and ECR-003, the pressure solve, which steps 0 to 4 do not wait for.
 
 Deferred findings from earlier pull requests are open as GitHub issues 33, 36, 38, 40 and 42.
@@ -285,11 +285,10 @@ still installed. Removing them is Alex's, after merge.
 
 ## Open questions
 
-ECR-002's acceptance. Alex took ADR-012's decisions on 2026-10-04 (recorded at its top), so what
-remains is signing the request, at which `docs/SYSTEM.md`'s requirement and scope text change;
-that edit moves the requirement register `tests/test_system_map.py` pins, so it goes through a
-build step rather than a text fix. The Annex 20 and backward-facing step thresholds stay OPEN by
-decision until the first coupled results exist.
+None for Alex on ECR-002: he accepted it and ADR-012 on 2026-10-04. Its requirement and scope
+text enter `docs/SYSTEM.md` in step 0's pull request, since that edit moves the requirement
+register `tests/test_system_map.py` pins. The Annex 20 and backward-facing step thresholds stay
+OPEN by decision until the first coupled results exist.
 
 Closed 2026-10-03: the three questions ADR-011 left open, the face concentration scheme and
 with it positivity, a number for VAL-004's "shape preserved", and the HEPA supply
