@@ -118,7 +118,10 @@ field fall without converging at Re 90, stall and then diverge at 895, and diver
 unconverged pressure solve (row 6) nor the obstacles (row 10). Heavier under-relaxation keeps the
 iterate bounded on both grids over the lengths run.
 
-**What they do not show.** That no steady laminar solution exists: rows 5, 7 and 8 have not
+**What they do not show.** (Answered on 40x15 under the T3 outlets by test 34b, step 0's report
+section 7.6: with ten momentum sweeps per outer iteration the laminar room converges at real air
+and at Re 8,950, and the committed one-sweep iteration repels those solutions.) That no steady
+laminar solution exists: rows 5, 7 and 8 have not
 diverged, and under-relaxation changes the path to a fixed point, not the fixed point. Row 7
 came within a factor of five of the stopping tolerance before its residual turned upward, as row
 9's did at Re 895; whether it would then converge, settle into an oscillation or grow beyond
@@ -501,7 +504,9 @@ the iterations run on 40x15. The measurement is closest to the third outcome wit
 qualification. Air drawn in through the outlets is part of how the divergence grows, and at Re
 8,950 under today's outlets it is where the divergence sits. It is not why the iteration fails to
 converge: with the hood's flow fixed and every face the extrapolation turns inward held closed,
-the runs still do not converge above Re 895, and on the product mesh the growth starts inside the
+the runs still do not converge above Re 895 (with the solver's one momentum sweep per outer
+iteration; with ten, T3 converges at Re 8,950 and real air on 40x15, so the cause there is the
+one-sweep iteration, not the Reynolds number: step 0's report, section 7.6), and on the product mesh the growth starts inside the
 room, at the supply's ends and above the hood bench, before any outlet face reverses (D2). Premise
 review B1's location of the divergence is confirmed at Re 8,950 and, for where it ends, at real
 air; its attribution of the non-convergence to the outlets is refuted by measurement. The Re 895

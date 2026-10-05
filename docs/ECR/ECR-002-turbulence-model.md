@@ -76,10 +76,15 @@ at the hood exhaust while it draws air in, and a fixed-flow hood removes it ther
 treatment converges the room above Re 895, the floor returns diverge instead when the hood is
 fixed, and on the product mesh at the real viscosity the growth starts inside the room before
 any outlet face reverses. So the outlets need a condition for entering air (ADR-012 decision 1,
-step 3), and beyond them the probes point to the Reynolds number: the same room, its outlets
-treated or not, has a falling residual at Re 90 and does not converge from Re 895 up. Whether the
-turbulence model makes the solve converge is a hypothesis this request measures (step 5; ADR-012
-D), not a claim it makes.
+step 3). Beyond them the probes first pointed to the Reynolds number: the same room, its outlets
+treated or not, has a falling residual at Re 90 and does not converge from Re 895 up. That holds
+for the solver's one momentum sweep per outer iteration only. With ten, the laminar 40x15 room
+under T3 converges at Re 8,950 and at real air, and the one-sweep iteration repels those
+solutions (step 0's report, section 7.6, from test 34b); at Re 895 it stalls with ten or fifty,
+cause open. So on that grid the non-convergence was the iteration, not the Reynolds number, and
+the first paragraph's reasons for the model stand unchanged. Whether the solve converges on the
+product mesh with the model is a hypothesis this request measures (steps 0 and 5; ADR-012 D),
+not a claim it makes.
 
 **ADR-004 conflated the two meanings of laminar.** Its rationale is about the supply's design
 intent, not the Reynolds number of the flow in the room.
@@ -384,7 +389,7 @@ The change is accepted when all of the following are demonstrated:
 
 | Risk | Likelihood | Impact | Mitigation |
 |------|-----------|--------|------------|
-| The coupled iteration does not converge at the core's effective viscosity: on 40x15 the laminar solver converges under no outlet treatment measured at a uniform viscosity of 1.5e-4 m^2/s (two runs diverge, two grow or oscillate over 550 to 930 iterations), and at 1.5e-3 it stalls, then diverges, under today's outlets (report, sections 4 and 8). | Medium to high | High | Step 0 probes it before anything is built and step 5 measures it before the coupled solve; convergence aids ranked there; VAL-018 changes rather than its tolerance (premise review B2). |
+| The coupled iteration does not converge at the core's effective viscosity: on 40x15 the laminar solver with one momentum sweep converges under no outlet treatment measured at a uniform viscosity of 1.5e-4 m^2/s (two runs diverge, two grow or oscillate over 550 to 930 iterations), and at 1.5e-3 it stalls, then diverges, under today's outlets (report, sections 4 and 8). With ten sweeps the 40x15 room converges across k-epsilon's range and laminar at real air (step 0's report, section 7), which lowers the risk on that grid and leaves the product mesh to step 5. | Medium to high | High | Step 0 probes it before anything is built and step 5 measures it before the coupled solve; convergence aids ranked there; VAL-018 changes rather than its tolerance (premise review B2). |
 | The room has no steady RANS solution: vortex shedding from the equipment edges. | Medium | High | Step 8 measures it; an unsteady solve would be a scope change, reported rather than tuned away (ADR-012 J). |
 | Air drawn in through the outlets: reversed faces accompany every divergence measured, and at Re 8,950 the divergence sits at the hood; the fixed-flow hood moves it to the floor returns. | Measured | High | Step 3's treatment, decision 1; it moves and delays the divergence and is not counted on for convergence. |
 | Wall functions used below their range in slow corners and at stagnation points. | High | Medium | The scalable form bounds the error; step 8 maps y+ over every wall node. |
