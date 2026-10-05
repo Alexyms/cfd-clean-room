@@ -561,6 +561,100 @@ on an iterate that is not divergence-free, and at Z2 the two forms reach the sam
 sweep and under ten (test 34, check 20). Whether ten sweeps also make Z3's and Z4's fixed points
 stable is the question prompt 34b's runs answer.
 
+## 7. Ten sweeps across the range (prompt 34b)
+
+**Date:** 2026-10-05.
+**Decision (Alex, 2026-10-04):** ten sweeps were measured at one rung, the top of k-epsilon's
+range, where the fix was most likely to work. Before step 1 opens, run them at the other two: one
+condition is not a test of the aid.
+**Order:** sections 7.1 to 7.3 and appendices G and H were committed before Z3-sw and Z4-sw
+started. Section 7.4 was written after the runs. The run logs' first lines carry their start times.
+
+### 7.1 Method
+
+Z3 and Z4 of section 2.5, each with ten momentum sweeps per outer iteration, and a fifty-sweep
+rerun of either that does not converge:
+
+| Run | Field | s | Core median of s nu_t0 (m^2/s) | Momentum sweeps per outer | When |
+|---|---|---|---|---|---|
+| Z3-sw | zero-equation | 0.061553 | 5e-4 | 10 | now |
+| Z4-sw | zero-equation | 0.018466 | 1.5e-4 | 10 | now |
+| Z3-sw50 | as Z3 | 0.061553 | 5e-4 | 50 | only if Z3-sw does not converge |
+| Z4-sw50 | as Z4 | 0.018466 | 1.5e-4 | 50 | only if Z4-sw does not converge |
+
+Everything but the sweep count is Z3's and Z4's: `frozen34.py` unchanged (appendix B), form b,
+QUICK, T3, alpha_velocity 0.5, the pressure toward 1e-8 with the 40,000-sweep cap, from rest, to
+3,000 outer iterations or 100 m/s. `--sweeps N` runs N Jacobi sweeps of the under-relaxed
+equations on the current field's coefficients and sources (section 2.3). `run34b.sh` (appendix G)
+launches Z3-sw and Z4-sw in parallel and, given Z3 or Z4, the fifty-sweep reruns.
+
+A fifty-sweep run starts when its ten-sweep run's class is settled: diverged, or 3,000 outer
+iterations run. A ten-sweep run past 20 m/s by outer 1,000 is plainly growing, and its fifty-sweep
+run may start then; section 7.4 says if one did. Without the fifty-sweep run a failure at ten is
+ambiguous between "ten is too few" and "sweeps do not help at that mixing". No run is stopped for
+cost before 3,000 unless the set has run four hours; then all are stopped together and section 7.4
+says so.
+
+Each run is classified by section 2.6's rules, through `compare34.classify` unchanged.
+`compare34b.py` (appendix H) imports it and adds, beyond section 6.2's columns: the sweep count and
+the seconds per outer iteration; at the end, the worst per-cell mass imbalance, the faces held
+shut and the pressure sweeps, as section 6.2 gives them for Z2-sw; the residual's median per 500
+iterations, by which a fifty-sweep run is set against its ten-sweep run; and the period of the
+residual's logarithm and of the largest speed over the last 1,000 iterations, taken as the first
+autocorrelation peak after the autocorrelation goes negative, with the peak's height so that a
+weak peak is not read as a period. By this measure Z2's residual has a period of 122 iterations
+(height 0.56), section 6.2's "roughly 120".
+
+The switch check: the first 100 residuals of each sweep run against its one-sweep run, Z3 or Z4.
+Identical residuals would mean the switch did not take, and the work stops there.
+
+### 7.2 What each outcome means
+
+In prompt 34b's terms, written before the runs:
+
+- **A. Both converge with ten sweeps.** The sweep aid holds across k-epsilon's range on this grid.
+  Step 1 opens; a configurable momentum sweep count (default 1, so the laminar results stay
+  bitwise) is built with step 4's viscosity field and used from step 5 on.
+- **B. One or both need fifty and converge with it.** The aid holds and its cost grows as the
+  mixing weakens; the sweep count needed is a step 5 measurement on the product mesh. Step 1
+  opens.
+- **C. Z4 (or Z3) does not converge with fifty.** Sweeps alone are not enough at that mixing,
+  either because the iteration still repels the fixed point or because no steady solution exists
+  there. Section 7.4 reports where the growth sits and whether it oscillates with a period. The
+  result goes to Alex with pseudo-transient continuation as the next aid before step 1 opens.
+
+These are section 7's outcomes. Step 0's outcome B (section 6.5) stands whichever of them holds.
+
+### 7.3 Predictions
+
+**The orchestrator's**, written before handover (prompt 34b): "Z3-sw converges, slower than
+Z2-sw's 1,240. Z4-sw does not converge, and neither does Z4-sw50: at a core of 1.5e-4 m^2/s, about
+ten times air's viscosity, the shear layers over return 4's gap are thin enough that the steady
+flow itself is unstable, which no inner solve can change. Outcome C at Z4."
+
+**Mine**, written before the runs:
+
+- Z3-sw converges by the solver's own stop, between outer 1,240 and 2,000, with no departure.
+- Z4-sw neither converges nor grows: no departure past 5 m/s in 3,000 iterations, the residual
+  oscillating between 1e-3 and 1e-1 without a downward trend, class none of these, as Z2 with one
+  sweep.
+- Z4-sw50 ends in Z4-sw's class, its residual medians per 500 iterations within a factor of two
+  of Z4-sw's.
+- Outcome C at Z4.
+
+Reasoning. A Jacobi sweep of the under-relaxed equations divides what the neighbours carry by
+a_P/alpha, and the neighbours' coefficients sum to a_P less the net outflow, so near continuity
+each sweep reduces the inner error by about alpha, 0.5. Ten sweeps solve the inner system to about
+1e-3, and fifty add almost nothing to the outer iteration; on the collocated cavity the outer
+count was 874 at ten sweeps and at thirty (`docs/reports/momentum_sweep_probe.md`). With the inner
+system solved, the relaxation term acts as a pseudo-time term, `(1 - alpha)/alpha a_P = rho V /
+dtau`, a local Courant number near one at alpha 0.5, so the outer iteration is close to a
+semi-implicit march in pseudo-time. It converges where the steady solution is stable, and where it
+is not it wanders without the growth to tens of m/s the one-sweep runs show. Z3 carries a third
+of Z2's mixing and Z4 a tenth. Below the equipment tops Z4 adds a median 3.1e-5 m^2/s, about
+twice air's own viscosity, between the uniform runs at real air and at ten times air's; Z3 adds
+1.0e-4 there. So I expect the steady solution to be stable at Z3 and not at Z4.
+
 ## Appendix A: base34.py
 
 ```python
@@ -1852,4 +1946,198 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+```
+
+## Appendix G: run34b.sh
+
+```sh
+#!/bin/sh
+# Prompt 34b: Z3 and Z4 with ten momentum sweeps per outer iteration, and the
+# fifty-sweep rerun of any of the two that does not converge. Everything but
+# the sweep count is run34.sh's Z3 and Z4: frozen34.py unchanged, form b,
+# QUICK, T3, from rest, to 3,000 outer iterations or 100 m/s.
+#   sh run34b.sh ten            Z3-sw and Z4-sw, in parallel
+#   sh run34b.sh fifty Z3 Z4    Z3-sw50 and/or Z4-sw50, each once its
+#                               ten-sweep run's class is settled
+export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
+PY=../../.venv/Scripts/python
+median() {
+    case $1 in
+        Z3) echo 5e-4 ;;
+        Z4) echo 1.5e-4 ;;
+    esac
+}
+mode=$1
+shift
+if [ "$mode" = ten ]; then
+    for z in Z3 Z4; do
+        $PY frozen34.py $z-sw zeq --core-median "$(median $z)" --sweeps 10 > $z-sw.log 2>&1 &
+    done
+elif [ "$mode" = fifty ]; then
+    for z in "$@"; do
+        $PY frozen34.py $z-sw50 zeq --core-median "$(median $z)" --sweeps 50 > $z-sw50.log 2>&1 &
+    done
+fi
+wait
+echo ALL DONE
+```
+
+## Appendix H: compare34b.py
+
+```python
+"""Builder helper, prompt 34b: the ten- and fifty-sweep runs at Z3 and Z4.
+
+Usage:
+    python compare34b.py switch     (the first 100 residuals against the one-sweep run)
+    python compare34b.py table      (classification and the section 7 columns)
+    python compare34b.py histories  (residual and speed against Z2-sw, Z3 and Z4)
+
+Reads the JSON histories frozen34.py writes beside this file. Classifies with
+compare34.classify, the rules of the report's section 2.6, imported unchanged.
+Writes rungs34b.json and ecr002_step0_sweeps.png beside this file.
+
+Beyond section 6.2's columns: the sweep count and the seconds per outer
+iteration; at the end, the worst per-cell mass imbalance, the faces held shut
+and the pressure sweeps; the residual's median per 500 iterations, which is
+what the ten- and fifty-sweep runs are compared by; and the period of the
+residual and of the largest speed over the last 1,000 iterations, the first
+peak of the autocorrelation after it has gone negative, None when there is
+no such peak.
+"""
+
+import json
+import sys
+from pathlib import Path
+
+import numpy as np
+from compare34 import SPEED_LINE, classify, load, running_median
+
+HERE = Path(__file__).parent
+RUNS = ["Z3-sw", "Z4-sw", "Z3-sw50", "Z4-sw50"]
+ONE_SWEEP = {"Z3-sw": "Z3", "Z4-sw": "Z4", "Z3-sw50": "Z3", "Z4-sw50": "Z4"}
+BLOCK = 500
+TAIL = 1000
+
+
+def present() -> list[str]:
+    return [n for n in RUNS if (HERE / f"{n}.json").exists()]
+
+
+def period(x: np.ndarray) -> dict:
+    """First autocorrelation peak after the first negative lag, over the last TAIL values."""
+    a = np.asarray(x[-TAIL:], dtype=float)
+    a = a - a.mean()
+    if a.size < 4 or not np.any(a):
+        return {"lag": None, "corr": None}
+    full = np.correlate(a, a, mode="full")[a.size - 1 :]
+    corr = full / full[0]
+    negative = np.nonzero(corr < 0.0)[0]
+    if negative.size == 0:
+        return {"lag": None, "corr": None}
+    for k in range(int(negative[0]) + 1, corr.size - 1):
+        if corr[k] >= corr[k - 1] and corr[k] >= corr[k + 1] and corr[k] > 0.0:
+            return {"lag": k, "corr": float(corr[k])}
+    return {"lag": None, "corr": None}
+
+
+def switch() -> None:
+    for name in present():
+        a, b = load(name), load(ONE_SWEEP[name])
+        n = min(100, len(a["residual"]), len(b["residual"]))
+        ra, rb = np.array(a["residual"][:n]), np.array(b["residual"][:n])
+        equal = ra == rb
+        rel = np.abs(ra - rb) / np.abs(rb)
+        print(
+            f"{name} against {ONE_SWEEP[name]}: sweeps {a['switches']['sweeps']} against "
+            f"{b['switches']['sweeps']}, {int(equal.sum())} of {n} residuals bitwise equal, "
+            f"first unequal at {int(np.argmin(equal)) if not equal.all() else None}, "
+            f"relative difference median {np.median(rel):.3g}, largest {rel.max():.3g}"
+        )
+
+
+def table() -> None:
+    out = {}
+    for name in present():
+        d = load(name)
+        c = classify(d)
+        r = np.array(d["residual"])
+        c["momentum_sweeps"] = d["switches"]["sweeps"]
+        c["seconds_per_outer"] = d["seconds"] / len(r)
+        c["end_worst_imbalance"] = d["worst"][-1]
+        c["end_closed"] = d["closed"][-1]
+        c["end_pressure_sweeps"] = d["sweeps"][-1]
+        c["block_medians"] = [
+            float(np.median(r[i : i + BLOCK])) for i in range(0, r.size, BLOCK)
+        ]
+        c["residual_period"] = period(np.log10(r))
+        c["speed_period"] = period(np.array(d["max_speed"]))
+        c["last_rate"] = float((r[-1] / r[-101]) ** (1 / 100)) if r.size > 100 else None
+        out[name] = c
+        dep = c["departure"]
+        print(
+            f"{name:8s} {c['class']:9s} outer {c['outer_run']:5d} least {c['least_residual']:.3g} "
+            f"at {c['least_at']} end {c['end_residual']:.3g} speed {c['end_speed']:.3g} at "
+            f"{c['end_cell']} largest {c['max_speed']:.3g} departure {dep['first']} {dep['cell']} "
+            f"transient {dep['transient']} cap {c['sweeps_at_cap']} s/outer "
+            f"{c['seconds_per_outer']:.2f} worst {c['end_worst_imbalance']:.3g} inflow "
+            f"{c['most_inflow']} closed end {c['end_closed']} p-sweeps end "
+            f"{c['end_pressure_sweeps']} rate {c['last_rate']}"
+        )
+        print(
+            f"         medians per {BLOCK}: "
+            + ", ".join(f"{m:.2e}" for m in c["block_medians"])
+        )
+        print(
+            f"         period residual {c['residual_period']} speed {c['speed_period']}"
+        )
+    (HERE / "rungs34b.json").write_text(json.dumps(out, indent=1))
+
+
+def histories() -> None:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    families = [
+        ("Z3, core median 5e-4 m^2/s", "Z3", "#1baf7a"),
+        ("Z4, core median 1.5e-4 m^2/s", "Z4", "#eda100"),
+    ]
+    fig, axes = plt.subplots(2, 2, figsize=(12, 7.5), dpi=150, sharex=True)
+    for col, (title, base, color) in enumerate(families):
+        lines = [
+            ("Z2-sw", "Z2-sw (ten sweeps, core 1.5e-3)", "#52514e", "-", 1.0),
+            (base, f"{base} (one sweep)", color, ":", 1.2),
+            (f"{base}-sw", f"{base}-sw (ten sweeps)", color, "-", 1.4),
+            (f"{base}-sw50", f"{base}-sw50 (fifty sweeps)", "#0b0b0b", "--", 1.0),
+        ]
+        for name, label, c, style, lw in lines:
+            if not (HERE / f"{name}.json").exists():
+                continue
+            d = load(name)
+            axes[0, col].semilogy(
+                running_median(d["residual"]), color=c, ls=style, lw=lw, label=label
+            )
+            axes[1, col].semilogy(d["max_speed"], color=c, ls=style, lw=lw, label=label)
+        axes[0, col].axhline(1e-6, color="#0b0b0b", lw=0.6)
+        axes[0, col].set_title(title, fontsize=10, loc="left")
+        axes[0, col].set_ylabel("residual, 25-iteration running median")
+        axes[1, col].set_ylabel("largest cell speed (m/s)")
+        axes[1, col].set_xlabel("outer iteration")
+        axes[1, col].axhline(SPEED_LINE, color="#0b0b0b", lw=0.6)
+        axes[1, col].set_ylim(1, 100)
+        axes[1, col].set_xlim(0, 3000)
+        axes[0, col].legend(fontsize=7, frameon=False)
+        for row in range(2):
+            ax = axes[row, col]
+            ax.grid(True, color="#e4e3df", lw=0.6)
+            for spine in ("top", "right"):
+                ax.spines[spine].set_visible(False)
+    fig.tight_layout()
+    fig.savefig(HERE / "ecr002_step0_sweeps.png")
+    print("wrote ecr002_step0_sweeps.png")
+
+
+if __name__ == "__main__":
+    {"switch": switch, "table": table, "histories": histories}[sys.argv[1]]()
 ```
