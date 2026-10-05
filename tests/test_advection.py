@@ -23,7 +23,7 @@ from time import perf_counter
 import numpy as np
 import pytest
 
-import src.solver_transport as solver_transport
+import src.scalar_scheme as scalar_scheme
 from src.solver_transport import FieldHistory, TransportSolver
 from validation.metrics import centroid, field_minimum, peak_retention, relative_l2
 from validation.transport_cases import (
@@ -146,7 +146,7 @@ def test_the_unlimited_quick_face_value_breaks_the_no_negative_clause_val004(
     by far more than the rounding allowance, so the clause can fail."""
     case = oblique_pulse_case()
     monkeypatch.setattr(
-        solver_transport,
+        scalar_scheme,
         "limited_face_values",
         lambda c_up, c_c, c_d, quick: quick,
     )

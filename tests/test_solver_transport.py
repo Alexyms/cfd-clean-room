@@ -28,11 +28,11 @@ from src.boundary_registry import BoundaryRegistry
 from src.config import SimConfig
 from src.mesh import SOLID, Mesh
 from src.particles import ParticlePhysics
+from src.scalar_scheme import limited_face_values
 from src.solver_transport import (
     FieldHistory,
     MassBudget,
     TransportSolver,
-    limited_face_values,
 )
 from src.staggered import FaceVelocities, u_shape, v_shape
 from validation.metrics import centroid

@@ -16,7 +16,7 @@ from time import perf_counter
 import numpy as np
 import pytest
 
-import src.solver_transport as solver_transport
+import src.scalar_scheme as scalar_scheme
 from src.solver_transport import TransportSolver
 from validation.transport_cases import (
     SMITH_HUTTON,
@@ -94,7 +94,7 @@ def test_the_unlimited_quick_face_value_breaks_the_bounds_val013(
     hundred steps, so the bounds test can fail."""
     case = smith_hutton_case()
     monkeypatch.setattr(
-        solver_transport,
+        scalar_scheme,
         "limited_face_values",
         lambda c_up, c_c, c_d, quick: quick,
     )

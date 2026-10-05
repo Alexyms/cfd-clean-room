@@ -51,6 +51,10 @@ serves = ["REQ-S04", "REQ-S08"]
 responsibility = "Predicts u* and v* on the staggered grid with QUICK advection by deferred correction over an upwind implicit matrix, one under-relaxed Jacobi sweep per call, and returns the diagonal coefficients the pressure correction needs."
 serves = ["REQ-S07", "REQ-S09"]
 
+[modules."src/scalar_scheme.py"]
+responsibility = "Holds the cell-centred scalar scheme the transport solver and the k-epsilon model share: QUICK's face value bounded by the UMIST limiter, the advective flux along one axis with the inflow value or the upwind cell at a domain face, and the backward Euler solve of diffusion with a non-negative cell sink by Jacobi, on per-face conductances with one step or a step per cell."
+serves = ["REQ-T12"]
+
 [modules."src/solver_staggered.py"]
 responsibility = "Runs steady SIMPLE on the staggered grid as one outer loop over the momentum predictor and the pressure correction, returning cell-centered fields through the harness's callback shape and exposing the final faces as FaceVelocities; stops by the velocity-step rule or, when configured, by the error-estimate rule."
 serves = ["REQ-S01", "REQ-S02", "REQ-S03", "REQ-S04", "REQ-S05", "REQ-S07", "REQ-S13"]

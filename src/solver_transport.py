@@ -27,7 +27,9 @@ the quadratic is the one the node positions give and the clamp is applied to
 it. Where the downstream difference is zero the ratio is undefined and the
 face value is ``C_C``; without that guard the scheme is not exact on a
 uniform field. ``advection_scheme: upwind`` takes ``C_C`` everywhere, the
-comparison scheme.
+comparison scheme. The face value, the advective flux and the implicit
+solve are ``src/scalar_scheme.py``'s, shared with the k-epsilon model; this
+module passes them the class's fluxes, conductances and deposition sink.
 
 Boundaries (ADR-011 E). The solver reads a ConcentrationFaces and imposes
 nothing of its own. At a domain face the sign of the face flux decides:
@@ -87,8 +89,8 @@ from src.config import (
     SimConfig,
 )
 from src.mesh import SOLID, Mesh
-from src.momentum import quick_face_values
 from src.particles import ParticlePhysics
+from src.scalar_scheme import advective_flux, implicit_step, mesh_axes
 from src.staggered import FaceVelocities, p_shape, u_shape, v_shape
 
 logger = logging.getLogger(__name__)
@@ -284,44 +286,6 @@ class FieldHistory:
         np.savez(path, **arrays)
 
 
-def limited_face_values(
-    c_up: np.ndarray, c_c: np.ndarray, c_d: np.ndarray, quick: np.ndarray
-) -> np.ndarray:
-    """The UMIST clamp of the QUICK face value (ADR-011 B).
-
-    Parameters
-    ----------
-    c_up : np.ndarray
-        The node upstream of the upstream cell, per face.
-    c_c : np.ndarray
-        The upstream cell value.
-    c_d : np.ndarray
-        The downstream cell value.
-    quick : np.ndarray
-        The unlimited quadratic's face value, from ``quick_face_values``.
-
-    Returns
-    -------
-    np.ndarray
-        ``c_c + psi(r) (c_d - c_c) / 2`` with ``psi = max(0, min(2r,
-        (1 + 3r) / 4, psi_quick, 2))``, ``r = (c_c - c_up) / (c_d - c_c)``
-        and ``psi_quick = 2 (quick - c_c) / (c_d - c_c)``; ``c_c`` where the
-        downstream difference is zero, so a uniform field is exact.
-    """
-    d_down = c_d - c_c
-    defined = d_down != 0.0
-    safe = np.where(defined, d_down, 1.0)
-    r = (c_c - c_up) / safe
-    psi_quick = 2.0 * (quick - c_c) / safe
-    psi = np.maximum(
-        0.0,
-        np.minimum.reduce(
-            [2.0 * r, (1.0 + 3.0 * r) / 4.0, psi_quick, np.full_like(r, 2.0)]
-        ),
-    )
-    return np.where(defined, c_c + 0.5 * psi * d_down, c_c)
-
-
 class ParticleProperties(Protocol):
     """What the solver reads of a particle model: ParticlePhysics satisfies it.
 
@@ -348,23 +312,6 @@ class ScalarConditions(Protocol):
     def faces_for(self, size_class: int) -> ConcentrationFaces:
         """The scalar condition at every face for one class."""
         ...
-
-
-@dataclass(frozen=True)
-class _Axis:
-    """One advection direction with that axis last, for ``_advective_flux``.
-
-    ``nodes`` are the boundary face, the cell centres and the other boundary
-    face along the axis; ``faces`` the interior face coordinates; ``left``
-    the index in ``nodes`` of the node on the low side of each interior
-    face; ``solid_ext`` the SOLID mask padded with one False on each side
-    in the transposed shape [nt, ns+2].
-    """
-
-    nodes: np.ndarray
-    faces: np.ndarray
-    left: np.ndarray
-    solid_ext: np.ndarray
 
 
 class TransportSolver:
@@ -455,19 +402,7 @@ class TransportSolver:
             inner_v, self._area_v / mesh.dy_face[:, None], 0.0
         )
 
-        ny, nx = self._p_shape
-        self._axis_x = _Axis(
-            nodes=np.concatenate(([mesh.x[0]], mesh.xc, [mesh.x[-1]])),
-            faces=mesh.x[1:-1],
-            left=np.arange(1, nx),
-            solid_ext=np.pad(solid, ((0, 0), (1, 1))),
-        )
-        self._axis_y = _Axis(
-            nodes=np.concatenate(([mesh.y[0]], mesh.yc, [mesh.y[-1]])),
-            faces=mesh.y[1:-1],
-            left=np.arange(1, ny),
-            solid_ext=np.ascontiguousarray(np.pad(solid, ((1, 1), (0, 0))).T),
-        )
+        self._axis_x, self._axis_y = mesh_axes(mesh)
 
         self._settling = [
             float(physics.settling_velocity(k)) for k in range(self._n_classes)
@@ -645,9 +580,11 @@ class TransportSolver:
         u_adv, v_adv = self._advecting_velocities(faces, k, v_ext)
         flux_u = u_adv * self._area_u
         flux_v = v_adv * self._area_v
-        adv_u = self._advective_flux(c, flux_u, conditions.inflow_u, self._axis_x)
-        adv_v = self._advective_flux(
-            c.T, flux_v.T, conditions.inflow_v.T, self._axis_y
+        adv_u = advective_flux(
+            c, flux_u, conditions.inflow_u, self._axis_x, self._upwind
+        )
+        adv_v = advective_flux(
+            c.T, flux_v.T, conditions.inflow_v.T, self._axis_y, self._upwind
         ).T
         divergence = adv_u[:, 1:] - adv_u[:, :-1] + adv_v[1:, :] - adv_v[:-1, :]
         c_star = c - dt * divergence / self._volume
@@ -764,104 +701,38 @@ class TransportSolver:
             v_adv = v_adv + np.where(self._inner_v, v_ext.v, 0.0)
         return u_adv, v_adv
 
-    def _advective_flux(
-        self,
-        c: np.ndarray,
-        flux: np.ndarray,
-        inflow: np.ndarray,
-        axis: _Axis,
-    ) -> np.ndarray:
-        """Volume flux times face concentration on every face along the last axis.
-
-        ``c`` has shape [nt, ns], ``flux`` and ``inflow`` [nt, ns+1]. The two
-        boundary nodes hold the carried concentration where the flux enters
-        and the adjacent cell value otherwise, so an inflow face reads the
-        inlet value at the face and every other boundary is zero gradient.
-        """
-        ns = c.shape[1]
-        low_in = flux[:, 0] > 0.0
-        high_in = flux[:, -1] < 0.0
-        c_low = np.where(low_in, inflow[:, 0], c[:, 0])
-        c_high = np.where(high_in, inflow[:, -1], c[:, -1])
-        ext = np.concatenate([c_low[:, None], c, c_high[:, None]], axis=1)
-        face = np.empty_like(flux)
-        face[:, 0] = c_low
-        face[:, -1] = c_high
-        if ns >= 2:
-            k = axis.left
-            positive = flux[:, 1:-1] > 0.0
-            c_c = np.where(positive, ext[:, k], ext[:, k + 1])
-            if self._upwind:
-                face[:, 1:-1] = c_c
-            else:
-                c_d = np.where(positive, ext[:, k + 1], ext[:, k])
-                c_up = np.where(positive, ext[:, k - 1], ext[:, k + 2])
-                far_solid = np.where(
-                    positive, axis.solid_ext[:, k - 1], axis.solid_ext[:, k + 2]
-                )
-                quick = quick_face_values(ext, axis.nodes, k, axis.faces, positive)
-                # A far node inside an obstacle is read as the upstream value,
-                # the zero-gradient rule a domain wall gets.
-                c_up = np.where(far_solid, c_c, c_up)
-                quick = np.where(far_solid, c_c, quick)
-                face[:, 1:-1] = limited_face_values(c_up, c_c, c_d, quick)
-        return flux * face
-
     def _implicit_step(
         self, c_star: np.ndarray, dt: float, diffusivity: float, k: int
     ) -> np.ndarray:
-        """Backward Euler diffusion and deposition by Jacobi.
+        """Backward Euler diffusion and deposition, by ``scalar_scheme.implicit_step``.
 
-        ``a_P C_P - sum_f G_f C_N = (V / dt) C*`` with ``a_P = V / dt + sum_f
-        G_f + sum_w v_d A_w``: ``G_f = D A_f / d_f`` on the interior faces
-        between non-SOLID cells, and the deposition sink of every wall face
-        of P in the diagonal, so the step cannot take a cell below zero
-        (ADR-011 C). Each sweep adds the residual over the diagonal, so the
-        stop reads the system's own residual: its largest entry below
-        ``diffusion_tol`` times the largest right-hand side. Returns the
-        explicit field when nothing diffuses or deposits.
+        ``G_f = D A_f / d_f`` on the interior faces between non-SOLID cells,
+        formed here before the solve, and the deposition sink of every wall
+        face of P in the diagonal, so the step cannot take a cell below zero
+        (ADR-011 C). Records the sweeps and whether the tolerance was met,
+        and logs a warning at the cap.
         """
         g_u = diffusivity * self._conductance_u
         g_v = diffusivity * self._conductance_v
-        diag_extra = (
-            g_u[:, :-1] + g_u[:, 1:] + g_v[:-1, :] + g_v[1:, :] + self._deposit_cell[k]
+        result = implicit_step(
+            c_star,
+            self._volume,
+            dt,
+            g_u,
+            g_v,
+            self._deposit_cell[k],
+            self._solid,
+            self._tol,
+            self._max_sweeps,
         )
-        if not diag_extra.any():
-            self.last_diffusion_sweeps = 0
-            self.diffusion_converged = True
-            return c_star
-        over_dt = self._volume / dt
-        a_p = over_dt + diag_extra
-        b = over_dt * c_star
-        scale = float(np.abs(b).max())
-        c = c_star.copy()
-        padded = np.pad(c, 1)
-        self.diffusion_converged = False
-        sweeps = 0
-        while True:
-            padded[1:-1, 1:-1] = c
-            neighbours = (
-                g_u[:, 1:] * padded[1:-1, 2:]
-                + g_u[:, :-1] * padded[1:-1, :-2]
-                + g_v[1:, :] * padded[2:, 1:-1]
-                + g_v[:-1, :] * padded[:-2, 1:-1]
+        if not result.converged:
+            logger.warning(
+                "implicit diffusion solve stopped at max_diffusion_iter %d",
+                self._max_sweeps,
             )
-            residual = b + neighbours - a_p * c
-            residual[self._solid] = 0.0
-            if float(np.abs(residual).max()) <= self._tol * scale:
-                self.diffusion_converged = True
-                break
-            if sweeps >= self._max_sweeps:
-                logger.warning(
-                    "implicit diffusion solve stopped at max_diffusion_iter %d",
-                    self._max_sweeps,
-                )
-                break
-            c = c + residual / a_p
-            c[self._solid] = 0.0
-            sweeps += 1
-        self.last_diffusion_sweeps = sweeps
-        return c
+        self.last_diffusion_sweeps = result.sweeps
+        self.diffusion_converged = result.converged
+        return result.field
 
     def _book_deposition(
         self, c_new: np.ndarray, dt: float, k: int, conditions: ConcentrationFaces
