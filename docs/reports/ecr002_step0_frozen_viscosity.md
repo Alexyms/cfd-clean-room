@@ -491,8 +491,9 @@ commit 2's terms:
 
 B says none settling would mean no steady iterate at that mixing with this solver. One settled:
 there is a steady iterate at the top of k-epsilon's range, and the committed iteration's one
-momentum sweep repels it (section 6.5's first point). What is not measured is whether ten sweeps also settle Z3 and Z4,
-the middle and bottom of the range, where one sweep grows.
+momentum sweep repels it (section 6.5's first point). Whether ten sweeps also settle Z3 and Z4,
+the middle and bottom of the range, where one sweep grows, was not measured here; section 7 (prompt
+34b) measured it: both converge.
 
 ### 6.6 Step 5's convergence aids, ranked
 
@@ -561,7 +562,7 @@ stress source is form b, not D's pair as the prompt wrote it: form b is the comm
 treatment of the molecular viscosity, the prompt's zero-field control and D's pair cannot both hold
 on an iterate that is not divergence-free, and at Z2 the two forms reach the same field under one
 sweep and under ten (test 34, check 20). Whether ten sweeps also make Z3's and Z4's fixed points
-stable is the question prompt 34b's runs answer.
+stable was the question prompt 34b's runs answered: they do (section 7).
 
 ## 7. Ten sweeps across the range (prompt 34b)
 
