@@ -265,9 +265,9 @@ the core it need not resemble the uniform run. At Z2's scale 64% of the fluid ce
 1.5e-3 (50% of the core, by construction), and the median below the core is 3.1e-4, a fifth of it.
 In the jets it is several times larger: at (6.1, 1.5), in the gap over return 4 where the uniform
 runs at 1.5e-3 and 1.5e-4 m^2/s depart, V is 2.83 m/s, L 0.50 m and Z2's value 1.0e-2, 6.7 times
-the uniform; at (6.9, 1.9), above the hood bench beside the gap, where real air departs, 7.0e-3;
+the uniform; at (6.9, 1.9), above the hood bench beside the gap, where real air departs, 3.6e-3, and 7.0e-3 one cell nearer the gap at (6.5, 1.9) (corrected after review 34, B1: the first version gave 7.0e-3 at (6.9, 1.9));
 at (4.7, 2.1), over the litho tool's right corner, 3.7e-3. Under the ceiling at the
-supply's two ends, (0.5, 2.9) and (7.5, 2.9), it is 3.1e-4. Ten percent of the fluid cells carry
+supply's two ends, (0.5, 2.9) and (7.5, 2.9), it is 3.0e-4 and 3.1e-4 (the first version gave 3.1e-4 for both; test 34). Ten percent of the fluid cells carry
 more than three times the uniform value.
 
 ## 4. What each outcome means
@@ -381,17 +381,18 @@ one face of return 2 is held shut by T3 and no outlet face draws air in.
 3.5 m/s, where the uniform control at the same core value departs at 2,284. The residual does not
 fall: least 3.10e-3 at 273, then between 1e-2 and 3.4e-2, a slow oscillation of roughly 120
 iterations (the figure), max over min 2.7 across the last 500, which no rule of section 2.6
-matches. At outer 2,999 the iterate is within 0.025 m/s of Z2-sw's converged field in the median
-cell and differs by up to 1.09 m/s at (6.5, 1.9), above the hood bench beside the gap over return
+matches. At outer 2,999 the iterate differs from Z2-sw's converged field by 0.066 m/s in the
+median fluid cell, over the 430 non-SOLID cells (the first version gave 0.025, a median over all
+600 cells, the 170 SOLID ones included; review 34, B1), and by up to 1.09 m/s at (6.5, 1.9), above the hood bench beside the gap over return
 4. Against `t_L100_T3` the residual is higher for the first 1,500 iterations (medians
 per 500 iterations 9.9e-3, 1.7e-2 and 2.1e-2 against 5.5e-3, 3.5e-3 and 7.7e-3) and lower after
 2,000, where the uniform run grows (2.6e-2 against 5.2e-2 over 2,000 to 2,500).
 
 *Z3 and Z4, the middle and bottom of the range.* Both depart in the gap over return 4, Z3 at 265 at
 (6.3, 1.7) and Z4 at 155 at (6.1, 1.7), and grow to 44 and 68 m/s by 3,000, Z4 still rising at the
-end. At some iteration every face of each floor return is held shut at once, and the correction
-turns up to every face of a return inward. Z4 departs 140 iterations before `t_L10_T3` (295, at
-(6.1, 1.5)), and the two are at similar speeds by outer 1,000 (13.4 and 12.3 m/s); the uniform run
+end. Each floor return has every one of its faces held shut at some iteration, never all four
+returns at once, and the correction turns every face of returns 1 to 3 inward at some iteration. Z4 departs 140 iterations before `t_L10_T3` (295, at
+(6.1, 1.5)), and the two are at similar speeds by outer 1,000 (13.3 and 12.3 m/s); the uniform run
 was not continued past 1,000.
 
 *Z2-sw, ten momentum sweeps per outer iteration.* Converged at 1,240 by the solver's own stop. The
@@ -406,7 +407,7 @@ ten sweeps themselves are a small part of the cost.
 2.71e-6 to 1.78e-6, a factor of 0.66 at 0.99916 per iteration. Falling as section 2.6 defines it
 needs a halving over the window, so the rule classes it stalled. At that rate it would reach 1e-6
 about 690 iterations later. Its field is upwind's, not QUICK's: at the end it differs from Z2-sw's
-converged field by up to 1.56 m/s at (5.7, 1.1), 0.12 m/s in the median cell (premise 4).
+converged field by up to 1.56 m/s at (5.7, 1.1), 0.195 m/s in the median fluid cell (premise 4).
 
 *Z2-ns and Z2-d, the stress source off and as D writes it.* Both follow Z2: no departure, largest
 speed 3.6 m/s, residual oscillating between 1e-2 and 4e-2. Neither the source nor its form decides
@@ -453,7 +454,11 @@ to 206,409 sweeps, median 86,467), and the history is Z2's:
 | 300 to 399 | 8.24e-3 [5.4e-3, 1.5e-2], 3.19 | 7.98e-3 [4.0e-3, 1.4e-2], 3.18 |
 | 400 to 499 | 1.12e-2 [6.9e-3, 1.9e-2], 3.25 | 9.18e-3 [4.8e-3, 1.6e-2], 3.25 |
 
-The two agree to between 1e-4 and 7e-4 relative over the first 100 iterations and part slowly
+Over the first 100 iterations the two residuals differ by 2.8e-6 to 7.3e-3 relative, median
+3.7e-4 (the first version gave 1e-4 to 7e-4, which fits about the first ten iterations; review
+34, B1). What carries the conclusion is the table: the per-100 medians stay within 20% of each
+other to outer 499, near 1e-2, where the converging runs sit at 2.8e-5 (Z1) and 5.4e-5 (Z2-sw)
+over outers 400 to 499. They part slowly
 after, as test 33b found for the cap on T3 at Re 8,950. The cap is not what keeps Z2 from settling;
 Z1 and Z2-sw converged under it.
 
@@ -466,20 +471,27 @@ commit 2's terms:
 
 - **Z2-sw converged: the momentum solve.** With ten Jacobi sweeps of the momentum equations per
   outer iteration the same discrete equations, QUICK and the same frozen field, converge at 1,240.
-  A steady solution of the frozen Z2 problem exists on this grid, and the one-sweep iteration does
-  not reach it from rest: it circles near it, within 0.025 m/s in the median cell and up to 1.1 m/s
-  above the hood bench.
+  A steady solution of the frozen Z2 problem exists on this grid, and it is an unstable fixed
+  point of the one-sweep iteration. Test 34 (check 19) started the one-sweep iteration on Z2-sw's
+  converged field and it left at about 3% per outer iteration, the residual rising from 1.9e-6 to
+  4.7e-3 by outer 300, while the same start under ten sweeps, and Z1's converged field under one
+  sweep, held. From rest the one-sweep iterate oscillates around the solution, 0.066 m/s from it
+  in the median fluid cell and up to 1.1 m/s above the hood bench at outer 2,999. More sweeps
+  change the iteration's stability, not only its speed. (Corrected after test 34, T1: the first
+  version said the iteration does not reach the solution from rest and circles near it.)
 - **Z2-up is stalled by the rule**, with a residual that falls at every iteration but too slowly
   for the rule's halving. By commit 2's terms the scheme control did not settle; its history says
   heavy numerical damping slows the iteration as much as it steadies it, and its field is upwind's
   (premise 4).
 - **Z2-ns and Z2-d end in Z2's class:** the stress source does not destabilize, and form b against
-  D's form does not decide the outcome. Step 4 can build either; at a fixed point they agree.
+  D's form does not decide the outcome at Z2 with one sweep. With ten sweeps D's form converges at
+  1,240 to Z2-sw's field within 4.3e-5 m/s (test 34, check 20), so at Z2 the form decides the
+  outcome under neither iteration; form b is ratified for step 4 (section 6.8).
 - **The pressure cap** (section 6.4) is not the cause.
 
 B says none settling would mean no steady iterate at that mixing with this solver. One settled:
 there is a steady iterate at the top of k-epsilon's range, and the committed iteration's one
-momentum sweep does not find it. What is not measured is whether ten sweeps also settle Z3 and Z4,
+momentum sweep repels it (section 6.5's first point). What is not measured is whether ten sweeps also settle Z3 and Z4,
 the middle and bottom of the range, where one sweep grows.
 
 ### 6.6 Step 5's convergence aids, ranked
@@ -489,14 +501,19 @@ candidates: more momentum sweeps per outer iteration, continuation in viscosity 
 zero-equation field, and pseudo-transient continuation.
 
 1. **More momentum sweeps per outer iteration.** The only aid measured to converge at k-epsilon's
-   mixing size: Z2 with ten sweeps converged where one sweep circles for 3,000 iterations, at a lower
+   mixing size: Z2 with ten sweeps converged where one sweep circles for 3,000 iterations around a fixed point
+   it repels (section 6.5), at a lower
    cost per outer iteration than Z2's. Measured at one sweep count and at the top of the range
    only; Z3 and Z4 with ten sweeps are the first runs to add, about two hours on this grid, before
    step 5 relies on it.
-2. **Continuation in viscosity from the zero-equation field.** Supported, not measured as a
-   continuation: the field at its published size converges with one sweep (Z1, 1,621), so it is a
-   reachable starting point. No run here started from a converged field; the committed solver
-   starts from rest and has no hook for an initial field, so a continuation needs one.
+2. **Continuation in viscosity from the zero-equation field.** Not measured, and with one sweep
+   contradicted at Z2. The field at its published size converges with one sweep (Z1, 1,621), so it
+   is a reachable start; but the continuation's end at Z2 is a fixed point the one-sweep iteration
+   repels (section 6.5), so somewhere between s = 1 and s = 0.185 a one-sweep continuation would
+   leave the solution it follows. It can help only together with more sweeps, which converge from
+   rest without it. The committed solver starts from rest and has no hook for an initial field,
+   so a continuation needs one. (Corrected after test 34, T1: the first version ranked it
+   supported.)
 3. **Pseudo-transient continuation.** Not measured.
 
 Not aids, on this evidence: first-order upwind, whose field is a different answer and whose
@@ -521,6 +538,7 @@ on this grid; ECR-003's pressure solve is needed on the product mesh for cost, n
 | Mine: Z2-up falls | Missed by the rule: stalled |
 | Mine: Z2-sw, Z2-ns and Z2-d end in Z2's class | Held for Z2-ns and Z2-d; missed for Z2-sw |
 | Mine: outcome B, the upwind control the one that settles | B held; the sweep control settled, not the upwind one |
+| Mine: Z2 carries "five to seven times the uniform value there", in the gap and above the hood bench | Held in the gap (6.7 times at (6.1, 1.5) and (6.1, 1.7), 7.3 at (6.3, 1.7)); above the hood bench at (6.9, 1.9) it is 2.4 times, so the reasoning rested on section 3's value as first written (review 34, B1) |
 
 My reasoning for Z2 and Z4 was that the field's extra mixing in the gap over return 4 would hold the
 growth off there. Z4 departs in that gap earlier than its uniform control, so it does not; Z2's
@@ -530,7 +548,18 @@ missing departure is not explained by it either.
 
 Section 4's limits stand: one coarse grid, a frozen field whose shape is the zero-equation model's
 and not k-epsilon's, and a converged iterate stopped by the velocity-step rule. Two more, from the
-results: the sweep aid is measured at one rung, and no run continued from a converged field.
+results: the sweep aid is measured at one rung, and no run here continued from a converged field
+(test 34's check 19 did; section 6.5).
+
+Two constructions of this probe were not varied, and are ratified by the orchestrator after review
+34 (S1, S2) with the stress source's form. The obstacle faces (section 2.3) are this probe's
+construction, a choice step 4 makes for real (ADR-012 B's obstacle wall stencil). The rungs' wall
+distance is to the staircase the solver sees, not the configured rectangles (section 3). The
+stress source is form b, not D's pair as the prompt wrote it: form b is the committed code's own
+treatment of the molecular viscosity, the prompt's zero-field control and D's pair cannot both hold
+on an iterate that is not divergence-free, and at Z2 the two forms reach the same field under one
+sweep and under ten (test 34, check 20). Whether ten sweeps also make Z3's and Z4's fixed points
+stable is the question prompt 34b's runs answer.
 
 ## Appendix A: base34.py
 

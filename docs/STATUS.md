@@ -47,18 +47,20 @@ ADR-012 (`docs/ADR/ADR-012-turbulence-model.md`) its design, both accepted by Al
 2026-10-04 with their decisions; ECR-002 fixes the outlets and probes convergence at a realistic
 effective viscosity before anything is built (step 0), then measures it with the built code
 before its first coupled solve, since the model's convergence is a hypothesis, not a given.
+The product case, and with it Phase 3's last deliverable, waits for that change. The seven
+transport gate rows stand: they were judged on prescribed or laminar face fields, and the scheme
+does not change. A second finding of `docs/reports/product_case_reynolds.md`: one pressure
+correction on the product mesh needs about a hundred and forty times the committed sweep cap at
+the committed tolerance, growing as the square of the cells per side, so the pressure solve has
+to change too (ADR-012, decision 5).
+
 Step 0 ran on 2026-10-04 on the coarse copy of the room, with a frozen eddy viscosity shaped
-like the indoor zero-equation model's: at that model's own size, several times above what
-k-epsilon will produce, the room converges; scaled into k-epsilon's range it does not with the
-solver's one momentum sweep per outer iteration, and with ten sweeps it converges at the top of
-that range. A steady solution exists there and the committed iteration does not reach it
-(`docs/reports/ecr002_step0_frozen_viscosity.md`). The product case, and with it Phase 3's
-last deliverable, waits for that change. The
-seven transport gate rows stand: they were judged on prescribed or laminar face fields, and the
-scheme does not change. A second finding in the same report: one pressure correction on the
-product mesh needs about a hundred and forty times the committed sweep cap at the committed
-tolerance, growing as the square of the cells per side, so the pressure solve has to change too
-(ADR-012, decision 5).
+like the indoor zero-equation model's (`docs/reports/ecr002_step0_frozen_viscosity.md`). At that
+model's own size, several times above what k-epsilon will produce, the room converges; scaled
+into k-epsilon's range it does not with the solver's one momentum sweep per outer iteration, and
+with ten sweeps it converges at the top of that range. There the steady solution is a fixed
+point the one-sweep iteration repels and ten sweeps make stable (test 34). Whether ten sweeps do
+the same in the middle and at the bottom of the range is prompt 34b's measurement.
 
 `docs/PROJECT_PLAN.md` holds the phase detail, deliverables and validation gates.
 
