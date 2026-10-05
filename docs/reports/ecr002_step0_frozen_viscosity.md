@@ -568,7 +568,8 @@ stable is the question prompt 34b's runs answer.
 range, where the fix was most likely to work. Before step 1 opens, run them at the other two: one
 condition is not a test of the aid.
 **Order:** sections 7.1 to 7.3 and appendices G and H were committed before Z3-sw and Z4-sw
-started. Section 7.4 was written after the runs. The run logs' first lines carry their start times.
+started. Sections 7.4 and 7.5 were written after the runs. The run logs' first lines carry their
+start times.
 
 ### 7.1 Method
 
@@ -654,6 +655,102 @@ is not it wanders without the growth to tens of m/s the one-sweep runs show. Z3 
 of Z2's mixing and Z4 a tenth. Below the equipment tops Z4 adds a median 3.1e-5 m^2/s, about
 twice air's own viscosity, between the uniform runs at real air and at ten times air's; Z3 adds
 1.0e-4 there. So I expect the steady solution to be stable at Z3 and not at Z4.
+
+### 7.4 Results (written after the runs)
+
+**Order.** Prompt 34b's commit 1 (3e4d412, "docs: add step 0's ten-sweep method and predictions
+at Z3 and Z4") is dated 2026-10-05 09:00:20 -0700. Both run logs open with `start
+2026-10-05T09:00:29`. Both runs ended at the solver's own stop, Z3-sw at 09:38:22 and Z4-sw at
+09:38:28, 38 minutes after the start. Neither fifty-sweep run was started, because both ten-sweep
+runs converged, and the four-hour budget did not bind. `frozen34.py`, `run34b.sh` and
+`compare34b.py` ran as committed (appendices B, G and H).
+
+**The switch took.** None of Z3-sw's first 100 residuals equals Z3's, from outer 0 on (relative
+difference median 0.97), and none of Z4-sw's equals Z4's (median 0.87). Both logs' first lines
+give 10 sweeps. Each run's frozen field is Z2-sw's scaled by the ratio of the two s values, a
+third and a tenth, in every fluid cell to rounding.
+
+| Run | Class | Outer run | Residual: least (at outer), end | Largest speed at end, cell | Past 5 m/s: departure, cell | At cap | Momentum sweeps per outer | Seconds per outer |
+|---|---|---|---|---|---|---|---|---|
+| Z3-sw | **converged** | 1,209 | 9.97e-7 (1,208), 9.97e-7 | 3.26 m/s, (4.7, 2.1) | never | 647 | 10 | 1.88 |
+| Z4-sw | **converged** | 1,205 | 9.95e-7 (1,204), 9.95e-7 | 3.27, (4.7, 2.1) | never; start-up transient over outers 0 to 1, 7.10 m/s at outer 0 | 652 | 10 | 1.89 |
+| Z2-sw (section 6.2) | converged | 1,240 | 9.97e-7 (1,239), 9.97e-7 | 3.26, (4.7, 2.1) | never | 659 | 10 | 2.04 |
+| Z3-sw50, Z4-sw50 | not run: their ten-sweep runs converged | | | | | | 50 | |
+
+Z2-sw ran beside seven other rungs and Z3-sw and Z4-sw beside each other only, so the seconds are
+not like for like across the two sets.
+
+At the stop, as section 6.2 gives them for Z2-sw. Z3-sw: the worst per-cell mass imbalance is
+3.63e-6 kg/s per metre of depth against a supply of 3.78; the largest speed sits at (4.7, 2.1),
+over the litho tool's right corner, as in Z1 and Z2-sw; no outlet face draws air in at any
+iteration, and one face of return 2 is held shut; the pressure corrections fall from the cap to
+1,784 sweeps at the stop. Z4-sw: 3.07e-6; (4.7, 2.1); no face draws air in at any iteration, one
+face of return 2 held shut; 1,617 sweeps at the stop. Over the last 50 iterations the residual
+falls at 0.9932 (Z3-sw) and 0.9929 (Z4-sw) per iteration, against Z2-sw's 0.9939 by the same
+measure, so the iteration error the stop leaves (section 6.2) is about 147 and 140 times the last
+step, 2.4e-3 and 2.3e-3 m/s.
+
+![Residual and largest speed of the ten-sweep runs against Z2-sw and the one-sweep Z3 and Z4](ecr002_step0_sweeps.png)
+
+Reading. The three ten-sweep runs follow nearly one residual path across a tenfold range of
+mixing: Z3-sw's residual is 0.97 times Z2-sw's in the median iteration (0.78 to 1.11 between the
+5th and 95th percentiles) and Z4-sw's 0.985 (0.80 to 1.70). The largest speed settles at 3.26 to
+3.27 m/s in all three. With one sweep the same fields pass 5 m/s at 265 (Z3) and 155 (Z4) and
+reach 44 and 68 m/s by 3,000.
+
+The converged fields still answer to the mixing, by less as it falls. Z3-sw differs from Z2-sw by
+8.7e-3 m/s in the median fluid cell and up to 0.116 m/s at (4.7, 0.1), on the floor beside the
+litho tool; Z4-sw from Z3-sw by 3.0e-3 in the median and up to 0.040 at the same cell; Z2-sw from
+Z1, for scale, by 0.052 and up to 0.54 there. The median between Z3-sw and Z4-sw is at the
+iteration error the stops leave, about 2.4e-3 m/s; the largest difference is about seventeen
+times it. The stress source at each stop scales with s (0.00517, 0.00178 and 0.000538 for Z2-sw,
+Z3-sw and Z4-sw) and equals D's pair to seven figures, as on a divergence-free field.
+
+**Which outcome: A.** Both converge with ten sweeps. At the top, the middle and the bottom of
+k-epsilon's core range, the frozen zero-equation field with ten momentum sweeps per outer
+iteration converges the room from rest by the solver's own stop, at 1,205 to 1,240 outer
+iterations, where one sweep circles (Z2) or grows to tens of m/s (Z3, Z4). The sweep aid holds
+across k-epsilon's range on this grid. In commit 1's terms step 1 opens, and a configurable
+momentum sweep count (default 1, so the laminar results stay bitwise) is built with step 4's
+viscosity field and used from step 5 on.
+
+Against section 6.5's account of Z2: nothing here contradicts it, and it extends to Z3 and Z4.
+Their steady solutions exist on this grid and are stable fixed points of the ten-sweep iteration,
+so the one-sweep runs' growth to tens of m/s belongs to the iteration, not to a missing steady
+flow. Whether the one-sweep iteration repels those solutions when started on them, as test 34
+showed at Z2, was not run.
+
+What this does not settle. Section 6.8's limits stand: one coarse grid, a frozen field with the
+zero-equation model's shape and not k-epsilon's, and iterates stopped by the velocity-step rule.
+Converging shows that each steady solution is a stable fixed point of this iteration, whose
+relaxation acts as a local pseudo-time step; it does not show that the room's flow at that mixing
+is steady in time. The fifty-sweep runs were not needed, so whether fewer than ten sweeps would
+do is not measured; the count step 5 needs on 200x75 is still that step's measurement.
+
+### 7.5 Predictions against the measurement
+
+| Prediction | Measured |
+|---|---|
+| Orchestrator: Z3-sw converges | Held: 1,209 |
+| Orchestrator: Z3-sw slower than Z2-sw's 1,240 | Missed: 31 iterations faster |
+| Orchestrator: Z4-sw does not converge, nor does Z4-sw50 | Missed: Z4-sw converged at 1,205; Z4-sw50 not run |
+| Orchestrator: the steady flow at a core of 1.5e-4 is unstable, which no inner solve can change | Contradicted for this iteration: Z4's steady solution is a stable fixed point of the ten-sweep iteration |
+| Orchestrator: outcome C at Z4 | Missed: outcome A |
+| Mine: Z3-sw converges by the solver's stop, no departure | Held |
+| Mine: between outer 1,240 and 2,000 | Missed: 1,209 |
+| Mine: Z4-sw neither converges nor grows, class none of these | Missed: converged. It did not grow |
+| Mine: Z4-sw50 within a factor of two of Z4-sw | Not run |
+| Mine: outcome C at Z4 | Missed: outcome A |
+
+My reasoning had two halves. The second, that below the equipment tops Z4's mixing is too weak for
+a stable steady flow, did not hold for this iteration. The first, that ten sweeps leave an outer
+iteration acting as a pseudo-time march that converges where the steady solution is stable, is
+not contradicted, but it does not account for the rate: were the viscous damping setting it, the
+rate would slow as the mixing falls, and it does not, 0.9939, 0.9932 and 0.9929 per iteration over
+a tenfold range. The momentum sweep probe's reading (`docs/reports/momentum_sweep_probe.md`)
+fits the three nearly coincident histories better: once the momentum solve is exhausted, the
+pressure-velocity coupling under alpha_velocity 0.5 sets the outer count, and the mixing barely
+enters it. That is an inference from these three runs, not a measurement of the coupling.
 
 ## Appendix A: base34.py
 
