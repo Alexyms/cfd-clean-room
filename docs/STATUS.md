@@ -46,7 +46,14 @@ turbulence model: ECR-002 (`docs/ECR/ECR-002-turbulence-model.md`) is the change
 ADR-012 (`docs/ADR/ADR-012-turbulence-model.md`) its design, both accepted by Alex on
 2026-10-04 with their decisions; ECR-002 fixes the outlets and probes convergence at a realistic
 effective viscosity before anything is built (step 0), then measures it with the built code
-before its first coupled solve, since the model's convergence is a hypothesis, not a given. The product case, and with it Phase 3's last deliverable, waits for that change. The
+before its first coupled solve, since the model's convergence is a hypothesis, not a given.
+Step 0 ran on 2026-10-04 on the coarse copy of the room, with a frozen eddy viscosity shaped
+like the indoor zero-equation model's: at that model's own size, several times above what
+k-epsilon will produce, the room converges; scaled into k-epsilon's range it does not with the
+solver's one momentum sweep per outer iteration, and with ten sweeps it converges at the top of
+that range. A steady solution exists there and the committed iteration does not reach it
+(`docs/reports/ecr002_step0_frozen_viscosity.md`). The product case, and with it Phase 3's
+last deliverable, waits for that change. The
 seven transport gate rows stand: they were judged on prescribed or laminar face fields, and the
 scheme does not change. A second finding in the same report: one pressure correction on the
 product mesh needs about a hundred and forty times the committed sweep cap at the committed
@@ -275,8 +282,10 @@ published standard k-epsilon prediction on the same lines, its threshold left to
 backward-facing step joins the validation, its threshold also OPEN for want of a sourced range.
 The premise review of ECR-002 and ADR-012 and `/cfd-test 33` ran, the fix pass of prompt 33b
 answered them, and `/cfd-test 33b`'s findings, all in the text, were applied directly. Alex took
-the design's decisions and accepted the request on 2026-10-04. Next: ECR-002 step 0, the
-risk-retirement probe, and ECR-003, the pressure solve, which steps 0 to 4 do not wait for.
+the design's decisions and accepted the request on 2026-10-04. Step 0, the risk-retirement
+probe, ran the same day, and its pull request carries ECR-002's requirement and scope text into
+`docs/SYSTEM.md`. Next: Alex's decision on step 0's result, before step 1 opens, and ECR-003,
+the pressure solve, which steps 1 to 4 do not wait for.
 
 Deferred findings from earlier pull requests are open as GitHub issues 33, 36, 38, 40 and 42.
 
@@ -285,10 +294,15 @@ still installed. Removing them is Alex's, after merge.
 
 ## Open questions
 
-None for Alex on ECR-002: he accepted it and ADR-012 on 2026-10-04. Its requirement and scope
-text enter `docs/SYSTEM.md` in step 0's pull request, since that edit moves the requirement
-register `tests/test_system_map.py` pins. The Annex 20 and backward-facing step thresholds stay
-OPEN by decision until the first coupled results exist.
+For Alex, before ECR-002 step 1 opens: step 0's result. On the coarse room the iteration
+converges at a k-epsilon-sized eddy viscosity only with more momentum sweeps per outer
+iteration than the solver's one, measured at the top of the range alone; the report ranks step
+5's convergence aids, more momentum sweeps first, and names the runs that would extend the
+evidence to the rest of the range (`docs/reports/ecr002_step0_frozen_viscosity.md`, sections
+6.5 and 6.6). ECR-002's requirement and scope text entered `docs/SYSTEM.md` in step 0's pull
+request, since that edit moves the requirement register `tests/test_system_map.py` pins. The
+Annex 20 and backward-facing step thresholds stay OPEN by decision until the first coupled
+results exist.
 
 Closed 2026-10-03: the three questions ADR-011 left open, the face concentration scheme and
 with it positivity, a number for VAL-004's "shape preserved", and the HEPA supply

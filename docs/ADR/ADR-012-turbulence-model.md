@@ -49,7 +49,10 @@ as they were put.
    eddy viscosity from the indoor zero-equation model added to the molecular viscosity: does the
    room's iteration converge at a realistic effective viscosity? Asked before eight steps of model
    are built on the assumption that it does. The outcome decides whether a convergence aid comes
-   before step 1.
+   before step 1. As run (2026-10-04, `docs/reports/ecr002_step0_frozen_viscosity.md`): the
+   zero-equation field as published has a core median of 8.2e-3 m^2/s, about 545 times air's
+   and above k-epsilon's core range, so the probe kept its shape and scaled it across that range,
+   to core medians of 1.5e-3, 5e-4 and 1.5e-4 m^2/s, with the unscaled field as one rung.
 
 **1. How the air leaves the room (section D; ECR-002 step 3).**
 *Picture.* Air leaves through four grilles in the floor and the hood's opening in the right
