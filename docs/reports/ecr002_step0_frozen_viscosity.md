@@ -505,7 +505,9 @@ zero-equation field, and pseudo-transient continuation.
    it repels (section 6.5), at a lower
    cost per outer iteration than Z2's. Measured at one sweep count and at the top of the range
    only; Z3 and Z4 with ten sweeps are the first runs to add, about two hours on this grid, before
-   step 5 relies on it.
+   step 5 relies on it. Prompt 34b added them (section 7): with ten sweeps Z3 and Z4 converge from
+   rest at 1,209 and 1,205 outer iterations, so the aid holds across the range on this grid, still
+   at the one sweep count.
 2. **Continuation in viscosity from the zero-equation field.** Not measured, and with one sweep
    contradicted at Z2. The field at its published size converges with one sweep (Z1, 1,621), so it
    is a reachable start; but the continuation's end at Z2 is a fixed point the one-sweep iteration

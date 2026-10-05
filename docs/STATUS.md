@@ -60,7 +60,9 @@ model's own size, several times above what k-epsilon will produce, the room conv
 into k-epsilon's range it does not with the solver's one momentum sweep per outer iteration, and
 with ten sweeps it converges at the top of that range. There the steady solution is a fixed
 point the one-sweep iteration repels and ten sweeps make stable (test 34). Whether ten sweeps do
-the same in the middle and at the bottom of the range is prompt 34b's measurement.
+the same in the middle and at the bottom of the range is prompt 34b's measurement. It ran on
+2026-10-05: with ten sweeps the middle and the bottom of the range converge as the top does, so
+the sweep aid holds across k-epsilon's range on the coarse room (the report, section 7).
 
 `docs/PROJECT_PLAN.md` holds the phase detail, deliverables and validation gates.
 
