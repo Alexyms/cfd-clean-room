@@ -298,12 +298,11 @@ still installed. Removing them is Alex's, after merge.
 
 ## Open questions
 
-For Alex, before ECR-002 step 1 opens: step 0's result. On the coarse room the iteration
-converges at a k-epsilon-sized eddy viscosity only with more momentum sweeps per outer
-iteration than the solver's one, measured at the top of the range alone; the report ranks step
-5's convergence aids, more momentum sweeps first, and names the runs that would extend the
-evidence to the rest of the range (`docs/reports/ecr002_step0_frozen_viscosity.md`, sections
-6.5 and 6.6). ECR-002's requirement and scope text entered `docs/SYSTEM.md` in step 0's pull
+Step 0's question is answered (outcome A, `docs/reports/ecr002_step0_frozen_viscosity.md`
+section 7): on the coarse room ten momentum sweeps per outer iteration converge the room across
+k-epsilon's range, where one sweep does not. Step 1 opens; a configurable momentum sweep count
+(default 1, so the laminar results stay bitwise) is built with step 4's viscosity field and used
+from step 5 on. ECR-002's requirement and scope text entered `docs/SYSTEM.md` in step 0's pull
 request, since that edit moves the requirement register `tests/test_system_map.py` pins. The
 Annex 20 and backward-facing step thresholds stay OPEN by decision until the first coupled
 results exist.
