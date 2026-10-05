@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from src.config import CFL_NUMBER_BOUND, SimConfig, TransportSpec
+from src.config import CFL_NUMBER_BOUND, SimConfig, TransportSpec, TurbulenceSpec
 from validation.cases import CONFIG_DIR, load_case
 
 
@@ -1240,6 +1240,149 @@ class TestTransportSection:
             SimConfig.from_dict(self._raw(tmp_path, cfl_numbre=0.1))
         with pytest.raises(ValueError, match="transport must be a mapping"):
             SimConfig.from_dict(self._raw(tmp_path, transport=[0.1]))
+
+
+TURBULENCE = {
+    "model": "k_epsilon",
+    "wall_treatment": "scalable_wall_functions",
+    "cfl_number": 0.4,
+    "alpha_turbulence": 0.7,
+    "max_iter": 300,
+    "tol": 1e-9,
+}
+
+
+@pytest.mark.unit
+class TestTurbulenceSection:
+    """The optional turbulence section (ADR-012 I, ECR-002 step 1): defaults, ranges, types, unknown keys."""
+
+    def _raw(self, tmp_path: Path, turbulence: object = None, **keys: object) -> dict:
+        with open(_write_config(tmp_path), encoding="utf-8") as handle:
+            raw = yaml.safe_load(handle)
+        raw["turbulence"] = TURBULENCE | keys if turbulence is None else turbulence
+        return raw
+
+    def test_absent_section_gives_none(self, tmp_path: Path) -> None:
+        """Absent means the model is off: no committed configuration carries one."""
+        assert SimConfig(_write_config(tmp_path)).turbulence is None
+        assert load_case("poiseuille").turbulence is None
+        assert load_case("cavity").turbulence is None
+        assert SimConfig(CONFIG_DIR / "clean_room_default.yaml").turbulence is None
+
+    def test_present_section_is_read_with_standard_the_default(
+        self, tmp_path: Path
+    ) -> None:
+        spec = SimConfig.from_dict(self._raw(tmp_path)).turbulence
+        assert spec == TurbulenceSpec(
+            model="k_epsilon",
+            variant="standard",
+            wall_treatment="scalable_wall_functions",
+            cfl_number=0.4,
+            alpha_turbulence=0.7,
+            max_iter=300,
+            tol=1e-9,
+        )
+        given = SimConfig.from_dict(
+            self._raw(
+                tmp_path,
+                variant="rng",
+                cfl_number=CFL_NUMBER_BOUND,
+                alpha_turbulence=1.0,
+                max_iter=1,
+            )
+        ).turbulence
+        assert (
+            given.variant,
+            given.cfl_number,
+            given.alpha_turbulence,
+            given.max_iter,
+        ) == ("rng", 0.5, 1.0, 1)
+
+    def test_the_section_changes_nothing_else_in_the_configuration(
+        self, tmp_path: Path
+    ) -> None:
+        """Until ECR-002 step 6 nothing else reads it, so every other field is the same."""
+        raw = self._raw(tmp_path)
+        with_section = vars(SimConfig.from_dict(raw))
+        del raw["turbulence"]
+        without = vars(SimConfig.from_dict(raw))
+        assert with_section.pop("turbulence") is not None
+        assert without.pop("turbulence") is None
+        assert with_section.keys() == without.keys()
+        for key in without:
+            assert with_section[key] == without[key], key
+
+    @pytest.mark.parametrize(
+        ("key", "bad", "error"),
+        [
+            ("model", "k_omega", ValueError),
+            ("model", "K_EPSILON", ValueError),
+            ("model", 1, TypeError),
+            ("model", True, TypeError),
+            ("variant", "realizable", ValueError),
+            ("variant", None, TypeError),
+            ("variant", True, TypeError),
+            ("wall_treatment", "standard_wall_functions", ValueError),
+            ("wall_treatment", 0, TypeError),
+            ("cfl_number", 0.0, ValueError),
+            ("cfl_number", -0.1, ValueError),
+            ("cfl_number", 0.5000001, ValueError),
+            ("cfl_number", 1.0, ValueError),
+            ("cfl_number", True, TypeError),
+            ("cfl_number", "0.4", TypeError),
+            ("cfl_number", float("nan"), ValueError),
+            ("alpha_turbulence", 0.0, ValueError),
+            ("alpha_turbulence", -0.5, ValueError),
+            ("alpha_turbulence", 1.0000001, ValueError),
+            ("alpha_turbulence", False, TypeError),
+            ("alpha_turbulence", float("inf"), ValueError),
+            ("alpha_turbulence", float("nan"), ValueError),
+            ("max_iter", 0, ValueError),
+            ("max_iter", -3, ValueError),
+            ("max_iter", 2.5, TypeError),
+            ("max_iter", True, TypeError),
+            ("max_iter", "300", TypeError),
+            ("tol", 0.0, ValueError),
+            ("tol", -1e-9, ValueError),
+            ("tol", True, TypeError),
+            ("tol", float("nan"), ValueError),
+            ("tol", -float("inf"), ValueError),
+        ],
+    )
+    def test_bad_values_are_rejected(
+        self, tmp_path: Path, key: str, bad: object, error: type[Exception]
+    ) -> None:
+        """Out of range, the wrong type, a bool where a number is expected, or not finite."""
+        with pytest.raises(error, match=f"turbulence.{key}"):
+            SimConfig.from_dict(self._raw(tmp_path, **{key: bad}))
+
+    @pytest.mark.parametrize(
+        "key",
+        [
+            "model",
+            "wall_treatment",
+            "cfl_number",
+            "alpha_turbulence",
+            "max_iter",
+            "tol",
+        ],
+    )
+    def test_missing_required_key_raises(self, tmp_path: Path, key: str) -> None:
+        raw = self._raw(tmp_path)
+        del raw["turbulence"][key]
+        with pytest.raises(ValueError, match=f"turbulence.{key}"):
+            SimConfig.from_dict(raw)
+
+    def test_unknown_key_and_non_mapping_are_rejected(self, tmp_path: Path) -> None:
+        """A misspelt key would otherwise run its default; the model's constants are not keys."""
+        with pytest.raises(
+            ValueError, match=r"turbulence\.varient is not a recognised"
+        ):
+            SimConfig.from_dict(self._raw(tmp_path, varient="rng"))
+        with pytest.raises(ValueError, match=r"turbulence\.c_mu is not a recognised"):
+            SimConfig.from_dict(self._raw(tmp_path, c_mu=0.09))
+        with pytest.raises(ValueError, match="turbulence must be a mapping"):
+            SimConfig.from_dict(self._raw(tmp_path, turbulence=["k_epsilon"]))
 
 
 WALL_SEGMENT = {"type": "wall", "location": "left", "y_start": 0.0, "y_end": 3.0}

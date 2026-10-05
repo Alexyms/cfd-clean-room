@@ -183,6 +183,43 @@ class TransportSpec:
     diffusion_tol: float
 
 
+@dataclass(frozen=True)
+class TurbulenceSpec:
+    """The turbulence section: what the k-epsilon model reads (ADR-012 I).
+
+    Present means the model is configured; absent, the model is off and
+    every other result is unchanged. Until ECR-002 step 6 couples the model
+    into the flow solver, nothing in the solver reads it either.
+
+    Parameters
+    ----------
+    model : str
+        "k_epsilon", the one model ECR-002 builds.
+    variant : str
+        "standard" (the default) or "rng" (ADR-012 A, decision 2).
+    wall_treatment : str
+        "scalable_wall_functions" (ADR-012 B, decision 3).
+    cfl_number : float
+        The pseudo-time Courant number of the k and eps step, in
+        (0, CFL_NUMBER_BOUND] (ADR-012 C).
+    alpha_turbulence : float
+        Under-relaxation of the eddy viscosity in the coupled solve, in
+        (0, 1].
+    max_iter : int
+        Cap on Jacobi sweeps of each implicit k and eps solve.
+    tol : float
+        Tolerance the implicit k and eps solves iterate to.
+    """
+
+    model: str
+    variant: str
+    wall_treatment: str
+    cfl_number: float
+    alpha_turbulence: float
+    max_iter: int
+    tol: float
+
+
 _VALID_BOUNDARY_TYPES: set[str] = {"velocity_inlet", "pressure_outlet", "wall"}
 _VALID_BOUNDARY_LOCATIONS: set[str] = {"top", "bottom", "left", "right"}
 
@@ -225,6 +262,30 @@ UPWIND = "upwind"
 ADVECTION_SCHEMES: tuple[str, ...] = (UMIST, UPWIND)
 _TRANSPORT_KEYS: frozenset[str] = frozenset(
     {"cfl_number", "advection_scheme", "max_diffusion_iter", "diffusion_tol"}
+)
+
+# Turbulence section (ADR-012 I), optional: absent means the model is off.
+# The k and eps step uses the transport scheme in pseudo-time, so its Courant
+# number has the scheme's bound, CFL_NUMBER_BOUND. The model constants are
+# not configuration: they define the published variants and live in
+# src/turbulence.py.
+K_EPSILON = "k_epsilon"
+TURBULENCE_MODELS: tuple[str, ...] = (K_EPSILON,)
+STANDARD = "standard"
+RNG = "rng"
+TURBULENCE_VARIANTS: tuple[str, ...] = (STANDARD, RNG)
+SCALABLE_WALL_FUNCTIONS = "scalable_wall_functions"
+WALL_TREATMENTS: tuple[str, ...] = (SCALABLE_WALL_FUNCTIONS,)
+_TURBULENCE_KEYS: frozenset[str] = frozenset(
+    {
+        "model",
+        "variant",
+        "wall_treatment",
+        "cfl_number",
+        "alpha_turbulence",
+        "max_iter",
+        "tol",
+    }
 )
 
 # Every key a boundary segment accepts. With optional keys a misspelt one
@@ -457,6 +518,11 @@ class SimConfig:
         self.transport: TransportSpec | None = None
         if "transport" in raw:
             self.transport = self._parse_transport(raw["transport"])
+
+        # Turbulence (optional, ADR-012 I). Absent means the model is off.
+        self.turbulence: TurbulenceSpec | None = None
+        if "turbulence" in raw:
+            self.turbulence = self._parse_turbulence(raw["turbulence"])
 
         # Boundaries
         boundaries_raw = self._require_section(raw, "boundaries")
@@ -825,6 +891,61 @@ class SimConfig:
                 section, "diffusion_tol", "transport"
             ),
         )
+
+    @classmethod
+    def _parse_turbulence(cls, section: object) -> TurbulenceSpec:
+        """Parse the turbulence section into a TurbulenceSpec.
+
+        ``variant`` defaults to standard; every other key is required.
+        ``cfl_number`` must lie in (0, CFL_NUMBER_BOUND] and
+        ``alpha_turbulence`` in (0, 1]. Any other key raises.
+        """
+        if not isinstance(section, dict):
+            raise ValueError("turbulence must be a mapping")
+        for key in section:
+            if key not in _TURBULENCE_KEYS:
+                raise ValueError(
+                    f"turbulence.{key} is not a recognised turbulence key; "
+                    f"known: {sorted(_TURBULENCE_KEYS)}"
+                )
+        model = cls._require_choice(section, "model", "turbulence", TURBULENCE_MODELS)
+        variant = STANDARD
+        if "variant" in section:
+            variant = cls._require_choice(
+                section, "variant", "turbulence", TURBULENCE_VARIANTS
+            )
+        wall_treatment = cls._require_choice(
+            section, "wall_treatment", "turbulence", WALL_TREATMENTS
+        )
+        cfl_number = cls._require_positive_float(section, "cfl_number", "turbulence")
+        if cfl_number > CFL_NUMBER_BOUND:
+            raise ValueError(
+                f"turbulence.cfl_number must be in (0, {CFL_NUMBER_BOUND}], the "
+                f"limited scheme's stability bound, got {cfl_number}"
+            )
+        return TurbulenceSpec(
+            model=model,
+            variant=variant,
+            wall_treatment=wall_treatment,
+            cfl_number=cfl_number,
+            alpha_turbulence=cls._require_relaxation_factor(
+                section, "alpha_turbulence", "turbulence"
+            ),
+            max_iter=cls._require_positive_int(section, "max_iter", "turbulence"),
+            tol=cls._require_positive_float(section, "tol", "turbulence"),
+        )
+
+    @classmethod
+    def _require_choice(
+        cls, section: dict, key: str, context: str, choices: tuple[str, ...]
+    ) -> str:
+        """Require a string that is one of ``choices``."""
+        value = cls._require_string(section, key, context)
+        if value not in choices:
+            raise ValueError(
+                f"{context}.{key} must be one of {list(choices)}, got '{value}'"
+            )
+        return value
 
     @staticmethod
     def _require_segment_type(
