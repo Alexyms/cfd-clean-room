@@ -6,7 +6,8 @@ import it and patch nothing in it.
 **Instruments:** `results/builder34/` (untracked): `base34.py` (item 0), `frozen34.py` (the probe,
 its controls and self-tests), `compare34.py` (the control comparison, the classification and the
 figures), `diff34.py` (the lines of the probe that differ from `src/momentum.py`) and the launcher
-`run34.sh`, carried verbatim in the appendices so this report stands without them.
+`run34.sh`, carried verbatim in the appendices so this report stands without them; and
+`cap34.py`, a diagnostic added after the rungs started (section 6.4, appendix F).
 **Order:** sections 1 to 5 and the appendices were committed before any rung ran (prompt 34,
 commit 2). Section 6 was written after the runs. The rung logs' first lines carry their start
 times, which section 6.1 sets against the commit's time.
@@ -327,6 +328,209 @@ the departure by under 20% and not the class. Outcome B with no QUICK control se
 - Z2-sw, Z2-ns and Z2-d end in Z2's class.
 - Outcome B: only Z1 falls among the QUICK, one-sweep rungs, and of Z2's controls only the upwind
   one settles, which points at the scheme with premise 4's caveat.
+
+## 6. Results (written after the runs)
+
+### 6.1 The order of the commit and the runs
+
+Commit 2 (e5a06cc, "docs: add ECR-002 step 0's method, base field and predictions") is dated
+2026-10-04 17:52:57 -0700. All eight rung logs open with `start 2026-10-04T17:52:58`: `run34.sh`
+was launched in the same shell command, after the commit returned. The subclass's self-tests and
+controls ran before the commit (17:47), as section 2.4 says; they are not rungs. The diagnostic of
+section 6.4 started at 18:16:19. The last rung ended at 20:15:57, 2 hours 23 minutes after the
+start, so no run was stopped for cost. Every rung ran to the solver's own stop or to 3,000 outer
+iterations; none passed 100 m/s.
+
+Since commit 2, `compare34.py` changed in its figure only (the running median of the residual and
+a log axis for the speed); its classification and departure rules are as committed. `frozen34.py`,
+`base34.py`, `diff34.py` and `run34.sh` are unchanged. `cap34.py` (appendix F) is new.
+
+### 6.2 The rungs
+
+Classified by section 2.6's rules. Residuals are the solver's; "at cap" counts the outer iterations
+whose pressure correction stopped at the 40,000-sweep cap rather than at 1e-8.
+
+| Run | Class | Outer run | Residual: least (at outer), end | Largest speed at end, cell | Past 5 m/s: departure, cell | At cap |
+|---|---|---|---|---|---|---|
+| Z1 | **converged** | 1,621 | 9.97e-7 (1,620), 9.97e-7 | 3.20 m/s, (4.7, 2.1) | never | 606 |
+| Z2 | none of these | 3,000 | 3.10e-3 (273), 2.83e-2 | 3.34, (6.1, 0.9) | never; largest 3.5 | 2,958 |
+| Z3 | grown | 3,000 | 1.31e-2 (7), 5.52e-1 | 44.1, (6.9, 2.3) | 265, (6.3, 1.7) | 2,978 |
+| Z4 | grown | 3,000 | 1.41e-2 (17), 1.13 | 68.5, (7.3, 1.7) | 155, (6.1, 1.7) | 2,947 |
+| Z2-up | stalled | 3,000 | 1.78e-6 (2,999), 1.78e-6 | 3.12, (4.7, 2.1) | never | 691 |
+| Z2-sw | **converged** | 1,240 | 9.97e-7 (1,239), 9.97e-7 | 3.26, (4.7, 2.1) | never | 659 |
+| Z2-ns | none of these | 3,000 | 3.84e-3 (273), 1.65e-2 | 3.28, (6.1, 0.9) | never; largest 3.6 | 2,947 |
+| Z2-d | none of these | 3,000 | 3.35e-3 (270), 2.35e-2 | 3.26, (6.1, 0.9) | never; largest 3.6 | 2,945 |
+
+The uniform controls by the same rules: `t_L100_T3` grown (2,500 run; least 2.06e-3 at 601, end
+9.75e-2; 7.37 m/s at (6.3, 1.3); departure 2,284 at (6.1, 1.5); at cap 258); `t_L10_T3` grown
+(1,000 run; departure 295 at (6.1, 1.5); 12.3 m/s at the end); `t_L1_T3` grown (700 run; start-up
+transient over outers 0 to 38, departure 127 at (6.9, 1.9); 16.0 m/s at the end).
+
+![Residual and largest speed of every rung against the uniform controls](ecr002_step0_histories.png)
+
+Reading, run by run.
+
+*Z1, the field as published.* The residual falls throughout and the solver stops itself at
+1,621, the largest speed 3.20 m/s at (4.7, 2.1), over the litho tool's right corner, where the
+uniform Re 90 runs put it. The uniform Re 90 field this nu_t0 was made from had fallen only to
+1.84e-5 at outer 999, where Z1 stood at 4.68e-6, and no uniform run on this grid reached the
+solver's stop in 3,000 iterations (`docs/reports/product_case_reynolds.md`, section 8.4). At the stop
+one face of return 2 is held shut by T3 and no outlet face draws air in.
+
+*Z2, the top of k-epsilon's range.* The speed never passes 5 m/s: from outer 500 it holds at 3.1 to
+3.5 m/s, where the uniform control at the same core value departs at 2,284. The residual does not
+fall: least 3.10e-3 at 273, then between 1e-2 and 3.4e-2, a slow oscillation of roughly 120
+iterations (the figure), max over min 2.7 across the last 500, which no rule of section 2.6
+matches. At outer 2,999 the iterate is within 0.025 m/s of Z2-sw's converged field in the median
+cell and differs by up to 1.09 m/s at (6.5, 1.9), above the hood bench beside the gap over return
+4. Against `t_L100_T3` the residual is higher for the first 1,500 iterations (medians
+per 500 iterations 9.9e-3, 1.7e-2 and 2.1e-2 against 5.5e-3, 3.5e-3 and 7.7e-3) and lower after
+2,000, where the uniform run grows (2.6e-2 against 5.2e-2 over 2,000 to 2,500).
+
+*Z3 and Z4, the middle and bottom of the range.* Both depart in the gap over return 4, Z3 at 265 at
+(6.3, 1.7) and Z4 at 155 at (6.1, 1.7), and grow to 44 and 68 m/s by 3,000, Z4 still rising at the
+end. At some iteration every face of each floor return is held shut at once, and the correction
+turns up to every face of a return inward. Z4 departs 140 iterations before `t_L10_T3` (295, at
+(6.1, 1.5)), and the two are at similar speeds by outer 1,000 (13.4 and 12.3 m/s); the uniform run
+was not continued past 1,000.
+
+*Z2-sw, ten momentum sweeps per outer iteration.* Converged at 1,240 by the solver's own stop. The
+residual falls geometrically, 0.9939 per iteration at the end; the largest speed settles at 3.26
+m/s at (4.7, 2.1); no outlet face draws air in at any iteration, and one face of return 2 is held
+shut; the worst per-cell mass imbalance is 3.75e-6 kg/s per metre of depth against a supply of
+3.78; the pressure corrections fall from the cap to 2,544 sweeps at the stop. Per outer iteration it
+cost 2.04 s against Z2's 2.84 s, because its pressure corrections left the cap as it converged; the
+ten sweeps themselves are a small part of the cost.
+
+*Z2-up, first-order upwind.* Its residual falls at every one of its last 500 iterations, from
+2.71e-6 to 1.78e-6, a factor of 0.66 at 0.99916 per iteration. Falling as section 2.6 defines it
+needs a halving over the window, so the rule classes it stalled. At that rate it would reach 1e-6
+about 690 iterations later. Its field is upwind's, not QUICK's: at the end it differs from Z2-sw's
+converged field by up to 1.56 m/s at (5.7, 1.1), 0.12 m/s in the median cell (premise 4).
+
+*Z2-ns and Z2-d, the stress source off and as D writes it.* Both follow Z2: no departure, largest
+speed 3.6 m/s, residual oscillating between 1e-2 and 4e-2. Neither the source nor its form decides
+the outcome at Z2. On the converged runs the applied source (form b) equals D's pair to the figures
+recorded (Z1 0.0294, Z2-sw 0.00517 at the stop), as it should on a divergence-free field.
+
+**The iteration error the stop leaves.** Both converged runs stopped by the committed
+`velocity_step` rule, a step below 1e-6 of the reference velocity. At their final rates the
+iteration error left is about rho / (1 - rho) times the last step
+(`docs/reports/stopping_rule_evidence.md`): 450 times for Z1 and 160 times for Z2-sw, about 7e-3 and
+3e-3 m/s. Both iterates are converging; neither is converged to the field's accuracy, which this
+step does not ask.
+
+### 6.3 Against the uniform controls
+
+| Pair | Core value (m^2/s) | Departure, cell | End state |
+|---|---|---|---|
+| Z2 against `t_L100_T3` | 1.515e-3 against 1.508e-3 | none in 3,000 against 2,284 at (6.1, 1.5) | 3.3 m/s, residual 1e-2 to 3e-2, against grown, 7.4 m/s at 2,500 |
+| Z4 against `t_L10_T3` | 1.65e-4 against 1.51e-4 | 155 at (6.1, 1.7) against 295 at (6.1, 1.5) | grown, 68.5 m/s at 3,000, against grown, 12.3 m/s at 1,000 |
+
+At the top of the range the field's shape helped: no departure where the uniform run departs at
+2,284, though Z2's residual sat higher than the uniform run's for the first 1,500 iterations. At
+the bottom it hurt: Z4 departs 140 iterations earlier. Z4 and both uniform controls depart in the
+gap over return 4, where at every scale the field carries five to seven times the uniform value at
+the same core median (section 3). So at the bottom of the range the growth starts where the field
+is strongest, and section 5's reasoning, that more mixing in the gap would hold the growth off
+there, does not hold.
+
+### 6.4 The pressure cap (a diagnostic added after commit 2)
+
+Every rung corrected its pressure at the 40,000-sweep cap on most outer iterations (section 6.2,
+last column), where `t_L100_T3` reached it on 258 of 2,500, so the cap was a difference between Z2
+and its control that the design did not hold fixed. I added one diagnostic after commit 2, while
+the rungs ran, `cap34.py` (appendix F): Z2 for 500 outer iterations with the cap at 400,000,
+everything else as Z2. It is not a rung, it is not classified, and it changes neither s,
+alpha_velocity nor the pressure tolerance. With the cap raised every correction reached 1e-8 (6,522
+to 206,409 sweeps, median 86,467), and the history is Z2's:
+
+| Outer | Z2, cap 40,000: residual median [least, largest], largest speed | Cap 400,000 |
+|---|---|---|
+| 0 to 99 | 1.66e-2 [9.6e-3, 1.2e-1], 2.68 m/s | 1.66e-2 [9.6e-3, 1.2e-1], 2.68 m/s |
+| 100 to 199 | 1.29e-2 [7.5e-3, 2.3e-2], 2.92 | 1.29e-2 [7.5e-3, 2.3e-2], 2.91 |
+| 200 to 299 | 5.38e-3 [3.1e-3, 8.9e-3], 3.09 | 5.93e-3 [3.7e-3, 8.9e-3], 3.08 |
+| 300 to 399 | 8.24e-3 [5.4e-3, 1.5e-2], 3.19 | 7.98e-3 [4.0e-3, 1.4e-2], 3.18 |
+| 400 to 499 | 1.12e-2 [6.9e-3, 1.9e-2], 3.25 | 9.18e-3 [4.8e-3, 1.6e-2], 3.25 |
+
+The two agree to between 1e-4 and 7e-4 relative over the first 100 iterations and part slowly
+after, as test 33b found for the cap on T3 at Re 8,950. The cap is not what keeps Z2 from settling;
+Z1 and Z2-sw converged under it.
+
+### 6.5 Which outcome
+
+**B.** Among the QUICK, one-sweep rungs only Z1 converges or falls: Z2 neither falls nor departs,
+and Z3 and Z4 grow. Mixing at the zero-equation size settles the room on this grid, and
+k-epsilon's size does not with the solver as committed. The controls say what kind of aid, in
+commit 2's terms:
+
+- **Z2-sw converged: the momentum solve.** With ten Jacobi sweeps of the momentum equations per
+  outer iteration the same discrete equations, QUICK and the same frozen field, converge at 1,240.
+  A steady solution of the frozen Z2 problem exists on this grid, and the one-sweep iteration does
+  not reach it from rest: it circles near it, within 0.025 m/s in the median cell and up to 1.1 m/s
+  above the hood bench.
+- **Z2-up is stalled by the rule**, with a residual that falls at every iteration but too slowly
+  for the rule's halving. By commit 2's terms the scheme control did not settle; its history says
+  heavy numerical damping slows the iteration as much as it steadies it, and its field is upwind's
+  (premise 4).
+- **Z2-ns and Z2-d end in Z2's class:** the stress source does not destabilize, and form b against
+  D's form does not decide the outcome. Step 4 can build either; at a fixed point they agree.
+- **The pressure cap** (section 6.4) is not the cause.
+
+B says none settling would mean no steady iterate at that mixing with this solver. One settled:
+there is a steady iterate at the top of k-epsilon's range, and the committed iteration's one
+momentum sweep does not find it. What is not measured is whether ten sweeps also settle Z3 and Z4,
+the middle and bottom of the range, where one sweep grows.
+
+### 6.6 Step 5's convergence aids, ranked
+
+B sends the result to Alex with step 5's aids ranked before step 1 opens. ECR-002 step 5 names three
+candidates: more momentum sweeps per outer iteration, continuation in viscosity from the
+zero-equation field, and pseudo-transient continuation.
+
+1. **More momentum sweeps per outer iteration.** The only aid measured to converge at k-epsilon's
+   mixing size: Z2 with ten sweeps converged where one sweep circles for 3,000 iterations, at a lower
+   cost per outer iteration than Z2's. Measured at one sweep count and at the top of the range
+   only; Z3 and Z4 with ten sweeps are the first runs to add, about two hours on this grid, before
+   step 5 relies on it.
+2. **Continuation in viscosity from the zero-equation field.** Supported, not measured as a
+   continuation: the field at its published size converges with one sweep (Z1, 1,621), so it is a
+   reachable starting point. No run here started from a converged field; the committed solver
+   starts from rest and has no hook for an initial field, so a continuation needs one.
+3. **Pseudo-transient continuation.** Not measured.
+
+Not aids, on this evidence: first-order upwind, whose field is a different answer and whose
+iteration is slower (Z2-up), and the stress source's form (Z2-d). The pressure cap is not the cause
+on this grid; ECR-003's pressure solve is needed on the product mesh for cost, not for this.
+
+### 6.7 Predictions against the measurement
+
+| Prediction | Measured |
+|---|---|
+| Orchestrator: item 0's core median about 7e-3 m^2/s | Held: 8.21e-3 (6.65e-3 at outer 119) |
+| Orchestrator: Z1 falls without converging | Missed: converged at 1,621 |
+| Orchestrator: Z2 grows, departing before 2,284 | Missed: no departure in 3,000; largest speed 3.5 m/s; class none of these |
+| Orchestrator: Z3 and Z4 grow sooner | Held: Z3 departs at 265, Z4 at 155 |
+| Orchestrator: Z2-up falls | Missed by the rule: stalled; its residual falls every iteration, by 0.66 over the last 500 |
+| Orchestrator: Z2-sw and Z2-ns change the departure by under 20% and not the class | Held for Z2-ns; missed for Z2-sw, which converged |
+| Orchestrator: outcome B with no QUICK control settling | B held; a QUICK control settled (Z2-sw) |
+| Mine: Z1 falls without converging | Missed: converged |
+| Mine: Z2 stalls, no departure by 3,000 | No departure held; stalled missed: the residual's spread over the last 500 is 2.7, class none of these |
+| Mine: Z3 departs after 295 and before 2,284 | Missed: 265 |
+| Mine: Z4 departs within 30% of 295 | Missed: 155, 47% earlier |
+| Mine: Z2-up falls | Missed by the rule: stalled |
+| Mine: Z2-sw, Z2-ns and Z2-d end in Z2's class | Held for Z2-ns and Z2-d; missed for Z2-sw |
+| Mine: outcome B, the upwind control the one that settles | B held; the sweep control settled, not the upwind one |
+
+My reasoning for Z2 and Z4 was that the field's extra mixing in the gap over return 4 would hold the
+growth off there. Z4 departs in that gap earlier than its uniform control, so it does not; Z2's
+missing departure is not explained by it either.
+
+### 6.8 What this measurement does not settle
+
+Section 4's limits stand: one coarse grid, a frozen field whose shape is the zero-equation model's
+and not k-epsilon's, and a converged iterate stopped by the velocity-step rule. Two more, from the
+results: the sweep aid is measured at one rung, and no run continued from a converged field.
 
 ## Appendix A: base34.py
 
@@ -1306,6 +1510,12 @@ def field_picture() -> None:
     print("wrote ecr002_step0_base_field.png")
 
 
+def running_median(r: list, n: int = 25) -> np.ndarray:
+    """Median of the last n values at each iteration (fewer at the start)."""
+    a = np.asarray(r)
+    return np.array([np.median(a[max(0, i - n + 1) : i + 1]) for i in range(a.size)])
+
+
 def histories() -> None:
     import matplotlib
 
@@ -1327,21 +1537,22 @@ def histories() -> None:
             d = load(ref)
             color, style = refs[ref]
             label = UNIFORM[ref]
-            axes[0, col].semilogy(d["residual"], color=color, ls=style, lw=1.2, label=label)
-            axes[1, col].plot(d["max_speed"], color=color, ls=style, lw=1.2, label=label)
+            axes[0, col].semilogy(running_median(d["residual"]), color=color, ls=style, lw=1.2, label=label)
+            axes[1, col].semilogy(d["max_speed"], color=color, ls=style, lw=1.2, label=label)
         for name in names:
             path = HERE / f"{name}.json"
             if not path.exists():
                 continue
             d = load(name)
-            axes[0, col].semilogy(d["residual"], color=colors[name], lw=1.2, label=name)
-            axes[1, col].plot(d["max_speed"], color=colors[name], lw=1.2, label=name)
+            axes[0, col].semilogy(running_median(d["residual"]), color=colors[name], lw=1.2, label=name)
+            axes[1, col].semilogy(d["max_speed"], color=colors[name], lw=1.2, label=name)
         axes[0, col].set_title(title, fontsize=10, loc="left")
-        axes[0, col].set_ylabel("residual (solver's)")
+        axes[0, col].set_ylabel("residual, 25-iteration running median")
         axes[1, col].set_ylabel("largest cell speed (m/s)")
         axes[1, col].set_xlabel("outer iteration")
         axes[1, col].axhline(SPEED_LINE, color="#0b0b0b", lw=0.6)
-        axes[1, col].set_ylim(0, 25)
+        axes[1, col].set_ylim(1, 100)
+        axes[1, col].set_xlim(0, 3000)
         axes[0, col].legend(fontsize=7, frameon=False, ncol=2)
         for row in range(2):
             ax = axes[row, col]
@@ -1567,4 +1778,49 @@ $PY frozen34.py Z2-ns zeq --core-median 1.5e-3 --no-stress > Z2-ns.log 2>&1 &
 $PY frozen34.py Z2-d zeq --core-median 1.5e-3 --stress-form d > Z2-d.log 2>&1 &
 wait
 echo ALL DONE
+```
+
+## Appendix F: cap34.py
+
+```python
+"""Builder diagnostic, prompt 34, added after commit 2: Z2 with the pressure cap raised.
+
+Usage: python cap34.py NAME CAP N_OUTER
+
+Runs frozen34.py's Z2 (the zero-equation field at a core median of 1.5e-3
+m^2/s, form b, QUICK, one momentum sweep) with max_pressure_iter CAP in place
+of 40,000, everything else as frozen34.py. Not a rung and not classified: every
+rung corrected its pressure at the 40,000-sweep cap on almost every outer
+iteration, where the uniform control t_L100_T3 reached it on 258 of 2,500, and
+this asks whether the cap shapes Z2's history. frozen34.py is imported and its
+build_room wrapped; the file the rungs ran is unchanged.
+"""
+
+import sys
+
+import frozen34
+from src.boundary_staggered import StaggeredBoundary
+from src.config import SimConfig
+from src.mesh import Mesh
+
+_original = frozen34.build_room
+
+
+def main() -> None:
+    name, cap, n_outer = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+
+    def build_room(n, mesh_section=None, mu_factor=1.0):  # type: ignore[no-untyped-def]
+        raw, _, _, _ = _original(n, mesh_section, mu_factor)
+        raw["solver"]["max_pressure_iter"] = cap
+        cfg = SimConfig.from_dict(raw)
+        mesh = Mesh(cfg)
+        return raw, cfg, mesh, StaggeredBoundary(mesh, cfg)
+
+    frozen34.build_room = build_room
+    sys.argv = ["frozen34.py", name, "zeq", "--core-median", "1.5e-3", "--n-outer", str(n_outer)]
+    frozen34.main()
+
+
+if __name__ == "__main__":
+    main()
 ```
