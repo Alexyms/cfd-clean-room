@@ -2,7 +2,7 @@
 
 **Project:** CFD Clean Room Simulation
 **Change Request ID:** ECR-002
-**Status:** Proposed 2026-10-04; revised the same day after premise review 33, test 33 and the outlet measurement of prompt 33b. Decision 1 (k-epsilon) taken by Alex on 2026-10-04; the eight design decisions of ADR-012 are open. Requirement and scope text change in `docs/SYSTEM.md` when this request is accepted, not before.
+**Status:** Accepted by Alex on 2026-10-04. Proposed the same day and revised after premise review 33, test 33, the outlet measurement of prompt 33b and test 33b. Decision 1 (k-epsilon) and the nine decisions of ADR-012 taken by Alex on 2026-10-04. The requirement and scope text of section 5 enter `docs/SYSTEM.md` in step 0's pull request, because that edit moves the requirement register `tests/test_system_map.py` pins.
 **Author:** Alex Moroz-Smietana (drafted in the builder session of prompt 33)
 **Approver(s):** Alex Moroz-Smietana, Claude (pair)
 **Date Raised:** 2026-10-04
@@ -178,7 +178,7 @@ measurement on the product mesh; as taken, it lands before step 5.
 
 ## 5. Requirement Changes
 
-Proposed text. `docs/SYSTEM.md` changes when Alex accepts this request.
+Accepted text (2026-10-04). It enters `docs/SYSTEM.md` in step 0's pull request.
 
 ### 5.1 Modified requirements
 
@@ -404,8 +404,8 @@ architecture, and the acceptance criteria are sufficient to close the change.
 
 | Role | Name | Approval | Date |
 |------|------|----------|------|
-| Author | Alex Moroz-Smietana | Pending | |
-| Reviewer | Claude | Pending | |
+| Author | Alex Moroz-Smietana | Approved | 2026-10-04 |
+| Reviewer | Claude | Approved: premise review 33, `/cfd-test 33` and `/cfd-test 33b` | 2026-10-04 |
 
 ---
 
@@ -416,3 +416,4 @@ architecture, and the acceptance criteria are sufficient to close the change.
 | 2026-10-04 | Proposed, with ADR-012 and the evidence report `docs/reports/product_case_reynolds.md`. Decision 1 taken by Alex; ADR-012's seven decisions open. Premise review and `/cfd-test 33` to follow. | Alex Moroz-Smietana |
 | 2026-10-04 | Revised after premise review 33, test 33 and the outlet measurement (report, section 8): section 2 restated, the outlet step (step 3, REQ-S18) and the convergence measurement (step 5) added before the coupled solve, VAL-016 moved to plane Couette flow, VAL-019 the backward-facing step added (Alex, decision 3 of 2026-10-04), VAL-018 made conditional; ADR-012's decisions eight, the outlets first. `/cfd-test 33b` to follow. | Alex Moroz-Smietana |
 | 2026-10-04 | After `/cfd-test 33b`: ADR-012's eight decisions taken by Alex as ranked first, and a ninth added, the risk-retirement probe of step 0. REQ-S18 and step 3 name the fixed-flow hood's zero tangential velocity and a closed face's zero-gradient one; criterion 6 compares against the probe rerun with the built condition (test 33b, B2). ECR-003 lands before step 5. Measuring steps commit their predictions before their runs. Text applied by the orchestrator. | Alex Moroz-Smietana |
+| 2026-10-04 | Accepted by Alex. SYSTEM.md's requirement and scope text follow in step 0's pull request. | Alex Moroz-Smietana |

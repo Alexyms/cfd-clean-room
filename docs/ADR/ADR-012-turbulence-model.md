@@ -1,13 +1,13 @@
 # ADR-012: Turbulence Model: k-epsilon on the Staggered Solver
 
 ## Status
-Proposed. Written 2026-10-04, before the build, as the design for ECR-002
+Accepted by Alex on 2026-10-04, with ECR-002. Written 2026-10-04, before the build, as the design for ECR-002
 (`docs/ECR/ECR-002-turbulence-model.md`), from the evidence in
 `docs/reports/product_case_reynolds.md`; revised the same day after premise review 33, test 33 and
 the outlet measurement of prompt 33b (that report's section 8), and again after `/cfd-test 33b`.
 Alex took the decisions listed first on 2026-10-04: the eight put to him, each as ranked first,
 and a ninth, a risk-retirement probe before anything is built (ECR-002 step 0). The sections carry
-the options with their ranking; the record of what was taken is at the head of the decisions. When accepted this ADR
+the options with their ranking; the record of what was taken is at the head of the decisions. As accepted it
 supersedes ADR-004 (laminar flow assumption) and gains a planned-against-built table when ECR-002
 closes, as ADR-010's was added at ECR-001 step 9. Bracketed numbers point at the sources at the
 end.
