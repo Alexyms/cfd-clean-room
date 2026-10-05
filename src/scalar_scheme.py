@@ -29,7 +29,10 @@ diffusion and a non-negative cell sink together:
 matrix has a positive diagonal and non-positive off-diagonals and is
 strictly diagonally dominant, so a non-negative ``C*`` gives a non-negative
 solution at any step. ``dt`` may be one number or one per cell, the local
-pseudo-time step of ADR-012 C.
+pseudo-time step of ADR-012 C. A cell may be held at its value of ``C*``, as
+k-epsilon holds eps in the wall cells (ADR-012 C): its row reads
+``C_P = C*_P`` exactly, the limit of a dominant diagonal, and its neighbours
+see the held value.
 """
 
 from dataclasses import dataclass
@@ -226,6 +229,7 @@ def implicit_step(
     solid: np.ndarray,
     tol: float,
     max_sweeps: int,
+    held: np.ndarray | None = None,
 ) -> ImplicitResult:
     """Backward Euler diffusion with a cell sink, solved by Jacobi.
 
@@ -252,6 +256,10 @@ def implicit_step(
         right-hand side.
     max_sweeps : int
         The sweep cap.
+    held : np.ndarray, optional
+        Bool [ny, nx], non-SOLID cells held at their value of ``c_star``:
+        their residual is zero, so they keep it, and their neighbours read
+        it. None holds nothing, and the arithmetic is the unheld path's.
 
     Returns
     -------
@@ -287,6 +295,8 @@ def implicit_step(
         )
         residual = b + neighbours - a_p * c
         residual[solid] = 0.0
+        if held is not None:
+            residual[held] = 0.0
         if float(np.abs(residual).max()) <= tol * scale:
             converged = True
             break

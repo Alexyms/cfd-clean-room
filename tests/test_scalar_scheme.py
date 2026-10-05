@@ -309,6 +309,78 @@ class TestPerCellStep:
 
 
 @pytest.mark.unit
+class TestHeldCells:
+    def test_a_held_cell_keeps_its_value_and_its_neighbours_read_it(self) -> None:
+        """Held cells are Dirichlet rows: exactly their C*, and the solve
+        around them equals the dense system with those rows replaced by
+        C_P = C*_P (ADR-012 C's held wall eps, the limit of a dominant
+        diagonal)."""
+        mesh = _mesh()
+        rng = np.random.default_rng(37)
+        solid = mesh.cell_type == SOLID
+        g_u, g_v = _conductances(mesh, rng, high=0.5)
+        c_star = np.where(solid, 0.0, rng.uniform(0.5, 1.5, size=solid.shape))
+        held = np.zeros_like(solid)
+        held[-1, :] = True
+        held[2, 1] = True
+        c_star[held] = 4.0
+        dt = rng.uniform(0.05, 5.0, size=solid.shape)
+        diagonal = np.where(solid, 0.0, rng.uniform(0.0, 0.3, size=solid.shape))
+        result = implicit_step(
+            c_star,
+            np.outer(mesh.dy_cell, mesh.dx_cell),
+            dt,
+            g_u,
+            g_v,
+            diagonal,
+            solid,
+            1e-13,
+            20000,
+            held=held,
+        )
+        assert result.converged
+        assert np.all(result.field[held] == 4.0)
+
+        ny, nx = solid.shape
+        idx = np.arange(ny * nx).reshape(ny, nx)
+        volume = np.outer(mesh.dy_cell, mesh.dx_cell)
+        a = np.zeros((ny * nx, ny * nx))
+        a[idx, idx] = volume / dt + diagonal
+        for j in range(ny):
+            for i in range(1, nx):
+                p, q = idx[j, i - 1], idx[j, i]
+                a[[p, q], [p, q]] += g_u[j, i]
+                a[p, q] -= g_u[j, i]
+                a[q, p] -= g_u[j, i]
+        for j in range(1, ny):
+            for i in range(nx):
+                p, q = idx[j - 1, i], idx[j, i]
+                a[[p, q], [p, q]] += g_v[j, i]
+                a[p, q] -= g_v[j, i]
+                a[q, p] -= g_v[j, i]
+        rhs = (volume / dt * c_star).ravel()
+        fixed = (solid | held).ravel()
+        a[fixed, :] = 0.0
+        a[fixed, fixed] = 1.0
+        rhs[fixed] = c_star.ravel()[fixed]
+        expected = np.linalg.solve(a, rhs).reshape(ny, nx)
+        assert np.allclose(result.field, expected, rtol=1e-10, atol=1e-14)
+
+        free = implicit_step(
+            c_star,
+            volume,
+            dt,
+            g_u,
+            g_v,
+            diagonal,
+            solid,
+            1e-13,
+            20000,
+        )
+        assert np.all(free.field[-1, ~solid[-1, :]] < 4.0)
+
+
+@pytest.mark.unit
 def test_the_axes_carry_the_mesh_nodes_and_the_solid_mask() -> None:
     mesh = _mesh()
     axis_x, axis_y = mesh_axes(mesh)
