@@ -159,7 +159,10 @@ class TurbulenceState:
     eps : np.ndarray
         Its dissipation rate, m^2/s^3, likewise.
     nu_t : np.ndarray
-        The kinematic eddy viscosity ``C_mu k^2 / eps``, m^2/s, likewise.
+        The kinematic eddy viscosity, m^2/s, [ny, nx], float64, read-only;
+        non-negative and finite in non-SOLID cells, zero in SOLID ones.
+        ``state`` builds it as ``C_mu k^2 / eps``; a caller may build a
+        state with another such field, as step 6's under-relaxed one.
     """
 
     k: np.ndarray
@@ -627,8 +630,12 @@ class KEpsilonModel:
     ) -> np.ndarray:
         mesh = self._mesh
         u, v = faces.u, faces.v
-        dudx = (u[:, 1:] - u[:, :-1]) / mesh.dx_cell[None, :]
-        dvdy = (v[1:, :] - v[:-1, :]) / mesh.dy_cell[:, None]
+        # A face beside a SOLID cell carries no air, here as in the rate and
+        # the advection: its stored velocity is read as zero.
+        u_live = np.where(self._live_u, u, 0.0)
+        v_live = np.where(self._live_v, v, 0.0)
+        dudx = (u_live[:, 1:] - u_live[:, :-1]) / mesh.dx_cell[None, :]
+        dvdy = (v_live[1:, :] - v_live[:-1, :]) / mesh.dy_cell[:, None]
         # du/dy at the corners [ny+1, nx+1]: along each u column the edge
         # values sit at the edges and the faces at the cell centres. A face
         # beside a SOLID cell is on or in an obstacle, zero at the corner.
@@ -794,7 +801,12 @@ class KEpsilonModel:
         return out
 
     def _check_state(self, state: TurbulenceState) -> None:
-        """Shapes, and k and eps positive and finite in every non-SOLID cell."""
+        """The state's contract, before any arithmetic.
+
+        Shapes; k and eps positive and finite in every non-SOLID cell; nu_t
+        non-negative and finite there, so every face conductance is
+        non-negative (ADR-012 C's M-matrix); all three zero in SOLID cells.
+        """
         for name in ("k", "eps", "nu_t"):
             array = getattr(state, name)
             if array.shape != self._p_shape:
@@ -807,6 +819,14 @@ class KEpsilonModel:
                 raise ValueError(
                     f"state.{name} must be positive and finite in every non-SOLID cell"
                 )
+        live = state.nu_t[self._live]
+        if not (np.isfinite(live).all() and (live >= 0.0).all()):
+            raise ValueError(
+                "state.nu_t must be non-negative and finite in every non-SOLID cell"
+            )
+        for name in ("k", "eps", "nu_t"):
+            if np.any(getattr(state, name)[self._solid] != 0.0):
+                raise ValueError(f"state.{name} must be zero in SOLID cells")
 
     def _check_faces(self, faces: FaceVelocities) -> None:
         if faces.u.shape != self._u_shape or faces.v.shape != self._v_shape:

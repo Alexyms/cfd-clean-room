@@ -209,9 +209,9 @@ Generated. The responsibility and serves columns are editorial and come from `do
 | `src/solver_transport.py` | 760 | Advances one particle class one explicit step on the staggered face velocities: QUICK's face value bounded by the UMIST limiter under forward Euler at a Courant number the configuration sets, implicit diffusion and deposition by Jacobi, the settling increment on interior faces, sources added and booked, SOLID cells zero; keeps one MassBudget per class and defines FieldHistory, the output contract for the animation. | N01, T01, T03, T04, T05, T06, T07, T08, T11, T12 |
 | `src/staggered.py` | 324 | Defines the staggered (MAC) field layout: shapes and allocation of face-centered u and v and cell-centered p, the face-to-center averaging the solver applies before returning, and FaceVelocities, the read-only face pair the solver exposes and the transport solver advects with. | S07, S13 |
 | `src/stopping.py` | 218 | Decides when the steady outer iteration has converged, on four conditions: (a) the iteration error estimated from the step and its fitted geometric rate, over a physical velocity scale; (b) the worst per-cell mass imbalance against its own tolerance; (c) the summed imbalance over the through-flow, which shares the tolerance of (a); and (d) the signed imbalance summed over the domain, which shares the tolerance of (b). Also defines IterationState, the snapshot a solver hands its callback once per outer iteration. | S01, S04 |
-| `src/turbulence.py` | 906 | Advances the k-epsilon model's k and eps one step on a prescribed face velocity field, standard or RNG with each variant's constants as module data: advection, explicit growth from the strain the faces give and implicit decay and diffusion through the shared scalar scheme, boundary values from a conditions object the caller builds each step, the kinematic eddy viscosity, and an assertion that k and eps are positive and finite after every step. | S14, S15 |
+| `src/turbulence.py` | 926 | Advances the k-epsilon model's k and eps one step on a prescribed face velocity field, standard or RNG with each variant's constants as module data: advection, explicit growth from the strain the faces give and implicit decay and diffusion through the shared scalar scheme, boundary values from a conditions object the caller builds each step, the kinematic eddy viscosity, and an assertion that k and eps are positive and finite after every step. | S14, S15 |
 
-Total 16 Python files, 6592 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
+Total 16 Python files, 6612 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
 
 `Declares it serves` is an EDITORIAL CLAIM read from `docs/system_map_annotations.toml`. It says which requirements a module is meant to satisfy, not that it does. Whether a requirement is met is answered by the tests named in the register's `Verified By` column.
 <!-- END GENERATED: components -->
@@ -236,7 +236,7 @@ Generated. Static import analysis cannot see a function bound into a registry by
 |---|---|
 | Scope | `src/**/*.py` |
 | Files hashed | 16 |
-| Digest | `sha256:f11de52ac0d407a0e88153db50aa0c1f9339f4101f04a9fd2db8d18959c98bc3` |
+| Digest | `sha256:8660ac220151a91dd10125e7455cb91298b4ce822e86b2d1b0b03c3b8c9968e5` |
 
 This is what lets the document answer whether it is current, which is the one question a stale table cannot be asked. `python scripts/gen_system_map.py --check` recomputes the whole set of generated regions, this digest included, and exits non-zero on any disagreement.
 
