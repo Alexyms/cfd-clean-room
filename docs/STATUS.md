@@ -294,8 +294,12 @@ answered them, and `/cfd-test 33b`'s findings, all in the text, were applied dir
 the design's decisions and accepted the request on 2026-10-04. Step 0, the risk-retirement
 probe, ran the same day, and its pull request carries ECR-002's requirement and scope text into
 `docs/SYSTEM.md`. Section 7 of its report (prompt 34b) found ten momentum sweeps converge the
-room across k-epsilon's range. Next: step 1, and ECR-003, the pressure solve, which steps 1 to 4
-do not wait for.
+room across k-epsilon's range. Step 1, k and eps on a prescribed face field, is built on
+`ecr002/k-epsilon-scalar` (prompt 35): the transport scheme shared through
+`src/scalar_scheme.py` with the transport gate unchanged to the bit, the `turbulence`
+configuration section, and `src/turbulence.py` for both variants, VAL-015 passing
+(`docs/PROJECT_PLAN.md`). Next: its review and test, then step 2, and ECR-003, the
+pressure solve, which steps 1 to 4 do not wait for.
 
 Deferred findings from earlier pull requests are open as GitHub issues 33, 36, 38, 40 and 42.
 
@@ -306,9 +310,11 @@ still installed. Removing them is Alex's, after merge.
 
 Step 0's question is answered (step 0's outcome B, then section 7's outcome A,
 `docs/reports/ecr002_step0_frozen_viscosity.md`): on the coarse room ten momentum sweeps per outer iteration converge the room across
-k-epsilon's range, where one sweep does not. Step 1 opens; a configurable momentum sweep count
+k-epsilon's range, where one sweep does not. A configurable momentum sweep count
 (default 1, so the laminar results stay bitwise) is built with step 4's viscosity field and used
-from step 5 on. ECR-002's requirement and scope text entered `docs/SYSTEM.md` in step 0's pull
+from step 5 on. Step 1 settled RNG's C_mu at 0.0845 (Alex, 2026-10-05) and found that a
+wall cell's held eps must follow k, so step 6 rebuilds the wall conditions every outer
+iteration (`docs/SYSTEM.md`, the turbulence.py contract). ECR-002's requirement and scope text entered `docs/SYSTEM.md` in step 0's pull
 request, since that edit moves the requirement register `tests/test_system_map.py` pins. The
 Annex 20 and backward-facing step thresholds stay OPEN by decision until the first coupled
 results exist.
