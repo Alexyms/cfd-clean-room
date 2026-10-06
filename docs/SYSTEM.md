@@ -40,8 +40,8 @@ Since ECR-001 step 9 (2026-09-30), "the NS solver" in this table is the staggere
 | REQ-S12 | Dirichlet velocity boundary conditions shall be imposed directly on the staggered velocity components at the physical wall location, without ghost cell interpolation. | Eliminates the O(h) wall accuracy limitation previously documented in ADR-008. Required by ECR-001. | Unit test, VAL-001 |
 | REQ-S12.1 | The interpretation of configured boundary segments (which segment covers a point on a domain edge, its type, and the velocity it prescribes there) shall be implemented once and shared by every boundary imposition layer. | Derived from REQ-S12, for modularity rather than physics: the staggered velocity layer reads one configuration interpretation today, and the Phase 3 concentration layer (`src/boundary_concentration.py`, decided 2026-10-02) will be its second reader; a second copy could drift between them. | Unit test |
 | REQ-S13 | The NS solver shall expose the face velocities of its last solve on their staggered storage locations: u on vertical faces [ny, nx+1], v on horizontal faces [ny+1, nx], float64, contiguous, read-only copies, whose two-face averages are the returned cell means and whose per-cell mass imbalance is `last_mass_imbalance`; when the solve stopped by `error_estimate`, that imbalance satisfies REQ-S04's per-cell and domain-sum clauses. | Proposed by ADR-011 (PR 30), section A, status Proposed. Continuity is enforced on the faces and the returned cell means are their averages, which do not carry it (ADR-010, Consequences); the transport solver advects with the face fluxes, the constancy test (REQ-T11) predicts its drift from their imbalance, and reconstructing faces from the means would give an O(h^2) imbalance the stopping rule never bounded. Adding the attribute changes no existing signature. | tests/test_solver_staggered.py::TestFaceVelocities (the first two promises, bitwise) and tests/test_solver_staggered.py::test_val001_40x20_continuity_remeasured_from_the_exposed_faces (the continuity clause, validation marker); VAL-012 (tests/test_constancy.py, planned) |
-| REQ-S14 | When configured, the NS solver shall model turbulence with the k-epsilon model in the variant ADR-012 A names, adding the eddy viscosity `rho C_mu k^2 / eps` to the molecular viscosity in the momentum equation's diffusive and stress terms. | The product room runs at Re 89,500 on its height, and the laminar solver, validated at 5 and 100, does not converge on it (`docs/reports/product_case_reynolds.md`); decision 1 of 2026-10-04 chose k-epsilon. Added 2026-10-04 (ECR-002, accepted); not yet built (ECR-002 steps 1, 4 and 6). | VAL-015, VAL-016, VAL-018; VAL-017 and VAL-019 when their criteria are set (planned) |
-| REQ-S15 | The turbulent kinetic energy and its dissipation rate shall be positive, k > 0 and eps > 0, at every non-SOLID cell after every outer iteration. | The eddy viscosity is defined only then; ADR-012 C shows the scheme guarantees it, without clipping. Added 2026-10-04 (ECR-002, accepted); not yet built (ECR-002 step 1). | Unit tests on a Smith-Hutton field with production; an assertion in every solve; VAL-015 (planned) |
+| REQ-S14 | When configured, the NS solver shall model turbulence with the k-epsilon model in the variant ADR-012 A names, adding the eddy viscosity `rho C_mu k^2 / eps` to the molecular viscosity in the momentum equation's diffusive and stress terms. | The product room runs at Re 89,500 on its height, and the laminar solver, validated at 5 and 100, does not converge on it (`docs/reports/product_case_reynolds.md`); decision 1 of 2026-10-04 chose k-epsilon. Added 2026-10-04 (ECR-002, accepted). The model on a prescribed face field built in ECR-002 step 1 (`src/turbulence.py`, both variants); its coupling into momentum is steps 4 and 6. | VAL-015 (tests/test_decaying_turbulence.py, both variants), VAL-016, VAL-018; VAL-017 and VAL-019 when their criteria are set (planned) |
+| REQ-S15 | The turbulent kinetic energy and its dissipation rate shall be positive, k > 0 and eps > 0, at every non-SOLID cell after every outer iteration. | The eddy viscosity is defined only then; ADR-012 C shows the scheme guarantees it, without clipping. Added 2026-10-04 (ECR-002, accepted). Built for the step on a prescribed field (ECR-002 step 1): KEpsilonModel.step raises PositivityError unless k and eps are positive and finite at every non-SOLID cell; the coupled solve calls it every outer iteration from step 6. | tests/test_turbulence.py::TestPositivity (the Smith-Hutton field and a random divergence-free field with production on, both variants, with the planted explicit decay as the control); the assertion in KEpsilonModel.step; VAL-015 (tests/test_decaying_turbulence.py) |
 | REQ-S16 | With the turbulence model off, the NS solver shall reproduce VAL-001 and VAL-002, and the transport solver its gate rows, bitwise. | The Phase 2 gate and the Phase 3 gate rows stand on these results. The obstacle wall stencil (ADR-012 B) changes laminar results in rooms with obstacles, none of which has a validated result. Added 2026-10-04 (ECR-002, accepted); holds today, since nothing of the model is built, and is checked at each ECR-002 step that changes a solver. | Hashes of the VAL-001 and VAL-002 faces against main; the transport gate tests unchanged (planned) |
 | REQ-S17 | Walls and obstacle faces shall be treated by the wall treatment ADR-012 B names (ADR-012 decision 3; ranked first: scalable wall functions, the law of the wall evaluated no closer than the floor where it meets the linear law, y* = 11.53 for kappa 0.41 and E 9.793). | y+ on the product mesh is about 7 to 70 (ADR-012 B). Added 2026-10-04 (ECR-002, accepted); not yet built (ECR-002 steps 4 and 6). | VAL-016; a unit test of the wall viscosity against its formula (planned) |
 | REQ-S18 | A pressure-outlet face whose velocity turns into the room shall carry the condition ADR-012 D names for entering air (ADR-012 decision 1, taken 2026-10-04: held at zero normal velocity for that outer iteration, its tangential condition the pressure outlet's zero gradient), and an exhaust whose flow a fan sets shall be a fixed-flow outlet segment: an outward normal velocity and zero tangential velocity in the flow solver, an outflow in the concentration layer, not counted as inflow. Applies with the turbulence model on or off. | Today a reversed outlet face has no condition. Air entering through the outlets accompanies every divergence measured, and at Re 8,950 it is where the divergence sits (`docs/reports/product_case_reynolds.md`, section 8). Added 2026-10-04 (ECR-002, accepted); not yet built (ECR-002 step 3). | VAL-001 and VAL-002 bitwise; unit tests of the reversed-face condition and the fixed-flow segment; the report's outlet ladder rerun with the treatment as built (planned) |
@@ -158,7 +158,7 @@ When a PR modifies a module, the reviewer verifies impact on downstream modules.
 
 | Modified Module | Check These Downstream Modules | What to Check |
 |-----------------|-------------------------------|---------------|
-| config.py | boundary_concentration, boundary_registry, boundary_staggered, mesh, momentum, particles, pressure, solver_staggered, solver_transport; monitor, scenarios, time_integration (planned) | New/changed/removed config fields are handled by all consumers. No module accesses a field that no longer exists. No module ignores a new field it should use. The optional transport block (SimConfig.transport, a TransportSpec of cfl_number, advection_scheme, max_diffusion_iter and diffusion_tol, None when absent) is read by solver_transport, which refuses a configuration without it; the optional turbulence block (SimConfig.turbulence, a TurbulenceSpec, None when absent) by turbulence (planned, ECR-002 step 1) and by no other module until ECR-002 step 6; the segment keys (concentration, hepa_filtered, deposition_surface, each allowed on one segment type) by boundary_concentration (ADR-011 E and I); output_interval becomes FieldHistory's interval. CFL_NUMBER_BOUND, the scheme names and the deposition surface names are this module's constants and consumers import them. |
+| config.py | boundary_concentration, boundary_registry, boundary_staggered, mesh, momentum, particles, pressure, solver_staggered, solver_transport; monitor, scenarios, time_integration (planned) | New/changed/removed config fields are handled by all consumers. No module accesses a field that no longer exists. No module ignores a new field it should use. The optional transport block (SimConfig.transport, a TransportSpec of cfl_number, advection_scheme, max_diffusion_iter and diffusion_tol, None when absent) is read by solver_transport, which refuses a configuration without it; the optional turbulence block (SimConfig.turbulence, a TurbulenceSpec, None when absent) by turbulence, which refuses a configuration without it, and by no other module until ECR-002 step 6; the segment keys (concentration, hepa_filtered, deposition_surface, each allowed on one segment type) by boundary_concentration (ADR-011 E and I); output_interval becomes FieldHistory's interval. CFL_NUMBER_BOUND, the scheme names and the deposition surface names are this module's constants and consumers import them. |
 | constants.py | particles | Constant names and SI values unchanged; no module defines its own copy (REQ-C04). |
 | mesh.py | boundary_staggered, momentum, pressure, solver_staggered, staggered, solver_transport; monitor (planned) | Grid dimensions, cell arrays, and coordinate arrays are consumed correctly. Shape assumptions still hold. Centers stay face midpoints; staggered averaging depends on it. solver_transport reads dx_face and dy_face for the diffusive flux on a stretched mesh and cell_type for which cells hold concentration. |
 | staggered.py | solver_staggered, boundary_staggered, boundary_concentration, momentum, pressure, solver_transport; tests/test_constancy.py, tests/test_conservation.py | Face array shapes and the face-to-center averaging contract unchanged. FaceVelocities (ADR-011 A, REQ-S13) is the transport solver's input type, so its field names, shapes and read-only owning float64 copies are part of that contract and the layout module is no longer internal to the velocity solver alone. edge_cells and edge_cell_inputs are where both boundary layers read which cells sit behind an edge's faces and which are SOLID; a change there moves both layers together, which the agreement test cannot see, so tests/test_staggered.py::TestEdgeCells checks them directly. |
@@ -166,7 +166,8 @@ When a PR modifies a module, the reviewer verifies impact on downstream modules.
 | boundary_staggered.py | momentum, pressure, solver_staggered | Normal imposition writes domain faces only. Tangential data shape [n+1], outlet data shape [n], wall_distance semantics and the inward flux sign unchanged. |
 | boundary_concentration.py | solver_transport | ConcentrationFaces array names, shapes and dtypes (face-shaped, read-only; float64 inflow and deposition, int32 surface codes, bool settling_v), the surface codes SURFACE_NONE 0, SURFACE_FLOOR 1, SURFACE_CEILING 2, SURFACE_WALL 3 the budget books deposition to, the settling_v mask (there is no settling_u; settling acts in -y), and the derivation of each condition from the registry's velocity type with the segment keys concentration, hepa_filtered and deposition_surface unchanged (ADR-011 E). |
 | momentum.py | pressure, solver_staggered, scalar_scheme | MomentumPrediction shapes and the meaning of a_p_u and a_p_v (un-relaxed diagonal, positive exactly at the unknown faces) unchanged; boundary entries of u and v read as given and never written. scalar_scheme reads quick_face_values only, for the transport solver: its signature, the `left` index of the low-side node of each face, the `positive` flow mask, the far node one past the upstream node (or one past the downstream node where that does not exist) and the caller placing the boundary value at its physical location as the end node; a change to any of these changes the transport face value. |
-| scalar_scheme.py | solver_transport; turbulence (planned, ECR-002 step 1); tests/test_scalar_scheme.py and, through solver_transport, the transport gate tests (tests/test_advection.py and tests/test_smith_hutton.py plant their unlimited-face control on scalar_scheme.limited_face_values) | The transport gate's bits: implicit_step sums the diagonal west, east, south, north, then the sink, and the caller forms each face conductance before the call; a change of either order changes the gate's results without failing a test (prompt 35's hash control, results/builder35/). limited_face_values' clamp and its c_c guard on a zero downstream difference; advective_flux's boundary nodes (the inflow value where the flux enters, the adjacent cell otherwise) and its reading of a far node in a SOLID cell as the upstream value; implicit_step's non-negative result for non-negative input at any step, scalar or per cell. |
+| turbulence.py | tests/test_turbulence.py, tests/test_decaying_turbulence.py; solver_staggered (planned, ECR-002 step 6) | TurbulenceState's fields (k, eps and the kinematic nu_t, [ny, nx], read-only, SOLID zero) and the positivity promise: step raises PositivityError unless k and eps are positive and finite at every non-SOLID cell. TurbulenceConditions' fields, shapes and dtypes, built by the caller every step (step 6 builds them from the wall functions, the inlet keys and the staggered boundary layer's tangential values); a wall cell needs its eps held and its production given together, its eps following k, or k runs away beside a shear (prompt 35). step's two kinds of dt: None the per-cell pseudo-time step, capped, an error on a field at rest; a float one true-time step, refused above the stable step. VARIANTS' values are the sourced ones (results/builder35/constants.md); a change to one passes every test but tests/test_turbulence.py::TestConstants. |
+| scalar_scheme.py | solver_transport, turbulence; tests/test_scalar_scheme.py and, through solver_transport, the transport gate tests (tests/test_advection.py and tests/test_smith_hutton.py plant their unlimited-face control on scalar_scheme.limited_face_values) | The transport gate's bits: implicit_step sums the diagonal west, east, south, north, then the sink, and the caller forms each face conductance before the call; a change of either order changes the gate's results without failing a test (prompt 35's hash control, results/builder35/). limited_face_values' clamp and its c_c guard on a zero downstream difference; advective_flux's boundary nodes (the inflow value where the flux enters, the adjacent cell otherwise) and its reading of a far node in a SOLID cell as the upstream value; implicit_step's non-negative result for non-negative input at any step, scalar or per cell, and its held mask (None the unheld path, bitwise; a held cell exactly its C*), which turbulence uses for the wall cells' eps. |
 | pressure.py | solver_staggered | PressureCorrection shapes, the right-hand side formed directly from face velocities with no compatibility correction, outlet faces corrected against p' = 0 with the nearest interior diagonal, closed-domain pin at the first FLUID cell, and the sweep count reported. |
 | solver_staggered.py | face_velocities is the transport solver's input, read by tests/test_constancy.py and tests/test_conservation.py (no import: solver_transport takes a FaceVelocities); time_integration (planned, Phase 4: the NS solver of section 2.1); scripts/benchmark.py, scripts/view_field.py, scripts/stopping_probe.py, scripts/val001_order.py, scripts/self_convergence.py | The public shape: cell-centered [ny, nx] float64 contiguous returns, the IterationState callback once per outer iteration with cell-centered fields and the corrector's sweep count, last_pressure_sweeps and stage_seconds reset per solve, reference_velocity F_ref / (rho h). Under the default velocity_step rule the stop is the residual below convergence_tol, the definition every stored velocity-step row was taken under, so outer iteration counts compare with them; residual_history keeps that definition under both rules. converged and stop_reason are set by every solve and reset at its start; the harness records them, with velocity_step_below_tol stored as residual_below_tol, the label every stored velocity-step row carries. face_velocities is None before the first solve and set at the end of every solve, converged or not (REQ-S13). |
 | stopping.py | solver_staggered, scripts/stopping_probe.py, scripts/val001_order.py, scripts/benchmark.py, scripts/self_convergence.py | IterationState's fields, which the solver hands its on_iteration callback and the harness reads, unchanged. update(step, imbalance) answers converged only when the estimate, the worst imbalance, the absolute sum over flux_scale and the absolute signed sum are all below their tolerances; the imbalance callable, which returns an ImbalanceSummary read by name from one evaluation, is not called until the estimate is met; no estimate (inf) while the window is short, a step in it is zero or not finite, or rho_hat is outside (0, 1). RATE_WINDOW stays a module constant. A change of condition raises RULE_VERSION, which stopping_probe and val001_order store with their saved solves, so that they solve again, and the harness records in every error_estimate row, so that its summary keeps the versions apart. |
@@ -203,7 +204,7 @@ Generated. The responsibility and serves columns are editorial and come from `do
 | `src/momentum.py` | 522 | Predicts u* and v* on the staggered grid with QUICK advection by deferred correction over an upwind implicit matrix, one under-relaxed Jacobi sweep per call, and returns the diagonal coefficients the pressure correction needs. | S07, S09 |
 | `src/particles.py` | 255 | Computes per-size-class transport properties: Cunningham correction, settling velocity, Brownian diffusion, deposition velocity and HEPA efficiency. | T03, T04, T09, T10 |
 | `src/pressure.py` | 441 | Assembles the staggered pressure correction equation from the momentum diagonals with the discrete divergence of u* as its right-hand side, solves it by weighted Jacobi iteration, corrects the face velocities and updates the pressure. | S04, S08 |
-| `src/scalar_scheme.py` | 308 | Holds the cell-centred scalar scheme the transport solver and the k-epsilon model share: QUICK's face value bounded by the UMIST limiter, the advective flux along one axis with the inflow value or the upwind cell at a domain face, and the backward Euler solve of diffusion with a non-negative cell sink by Jacobi, on per-face conductances with one step or a step per cell. | T12 |
+| `src/scalar_scheme.py` | 308 | Holds the cell-centred scalar scheme the transport solver and the k-epsilon model share: QUICK's face value bounded by the UMIST limiter, the advective flux along one axis with the inflow value or the upwind cell at a domain face, and the backward Euler solve of diffusion with a non-negative cell sink by Jacobi, on per-face conductances with one step or a step per cell, with an optional mask of cells held at their value. | S15, T12 |
 | `src/solver_staggered.py` | 306 | Runs steady SIMPLE on the staggered grid as one outer loop over the momentum predictor and the pressure correction, returning cell-centered fields through the harness's callback shape and exposing the final faces as FaceVelocities; stops by the velocity-step rule or, when configured, by the error-estimate rule. | S01, S02, S03, S04, S05, S07, S13 |
 | `src/solver_transport.py` | 760 | Advances one particle class one explicit step on the staggered face velocities: QUICK's face value bounded by the UMIST limiter under forward Euler at a Courant number the configuration sets, implicit diffusion and deposition by Jacobi, the settling increment on interior faces, sources added and booked, SOLID cells zero; keeps one MassBudget per class and defines FieldHistory, the output contract for the animation. | N01, T01, T03, T04, T05, T06, T07, T08, T11, T12 |
 | `src/staggered.py` | 324 | Defines the staggered (MAC) field layout: shapes and allocation of face-centered u and v and cell-centered p, the face-to-center averaging the solver applies before returning, and FaceVelocities, the read-only face pair the solver exposes and the transport solver advects with. | S07, S13 |
@@ -291,8 +292,9 @@ SimConfig:
         max_iter: int               # positive; Jacobi cap of each k and eps solve
         tol: float                  # positive; relative, as diffusion_tol
     # every key required but variant; any other key raises ValueError at load, the model
-    # constants included (they are src/turbulence.py's). Until ECR-002 step 6 no solver
-    # reads the section, so with it present every flow and transport result is unchanged.
+    # constants included (they are src/turbulence.py's). turbulence.KEpsilonModel reads it;
+    # until ECR-002 step 6 no flow or transport solver does, so with it present every flow
+    # and transport result is unchanged.
     boundaries: dict[str, BoundarySpec]
     obstacles: list[ObstacleSpec]
     # scenarios: deferred to Phase 4, loaded via separate scenario YAML files
@@ -635,7 +637,7 @@ ConcentrationBoundary:
         obstacle faces: floor above, ceiling below, wall beside
 ```
 
-### scalar_scheme.py --> solver_transport; turbulence (planned, ECR-002 step 1)
+### scalar_scheme.py --> solver_transport, turbulence
 
 Built (prompt 35, ECR-002 step 1) by moving the transport solver's face
 value, advective flux and implicit solve out of TransportSolver into module
@@ -643,7 +645,9 @@ functions, so that the k-epsilon model takes the same scheme by import without
 importing the particle solver (a departure from ADR-012 I, which named
 solver_transport). The transport gate's fields are bitwise those of main
 (results/builder35/). The implicit solve gained what turbulence needs:
-per-face conductances, a cell sink in the diagonal, and a step per cell.
+per-face conductances, a cell sink in the diagonal, a step per cell, and an
+optional mask of cells held at their C*, the k-epsilon wall cells' eps; with
+the mask None the transport gate's hashes are unchanged.
 
 ```
 Axis:                     # frozen; one advection direction, that axis last
@@ -662,15 +666,93 @@ advective_flux(c, flux, inflow, axis, upwind) -> ndarray
     carries none.
 ImplicitResult:           # frozen
     field: ndarray, sweeps: int, converged: bool
-implicit_step(c_star, volume, dt, g_u, g_v, diagonal, solid, tol, max_sweeps)
-        -> ImplicitResult
+implicit_step(c_star, volume, dt, g_u, g_v, diagonal, solid, tol, max_sweeps,
+              held=None) -> ImplicitResult
     (V / dt + sum_f G_f + D_P) C_P - sum_f G_f C_N = (V / dt) C*, by Jacobi until
     the largest residual is at most tol times the largest right-hand side or
     max_sweeps; dt a float or [ny, nx]; g_u [ny, nx+1] and g_v [ny+1, nx] the
     face conductances, zero where nothing diffuses; diagonal [ny, nx] the
-    non-negative sink; SOLID cells held at zero. Non-negative C* gives a
-    non-negative result at any step. With no conductance and no sink it returns
-    C* itself, zero sweeps.
+    non-negative sink; SOLID cells held at zero; held [ny, nx] bool or None, cells
+    kept at their C* exactly (a Dirichlet row, the limit of a dominant diagonal)
+    whose neighbours read it. Non-negative C* gives a non-negative result at any
+    step. With no conductance and no sink it returns C* itself, zero sweeps.
+```
+
+### turbulence.py --> tests/test_turbulence.py, tests/test_decaying_turbulence.py; solver_staggered (planned, ECR-002 step 6)
+
+Built in ECR-002 step 1 (prompt 35) from ADR-012 A and C: k and eps advanced on
+a prescribed face field, no coupling to momentum. Per unit density, so nu_t is
+kinematic (REQ-S14's mu_t is rho nu_t). One step: advection by the shared
+scheme with the limited QUICK face value, forward Euler; explicit growth from
+the previous iterate (P = nu_t S^2, C_1 (eps / k) P, and RNG's R where it is
+negative); one implicit solve per quantity with diffusion and the decay (eps / k;
+C_2 eps / k and RNG's positive R over eps) in the diagonal, from the previous
+iterate. Nothing is clipped. Strain: du/dx and dv/dy face differences, du/dy and
+dv/dx at the four corners averaged to the centre, the edge's tangential velocity
+at a domain edge and zero at an obstacle face read at the corner, so a no-slip
+wall gives the full shear. The face diffusivity is the distance-weighted harmonic
+mean of nu + nu_t / sigma across the face, ADR-012 F's rule for the transport
+diffusivity, so k, eps and the particles use one rule. Constants sourced in
+results/builder35/constants.md; RNG's C_mu 0.0845 by Alex's decision of
+2026-10-05, the preprint printing "C_mu ~ 0.085".
+
+Departures from ADR-012 I's draft:
+1. The shared scheme is `scalar_scheme.py`, not functions imported from
+   `solver_transport.py`: a flow-side model importing the particle solver would
+   invert the layers.
+2. The boundary values are a TurbulenceConditions the caller builds and passes
+   to `step` every step, not a StaggeredBoundary given at construction: step 6's
+   wall-function values change every outer iteration. So the constructor takes
+   `(mesh, config)` and `initial` takes the uniform values it starts from.
+3. The conditions carry the edges' tangential velocities, which a moving wall
+   needs for its corner shear; step 6 fills them from the staggered boundary
+   layer, which owns them.
+4. The face diffusivity is ADR-012 F's harmonic mean, which the draft did not
+   state. The eps of a wall cell is held exactly, by a mask in implicit_step,
+   the limit of ADR-012 C's dominant diagonal.
+5. `wall_viscosity` is not built: it needs the wall functions of ADR-012 B,
+   ECR-002 steps 4 and 6.
+
+```
+VariantConstants:          # frozen: c_mu, c_1, c_2, sigma_k, sigma_e, eta_0, beta
+VARIANTS = {"standard": (0.09, 1.44, 1.92, 1.0, 1.3), "rng": (0.0845, 1.42, 1.68, 0.7194,
+            0.7194, eta_0 4.38, beta 0.012)}   # module constants, not configuration
+PositivityError(RuntimeError):   # .minimum, the least value over non-SOLID cells
+TurbulenceState:           # frozen, eq=False; [ny, nx] float64, read-only, SOLID zero
+    k, eps: positive and finite in every non-SOLID cell
+    nu_t: C_mu k^2 / eps, kinematic, m^2/s
+TurbulenceConditions:      # frozen, eq=False; built by the caller for each step
+    inflow_k_u, inflow_eps_u [ny, nx+1]; inflow_k_v, inflow_eps_v [ny+1, nx]   # float64,
+        read on the domain faces whose flux enters; positive there
+    tangential_bottom, tangential_top [nx+1]; tangential_left, tangential_right [ny+1]
+        # the edge's own tangential velocity at the corners along it, m/s
+    eps_held, production_given: [ny, nx] bool, non-SOLID cells only
+    eps_wall: [ny, nx], positive where held; production: [ny, nx] m^2/s^3, >= 0 where given
+    uniform(mesh, k, eps) -> TurbulenceConditions   # edges at rest, nothing held or given
+StepTerms:                 # frozen, eq=False; per cell, per unit density
+    production, rng_r, growth_k, growth_eps, decay_k, decay_eps
+KEpsilonModel:
+    __init__(mesh, config)   # ValueError without config.turbulence
+    constants: VariantConstants
+    initial(k: float, eps: float) -> TurbulenceState   # uniform; TypeError on a bool,
+                                                       # ValueError unless positive, finite
+    state(k, eps) -> TurbulenceState   # checked copies with nu_t; ValueError on a shape or a
+                                       # value not positive and finite in a non-SOLID cell
+    eddy_viscosity(k, eps) -> ndarray  # C_mu k^2 / eps, kinematic, SOLID zero
+    strain_squared(faces, conditions) -> ndarray       # 2 S_ij S_ij, 1/s^2
+    terms(state, faces, conditions) -> StepTerms       # what a step adds and decays
+    pseudo_time_step(faces) -> ndarray
+        cfl / (max(|u_w|, |u_e|) / dx + max(|v_s|, |v_n|) / dy) per cell over the faces with
+        a flux; a cell at rest and every SOLID cell take the largest finite value; ValueError
+        when no non-SOLID cell moves (the step has no value there; pass a true-time dt)
+    step(state, faces: FaceVelocities, conditions: TurbulenceConditions, dt=None)
+            -> TurbulenceState
+        dt None: the pseudo-time step; a float: one true-time step for every cell, ValueError
+        above cfl / the largest cell rate, TypeError on a bool. Every check before any
+        arithmetic. Raises PositivityError unless k and eps are positive and finite at
+        every non-SOLID cell after the step (REQ-S15).
+    last_sweeps: tuple[int, int]   # Jacobi sweeps of the last k and eps solves
+    solves_converged: bool         # both met tol within max_iter (a warning otherwise)
 ```
 
 ### solver_transport.py --> time_integration, monitor (planned, Phases 4 and 5); the Phase 3 tests
@@ -901,3 +983,4 @@ ADR-008, ADR-010, ADR-011 and ADR-012 are files in `docs/ADR/`; the others are i
 | 2026-10-04 | ECR-002 accepted by Alex on 2026-10-04; its section 5 requirement and scope text entered here in step 0's pull request. REQ-S01 clarified, not amended (condition (e) on the eddy viscosity and rule version 4 with the turbulence model on); REQ-S10 amended (`alpha_turbulence`) and REQ-T01 amended (the diffusivity Brownian plus the turbulent term of REQ-T13); REQ-S14 to S18 and REQ-T13 added. None of the new or changed clauses is built yet, and each row names the ECR-002 step that builds it. Section 5: in scope, incompressible Navier-Stokes laminar or with the k-epsilon model; out of scope, ADR-004's exclusion of turbulence modelling removed and LES, DNS and other RANS models added. Section 6: ADR-004 superseded by ADR-012, an ADR-012 row added, and the list of ADRs held as files corrected. The register pin in tests/test_system_map.py widened to REQ-S18 and REQ-T13. No module, contract or generated region changed. | Alex Moroz-Smietana |
 | 2026-10-05 | ECR-002 step 1, first commit (prompt 35): src/scalar_scheme.py holds the face value, the advective flux and the implicit solve, moved out of solver_transport.py with per-face conductances, a cell sink and a per-cell step; the transport gate tests return bitwise main's fields at every step (results/builder35/). Its contract and cascade row added; limited_face_values leaves the solver_transport contract; momentum.py's quick_face_values is read by scalar_scheme, not solver_transport. A departure from ADR-012 I, which named import from the transport solver: a flow-side model importing the particle solver would invert the layers. No requirement's text changed. | Alex Moroz-Smietana |
 | 2026-10-05 | ECR-002 step 1, second commit (prompt 35): SimConfig gains the optional turbulence section as a TurbulenceSpec (model, variant defaulting to standard, wall_treatment, cfl_number in (0, 1/2], alpha_turbulence in (0, 1], max_iter, tol), validated per REQ-C02 with unknown keys refused; absent means the model is off. The config.py contract and cascade row name it; REQ-S10's rationale notes alpha_turbulence is validated now and read from step 6. No solver reads the section yet. No requirement's text changed. | Alex Moroz-Smietana |
+| 2026-10-05 | ECR-002 step 1, records (prompt 35): src/turbulence.py built, k and eps on a prescribed face field, both variants; its contract added with the departures from ADR-012 I's draft (the shared scheme module, a conditions object passed every step, the edges' tangential velocities in it, ADR-012 F's harmonic face rule, eps held exactly; wall_viscosity not built), its cascade row, and scalar_scheme's held mask. REQ-S14's rationale says what is built; REQ-S15's rationale and Verified By name the step's assertion and the tests; VAL-015 passes for both variants. No requirement's text changed. | Alex Moroz-Smietana |
