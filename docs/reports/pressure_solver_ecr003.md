@@ -359,6 +359,626 @@ I saw the controls of section 3 before writing these, among them the cost33 cont
 - R3. B, C and D come within a factor of three of each other per steady solve, so the ranking turns
   on dependencies and the GPU path.
 
+## 6. Item 0: the systems the candidates solve (written after the runs)
+
+**Order.** The first commit (67e2f63) is dated 2026-10-06 09:27:45 -0700. The capture runs started
+at 09:27:57 (each log opens with its start time), item 0's checks ran from 09:29 to 09:35,
+measurement 1's timed runs from 09:35 to 09:39 and its untimed Jacobi runs after them, and
+measurement 2 from 09:39:33. The diagnostics and rungs added after measurement 2's first runs
+followed from 09:42 (restart) to 09:58 (the outlet diagnostic), and measurement 3 from 10:00.
+
+**Symmetric and positive definite on every open system; the gate passes.** On all fifteen captured
+systems the two copies of every face coefficient are the same double, so `A - A^T` is zero exactly,
+not to rounding. Every diagonal is positive, every neighbour coefficient non-negative and every
+row's surplus `a_P - sum(a_nb)` non-negative. On the product, channel and Annex 20 systems the cell
+graph is one component with strict rows in it at the open outlet faces, and the dense Cholesky
+factorization of the whole matrix succeeds on each, the product's 10,910 unknowns included. The
+cavity is singular as expected and compatible, and its matrix with the pin cell removed factors. So
+conjugate gradients and the multigrid candidates apply as planned (`item0_*.json`; `table36.py
+item0`):
+
+| System | Unknowns | Symmetric to the bit | Strict rows | Components (with a strict row) | lambda_min(A) | lambda_min(D^-1 A) | lambda_max(D^-1 A) | Cholesky (unknowns, s) |
+|---|---|---|---|---|---|---|---|---|
+| product200 outer 1 | 10,910 | yes | 56 | 1 (1) | 8.7e-6 | 3.7e-6 | 2.0 | succeeded (10,910, 6.0) |
+| product200 outer 100 | 10,910 | yes | 56 | 1 (1) | 7.4e-6 | 1.5e-5 | 2.0 | succeeded (10,910, 5.8) |
+| product200 outer 1000 | 10,910 | yes | 56 | 1 (1) | 6.2e-6 | 1.4e-5 | 2.0 | succeeded (10,910, 5.9) |
+| product40 outer 1 | 430 | yes | 13 | 1 (1) | 9.1e-4 | 2.2e-4 | 2.0 | succeeded |
+| product40 outer 100 | 430 | yes | 13 | 1 (1) | 9.0e-4 | 9.6e-5 | 2.0 | succeeded |
+| product40 outer 1000 | 430 | yes | 12 | 1 (1) | 6.5e-4 | 6.9e-5 | 2.0 | succeeded |
+| channel80 outer 1, 100, 569 | 3,200 | yes | 40 | 1 (1) | 1.4e-6 to 1.5e-6 | 9.7e-5 to 9.8e-5 | 2.0 | succeeded |
+| annex180 outer 1 | 10,800 | yes | 10 | 1 (1) | 3.4e-5 | 4.1e-6 | 2.0 | succeeded (10,800, 5.6) |
+| annex180 outer 100 | 10,800 | yes | 10 | 1 (1) | 2.9e-5 | 6.0e-6 | 2.0 | succeeded |
+| annex180 outer 1000 | 10,800 | yes | 10 | 1 (1) | 1.4e-5 | 1.0e-5 | 2.0 | succeeded |
+| cavity80 outer 1, 100, 1000 | 6,400 | yes | 0 | 1 (0) | zero to rounding (-2e-19 to -7e-19), next 5.7e-6 to 6.0e-6 | zero to rounding | 2.0 | succeeded with the pin removed (6,399, 1.4) |
+
+On the cavity `A 1` is zero to 1.7e-16 of the largest diagonal, and `|sum b| / sum |b|` is 1.4e-17
+at outer 1, 1.7e-15 at outer 100 and 3.7e-14 at outer 1,000: the sum stays at rounding while the
+imbalance it is divided by falls by four orders. The channel was captured at its last iteration,
+569, instead of 1,000: under velocity_step VAL-001 80x40 stops at outer 570. The identity of section
+2.4, the committed imbalance arithmetic on faces corrected with any p' against `b + A p'`, holds to
+6e-14 of the largest corrected face flux on every system, at the exact p' and at a random one.
+
+**What the eigenvalues say about today's loop.** Weighted Jacobi's slowest mode shrinks by `1 -
+(2/3) lambda_min(D^-1 A)` per sweep. On the product's systems that is 1 - 2.5e-6 at outer 1 and 1 -
+1e-5 later: hundreds of thousands of sweeps per factor e. The cost33 control, the same room as
+committed (T0, one sweep, alpha 0.7) at outer 0, had 8.1e-5. The T3 systems hold the hood at its
+flow and so have 56 strict rows against 79, and the outer-1 system follows a first step taken with
+alpha 0.5 and ten sweeps; the two were not separated. `lambda_max(D^-1 A)` is 2.0 to four figures on
+every system, the bipartite five-point bound, so the condition number CG faces is `2 / lambda_min`:
+about 5e5 at the product's outer 1 and 1.4e5 after.
+
+**Against the predictions.** I1 (symmetric to the bit), I2 (M-matrix, Cholesky succeeds) and the
+orchestrator's item-0 prediction held. I3 held in substance; its compatibility figure (1e-15) held
+at outers 1 and 100 and missed at outer 1,000 (3.7e-14), where the rounding of the sum is divided by
+an imbalance four orders smaller. I4 missed: `lambda_min(D^-1 A)` on 200x75 under T3 is 3.7e-6 to
+1.5e-5, below the 2e-5 to 1.5e-4 predicted from the control.
+
+## 7. Measurement 1: one correction, each candidate (written after the runs)
+
+The timed runs ran one at a time from 09:35 to 09:39, beside the product200 capture run only. The
+untimed Jacobi runs ran after them, in parallel (`m1_*.json`, `m1hist_*.json`; `table36.py m1mean`,
+`hist_table36.py`).
+
+### 7.1 Today's 1e-6 Pa stop on the relative-residual scale
+
+Today's loop from p' = 0, the committed sweep and stop, on each captured system. The seconds are the
+sweeps times a timed loop's seconds per sweep.
+
+| System | ms per sweep | 1e-6 Pa stop: sweeps, s, relative residual, net outflow / supply | 1e-8 Pa stop: sweeps, s, relative residual | Sweeps to 1e-2 | to 1e-4 | to 1e-6 | to 1e-8 | Cap 200: relative residual, net outflow / supply |
+|---|---|---|---|---|---|---|---|---|
+| product200 1 | 0.210 | 378,336, 79.3, 2.9e-03, -2.6e-03 | 2,256,870, 473.2, 2.9e-05 | 1,090 | 1,758,140 | 3,636,670 | > 5,000,000 | 0.03, -4.8e-02 |
+| product200 100 | 0.203 | 57,257, 11.6, 2.2e-03, -1.2e-03 | 541,640, 110.0, 2.0e-05 | 2,200 | 381,360 | 842,390 | 1,303,420 | 0.05, -1.3e-02 |
+| product200 1000 | 0.218 | 27,916, 6.1, 9.7e-04, -9.6e-04 | 499,758, 109.0, 1.1e-05 | 720 | 260,420 | 762,390 | 1,264,220 | 0.02, -6.9e-03 |
+| annex180 1 | 0.157 | 1,816, 0.3, 7.9e-04, -6.5e-02 | 470,678, 73.9, 4.8e-05 | 160 | 200,530 | 1,883,890 | 3,567,250 | 0.01, -7.6e-02 |
+| annex180 100 | 0.153 | 903, 0.1, 3.8e-03, -1.6e-02 | 72,453, 11.1, 8.2e-04 | 380 | 596,870 | 1,756,780 | 2,916,690 | 0.02, -2.0e-02 |
+| annex180 1000 | 0.151 | 1,448, 0.2, 4.9e-03, -2.2e-02 | 246,067, 37.3, 1.1e-04 | 670 | 264,550 | 955,140 | 1,645,730 | 0.03, -4.1e-02 |
+| product40 1 | 0.064 | 29,023, 1.8, 3.1e-05, 1.4e-04 | 60,140, 3.8, 3.1e-07 | 170 | 21,050 | 52,170 | 83,280 | 0.01, -1.7e-02 |
+| product40 100 | 0.046 | 9,393, 0.4, 7.5e-03, -3.1e-04 | 81,258, 3.7, 7.5e-05 | 4,040 | 76,850 | 148,710 | 220,560 | 0.03, -6.7e-03 |
+| product40 1000 | 0.045 | 48, 0.0, 7.7e-02, -4.3e-05 | 3,308, 0.1, 5.2e-03 | 1,680 | 91,570 | 191,370 | 291,170 | 0.08, -4.3e-05 |
+| channel80 1 | 0.081 | 108,361, 8.8, 5.2e-04, -9.3e-04 | 178,956, 14.5, 5.2e-06 | 63,000 | 133,600 | 204,190 | 274,790 | 0.62, -9.9e-01 |
+| channel80 100 | 0.076 | 6,804, 0.5, 3.3e-01, 9.1e-04 | 78,079, 6.0, 3.3e-03 | 61,050 | 132,340 | 203,640 | 274,930 | 0.51, 1.4e-03 |
+| channel80 569 | 0.071 | 1, 0.0, 9.5e-01, 9.2e-06 | 505, 0.0, 8.9e-01 | 69,920 | 141,180 | 212,440 | 283,700 | 0.95, 9.2e-06 |
+| cavity80 1 | 0.125 | 18,005, 2.2, 4.3e-04, -1.1e-17 | 35,495, 4.4, 4.4e-06 | 6,180 | 23,600 | 41,130 | 58,660 | 0.10, -1.0e-17 |
+| cavity80 100 | 0.105 | 3,500, 0.4, 1.3e-01, -6.1e-19 | 19,617, 2.1, 1.7e-03 | 12,940 | 30,440 | 47,940 | 65,440 | 0.39, -3.5e-19 |
+| cavity80 1000 | 0.105 | 3, 0.0, 9.5e-01, -5.0e-19 | 8,040, 0.8, 2.9e-02 | 12,110 | 29,550 | 46,990 | 64,440 | 0.95, -5.0e-19 |
+
+**Today's stop corresponds to no fixed accuracy.** On the product's systems the 1e-6 Pa stop takes
+28,000 to 378,000 sweeps, 6 to 79 s, and lands at a relative residual of 1e-3 to 3e-3; on the Annex
+20 room 900 to 1,800 sweeps and 8e-4 to 5e-3; on the 40x15 room's first correction 3e-5. As a solve
+converges its right-hand side shrinks, the first sweep's change falls below the tolerance, and the
+stop fires after one to three sweeps: on the channel at outer 569 (one sweep) and the cavity at
+outer 1,000 (three) it leaves a relative residual of 0.95, the right-hand side all but untouched.
+The stop's quantity is the largest weighted change of p' in one sweep, `(2/3) lambda_min(D^-1 A)`
+times the slow mode's error once that mode dominates, so with `lambda_min` at 4e-6 to 1.5e-5 on the
+product a 1e-6 Pa change means an error of 0.1 to 0.4 Pa in that mode, while on a small right-hand
+side the change is small from the first sweep. Reaching a relative residual of 1e-6 takes today's
+sweep 760,000 to 3.6 million sweeps on the product's systems (166 to 764 s) and up to 1.9 million on
+the Annex 20 room. The product report's 27,408 sweeps (section 5 there) are reproduced exactly on
+its own system, the room as committed at outer 0 (section 3); on the systems the T3 room with ten
+momentum sweeps builds, the same tolerance takes 1 to 14 times as many.
+
+The committed cap of 200 sweeps leaves 0.01 to 0.08 on the open rooms, where the first sweeps take
+the rough part of the residual, and 0.1 to 0.95 on the closed cavity and the channel; on the
+channel's first correction it leaves 99% of the through-flow as net outflow error.
+
+### 7.2 Each candidate on the 200x75 product
+
+The mean over the three captured systems (outer 1, 100 and 1,000), with the range; the iterations on
+each system; and, at the largest of the three, the relative residual reached, the corrected faces'
+net outflow error over the supply's 3.78 kg/s per metre, the error of p' and the error of the
+corrected face velocity against SuperLU.
+
+**product200**, outer 1, 100 and 1000
+
+| Candidate | Level | Total ms, mean [min, max] | Setup ms, mean | Iterations | Relative residual, largest | Net outflow / supply, largest abs | p' error, largest | Face error m/s, largest |
+|---|---|---|---|---|---|---|---|---|
+| E_direct | exact | 34.7 [34.2, 35.5] | 33.0 | 1 | - | - | 0 | 0 |
+| A_jacobi_cap200 | cap 200 | 42.1 | 0 | 200 | 0.0471 | 0.0477 | 0.705 | 0.123 |
+| B_pcg | 0.1 | 3.7 [3.1, 4.2] | 0.1 | 24, 26, 14 | 0.097 | 0.0351 | 0.688 | 0.103 |
+| C_gmg | 0.1 | 127.7 [124.5, 133.1] | 122.8 | 2, 1, 1 | 0.0795 | 0.0152 | 0.446 | 0.0387 |
+| C_mg_pcg | 0.1 | 135.7 [132.8, 137.6] | 129.1 | 2, 2, 1 | 0.0743 | 8.9e-03 | 0.28 | 0.0305 |
+| D_sa | 0.1 | 39.4 [36.3, 40.9] | 35.7 | 1, 1, 1 | 0.0958 | 4.7e-03 | 0.159 | 0.133 |
+| D_sa_cg | 0.1 | 44.5 [39.5, 49.9] | 37.8 | 2, 1, 1 | 0.0897 | 2.1e-03 | 0.129 | 0.0322 |
+| D_sa_jacobi_cg | 0.1 | 77.1 [76.5, 77.9] | 65.1 | 3, 2, 2 | 0.0798 | 2.8e-03 | 0.1 | 0.0613 |
+| D_rs_cg | 0.1 | 44.6 [42.2, 47.2] | 37.3 | 1, 1, 1 | 0.0649 | 4.9e-03 | 0.165 | 0.0389 |
+| B_pcg | 0.01 | 43.7 [18.1, 62.1] | 0.1 | 313, 245, 87 | 1.0e-02 | 4.7e-03 | 0.542 | 0.0656 |
+| C_gmg | 0.01 | 181.6 [176.2, 185.2] | 164.7 | 3, 4, 3 | 9.9e-03 | 7.4e-03 | 0.0733 | 0.017 |
+| C_mg_pcg | 0.01 | 176.7 [172.1, 181.9] | 160.3 | 4, 3, 3 | 6.1e-03 | 9.5e-05 | 0.0118 | 1.6e-03 |
+| D_sa | 0.01 | 54.0 [47.2, 62.5] | 44.5 | 3, 3, 3 | 4.3e-03 | 5.2e-04 | 0.0427 | 0.0109 |
+| D_sa_cg | 0.01 | 52.2 [50.8, 54.4] | 41.7 | 3, 3, 2 | 8.0e-03 | 1.3e-04 | 0.0182 | 5.1e-03 |
+| D_sa_jacobi_cg | 0.01 | 77.1 [70.1, 82.6] | 63.2 | 6, 5, 4 | 9.8e-03 | 8.4e-05 | 0.0113 | 0.0136 |
+| D_rs_cg | 0.01 | 45.3 [43.5, 47.1] | 32.9 | 2, 3, 2 | 8.2e-03 | 2.8e-04 | 0.0352 | 7.8e-03 |
+| B_pcg | 0.0001 | 134.1 [132.1, 138.0] | 0.1 | 703, 680, 672 | 9.8e-05 | 5.0e-06 | 5.6e-04 | 7.9e-05 |
+| C_gmg | 0.0001 | 209.2 [198.4, 218.2] | 168.6 | 9, 10, 8 | 9.8e-05 | 1.1e-04 | 2.9e-03 | 3.9e-04 |
+| C_mg_pcg | 0.0001 | 193.8 [186.6, 201.7] | 167.4 | 7, 6, 5 | 9.5e-05 | 3.0e-07 | 1.3e-04 | 3.4e-05 |
+| D_sa | 0.0001 | 64.1 [55.6, 76.5] | 41.3 | 10, 8, 6 | 9.9e-05 | 1.0e-05 | 3.3e-03 | 3.5e-04 |
+| D_sa_cg | 0.0001 | 64.8 [59.0, 72.6] | 42.8 | 7, 6, 5 | 7.3e-05 | 8.8e-07 | 1.2e-04 | 3.2e-05 |
+| D_sa_jacobi_cg | 0.0001 | 105.2 [96.5, 111.2] | 74.3 | 12, 11, 9 | 9.7e-05 | 4.4e-07 | 1.3e-04 | 1.4e-04 |
+| D_rs_cg | 0.0001 | 57.8 [53.7, 60.5] | 36.3 | 5, 5, 5 | 5.1e-05 | 1.2e-06 | 1.5e-04 | 5.1e-05 |
+| B_pcg | 1e-06 | 154.5 [150.4, 160.6] | 0.1 | 791, 794, 792 | 1.0e-06 | 1.4e-08 | 2.2e-06 | 6.0e-07 |
+| C_gmg | 1e-06 | 243.3 [228.6, 260.6] | 161.5 | 17, 18, 15 | 8.4e-07 | 5.2e-07 | 2.6e-05 | 6.7e-06 |
+| C_mg_pcg | 1e-06 | 202.9 [190.2, 210.2] | 162.2 | 9, 8, 8 | 6.2e-07 | 2.6e-09 | 2.4e-06 | 2.6e-07 |
+| D_sa | 1e-06 | 101.3 [90.8, 113.9] | 48.0 | 20, 18, 13 | 8.0e-07 | 7.4e-08 | 2.7e-05 | 2.8e-06 |
+| D_sa_cg | 1e-06 | 78.4 [71.8, 85.0] | 48.4 | 10, 9, 8 | 6.5e-07 | 2.6e-09 | 9.3e-07 | 3.3e-07 |
+| D_sa_jacobi_cg | 1e-06 | 116.3 [107.8, 120.8] | 66.1 | 17, 15, 14 | 8.0e-07 | 3.2e-09 | 1.3e-06 | 2.4e-07 |
+| D_rs_cg | 1e-06 | 63.6 [57.9, 69.8] | 35.0 | 7, 8, 8 | 7.6e-07 | 5.9e-09 | 1.1e-06 | 6.0e-07 |
+| B_pcg | 1e-08 | 161.2 [157.1, 163.4] | 0.1 | 852, 861, 857 | 9.9e-09 | 7.4e-11 | 2.3e-08 | 1.1e-08 |
+| C_gmg | 1e-08 | 280.3 [267.9, 296.2] | 165.8 | 26, 25, 22 | 7.4e-09 | 2.4e-09 | 2.3e-07 | 6.2e-08 |
+| C_mg_pcg | 1e-08 | 228.6 [222.1, 236.5] | 173.9 | 11, 11, 10 | 6.8e-09 | 5.5e-11 | 8.8e-09 | 3.6e-09 |
+| D_sa | 1e-08 | 128.1 [115.2, 137.0] | 47.6 | 30, 28, 20 | 8.8e-09 | 6.3e-10 | 2.3e-07 | 2.3e-08 |
+| D_sa_cg | 1e-08 | 91.2 [87.5, 94.1] | 48.3 | 13, 12, 11 | 4.4e-09 | 1.8e-11 | 1.3e-08 | 1.8e-09 |
+| D_sa_jacobi_cg | 1e-08 | 131.2 [126.3, 137.7] | 69.0 | 22, 20, 19 | 5.5e-09 | 4.6e-11 | 4.1e-09 | 5.2e-09 |
+| D_rs_cg | 1e-08 | 74.9 [71.3, 79.6] | 36.6 | 9, 10, 11 | 6.2e-09 | 3.5e-11 | 5.3e-09 | 5.2e-09 |
+
+### 7.3 Across the rooms
+
+Total milliseconds per correction (setup and solve), mean over each room's three systems, at three
+levels:
+
+| Room | Level | B | C | C MG-PCG | D SA-CG | D RS-CG | E SuperLU | Today's 1e-6 Pa stop |
+|---|---|---|---|---|---|---|---|---|
+| Product 200x75 | 0.1 | 3.7 | 127.7 | 135.7 | 44.5 | 44.6 | 34.7 | 11627 (median) |
+|  | 0.01 | 43.7 | 181.6 | 176.7 | 52.2 | 45.3 | 34.7 |  |
+|  | 1e-06 | 154.5 | 243.3 | 202.9 | 78.4 | 63.6 | 34.7 |  |
+| Annex 20 180x60 | 0.1 | 1.9 | 102.8 | 100.1 | 38.3 | 33.1 | 42.1 | 219 (median) |
+|  | 0.01 | 8.7 | 117.7 | 137.4 | 58.3 | 48.5 | 42.1 |  |
+|  | 1e-06 | 96.4 | 154.4 | 142.0 | 71.0 | 67.9 | 42.1 |  |
+| Product 40x15 | 0.1 | 0.8 | 29.9 | 31.7 | 8.9 | 6.0 | 1.6 | 432 (median) |
+|  | 0.01 | 3.1 | 32.5 | 31.7 | 10.6 | 6.0 | 1.6 |  |
+|  | 1e-06 | 8.0 | 37.9 | 33.7 | 12.1 | 8.2 | 1.6 |  |
+| VAL-001 80x40 | 0.1 | 6.2 | 65.5 | 63.1 | 21.9 | 18.2 | 12.9 | 520 (median) |
+|  | 0.01 | 8.0 | 60.7 | 61.2 | 19.8 | 14.6 | 12.9 |  |
+|  | 1e-06 | 15.3 | 93.1 | 83.1 | 29.7 | 24.0 | 12.9 |  |
+| VAL-002 80x80 | 0.1 | 11.8 | 82.7 | 84.6 | 28.6 | 24.3 | 26.5 | 366 (median) |
+|  | 0.01 | 15.0 | 79.9 | 87.8 | 35.6 | 30.2 | 26.5 |  |
+|  | 1e-06 | 34.2 | 115.8 | 117.4 | 48.1 (not reached once) | 40.6 | 26.5 |  |
+
+The ranking moves with the level. At 1e-1 Jacobi-PCG is the fastest on every room, because it has no
+setup: on the product and Annex 20 rooms it needs 12 to 26 iterations and is 9 to 17 times faster
+than the next candidate, on the small rooms about twice as fast. At 1e-2 it is still the fastest or
+level on every room but 40x15, where SuperLU's 1.6 ms leads. At 1e-6 SuperLU and pyamg's two CG
+variants lead on the product and Annex 20 rooms, and Jacobi-PCG stays second or close on the small
+ones (8 to 34 ms). SuperLU costs one factorization, 1.6 ms on 40x15, 13 on the channel, 27 on the
+cavity, 35 on the product and 42 on the Annex 20 room, and returns the exact correction. My NumPy
+multigrid is the slowest at every level on every room. Its solve is fast: three or four cycles at
+1e-2, and at 1e-6 on the product 41 ms of solve for MG-PCG and 82 for GMG. But its setup, the
+Galerkin product formed by probing in Python, costs 120 to 175 ms on the product, two and a half to
+five times pyamg's setup. That is the implementation's cost, not the method's; the setup is 25
+probes per level, each a full prolongation, product and restriction in NumPy.
+
+Jacobi-PCG spends most of its iterations on the first four decades and few on the next four: on the
+product 245 to 313 iterations to 1e-2 at the first two captures, 672 to 703 to 1e-4, 791 to 794 to
+1e-6 and 852 to 861 to 1e-8. Going from 1e-4 to 1e-8 costs 1.2 times; every Krylov candidate has the
+same shape (RS-CG 58 to 75 ms, SA-CG 65 to 91, MG-PCG 194 to 229).
+
+### 7.4 One relative residual, different errors
+
+The relative residual in the 2-norm is the measure every candidate stopped on (section 2.4), and it
+does not mean the same error for each. At 1e-1 on the product, Jacobi-PCG leaves 69% of p' wrong and
+a net outflow error of up to 3.5% of the supply; MG-PCG at a similar residual leaves 28% and 0.9%,
+the pyamg variants 10% to 17% and 0.2% to 0.5%. Conjugate gradients with a diagonal preconditioner,
+like Jacobi itself, removes the rough part of the residual first; the smooth part, which carries
+little residual but most of p' and of the net outflow error, is what remains. Multigrid removes
+both. Measurement 2 shows the outer loop sees that difference.
+
+### 7.5 Failures
+
+**pyamg's preconditioned CG on the singular cavity.** On the closed cavity, smoothed aggregation
+with CG does not reach 1e-6 at outer 1,000 (it stops at 2.0e-4). At 1e-8, smoothed aggregation with
+CG and its Jacobi-smoothed variant fail at outers 100 and 1,000, and Ruge-Stuben with CG at 1,000,
+stopping between 6.6e-7 and 4.9e-5. The logs carry pyamg's "indefinite preconditioner" and
+"indefinite matrix" warnings, 20 to 36 per cavity run, and the histories show the residual reaching
+5e-10 and climbing back to 2e-7 (smoothed aggregation, outer 1). The synthetic closed system of
+section 3 failed the same way. The right-hand side is projected onto the range as for the other
+candidates. The likely cause, not tested: the V-cycle puts a constant into the preconditioned
+direction, which the singular matrix does not see, and pyamg's CG aborts on the indefiniteness that
+follows. Not tuned (section 2.3). Every candidate converges to every level on every open system, and
+the standalone smoothed-aggregation and geometric cycles, Jacobi-PCG and MG-PCG converge to 1e-8 on
+the cavity.
+
+### 7.6 Reusing a hierarchy
+
+Built on the previous captured system of the same run and used as the preconditioner of CG on the
+current matrix, a hierarchy 99 or 900 outer iterations old needs 6 to 31 times the iterations of a
+fresh one. With pyamg's setup at 30 to 50 ms that never pays, on the product or the Annex 20 room.
+With my NumPy setup it pays on the product at 1e-1 and 1e-2 (57 to 119 ms stale against 132 to 182
+fresh) and not at 1e-6 (434 to 467 against 190 to 208). A lag of a few outer iterations was not
+measured.
+
+### 7.7 Against the predictions
+
+| Prediction | Measured |
+|---|---|
+| Orchestrator: CG takes a few hundred iterations on 200x75 to 1e-6 | Held: 791 to 794 |
+| Orchestrator: iterations growing as the cells per side | Held in proportion: 140 to 154 on 40x15 against 791 to 794 on 200x75, five times the cells per side for 5.3 times the iterations |
+| Orchestrator: about two orders faster than Jacobi in seconds | Held at equal accuracy: 155 ms against 166 to 764 s at 1e-6, three orders; against today's 1e-6 Pa stop (6 to 79 s, at 1e-3 to 3e-3) 40 to 500 times |
+| Orchestrator: MG-PCG and pyamg take tens of iterations and are fastest | Iterations held (7 to 10 for MG-PCG, SA-CG and RS-CG at 1e-6); fastest held for pyamg, not for my NumPy MG-PCG, which is the slowest in total because of its setup; SuperLU is faster than both |
+| Orchestrator: pyamg a factor of a few over hand-written NumPy multigrid | Held: 2.6 to 3.2 times at 1e-6 (RS-CG 64 ms, SA-CG 78 against MG-PCG 203) |
+| P1: today's stop takes 5,000 to 30,000 sweeps and lands at 1e-4 to 1e-2 | Partly: 27,916, 57,257 and 378,336 sweeps, two above the range; 9.7e-4 to 2.9e-3, inside |
+| P2: cap 200 leaves above 0.3 and a net outflow error above half the supply at outer 1 | Missed: 0.029 and 4.8% |
+| P3: Jacobi needs more than 150,000 sweeps and 35 s to reach 1e-6 | Held: 762,390 to 3,636,670 sweeps, 166 to 764 s |
+| P4: B reaches 1e-6 in 300 to 800 iterations, 0.1 to 0.4 s | Held: 791 to 794, 0.15 to 0.16 s |
+| P5: C standalone 15 to 50 cycles, 0.4 to 0.7 per cycle; MG-PCG 10 to 25 iterations; 0.05 to 0.2 s | Partly: 15 to 18 cycles; MG-PCG 8 to 9, below the range; 0.19 to 0.26 s, MG-PCG inside and GMG above |
+| P6: SA-CG and RS-CG 8 to 20 iterations, 20 to 80 ms, two to four times faster than MG-PCG | Held: 7 to 10 iterations (RS-CG's 7 just below), 58 to 85 ms (SA-CG's 85 just above), 2.2 to 3.6 times |
+| P7: SuperLU 30 to 100 ms, level with pyamg at 1e-6 | Range held (34 to 36 ms); faster than pyamg by about two, not level |
+| P8: at 1e-1 B is the fastest NumPy candidate, within a factor of two of pyamg | Fastest held; it is ten times faster than pyamg, not within two of it |
+
+## 8. Measurement 2: how tightly the outer loop needs the correction (written after the runs)
+
+The 40x15 and 80x30 sets started at 09:39:34, after measurement 1, each grid's runs in parallel
+beside the untimed Jacobi runs, so their seconds carry that load (`m2_*.json`; `table36.py m2`).
+Three things happened that section 2.6 did not plan for, each reported where it falls: the 80x30
+room did not converge at real air, nor at ten times its viscosity, the fallback; a field difference
+far above the stop's iteration error turned out to be the room's own; and a converged state held a
+standing imbalance at the outlets that no relative residual can clear. The diagnostics added for
+them are named as added.
+
+### 8.1 The 40x15 room, real air
+
+| Run | Stop | velocity_step at | error_estimate at | Seconds | ms per outer | Inner iterations, median [max] | Relative residual reached, median | Field vs direct at velocity_step (m/s) | its error + direct's | Field vs direct at error_estimate (m/s) | Worst cell at the stop / tol |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| direct | error_estimate_and_continuity | 1209 | 2822 | 25 | 9.0 | 1 [1] | 1.2e-14 | - | - | - | 1.2e-09 |
+| pcg_3e-1 | diverged | - | - | 0 | 7.9 | 3 [4] | 0.265 | - | - | - | 6.6e+09 |
+| pcg_1e-1 | diverged | - | - | 0 | 9.3 | 10 [16] | 0.088 | - | - | - | 3.1e+08 |
+| mgpcg_1e-1 | error_estimate_and_continuity | 1210 | 2829 | 164 | 58.1 | 2 [2] | 0.0143 | 3.2e-03 | 4.6e-03 | 3.2e-03 | 1.3e-03 |
+| gmg_1e-1 | error_estimate_and_continuity | 1232 | 2923 | 168 | 57.4 | 2 [2] | 0.0368 | 1.2e-03 | 5.0e-03 | 1.2e-03 | 6.1e-03 |
+| sacg_1e-1 | diverged | - | - | 2 | 536.6 | 1 [1] | 0.041 | - | - | - | 5.4e+07 |
+| pcg_1e-2 | error_estimate_and_continuity | 1205 | 2818 | 34 | 11.9 | 119 [143] | 9.1e-03 | 0.041 | 4.6e-03 | 0.041 | 5.2e-04 |
+| mgpcg_1e-2 | error_estimate_and_continuity | 1208 | 2820 | 166 | 58.8 | 3 [4] | 2.3e-03 | 1.8e-03 | 4.6e-03 | 1.8e-03 | 1.2e-04 |
+| gmg_1e-2 | error_estimate_and_continuity | 1212 | 2834 | 167 | 59.0 | 3 [6] | 7.9e-03 | 1.7e-03 | 4.6e-03 | 1.8e-03 | 4.8e-04 |
+| sacg_1e-2 | error_estimate_and_continuity | 1206 | 2820 | 78 | 27.5 | 3 [3] | 2.7e-03 | 1.8e-03 | 4.6e-03 | 1.8e-03 | 2.2e-04 |
+| pcg_1e-4 | error_estimate_and_continuity | 1209 | 2822 | 42 | 15.1 | 143 [154] | 8.3e-05 | 1.4e-04 | 4.6e-03 | 1.4e-04 | 7.1e-06 |
+| mgpcg_1e-4 | error_estimate_and_continuity | 1209 | 2822 | 172 | 60.9 | 5 [7] | 5.8e-05 | 4.2e-04 | 4.6e-03 | 4.2e-04 | 1.9e-06 |
+| gmg_1e-4 | error_estimate_and_continuity | 1209 | 2822 | 179 | 63.5 | 8 [15] | 4.9e-05 | 2.5e-04 | 4.6e-03 | 2.5e-04 | 2.0e-06 |
+| sacg_1e-4 | error_estimate_and_continuity | 1209 | 2822 | 82 | 29.1 | 5 [6] | 1.6e-05 | 1.3e-06 | 4.6e-03 | 1.3e-06 | 1.5e-06 |
+| pcg_1e-8 | error_estimate_and_continuity | 1209 | 2822 | 46 | 16.2 | 162 [173] | 2.2e-08 | 2.4e-08 | 4.6e-03 | 2.4e-08 | 1.8e-06 |
+| jacobi200 | max_simple_iter | 1684 | - | 184 | 9.2 | 28 [200] | 0.0982 | 0.0124 | 4.4e-03 | - | 232 |
+| jacobi40k | max_simple_iter | 1208 | - | 2810 | 140.5 | 29 [40000] | 0.0781 | 1.1e-04 | 4.6e-03 | - | 1.51 |
+
+Every level and solver that converges does so within 5% of direct's outer count at both stops;
+today's two loops (below) never meet the error-estimate stop. The multigrid and pyamg repeats ran at
+1e-1, 1e-2 and 1e-4, wider than section 2.6's two levels, because by its field criterion only 1e-8
+passed (below). The levels differ in three ways.
+
+**1e-1 and 3e-1 diverge with Jacobi-PCG, and 1e-1 with smoothed aggregation.** Jacobi-PCG's first
+correction at 1e-1 meets its relative residual in five iterations by removing the spike the supply
+puts in the top row of an air field at rest, and leaves the corrected faces with a net outflow error
+of -3.29 kg/s, 85% of the 3.888 kg/s supply; the next momentum step passes 400 m/s. At 1e-2 the same
+first correction still leaves 55% of the supply unbalanced, and the loop recovers. The two geometric
+multigrid runs leave 15% and 16% at the first correction and converge; smoothed aggregation at 1e-1,
+which takes one cycle per correction, leaves 4% to 9% and still diverges at outer 2, so the net
+outflow alone does not decide it.
+
+**At 1e-2 Jacobi-PCG settles on a different steady state.** It meets both stops within four
+iterations of direct, but its field differs from direct's by 0.041 m/s at one cell, (4.7, 1.9), the
+jet into the gap beside the litho tool's top corner where step 0 found the room's fastest air; the
+median cell differs by 6e-5 m/s. At the error-estimate stop each run's iteration error is below
+4.5e-7 m/s, so the two states are 0.041 m/s apart beyond either run's error. The multigrid solvers
+at 1e-2 land 1.7e-3 to 1.8e-3 from direct at the same cell, Jacobi-PCG at 1e-4 1.4e-4, at 1e-8
+2.4e-8.
+
+**The difference is the room's, not the correction's** (two diagnostics added after the runs):
+
+- *Restart* (`restart36.py`, appendix K). Continued from direct's converged state for 3,000 more
+  outer iterations with Jacobi-PCG at 1e-2, the field moves 3.8e-7 m/s; continued from Jacobi-PCG
+  1e-2's converged state with direct, it moves 3.9e-7. Each state is a fixed point of the other
+  iteration to within the stop's iteration error. So the exact iteration has two fixed points 0.041
+  m/s apart at that cell, and the inner tolerance chose between them by changing the path.
+- *The path alone* (`control36.py`, appendix L). With the exact correction, nine or eleven momentum
+  sweeps, or alpha_velocity 0.45 or 0.55, change only the path to the same steady equations. Their
+  converged fields differ from direct's at the same cell by 1.1e-5, 1.6e-6, 4.8e-4 and 1.1e-5 m/s
+  (medians 1.5e-8 to 6.6e-7), every one above the stop's iteration error.
+
+| Run | Stop | velocity_step at | error_estimate at | Seconds | ms per outer | Inner iterations, median [max] | Relative residual reached, median | Field vs direct at velocity_step (m/s) | its error + direct's | Field vs direct at error_estimate (m/s) | Worst cell at the stop / tol |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| exact, sw9_a0.5 | error_estimate_and_continuity | 1210 | 2822 | 25 | 8.7 | 1 [1] | 1.2e-14 | 1.4e-05 | 4.6e-03 | 1.1e-05 | 1.2e-09 |
+| exact, sw11_a0.5 | error_estimate_and_continuity | 1209 | 2822 | 26 | 9.1 | 1 [1] | 1.2e-14 | 2.5e-06 | 4.6e-03 | 1.6e-06 | 1.2e-09 |
+| exact, sw10_a0.45 | error_estimate_and_continuity | 1213 | 2875 | 26 | 9.0 | 1 [1] | 1.2e-14 | 1.3e-03 | 4.8e-03 | 4.8e-04 | 1.3e-09 |
+| exact, sw10_a0.55 | error_estimate_and_continuity | 1227 | 2712 | 24 | 8.8 | 1 [1] | 1.2e-14 | 5.9e-04 | 5.0e-03 | 1.1e-05 | 1.2e-09 |
+
+So on this grid the steady equations have a nearly neutral direction at one cell, and any change of
+path moves where a converged run lands along it: by up to 4.8e-4 m/s for the path changes tried with
+the exact correction. That, not the stop's iteration error, is the floor a field comparison can be
+held to here. Section 2.6's criterion (ii), the field within the sum of the two runs' own iteration
+errors, is passed at the error-estimate stop by Jacobi-PCG at 1e-8 alone, and by none of the exact
+correction's own path changes; the path floor replaces it on this grid, a change made after the
+runs. Against it, every solver at 1e-4 is indistinguishable from a path change (1.3e-6 to 4.2e-4
+m/s); the multigrid solvers at 1e-2 and 1e-1 are 2.5 to 7 times over it (1.2e-3 to 3.2e-3) and
+Jacobi-PCG at 1e-2 85 times over it.
+
+**Today's loop at the committed cap of 200** reaches the velocity-step stop at 1,684, 39% later than
+direct, its field there 0.012 m/s from direct's, and never the error-estimate stop in 20,000 outer
+iterations: its corrections reach a relative residual of 0.10 in the median and 0.8 late in the run,
+and the per-cell continuity condition never holds. **Today's loop at step 0's settings** (cap
+40,000, 1e-8 Pa) reproduces test 34b's `A-sw` record to the bit, all 1,208 residuals and sweep
+counts, and meets the velocity-step stop at 1,208, its field there 1.1e-4 m/s from direct's, inside
+the path floor. It never meets the error-estimate stop in 20,000 outer iterations. Once the
+right-hand side is small its stop fires after 24 to 430 sweeps, leaving 5% to 91% of the imbalance
+per correction (0.078 in the median over the run), and the worst cell stays between 1.2e-7 and
+1.7e-6 kg/s per metre, above the 8e-8 the stop asks. It ran 2,810 s, against direct's 25.
+
+### 8.2 The 80x30 room: no converged laminar solve at real air or at ten times its viscosity
+
+With the exact correction the 80x30 room at real air reaches its least residual, 1.2e-4, at outer
+393 and then wanders, 1.3e-3 to 3.5e-3 between the 5th and 95th percentiles of the last 10,000 outer
+iterations, the largest speed near 6.5 m/s; at ten times air's viscosity (Re 8,950, the
+pre-committed fallback) its least residual is 1.0e-4 at outer 634 and it wanders between 1.1e-3 and
+3.2e-3. Neither meets the velocity-step stop. The 40x15 room's convergence at real air (test 34b and
+here) does not carry to 80x30. What the 80x30 runs can still show is which levels keep direct's path
+and which leave it:
+
+| Run | Viscosity | Stop | Outer iterations run | Least residual (at outer) | Residual, 5th to 95th percentile of the last 1,000 run | Largest speed at the end (m/s) | First correction's net outflow error / supply |
+|---|---|---|---|---|---|---|---|
+| direct | air | cap | 20,000 | 1.2e-04 (393) | 1.3e-03 to 3.6e-03 | 6.52 | 0.00 |
+| pcg_3e-1 | air | diverged | 2 | 2.8e-01 (0) | - | 355 | -0.86 |
+| pcg_1e-1 | air | diverged | 3 | 2.0e-01 (0) | - | 8.31e+03 | -0.86 |
+| mgpcg_1e-1 | air | cap | 3,000 | 2.0e-04 (1427) | 1.3e-03 to 4.4e-03 | 6.51 | -0.27 |
+| gmg_1e-1 | air | diverged | 3 | 1.8e-01 (0) | - | 331 | -0.30 |
+| sacg_1e-1 | air | diverged | 29 | 3.2e-02 (18) | - | 770 | -0.07 |
+| pcg_1e-2 | air | cap | 20,000 | 1.2e-04 (409) | 1.2e-03 to 3.5e-03 | 6.49 | -0.86 |
+| mgpcg_1e-2 | air | cap | 3,000 | 1.2e-04 (395) | 1.3e-03 to 3.5e-03 | 6.51 | -0.05 |
+| gmg_1e-2 | air | cap | 3,000 | 1.1e-04 (564) | 1.3e-03 to 3.5e-03 | 6.5 | -0.03 |
+| sacg_1e-2 | air | cap | 3,000 | 1.2e-04 (394) | 1.3e-03 to 3.5e-03 | 6.48 | -0.02 |
+| pcg_1e-4 | air | cap | 20,000 | 1.2e-04 (393) | 1.2e-03 to 3.5e-03 | 6.49 | -0.00 |
+| pcg_1e-8 | air | cap | 20,000 | 1.2e-04 (393) | 1.3e-03 to 3.5e-03 | 6.5 | 0.00 |
+| jacobi200 | air | cap; velocity_step at 5232 | 20,000 | 5.6e-17 (17120) | 5.6e-17 to 1.1e-16 | 9.47 | -0.85 |
+| direct | 10 x air | cap | 20,000 | 1.0e-04 (634) | 1.1e-03 to 3.2e-03 | 6.49 | -0.00 |
+| pcg_3e-1 | 10 x air | diverged | 6 | 3.3e-02 (0) | - | 157 | -0.86 |
+| pcg_1e-1 | 10 x air | cap | 20,000 | 1.8e-04 (1096) | 1.1e-03 to 3.7e-03 | 6.46 | -0.86 |
+| pcg_1e-2 | 10 x air | cap | 20,000 | 1.0e-04 (512) | 1.1e-03 to 3.2e-03 | 6.48 | 0.01 |
+| pcg_1e-4 | 10 x air | cap | 20,000 | 1.0e-04 (634) | 1.1e-03 to 3.2e-03 | 6.49 | -0.00 |
+| pcg_1e-8 | 10 x air | cap | 20,000 | 1.0e-04 (634) | 1.1e-03 to 3.2e-03 | 6.48 | -0.00 |
+| jacobi200 | 10 x air | cap; velocity_step at 5191 | 20,000 | 5.6e-17 (17251) | 5.6e-17 to 1.1e-16 | 9.31 | -0.86 |
+
+At real air, 1e-1 diverges with Jacobi-PCG and standalone geometric multigrid by outer 3 and with
+smoothed aggregation by outer 29; only MG-PCG at 1e-1 follows direct's course. At 1e-2 every solver
+follows it: least residual 1.1e-4 to 1.2e-4 at outer 393 to 564, the same wandering after. At ten
+times the viscosity Jacobi-PCG at 1e-1 survives but bottoms out later (1.8e-4 at 1,096) and 3e-1
+diverges. The 200x75 product room with the exact correction does the same as 80x30 at real air
+(least residual 3.5e-4 at outer 150, then 1.6e-3 to 4.9e-3 between the 5th and 95th percentiles of
+the last 10,000 outer iterations; section 9).
+
+**Today's loop at the committed cap of 200 freezes without continuity.** On 80x30 at real air it
+meets the velocity-step stop at outer 5,232, and at ten times the viscosity at 5,191, with the
+corrected faces carrying a net imbalance of 46.5% and 44.5% of the supply; the velocity then stays
+fixed to rounding (its change 1e-16) for the rest of 20,000 outer iterations. Captured at outer
+5,231 (`freeze36.py`, appendix M, a diagnostic added after the runs) the system is not singular: T3
+has shut returns 1 to 3 and the hood is held, leaving return 4's six faces open; Cholesky succeeds;
+`lambda_min(D^-1 A)` is 3.2e-6. The right-hand side is spread over the whole room almost exactly in
+proportion to the diagonal: `b / a_P` lies within 1.3% of its median over 90% of the cells. Weighted
+Jacobi turns a residual proportional to its own diagonal into a uniform p', which moves no face, so
+the velocity stands still while the pressure drifts and 1.77 kg/s per metre stays unaccounted. The
+velocity-step rule calls that converged. The error-estimate rule does not.
+
+### 8.3 The 80x30 room at a thousand times air's viscosity (added)
+
+With the fallback spent, one rung was added so that 80x30 gives a converged case: a thousand times
+air's viscosity (Re 90), where the room's residual falls steadily. With the exact correction it
+meets the velocity-step stop at 233 and the error-estimate stop at 588.
+
+| Run | Stop | velocity_step at | error_estimate at | Seconds | ms per outer | Inner iterations, median [max] | Relative residual reached, median | Field vs direct at velocity_step (m/s) | its error + direct's | Field vs direct at error_estimate (m/s) | Worst cell at the stop / tol |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| direct_mu1000 | error_estimate_and_continuity | 233 | 588 | 11 | 19.4 | 1 [1] | 7.8e-15 | - | - | - | 3.1e-09 |
+| pcg_3e-1_mu1000 | max_simple_iter | - | - | 186 | 9.3 | 12 [102] | 0.29 | - | - | - | 2.4e+05 |
+| pcg_1e-1_mu1000 | max_simple_iter | - | - | 224 | 11.2 | 30 [141] | 0.0964 | - | - | - | 5.7e+04 |
+| mgpcg_1e-1_mu1000 | max_simple_iter | 233 | - | 1742 | 87.1 | 2 [2] | 7.6e-03 | 2.4e-03 | 2.7e-03 | - | 6.5e+03 |
+| gmg_1e-1_mu1000 | max_simple_iter | - | - | 1716 | 85.8 | 2 [3] | 0.0416 | - | - | - | 7.9e+04 |
+| sacg_1e-1_mu1000 | max_simple_iter | 230 | - | 601 | 30.1 | 1 [2] | 0.0385 | 5.9e-03 | 2.6e-03 | - | 4.2e+04 |
+| pcg_1e-2_mu1000 | max_simple_iter | 234 | - | 405 | 20.3 | 152 [179] | 9.2e-03 | 1.6e-03 | 2.7e-03 | - | 3.49e+03 |
+| mgpcg_1e-2_mu1000 | max_simple_iter | 233 | - | 1736 | 86.8 | 2 [3] | 7.6e-03 | 2.4e-03 | 2.7e-03 | - | 6.5e+03 |
+| gmg_1e-2_mu1000 | max_simple_iter | 233 | - | 1808 | 90.4 | 4 [5] | 3.6e-03 | 9.2e-04 | 2.7e-03 | - | 3.45e+03 |
+| sacg_1e-2_mu1000 | max_simple_iter | 233 | - | 641 | 32.1 | 3 [4] | 1.4e-03 | 1.2e-04 | 2.7e-03 | - | 992 |
+| pcg_1e-4_mu1000 | max_simple_iter | 233 | - | 515 | 25.7 | 228 [228] | 9.8e-05 | 8.8e-06 | 2.7e-03 | - | 36.3 |
+| pcg_1e-8_mu1000 | error_estimate_and_continuity | 233 | 588 | 21 | 36.4 | 303 [303] | 7.5e-09 | 5.8e-10 | 2.7e-03 | 5.7e-10 | 2.5e-03 |
+| jacobi200_mu1000 | max_simple_iter | 289 | - | 576 | 28.8 | 200 [200] | 0.312 | 0.386 | 3.1e-03 | - | 4.4e+04 |
+
+**No relative level from 3e-1 to 1e-4 meets the error-estimate stop in 20,000 outer iterations; 1e-8
+meets it with direct's counts, 233 and 588.** At 1e-2 and 1e-4 every solver meets the velocity-step
+stop at 230 to 234, as direct does at 233, and then the velocity all but stops changing (between
+1e-7 and 1e-17 per outer iteration) while the corrected faces keep a worst-cell imbalance of 2e-5 to
+1.3e-4 kg/s per metre at 1e-2 and 7e-7 at 1e-4, 36 to 6,500 times the 2e-8 the stop asks. At 1e-1
+Jacobi-PCG and standalone multigrid never meet even the velocity-step stop; MG-PCG and smoothed
+aggregation meet it (at 233 and 230) and then hold an imbalance as at 1e-2. Today's committed cap of
+200 meets the velocity-step stop at 289 and freezes with 20% of the supply unaccounted.
+
+**The cause is a standing imbalance at the outlets**, in direct's run as much as in Jacobi-PCG's
+(`stall36.py`, appendix N, a diagnostic added after the runs). At the end of both runs the
+right-hand side sits entirely on the cells beside the open return faces (100% of its square) and is
+exactly anti-proportional to those cells' outlet coefficients (correlation -1.0000), and the room's
+mean pressure rises by 0.0882 Pa every outer iteration in both. The committed outlet treatment
+explains it. Before each prediction every open outlet face takes its interior neighbour's velocity,
+and if the steady flow carries air sideways into an outlet cell, that zero-gradient value cannot
+close the cell. The correction closes it with a uniform p' of 0.29 Pa, which moves only the outlet
+faces, by `d p'`. The next extrapolation discards that move, and the same b returns. The interior
+velocity is steady and the pressure climbs at a steady rate, 20,000 outer iterations long. With an
+exact correction the corrected faces close to rounding, so the error-estimate rule's continuity
+conditions hold and it stops; with a relative residual r a fraction r of that standing b stays in
+the corrected faces every iteration, so the per-cell condition can never hold unless `r ||b||` is
+below `mass_imbalance_tol`. Here `||b||` is 0.079, so a level of about 2.5e-7 is enough (the worst
+cell is at most the 2-norm). The 40x15 room at real air has no such state: at its stop b is 1.6e-8
+and the pressure moves 1e-8 Pa per outer iteration. The drifting pressure is the outlet treatment's
+property, not the correction's, since it appears with the exact correction, and it is outside this
+change; what belongs to this change is that a relative stop alone cannot satisfy the stopping rule
+there.
+
+### 8.4 What measurement 2 says
+
+The loosest per-correction accuracy depends on what has to stay unchanged:
+
+| What must not change | Loosest level measured that keeps it | Where |
+|---|---|---|
+| The outer count, every solver | 1e-2 | 40x15 (both stops), 80x30 (the path to its stall), Re 90 (the velocity-step stop) |
+| The outer count, multigrid only | 1e-1 (MG-PCG on both grids; GMG on 40x15 only) | 40x15, 80x30 |
+| The converged field, to the floor the path itself sets (4.8e-4 m/s) | 1e-4 for every solver; 1e-2 for none | 40x15 |
+| The stopping rule's continuity conditions where the outlets hold a standing imbalance | an absolute bound: each correction must leave less than `mass_imbalance_tol` per cell; 1e-8 here, 1e-4 does not | 80x30 at Re 90 |
+
+The relative residual in the 2-norm is not a solver-independent measure of enough: at the same level
+the multigrid solvers survive 1e-1 where Jacobi-PCG and smoothed aggregation do not, and land about
+23 times closer to direct at 1e-2, because they also remove the smooth error.
+
+**Against the premise.** The premise was that most of today's per-correction accuracy is wasted,
+since the outer loop needs no more than a few hundred sweeps' worth. For the outer count it holds:
+1e-2 keeps it, and today's 1e-6 Pa stop delivers 1e-3 to 3e-3 on the product's systems at 6 to 79 s.
+For anything the stop or a reader checks it does not: a loose level moves the converged field beyond
+the path floor, and where the outlets hold a standing imbalance the stopping rule needs an absolute
+bound that no relative level and not today's stop delivers. **This contradicts the premise in the
+sense the prompt's stop condition names: the outer loop needs tighter pressure than today's for the
+converged field and for the stopping rule's continuity, not looser.** It changes the emphasis of
+ECR-003 from loosening the correction to solving it fast to a tight, absolutely bounded tolerance,
+which is cheap: from 1e-4 to 1e-8 Jacobi-PCG's cost rises 1.2 times on the product (section 7.3).
+
+### 8.5 Against the predictions
+
+| Prediction | Measured |
+|---|---|
+| Orchestrator: a relative residual of about 1e-2 leaves the outer count and the field unchanged | The count held at 1e-2 with every solver (40x15 at both stops, the path on 80x30, the velocity-step stop at Re 90). The field missed: Jacobi-PCG at 1e-2 lands 0.041 m/s from the exact correction's state at one cell, 85 times the path floor, and the multigrid solvers and pyamg 1.8e-3, 3.7 times it; at Re 90 no level looser than 1e-8 meets the stopping rule |
+| Orchestrator: so most of today's cost is wasted accuracy | Missed, in section 8.4's sense: today's 1e-6 Pa stop delivers 1e-3 to 3e-3 on the product's systems, looser than the field and the stopping rule need. Today's cost is Jacobi's rate, not accuracy beyond need |
+| Q1: jacobi40k on 40x15 reproduces A-sw bitwise and meets the velocity-step stop at 1,208 | Held: all 1,208 residuals and sweep counts bitwise; the velocity-step stop at 1,208 |
+| Q2: direct on 40x15 meets the velocity-step stop within 10% of 1,208, the error-estimate stop at 1.5 to 3 times that | Held: 1,209 and 2,822 (2.3 times) |
+| Q3: 1e-1 is the loosest sufficient level on both grids; 1e-2 and tighter indistinguishable from direct; 3e-1 converges, its count more than 5% off | Missed: 1e-1 and 3e-1 diverge with Jacobi-PCG on both grids; 1e-2 settles on a different steady state on 40x15 |
+| Q4: at the error-estimate stop every converged run carries one field within twice the stop's iteration error, since the fixed point does not depend on the inner tolerance | Missed twice. Converged runs at 1e-2 and 1e-4 land 0.041 and 1.4e-4 m/s from direct: the room has nearby steady states and the path picks one (restart test). And at Re 90 the relative levels never reach the stop, because b at the converged state is not zero but stands on the outlet cells |
+| Q5: jacobi200 converges on 40x15 within 25% of direct's count, and not on 80x30 | 40x15 missed: velocity-step stop at 1,684 (39% later), error-estimate stop never. 80x30 held in substance: it freezes with 47% of the supply unaccounted, though the velocity-step rule reports convergence at 5,232 |
+| Q6: today's loop meets the error-estimate stop later than the relative-residual runs, by more than 10% where both converge, because its stop falls to one sweep once b is small | jacobi200 never meets it on 40x15. The fall to one to three sweeps is measured on the channel and cavity systems (section 7.1). jacobi40k never meets it in 20,000 outer iterations either: once b is small its stop fires after 24 to 430 sweeps and leaves 5% to 91% of it. Held, with 24 sweeps in place of one |
+
+## 9. Measurement 3: one steady product solve (written after the runs)
+
+**The outer count is an assumption.** With the exact correction the laminar 200x75 room does not
+converge in 20,000 outer iterations: its residual reaches 3.5e-4 at outer 150 and then wanders,
+1.6e-3 to 4.9e-3 between the 5th and 95th percentiles of the last 10,000, the largest speed between
+2.7 and 3.0 m/s, nothing diverging. Neither does 80x30 at real air or at ten times its viscosity
+(section 8.2). The converged cases here are 40x15 at real air (1,209 outer iterations to the
+velocity-step stop, 2,822 to the error-estimate stop) and 80x30 at Re 90 (233 and 588). The
+product's steady solve will be the k-epsilon one, and its outer count is ECR-002 step 5's
+measurement. So the projection takes ADR-012 H's range, 3,000 to 13,000 outer iterations: the 40x15
+room's error-estimate count rounded up, and VAL-002 80x80's 12,849, the slowest validated case. It
+gives 6,000 between them and the cost per 1,000 outer iterations, which needs no assumption.
+
+**Per outer iteration on 200x75**: the momentum stage with ten sweeps, 13.1 ms, timed over 30 outer
+iterations in one process; the corrector's other work (the coefficients, the right-hand side, the
+face and pressure update), 2.9 ms; and the correction, the median over the three captured systems
+(`m3_36.py`, appendix O). At the level measurement 2 asks for, 1e-8:
+
+| Correction | Iterations (outer 1, 100, 1000) | Correction ms | ms per outer iteration | Per 1,000 outer | 3,000 outer | 6,000 | 13,000 |
+|---|---|---|---|---|---|---|---|
+| B, Jacobi-PCG | 852, 861, 857 | 163.2 | 179.2 | 3.0 min | 9.0 min | 17.9 min | 38.8 min |
+| C, GMG V(2,2) | 26, 25, 22 | 276.7 | 292.8 | 4.9 min | 14.6 min | 29.3 min | 63.4 min |
+| C, MG-PCG | 11, 11, 10 | 227.2 | 243.2 | 4.1 min | 12.2 min | 24.3 min | 52.7 min |
+| D, SA | 30, 28, 20 | 132.1 | 148.2 | 2.5 min | 7.4 min | 14.8 min | 32.1 min |
+| D, SA-CG | 13, 12, 11 | 92.0 | 108.1 | 1.8 min | 5.4 min | 10.8 min | 23.4 min |
+| D, SA-Jacobi-CG | 22, 20, 19 | 129.5 | 145.5 | 2.4 min | 7.3 min | 14.6 min | 31.5 min |
+| D, RS-CG | 9, 10, 11 | 73.8 | 89.8 | 1.5 min | 4.5 min | 9.0 min | 19.5 min |
+| E, SuperLU (exact) | 1, 1, 1 | 34.3 | 50.4 | 0.8 min | 2.5 min | 5.0 min | 10.9 min |
+| A, today's 1e-6 Pa stop | 378,336, 57,257, 27,916 | 11,627.1 | 11,643.2 | 3.2 h | 9.7 h | 19.4 h | 42.0 h |
+| A, today's cap 200 (1e-8 not reached) | 200, 200, 200 | 40.3 | 56.3 | 0.9 min | 2.8 min | 5.6 min | 12.2 min |
+
+Today's loop at its 1e-6 Pa stop is the median of its three corrections, 11.6 s (28,000 to 378,000
+sweeps); it delivers 1e-3 to 3e-3, not 1e-8. The committed cap of 200 is cheap and is in the table
+for the cost alone: section 8.2 shows what it delivers.
+
+**Checked in a run.** The 200x75 room driven for 1,000 outer iterations with each correction (three
+runs in parallel beside other probes, `outer36.py`): SuperLU 72 ms per outer iteration against the
+projection's 50, Ruge-Stuben with CG at 1e-8 106 against 90, Jacobi-PCG at 1e-8 196 against 179. The
+in-run figures carry the parallel load and the harness's own records, 9% to 44% over the projection.
+SuperLU's run reproduces the capture run's residuals to the bit; the two 1e-8 runs follow them
+within 5% in residual and end at the same largest speed.
+
+**The Annex 20 room on 180x60**, the same way (momentum 10.9 ms, corrector 2.2 ms per outer
+iteration; its own three captured systems):
+
+| Correction | Iterations (outer 1, 100, 1000) | Correction ms | ms per outer iteration | Per 1,000 outer | 3,000 outer | 6,000 | 13,000 |
+|---|---|---|---|---|---|---|---|
+| B, Jacobi-PCG | 672, 713, 737 | 106.3 | 119.4 | 2.0 min | 6.0 min | 11.9 min | 25.9 min |
+| C, GMG V(2,2) | 13, 16, 17 | 171.0 | 184.1 | 3.1 min | 9.2 min | 18.4 min | 39.9 min |
+| C, MG-PCG | 8, 8, 8 | 158.2 | 171.3 | 2.9 min | 8.6 min | 17.1 min | 37.1 min |
+| D, SA | 16, 20, 19 | 98.9 | 112.0 | 1.9 min | 5.6 min | 11.2 min | 24.3 min |
+| D, SA-CG | 9, 11, 10 | 83.2 | 96.3 | 1.6 min | 4.8 min | 9.6 min | 20.9 min |
+| D, SA-Jacobi-CG | 15, 19, 16 | 119.3 | 132.4 | 2.2 min | 6.6 min | 13.2 min | 28.7 min |
+| D, RS-CG | 8, 11, 11 | 70.0 | 83.1 | 1.4 min | 4.2 min | 8.3 min | 18.0 min |
+| E, SuperLU (exact) | 1, 1, 1 | 40.0 | 53.1 | 0.9 min | 2.7 min | 5.3 min | 11.5 min |
+| A, today's 1e-6 Pa stop | 1,816, 903, 1,448 | 219.2 | 232.3 | 3.9 min | 11.6 min | 23.2 min | 50.3 min |
+| A, today's cap 200 (1e-8 not reached) | 200, 200, 200 | 30.3 | 43.3 | 0.7 min | 2.2 min | 4.3 min | 9.4 min |
+
+**Reading.** At the accuracy measurement 2 asks for, every candidate takes a steady product solve
+from 10 to 42 hours to minutes: SuperLU 2.5 to 11 minutes, Ruge-Stuben with CG 4.5 to 20, smoothed
+aggregation with CG 5.4 to 23, Jacobi-PCG 9 to 39, my NumPy multigrid 12 to 63 (its setup). The
+correction is most of every outer iteration: 68% of it with SuperLU, 82% to 95% with the others. On
+the Annex 20 room today's stop costs 0.2 s, not 11.6, because there it fires after 900 to 1,800
+sweeps at a relative residual of 8e-4 to 5e-3 (section 7.1): cheap because loose. Loosening every
+candidate to 1e-2 would save 2.7 times with Jacobi-PCG, 1.5 to 2.2 times with pyamg and nothing with
+SuperLU (`m3_product200_0.01.json`), against the risks section 8 measured.
+
+| Prediction | Measured |
+|---|---|
+| Orchestrator: a steady product solve drops from hours to minutes with any of B, C or D | Held, at 1e-8: 4.5 to 63 minutes for B, C and D over the outer range, 10 to 42 hours today |
+| Orchestrator: the ranking then turns on dependencies and the GPU path more than on speed | Held in part: B, C and D span a factor of 3.3 per outer iteration (Ruge-Stuben with CG to my NumPy multigrid, which is setup-bound); SuperLU, not a candidate, is a further 1.8 times faster than the fastest of them |
+| R1: the 200x75 laminar room does not converge with the exact correction in 20,000 outer iterations, without passing 100 m/s | Held |
+| R2: momentum 30 to 80 ms per outer iteration; B at 1e-1 10 to 50 ms; 0.05 to 0.15 s per outer; 3 to 40 minutes with B, C or D; 3 to 30 hours today | Momentum missed (13.1 ms, below the range); B at 1e-1 missed (3.7 ms, and 1e-1 is not the level that holds); at 1e-8, 0.09 to 0.29 s per outer and 4.5 to 63 minutes, above both ranges at their top; today 10 to 42 hours, above the range |
+| R3: B, C and D within a factor of three of each other per steady solve | Missed narrowly: 3.3 times between Ruge-Stuben with CG and GMG at 1e-8 on the product |
+
+## 10. Stop-and-report items, and what contradicts the cited reports
+
+The prompt names four conditions to stop and report on. Item 0 did not trigger one. Two others did,
+and the work went on past them because neither changes what the remaining measurements could
+measure; both are carried into ECR-003 and ADR-013 as they stand.
+
+1. **A candidate does not converge on a captured system.** pyamg's preconditioned CG on the singular
+   VAL-002 cavity: smoothed aggregation with CG misses 1e-6 at outer 1,000, and at 1e-8 smoothed
+   aggregation with CG and with Jacobi smoothing miss at outers 100 and 1,000 and Ruge-Stuben with
+   CG at 1,000, aborting on pyamg's indefiniteness checks (section 7.5). Every candidate converges
+   on every open system. Not tuned.
+2. **Measurement 2 finds the outer loop needs tighter pressure than today's.** For the outer count a
+   relative residual of 1e-2 is enough with every solver. For the converged field, held to the floor
+   the path itself sets, 1e-4 is needed. Where the outlets hold a standing imbalance, the stopping
+   rule's continuity conditions need an absolute bound that only 1e-8 met. Today's 1e-6 Pa stop
+   delivers 1e-3 to 3e-3 on the product's systems (sections 8.4, 7.1). The ECR's emphasis moves from
+   loosening the correction to solving it fast and tight.
+
+**Against the reports cited in the prompt:**
+
+- `docs/reports/product_case_reynolds.md` section 5 and ADR-012 H. The 27,408 and 112,519 sweeps are
+  reproduced to the sweep on their own system. On the systems the T3 room with ten momentum sweeps
+  builds, the committed tolerance takes 28,000 to 378,000 sweeps, median 57,000. ADR-012 H took a
+  third of the first correction's count per correction, about 9,100 sweeps, for "about 3 hours" over
+  4,000 outer iterations at 1e-6 Pa; at the measured median correction (11.6 s) the same 4,000 take
+  about 13 hours. ADR-012 H called its figure a lower bound, so this quantifies it rather than
+  contradicting it.
+- `docs/reports/pressure_solver_probe.md`: the collocated outer count did not depend on the sweep
+  cap. On the staggered solver it does at the committed cap: with 200 sweeps the 40x15 room never
+  meets the error-estimate stop and the 80x30 room freezes with 47% of the supply unaccounted
+  (section 8.2). Above 1e-2 the count does not depend on the level. The collocated system was
+  singular and inconsistent, which the staggered system is not, so this is a different regime, not
+  an error in that report.
+- Step 0's report section 6.4: raising the cap from 40,000 to 400,000 left the 40x15 history
+  unchanged. Consistent: both caps there solve far below 1e-2.
+- Step 0's report section 7.6 and test 34b: the laminar 40x15 room converges with ten momentum
+  sweeps at real air. Reproduced: 1,209 outer iterations to the velocity-step stop with the exact
+  correction, and today's loop at step 0's settings reproduces test 34b's `A-sw` record bitwise to
+  its stop at 1,208. **It does not carry to finer grids**: with ten sweeps and the exact correction
+  the laminar room converges neither on 80x30 (at real air or at ten times its viscosity) nor on
+  200x75, over 20,000 outer iterations each. `docs/STATUS.md` and ECR-002 section 2 state the 40x15
+  result as "on that grid"; this measurement does not contradict them, and it bounds them. It bears
+  on ECR-002 step 5, whose question is the product mesh.
+
+## 11. What this does not settle
+
+- **The product's outer count.** No laminar solve converged on 80x30 or 200x75. The k-epsilon
+  solve's count is ECR-002 step 5's; measurement 3 is a projection over an assumed range.
+- **The near-neutral direction at (4.7, 1.9).** Measured on the laminar 40x15 room only, the one
+  converged real-air case. Whether the product's turbulent solve has such directions, and how large
+  the floor they set is, is not measured.
+- **The drifting pressure at the outlets.** A property of the committed outlet treatment
+  (zero-gradient extrapolation before each prediction, p' = 0 at the face in the correction), found
+  on the 80x30 room at Re 90 and absent from the 40x15 room at real air. Outside this change;
+  ECR-002 step 3 rebuilds the outlets.
+- **A combined stop**, a relative level with an absolute floor tied to `mass_imbalance_tol`, was not
+  run; only fixed relative levels were. 1e-8 met every condition here.
+- **My multigrid's setup** is the implementation's cost (25 probes per level in Python); a stencil
+  formula or C would change its ranking, not measured.
+- **pyamg on singular systems** with a pinned cell instead of a projected right-hand side, not run.
+- **Reusing a hierarchy** over a lag of a few outer iterations, not run.
+- **The timings** are one core of one machine with NumPy 2.4.4, SciPy 1.18.1 and pyamg 5.3.0; no GPU
+  was measured.
+
 ## Appendix A: common36.py
 
 ```python
@@ -1559,7 +2179,11 @@ if __name__ == "__main__":
 ```python
 """Builder probe, prompt 36, item 0: run a room and keep its p' systems.
 
-Usage: python capture36.py ROOM [N_OUTER]
+Usage: python capture36.py ROOM [N_OUTER] [AT]
+
+AT, comma-separated outer iterations, replaces the default 1,100,1000 (the
+VAL-001 channel stops at 570 under velocity_step, so its third capture is its
+last iteration, 569).
 
 ROOM is one of
     product200   200x75 product under T3, laminar, ten momentum sweeps, the
@@ -1733,8 +2357,9 @@ def main() -> None:
     room_name = sys.argv[1]
     default = {"product200": 20000, "product40": 20000}.get(room_name, 1001)
     n_outer = int(sys.argv[2]) if len(sys.argv) > 2 else default
+    at = tuple(int(k) for k in sys.argv[3].split(",")) if len(sys.argv) > 3 else CAPTURE
     room, solve = build(room_name, n_outer)
-    run_room(room, solve, room_name, CAPTURE)
+    run_room(room, solve, room_name, at)
 
 
 if __name__ == "__main__":
@@ -1851,6 +2476,10 @@ def check(name: str) -> dict:
         u, v = corrected_faces(s, xx)
         diff = face_imbalance(s, u, v) - corrected_imbalance(c, s.b, xx)
         out[f"identity_{label}_max_over_max_b"] = float(np.max(np.abs(diff[act])) / bmax)
+        # Against the largest single face flux of the corrected field, the scale of the rounding.
+        flux = s.rho * max(float(np.max(np.abs(u))) * float(s.dy_cell.max()),
+                           float(np.max(np.abs(v))) * float(s.dx_cell.max()))
+        out[f"identity_{label}_max_over_face_flux"] = float(np.max(np.abs(diff[act])) / flux)
     out["b_norm"] = float(np.linalg.norm(s.b))
     out["b_sum"] = float(s.b[act].sum())
     out["supply"] = s.supply
@@ -1884,13 +2513,17 @@ as its worst cell, its absolute sum and its signed sum, each over the
 supply's mass flow; the largest error of p' and of the corrected face
 velocity against the SuperLU solution.
 
-Today's loop: to 1e-6 Pa (the committed tolerance) and 1e-8 Pa (the
-validation cases' and step 0's), uncapped up to 5,000,000 sweeps; at the
-committed cap of 200 sweeps; and the sweep at which each relative level is
-first seen (checked every 10 sweeps, untimed, up to 2,000,000 sweeps; its
-seconds are the sweeps times the timed loop's seconds per sweep). The history
-is a run of its own (--jacobi-history, m1hist_SYSTEM.json), so the untimed
-runs can go in parallel while the timed ones run one at a time.
+Today's loop, in a run of its own (--jacobi-history, untimed, so the 15
+systems can run in parallel while the timed runs go one at a time): the
+committed sweep from p' = 0 with the committed stop's quantity, the largest
+weighted change, computed every sweep, up to 5,000,000 sweeps. Recorded and
+evaluated as above: the sweep at which that change first falls below 1e-6 Pa
+(the committed tolerance) and below 1e-8 Pa (the validation cases' and step
+0's), and the sweep at which each relative level is first seen (the residual
+checked every 10 sweeps). Its seconds are the sweeps times the timed run's
+seconds per sweep, from 2,000 sweeps of the committed loop. The timed run
+also runs the loop at the committed cap of 200 sweeps. Writes
+m1hist_SYSTEM.json.
 
 Timings: the median of three runs for every solve under two seconds, one run
 otherwise; setup (the multigrid hierarchy, pyamg's setup with the CSR
@@ -1901,6 +2534,7 @@ Writes m1_SYSTEM.json.
 """
 
 import json
+import math
 import sys
 import time
 import warnings
@@ -1913,7 +2547,6 @@ from solvers36 import (
     direct_solve,
     gmg_solve,
     jacobi_committed,
-    jacobi_history,
     jacobi_pcg,
     mg_pcg,
     pyamg_solve,
@@ -1955,6 +2588,40 @@ def evaluate(s, x: np.ndarray, exact: np.ndarray, f: np.ndarray) -> dict:  # typ
     }
 
 
+def jacobi_events(s, f, exact, levels, tols, cap: int) -> dict:  # type: ignore[no-untyped-def]
+    """The committed sweep from zero; evaluate where each stop tolerance and each level is first met."""
+    from common36 import JACOBI_WEIGHT
+
+    c = s.c
+    shim = _Shim(c.a_p.shape)
+    active = s.active
+    p_prime = np.zeros(c.a_p.shape)
+    pending_lev = sorted(levels, reverse=True)
+    pending_tol = sorted(tols, reverse=True)
+    events: dict[str, dict] = {}
+    trace: list[tuple[int, float, float]] = []
+    sweep = 0
+    diff = math.inf
+    for sweep in range(1, cap + 1):
+        p_new = shim.sweep(p_prime, c, s.b, JACOBI_WEIGHT)
+        diff = float(np.max(np.abs(p_new[active] - p_prime[active])))
+        p_prime = p_new
+        while pending_tol and diff < pending_tol[0]:
+            events[f"stop {pending_tol[0]:.0e} Pa"] = {"sweeps": sweep, "diff": diff, **evaluate(s, p_prime, exact, f)}
+            pending_tol.pop(0)
+        if sweep % 10 == 0:
+            rel = float(np.linalg.norm((f - apply_a(c, p_prime))[active])) / float(np.linalg.norm(f))
+            trace.append((sweep, rel, diff))
+            while pending_lev and rel < pending_lev[0]:
+                events[f"level {pending_lev[0]:.0e}"] = {"sweeps": sweep, "diff": diff, **evaluate(s, p_prime, exact, f)}
+                pending_lev.pop(0)
+        if not pending_lev and not pending_tol:
+            break
+    last = evaluate(s, p_prime, exact, f)
+    return {"events": events, "trace": trace[:: max(1, len(trace) // 400)],
+            "last": {"sweeps": sweep, "diff": diff, **last}}
+
+
 def timed(fn, repeats: int = 3):  # type: ignore[no-untyped-def]
     """Run fn once; if under two seconds, twice more; return the run with the median total."""
     first = fn()
@@ -1974,12 +2641,12 @@ def main() -> None:
     f = s.rhs()
     singular = s.needs_pin
     if "--jacobi-history" in sys.argv:
-        shim = _Shim(s.c.a_p.shape)
+        exact = direct_solve(s.c, f, singular, s.pin_cell).x
         t0 = time.perf_counter()
-        hist = jacobi_history(shim, s.c, s.b, f, LEVELS, 2_000_000)
+        hist = jacobi_events(s, f, exact, LEVELS, (1e-6, 1e-8), 5_000_000)
         hist["seconds_untimed"] = time.perf_counter() - t0
         (HERE / f"m1hist_{name}.json").write_text(json.dumps(hist))
-        print(f"{name} jacobi history {hist['found']} last {hist['last']}", flush=True)
+        print(f"{name} jacobi events {json.dumps(hist['events'])} last {hist['last']}", flush=True)
         return
     out: dict = {"system": name, "meta": s.meta, "active": int(s.active.sum()), "levels": LEVELS, "rows": []}
 
@@ -1997,9 +2664,8 @@ def main() -> None:
     row("E_direct", "exact", ex)
 
     shim = _Shim(s.c.a_p.shape)
-    for tol in (1e-6, 1e-8):
-        res = jacobi_committed(shim, s.c, s.b, tol, 5_000_000)
-        row("A_jacobi_stop", f"{tol:.0e} Pa", res, {"ms_per_sweep": 1e3 * res.solve_s / res.iterations})
+    res = jacobi_committed(shim, s.c, s.b, 0.0, 2000)
+    out["jacobi_ms_per_sweep"] = 1e3 * res.solve_s / res.iterations
     res = timed(lambda: jacobi_committed(shim, s.c, s.b, 1e-6, 200))
     row("A_jacobi_cap200", "1e-06 Pa", res)
 
@@ -2064,6 +2730,8 @@ MODE is one of
     mgpcg:RTOL       MG-preconditioned CG (solvers36.GMG) to RTOL
     gmg:RTOL         Galerkin V(2,2) cycles to RTOL
     sacg:RTOL        pyamg smoothed aggregation with CG to RTOL
+    rscg:RTOL        pyamg Ruge-Stuben with CG to RTOL (added for measurement 3's
+                     in-run check)
     jacobi200        today's committed loop at the committed cap 200, 1e-6 Pa
     jacobi40k        today's loop at step 0's cap 40,000, 1e-8 Pa (test 34b's A-sw
                      on 40x15, reproduced bitwise to its velocity_step stop)
@@ -2111,9 +2779,11 @@ def make_solve(mode: str, supply: float):  # type: ignore[no-untyped-def]
         def solve(c, b, active, needs_pin):  # type: ignore[no-untyped-def]
             res = gmg_solve(c, rhs(b, active, needs_pin), rtol, needs_pin)
             return res.x, res.iterations
-    elif kind == "sacg":
+    elif kind in ("sacg", "rscg"):
+        amg = "sa" if kind == "sacg" else "rs"
+
         def solve(c, b, active, needs_pin):  # type: ignore[no-untyped-def]
-            res, _ = pyamg_solve(c, rhs(b, active, needs_pin), rtol, "sa", "cg")
+            res, _ = pyamg_solve(c, rhs(b, active, needs_pin), rtol, amg, "cg")
             return res.x, res.iterations
     else:
         raise SystemExit(f"unknown mode {mode}")
@@ -2149,6 +2819,15 @@ if __name__ == "__main__":
 #   sh run36.sh m1hist          its untimed Jacobi histories, in parallel
 #   sh run36.sh m2 NX NY        measurement 2's set on one grid, in parallel
 #   sh run36.sh m2b NX NY LEVEL the solver-independence runs at one level
+# Added after the first measurement 2 runs (report, section 8), in the order run:
+#   sh run36.sh restart         restart36.py: each converged 40x15 state continued
+#                               with the other correction
+#   sh run36.sh control         control36.py: the exact correction on other paths
+#   sh run36.sh fallback        80x30 at ten times air's viscosity (section 2.6)
+#   sh run36.sh re90            80x30 at a thousand times, with the repeats
+#   sh run36.sh repeats80       the multigrid and pyamg repeats on 80x30, air
+#   sh run36.sh diag            freeze36.py and stall36.py
+#   sh run36.sh m3              m3_36.py and the 1,000-iteration in-run check
 PY=venv36/Scripts/python.exe
 export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1
 mkdir -p logs
@@ -2157,24 +2836,28 @@ selftest)
     $PY selftest36.py all > logs/selftest36.log 2>&1 ;;
 capture)
     nohup $PY capture36.py product200 > logs/product200.log 2>&1 &
-    for r in product40 cavity80 channel80 annex180; do
+    for r in product40 cavity80 annex180; do
         $PY capture36.py $r > logs/$r.log 2>&1 &
     done
+    $PY capture36.py channel80 1001 1,100,569 > logs/channel80.log 2>&1 &
     wait ;;
 item0)
     unset OPENBLAS_NUM_THREADS OMP_NUM_THREADS MKL_NUM_THREADS
-    for r in product200 product40 cavity80 channel80 annex180; do
+    for r in product200 product40 cavity80 annex180; do
         $PY item0_36.py ${r}_it1 ${r}_it100 ${r}_it1000 > logs/item0_$r.log 2>&1
-    done ;;
+    done
+    $PY item0_36.py channel80_it1 channel80_it100 channel80_it569 > logs/item0_channel80.log 2>&1 ;;
 m1)
     for r in product200 cavity80 channel80 annex180 product40; do
+        last=1000; [ "$r" = channel80 ] && last=569
         $PY m1_36.py ${r}_it1 > logs/m1_${r}_it1.log 2>&1
         $PY m1_36.py ${r}_it100 ${r}_it1 > logs/m1_${r}_it100.log 2>&1
-        $PY m1_36.py ${r}_it1000 ${r}_it100 > logs/m1_${r}_it1000.log 2>&1
+        $PY m1_36.py ${r}_it$last ${r}_it100 > logs/m1_${r}_it$last.log 2>&1
     done ;;
 m1hist)
     for r in product200 cavity80 channel80 annex180 product40; do
-        for k in 1 100 1000; do
+        last=1000; [ "$r" = channel80 ] && last=569
+        for k in 1 100 $last; do
             $PY m1_36.py ${r}_it$k --jacobi-history > logs/m1hist_${r}_it$k.log 2>&1 &
         done
     done
@@ -2188,6 +2871,50 @@ m2)
 m2b)
     for k in mgpcg gmg sacg; do
         $PY outer36.py "$2" "$3" "$k:$4" > "logs/m2_$2x$3_${k}_$4.log" 2>&1 &
+    done
+    wait ;;
+restart)
+    $PY restart36.py 40 15 direct pcg:1e-2 3000 > logs/restart_a.log 2>&1 &
+    $PY restart36.py 40 15 pcg:1e-2 direct 3000 > logs/restart_b.log 2>&1 &
+    $PY restart36.py 40 15 direct pcg:1e-4 3000 > logs/restart_c.log 2>&1 &
+    wait ;;
+control)
+    for a in "9 0.5" "11 0.5" "10 0.45" "10 0.55"; do
+        $PY control36.py 40 15 $a > "logs/m2c_40x15_$(echo $a | tr ' ' '_').log" 2>&1 &
+    done
+    wait ;;
+fallback)
+    for m in direct pcg:3e-1 pcg:1e-1 pcg:1e-2 pcg:1e-4 pcg:1e-8 jacobi200 jacobi40k; do
+        tag=$(echo "$m" | tr ':' '_')
+        $PY outer36.py 80 30 "$m" 20000 10 > "logs/m2_80x30_${tag}_mu10.log" 2>&1 &
+    done
+    wait ;;
+re90)
+    for m in direct pcg:3e-1 pcg:1e-1 pcg:1e-2 pcg:1e-4 pcg:1e-8 jacobi200 mgpcg:1e-1 gmg:1e-1 sacg:1e-1 mgpcg:1e-2 gmg:1e-2 sacg:1e-2; do
+        tag=$(echo "$m" | tr ':' '_')
+        $PY outer36.py 80 30 "$m" 20000 1000 > "logs/m2_80x30_${tag}_mu1000.log" 2>&1 &
+    done
+    wait ;;
+repeats80)
+    for m in mgpcg:1e-1 gmg:1e-1 sacg:1e-1 mgpcg:1e-2 gmg:1e-2 sacg:1e-2; do
+        tag=$(echo "$m" | tr ':' '_')
+        $PY outer36.py 80 30 "$m" 3000 > "logs/m2_80x30_${tag}.log" 2>&1 &
+    done
+    wait ;;
+diag)
+    $PY freeze36.py > logs/freeze80.log 2>&1
+    $PY item0_36.py freeze80_it5231 > logs/item0_freeze80.log 2>&1
+    $PY stall36.py pcg:1e-4 1500 > logs/stall_pcg.log 2>&1 &
+    $PY stall36.py direct 588 > logs/stall_direct.log 2>&1 &
+    wait
+    $PY stall36.py direct 2822 40 15 1 > logs/stall_direct_40.log 2>&1 ;;
+m3)
+    for r in product200 annex180; do
+        for lev in 1e-8 1e-2; do $PY m3_36.py $r $lev 3000 13000 6000 > logs/m3_${r}_$lev.log 2>&1; done
+    done
+    for m in pcg:1e-8 rscg:1e-8 direct; do
+        tag=$(echo "$m" | tr ':' '_')
+        $PY outer36.py 200 75 "$m" 1000 > "logs/m3_200x75_$tag.log" 2>&1 &
     done
     wait ;;
 esac
@@ -2218,6 +2945,12 @@ FILES = [
     ("H", "run36.sh", "sh"),
     ("I", "appendix36.py", "python"),
     ("J", "table36.py", "python"),
+    ("K", "restart36.py", "python"),
+    ("L", "control36.py", "python"),
+    ("M", "freeze36.py", "python"),
+    ("N", "stall36.py", "python"),
+    ("O", "m3_36.py", "python"),
+    ("P", "hist_table36.py", "python"),
 ]
 
 
@@ -2233,6 +2966,615 @@ def main() -> None:
         src = path.read_text(encoding="utf-8").rstrip("\n")
         parts.append(f"\n## Appendix {letter}: {name}\n\n```{lang}\n{src}\n```\n")
     REPORT.write_text("".join(parts), encoding="utf-8", newline="\n")
+
+
+if __name__ == "__main__":
+    main()
+```
+
+## Appendix J: table36.py
+
+```python
+"""Builder probe, prompt 36: the report's tables, from the records the probes wrote.
+
+Usage: python table36.py item0 | m1 SYSTEM | m1all | m2 NXxNY | runs NAME... | m3
+Prints markdown. Reads only the JSON and NPZ files beside it.
+"""
+
+import json
+import math
+import sys
+
+import numpy as np
+
+from common36 import HERE, Mesh, SimConfig, product_raw
+from src.mesh import SOLID
+
+ROOMS = ["product200", "product40", "cavity80", "channel80", "annex180"]
+
+
+def load(name: str) -> dict:
+    return json.loads((HERE / f"{name}.json").read_text())
+
+
+def g(x: float, n: int = 2) -> str:
+    """A number in short scientific or plain form."""
+    if x is None:
+        return "-"
+    if isinstance(x, str):
+        return x
+    if x == 0:
+        return "0"
+    if abs(x) >= 1e4 or abs(x) < 1e-2:
+        return f"{x:.{n - 1}e}"
+    return f"{x:.{n + 1}g}"
+
+
+def item0() -> None:
+    print("| System | Active cells | Symmetric to the bit | max abs(A - A^T) / max A | Strict rows | Components (with a strict row) "
+          "| lambda_min(A) | lambda_min(D^-1 A) | lambda_max(D^-1 A) | Cholesky (n, s) |")
+    print("|---|---|---|---|---|---|---|---|---|---|")
+    for r in ROOMS:
+        for k in (1, 100, 569, 1000):
+            path = HERE / f"item0_{r}_it{k}.json"
+            if not path.exists():
+                continue
+            d = json.loads(path.read_text())
+            sym = "yes" if d["sym_bitwise_ew"] and d["sym_bitwise_ns"] else "NO"
+            chol = f"{d['cholesky']} ({d['cholesky_n']}, {d['cholesky_seconds']:.1f})"
+            print(f"| {r} outer {k} | {d['active']} | {sym} | {g(d['sym_matrix_max_rel'])} | {d['strict_rows']} "
+                  f"| {d['components']} ({d['components_with_strict_row']}) | {g(d['eig_A_smallest'][0])} "
+                  f"| {g(d['eig_DinvA_smallest'][0])} | {g(d['eig_DinvA_largest'], 4)} | {chol} |")
+    print()
+    print("| System | A 1 = 0 (max abs / max a_P) | abs(sum b) / sum abs(b) | three smallest eigenvalues of A | identity, exact p' | identity, random p' |")
+    print("|---|---|---|---|---|---|")
+    for r in ROOMS:
+        for k in (1, 100, 569, 1000):
+            path = HERE / f"item0_{r}_it{k}.json"
+            if not path.exists():
+                continue
+            d = json.loads(path.read_text())
+            print(f"| {r} outer {k} | {g(d.get('ones_null_max_rel'))} | {g(d.get('compatibility'))} "
+                  f"| {', '.join(g(x) for x in d['eig_A_smallest'])} | {g(d['identity_direct_max_over_max_b'])} "
+                  f"| {g(d['identity_random_max_over_max_b'])} |")
+
+
+def m1(system: str) -> None:
+    d = load(f"m1_{system}")
+    hist_path = HERE / f"m1hist_{system}.json"
+    print(f"**{system}** ({d['active']} unknowns; GMG levels {d['gmg_levels']})\n")
+    print("| Candidate | Level | Iterations | Setup ms | Solve ms | Total ms | Relative residual | Worst cell / supply "
+          "| Net outflow / supply | p' error | Face error m/s |")
+    print("|---|---|---|---|---|---|---|---|---|---|---|")
+    for row in d["rows"]:
+        print(f"| {row['candidate']} | {row['level']} | {row['iterations']} | {1e3 * row['setup_s']:.1f} "
+              f"| {1e3 * row['solve_s']:.1f} | {1e3 * row['total_s']:.1f} | {g(row['rel2'])} | {g(row['worst_over_supply'])} "
+              f"| {g(row['signed_over_supply'])} | {g(row['p_err_rel'])} | {g(row['face_err_m_s'])} |")
+    if hist_path.exists():
+        h = json.loads(hist_path.read_text())
+        ms = d["jacobi_ms_per_sweep"]
+        print()
+        print("Today's loop from zero (untimed run; seconds at the timed run's "
+              f"{ms:.3f} ms per sweep):")
+        print()
+        print("| Event | Sweeps | Seconds | Largest weighted change (Pa) | Relative residual | Worst cell / supply "
+              "| Net outflow / supply | p' error | Face error m/s |")
+        print("|---|---|---|---|---|---|---|---|---|")
+        order = ["stop 1e-06 Pa", "stop 1e-08 Pa", "level 1e-01", "level 1e-02", "level 1e-04", "level 1e-06", "level 1e-08"]
+        for key in sorted(h["events"], key=lambda k: h["events"][k]["sweeps"]):
+            e = h["events"][key]
+            print(f"| {key} | {e['sweeps']} | {e['sweeps'] * ms / 1e3:.1f} | {g(e['diff'])} | {g(e['rel2'])} "
+                  f"| {g(e['worst_over_supply'])} | {g(e['signed_over_supply'])} | {g(e['p_err_rel'])} | {g(e['face_err_m_s'])} |")
+        missing = [k for k in order if k not in h["events"]]
+        if missing:
+            last = h["last"]
+            print(f"| not met by sweep {last['sweeps']}: {', '.join(missing)} | | | {g(last['diff'])} | {g(last['rel2'])} "
+                  f"| {g(last['worst_over_supply'])} | {g(last['signed_over_supply'])} | {g(last['p_err_rel'])} | {g(last['face_err_m_s'])} |")
+
+
+def summary_m1() -> None:
+    """One line per system: total ms per candidate at each level, and Jacobi's stops."""
+    levels = [0.1, 0.01, 1e-4, 1e-6, 1e-8]
+    cands = ["B_pcg", "C_gmg", "C_mg_pcg", "D_sa", "D_sa_cg", "D_sa_jacobi_cg", "D_rs_cg"]
+    for lev in levels:
+        print(f"\nLevel {lev:g}: total ms (iterations)\n")
+        print("| System | " + " | ".join(cands) + " | E_direct |")
+        print("|---" * (len(cands) + 2) + "|")
+        for r in ROOMS:
+            for k in (1, 100, 569, 1000):
+                path = HERE / f"m1_{r}_it{k}.json"
+                if not path.exists():
+                    continue
+                d = json.loads(path.read_text())
+                cells = []
+                for c in cands:
+                    row = [x for x in d["rows"] if x["candidate"] == c and x["level"] == lev]
+                    if row:
+                        x = row[0]
+                        ok = "" if x["rel2"] <= lev * 1.0001 else " NOT REACHED"
+                        cells.append(f"{1e3 * x['total_s']:.1f} ({x['iterations']}){ok}")
+                    else:
+                        cells.append("-")
+                e = [x for x in d["rows"] if x["candidate"] == "E_direct"][0]
+                print(f"| {r} {k} | " + " | ".join(cells) + f" | {1e3 * e['total_s']:.1f} |")
+
+
+def rate_estimate(steps: list[float], window: int = 100) -> tuple[float, float]:
+    """The error_estimate rule's estimate (m/s) and rho_hat from the last `window` steps."""
+    s = np.array(steps[-window:])
+    if s.size < window or not np.all(s > 0):
+        return math.inf, math.nan
+    x = np.arange(s.size) - (s.size - 1) / 2.0
+    rho = math.exp(float(x @ np.log(s)) / float(x @ x))
+    if not 0.0 < rho < 1.0:
+        return math.inf, rho
+    return float(s[-1]) * rho / (1.0 - rho), rho
+
+
+def m2(grid: str, names: list[str] | None = None, base: str | None = None) -> None:
+    nx, ny = (int(v) for v in grid.split("x"))
+    cfg = SimConfig.from_dict(product_raw(nx, ny))
+    fluid = Mesh(cfg).cell_type != SOLID
+    if names is None:
+        names = sorted(p.stem for p in HERE.glob(f"m2_{grid}_*.json"))
+    base = base or f"m2_{grid}_direct"
+    ref = load(base) if (HERE / f"{base}.json").exists() else None
+    ref_f = np.load(HERE / f"{base}.npz") if (HERE / f"{base}.npz").exists() else None
+    print(f"| Run | Stop | velocity_step at | error_estimate at | Seconds | ms per outer | Inner iterations, median [max] "
+          "| Relative residual reached, median | Field vs direct at velocity_step (m/s) | its error + direct's "
+          "| Field vs direct at error_estimate (m/s) | Worst cell at the stop / tol |")
+    print("|---|---|---|---|---|---|---|---|---|---|---|---|")
+    tol = 1e-4 * 1.2 * (8.0 / nx) * (3.0 / ny) / 60.0
+    for name in names:
+        d = load(name)
+        n = d["outer"]
+        ee = n if d["stop"] == "error_estimate_and_continuity" else None
+        vs = d["velocity_step_outer"]
+        inner = np.array(d["inner"])
+        rel = np.array(d["rel"])
+        row_vs = row_ee = err_sum = "-"
+        if ref is not None and ref_f is not None and name != base:
+            f = np.load(HERE / f"{name}.npz") if (HERE / f"{name}.npz").exists() else None
+            if f is not None and vs and ref["velocity_step_outer"] and f["u_vs"].size > 1:
+                diff = max(np.max(np.abs(f["u_vs"] - ref_f["u_vs"])[fluid]), np.max(np.abs(f["v_vs"] - ref_f["v_vs"])[fluid]))
+                e1, _ = rate_estimate(d["step"][:vs])
+                e2, _ = rate_estimate(ref["step"][: ref["velocity_step_outer"]])
+                row_vs, err_sum = g(float(diff)), g(e1 + e2)
+            if f is not None and ee and ref["stop"] == "error_estimate_and_continuity":
+                diff = max(np.max(np.abs(f["u"] - ref_f["u"])[fluid]), np.max(np.abs(f["v"] - ref_f["v"])[fluid]))
+                row_ee = g(float(diff))
+        print(f"| {name.replace('m2_' + grid + '_', '').replace('m2c_' + grid + '_', 'exact, ')} | {d['stop']} | {vs or '-'} | {ee or '-'} | {d['seconds']:.0f} "
+              f"| {1e3 * d['seconds'] / n:.1f} | {int(np.median(inner))} [{int(inner.max())}] | {g(float(np.median(rel)))} "
+              f"| {row_vs} | {err_sum} | {row_ee} | {g(d['worst'][-1] / tol)} |")
+
+
+def runs(names: list[str]) -> None:
+    for name in names:
+        d = load(name)
+        n = d["outer"]
+        e, rho = rate_estimate(d["step"])
+        print(f"{name}: stop {d['stop']} outer {n} velocity_step at {d['velocity_step_outer']} seconds {d['seconds']:.1f} "
+              f"momentum ms/outer median {1e3 * np.median(d['momentum_s']):.2f} pressure ms/outer median "
+              f"{1e3 * np.median(d['pressure_s']):.2f} last residual {d['residual'][-1]:.3e} max speed end "
+              f"{d['max_speed'][-1]:.3f} least residual {min(d['residual']):.3e} at {int(np.argmin(d['residual']))} "
+              f"estimate at end {e:.2e} rho {rho:.5f} worst end {d['worst'][-1]:.2e}")
+
+
+def main() -> None:
+    cmd = sys.argv[1]
+    if cmd == "item0":
+        item0()
+    elif cmd == "m1":
+        m1(sys.argv[2])
+    elif cmd == "m1all":
+        summary_m1()
+    elif cmd == "m2":
+        args = sys.argv[3:]
+        base = None
+        if args and args[0].startswith("--base="):
+            base, args = args[0].split("=", 1)[1], args[1:]
+        m2(sys.argv[2], args or None, base)
+    elif cmd == "runs":
+        runs(sys.argv[2:])
+
+
+if __name__ == "__main__":
+    main()
+
+
+def m1mean(room: str, last: int = 1000) -> None:
+    """Per candidate and level, over the room's three systems: total ms mean [min, max], iterations, accuracy."""
+    systems = [f"{room}_it{k}" for k in (1, 100, last)]
+    data = [load(f"m1_{s}") for s in systems]
+    cands = ["B_pcg", "C_gmg", "C_mg_pcg", "D_sa", "D_sa_cg", "D_sa_jacobi_cg", "D_rs_cg"]
+    print(f"**{room}**, outer 1, 100 and {last}\n")
+    print("| Candidate | Level | Total ms, mean [min, max] | Setup ms, mean | Iterations | Relative residual, largest "
+          "| Net outflow / supply, largest abs | p' error, largest | Face error m/s, largest |")
+    print("|---|---|---|---|---|---|---|---|---|")
+    e = [[x for x in d["rows"] if x["candidate"] == "E_direct"][0] for d in data]
+    print(f"| E_direct | exact | {1e3 * np.mean([x['total_s'] for x in e]):.1f} [{1e3 * min(x['total_s'] for x in e):.1f}, "
+          f"{1e3 * max(x['total_s'] for x in e):.1f}] | {1e3 * np.mean([x['setup_s'] for x in e]):.1f} | 1 | - | - | 0 | 0 |")
+    c2 = [[x for x in d["rows"] if x["candidate"] == "A_jacobi_cap200"][0] for d in data]
+    print(f"| A_jacobi_cap200 | cap 200 | {1e3 * np.mean([x['total_s'] for x in c2]):.1f} | 0 | 200 "
+          f"| {g(max(x['rel2'] for x in c2))} | {g(max(abs(x['signed_over_supply']) for x in c2))} "
+          f"| {g(max(x['p_err_rel'] for x in c2))} | {g(max(x['face_err_m_s'] for x in c2))} |")
+    for lev in [0.1, 0.01, 1e-4, 1e-6, 1e-8]:
+        for c in cands:
+            rows = [[x for x in d["rows"] if x["candidate"] == c and x["level"] == lev][0] for d in data]
+            tot = [1e3 * x["total_s"] for x in rows]
+            its = ", ".join(str(x["iterations"]) for x in rows)
+            miss = [s for s, x in zip((1, 100, last), rows) if x["rel2"] > lev * 1.0001]
+            note = f" (not reached at outer {', '.join(str(m) for m in miss)})" if miss else ""
+            print(f"| {c}{note} | {lev:g} | {np.mean(tot):.1f} [{min(tot):.1f}, {max(tot):.1f}] "
+                  f"| {np.mean([1e3 * x['setup_s'] for x in rows]):.1f} | {its} | {g(max(x['rel2'] for x in rows))} "
+                  f"| {g(max(abs(x['signed_over_supply']) for x in rows))} | {g(max(x['p_err_rel'] for x in rows))} "
+                  f"| {g(max(x['face_err_m_s'] for x in rows))} |")
+
+
+if __name__ == "__main__" and sys.argv[1] == "m1mean":
+    m1mean(sys.argv[2], int(sys.argv[3]) if len(sys.argv) > 3 else 1000)
+```
+
+## Appendix K: restart36.py
+
+```python
+"""Builder probe, prompt 36, a diagnostic added after measurement 2's first runs.
+
+Usage: python restart36.py NX NY MODE_A MODE_B N_MORE
+
+Runs the measurement 2 room to its error_estimate stop with correction
+MODE_A (outer36's modes), then continues from that state, its faces and its
+pressure, for N_MORE outer iterations with correction MODE_B, through the
+same calls solve_steady makes (the T3 extrapolation, predict, correct), and
+records how far the cell-centred velocity moves from the MODE_A stop and the
+residual on the way. If the MODE_A state is a fixed point of the MODE_B
+iteration it stays within the stop's iteration error; if the two iterations
+have different fixed points it moves to MODE_B's. Writes
+restart_NXxNY_A_B.json and .npz.
+"""
+
+import json
+import sys
+
+import numpy as np
+
+from capture36 import stopping_for
+from common36 import HERE, install_corrector, product_t3
+from outer36 import make_solve
+from src.mesh import SOLID
+from src.staggered import to_cell_centers
+
+
+def main() -> None:
+    nx, ny, mode_a, mode_b, n_more = int(sys.argv[1]), int(sys.argv[2]), sys.argv[3], sys.argv[4], int(sys.argv[5])
+    stop = stopping_for(nx, ny, 8.0, 3.0, 1.2, 60.0)
+    room = product_t3("restart", nx, ny, 20000, stopping=stop)
+    corr = install_corrector(room, make_solve(mode_a, room.supply), measure_residual=False)
+    solver = room.solver
+    u_c, v_c, p = solver.solve_steady()
+    n_a = len(solver.residual_history)
+    fv = solver.face_velocities
+    u, v = fv.u.copy(), fv.v.copy()
+    p = p.copy()
+    u0, v0 = u_c.copy(), v_c.copy()
+    fluid = room.mesh.cell_type != SOLID
+    corr.solve = make_solve(mode_b, room.supply)
+    ref = solver.reference_velocity
+    drift, res = [], []
+    prev_u, prev_v = u0, v0
+    for _ in range(n_more):
+        solver._extrapolate_outlets(u, v)
+        pred = solver._predictor.predict(u, v, p)
+        out = corr.correct(pred, p)
+        u, v, p = out.u, out.v, out.p
+        uc, vc = to_cell_centers(u, v)
+        res.append(float(max(np.max(np.abs(uc - prev_u)[fluid]), np.max(np.abs(vc - prev_v)[fluid]))) / ref)
+        drift.append(float(max(np.max(np.abs(uc - u0)[fluid]), np.max(np.abs(vc - v0)[fluid]))))
+        prev_u, prev_v = uc, vc
+    tag = f"restart_{nx}x{ny}_{mode_a.replace(':', '_')}_{mode_b.replace(':', '_')}"
+    out_d = {"mode_a": mode_a, "mode_b": mode_b, "stop_a": solver.stop_reason, "outer_a": n_a,
+             "drift": drift, "residual": res}
+    (HERE / f"{tag}.json").write_text(json.dumps(out_d))
+    np.savez(HERE / f"{tag}.npz", u_a=u0, v_a=v0, u_b=prev_u, v_b=prev_v)
+    print(f"{tag}: A stopped {solver.stop_reason} at {n_a}; after {n_more} with B the drift is {drift[-1]:.3e} m/s "
+          f"(largest {max(drift):.3e}), last residual {res[-1]:.3e}", flush=True)
+
+
+if __name__ == "__main__":
+    main()
+```
+
+## Appendix L: control36.py
+
+```python
+"""Builder probe, prompt 36, a control added after measurement 2's first runs.
+
+Usage: python control36.py NX NY SWEEPS ALPHA_U
+
+The measurement 2 room with the exact correction (SuperLU) and a different
+path to the same steady equations: SWEEPS momentum sweeps per outer
+iteration and alpha_velocity ALPHA_U in place of 10 and 0.5. Neither enters
+the steady discrete equations, only the path to them, so the difference of
+its converged field from m2_NXxNY_direct's measures how much the path alone
+selects among steady solutions. Writes m2c_NXxNY_swSWEEPS_aALPHA_U.json and
+.npz through capture36.run_room.
+"""
+
+import sys
+
+from capture36 import run_room, stopping_for
+from common36 import product_t3
+from outer36 import make_solve
+
+
+def main() -> None:
+    nx, ny, sweeps, alpha = int(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3]), float(sys.argv[4])
+    stop = stopping_for(nx, ny, 8.0, 3.0, 1.2, 60.0)
+    tag = f"m2c_{nx}x{ny}_sw{sweeps}_a{alpha:g}"
+    room = product_t3(tag, nx, ny, 20000, sweeps=sweeps, alpha_u=alpha, stopping=stop)
+    run_room(room, make_solve("direct", room.supply), tag, print_every=500)
+
+
+if __name__ == "__main__":
+    main()
+```
+
+## Appendix M: freeze36.py
+
+```python
+"""Builder probe, prompt 36, a diagnostic added after measurement 2's runs.
+
+Usage: python freeze36.py
+
+Reruns m2_80x30_jacobi200 (the committed loop, cap 200 and 1e-6 Pa, on the
+80x30 room at air's viscosity) to outer 5,233 and saves the p' system at outer
+5,231, the iteration at which velocity_step first held there, so item0_36.py
+can say whether the system the committed loop froze on is singular. Writes
+freeze80.json and systems/freeze80_it5231.npz through capture36.run_room.
+"""
+
+from capture36 import run_room, stopping_for
+from common36 import product_t3
+
+stop = stopping_for(80, 30, 8.0, 3.0, 1.2, 60.0)
+room = product_t3("freeze80", 80, 30, 5233, p_cap=200, p_tol=1e-6, stopping=stop)
+run_room(room, None, "freeze80", capture_at=(5231,), print_every=500)
+```
+
+## Appendix N: stall36.py
+
+```python
+"""Builder probe, prompt 36, a diagnostic added after measurement 2's runs.
+
+Usage: python stall36.py MODE N [NX NY MU_FACTOR]
+
+The measurement 2 room, by default 80x30 at a thousand times air's viscosity
+(the Re 90 rung), with correction MODE for N outer iterations, saving the p' system at outer N - 1
+and the pressure field's mean over the cells with an equation at every outer
+iteration, so the stalled state's right-hand side can be located and a
+uniform drift of the pressure seen. Writes stall_MODE.json and
+systems/stall_MODE_it(N-1).npz.
+"""
+
+import json
+import sys
+
+import numpy as np
+
+from capture36 import stopping_for
+from common36 import HERE, install_corrector, product_t3
+from outer36 import make_solve
+
+mode, n = sys.argv[1], int(sys.argv[2])
+nx, ny, mu = (int(sys.argv[3]), int(sys.argv[4]), float(sys.argv[5])) if len(sys.argv) > 5 else (80, 30, 1000.0)
+tag = f"stall_{mode.replace(':', '_')}" + ("" if (nx, ny, mu) == (80, 30, 1000.0) else f"_{nx}x{ny}_mu{mu:g}")
+room = product_t3(tag, nx, ny, n, mu_factor=mu, stopping=stopping_for(nx, ny, 8.0, 3.0, 1.2, 60.0))
+corr = install_corrector(room, make_solve(mode, room.supply), capture_at=(n - 1,), capture_name=tag)
+means, res = [], []
+fluid = room.mesh.cell_type != 1
+
+
+def cb(state) -> None:  # type: ignore[no-untyped-def]
+    means.append(float(np.mean(state.p[fluid])))
+    res.append(float(state.residual))
+
+
+room.solver.solve_steady(on_iteration=cb)
+(HERE / f"{tag}.json").write_text(json.dumps({"mode": mode, "p_mean": means, "residual": res,
+                                              "stop": room.solver.stop_reason}))
+print(tag, room.solver.stop_reason, len(res), "p mean at", [round(means[k], 6) for k in (0, len(means) // 2, -2, -1)])
+```
+
+## Appendix O: m3_36.py
+
+```python
+"""Builder probe, prompt 36, measurement 3: the cost of one steady solve, projected.
+
+Usage: python m3_36.py ROOM LEVEL OUTER_LO OUTER_HI [OUTER_MID]
+
+ROOM is product200 or annex180. Per outer iteration:
+
+    momentum seconds    the momentum stage (T3 extrapolation and ten sweeps) over
+                        30 outer iterations of the room from rest with SuperLU,
+                        timed here, one process, so the seconds are not the
+                        capture run's, which ran beside other probes
+    corrector overhead  the committed corrector's work besides the solve, timed
+                        here on the room's captured systems: coefficients,
+                        mass_imbalance, _face_d and the face and pressure update
+                        (median of 20)
+    correction seconds  measurement 1's total (setup and solve) at LEVEL, the
+                        median over the room's three captured systems; SuperLU's
+                        factorization and solve; for today's loop, its 1e-6 Pa
+                        stop's sweeps (the untimed run) times the timed seconds per
+                        sweep, and its cap of 200, each the median of the three
+
+and a steady solve is that times OUTER_LO, OUTER_MID and OUTER_HI outer
+iterations, the range the report states with its sources. Prints a markdown
+table and writes m3_ROOM_LEVEL.json.
+"""
+
+import json
+import sys
+import time
+
+import numpy as np
+
+from common36 import HERE, SYSTEMS, load_system
+
+CANDIDATES = ["B_pcg", "C_gmg", "C_mg_pcg", "D_sa", "D_sa_cg", "D_sa_jacobi_cg", "D_rs_cg"]
+
+
+def overhead(name: str) -> float:
+    """Median seconds of the corrector's non-solve work on a captured system."""
+    s = load_system(name)
+    z = np.load(SYSTEMS / f"{name}.npz")
+    from common36 import PressureCorrector
+
+    class Shim(PressureCorrector):
+        def __init__(self) -> None:  # noqa: D107
+            self._p_shape = s.c.a_p.shape
+            self._u_shape = z["a_p_u"].shape
+            self._v_shape = z["a_p_v"].shape
+            self._rho = s.rho
+            self._alpha_p = 0.3
+            self._solid = s.solid
+            self._out_left, self._out_right = z["out_left"], z["out_right"]
+            self._out_bottom, self._out_top = z["out_bottom"], z["out_top"]
+
+            class M:
+                dx_cell = s.dx_cell
+                dy_cell = s.dy_cell
+
+            self._mesh = M()
+
+    sh = Shim()
+    p = np.zeros(s.c.a_p.shape)
+    x = np.zeros(s.c.a_p.shape)
+    times = []
+    for _ in range(20):
+        t0 = time.perf_counter()
+        c = sh.coefficients(z["a_p_u"], z["a_p_v"])
+        b = sh.mass_imbalance(z["u_star"], z["v_star"])
+        active = c.a_p > 0.0
+        d_u, d_v = sh._face_d(z["a_p_u"], z["a_p_v"])
+        padded = np.zeros((p.shape[0] + 2, p.shape[1] + 2))
+        padded[1:-1, 1:-1] = x
+        u = z["u_star"] - d_u * (padded[1:-1, 1:] - padded[1:-1, :-1])
+        v = z["v_star"] - d_v * (padded[1:, 1:-1] - padded[:-1, 1:-1])
+        p_next = p.copy()
+        p_next[active] += 0.3 * x[active]
+        times.append(time.perf_counter() - t0)
+        del b, u, v
+    return float(np.median(times))
+
+
+def main() -> None:
+    room, level = sys.argv[1], float(sys.argv[2])
+    lo, hi = int(sys.argv[3]), int(sys.argv[4])
+    mid = int(sys.argv[5]) if len(sys.argv) > 5 else int(round(np.sqrt(lo * hi)))
+    from common36 import annex20, install_corrector, product_t3
+    from capture36 import exact_solve
+
+    built = product_t3("m3", 200, 75, 30) if room == "product200" else annex20("m3", 180, 60, 30)
+    install_corrector(built, exact_solve, measure_residual=False)
+    built.solver.solve_steady()
+    momentum = built.solver.stage_seconds["momentum"] / 30
+    systems = [f"{room}_it{k}" for k in (1, 100, 1000)]
+    over = float(np.median([overhead(n) for n in systems]))
+    rows = []
+    for cand in CANDIDATES:
+        vals, its, ok = [], [], True
+        for n in systems:
+            d = json.loads((HERE / f"m1_{n}.json").read_text())
+            r = [x for x in d["rows"] if x["candidate"] == cand and x["level"] == level][0]
+            vals.append(r["total_s"])
+            its.append(r["iterations"])
+            ok &= r["rel2"] <= level * 1.0001
+        rows.append((cand, float(np.median(vals)), its, ok))
+    direct = [[x for x in json.loads((HERE / f"m1_{n}.json").read_text())["rows"] if x["candidate"] == "E_direct"][0]
+              for n in systems]
+    rows.append(("E_direct (exact)", float(np.median([x["total_s"] for x in direct])), [1, 1, 1], True))
+    sweeps, ms = [], []
+    for n in systems:
+        h = json.loads((HERE / f"m1hist_{n}.json").read_text())
+        d = json.loads((HERE / f"m1_{n}.json").read_text())
+        ev = h["events"].get("stop 1e-06 Pa")
+        sweeps.append(ev["sweeps"] if ev else h["last"]["sweeps"])
+        ms.append(d["jacobi_ms_per_sweep"])
+    jac = float(np.median([sw * m / 1e3 for sw, m in zip(sweeps, ms)]))
+    cap = [json.loads((HERE / f"m1_{n}.json").read_text()) for n in systems]
+    cap200 = float(np.median([[x for x in d["rows"] if x["candidate"] == "A_jacobi_cap200"][0]["total_s"] for d in cap]))
+    rows.append(("A_jacobi 1e-6 Pa stop", jac, sweeps, True))
+    rows.append(("A_jacobi cap 200", cap200, [200, 200, 200], False))
+    print(f"{room}: momentum {1e3 * momentum:.1f} ms per outer, corrector overhead {1e3 * over:.2f} ms, level {level:g}, "
+          f"outer iterations {lo}, {mid}, {hi}\n")
+    print(f"| Correction | Iterations (outer 1, 100, 1000) | Correction ms | ms per outer | Steady solve at {lo} | at {mid} | at {hi} |")
+    print("|---|---|---|---|---|---|---|")
+    out = []
+    for cand, sec, its, ok in rows:
+        per = momentum + over + sec
+        note = "" if ok else " (level not reached)"
+        cells = []
+        for n in (lo, mid, hi):
+            t = n * per
+            cells.append(f"{t / 60:.1f} min" if t < 7200 else f"{t / 3600:.1f} h")
+        print(f"| {cand}{note} | {', '.join(str(i) for i in its)} | {1e3 * sec:.1f} | {1e3 * per:.1f} | " + " | ".join(cells) + " |")
+        out.append({"candidate": cand, "correction_s": sec, "per_outer_s": per, "iterations": its, "reached": ok})
+    (HERE / f"m3_{room}_{level:g}.json").write_text(json.dumps(
+        {"room": room, "level": level, "momentum_s": momentum, "overhead_s": over, "outer": [lo, mid, hi], "rows": out}))
+
+
+if __name__ == "__main__":
+    main()
+```
+
+## Appendix P: hist_table36.py
+
+```python
+"""Builder probe, prompt 36: today's loop on the relative-residual scale, one row per system.
+
+Usage: python hist_table36.py
+Reads m1hist_*.json (the untimed runs) and m1_*.json (seconds per sweep and the
+cap-200 row). Prints markdown.
+"""
+
+import json
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+ROOMS = [("product200", 1000), ("annex180", 1000), ("product40", 1000), ("channel80", 569), ("cavity80", 1000)]
+
+
+def main() -> None:
+    print("| System | ms per sweep | 1e-6 Pa stop: sweeps, s, relative residual, net outflow / supply "
+          "| 1e-8 Pa stop: sweeps, s, relative residual | Sweeps to 1e-2 | to 1e-4 | to 1e-6 | to 1e-8 "
+          "| Cap 200: relative residual, net outflow / supply |")
+    print("|---|---|---|---|---|---|---|---|---|")
+    for room, last in ROOMS:
+        for k in (1, 100, last):
+            s = f"{room}_it{k}"
+            hp, mp = HERE / f"m1hist_{s}.json", HERE / f"m1_{s}.json"
+            if not hp.exists():
+                print(f"| {room} {k} | (running) | | | | | | | |")
+                continue
+            h, d = json.loads(hp.read_text()), json.loads(mp.read_text())
+            ms, ev, last_e = d["jacobi_ms_per_sweep"], h["events"], h["last"]
+
+            def stop(key: str, net: bool = True) -> str:
+                e = ev.get(key)
+                if not e:
+                    return f"not met in {last_e['sweeps']:,} (relative {last_e['rel2']:.1e})"
+                out = f"{e['sweeps']:,}, {e['sweeps'] * ms / 1e3:.1f}, {e['rel2']:.1e}"
+                return out + (f", {e['signed_over_supply']:.1e}" if net else "")
+
+            def sweeps(key: str) -> str:
+                e = ev.get(key)
+                return f"{e['sweeps']:,}" if e else f"> {last_e['sweeps']:,}"
+
+            c2 = [x for x in d["rows"] if x["candidate"] == "A_jacobi_cap200"][0]
+            print(f"| {room} {k} | {ms:.3f} | {stop('stop 1e-06 Pa')} | {stop('stop 1e-08 Pa', False)} "
+                  f"| {sweeps('level 1e-02')} | {sweeps('level 1e-04')} | {sweeps('level 1e-06')} "
+                  f"| {sweeps('level 1e-08')} | {c2['rel2']:.2f}, {c2['signed_over_supply']:.1e} |")
 
 
 if __name__ == "__main__":
