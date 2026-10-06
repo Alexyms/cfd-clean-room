@@ -14,10 +14,13 @@ ECR-002 step 1. VAL-015 is in tests/test_decaying_turbulence.py. Here:
   explicit decay as its control;
 - constancy on the VAL-001 faces, production and decay switched off.
 
-Each planted defect of prompt 35's traps fails a test here; the mutation log
-is results/builder35/mutation35.md. Meshes are non-square and, where it
-matters, stretched, so an index that works only on a square uniform grid
-shows.
+Each planted defect of prompt 35's traps fails a test here; the mutation logs
+are results/builder35/mutation35.md and mutation35b.md. Meshes are non-square
+and, where it matters, stretched, so an index that works only on a square
+uniform grid shows. Every rule with an x and a y half is tested on a field
+that moves in y, or in both directions with different magnitudes: test 32b
+found the transport solver's tests pinned one direction only, and review 35
+and test 35 found the same here (prompt 35b).
 """
 
 import dataclasses
@@ -66,12 +69,13 @@ def _config(
     max_iter: int = 2000,
     obstacles: list[dict] | None = None,
     mesh: dict | None = None,
+    viscosity: float = AIR["viscosity"],
 ) -> SimConfig:
     """A validated configuration with a turbulence section, air at rho 1.2."""
     raw = {
         "domain": {"width": width, "height": height, "nx": nx, "ny": ny},
         "mesh": mesh or {},
-        "fluid": AIR,
+        "fluid": {**AIR, "viscosity": viscosity},
         "particles": PARTICLES,
         "solver": SOLVER_BLOCK,
         "turbulence": {
@@ -162,33 +166,89 @@ def _patchy_start(
     return k, eps
 
 
-def _explicit_decay(model: KEpsilonModel) -> None:
-    """Plant the explicit form of the decay: subtract dt eps (and dt C_2 eps^2 / k) in step 2."""
+def _explicit_decay(
+    model: KEpsilonModel,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    for_k: bool = True,
+    for_eps: bool = True,
+) -> None:
+    """Plant the explicit form of the decay in step 2: ``- dt eps`` for k and
+    ``- dt C_2 eps^2 / k`` for eps, moved out of the implicit diagonal."""
     original = model._terms
 
-    def explicit(state, faces, conditions):  # type: ignore[no-untyped-def]
+    def explicit(
+        state: TurbulenceState,
+        faces: FaceVelocities,
+        conditions: TurbulenceConditions,
+    ) -> StepTerms:
         t = original(state, faces, conditions)
-        return dataclasses.replace(
-            t,
-            growth_k=t.growth_k - t.decay_k * state.k,
-            growth_eps=t.growth_eps - t.decay_eps * state.eps,
-            decay_k=np.zeros_like(t.decay_k),
-            decay_eps=np.zeros_like(t.decay_eps),
-        )
+        if for_k:
+            t = dataclasses.replace(
+                t,
+                growth_k=t.growth_k - t.decay_k * state.k,
+                decay_k=np.zeros_like(t.decay_k),
+            )
+        if for_eps:
+            t = dataclasses.replace(
+                t,
+                growth_eps=t.growth_eps - t.decay_eps * state.eps,
+                decay_eps=np.zeros_like(t.decay_eps),
+            )
+        return t
 
-    model._terms = explicit  # type: ignore[method-assign]
+    monkeypatch.setattr(model, "_terms", explicit)
 
 
-def _no_sources(model: KEpsilonModel) -> None:
+def _no_sources(model: KEpsilonModel, monkeypatch: pytest.MonkeyPatch) -> None:
     """Switch production and decay off: every growth and decay term zero."""
 
-    def zero(state, faces, conditions):  # type: ignore[no-untyped-def]
+    def zero(
+        state: TurbulenceState,
+        faces: FaceVelocities,
+        conditions: TurbulenceConditions,
+    ) -> StepTerms:
         z = np.zeros_like(state.k)
         return StepTerms(
             production=z, rng_r=z, growth_k=z, growth_eps=z, decay_k=z, decay_eps=z
         )
 
-    model._terms = zero  # type: ignore[method-assign]
+    monkeypatch.setattr(model, "_terms", zero)
+
+
+LINEAR = (0.7, 0.3, 0.6, 0.2)
+
+
+def _linear_field(
+    mesh: Mesh, a: float, b: float, c: float, d: float
+) -> tuple[FaceVelocities, TurbulenceConditions]:
+    """u = a x + b y on the u faces, v = c x + d y on the v faces, each edge
+    carrying the field's own tangential value, so the field moves in both
+    directions with gradients of four different magnitudes."""
+    u = a * mesh.x[None, :] + b * mesh.yc[:, None]
+    v = c * mesh.xc[None, :] + d * mesh.y[:, None]
+    conditions = dataclasses.replace(
+        TurbulenceConditions.uniform(mesh, 1.0e-3, 1.0e-4),
+        tangential_bottom=a * mesh.x + b * mesh.y[0],
+        tangential_top=a * mesh.x + b * mesh.y[-1],
+        tangential_left=c * mesh.x[0] + d * mesh.y,
+        tangential_right=c * mesh.x[-1] + d * mesh.y,
+    )
+    return FaceVelocities.copy_of(u, v), conditions
+
+
+def _rate_by_loop(mesh: Mesh, faces: FaceVelocities) -> np.ndarray:
+    """``max(|u_w|, |u_e|) / dx + max(|v_s|, |v_n|) / dy`` cell by cell, both halves."""
+    ny, nx = mesh.cell_type.shape
+    rate = np.zeros((ny, nx))
+    for j in range(ny):
+        for i in range(nx):
+            horizontal = (
+                max(abs(faces.u[j, i]), abs(faces.u[j, i + 1])) / mesh.dx_cell[i]
+            )
+            vertical = max(abs(faces.v[j, i]), abs(faces.v[j + 1, i])) / mesh.dy_cell[j]
+            rate[j, i] = horizontal + vertical
+    return rate
 
 
 # ---------------------------------------------------------------------------
@@ -336,6 +396,83 @@ class TestChecks:
                 model.step(state, faces, dataclasses.replace(base, **changes), 1.0)
 
     @pytest.mark.parametrize(
+        ("field", "defect", "match"),
+        [
+            ("k", "shape", "state.k must have shape"),
+            ("nu_t", "shape", "state.nu_t must have shape"),
+            ("k", -1.0e-3, "state.k must be positive and finite"),
+            ("eps", 0.0, "state.eps must be positive and finite"),
+            ("eps", float("nan"), "state.eps must be positive and finite"),
+            ("nu_t", float("nan"), "state.nu_t must be non-negative and finite"),
+            ("nu_t", -1.0e-3, "state.nu_t must be non-negative and finite"),
+            ("nu_t", float("inf"), "state.nu_t must be non-negative and finite"),
+            ("k", "solid", "state.k must be zero in SOLID cells"),
+            ("nu_t", "solid", "state.nu_t must be zero in SOLID cells"),
+        ],
+    )
+    def test_a_state_is_checked_before_any_arithmetic(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        field: str,
+        defect: object,
+        match: str,
+    ) -> None:
+        """A TurbulenceState built directly, as step 6 will build one with an
+        under-relaxed nu_t, is refused by ``step`` before any of the step's
+        arithmetic runs: the terms are replaced by a tripwire, and the refusal
+        comes first. A negative nu_t would give a negative face conductance."""
+        obstacle = [
+            {"name": "b", "x_start": 0.4, "x_end": 0.6, "y_start": 0.0, "y_end": 0.2}
+        ]
+        mesh, model = _model(_config(1.2, 0.8, 6, 4, obstacles=obstacle))
+        solid = mesh.cell_type == SOLID
+        valid = model.initial(1.0e-3, 1.0e-4)
+        arrays = {name: getattr(valid, name).copy() for name in ("k", "eps", "nu_t")}
+        if defect == "shape":
+            arrays[field] = arrays[field][:, :-1]
+        elif defect == "solid":
+            arrays[field][tuple(np.argwhere(solid)[0])] = 1.0e-3
+        else:
+            arrays[field][1, 1] = defect
+        broken = TurbulenceState(**arrays)
+
+        def tripwire(*args: object) -> StepTerms:
+            raise AssertionError("the step reached its arithmetic")
+
+        monkeypatch.setattr(model, "_terms", tripwire)
+        faces, conditions = _shear(mesh, 0.3)
+        with pytest.raises(ValueError, match=match):
+            model.step(broken, faces, conditions, 0.01)
+
+    def test_faces_are_checked_before_any_arithmetic(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A face pair of another mesh's shape, or holding a NaN or an
+        infinity, is refused before the step's arithmetic, which a tripwire
+        stands in for; FaceVelocities itself checks neither."""
+        mesh, model = _model(_config(1.2, 0.8, 6, 4))
+        state = model.initial(1.0e-3, 1.0e-4)
+
+        def tripwire(*args: object) -> StepTerms:
+            raise AssertionError("the step reached its arithmetic")
+
+        monkeypatch.setattr(model, "_terms", tripwire)
+        conditions = TurbulenceConditions.uniform(mesh, 1.0e-3, 1.0e-4)
+        other = Mesh(_config(1.2, 0.8, 7, 4))
+        with pytest.raises(ValueError, match="faces must have shapes"):
+            model.step(state, _at_rest(other), conditions, 0.01)
+        u = np.zeros(u_shape(mesh))
+        u[1, 2] = np.nan
+        v = np.zeros(v_shape(mesh))
+        with pytest.raises(ValueError, match="faces must be finite"):
+            model.step(state, FaceVelocities.copy_of(u, v), conditions, 0.01)
+        v[2, 3] = np.inf
+        with pytest.raises(ValueError, match="faces must be finite"):
+            model.step(
+                state, FaceVelocities.copy_of(np.zeros(u_shape(mesh)), v), conditions
+            )
+
+    @pytest.mark.parametrize(
         ("dt", "error", "match"),
         [
             (True, TypeError, "dt must be a number"),
@@ -402,17 +539,87 @@ class TestTwoKindsOfStep:
             state = model.step(state, faces, conditions)
         assert np.all(np.isfinite(state.k)) and np.all(state.k[0, :] > 1.0e-3)
 
-    def test_a_true_time_step_is_one_value_for_every_cell(self) -> None:
-        """On a moving field a float dt at the stable step is accepted and every
-        cell advances by it: a cell at rest decays as the box of VAL-015 does."""
-        mesh, model = _model(_config(1.2, 0.8, 6, 5))
+    @pytest.mark.parametrize("variant", VARIANT_NAMES)
+    def test_a_true_time_step_is_one_value_for_every_cell(self, variant: str) -> None:
+        """Couette flow with its bottom row at rest, uniform k and eps, one float
+        dt at the stable step: the advection of a uniform field is zero, and
+        with the viscosity and nu_t small enough that diffusion between rows
+        moves a value by under 1e-8 of it, every cell's step is k1 = (k0 + dt
+        P) / (1 + dt eps0 / k0) and eps1 = (eps0 + dt C_1 (eps0 / k0) P) / (1 +
+        dt C_2 eps0 / k0) with the one dt, the row at rest as the moving rows.
+        P is evaluated by hand from the corner shear. The row at rest has
+        production from its top corners, so it does not simply decay."""
+        mesh, model = _model(_config(1.2, 0.8, 6, 5, variant, viscosity=1.0e-12))
+        const = model.constants
         faces, conditions = _shear(mesh, 0.3)
         u = faces.u.copy()
         u[0, :] = 0.0
         faces = FaceVelocities.copy_of(u, faces.v)
-        stable = 0.5 / float(model._rate(faces).max())
-        state = model.step(model.initial(1.0e-3, 1.0e-4), faces, conditions, stable)
-        assert np.all(state.k > 0.0)
+        dt = 0.5 / float(_rate_by_loop(mesh, faces).max())
+        k0, eps0 = 1.0e-4, 1.0e-2
+        # The inlet carries the field's own values, so the uniform field's
+        # advection is zero in every row.
+        same = TurbulenceConditions.uniform(mesh, k0, eps0)
+        conditions = dataclasses.replace(
+            conditions,
+            inflow_k_u=same.inflow_k_u,
+            inflow_k_v=same.inflow_k_v,
+            inflow_eps_u=same.inflow_eps_u,
+            inflow_eps_v=same.inflow_eps_v,
+        )
+        state = model.step(model.initial(k0, eps0), faces, conditions, dt)
+
+        speed, height = 0.3, 0.8
+        nu_t = const.c_mu * k0**2 / eps0
+        column = u[:, 0]
+        nodes = np.concatenate(([0.0], mesh.yc, [height]))
+        values = np.concatenate(([0.0], column, [speed]))
+        corner = np.diff(values) / np.diff(nodes)
+        shear = 0.5 * (corner[:-1] + corner[1:])
+        for row in (0, 3):
+            p = nu_t * shear[row] ** 2
+            k1 = (k0 + dt * p) / (1.0 + dt * eps0 / k0)
+            eps1 = (eps0 + dt * const.c_1 * eps0 / k0 * p) / (
+                1.0 + dt * const.c_2 * eps0 / k0
+            )
+            assert np.allclose(state.k[row, :], k1, rtol=1e-8, atol=0.0), row
+            assert np.allclose(state.eps[row, :], eps1, rtol=1e-8, atol=0.0), row
+        assert shear[0] > 0.0
+
+    def test_the_pseudo_time_step_reads_both_directions(self) -> None:
+        """A field moving in x and y with four different gradients on a mesh
+        stretched both ways: each cell's step is cfl over the sum of its
+        horizontal and vertical rates, evaluated cell by cell. The one-direction
+        trap of test 32b: a rate that drops its vertical half passes a field
+        that moves along x only."""
+        mesh, model = _model(
+            _config(
+                1.2,
+                0.8,
+                7,
+                5,
+                mesh={"x": {"stretch_ratio": 1.2}, "y": {"stretch_ratio": 1.3}},
+            )
+        )
+        faces, _ = _linear_field(mesh, *LINEAR)
+        expected = 0.5 / _rate_by_loop(mesh, faces)
+        assert np.allclose(model.pseudo_time_step(faces), expected, rtol=1e-14)
+
+    def test_a_true_time_step_a_little_above_the_stable_step_is_refused(
+        self,
+    ) -> None:
+        """The stable step on a field moving both ways, from the loop: 0.999 of
+        it is accepted, 1.02 of it refused, so a bound loosened by a few percent,
+        or one that reads one direction only, fails here."""
+        mesh, model = _model(
+            _config(1.2, 0.8, 7, 5, mesh={"y": {"stretch_ratio": 1.3}})
+        )
+        faces, conditions = _linear_field(mesh, *LINEAR)
+        stable = 0.5 / float(_rate_by_loop(mesh, faces).max())
+        state = model.initial(1.0e-3, 1.0e-4)
+        model.step(state, faces, conditions, 0.999 * stable)
+        with pytest.raises(ValueError, match="exceeds the stable step"):
+            model.step(state, faces, conditions, 1.02 * stable)
 
 
 # ---------------------------------------------------------------------------
@@ -484,6 +691,119 @@ class TestStrain:
         assert np.allclose(s2[~solid], (speed / (0.9 - h)) ** 2, rtol=1e-12, atol=0.0)
         assert np.all(s2[solid] == 0.0)
 
+    def test_a_linear_field_in_both_directions_has_each_term_in_its_place(
+        self,
+    ) -> None:
+        """u = a x + b y, v = c x + d y with four different coefficients, the
+        edges carrying the field's own values, on a mesh stretched both ways:
+        S^2 = 2 a^2 + 2 d^2 + (b + c)^2 in every cell. A strain that drops dv/dx
+        or dv/dy, or swaps the left and right edges' velocities, fails: the
+        one-direction trap of test 32b, which a field moving along x cannot
+        show."""
+        mesh, model = _model(
+            _config(
+                1.2,
+                0.8,
+                7,
+                5,
+                mesh={"x": {"stretch_ratio": 1.25}, "y": {"stretch_ratio": 1.2}},
+            )
+        )
+        a, b, c, d = LINEAR
+        faces, conditions = _linear_field(mesh, a, b, c, d)
+        s2 = model.strain_squared(faces, conditions)
+        expected = 2.0 * a**2 + 2.0 * d**2 + (b + c) ** 2
+        assert np.allclose(s2, expected, rtol=1e-12, atol=0.0)
+
+    def test_a_shear_that_differs_at_each_corner_is_averaged_over_all_four(
+        self,
+    ) -> None:
+        """u = q y^2 and v = r x^2 on a mesh stretched both ways: every corner
+        carries its own shear, du/dy = q (y_hi + y_lo) and dv/dx = r (x_hi + x_lo)
+        between the two nodes either side, so a cell's shear is the mean of its
+        four corners, ((g_j + g_j+1) / 2 + (h_i + h_i+1) / 2), evaluated here node
+        by node. One corner in place of four, or the y half of the trap of test
+        32b, fails."""
+        mesh, model = _model(
+            _config(
+                1.2,
+                0.8,
+                7,
+                5,
+                mesh={"x": {"stretch_ratio": 1.3}, "y": {"stretch_ratio": 1.25}},
+            )
+        )
+        q, r = 0.9, -0.4
+        width, height = 1.2, 0.8
+        u = np.repeat((q * mesh.yc**2)[:, None], u_shape(mesh)[1], axis=1)
+        v = np.repeat((r * mesh.xc**2)[None, :], v_shape(mesh)[0], axis=0)
+        conditions = dataclasses.replace(
+            TurbulenceConditions.uniform(mesh, 1.0e-3, 1.0e-4),
+            tangential_bottom=np.zeros(mesh.x.shape),
+            tangential_top=np.full(mesh.x.shape, q * height**2),
+            tangential_left=np.zeros(mesh.y.shape),
+            tangential_right=np.full(mesh.y.shape, r * width**2),
+        )
+        s2 = model.strain_squared(FaceVelocities.copy_of(u, v), conditions)
+        y_nodes = np.concatenate(([0.0], mesh.yc, [height]))
+        x_nodes = np.concatenate(([0.0], mesh.xc, [width]))
+        g = q * (y_nodes[1:] + y_nodes[:-1])
+        h = r * (x_nodes[1:] + x_nodes[:-1])
+        shear = 0.5 * (g[:-1] + g[1:])[:, None] + 0.5 * (h[:-1] + h[1:])[None, :]
+        assert len(np.unique(np.round(shear, 12))) == shear.size
+        assert np.allclose(s2, shear**2, rtol=1e-12, atol=0.0)
+
+    def test_a_vertical_obstacle_face_gives_the_full_shear_too(self) -> None:
+        """A full-height obstacle 0.3 m wide on the left under vertical Couette
+        flow to the moving right edge, v = V (x - w) / (W - w): the cells beside
+        its vertical face read the obstacle's zero at the face, so S^2 is (V /
+        (W - w))^2 there as in the core. The vertical face is the y half of the
+        horizontal-face test above, the one-direction trap of test 32b."""
+        obstacle = [
+            {"name": "wall", "x_start": 0.0, "x_end": 0.3, "y_start": 0.0, "y_end": 0.8}
+        ]
+        mesh, model = _model(_config(1.2, 0.8, 8, 5, obstacles=obstacle))
+        solid = mesh.cell_type == SOLID
+        assert solid[:, :2].all() and not solid[:, 2:].any()
+        speed, w, width = 0.3, 0.3, 1.2
+        profile = np.where(mesh.xc > w, speed * (mesh.xc - w) / (width - w), 0.0)
+        v = np.repeat(profile[None, :], v_shape(mesh)[0], axis=0)
+        conditions = dataclasses.replace(
+            TurbulenceConditions.uniform(mesh, 1.0e-3, 1.0e-4),
+            tangential_right=np.full(mesh.y.shape, speed),
+        )
+        s2 = model.strain_squared(
+            FaceVelocities.copy_of(np.zeros(u_shape(mesh)), v), conditions
+        )
+        assert np.allclose(s2[~solid], (speed / (width - w)) ** 2, rtol=1e-12, atol=0.0)
+        assert np.all(s2[solid] == 0.0)
+
+    def test_a_velocity_held_on_an_obstacle_face_makes_no_strain(self) -> None:
+        """Every face beside or inside an obstacle holds a velocity and every
+        other face is at rest: those faces carry no air, so the strain and the
+        production are zero everywhere, production on, and a step equals the
+        step on the field at rest bit for bit (review 35, S3)."""
+        obstacle = [
+            {"name": "b", "x_start": 0.5, "x_end": 0.8, "y_start": 0.0, "y_end": 0.35}
+        ]
+        mesh, model = _model(_config(1.5, 0.9, 10, 7, obstacles=obstacle))
+        solid = mesh.cell_type == SOLID
+        u = np.zeros(u_shape(mesh))
+        v = np.zeros(v_shape(mesh))
+        u[:, 1:-1] = np.where(solid[:, :-1] | solid[:, 1:], 0.3, 0.0)
+        u[:, 0] = np.where(solid[:, 0], 0.3, 0.0)
+        v[1:-1, :] = np.where(solid[:-1, :] | solid[1:, :], -0.3, 0.0)
+        v[0, :] = np.where(solid[0, :], -0.3, 0.0)
+        assert np.abs(u).sum() > 0.0 and np.abs(v).sum() > 0.0
+        faces = FaceVelocities.copy_of(u, v)
+        conditions = TurbulenceConditions.uniform(mesh, 1.0e-3, 1.0e-4)
+        state = model.initial(1.0e-3, 1.0e-4)
+        assert np.all(model.strain_squared(faces, conditions) == 0.0)
+        assert np.all(model.terms(state, faces, conditions).production == 0.0)
+        held = model.step(state, faces, conditions, 0.5)
+        rest = model.step(state, _at_rest(mesh), conditions, 0.5)
+        assert np.array_equal(held.k, rest.k) and np.array_equal(held.eps, rest.eps)
+
 
 # ---------------------------------------------------------------------------
 # The terms, and RNG's R
@@ -553,12 +873,13 @@ class TestTerms:
         assert np.allclose(t.decay_eps, 1.68 * 0.00291 / 0.0137, rtol=1e-15)
 
     def test_rng_r_splits_by_sign_into_the_growth_and_the_diagonal(self) -> None:
-        """At a uniform shear S = U / H, k / eps varied cell by cell puts eta
-        from 1 to 9, either side of eta_0 = 4.38: R from its formula; negative
-        R in eps's growth, positive R over eps in its diagonal, so both stay
-        non-negative."""
+        """At a uniform shear S = U / H = 0.375 1/s, so that S and S^2 differ,
+        k / eps varied cell by cell puts eta from 1 to 9, either side of eta_0 =
+        4.38, so (1 - eta / eta_0) changes sign across the cells: R from its
+        formula; negative R in eps's growth, positive R over eps in its
+        diagonal, so both stay non-negative."""
         mesh, model = _model(_config(1.2, 0.8, 8, 6, "rng"))
-        speed = 0.8
+        speed = 0.3
         faces, conditions = _shear(mesh, speed)
         s = speed / 0.8
         eta_target = np.linspace(1.0, 9.0, 48).reshape(6, 8)
@@ -567,6 +888,7 @@ class TestTerms:
         state = model.state(k, eps)
         t = model.terms(state, faces, conditions)
 
+        assert s != s**2
         eta = s * k / eps
         r = 0.0845 * eta**3 * (1.0 - eta / 4.38) / (1.0 + 0.012 * eta**3) * eps**2 / k
         assert (r > 0.0).any() and (r < 0.0).any()
@@ -635,8 +957,58 @@ class TestBoundaries:
         assert np.array_equal(other.k, reference.k)
         assert np.array_equal(other.eps, reference.eps)
 
+    def test_k_and_eps_enter_through_a_bottom_face_each_with_its_own_value(
+        self,
+    ) -> None:
+        """Uniform flow upward, edges slipping with it so nothing is sheared:
+        k's inflow on the bottom faces raises k in the bottom row and leaves eps
+        bit for bit, eps's inflow raises eps and leaves k, and the top faces'
+        values, where the air leaves, are never read. The one-direction trap of
+        test 32b: the left-edge inflow test cannot see the v faces' arrays."""
+        mesh, model = _model(_config(1.2, 0.8, 6, 4))
+        speed = 0.2
+        faces = FaceVelocities.copy_of(
+            np.zeros(u_shape(mesh)), np.full(v_shape(mesh), speed)
+        )
+        base = dataclasses.replace(
+            TurbulenceConditions.uniform(mesh, 1.0e-3, 1.0e-4),
+            tangential_left=np.full(mesh.y.shape, speed),
+            tangential_right=np.full(mesh.y.shape, speed),
+        )
+        state = model.initial(1.0e-3, 1.0e-4)
+        assert np.all(model.terms(state, faces, base).production == 0.0)
+        reference = model.step(state, faces, base)
+
+        richer_k = base.inflow_k_v.copy()
+        richer_k[0, :] = 4.0e-3
+        k_in = model.step(state, faces, dataclasses.replace(base, inflow_k_v=richer_k))
+        assert np.all(k_in.k[0, :] > reference.k[0, :])
+        assert np.array_equal(k_in.eps, reference.eps)
+
+        richer_eps = base.inflow_eps_v.copy()
+        richer_eps[0, :] = 4.0e-4
+        eps_in = model.step(
+            state, faces, dataclasses.replace(base, inflow_eps_v=richer_eps)
+        )
+        assert np.all(eps_in.eps[0, :] > reference.eps[0, :])
+        assert np.array_equal(eps_in.k, reference.k)
+
+        top_k = base.inflow_k_v.copy()
+        top_k[-1, :] = 9.0
+        top_eps = base.inflow_eps_v.copy()
+        top_eps[-1, :] = 9.0
+        leaving = model.step(
+            state,
+            faces,
+            dataclasses.replace(base, inflow_k_v=top_k, inflow_eps_v=top_eps),
+        )
+        assert np.array_equal(leaving.k, reference.k)
+        assert np.array_equal(leaving.eps, reference.eps)
+
     @pytest.mark.parametrize("variant", VARIANT_NAMES)
-    def test_nothing_crosses_a_wall_or_an_obstacle_face(self, variant: str) -> None:
+    def test_nothing_crosses_a_wall_or_an_obstacle_face(
+        self, monkeypatch: pytest.MonkeyPatch, variant: str
+    ) -> None:
         """Production and decay off, a closed box with an obstacle, one
         true-time step for every cell: the content sum(k V) is conserved,
         though the faces of the obstacle hold a velocity, and the obstacle
@@ -663,7 +1035,7 @@ class TestBoundaries:
         u[:, 1:-1] = np.where(solid[:, :-1] | solid[:, 1:], 0.3, u[:, 1:-1])
         v[1:-1, :] = np.where(solid[:-1, :] | solid[1:, :], -0.3, v[1:-1, :])
         faces = FaceVelocities.copy_of(u, v)
-        _no_sources(model)
+        _no_sources(model, monkeypatch)
         rng = np.random.default_rng(8)
         state = model.state(
             rng.uniform(1e-3, 2e-3, solid.shape), rng.uniform(1e-4, 2e-4, solid.shape)
@@ -693,38 +1065,57 @@ class TestBoundaries:
         assert np.all(fixed.eps[0, :] == 3.7e-3)
         assert np.all(fixed.eps[1, :] > free.eps[1, :])
 
-    def test_the_face_diffusivity_is_the_harmonic_mean_adr012_f(self) -> None:
+    @pytest.mark.parametrize("variant", VARIANT_NAMES)
+    @pytest.mark.parametrize("quantity", ["k", "eps"])
+    def test_the_face_diffusivity_is_the_harmonic_mean_with_its_own_sigma_adr012_f(
+        self, quantity: str, variant: str
+    ) -> None:
         """One true-time step at rest on a stretched mesh with a varying eddy
-        viscosity: k's implicit solve against the system assembled face by
-        face, each face's (nu + nu_t / sigma_k) the distance-weighted harmonic
-        mean of its two cells, and the decay eps / k in the diagonal."""
+        viscosity: each quantity's implicit solve against the system assembled
+        face by face, each face's (nu + nu_t / sigma) the distance-weighted
+        harmonic mean of its two cells, with that quantity's sigma written here
+        as ADR-012 A tabulates it (1.0 and 1.3 standard, 0.7194 for both in
+        RNG), and its decay, eps / k for k and C_2 eps / k for eps, in the
+        diagonal. A sigma swapped between k and eps, dropped, or taken from the
+        other variant fails."""
         mesh, model = _model(
             _config(
                 1.2,
                 0.8,
                 7,
                 5,
+                variant,
                 tol=1e-15,
                 mesh={"x": {"stretch_ratio": 1.3}, "y": {"stretch_ratio": 1.2}},
             )
         )
+        sigma = {
+            ("standard", "k"): 1.0,
+            ("standard", "eps"): 1.3,
+            ("rng", "k"): 0.7194,
+            ("rng", "eps"): 0.7194,
+        }[(variant, quantity)]
+        c_2 = {"standard": 1.92, "rng": 1.68}[variant]
         rng = np.random.default_rng(12)
         shape = mesh.cell_type.shape
         state = model.state(
             rng.uniform(0.02, 0.2, shape), rng.uniform(1e-3, 1e-2, shape)
         )
         dt = 0.3
-        got = model.step(
+        result = model.step(
             state, _at_rest(mesh), TurbulenceConditions.uniform(mesh, 0.1, 0.01), dt
-        ).k
+        )
+        got = result.k if quantity == "k" else result.eps
+        start = state.k if quantity == "k" else state.eps
+        decay = state.eps / state.k * (1.0 if quantity == "k" else c_2)
 
         nu = AIR["viscosity"] / AIR["density"]
-        gamma = nu + state.nu_t / 1.0
+        gamma = nu + state.nu_t / sigma
         ny, nx = shape
         idx = np.arange(ny * nx).reshape(shape)
         volume = np.outer(mesh.dy_cell, mesh.dx_cell)
         a = np.zeros((ny * nx, ny * nx))
-        a[idx, idx] = volume / dt + volume * state.eps / state.k
+        a[idx, idx] = volume / dt + volume * decay
 
         def couple(p: int, q: int, g: float) -> None:
             a[p, p] += g
@@ -742,7 +1133,7 @@ class TestBoundaries:
                 d_s, d_n = mesh.y[j] - mesh.yc[j - 1], mesh.yc[j] - mesh.y[j]
                 face = (d_s + d_n) / (d_s / gamma[j - 1, i] + d_n / gamma[j, i])
                 couple(idx[j - 1, i], idx[j, i], face * mesh.dx_cell[i] / (d_s + d_n))
-        expected = np.linalg.solve(a, (volume / dt * state.k).ravel()).reshape(shape)
+        expected = np.linalg.solve(a, (volume / dt * start).ravel()).reshape(shape)
         assert np.allclose(got, expected, rtol=1e-12, atol=0.0)
 
 
@@ -819,49 +1210,124 @@ def _random_case(
 CASES = {"smith_hutton": _smith_hutton_case, "random": _random_case}
 
 
+RANDOM_CONVERGED_STEPS = 40
+
+
+def _bounded_start(shape: tuple[int, int], seed: int) -> tuple[np.ndarray, np.ndarray]:
+    """A non-uniform start near k = eps = 1e-4, nu_t about 1e-5 m^2/s.
+
+    On the random field the frozen strain grows k without a steady state (the
+    model's homogeneous-shear growth, test 35 check 7); from this start nu_t
+    stays small enough over RANDOM_CONVERGED_STEPS steps that every implicit
+    solve meets its tolerance within the 500-sweep cap.
+    """
+    rng = np.random.default_rng(seed)
+    k = rng.uniform(0.5, 1.5, size=shape) * 1.0e-4
+    eps = rng.uniform(0.5, 1.5, size=shape) * 1.0e-4
+    return k, eps
+
+
 @pytest.mark.unit
 class TestPositivity:
     @pytest.mark.parametrize("variant", VARIANT_NAMES)
     @pytest.mark.parametrize("case", list(CASES))
-    def test_k_and_eps_stay_positive_at_every_step_with_production_on(
+    def test_k_and_eps_stay_positive_and_every_solve_converges(
         self, case: str, variant: str
     ) -> None:
-        """Three hundred pseudo-time steps from a patchy start: the step's own
-        assertion holds at every step, and the run produced and moved k."""
+        """Production on, from a non-uniform start: the Smith-Hutton field from
+        the patchy start for 300 pseudo-time steps, the random field from a
+        start whose nu_t stays bounded for 40. At every step both implicit
+        solves meet their tolerance, so each state is the step's own, and the
+        step's assertion holds; the run produced and moved k."""
         mesh, model, faces, conditions_for = CASES[case](variant)
         live = mesh.cell_type != SOLID
-        k, eps = _patchy_start(model, mesh.cell_type.shape, seed=3)
+        if case == "smith_hutton":
+            k, eps = _patchy_start(model, mesh.cell_type.shape, seed=3)
+            steps = POSITIVITY_STEPS
+        else:
+            k, eps = _bounded_start(mesh.cell_type.shape, seed=5)
+            steps = RANDOM_CONVERGED_STEPS
         state = model.state(k, eps)
         produced = model.terms(state, faces, conditions_for(state)).production
         assert produced.max() > 0.0
         least_k = least_eps = math.inf
-        for _ in range(POSITIVITY_STEPS):
+        most_sweeps = 0
+        for n in range(steps):
             state = model.step(state, faces, conditions_for(state))
+            assert model.solves_converged, f"step {n}: sweeps {model.last_sweeps}"
+            most_sweeps = max(most_sweeps, *model.last_sweeps)
             least_k = min(least_k, float(state.k[live].min()))
             least_eps = min(least_eps, float(state.eps[live].min()))
         print(
-            f"positivity {case} {variant}: least k {least_k:.3e}, least eps "
-            f"{least_eps:.3e}; end k [{state.k[live].min():.3e}, "
-            f"{state.k[live].max():.3e}]"
+            f"positivity {case} {variant}: {steps} steps, most sweeps {most_sweeps}; "
+            f"least k {least_k:.3e}, least eps {least_eps:.3e}; end k "
+            f"[{state.k[live].min():.3e}, {state.k[live].max():.3e}]"
         )
         assert least_k > 0.0 and least_eps > 0.0
-        assert np.all(np.isfinite(state.k)) and np.all(np.isfinite(state.eps))
         assert not np.allclose(state.k[live], k[live])
+
+    @pytest.mark.parametrize("variant", VARIANT_NAMES)
+    def test_a_long_run_stays_positive_while_its_solves_are_truncated(
+        self, variant: str
+    ) -> None:
+        """The random field from the patchy start for 300 pseudo-time steps.
+        The frozen strain grows k without a steady state, nu_t with it, and
+        the face conductances outgrow V / dt by orders, so the implicit solves
+        stop at their 500-sweep cap on most steps (test 35 check 7): the
+        states are truncated Jacobi iterates, not the step's solution.
+        Positivity holds all the same, because every Jacobi sweep is a
+        non-negative combination of a non-negative right-hand side and
+        non-negative neighbours (scalar_scheme.implicit_step), so a truncated
+        iterate is positive as the converged one is. Whether the coupled solve
+        should iterate further is a question for steps 5 and 6, not this
+        test."""
+        mesh, model, faces, conditions_for = CASES["random"](variant)
+        live = mesh.cell_type != SOLID
+        state = model.state(*_patchy_start(model, mesh.cell_type.shape, seed=3))
+        truncated = 0
+        least_k = least_eps = math.inf
+        for _ in range(POSITIVITY_STEPS):
+            state = model.step(state, faces, conditions_for(state))
+            truncated += not model.solves_converged
+            least_k = min(least_k, float(state.k[live].min()))
+            least_eps = min(least_eps, float(state.eps[live].min()))
+        print(
+            f"long run {variant}: {truncated} of {POSITIVITY_STEPS} steps truncated; "
+            f"least k {least_k:.3e}, least eps {least_eps:.3e}"
+        )
+        # The run exists to exercise truncated solves; if they all converge,
+        # its docstring no longer describes it.
+        assert truncated > 0
+        assert least_k > 0.0 and least_eps > 0.0
+        assert np.all(np.isfinite(state.k)) and np.all(np.isfinite(state.eps))
 
     @pytest.mark.parametrize("variant", VARIANT_NAMES)
     @pytest.mark.parametrize("case", list(CASES))
     def test_the_planted_explicit_decay_goes_negative(
-        self, case: str, variant: str
+        self, monkeypatch: pytest.MonkeyPatch, case: str, variant: str
     ) -> None:
         """The control: the same start with the decay moved to step 2's explicit
         growth, ``k - dt eps``, takes k below zero within a few steps at a
         Courant number of 1/2, and the step's assertion names it."""
         mesh, model, faces, conditions_for = CASES[case](variant)
-        _explicit_decay(model)
+        _explicit_decay(model, monkeypatch)
         state = model.state(*_patchy_start(model, mesh.cell_type.shape, seed=3))
         with pytest.raises(PositivityError) as raised:
             for _ in range(5):
                 state = model.step(state, faces, conditions_for(state))
+        assert raised.value.minimum < 0.0
+
+    def test_the_assertion_names_eps_when_only_eps_goes_negative(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """eps's own branch of the assertion: with only eps's decay made
+        explicit, k stays positive and the step raises naming eps, with a
+        negative least value."""
+        mesh, model, faces, conditions_for = CASES["smith_hutton"]("standard")
+        _explicit_decay(model, monkeypatch, for_k=False, for_eps=True)
+        state = model.state(*_patchy_start(model, mesh.cell_type.shape, seed=3))
+        with pytest.raises(PositivityError, match="eps is not positive") as raised:
+            model.step(state, faces, conditions_for(state))
         assert raised.value.minimum < 0.0
 
     def test_the_assertion_refuses_a_value_that_is_not_finite(self) -> None:
@@ -905,11 +1371,15 @@ def val001_faces() -> tuple[Mesh, FaceVelocities, np.ndarray, SimConfig]:
 
 
 def _drift(
-    mesh: Mesh, config: SimConfig, faces: FaceVelocities, seconds: float
+    mesh: Mesh,
+    config: SimConfig,
+    faces: FaceVelocities,
+    seconds: float,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> tuple[float, float, float]:
     """Largest relative departure of uniform k and eps, sources off, and T."""
     model = KEpsilonModel(mesh, config)
-    _no_sources(model)
+    _no_sources(model, monkeypatch)
     k0, eps0 = 2.3e-3, 4.1e-4
     conditions = TurbulenceConditions.uniform(mesh, k0, eps0)
     dt = 0.5 / float(model._rate(faces)[mesh.cell_type != SOLID].max())
@@ -928,20 +1398,23 @@ def _drift(
 @pytest.mark.integration
 def test_uniform_k_and_eps_stay_uniform_on_the_val001_faces(
     val001_faces: tuple[Mesh, FaceVelocities, np.ndarray, SimConfig],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Production and decay off, uniform k and eps with the inlet carrying the
     same: the departure stays within the transport scheme's constancy bound,
     max |b_P| T / (rho V_P) (REQ-T11, VAL-012); one interior face perturbed
     by 1e-6 m/s breaks it, so the bound can fail."""
     mesh, faces, imbalance, config = val001_faces
-    k_drift, eps_drift, t_total = _drift(mesh, config, faces, CONSTANCY_SECONDS)
+    k_drift, eps_drift, t_total = _drift(
+        mesh, config, faces, CONSTANCY_SECONDS, monkeypatch
+    )
     volume = np.outer(mesh.dy_cell, mesh.dx_cell)
     live = mesh.cell_type != SOLID
     bound = float((np.abs(imbalance) / (config.rho * volume))[live].max()) * t_total
     u = faces.u.copy()
     u[10, 20] += 1.0e-6
     control, _, _ = _drift(
-        mesh, config, FaceVelocities.copy_of(u, faces.v), CONSTANCY_SECONDS
+        mesh, config, FaceVelocities.copy_of(u, faces.v), CONSTANCY_SECONDS, monkeypatch
     )
     print(
         f"constancy: T {t_total:.2f} s; departure k {k_drift:.3e}, eps "

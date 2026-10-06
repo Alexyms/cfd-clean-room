@@ -12,14 +12,18 @@ diagonal with eps / k from the previous iterate, backward Euler in a
 linearised form, so the error at a fixed end time falls at first order in
 the true-time step. The criterion: observed order between 0.9 and 1.1 over
 three steps in a ratio of two, for k and for eps, both variants; and the
-field uniform to rounding, its relative spread below 2e-15 per step taken. RNG's R is zero at rest (eta = 0), so RNG decays
-with its own C_2, 1.68.
+field uniform to rounding, its relative spread below 2e-15 per step taken.
+RNG's R is zero at rest (eta = 0), so RNG decays with its own C_2, 1.68.
 
-The end time is two initial turnover times, 2 k0 / eps0, and the steps are
-1/40, 1/80 and 1/160 of it: at 1/20 the coarse pair's order for RNG's k is
-0.887, outside the band, the dt^2 term still visible (prompt 35's smoke run,
-results/builder35/).
+The end time is two initial turnover times, 2 k0 / eps0. The step sizes were
+set after a first run: from 1/20, 1/40 and 1/80 of it the coarse pair fell
+outside the band twice, RNG's k at 0.887 and the standard eps at 1.163, the
+dt^2 term still visible (prompt 35's smoke run, results/builder35/; test 35
+check 6 reproduced both). The steps are 1/40, 1/80 and 1/160, where every
+order is inside it.
 """
+
+import dataclasses
 
 import numpy as np
 import pytest
@@ -27,7 +31,13 @@ import pytest
 from src.config import SimConfig
 from src.mesh import Mesh
 from src.staggered import FaceVelocities, u_shape, v_shape
-from src.turbulence import KEpsilonModel, TurbulenceConditions
+from src.turbulence import (
+    KEpsilonModel,
+    PositivityError,
+    StepTerms,
+    TurbulenceConditions,
+    TurbulenceState,
+)
 from validation.transport_cases import AIR, PARTICLES, SOLVER_BLOCK
 
 K0 = 0.0137
@@ -114,9 +124,13 @@ def test_decaying_turbulence_val015(variant: str) -> None:
 
 
 @pytest.mark.validation
-def test_the_planted_explicit_decay_breaks_val015_at_a_large_step() -> None:
-    """The trap's control: with the decay explicit, ``k - dt eps``, one step of
-    dt = 2 k0 / eps0 takes k below zero; the implicit decay keeps it positive."""
+def test_the_planted_explicit_decay_breaks_val015_at_a_large_step(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The trap's control, planted through the model: with k's decay moved from
+    the implicit diagonal to step 2's explicit growth, ``k - dt eps``, one
+    step of dt = 2 k0 / eps0 takes k below zero and the step raises; the
+    model as built keeps k positive at the same step."""
     config = _box("standard")
     mesh = Mesh(config)
     model = KEpsilonModel(mesh, config)
@@ -125,9 +139,26 @@ def test_the_planted_explicit_decay_breaks_val015_at_a_large_step() -> None:
     state = model.initial(K0, EPS0)
     implicit = model.step(state, faces, conditions, END_TIME)
     assert implicit.k.min() > 0.0
-    explicit_k = state.k - END_TIME * state.eps
+
+    original = model._terms
+
+    def explicit(
+        state: TurbulenceState,
+        faces: FaceVelocities,
+        conditions: TurbulenceConditions,
+    ) -> StepTerms:
+        t = original(state, faces, conditions)
+        return dataclasses.replace(
+            t,
+            growth_k=t.growth_k - t.decay_k * state.k,
+            decay_k=np.zeros_like(t.decay_k),
+        )
+
+    monkeypatch.setattr(model, "_terms", explicit)
+    with pytest.raises(PositivityError, match="k is not positive") as raised:
+        model.step(state, faces, conditions, END_TIME)
     print(
         f"VAL-015 control: one step of {END_TIME:.3f} s, implicit k "
-        f"{implicit.k.mean():.4e}, explicit k {explicit_k.mean():.4e}"
+        f"{implicit.k.mean():.4e}, explicit k down to {raised.value.minimum:.4e}"
     )
-    assert explicit_k.max() < 0.0
+    assert raised.value.minimum < 0.0
