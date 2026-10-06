@@ -295,11 +295,13 @@ the design's decisions and accepted the request on 2026-10-04. Step 0, the risk-
 probe, ran the same day, and its pull request carries ECR-002's requirement and scope text into
 `docs/SYSTEM.md`. Section 7 of its report (prompt 34b) found ten momentum sweeps converge the
 room across k-epsilon's range. Step 1, k and eps on a prescribed face field, is built on
-`ecr002/k-epsilon-scalar` (prompt 35): the transport scheme shared through
+`feature/ecr002-k-epsilon-scalar` (prompt 35): the transport scheme shared through
 `src/scalar_scheme.py` with the transport gate unchanged to the bit, the `turbulence`
 configuration section, and `src/turbulence.py` for both variants, VAL-015 passing
-(`docs/PROJECT_PLAN.md`). Next: its review and test, then step 2, and ECR-003, the
-pressure solve, which steps 1 to 4 do not wait for.
+(`docs/PROJECT_PLAN.md`). Review 35 and test 35 found its tests one-directional and
+`nu_t` unchecked; the fix pass of prompt 35b answers them on
+`feature/ecr002-k-epsilon-scalar`. Next: `/cfd-test 35b`, the pull request, then step 2,
+and ECR-003, the pressure solve, which steps 1 to 4 do not wait for.
 
 Deferred findings from earlier pull requests are open as GitHub issues 33, 36, 38, 40 and 42.
 
