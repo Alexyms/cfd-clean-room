@@ -8,6 +8,9 @@ ed83807 and at main's 023b8f6, so what is measured here holds on both.
 **Order:** sections 1 to 5 (the question, the method, the controls on the harness, what each
 outcome means, and both sets of predictions) are the first commit, made before item 0 and before
 measurements 1 to 3 ran. The sections after them were written after the runs.
+**36b:** section 12 and appendices Q to S were added in the fix pass of prompt 36b, after premise
+review 36 and test 36, from runs of that pass in `results/builder36b/` (untracked). Sections 1 to 5
+are unchanged; notes marked "36b" in sections 8, 10 and 11 point at section 12.
 
 ## 1. The question
 
@@ -686,6 +689,15 @@ runs. Against it, every solver at 1e-4 is indistinguishable from a path change (
 m/s); the multigrid solvers at 1e-2 and 1e-1 are 2.5 to 7 times over it (1.2e-3 to 3.2e-3) and
 Jacobi-PCG at 1e-2 85 times over it.
 
+*36b.* Section 12.3 reads this differently. The states are separate steady solutions, at least
+three, not positions along one nearly neutral direction: the alpha 0.45 state and the CG 1e-2 state,
+continued 4,000 outer iterations with the exact correction at alpha 0.5, stay 4.8e-4 and 0.041 m/s
+from direct's with the same faces shut. So the "path floor" is a lower bound on how far apart
+solutions lie, not a floor on a run's error, and the CG 1e-2 state is a solution, not an error.
+After 100 corrections at 1e-8, CG at 1e-1 converges (2,739 outer iterations) and CG at 1e-1 and 1e-2
+land 2.7e-4 and 1.0e-4 m/s from direct: the divergence at 1e-1 and the 0.041 m/s state above come
+from a loose correction from rest. 3e-1 diverges even after the tight start.
+
 **Today's loop at the committed cap of 200** reaches the velocity-step stop at 1,684, 39% later than
 direct, its field there 0.012 m/s from direct's, and never the error-estimate stop in 20,000 outer
 iterations: its corrections reach a relative residual of 0.10 in the median and 0.8 late in the run,
@@ -740,7 +752,8 @@ the last 10,000 outer iterations; section 9).
 
 **Today's loop at the committed cap of 200 freezes without continuity.** On 80x30 at real air it
 meets the velocity-step stop at outer 5,232, and at ten times the viscosity at 5,191, with the
-corrected faces carrying a net imbalance of 46.5% and 44.5% of the supply; the velocity then stays
+corrected faces carrying a net imbalance of 46.5% and 44.2% of the supply (36b: 44.2% corrects
+44.5%, the second run's value at its end); the velocity then stays
 fixed to rounding (its change 1e-16) for the rest of 20,000 outer iterations. Captured at outer
 5,231 (`freeze36.py`, appendix M, a diagnostic added after the runs) the system is not singular: T3
 has shut returns 1 to 3 and the hood is held, leaving return 4's six faces open; Cholesky succeeds;
@@ -749,6 +762,11 @@ proportion to the diagonal: `b / a_P` lies within 1.3% of its median over 90% of
 Jacobi turns a residual proportional to its own diagonal into a uniform p', which moves no face, so
 the velocity stands still while the pressure drifts and 1.77 kg/s per metre stays unaccounted. The
 velocity-step rule calls that converged. The error-estimate rule does not.
+
+*36b.* This is the probe room: T3 outlets, ten momentum sweeps, alpha_velocity 0.5. The committed
+configuration (T0, one sweep, alpha_velocity 0.7) does not freeze at the cap of 200: it goes
+non-finite at outer 7,635 on 80x30 and never meets the velocity-step stop on 200x75, every
+correction at the cap (section 12.5).
 
 ### 8.3 The 80x30 room at a thousand times air's viscosity (added)
 
@@ -801,6 +819,11 @@ property, not the correction's, since it appears with the exact correction, and 
 change; what belongs to this change is that a relative stop alone cannot satisfy the stopping rule
 there.
 
+*36b.* Measured here under T3 only, where the hood holds its flow. Under T0, the committed outlets,
+the same state forms: the exact correction and CG at 1e-8 stop by the error estimate at 1,197 with
+the pressure rising 0.0587 Pa per outer iteration and `||b||` 0.069, and CG at 1e-2 and 1e-4 never
+stop in 20,000 outer iterations (section 12.4).
+
 ### 8.4 What measurement 2 says
 
 The loosest per-correction accuracy depends on what has to stay unchanged:
@@ -809,7 +832,7 @@ The loosest per-correction accuracy depends on what has to stay unchanged:
 |---|---|---|
 | The outer count, every solver | 1e-2 | 40x15 (both stops), 80x30 (the path to its stall), Re 90 (the velocity-step stop) |
 | The outer count, multigrid only | 1e-1 (MG-PCG on both grids; GMG on 40x15 only) | 40x15, 80x30 |
-| The converged field, to the floor the path itself sets (4.8e-4 m/s) | 1e-4 for every solver; 1e-2 for none | 40x15 |
+| The converged field, to the floor the path itself sets (4.8e-4 m/s) | 1e-4 for every solver from rest; 1e-2 for none from rest; 1e-1 and 1e-2 with CG after 100 corrections at 1e-8 (36b, section 12.3) | 40x15 |
 | The stopping rule's continuity conditions where the outlets hold a standing imbalance | an absolute bound: each correction must leave less than `mass_imbalance_tol` per cell; 1e-8 here, 1e-4 does not | 80x30 at Re 90 |
 
 The relative residual in the 2-norm is not a solver-independent measure of enough: at the same level
@@ -826,6 +849,15 @@ sense the prompt's stop condition names: the outer loop needs tighter pressure t
 converged field and for the stopping rule's continuity, not looser.** It changes the emphasis of
 ECR-003 from loosening the correction to solving it fast to a tight, absolutely bounded tolerance,
 which is cheap: from 1e-4 to 1e-8 Jacobi-PCG's cost rises 1.2 times on the product (section 7.3).
+
+*36b.* The bold sentence holds for the stopping rule's continuity, and for the field only with CG
+and multigrid at fixed relative levels from rest. Today's loop at step 0's settings (jacobi40k, cap
+40,000, 1e-8 Pa) leaves 7.8% of the imbalance per correction in the median, yet its field is 1.1e-4
+m/s from direct's at its velocity-step stop and 7.2e-5 m/s at the end of its 20,000 outer
+iterations, inside the 4.8e-4 m/s spread; it fails on continuity, its worst cell ending at 1.2e-7
+kg/s per metre against the 8e-8 asked. So for the field the relative level is not the quantity that
+decides; section 12.3 shows the start from rest is: after a tight start CG at 1e-1 lands 2.7e-4 m/s
+from direct.
 
 ### 8.5 Against the predictions
 
@@ -932,6 +964,12 @@ measure; both are carried into ECR-003 and ADR-013 as they stand.
    rule's continuity conditions need an absolute bound that only 1e-8 met. Today's 1e-6 Pa stop
    delivers 1e-3 to 3e-3 on the product's systems (sections 8.4, 7.1). The ECR's emphasis moves from
    loosening the correction to solving it fast and tight.
+   *36b.* Which leg fails depends on the solver. CG and multigrid at 1e-2 from rest keep the count and
+   miss the field; today's loop at step 0's settings lands its field inside the spread and misses
+   continuity. The field leg is a start-from-rest effect: after 100 tight corrections CG at 1e-1 and
+   1e-2 land within the spread, and the "floor" is a lower bound on the spread of several steady
+   solutions (sections 8.4 and 12.3). The continuity leg, at Re 90 on 80x30, holds under the
+   committed outlets too (section 12.4).
 
 **Against the reports cited in the prompt:**
 
@@ -965,19 +1003,226 @@ measure; both are carried into ECR-003 and ADR-013 as they stand.
   solve's count is ECR-002 step 5's; measurement 3 is a projection over an assumed range.
 - **The near-neutral direction at (4.7, 1.9).** Measured on the laminar 40x15 room only, the one
   converged real-air case. Whether the product's turbulent solve has such directions, and how large
-  the floor they set is, is not measured.
+  the floor they set is, is not measured. *36b:* they are at least three separate steady solutions,
+  not one direction (section 12.3); what makes the room have them at that cell is not found.
 - **The drifting pressure at the outlets.** A property of the committed outlet treatment
   (zero-gradient extrapolation before each prediction, p' = 0 at the face in the correction), found
   on the 80x30 room at Re 90 and absent from the 40x15 room at real air. Outside this change;
-  ECR-002 step 3 rebuilds the outlets.
+  ECR-002 step 3 rebuilds the outlets. *36b:* found under T0, the committed outlets, as well as
+  under T3 (section 12.4).
 - **A combined stop**, a relative level with an absolute floor tied to `mass_imbalance_tol`, was not
-  run; only fixed relative levels were. 1e-8 met every condition here.
+  run; only fixed relative levels were. 1e-8 met every condition here. *36b:* a tight start before a
+  looser level was run on 40x15 only (section 12.3); the combined stop is still not run, and the
+  standing `||b||` at the product's converged state is not measured.
 - **My multigrid's setup** is the implementation's cost (25 probes per level in Python); a stencil
   formula or C would change its ranking, not measured.
 - **pyamg on singular systems** with a pinned cell instead of a projected right-hand side, not run.
 - **Reusing a hierarchy** over a lag of a few outer iterations, not run.
 - **The timings** are one core of one machine with NumPy 2.4.4, SciPy 1.18.1 and pyamg 5.3.0; no GPU
   was measured.
+
+## 12. Added in 36b: the controls premise review 36 and test 36 found missing (written after the runs)
+
+Premise review 36 and test 36 measured several things this report had not: CG's growth past
+200x75, the Annex 20 room at the grid ADR-012 G plans, a tight start before a loose level, a third
+steady state, the summation order of CG's sums, the standing imbalance under the committed outlets,
+the committed configuration on the finer grids, and CG with a sparse-matrix product. ECR-003 and
+ADR-013 now rest on those results, so the fix pass of prompt 36b ran each again with its own probe,
+`results/builder36b/probe36b.py` (appendix Q), launched by `run36b.sh` (appendix R) and read by
+`summary36b.py` (appendix S). It imports the builder-36 modules of appendices A, B, D and G
+read-only, runs in the probe environment of section 2.1 with BLAS on one thread, and writes only to
+`results/builder36b/`. The timed runs (12.1, 12.6) ran one at a time with nothing beside them; the
+outer-loop runs ran in parallel afterwards and are untimed. Where the premise review or the test
+measured the same thing, its figure is given beside this one.
+
+**The harness is the report's.** Four reruns reproduce saved fields of section 8 bitwise (u, v and
+p): the 40x15 room with the exact correction, with CG at 1e-2 and with CG at 1e-8, and the 80x30
+room at Re 90 with the exact correction. Their stops are the report's: 1,209 and 2,822, 1,205 and
+2,818, 1,209 and 2,822, 233 and 588.
+
+### 12.1 Growth with the mesh, the Annex 20 room at 216x72, and the residual CG stops on
+
+Each system was captured at outer 100 of a run driven with SuperLU (the T3 room of section 8 with
+ten momentum sweeps; the Annex 20 room under T1 as in section 2.2) and solved with Jacobi-PCG,
+`solvers36.jacobi_pcg`. The milliseconds are seven solves of each system to 1e-8, interleaved across
+the four so that a drift in the machine's speed falls on all of them alike (`retime`); the scaling
+runs' own medians of three, run one system after another, differ from them by up to 17%.
+
+| Room | Grid | Unknowns | Iterations to 1e-4 | to 1e-6 | to 1e-8 | ms per correction at 1e-8, median [fastest] | True minus recursive relative residual at exit, largest of the three levels |
+|---|---|---|---|---|---|---|---|
+| Product, T3 | 200x75 | 10,910 | 680 | 794 | 861 | 147 [136] | 2.3e-14 |
+| Product, T3 | 400x150 | 43,800 | 1,241 | 1,469 | 1,643 | 1,132 [974] | 1.8e-14 |
+| Annex 20, T1 | 180x60 | 10,800 | 548 | 645 | 713 | 97 [85] | 3.1e-15 |
+| Annex 20, T1 | 216x72 | 15,552 | 663 | 785 | 872 | 178 [145] | 8.1e-15 |
+
+**Growth per doubling.** From 200x75 to 400x150 the iterations grow 1.91 times and the unknowns 4.01
+times, so the work grows 7.7 times; the time grew 7.7 times by the medians and 7.2 by the fastest
+solves. ECR-003 and ADR-013 now give one figure, about 7.5 times per correction for each doubling
+of the cells per side, in place of the draft's "four times" (ECR) and "eight times, extrapolated"
+(ADR). The premise review measured the same iteration counts and 135.5 to 1,016 ms, 7.5 times.
+
+**The Annex 20 room at 216x72**, the grid ADR-012 G plans for VAL-016: 872 iterations to 1e-8, 1.22
+times its 180x60 count and level with the product's 861, on 1.43 times the product's unknowns;
+0.18 s per correction against the product's 0.15 s. The premise review measured 872 iterations and
+151 ms. Section 9's 180x60 count at outer 100, 713, is reproduced.
+
+**The residual CG stops on.** The probe's CG stops on the residual it updates by recursion. At every
+level on all four systems the true relative residual at exit, formed from p', is within 2.3e-14 of
+the recursive one. The premise review found 9.1e-9 to 9.9e-9 true at 1e-8 on the three captured
+200x75 systems.
+
+### 12.2 The order of CG's sums, one iteration more, and the floor on the cavity
+
+One correction on five captured systems (section 2.2) with CG's three sums taken in three orders:
+NumPy's `vdot`, the reversed arrays through `np.sum`, and blocks of 256 summed in reverse block
+order, a stand-in for a GPU's tree reduction. Each CG stops at its relative level or at the floor of
+1e-13 times the flux scale F (rho times the inflow, on the cavity rho times the lid velocity times
+the side), as every Krylov run of section 8 did. "One iteration more" is the `vdot` loop run one
+iteration past its stop: what a second implementation stopping one iteration later would return.
+
+| System | Level | Iterations, vdot / reversed / blocks | Largest p' (Pa) | p' moved by the order, reversed / blocks (Pa) | Faces moved by the order, reversed / blocks (m/s) | Faces moved by one iteration more (m/s) |
+|---|---|---|---|---|---|---|
+| product200 outer 1 | 1e-8 | 852 / 852 / 852 | 3.86 | 5.6e-14 / 5.9e-14 | 1.2e-12 / 1.5e-12 | 5.9e-09 |
+| product200 outer 100 | 1e-8 | 861 / 861 / 861 | 0.266 | 9.5e-15 / 3.2e-15 | 5.8e-14 / 3.4e-14 | 1.4e-09 |
+| product200 outer 1000 | 1e-8 | 857 / 857 / 857 | 0.247 | 2.0e-15 / 2.7e-15 | 4.9e-14 / 4.1e-14 | 8.9e-10 |
+| product40 outer 100 | 1e-8 | 164 / 164 / 164 | 0.145 | 7.7e-16 / 8.8e-16 | 4.7e-14 / 3.9e-15 | 4.2e-10 |
+| cavity80 outer 100 | 1e-8 | 384 / 384 / 384 (the floor) | 0.0138 | 4.0e-17 / 1.9e-17 | 1.1e-16 / 1.1e-16 | 2.0e-13 |
+| product200 outer 1 | 1e-10 | 903 / 903 / 903 | 3.86 | 5.7e-14 / 5.9e-14 | 1.2e-12 / 1.6e-12 | 7.4e-11 |
+| product200 outer 100 | 1e-10 | 928 / 928 / 928 | 0.266 | 9.5e-15 / 3.2e-15 | 1.1e-13 / 2.8e-14 | 2.0e-11 |
+| product200 outer 1000 | 1e-10 | 925 / 925 / 925 | 0.247 | 2.0e-15 / 2.8e-15 | 5.5e-14 / 3.7e-14 | 9.5e-12 |
+| product40 outer 100 | 1e-10 | 174 / 174 / 174 | 0.145 | 7.8e-16 / 8.9e-16 | 4.7e-14 / 7.8e-15 | 8.5e-12 |
+
+In the outer loop, the 40x15 room at real air with every sum of CG reversed (`pcgrev:1e-8`) meets the
+velocity-step stop at 1,209 and the error-estimate stop at 2,822, as CG with `vdot` does, and its
+final field is within 1.1e-14 m/s of that run's.
+
+**Reading.** The order of the sums alone left the iteration counts unchanged and moved the corrected
+faces by at most 1.6e-12 m/s, two orders inside REQ-N03's 1e-10; the converged room moved by 1.1e-14
+m/s. Test 36 found 1.4e-12 and 3.9e-14 m/s on outers 1 and 1,000 with its own blocked order; the
+premise review 1.2e-12 m/s and 1.1e-14 for the room. One iteration more at 1e-8 moves the faces by
+4.2e-10 to 5.9e-9 m/s on the open systems, more than 1e-10; at 1e-10 it stays below (8.5e-12 to
+7.4e-11). So the risk to REQ-N03 is not the order of the sums but a stop that fires one iteration
+apart, which these runs did not produce and a test can rule out by fixing the count (ADR-013 C). This
+was a reordering on one CPU, not a GPU run.
+
+**The floor on the cavity.** At outer 100 of VAL-002 80x80 the floor, not the relative level, ended
+the correction: CG stopped at 384 iterations with a relative residual of 1.4e-8, at both levels. On
+a closed domain a converged solve's right-hand side shrinks toward rounding, so the floor is part of
+the stop and belongs in REQ-S08's text (ECR-003 section 5.1).
+
+### 12.3 A tight start, and how many steady states the 40x15 room has
+
+Every run of section 8 started from rest. These start from rest with CG at 1e-8 for the first 100
+(or 1,300) corrections and switch to a looser level (`sched:N:LOOSE`); the room, the stop and the
+divergence check are section 8.1's. The field is compared with section 8.1's direct run.
+
+| Correction | velocity_step at | error_estimate at | Inner iterations, median [max] | Field vs direct, largest (at) | Shut return faces |
+|---|---|---|---|---|---|
+| exact (rerun) | 1,209 | 2,822 | 1 [1] | - | bottom 12 |
+| CG 1e-2 from rest (rerun) | 1,205 | 2,818 | 119 [143] | 0.041 (4.7, 1.9) | bottom 12 |
+| 100 at 1e-8, then 1e-1 | 1,196 | 2,739 | 35 [173] | 2.7e-4 (4.7, 1.9) | bottom 12 |
+| 1,300 at 1e-8, then 1e-1 | 1,209 | 2,799 | 88 [173] | 1.6e-7 (6.1, 0.9) | bottom 12 |
+| 100 at 1e-8, then 1e-2 | 1,206 | 2,821 | 120 [173] | 1.0e-4 (4.7, 1.9) | bottom 12 |
+| 100 at 1e-8, then 3e-1 | - | diverged at outer 125 | 163 [173] | - | bottom 13 and 14 when it diverged |
+
+From rest, CG at 1e-1 and 3e-1 diverged by outer 2 (section 8.1). After 100 tight corrections 1e-1
+converges: its first loose corrections leave a net outflow error of 0.2% to 1% of the supply, where
+the first correction from rest left 85%. 3e-1 still diverges, 25 outer iterations after the
+switch. The premise review measured the 1e-1 rows (2,739 and 2.7e-4; 2,799 and 1.6e-7) and could
+not tell whether its 3e-1 run diverged; this one does. The 1e-2 row is new.
+
+Then each of three converged states was continued 4,000 outer iterations with the exact correction
+(`continue`, restart36's loop of appendix K):
+
+| State | Reached by | Stop | Distance from direct's state at its stop | Continued with | Drift from its stop | Last step (m/s) | Distance from direct's state at the end | Shut return faces, stop and end |
+|---|---|---|---|---|---|---|---|---|
+| D | exact, alpha_velocity 0.5 | 2,822 | - | exact, alpha 0.45 | 3.8e-7 | 1.3e-15 | 3.8e-7 | bottom 12 |
+| A | exact, alpha_velocity 0.45 | 2,875 | 4.8e-4 at (4.7, 1.9) | exact, alpha 0.5 | 3.5e-7 | 4.4e-16 | 4.8e-4 at (4.7, 1.9) | bottom 12 |
+| P | CG 1e-2, alpha_velocity 0.5 | 2,818 | 0.041 at (4.7, 1.9) | exact, alpha 0.5 | 3.9e-7 | 8.9e-16 | 0.041 at (4.7, 1.9) | bottom 12 |
+
+The open bottom faces are the same twelve at every stop and every end, `[2, 3, 4, 5, 13, 14, 23, 24,
+28, 29, 30, 31]`, with none shut on the right wall.
+
+**Reading.** Continued with the exact iteration at alpha 0.5, the states A and P stay where they are:
+they drift 3.5e-7 and 3.9e-7 m/s, the stop's own iteration error (test 36 measured 3.79e-7 for the
+exact state continued from itself), their step falls to 1e-15 m/s, which is rounding, and the same
+faces stay shut. A fixed point of the exact iteration solves the discrete steady equations with those
+faces shut: the pressure update stops only where p' is zero, so the corrected faces are the
+predicted ones and their imbalance b is zero, and ten momentum sweeps return their starting field
+only if it solves the momentum equations. So the 40x15 room has at least three steady solutions,
+which differ at (4.7, 1.9) by 4.8e-4 and 0.041 m/s, not one solution with a slow direction.
+Section 8.1's "path floor" of 4.8e-4 m/s is the spread of the solutions its path changes happened to
+reach: a lower bound on how far apart solutions lie, not a floor on any run's error. CG at 1e-2 from
+rest reached another solution as alpha 0.45 did; after a tight start CG at 1e-1 and 1e-2 land within
+that spread of the exact correction's solution. So section 8.1's divergence of 1e-1 and its 0.041
+m/s state are effects of a loose correction from rest; the divergence of 3e-1 is not. What makes
+this room have several solutions at that cell, the jet into the gap beside the litho tool's top
+corner, is not found (test 36, S8).
+
+### 12.4 The standing imbalance under the committed outlets
+
+Section 8.3 measured the standing imbalance under T3, where the hood is held at a fixed flow. T0 is
+the committed treatment: every outlet face takes its interior neighbour's velocity. The 80x30 room at
+a thousand times air's viscosity, otherwise as section 8.3; `mass_imbalance_tol` is 2e-8 kg/s per
+metre.
+
+| Outlets | Correction | Stop | velocity_step at | error_estimate at | Worst cell at the end, kg/s per m (over the tolerance) | Mean pressure change per outer iteration, last 100 (Pa) | `||b||` at the end |
+|---|---|---|---|---|---|---|---|
+| T3 (rerun) | exact | error_estimate | 233 | 588 | 6.3e-17 | +0.0882 | 0.0793 |
+| T0 | exact | error_estimate | 489 | 1,197 | 4.4e-17 | +0.0587 | 0.0694 |
+| T0 | CG 1e-8 | error_estimate | 489 | 1,197 | 6.2e-11 | +0.0587 | 0.0694 |
+| T0 | CG 1e-4 | none in 20,000 | 489 | - | 6.7e-7 (33 times) | +0.0587 | 0.0694 |
+| T0 | CG 1e-2 | none in 20,000 | 487 | - | 9.1e-5 (4,500 times) | +0.0587 | 0.0694 |
+
+**Reading.** The committed outlets hold the same kind of state: the exact correction and CG at 1e-8
+stop by the error estimate at 1,197 with the mean pressure still rising 0.0587 Pa per outer
+iteration, and 1e-4 and 1e-2 never stop, though both meet the velocity-step stop by outer 489,
+their worst cell ending 33 and 4,500 times the tolerance. The hood held at its flow under T3 is not
+the cause. The level needed is `mass_imbalance_tol / ||b||`, 2.9e-7 under T0 and 2.5e-7 under T3.
+The premise review measured the T0 rows (1,197, 0.0587, 0.0694, and worst cells of 9.1e-5 and
+6.7e-7); they are reproduced.
+
+### 12.5 The committed configuration on 80x30 and 200x75
+
+`configs/clean_room_default.yaml` with only nx, ny and `max_simple_iter` changed: T0, one momentum
+sweep, alpha_velocity 0.7, the committed Jacobi loop (cap 200, 1e-6 Pa), velocity_step.
+
+| Grid | Outer iterations run | Outcome | Least residual (at outer) | Residual over the last 1,000, 5th and 95th percentiles | Corrections that took 200 sweeps | velocity_step met |
+|---|---|---|---|---|---|---|
+| 80x30 | 7,636 | non-finite at outer 7,635 | 0.042 (15) | 4.6e132, 4.1e150 | all 7,636 | never |
+| 200x75 | 3,000 | the cap of 3,000 | 7.9e-3 (11) | 1.4e44, 2.2e63 | all 3,000 | never |
+
+**Reading.** The committed room diverges on both grids. Every correction runs the full 200 sweeps, but
+the room never reaches a state the cap could freeze. The freeze of section 8.2, where velocity_step
+calls a frozen, unbalanced field converged, belongs to the probe room (T3, ten momentum sweeps,
+alpha_velocity 0.5), as ECR-003 section 1 now says. The premise review found the same outcomes
+(non-finite from 7,635; 7.9e-3 at outer 11; a 5th percentile of 1.4e44) and gives 98% of the 80x30
+corrections at the cap; this count takes every correction that ran 200 sweeps, whether or not its
+stop fired at the last one.
+
+### 12.6 CG with a sparse-matrix product
+
+On the three captured 200x75 systems of section 7.2, the probe's Jacobi-PCG, whose product is five
+shifted NumPy arrays, against the same loop (`solvers36.pcg`) with SciPy's CSR product on the cells
+with an equation; five timed solves of each to 1e-8, alternating, in one process.
+
+| System | Iterations, both | Five shifted arrays, ms (per iteration) | CSR product, ms (per iteration) | Per iteration, shifted over CSR |
+|---|---|---|---|---|
+| product200 outer 1 | 852 | 134 (0.157) | 87 (0.102) | 1.53 |
+| product200 outer 100 | 861 | 140 (0.163) | 96 (0.112) | 1.46 |
+| product200 outer 1000 | 857 | 183 (0.213) | 123 (0.144) | 1.48 |
+
+**Reading.** The same iterations take about 1.5 times less with a library sparse product; test 36
+found 0.09 to 0.10 s with its own CSR loop, 1.7 times. The 0.16 s of section 7.2 is the probe's
+product, not CG's floor. A CSR product needs SciPy (ADR-013 decision 2) or compiled code (decision
+5); with it, SuperLU's lead per outer iteration falls from 3.6 times to about two.
+
+### 12.7 What section 12 changes in sections 8 to 11
+
+Sections 1 to 5 stand as committed. Notes marked "36b" in sections 8.1 to 8.4, 10 and 11 point
+here, and one figure in section 8.2 is corrected: the 80x30 jacobi200 run at ten times air's
+viscosity met the velocity-step stop with 44.2% of the supply unaccounted, and 44.5% is that run's
+value at its end (test 36, S2).
 
 ## Appendix A: common36.py
 
@@ -3575,6 +3820,673 @@ def main() -> None:
             print(f"| {room} {k} | {ms:.3f} | {stop('stop 1e-06 Pa')} | {stop('stop 1e-08 Pa', False)} "
                   f"| {sweeps('level 1e-02')} | {sweeps('level 1e-04')} | {sweeps('level 1e-06')} "
                   f"| {sweeps('level 1e-08')} | {c2['rel2']:.2f}, {c2['signed_over_supply']:.1e} |")
+
+
+if __name__ == "__main__":
+    main()
+```
+
+## Appendix Q: probe36b.py
+
+```python
+"""Builder probe, prompt 36b: the runs behind the claims the fix pass adds.
+
+The premise review and test 36 measured several things the report did not:
+CG's growth to 400x150, the Annex 20 room at ADR-012's 216x72, a tight start
+before a loose level, a third steady state, the summation order of CG's
+reductions, the standing imbalance under the committed outlets (T0), the
+committed configuration on 80x30 and 200x75, and CG with a sparse product.
+ECR-003 and ADR-013 now cite each, so each is run again here, by this
+builder, with the builder-36 probe modules imported read-only. Writes only
+to this directory.
+
+Usage (from results/builder36b/, with results/builder36/venv36, BLAS on one
+thread):
+
+    python probe36b.py scaling FAMILY NX NY
+        FAMILY t3 (the measurement 2 room) or annex (Annex 20 under T1).
+        Drives the room with SuperLU, keeps the p' system at outer 100 and
+        solves it with Jacobi-PCG to 1e-4, 1e-6 and 1e-8, three timed solves
+        each; records the recursive and the true relative residual at exit.
+    python probe36b.py retime NAME [NAME ...]
+        Jacobi-PCG to 1e-8 on systems saved by scaling, seven timed solves
+        each, interleaved so a drift in the machine's speed falls on every
+        system alike.
+    python probe36b.py csr
+        On the three captured product200 systems: Jacobi-PCG with the probe's
+        five shifted arrays against the same loop with a SciPy CSR product,
+        to 1e-8, five timed solves each.
+    python probe36b.py order
+        One correction to 1e-8 and 1e-10 on five captured systems with CG's
+        three sums taken in three orders: NumPy's vdot, the reversed array
+        through np.sum, and blocks of 256 summed in reverse block order.
+    python probe36b.py outer NX NY MODE [MU] [ALPHA] [TREATMENT] [N_OUTER]
+        The measurement 2 room (capture36.run_room) with MODE one of
+        outer36's, or pcgrev:RTOL (CG with reversed sums) or
+        sched:N:LOOSE (N corrections at 1e-8, then LOOSE). TREATMENT T3 (the
+        report's) or T0 (every outlet extrapolated, as committed). Records the
+        shut faces at the end and the field's distance from the report's
+        m2_40x15_direct.npz where the grid is 40x15.
+    python probe36b.py continue NX NY MODE_A ALPHA_A MODE_B ALPHA_B N_MORE
+        Runs MODE_A at ALPHA_A to its error_estimate stop, then continues the
+        state N_MORE outer iterations with MODE_B at ALPHA_B (restart36's
+        loop), recording the drift, the last step and the distance from the
+        report's direct state.
+    python probe36b.py committed NX NY N_OUTER
+        configs/clean_room_default.yaml with only nx, ny and max_simple_iter
+        changed: T0, one momentum sweep, alpha_velocity 0.7, the committed
+        Jacobi loop (cap 200, 1e-6 Pa), velocity_step. Records the residual,
+        the corrections that reach the cap, and the first non-finite outer.
+"""
+
+import json
+import math
+import sys
+import time
+from pathlib import Path
+
+OUT = Path(__file__).resolve().parent
+B36 = OUT.parent / "builder36"
+sys.path.insert(0, str(B36))
+
+import numpy as np  # noqa: E402
+
+import capture36  # noqa: E402
+import common36 as c36  # noqa: E402
+import outer36  # noqa: E402
+import solvers36  # noqa: E402
+
+from src.mesh import SOLID  # noqa: E402
+from src.staggered import to_cell_centers  # noqa: E402
+
+capture36.HERE = OUT  # run_room writes its records here, not into builder36
+LEVELS = (1e-4, 1e-6, 1e-8)
+
+
+def rhs(b: np.ndarray, active: np.ndarray, needs_pin: bool) -> np.ndarray:
+    """f = -b, projected onto the range on a closed domain, zero off the equations."""
+    f = -b.copy()
+    if needs_pin:
+        f[active] -= f[active].mean()
+    f[~active] = 0.0
+    return f
+
+
+def write(name: str, out: dict) -> None:
+    (OUT / f"{name}.json").write_text(json.dumps(out, indent=1))
+    print(json.dumps({k: v for k, v in out.items() if not isinstance(v, list) or len(v) < 40}), flush=True)
+
+
+# ---------------------------------------------------------------------------
+# CG with its sums in a chosen order
+# ---------------------------------------------------------------------------
+
+
+def make_dot(order: str):  # type: ignore[no-untyped-def]
+    """A dot product over whole arrays with the summation order named."""
+    if order == "vdot":
+        return lambda a, b: float(np.vdot(a, b))
+    if order == "reversed":
+        return lambda a, b: float(np.sum(a.ravel()[::-1] * b.ravel()[::-1]))
+    if order == "blocks256":
+        def dot(a, b):  # type: ignore[no-untyped-def]
+            prod = (a.ravel() * b.ravel())
+            pad = (-prod.size) % 256
+            parts = np.concatenate([prod, np.zeros(pad)]).reshape(-1, 256).sum(axis=1)
+            return float(np.sum(parts[::-1]))
+        return dot
+    raise ValueError(order)
+
+
+def pcg_ordered(c, f: np.ndarray, rtol: float, atol: float, order: str,  # type: ignore[no-untyped-def]
+                maxiter: int = 20000) -> tuple[np.ndarray, int, float]:
+    """solvers36.pcg with the diagonal preconditioner and every sum taken in ORDER."""
+    dot = make_dot(order)
+    inv = np.where(c.a_p > 0.0, 1.0 / np.where(c.a_p > 0.0, c.a_p, 1.0), 0.0)
+    x = np.zeros_like(f)
+    r = f.copy()
+    fn = math.sqrt(dot(f, f))
+    stop = max(rtol * fn, atol)
+    if fn == 0.0:
+        return x, 0, 0.0
+    z = inv * r
+    p = z.copy()
+    rz = dot(r, z)
+    k = 0
+    rn = fn
+    while k < maxiter:
+        q = c36.apply_a(c, p)
+        alpha = rz / dot(p, q)
+        x += alpha * p
+        r -= alpha * q
+        k += 1
+        rn = math.sqrt(dot(r, r))
+        if rn <= stop:
+            break
+        z = inv * r
+        rz_new = dot(r, z)
+        p *= rz_new / rz
+        p += z
+        rz = rz_new
+    return x, k, rn / fn
+
+
+# ---------------------------------------------------------------------------
+# scaling and csr
+# ---------------------------------------------------------------------------
+
+
+def scaling(family: str, nx: int, ny: int) -> None:
+    capture = 100
+    if family == "t3":
+        stop = capture36.stopping_for(nx, ny, 8.0, 3.0, 1.2, 60.0)
+        room = c36.product_t3(f"scaling_{family}", nx, ny, capture + 1, stopping=stop)
+    elif family == "annex":
+        room = c36.annex20(f"scaling_{family}", nx, ny, capture + 1)
+    else:
+        raise SystemExit(family)
+    kept: dict = {}
+    calls = [0]
+
+    def solve(c, b, active, needs_pin):  # type: ignore[no-untyped-def]
+        if calls[0] == capture:
+            kept.update(c=c, b=b.copy(), active=active.copy(), needs_pin=needs_pin)
+        calls[0] += 1
+        pin = tuple(int(v) for v in np.argwhere(active)[0])
+        return solvers36.direct_solve(c, rhs(b, active, needs_pin), needs_pin, pin).x, 1
+
+    c36.install_corrector(room, solve, measure_residual=False)
+    t0 = time.perf_counter()
+    room.solver.solve_steady()
+    drive_s = time.perf_counter() - t0
+    c, active = kept["c"], kept["active"]
+    f = rhs(kept["b"], active, kept["needs_pin"])
+    np.savez(OUT / f"system_{family}_{nx}x{ny}_it{capture}.npz", a_p=c.a_p, a_e=c.a_e, a_w=c.a_w,
+             a_n=c.a_n, a_s=c.a_s, f=f)
+    out: dict = {"family": family, "nx": nx, "ny": ny, "capture": capture,
+                 "unknowns": int(active.sum()), "drive_s": drive_s,
+                 "threads": c36.threads_note(), "levels": {}}
+    for rtol in LEVELS:
+        times = []
+        for _ in range(3):
+            res = solvers36.jacobi_pcg(c, f, rtol, maxiter=200000, keep=True)
+            times.append(res.total_s)
+        r = f - c36.apply_a(c, res.x)
+        r[~active] = 0.0
+        out["levels"][f"{rtol:.0e}"] = {
+            "iterations": res.iterations,
+            "recursive_rel": res.history[-1],
+            "true_rel": float(np.linalg.norm(r) / np.linalg.norm(f)),
+            "ms": [1e3 * t for t in times],
+            "ms_median": 1e3 * float(np.median(times)),
+        }
+    write(f"scaling_{family}_{nx}x{ny}", out)
+
+
+def retime(names: list[str], repeats: int = 7) -> None:
+    """Jacobi-PCG to 1e-8 on saved systems, the timed solves interleaved across them."""
+    systems = {}
+    for name in names:
+        z = np.load(OUT / f"{name}.npz")
+        c = c36.PressureCoefficients(a_p=z["a_p"], a_e=z["a_e"], a_w=z["a_w"], a_n=z["a_n"], a_s=z["a_s"])
+        systems[name] = (c, z["f"])
+    times: dict[str, list[float]] = {name: [] for name in names}
+    iterations = {}
+    for _ in range(repeats):
+        for name, (c, f) in systems.items():
+            res = solvers36.jacobi_pcg(c, f, 1e-8, maxiter=200000)
+            times[name].append(res.total_s)
+            iterations[name] = res.iterations
+    out = {"threads": c36.threads_note(), "repeats": repeats,
+           "systems": {n: {"iterations": iterations[n], "ms": [1e3 * t for t in times[n]],
+                           "ms_median": 1e3 * float(np.median(times[n])),
+                           "ms_min": 1e3 * float(np.min(times[n]))} for n in names}}
+    write("retime_" + "_".join(n.replace("system_", "") for n in names), out)
+
+
+def csr() -> None:
+    out: dict = {"threads": c36.threads_note(), "systems": {}}
+    for k in (1, 100, 1000):
+        s = c36.load_system(f"product200_it{k}")
+        f = s.rhs()
+        active = s.active
+        a, _ = solvers36.to_csr(s.c)
+        fa = f[active]
+        inv = 1.0 / s.c.a_p[active]
+        shift, sparse = [], []
+        for _ in range(5):
+            res = solvers36.jacobi_pcg(s.c, f, 1e-8)
+            shift.append(res.total_s)
+            t0 = time.perf_counter()
+            xa, it, _ = solvers36.pcg(lambda v: a @ v, lambda r: inv * r, fa, 1e-8, 20000)
+            sparse.append(time.perf_counter() - t0)
+        x = np.zeros_like(f)
+        x[active] = xa
+        out["systems"][f"it{k}"] = {
+            "shift_iterations": res.iterations, "csr_iterations": it,
+            "shift_ms_median": 1e3 * float(np.median(shift)),
+            "csr_ms_median": 1e3 * float(np.median(sparse)),
+            "shift_ms_per_iteration": 1e3 * float(np.median(shift)) / res.iterations,
+            "csr_ms_per_iteration": 1e3 * float(np.median(sparse)) / it,
+            "p_diff_rel": float(np.abs(x - res.x).max() / np.abs(res.x).max()),
+        }
+    write("csr_product200", out)
+
+
+# ---------------------------------------------------------------------------
+# order
+# ---------------------------------------------------------------------------
+
+
+def order() -> None:
+    out: dict = {"threads": c36.threads_note(), "systems": {}}
+    for name in ("product200_it1", "product200_it100", "product200_it1000",
+                 "product40_it100", "cavity80_it100"):
+        s = c36.load_system(name)
+        f = s.rhs()
+        atol = 1e-13 * s.supply
+        row: dict = {}
+        for rtol in (1e-8, 1e-10):
+            base = None
+            entry: dict = {}
+            for kind in ("vdot", "reversed", "blocks256"):
+                x, k, rel = pcg_ordered(s.c, f, rtol, atol, kind)
+                if s.needs_pin:
+                    x = x.copy()
+                    x[s.active] -= x[s.pin_cell]
+                u, v = c36.corrected_faces(s, x)
+                entry[kind] = {"iterations": k, "recursive_rel": rel}
+                if base is None:
+                    base = (x, u, v)
+                    entry["max_abs_p"] = float(np.abs(x).max())
+                    # The same loop run one iteration past its stop: what a
+                    # second implementation stopping one iteration later
+                    # would return.
+                    x1, k1, _ = pcg_ordered(s.c, f, 0.0, 0.0, kind, maxiter=k + 1)
+                    if s.needs_pin:
+                        x1 = x1.copy()
+                        x1[s.active] -= x1[s.pin_cell]
+                    u1, v1 = c36.corrected_faces(s, x1)
+                    entry["one_more"] = {
+                        "iterations": k1,
+                        "p_diff_pa": float(np.abs(x1 - x).max()),
+                        "face_diff_m_s": float(max(np.abs(u1 - u).max(), np.abs(v1 - v).max())),
+                    }
+                else:
+                    entry[kind]["p_diff_pa"] = float(np.abs(x - base[0]).max())
+                    entry[kind]["face_diff_m_s"] = float(max(np.abs(u - base[1]).max(),
+                                                             np.abs(v - base[2]).max()))
+            row[f"{rtol:.0e}"] = entry
+        out["systems"][name] = row
+    write("order_systems", out)
+
+
+# ---------------------------------------------------------------------------
+# outer and continue
+# ---------------------------------------------------------------------------
+
+
+def make_solve(mode: str, supply: float):  # type: ignore[no-untyped-def]
+    """outer36's modes, plus pcgrev:RTOL and sched:N:LOOSE."""
+    atol = 1e-13 * supply
+    if mode.startswith("pcgrev:"):
+        rtol = float(mode.split(":")[1])
+
+        def solve(c, b, active, needs_pin):  # type: ignore[no-untyped-def]
+            x, k, _ = pcg_ordered(c, rhs(b, active, needs_pin), rtol, atol, "reversed")
+            return x, k
+        return solve
+    if mode.startswith("sched:"):
+        _, n_tight, loose = mode.split(":")
+        n_tight, loose_rtol = int(n_tight), float(loose)
+        calls = [0]
+
+        def solve(c, b, active, needs_pin):  # type: ignore[no-untyped-def]
+            rtol = 1e-8 if calls[0] < n_tight else loose_rtol
+            calls[0] += 1
+            res = solvers36.jacobi_pcg(c, rhs(b, active, needs_pin), rtol, atol=atol)
+            return res.x, res.iterations
+        return solve
+    return outer36.make_solve(mode, supply)
+
+
+def field_distance(nx: int, ny: int, u: np.ndarray, v: np.ndarray, mesh) -> dict:  # type: ignore[no-untyped-def]
+    """Largest and median distance from the report's direct state on 40x15, and where."""
+    ref_path = B36 / "m2_40x15_direct.npz"
+    if (nx, ny) != (40, 15) or not ref_path.exists():
+        return {}
+    ref = np.load(ref_path)
+    fluid = mesh.cell_type != SOLID
+    d = np.maximum(np.abs(u - ref["u"]), np.abs(v - ref["v"]))
+    d[~fluid] = 0.0
+    j, i = np.unravel_index(int(np.argmax(d)), d.shape)
+    return {"vs_direct_max": float(d.max()), "at": [float(mesh.xc[i]), float(mesh.yc[j])],
+            "vs_direct_median": float(np.median(d[fluid]))}
+
+
+def shut_faces(solver) -> dict:  # type: ignore[no-untyped-def]
+    return {
+        "closed_bottom": np.flatnonzero(getattr(solver, "closed_bottom", np.zeros(1, bool))).tolist(),
+        "closed_right": np.flatnonzero(getattr(solver, "closed_right", np.zeros(1, bool))).tolist(),
+        "open_bottom": np.flatnonzero(solver._corrector._out_bottom).tolist(),
+        "open_right": np.flatnonzero(solver._corrector._out_right).tolist(),
+    }
+
+
+def outer(nx: int, ny: int, mode: str, mu: float, alpha: float, treatment: str, n_outer: int) -> None:
+    tag = f"outer_{nx}x{ny}_{mode.replace(':', '_')}_mu{mu:g}_a{alpha:g}_{treatment}"
+    stop = capture36.stopping_for(nx, ny, 8.0, 3.0, 1.2, 60.0)
+    room = c36.product_t3(tag, nx, ny, n_outer, mu_factor=mu, alpha_u=alpha, stopping=stop)
+    room.solver.treatment = treatment
+    fluid = room.mesh.cell_type != SOLID
+    p_means: list[float] = []
+    solve_steady = room.solver.solve_steady
+
+    def with_pressure(on_iteration=None):  # type: ignore[no-untyped-def]
+        def cb(state) -> None:  # type: ignore[no-untyped-def]
+            p_means.append(float(state.p[fluid].mean()))
+            if on_iteration is not None:
+                on_iteration(state)
+        return solve_steady(on_iteration=cb)
+
+    room.solver.solve_steady = with_pressure
+    rec = capture36.run_room(room, make_solve(mode, room.supply), tag, print_every=500)
+    extra: dict = {"mode": mode, "mu_factor": mu, "alpha": alpha, "treatment": treatment,
+                   "mass_imbalance_tol": stop["mass_imbalance_tol"], **shut_faces(room.solver)}
+    if rec["stop"] != "diverged":
+        z = np.load(OUT / f"{tag}.npz")
+        extra.update(field_distance(nx, ny, z["u"], z["v"], room.mesh))
+        extra["worst_end"] = rec["worst"][-1]
+        extra["b_norm_end"] = rec["b_norm"][-1]
+        if len(p_means) > 101:
+            extra["p_mean_end"] = p_means[-1]
+            extra["p_mean_change_per_outer_last100"] = (p_means[-1] - p_means[-101]) / 100.0
+    rec.update(extra)
+    (OUT / f"{tag}.json").write_text(json.dumps(rec))
+    print(json.dumps({k: v for k, v in rec.items() if not isinstance(v, list) or len(v) < 40}), flush=True)
+
+
+def cont(nx: int, ny: int, mode_a: str, alpha_a: float, mode_b: str, alpha_b: float, n_more: int) -> None:
+    tag = f"continue_{nx}x{ny}_{mode_a.replace(':', '_')}_a{alpha_a:g}_{mode_b.replace(':', '_')}_a{alpha_b:g}"
+    stop = capture36.stopping_for(nx, ny, 8.0, 3.0, 1.2, 60.0)
+    room = c36.product_t3(tag, nx, ny, 20000, alpha_u=alpha_a, stopping=stop)
+    corr = c36.install_corrector(room, make_solve(mode_a, room.supply), measure_residual=False)
+    solver = room.solver
+    u_c, v_c, p = solver.solve_steady()
+    out: dict = {"mode_a": mode_a, "alpha_a": alpha_a, "mode_b": mode_b, "alpha_b": alpha_b,
+                 "stop_a": solver.stop_reason, "outer_a": len(solver.residual_history),
+                 "faces_a": shut_faces(solver), "a": field_distance(nx, ny, u_c, v_c, room.mesh)}
+    fv = solver.face_velocities
+    u, v, p = fv.u.copy(), fv.v.copy(), p.copy()
+    u0, v0 = u_c.copy(), v_c.copy()
+    fluid = room.mesh.cell_type != SOLID
+    corr.solve = make_solve(mode_b, room.supply)
+    solver._predictor._alpha = alpha_b
+    ref = solver.reference_velocity
+    drift, step = [], []
+    prev_u, prev_v = u0, v0
+    for _ in range(n_more):
+        solver._extrapolate_outlets(u, v)
+        pred = solver._predictor.predict(u, v, p)
+        res = corr.correct(pred, p)
+        u, v, p = res.u, res.v, res.p
+        uc, vc = to_cell_centers(u, v)
+        step.append(float(max(np.max(np.abs(uc - prev_u)[fluid]), np.max(np.abs(vc - prev_v)[fluid]))))
+        drift.append(float(max(np.max(np.abs(uc - u0)[fluid]), np.max(np.abs(vc - v0)[fluid]))))
+        prev_u, prev_v = uc, vc
+    out.update(drift_end=drift[-1], drift_max=max(drift), step_end_m_s=step[-1],
+               step_end_over_ref=step[-1] / ref, step_at_1000=step[min(999, len(step) - 1)],
+               faces_b=shut_faces(solver), b=field_distance(nx, ny, prev_u, prev_v, room.mesh))
+    write(tag, out)
+
+
+# ---------------------------------------------------------------------------
+# committed
+# ---------------------------------------------------------------------------
+
+
+class Stop(Exception):
+    """Raised from the callback at a non-finite residual."""
+
+
+def committed(nx: int, ny: int, n_outer: int) -> None:
+    room = c36.product_committed(f"committed_{nx}x{ny}", nx, ny, n_outer)
+    solver = room.solver
+    cap, tol = room.cfg.max_pressure_iter, room.cfg.pressure_tol
+    corrector, correct = solver._corrector, solver._corrector.correct
+    sweeps: list[int] = []
+
+    def recorded(prediction, p):  # type: ignore[no-untyped-def]
+        result = correct(prediction, p)
+        sweeps.append(result.sweeps)
+        return result
+
+    corrector.correct = recorded
+    residual: list[float] = []
+    first_bad = [None]
+
+    def cb(state) -> None:  # type: ignore[no-untyped-def]
+        residual.append(float(state.residual))
+        if not math.isfinite(state.residual):
+            first_bad[0] = state.iteration
+            raise Stop
+
+    t0 = time.perf_counter()
+    try:
+        solver.solve_steady(on_iteration=cb)
+        stop = solver.stop_reason or "max_simple_iter"
+    except Stop:
+        stop = "non-finite"
+    r = np.array(residual)
+    fin = r[np.isfinite(r)]
+    least = int(np.argmin(fin)) if fin.size else None
+    tail = fin[-1000:] if fin.size >= 1000 else fin
+    out = {
+        "nx": nx, "ny": ny, "n_outer": n_outer, "treatment": "committed (T0)",
+        "alpha_velocity": room.cfg.alpha_velocity, "max_pressure_iter": cap, "pressure_tol": tol,
+        "stop": stop, "outer": len(residual), "first_non_finite": first_bad[0],
+        "least_residual": float(fin[least]) if least is not None else None, "least_at": least,
+        "tail_p5": float(np.percentile(tail, 5)) if tail.size else None,
+        "tail_p95": float(np.percentile(tail, 95)) if tail.size else None,
+        "velocity_step_met": bool(np.any(fin < room.cfg.convergence_tol)),
+        "corrections_at_cap": int(np.sum(np.array(sweeps) >= cap)), "corrections": len(sweeps),
+        "seconds": time.perf_counter() - t0, "threads": c36.threads_note(),
+    }
+    write(f"committed_{nx}x{ny}", out)
+
+
+def main() -> None:
+    cmd, args = sys.argv[1], sys.argv[2:]
+    if cmd == "scaling":
+        scaling(args[0], int(args[1]), int(args[2]))
+    elif cmd == "retime":
+        retime(args)
+    elif cmd == "csr":
+        csr()
+    elif cmd == "order":
+        order()
+    elif cmd == "outer":
+        nx, ny, mode = int(args[0]), int(args[1]), args[2]
+        mu = float(args[3]) if len(args) > 3 else 1.0
+        alpha = float(args[4]) if len(args) > 4 else 0.5
+        treatment = args[5] if len(args) > 5 else "T3"
+        n_outer = int(args[6]) if len(args) > 6 else 20000
+        outer(nx, ny, mode, mu, alpha, treatment, n_outer)
+    elif cmd == "continue":
+        cont(int(args[0]), int(args[1]), args[2], float(args[3]), args[4], float(args[5]), int(args[6]))
+    elif cmd == "committed":
+        committed(int(args[0]), int(args[1]), int(args[2]))
+    else:
+        raise SystemExit(f"unknown command {cmd}")
+
+
+if __name__ == "__main__":
+    main()
+```
+
+## Appendix R: run36b.sh
+
+```sh
+#!/bin/sh
+# Prompt 36b: the launchers, from results/builder36b/. BLAS on one thread in
+# every run. The timed set runs one at a time with nothing beside it; the
+# outer-loop set runs in parallel afterwards and is untimed.
+#   sh run36b.sh timed     scaling on four grids, then the CSR comparison
+#   sh run36b.sh retime    the four systems scaling saved, timed again
+#                          interleaved (added after the first timed set)
+#   sh run36b.sh order     the summation-order probe on five captured systems
+#   sh run36b.sh outer     the outer-loop runs, in parallel
+#   sh run36b.sh committed the committed configuration on 80x30 and 200x75
+export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1
+PY=../builder36/venv36/Scripts/python.exe
+mkdir -p logs
+case "$1" in
+timed)
+    for g in "t3 200 75" "t3 400 150" "annex 180 60" "annex 216 72"; do
+        set -- $g
+        $PY probe36b.py scaling $1 $2 $3 > logs/scaling_$1_$2x$3.log 2>&1
+    done
+    $PY probe36b.py csr > logs/csr.log 2>&1
+    ;;
+retime)
+    $PY probe36b.py retime system_t3_200x75_it100 system_t3_400x150_it100 \
+        system_annex_180x60_it100 system_annex_216x72_it100 > logs/retime.log 2>&1
+    ;;
+order)
+    $PY probe36b.py order > logs/order.log 2>&1
+    ;;
+outer)
+    # 40x15 at real air under T3: the reproduction controls with the shut
+    # faces recorded, the tight starts, the reversed sums, the third state.
+    $PY probe36b.py outer 40 15 direct > logs/o_direct.log 2>&1 &
+    $PY probe36b.py outer 40 15 pcg:1e-2 > logs/o_pcg1e-2.log 2>&1 &
+    $PY probe36b.py outer 40 15 pcg:1e-8 > logs/o_pcg1e-8.log 2>&1 &
+    $PY probe36b.py outer 40 15 pcgrev:1e-8 > logs/o_pcgrev1e-8.log 2>&1 &
+    $PY probe36b.py outer 40 15 sched:100:1e-1 > logs/o_sched100_1e-1.log 2>&1 &
+    $PY probe36b.py outer 40 15 sched:1300:1e-1 > logs/o_sched1300_1e-1.log 2>&1 &
+    $PY probe36b.py outer 40 15 sched:100:3e-1 > logs/o_sched100_3e-1.log 2>&1 &
+    $PY probe36b.py outer 40 15 sched:100:1e-2 > logs/o_sched100_1e-2.log 2>&1 &
+    $PY probe36b.py continue 40 15 direct 0.45 direct 0.5 4000 > logs/c_a045_a05.log 2>&1 &
+    $PY probe36b.py continue 40 15 direct 0.5 direct 0.45 4000 > logs/c_a05_a045.log 2>&1 &
+    $PY probe36b.py continue 40 15 pcg:1e-2 0.5 direct 0.5 4000 > logs/c_pcg1e-2_direct.log 2>&1 &
+    # 80x30 at Re 90: T3 as the report ran it, and T0, the committed outlets.
+    $PY probe36b.py outer 80 30 direct 1000 0.5 T3 > logs/o_re90_direct_T3.log 2>&1 &
+    $PY probe36b.py outer 80 30 direct 1000 0.5 T0 > logs/o_re90_direct_T0.log 2>&1 &
+    $PY probe36b.py outer 80 30 pcg:1e-2 1000 0.5 T0 > logs/o_re90_pcg1e-2_T0.log 2>&1 &
+    $PY probe36b.py outer 80 30 pcg:1e-4 1000 0.5 T0 > logs/o_re90_pcg1e-4_T0.log 2>&1 &
+    $PY probe36b.py outer 80 30 pcg:1e-8 1000 0.5 T0 > logs/o_re90_pcg1e-8_T0.log 2>&1 &
+    wait
+    ;;
+committed)
+    $PY probe36b.py committed 80 30 8000 > logs/committed_80x30.log 2>&1 &
+    $PY probe36b.py committed 200 75 3000 > logs/committed_200x75.log 2>&1 &
+    wait
+    ;;
+esac
+```
+
+## Appendix S: summary36b.py
+
+```python
+"""Builder probe, prompt 36b: the run records summarised as the report's section 12 tables give them."""
+
+import json
+import sys
+from pathlib import Path
+
+import numpy as np
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parents[1]))
+B36 = HERE.parent / "builder36"
+
+
+def g(x: float | None, n: int = 2) -> str:
+    if x is None:
+        return "-"
+    return f"{x:.{n - 1}e}"
+
+
+def outer_rows() -> None:
+    ref = None
+    names = sorted(p.stem for p in HERE.glob("outer_*.json"))
+    print("| Run | Stop | velocity_step at | Outer | Inner, median [max] | Rel. residual, median | Field vs report's direct, max (at) | median | Worst cell at end / tol | Shut faces (bottom; right) | dp/outer, last 100 | b norm at end |")
+    print("|---|---|---|---|---|---|---|---|---|---|---|---|")
+    for name in names:
+        d = json.loads((HERE / f"{name}.json").read_text())
+        inner = np.array(d["inner"])
+        rel = np.array(d["rel"])
+        worst = d.get("worst_end")
+        tol = d["mass_imbalance_tol"]
+        at = d.get("at")
+        print(f"| {name.replace('outer_', '')} | {d['stop']} | {d['velocity_step_outer'] or '-'} | {d['outer']} "
+              f"| {int(np.median(inner))} [{int(inner.max())}] | {g(float(np.median(rel)))} "
+              f"| {g(d.get('vs_direct_max'))} ({'-' if at is None else f'{at[0]:.2f}, {at[1]:.2f}'}) | {g(d.get('vs_direct_median'))} "
+              f"| {g(None if worst is None else worst / tol)} | {d['closed_bottom']}; {d['closed_right']} "
+              f"| {g(d.get('p_mean_change_per_outer_last100'), 3)} | {g(d.get('b_norm_end'), 3)} |")
+
+
+def field_pair(a: str, b: str) -> None:
+    za, zb = np.load(HERE / f"{a}.npz"), np.load(HERE / f"{b}.npz")
+    d = max(np.abs(za["u"] - zb["u"]).max(), np.abs(za["v"] - zb["v"]).max())
+    print(f"{a} vs {b}: max field difference {d:.3e} m/s")
+
+
+def bitwise(mine: str, theirs: str) -> None:
+    za, zb = np.load(HERE / f"{mine}.npz"), np.load(B36 / f"{theirs}.npz")
+    same = all(np.array_equal(za[k], zb[k]) for k in ("u", "v", "p"))
+    print(f"{mine} against builder36 {theirs}: bitwise {'equal' if same else 'DIFFERENT'}")
+
+
+def jacobi40k() -> None:
+    """Today's loop at step 0's settings on 40x15 (the report's run), against direct, from its records."""
+    ref, run = np.load(B36 / "m2_40x15_direct.npz"), np.load(B36 / "m2_40x15_jacobi40k.npz")
+    rec = json.loads((B36 / "m2_40x15_jacobi40k.json").read_text())
+    import yaml  # noqa: PLC0415
+
+    from src.config import SimConfig  # noqa: PLC0415
+    from src.mesh import SOLID, Mesh  # noqa: PLC0415
+
+    raw = yaml.safe_load((HERE.parents[1] / "configs/clean_room_default.yaml").read_text())
+    raw["domain"]["nx"], raw["domain"]["ny"] = 40, 15
+    mesh = Mesh(SimConfig.from_dict(raw))
+    fluid = mesh.cell_type != SOLID
+    # The end of run against direct's error_estimate stop; each velocity_step stop against the other.
+    for key_u, key_v, label in (("u", "v", "end of run"), ("u_vs", "v_vs", "velocity_step stop")):
+        d = np.maximum(np.abs(run[key_u] - ref[key_u]), np.abs(run[key_v] - ref[key_v]))
+        d[~fluid] = 0.0
+        j, i = np.unravel_index(int(np.argmax(d)), d.shape)
+        print(f"jacobi40k vs direct at the {label}: {d.max():.3e} m/s at ({mesh.xc[i]:.2f}, {mesh.yc[j]:.2f})")
+    print(f"jacobi40k: stop {rec['stop']} after {rec['outer']}, velocity_step at {rec['velocity_step_outer']}, "
+          f"median relative residual {np.median(rec['rel']):.3f}, worst cell at the end {rec['worst'][-1]:.3e}")
+
+
+def main() -> None:
+    what = sys.argv[1] if len(sys.argv) > 1 else "all"
+    if what in ("all", "outer"):
+        outer_rows()
+    if what in ("all", "pairs"):
+        for mine, theirs in (("outer_40x15_direct_mu1_a0.5_T3", "m2_40x15_direct"),
+                             ("outer_40x15_pcg_1e-2_mu1_a0.5_T3", "m2_40x15_pcg_1e-2"),
+                             ("outer_40x15_pcg_1e-8_mu1_a0.5_T3", "m2_40x15_pcg_1e-8"),
+                             ("outer_80x30_direct_mu1000_a0.5_T3", "m2_80x30_direct_mu1000")):
+            if (HERE / f"{mine}.npz").exists():
+                bitwise(mine, theirs)
+        if (HERE / "outer_40x15_pcgrev_1e-8_mu1_a0.5_T3.npz").exists():
+            field_pair("outer_40x15_pcgrev_1e-8_mu1_a0.5_T3", "outer_40x15_pcg_1e-8_mu1_a0.5_T3")
+    if what in ("all", "continue"):
+        for p in sorted(HERE.glob("continue_*.json")):
+            d = json.loads(p.read_text())
+            print(f"{p.stem}: A {d['stop_a']} at {d['outer_a']}, A vs direct {g(d['a'].get('vs_direct_max'))}; "
+                  f"after B: drift {g(d['drift_end'])} (max {g(d['drift_max'])}), step at 1000 {g(d['step_at_1000'])}, "
+                  f"last step {g(d['step_end_m_s'])} m/s; B vs direct {g(d['b'].get('vs_direct_max'))} at {d['b'].get('at')}; "
+                  f"faces A {d['faces_a']['closed_bottom']}/{d['faces_a']['closed_right']} "
+                  f"B {d['faces_b']['closed_bottom']}/{d['faces_b']['closed_right']}")
+    if what in ("all", "jacobi40k"):
+        jacobi40k()
+    if what in ("all", "committed"):
+        for p in sorted(HERE.glob("committed_*.json")):
+            print(p.stem, json.loads(p.read_text()))
 
 
 if __name__ == "__main__":
