@@ -1,9 +1,10 @@
 # ECR-003 Step 1: The Conjugate Gradient Pressure Correction
 
 **Date:** 2026-10-06
-**Tree:** branch `feature/ecr003-pressure-cg` from main at 867ef89. The five commits are listed in
-the pull request body; `src/pressure.py`, `src/config.py`, `src/solver_staggered.py` and
-`src/stopping.py` are the modules changed.
+**Tree:** branch `feature/ecr003-pressure-cg` from main at 867ef89. The six commits of prompt 37
+and the seven of its fix pass, prompt 37b (section 13), are listed in the pull request body;
+`src/pressure.py`, `src/config.py`, `src/solver_staggered.py` and `src/stopping.py` are the
+modules changed.
 **Instruments:** `results/builder37/` (untracked): `extract37.py` (the appendices of
 `docs/reports/pressure_solver_ecr003.md` extracted byte for byte), the byte copies `common36.py`,
 `solvers36.py`, `capture36.py` and `outer36.py` it wrote, the byte copies `outlet33b.py` and
@@ -41,9 +42,14 @@ tree with nothing else of mine running; the criterion 4 timing ran alone.
 
 `extract37.py` reads the report as bytes, finds "## Appendix X: name" and the python fence after
 it, writes the fenced bytes, reads them back and compares. All four files are identical to their
-appendices; the SHA-256 of each is in `item0.md`. `outlet33b.py` and `frozen34.py` are byte copies
-of `results/builder33b/` and `results/builder34/`, with the hashes the report's section 2.1
-records (2ad2b9f2..., 3a85849b...). The classes `common36.py` imports from them, `OutletSolver`
+appendices as this checkout holds the report: Git stores it with LF line endings and this Windows
+working copy has CRLF (`git ls-files --eol`: `i/lf w/crlf`), so the extracted files are CRLF and
+the SHA-256 of each in `item0.md` is of CRLF bytes. A checkout without autocrlf, any Linux runner,
+extracts LF bytes that hash differently. The check that holds on every checkout is identity after
+LF normalization, which test 37 made with its own extractor (its check 3); the LF-normalized
+hashes are in section 13.4. `outlet33b.py` and `frozen34.py` are byte copies of
+`results/builder33b/` and `results/builder34/`, with the hashes the report's section 2.1 records
+(2ad2b9f2..., 3a85849b...), of the files as stored there: `outlet33b.py` LF, `frozen34.py` CRLF. The classes `common36.py` imports from them, `OutletSolver`
 and `FrozenSolver`, read no renamed field, so the copies run unchanged on the built solver; the
 scripts' own `main` functions, which read `pressure_tol` and `pressure_sweeps`, are not called.
 
@@ -116,12 +122,14 @@ fire. Record: `item0.md`.
   over the smallest eigenvalue CG sees.
 - `test_val002_cavity_system_agrees_with_a_dense_solve[0, 300]`: the VAL-002 cavity's own system
   on 20x20 at outer 0 and at outer 300 of its committed solve, against a dense solve of the
-  pinned system, to the same bound; neither correction reached the cap.
+  pinned system, to the same bound; neither correction reached the cap. Replaced in 37b by the
+  first and the last system of the solve, with the floor shown to end the last (section 13.2).
 - `test_stops_at_the_first_iteration_meeting_the_relative_level`: at 1e-4, 1e-8 and 1e-12 the
   true residual meets the level, one iteration fewer leaves it above, and the counts rise.
 - `test_the_floor_ends_a_correction_at_rounding`: `RESIDUAL_FLOOR` is 1e-13; with it raised to
   1e-2 the correction stops below 1e-2 F and above the relative level, in fewer iterations; the
-  same loop with a floor of zero takes the full count.
+  same loop with a floor of zero takes the full count. Since 37b one iteration fewer leaves the
+  true residual above 1e-2 F, so a floor at another scale fails (test 37 T-S1).
 - `test_flux_scale_is_the_stopping_rules`: F is rho times the inflow on the channel and rho times
   the lid speed times the longer side on the 2 by 1 cavity, as the stopping rule defines it; zero
   with no boundary velocity.
@@ -139,7 +147,8 @@ fire. Record: `item0.md`.
   makes b incompatible; the correction still stops at the relative level on the projected
   residual, leaving the mean and nothing else.
 - `test_closed_domain_in_two_components_is_refused`: a wall the full height of the cavity raises
-  at construction naming two components; one block does not; an open domain is not checked.
+  at construction naming two components; one block does not. As built in prompt 37 an open domain
+  was not checked; since 37b it is (section 13.2).
 - `TestCoefficients::test_apply_operator_is_the_dense_matrix`: the shifted products equal the
   dense matrix's product on both domains with an obstacle, and the matrix is symmetric.
 - The unchanged properties keep their tests: the closed-domain right-hand side sums to zero to
@@ -167,6 +176,8 @@ retired label refused, every solver key in a row's params (issue 38), `pressure_
 outcome, `inner_iterations` in the work. `tests/test_stopping_probe.py`: the rule key changes
 with `PRESSURE_SOLVER_VERSION`; the truth, tight-truth and control files are re-solved when the
 stored version is missing or old and reused when it is this solver's, tested without a solve.
+Test 37 found the control's test unable to see its check, and review 37 a truth read without one;
+section 13.1 has both.
 `tests/test_self_convergence.py`: `tight_field` reads the current label's file and nothing else.
 
 ## 5. Criterion 3: the measured rooms reproduce (written after the runs)
@@ -250,6 +261,13 @@ The delta is +32 tests. The runtime fell by about half, as predicted: every test
 to its cap under Jacobi now stops in tens to hundreds of CG iterations. `gen_system_map.py
 --check` and ruff pass at every commit.
 
+The skipped test is the same in every row,
+`tests/test_self_convergence.py::test_true_centerline_meets_the_saved_staggered_faces_at_second_order`,
+which reads saved fields under `results/`, and the snapshots have none. It is not the same in the
+working tree: there main runs it against the saved `staggered-jacobi_{20,40,80}.npz`, and this
+branch skips it until `staggered-cg` fields are saved, which is the new label doing its work (review
+37 S2; test 37 check 1 confirmed it).
+
 ## 10. Contracts that differ from ADR-013 D's draft
 
 - `apply_operator(coefficients, x)`, `conjugate_gradient(apply, inverse_diagonal, f, rtol, floor,
@@ -267,6 +285,11 @@ to its cap under Jacobi now stops in tens to hundreds of CG iterations. `gen_sys
   is `cells_per_iteration`.
 - The one-component check counts a cell as having an equation when it is non-SOLID with a
   non-SOLID 4-neighbour; a sealed single cell is not counted.
+- Since 37b (section 13): the constructor also refuses an open domain with a component that holds
+  no outlet cell, which D's closed-domain check did not cover; `ConjugateGradientResult`,
+  `PressureCorrection` and `IterationState` carry the count of operator products, and the harness
+  counts its work in them; `STAGGERED_METHODS` and `STAGGERED_METHOD` live in `pressure.py` beside
+  `PRESSURE_SOLVER_VERSION`; `conjugate_gradient` checks its arguments.
 
 ## 11. Against the prediction (orchestrator, written before handover)
 
@@ -286,6 +309,216 @@ ADR-013 accepted with planned against built and the request closed. The default'
 mesh and its revisit after ECR-002 step 3 (ADR-013 decisions 1 and 3) are the request's open
 items, not this step's. Whether a capped correction can arise in a real room under the committed
 cap of 5,000 is not measured here: the report's largest count is 1,643 on 400x150.
+
+## 13. Fix pass 37b (written after the runs)
+
+Review 37 (`docs/prompts/review-37.md`) found one Bug and nine Suggestions. Test 37
+(`docs/prompts/test-37.md`) failed two checks, the second the review's Bug confirmed by run, and
+made two Suggestions. Prompt 37b answers every finding; the pull request body's resolution table
+gives each one its line. Seven commits:
+
+| Commit | Findings | What |
+|---|---|---|
+| 47e92a1 | review S4 | The method label defined once, in `src/pressure.py`, looked up by `PRESSURE_SOLVER_VERSION` |
+| 7f0cd2b | review B1, test T-B1 | Every saved truth read through the identity check; the tests that could not see their reuse |
+| 6d62856 | review S7, S6 | An open region no outlet reaches refused at construction; `conjugate_gradient`'s arguments checked |
+| 6bb8800 | review S5 | The work counted in operator products, the exit checks included; row schema 2 |
+| 554a8fc | review S8, test T-S1 | The floor at its real value on the cavity's last system; the error bound read on the range part |
+| 8a19ab5 | mutant OC4 below | An outlet cell beside a SOLID neighbour holds no p' = 0 |
+| the records commit | review S1, S2, S3, S9, test T-S2 | This section, the PR body, PROJECT_PLAN, STATUS, ADR-011, ADR-012, SYSTEM.md's history |
+
+Instruments, under `results/builder37b/` (untracked): `component_check.py`, `late_probe.py`,
+`mutate37b.py`, `suite_at.sh`, and copies of `common37.py`, `outer37.py`, `item0_built.py`,
+`outlet33b.py`, `frozen34.py`, `item0_probe.npz` and `systems/` from `results/builder37/`, with
+every run's log and json beside them.
+
+### 13.1 Every saved-solve read, and how it is keyed
+
+The grep the prompt asks for, `grep -n -E "np\.load|\.exists\(\)" scripts/*.py validation/*.py`,
+ran at 2146921 before any fix; each hit was then read. `read_text` and `json.load` hits were read
+too. The table is the state after the fix pass.
+
+| Where | Reads | Keyed by |
+|---|---|---|
+| `stopping_probe.written_by_this_solver` | any saved solve | the check itself: the stored `pressure_solver_version` against `PRESSURE_SOLVER_VERSION`; no key or another value is not this solver's |
+| `stopping_probe.solve_truth` | `{case}.npz`, the truth | `written_by_this_solver` |
+| `stopping_probe.control` | `{case}_control.npz` | `written_by_this_solver`; its truth through `solve_truth` |
+| `stopping_probe.analyse` | the truth | through `solve_truth` since 37b; before, a direct read, safe only because `main` ran `solve_truth` first |
+| `stopping_probe.tight_truth` | `{case}_truth13.npz` | `written_by_this_solver` and the stored tolerance |
+| `stopping_probe.verify_rule` | `{case}_rule.npz` | `rule_parameters`: the scales, the tolerances, `RATE_WINDOW`, `RULE_VERSION`, `PRESSURE_SOLVER_VERSION` |
+| `stopping_probe.verify_rule` | the truth | through `solve_truth` since 37b; before, a direct read (review B1) |
+| `stopping_probe.verify_rule` | the tight truth | through `tight_truth` |
+| `stopping_probe.main` | the truth | through `solve_truth` |
+| `self_convergence.solve_and_save` | `{label}_{n}.npz` | the label, `STAGGERED_METHODS[PRESSURE_SOLVER_VERSION]` |
+| `self_convergence.solve_tight` | `{label}_{n}_tol1e-9.npz`, and `{label}_{n}.npz` for the continuation check | the label |
+| `self_convergence` `--extrapolate`, `tight_field`, `main` | the same two names | the label |
+| `val001_order.solve` | `poiseuille_{nx}x{ny}.npz` | `reuse_key`: the solver parameters, `RULE_VERSION`, and since 37b `PRESSURE_SOLVER_VERSION` |
+| `view_field.render` | the file it is given | none needed: it draws that file under the method the file stores, and serves it as no other solver's |
+| `benchmark.print_summary` | `benchmarks/results.jsonl` | rows, grouped by method; not a solve |
+| `benchmark.cpu_name`, `gen_system_map`, `validation.cases` | `/proc/cpuinfo`, SYSTEM.md, the case files | not saved solves |
+
+Two reads took a truth without the check: review B1's in `verify_rule`, and `analyse`'s, which the
+review found safe by call order. `analyse`'s is the sixth reuse the prompt asked for; it needed the
+same keying, not a design choice, so it was fixed here and the prompt's first stop did not fire.
+`val001_order`'s key, which ECR-003 section 7.1 named, carried the solver's identity only through
+`pressure_rtol`'s name replacing `pressure_tol`'s; it now carries the version, which section 7.1's
+"No edit of its own" did not foresee.
+
+The tests, each with the defect it catches in the log of section 13.5:
+`test_control_is_reused_only_when_this_solver_wrote_it` writes the truth current and the control
+stale, so only the control's own check stands between the call and a reused file (test T-B1 (a));
+`test_readers_of_the_truth_re_solve_a_truth_this_solver_did_not_write` gives `verify_rule` and
+`analyse` a stale truth beside a current rule file, and checks that the solve the sentinel stopped
+was the truth's (at `TRUTH_TOL` under velocity_step), not the rule's (review B1);
+`test_solve_tight_and_solve_and_save_skip_a_field_another_solver_saved` puts `staggered-jacobi`
+fields for the grid in `FIELD_DIR` and requires the current version's file name (test T-B1 (b));
+`test_saved_solve_is_not_reused_under_another_pressure_solver_version` in `test_val001_order.py`.
+The sentinel solver now refuses to solve rather than to be built, since `verify_rule` builds a
+solver for its flux scale before it decides anything. `self_convergence`'s files carry no version of
+their own: the label in their names is the version's, so its test pins the name.
+
+### 13.2 What changed in the code
+
+- **The label (S4).** `src/pressure.py` defines `STAGGERED_METHODS = {1: "staggered-jacobi", 2:
+  "staggered-cg"}` and `STAGGERED_METHOD = STAGGERED_METHODS[PRESSURE_SOLVER_VERSION]`;
+  `scripts/benchmark.py`, `scripts/view_field.py` and `scripts/self_convergence.py` import it. A
+  version raised without a label fails at import. A test parses the three scripts and refuses one
+  that binds its own `STAGGERED_METHOD`.
+- **A region no outlet reaches (S7).** The constructor grows the components of the cells with an
+  equation on every domain. Closed, it refuses more than one, as before. Open, it refuses any
+  component without an outlet cell, one whose outlet face borrows a diagonal (the cell and its
+  inward neighbour both non-SOLID), since only those rows hold p' = 0. The test: a full-height wall
+  across the channel is refused (1 of 2 components); a full-length shelf, which leaves both parts an
+  outlet, is accepted and its correction converges; a wall one column in from the outlet is refused
+  with both parts stranded. `component_check.py` built the corrector on every committed
+  configuration (the product room with its 4,090 SOLID cells among them), the five presets and the
+  five transport cases: 13 of 13 accepted. The two criterion 3 rooms construct as well (13.3). The
+  prompt's second stop did not fire.
+- **`conjugate_gradient`'s arguments (S6).** A preconditioner of another shape, an `rtol` outside
+  [0, 1), a floor negative or not finite and a cap that is not a positive int raise `ValueError`,
+  bool refused for each. The retired-key message formats its range from `PRESSURE_RTOL_BOUNDS`.
+- **The work (S5).** `ConjugateGradientResult.products` counts every product with the operator:
+  one per iteration, plus one per true-residual check, at exit, at a restart and at the cap. It
+  reaches the harness through `PressureCorrection.products` and `IterationState.pressure_products`,
+  added as the last field so no other moves. `cell_updates` counts products, and the row records
+  `work.inner_products` beside `inner_iterations`. `SCHEMA_VERSION` is 2. Stored rows of schema 1
+  summarize as before, since nothing reads the work keys back. On the 20x20 cavity's solve every
+  correction formed one product beyond its iterations (970 of 970, `late_probe.json`). ECR-003
+  section 7.1 describes the work as "one stencil evaluation per cell ... per CG iteration, plus
+  vector operations". The definition counts stencil evaluations, now every product's, and not the
+  vector operations, as every method's definition has. Those are throughput, which the time axis
+  carries. This is a departure from 7.1's wording, recorded here for step 3.
+- **The tests' inputs (S8, T-S1).** Measured before writing the test (`late_probe.py`): the 20x20
+  cavity under its own rule stops at outer 970 (error_estimate_and_continuity, 5.3 s), and the floor
+  is the larger stop term from outer 235 on, so outer 300 was already in the floor's regime but no
+  assertion said so. The test now takes the first system and the last. On the last, `||f||` is
+  8.2e-10, `pressure_rtol ||f||` 8.2e-18 and the floor 1e-13 F with F = 1. The correction stops by
+  the floor in 71 iterations, and one iteration fewer leaves the true residual above it. Without the
+  floor the same loop reaches the relative level in 100 iterations, not the cap; the test as first
+  written predicted the cap and failed, and now asserts what was measured. The raised-floor test
+  gained the same one-iteration-fewer check, which the floor scaled by `||f||` (test 37's P6) now
+  fails. The closed-domain error bound is read on the range part, the difference with its mean over
+  the cells with an equation removed, where `||A e|| >= lambda_min ||e||` holds; review S8 showed
+  the pinned difference can exceed it.
+
+### 13.3 Criteria 3 and 4, and item 0, rerun
+
+The CG arithmetic is unchanged: the edits add argument checks before the loop, a counter, and
+the component refusal at construction. Rerun at 8a19ab5 with `results/builder37b/` copies of the
+probes:
+
+| Check | Prompt 37 | 37b |
+|---|---|---|
+| Item 0, the nine solves against the probe's | counts 703/791/852, 680/794/861, 672/792/857; solutions bitwise | the same counts; solutions bitwise (`item0_built.log`) |
+| Criterion 3, 40x15 at real air | 1,209 / 2,822; inner median 162, max 173; 0 cap hits | 1,209 / 2,822; inner median 162, max 173; 0 cap hits; 32 s |
+| Criterion 3, 80x30 at a thousand times air's viscosity | 233 / 588; inner 303 / 303; 0 cap hits | 233 / 588; inner 303 / 303; 0 cap hits; 15 s |
+| Criterion 4, ms per correction, median (fastest, slowest) | 131, 138, 162 | 137 (127, 215), 154 (129, 218), 143 (139, 209) |
+
+Criterion 3's counts did not move, so the prompt's third stop did not fire. Criterion 4 stays under
+the 0.5 s asked; the medians moved within the spread of seven solves.
+
+### 13.4 The item 0 hashes (test T-S2)
+
+The SHA-256 values in `item0.md` and section 2.2 are of the CRLF bytes this Windows checkout
+extracts. Over LF-normalized content, the form every checkout agrees on:
+
+| File | As extracted here (CRLF) | LF-normalized |
+|---|---|---|
+| `common36.py` | f929296f51ebab4efed14b054c413a32a9b5f30485e602be9627611dcdb27e46 | 715bcebe28c2df090d044a249592732a6935896a97780f6a7fdb5a0900fbf65e |
+| `solvers36.py` | c8d828dda83c35b251b0dea55fd94dcf19fa5c96a64cc4490d32493ffcc960dd | dfe41b0f4c32a6ea02d5bcc8247030ea5f64d99a29e641ee4f88884f8fb9d704 |
+| `capture36.py` | 958985305c00dd61be9be5d08b4fad9114a1389392d2e9778d5961226ade0f6c | 7de3843025f84181d3c39ed626c700ddc1846440bb4cd55f7d9e8967fb91dab5 |
+| `outer36.py` | 5bafb06aff99395100e38e40ec99b8156f0156e48466daec8af35e9f65bc7aa7 | 387e1e45cd8528a9bcd14a91985825e508644f5df20938d3373111aa2fc3d038 |
+| `frozen34.py` | 3a85849b63e587e5e9a31a1d7c2c1ff5ae333390ad357e228616cfe7f90868d9 | f56f03a99fdd6d58df31008a51f8254a044a528a27f2ecd7eabab8d6ae744530 |
+
+`outlet33b.py` is LF as stored, so its one hash, 2ad2b9f2..., is both. The content check that
+holds on every checkout is identity after LF normalization, which test 37's own extractor made
+(its check 3).
+
+### 13.5 The mutation log
+
+`mutate37b.py` extracts HEAD (8a19ab5) into a scratch tree, confirms the named test files pass
+unmutated (404 passed, 1 skipped), plants one defect at a time by exact replacement, and runs
+those files with `-x`. 25 of 25 fail a named test (`mutation37b.json`, `mutation37b.log`). OC4
+survived the first run, on 554a8fc; commit 8a19ab5 added the test that kills it.
+
+| Id | Planted defect | First failing test |
+|---|---|---|
+| SP2 | Test 37's survivor: `control` reuses any existing file | `test_stopping_probe.py::test_control_is_reused_only_when_this_solver_wrote_it[no-version]` |
+| SC2 | Test 37's survivor: `solve_tight` reads and writes the Jacobi-era name | `test_self_convergence.py::test_solve_tight_and_solve_and_save_skip_a_field_another_solver_saved` |
+| VR1 | Review B1 replanted: `verify_rule` loads the truth file directly | `test_stopping_probe.py::test_readers_of_the_truth_re_solve_a_truth_this_solver_did_not_write[no-version]` |
+| AN1 | `analyse` loads the truth file directly | the same |
+| SS1 | `solve_and_save` writes the Jacobi-era name | `test_self_convergence.py::test_solve_tight_and_solve_and_save_skip_a_field_another_solver_saved` |
+| VO1 | `val001_order`'s key without `PRESSURE_SOLVER_VERSION` | `test_val001_order.py::test_saved_solve_is_not_reused_under_another_pressure_solver_version` |
+| L1 | `self_convergence` binds its own label | `test_solver_selection.py::test_every_script_files_its_results_under_the_current_solvers_one_label` |
+| L2 | Two versions share a label | `test_pressure.py::TestCorrection::test_each_solver_version_has_its_own_label` |
+| P6 | Test 37's P6: the floor scaled by `||f||` in `conjugate_gradient` | `test_pressure.py::TestConjugateGradient::test_val002_cavity_system_agrees_with_a_dense_solve[last]` |
+| P6b | The corrector passes `RESIDUAL_FLOOR ||f||` | the same |
+| P6c | `RESIDUAL_FLOOR` ten times too large | the same |
+| OC1 | The open-domain check skipped | `test_pressure.py::TestConjugateGradient::test_open_domain_with_a_component_no_outlet_reaches_is_refused` |
+| OC2 | An open domain held to one component | the same |
+| OC3 | A closed domain in two components accepted | `test_pressure.py::TestConjugateGradient::test_closed_domain_in_two_components_is_refused` |
+| OC4 | An outlet cell counted without its inward neighbour | `test_pressure.py::TestConjugateGradient::test_open_domain_with_a_component_no_outlet_reaches_is_refused` |
+| A1 | A negative `rtol` accepted | `test_pressure.py::TestConjugateGradient::test_bad_scalar_arguments_are_refused[rtol--1e-08]` |
+| A2 | A bool cap accepted | `test_bad_scalar_arguments_are_refused[max_iter-True]` |
+| A3 | An infinite floor accepted | `test_bad_scalar_arguments_are_refused[floor-inf]` |
+| A4 | A preconditioner of another shape accepted | `test_pressure.py::TestConjugateGradient::test_edge_arguments_are_accepted_and_a_wrong_shape_refused` |
+| CM1 | The retired-key message's range written out by hand | `test_config.py::TestPressureKeys::test_the_retired_pressure_tol_is_refused_naming_the_new_key` |
+| W1 | The work counted in iterations, not products | `test_solver_selection.py::test_staggered_work_counts_faces_and_every_cell_with_an_equation` |
+| W2 | The exit check's product not counted | `test_pressure.py::TestConjugateGradient::test_products_are_every_call_of_the_operator` |
+| W3 | The cap's product not counted | the same |
+| W4 | The schema left at 1 | `test_benchmark.py::test_staggered_velocity_step_stop_has_the_collocated_label` |
+| W5 | The solver hands the iterations as the products | `test_solver_staggered.py::TestContract::test_callback_gets_cell_centered_fields_and_the_corrector_iterations` |
+
+### 13.6 The suite
+
+Each commit's tree was extracted with `git archive` and checked there: `ruff format --check`,
+`ruff check`, `gen_system_map.py --check` and the full suite, one BLAS thread.
+
+| Tree | ruff, system map | Collected | Result | Wall time |
+|---|---|---|---|---|
+| main at 867ef89 (section 9) | pass | 908 | 907 passed, 1 skipped | 447 s |
+| 2146921, prompt 37's last (section 9, test 37) | pass | 940 | 939 passed, 1 skipped | 208 s |
+| 47e92a1, the label | pass | 942 | 941 passed, 1 skipped | 211 s |
+| 7f0cd2b, the saved-solve reads | pass | 949 | 948 passed, 1 skipped | 194 s |
+| 6d62856, the component refusal and the arguments | pass | 963 | 962 passed, 1 skipped | 185 s |
+| 6bb8800, the products | pass | 964 | 963 passed, 1 skipped | 207 s |
+| 554a8fc, the floor and the bound | pass | 964 | 963 passed, 1 skipped | 209 s |
+| 8a19ab5, the outlet cell beside SOLID | pass | 964 | 963 passed, 1 skipped | 207 s |
+| the records commit, as the working tree before committing | pass | 964 | 963 passed, 1 skipped | 208 s |
+
+The fix pass adds 24 tests to prompt 37's 940, 56 to main's 908: two for the label, seven for
+the saved-solve reads (the sentinel test split in three, `solve_tight`'s names, `val001_order`'s
+version), fourteen for the refusal and the arguments, one for the products. The floor and bound
+changes rewrote existing tests, and the last code commit added a case to one. Some of these runs
+overlapped the mutation log and each other, so the wall times are a check that the suite stays
+near prompt 37's, not a runtime comparison. The skipped test is section 9's.
+
+### 13.7 Housekeeping
+
+The prompt asks for the untracked `c3_bare_80x30.log` in the repository root to be deleted. It was
+not there when this pass began (`git status --ignored` and a search of the tree): test 37's runs
+keep `results/tester37/c3_bare_80x30_failed_start.log`, under the gitignored `results/`, which is
+the tester's record and was left alone. Nothing was deleted.
 
 ## Appendix A: common37.py, the edited probe
 

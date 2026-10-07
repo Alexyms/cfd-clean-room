@@ -228,7 +228,7 @@ class TestConstruction:
                 "max_simple_iter": 10,
                 "alpha_velocity": 0.7,
                 "alpha_pressure": 0.3,
-                "max_pressure_iter": 10,
+                "max_pressure_iter": 5000,
                 "pressure_rtol": 1e-8,
             },
             "boundaries": {},
