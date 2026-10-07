@@ -4,15 +4,32 @@
 Proposed 2026-10-06, with ECR-003 (`docs/ECR/ECR-003-pressure-solver.md`), from the measurements in
 `docs/reports/pressure_solver_ecr003.md` [1]. Premise review 36 and `/cfd-test 36` found no Critical
 and four distinct Bugs between them; the fix pass of prompt 36b revised this design on their
-findings, with the runs it cites added to the report as its section 12. Alex then takes the
-decisions below. As
+findings, with the runs it cites added to the report as its section 12, and `/cfd-test 36b`'s
+text findings were applied by the orchestrator. Alex took the six decisions below on 2026-10-06,
+each as ranked first. As
 accepted it amends REQ-S08 and supersedes ADR-010's weighted Jacobi sweep as the pressure solve.
 Bracketed numbers point at the sources at the end; section numbers in the decisions point at this
 design's sections, "the report" at [1].
 
 ## Decisions for Alex
 Each decision is a picture first, then the options ranked with their consequence, then the section
-that carries the detail. The ranking is mine, from the measurements; none is taken.
+that carries the detail. The ranking is the builder's, from the measurements.
+
+**Taken by Alex, 2026-10-06.** Every recommendation below. The options stay as they were put.
+
+1. The solver: Jacobi-preconditioned conjugate gradients in NumPy, with multigrid preconditioning
+   of the same CG loop named as the successor if a finer mesh makes CG too slow. Chosen for the GPU
+   path (one thread per cell, plus three reductions per iteration) as much as for speed.
+2. Dependencies: NumPy only; no SciPy or pyamg at runtime.
+3. The stop: relative residual `pressure_rtol`, default 1e-8, with the rounding floor and the cap
+   reported. To be revisited after ECR-002 step 3 rebuilds the outlets, with the guard and
+   tight-start options as the candidates.
+4. The keys: `pressure_rtol` in [1e-10, 1); `pressure_tol` refused at load with a message;
+   `max_pressure_iter` the CG cap, 5,000 in committed files; the weighted sweep and `JACOBI_WEIGHT`
+   removed with their tests.
+5. The C path: deferred to Phase 6, where the CUDA kernel becomes a CG kernel.
+6. The two findings outside this change: the outlet drift to ECR-002 step 3 (an issue), the
+   finer-grid non-convergence to ECR-002 step 5.
 
 **1. What solves the pressure correction (section A).**
 *Picture.* Every outer iteration the solver works out a pressure correction that makes the air's
@@ -80,14 +97,18 @@ how loose it can be.
 - *Starting from rest is the hard part.* At one part in ten, the first correction of an air field at
   rest leaves 85% of the supply unbalanced, and the 40x15 and 80x30 rooms at real air blow up within
   three outer iterations (at ten and a thousand times air's viscosity they do not). After 100 tight
-  corrections the same one part in ten converges, in 2,739 outer iterations against the exact
-  correction's 2,822. One part in three blows up even after the tight start.
+  corrections the same one part in ten converges, in about 2,740 to 2,760 outer iterations against
+  the exact correction's 2,822 (2,739 and 2,760 in two CG implementations, test 36b). One part in three blows up even after the tight start.
 - *The coarse room has more than one steady solution.* On 40x15 at least three states solve the
   same discrete equations, with the same return faces shut: two of them lie 4.8e-4 and 0.041 m/s
   from the exact correction's at one cell, and each stays put when the exact iteration is continued
   from it. Which one a run reaches depends on its path. A different under-relaxation picks one; so
   did one part in a hundred from rest, which reached the 0.041 m/s one. None of them is wrong. After the tight start, one part
-  in ten lands 2.7e-4 m/s and one part in a hundred 1.0e-4 m/s from the exact correction's state.
+  in ten lands 1.7e-4 to 2.7e-4 m/s and one part in a hundred 1.0e-4 m/s from the exact correction's
+  state. At one part in ten even the implementation's rounding moves where a run lands: two CG
+  implementations with the same stop reached states 9.9e-5 m/s apart, where at one part in a hundred
+  they agreed to 4e-6 m/s (test 36b). Section C's fixed-count protocol is what keeps REQ-N03's test
+  meaningful at a loose level.
   What a tight correction buys here is reproducibility: the exact correction's solution, to 2.4e-8
   m/s at one part in a hundred million.
 - *One room needs a tight correction at its end, not its start.* Under the committed outlets, where
@@ -137,7 +158,7 @@ candidates to replace it.
 *Picture.* Every configuration file today says `pressure_tol: 1.0e-6` (or 1e-8) meaning pascals per
 sweep, and `max_pressure_iter` meaning sweeps. Under the new stop both numbers mean something else.
 *Options, ranked.*
-(1) A new key, `pressure_rtol`, dimensionless in (0, 1); `pressure_tol` refused at load with a
+(1) A new key, `pressure_rtol`, dimensionless in [1e-10, 1) (section D); `pressure_tol` refused at load with a
 message that names the change; `max_pressure_iter` kept as the CG iteration cap, still a required
 key, set to 5,000 in the committed files (861 iterations to 1e-8 on 200x75 and 1,643 on 400x150).
 The weighted sweep and `JACOBI_WEIGHT` removed with the tests that pin them; the step 5 report keeps
@@ -232,8 +253,10 @@ from hours to minutes. Its weakness is growth. On the systems captured at outer 
 cells per side. A correction on 400x150 took 1.1 s against 0.15 s on 200x75, timed interleaved, 7.7
 times by the medians and 7.2 by the fastest solves; the work grows 7.7 times (the report, sections
 12.1 and 12.2). The Annex 20 room on 216x72, the grid ADR-012 G plans for VAL-016, takes 872
-iterations, 1.2 times its 180x60 count and level with the product's 200x75 count on 1.4 times the
-product's unknowns: 0.18 s per correction against the product's 0.15 s, in the same timed run.
+iterations, 1.2 times its 180x60 count and level with the product's 200x75 count on 1.04 times the
+product's cells (the loop forms its product on the full grid): about the same cost per correction,
+0.91 to 1.21 times the product's across three timings (the report, section 12.1; the premise
+review; test 36b).
 Multigrid preconditioning, which needed 5 to 9 iterations at 1e-6 on every grid measured, is the
 upgrade when a finer mesh makes CG too slow: the same CG loop with a different preconditioner. The
 probe's multigrid setup, 25 probing passes per level in Python, is what makes it slow today;
@@ -345,11 +368,16 @@ CLAUDE.md's language policy puts performance-critical loops in C through ctypes;
 
 ## D. Configuration and modules (REQ-C01, C02; decision 4)
 
-**Keys.** `solver.pressure_rtol`, a float in (0, 1), 1e-8 in every committed file, validated for
+**Keys.** `solver.pressure_rtol`, a float in [1e-10, 1), 1e-8 in every committed file. The lower
+bound: on the product's first correction from rest the true residual cannot go below about 1.3e-13
+of the flux scale, so a configured level at or below about 1e-12 runs that correction to the cap and
+the velocity-step rule then refuses to stop on it (test 36b, S4); 1e-10 keeps two orders of margin
+above the attainable level and two below the default. It is validated for
 type, range, NaN and bool. `solver.pressure_tol` refused at load with a message naming
 `pressure_rtol`. `solver.max_pressure_iter`, a required positive integer as today, now the CG
 iteration cap; 5,000 in the committed files: 861 iterations are needed at 1e-8 on 200x75, 1,643 on
-400x150, 303 on 80x30 at Re 90 and 150 to 175 on 40x15, so 5,000 leaves three times the largest.
+400x150, 303 on 80x30 at Re 90 and 162 to 173 on 40x15 (the report's section 8.1 median and
+largest), so 5,000 leaves three times the largest.
 
 **Draft contract** (SYSTEM.md section 4 gains it when ECR-003 is accepted).
 
@@ -415,7 +443,7 @@ grows about 7.5 times per doubling of the cells per side. SuperLU, measured 3.6 
 product mesh, is not taken. The configuration files and the test fixtures all change. The default
 lets the stopping rule's continuity conditions hold in the standing-imbalance state at 80x30 and Re
 90, but what it then accepts is a steady velocity under a pressure still rising 0.059 to 0.088 Pa
-every outer iteration (mean 53.6 Pa at the T3 stop): the outlet defect of decision 6, not cured here.
+every outer iteration (mean 53.6 Pa at the T3 stop: builder 36's `stall_direct.json`, rerun by test 36b at 53.567 Pa): the outlet defect of decision 6, not cured here.
 Whether 1e-8 keeps the per-cell condition on the product mesh depends on a `||b||` not yet measured.
 
 ## Alternatives considered
