@@ -993,6 +993,49 @@ class TestConjugateGradient:
             left[active] - left[active].mean()
         ) <= TIGHT_RTOL * np.linalg.norm(f)
 
+    def test_a_cell_without_an_equation_is_left_out_of_the_solve(self) -> None:
+        """A sealed inlet cell (a_P = 0, b != 0) gets no p' and does not stall the solve.
+
+        Two obstacles wall the channel's bottom-left cell off from the
+        interior, leaving it the inlet face that pours air in: it is not
+        SOLID, it has no correctable face, and its imbalance is the inlet
+        flux. The operator's row there is zero, so a right-hand side left
+        nonzero at that cell could never be reduced and CG would run to its
+        cap. The solve zeroes f there, converges for every other cell, and
+        leaves the sealed cell's imbalance as it must.
+        """
+        pocket = [
+            {
+                "name": "east",
+                "x_start": 0.25,
+                "x_end": 0.5,
+                "y_start": 0.0,
+                "y_end": 1 / 6,
+            },
+            {
+                "name": "north",
+                "x_start": 0.0,
+                "x_end": 0.25,
+                "y_start": 1 / 6,
+                "y_end": 1 / 3,
+            },
+        ]
+        mesh, _bc, pc, pred, p = _predicted(
+            _config(CHANNEL, obstacles=pocket), outlet_right=True
+        )
+        c = pc.coefficients(pred.a_p_u, pred.a_p_v)
+        b = pc.mass_imbalance(pred.u_star, pred.v_star)
+        assert mesh.cell_type[0, 0] != SOLID
+        assert c.a_p[0, 0] == 0.0
+        assert b[0, 0] == pytest.approx(-1.2 * 0.3 * mesh.dy_cell[0], rel=1e-14)
+        out = pc.correct(pred, p)
+        assert out.reached_cap is False
+        assert out.p_prime[0, 0] == 0.0
+        left = pc.mass_imbalance(out.u, out.v)
+        assert left[0, 0] == b[0, 0]
+        active = c.a_p > 0.0
+        assert np.linalg.norm(left[active]) <= TIGHT_RTOL * np.linalg.norm(b[active])
+
     def test_closed_domain_in_two_components_is_refused(self) -> None:
         """A wall the full height splits the cavity; one block does not; an outlet is not checked."""
         with pytest.raises(ValueError, match="2 connected components"):
