@@ -75,7 +75,11 @@ def _make_config_with_obstacle(tmp_path: Path) -> SimConfig:
 
 @pytest.mark.unit
 def test_cell_updates_equal_fluid_cells_times_sweeps(tmp_path: Path) -> None:
-    """cells_per_iteration * (2 + iterations) per outer iteration, counting FLUID cells only."""
+    """cells_per_iteration * (2 + products) per outer iteration, counting FLUID cells only.
+
+    A Jacobi sweep was one product, so the collocated convention reads the
+    same with products for sweeps.
+    """
     config = _make_config_with_obstacle(tmp_path)
     mesh = Mesh(config)
     cells = benchmark.fluid_cells_per_sweep(mesh)
@@ -94,8 +98,10 @@ def test_cell_updates_equal_fluid_cells_times_sweeps(tmp_path: Path) -> None:
                 u=fields,
                 v=fields,
                 p=fields,
+                pressure_products=sweeps,
             )
         )
     assert counter.work["cell_updates"] == iterations * cells * (2 + sweeps)
     assert counter.work["inner_iterations"] == iterations * sweeps
+    assert counter.work["inner_products"] == iterations * sweeps
     assert counter.work["outer_iterations"] == iterations

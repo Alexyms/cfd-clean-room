@@ -183,6 +183,9 @@ class TestContract:
         assert [s.pressure_iterations for s in states] == [
             c.iterations for c in corrections
         ]
+        assert [s.pressure_products for s in states] == [
+            c.products for c in corrections
+        ]
         assert [s.residual for s in states] == solver.residual_history
         for state, corrected in zip(states, corrections, strict=True):
             u_c, v_c = to_cell_centers(corrected.u, corrected.v)
@@ -707,6 +710,7 @@ class TestCappedCorrections:
                 p_prime=np.zeros_like(p),
                 iterations=self._max_iter,
                 reached_cap=True,
+                products=self._max_iter + 1,
             )
 
         monkeypatch.setattr(PressureCorrector, "correct", truncated)
@@ -756,6 +760,7 @@ class TestCappedCorrections:
                 p_prime=np.zeros_like(p),
                 iterations=self._max_iter,
                 reached_cap=True,
+                products=self._max_iter + 1,
             )
 
         monkeypatch.setattr(PressureCorrector, "correct", truncated)

@@ -393,9 +393,15 @@ def test_staggered_velocity_step_stop_has_the_collocated_label(
     assert set(row["work"]) == {
         "outer_iterations",
         "inner_iterations",
+        "inner_products",
         "cell_updates",
         "cell_update_definition",
     }
+    # Each correction forms one product per iteration and at least one for
+    # the exit check (review 37 S5); the schema was raised with the keys.
+    work = row["work"]
+    assert work["inner_products"] >= work["inner_iterations"] + work["outer_iterations"]
+    assert row["schema_version"] == benchmark.SCHEMA_VERSION == 2
 
 
 @pytest.mark.unit
