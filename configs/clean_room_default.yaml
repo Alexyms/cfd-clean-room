@@ -40,8 +40,8 @@ solver:
   max_simple_iter: 500     # max SIMPLE iterations per timestep
   alpha_velocity: 0.7      # velocity under-relaxation factor (0, 1]
   alpha_pressure: 0.3      # pressure under-relaxation factor (0, 1]
-  max_pressure_iter: 200   # max Jacobi iterations per SIMPLE step
-  pressure_tol: 1.0e-6     # Jacobi convergence tolerance
+  max_pressure_iter: 5000  # CG iteration cap per pressure correction (861 needed on 200x75)
+  pressure_rtol: 1.0e-8    # relative residual the pressure correction solves to (ADR-013)
 
 transport:
   # ADR-011 I. cfl_number is the Courant number the explicit advection step

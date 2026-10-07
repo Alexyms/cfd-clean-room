@@ -164,7 +164,7 @@ class TestContract:
             assert field.dtype == np.float64
             assert field.flags["C_CONTIGUOUS"]
 
-    def test_callback_gets_cell_centered_fields_and_the_corrector_sweeps(
+    def test_callback_gets_cell_centered_fields_and_the_corrector_iterations(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Once per outer iteration, with the corrected faces averaged to centers.
@@ -180,7 +180,9 @@ class TestContract:
 
         assert len(states) == len(solver.residual_history) == len(corrections)
         assert [s.iteration for s in states] == list(range(len(states)))
-        assert [s.pressure_sweeps for s in states] == [c.sweeps for c in corrections]
+        assert [s.pressure_iterations for s in states] == [
+            c.iterations for c in corrections
+        ]
         assert [s.residual for s in states] == solver.residual_history
         for state, corrected in zip(states, corrections, strict=True):
             u_c, v_c = to_cell_centers(corrected.u, corrected.v)
@@ -189,16 +191,18 @@ class TestContract:
             assert np.array_equal(state.v, v_c)
             assert state.p is corrected.p
         assert np.array_equal(u, states[-1].u)
-        assert solver.last_pressure_sweeps == corrections[-1].sweeps
+        assert solver.last_pressure_iterations == corrections[-1].iterations
+        assert solver.pressure_cap_hits == 0
 
-    def test_sweep_count_and_stage_timers_reset_at_the_start_of_each_solve(
+    def test_iteration_count_cap_hits_and_stage_timers_reset_at_the_start_of_each_solve(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A solve that fails before its first correction reports none of the last one."""
-        config = _case("cavity", 6)
+        config = _ruled("cavity", (6, 6), max_pressure_iter=2, max_simple_iter=5)
         _mesh, _bc, solver = _build(config)
         solver.solve_steady()
-        assert solver.last_pressure_sweeps > 0
+        assert solver.last_pressure_iterations == 2
+        assert solver.pressure_cap_hits == 5
         assert set(solver.stage_seconds) == {"momentum", "pressure", "correct"}
         assert solver.stage_seconds["pressure"] > 0.0
 
@@ -210,13 +214,24 @@ class TestContract:
         monkeypatch.setattr(MomentumPredictor, "predict", fail)
         with pytest.raises(RuntimeError, match="first correction"):
             solver.solve_steady()
-        assert solver.last_pressure_sweeps == 0
+        assert solver.last_pressure_iterations == 0
+        assert solver.pressure_cap_hits == 0
         assert solver.stage_seconds == {
             "momentum": 0.0,
             "pressure": 0.0,
             "correct": 0.0,
         }
         assert solver.residual_history == []
+
+    def test_error_estimate_flux_scale_is_the_correctors(self) -> None:
+        """One F for the rounding floor and the rule: the solver reads the corrector's."""
+        config = _ruled("poiseuille", (12, 6), stopping_rule="error_estimate")
+        _mesh, _bc, solver = _build(config)
+        assert solver.flux_scale == solver._corrector.flux_scale
+        assert solver.flux_scale == pytest.approx(1.0 * 0.1 * 0.5, rel=1e-14)
+        _mesh, _bc, plain = _build(_case("cavity", 6))
+        assert plain.flux_scale is None
+        assert plain._corrector.flux_scale == pytest.approx(1.0, rel=1e-14)
 
     def test_last_mass_imbalance_is_that_of_the_returned_faces(
         self, monkeypatch: pytest.MonkeyPatch
@@ -603,3 +618,152 @@ class TestStoppingRule:
         config = _ruled("cavity", (6, 6), boundaries={}, stopping_rule="error_estimate")
         with pytest.raises(ValueError, match="stopping_rule error_estimate needs"):
             _build(config)
+
+
+@pytest.mark.integration
+class TestCappedCorrections:
+    """A pressure correction that stops at max_pressure_iter is reported, not hidden (ADR-013 B).
+
+    The report's probe room froze under the committed cap of 200 sweeps with
+    47% of the supply unaccounted while the velocity-step rule called it
+    converged (docs/reports/pressure_solver_ecr003.md, section 8.2). The
+    solver counts capped corrections, warns once, and under velocity_step
+    does not stop on an outer iteration whose correction reached the cap.
+    """
+
+    def test_capped_corrections_are_counted_and_warned_once(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """With a cap of one every correction is capped: counted, and one warning."""
+        corrections = _record_corrections(monkeypatch)
+        config = _ruled(
+            "cavity",
+            (6, 6),
+            stopping_rule="velocity_step",
+            max_pressure_iter=1,
+            max_simple_iter=12,
+        )
+        _mesh, _bc, solver = _build(config)
+        with caplog.at_level("WARNING", logger="src.solver_staggered"):
+            solver.solve_steady()
+        assert all(c.reached_cap for c in corrections)
+        assert solver.pressure_cap_hits == len(corrections) == 12
+        warnings = [r for r in caplog.records if "max_pressure_iter" in r.getMessage()]
+        assert len(warnings) == 1
+        assert (solver.converged, solver.stop_reason) == (False, "max_simple_iter")
+
+    def test_a_capped_outer_loop_that_converges_stops_on_an_uncapped_correction(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """One CG iteration per correction still converges the tiny cavity, and may stop.
+
+        The outer loop converges on its own once b shrinks, and the last
+        correction then meets the floor rather than the cap, so the refusal
+        does not hold a converged solve hostage: the stop is allowed on that
+        iteration, and the faces it returns do close.
+        """
+        corrections = _record_corrections(monkeypatch)
+        config = _ruled(
+            "cavity",
+            (6, 6),
+            stopping_rule="velocity_step",
+            max_pressure_iter=1,
+            max_simple_iter=2000,
+        )
+        _mesh, _bc, solver = _build(config)
+        solver.solve_steady()
+        assert (solver.converged, solver.stop_reason) == (
+            True,
+            "velocity_step_below_tol",
+        )
+        assert corrections[-1].reached_cap is False
+        assert solver.pressure_cap_hits == len(corrections) - 1 > 100
+        assert np.abs(solver.last_mass_imbalance).max() < 1e-12
+
+    def test_velocity_step_does_not_stop_on_a_capped_correction(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The frozen shape: a small velocity step with the faces unbalanced is not a stop.
+
+        The limit of a cap is a correction truncated to nothing: the faces
+        and the pressure returned as predicted, flagged capped. The momentum
+        predictor alone then settles the tiny cavity into a steady field whose
+        velocity step falls below convergence_tol while its imbalance stands
+        at the supply's order, the shape of the report's section 8.2. The old
+        rule called that converged; the new one runs to max_simple_iter. The
+        second half isolates the refusal from the physics: the real,
+        converging solve with every correction merely flagged capped must not
+        stop either.
+        """
+        original = PressureCorrector.correct
+
+        def truncated(
+            self: PressureCorrector, prediction: MomentumPrediction, p: np.ndarray
+        ) -> PressureCorrection:
+            return PressureCorrection(
+                u=np.ascontiguousarray(prediction.u_star),
+                v=np.ascontiguousarray(prediction.v_star),
+                p=p.copy(),
+                p_prime=np.zeros_like(p),
+                iterations=self._max_iter,
+                reached_cap=True,
+            )
+
+        monkeypatch.setattr(PressureCorrector, "correct", truncated)
+        config = _ruled(
+            "cavity", (6, 6), stopping_rule="velocity_step", max_simple_iter=400
+        )
+        mesh, _bc, solver = _build(config)
+        solver.solve_steady()
+        assert (solver.converged, solver.stop_reason) == (False, "max_simple_iter")
+        assert solver.pressure_cap_hits == 400
+        assert min(solver.residual_history) < config.convergence_tol
+        left = np.abs(solver.last_mass_imbalance).max()
+        assert left > 1e-2 * config.rho * 1.0 * mesh.dy
+
+        flagged: list[PressureCorrection] = []
+
+        def capped(
+            self: PressureCorrector, prediction: MomentumPrediction, p: np.ndarray
+        ) -> PressureCorrection:
+            out = dataclasses.replace(original(self, prediction, p), reached_cap=True)
+            flagged.append(out)
+            return out
+
+        monkeypatch.setattr(PressureCorrector, "correct", capped)
+        config = _ruled(
+            "cavity", (6, 6), stopping_rule="velocity_step", max_simple_iter=300
+        )
+        _mesh, _bc, solver = _build(config)
+        solver.solve_steady()
+        assert len(flagged) == 300
+        assert min(solver.residual_history) < config.convergence_tol
+        assert (solver.converged, solver.stop_reason) == (False, "max_simple_iter")
+        assert solver.pressure_cap_hits == 300
+
+    def test_error_estimate_refuses_the_frozen_state_through_continuity(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Under error_estimate the per-cell condition refuses what a truncated correction leaves."""
+
+        def truncated(
+            self: PressureCorrector, prediction: MomentumPrediction, p: np.ndarray
+        ) -> PressureCorrection:
+            return PressureCorrection(
+                u=np.ascontiguousarray(prediction.u_star),
+                v=np.ascontiguousarray(prediction.v_star),
+                p=p.copy(),
+                p_prime=np.zeros_like(p),
+                iterations=self._max_iter,
+                reached_cap=True,
+            )
+
+        monkeypatch.setattr(PressureCorrector, "correct", truncated)
+        config = _ruled(
+            "cavity", (6, 6), stopping_rule="error_estimate", max_simple_iter=400
+        )
+        _mesh, _bc, solver = _build(config)
+        solver.solve_steady()
+        assert (solver.converged, solver.stop_reason) == (False, "max_simple_iter")
+        assert min(solver.residual_history) < config.convergence_tol
+        assert np.abs(solver.last_mass_imbalance).max() > config.mass_imbalance_tol

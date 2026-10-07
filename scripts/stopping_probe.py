@@ -129,7 +129,7 @@ def instrument(
         imbalance.append(float(cells.max()))
         total.append(float(cells.sum()))
         signed.append(float(net.sum()))
-        sweeps.append(result.sweeps)
+        sweeps.append(result.iterations)
         return result
 
     corrector.correct = recorded

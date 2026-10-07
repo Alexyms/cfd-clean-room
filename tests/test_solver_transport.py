@@ -229,7 +229,7 @@ class TestConstruction:
                 "alpha_velocity": 0.7,
                 "alpha_pressure": 0.3,
                 "max_pressure_iter": 10,
-                "pressure_tol": 1e-6,
+                "pressure_rtol": 1e-8,
             },
             "boundaries": {},
             "sensors": [],

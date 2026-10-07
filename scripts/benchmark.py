@@ -102,7 +102,7 @@ SOLVER_PARAMETERS = (
     "alpha_velocity",
     "alpha_pressure",
     "max_pressure_iter",
-    "pressure_tol",
+    "pressure_rtol",
     "stopping_rule",
     "iteration_error_tol",
     "mass_imbalance_tol",
@@ -282,9 +282,9 @@ class WorkCounter:
             Snapshot handed to the solve_steady callback.
         """
         self.work["outer_iterations"] = state.iteration + 1
-        self.work["inner_sweeps"] += state.pressure_sweeps
+        self.work["inner_sweeps"] += state.pressure_iterations
         self.work["cell_updates"] += (
-            self.momentum_updates + self.cells_per_sweep * state.pressure_sweeps
+            self.momentum_updates + self.cells_per_sweep * state.pressure_iterations
         )
 
 

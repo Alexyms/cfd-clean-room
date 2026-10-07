@@ -67,19 +67,22 @@ class IterationState:
         Zero-based SIMPLE iteration index.
     residual : float
         Scaled velocity-change residual for this iteration.
-    pressure_sweeps : int
-        Jacobi sweeps performed by the pressure correction this iteration.
+    pressure_iterations : int
+        Conjugate gradient iterations performed by the pressure correction
+        this iteration.
     u, v, p : np.ndarray
         Current velocity and pressure fields, each shape [ny, nx].
 
     Notes
     -----
     Moved here from src/solver_ns.py on 2026-10-02 (PR 29), fields unchanged.
+    The count field was renamed from pressure_sweeps on 2026-10-06 (ECR-003
+    step 1), when the Jacobi sweep gave way to conjugate gradients.
     """
 
     iteration: int
     residual: float
-    pressure_sweeps: int
+    pressure_iterations: int
     u: np.ndarray
     v: np.ndarray
     p: np.ndarray

@@ -145,7 +145,7 @@ def test_staggered_work_counts_faces_and_every_cell_with_an_equation() -> None:
             IterationState(
                 iteration=i,
                 residual=1.0,
-                pressure_sweeps=sweeps,
+                pressure_iterations=sweeps,
                 u=fields,
                 v=fields,
                 p=fields,
