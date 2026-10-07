@@ -2,7 +2,7 @@
 
 **Project:** CFD Clean Room Simulation
 **Change Request ID:** ECR-003
-**Status:** Accepted 2026-10-06 by Alex, with ADR-013's six decisions each as ranked first; step 1 of section 8 opened the same day (branch `feature/ecr003-pressure-cg`), and its first commit enters section 5's text in `docs/SYSTEM.md`. Proposed 2026-10-06, with ADR-013, from the measurements in `docs/reports/pressure_solver_ecr003.md`. Revised the same day by the fix pass of prompt 36b on premise review 36 and `/cfd-test 36`, with the runs it cites added to the report as section 12. ADR-012 decision 5 (Alex, 2026-10-04) asked for this request, to land before ECR-002 step 5.
+**Status:** Closed 2026-10-07 at step 3, with steps 2 and 3 in one pull request (section 8, note). Step 1 merged as PR 62 on 2026-10-07; step 2's rows accepted by Alex on 2026-10-07 as ECR-002 criterion 1's laminar baseline after the step stopped on its outer counts. See section 9 for each criterion's evidence and the Document History for the sequence. Accepted 2026-10-06 by Alex, with ADR-013's six decisions each as ranked first; step 1 of section 8 opened the same day (branch `feature/ecr003-pressure-cg`), and its first commit enters section 5's text in `docs/SYSTEM.md`. Proposed 2026-10-06, with ADR-013, from the measurements in `docs/reports/pressure_solver_ecr003.md`. Revised the same day by the fix pass of prompt 36b on premise review 36 and `/cfd-test 36`, with the runs it cites added to the report as section 12. ADR-012 decision 5 (Alex, 2026-10-04) asked for this request, to land before ECR-002 step 5.
 **Author:** Alex Moroz-Smietana (drafted in the builder sessions of prompts 36 and 36b)
 **Approver(s):** Alex Moroz-Smietana, Claude (pair)
 **Date Raised:** 2026-10-06
@@ -264,6 +264,13 @@ Each step is one pull request through `/cfd-review` and `/cfd-test`.
 
 ECR-002 step 5, the first that solves the 200x75 room to tolerance, waits for step 2.
 
+*Note 2026-10-07, steps 2 and 3 in one pull request.* Step 1 merged as PR 62 on 2026-10-07. Steps
+2 and 3 ride together in the pull request of prompt 38: step 3 is records only, and Alex's standing
+rule is that process is a guideline. Step 2 stopped at its measurement, two outer counts having
+moved by more than the 5% the prompt allowed; Alex accepted its rows on 2026-10-07 and step 3
+followed on the same branch (`docs/reports/ecr003_step2_baseline.md`, sections 9 and 10).
+ECR-002 step 5's dependency on this request is met.
+
 ## 9. Acceptance Criteria
 
 1. **The solve.** `PressureCorrector.correct` solves by Jacobi-preconditioned CG; against a dense
@@ -272,22 +279,60 @@ ECR-002 step 5, the first that solves the 200x75 room to tolerance, waits for st
    reports `reached_cap`; the corrected faces' imbalance equals the residual to rounding; under
    velocity_step a capped correction does not stop the solve, and the count is recorded. Method:
    test.
+
+   *Met, step 1 (PR 62).* `tests/test_pressure.py` and `tests/test_solver_staggered.py`
+   (`docs/reports/ecr003_step1_cg.md`, section 4): CG against a dense solve on open and closed
+   systems, the stop, the floor, the exit check, the cap and `reached_cap`, the identity with the
+   corrected faces' imbalance, the velocity_step refusal and the count. 21 of 21 planted defects
+   and then 25 of 25 in the fix pass fail a named test (sections 7 and 13.5). Test 37b's two
+   missing tests, on saved-truth reads and the open-region refusal's other three edges, are
+   issue 63; neither is a clause of this criterion.
 2. **The laminar baseline.** `val001_80x40`, `val001_80x40_stretched` and `val002_80x80` meet REQ-S02
    and REQ-S03 under the change and stop by `error_estimate_and_continuity`; their harness rows under
    the new method label are ECR-002 criterion 1's baseline from then on (ECR-002 section 9, criterion
    1, "if ECR-003 lands first"). The transport gate tests pass. Method: test and harness rows.
+
+   *Met, step 2 (prompt 38).* Six rows under `staggered-cg` at 311034e, two of each case
+   (ae24b120, 63d655ba; a88453c2, a8ac6dd8; 284d7844, b00e334c): every one stops by
+   `error_estimate_and_continuity` with no capped correction. VAL-001 4.108e-4 uniform and
+   3.024e-3 clustered, against 1%; VAL-002 u 1.057e-3 and v 7.356e-4 of the lid speed against
+   Marchi, against 2%. The six transport gate files pass, 13 tests. The channel outer counts fell
+   61% and 50% from their Jacobi rows, past the 5% the prompt allowed, so the step stopped; the
+   cause is the Jacobi correction's, not CG's (`docs/reports/ecr003_step2_baseline.md`, sections 4
+   to 8), and Alex accepted the rows as ECR-002 criterion 1's baseline on 2026-10-07.
 3. **The measured cases reproduce.** With the built code at the default: the 40x15 room at real air
    under T3 with ten momentum sweeps meets the velocity-step stop at 1,209 and the error-estimate stop
    at 2,822 outer iterations, within 1%; the 80x30 room at a thousand times air's viscosity at 233 and
    588. Both through the report's probe-only subclass for T3 and the sweeps
    (`results/builder36/common36.py` with `outlet33b.py` and `frozen34.py`), edited as section 7.3
    states and reproduced in the step's report. Method: report.
+
+   *Met, step 1.* Exactly, not within 1%: 1,209 and 2,822 on 40x15 at real air, 233 and 588 on
+   80x30, with the report's inner counts (`docs/reports/ecr003_step1_cg.md`, sections 5 and 13.3;
+   the edited probe in its appendix A).
 4. **The cost.** One correction on each of the report's three captured 200x75 systems at the default
    in under 0.5 s on the report's machine, or the harness's equivalent on another. Method: report.
+
+   *Met, step 1, with one BLAS thread.* 131, 138 and 162 ms by the medians of seven solves, on the
+   report's machine (`docs/reports/ecr003_step1_cg.md`, section 6; rerun in section 13.3).
+   *Note 2026-10-07:* that timing set `OPENBLAS_NUM_THREADS` to 1, as the evidence report's did.
+   Under OpenBLAS's default threads, the setting the harness and the tests run with, the same
+   corrections take 1.03 to 1.10 s with the same iteration counts: CG's three reductions over the
+   15,000-cell grid are split across threads, about a third of a millisecond each
+   (`docs/reports/ecr003_step2_baseline.md`, section 11). Whether the criterion is held to the
+   default thread setting, and how the setting is fixed, is open for Alex. Meshes below about
+   10,000 cells, the step 2 cases among them, are not affected.
 5. **Records.** SYSTEM.md, PROJECT_PLAN.md, STATUS.md, ADR-013 (accepted, with planned against built)
    and this request updated and committed. Method: inspection.
+
+   *Met, step 3 (2026-10-07).* ADR-013 Accepted (built), with its planned against built;
+   REQ-S02 and REQ-S03 in SYSTEM.md carry the `staggered-cg` values; PROJECT_PLAN.md and STATUS.md
+   record this request closed; ECR-002 criterion 1 points at the baseline.
 6. **Review.** Each step's pull request carries its `/cfd-review` and `/cfd-test` reports. Method:
    inspection.
+
+   *Met.* PR 62 carries review 37 and tests 37, 37b and 37c. The pull request of steps 2 and 3
+   carries `/cfd-review 38` and `/cfd-test 38`.
 
 ## 10. Risks and Mitigations
 
@@ -311,6 +356,8 @@ architecture, and the acceptance criteria are sufficient to close the change.
 |------|------|----------|------|
 | Author | Alex Moroz-Smietana | Approved, with ADR-013's six decisions each as ranked first | 2026-10-06 |
 | Reviewer | Claude | Premise review 36, `/cfd-test 36` and `/cfd-test 36b` done; fix pass 36b and the orchestrator's text pass applied | 2026-10-06 |
+| Closure, author | Alex Moroz-Smietana | Approved: step 2's rows accepted as ECR-002 criterion 1's laminar baseline, and step 3 to proceed with the five notes of the continuation of prompt 38 | 2026-10-07 |
+| Closure, reviewer | Claude | Step 1: review 37, tests 37, 37b and 37c on PR 62. Steps 2 and 3: `/cfd-review 38` and `/cfd-test 38`, posted on their pull request | 2026-10-07 |
 
 ---
 
@@ -322,3 +369,5 @@ architecture, and the acceptance criteria are sufficient to close the change.
 | 2026-10-06 | Fix pass 36b on premise review 36 and test 36: section 7 rebuilt from a search of the tree (the eight test fixtures, the harness parameter list, the method label and its readers, the saved solves without a solver identity, the probe criterion 3 runs through); REQ-N03 kept as written, with the narrower risk and Phase 6's test stated; the cap reported and refused as a velocity_step stop; the default's reasons restated to the evidence, with the guard and tight-start options; the rounding floor, the true-residual check and the one-component check in the design; the growth per doubling measured. | Alex Moroz-Smietana |
 | 2026-10-06 | `/cfd-test 36b`'s text findings applied by the orchestrator (the fourth saved-solve reuse in `stopping_probe.py`, `pressure_rtol`'s lower bound, the Annex 20 cost, wording). ADR-013's six decisions taken by Alex, each as ranked first. | Alex Moroz-Smietana |
 | 2026-10-06 | Accepted by Alex. Step 1 opened (prompt 37): REQ-S08's amended text and REQ-S04's clarification entered in `docs/SYSTEM.md` in the step's first commit, as ECR-002 step 0 did for that request; the solve, the keys, the consumers of section 7 and criteria 1, 3 and 4 follow in the same pull request. | Alex Moroz-Smietana |
+| 2026-10-07 | Step 1 merged as PR 62 (prompts 37, 37b and 37c), with review 37 and tests 37, 37b and 37c posted on it: the CG solve, the keys, the consumers of section 7, criteria 1, 3 and 4 (`docs/reports/ecr003_step1_cg.md`). VAL-012 split by Alex the same day, its lower clause moved to a planted field (section 7.2's "re-checked, not re-set" departed from; ADR-013, planned against built). Test 37b's two missing tests deferred to issue 63. | Alex Moroz-Smietana |
+| 2026-10-07 | Steps 2 and 3 in one pull request (prompt 38; section 8, note). Step 2: six `staggered-cg` rows at 311034e meet REQ-S02 and REQ-S03 and stop by `error_estimate_and_continuity` with no capped correction; the transport gate passes. The channel outer counts fell 61% and 50% from their Jacobi rows and the step stopped; the cause was the Jacobi correction leaving most of the imbalance in the faces (`docs/reports/ecr003_step2_baseline.md`, section 6), and Alex accepted the rows as ECR-002 criterion 1's baseline. Step 3: ADR-013 Accepted (built) with planned against built; SYSTEM.md, PROJECT_PLAN.md, STATUS.md and ECR-002 updated, with the continuation's five notes (the net-outflow oscillation was the Jacobi correction's; the Jacobi-era orders bounded, not retaken; the cavity's cost; machine-specific hashes; ECR-002 step 5 retakes step 0's sweep result under CG). Each criterion's evidence in section 9. A finding on the way: with OpenBLAS's default threads one correction on the 200x75 systems takes 1.03 to 1.10 s, against criterion 4's 0.5 s met with one thread; recorded under criterion 4 and left to Alex. Closed. | Alex Moroz-Smietana |

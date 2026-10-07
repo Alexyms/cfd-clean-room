@@ -107,7 +107,9 @@ solve stops when all four hold, and reaching the cap is reported as not converge
   200 iterations only the stop is below 1e-10. Alex accepted that on 2026-10-01, with the
   returned field meeting criterion 6 as written and (a) bounding its accuracy: the true error
   at the 40x20 and 80x40 stops is 2.0e-8 and 6.1e-8 of the inlet speed, 34 and 9 times less
-  than under the three conditions [4, section 10].
+  than under the three conditions [4, section 10]. *Note 2026-10-07:* the oscillation belonged to
+  the weighted Jacobi correction; under ECR-003's conjugate gradients (d) holds from the first
+  outer iteration on both 80x40 channels (For Phase 3, below).
 
 The three-condition rule cost 1.07 to 1.16 times the default rule's wall time on the five
 validation solves [4, section 9]; (d) moved every channel stop later, 1.26 to 1.58 times the
@@ -207,6 +209,15 @@ remain, and `IterationState` is defined in `stopping.py`.
   is an adaptive iteration that does not overshoot: an outflow correction that removes the
   net-outflow mode, or under-relaxation that adapts to the damping the solver observes. A Phase
   3 design question (`docs/STATUS.md`, open questions); nothing is built.
+  *Note 2026-10-07 (ECR-003 step 2):* the oscillation was the weighted Jacobi correction's, not
+  the outer loop's. That correction's 1e-8 Pa stop left a median 99.9% of u*'s imbalance in the
+  corrected faces on both channels, so the net outflow was whatever the outer iteration had not
+  yet removed. With the correction solved by conjugate gradients (ADR-013) the faces balance to
+  rounding at every outer iteration: the signed domain sum stays below 1.8e-11 throughout,
+  conditions (b) to (d) hold from the first outer iteration, and (a) alone sets the stop, at 1,559
+  and 1,124 outer iterations against the 3,988 and 2,253 above
+  (`docs/reports/ecr003_step2_baseline.md`, section 6). The decision on (d) of 2026-10-01 stands as
+  history; under ECR-003 it does not bind on these cases.
 - *Mass conservation is a particle-source concern.* A per-cell velocity imbalance is a source or
   sink of particle mass in the transport equation, and REQ-T05 asks for 0.01%. Continuity holds
   on the staggered faces; the returned cell-centered field is their average and does not carry

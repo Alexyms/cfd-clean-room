@@ -61,9 +61,11 @@ to change too (ADR-012, decision 5). That change is ECR-003
 (`docs/ECR/ECR-003-pressure-solver.md`, ADR-013), accepted by Alex on 2026-10-06 after the
 measurements of `docs/reports/pressure_solver_ecr003.md`: Jacobi-preconditioned conjugate
 gradients in NumPy, stopping on the relative residual `pressure_rtol` (1e-8) or a rounding floor,
-with the iteration cap reported. Step 1 of its three is built on `feature/ecr003-pressure-cg`
-(prompt 37, `docs/reports/ecr003_step1_cg.md`); every laminar result changes beyond rounding, and
-step 2 retakes the laminar baseline.
+with the iteration cap reported. It closed on 2026-10-07. Step 1 replaced the solve (PR 62,
+`docs/reports/ecr003_step1_cg.md`); step 2 retook the laminar baseline, on which VAL-001 and
+VAL-002 pass as before, and Alex accepted its rows as ECR-002 criterion 1's baseline
+(`docs/reports/ecr003_step2_baseline.md`); step 3 recorded the design as built. ECR-002 step 5,
+which waited for it, can run.
 
 Step 0 ran on 2026-10-04 on the coarse copy of the room, with a frozen eddy viscosity shaped
 like the indoor zero-equation model's (`docs/reports/ecr002_step0_frozen_viscosity.md`). At that
@@ -113,7 +115,11 @@ where the oscillation has settled: between crossings the outflow is well above t
 accepted that as built on 2026-10-01: the returned field meets the criterion as written, and
 the estimated-error condition bounds its accuracy. Harness rows now record the rule's version,
 so the summary keeps the rule's versions apart (`docs/reports/stopping_rule_evidence.md`,
-section 10).
+section 10). The oscillation turned out to be the weighted Jacobi correction's, which left
+most of each outer iteration's imbalance in the faces: since ECR-003 replaced it with conjugate
+gradients, the condition holds from the first outer iteration and the estimated iteration error
+alone sets the stop on every case ECR-003 step 2 instrumented (`docs/reports/ecr003_step2_baseline.md`,
+sections 6 and 10).
 
 ## What the diagnostics established
 
@@ -327,12 +333,28 @@ and with it wired in the report's two measured rooms stop at the report's outer 
 solver's identity and two reuses their tests could not see; the fix pass of prompt 37b reads
 every saved truth through the identity check, defines the method label once beside the solver's
 version, refuses an open domain with a region no outlet reaches, and counts the work in operator
-products. Next: `/cfd-test 37b`, the pull request, then step 2 (the laminar baseline retaken
-under the new label) and step 3 (the records), after which ECR-002 step 5 can run.
+products. Step 1 merged as PR 62 on 2026-10-07, after VAL-012's lower clause moved to a planted
+field the same day because the solver's faces now balance to rounding. Step 2 (prompt 38) retook the
+laminar baseline under `staggered-cg`: VAL-001 and VAL-002 pass with the Jacobi values to three
+figures, every case stops by the rule with no capped correction, and the transport gate passes.
+The channel cases stop in half the outer iterations or fewer, which stopped the step against a
+prediction that assumed each Jacobi correction delivered its tolerance; it delivered almost
+nothing late in a solve, so the channel's continuity conditions had waited on the outer
+iteration. Alex accepted the rows on 2026-10-07, and step 3 closed the request: ADR-013 as
+built, with a table of planned against built. The orders of convergence on record were measured
+under Jacobi and are not retaken; the field differences bound how far they could move (the
+gate rows in `docs/PROJECT_PLAN.md`). On the 80x80 cavity CG at the default costs more wall time
+than the Jacobi row did, a candidate for the efficiency pass in `docs/PROJECT_PLAN.md`, not a
+decision. Found on the way: on meshes above about 10,000 cells, the product's among them,
+OpenBLAS's default threads make each CG correction about seven times slower than the one-thread
+timing ECR-003's cost criterion was met with; how runs set the thread count is Alex's to decide
+(`docs/reports/ecr003_step2_baseline.md`, section 11). Next: ECR-002 steps 2 to 5; step 5 retakes
+step 0's sweep result with CG.
 
-Deferred findings from earlier pull requests are open as GitHub issues 33, 36, 40 and 42; issue
-38's last item, the solver-key list held once, is done in ECR-003 step 1's pull request, which
-closes it.
+Deferred findings from earlier pull requests are open as GitHub issues 33, 36, 40, 42, 45, 47, 51,
+53 and 58; issue 61 holds the outlet finding for ECR-002 step 3, and issue 63 the two tests test
+37b found missing in ECR-003 step 1. Issue 38's last item, the solver-key list held once, was done
+in ECR-003 step 1's pull request, which closed it.
 
 With the review Action removed, its repository secret and the GitHub App it used are
 still installed. Removing them is Alex's, after merge.
@@ -365,11 +387,13 @@ decision has been open to choose since 2026-10-02.
 
 What sets the outer iteration count once the pressure correction is active rather than inert.
 Asked of the collocated solver and not pursued there, because the rebuild changed that regime
-in kind. Open on the staggered solver, with no dedicated probe. What its records show so far:
-on the channel the count is set by the net outflow's underdamped oscillation, the next
-question; on the cavity the condition met last is the per-cell imbalance at 20x20 and 40x40
-and the estimated iteration error at 80x80 (`docs/reports/stopping_rule_evidence.md`, section
-10). The harness records the outer count on every run.
+in kind. Open on the staggered solver, with no dedicated probe. What its records show: under
+the weighted Jacobi correction the channel's count was set by the net outflow's oscillation and
+the cavity's by the per-cell imbalance at 20x20 and 40x40 and the estimated iteration error at
+80x80 (`docs/reports/stopping_rule_evidence.md`, section 10). Since ECR-003 (2026-10-07) the
+estimated iteration error sets the stop on the 80x40 channels and the three cavities, the
+continuity conditions holding from the first outer iteration (`docs/reports/ecr003_step2_baseline.md`, sections 6 and 10). The
+harness records the outer count on every run.
 
 An outer iteration that adapts rather than overshoots, a Phase 3 design question recorded
 2026-10-01. On the open channel the net mass outflow decays as an oscillation about zero, an
@@ -378,7 +402,11 @@ rule's domain-sum condition is met at a zero crossing (`docs/reports/stopping_ru
 section 10). Alex's stated direction is an adaptive iteration that does not overshoot. There
 are two candidate fixes: an outflow correction that removes the net-outflow mode, or
 under-relaxation that adapts to the damping the solver observes. Nothing is built yet.
-Deferred on 2026-10-02 to a later efficiency and clean-up pass; it is not Phase 3 work.
+Deferred on 2026-10-02 to a later efficiency and clean-up pass; it is not Phase 3 work. Since
+2026-10-07 the oscillation is known to have been the weighted Jacobi correction's, and under
+ECR-003's conjugate gradients it is gone on the validation channels; the pass is now listed in
+`docs/PROJECT_PLAN.md` with this question beside a second candidate, a pressure tolerance loose
+early and tight near the stop.
 
 Closed 2026-10-01: whether the domain-sum condition should hold over a window, or bound the
 oscillation's envelope, rather than be met at a zero crossing. It should not. Alex and the
