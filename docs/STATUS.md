@@ -57,7 +57,13 @@ transport gate rows stand: they were judged on prescribed or laminar face fields
 does not change. A second finding of `docs/reports/product_case_reynolds.md`: one pressure
 correction on the product mesh needs about a hundred and forty times the committed sweep cap at
 the committed tolerance, growing as the square of the cells per side, so the pressure solve has
-to change too (ADR-012, decision 5).
+to change too (ADR-012, decision 5). That change is ECR-003
+(`docs/ECR/ECR-003-pressure-solver.md`, ADR-013), accepted by Alex on 2026-10-06 after the
+measurements of `docs/reports/pressure_solver_ecr003.md`: Jacobi-preconditioned conjugate
+gradients in NumPy, stopping on the relative residual `pressure_rtol` (1e-8) or a rounding floor,
+with the iteration cap reported. Step 1 of its three is built on `feature/ecr003-pressure-cg`
+(prompt 37, `docs/reports/ecr003_step1_cg.md`); every laminar result changes beyond rounding, and
+step 2 retakes the laminar baseline.
 
 Step 0 ran on 2026-10-04 on the coarse copy of the room, with a frozen eddy viscosity shaped
 like the indoor zero-equation model's (`docs/reports/ecr002_step0_frozen_viscosity.md`). At that
@@ -90,7 +96,9 @@ system, which the collocated one was not, because the collocated walls leak mass
 
 Four decisions the plan did not anticipate were made during the build, each recorded where
 it was made. The pressure Jacobi sweep is weighted by two thirds, because the plain sweep has
-an exact -1 eigenvalue on a closed domain and never converges there (REQ-S08, clarified). The
+an exact -1 eigenvalue on a closed domain and never converges there (REQ-S08, clarified; the
+sweep itself was replaced by conjugate gradients on 2026-10-06, ECR-003 step 1, and REQ-S08
+amended). The
 validation cases stop by an `error_estimate` rule that bounds the iteration error and the mass
 imbalance rather than the last velocity step, because the step rule left iteration error as
 large as the discretization error and could not see a flux drift on the open channel (REQ-S01
@@ -299,11 +307,28 @@ room across k-epsilon's range. Step 1, k and eps on a prescribed face field, is 
 `src/scalar_scheme.py` with the transport gate unchanged to the bit, the `turbulence`
 configuration section, and `src/turbulence.py` for both variants, VAL-015 passing
 (`docs/PROJECT_PLAN.md`). Review 35 and test 35 found its tests one-directional and
-`nu_t` unchecked; the fix pass of prompt 35b answers them on
-`feature/ecr002-k-epsilon-scalar`. Next: `/cfd-test 35b`, the pull request, then step 2,
-and ECR-003, the pressure solve, which steps 1 to 4 do not wait for.
+`nu_t` unchecked; the fix pass of prompt 35b answered them, and step 1 is on main (023b8f6).
 
-Deferred findings from earlier pull requests are open as GitHub issues 33, 36, 38, 40 and 42.
+ECR-003, the pressure solve, was measured (prompt 36: the systems the product room builds are
+symmetric and positive definite; weighted Jacobi needs 28,000 to 378,000 sweeps per correction
+on 200x75 for a relative residual of 1e-3 to 3e-3 while conjugate gradients reach 1e-8 in about
+860 iterations and 0.16 s; the outer loop needs a tight correction, not a loose one, for the
+stopping rule's continuity where the outlets hold a standing imbalance), premise-reviewed and
+tested (36, 36b), and accepted by Alex on 2026-10-06 with ADR-013's six decisions. Step 1
+(prompt 37, `feature/ecr003-pressure-cg`) replaces the weighted sweep in `src/pressure.py` by
+Jacobi-preconditioned CG with the stop, the floor, the true-residual check, the reported cap and
+the closed-domain projection ADR-013 states; `pressure_rtol` replaces `pressure_tol`, which the
+loader refuses; a capped correction cannot stop a velocity_step solve; the harness label is
+`staggered-cg` and every saved solve carries the solver's identity. Before the solve was wired in,
+the built loop reproduced the report's probe on the three recaptured 200x75 systems bit for bit,
+and with it wired in the report's two measured rooms stop at the report's outer counts exactly
+(`docs/reports/ecr003_step1_cg.md`). Next: `/cfd-review 37` and `/cfd-test 37`, the pull request,
+then step 2 (the laminar baseline retaken under the new label) and step 3 (the records), after
+which ECR-002 step 5 can run.
+
+Deferred findings from earlier pull requests are open as GitHub issues 33, 36, 40 and 42; issue
+38's last item, the solver-key list held once, is done in ECR-003 step 1's pull request, which
+closes it.
 
 With the review Action removed, its repository secret and the GitHub App it used are
 still installed. Removing them is Alex's, after merge.
@@ -361,7 +386,8 @@ Closed 2026-09-22: how REQ-S08 should be amended. It was clarified, not amended.
 Jacobi with w = 2/3 keeps the data-parallel per-cell update and maps the closed-domain
 system's exact -1 eigenvalue to -1/3, and the closed cavity now converges. The rationale
 is recorded in the requirement in `docs/SYSTEM.md`; the evidence is in
-`docs/reports/pressure_correction_step5.md`, sections 3 and 5.
+`docs/reports/pressure_correction_step5.md`, sections 3 and 5. Superseded 2026-10-06: REQ-S08
+is amended to conjugate gradients (ECR-003, ADR-013), and the weight is history.
 
 Closed 2026-09-25: whether VAL-002 can return to the full grid in CI once the rebuild lands.
 It does not need to. CI runs the staggered VAL-002 on the case file's 40x40 in about a minute,
