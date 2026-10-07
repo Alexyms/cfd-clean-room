@@ -329,3 +329,18 @@ is a Phase 3 design question (`docs/STATUS.md`, open questions).
 Both misses have one cause. The prediction took the signed sum to fall monotonically, with (d)
 met where its magnitude settles below 1e-10 (40x20: 2375, inside the predicted range). It falls
 only in envelope, and (d) is met at the first sign change after (a), (b) and (c) hold.
+
+**Note 2026-10-07 (ECR-003 step 2).** The oscillation was the weighted Jacobi pressure
+correction's, not the outer loop's. Every run above used that correction, whose 1e-8 Pa stop
+left a median 99.97% and 99.90% of u*'s imbalance in the corrected faces on the uniform and
+clustered 80x40 channels and 94% on the 80x80 cavity; the net outflow was the part of it the
+outer iteration had not yet removed. ECR-003 replaced that correction by conjugate gradients to
+a relative residual of 1e-8 (ADR-013). Under it the faces balance to rounding at every outer
+iteration, the signed domain sum on the two channels never exceeds 1.8e-11, (b), (c) and (d)
+hold from the first outer iteration on each of these cases, and (a) alone sets the stop: VAL-001
+80x40 at 1559 (3988 above), clustered 80x40 at 1124 (2253), cavity 20x20 at 970 (1370), 40x40
+at 3435 (3849) and 80x80 at 12814 (12849). So the cavity's (b) at 20x20 and 40x40 and the
+channel's (d) were set by the correction too. The sentence in the decision above naming the
+oscillation an underdamped mode of the outer loop, and the design question it raised, rest on
+the Jacobi correction; the decision itself stands as history. Evidence:
+`docs/reports/ecr003_step2_baseline.md`, sections 6 and 10.

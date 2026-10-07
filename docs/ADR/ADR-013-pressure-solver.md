@@ -1,6 +1,9 @@
 # ADR-013: Pressure Correction Solver: Jacobi-Preconditioned Conjugate Gradients
 
 ## Status
+Accepted (built). Built in ECR-003 step 1 (prompts 37 to 37c, PR 62, merged 2026-10-07) and
+measured on the laminar baseline in step 2 (prompt 38); the section "Planned against built" was
+added at step 3 on 2026-10-07, when ECR-003 closed [5, 6].
 Accepted 2026-10-06 by Alex, each of the six decisions below as ranked first; ECR-003 step 1 builds it
 (prompt 37), and step 3 adds planned against built. Proposed 2026-10-06, with ECR-003 (`docs/ECR/ECR-003-pressure-solver.md`), from the measurements in
 `docs/reports/pressure_solver_ecr003.md` [1]. Premise review 36 and `/cfd-test 36` found no Critical
@@ -431,6 +434,32 @@ room does, and what makes that room have them (a degenerate face or cell beside 
 corner is the obvious place to look): not measured. No ECR-003 criterion holds a field to the
 spread of those solutions.
 
+## Planned against built
+
+Written 2026-10-07 at ECR-003 step 3, after step 1 merged (PR 62) and step 2 measured the
+laminar baseline. Each row is a decision or section of this design, or the line of ECR-003 that
+planned it, against what was built and measured.
+
+| ADR-013 planned | Built | Why, and where measured |
+|---|---|---|
+| Decision 1, section A: Jacobi-preconditioned CG in NumPy, the solve inside `PressureCorrector.correct` (D's draft) | `apply_operator`, `conjugate_gradient` and `ConjugateGradientResult` module-level in `src/pressure.py`; `correct` calls them | The tests plant a lying operator and count iterations, the probes call the loop on captured systems, and Phase 6 can run it for a fixed count (section C). The built loop reproduces the probe's on the three recaptured 200x75 systems bit for bit, nine solves [5, sections 3 and 10] |
+| Decision 2, section C: NumPy only | As planned; `requirements.txt` unchanged | |
+| Decision 3, section B: `pressure_rtol` 1e-8, the floor `1e-13 F` with F the stopping rule's flux scale, the true residual checked at exit | As planned. F is `PressureCorrector.flux_scale`, public, and the solver's error_estimate rule reads it, so the floor and the rule share one F; `ZERO_SCALE` moved from `solver_staggered.py` to `pressure.py`, one guard for both. A failed exit check restarts from the true residual | [5, section 10]. The floor ends every correction of the 20x20 cavity from outer 235 [5, section 13.2], and the late corrections of every step 2 case, where the relative figure rises to 6e-3 (channels) and 7e-2 (cavity) while the corrected faces' worst cell stays at most 8.2e-12 kg/s per metre [6, section 6] |
+| Section B, the cap: `reached_cap`, `pressure_cap_hits`, a warning, no velocity_step stop on a capped correction | As planned; every harness row records `pressure_cap_hits` | Step 2's six rows record none. The Jacobi rows they replace had 410, 129 and 3,728 corrections at their caps, which no row could record [6, section 6] |
+| Section D: a closed domain whose cells with an equation are not one component refused | Built, a cell having an equation when it is non-SOLID with a non-SOLID 4-neighbour (a sealed cell is not counted); and an open domain with a component no outlet cell reaches refused as well | Not in D's plan; such a domain caps every correction (review 37 S7). 13 of 13 committed configurations, presets and transport cases are accepted [5, section 13.2] |
+| Decision 4, section D: `pressure_rtol` in [1e-10, 1), `pressure_tol` refused, `max_pressure_iter` 5,000, the weighted sweep and `JACOBI_WEIGHT` removed | As planned; the refusal's range is formatted from `PRESSURE_RTOL_BOUNDS`. The harness records the solver keys from `SOLVER_KEYS` in `config.py`, the one list (issue 38), not from a `SOLVER_PARAMETERS` of its own as ECR-003 7.1 named | [5, sections 10 and 13.2] |
+| Section D's contract: `PressureCorrection.iterations` and `reached_cap`; `IterationState.pressure_iterations` | As planned, and `products`, every product with the operator (one per iteration and one per true-residual check), on `ConjugateGradientResult` and `PressureCorrection`, with `IterationState.pressure_products` as its last field | Review 37 S5: the harness counts its work in operator products, row schema 2 with `work.inner_iterations` and `work.inner_products`; stored rows keep `inner_sweeps`. ECR-003 7.1 described the work as "plus vector operations"; the built definition counts stencil evaluations only, as every method's does [5, section 13.2] |
+| ECR-003 7.1: the label `staggered-cg` in the harness, `staggered-jacobi` retired | As planned, with `STAGGERED_METHODS` and `STAGGERED_METHOD` defined once in `pressure.py`, looked up by `PRESSURE_SOLVER_VERSION`, and imported by the harness, the viewer and `self_convergence.py` | Review 37 S4: a version without a label fails at import [5, section 13.2] |
+| ECR-003 7.1: four saved-solve reuses in `stopping_probe.py` keyed on the version; `val001_order.py` "no edit of its own" | Every saved truth read through one identity check, six reads in all; `val001_order.py`'s reuse key carries `PRESSURE_SOLVER_VERSION` | Review 37 B1 found the fifth read, the fix pass the sixth; the key had carried the solver's identity only through `pressure_rtol`'s name [5, section 13.1]. Test 37b's two missing tests are issue 63 |
+| ECR-003 7.2: the transport criteria re-checked, not re-set | VAL-012 split by Alex on 2026-10-07: its requirement clause stays on the solver's VAL-001 faces, its lower clause moved to a planted field. Every other gate row passes unchanged | CG balances those faces to rounding (worst cell 6.2e-16 kg/s), so departure and bound were both rounding, their ratio on the 0.1 line (0.100 on Windows, 0.099 on Linux); ADR-011 G records the split. Step 2 re-ran the six gate files: 13 passed [6, section 8] |
+| Criterion 3: the report's two rooms reproduce within 1% | Exactly: 1,209 and 2,822 on 40x15, 233 and 588 on 80x30 | [5, section 5] |
+| Criterion 4: under 0.5 s per correction on 200x75 | 131 to 162 ms, the medians over three systems, with one BLAS thread; 1.03 to 1.10 s under OpenBLAS's default threads, the same iteration counts | Every timing in [1] and [5] set one BLAS thread. Above about 10,000 cells OpenBLAS splits each of CG's three reductions across threads at about a third of a millisecond apiece; below it, the step 2 cases among them, time and bits are the same either way. Whether the criterion holds the default setting, and how the setting is fixed, is open for Alex [6, section 11] |
+| Criterion 2 and the negative consequence: every laminar result changes beyond rounding and the baseline is retaken | VAL-001 4.108e-4 and 3.024e-3, VAL-002 u 1.057e-3 and v 7.356e-4 of the lid speed, each the Jacobi value to three figures; the faces moved by at most 1.1e-7 m/s on the channels and 7.3e-8 on the cavity. The channel outer counts fell 61% and 50%, the cavity's 0.27%. Six rows at 311034e, accepted by Alex on 2026-10-07 as ECR-002 criterion 1's baseline | The prediction's premise, that each Jacobi correction delivered its tolerance, was wrong: the median correction left 99.9% of the imbalance in the faces, so on the channels the stopping rule's condition (d) held only at zero crossings of the net outflow. Under CG conditions (b) to (d) hold from the first outer iteration and (a) alone sets the stop [6, sections 4 to 6]. The orders of convergence recorded under Jacobi are not retaken; the measured field differences can move none by more than 0.003 (VAL-001's 1.992) or 6e-4 (VAL-002's four) [6, section 10] |
+| ECR-003 section 4: a tight level "costs little against a sweep" | On the 80x80 cavity CG at the default takes 9% to 15% more wall time than the Jacobi row, with the counts equal: 265 CG iterations per correction at the median against the Jacobi row's 192 sweeps on average at its loose stop. Measured; no action taken | The cost case rests on the product mesh, where a sweep-based correction needs 28,000 to 378,000 sweeps (section A), not on the validation cases [6, sections 4 and 5]. PROJECT_PLAN's efficiency pass lists a tolerance loose early and tight near the stop as a candidate, not decided |
+| Section C: REQ-N03 as written; Phase 6's test runs both loops for the same iteration count | Not built (Phase 6). Step 2 found the face bits depend on the BLAS kernel: one thread or many gives the same hash on one machine, and OpenBLAS picks its `ddot` kernel by CPU | ECR-002 criterion 1 compares hashes taken on one machine [6, section 7] |
+| Decision 5: the C path deferred | Deferred; PROJECT_PLAN's Phase 6 deliverable `csolver/pressure_solve.cu` is a CG kernel | |
+| Decision 6: the outlet drift to ECR-002 step 3, the finer-grid non-convergence to ECR-002 step 5 | Issue 61 for step 3; step 5's row in ECR-002 section 8 names both the finer-grid finding and the sweep result it retakes under CG | Step 3 notes in ECR-002, 2026-10-07 |
+
 ## Consequences
 **Positive.** A steady product solve takes minutes, not hours or days. The stop measures what it
 claims: the fraction of the imbalance a correction leaves. A correction cut short by the cap is
@@ -470,6 +499,10 @@ consequence above.
    `docs/reports/product_case_reynolds.md`, section 5.
 4. `docs/reports/ecr002_step0_frozen_viscosity.md`, sections 6.4 and 7.6, and test 34b: the 40x15
    room converging with ten momentum sweeps.
+5. `docs/reports/ecr003_step1_cg.md`: item 0 (section 3), criteria 3 and 4 (sections 5 and 6), the
+   contracts that differ from section D's draft (10), the fix pass (13).
+6. `docs/reports/ecr003_step2_baseline.md`: the rows (section 4), the prediction (5), why the
+   channel counts moved (6), the controls (7), the transport gate (8), the orders (10).
 
 Hestenes and Stiefel (1952), conjugate gradients; Saad (2003), preconditioned Krylov methods;
 Briggs, Henson and McCormick (2000), multigrid and Galerkin coarse operators; Ruge and Stueben (1987)
