@@ -2,7 +2,7 @@
 
 **Project:** CFD Clean Room Simulation
 **Change Request ID:** ECR-003
-**Status:** Proposed 2026-10-06, with ADR-013, from the measurements in `docs/reports/pressure_solver_ecr003.md`. Revised the same day by the fix pass of prompt 36b on premise review 36 and `/cfd-test 36`, with the runs it cites added to the report as section 12. ADR-012 decision 5 (Alex, 2026-10-04) asked for this request, to land before ECR-002 step 5.
+**Status:** Accepted 2026-10-06 by Alex, with ADR-013's six decisions each as ranked first; step 1 of section 8 opened the same day (branch `feature/ecr003-pressure-cg`), and its first commit enters section 5's text in `docs/SYSTEM.md`. Proposed 2026-10-06, with ADR-013, from the measurements in `docs/reports/pressure_solver_ecr003.md`. Revised the same day by the fix pass of prompt 36b on premise review 36 and `/cfd-test 36`, with the runs it cites added to the report as section 12. ADR-012 decision 5 (Alex, 2026-10-04) asked for this request, to land before ECR-002 step 5.
 **Author:** Alex Moroz-Smietana (drafted in the builder sessions of prompts 36 and 36b)
 **Approver(s):** Alex Moroz-Smietana, Claude (pair)
 **Date Raised:** 2026-10-06
@@ -309,7 +309,7 @@ architecture, and the acceptance criteria are sufficient to close the change.
 
 | Role | Name | Approval | Date |
 |------|------|----------|------|
-| Author | Alex Moroz-Smietana | Pending | |
+| Author | Alex Moroz-Smietana | Approved, with ADR-013's six decisions each as ranked first | 2026-10-06 |
 | Reviewer | Claude | Premise review 36, `/cfd-test 36` and `/cfd-test 36b` done; fix pass 36b and the orchestrator's text pass applied | 2026-10-06 |
 
 ---
@@ -321,3 +321,4 @@ architecture, and the acceptance criteria are sufficient to close the change.
 | 2026-10-06 | Proposed, with ADR-013 and the evidence report `docs/reports/pressure_solver_ecr003.md`. ADR-013's decisions open. Premise review and `/cfd-test 36` to follow. | Alex Moroz-Smietana |
 | 2026-10-06 | Fix pass 36b on premise review 36 and test 36: section 7 rebuilt from a search of the tree (the eight test fixtures, the harness parameter list, the method label and its readers, the saved solves without a solver identity, the probe criterion 3 runs through); REQ-N03 kept as written, with the narrower risk and Phase 6's test stated; the cap reported and refused as a velocity_step stop; the default's reasons restated to the evidence, with the guard and tight-start options; the rounding floor, the true-residual check and the one-component check in the design; the growth per doubling measured. | Alex Moroz-Smietana |
 | 2026-10-06 | `/cfd-test 36b`'s text findings applied by the orchestrator (the fourth saved-solve reuse in `stopping_probe.py`, `pressure_rtol`'s lower bound, the Annex 20 cost, wording). ADR-013's six decisions taken by Alex, each as ranked first. | Alex Moroz-Smietana |
+| 2026-10-06 | Accepted by Alex. Step 1 opened (prompt 37): REQ-S08's amended text and REQ-S04's clarification entered in `docs/SYSTEM.md` in the step's first commit, as ECR-002 step 0 did for that request; the solve, the keys, the consumers of section 7 and criteria 1, 3 and 4 follow in the same pull request. | Alex Moroz-Smietana |
