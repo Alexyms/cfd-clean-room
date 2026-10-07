@@ -8,7 +8,11 @@
 `run_case` and hashes the final faces of the same solve; two detached worktrees,
 `wt_311034e` (main, the solver under test) and `wt_867ef89` (main before step 1, the weighted
 Jacobi solver); every run's log and manifest beside them. Added after the runs began:
-`diagnose38.py` (section 6) and `controls38.sh` (sections 7 and 8).
+`diagnose38.py` (section 6) and `controls38.sh` (sections 7 and 8); after Alex's decision,
+`order_bounds38.py` with `val001_order_cg/` (section 10), and `one_thread_order.py`,
+`vdot_bench.py` and `criterion4_threads.py` (section 11). The worktrees were removed with
+`git worktree remove` at the end of step 3; the trees are commits 311034e and 867ef89, and every
+output written inside them was copied to `results/builder38/` first.
 **Order:** this section and sections 1 to 3 are committed before the runs (03e339b). One run came
 before them: a smoke test of `baseline38.py` on `val002_20x20` into a scratch file, which section 3
 reports. The six rows ran alone; the controls, the diagnosis and the transport gate ran after them,
@@ -165,6 +169,12 @@ file's arrays, read back, reproduce the hash stored in it.
 | Wall time three to ten times shorter, the cavity most | Not held. The channels are 3.8 and 2.0 times shorter, from the fewer outer iterations: per outer iteration 1.5 and 1.0 times. The cavity takes 9% to 15% longer |
 | Face hashes differ from the Jacobi rows' | Held on every case (section 7). The faces differ by at most 1.1e-7 m/s on the channels and 7.3e-8 m/s on the cavity |
 
+The prediction's premise was wrong: it assumed each Jacobi correction delivered its tolerance, a
+relative residual of about 1e-3, and on these cases the median correction delivered almost
+nothing (section 6). The count prediction failed on the channels for that reason, and the wall
+time prediction with it, since both read Jacobi's cost and stop as those of a correction that did
+its job.
+
 ## 6. Why the channel counts moved (written after the runs)
 
 `diagnose38.py` ran each case once more on each tree, reading the rule's four quantities on the
@@ -264,3 +274,102 @@ What is Alex's to decide:
    and 40x40 cavity rows would). On the 80x80 cavity CG at the default costs 9% to 15% more wall
    time than the Jacobi row, so ADR-013's cost case rests on the product mesh, not on the validation
    cases.
+
+**Decision, 2026-10-07 (Alex).** The six rows are accepted as ECR-002 criterion 1's baseline; the
+stop was correct and section 6's analysis is accepted. Step 3 proceeds on this branch with five
+notes: the oscillation (ADR-010, SYSTEM.md, `docs/reports/stopping_rule_evidence.md` section 10),
+the orders bounded rather than retaken (section 10 below), the cavity's cost (ADR-013 and
+PROJECT_PLAN's efficiency pass), the machine-specific hashes (ECR-002 criterion 1), and ECR-002
+step 5 retaking step 0's sweep result under CG.
+
+## 10. The orders, bounded (written 2026-10-07, after Alex's decision)
+
+The orders of convergence on record were measured under the weighted Jacobi correction: VAL-001's
+reference-free order 1.992 (REQ-S02's 1.99, ECR-001 criterion 4) and VAL-002's 2.24 and 2.11 in u
+and 2.12 and 2.07 in v over 20x20, 40x40 and 80x80 (REQ-S03's second order, ECR-001 criterion 3a).
+By Alex's decision they are not retaken. This section bounds how far the CG-against-Jacobi field
+differences could move each, with the stop the continuation set: more than 0.01 on any order, and
+the step reports instead of recording.
+
+**The bound.** VAL-001's order is `log2(||d1|| / ||d2||)`, RMS, with `d1 = f40 - R f80` and
+`d2 = R(f80 - R f160)`, f the u profile at x = L/2 in m/s and R the average of pairs. A profile
+change of largest size `delta_k` on grid k moves `||d1||` by at most `delta_1 + delta_2` and `||d2||`
+by at most `delta_2 + delta_3`, so the order moves by at most
+`((delta_1 + delta_2) / ||d1|| + (delta_2 + delta_3) / ||d2||) / ln 2`. VAL-002's orders are
+`log2(e_n / e_2n)`, e the largest error over Marchi's stations in units of the lid speed, read by
+the cubic through the four nearest profile nodes. A profile change of largest size delta moves e by
+at most `L delta / U`, L the cubic's Lebesgue constant at the stations (1.5625 at 20x20, where a
+station falls in an end interval, 1.25 at 40x40 and 80x80, computed from the metric's own weights),
+and the order by at most `(de_n / e_n + de_2n / e_2n) / ln 2`.
+
+**The differences, measured on every grid of both studies.** VAL-001: `scripts/val001_order.py`'s own
+solve of 40x20, 80x40 and 160x80 at 311034e, against the Jacobi solves that script saved at
+8aac137 (outer 1,389, 3,988 and 13,454, the order 1.992 and the rows' metrics). The CG solves
+stop at 408, 1,559 and 6,103 outer iterations, all by `error_estimate_and_continuity`. VAL-002:
+20x20 and 40x40 solved on both trees by `diagnose38.py`; the Jacobi reruns reproduce rows 5129231b
+and 6e1cf3fe to the bit (1,370 and 3,849 outer iterations), and the CG solves stop at 970 and
+3,435. 80x80 is section 6's pair.
+
+| Order (where it is recorded) | Under Jacobi | Largest profile difference, CG against Jacobi, coarse to fine | Largest change it can cause | Change under CG, a check |
+|---|---|---|---|---|
+| VAL-001 reference-free, RMS (REQ-S02 1.99; the VAL-001 gate row 1.992) | 1.9923 | 2.6e-8, 3.4e-8, 3.5e-8 m/s (`d1` 1.69e-4, `d2` 4.26e-5 m/s) | 0.0029 (0.0015 in the max norm beside it) | -2.5e-5 |
+| VAL-002 u, 20x20 to 40x40 (2.24) | 2.2366 | 9.5e-7, 6.7e-7 of the lid speed | 3.6e-4 | -7.0e-5 |
+| VAL-002 u, 40x40 to 80x80 (2.11) | 2.1050 | 6.7e-7, 6.6e-8 | 3.8e-4 | +1.6e-4 |
+| VAL-002 v, 20x20 to 40x40 (2.12) | 2.1181 | 9.3e-7, 7.1e-7 | 5.7e-4 | -1.7e-4 |
+| VAL-002 v, 40x40 to 80x80 (2.07) | 2.0658 | 7.1e-7, 6.4e-8 | 5.7e-4 | +3.0e-4 |
+
+No order can move by 0.01; the largest possible change is 0.0029, on VAL-001, and every recorded
+order stands to the figures it is quoted at. The last column is the order computed from the same CG
+solves, as a check that the bound is one: every realized change is inside it. Had the 80x40 face
+difference of section 6, 1.06e-7 m/s, been taken for every grid instead of the measured profile
+differences, the VAL-001 bound would have read 0.009, close enough to 0.01 that the other grids
+were measured rather than assumed. The full field differences on the VAL-001 grids are 9.6e-8,
+1.06e-7 and 1.04e-7 m/s, near the two solves' iteration-error bound of 2e-7.
+
+The smaller channel and cavity grids move as the step 2 cases did: under CG the 40x20 channel stops
+at 408 outer iterations against 1,389, the 20x20 and 40x40 cavities at 970 and 3,435 against 1,370
+and 3,849. On the two cavities, which `diagnose38.py` instrumented, (b) to (d) hold from the first
+outer iteration and (a) sets the stop; the 40x20 and 160x80 channel solves were not instrumented.
+Under Jacobi the cavity's 20x20 and 40x40 stops were set by (b), the per-cell imbalance
+(`docs/reports/stopping_rule_evidence.md`, section 10). Records: `results/builder38/order_bounds38.py`,
+`order_bounds_cavity.json`, `order_bounds_channel.json`.
+
+## 11. A finding on the way: BLAS threads above about 10,000 cells (written 2026-10-07)
+
+Section 10's CG solve of the VAL-001 160x80 grid took 2,862 s for 6,103 outer iterations, where
+80x40 takes 29 s for 1,559 and the Jacobi solve of 160x80 took 882 s for 13,454. The cause is the BLAS
+thread count. CG's three reductions per iteration are `np.vdot` over the full [ny, nx] grid, and
+this NumPy's OpenBLAS splits a `ddot` across threads once the vector is long enough:
+
+| Vector length | `np.vdot`, default threads, microseconds | One thread (`OPENBLAS_NUM_THREADS=1`) |
+|---|---|---|
+| 3,200 (80x40) | 2.1 to 2.2 | 2.2 to 2.3 |
+| 6,400 (80x80) | 2.5 to 2.8 | 2.8 to 2.9 |
+| 9,600 | 3.1 | 3.3 to 3.4 |
+| 12,800 (160x80) | 327 to 332 | 4.2 |
+| 15,000 (200x75, the product mesh) | 334 to 360 | 4.3 |
+
+Two runs with nothing else running, 20,000 calls each (`results/builder38/vdot_bench.py`; a
+first run under load gave the same picture). Below the threshold, somewhere between 9,600 and
+12,800 elements, the two settings agree in time and in bits: the step 2 cases have at most 6,400
+cells, and the one-thread control of section 7 gave the same hashes; so do section 10's 40x20 and
+80x40 solves. Above it each reduction costs about a third of a millisecond, three per CG
+iteration, and the bits differ: section 10's 160x80 solve under one thread stops at the same count
+with u within 7.1e-14 m/s of the default's, far below the differences that section bounds.
+
+| Measured | Default threads | One thread |
+|---|---|---|
+| VAL-001 160x80, the whole CG solve | 6,103 outer, 2,862 s | 6,103 outer, 418 s; u within 7.1e-14 m/s of the default's |
+| One correction on each captured 200x75 system at 1e-8, the median of seven solves, two runs | 1,033 to 1,102 ms; 852, 861 and 857 iterations | 136 to 143 ms; the same iteration counts; different bits |
+
+ECR-003 criterion 4 asks for one such correction in under 0.5 s on the report's machine. Step 1
+met it with one BLAS thread, as the evidence report and step 1 timed every run
+(`docs/reports/ecr003_step1_cg.md`, section 2.1). Under the thread setting a process starts with,
+which is how the harness, the tests and ECR-002 step 5's 200x75 solves run unless told otherwise,
+the same corrections take about 1.05 s, over the criterion. The baseline rows are unaffected, and
+so are their hashes. With the correction at about 1.05 s of an outer iteration that ADR-013 A puts
+at 0.18 s with one thread, a steady product solve over its 3,000 to 13,000 outer iterations would
+take about six times the evidence report's 9 to 39 minutes unless the thread count is set. Whether criterion 4 is held to the default thread setting, and how the setting is fixed (the
+environment for each run, or the code), is Alex's to decide; nothing is changed here. Records:
+`results/builder38/logs/one_thread_order.log`, `vdot_bench.log` and `criterion4_threads.log`, with
+the probes beside them.
