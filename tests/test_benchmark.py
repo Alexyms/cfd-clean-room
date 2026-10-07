@@ -16,7 +16,7 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 import benchmark  # noqa: E402 -- scripts/ is not a package; path set above
 
-from src.config import SimConfig  # noqa: E402 -- follows sys.path.insert
+from src.config import SOLVER_KEYS, SimConfig  # noqa: E402 -- follows sys.path.insert
 from src.mesh import Mesh  # noqa: E402 -- follows sys.path.insert
 from src.solver_staggered import (  # noqa: E402 -- follows sys.path.insert
     StaggeredSolver,
@@ -245,8 +245,12 @@ def test_harness_row_takes_the_cap_from_the_solver(
     config = SimConfig.from_dict(raw)
     monkeypatch.setitem(benchmark.CASES, "tiny_cavity", ("cavity", 6, 6))
     monkeypatch.setattr(benchmark, "load_preset", lambda case_id: config)
-    row = benchmark.run_case("tiny_cavity", "staggered-jacobi", 10, 1)
-    assert row["outcome"] == {"converged": False, "stop_reason": "max_simple_iter"}
+    row = benchmark.run_case("tiny_cavity", "staggered-cg", 10, 1)
+    assert row["outcome"] == {
+        "converged": False,
+        "stop_reason": "max_simple_iter",
+        "pressure_cap_hits": 0,
+    }
     assert row["work"]["outer_iterations"] == 20
     assert row["trajectory"][-1]["residual"] < 10.0
     assert row["params"]["stopping_rule"] == "error_estimate"
@@ -303,22 +307,59 @@ def test_summary_never_pools_two_rules(
 def test_summary_prints_stored_collocated_rows_beside_staggered_ones(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """The retired method's stored rows still summarize beside the staggered rows.
+    """The retired methods' stored rows still summarize beside the staggered-cg rows.
 
-    The results file is append-only, and its collocated-jacobi rows are
-    ECR-001's before-and-after evidence. Defect caught: the summary filtered
-    records to the runnable METHODS, which drops every one of them.
+    The results file is append-only: its collocated-jacobi rows are ECR-001's
+    before-and-after evidence and its staggered-jacobi rows the laminar
+    baseline ECR-003 step 2 retakes. Defect caught: the summary filtered
+    records to the runnable METHODS, which drops every one of them. Rows
+    group by method, so the old and the new labels never pool.
     """
-    staggered = _record("val002_20x20", 1, 13.0) | {"method": "staggered-jacobi"}
+    jacobi = _record("val002_20x20", 1, 13.0) | {"method": "staggered-jacobi"}
+    cg = _record("val002_20x20", 1, 9.0) | {"method": "staggered-cg"}
     path = _write(
-        tmp_path / "results.jsonl", [_record("val002_20x20", 1, 13.5), staggered]
+        tmp_path / "results.jsonl", [_record("val002_20x20", 1, 13.5), jacobi, cg]
     )
     benchmark.print_summary(path)
     out = capsys.readouterr().out
     rows = [line for line in out.splitlines() if "val002_20x20" in line]
-    assert [row.split()[0] for row in rows] == ["collocated-jacobi", "staggered-jacobi"]
-    assert "collocated-jacobi" in benchmark.CELL_UPDATE_DEFINITIONS
-    assert "collocated-jacobi" not in benchmark.METHODS
+    assert [row.split()[0] for row in rows] == [
+        "collocated-jacobi",
+        "staggered-cg",
+        "staggered-jacobi",
+    ]
+    for retired in ("collocated-jacobi", "staggered-jacobi"):
+        assert retired in benchmark.CELL_UPDATE_DEFINITIONS
+        assert retired not in benchmark.METHODS
+
+
+@pytest.mark.unit
+def test_run_case_refuses_the_retired_staggered_jacobi_label_by_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The Jacobi-era label takes no new row: refused with the change that retired it.
+
+    Defect caught: the label left in METHODS, so a new row could claim the
+    sweep the solver no longer runs.
+    """
+    monkeypatch.setitem(benchmark.CASES, "tiny_cavity", ("cavity", 6, 6))
+    with pytest.raises(ValueError, match=r"staggered-jacobi.*2026-10-06.*ECR-003"):
+        benchmark.run_case("tiny_cavity", "staggered-jacobi", 10, 1)
+    assert benchmark.METHODS == ("staggered-cg",)
+    assert benchmark.DEFAULT_METHOD == "staggered-cg"
+
+
+@pytest.mark.unit
+def test_every_solver_key_is_recorded_from_the_one_list() -> None:
+    """GitHub issue 38: the harness reads SOLVER_KEYS, so a key added there is in every row.
+
+    Defect caught: a second list in the harness that a new key is not added to.
+    """
+    config = with_velocity_step(load_case("cavity", grid=(6, 6)))
+    params = benchmark.solver_parameters(config)
+    assert list(params) == list(SOLVER_KEYS)
+    assert params["pressure_rtol"] == config.pressure_rtol == 1e-8
+    assert not hasattr(benchmark, "SOLVER_PARAMETERS")
 
 
 @pytest.mark.integration
@@ -334,10 +375,27 @@ def test_staggered_velocity_step_stop_has_the_collocated_label(
         benchmark, "load_preset", lambda case_id: with_velocity_step(real(case_id))
     )
     monkeypatch.setitem(benchmark.CASES, "tiny_cavity", ("cavity", 6, 6))
-    row = benchmark.run_case("tiny_cavity", "staggered-jacobi", 10, 1)
+    row = benchmark.run_case("tiny_cavity", "staggered-cg", 10, 1)
     assert row["params"]["stopping_rule"] == "velocity_step"
     assert "rule_version" not in row["params"]
-    assert row["outcome"] == {"converged": True, "stop_reason": "residual_below_tol"}
+    assert row["outcome"] == {
+        "converged": True,
+        "stop_reason": "residual_below_tol",
+        "pressure_cap_hits": 0,
+    }
+    # GitHub issue 38: every accepted solver key is in the row's params, read
+    # from the one list in src/config.py.
+    assert set(SOLVER_KEYS) <= set(row["params"])
+    assert row["params"]["pressure_rtol"] == 1e-8
+    assert "pressure_tol" not in row["params"]
+    assert row["method"] == benchmark.STAGGERED_METHOD == "staggered-cg"
+    assert "conjugate gradient" in row["work"]["cell_update_definition"]
+    assert set(row["work"]) == {
+        "outer_iterations",
+        "inner_iterations",
+        "cell_updates",
+        "cell_update_definition",
+    }
 
 
 @pytest.mark.unit
@@ -361,7 +419,7 @@ def test_harness_builds_a_wall_clustered_preset_on_its_clustered_mesh(
         "validation.cases.WALL_CLUSTERED_GRIDS", frozenset({"tiny_clustered"})
     )
     with pytest.raises(ConstructedError):
-        benchmark.run_case("tiny_clustered", "staggered-jacobi", 10, 1)
+        benchmark.run_case("tiny_clustered", "staggered-cg", 10, 1)
     assert meshes[0].dy_cell[0] == pytest.approx(0.1 * 0.5 / 6, rel=1e-12)
     assert meshes[0].stretch_ratio_x == 1.0
 
@@ -383,7 +441,7 @@ def test_harness_row_records_each_axis_clustering(
 
     monkeypatch.setattr(benchmark, "load_preset", capped)
     uniform, stretched = (
-        benchmark.run_case(case_id, "staggered-jacobi", 10, 1)["grid"]
+        benchmark.run_case(case_id, "staggered-cg", 10, 1)["grid"]
         for case_id in ("val001_80x40", "val001_80x40_stretched")
     )
     assert uniform == {

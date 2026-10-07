@@ -4,7 +4,10 @@ Solves VAL-001 at 40x20 and 80x40 and the cavity at 20x20, 40x40 and 80x80 once
 each with the committed settings except convergence_tol, set in memory to
 TRUTH_TOL, and the iteration cap. The field at TRUTH_TOL is the truth for that
 case and grid. The solver's corrector is wrapped on the instance to record each
-outer iteration's worst per-cell imbalance and sweep count; src/ is not edited.
+outer iteration's worst per-cell imbalance and pressure iteration count; src/ is
+not edited. Every saved solve stores PRESSURE_SOLVER_VERSION and is solved again
+when the stored value differs or is missing, so a field written by the weighted
+Jacobi sweep is never read as the conjugate gradient solve's.
 u and v are kept at each quarter decade of residual from 1e-5 to TRUTH_TOL and at
 the case's own tolerance. The same-computation control runs first and stops the
 script if an unwrapped solve at the committed tolerance differs from the wrapped
@@ -39,6 +42,7 @@ sys.path.insert(0, str(REPO_ROOT))
 # this script uses, so they are read from it: sc.Mesh, sc.MARCHI_U_ROWS.
 import self_convergence as sc  # noqa: E402 -- path set above
 
+from src.pressure import PRESSURE_SOLVER_VERSION  # noqa: E402 -- path set above
 from src.stopping import (  # noqa: E402 -- path set above
     RATE_WINDOW,
     RULE_VERSION,
@@ -111,14 +115,14 @@ def case_config(
 def instrument(
     solver: sc.StaggeredSolver,
 ) -> tuple[list[float], list[int], list[float], list[float]]:
-    """Record each outer iteration's worst imbalance, sweeps, absolute and signed sum.
+    """Record each outer iteration's worst imbalance, iterations, absolute and signed sum.
 
     The wrapper returns the corrector's own result object, so the solve is
     unchanged; the same-computation control checks that bitwise.
     """
     corrector, correct = solver._corrector, solver._corrector.correct
     imbalance: list[float] = []
-    sweeps: list[int] = []
+    iterations: list[int] = []
     total: list[float] = []
     signed: list[float] = []
 
@@ -129,22 +133,41 @@ def instrument(
         imbalance.append(float(cells.max()))
         total.append(float(cells.sum()))
         signed.append(float(net.sum()))
-        sweeps.append(result.iterations)
+        iterations.append(result.iterations)
         return result
 
     corrector.correct = recorded
-    return imbalance, sweeps, total, signed
+    return imbalance, iterations, total, signed
+
+
+def written_by_this_solver(path: Path) -> bool:
+    """Whether a saved solve holds the current PRESSURE_SOLVER_VERSION.
+
+    A file without the key was written before the key existed, by the
+    weighted Jacobi sweep, and is not reused.
+    """
+    if not path.exists():
+        return False
+    with np.load(path) as saved:
+        return "pressure_solver_version" in saved.files and int(
+            saved["pressure_solver_version"]
+        ) == int(PRESSURE_SOLVER_VERSION)
 
 
 def solve_truth(case: str, n: int) -> Path:
-    """Solve to TRUTH_TOL wrapped, keeping snapshots; an existing file is returned unsolved."""
+    """Solve to TRUTH_TOL wrapped, keeping snapshots.
+
+    An existing file is returned unsolved only when it was written by the
+    current pressure solve (written_by_this_solver); otherwise it is solved
+    again and overwritten.
+    """
     path = OUT_DIR / f"{case_name(case, n)}.npz"
-    if path.exists():
+    if written_by_this_solver(path):
         return path
     config = case_config(case, n, TRUTH_TOL)
     mesh = sc.Mesh(config)
     solver = sc.StaggeredSolver(mesh, config, sc.StaggeredBoundary(mesh, config))
-    imbalance, sweeps, _total, _signed = instrument(solver)
+    imbalance, iterations, _total, _signed = instrument(solver)
     levels = sorted({*LEVELS, case_config(case, n).convergence_tol}, reverse=True)
     taken: list[tuple[float, int]] = []
     snaps: dict[str, np.ndarray] = {}
@@ -167,10 +190,11 @@ def solve_truth(case: str, n: int) -> Path:
         iteration=np.array([t[1] for t in taken], dtype=int),
         residual=np.array(solver.residual_history),
         imbalance=np.array(imbalance),
-        sweeps=np.array(sweeps),
+        iterations=np.array(iterations),
         elapsed=np.array(elapsed),
         reference_velocity=solver.reference_velocity,
         reached=not levels,
+        pressure_solver_version=PRESSURE_SOLVER_VERSION,
         **snaps,
     )
     print(
@@ -182,16 +206,25 @@ def solve_truth(case: str, n: int) -> Path:
 def control(case: str, n: int) -> dict:
     """An unwrapped solve at the committed tolerance against the wrapped snapshot there.
 
-    Raises SystemExit unless u and v are bitwise equal and the outer counts agree.
+    The saved control is reused only when the current pressure solve wrote
+    it (written_by_this_solver). Raises SystemExit unless u and v are
+    bitwise equal and the outer counts agree.
     """
     name, config = case_name(case, n), case_config(case, n)
     path, mesh = OUT_DIR / f"{name}_control.npz", sc.Mesh(config)
-    if not path.exists():
+    if not written_by_this_solver(path):
         solver = sc.StaggeredSolver(mesh, config, sc.StaggeredBoundary(mesh, config))
         start = time.perf_counter()
         u, v, _p = solver.solve_steady()
         seconds = time.perf_counter() - start
-        np.savez(path, u=u, v=v, outer=len(solver.residual_history), seconds=seconds)
+        np.savez(
+            path,
+            u=u,
+            v=v,
+            outer=len(solver.residual_history),
+            seconds=seconds,
+            pressure_solver_version=PRESSURE_SOLVER_VERSION,
+        )
     with np.load(path) as plain, np.load(solve_truth(case, n)) as wrapped:
         k = int(np.flatnonzero(wrapped["level"] == config.convergence_tol)[0])
         same = np.array_equal(plain["u"], wrapped[f"u_{k}"]) and np.array_equal(
@@ -349,7 +382,7 @@ def analyse(case: str, n: int) -> dict:
             "true_error": err,
             "true_error_rel": err / phys,
         }
-        row |= {"imbalance": float(imb[it]), "sweeps": int(d["sweeps"][it])}
+        row |= {"imbalance": float(imb[it]), "iterations": int(d["iterations"][it])}
         worst = np.maximum(np.abs(u - truth[0]), np.abs(v - truth[1])) * fluid
         row["worst_cell"] = [int(x) for x in np.unravel_index(worst.argmax(), u.shape)]
         for w in (WINDOW // 2, WINDOW, 2 * WINDOW):
@@ -377,11 +410,12 @@ def tight_truth(case: str, n: int) -> Path:
     """The case under the default rule to TIGHT_TRUTH_TOL, beside the probe's truth.
 
     Solved once, and again if the file does not hold TIGHT_TRUTH_TOL as its
-    tolerance. Raises SystemExit if the cap stops it first.
+    tolerance or was not written by the current pressure solve. Raises
+    SystemExit if the cap stops it first.
     """
     path = OUT_DIR / f"{case_name(case, n)}_truth13.npz"
     stale = True
-    if path.exists():
+    if written_by_this_solver(path):
         with np.load(path) as saved:
             stale = "tol" not in saved.files or float(saved["tol"]) != TIGHT_TRUTH_TOL
     if stale:
@@ -394,13 +428,28 @@ def tight_truth(case: str, n: int) -> Path:
             raise SystemExit(f"{path.stem} did not reach {TIGHT_TRUTH_TOL:.0e}")
         worst = np.abs(solver.last_mass_imbalance).max()
         outer = len(solver.residual_history)
-        np.savez(path, tol=TIGHT_TRUTH_TOL, u=u, v=v, outer=outer, imbalance=worst)
+        np.savez(
+            path,
+            tol=TIGHT_TRUTH_TOL,
+            u=u,
+            v=v,
+            outer=outer,
+            imbalance=worst,
+            pressure_solver_version=PRESSURE_SOLVER_VERSION,
+        )
     return path
 
 
 def rule_parameters(scale: float, flux: float, tols: tuple[float, float]) -> np.ndarray:
-    """What a saved rule solve is reused under; a new condition changes no tolerance."""
-    return np.array([scale, flux, *tols, RATE_WINDOW, RULE_VERSION])
+    """What a saved rule solve is reused under: the rule's inputs and both versions.
+
+    A new condition changes no tolerance, so RULE_VERSION is in the key; a
+    new pressure solve changes every field beyond rounding, so
+    PRESSURE_SOLVER_VERSION is too.
+    """
+    return np.array(
+        [scale, flux, *tols, RATE_WINDOW, RULE_VERSION, PRESSURE_SOLVER_VERSION]
+    )
 
 
 def verify_rule(case: str, n: int) -> dict:
@@ -408,8 +457,8 @@ def verify_rule(case: str, n: int) -> dict:
 
     The corrector is wrapped as in the truth solve, so every iteration's
     imbalance is known and the wall time compares with the default rule's
-    snapshot. A saved solve is reused only if its rule parameters and
-    RULE_VERSION match. Each condition is dated from the start of its final
+    snapshot. A saved solve is reused only if its rule parameters,
+    RULE_VERSION and PRESSURE_SOLVER_VERSION match. Each condition is dated from the start of its final
     run. Raises SystemExit if a fresh rule replaying the history does not stop
     where the solver did, or the recorded worst or signed sum at the stop is
     not the returned field's. The channel is read against its TIGHT_TRUTH_TOL
@@ -430,7 +479,7 @@ def verify_rule(case: str, n: int) -> dict:
                 saved["params"], params
             )
     if stale:
-        imbalance, _sweeps, total, signed = instrument(solver)
+        imbalance, _iterations, total, signed = instrument(solver)
         start = time.perf_counter()
         u, v, _p = solver.solve_steady()
         np.savez(

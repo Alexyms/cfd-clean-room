@@ -154,6 +154,88 @@ def test_rule_parameters_change_with_the_rule_version(
 
 
 @pytest.mark.unit
+def test_rule_parameters_change_with_the_pressure_solver_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A saved rule solve is solved again under another PRESSURE_SOLVER_VERSION.
+
+    ECR-003 section 7.1: a field written by the weighted Jacobi sweep must
+    not be served as the conjugate gradient solve's. Defect caught: the
+    solver's version dropped from the stored parameters.
+    """
+    before = stopping_probe.rule_parameters(0.1, 0.05, (1e-6, 1e-10))
+    monkeypatch.setattr(
+        stopping_probe,
+        "PRESSURE_SOLVER_VERSION",
+        stopping_probe.PRESSURE_SOLVER_VERSION + 1,
+    )
+    after = stopping_probe.rule_parameters(0.1, 0.05, (1e-6, 1e-10))
+    assert not np.array_equal(before, after)
+    assert before[-1] == stopping_probe.PRESSURE_SOLVER_VERSION - 1
+
+
+class _BuiltError(Exception):
+    """Raised by the sentinel solver: a saved solve was not reused."""
+
+
+def _refuse_to_solve(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Point OUT_DIR at tmp_path and make building a solver raise _BuiltError."""
+
+    class Sentinel:
+        def __init__(self, *args: object) -> None:
+            raise _BuiltError
+
+    monkeypatch.setattr(stopping_probe, "OUT_DIR", tmp_path)
+    monkeypatch.setattr(stopping_probe.sc, "StaggeredSolver", Sentinel)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("saved", "reused"),
+    [
+        ({}, False),
+        ({"pressure_solver_version": 1}, False),
+        ({"pressure_solver_version": stopping_probe.PRESSURE_SOLVER_VERSION}, True),
+    ],
+    ids=["no-version", "jacobi-era", "this-solver"],
+)
+def test_saved_solves_are_reused_only_when_this_solver_wrote_them(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, saved: dict, reused: bool
+) -> None:
+    """The truth, the tight truth and the control each re-solve on a missing or old version.
+
+    The decision is tested without a solve: building a solver raises, so a
+    file that is reused returns, and one that is not reaches the sentinel.
+    The fourth reuse, verify_rule's, is keyed by rule_parameters above.
+    """
+    _refuse_to_solve(monkeypatch, tmp_path)
+    name = stopping_probe.case_name("cavity", 20)
+    np.savez(tmp_path / f"{name}.npz", u=np.zeros(1), **saved)
+    np.savez(tmp_path / f"{name}_control.npz", u=np.zeros(1), **saved)
+    np.savez(
+        tmp_path / f"{name}_truth13.npz",
+        tol=stopping_probe.TIGHT_TRUTH_TOL,
+        u=np.zeros(1),
+        **saved,
+    )
+    for reuse in (
+        lambda: stopping_probe.solve_truth("cavity", 20),
+        lambda: stopping_probe.tight_truth("cavity", 20),
+    ):
+        if reused:
+            assert reuse().exists()
+        else:
+            with pytest.raises(_BuiltError):
+                reuse()
+    if reused:
+        assert stopping_probe.written_by_this_solver(tmp_path / f"{name}_control.npz")
+    else:
+        with pytest.raises(_BuiltError):
+            stopping_probe.control("cavity", 20)
+    assert not stopping_probe.written_by_this_solver(tmp_path / "absent.npz")
+
+
+@pytest.mark.unit
 @pytest.mark.parametrize("tol", [None, 1e-11])
 def test_case_config_without_a_rule_is_velocity_step(tol: float | None) -> None:
     """Truths and snapshots were solved under velocity_step, and the channel file now

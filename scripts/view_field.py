@@ -9,12 +9,14 @@ Poiseuille). Phase 7 owns presentation-quality visuals.
 Run:
 
     python scripts/view_field.py val002_40x40            # solve, save, draw
-    python scripts/view_field.py results/val002_40x40_staggered-jacobi.npz
+    python scripts/view_field.py results/val002_40x40_staggered-cg.npz
 
 A solve writes results/<case_id>_<method>.npz, so the next look costs no
-solver time. The method names are the benchmark harness's. A saved file with
-no method entry predates the label and came from the collocated solver,
-retired on 2026-10-02 (tag collocated-final); it still draws.
+solver time. The method names are the benchmark harness's: staggered-cg since
+ECR-003 step 1 (2026-10-06). A saved file carries its method and render reads
+it, so a file saved as staggered-jacobi still draws under that label; one
+with no method entry predates the label and came from the collocated solver,
+retired on 2026-10-02 (tag collocated-final).
 """
 
 from __future__ import annotations
@@ -57,7 +59,7 @@ from validation.metrics import (  # noqa: E402 -- follows sys.path.insert
 )
 
 RESULTS_DIR = REPO_ROOT / "results"
-STAGGERED_METHOD = "staggered-jacobi"
+STAGGERED_METHOD = "staggered-cg"
 DEFAULT_METHOD = STAGGERED_METHOD
 METHODS = (STAGGERED_METHOD,)
 # Files saved before the method was recorded all came from this solver, retired
