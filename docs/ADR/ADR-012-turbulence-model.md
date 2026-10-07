@@ -771,8 +771,9 @@ velocity inlet with a nonzero normal velocity when the model is on and refused o
 with its outward face velocity (m/s, positive), refused when the exhausts' total reaches the
 supply's. Every key validated for type, range, NaN and bool (REQ-C02); unknown keys refused. The
 model constants of section A are module constants of `src/turbulence.py`, one table per variant, as
-`JACOBI_WEIGHT` is in `pressure.py`: they define the published model, and a configured C_mu would
-be a different model under the same name.
+`JACOBI_WEIGHT` was in `pressure.py` until ECR-003 retired it with the weighted sweep on
+2026-10-06: they define the published model, and a configured C_mu would be a different model
+under the same name.
 
 **Modules.** `src/turbulence.py` (new): the k and eps step of section C on a face field, the wall
 function values of section B as data, the eddy viscosity; it reuses `limited_face_values` and the

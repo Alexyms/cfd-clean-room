@@ -695,8 +695,9 @@ the limited scheme's bound, with 0.1 the value the validation cases and the prod
 `advection_scheme`, one of `umist` (default) and `upwind`, so the VAL-004 comparison can run both
 from the same code, with unlimited QUICK not offered because forward Euler is unstable with it
 (section C); `max_diffusion_iter`, a positive int; `diffusion_tol`, a positive float. The
-scheme's stability bound is a module constant, as `JACOBI_WEIGHT` is; the fraction of it a run
-uses is configuration. The existing `output_interval` key is `FieldHistory`'s `every`. The
+scheme's stability bound is a module constant, as `JACOBI_WEIGHT` was until ECR-003 retired it
+with the weighted sweep on 2026-10-06 (`RESIDUAL_FLOOR` in `pressure.py` is such a constant now);
+the fraction of it a run uses is configuration. The existing `output_interval` key is `FieldHistory`'s `every`. The
 boundary segment keys of section E. Every key is validated for type, range and the segment type
 it is allowed on, with bools rejected where numbers are expected (`config.py`, REQ-C02); the
 physical constants stay in `constants.py` (REQ-C04). SYSTEM.md section 4 carries the new keys

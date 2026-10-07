@@ -1,7 +1,7 @@
 # Project Plan
 
 **Project:** CFD Clean Room Simulation
-**Last Updated:** 2026-10-04
+**Last Updated:** 2026-10-06
 **Current Phase:** Phase 3 (Transport Solver), in progress: design accepted (ADR-011, decisions of 2026-10-03); the product case blocked on ECR-002 (accepted 2026-10-04); Phase 2 complete
 
 This document tracks development progress by phase. Code review reads this document to determine the current phase and verify that PRs are in scope; the policy is `docs/REVIEW_POLICY.md`. Update this document as work progresses.
@@ -197,7 +197,7 @@ ADR-012. Its steps' deliverables and validation identifiers are tracked here as 
 | SimConfig.turbulence | DONE (step 1) | The optional section of ADR-012 I, validated per REQ-C02; absent means off; no solver reads it before step 6 |
 | src/turbulence.py | DONE (step 1) | k and eps on a prescribed face field, standard and RNG (constants sourced, RNG's C_mu 0.0845 by Alex's decision of 2026-10-05); boundary values from a conditions object built each step; raises unless k and eps are positive and finite (REQ-S15) |
 | tests/test_turbulence.py, tests/test_decaying_turbulence.py, tests/test_scalar_scheme.py | DONE (step 1) | Positivity on the Smith-Hutton and a random divergence-free field with production on, every implicit solve converged, against the planted explicit decay, and a long run whose solves are truncated; constancy on the VAL-001 faces; strain, the step's rate and the inflow on fields moving in y and in both directions, at walls and at horizontal and vertical obstacle faces; each sigma pinned; RNG's R split at S != 1; VAL-015. 21 planted defects, then 23 more from test 35 (results/builder35/mutation35.md, mutation35b.md), each fail a test on an assertion about the quantity |
-| Steps 2 to 8 | NOT STARTED | Transport coupling, the outlets, the momentum coupling, the convergence measurement, the coupled solve, the validation cases, the product (ECR-002 section 8) |
+| Steps 2 to 8 | NOT STARTED | Transport coupling, the outlets, the momentum coupling, the convergence measurement, the coupled solve, the validation cases, the product (ECR-002 section 8). Step 5, the first to solve the 200x75 room to tolerance, waits for ECR-003 step 2 (ADR-012 decision 5; ECR-003 section 8, tracked below) |
 
 | Test ID | Description | Criterion | Status |
 |---------|-------------|-----------|--------|
@@ -206,6 +206,18 @@ ADR-012. Its steps' deliverables and validation identifiers are tracked here as 
 | VAL-017 | The Annex 20 room | OPEN by decision until the first coupled results | NOT RUN (step 7) |
 | VAL-018 | The product room converges | Conditional on step 5 | NOT RUN (step 8) |
 | VAL-019 | The backward-facing step | OPEN by decision until the first coupled results | NOT RUN (step 7) |
+
+### ECR-003: the pressure solve (accepted 2026-10-06)
+
+ECR-002 step 5 waits for ECR-003 (`docs/ECR/ECR-003-pressure-solver.md`), whose design is
+ADR-013. Its steps are tracked here as they land; each is one pull request through `/cfd-review`
+and `/cfd-test`.
+
+| Deliverable | Status | Notes |
+|-------------|--------|-------|
+| Step 1, the conjugate gradient solve | BUILT, in review (prompts 37 and 37b, `feature/ecr003-pressure-cg`) | `src/pressure.py` solves the correction by Jacobi-preconditioned CG with ADR-013's stop, floor, true-residual check, reported cap and component checks; `pressure_rtol` replaces `pressure_tol`; the method label `staggered-cg`, looked up by `PRESSURE_SOLVER_VERSION`; every saved solve keyed on the solver's identity; criteria 1, 3 and 4 (`docs/reports/ecr003_step1_cg.md`). Review 37 and test 37's findings answered in the fix pass of prompt 37b |
+| Step 2, the laminar baseline | NOT STARTED | `val001_80x40`, `val001_80x40_stretched` and `val002_80x80` rerun under `staggered-cg`, their rows ECR-002 criterion 1's baseline; VAL-001 and VAL-002 against their criteria; the transport gate tests re-checked (criterion 2) |
+| Step 3, the records | NOT STARTED | ADR-013 accepted with planned against built, SYSTEM.md, this plan and STATUS.md; the request closed (criterion 5) |
 
 ### Phase-Specific Risks
 
@@ -407,3 +419,4 @@ Phase 3 completion is the minimum viable portfolio artifact. A working, validate
 | 2026-10-05 | ECR-002 step 1 (prompt 35, continued after item 0's stop): the transport scheme moved into src/scalar_scheme.py, bitwise on the transport gate; the turbulence configuration section; src/turbulence.py, k and eps on a prescribed face field, standard and RNG. Item 0 checked every constant against its source; RNG's C_mu stays 0.0845 against the preprint's printed ~0.085 (Alex, 2026-10-05). The orchestrator's build choices: eps held exactly by a mask, the conditions object passed every step, the edges' tangential velocities in it, ADR-012 F's harmonic face rule. VAL-015 PASS for both variants. A held eps that does not follow k runs away beside a shear, so step 6 rebuilds the wall cells' conditions every outer iteration. No module coupled; momentum.py, pressure.py, solver_staggered.py and every YAML unchanged. |
 | 2026-10-05 | ECR-002 step 1 fix pass (prompt 35b) on review 35 (3 Bugs, 7 Suggestions) and test 35 (5 Bugs, 3 Suggestions): tests for the y-direction half of the strain, the step's rate and the inflow, for the state's and the faces' refusals and eps's positivity branch, for a true-time step uniform over every cell, for each sigma, for RNG's R at S != 1 and for the stable-step bound within 2%; the state's nu_t checked and the face differences masked beside SOLID cells; the random-field positivity run split into a converged run and a truncated long run; VAL-015's row records the 1/20 run. The 23 mutants of test 35 each fail a named test; the transport hashes still equal main's. The branch renamed feature/ecr002-k-epsilon-scalar. No module beyond src/turbulence.py changed. |
 | 2026-10-06 | ECR-003 accepted by Alex with ADR-013's six decisions, each as ranked first (docs/ECR/ECR-003-pressure-solver.md, docs/ADR/ADR-013-pressure-solver.md, docs/reports/pressure_solver_ecr003.md): Jacobi-preconditioned conjugate gradients in NumPy, NumPy only, the relative residual pressure_rtol at 1e-8 with a rounding floor and the cap reported, pressure_tol refused, max_pressure_iter the CG cap at 5,000, C deferred to Phase 6, the outlet and finer-grid findings to ECR-002 steps 3 and 5. Step 1 built the same day (prompt 37, branch feature/ecr003-pressure-cg): src/pressure.py solves by CG with the stop, floor, true-residual check, cap flag and one-component check of ADR-013; the key, the renamed counts, pressure_cap_hits and the velocity_step refusal; every consumer of ECR-003 section 7 moved, the method label staggered-cg, saved solves keyed on PRESSURE_SOLVER_VERSION or the label, the one solver-key list (issue 38). Item 0: the built CG reproduces the probe's on the three recaptured 200x75 systems bit for bit. Criterion 3: 1,209 and 2,822 on 40x15, 233 and 588 on 80x30 at Re 90, the report's counts exactly. Criterion 4: about 0.15 s per correction on 200x75 (docs/reports/ecr003_step1_cg.md). REQ-S08 amended and REQ-S04 clarified in SYSTEM.md. Phase 6's pressure_solve.cu becomes a CG kernel. VAL-001 and VAL-002 are retaken in step 2; the laminar baseline rows of step 2 replace the staggered-jacobi rows as ECR-002 criterion 1's. |
+| 2026-10-06 | ECR-003 step 1 fix pass (prompt 37b) on review 37 (1 Bug, 9 Suggestions) and test 37 (2 FAILs, 2 Suggestions): stopping_probe's verify_rule and analyse read the truth through solve_truth, so a weighted-Jacobi truth is solved again rather than served; the control, the truth readers and self_convergence's file names tested so only their own check stands between a call and a reused file; val001_order's key carries PRESSURE_SOLVER_VERSION; the method label defined once in src/pressure.py and looked up by version; an open domain with a component no outlet reaches refused at construction (every committed configuration and case still accepted); conjugate_gradient's arguments checked; the work counted in operator products, the exit checks included, under harness schema 2; the floor tested at its real value on the VAL-002 cavity's last system. Criteria 3 and 4 rerun and unchanged. ECR-003 tracked in its own section. |

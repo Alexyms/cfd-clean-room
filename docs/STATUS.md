@@ -310,10 +310,11 @@ configuration section, and `src/turbulence.py` for both variants, VAL-015 passin
 `nu_t` unchecked; the fix pass of prompt 35b answered them, and step 1 is on main (023b8f6).
 
 ECR-003, the pressure solve, was measured (prompt 36: the systems the product room builds are
-symmetric and positive definite; weighted Jacobi needs 28,000 to 378,000 sweeps per correction
-on 200x75 for a relative residual of 1e-3 to 3e-3 while conjugate gradients reach 1e-8 in about
-860 iterations and 0.16 s; the outer loop needs a tight correction, not a loose one, for the
-stopping rule's continuity where the outlets hold a standing imbalance), premise-reviewed and
+symmetric and positive definite; weighted Jacobi needs orders of magnitude more sweeps per
+correction on the product mesh to reach a far looser level than conjugate gradients reach at the
+default, `docs/reports/pressure_solver_ecr003.md` section 7; the outer loop needs a tight
+correction, not a loose one, for the stopping rule's continuity where the outlets hold a
+standing imbalance), premise-reviewed and
 tested (36, 36b), and accepted by Alex on 2026-10-06 with ADR-013's six decisions. Step 1
 (prompt 37, `feature/ecr003-pressure-cg`) replaces the weighted sweep in `src/pressure.py` by
 Jacobi-preconditioned CG with the stop, the floor, the true-residual check, the reported cap and
@@ -322,9 +323,12 @@ loader refuses; a capped correction cannot stop a velocity_step solve; the harne
 `staggered-cg` and every saved solve carries the solver's identity. Before the solve was wired in,
 the built loop reproduced the report's probe on the three recaptured 200x75 systems bit for bit,
 and with it wired in the report's two measured rooms stop at the report's outer counts exactly
-(`docs/reports/ecr003_step1_cg.md`). Next: `/cfd-review 37` and `/cfd-test 37`, the pull request,
-then step 2 (the laminar baseline retaken under the new label) and step 3 (the records), after
-which ECR-002 step 5 can run.
+(`docs/reports/ecr003_step1_cg.md`). Review 37 and test 37 found one saved truth read without the
+solver's identity and two reuses their tests could not see; the fix pass of prompt 37b reads
+every saved truth through the identity check, defines the method label once beside the solver's
+version, refuses an open domain with a region no outlet reaches, and counts the work in operator
+products. Next: `/cfd-test 37b`, the pull request, then step 2 (the laminar baseline retaken
+under the new label) and step 3 (the records), after which ECR-002 step 5 can run.
 
 Deferred findings from earlier pull requests are open as GitHub issues 33, 36, 40 and 42; issue
 38's last item, the solver-key list held once, is done in ECR-003 step 1's pull request, which
