@@ -45,6 +45,8 @@ the solve the first FLUID cell is the reference: its value is subtracted
 from p' and from p after the update, as the collocated solver did. One
 mean and one pin handle one connected component, so the constructor
 refuses a closed domain whose cells with an equation form more than one.
+On an open domain the outlet faces' p' = 0 does the pin's work, so it
+refuses a component no outlet reaches.
 
 The solve. The matrix is symmetric and positive definite on an open domain
 and positive semi-definite on a closed one (the report, section 6), so
@@ -63,6 +65,7 @@ the product mesh (docs/reports/pressure_solver_ecr003.md, section 7); its
 evidence is docs/reports/pressure_correction_step5.md.
 """
 
+import math
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -256,6 +259,14 @@ def conjugate_gradient(
         residual's 2-norm at exit. A zero right-hand side returns zero at
         once, with no iteration.
 
+    Raises
+    ------
+    ValueError
+        If inverse_diagonal is not f's shape, rtol is not a number in
+        [0, 1), floor is not a finite number of at least zero, or max_iter
+        is not a positive integer; a bool is refused for each, as the
+        retired weighted sweep refused one for its weight.
+
     Notes
     -----
     Hestenes and Stiefel's iteration with the standard recursion for the
@@ -269,6 +280,7 @@ def conjugate_gradient(
     order moved a correction's faces by at most 1.6e-12 m/s on the
     product mesh (the report, section 12.2).
     """
+    _check_solve_arguments(inverse_diagonal, f, rtol, floor, max_iter)
     x = np.zeros_like(f)
     r = f.copy()
     f_norm = float(np.sqrt(np.vdot(f, f)))
@@ -313,6 +325,40 @@ def conjugate_gradient(
     )
 
 
+def _check_solve_arguments(
+    inverse_diagonal: np.ndarray,
+    f: np.ndarray,
+    rtol: float,
+    floor: float,
+    max_iter: int,
+) -> None:
+    """Raise ValueError unless conjugate_gradient's arguments are what it documents.
+
+    rtol at or above 1 would stop at the first iteration, a negative rtol
+    would silently leave only the floor, and a float or bool cap would run a
+    count nobody asked for.
+    """
+    if inverse_diagonal.shape != f.shape:
+        raise ValueError(
+            f"expected inverse_diagonal of f's shape {f.shape}, "
+            f"got {inverse_diagonal.shape}"
+        )
+    if (
+        isinstance(rtol, bool)
+        or not isinstance(rtol, int | float)
+        or not 0.0 <= rtol < 1.0
+    ):
+        raise ValueError(f"rtol must be a number in [0, 1), got {rtol!r}")
+    if (
+        isinstance(floor, bool)
+        or not isinstance(floor, int | float)
+        or not (math.isfinite(floor) and floor >= 0.0)
+    ):
+        raise ValueError(f"floor must be a finite number of at least 0, got {floor!r}")
+    if isinstance(max_iter, bool) or not isinstance(max_iter, int) or max_iter < 1:
+        raise ValueError(f"max_iter must be a positive integer, got {max_iter!r}")
+
+
 class PressureCorrector:
     """Assemble and solve the p' equation and correct the staggered velocities.
 
@@ -345,7 +391,12 @@ class PressureCorrector:
         On a closed domain whose cells with a pressure equation form more
         than one connected component: the projection removes one mean and
         the pin fixes one cell, so a second component would be solved to
-        the wrong level (ADR-013 D).
+        the wrong level (ADR-013 D). On an open domain, when a component
+        has no cell beside a pressure outlet: its block of the operator is
+        singular with nothing fixing its level, a component an inlet feeds
+        has a right-hand side outside the block's range, and every
+        correction would run to max_pressure_iter while the faces grow more
+        unbalanced (test 37 measured 189 times u*'s imbalance after one).
     """
 
     def __init__(
@@ -373,7 +424,7 @@ class PressureCorrector:
             fluid_idx = np.argwhere(self._fluid)
             if fluid_idx.size > 0:
                 self.pin_cell = (int(fluid_idx[0, 0]), int(fluid_idx[0, 1]))
-            self._check_one_component()
+        self._check_components()
         self.flux_scale: float = self._flux_scale_of(boundary)
 
     def _flux_scale_of(self, boundary: StaggeredBoundary) -> float:
@@ -385,19 +436,23 @@ class PressureCorrector:
             inflow = boundary.get_max_boundary_velocity() * longer
         return self._rho * inflow
 
-    def _check_one_component(self) -> None:
-        """Raise unless the cells with a pressure equation are one connected component.
+    def _check_components(self) -> None:
+        """Raise unless every component of the cells with a pressure equation is solvable.
 
-        On a closed domain a cell has an equation when one of its faces is
-        correctable, which means a face shared with another non-SOLID
-        cell; a sealed single cell has none and is not counted. Components
-        are grown by flood fill through 4-neighbours, a few array passes
-        per cell of diameter, once at construction.
+        A cell has an equation when one of its faces is correctable, which
+        means a face shared with another non-SOLID cell; a sealed single
+        cell has none and is not counted. A closed domain must be one
+        component, since one mean and one pin handle one. On an open domain
+        each component must hold an outlet cell, where the outlet face's
+        coefficient sits in the diagonal with no neighbour (p' = 0 at the
+        face): that row is what makes the component's block nonsingular.
+        Components are grown by flood fill through 4-neighbours, a few array
+        passes per cell of diameter, once at construction.
         """
         open_cell = ~self._solid
-        has_equation = open_cell & _dilate(open_cell)
-        remaining = has_equation.copy()
-        components = 0
+        remaining = open_cell & _dilate(open_cell)
+        outlet_rows = self._outlet_rows(open_cell)
+        components, stranded = 0, 0
         while remaining.any():
             components += 1
             reached = np.zeros_like(remaining)
@@ -408,12 +463,38 @@ class PressureCorrector:
                     break
                 reached = grown
             remaining &= ~reached
-        if components > 1:
+            stranded += not (reached & outlet_rows).any()
+        if self.needs_pin and components > 1:
             raise ValueError(
                 f"closed domain: the cells with a pressure equation form {components} "
                 "connected components; the pressure correction projects one mean and "
                 "pins one cell, so it solves one component only (ADR-013 D)"
             )
+        if not self.needs_pin and stranded:
+            raise ValueError(
+                f"open domain: {stranded} of the {components} connected components of "
+                "the cells with a pressure equation reach no pressure outlet; with no "
+                "p' = 0 face their block of the pressure correction is singular, and "
+                "every correction would run to max_pressure_iter"
+            )
+
+    def _outlet_rows(self, open_cell: np.ndarray) -> np.ndarray:
+        """Cells whose outlet face gets a coefficient: p' = 0 sits in their row.
+
+        The outlet face borrows the diagonal of the interior face beside it
+        (_face_d), which is correctable when the cell and its inward
+        neighbour are both non-SOLID. A grid one cell across has no interior
+        face on that axis, so its outlet there borrows nothing.
+        """
+        rows = np.zeros_like(open_cell)
+        ny, nx = open_cell.shape
+        if nx > 1:
+            rows[:, 0] |= self._out_left & open_cell[:, 0] & open_cell[:, 1]
+            rows[:, -1] |= self._out_right & open_cell[:, -1] & open_cell[:, -2]
+        if ny > 1:
+            rows[0, :] |= self._out_bottom & open_cell[0, :] & open_cell[1, :]
+            rows[-1, :] |= self._out_top & open_cell[-1, :] & open_cell[-2, :]
+        return rows
 
     # ------------------------------------------------------------------
     # The right-hand side

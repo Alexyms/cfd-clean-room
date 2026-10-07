@@ -198,12 +198,12 @@ Generated. The responsibility and serves columns are editorial and come from `do
 | `src/boundary_concentration.py` | 324 | Derives the per-face concentration conditions of each particle class from the registry's shared coverage and ParticlePhysics: the concentration an inlet carries, the deposition velocity and surface code at every wall and obstacle face, and the mask of faces that carry the settling increment, as read-only face-shaped data for the transport solver. | S12.1, T09, T10 |
 | `src/boundary_registry.py` | 315 | Interprets the configured boundary segments once, answering which segment covers each point along a domain edge and which condition and prescribed velocity hold there, SOLID cells read as walls, for both boundary imposition layers: the staggered velocity layer and the concentration layer. | S12.1 |
 | `src/boundary_staggered.py` | 415 | Writes Dirichlet normal velocities exactly into the staggered domain-face entries and exposes the tangential wall values, wall distances and pressure outlets as data for the momentum and pressure steps. | S12 |
-| `src/config.py` | 1104 | Loads the YAML configuration into typed dataclasses and rejects missing keys, wrong types and out-of-range values at load time. | A02, A03, C01, C02, S10 |
+| `src/config.py` | 1105 | Loads the YAML configuration into typed dataclasses and rejects missing keys, wrong types and out-of-range values at load time. | A02, A03, C01, C02, S10 |
 | `src/constants.py` | 8 | Holds the physical constants shared by every module so that none of them defines its own copy. | C04 |
 | `src/mesh.py` | 411 | Builds the structured grid, uniform or geometrically clustered at the walls, with the face, center, width and center-to-center arrays a face-based stencil needs, and classifies each cell as FLUID, SOLID or BOUNDARY. | S11 |
 | `src/momentum.py` | 522 | Predicts u* and v* on the staggered grid with QUICK advection by deferred correction over an upwind implicit matrix, one under-relaxed Jacobi sweep per call, and returns the diagonal coefficients the pressure correction needs. | S07, S09 |
 | `src/particles.py` | 255 | Computes per-size-class transport properties: Cunningham correction, settling velocity, Brownian diffusion, deposition velocity and HEPA efficiency. | T03, T04, T09, T10 |
-| `src/pressure.py` | 633 | Assembles the staggered pressure correction equation from the momentum diagonals with the discrete divergence of u* as its right-hand side, solves it by conjugate gradients preconditioned with its diagonal to a relative residual, a rounding floor or a reported iteration cap, corrects the face velocities and updates the pressure. | S04, S08 |
+| `src/pressure.py` | 714 | Assembles the staggered pressure correction equation from the momentum diagonals with the discrete divergence of u* as its right-hand side, solves it by conjugate gradients preconditioned with its diagonal to a relative residual, a rounding floor or a reported iteration cap, corrects the face velocities and updates the pressure. | S04, S08 |
 | `src/scalar_scheme.py` | 308 | Holds the cell-centred scalar scheme the transport solver and the k-epsilon model share: QUICK's face value bounded by the UMIST limiter, the advective flux along one axis with the inflow value or the upwind cell at a domain face, and the backward Euler solve of diffusion with a non-negative cell sink by Jacobi, on per-face conductances with one step or a step per cell, with an optional mask of cells held at their value. | S15, T12 |
 | `src/solver_staggered.py` | 330 | Runs steady SIMPLE on the staggered grid as one outer loop over the momentum predictor and the pressure correction, returning cell-centered fields through the harness's callback shape and exposing the final faces as FaceVelocities; stops by the velocity-step rule or, when configured, by the error-estimate rule. | S01, S02, S03, S04, S05, S07, S13 |
 | `src/solver_transport.py` | 760 | Advances one particle class one explicit step on the staggered face velocities: QUICK's face value bounded by the UMIST limiter under forward Euler at a Courant number the configuration sets, implicit diffusion and deposition by Jacobi, the settling increment on interior faces, sources added and booked, SOLID cells zero; keeps one MassBudget per class and defines FieldHistory, the output contract for the animation. | N01, T01, T03, T04, T05, T06, T07, T08, T11, T12 |
@@ -211,7 +211,7 @@ Generated. The responsibility and serves columns are editorial and come from `do
 | `src/stopping.py` | 221 | Decides when the steady outer iteration has converged, on four conditions: (a) the iteration error estimated from the step and its fitted geometric rate, over a physical velocity scale; (b) the worst per-cell mass imbalance against its own tolerance; (c) the summed imbalance over the through-flow, which shares the tolerance of (a); and (d) the signed imbalance summed over the domain, which shares the tolerance of (b). Also defines IterationState, the snapshot a solver hands its callback once per outer iteration. | S01, S04 |
 | `src/turbulence.py` | 926 | Advances the k-epsilon model's k and eps one step on a prescribed face velocity field, standard or RNG with each variant's constants as module data: advection, explicit growth from the strain the faces give and implicit decay and diffusion through the shared scalar scheme, boundary values from a conditions object the caller builds each step, the kinematic eddy viscosity, and an assertion that k and eps are positive and finite after every step. | S14, S15 |
 
-Total 16 Python files, 6856 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
+Total 16 Python files, 6938 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
 
 `Declares it serves` is an EDITORIAL CLAIM read from `docs/system_map_annotations.toml`. It says which requirements a module is meant to satisfy, not that it does. Whether a requirement is met is answered by the tests named in the register's `Verified By` column.
 <!-- END GENERATED: components -->
@@ -236,7 +236,7 @@ Generated. Static import analysis cannot see a function bound into a registry by
 |---|---|
 | Scope | `src/**/*.py` |
 | Files hashed | 16 |
-| Digest | `sha256:792520c4e9059f3bb00e4b3ff571c603cf7c8ac0ebbfbce5190425bf5528c35f` |
+| Digest | `sha256:ffe15ecc69235ab5f144c38194e0e9ddf648494445deda06b28bbacaa54ef910` |
 
 This is what lets the document answer whether it is current, which is the one question a stale table cannot be asked. `python scripts/gen_system_map.py --check` recomputes the whole set of generated regions, this digest included, and exits non-zero on any disagreement.
 
@@ -483,8 +483,10 @@ collocated solver did. The solve is conjugate gradients preconditioned by
 the diagonal, from p' = 0, to a relative residual, a rounding floor or a
 reported iteration cap (ECR-003 step 1). Built 2026-10-06; the departures
 from ADR-013 D's draft are the two module-level functions and the result
-type below, which the tests and the probes call directly, ZERO_SCALE, and
-flux_scale on the corrector, which the solver reads.
+type below, which the tests and the probes call directly, ZERO_SCALE,
+flux_scale on the corrector, which the solver reads, and the refusal of an
+open domain with a component no outlet reaches (review 37 S7), which D's
+one-component check covered for closed domains only.
 
 ```
 PRESSURE_SOLVER_VERSION = 2              # 1 was the weighted sweep; scripts store it
@@ -502,14 +504,18 @@ conjugate_gradient(apply, inverse_diagonal, f, rtol, floor, max_iter)
     preconditioned CG from zero; stops when ||r||_2 <= max(rtol ||f||_2, floor) on the
     recursive residual, confirmed on the true residual f - A x formed once more; a
     failed confirmation restarts from the true residual and goes on; max_iter caps
-    it; a zero f returns at once with no iteration
+    it; a zero f returns at once with no iteration; raises ValueError unless
+    inverse_diagonal is f's shape, rtol a number in [0, 1), floor a finite number
+    of at least 0 and max_iter a positive int, a bool refused for each
 ConjugateGradientResult: x, iterations: int, reached_cap: bool,
     residual_norm: float                 # the true residual's 2-norm at exit
 PressureCorrector:
     __init__(mesh: Mesh, config: SimConfig, boundary: StaggeredBoundary)
         reads rho, alpha_pressure, max_pressure_iter, pressure_rtol; closed
         domain: raises ValueError if the cells with an equation (non-SOLID
-        cells with a non-SOLID 4-neighbour) are not one connected component
+        cells with a non-SOLID 4-neighbour) are not one connected component;
+        open domain: raises ValueError if a component holds no outlet cell
+        (a cell whose outlet face borrows a diagonal, p' = 0 in its row)
     needs_pin: bool, pin_cell: (j, i)    # unchanged
     flux_scale: float                    # F: rho times the inflow, or closed, rho times the
                                          # largest prescribed boundary velocity times the

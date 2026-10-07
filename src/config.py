@@ -480,11 +480,12 @@ class SimConfig:
         if not isinstance(solver, dict):
             raise ValueError("solver must be a mapping")
         if RETIRED_PRESSURE_TOL_KEY in solver:
+            lower, upper = PRESSURE_RTOL_BOUNDS
             raise ValueError(
                 f"solver.{RETIRED_PRESSURE_TOL_KEY} was the weighted Jacobi solve's "
                 "stop, pascals of change per sweep, and was retired with it "
                 "(ECR-003, 2026-10-06); the conjugate gradient solve stops on the "
-                "relative residual solver.pressure_rtol, in [1e-10, 1), with "
+                f"relative residual solver.pressure_rtol, in [{lower}, {upper}), with "
                 "max_pressure_iter its iteration cap"
             )
         for key in solver:
