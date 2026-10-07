@@ -1227,8 +1227,12 @@ class TestPressureKeys:
         that names pressure_rtol, distinct from the unknown-key refusal.
         """
         retired = r"solver\.pressure_tol was the weighted Jacobi.*pressure_rtol"
-        with pytest.raises(ValueError, match=retired):
+        with pytest.raises(ValueError, match=retired) as refused:
             SimConfig.from_dict(self._raw(tmp_path, pressure_tol=1e-6))
+        # The range in the message is the one the range check enforces (review
+        # 37 S6: it was written out by hand beside the constant).
+        lower, upper = PRESSURE_RTOL_BOUNDS
+        assert f"pressure_rtol, in [{lower}, {upper})," in str(refused.value)
         raw = self._raw(tmp_path, pressure_tol=1e-6)
         del raw["solver"]["pressure_rtol"]
         with pytest.raises(ValueError, match=retired):

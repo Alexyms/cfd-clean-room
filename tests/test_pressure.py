@@ -96,6 +96,14 @@ PARTITION = {
     "y_start": 0.0,
     "y_end": 1.0,
 }
+# A wall the full length, splitting it into a lower and an upper part.
+SHELF = {
+    "name": "shelf",
+    "x_start": 0.0,
+    "x_end": 2.0,
+    "y_start": 0.4,
+    "y_end": 0.6,
+}
 
 
 def _config(
@@ -1050,10 +1058,76 @@ class TestConjugateGradient:
         assert np.linalg.norm(left[active]) <= TIGHT_RTOL * np.linalg.norm(b[active])
 
     def test_closed_domain_in_two_components_is_refused(self) -> None:
-        """A wall the full height splits the cavity; one block does not; an outlet is not checked."""
+        """A wall the full height splits the cavity and is refused; one block does not."""
         with pytest.raises(ValueError, match="2 connected components"):
             _build(_config(CAVITY, obstacles=[PARTITION]))
         _mesh, _bc, _mp, one = _build(_config(CAVITY, obstacles=[BLOCK]))
         assert one.needs_pin
-        _mesh, _bc, _mp, open_domain = _build(_config(CHANNEL, obstacles=[PARTITION]))
-        assert not open_domain.needs_pin
+
+    def test_open_domain_with_a_component_no_outlet_reaches_is_refused(self) -> None:
+        """The same wall across the channel leaves the inlet side no outlet: refused.
+
+        Review 37 S7, confirmed by test 37: the left part's block of the
+        operator has no p' = 0 row and its right-hand side carries the
+        inflow, which no p' removes, so every correction ran to the cap and
+        left the faces 189 times more unbalanced than u*. A shelf the full
+        length splits the channel too, but each part reaches the outlet, so
+        it is accepted and its correction converges. Defect caught: the check
+        skipped on an open domain, or an open domain held to one component.
+        """
+        stranded = r"open domain: 1 of the 2 connected components .* no pressure outlet"
+        with pytest.raises(ValueError, match=stranded):
+            _build(_config(CHANNEL, obstacles=[PARTITION]))
+        mesh, _bc, pc, pred, p = _predicted(
+            _config(CHANNEL, obstacles=[SHELF]), outlet_right=True
+        )
+        assert (mesh.cell_type[2:4, :] == SOLID).all()
+        assert not pc.needs_pin
+        out = pc.correct(pred, p)
+        assert out.reached_cap is False
+        left = pc.mass_imbalance(out.u, out.v)
+        b = pc.mass_imbalance(pred.u_star, pred.v_star)
+        assert np.linalg.norm(left) <= TIGHT_RTOL * np.linalg.norm(b)
+
+    @pytest.mark.parametrize(
+        ("keyword", "value"),
+        [
+            ("rtol", True),
+            ("rtol", -1e-8),
+            ("rtol", 1.0),
+            ("rtol", float("nan")),
+            ("rtol", "1e-8"),
+            ("floor", True),
+            ("floor", -1e-13),
+            ("floor", float("inf")),
+            ("floor", float("nan")),
+            ("max_iter", True),
+            ("max_iter", 0),
+            ("max_iter", 50.0),
+        ],
+    )
+    def test_bad_scalar_arguments_are_refused(
+        self, keyword: str, value: object
+    ) -> None:
+        """Each scalar is checked for type, bool and range, as the retired sweep's weight was.
+
+        Review 37 S6: max_iter=True ran one iteration, a float cap was
+        accepted, and a negative rtol silently left only the floor.
+        """
+        _pc, c, b, _pred, _p = self._system(CHANNEL)
+        args = {"rtol": 1e-8, "floor": 0.0, "max_iter": 50} | {keyword: value}
+        with pytest.raises(ValueError, match=f"^{keyword} must be"):
+            conjugate_gradient(
+                lambda x: apply_operator(c, x), _inverse_diagonal(c), -b, **args
+            )
+
+    def test_edge_arguments_are_accepted_and_a_wrong_shape_refused(self) -> None:
+        """rtol 0 with floor 0 and one iteration is a legal, capped solve; shapes must match."""
+        _pc, c, b, _pred, _p = self._system(CHANNEL)
+        inv = _inverse_diagonal(c)
+        res = conjugate_gradient(lambda x: apply_operator(c, x), inv, -b, 0.0, 0.0, 1)
+        assert (res.iterations, res.reached_cap) == (1, True)
+        with pytest.raises(ValueError, match="inverse_diagonal"):
+            conjugate_gradient(
+                lambda x: apply_operator(c, x), inv.T.copy(), -b, 1e-8, 0.0, 50
+            )
