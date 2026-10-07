@@ -274,6 +274,26 @@ def _residual(
     return r
 
 
+def _range_part(
+    pc: PressureCorrector, c: PressureCoefficients, x: np.ndarray
+) -> np.ndarray:
+    """x with its mean over the cells with an equation removed on a closed domain.
+
+    The constants are the closed operator's null space, so this is x's
+    component in the range, where ``||A e|| >= lambda_min ||e||`` holds with
+    the smallest nonzero eigenvalue. Pinning adds a constant, which can make
+    the pinned difference larger than its range part, so the error bound is
+    read here, before the pin (review 37 S8). On an open domain x is
+    returned as it is.
+    """
+    if not pc.needs_pin:
+        return x
+    active = c.a_p > 0.0
+    out = np.zeros_like(x)
+    out[active] = x[active] - x[active].mean()
+    return out
+
+
 # ---------------------------------------------------------------------------
 # The right-hand side
 # ---------------------------------------------------------------------------
@@ -764,9 +784,11 @@ class TestConjugateGradient:
     ) -> None:
         """p' is within ||r|| / lambda_min of the dense solution, open and closed, with an obstacle.
 
-        The error of any solution with residual r is bounded by ||r||_2 over
-        the smallest eigenvalue CG sees (the smallest nonzero one on the
-        singular cavity), so that, not a chosen number, is the bound. The
+        The error e of any solution with residual r has ``||e|| <= ||r||_2 /
+        lambda_min``, lambda_min the smallest eigenvalue CG sees, so that, not a
+        chosen number, is the bound. On the singular cavity it is the smallest
+        nonzero eigenvalue and the bound holds for e's range part, the
+        difference with its mean removed, not for the pinned difference. The
         true relative residual at exit meets the configured level.
         """
         boundaries = CHANNEL if domain == "open" else CAVITY
@@ -778,21 +800,30 @@ class TestConjugateGradient:
         if pc.needs_pin:
             r[c.a_p > 0.0] -= b[c.a_p > 0.0].mean()
         assert np.linalg.norm(r) <= TIGHT_RTOL * np.linalg.norm(f)
-        assert np.linalg.norm(out.p_prime - dense) <= np.linalg.norm(r) / smallest
+        error = _range_part(pc, c, out.p_prime) - _range_part(pc, c, dense)
+        assert np.linalg.norm(error) <= np.linalg.norm(r) / smallest
         assert np.abs(out.p_prime - dense).max() < 1e-7 * np.abs(dense).max()
         assert np.abs(dense).max() > 0.0
 
-    @pytest.mark.parametrize("outer", [0, 300])
-    def test_val002_cavity_system_agrees_with_a_dense_solve(self, outer: int) -> None:
-        """The VAL-002 cavity's own system, from rest and at a late outer iteration.
+    @pytest.mark.parametrize("when", ["first", "last"])
+    def test_val002_cavity_system_agrees_with_a_dense_solve(self, when: str) -> None:
+        """The VAL-002 cavity's own system, from rest and at the last correction of its solve.
 
-        The 20x20 case file's solve is run to the given outer iteration under
-        the committed level and cap, the prediction handed to the corrector
-        there is kept, and the correction on it is compared with a dense
-        solve of the same pinned system to the tolerance's worth. At the late
-        iteration the right-hand side is small and the stop may be the floor.
+        The 20x20 case file is solved under its own rule, level and cap, to
+        its first outer iteration or to its stop, and the prediction handed
+        to the corrector there is kept. The correction on it is compared with
+        a dense solve of the same system to the tolerance's worth, read on
+        the range part. The last system is the regime ADR-013 B cites: the
+        right-hand side has shrunk toward rounding, so the floor, 1e-13 F at
+        its real value, ends the correction (review 37 S8: outer 300 of a
+        solve that runs 970 was asserted nothing about). Without the floor
+        the same solve goes on to the relative level, far below the faces'
+        rounding (100 iterations against 71 when this was written); one
+        iteration fewer leaves the true residual above the floor, so a floor
+        at another scale fails here.
         """
-        config = _case_with("cavity", 20, max_simple_iter=outer + 1)
+        keys = {"max_simple_iter": 1} if when == "first" else {}
+        config = _case_with("cavity", 20, **keys)
         mesh = Mesh(config)
         bc = StaggeredBoundary(mesh, config)
         solver = StaggeredSolver(mesh, config, bc)
@@ -810,7 +841,7 @@ class TestConjugateGradient:
             solver.solve_steady()
         finally:
             PressureCorrector.correct = original  # type: ignore[method-assign]
-        pred, p = seen[outer]
+        pred, p = seen[-1]
         pc = PressureCorrector(mesh, config, bc)
         c = pc.coefficients(pred.a_p_u, pred.a_p_v)
         b = pc.mass_imbalance(pred.u_star, pred.v_star)
@@ -819,13 +850,31 @@ class TestConjugateGradient:
         f = _projected_rhs(pc, c, b)
         r = _residual(c, b, out.p_prime)
         r[c.a_p > 0.0] -= b[c.a_p > 0.0].mean()
-        stop = max(
-            config.pressure_rtol * np.linalg.norm(f), RESIDUAL_FLOOR * pc.flux_scale
-        )
+        relative = config.pressure_rtol * np.linalg.norm(f)
+        floor = 1e-13 * pc.flux_scale
         assert out.reached_cap is False
-        assert np.linalg.norm(r) <= stop
-        assert np.linalg.norm(out.p_prime - dense) <= np.linalg.norm(r) / smallest
+        assert np.linalg.norm(r) <= max(relative, floor)
+        error = _range_part(pc, c, out.p_prime) - _range_part(pc, c, dense)
+        assert np.linalg.norm(error) <= np.linalg.norm(r) / smallest
         assert np.abs(dense).max() > 0.0
+        if when == "first":
+            assert len(seen) == 1 and relative > floor
+            return
+        assert len(seen) > 900
+        assert solver.stop_reason == "error_estimate_and_continuity"
+        assert floor > 1e3 * relative
+
+        def apply(x: np.ndarray) -> np.ndarray:
+            return apply_operator(c, x)
+
+        inv = _inverse_diagonal(c)
+        rtol = config.pressure_rtol
+        bare = conjugate_gradient(apply, inv, f, rtol, 0.0, config.max_pressure_iter)
+        assert bare.iterations > out.iterations
+        assert bare.residual_norm <= relative < floor
+        short = conjugate_gradient(apply, inv, f, rtol, floor, out.iterations - 1)
+        assert short.reached_cap is True
+        assert short.residual_norm > floor
 
     def test_stops_at_the_first_iteration_meeting_the_relative_level(self) -> None:
         """One iteration fewer leaves the residual above rtol ||f||; tighter levels take more."""
@@ -858,7 +907,10 @@ class TestConjugateGradient:
         With the floor raised to 1e-2 F the correction stops as soon as the
         residual's 2-norm is below it, above the relative level and in fewer
         iterations than the real floor allows; the residual reported is the
-        true one. A floor of zero removes the second stop.
+        true one. One iteration fewer leaves the true residual above 1e-2 F,
+        so a floor at another scale, 1e-2 ||f|| say, stops elsewhere and
+        fails (test 37 T-S1: an upper bound alone passed at 1e-3 F and 1e-4 F
+        too). A floor of zero removes the second stop.
         """
         pc, c, b, pred, p = self._system(CAVITY)
         f = _projected_rhs(pc, c, b)
@@ -884,6 +936,16 @@ class TestConjugateGradient:
         )
         assert direct.iterations == floored.iterations
         assert direct.residual_norm == pytest.approx(np.linalg.norm(r), rel=1e-12)
+        short = conjugate_gradient(
+            lambda x: apply_operator(c, x),
+            inv,
+            f,
+            TIGHT_RTOL,
+            1e-2 * pc.flux_scale,
+            floored.iterations - 1,
+        )
+        assert short.reached_cap is True
+        assert short.residual_norm > 1e-2 * pc.flux_scale
         bare = conjugate_gradient(
             lambda x: apply_operator(c, x), inv, f, TIGHT_RTOL, 0.0, 5000
         )

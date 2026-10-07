@@ -661,9 +661,11 @@ class TestCappedCorrections:
         """One CG iteration per correction still converges the tiny cavity, and may stop.
 
         The outer loop converges on its own once b shrinks, and the last
-        correction then meets the floor rather than the cap, so the refusal
-        does not hold a converged solve hostage: the stop is allowed on that
-        iteration, and the faces it returns do close.
+        correction then meets its stop in one iteration rather than the cap,
+        so the refusal does not hold a converged solve hostage: the stop is
+        allowed on that iteration, and the faces it returns do close. Which
+        term of the stop ends such a correction, the floor, is shown on the
+        VAL-002 cavity's last system in tests/test_pressure.py.
         """
         corrections = _record_corrections(monkeypatch)
         config = _ruled(
