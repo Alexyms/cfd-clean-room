@@ -141,21 +141,25 @@ def test_staggered_work_counts_faces_and_every_cell_with_an_equation() -> None:
         benchmark.fluid_cells_per_sweep(mesh) == 324 == (mesh.cell_type == FLUID).sum()
     )
 
+    # Review 37 S5: the work counts every product with the operator, the
+    # exit checks included, so the products, not the iterations, set it.
     counter = benchmark.WorkCounter(cells, momentum)
     fields = mesh.xc[None, :] * mesh.yc[:, None]
-    for i, sweeps in enumerate((500, 312)):
+    for i, (iterations, products) in enumerate(((500, 501), (312, 314))):
         counter.record(
             IterationState(
                 iteration=i,
                 residual=1.0,
-                pressure_iterations=sweeps,
+                pressure_iterations=iterations,
                 u=fields,
                 v=fields,
                 p=fields,
+                pressure_products=products,
             )
         )
-    assert counter.work["cell_updates"] == 2 * momentum + cells * (500 + 312)
+    assert counter.work["cell_updates"] == 2 * momentum + cells * (501 + 314)
     assert counter.work["inner_iterations"] == 812
+    assert counter.work["inner_products"] == 815
 
 
 @pytest.mark.integration

@@ -155,6 +155,9 @@ class PressureCorrection:
         True when the solve stopped at max_pressure_iter rather than at
         its relative level or the floor. The solver counts such
         corrections and, under velocity_step, does not stop on one.
+    products : int
+        Products with the operator the solve formed, ConjugateGradientResult's
+        count; the harness counts its work in them.
     """
 
     u: np.ndarray
@@ -163,6 +166,7 @@ class PressureCorrection:
     p_prime: np.ndarray
     iterations: int
     reached_cap: bool
+    products: int
 
 
 @dataclass(frozen=True)
@@ -174,18 +178,24 @@ class ConjugateGradientResult:
     x : np.ndarray
         The solution, the shape of the right-hand side.
     iterations : int
-        Iterations performed, each one product with the operator.
+        Iterations performed, each with one product with the operator.
     reached_cap : bool
         True when the iteration cap ended the solve before the stop held
         on the true residual.
     residual_norm : float
         2-norm of the true residual ``f - A x`` at exit.
+    products : int
+        Every product with the operator the solve formed: one per
+        iteration, plus one each time the true residual was formed, at the
+        exit check, at a check that failed and restarted the iteration, and
+        at the cap. A zero right-hand side forms none.
     """
 
     x: np.ndarray
     iterations: int
     reached_cap: bool
     residual_norm: float
+    products: int
 
 
 def apply_operator(coefficients: PressureCoefficients, x: np.ndarray) -> np.ndarray:
@@ -287,12 +297,14 @@ def conjugate_gradient(
     stop = max(rtol * f_norm, floor)
     if f_norm == 0.0:
         return ConjugateGradientResult(
-            x=x, iterations=0, reached_cap=False, residual_norm=0.0
+            x=x, iterations=0, reached_cap=False, residual_norm=0.0, products=0
         )
     z = inverse_diagonal * r
     p = z.copy()
     rz = float(np.vdot(r, z))
     k = 0
+    # Products formed for the true residual, counted apart from the iterations.
+    checks = 0
     while k < max_iter:
         q = apply(p)
         alpha = rz / float(np.vdot(p, q))
@@ -305,10 +317,15 @@ def conjugate_gradient(
             # and a solve whose true residual still misses the stop restarts
             # from that residual rather than returning it.
             r = f - apply(x)
+            checks += 1
             r_norm = float(np.sqrt(np.vdot(r, r)))
             if r_norm <= stop:
                 return ConjugateGradientResult(
-                    x=x, iterations=k, reached_cap=False, residual_norm=r_norm
+                    x=x,
+                    iterations=k,
+                    reached_cap=False,
+                    residual_norm=r_norm,
+                    products=k + checks,
                 )
             z = inverse_diagonal * r
             p = z.copy()
@@ -321,7 +338,11 @@ def conjugate_gradient(
         rz = rz_new
     r = f - apply(x)
     return ConjugateGradientResult(
-        x=x, iterations=k, reached_cap=True, residual_norm=float(np.sqrt(np.vdot(r, r)))
+        x=x,
+        iterations=k,
+        reached_cap=True,
+        residual_norm=float(np.sqrt(np.vdot(r, r))),
+        products=k + checks + 1,
     )
 
 
@@ -631,8 +652,8 @@ class PressureCorrector:
         Returns
         -------
         PressureCorrection
-            Corrected u and v, updated p, p', the iteration count and
-            whether the cap ended the solve.
+            Corrected u and v, updated p, p', the iteration count, whether
+            the cap ended the solve, and the count of operator products.
 
         Notes
         -----
@@ -694,6 +715,7 @@ class PressureCorrector:
             p_prime=p_prime,
             iterations=solved.iterations,
             reached_cap=solved.reached_cap,
+            products=solved.products,
         )
 
     def _check_shapes(self, u: np.ndarray, v: np.ndarray) -> None:

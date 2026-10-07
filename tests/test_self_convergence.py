@@ -222,7 +222,7 @@ class _ScriptedSolver:
         n = self.config.nx
         for k in range(self.config.max_simple_iter):
             field, residual = np.full((n, n), float(k)), 5e-6 * 10.0**-k
-            on_iteration(IterationState(k, residual, 0, field, field, field))
+            on_iteration(IterationState(k, residual, 0, field, field, field, 0))
             if residual < self.config.convergence_tol:
                 return
 

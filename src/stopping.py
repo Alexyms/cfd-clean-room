@@ -72,12 +72,18 @@ class IterationState:
         this iteration.
     u, v, p : np.ndarray
         Current velocity and pressure fields, each shape [ny, nx].
+    pressure_products : int
+        Products with the pressure operator that correction formed: its
+        iterations plus the true-residual checks. The harness counts its
+        work in them.
 
     Notes
     -----
     Moved here from src/solver_ns.py on 2026-10-02 (PR 29), fields unchanged.
     The count field was renamed from pressure_sweeps on 2026-10-06 (ECR-003
     step 1), when the Jacobi sweep gave way to conjugate gradients.
+    pressure_products was added last the same day (review 37 S5), so every
+    other field keeps its position.
     """
 
     iteration: int
@@ -86,6 +92,7 @@ class IterationState:
     u: np.ndarray
     v: np.ndarray
     p: np.ndarray
+    pressure_products: int
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)

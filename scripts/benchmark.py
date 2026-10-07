@@ -84,7 +84,10 @@ from validation.metrics import (  # noqa: E402 -- follows sys.path.insert
     poiseuille_l2_error,
 )
 
-SCHEMA_VERSION = 1
+# 2 since ECR-003 step 1: work.inner_sweeps became inner_iterations, and
+# work.inner_products and outcome.pressure_cap_hits were added. Rows of
+# schema 1 are read as before; nothing reads the renamed key back.
+SCHEMA_VERSION = 2
 RESULTS_PATH = REPO_ROOT / "benchmarks" / "results.jsonl"
 # The method label selects the solver, so a row cannot claim one it did not run.
 # It is src/pressure.py's, looked up there by PRESSURE_SOLVER_VERSION.
@@ -169,9 +172,10 @@ CELL_UPDATE_DEFINITIONS: dict[str, str] = {
     STAGGERED_METHOD: (
         "stencil evaluations at unknowns: the unknown u and v faces (a_p > 0) once "
         "per outer iteration for momentum, plus the cells with a pressure equation "
-        "(a_P > 0) once per conjugate gradient iteration, its one five-point "
-        "product; the diagonal scaling, the vector updates and the three "
-        "reductions of an iteration are not counted"
+        "(a_P > 0) once per five-point product of the conjugate gradient solve: "
+        "one per iteration and one per true-residual check, at exit, at a restart "
+        "and at the cap; the diagonal scaling, the vector updates and the "
+        "reductions are not counted"
     ),
 }
 
@@ -251,8 +255,8 @@ def staggered_updates(mesh: Mesh, config: SimConfig) -> tuple[int, int]:
     -------
     tuple[int, int]
         (momentum updates per outer iteration, the unknown u faces plus the
-        unknown v faces with a_p > 0; cells per pressure sweep, those with
-        a_P > 0).
+        unknown v faces with a_p > 0; cells per product with the pressure
+        operator, those with a_P > 0).
     """
     boundary = StaggeredBoundary(mesh, config)
     u, v, p = allocate_fields(mesh)
@@ -273,11 +277,11 @@ class WorkCounter:
     Parameters
     ----------
     cells_per_iteration : int
-        Unknowns one inner pressure iteration touches, a stencil evaluation
-        each: the second value of staggered_updates. One conjugate gradient
-        iteration or one Jacobi sweep, both one five-point product per cell
-        with an equation. The stored collocated-jacobi rows counted
-        fluid_cells_per_sweep here.
+        Unknowns one product with the pressure operator touches, a stencil
+        evaluation each: the second value of staggered_updates. A conjugate
+        gradient iteration forms one product, and its true-residual checks
+        one each; a Jacobi sweep was one. The stored collocated-jacobi rows
+        counted fluid_cells_per_sweep here.
     momentum_updates : int, optional
         Unknowns the momentum step updates per outer iteration. Defaults to
         ``2 * cells_per_iteration``, the convention the stored
@@ -292,16 +296,18 @@ class WorkCounter:
         self.momentum_updates = (
             2 * cells_per_iteration if momentum_updates is None else momentum_updates
         )
-        # Stored rows written before ECR-003 step 1 carry this count as
-        # inner_sweeps; nothing reads it back.
+        # Stored rows written before ECR-003 step 1 (schema 1) carry the
+        # iteration count as inner_sweeps and no product count; nothing reads
+        # either back.
         self.work: dict[str, int] = {
             "outer_iterations": 0,
             "inner_iterations": 0,
+            "inner_products": 0,
             "cell_updates": 0,
         }
 
     def record(self, state: IterationState) -> None:
-        """Add one SIMPLE iteration: its momentum updates plus its pressure iterations.
+        """Add one SIMPLE iteration: its momentum updates plus its pressure products.
 
         Parameters
         ----------
@@ -310,8 +316,9 @@ class WorkCounter:
         """
         self.work["outer_iterations"] = state.iteration + 1
         self.work["inner_iterations"] += state.pressure_iterations
+        self.work["inner_products"] += state.pressure_products
         self.work["cell_updates"] += (
-            self.momentum_updates + self.cells_per_iteration * state.pressure_iterations
+            self.momentum_updates + self.cells_per_iteration * state.pressure_products
         )
 
 

@@ -678,7 +678,15 @@ class TestCorrection:
     def test_result_fields_are_the_contract(self) -> None:
         """iterations and reached_cap, not sweeps: the harness and the solver read them."""
         names = [f.name for f in PressureCorrection.__dataclass_fields__.values()]
-        assert names == ["u", "v", "p", "p_prime", "iterations", "reached_cap"]
+        assert names == [
+            "u",
+            "v",
+            "p",
+            "p_prime",
+            "iterations",
+            "reached_cap",
+            "products",
+        ]
         assert PRESSURE_SOLVER_VERSION == 2
 
     def test_each_solver_version_has_its_own_label(self) -> None:
@@ -928,6 +936,42 @@ class TestConjugateGradient:
             lambda x: apply_operator(c, x), inv, f, rtol, 0.0, 5000
         )
         assert honest.residual_norm <= stop
+
+    def test_products_are_every_call_of_the_operator(self) -> None:
+        """One per iteration and one per true-residual check, counted as the operator sees them.
+
+        Review 37 S5: the work counted iterations only, which leaves out the
+        exit check's product, a restart's and the cap's. The operator is
+        wrapped to count its calls on a solve that stops, one whose lying
+        recursion forces a restart, one the cap ends, and a zero right-hand
+        side; the correction reports its solve's count.
+        """
+        pc, c, b, pred, p = self._system(CHANNEL)
+        f = _projected_rhs(pc, c, b)
+        inv = _inverse_diagonal(c)
+        calls = {"n": 0, "lie_at": 0}
+
+        def counted(x: np.ndarray) -> np.ndarray:
+            calls["n"] += 1
+            q = apply_operator(c, x)
+            if calls["n"] == calls["lie_at"]:
+                q = q.copy()
+                q[2, 3] += 1e-3 * float(np.linalg.norm(f))
+            return q
+
+        seen = []
+        for lie_at, rhs, cap in ((0, f, 5000), (3, f, 5000), (0, f, 3), (0, 0 * f, 50)):
+            calls["n"], calls["lie_at"] = 0, lie_at
+            res = conjugate_gradient(counted, inv, rhs, 1e-8, 0.0, cap)
+            assert res.products == calls["n"]
+            seen.append((res.iterations, res.products, res.reached_cap))
+        honest, restarted, capped, zero = seen
+        assert honest[1] == honest[0] + 1 and not honest[2]
+        assert restarted[1] >= restarted[0] + 2 and not restarted[2]
+        assert capped == (3, 4, True)
+        assert zero == (0, 0, False)
+        out = pc.correct(pred, p)
+        assert out.products == out.iterations + 1
 
     def test_cap_is_reported_with_the_true_residual(self) -> None:
         """Three iterations on a system that needs more: capped, and the residual is f - A x."""

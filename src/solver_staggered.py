@@ -302,6 +302,7 @@ class StaggeredSolver:
                         u=u_c,
                         v=v_c,
                         p=p,
+                        pressure_products=corrected.products,
                     )
                 )
 
