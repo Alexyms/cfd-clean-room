@@ -1178,12 +1178,19 @@ class TestConjugateGradient:
         inflow, which no p' removes, so every correction ran to the cap and
         left the faces 189 times more unbalanced than u*. A shelf the full
         length splits the channel too, but each part reaches the outlet, so
-        it is accepted and its correction converges. Defect caught: the check
-        skipped on an open domain, or an open domain held to one component.
+        it is accepted and its correction converges. A wall one column in
+        from the outlet strands both parts: the edge column touches the outlet,
+        but its outlet faces borrow no diagonal, since the face inward of each
+        is a SOLID cell's, so no p' = 0 sits in its rows. Defect caught: the
+        check skipped on an open domain, an open domain held to one
+        component, or an outlet cell counted without its inward neighbour.
         """
         stranded = r"open domain: 1 of the 2 connected components .* no pressure outlet"
         with pytest.raises(ValueError, match=stranded):
             _build(_config(CHANNEL, obstacles=[PARTITION]))
+        liner = {**PARTITION, "x_start": 1.5, "x_end": 1.75}
+        with pytest.raises(ValueError, match=r"open domain: 2 of the 2 connected"):
+            _build(_config(CHANNEL, obstacles=[liner]))
         mesh, _bc, pc, pred, p = _predicted(
             _config(CHANNEL, obstacles=[SHELF]), outlet_right=True
         )
