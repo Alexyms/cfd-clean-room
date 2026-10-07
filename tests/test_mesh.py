@@ -57,8 +57,8 @@ def _make_config(tmp_path, overrides: dict | None = None) -> SimConfig:
             "max_simple_iter": 100,
             "alpha_velocity": 0.7,
             "alpha_pressure": 0.3,
-            "max_pressure_iter": 200,
-            "pressure_tol": 1.0e-6,
+            "max_pressure_iter": 5000,
+            "pressure_rtol": 1.0e-8,
         },
         "boundaries": {
             "top": {

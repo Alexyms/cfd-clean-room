@@ -69,15 +69,15 @@ class TestLoadCase:
     def test_poiseuille_settings_are_the_validation_settings(self) -> None:
         config = load_case("poiseuille")
         assert (config.nx, config.ny) == (80, 40)
-        assert config.max_pressure_iter == 2000
-        assert config.pressure_tol == 1.0e-8
+        assert config.max_pressure_iter == 5000
+        assert config.pressure_rtol == 1.0e-8
         assert config.alpha_velocity == 0.7
 
     def test_cavity_settings_are_the_validation_settings(self) -> None:
         config = load_case("cavity")
         assert (config.nx, config.ny) == (40, 40)
-        assert config.max_pressure_iter == 500
-        assert config.pressure_tol == 1.0e-8
+        assert config.max_pressure_iter == 5000
+        assert config.pressure_rtol == 1.0e-8
         assert config.alpha_velocity == 0.5
 
     def test_grid_override_changes_only_the_grid(self) -> None:

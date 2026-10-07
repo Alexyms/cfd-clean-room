@@ -44,8 +44,8 @@ def _make_config_with_obstacle(tmp_path: Path) -> SimConfig:
             "max_simple_iter": 100,
             "alpha_velocity": 0.7,
             "alpha_pressure": 0.3,
-            "max_pressure_iter": 200,
-            "pressure_tol": 1.0e-6,
+            "max_pressure_iter": 5000,
+            "pressure_rtol": 1.0e-8,
         },
         "boundaries": {
             "top": {
@@ -90,7 +90,7 @@ def test_cell_updates_equal_fluid_cells_times_sweeps(tmp_path: Path) -> None:
             IterationState(
                 iteration=i,
                 residual=1.0,
-                pressure_sweeps=sweeps,
+                pressure_iterations=sweeps,
                 u=fields,
                 v=fields,
                 p=fields,

@@ -232,23 +232,34 @@ DEFAULT_ITERATION_ERROR_TOL = 1.0e-6
 # ECR-001 acceptance criterion 6: the per-cell imbalance and its signed domain
 # sum each below 1e-10, absolute.
 DEFAULT_MASS_IMBALANCE_TOL = 1.0e-10
-# Every key the solver block accepts, nine required and three optional. With
-# optional keys a misspelt one would otherwise fall back to its default.
-_SOLVER_KEYS: frozenset[str] = frozenset(
-    {
-        "dt",
-        "t_end",
-        "output_interval",
-        "convergence_tol",
-        "max_simple_iter",
-        "alpha_velocity",
-        "alpha_pressure",
-        "max_pressure_iter",
-        "pressure_tol",
-        "stopping_rule",
-        "iteration_error_tol",
-        "mass_imbalance_tol",
-    }
+# The relative residual the pressure correction solves to (REQ-S08 as amended
+# 2026-10-06, ADR-013 D). The lower bound: on the product's first correction
+# from rest the true residual cannot fall below about 1.3e-13 of the flux
+# scale, so a level at or below about 1e-12 would run every such correction to
+# its cap; 1e-10 keeps two orders above that and two below the default 1e-8.
+# The upper bound excludes a level that asks for nothing.
+PRESSURE_RTOL_BOUNDS: tuple[float, float] = (1.0e-10, 1.0)
+# The key the weighted Jacobi solve read until ECR-003 step 1: pascals of
+# change per sweep, which means nothing for the conjugate gradient solve. It is
+# refused by name so a saved configuration cannot be read as the new key.
+RETIRED_PRESSURE_TOL_KEY = "pressure_tol"
+# Every key the solver block accepts, nine required and three optional, in the
+# order the harness records them: it reads this tuple, so a key added here is
+# in every harness row (GitHub issue 38). With optional keys a misspelt one
+# would otherwise fall back to its default.
+SOLVER_KEYS: tuple[str, ...] = (
+    "dt",
+    "t_end",
+    "output_interval",
+    "convergence_tol",
+    "max_simple_iter",
+    "alpha_velocity",
+    "alpha_pressure",
+    "max_pressure_iter",
+    "pressure_rtol",
+    "stopping_rule",
+    "iteration_error_tol",
+    "mass_imbalance_tol",
 )
 
 # Transport section (ADR-011 I), optional: the velocity-only validation cases
@@ -468,11 +479,19 @@ class SimConfig:
         solver = self._require_section(raw, "solver")
         if not isinstance(solver, dict):
             raise ValueError("solver must be a mapping")
+        if RETIRED_PRESSURE_TOL_KEY in solver:
+            raise ValueError(
+                f"solver.{RETIRED_PRESSURE_TOL_KEY} was the weighted Jacobi solve's "
+                "stop, pascals of change per sweep, and was retired with it "
+                "(ECR-003, 2026-10-06); the conjugate gradient solve stops on the "
+                "relative residual solver.pressure_rtol, in [1e-10, 1), with "
+                "max_pressure_iter its iteration cap"
+            )
         for key in solver:
-            if key not in _SOLVER_KEYS:
+            if key not in SOLVER_KEYS:
                 raise ValueError(
                     f"solver.{key} is not a recognised solver key; "
-                    f"known: {sorted(_SOLVER_KEYS)}"
+                    f"known: {sorted(SOLVER_KEYS)}"
                 )
         self.dt: float = self._require_positive_float(solver, "dt", "solver")
         self.t_end: float = self._require_positive_float(solver, "t_end", "solver")
@@ -494,9 +513,15 @@ class SimConfig:
         self.max_pressure_iter: int = self._require_positive_int(
             solver, "max_pressure_iter", "solver"
         )
-        self.pressure_tol: float = self._require_positive_float(
-            solver, "pressure_tol", "solver"
+        self.pressure_rtol: float = self._require_positive_float(
+            solver, "pressure_rtol", "solver"
         )
+        lower, upper = PRESSURE_RTOL_BOUNDS
+        if not lower <= self.pressure_rtol < upper:
+            raise ValueError(
+                f"solver.pressure_rtol must be in [{lower}, {upper}), the relative "
+                f"residual the pressure correction solves to, got {self.pressure_rtol}"
+            )
         # Optional: absent keys give the velocity-step rule and its behaviour.
         self.stopping_rule: str = VELOCITY_STEP
         if "stopping_rule" in solver:

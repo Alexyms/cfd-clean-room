@@ -10,8 +10,17 @@ from pathlib import Path
 import pytest
 import yaml
 
-from src.config import CFL_NUMBER_BOUND, SimConfig, TransportSpec, TurbulenceSpec
+from src.config import (
+    CFL_NUMBER_BOUND,
+    PRESSURE_RTOL_BOUNDS,
+    RETIRED_PRESSURE_TOL_KEY,
+    SOLVER_KEYS,
+    SimConfig,
+    TransportSpec,
+    TurbulenceSpec,
+)
 from validation.cases import CONFIG_DIR, load_case
+from validation.transport_cases import SOLVER_BLOCK
 
 
 def _write_config(tmp_path, overrides: dict | None = None) -> str:
@@ -52,8 +61,8 @@ def _write_config(tmp_path, overrides: dict | None = None) -> str:
             "max_simple_iter": 500,
             "alpha_velocity": 0.7,
             "alpha_pressure": 0.3,
-            "max_pressure_iter": 200,
-            "pressure_tol": 1.0e-6,
+            "max_pressure_iter": 5000,
+            "pressure_rtol": 1.0e-8,
         },
         "boundaries": {
             "hepa_supply": {
@@ -151,8 +160,8 @@ class TestSimConfigValid:
         assert config.max_simple_iter == 500
         assert config.alpha_velocity == pytest.approx(0.7)
         assert config.alpha_pressure == pytest.approx(0.3)
-        assert config.max_pressure_iter == 200
-        assert config.pressure_tol == pytest.approx(1.0e-6)
+        assert config.max_pressure_iter == 5000
+        assert config.pressure_rtol == pytest.approx(1.0e-8)
 
     def test_boundaries_parsed(self, tmp_path) -> None:
         """Boundaries section produces BoundarySpec objects."""
@@ -914,8 +923,8 @@ class TestSimConfigInvalidValues:
                     "max_simple_iter": 500,
                     "alpha_velocity": 0.0,
                     "alpha_pressure": 0.3,
-                    "max_pressure_iter": 200,
-                    "pressure_tol": 1e-6,
+                    "max_pressure_iter": 5000,
+                    "pressure_rtol": 1e-8,
                 }
             },
         )
@@ -935,8 +944,8 @@ class TestSimConfigInvalidValues:
                     "max_simple_iter": 500,
                     "alpha_velocity": 1.5,
                     "alpha_pressure": 0.3,
-                    "max_pressure_iter": 200,
-                    "pressure_tol": 1e-6,
+                    "max_pressure_iter": 5000,
+                    "pressure_rtol": 1e-8,
                 }
             },
         )
@@ -956,8 +965,8 @@ class TestSimConfigInvalidValues:
                     "max_simple_iter": 500,
                     "alpha_velocity": 0.7,
                     "alpha_pressure": -0.1,
-                    "max_pressure_iter": 200,
-                    "pressure_tol": 1e-6,
+                    "max_pressure_iter": 5000,
+                    "pressure_rtol": 1e-8,
                 }
             },
         )
@@ -977,8 +986,8 @@ class TestSimConfigInvalidValues:
                     "max_simple_iter": 500,
                     "alpha_velocity": True,
                     "alpha_pressure": 0.3,
-                    "max_pressure_iter": 200,
-                    "pressure_tol": 1e-6,
+                    "max_pressure_iter": 5000,
+                    "pressure_rtol": 1e-8,
                 }
             },
         )
@@ -998,8 +1007,8 @@ class TestSimConfigInvalidValues:
                     "max_simple_iter": 500,
                     "alpha_velocity": 1.0,
                     "alpha_pressure": 0.3,
-                    "max_pressure_iter": 200,
-                    "pressure_tol": 1e-6,
+                    "max_pressure_iter": 5000,
+                    "pressure_rtol": 1e-8,
                 }
             },
         )
@@ -1157,6 +1166,94 @@ class TestStoppingRuleKeys:
             ValueError, match=r"solver\.stoping_rule is not a recognised"
         ):
             SimConfig.from_dict(self._raw(tmp_path, stoping_rule="error_estimate"))
+
+
+@pytest.mark.unit
+class TestPressureKeys:
+    """The pressure correction's keys (REQ-S08 as amended 2026-10-06, ADR-013 D)."""
+
+    def _raw(self, tmp_path: Path, **keys: object) -> dict:
+        with open(_write_config(tmp_path), encoding="utf-8") as handle:
+            raw = yaml.safe_load(handle)
+        raw["solver"].update(keys)
+        return raw
+
+    def test_pressure_rtol_is_read_and_its_bounds_are_inclusive_exclusive(
+        self, tmp_path: Path
+    ) -> None:
+        """A value in [1e-10, 1) is read as given; the lower bound is accepted."""
+        for value in (1e-10, 1e-8, 0.5):
+            config = SimConfig.from_dict(self._raw(tmp_path, pressure_rtol=value))
+            assert config.pressure_rtol == value
+        assert PRESSURE_RTOL_BOUNDS == (1e-10, 1.0)
+
+    @pytest.mark.parametrize(
+        ("bad", "error", "message"),
+        [
+            (1.0, ValueError, r"solver\.pressure_rtol must be in \[1e-10, 1\.0\)"),
+            (2.0, ValueError, r"solver\.pressure_rtol must be in"),
+            (9.9e-11, ValueError, r"solver\.pressure_rtol must be in"),
+            (1e-12, ValueError, r"solver\.pressure_rtol must be in"),
+            (0.0, ValueError, r"solver\.pressure_rtol must be positive"),
+            (-1e-8, ValueError, r"solver\.pressure_rtol must be positive"),
+            (float("nan"), ValueError, r"solver\.pressure_rtol must be finite"),
+            (True, TypeError, r"solver\.pressure_rtol must be a number"),
+            ("1e-8", TypeError, r"solver\.pressure_rtol must be a number"),
+        ],
+    )
+    def test_bad_pressure_rtol_is_rejected(
+        self, tmp_path: Path, bad: object, error: type[Exception], message: str
+    ) -> None:
+        """Out of range, non-positive, non-finite, bool or string: each refused by name."""
+        with pytest.raises(error, match=message):
+            SimConfig.from_dict(self._raw(tmp_path, pressure_rtol=bad))
+
+    def test_missing_pressure_rtol_or_cap_is_refused(self, tmp_path: Path) -> None:
+        """Both keys stay required; neither has a default (ADR-013 decision 4)."""
+        for key in ("pressure_rtol", "max_pressure_iter"):
+            raw = self._raw(tmp_path)
+            del raw["solver"][key]
+            with pytest.raises(
+                ValueError, match=f"Missing required key: 'solver.{key}'"
+            ):
+                SimConfig.from_dict(raw)
+
+    def test_the_retired_pressure_tol_is_refused_naming_the_new_key(
+        self, tmp_path: Path
+    ) -> None:
+        """A Jacobi-era file cannot be read with its pascals as a relative residual.
+
+        Refused whether or not pressure_rtol is also given, with a message
+        that names pressure_rtol, distinct from the unknown-key refusal.
+        """
+        with pytest.raises(ValueError, match=r"solver\.pressure_tol.*pressure_rtol"):
+            SimConfig.from_dict(self._raw(tmp_path, pressure_tol=1e-6))
+        raw = self._raw(tmp_path, pressure_tol=1e-6)
+        del raw["solver"]["pressure_rtol"]
+        with pytest.raises(ValueError, match=r"solver\.pressure_tol.*pressure_rtol"):
+            SimConfig.from_dict(raw)
+        assert "pressure_tol" not in SOLVER_KEYS
+        assert RETIRED_PRESSURE_TOL_KEY == "pressure_tol"
+
+    def test_solver_keys_is_the_one_ordered_list(self) -> None:
+        """Twelve keys, nine required then three optional, pressure_rtol among them."""
+        assert isinstance(SOLVER_KEYS, tuple)
+        assert len(SOLVER_KEYS) == len(set(SOLVER_KEYS)) == 12
+        assert "pressure_rtol" in SOLVER_KEYS
+        assert SOLVER_KEYS[-3:] == (
+            "stopping_rule",
+            "iteration_error_tol",
+            "mass_imbalance_tol",
+        )
+
+    def test_every_committed_configuration_names_the_new_key_and_cap(self) -> None:
+        """The three YAML files and the transport stand-ins carry 1e-8 and 5000."""
+        for path in sorted(CONFIG_DIR.glob("*.yaml")):
+            config = SimConfig(path)
+            assert config.pressure_rtol == 1e-8, path.name
+            assert config.max_pressure_iter == 5000, path.name
+        assert SOLVER_BLOCK["pressure_rtol"] == 1e-8
+        assert SOLVER_BLOCK["max_pressure_iter"] == 5000
 
 
 @pytest.mark.unit

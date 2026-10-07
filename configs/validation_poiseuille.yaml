@@ -5,10 +5,9 @@
 # solution is the parabolic profile with u_max = 1.5 * u_mean. Loaded by
 # validation/cases.py for tests/test_poiseuille.py and scripts/benchmark.py.
 #
-# The solver block is the one the validation test has always used. It
-# differs from configs/clean_room_default.yaml on purpose: a tighter
-# pressure tolerance and a higher sweep cap so the inner solve is not the
-# variable under test.
+# The solver block is the one the validation test has always used. Since
+# ECR-003 step 1 the pressure correction's level and cap are the committed
+# defaults, 1e-8 and 5000, on every configuration.
 
 domain:
   width: 1.0
@@ -46,8 +45,8 @@ solver:
   max_simple_iter: 20000
   alpha_velocity: 0.7
   alpha_pressure: 0.3
-  max_pressure_iter: 2000
-  pressure_tol: 1.0e-8
+  max_pressure_iter: 5000
+  pressure_rtol: 1.0e-8
   # The case says how it is validated (ECR-001 step 7). The tolerances are the
   # defaults, written out. The collocated solver refuses this rule, so the
   # harness and its VAL-001 test run it under velocity_step, set in memory.

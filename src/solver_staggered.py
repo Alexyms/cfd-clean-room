@@ -9,8 +9,9 @@ solver was retired on 2026-10-02 (tag collocated-final).
 
 The public shape is the collocated solver's: the constructor,
 ``solve_steady(on_iteration=None)`` returning cell-centered (u, v, p),
-``residual_history``, ``last_pressure_sweeps`` and ``stage_seconds``, the
-three the ECR-001 section 7.1 interface obligation names.
+``residual_history``, ``last_pressure_iterations`` (``last_pressure_sweeps``
+until ECR-003 step 1) and ``stage_seconds``, the three the ECR-001 section
+7.1 interface obligation names.
 
 Boundary faces. ``apply_normal_velocity`` writes the wall and inlet faces
 once, before the loop. Neither the predictor nor the corrector writes them,
@@ -43,6 +44,16 @@ per-cell mass imbalance below ``mass_imbalance_tol``, the summed imbalance
 over the through-flow below ``iteration_error_tol``, and the absolute signed
 domain sum of the imbalance below ``mass_imbalance_tol``. Reaching
 ``max_simple_iter`` is not convergence under either.
+
+A pressure correction that stops at ``max_pressure_iter`` is reported, not
+hidden: the solver counts such corrections in ``pressure_cap_hits``, warns at
+the first, and under velocity_step does not stop on an outer iteration whose
+correction reached the cap. A truncated correction leaves the faces unbalanced
+while the velocity barely moves, which is how the committed cap of 200 sweeps
+froze the 80x30 probe room with 47% of the supply unaccounted and the
+velocity-step rule called it converged (docs/reports/pressure_solver_ecr003.md,
+section 8.2; ADR-013 B). Under error_estimate the continuity conditions refuse
+that state on their own.
 """
 
 import logging
@@ -56,15 +67,12 @@ from src.boundary_staggered import StaggeredBoundary
 from src.config import ERROR_ESTIMATE, VELOCITY_STEP, SimConfig
 from src.mesh import FLUID, Mesh
 from src.momentum import MomentumPredictor
-from src.pressure import PressureCorrector
+from src.pressure import ZERO_SCALE, PressureCorrector
 from src.staggered import FaceVelocities, allocate_fields, p_shape, to_cell_centers
 from src.stopping import ErrorEstimateRule, ImbalanceSummary, IterationState
 
 logger = logging.getLogger(__name__)
 
-# The collocated solver's guard against a zero flux or velocity scale, kept
-# identical so the two residuals are the same quantity.
-_ZERO_SCALE = 1e-30
 _STOP_REASONS = {
     VELOCITY_STEP: "velocity_step_below_tol",
     ERROR_ESTIMATE: "error_estimate_and_continuity",
@@ -96,8 +104,11 @@ class StaggeredSolver:
     stop_reason : str or None
         "velocity_step_below_tol", "error_estimate_and_continuity" or
         "max_simple_iter"; None until a solve completes. Both reset per solve.
-    last_pressure_sweeps : int
-        Pressure sweeps performed by the most recent correction.
+    last_pressure_iterations : int
+        Conjugate gradient iterations of the most recent pressure correction.
+    pressure_cap_hits : int
+        Corrections of the last solve that stopped at max_pressure_iter
+        rather than at their stop; reset per solve, recorded by the harness.
     stage_seconds : dict[str, float]
         Wall time of the last solve in each stage: "momentum" (outlet
         extrapolation and prediction), "pressure" (the p' solve and the
@@ -144,7 +155,8 @@ class StaggeredSolver:
 
         self.reference_velocity: float = self._reference_velocity()
         self.residual_history: list[float] = []
-        self.last_pressure_sweeps: int = 0
+        self.last_pressure_iterations: int = 0
+        self.pressure_cap_hits: int = 0
         self.stage_seconds: dict[str, float] = self._zero_stage_seconds()
         self.last_mass_imbalance: np.ndarray = np.zeros(p_shape(mesh))
         self.face_velocities: FaceVelocities | None = None
@@ -168,11 +180,11 @@ class StaggeredSolver:
         nx, ny = self._mesh.xc.shape[0], self._mesh.yc.shape[0]
         h = max(float(self._mesh.x[nx]) / nx, float(self._mesh.y[ny]) / ny)
         vol_flux = self._boundary.get_total_inlet_flux()
-        if abs(vol_flux) > _ZERO_SCALE:
+        if abs(vol_flux) > ZERO_SCALE:
             f_ref = self._rho * abs(vol_flux)
         else:
             max_vel = self._boundary.get_max_boundary_velocity()
-            f_ref = max(self._rho * max_vel * h, _ZERO_SCALE)
+            f_ref = max(self._rho * max_vel * h, ZERO_SCALE)
         return f_ref / (self._rho * h)
 
     def _new_rule(self) -> ErrorEstimateRule | None:
@@ -180,9 +192,11 @@ class StaggeredSolver:
 
         The velocity scale is the largest prescribed boundary velocity. The
         flux scale F is rho times the total inflow, or on a closed domain rho
-        times that velocity times the longer side. It is not built from
-        reference_velocity, the inflow over one cell spacing: that moves with
-        the grid, and so would the bound on the summed imbalance.
+        times that velocity times the longer side: the corrector's flux_scale,
+        formed once there so the pressure solve's rounding floor and this
+        rule read the same F. It is not built from reference_velocity, the
+        inflow over one cell spacing: that moves with the grid, and so would
+        the bound on the summed imbalance.
         """
         if self._stopping_rule != ERROR_ESTIMATE:
             return None
@@ -192,10 +206,7 @@ class StaggeredSolver:
                 "stopping_rule error_estimate needs a velocity scale, and no "
                 "boundary prescribes a velocity; give one or use velocity_step"
             )
-        inflow = self._boundary.get_total_inlet_flux()
-        if inflow <= _ZERO_SCALE:
-            inflow = scale * max(float(self._mesh.x[-1]), float(self._mesh.y[-1]))
-        self._flux_scale = self._rho * inflow
+        self._flux_scale = self._corrector.flux_scale
         return ErrorEstimateRule(scale, self._flux_scale, *self._rule_tols)
 
     def _imbalance_summary(self, u: np.ndarray, v: np.ndarray) -> ImbalanceSummary:
@@ -228,8 +239,8 @@ class StaggeredSolver:
         ----------
         on_iteration : Callable[[IterationState], None], optional
             Called after every outer iteration with the cell-centered u and
-            v, the pressure, the residual and the corrector's sweep count
-            for that iteration. The arrays are fresh each iteration and
+            v, the pressure, the residual and the corrector's iteration
+            count for that iteration. The arrays are fresh each iteration and
             must not be modified.
 
         Returns
@@ -244,8 +255,9 @@ class StaggeredSolver:
         self.residual_history = []
         self.stage_seconds = self._zero_stage_seconds()
         # Reset with the timers: a solve that stops before its first
-        # correction must not report the previous call's sweep count.
-        self.last_pressure_sweeps = 0
+        # correction must not report the previous call's counts.
+        self.last_pressure_iterations = 0
+        self.pressure_cap_hits = 0
         self.converged, self.stop_reason = False, None
         rule = self._new_rule()
         u_c, v_c = to_cell_centers(u, v)
@@ -260,7 +272,16 @@ class StaggeredSolver:
 
             corrected = self._corrector.correct(prediction, p)
             u, v, p = corrected.u, corrected.v, corrected.p
-            self.last_pressure_sweeps = corrected.sweeps
+            self.last_pressure_iterations = corrected.iterations
+            if corrected.reached_cap:
+                self.pressure_cap_hits += 1
+                if self.pressure_cap_hits == 1:
+                    logger.warning(
+                        "SIMPLE iter %d: pressure correction stopped at "
+                        "max_pressure_iter (%d) before its residual met the stop",
+                        iteration,
+                        corrected.iterations,
+                    )
             t2 = perf_counter()
             self.stage_seconds["pressure"] += t2 - t1
 
@@ -268,7 +289,7 @@ class StaggeredSolver:
             u_c, v_c = to_cell_centers(u, v)
             du = float(np.max(np.abs(u_c[fluid] - u_prev[fluid])))
             dv = float(np.max(np.abs(v_c[fluid] - v_prev[fluid])))
-            residual = max(du, dv) / max(self.reference_velocity, _ZERO_SCALE)
+            residual = max(du, dv) / max(self.reference_velocity, ZERO_SCALE)
             self.residual_history.append(residual)
             self.stage_seconds["correct"] += perf_counter() - t2
 
@@ -277,7 +298,7 @@ class StaggeredSolver:
                     IterationState(
                         iteration=iteration,
                         residual=residual,
-                        pressure_sweeps=corrected.sweeps,
+                        pressure_iterations=corrected.iterations,
                         u=u_c,
                         v=v_c,
                         p=p,
@@ -285,7 +306,10 @@ class StaggeredSolver:
                 )
 
             if rule is None:
-                stop = residual < self._convergence_tol
+                # A capped correction makes the step small without balancing
+                # the faces; the velocity-step rule cannot tell, so it is not
+                # allowed to stop on one (ADR-013 B).
+                stop = residual < self._convergence_tol and not corrected.reached_cap
             else:
                 stop = rule.update(max(du, dv), partial(self._imbalance_summary, u, v))
 

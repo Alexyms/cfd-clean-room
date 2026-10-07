@@ -61,8 +61,8 @@ SOLVER_BLOCK = {
     "max_simple_iter": 100,
     "alpha_velocity": 0.7,
     "alpha_pressure": 0.3,
-    "max_pressure_iter": 200,
-    "pressure_tol": 1.0e-6,
+    "max_pressure_iter": 5000,
+    "pressure_rtol": 1.0e-8,
 }
 
 # ADR-011 H: the validation cases advect at the product case's Courant number.

@@ -159,13 +159,14 @@ def test_iteration_state_has_its_six_fields_in_order() -> None:
     """The callback snapshot moved here from solver_ns.py with its fields unchanged.
 
     Defect caught: a field renamed, which every positional construction in
-    the harness and the tests would still accept.
+    the harness and the tests would still accept. The count field was renamed
+    with the solve on 2026-10-06 (ECR-003 step 1); this pins the new name.
     """
     names = [field.name for field in dataclasses.fields(IterationState)]
-    assert names == ["iteration", "residual", "pressure_sweeps", "u", "v", "p"]
+    assert names == ["iteration", "residual", "pressure_iterations", "u", "v", "p"]
     u, v, p = np.zeros((2, 3)), np.ones((2, 3)), np.full((2, 3), 2.0)
     state = IterationState(4, 1e-3, 7, u, v, p)
-    assert (state.iteration, state.residual, state.pressure_sweeps) == (4, 1e-3, 7)
+    assert (state.iteration, state.residual, state.pressure_iterations) == (4, 1e-3, 7)
     assert state.u is u and state.v is v and state.p is p
     # Frozen, and compared by identity only: the fields are arrays.
     with pytest.raises(dataclasses.FrozenInstanceError):
