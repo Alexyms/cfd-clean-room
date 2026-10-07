@@ -10,6 +10,7 @@ from __future__ import annotations
 import sys
 from collections.abc import Callable
 from pathlib import Path
+from typing import NoReturn
 
 import numpy as np
 import pytest
@@ -19,6 +20,7 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 import stopping_probe  # noqa: E402 -- scripts/ is not a package; path set above
 
+from src.config import SimConfig  # noqa: E402 -- follows sys.path.insert
 from src.mesh import FLUID, Mesh  # noqa: E402 -- follows sys.path.insert
 from validation.cases import load_case  # noqa: E402 -- follows sys.path.insert
 
@@ -175,43 +177,80 @@ def test_rule_parameters_change_with_the_pressure_solver_version(
 
 
 class _BuiltError(Exception):
-    """Raised by the sentinel solver: a saved solve was not reused."""
+    """Raised by the sentinel solver: a saved solve was not reused.
+
+    Its one argument is the configuration of the solve that was asked for,
+    so a test can tell the truth's solve from the rule's.
+    """
+
+
+STALE = [({}, "no-version"), ({"pressure_solver_version": 1}, "jacobi-era")]
+CURRENT = {"pressure_solver_version": stopping_probe.PRESSURE_SOLVER_VERSION}
 
 
 def _refuse_to_solve(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """Point OUT_DIR at tmp_path and make building a solver raise _BuiltError."""
+    """Point OUT_DIR at tmp_path and make every solve raise _BuiltError.
 
-    class Sentinel:
-        def __init__(self, *args: object) -> None:
-            raise _BuiltError
+    The solver is still built, since verify_rule reads its flux scale before
+    deciding anything; only solve_steady refuses.
+    """
+
+    class Sentinel(stopping_probe.sc.StaggeredSolver):
+        def __init__(self, mesh: Mesh, config: SimConfig, boundary: object) -> None:
+            super().__init__(mesh, config, boundary)
+            self.asked = config
+
+        def solve_steady(self, *args: object, **kwargs: object) -> NoReturn:
+            raise _BuiltError(self.asked)
 
     monkeypatch.setattr(stopping_probe, "OUT_DIR", tmp_path)
     monkeypatch.setattr(stopping_probe.sc, "StaggeredSolver", Sentinel)
 
 
+def _save_truth(path: Path, saved: dict, u: np.ndarray, v: np.ndarray) -> None:
+    """A truth file as solve_truth writes it, its second snapshot at the case tolerance.
+
+    Complete, so a reader that skipped the version check would read it
+    without error rather than fail on a missing key.
+    """
+    tol = stopping_probe.case_config("cavity", 20).convergence_tol
+    np.savez(
+        path,
+        level=np.array([10.0 * tol, tol]),
+        iteration=np.array([3, 5]),
+        residual=np.full(6, tol),
+        imbalance=np.zeros(6),
+        iterations=np.full(6, 9),
+        elapsed=np.arange(6.0),
+        reference_velocity=1.0,
+        reached=True,
+        u_0=u,
+        v_0=v,
+        u_1=u,
+        v_1=v,
+        **saved,
+    )
+
+
 @pytest.mark.unit
 @pytest.mark.parametrize(
     ("saved", "reused"),
-    [
-        ({}, False),
-        ({"pressure_solver_version": 1}, False),
-        ({"pressure_solver_version": stopping_probe.PRESSURE_SOLVER_VERSION}, True),
-    ],
-    ids=["no-version", "jacobi-era", "this-solver"],
+    [*((s, False) for s, _ in STALE), (CURRENT, True)],
+    ids=[*(i for _, i in STALE), "this-solver"],
 )
 def test_saved_solves_are_reused_only_when_this_solver_wrote_them(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, saved: dict, reused: bool
 ) -> None:
-    """The truth, the tight truth and the control each re-solve on a missing or old version.
+    """The truth and the tight truth each re-solve on a missing or old version.
 
-    The decision is tested without a solve: building a solver raises, so a
-    file that is reused returns, and one that is not reaches the sentinel.
-    The fourth reuse, verify_rule's, is keyed by rule_parameters above.
+    The decision is tested without a solve: solving raises, so a file that
+    is reused returns, and one that is not reaches the sentinel. The control
+    and the two readers of the truth have their own tests below, and the
+    rule file is keyed by rule_parameters above.
     """
     _refuse_to_solve(monkeypatch, tmp_path)
     name = stopping_probe.case_name("cavity", 20)
     np.savez(tmp_path / f"{name}.npz", u=np.zeros(1), **saved)
-    np.savez(tmp_path / f"{name}_control.npz", u=np.zeros(1), **saved)
     np.savez(
         tmp_path / f"{name}_truth13.npz",
         tol=stopping_probe.TIGHT_TRUTH_TOL,
@@ -227,12 +266,71 @@ def test_saved_solves_are_reused_only_when_this_solver_wrote_them(
         else:
             with pytest.raises(_BuiltError):
                 reuse()
+    assert not stopping_probe.written_by_this_solver(tmp_path / "absent.npz")
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("saved", "reused"),
+    [*((s, False) for s, _ in STALE), (CURRENT, True)],
+    ids=[*(i for _, i in STALE), "this-solver"],
+)
+def test_control_is_reused_only_when_this_solver_wrote_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, saved: dict, reused: bool
+) -> None:
+    """The control re-solves on a missing or old version, beside a current truth.
+
+    Test 37 T-B1 (a): with the truth stale too, solve_truth reached the
+    sentinel whatever the control decided, so the control's own check was
+    never tested. Here the truth is this solver's and agrees with the control
+    bitwise, so only that check stands between the call and a reused field.
+    Defect caught: the control reused whenever its file exists.
+    """
+    _refuse_to_solve(monkeypatch, tmp_path)
+    name = stopping_probe.case_name("cavity", 20)
+    u, v = np.full((20, 20), 0.25), np.full((20, 20), -0.5)
+    _save_truth(tmp_path / f"{name}.npz", CURRENT, u, v)
+    np.savez(tmp_path / f"{name}_control.npz", u=u, v=v, outer=6, seconds=1.0, **saved)
     if reused:
-        assert stopping_probe.written_by_this_solver(tmp_path / f"{name}_control.npz")
+        out = stopping_probe.control("cavity", 20)
+        assert out == {"outer": 6, "seconds": 1.0, "bitwise_equal": True}
     else:
         with pytest.raises(_BuiltError):
             stopping_probe.control("cavity", 20)
-    assert not stopping_probe.written_by_this_solver(tmp_path / "absent.npz")
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("saved", [s for s, _ in STALE], ids=[i for _, i in STALE])
+def test_readers_of_the_truth_re_solve_a_truth_this_solver_did_not_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, saved: dict
+) -> None:
+    """verify_rule and analyse each solve a stale truth again before reading it.
+
+    Review 37 B1: verify_rule read the truth file directly, so under
+    --verify-rule a weighted-Jacobi truth was served as this solver's. Here
+    the rule file is current, so verify_rule reaches the truth without a
+    solve of its own, and the sentinel must be reached by the truth's solve:
+    the solve asked for is at TRUTH_TOL under velocity_step, not the rule's.
+    Defect caught: either reader loading the truth file without solve_truth.
+    """
+    _refuse_to_solve(monkeypatch, tmp_path)
+    name = stopping_probe.case_name("cavity", 20)
+    zeros = np.zeros((20, 20))
+    _save_truth(tmp_path / f"{name}.npz", saved, zeros, zeros)
+    config = stopping_probe.case_config("cavity", 20, rule="error_estimate")
+    mesh = stopping_probe.sc.Mesh(config)
+    boundary = stopping_probe.sc.StaggeredBoundary(mesh, config)
+    flux = stopping_probe.sc.StaggeredSolver(mesh, config, boundary).flux_scale
+    tols = (config.iteration_error_tol, config.mass_imbalance_tol)
+    params = stopping_probe.rule_parameters(
+        boundary.get_max_boundary_velocity(), flux, tols
+    )
+    np.savez(tmp_path / f"{name}_rule.npz", params=params)
+    for reader in (stopping_probe.verify_rule, stopping_probe.analyse):
+        with pytest.raises(_BuiltError) as asked:
+            reader("cavity", 20)
+        assert asked.value.args[0].convergence_tol == stopping_probe.TRUTH_TOL
+        assert asked.value.args[0].stopping_rule == "velocity_step"
 
 
 @pytest.mark.unit

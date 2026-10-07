@@ -103,3 +103,35 @@ def test_saved_solve_is_not_reused_under_another_rule_version(
     monkeypatch.setattr(val001_order, "RULE_VERSION", val001_order.RULE_VERSION + 1)
     with pytest.raises(SolverBuiltError):
         val001_order.solve(12, 6)
+
+
+@pytest.mark.unit
+def test_saved_solve_is_not_reused_under_another_pressure_solver_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A file saved under one PRESSURE_SOLVER_VERSION builds a solver under another.
+
+    Review 37 S4: the key caught ECR-003 only because pressure_rtol replaced
+    pressure_tol; a later solve that keeps the keys would not have changed it.
+    Defect caught: the version dropped from the key.
+    """
+
+    class SolverBuiltError(Exception):
+        pass
+
+    def no_solver(*args: object) -> None:
+        raise SolverBuiltError
+
+    monkeypatch.setattr(val001_order, "FIELD_DIR", tmp_path)
+    monkeypatch.setattr(val001_order, "StaggeredSolver", no_solver)
+    config = val001_order.load_case("poiseuille", grid=(12, 6))
+    params = val001_order.reuse_key(config)
+    np.savez(tmp_path / "poiseuille_12x6.npz", params=params, u=np.ones((6, 12)))
+    assert np.array_equal(val001_order.solve(12, 6)["u"], np.ones((6, 12)))
+    monkeypatch.setattr(
+        val001_order,
+        "PRESSURE_SOLVER_VERSION",
+        val001_order.PRESSURE_SOLVER_VERSION + 1,
+    )
+    with pytest.raises(SolverBuiltError):
+        val001_order.solve(12, 6)

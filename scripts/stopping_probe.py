@@ -7,12 +7,14 @@ case and grid. The solver's corrector is wrapped on the instance to record each
 outer iteration's worst per-cell imbalance and pressure iteration count; src/ is
 not edited. Every saved solve stores PRESSURE_SOLVER_VERSION and is solved again
 when the stored value differs or is missing, so a field written by the weighted
-Jacobi sweep is never read as the conjugate gradient solve's.
+Jacobi sweep is never read as the conjugate gradient solve's. Every reader of a
+truth, verify_rule's and analyse's included, takes it through solve_truth.
 u and v are kept at each quarter decade of residual from 1e-5 to TRUTH_TOL and at
 the case's own tolerance. The same-computation control runs first and stops the
 script if an unwrapped solve at the committed tolerance differs from the wrapped
-snapshot there. Fields go to results/stopping_probe/ (gitignored) and are never
-solved again once saved; the analysis writes summary.json there.
+snapshot there. Fields go to results/stopping_probe/ (gitignored) and are solved
+again only when their stored version is not this solver's; the analysis writes
+summary.json there.
 
 With --verify-rule each case is solved once more under the error_estimate
 stopping rule (src/stopping.py) at its default tolerances, set in memory, and
@@ -318,11 +320,15 @@ def marchi_stations(
 
 
 def analyse(case: str, n: int) -> dict:
-    """Every snapshot of one case against its truth, and the truth against its reference."""
+    """Every snapshot of one case against its truth, and the truth against its reference.
+
+    The truth is read through solve_truth, so a file another solver wrote is
+    solved again first, whatever ran before this call.
+    """
     config = case_config(case, n)
     mesh = sc.Mesh(config)
     fluid = mesh.cell_type == sc.FLUID
-    with np.load(OUT_DIR / f"{case_name(case, n)}.npz") as saved:
+    with np.load(solve_truth(case, n)) as saved:
         d = {k: saved[k] for k in saved.files}
     res, ref_vel, imb = d["residual"], float(d["reference_velocity"]), d["imbalance"]
     phys = sc._lid_velocity(config) if case == "cavity" else _inlet_velocity(config)
@@ -458,11 +464,13 @@ def verify_rule(case: str, n: int) -> dict:
     The corrector is wrapped as in the truth solve, so every iteration's
     imbalance is known and the wall time compares with the default rule's
     snapshot. A saved solve is reused only if its rule parameters,
-    RULE_VERSION and PRESSURE_SOLVER_VERSION match. Each condition is dated from the start of its final
-    run. Raises SystemExit if a fresh rule replaying the history does not stop
-    where the solver did, or the recorded worst or signed sum at the stop is
-    not the returned field's. The channel is read against its TIGHT_TRUTH_TOL
-    truth.
+    RULE_VERSION and PRESSURE_SOLVER_VERSION match. The truth and the default
+    rule's outer count and seconds are read through solve_truth, so a truth
+    another solver wrote is solved again first (review 37 B1). Each condition
+    is dated from the start of its final run. Raises SystemExit if a fresh
+    rule replaying the history does not stop where the solver did, or the
+    recorded worst or signed sum at the stop is not the returned field's. The
+    channel is read against its TIGHT_TRUTH_TOL truth.
     """
     name, config = case_name(case, n), case_config(case, n, rule="error_estimate")
     mesh, path = sc.Mesh(config), OUT_DIR / f"{name}_rule.npz"
@@ -500,7 +508,7 @@ def verify_rule(case: str, n: int) -> dict:
     print(f"{name}: {'solved' if stale else 'reused the saved solve'}", flush=True)
     with np.load(path) as saved:
         d = {k: saved[k] for k in saved.files}
-    with np.load(OUT_DIR / f"{name}.npz") as saved:
+    with np.load(solve_truth(case, n)) as saved:
         last = len(saved["level"]) - 1
         truth = (saved[f"u_{last}"], saved[f"v_{last}"])
         at_tol = saved["level"] == case_config(case, n).convergence_tol

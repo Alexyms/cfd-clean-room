@@ -2,9 +2,9 @@
 
 Solves the channel at 40x20, 80x40 and 160x80 with the staggered solver under
 the case file's stopping rule. Fields are saved under results/val001_order/
-(gitignored) under reuse_key, the solver parameters they were solved with and
-the stopping rule's RULE_VERSION, and a saved field is re-solved only when that
-key differs from the current one. A solve that reaches its cap stops the script.
+(gitignored) under reuse_key, the solver parameters they were solved with, the
+stopping rule's RULE_VERSION and the pressure solve's PRESSURE_SOLVER_VERSION,
+and a saved field is re-solved only when that key differs from the current one. A solve that reaches its cap stops the script.
 
 Each profile is u at x = L/2 exactly, the mean of the two cell columns either
 side of that face, and at x = 3L/4 the same way; every nx here is a multiple
@@ -43,6 +43,9 @@ from src.boundary_staggered import (  # noqa: E402 -- follows sys.path.insert
 )
 from src.config import SimConfig  # noqa: E402 -- follows sys.path.insert
 from src.mesh import Mesh  # noqa: E402 -- follows sys.path.insert
+from src.pressure import (  # noqa: E402 -- follows sys.path.insert
+    PRESSURE_SOLVER_VERSION,
+)
 from src.solver_staggered import (  # noqa: E402 -- follows sys.path.insert
     StaggeredSolver,
 )
@@ -60,11 +63,17 @@ CONTROL_TOL = 0.05
 
 
 def reuse_key(config: SimConfig) -> str:
-    """The key a saved solve is reused under: solver parameters and RULE_VERSION.
+    """The key a saved solve is reused under: solver parameters and both versions.
 
-    A new stopping condition changes no solver parameter, so the version joins them.
+    A new stopping condition changes no solver parameter, so RULE_VERSION
+    joins them. Nor need a new pressure solve: ECR-003 changed the field only
+    because pressure_rtol replaced pressure_tol, so PRESSURE_SOLVER_VERSION
+    joins them too (review 37 S4).
     """
-    key = solver_parameters(config) | {"rule_version": RULE_VERSION}
+    key = solver_parameters(config) | {
+        "rule_version": RULE_VERSION,
+        "pressure_solver_version": PRESSURE_SOLVER_VERSION,
+    }
     return json.dumps(key, sort_keys=True)
 
 
