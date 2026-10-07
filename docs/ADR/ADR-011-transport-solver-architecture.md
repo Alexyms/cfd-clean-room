@@ -485,11 +485,27 @@ applies, because transport consumes the field at the stop. These reproduce the f
 **The test, VAL-012.** `tests/test_constancy.py` solves VAL-001 at 40x20 under `error_estimate`
 (23.8 s at the version 3 stop [4]), takes `face_velocities`, sets `C` to one everywhere and the
 inlet's carried concentration to one, and steps the advection alone with diffusion, settling,
-deposition and sources off for N steps at `stable_dt`, T = N dt of the order of 40 s, so that the
-predicted departure (about 2e-7) is six orders above the rounding floor and the second-order term
-`(b T / rho V)^2` six orders below it. It asserts the measured largest departure is below the
-bound and above a tenth of it, bounding the drift and confirming the mechanism. Its planted
-control: one interior face perturbed, whose drift must exceed the bound. VAL-002's cavity, a
+deposition and sources off for N steps at `stable_dt`, T = N dt of the order of 40 s. It asserts
+the measured largest departure is at most the bound. Its planted control: one interior face
+perturbed, whose drift must exceed the bound. As built under the weighted Jacobi correction (PR
+32) the faces put the predicted departure (about 2e-7) six orders above the rounding floor and
+the second-order term `(b T / rho V)^2` six orders below it, and the test also asserted the
+departure above a tenth of the bound, confirming the mechanism (measured ratio 0.145).
+
+Split on 2026-10-07 (Alex), because ECR-003 step 1's conjugate gradient correction balances the
+faces to rounding: worst |b_P| 6.2e-16 to 6.4e-16 kg/s at `pressure_rtol` 1e-8, 1e-6 and 1e-4.
+The departure and the bound are then both rounding, 4.0e-12 against 4.0e-11 over 40 s, and their
+ratio sits on the 0.1 line, 0.100 on Windows and 0.099 on Linux, where CI failed the lower
+clause. The requirement's clause, departure at most the bound, stays on these faces and holds by
+a factor of about ten on rounding-level quantities. The mechanism's clause moves to a planted face
+field with a known imbalance: uniform flow at 0.1 m/s on the 40x20 mesh with one face column
+raised by 1e-4 m/s, ten orders above rounding, stepped for one residence time of the cell that
+drains. On an open field a parcel is flushed, so its departure is the imbalance rate times its
+residence time, not T, and a T of one residence time puts the ratio inside the window. There the
+draining cell follows forward Euler with upwind face values, and the ratio is
+`(1 - (1 - s dt)^N) / (s N dt)`, s dt the Courant number 0.1 and N = 10: 0.651, predicted before
+the run and measured 0.6513, within 1e-13 of the closed form. Both clauses hold, and a transport
+step made non-conservative at one face fails the test. VAL-002's cavity, a
 closed domain with no inlet where the domain-sum clause holds to rounding and the drift is
 per-cell only, is the second field the test may use (test 30 S4).
 
