@@ -22,6 +22,10 @@ import self_convergence  # noqa: E402 -- scripts/ is not a package; path set abo
 
 from src.config import SimConfig  # noqa: E402 -- follows sys.path.insert
 from src.mesh import Mesh  # noqa: E402 -- follows sys.path.insert
+from src.pressure import (  # noqa: E402 -- follows sys.path.insert
+    PRESSURE_SOLVER_VERSION,
+    STAGGERED_METHODS,
+)
 from src.stopping import IterationState  # noqa: E402 -- follows sys.path.insert
 from validation.cases import load_case  # noqa: E402 -- follows sys.path.insert
 from validation.metrics import (  # noqa: E402 -- follows sys.path.insert
@@ -250,6 +254,50 @@ def test_solve_tight_keeps_only_a_whole_continuation_of_the_saved_field(
         tags = ("1e-06", "1e-07", "1e-08", "1e-09")
         assert [int(data[f"outer_{t}"]) for t in tags] == [2, 3, 4, 5]
         assert np.array_equal(data["u_1e-09"], np.full((8, 8), 4.0))
+
+
+@pytest.mark.unit
+def test_solve_tight_and_solve_and_save_skip_a_field_another_solver_saved(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With a staggered-jacobi field saved for the grid, both solve and file under staggered-cg.
+
+    Test 37 T-B1 (b): no test put a Jacobi-era file in FIELD_DIR, so
+    solve_tight spelling the old label could return it unsolved. The name is
+    the current PRESSURE_SOLVER_VERSION's label, which is what keys these
+    files. Defect caught: either function reading or writing another
+    version's file name.
+    """
+    monkeypatch.setattr(self_convergence, "FIELD_DIR", tmp_path)
+    monkeypatch.setattr(self_convergence, "StaggeredSolver", _ScriptedSolver)
+    monkeypatch.setattr(self_convergence, "TIGHT_MAX_ITER", 99)
+    label = STAGGERED_METHODS[PRESSURE_SOLVER_VERSION]
+    decoy = np.full((8, 8), -7.0)
+    for version, old in STAGGERED_METHODS.items():
+        if version != PRESSURE_SOLVER_VERSION:
+            np.savez(tmp_path / f"{old}_8.npz", u=decoy, v=decoy, p=decoy)
+            tags = ("1e-06", "1e-07", "1e-08", "1e-09")
+            np.savez(
+                tmp_path / f"{old}_8_tol1e-9.npz",
+                **{f"{c}_{t}": decoy for c in "uv" for t in tags},
+            )
+    np.savez(tmp_path / f"{label}_8.npz", u=np.ones((8, 8)), v=np.ones((8, 8)))
+    tight = self_convergence.solve_tight(8)
+    assert tight == tmp_path / f"{label}_8_tol1e-9.npz"
+    with np.load(tight) as data:
+        assert np.array_equal(data["u_1e-09"], np.full((8, 8), 4.0))
+    assert np.array_equal(self_convergence.tight_field(8)[0], np.full((8, 8), 4.0))
+
+    class BuiltError(Exception):
+        pass
+
+    def spy(mesh: Mesh, config: SimConfig, boundary: object) -> None:
+        raise BuiltError
+
+    (tmp_path / f"{label}_8.npz").unlink()
+    monkeypatch.setattr(self_convergence, "StaggeredSolver", spy)
+    with pytest.raises(BuiltError):
+        self_convergence.solve_and_save(label, 8)
 
 
 @pytest.mark.unit
