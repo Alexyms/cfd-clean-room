@@ -1,7 +1,8 @@
 # ADR-013: Pressure Correction Solver: Jacobi-Preconditioned Conjugate Gradients
 
 ## Status
-Proposed 2026-10-06, with ECR-003 (`docs/ECR/ECR-003-pressure-solver.md`), from the measurements in
+Accepted 2026-10-06 by Alex, each of the six decisions below as ranked first; ECR-003 step 1 builds it
+(prompt 37), and step 3 adds planned against built. Proposed 2026-10-06, with ECR-003 (`docs/ECR/ECR-003-pressure-solver.md`), from the measurements in
 `docs/reports/pressure_solver_ecr003.md` [1]. Premise review 36 and `/cfd-test 36` found no Critical
 and four distinct Bugs between them; the fix pass of prompt 36b revised this design on their
 findings, with the runs it cites added to the report as its section 12, and `/cfd-test 36b`'s

@@ -4,7 +4,10 @@
 Accepted. Written 2026-09-30 at ECR-001 step 9, after steps 1 to 8 were merged, so it records
 what was built rather than what was planned; revised 2026-10-01 for the fourth condition of the
 stopping rule. Supersedes ADR-008. ECR-001 holds the decision to rebuild and its acceptance
-criteria. Bracketed numbers point at the sources listed at the end.
+criteria. Decision 4, the weighted Jacobi sweep, and REQ-S08's clarification of 2026-09-22 are
+superseded by ADR-013 (ECR-003, accepted 2026-10-06): the pressure correction is solved by
+Jacobi-preconditioned conjugate gradients and REQ-S08 is amended. The step 5 report's evidence
+for the weight stands as history. Bracketed numbers point at the sources listed at the end.
 
 ## Context
 The collocated SIMPLE solver (`src/solver_ns.py`, Rhie-Chow face fluxes, hybrid advection,
@@ -222,7 +225,10 @@ remain, and `IterationState` is defined in `stopping.py`.
 **For Phase 6.** The CUDA port targets this solver, and REQ-N03's NumPy reference is now
 `solver_staggered.py`. Weighted Jacobi keeps one thread per cell. A GPU shortens each sweep, not
 their number, which quadruples per halving of h [3], on a production grid of 200x75 [1, section
-7]; a faster algorithm would change REQ-S08, which this ADR does not do.
+7]; a faster algorithm would change REQ-S08, which this ADR does not do. ECR-003 did, on
+2026-10-06: ADR-013 replaces the sweep by conjugate gradients, one five-point product and a
+diagonal scaling per cell plus three reductions per iteration, and the CUDA kernel of Phase 6
+becomes a CG kernel.
 
 ## Alternatives Considered
 Within the build, decisions 4 and 5 and the references paragraph name theirs. At the level of

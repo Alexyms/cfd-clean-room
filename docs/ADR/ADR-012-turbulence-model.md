@@ -150,7 +150,11 @@ grid) by measuring both on the product mesh. REQ-S08 is amended either way. The 
 needs it too.
 (2) The same inside ECR-002.
 (3) Keep plain weighted Jacobi: at least hours per steady product solve, a lower bound.
-*Recommendation.* (1).
+*Recommendation.* (1). *Answered 2026-10-06:* ECR-003, accepted, chose Jacobi-preconditioned
+conjugate gradients (its option B), measured against geometric multigrid, pyamg's algebraic
+multigrid and SuperLU (ADR-013). This section's cost table is retaken in
+`docs/reports/pressure_solver_ecr003.md`, section 9, and the Annex 20 room at G's 216x72 in its
+section 12.1.
 
 **6. The validation thresholds: the Annex 20 room and the backward-facing step (section G).**
 *Picture.* Two published rooms or channels with measured air speeds are the model's tests against
