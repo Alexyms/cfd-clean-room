@@ -81,6 +81,15 @@ from src.staggered import p_shape, u_shape, v_shape
 # one solver is never served as the other's.
 PRESSURE_SOLVER_VERSION = 2
 
+# The method label of the staggered solver under each pressure solve. The
+# harness records it in every row and the scripts that save fields put it in
+# their file names, so it is the version in another form. It is looked up by
+# version here and imported by those scripts, so raising the version without
+# adding a label fails at import instead of filing the new solve's results
+# under the old label.
+STAGGERED_METHODS: dict[int, str] = {1: "staggered-jacobi", 2: "staggered-cg"}
+STAGGERED_METHOD = STAGGERED_METHODS[PRESSURE_SOLVER_VERSION]
+
 # The rounding floor of the stop, as a fraction of the flux scale F (rho times
 # the inflow, or on a closed domain rho times the largest prescribed boundary
 # velocity times the longer side, the stopping rule's definition). The residual

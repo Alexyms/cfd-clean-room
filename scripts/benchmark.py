@@ -62,7 +62,11 @@ from src.config import (  # noqa: E402 -- follows sys.path.insert
 )
 from src.mesh import FLUID, Mesh  # noqa: E402 -- follows sys.path.insert
 from src.momentum import MomentumPredictor  # noqa: E402 -- follows sys.path.insert
-from src.pressure import PressureCorrector  # noqa: E402 -- follows sys.path.insert
+from src.pressure import (  # noqa: E402 -- follows sys.path.insert
+    STAGGERED_METHOD,
+    STAGGERED_METHODS,
+    PressureCorrector,
+)
 from src.solver_staggered import (  # noqa: E402 -- follows sys.path.insert
     StaggeredSolver,
 )
@@ -83,7 +87,7 @@ from validation.metrics import (  # noqa: E402 -- follows sys.path.insert
 SCHEMA_VERSION = 1
 RESULTS_PATH = REPO_ROOT / "benchmarks" / "results.jsonl"
 # The method label selects the solver, so a row cannot claim one it did not run.
-STAGGERED_METHOD = "staggered-cg"
+# It is src/pressure.py's, looked up there by PRESSURE_SOLVER_VERSION.
 DEFAULT_METHOD = STAGGERED_METHOD
 METHODS = (STAGGERED_METHOD,)
 # Retired labels stay known so their stored rows still summarize; run_case
@@ -92,7 +96,7 @@ METHODS = (STAGGERED_METHOD,)
 # Jacobi sweep on 2026-10-06 (ECR-003 step 1), its loop in the history of
 # src/pressure.py and its evidence in docs/reports/pressure_correction_step5.md.
 COLLOCATED_METHOD = "collocated-jacobi"
-STAGGERED_JACOBI_METHOD = "staggered-jacobi"
+STAGGERED_JACOBI_METHOD = STAGGERED_METHODS[1]
 RETIRED_METHODS: dict[str, str] = {
     COLLOCATED_METHOD: (
         "was retired on 2026-10-02 and takes no new row; its stored rows still "
