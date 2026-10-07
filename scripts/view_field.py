@@ -38,6 +38,7 @@ from src.boundary_staggered import (  # noqa: E402 -- follows sys.path.insert
     StaggeredBoundary,
 )
 from src.mesh import Mesh  # noqa: E402 -- follows sys.path.insert
+from src.pressure import STAGGERED_METHOD  # noqa: E402 -- follows sys.path.insert
 from src.solver_staggered import (  # noqa: E402 -- follows sys.path.insert
     StaggeredSolver,
 )
@@ -59,7 +60,7 @@ from validation.metrics import (  # noqa: E402 -- follows sys.path.insert
 )
 
 RESULTS_DIR = REPO_ROOT / "results"
-STAGGERED_METHOD = "staggered-cg"
+# STAGGERED_METHOD is src/pressure.py's, looked up there by PRESSURE_SOLVER_VERSION.
 DEFAULT_METHOD = STAGGERED_METHOD
 METHODS = (STAGGERED_METHOD,)
 # Files saved before the method was recorded all came from this solver, retired

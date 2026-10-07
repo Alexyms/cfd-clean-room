@@ -33,6 +33,8 @@ from src.momentum import MomentumPrediction, MomentumPredictor
 from src.pressure import (
     PRESSURE_SOLVER_VERSION,
     RESIDUAL_FLOOR,
+    STAGGERED_METHOD,
+    STAGGERED_METHODS,
     ConjugateGradientResult,
     PressureCoefficients,
     PressureCorrection,
@@ -670,6 +672,17 @@ class TestCorrection:
         names = [f.name for f in PressureCorrection.__dataclass_fields__.values()]
         assert names == ["u", "v", "p", "p_prime", "iterations", "reached_cap"]
         assert PRESSURE_SOLVER_VERSION == 2
+
+    def test_each_solver_version_has_its_own_label(self) -> None:
+        """The label the scripts file results under is the current version's, and unique.
+
+        Review 37 S4. Defect caught: two versions sharing a label, so a saved
+        field of one could be read as the other's, or the current label not
+        the current version's.
+        """
+        assert STAGGERED_METHODS[PRESSURE_SOLVER_VERSION] == STAGGERED_METHOD
+        assert STAGGERED_METHODS == {1: "staggered-jacobi", 2: "staggered-cg"}
+        assert len(set(STAGGERED_METHODS.values())) == len(STAGGERED_METHODS)
 
 
 # ---------------------------------------------------------------------------

@@ -55,6 +55,7 @@ from src.boundary_staggered import (  # noqa: E402 -- follows sys.path.insert
 )
 from src.config import SimConfig  # noqa: E402 -- follows sys.path.insert
 from src.mesh import FLUID, Mesh  # noqa: E402 -- follows sys.path.insert
+from src.pressure import STAGGERED_METHOD  # noqa: E402 -- follows sys.path.insert
 from src.solver_staggered import (  # noqa: E402 -- follows sys.path.insert
     StaggeredSolver,
 )
@@ -79,10 +80,11 @@ from validation.metrics import (  # noqa: E402 -- follows sys.path.insert
 )
 
 GRIDS = (20, 40, 80)
-# The harness's label for the solver of record: staggered-cg since ECR-003 step 1
-# (2026-10-06). It is in every saved file's name, so a field solved by the
-# weighted Jacobi sweep (staggered-jacobi) is never reused as this solver's.
-STAGGERED_METHOD = "staggered-cg"
+# STAGGERED_METHOD, the harness's label for the solver of record, is
+# src/pressure.py's, looked up there by PRESSURE_SOLVER_VERSION: staggered-cg
+# since ECR-003 step 1 (2026-10-06). It is in every saved file's name, so a field
+# solved by the weighted Jacobi sweep (staggered-jacobi) is never reused as this
+# solver's, and a later version, which brings its own label, reuses neither.
 METHODS = (STAGGERED_METHOD,)
 FIELD_DIR = REPO_ROOT / "results" / "self_convergence"
 MAP_DIR = REPO_ROOT / "docs" / "reports"

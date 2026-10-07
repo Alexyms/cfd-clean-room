@@ -11,6 +11,7 @@ where the solver went.
 
 from __future__ import annotations
 
+import ast
 import json
 import sys
 from pathlib import Path
@@ -20,6 +21,7 @@ import pytest
 from src.boundary_staggered import StaggeredBoundary
 from src.config import SimConfig
 from src.mesh import FLUID, Mesh
+from src.pressure import PRESSURE_SOLVER_VERSION, STAGGERED_METHODS
 from src.solver_staggered import StaggeredSolver
 from src.stopping import IterationState
 from validation.cases import load_case
@@ -28,6 +30,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 import benchmark  # noqa: E402 -- scripts/ is not a package; path set above
+import self_convergence  # noqa: E402 -- scripts/ is not a package; path set above
 import view_field  # noqa: E402 -- scripts/ is not a package; path set above
 
 TINY = "tiny_cavity"
@@ -188,3 +191,39 @@ def test_viewer_rejects_an_unknown_method(
     with pytest.raises(ValueError, match="unknown method"):
         view_field.solve_and_save(TINY, tmp_path, "staggered")
     assert built == []
+
+
+@pytest.mark.unit
+def test_every_script_files_its_results_under_the_current_solvers_one_label() -> None:
+    """The harness, the viewer and the saved-field script import src/pressure.py's label.
+
+    Review 37 S4: the label was spelled out in each script, so raising
+    PRESSURE_SOLVER_VERSION could leave one of them filing a new solve's
+    results under the old label. Defect caught: a script binding its own
+    STAGGERED_METHOD, whatever its value, instead of importing the one
+    pressure.py looks up by version.
+    """
+    label = STAGGERED_METHODS[PRESSURE_SOLVER_VERSION]
+    for module in (benchmark, self_convergence, view_field):
+        assert label == module.STAGGERED_METHOD, module.__name__
+        assert (label,) == module.METHODS
+        tree = ast.parse(Path(module.__file__).read_text(encoding="utf-8"))
+        bound = [
+            target.id
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Assign | ast.AnnAssign)
+            for target in (
+                node.targets if isinstance(node, ast.Assign) else [node.target]
+            )
+            if isinstance(target, ast.Name)
+        ]
+        imported = [
+            alias.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.module == "src.pressure"
+            for alias in node.names
+        ]
+        assert "STAGGERED_METHOD" not in bound, module.__name__
+        assert "STAGGERED_METHOD" in imported, module.__name__
+    assert benchmark.DEFAULT_METHOD == view_field.DEFAULT_METHOD == label
+    assert STAGGERED_METHODS[1] == benchmark.STAGGERED_JACOBI_METHOD
