@@ -1031,8 +1031,11 @@ ADR-013 now rest on those results, so the fix pass of prompt 36b ran each again 
 `results/builder36b/probe36b.py` (appendix Q), launched by `run36b.sh` (appendix R) and read by
 `summary36b.py` (appendix S). It imports the builder-36 modules of appendices A, B, D and G
 read-only, runs in the probe environment of section 2.1 with BLAS on one thread, and writes only to
-`results/builder36b/`. The timed runs (12.1, 12.6) ran one at a time with nothing beside them; the
-outer-loop runs ran in parallel afterwards and are untimed. Where the premise review or the test
+`results/builder36b/`. The outer-loop runs ran in parallel and are untimed. The timed runs (12.1, 12.6)
+ran after them, one after another, but beside one untimed run still solving (`probe36b.py committed
+200 75 3000`, 15:03:52 to 15:07:09, against the timed set's 15:05:35 to 15:07:31; test 36b, T7, read
+from the probe's records). No ranking rests on their absolute values; the premise review's and the
+test's timings are given beside them. Where the premise review or the test
 measured the same thing, its figure is given beside this one.
 
 **The harness is the report's.** Four reruns reproduce saved fields of section 8 bitwise (u, v and
@@ -1062,8 +1065,10 @@ of the cells per side, in place of the draft's "four times" (ECR) and "eight tim
 (ADR). The premise review measured the same iteration counts and 135.5 to 1,016 ms, 7.5 times.
 
 **The Annex 20 room at 216x72**, the grid ADR-012 G plans for VAL-016: 872 iterations to 1e-8, 1.22
-times its 180x60 count and level with the product's 861, on 1.43 times the product's unknowns;
-0.18 s per correction against the product's 0.15 s. The premise review measured 872 iterations and
+times its 180x60 count and level with the product's 861, on 1.04 times the product's cells (the loop forms its product on
+the full grid); 0.18 s per correction against the product's 0.15 s in this timing, which ran beside
+another run, against 1.11 times the product's in the premise review and 0.91 in test 36b, alone:
+about the same cost. The premise review measured 872 iterations and
 151 ms. Section 9's 180x60 count at outer 100, 713, is reproduced.
 
 **The residual CG stops on.** The probe's CG stops on the residual it updates by recursion. At every

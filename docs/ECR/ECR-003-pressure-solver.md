@@ -190,22 +190,23 @@ None. The stop's definition moves into REQ-S08.
 
 Found by searching the tree at origin/main (023b8f6) for `pressure_tol`, `max_pressure_iter`,
 `JACOBI_WEIGHT`, `sweep`, `sweeps`, `pressure_sweeps`, `staggered-jacobi`, `SOLVER_PARAMETERS`,
-`RULE_VERSION` and every saved-solve reuse (`.exists()`) in `scripts/`. Every file below changes in
-step 1, so no commit leaves a consumer reading the old solver's names or results.
+`RULE_VERSION` and every saved-solve reuse (`.exists()`) in `scripts/`. Every file below is checked in
+step 1, and every one given an edit changes there, so no commit leaves a consumer reading the old
+solver's names or results.
 
 ### 7.1 Source code and scripts
 
 | Artifact | Impact |
 |----------|--------|
 | `src/pressure.py` | `correct` solves by Jacobi-preconditioned CG with the stop of section 4; `JACOBI_WEIGHT` and the weighted `sweep` leave (ADR-013 decision 4); `PRESSURE_SOLVER_VERSION = 2` and `RESIDUAL_FLOOR` added; the constructor reads `pressure_rtol` and checks a closed domain is one component; `PressureCorrection.sweeps` renamed `iterations`, and `reached_cap` added. |
-| `src/config.py` | `pressure_rtol` in (0, 1), validated; `pressure_tol` refused with a message naming `pressure_rtol`, and dropped from `_SOLVER_KEYS`; `max_pressure_iter` stays a required positive integer, now the CG cap (it has no default today and gets none). |
+| `src/config.py` | `pressure_rtol` in [1e-10, 1), validated (below about 1e-12 the true residual of the product's first correction cannot be reached, so every such correction would run to the cap; test 36b); `pressure_tol` refused with a message naming `pressure_rtol`, and dropped from `_SOLVER_KEYS`; `max_pressure_iter` stays a required positive integer, now the CG cap (it has no default today and gets none). |
 | `src/solver_staggered.py` | `last_pressure_sweeps` renamed `last_pressure_iterations`; `pressure_cap_hits` counted per solve, reset with the timers; under velocity_step an outer iteration whose correction reached the cap does not stop the solve; a warning at the first capped correction. |
 | `src/stopping.py` | `IterationState.pressure_sweeps` renamed `pressure_iterations`. |
 | `configs/*.yaml` (three), `validation/transport_cases.py` | `pressure_rtol: 1.0e-8` in place of `pressure_tol`; `max_pressure_iter: 5000` in place of the Jacobi caps (200, 500, 2,000), which mean nothing for CG. |
 | `scripts/benchmark.py` | `SOLVER_PARAMETERS` lists `pressure_rtol` in place of `pressure_tol`: `solver_parameters` reads each name with `getattr`, so the old name raises at the first row. `STAGGERED_METHOD` becomes a new label, `staggered-cg`; `staggered-jacobi` is retired as `collocated-jacobi` was, kept known so its 20 stored rows still summarize (rows group by method, so old and new rows do not mix) and refused by `run_case`. `CELL_UPDATE_DEFINITIONS` gains the new label's work definition: one stencil evaluation per cell with an equation per CG iteration, plus vector operations. The work counter reads `pressure_iterations`. Each row records `pressure_cap_hits`. |
 | `scripts/val001_order.py` | `reuse_key` builds on `solver_parameters`, so the key carries `pressure_rtol` after the change and a Jacobi-era saved Poiseuille solve no longer matches: it is re-solved, not reused. No edit of its own. |
 | `scripts/self_convergence.py` | `METHODS` follows the new label, and so do the saved file names built from it (`{method}_{n}.npz`) and the six other lines that spell `staggered-jacobi` out in a file name, a docstring or a metric key; `solve_and_save` and `solve_tight` reuse any file that exists, so the new names are what keeps them from serving Jacobi-era cavity fields. `tight_field` falls back to `results/tester21b/staggered_{n}_tight.npz`, Jacobi-era fields with no solver identity; the fallback is removed, and the 60x60 and 100x100 solves it served are retaken under the new label when the Marchi comparison is next run. |
-| `scripts/stopping_probe.py` | Reads no configuration pressure key (the draft of this table said it did). Its pressure dependencies: `instrument` appends `result.sweeps` (renamed), and three saved-solve reuses carry no solver identity. `solve_truth` returns any existing truth file; the tight truth is re-solved only when its stored tolerance differs; `verify_rule` reuses `{case}_rule.npz` when `rule_parameters` match, and those are `[scale, flux, *tols, RATE_WINDOW, RULE_VERSION]`. `rule_parameters` appends `PRESSURE_SOLVER_VERSION`, and the two truth files store it and are re-solved when it differs or is missing. |
+| `scripts/stopping_probe.py` | Reads no configuration pressure key (the draft of this table said it did). Its pressure dependencies: `instrument` appends `result.sweeps` (renamed), and four saved-solve reuses carry no solver identity (the fourth, `control`, found by test 36b). `solve_truth` returns any existing truth file; the tight truth is re-solved only when its stored tolerance differs; `verify_rule` reuses `{case}_rule.npz` when `rule_parameters` match, and those are `[scale, flux, *tols, RATE_WINDOW, RULE_VERSION]`. `control` reuses `{name}_control.npz` whenever it exists, and compares it bitwise with the truth's snapshot (two such files exist in the main tree today). `rule_parameters` appends `PRESSURE_SOLVER_VERSION`, and the two truth files and the control file store it and are re-solved when it differs or is missing. |
 | `scripts/view_field.py` | `STAGGERED_METHOD` follows the new label. Saved viewer files carry their method, and `render` reads it, so old files still render under `staggered-jacobi`. |
 
 ### 7.2 Tests
@@ -219,7 +220,7 @@ step 1, so no commit leaves a consumer reading the old solver's names or results
 | `tests/test_solver_staggered.py`, `tests/test_solver_selection.py`, `tests/test_stopping.py` | The renames; `test_solver_selection` also names the method label twice; `test_solver_staggered` adds the cap count and the velocity_step refusal on a capped correction. |
 | `tests/test_benchmark.py` | The four `run_case` calls with `"staggered-jacobi"` take the new label; the summary test of stored rows keeps the old label, as it keeps `collocated-jacobi`; `run_case` refuses the retired label. |
 | `tests/test_self_convergence.py`, `tests/test_view_field.py` | The label in the saved file names they build or read; `test_self_convergence` loses the `TESTER_DIR` fallback case. |
-| `tests/test_stopping_probe.py` | `rule_parameters` changes with `PRESSURE_SOLVER_VERSION`, as `test_rule_parameters_change_with_the_rule_version` shows for `RULE_VERSION`; the truth files are re-solved when their stored version differs. |
+| `tests/test_stopping_probe.py` | `rule_parameters` changes with `PRESSURE_SOLVER_VERSION`, as `test_rule_parameters_change_with_the_rule_version` shows for `RULE_VERSION`; the truth files and the control file are re-solved when their stored version differs. |
 | `tests/test_val001_order.py` | No edit: its key tests read `reuse_key`, which follows `SOLVER_PARAMETERS`. |
 | `tests/test_conservation.py`, `tests/test_constancy.py` | Read VAL-001's face velocities from a solve, which change beyond rounding; the transport criteria are re-checked, not re-set. |
 
@@ -228,7 +229,7 @@ step 1, so no commit leaves a consumer reading the old solver's names or results
 | Artifact | Impact |
 |----------|--------|
 | `docs/SYSTEM.md` | REQ-S08 amended and REQ-S04 clarified (section 5); the `pressure.py`, `solver_staggered.py` and `stopping.py` contracts (ADR-013 section D); cascade rows; generated regions regenerate. |
-| `docs/PROJECT_PLAN.md`, `docs/STATUS.md` | The request and its steps; ECR-002 step 5's dependency met on closure. |
+| `docs/PROJECT_PLAN.md`, `docs/STATUS.md` | The request and its steps; ECR-002 step 5's dependency met on closure; Phase 6's deliverable `csolver/pressure_solve.cu` (PROJECT_PLAN line 308, "CUDA kernel for Jacobi pressure correction") becomes a CG kernel. |
 | `docs/ADR/ADR-013-pressure-solver.md` | Create (this pass, Proposed). |
 | `docs/reports/pressure_solver_ecr003.md` | Create (this pass): the evidence. |
 | `benchmarks/results.jsonl` | Unchanged: its 42 rows, 20 of them `staggered-jacobi`, keep their labels and their `pressure_tol`; step 2's rows carry the new label and `pressure_rtol`. |
@@ -241,8 +242,9 @@ solver_staggered`: `PressureCorrection` keeps its shapes; its count field is ren
 added. `solver_staggered.py -> the harness, the viewer, scripts/stopping_probe.py,
 tests/test_conservation.py, tests/test_constancy.py`: `last_pressure_sweeps` renamed, the cap count
 added, the velocity_step stop refused on a capped correction; every face field changes beyond
-rounding. `stopping.py -> solver_staggered, scripts/benchmark.py, scripts/self_convergence.py,
-scripts/stopping_probe.py, scripts/val001_order.py`: `IterationState`'s field renamed.
+rounding. `stopping.py -> solver_staggered, scripts/benchmark.py`: `IterationState`'s field renamed
+(`scripts/self_convergence.py` and `scripts/stopping_probe.py` use the class as an annotation only,
+and `scripts/val001_order.py` does not name it).
 `scripts/benchmark.py -> scripts/val001_order.py`: the parameter list, and with it the reuse key.
 The method label `staggered-jacobi -> staggered-cg` runs through `benchmark.py`, `view_field.py`,
 `self_convergence.py` and their tests. Saved solves keyed without a solver identity
@@ -308,7 +310,7 @@ architecture, and the acceptance criteria are sufficient to close the change.
 | Role | Name | Approval | Date |
 |------|------|----------|------|
 | Author | Alex Moroz-Smietana | Pending | |
-| Reviewer | Claude | Premise review 36 and `/cfd-test 36` done; fix pass 36b; `/cfd-test 36b` pending | |
+| Reviewer | Claude | Premise review 36, `/cfd-test 36` and `/cfd-test 36b` done; fix pass 36b and the orchestrator's text pass applied | 2026-10-06 |
 
 ---
 
@@ -318,3 +320,4 @@ architecture, and the acceptance criteria are sufficient to close the change.
 |------|--------|--------|
 | 2026-10-06 | Proposed, with ADR-013 and the evidence report `docs/reports/pressure_solver_ecr003.md`. ADR-013's decisions open. Premise review and `/cfd-test 36` to follow. | Alex Moroz-Smietana |
 | 2026-10-06 | Fix pass 36b on premise review 36 and test 36: section 7 rebuilt from a search of the tree (the eight test fixtures, the harness parameter list, the method label and its readers, the saved solves without a solver identity, the probe criterion 3 runs through); REQ-N03 kept as written, with the narrower risk and Phase 6's test stated; the cap reported and refused as a velocity_step stop; the default's reasons restated to the evidence, with the guard and tight-start options; the rounding floor, the true-residual check and the one-component check in the design; the growth per doubling measured. | Alex Moroz-Smietana |
+| 2026-10-06 | `/cfd-test 36b`'s text findings applied by the orchestrator (the fourth saved-solve reuse in `stopping_probe.py`, `pressure_rtol`'s lower bound, the Annex 20 cost, wording). ADR-013's six decisions taken by Alex, each as ranked first. | Alex Moroz-Smietana |
