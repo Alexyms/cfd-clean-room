@@ -2,7 +2,7 @@
 
 **Project:** CFD Clean Room Simulation
 **Change Request ID:** ECR-003
-**Status:** Closed 2026-10-07 at step 3, with steps 2 and 3 in one pull request (section 8, note). Step 1 merged as PR 62 on 2026-10-07; step 2's rows accepted by Alex on 2026-10-07 as ECR-002 criterion 1's laminar baseline after the step stopped on its outer counts. See section 9 for each criterion's evidence and the Document History for the sequence. Accepted 2026-10-06 by Alex, with ADR-013's six decisions each as ranked first; step 1 of section 8 opened the same day (branch `feature/ecr003-pressure-cg`), and its first commit enters section 5's text in `docs/SYSTEM.md`. Proposed 2026-10-06, with ADR-013, from the measurements in `docs/reports/pressure_solver_ecr003.md`. Revised the same day by the fix pass of prompt 36b on premise review 36 and `/cfd-test 36`, with the runs it cites added to the report as section 12. ADR-012 decision 5 (Alex, 2026-10-04) asked for this request, to land before ECR-002 step 5.
+**Status:** Closed 2026-10-07 at step 3, with steps 2 and 3 in one pull request (section 8, note). Step 1 merged as PR 62 on 2026-10-07; step 2's rows accepted by Alex on 2026-10-07 as ECR-002 criterion 1's laminar baseline after the step stopped on its outer counts. Criterion 4 holds at the default thread setting once the cleanup pull request sets one BLAS thread in the code (Alex, 2026-10-07; section 9). See section 9 for each criterion's evidence and the Document History for the sequence. Accepted 2026-10-06 by Alex, with ADR-013's six decisions each as ranked first; step 1 of section 8 opened the same day (branch `feature/ecr003-pressure-cg`), and its first commit enters section 5's text in `docs/SYSTEM.md`. Proposed 2026-10-06, with ADR-013, from the measurements in `docs/reports/pressure_solver_ecr003.md`. Revised the same day by the fix pass of prompt 36b on premise review 36 and `/cfd-test 36`, with the runs it cites added to the report as section 12. ADR-012 decision 5 (Alex, 2026-10-04) asked for this request, to land before ECR-002 step 5.
 **Author:** Alex Moroz-Smietana (drafted in the builder sessions of prompts 36 and 36b)
 **Approver(s):** Alex Moroz-Smietana, Claude (pair)
 **Date Raised:** 2026-10-06
@@ -320,7 +320,7 @@ ECR-002 step 5's dependency on this request is met.
    corrections take 1.03 to 1.10 s with the same iteration counts: CG's three reductions over the
    15,000-cell grid are split across threads, about a third of a millisecond each
    (`docs/reports/ecr003_step2_baseline.md`, section 11). Whether the criterion is held to the
-   default thread setting, and how the setting is fixed, is open for Alex. Meshes below about
+   default thread setting, and how the setting is fixed, was decided by Alex on 2026-10-07: the code sets one BLAS thread for the pressure solve (threadpoolctl, one named constant), built in the cleanup pull request with the dot-product timing extended to a million elements. Meshes below about
    10,000 cells, the step 2 cases among them, are not affected.
 5. **Records.** SYSTEM.md, PROJECT_PLAN.md, STATUS.md, ADR-013 (accepted, with planned against built)
    and this request updated and committed. Method: inspection.
@@ -332,7 +332,9 @@ ECR-002 step 5's dependency on this request is met.
    inspection.
 
    *Met.* PR 62 carries review 37 and tests 37, 37b and 37c. The pull request of steps 2 and 3
-   carries `/cfd-review 38` and `/cfd-test 38`.
+   carries review 38 and test 38: one Bug between them, the same one (B1, the cavity's cost
+   figure, which did not follow from the rows), corrected in the text by the orchestrator with no
+   test affected; review 38's five Suggestions applied in the same commit.
 
 ## 10. Risks and Mitigations
 
@@ -357,7 +359,7 @@ architecture, and the acceptance criteria are sufficient to close the change.
 | Author | Alex Moroz-Smietana | Approved, with ADR-013's six decisions each as ranked first | 2026-10-06 |
 | Reviewer | Claude | Premise review 36, `/cfd-test 36` and `/cfd-test 36b` done; fix pass 36b and the orchestrator's text pass applied | 2026-10-06 |
 | Closure, author | Alex Moroz-Smietana | Approved: step 2's rows accepted as ECR-002 criterion 1's laminar baseline, and step 3 to proceed with the five notes of the continuation of prompt 38 | 2026-10-07 |
-| Closure, reviewer | Claude | Step 1: review 37, tests 37, 37b and 37c on PR 62. Steps 2 and 3: `/cfd-review 38` and `/cfd-test 38`, posted on their pull request | 2026-10-07 |
+| Closure, reviewer | Claude | Step 1: review 37, tests 37, 37b and 37c on PR 62. Steps 2 and 3: review 38 and test 38 (one Bug, text, corrected by the orchestrator), posted on their pull request | 2026-10-07 |
 
 ---
 
@@ -370,4 +372,4 @@ architecture, and the acceptance criteria are sufficient to close the change.
 | 2026-10-06 | `/cfd-test 36b`'s text findings applied by the orchestrator (the fourth saved-solve reuse in `stopping_probe.py`, `pressure_rtol`'s lower bound, the Annex 20 cost, wording). ADR-013's six decisions taken by Alex, each as ranked first. | Alex Moroz-Smietana |
 | 2026-10-06 | Accepted by Alex. Step 1 opened (prompt 37): REQ-S08's amended text and REQ-S04's clarification entered in `docs/SYSTEM.md` in the step's first commit, as ECR-002 step 0 did for that request; the solve, the keys, the consumers of section 7 and criteria 1, 3 and 4 follow in the same pull request. | Alex Moroz-Smietana |
 | 2026-10-07 | Step 1 merged as PR 62 (prompts 37, 37b and 37c), with review 37 and tests 37, 37b and 37c posted on it: the CG solve, the keys, the consumers of section 7, criteria 1, 3 and 4 (`docs/reports/ecr003_step1_cg.md`). VAL-012 split by Alex the same day, its lower clause moved to a planted field (section 7.2's "re-checked, not re-set" departed from; ADR-013, planned against built). Test 37b's two missing tests deferred to issue 63. | Alex Moroz-Smietana |
-| 2026-10-07 | Steps 2 and 3 in one pull request (prompt 38; section 8, note). Step 2: six `staggered-cg` rows at 311034e meet REQ-S02 and REQ-S03 and stop by `error_estimate_and_continuity` with no capped correction; the transport gate passes. The channel outer counts fell 61% and 50% from their Jacobi rows and the step stopped; the cause was the Jacobi correction leaving most of the imbalance in the faces (`docs/reports/ecr003_step2_baseline.md`, section 6), and Alex accepted the rows as ECR-002 criterion 1's baseline. Step 3: ADR-013 Accepted (built) with planned against built; SYSTEM.md, PROJECT_PLAN.md, STATUS.md and ECR-002 updated, with the continuation's five notes (the net-outflow oscillation was the Jacobi correction's; the Jacobi-era orders bounded, not retaken; the cavity's cost; machine-specific hashes; ECR-002 step 5 retakes step 0's sweep result under CG). Each criterion's evidence in section 9. A finding on the way: with OpenBLAS's default threads one correction on the 200x75 systems takes 1.03 to 1.10 s, against criterion 4's 0.5 s met with one thread; recorded under criterion 4 and left to Alex. Closed. | Alex Moroz-Smietana |
+| 2026-10-07 | Steps 2 and 3 in one pull request (prompt 38; section 8, note). Step 2: six `staggered-cg` rows at 311034e meet REQ-S02 and REQ-S03 and stop by `error_estimate_and_continuity` with no capped correction; the transport gate passes. The channel outer counts fell 61% and 50% from their Jacobi rows and the step stopped; the cause was the Jacobi correction leaving most of the imbalance in the faces (`docs/reports/ecr003_step2_baseline.md`, section 6), and Alex accepted the rows as ECR-002 criterion 1's baseline. Step 3: ADR-013 Accepted (built) with planned against built; SYSTEM.md, PROJECT_PLAN.md, STATUS.md and ECR-002 updated, with the continuation's five notes (the net-outflow oscillation was the Jacobi correction's; the Jacobi-era orders bounded, not retaken; the cavity's cost; machine-specific hashes; ECR-002 step 5 retakes step 0's sweep result under CG). Each criterion's evidence in section 9. A finding on the way: with OpenBLAS's default threads one correction on the 200x75 systems takes 1.03 to 1.10 s, against criterion 4's 0.5 s met with one thread; recorded under criterion 4; Alex decided the same day that the code sets one BLAS thread, built in the cleanup pull request. Closed. | Alex Moroz-Smietana |

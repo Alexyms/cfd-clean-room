@@ -337,17 +337,17 @@ products. Step 1 merged as PR 62 on 2026-10-07, after VAL-012's lower clause mov
 field the same day because the solver's faces now balance to rounding. Step 2 (prompt 38) retook the
 laminar baseline under `staggered-cg`: VAL-001 and VAL-002 pass with the Jacobi values to three
 figures, every case stops by the rule with no capped correction, and the transport gate passes.
-The channel cases stop in half the outer iterations or fewer, which stopped the step against a
+The channel cases stop in far fewer outer iterations, which stopped the step against a
 prediction that assumed each Jacobi correction delivered its tolerance; it delivered almost
 nothing late in a solve, so the channel's continuity conditions had waited on the outer
 iteration. Alex accepted the rows on 2026-10-07, and step 3 closed the request: ADR-013 as
 built, with a table of planned against built. The orders of convergence on record were measured
 under Jacobi and are not retaken; the field differences bound how far they could move (the
-gate rows in `docs/PROJECT_PLAN.md`). On the 80x80 cavity CG at the default costs more wall time
-than the Jacobi row did, a candidate for the efficiency pass in `docs/PROJECT_PLAN.md`, not a
-decision. Found on the way: on meshes above about 10,000 cells, the product's among them,
-OpenBLAS's default threads make each CG correction about seven times slower than the one-thread
-timing ECR-003's cost criterion was met with; how runs set the thread count is Alex's to decide
+gate rows in `docs/PROJECT_PLAN.md`). On the 80x80 cavity no cost difference between CG and Jacobi is resolved against the spread
+between identical runs (the report, section 5). Found on the way: on meshes above about 10,000 cells, the product's among them,
+OpenBLAS's default threads make each CG correction several times slower than the one-thread
+timing ECR-003's cost criterion was met with; Alex decided on 2026-10-07 that the code sets one
+thread, built in the cleanup pull request
 (`docs/reports/ecr003_step2_baseline.md`, section 11). Next: ECR-002 steps 2 to 5; step 5 retakes
 step 0's sweep result with CG.
 

@@ -141,7 +141,7 @@ case's Jacobi row under the same rule version:
 |---|---|---|---|---|---|
 | `val001_80x40` | 3,988 to 1,559 | -60.9% | 4.10683e-4 to 4.10770e-4 | 111.5 to 29.6 (3.8 times shorter) | 28.0 to 19.0 |
 | `val001_80x40_stretched` | 2,253 to 1,124 | -50.1% | 3.02376e-3 to 3.02366e-3 | 40.5 to 20.2 (2.0 times shorter) | 18.0 to 17.9 |
-| `val002_80x80` | 12,849 to 12,814 | -0.27% | u 1.05725e-3 to 1.05721e-3; v 7.35582e-4 to 7.35562e-4 | 394.5 to 434.1 and 465.9 (9% to 15% longer) | 30.7 to 33.9 and 36.4 |
+| `val002_80x80` | 12,849 to 12,814 | -0.27% | u 1.05725e-3 to 1.05721e-3; v 7.35582e-4 to 7.35562e-4 | 394.5 to 434.1 and 465.9 (10% and 18% longer; the spread between identical runs is 7% to 8%, section 5) | 30.7 to 33.9 and 36.4 |
 
 The work in cell updates follows the counts: 3.40e9 to 1.00e9 and 1.14e9 to 6.81e8 on the
 channels, and 1.59e10 to 2.18e10 on the cavity, where CG's 265 iterations per correction to 1e-8 or
@@ -166,7 +166,7 @@ file's arrays, read back, reproduce the hash stored in it.
 |---|---|
 | Outer counts within 1% of the Jacobi rows | Held on the cavity (-0.27%). Not on the channels: -60.9% and -50.1%, past the 5% stop (section 9) |
 | Accuracy unchanged to three figures | Held to three significant figures on every case. At the four the prediction quotes, the uniform channel reads 4.108e-4 against 4.107e-4 (a difference of 8.7e-8, 2e-4 of the value); the stretched channel and the cavity agree at four |
-| Wall time three to ten times shorter, the cavity most | Not held. The channels are 3.8 and 2.0 times shorter, from the fewer outer iterations: per outer iteration 1.5 and 1.0 times. The cavity takes 9% to 15% longer |
+| Wall time three to ten times shorter, the cavity most | Not held. The channels are 3.8 and 2.0 times shorter, from the fewer outer iterations: per outer iteration 1.5 and 1.0 times. The cavity is not resolved: the CG rows take 10% and 18% longer than the 394.5 s Jacobi row and 2% and 9% longer than the 426.5 s Jacobi row, whose arithmetic is identical (12,849 outer iterations, the same cell updates and accuracy); identical runs differ by 7% to 8% on this machine (the two Jacobi rows by 8%, the two CG repeats by 7%) |
 | Face hashes differ from the Jacobi rows' | Held on every case (section 7). The faces differ by at most 1.1e-7 m/s on the channels and 7.3e-8 m/s on the cavity |
 
 The prediction's premise was wrong: it assumed each Jacobi correction delivered its tolerance, a
@@ -271,8 +271,7 @@ What is Alex's to decide:
    section 10 treat as the outer loop's, is absent under CG, and condition (d) no longer binds on the
    channels. The VAL-001 and VAL-002 gate rows quote orders of convergence (1.992; 2.24, 2.11, 2.12,
    2.07) measured under Jacobi, which step 2 does not retake (`scripts/val001_order.py` and the 20x20
-   and 40x40 cavity rows would). On the 80x80 cavity CG at the default costs 9% to 15% more wall
-   time than the Jacobi row, so ADR-013's cost case rests on the product mesh, not on the validation
+   and 40x40 cavity rows would). On the 80x80 cavity CG at the default takes between about 2% and 18% more wall time than the two Jacobi rows of identical arithmetic, a difference inside the 7% to 8% spread between identical runs, so ADR-013's cost case rests on the product mesh, not on the validation
    cases.
 
 **Decision, 2026-10-07 (Alex).** The six rows are accepted as ECR-002 criterion 1's baseline; the
@@ -370,6 +369,6 @@ the same corrections take about 1.05 s, over the criterion. The baseline rows ar
 so are their hashes. With the correction at about 1.05 s of an outer iteration that ADR-013 A puts
 at 0.18 s with one thread, a steady product solve over its 3,000 to 13,000 outer iterations would
 take about six times the evidence report's 9 to 39 minutes unless the thread count is set. Whether criterion 4 is held to the default thread setting, and how the setting is fixed (the
-environment for each run, or the code), is Alex's to decide; nothing is changed here. Records:
+environment for each run, or the code), is Alex's to decide; nothing is changed here (note 2026-10-07: decided by Alex on 2026-10-07: the code sets one BLAS thread for the pressure solve (threadpoolctl, one named constant), built in the cleanup pull request with the dot-product timing extended to a million elements). Records:
 `results/builder38/logs/one_thread_order.log`, `vdot_bench.log` and `criterion4_threads.log`, with
 the probes beside them.
