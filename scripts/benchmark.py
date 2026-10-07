@@ -18,6 +18,13 @@ velocity-step row carries, including the collocated-jacobi rows taken before
 that solver was retired (tag collocated-final). An error_estimate row also
 records the rule's RULE_VERSION in its params.
 
+The method label names the pressure solve as well as the grid: staggered-cg
+since ECR-003 step 1 (2026-10-06), when conjugate gradients replaced the
+weighted Jacobi sweep. The 20 stored staggered-jacobi rows keep their label
+and summarize apart from the new ones, as the collocated rows do; run_case
+refuses both retired labels by name. Every row records the solver's
+pressure_cap_hits beside its stop.
+
 Run:
 
     python scripts/benchmark.py                       # seed cases, 3 repeats
@@ -49,6 +56,7 @@ from src.boundary_staggered import (  # noqa: E402 -- follows sys.path.insert
 )
 from src.config import (  # noqa: E402 -- follows sys.path.insert
     ERROR_ESTIMATE,
+    SOLVER_KEYS,
     VELOCITY_STEP,
     SimConfig,
 )
@@ -75,12 +83,27 @@ from validation.metrics import (  # noqa: E402 -- follows sys.path.insert
 SCHEMA_VERSION = 1
 RESULTS_PATH = REPO_ROOT / "benchmarks" / "results.jsonl"
 # The method label selects the solver, so a row cannot claim one it did not run.
-STAGGERED_METHOD = "staggered-jacobi"
+STAGGERED_METHOD = "staggered-cg"
 DEFAULT_METHOD = STAGGERED_METHOD
 METHODS = (STAGGERED_METHOD,)
-# The collocated solver was retired on 2026-10-02 (tag collocated-final). Its
-# label stays known so its stored rows still summarize; run_case refuses it.
+# Retired labels stay known so their stored rows still summarize; run_case
+# refuses each by name with where its solver went. The collocated solver was
+# retired on 2026-10-02 (tag collocated-final); the staggered solver's weighted
+# Jacobi sweep on 2026-10-06 (ECR-003 step 1), its loop in the history of
+# src/pressure.py and its evidence in docs/reports/pressure_correction_step5.md.
 COLLOCATED_METHOD = "collocated-jacobi"
+STAGGERED_JACOBI_METHOD = "staggered-jacobi"
+RETIRED_METHODS: dict[str, str] = {
+    COLLOCATED_METHOD: (
+        "was retired on 2026-10-02 and takes no new row; its stored rows still "
+        "summarize, and the solver is at tag collocated-final"
+    ),
+    STAGGERED_JACOBI_METHOD: (
+        "was retired on 2026-10-06 with the weighted Jacobi pressure sweep "
+        "(ECR-003 step 1) and takes no new row; its stored rows still summarize, "
+        f"and the solver of record runs as {STAGGERED_METHOD}"
+    ),
+}
 
 # Grid presets come from validation.cases so the harness, the tests and the
 # field viewer name the same solve the same way. Every other setting comes
@@ -93,25 +116,13 @@ DEFAULT_CASES = ["val001_80x40", "val002_20x20", "val002_40x40"]
 STOP_LABELS = {"velocity_step_below_tol": "residual_below_tol"}
 
 
-SOLVER_PARAMETERS = (
-    "dt",
-    "t_end",
-    "output_interval",
-    "convergence_tol",
-    "max_simple_iter",
-    "alpha_velocity",
-    "alpha_pressure",
-    "max_pressure_iter",
-    "pressure_rtol",
-    "stopping_rule",
-    "iteration_error_tol",
-    "mass_imbalance_tol",
-)
-
-
 def solver_parameters(config: SimConfig) -> dict:
-    """Every solver parameter as loaded, and under error_estimate the rule's version."""
-    params = {name: getattr(config, name) for name in SOLVER_PARAMETERS}
+    """Every solver parameter as loaded, and under error_estimate the rule's version.
+
+    The names are SOLVER_KEYS, the one list of what the solver block accepts,
+    so a key added to the configuration is in every row (GitHub issue 38).
+    """
+    params = {name: getattr(config, name) for name in SOLVER_KEYS}
     if config.stopping_rule == ERROR_ESTIMATE:
         params["rule_version"] = RULE_VERSION
     return params
@@ -140,16 +151,23 @@ def git_state() -> tuple[str, bool]:
 
 
 # Recorded with every row, so each row says what its cell_updates number counts.
-# The collocated entry describes the stored rows; no new row can carry it.
+# The two retired entries describe the stored rows; no new row can carry them.
 CELL_UPDATE_DEFINITIONS: dict[str, str] = {
     COLLOCATED_METHOD: (
         "stencil evaluations at FLUID cells: two momentum sweeps per outer iteration "
         "plus one per Jacobi pressure sweep; SOLID cells are not counted"
     ),
-    STAGGERED_METHOD: (
+    STAGGERED_JACOBI_METHOD: (
         "stencil evaluations at unknowns: the unknown u and v faces (a_p > 0) once "
         "per outer iteration for momentum, plus the cells with a pressure equation "
         "(a_P > 0) once per weighted Jacobi pressure sweep"
+    ),
+    STAGGERED_METHOD: (
+        "stencil evaluations at unknowns: the unknown u and v faces (a_p > 0) once "
+        "per outer iteration for momentum, plus the cells with a pressure equation "
+        "(a_P > 0) once per conjugate gradient iteration, its one five-point "
+        "product; the diagonal scaling, the vector updates and the three "
+        "reductions of an iteration are not counted"
     ),
 }
 
@@ -250,31 +268,36 @@ class WorkCounter:
 
     Parameters
     ----------
-    cells_per_sweep : int
-        Unknowns updated by one pressure sweep: the second value of
-        staggered_updates. The stored collocated-jacobi rows counted
+    cells_per_iteration : int
+        Unknowns one inner pressure iteration touches, a stencil evaluation
+        each: the second value of staggered_updates. One conjugate gradient
+        iteration or one Jacobi sweep, both one five-point product per cell
+        with an equation. The stored collocated-jacobi rows counted
         fluid_cells_per_sweep here.
     momentum_updates : int, optional
         Unknowns the momentum step updates per outer iteration. Defaults to
-        ``2 * cells_per_sweep``, the convention the stored collocated-jacobi
-        rows were counted with: u and v sweeps over the same cells.
+        ``2 * cells_per_iteration``, the convention the stored
+        collocated-jacobi rows were counted with: u and v sweeps over the
+        same cells.
     """
 
     def __init__(
-        self, cells_per_sweep: int, momentum_updates: int | None = None
+        self, cells_per_iteration: int, momentum_updates: int | None = None
     ) -> None:
-        self.cells_per_sweep = cells_per_sweep
+        self.cells_per_iteration = cells_per_iteration
         self.momentum_updates = (
-            2 * cells_per_sweep if momentum_updates is None else momentum_updates
+            2 * cells_per_iteration if momentum_updates is None else momentum_updates
         )
+        # Stored rows written before ECR-003 step 1 carry this count as
+        # inner_sweeps; nothing reads it back.
         self.work: dict[str, int] = {
             "outer_iterations": 0,
-            "inner_sweeps": 0,
+            "inner_iterations": 0,
             "cell_updates": 0,
         }
 
     def record(self, state: IterationState) -> None:
-        """Add one SIMPLE iteration: its momentum updates plus its pressure sweeps.
+        """Add one SIMPLE iteration: its momentum updates plus its pressure iterations.
 
         Parameters
         ----------
@@ -282,9 +305,9 @@ class WorkCounter:
             Snapshot handed to the solve_steady callback.
         """
         self.work["outer_iterations"] = state.iteration + 1
-        self.work["inner_sweeps"] += state.pressure_iterations
+        self.work["inner_iterations"] += state.pressure_iterations
         self.work["cell_updates"] += (
-            self.momentum_updates + self.cells_per_sweep * state.pressure_iterations
+            self.momentum_updates + self.cells_per_iteration * state.pressure_iterations
         )
 
 
@@ -374,15 +397,12 @@ def run_case(case_id: str, method: str, sample_every: int, concurrent: int) -> d
     Raises
     ------
     ValueError
-        If the method is not one of METHODS. The retired collocated-jacobi
-        is refused by name, with the tag that holds its solver.
+        If the method is not one of METHODS. The two retired labels,
+        collocated-jacobi and staggered-jacobi, are refused by name with
+        where each solver went.
     """
-    if method == COLLOCATED_METHOD:
-        raise ValueError(
-            f"method {method!r} was retired on 2026-10-02 and takes no new row; "
-            "its stored rows still summarize, and the solver is at tag "
-            "collocated-final"
-        )
+    if method in RETIRED_METHODS:
+        raise ValueError(f"method {method!r} {RETIRED_METHODS[method]}")
     if method != STAGGERED_METHOD:
         raise ValueError(f"unknown method {method!r}; known: {list(METHODS)}")
     kind, nx, ny = CASES[case_id]
@@ -434,6 +454,8 @@ def run_case(case_id: str, method: str, sample_every: int, concurrent: int) -> d
 
     # The solver knows which rule it ran and whether the cap stopped it; a
     # velocity-step stop is stored under the label every stored row carries.
+    # The count of pressure corrections that reached max_pressure_iter is
+    # stored beside the stop, so a row cannot hide a truncated solve.
     converged = solver.converged
     stop_reason = STOP_LABELS.get(solver.stop_reason, solver.stop_reason)
     commit, dirty = git_state()
@@ -455,7 +477,11 @@ def run_case(case_id: str, method: str, sample_every: int, concurrent: int) -> d
             "numpy": np.__version__,
             "concurrent_processes": concurrent,
         },
-        "outcome": {"converged": bool(converged), "stop_reason": stop_reason},
+        "outcome": {
+            "converged": bool(converged),
+            "stop_reason": stop_reason,
+            "pressure_cap_hits": int(solver.pressure_cap_hits),
+        },
         "accuracy": accuracy,
         "work": {**work, "cell_update_definition": CELL_UPDATE_DEFINITIONS[method]},
         "time": {"wall_seconds": wall, "stages": dict(solver.stage_seconds)},

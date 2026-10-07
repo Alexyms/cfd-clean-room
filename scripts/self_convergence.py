@@ -79,7 +79,11 @@ from validation.metrics import (  # noqa: E402 -- follows sys.path.insert
 )
 
 GRIDS = (20, 40, 80)
-METHODS = ("staggered-jacobi",)
+# The harness's label for the solver of record: staggered-cg since ECR-003 step 1
+# (2026-10-06). It is in every saved file's name, so a field solved by the
+# weighted Jacobi sweep (staggered-jacobi) is never reused as this solver's.
+STAGGERED_METHOD = "staggered-cg"
+METHODS = (STAGGERED_METHOD,)
 FIELD_DIR = REPO_ROOT / "results" / "self_convergence"
 MAP_DIR = REPO_ROOT / "docs" / "reports"
 CONTROL_TOL = 0.05
@@ -93,8 +97,6 @@ ORDER_BAND = 0.25
 TIGHT_TOL = 1.0e-9
 TIGHT_MAX_ITER = 40000
 SNAPSHOT_TOLS = (1.0e-7, 1.0e-8)
-# Test 21b continued the 60x60 and 100x100 solves to TIGHT_TOL the same way.
-TESTER_DIR = REPO_ROOT / "results" / "tester21b"
 # Ghia's stations lie on his 1/128 grid, Marchi's on sixteenths. A Ghia station
 # within three of Ghia's spacings of a Marchi station is compared with it.
 GHIA_PAIR = 3.0 / 128.0
@@ -133,7 +135,7 @@ def solve_tight(n: int) -> Path:
     Returns
     -------
     Path
-        results/self_convergence/staggered-jacobi_<n>_tol1e-9.npz, holding
+        results/self_convergence/staggered-cg_<n>_tol1e-9.npz, holding
         u_<tol>, v_<tol> and outer_<tol> per snapshot (tol formatted as 1e-06)
         and the wall time in seconds. An existing file is returned unsolved.
 
@@ -144,7 +146,7 @@ def solve_tight(n: int) -> Path:
         tolerance is not bitwise identical to the saved staggered field, in
         which case this is not a continuation of that computation.
     """
-    path = FIELD_DIR / f"staggered-jacobi_{n}_tol1e-9.npz"
+    path = FIELD_DIR / f"{STAGGERED_METHOD}_{n}_tol1e-9.npz"
     if path.exists():
         return path
     raw = yaml.safe_load(case_path("cavity").read_text(encoding="utf-8"))
@@ -170,7 +172,7 @@ def solve_tight(n: int) -> Path:
     if levels:
         raise SystemExit(f"{n}x{n} stopped before reaching {levels[0]:.0e}")
     tag = f"{case_tol:.0e}"
-    with np.load(FIELD_DIR / f"staggered-jacobi_{n}.npz") as saved:
+    with np.load(FIELD_DIR / f"{STAGGERED_METHOD}_{n}.npz") as saved:
         same = np.array_equal(snaps[f"u_{tag}"], saved["u"]) and np.array_equal(
             snaps[f"v_{tag}"], saved["v"]
         )
@@ -650,7 +652,7 @@ def extrapolation() -> dict:
     for positions in (GHIA_U_Y, GHIA_V_X):
         run_extrapolation_control(np.array(positions[1:-1]))
     saved = [FIELD_DIR / f"{m}_{n}.npz" for m in METHODS for n in GRIDS]
-    tight = [FIELD_DIR / f"staggered-jacobi_{n}_tol1e-9.npz" for n in GRIDS]
+    tight = [FIELD_DIR / f"{STAGGERED_METHOD}_{n}_tol1e-9.npz" for n in GRIDS]
     if missing := [p.name for p in saved + tight if not p.exists()]:
         raise SystemExit(f"saved fields missing, nothing re-solved: {missing}")
     configs = {n: load_case("cavity", grid=(n, n)) for n in GRIDS}
@@ -681,7 +683,7 @@ def extrapolation() -> dict:
         metric = cavity_true_centerline_errors(
             configs[n], meshes[n], s[f"u_{last}"], s[f"v_{last}"]
         )
-        out["metric"][f"staggered-jacobi_{n}_tol{last}"] = metric.components
+        out["metric"][f"{STAGGERED_METHOD}_{n}_tol{last}"] = metric.components
     references = {"u": (GHIA_U_Y, GHIA_U_VAL), "v": (GHIA_V_X, GHIA_V_VAL)}
     for t in tags:
         lines = {
@@ -703,10 +705,14 @@ def extrapolation() -> dict:
 
 
 def tight_field(n: int) -> tuple[np.ndarray, np.ndarray]:
-    """The staggered u and v at n x n converged to TIGHT_TOL, from either pass that saved it."""
-    path = FIELD_DIR / f"staggered-jacobi_{n}_tol1e-9.npz"
-    if not path.exists():
-        path = TESTER_DIR / f"staggered_{n}_tight.npz"
+    """The staggered u and v at n x n converged to TIGHT_TOL, from solve_tight's file.
+
+    Until ECR-003 step 1 a missing file fell back to test 21b's Jacobi-era
+    fields under results/tester21b, which carry no solver identity; the
+    fallback is gone, and a grid not yet solved under the current label
+    raises FileNotFoundError.
+    """
+    path = FIELD_DIR / f"{STAGGERED_METHOD}_{n}_tol1e-9.npz"
     with np.load(path) as data:
         return data["u_1e-09"], data["v_1e-09"]
 

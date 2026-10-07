@@ -138,7 +138,7 @@ def test_true_centerline_meets_the_saved_staggered_faces_at_second_order() -> No
     fields are gitignored, so this skips where they have not been saved.
     """
     paths = {
-        n: self_convergence.FIELD_DIR / f"staggered-jacobi_{n}.npz"
+        n: self_convergence.FIELD_DIR / f"staggered-cg_{n}.npz"
         for n in self_convergence.GRIDS
     }
     if not all(p.exists() for p in paths.values()):
@@ -241,7 +241,7 @@ def test_solve_tight_keeps_only_a_whole_continuation_of_the_saved_field(
     monkeypatch.setattr(self_convergence, "TIGHT_MAX_ITER", cap)
     saved = np.ones((8, 8))  # iteration 1 is the first below 1e-6
     saved[0, 0] = np.nextafter(1.0, 2.0) if ulps else 1.0
-    np.savez(tmp_path / "staggered-jacobi_8.npz", u=saved, v=np.ones((8, 8)))
+    np.savez(tmp_path / "staggered-cg_8.npz", u=saved, v=np.ones((8, 8)))
     if stops:
         with pytest.raises(SystemExit, match=stops):
             self_convergence.solve_tight(8)
@@ -274,7 +274,7 @@ def test_every_solve_is_pinned_to_velocity_step(
             self_convergence.solve_and_save(method, 8)
     with pytest.raises(BuiltError):
         self_convergence.solve_tight(8)
-    # One solve per method, staggered-jacobi alone since the retirement, then
+    # One solve per method, staggered-cg alone since the retirement, then
     # solve_tight.
     assert rules == ["velocity_step"] * 2
 
@@ -330,7 +330,7 @@ def test_extrapolation_carries_known_orders_through_to_its_output(
             u, v = _cells(c**3 + e * c * (1 - c), c * (1 - c) * (c + e))
             fields[n, t] = u
             snaps |= {f"u_{t}": u, f"v_{t}": v, f"outer_{t}": np.array(1)}
-        np.savez(tmp_path / f"staggered-jacobi_{n}_tol1e-9.npz", seconds=1.0, **snaps)
+        np.savez(tmp_path / f"staggered-cg_{n}_tol1e-9.npz", seconds=1.0, **snaps)
         for method in self_convergence.METHODS:
             np.savez(tmp_path / f"{method}_{n}.npz", u=fields[n, "1e-06"], v=v)
     out = self_convergence.extrapolation()
@@ -389,16 +389,14 @@ def _marchi_fields(
 
     The midline faces are y^3 + h^2 y(1 - y) and x(1 - x)(x + h^2). Both are
     cubics, which both interpolations reproduce, so R(40, 80) and R(80, 100)
-    return the limits y^3 and x^2(1 - x) to rounding. 20, 40 and 80 go in
-    FIELD_DIR, and 100 only in TESTER_DIR, so the fallback runs. Two decoys hold
-    order-1 fields: an 80x80 file in TESTER_DIR, and a 1e-08 snapshot in every
-    file. Returns the order-2 fields by grid.
+    return the limits y^3 and x^2(1 - x) to rounding. Every grid goes in
+    FIELD_DIR under the current label; a Jacobi-era decoy sits beside them
+    under the retired label, and a 1e-08 snapshot of order 1 in every file.
+    Returns the order-2 fields by grid.
     """
-    builder, tester = tmp_path / "builder", tmp_path / "tester"
+    builder = tmp_path / "builder"
     builder.mkdir()
-    tester.mkdir()
     monkeypatch.setattr(self_convergence, "FIELD_DIR", builder)
-    monkeypatch.setattr(self_convergence, "TESTER_DIR", tester)
 
     def cells(n: int, q: float) -> tuple[np.ndarray, np.ndarray]:
         c, e = (np.arange(n) + 0.5) / n, float(n) ** -q
@@ -410,26 +408,30 @@ def _marchi_fields(
         decoy = cells(n, 1.0)
         snaps = {"u_1e-09": fields[n][0], "v_1e-09": fields[n][1]}
         snaps |= {"u_1e-08": decoy[0], "v_1e-08": decoy[1]}
-        if n == 100:
-            path = tester / "staggered_100_tight.npz"
-        else:
-            path = builder / f"staggered-jacobi_{n}_tol1e-9.npz"
-        np.savez(path, **snaps)
+        np.savez(builder / f"staggered-cg_{n}_tol1e-9.npz", **snaps)
     u, v = cells(80, 1.0)
-    np.savez(tester / "staggered_80_tight.npz", **{"u_1e-09": u, "v_1e-09": v})
+    np.savez(
+        builder / "staggered-jacobi_80_tol1e-9.npz", **{"u_1e-09": u, "v_1e-09": v}
+    )
     return fields
 
 
 @pytest.mark.unit
-def test_tight_field_prefers_the_builders_file_and_reads_the_1e_9_snapshot(
+def test_tight_field_reads_the_current_labels_1e_9_snapshot_and_nothing_else(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """80 comes from FIELD_DIR though TESTER_DIR has one too; 100 falls back to TESTER_DIR."""
+    """80 and 100 come from the staggered-cg files; the Jacobi-era decoy and the
+    1e-08 snapshots are never read, and a grid with no file raises rather
+    than falling back to a field of unknown solver."""
     fields = _marchi_fields(tmp_path, monkeypatch)
     for n in (80, 100):
         u, v = self_convergence.tight_field(n)
         assert np.array_equal(u, fields[n][0])
         assert np.array_equal(v, fields[n][1])
+    with pytest.raises(FileNotFoundError):
+        self_convergence.tight_field(60)
+    assert not hasattr(self_convergence, "TESTER_DIR")
+    assert self_convergence.METHODS == ("staggered-cg",)
 
 
 @pytest.mark.unit

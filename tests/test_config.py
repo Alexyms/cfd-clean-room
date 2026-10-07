@@ -1226,11 +1226,12 @@ class TestPressureKeys:
         Refused whether or not pressure_rtol is also given, with a message
         that names pressure_rtol, distinct from the unknown-key refusal.
         """
-        with pytest.raises(ValueError, match=r"solver\.pressure_tol.*pressure_rtol"):
+        retired = r"solver\.pressure_tol was the weighted Jacobi.*pressure_rtol"
+        with pytest.raises(ValueError, match=retired):
             SimConfig.from_dict(self._raw(tmp_path, pressure_tol=1e-6))
         raw = self._raw(tmp_path, pressure_tol=1e-6)
         del raw["solver"]["pressure_rtol"]
-        with pytest.raises(ValueError, match=r"solver\.pressure_tol.*pressure_rtol"):
+        with pytest.raises(ValueError, match=retired):
             SimConfig.from_dict(raw)
         assert "pressure_tol" not in SOLVER_KEYS
         assert RETIRED_PRESSURE_TOL_KEY == "pressure_tol"

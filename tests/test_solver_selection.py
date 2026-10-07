@@ -55,7 +55,7 @@ def built(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 @pytest.mark.integration
 def test_harness_method_selects_the_solver(built: list[str], tmp_path: Path) -> None:
     """The row's method, definition and stage keys all come from the solver that ran."""
-    method = "staggered-jacobi"
+    method = "staggered-cg"
     results = tmp_path / "results.jsonl"
     code = benchmark.main(
         [
@@ -152,7 +152,7 @@ def test_staggered_work_counts_faces_and_every_cell_with_an_equation() -> None:
             )
         )
     assert counter.work["cell_updates"] == 2 * momentum + cells * (500 + 312)
-    assert counter.work["inner_sweeps"] == 812
+    assert counter.work["inner_iterations"] == 812
 
 
 @pytest.mark.integration
@@ -168,7 +168,7 @@ def test_staggered_work_excludes_the_outlet_faces() -> None:
 @pytest.mark.integration
 def test_viewer_method_selects_the_solver(built: list[str], tmp_path: Path) -> None:
     """The viewer builds the named solver and names the file after the method."""
-    method = "staggered-jacobi"
+    method = "staggered-cg"
     path = view_field.solve_and_save(TINY, tmp_path, method)
     assert built == ["staggered"]
     assert path == tmp_path / f"{TINY}_{method}.npz"

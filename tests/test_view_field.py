@@ -103,6 +103,4 @@ def test_viewer_refuses_a_wall_clustered_preset_before_solving(
 
     monkeypatch.setattr(view_field, "StaggeredSolver", no_solver)
     with pytest.raises(ValueError, match="wall-clustered"):
-        view_field.solve_and_save(
-            "val001_80x40_stretched", tmp_path, "staggered-jacobi"
-        )
+        view_field.solve_and_save("val001_80x40_stretched", tmp_path, "staggered-cg")
