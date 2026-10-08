@@ -69,6 +69,12 @@ SOLVER_BLOCK = {
 CFL_NUMBER = 0.1
 # The supply speed of the product case, which rows 1 of VAL-004 and VAL-013 use.
 SUPPLY_SPEED = 0.45
+# ADR-012 decision 8: the turbulent Schmidt number the gate rows with an eddy
+# viscosity field run at, the value the default configuration carries.
+TURBULENT_SCHMIDT = 0.7
+# ADR-012 F: the room's core has cell Peclet numbers U dx / D_t of about 8 to
+# 250 on the turbulent diffusivity; the prescribed fields below span them.
+CORE_PECLET = (8.0, 250.0)
 
 
 @dataclass(frozen=True)
@@ -304,6 +310,45 @@ def transport_config(
         "thresholds": {str(PARTICLE_SIZE): 100.0},
     }
     return SimConfig.from_dict(raw)
+
+
+def prescribed_eddy_viscosity(
+    mesh: Mesh, speed: float, schmidt: float = TURBULENT_SCHMIDT
+) -> np.ndarray:
+    """A non-uniform eddy viscosity for the gate rows, scaled to the case.
+
+    Parameters
+    ----------
+    mesh : Mesh
+        A uniform mesh; ``mesh.dx`` is the length the Peclet number uses.
+    speed : float
+        The case's velocity scale in m/s.
+    schmidt : float
+        Sc_t the case runs at.
+
+    Returns
+    -------
+    np.ndarray
+        ``nu_t`` in m^2/s, [ny, nx].
+
+    Notes
+    -----
+    ``nu_t = Sc_t U dx / Pe`` puts the cell Peclet number on the turbulent
+    diffusivity ``D_t = nu_t / Sc_t`` at ``Pe``. The field runs from
+    ``Pe = 250`` to ``Pe = 8`` (``CORE_PECLET``) log-linearly along the
+    domain diagonal, ``s = (x / Lx + y / Ly) / 2``:
+    ``nu_t = nu_lo (nu_hi / nu_lo)^s``. A band of cells, ``max(2, nx / 16)``
+    columns wide from column ``nx / 3``, is zero over the full height, so the
+    harmonic mean's zero branch is crossed on the faces on both sides of it.
+    """
+    pe_low, pe_high = CORE_PECLET
+    nu_hi = schmidt * speed * mesh.dx / pe_low
+    nu_lo = schmidt * speed * mesh.dx / pe_high
+    s = 0.5 * (mesh.xc[None, :] / mesh.x[-1] + mesh.yc[:, None] / mesh.y[-1])
+    field = nu_lo * (nu_hi / nu_lo) ** s
+    first = mesh.xc.size // 3
+    field[:, first : first + max(2, mesh.xc.size // 16)] = 0.0
+    return np.ascontiguousarray(field)
 
 
 def erf_values(z: np.ndarray) -> np.ndarray:
@@ -759,8 +804,14 @@ SMITH_HUTTON = {
 }
 
 
-def smith_hutton_case() -> TransportCase:
+def smith_hutton_case(turbulent_schmidt: float | None = None) -> TransportCase:
     """VAL-013, the bounded-advection case (ADR-011 H; REQ-T12).
+
+    Parameters
+    ----------
+    turbulent_schmidt : float, optional
+        Sc_t for the row that hands the solver an eddy viscosity field; None
+        leaves it out of the configuration.
 
     Returns
     -------
@@ -792,7 +843,14 @@ def smith_hutton_case() -> TransportCase:
             "x_end": 2.0,
         },
     }
-    config = transport_config(p["width"], p["height"], p["nx"], p["ny"], boundaries)
+    config = transport_config(
+        p["width"],
+        p["height"],
+        p["nx"],
+        p["ny"],
+        boundaries,
+        turbulent_schmidt=turbulent_schmidt,
+    )
     mesh = Mesh(config)
     x_prime = mesh.xc - 1.0
     inflow_v = np.zeros(v_shape(mesh))

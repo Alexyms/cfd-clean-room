@@ -32,6 +32,8 @@ from validation.cases import case_path
 from validation.transport_cases import (
     CFL_NUMBER,
     PARTICLE_SIZE,
+    TURBULENT_SCHMIDT,
+    prescribed_eddy_viscosity,
     random_face_field,
     transport_config,
 )
@@ -46,9 +48,19 @@ SOURCE_RATE = 5.0e4
 
 
 def _run(
-    config: SimConfig, mesh: Mesh, faces: FaceVelocities, source_cell: tuple[int, int]
+    config: SimConfig,
+    mesh: Mesh,
+    faces: FaceVelocities,
+    source_cell: tuple[int, int],
+    eddy_viscosity: np.ndarray | None = None,
+    sweeps: list[int] | None = None,
 ) -> tuple[TransportSolver, MassBudget, float, float]:
-    """500 steps at the stable step from a seeded field with a source; returns the budget."""
+    """500 steps at the stable step from a seeded field with a source; returns the budget.
+
+    With an eddy viscosity field every step is held to a converged implicit
+    solve (a capped one is a stop, prompt 40), and ``sweeps``, when given,
+    collects the sweeps each step took.
+    """
     physics = ParticlePhysics(config)
     boundary = ConcentrationBoundary(mesh, config, physics, BoundaryRegistry(config))
     solver = TransportSolver(mesh, config, physics, boundary)
@@ -59,7 +71,13 @@ def _run(
     dt = solver.stable_dt(faces, 0)
     start = perf_counter()
     for _ in range(STEPS):
-        c = solver.solve_timestep(c, faces, 0, dt, sources=rate)
+        c = solver.solve_timestep(
+            c, faces, 0, dt, sources=rate, eddy_viscosity=eddy_viscosity
+        )
+        if eddy_viscosity is not None:
+            assert solver.diffusion_converged
+        if sweeps is not None:
+            sweeps.append(solver.last_diffusion_sweeps)
     return solver, solver.budget[0], dt, perf_counter() - start
 
 
@@ -185,6 +203,140 @@ def test_mass_conservation_on_the_val001_faces_val007() -> None:
     assert abs(budget.relative()) < ROUNDING_EXPECTATION
     assert budget.inflow > 0.0 and budget.outflow > 0.0 and budget.source > 0.0
     assert budget.deposited["floor"] > 0.0 and budget.deposited["ceiling"] > 0.0
+    row = _carried_row(config, mesh, faces)
+    control = _dropped_face_control(budget, faces, mesh, dt, row)
+    print(f"  control, inlet face at row {row} dropped from the booking: {control:.3e}")
+    assert abs(control) > CRITERION
+
+
+def _random_field_config(turbulent_schmidt: float | None) -> SimConfig:
+    """The configuration of VAL-007 (i), with Sc_t when a field is to be handed."""
+    return transport_config(
+        1.6,
+        0.9,
+        64,
+        36,
+        boundaries={
+            "inlet": {
+                "type": "velocity_inlet",
+                "location": "left",
+                "y_start": 0.2,
+                "y_end": 0.7,
+                "velocity": 0.3,
+                "concentration": [INLET_CONCENTRATION],
+            },
+            "outlet": {
+                "type": "pressure_outlet",
+                "location": "right",
+                "y_start": 0.1,
+                "y_end": 0.8,
+            },
+        },
+        diffusion_tol=1.0e-14,
+        turbulent_schmidt=turbulent_schmidt,
+    )
+
+
+def _val001_config(turbulent_schmidt: float | None) -> SimConfig:
+    """The configuration of VAL-007 (ii), with Sc_t when a field is to be handed."""
+    raw = yaml.safe_load(case_path("poiseuille").read_text(encoding="utf-8"))
+    raw["domain"]["nx"], raw["domain"]["ny"] = 40, 20
+    raw["particles"]["sizes"] = [PARTICLE_SIZE]
+    raw["particles"]["hepa_reference"] = {
+        "diameters": [PARTICLE_SIZE],
+        "efficiencies": [0.99999],
+    }
+    raw["boundaries"]["inlet"]["concentration"] = [INLET_CONCENTRATION]
+    raw["transport"] = {
+        "cfl_number": CFL_NUMBER,
+        "advection_scheme": "umist",
+        "max_diffusion_iter": 100,
+        "diffusion_tol": 1.0e-14,
+    }
+    if turbulent_schmidt is not None:
+        raw["transport"]["turbulent_schmidt"] = turbulent_schmidt
+    return SimConfig.from_dict(raw)
+
+
+def _report_field(
+    label: str, budget: MassBudget, dt: float, seconds: float, sweeps: list[int]
+) -> None:
+    """The ``_report`` lines and the implicit sweeps the field's run took."""
+    _report(label, budget, dt, seconds)
+    print(
+        f"  implicit sweeps per step with the field: max {max(sweeps)}, mean "
+        f"{sum(sweeps) / len(sweeps):.2f}, all {len(sweeps)} solves converged"
+    )
+
+
+@pytest.mark.validation
+def test_mass_conservation_with_an_eddy_viscosity_field_on_a_random_face_field_val007() -> (
+    None
+):
+    """VAL-007 (i) with a field, ECR-002 criterion 5: the budget closes below 1e-4.
+
+    The same room, faces and 500 steps as the test above, with nu_t handed
+    to every step: a non-uniform field from ``prescribed_eddy_viscosity``
+    (cell Peclet numbers 8 to 250 on ``nu_t / 0.7``, speed 0.3 m/s, a band
+    of zero columns). Every face flux still leaves one cell and enters the
+    next whatever its conductance, so the residual is predicted at rounding.
+    Defect caught: a conductance that is not shared by the two cells of a
+    face, or a field that reaches the boundary bookings.
+    """
+    config = _random_field_config(TURBULENT_SCHMIDT)
+    mesh = Mesh(config)
+    faces = random_face_field(mesh, seed=32, scale=0.3)
+    nu_t = prescribed_eddy_viscosity(mesh, 0.3)
+    assert nu_t.min() == 0.0 and nu_t.max() > 10.0 * nu_t[nu_t > 0.0].min()
+    sweeps: list[int] = []
+    _, budget, dt, seconds = _run(config, mesh, faces, (18, 32), nu_t, sweeps)
+    _report_field("VAL-007 (i) with a field, random 64x36", budget, dt, seconds, sweeps)
+    assert abs(budget.relative()) < CRITERION
+    assert abs(budget.relative()) < ROUNDING_EXPECTATION
+    assert budget.inflow > 0.0 and budget.outflow > 0.0 and budget.source > 0.0
+    assert all(budget.deposited[k] > 0.0 for k in ("floor", "ceiling", "wall"))
+    assert max(sweeps) > 0
+
+    row = _carried_row(config, mesh, faces)
+    control = _dropped_face_control(budget, faces, mesh, dt, row)
+    print(f"  control, inlet face at row {row} dropped from the booking: {control:.3e}")
+    assert abs(control) > CRITERION
+
+
+@pytest.mark.validation
+def test_mass_conservation_with_an_eddy_viscosity_field_on_the_val001_faces_val007() -> (
+    None
+):
+    """VAL-007 (ii) with a field, ECR-002 criterion 5: the budget closes below 1e-4.
+
+    The VAL-001 40x20 faces as above with the field at the case's inlet
+    speed; the residual is predicted at rounding.
+    """
+    config = _val001_config(TURBULENT_SCHMIDT)
+    mesh = Mesh(config)
+    staggered = StaggeredBoundary(mesh, config)
+    velocity = StaggeredSolver(mesh, config, staggered)
+    start = perf_counter()
+    velocity.solve_steady()
+    solve_seconds = perf_counter() - start
+    assert velocity.stop_reason == "error_estimate_and_continuity"
+    faces = velocity.face_velocities
+    nu_t = prescribed_eddy_viscosity(mesh, config.boundaries["inlet"].velocity)
+
+    sweeps: list[int] = []
+    _, budget, dt, seconds = _run(config, mesh, faces, (10, 20), nu_t, sweeps)
+    _report_field(
+        f"VAL-007 (ii) with a field, VAL-001 40x20 faces (solved in {solve_seconds:.1f} s)",
+        budget,
+        dt,
+        seconds,
+        sweeps,
+    )
+    assert abs(budget.relative()) < CRITERION
+    assert abs(budget.relative()) < ROUNDING_EXPECTATION
+    assert budget.inflow > 0.0 and budget.outflow > 0.0 and budget.source > 0.0
+    assert budget.deposited["floor"] > 0.0 and budget.deposited["ceiling"] > 0.0
+    assert max(sweeps) > 0
     row = _carried_row(config, mesh, faces)
     control = _dropped_face_control(budget, faces, mesh, dt, row)
     print(f"  control, inlet face at row {row} dropped from the booking: {control:.3e}")
