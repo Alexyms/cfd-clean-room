@@ -42,6 +42,7 @@ from validation.metrics import (
     peak_retention,
     poiseuille_l2_error,
     poiseuille_profiles,
+    poiseuille_reference,
     relative_l2,
 )
 from validation.transport_cases import (
@@ -171,6 +172,18 @@ class TestStepEightCases:
         with pytest.raises(KeyError, match="unknown grid preset"):
             load_preset("val002_60x60")
 
+    @pytest.mark.parametrize("grid", [(8, 0), (0, 8)])
+    def test_wall_clustered_loader_validates_before_it_divides(
+        self, grid: tuple[int, int]
+    ) -> None:
+        """A zero cell count is SimConfig's ValueError, not a ZeroDivisionError (review 25 S6).
+
+        The spacing is WALL_SPACING_FRACTION * height / ny; the loader used to
+        divide the raw YAML value before anything had checked it.
+        """
+        with pytest.raises(ValueError, match=r"domain\.n[xy] must be positive"):
+            load_wall_clustered("poiseuille", grid=grid)
+
 
 @pytest.mark.unit
 class TestPoiseuilleMetric:
@@ -193,6 +206,21 @@ class TestPoiseuilleMetric:
             "value": metric.value,
             "reference": metric.reference,
         }
+
+    def test_reference_profile_is_the_parabola_the_metric_uses(self) -> None:
+        """Zero at both walls, 1.5 u_mean at mid-height, and the metric's own reference."""
+        config = load_case("poiseuille", grid=(16, 12))
+        mesh = Mesh(config)
+        height = config.room_height
+        u_mean = config.boundaries["inlet"].velocity
+        walls = poiseuille_reference(np.array([0.0, height]), height, u_mean)
+        assert np.all(walls == 0.0)
+        mid = poiseuille_reference(np.array([0.5 * height]), height, u_mean)
+        assert mid[0] == pytest.approx(1.5 * u_mean, rel=1e-14)
+        y, _u_num, u_ref = poiseuille_profiles(
+            config, mesh, np.zeros((config.ny, config.nx))
+        )
+        assert np.array_equal(u_ref, poiseuille_reference(y, height, u_mean))
 
     def test_a_flat_profile_scores_nonzero(self) -> None:
         """The other direction: a wrong profile must not score zero."""
