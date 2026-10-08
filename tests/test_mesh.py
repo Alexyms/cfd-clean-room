@@ -361,15 +361,15 @@ class TestCellClassification:
                     {
                         "name": "left",
                         "x_start": 0.0,
-                        "x_end": 0.15,
+                        "x_end": 0.1,
                         "y_start": 0.0,
-                        "y_end": 0.15,
+                        "y_end": 0.1,
                     },
                     {
                         "name": "right",
-                        "x_start": 0.85,
+                        "x_start": 0.9,
                         "x_end": 1.0,
-                        "y_start": 0.85,
+                        "y_start": 0.9,
                         "y_end": 1.0,
                     },
                 ]
