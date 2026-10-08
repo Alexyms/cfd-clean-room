@@ -60,8 +60,8 @@ responsibility = "Runs steady SIMPLE on the staggered grid as one outer loop ove
 serves = ["REQ-S01", "REQ-S02", "REQ-S03", "REQ-S04", "REQ-S05", "REQ-S07", "REQ-S13"]
 
 [modules."src/solver_transport.py"]
-responsibility = "Advances one particle class one explicit step on the staggered face velocities: QUICK's face value bounded by the UMIST limiter under forward Euler at a Courant number the configuration sets, implicit diffusion and deposition by Jacobi, the settling increment on interior faces, sources added and booked, SOLID cells zero; keeps one MassBudget per class and defines FieldHistory, the output contract for the animation."
-serves = ["REQ-T01", "REQ-T03", "REQ-T04", "REQ-T05", "REQ-T06", "REQ-T07", "REQ-T08", "REQ-T11", "REQ-T12", "REQ-N01"]
+responsibility = "Advances one particle class one explicit step on the staggered face velocities: QUICK's face value bounded by the UMIST limiter under forward Euler at a Courant number the configuration sets, implicit diffusion and deposition by Jacobi on per-face conductances, the Brownian coefficient plus nu_t / Sc_t on interior faces when handed an eddy viscosity field, the settling increment on interior faces, sources added and booked, SOLID cells zero; keeps one MassBudget per class and defines FieldHistory, the output contract for the animation."
+serves = ["REQ-T01", "REQ-T03", "REQ-T04", "REQ-T05", "REQ-T06", "REQ-T07", "REQ-T08", "REQ-T11", "REQ-T12", "REQ-T13", "REQ-N01"]
 
 [modules."src/stopping.py"]
 responsibility = "Decides when the steady outer iteration has converged, on four conditions: (a) the iteration error estimated from the step and its fitted geometric rate, over a physical velocity scale; (b) the worst per-cell mass imbalance against its own tolerance; (c) the summed imbalance over the through-flow, which shares the tolerance of (a); and (d) the signed imbalance summed over the domain, which shares the tolerance of (b). Also defines IterationState, the snapshot a solver hands its callback once per outer iteration."
