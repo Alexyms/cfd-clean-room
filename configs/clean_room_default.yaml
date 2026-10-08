@@ -72,35 +72,43 @@ boundaries:
     y_start: 0.0
     y_end: 2.1
 
+  # Every outlet is a fixed-flow outlet: the returns and the hood are ducted to
+  # fans, so their flows are set, not found by the room (ADR-012 decision 1,
+  # amended 2026-10-08; docs/reports/ecr002_step3_outlet_probe.md, arm D0). A
+  # pressure outlet's zero-gradient copy cannot close an outlet cell that air
+  # enters sideways, and the room's pressure then climbs without end (#61).
+  # The returns state no velocity, so they share what the hood leaves of the
+  # supply at one face velocity, which balances the room exactly on any mesh.
   floor_return_1:
-    type: pressure_outlet
+    type: fixed_flow_outlet
     location: bottom
     x_start: 0.5
     x_end: 1.25
 
   floor_return_2:
-    type: pressure_outlet
+    type: fixed_flow_outlet
     location: bottom
     x_start: 2.4
     x_end: 2.95
 
   floor_return_3:
-    type: pressure_outlet
+    type: fixed_flow_outlet
     location: bottom
     x_start: 4.6
     x_end: 4.9
 
   floor_return_4:
-    type: pressure_outlet
+    type: fixed_flow_outlet
     location: bottom
     x_start: 5.7
     x_end: 6.3
 
   hood_exhaust:
-    type: pressure_outlet
+    type: fixed_flow_outlet
     location: right
     y_start: 0.9
     y_end: 1.8
+    velocity: 0.5     # outward, m/s: the hood's fan (ADR-012 decision 1)
 
 obstacles:
   - name: server_rack
