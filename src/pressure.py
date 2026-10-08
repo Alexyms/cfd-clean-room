@@ -451,10 +451,12 @@ class PressureCorrector:
         the pin fixes one cell, so a second component would be solved to
         the wrong level (ADR-013 D). On an open domain, when a component
         has no cell beside a pressure outlet: its block of the operator is
-        singular with nothing fixing its level, a component an inlet feeds
-        has a right-hand side outside the block's range, and every
-        correction would run to max_pressure_iter while the faces grow more
-        unbalanced (test 37 measured 189 times u*'s imbalance after one).
+        singular with nothing fixing its level. A component an inlet feeds
+        has no outflow to balance its supply, so its right-hand side is
+        outside the block's range and no correction converges (test 37
+        measured the faces 189 times more unbalanced than u* after one); a
+        pocket with no supply does converge, to a level nothing fixes. Both
+        are refused.
     """
 
     def __init__(
@@ -532,8 +534,10 @@ class PressureCorrector:
             raise ValueError(
                 f"open domain: {stranded} of the {components} connected components of "
                 "the cells with a pressure equation reach no pressure outlet; with no "
-                "p' = 0 face their block of the pressure correction is singular, and "
-                "every correction would run to max_pressure_iter"
+                "p' = 0 face their block of the pressure correction is singular. A "
+                "component an inlet feeds has no outflow to balance its supply, so the "
+                "correction cannot converge; one with no supply converges to a level "
+                "nothing fixes"
             )
 
     def _outlet_rows(self, open_cell: np.ndarray) -> np.ndarray:

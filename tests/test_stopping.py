@@ -155,7 +155,7 @@ def test_signed_domain_sum_decides_once_the_other_three_are_met(
 
 
 @pytest.mark.unit
-def test_iteration_state_has_its_six_fields_in_order() -> None:
+def test_iteration_state_has_its_seven_fields_in_order() -> None:
     """The callback snapshot moved here from solver_ns.py with its fields unchanged.
 
     Defect caught: a field renamed, which every positional construction in

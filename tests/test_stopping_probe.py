@@ -207,13 +207,22 @@ def _refuse_to_solve(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(stopping_probe.sc, "StaggeredSolver", Sentinel)
 
 
-def _save_truth(path: Path, saved: dict, u: np.ndarray, v: np.ndarray) -> None:
+def _save_truth(
+    path: Path,
+    saved: dict,
+    u: np.ndarray,
+    v: np.ndarray,
+    case: str = "cavity",
+    n: int = 20,
+    elapsed: np.ndarray | None = None,
+) -> None:
     """A truth file as solve_truth writes it, its second snapshot at the case tolerance.
 
     Complete, so a reader that skipped the version check would read it
-    without error rather than fail on a missing key.
+    without error rather than fail on a missing key. ``elapsed`` defaults
+    to a few seconds.
     """
-    tol = stopping_probe.case_config("cavity", 20).convergence_tol
+    tol = stopping_probe.case_config(case, n).convergence_tol
     np.savez(
         path,
         level=np.array([10.0 * tol, tol]),
@@ -221,7 +230,7 @@ def _save_truth(path: Path, saved: dict, u: np.ndarray, v: np.ndarray) -> None:
         residual=np.full(6, tol),
         imbalance=np.zeros(6),
         iterations=np.full(6, 9),
-        elapsed=np.arange(6.0),
+        elapsed=np.arange(6.0) if elapsed is None else elapsed,
         reference_velocity=1.0,
         reached=True,
         u_0=u,
@@ -331,6 +340,104 @@ def test_readers_of_the_truth_re_solve_a_truth_this_solver_did_not_write(
             reader("cavity", 20)
         assert asked.value.args[0].convergence_tol == stopping_probe.TRUTH_TOL
         assert asked.value.args[0].stopping_rule == "velocity_step"
+
+
+def _poiseuille_rule_files(tmp_path: Path, case: str, n: int) -> str:
+    """Write the rule file verify_rule reads, current for a case; return the case's name."""
+    name = stopping_probe.case_name(case, n)
+    config = stopping_probe.case_config(case, n, rule="error_estimate")
+    mesh = stopping_probe.sc.Mesh(config)
+    boundary = stopping_probe.sc.StaggeredBoundary(mesh, config)
+    flux = stopping_probe.sc.StaggeredSolver(mesh, config, boundary).flux_scale
+    tols = (config.iteration_error_tol, config.mass_imbalance_tol)
+    params = stopping_probe.rule_parameters(
+        boundary.get_max_boundary_velocity(), flux, tols
+    )
+    np.savez(tmp_path / f"{name}_rule.npz", params=params)
+    return name
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("saved", [s for s, _ in STALE], ids=[i for _, i in STALE])
+def test_verify_rule_reads_the_tight_truth_through_the_identity_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, saved: dict
+) -> None:
+    """A channel's tight truth from another solver is solved again before it is read.
+
+    Test 37b T-B1 (TT1): the readers test above stops at the cavity, where
+    verify_rule never reads a tight truth. Here a Poiseuille case has a
+    current truth and rule file and a stale ``_truth13`` beside them, so the
+    only read left is the tight truth's, and the sentinel must be reached at
+    TIGHT_TRUTH_TOL. Defect caught: verify_rule loading the file directly,
+    which scores the channel against a Jacobi-era truth without a sound
+    (review 37 B1 for the channel).
+    """
+    _refuse_to_solve(monkeypatch, tmp_path)
+    case, n = "poiseuille", 40
+    name = _poiseuille_rule_files(tmp_path, case, n)
+    zeros = np.zeros((20, 40))
+    _save_truth(tmp_path / f"{name}.npz", CURRENT, zeros, zeros, case, n)
+    np.savez(
+        tmp_path / f"{name}_truth13.npz",
+        tol=stopping_probe.TIGHT_TRUTH_TOL,
+        u=zeros,
+        v=zeros,
+        **saved,
+    )
+    with pytest.raises(_BuiltError) as asked:
+        stopping_probe.verify_rule(case, n)
+    assert asked.value.args[0].convergence_tol == stopping_probe.TIGHT_TRUTH_TOL
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("saved", [s for s, _ in STALE], ids=[i for _, i in STALE])
+def test_control_reads_its_truth_through_the_identity_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, saved: dict
+) -> None:
+    """The control re-solves a stale truth even beside a current control file.
+
+    Test 37b T-B1 (CT1): the control's own test keeps the truth current by
+    design, so the control's read of the truth was never tried against a
+    stale one. Defect caught: the control loading the truth file directly,
+    which compares a conjugate gradient solve with a stale snapshot.
+    """
+    _refuse_to_solve(monkeypatch, tmp_path)
+    name = stopping_probe.case_name("cavity", 20)
+    u, v = np.full((20, 20), 0.25), np.full((20, 20), -0.5)
+    _save_truth(tmp_path / f"{name}.npz", saved, u, v)
+    np.savez(
+        tmp_path / f"{name}_control.npz", u=u, v=v, outer=6, seconds=1.0, **CURRENT
+    )
+    with pytest.raises(_BuiltError) as asked:
+        stopping_probe.control("cavity", 20)
+    assert asked.value.args[0].convergence_tol == stopping_probe.TRUTH_TOL
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("saved", [s for s, _ in STALE], ids=[i for _, i in STALE])
+def test_main_reads_its_budget_through_the_identity_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, saved: dict
+) -> None:
+    """main's budget reads the truth through solve_truth, so a stale one is solved again.
+
+    Test 37b T-B1 (MN1), the third read, which the tester left to a
+    Suggestion. One non-control case is run, with a stale truth whose elapsed
+    time is ten times the budget: read directly, main would stop on the
+    budget (SystemExit); read through solve_truth it reaches the sentinel
+    first. Defect caught: main loading ``{name}.npz`` for its budget.
+    """
+    _refuse_to_solve(monkeypatch, tmp_path)
+    monkeypatch.setattr(stopping_probe, "CASES", (("poiseuille", 40),))
+    name = stopping_probe.case_name("poiseuille", 40)
+    assert name not in stopping_probe.CONTROLS
+    zeros = np.zeros((20, 40))
+    over_budget = np.full(6, 10.0 * stopping_probe.BUDGET_SECONDS)
+    _save_truth(
+        tmp_path / f"{name}.npz", saved, zeros, zeros, "poiseuille", 40, over_budget
+    )
+    with pytest.raises(_BuiltError) as asked:
+        stopping_probe.main([])
+    assert asked.value.args[0].convergence_tol == stopping_probe.TRUTH_TOL
 
 
 @pytest.mark.unit
