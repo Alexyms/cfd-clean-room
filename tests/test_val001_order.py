@@ -7,6 +7,7 @@ pipeline defects it exists to catch.
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -22,7 +23,6 @@ import val001_order  # noqa: E402 -- scripts/ is not a package; path set above
 from src.config import SimConfig  # noqa: E402 -- follows sys.path.insert
 from validation.cases import (  # noqa: E402 -- follows sys.path.insert
     case_path,
-    load_wall_clustered,
 )
 from validation.metrics import (  # noqa: E402 -- follows sys.path.insert
     poiseuille_reference,
@@ -80,47 +80,58 @@ def test_station_refuses_a_position_that_is_not_a_face() -> None:
         val001_order.station(np.zeros((4, 10)), 0.75)
 
 
-def _channel(grid: tuple[int, int] = (12, 6), **changes: float) -> SimConfig:
-    """The channel case at a grid with domain, fluid or inlet values replaced."""
+def _channel(grid: tuple[int, int] = (12, 6), **changes: object) -> SimConfig:
+    """The channel case at a grid, with domain, mesh, fluid or inlet values replaced."""
     raw = yaml.safe_load(case_path("poiseuille").read_text(encoding="utf-8"))
     raw["domain"]["nx"], raw["domain"]["ny"] = grid
     raw["domain"].update({k: v for k, v in changes.items() if k in ("width", "height")})
-    raw["fluid"].update({k: v for k, v in changes.items() if k == "viscosity"})
+    raw["fluid"].update({"density": changes["density"]} if "density" in changes else {})
+    raw["fluid"].update(
+        {"viscosity": changes["viscosity"]} if "viscosity" in changes else {}
+    )
+    for axis in ("x", "y"):
+        if f"stretch_{axis}" in changes:
+            raw["mesh"][axis] = {"stretch_ratio": changes[f"stretch_{axis}"]}
     if "velocity" in changes:
         raw["boundaries"]["inlet"]["velocity"] = changes["velocity"]
     return SimConfig.from_dict(raw)
 
 
+# One change per component of the key's "case" entry, keyed by that component's name.
+CASE_CHANGES: dict[str, dict] = {
+    "width": {"width": 5.0},
+    "height": {"height": 0.7},
+    "nx": {"grid": (16, 6)},
+    "ny": {"grid": (12, 8)},
+    "stretch_x": {"stretch_x": 1.1},
+    "stretch_y": {"stretch_y": 1.1},
+    "density": {"density": 1.5},
+    "viscosity": {"viscosity": 2.0e-3},
+    "inlet_velocity": {"velocity": 0.05},
+}
+
+
 @pytest.mark.unit
-@pytest.mark.parametrize(
-    "changed",
-    [
-        {"width": 5.0},
-        {"height": 0.7},
-        {"viscosity": 2.0e-3},
-        {"velocity": 0.05},
-        {"grid": (12, 8)},
-    ],
-    ids=["width", "height", "viscosity", "inlet", "grid"],
-)
-def test_reuse_key_covers_the_case(changed: dict) -> None:
-    """A saved field is reused only for the same case, not only the same solver block.
+@pytest.mark.parametrize("component", list(CASE_CHANGES))
+def test_reuse_key_covers_each_component_of_the_case(component: str) -> None:
+    """Changing any one component of the case changes the key.
 
     Review 25 S8: the key held the solver parameters and the two versions, so
-    editing the domain, the fluid or the inlet in the case file left a field
-    solved under the old values to be served for the new ones.
+    editing the domain, the mesh, the fluid or the inlet in the case file left
+    a field solved under the old values to be served for the new ones. Test 39
+    T1 found nx, stretch_x and density unguarded: each component is changed
+    on its own here, and the next test ties the list to the key.
     """
     base = val001_order.reuse_key(_channel())
     assert val001_order.reuse_key(_channel()) == base
-    assert val001_order.reuse_key(_channel(**changed)) != base
+    assert val001_order.reuse_key(_channel(**CASE_CHANGES[component])) != base
 
 
 @pytest.mark.unit
-def test_reuse_key_covers_the_mesh() -> None:
-    """The wall-clustered mesh and the uniform one of the same size key apart."""
-    uniform = val001_order.reuse_key(_channel())
-    clustered = val001_order.reuse_key(load_wall_clustered("poiseuille", grid=(12, 6)))
-    assert clustered != uniform
+def test_every_component_of_the_reuse_key_has_a_case_above() -> None:
+    """A component added to the key without a case in CASE_CHANGES fails here."""
+    key = json.loads(val001_order.reuse_key(_channel()))
+    assert set(key["case"]) == set(CASE_CHANGES)
 
 
 @pytest.mark.unit
