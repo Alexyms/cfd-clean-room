@@ -350,7 +350,9 @@ timing ECR-003's cost criterion was met with (`docs/reports/ecr003_step2_baselin
 11). Alex decided on 2026-10-07 that the code sets one thread, and the cleanup pull request built
 it: the CG solve runs under a BLAS limit of one thread (`PRESSURE_BLAS_THREADS` in
 `src/pressure.py`), the measurement is `docs/reports/blas_threads.md`, and the cost criterion now
-holds under the default environment. Next: ECR-002 steps 2 to 5; step 5 retakes step 0's sweep
+holds under the default environment. ECR-002 step 2, the turbulent diffusivity in the transport
+solver (REQ-T13), is built on `feature/ecr002-transport-coupling` and waits for review and test;
+the tests are named in `docs/SYSTEM.md`. Next: ECR-002 steps 3 to 5; step 5 retakes step 0's sweep
 result with CG.
 
 Deferred findings from earlier pull requests were open as GitHub issues, and every open one now
