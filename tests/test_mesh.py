@@ -254,6 +254,61 @@ class TestCellClassification:
         mesh = Mesh(config)
         assert mesh.cell_type[5, 5] == SOLID
 
+    @pytest.mark.parametrize("edge", ["x_start", "x_end", "y_start", "y_end"])
+    @pytest.mark.parametrize("ulps", [-4, 4])
+    def test_edge_through_a_center_holds_within_rounding(
+        self, tmp_path, edge: str, ulps: int
+    ) -> None:
+        """An obstacle edge a few ulps either side of a cell center still contains that center.
+
+        Issue 51 D3: on the product mesh xc[57] is 2.3000000000000003 and the
+        server rack ends at 2.3, so the inclusive comparison dropped the cell
+        by one ulp. The edge is placed at the center of the block's first or
+        last cell and moved four ulps in or out; the block must come out as
+        the same 3 x 3 cells. Defect caught: the tolerance removed, or
+        applied on fewer than all four edges.
+        """
+        plain = Mesh(_make_config(tmp_path))
+        bounds = {
+            "x_start": float(plain.xc[3]),
+            "x_end": float(plain.xc[5]),
+            "y_start": float(plain.yc[3]),
+            "y_end": float(plain.yc[5]),
+        }
+        toward = np.inf if ulps > 0 else -np.inf
+        for _ in range(abs(ulps)):
+            bounds[edge] = float(np.nextafter(bounds[edge], toward))
+        config = _make_config(
+            tmp_path, overrides={"obstacles": [{"name": "block", **bounds}]}
+        )
+        mesh = Mesh(config)
+        solid = mesh.cell_type == SOLID
+        assert solid.sum() == 9
+        assert solid[3:6, 3:6].all()
+
+    @pytest.mark.parametrize("edge", ["x_start", "x_end", "y_start", "y_end"])
+    def test_edge_a_tenth_of_a_cell_inside_excludes_the_center(
+        self, tmp_path, edge: str
+    ) -> None:
+        """The tolerance is rounding, not a margin: a real tenth of a cell still excludes.
+
+        Moving one edge a tenth of a cell width inward leaves the end cell's
+        center outside the obstacle, so the block loses that row or column.
+        """
+        plain = Mesh(_make_config(tmp_path))
+        bounds = {
+            "x_start": float(plain.xc[3]),
+            "x_end": float(plain.xc[5]),
+            "y_start": float(plain.yc[3]),
+            "y_end": float(plain.yc[5]),
+        }
+        sign = 1.0 if edge.endswith("start") else -1.0
+        bounds[edge] += sign * 0.1 * float(plain.dx_cell[0])
+        config = _make_config(
+            tmp_path, overrides={"obstacles": [{"name": "block", **bounds}]}
+        )
+        assert (Mesh(config).cell_type == SOLID).sum() == 6
+
     def test_boundary_cell_on_edge_not_obstacle(self, tmp_path) -> None:
         """Edge cells not inside obstacles are BOUNDARY."""
         config = _make_config(
@@ -474,6 +529,18 @@ class TestMeshIntegration:
         assert n_solid > 100
         # But not the entire domain
         assert n_solid < 200 * 75 // 2
+
+    def test_default_config_floor_cells_under_obstacles(self) -> None:
+        """The four obstacles hold 99 floor cells, the count exact arithmetic gives.
+
+        Issue 51 D3: the server rack ends at 2.3 m, a cell center on the 0.04 m
+        grid that rounds to 2.3000000000000003, and the inclusive comparison
+        counted 98. The columns are 21 (rack), 33 (litho tool), 15 (etch
+        chamber) and 30 (hood bench).
+        """
+        mesh = Mesh(SimConfig("configs/clean_room_default.yaml"))
+        assert int(np.count_nonzero(mesh.cell_type[0] == SOLID)) == 99
+        assert mesh.cell_type[0, 57] == SOLID
 
     def test_default_config_counts_sum(self) -> None:
         """FLUID + SOLID + BOUNDARY equals total cells for default config."""

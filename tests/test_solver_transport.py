@@ -876,8 +876,8 @@ class TestMassBudget:
                     "name": "b",
                     "x_start": 0.4,
                     "x_end": 0.6,
-                    "y_start": 0.15,
-                    "y_end": 0.35,
+                    "y_start": 0.1,
+                    "y_end": 0.3,
                 }
             ],
         )
@@ -1161,8 +1161,8 @@ class TestWithTheRealBoundaryLayer:
                     "name": "b",
                     "x_start": 0.4,
                     "x_end": 0.6,
-                    "y_start": 0.15,
-                    "y_end": 0.35,
+                    "y_start": 0.1,
+                    "y_end": 0.3,
                 }
             ],
         )

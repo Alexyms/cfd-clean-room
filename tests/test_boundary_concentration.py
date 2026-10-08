@@ -473,11 +473,16 @@ class TestSolidEdgeCells:
             assert np.all(carried == [10.0, 20.0, 30.0, 40.0, 50.0][k])
 
     def test_product_floor_faces_under_the_obstacles_take_no_condition(self) -> None:
-        """Test 31: 98 floor faces on the product's own 200x75 grid sit under obstacles."""
+        """99 floor faces on the product's own 200x75 grid sit under obstacles.
+
+        Test 31 counted 98: the server rack ends at 2.3 m, a cell center that
+        rounds one ulp outside, and the inclusive comparison dropped it
+        (issue 51 D3). Exact arithmetic gives 99.
+        """
         config = SimConfig(CONFIG_DIR / "clean_room_default.yaml")
         mesh, _physics, bc = _build(config)
         under = mesh.cell_type[0, :] == SOLID
-        assert int(under.sum()) == 98
+        assert int(under.sum()) == 99
         faces = bc.faces_for(4)
         assert not faces.surface_v[0, under].any()
         assert not faces.deposition_v[0, under].any()
