@@ -196,6 +196,411 @@ correction, or a refusal) is a finding for that arm.
   Re 8,950: A, B, C, E and E0 end growing or diverge; D, which cannot reverse a return face, I
   also expect to end growing, because the growth sits in the gap over return 4 inside the room.
 
-## 6. Onward
+## 6. Method as built (written after the runs)
 
-Sections 6 onward are written after the runs.
+Everything ran as section 4 planned it, with these additions and adaptations.
+
+**The scripts.** `docs/reports/probe41/outlet41.py` holds the arms, the rooms, the runner and the
+comparisons; `run41.sh` is every run in the order it was launched; `summary41.py` prints the
+tables below from the records. Nothing under `src/`, `validation/`, `configs/` or `tests/`
+changed. The scripts import nothing from `results/`, except the control, which imports
+`frozen34.py` from `results/builder34/` to compare against.
+
+**Adaptations of the earlier probes.**
+- `outlet33b.py` set the sweep tolerance with `pressure_tol` and a 40,000-sweep cap; here the
+  solver block gets `pressure_rtol` (1e-8, 1e-4 or 1e-2) and `max_pressure_iter` 5,000, the
+  committed cap. `PressureCorrection` carries `iterations`, `reached_cap` and `products` instead of
+  `sweeps`, and the callback's state carries `pressure_iterations`.
+- `stall36.py` and `outer37.py` reached the drift room through `common36.py`'s `product_t3`, which
+  is `frozen34.py`'s `FrozenSolver` (ten momentum sweeps on the zero-field path) over
+  `outlet33b.py`'s T3. Here the ten sweeps are `SweepPredictor`, a subclass of the committed
+  `MomentumPredictor` whose `predict` calls the committed `_assemble` and `frozen34.py`'s `_sweep_n`
+  verbatim. The control (`outlet41.py control`) ran arm A for 50 outer iterations through each
+  predictor: the residual histories are equal bitwise and the face hashes are equal
+  (828112bc...), so the drift case here is the ECR-003 room to the bit at the start.
+- The hood's tangential velocity is held at zero by `hold_hood_tangential`, test 33b's `tangD`:
+  the ten right-edge tangential locations that are not already Dirichlet (the hood's nine faces
+  have ten `v` storage locations along the edge) become Dirichlet zero before the predictors are
+  built. Arm A was also run with 33b's zero gradient (A0) as a control; section 7.1 reads it.
+- `outlet33b.py` applied its treatment after calling the committed extrapolation; `ArmSolver`
+  replaces `_extrapolate_outlets` outright, so a segment's rule is the only thing that writes its
+  faces, and checks at construction that the segments cover every configured outlet face.
+- The corrector's open masks are set per iteration as in `outlet33b.py`. Arm D (and F, section
+  8) also set `needs_pin` and `pin_cell` on the committed corrector, which then runs its own
+  closed-domain projection and pin in `correct`; nothing else was needed. The corrector's
+  `_check_components` ran once at construction on the configured (open) layout and was not run
+  again on the closed one; the drift room is one component either way.
+- The mean pressure is the mean of `state.p` over non-SOLID cells after each outer iteration; the
+  "last 100" figure is the mean of its 100 last differences. Because that window spans the end of
+  a geometric convergence, the tables also give the mean of the last 10, and section 7.2 runs
+  every arm to 3,000 outer iterations with the stop disabled (`--long`: `iteration_error_tol`
+  1e-14, `mass_imbalance_tol` 1e-16) to read the pressure's movement far past the stop.
+- The velocity-step iteration is 1-based, as `outer37.py` recorded it (233 on the drift case).
+
+**The runs.** 49 solves, the control's two, and 9 comparisons, launched in parallel with one BLAS
+thread each (`run41.sh`), 2026-10-08, Python 3.13.3, NumPy 2.4.4, on the machine the baseline rows record (AMD
+Ryzen AI 9 HX 370). Every run was made twice: a first pass with the script before the 1-based
+change and before arm F existed (kept under `results/builder41/pass1/`), and the pass the tables
+report; section 7.6 compares them. The wall times in the tables were taken under that parallel
+load and are not used. No correction in any run reached the cap, no corrector
+refused a layout, and no arm had to stop for want of a `src/` change. Arm E ran with B's rule at
+the largest return (floor_return_1, seven faces), since B removed the drift on its own (section
+7.1), as the arm's definition prescribes.
+
+## 7. Results (written after the runs)
+
+### 7.1 Measurement 1: the drift case
+
+| Arm | rtol | Stop | velocity_step at | Outer | Mean p change per outer, last 100 (Pa) | last 10 | `\|\|b\|\|` end | Share beside open faces | Worst cell at end (kg/s per m) | Signed sum | Reversed, most at once | Held shut, most at once | CG per correction, median [max] | Cap hits | s |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| A | 1e-08 | error_estimate_and_continuity | 233 | 588 | +8.820e-02 | +8.8e-02 | 7.93e-02 | 1.000 | 5.0e-11 | -3.4e-16 | [0, 0, 0, 0, 0] | [0, 0, 0, 0, 0] | 303 [303] | 0 | 44 |
+| A | 0.0001 | cap, growing | 233 | 20,000 | +8.820e-02 | +8.8e-02 | 7.93e-02 | 1.000 | 6.9e-07 | +1.2e-16 | [0, 0, 0, 0, 0] | [0, 0, 0, 0, 0] | 229 [229] | 0 | 552 |
+| A | 0.01 | cap, growing | 234 | 20,000 | +8.819e-02 | +8.8e-02 | 7.93e-02 | 1.000 | 7.2e-05 | +3.3e-10 | [0, 0, 0, 0, 0] | [0, 0, 0, 0, 0] | 152 [179] | 0 | 413 |
+| B | 1e-08 | error_estimate_and_continuity | 115 | 206 | -4.929e-07 | -1.8e-08 | 1.86e-08 | 0.438 | 3.7e-14 | -2.5e-13 | [0, 0, 0, 0, 0] | [0, 0, 0, 0, 0] | 298 [307] | 0 | 23 |
+| B | 0.0001 | error_estimate_and_continuity | 115 | 206 | -4.929e-07 | -1.8e-08 | 1.86e-08 | 0.438 | 1.6e-13 | -1.0e-12 | [0, 0, 0, 0, 0] | [0, 0, 0, 0, 0] | 223 [229] | 0 | 20 |
+| B | 0.01 | error_estimate_and_continuity | 115 | 205 | -5.156e-07 | -1.9e-08 | 2.00e-08 | 0.444 | 1.7e-11 | +4.0e-11 | [0, 0, 0, 0, 0] | [0, 0, 0, 0, 0] | 121 [179] | 0 | 14 |
+| C | 1e-08 | error_estimate_and_continuity | 115 | 206 | -4.929e-07 | -1.8e-08 | 1.86e-08 | 0.438 | 3.7e-14 | -2.5e-13 | [0, 0, 0, 0, 0] | [0, 0, 0, 0, 0] | 298 [307] | 0 | 7 |
+| C | 0.0001 | error_estimate_and_continuity | 115 | 206 | -4.929e-07 | -1.8e-08 | 1.86e-08 | 0.438 | 1.6e-13 | -1.0e-12 | [0, 0, 0, 0, 0] | [0, 0, 0, 0, 0] | 223 [229] | 0 | 21 |
+| C | 0.01 | error_estimate_and_continuity | 115 | 206 | -4.817e-07 | -1.8e-08 | 1.85e-08 | 0.434 | 1.9e-11 | +3.9e-11 | [0, 0, 0, 0, 0] | [0, 0, 0, 0, 0] | 121 [179] | 0 | 4 |
+| D | 1e-08 | error_estimate_and_continuity | 103 | 177 | +8.271e-06 | +2.2e-08 | 1.88e-08 | 0.000 | 4.0e-14 | +2.0e-15 | [0, 0, 0, 0, 0] | [0, 0, 0, 0, 0] | 313 [320] | 0 | 23 |
+| D | 0.0001 | error_estimate_and_continuity | 103 | 177 | +8.270e-06 | +2.2e-08 | 1.88e-08 | 0.000 | 1.6e-13 | +2.0e-15 | [0, 0, 0, 0, 0] | [0, 0, 0, 0, 0] | 238 [254] | 0 | 5 |
+| D | 0.01 | error_estimate_and_continuity | 103 | 177 | +7.587e-06 | +1.8e-08 | 1.82e-08 | 0.000 | 2.8e-11 | +2.0e-15 | [0, 0, 0, 0, 0] | [0, 0, 0, 0, 0] | 58 [195] | 0 | 9 |
+| E | 1e-08 | error_estimate_and_continuity | 103 | 177 | +7.616e-06 | -1.1e-08 | 1.80e-08 | 0.030 | 3.3e-14 | +1.2e-13 | [0, 0, 0, 0, 0] | [0, 0, 0, 0, 0] | 340 [345] | 0 | 23 |
+| E0 | 1e-08 | error_estimate_and_continuity | 106 | 177 | +1.181e-01 | +1.2e-01 | 5.69e-02 | 1.000 | 5.7e-11 | -6.4e-16 | [0, 0, 0, 0, 0] | [0, 0, 0, 0, 0] | 339 [340] | 0 | 24 |
+| A (A0, hood tangential zero gradient) | 1e-08 | error_estimate_and_continuity | 233 | 588 | +8.820e-02 | +8.8e-02 | 7.93e-02 | 1.000 | 5.1e-11 | -6.0e-16 | [0, 0, 0, 0, 0] | [0, 0, 0, 0, 0] | 303 [303] | 0 | 21 |
+| F | 1e-08 | error_estimate_and_continuity | 512 | 969 | -1.991e-08 | -7.7e-09 | 5.50e-09 | 0.000 | 3.5e-14 | +2.0e-15 | [0, 0, 0, 0, 0] | [1, 0, 1, 0, 0] | 323 [330] | 0 | 39 |
+| F | 0.0001 | error_estimate_and_continuity | 512 | 969 | -1.991e-08 | -7.7e-09 | 5.50e-09 | 0.000 | 5.5e-14 | +2.1e-15 | [0, 0, 0, 0, 0] | [1, 0, 1, 0, 0] | 266 [268] | 0 | 54 |
+| F | 0.01 | error_estimate_and_continuity | 513 | 970 | -2.000e-08 | -7.8e-09 | 5.53e-09 | 0.000 | 6.8e-12 | +2.5e-15 | [0, 0, 0, 0, 0] | [1, 0, 3, 0, 0] | 172 [195] | 0 | 40 |
+
+**Arm A reproduces #61.** +0.0882 Pa per outer iteration, `||b||` 0.0793 with 100.0% of its
+square on the cells beside the open return faces, the error-estimate stop at 588 and the
+velocity-step stop at 233, as sections 8.3 and 12.4 recorded (+0.0882, 0.0793, 588, 233). The
+hood's tangential condition makes no difference the table can show: A0 (zero gradient, as the
+ECR-003 rows had it) gives the same numbers; the two residual histories differ by at most 2.1e-3
+relative (at outer 55) and their drift rates by 7e-6 relative. At 1e-4 and 1e-2 arm A never stops
+in 20,000 outer iterations, as section 12.4 found under the committed outlets: the velocity-step
+stop comes at 233 and 234 and the worst cell then holds 6.9e-7 (1e-4) and 7.2e-5 (1e-2) kg/s per metre
+against the 2e-8 the rule asks, 35 and 3,600 times over, with the pressure climbing at the same
++0.0882 throughout.
+
+**B and C remove the drift, and are the same iteration.** The pressure's change per outer
+iteration is -4.9e-7 over the last 100 and -1.8e-8 over the last 10, falling; `||b||` at the
+end is 1.9e-8 and the share beside the open faces 0.44 of a norm that is itself at rounding
+(the worst cell is 3.7e-14). B and C agree to 3e-10 m/s at every cell (section 7.4), as
+predicted: at 1e-8 the velocity that closes a cell is the corrected face of the previous
+iteration to the correction's own residual. Both stop at 206 outer iterations, with the
+velocity-step stop at 115, against A's 588 and 233: the standing imbalance was costing the
+velocity's convergence as well as the pressure's. No return face ever pointed into the room
+under B or C, so the hold-shut rule never acted.
+
+**D has no drift, no reversed face, and `||b||` at rounding.** 177 outer iterations, the fewest
+of any arm, the velocity-step stop at 103; `||b||` 1.9e-8 at the stop with no cell beside an
+open face (there is none); the worst cell 4.0e-14. The committed corrector solved the closed
+system through the subclass alone: every one of the 177 corrections stopped by its relative
+level (313 CG iterations median, 320 at most, against A's 303), none at the cap, and the
+signed domain sum of the corrected faces was 2e-15. The projection removed only rounding: the
+fixed split is formed from the face widths, so the supply, the hood and the returns balance to
+the arithmetic.
+
+**E does not drift and E0 does.** E, with B's rule at floor_return_1 and fixed flows at the other
+three, matches D's counts (177, 103) and ends at `||b||` 1.8e-8 with 3% of it beside the one open
+return; its flow differs from D's by at most 0.010 m/s, at the return-1 cells, where its seven
+faces take a pressure outlet's distribution (1.19 to 1.22 m/s) in place of D's uniform 1.23
+(section 7.4), and agrees with D's at the return-4 cells to the digits shown. E0, the same layout with A's copy
+at that return, climbs at +0.118 Pa per outer iteration, faster than A's +0.088, with `||b||`
+0.0569 entirely beside its seven open faces.
+
+**At 1e-4 and 1e-2, B, C and D stop where 1e-8 does.** 206, 206 and 177 outer iterations at every
+level, the worst cell at the stop 1.6e-13 (1e-4) and 1.7e-11 to 2.8e-11 (1e-2), below the 2e-8
+bound; the CG work per correction falls from 298 to 313 iterations at 1e-8 to 223 to 238 at 1e-4
+and 58 to 121 at 1e-2. Under A no level below 1e-8 ever stops.
+
+**The flow under A is not B's.** Section 7.4: A's cell-centred velocity differs from B's by 0.42
+m/s in u and 0.51 m/s in v, at the return-4 cells, a third of the largest speed; A's largest speed
+is 1.78 m/s where B's is 1.29. A's return faces carry the interior copy plus the standing
+correction `d p'`, which the next copy discards, so the faces the momentum equations see and the
+faces continuity holds are not the same faces; the velocity A settles on solves neither problem.
+The drift is not a cosmetic offset of the pressure.
+
+### 7.2 Measurement 1, continued: past the stop
+
+| Arm | p change per outer at 200 (mean of 10) | p change per outer at 588 (mean of 10) | p change per outer at 1,000 (mean of 10) | p change per outer at 2,000 (mean of 10) | p change per outer at 3,000 (mean of 10) | `\|\|b\|\|` at 3,000 | Residual at 3,000 | Worst cell at 3,000 |
+|---|---|---|---|---|---|---|---|---|
+| A | +8.8e-02 | +8.8e-02 | +8.8e-02 | +8.8e-02 | +8.8e-02 | 7.93e-02 | 2.56e-17 | 5.0e-11 |
+| B | -2.5e-08 | -9.9e-16 | -5.7e-16 | -1.5e-16 | -4.9e-17 | 3.15e-15 | 1.41e-17 | 3.9e-16 |
+| C | -2.5e-08 | +2.7e-16 | +3.9e-16 | +2.5e-16 | +1.5e-16 | 1.18e-14 | 2.82e-17 | 3.0e-15 |
+| D | +2.2e-09 | -5.5e-15 | +1.6e-16 | -3.7e-17 | -6.2e-18 | 8.44e-16 | 1.41e-17 | 9.2e-17 |
+| E | +6.6e-11 | -1.4e-15 | -1.6e-15 | -1.0e-15 | -7.9e-16 | 3.65e-14 | 1.95e-16 | 4.9e-15 |
+| E0 | +1.2e-01 | +1.2e-01 | +1.2e-01 | +1.2e-01 | +1.2e-01 | 5.69e-02 | 3.30e-17 | 5.7e-11 |
+| F | -7.4e-03 | -7.5e-06 | -4.4e-09 | -1.4e-15 | -2.5e-15 | 4.29e-14 | 4.43e-16 | 9.2e-15 |
+
+With the stop disabled, B, C, D and E move the pressure by 1e-15 Pa or less per outer iteration
+from 588 on, with `||b||` between 8e-16 and 4e-14 and the worst cell at or below 5e-15 at 3,000.
+A holds +0.0882 and E0 +0.118 for all 3,000 iterations with `||b||` unchanged, while their
+velocity residuals fall to 3e-17: the velocity is steady and the pressure climbs without end, as
+#61 says.
+
+### 7.3 Measurement 2: the ladder
+
+| Re | Arm | Outer | End | Residual: least, at end | Largest speed at end (m/s), cell | Reversed faces, most at once (returns 1 to 4, hood) | Held shut, most at once | Mean p change per outer, last 100 (Pa) | `\|\|b\|\|` end | s |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 895 | A | 3,000 | cap, growing | 2.36e-03, 2.18e-01 | 16.9, (6.3, 1.5) | [3, 3, 2, 1, 0] | [4, 3, 2, 2, 0] | -1.03e+00 | 4.75e+00 | 65 |
+| 895 | B | 435 | velocity_step_below_tol | 9.90e-07, 9.90e-07 | 1.26, (2.7, 0.1) | [0, 0, 0, 0, 0] | [0, 0, 0, 0, 0] | -4.95e-09 | 5.47e-06 | 10 |
+| 895 | C | 435 | velocity_step_below_tol | 9.90e-07, 9.90e-07 | 1.26, (2.7, 0.1) | [0, 0, 0, 0, 0] | [0, 0, 0, 0, 0] | -4.95e-09 | 5.47e-06 | 21 |
+| 895 | D | 391 | velocity_step_below_tol | 9.89e-07, 9.89e-07 | 1.41, (6.1, 0.9) | [0, 0, 0, 0, 0] | [0, 0, 0, 0, 0] | -1.88e-07 | 9.32e-06 | 19 |
+| 895 | E | 402 | velocity_step_below_tol | 9.51e-07, 9.51e-07 | 1.41, (6.1, 0.9) | [0, 0, 0, 0, 0] | [0, 0, 0, 0, 0] | +2.58e-07 | 9.82e-06 | 20 |
+| 895 | E0 | 400 | velocity_step_below_tol | 8.71e-07, 8.71e-07 | 1.41, (6.1, 0.9) | [0, 0, 0, 0, 0] | [0, 0, 0, 0, 0] | +4.96e-02 | 6.19e-02 | 20 |
+| 895 | F | 3,000 | cap, falling | 7.79e-03, 9.47e-02 | 6.14, (6.1, 0.9) | [0, 0, 0, 0, 0] | [1, 2, 1, 1, 0] | +5.99e-03 | 2.23e+00 | 52 |
+| 8,950 | A | 3,000 | cap, growing | 5.03e-03, 2.71e-01 | 17.2, (6.3, 1.7) | [4, 3, 2, 2, 0] | [4, 3, 2, 3, 0] | -1.44e+00 | 5.12e+00 | 67 |
+| 8,950 | B | 2,510 | velocity_step_below_tol | 9.92e-07, 9.92e-07 | 1.29, (4.9, 1.1) | [0, 0, 0, 0, 0] | [0, 0, 0, 0, 0] | -4.01e-09 | 4.49e-06 | 42 |
+| 8,950 | C | 2,510 | velocity_step_below_tol | 9.92e-07, 9.92e-07 | 1.29, (4.9, 1.1) | [0, 0, 0, 0, 0] | [0, 0, 0, 0, 0] | -4.01e-09 | 4.49e-06 | 42 |
+| 8,950 | D | 1,632 | velocity_step_below_tol | 9.85e-07, 9.85e-07 | 1.41, (6.1, 0.9) | [0, 0, 0, 0, 0] | [0, 0, 0, 0, 0] | +2.74e-10 | 4.74e-06 | 28 |
+| 8,950 | E | 1,632 | velocity_step_below_tol | 9.91e-07, 9.91e-07 | 1.41, (6.1, 0.9) | [0, 0, 0, 0, 0] | [0, 0, 0, 0, 0] | +2.77e-11 | 4.75e-06 | 45 |
+| 8,950 | E0 | 1,632 | velocity_step_below_tol | 9.85e-07, 9.85e-07 | 1.41, (6.1, 0.9) | [0, 0, 0, 0, 0] | [0, 0, 0, 0, 0] | +4.59e-02 | 5.49e-02 | 30 |
+| 8,950 | F | 3,000 | cap, growing | 8.35e-03, 1.50e-01 | 10, (6.3, 1.3) | [0, 0, 0, 0, 0] | [4, 2, 1, 2, 0] | +1.07e-02 | 3.83e+00 | 66 |
+
+**Arm A does not converge at either rung and every other pressure rule does.** Under A the
+residual's least value is 2.4e-3 (Re 895) and 5.0e-3 (Re 8,950), the end state 0.22 and 0.27 with
+the largest speed 17 m/s over return 4 and the hood bench, `||b||` 4.7 and 5.1 of a supply of 3.9
+kg/s per metre, and faces held shut in 2,830 and 2,843 of the 3,000 iterations, from outer 165
+and 158 on, up to four at once on return 1. That is test 33b's picture of T3 at these rungs (10 to
+20 m/s, residuals 0.1 to 0.35, held and reversed faces throughout) reproduced under the built
+hood condition, and without the cap: no correction here stopped short.
+
+Under B and C the room converges by the velocity-step rule at 435 outer iterations at Re 895 and
+2,510 at Re 8,950, to a largest speed of 1.26 and 1.29 m/s, with no return face ever pointing into
+the room and none ever held shut, so the two arms ran identical iterations (same counts, same
+residuals to the digits shown). Under D, E and E0 it converges at 391 to 402 (Re 895) and 1,632
+(Re 8,950); E0 drifts at +0.05 Pa per outer iteration while converging in velocity. At Re 8,950
+under B every return face carries outflow at the end, 0.70 to 1.31 m/s, and the four returns take
+0.85, 0.72, 0.43 and 0.74 m^2/s with the hood's 0.50, the supply's 3.24 on this grid to the
+digits shown.
+
+Prompt 33b's ladder (the Reynolds report, section 8.4) found no treatment that converged at
+Re 895 or above, and test 33b continued T3 to 2,500 and 1,000 outer iterations without
+convergence; ADR-012 D reads from that that "nothing tried makes the room converge above a
+hundred times the viscosity". Every treatment measured there copied the interior at the open
+returns. With the copy gone, on this grid and at one momentum sweep, the laminar room converges at
+both rungs under four different rules for the returns. Prediction (g) was wrong on its second
+half, and the premise it carried, that the Reynolds number and not the outlets is these rungs'
+problem, does not hold on 40x15. What holds on 80x30 and 200x75 at real air, where ADR-013
+decision 6 found the laminar room converging on neither with ten sweeps, is step 5's
+measurement, now with a different outlet rule to make it under.
+
+### 7.4 Measurement 4: the flows against each other
+
+| Pair | max abs du (m/s), cell | max abs dv (m/s), cell | max abs dp after removing each mean (Pa), cell | Floor faces, max abs dv (m/s) | Scale: max abs u, v, p (B) |
+|---|---|---|---|---|---|
+| D vs B | 6.431e-02, (6.15, 0.05) | 8.419e-02, (6.25, 0.05) | 8.119e-01, (1.55, 0.05) | 1.261e-01 | 0.906, 1.277, 1.082 |
+| C vs B | 2.833e-10, (5.85, 0.05) | 3.489e-10, (5.95, 0.05) | 5.702e-10, (5.95, 0.05) | 5.215e-10 | 0.914, 1.288, 1.096 |
+| E vs B | 6.431e-02, (6.15, 0.05) | 8.419e-02, (6.25, 0.05) | 9.584e-02, (2.75, 0.05) | 1.261e-01 | 0.906, 1.277, 1.162 |
+| E vs D | 9.232e-03, (0.75, 0.05) | 1.015e-02, (0.55, 0.05) | 8.779e-01, (1.55, 0.05) | 1.474e-02 | 0.906, 1.277, 1.162 |
+| A vs B | 4.150e-01, (5.65, 2.05) | 5.067e-01, (6.05, 0.05) | 5.247e+01, (1.55, 0.05) | 5.694e-01 | 1.197, 1.783, 53.567 |
+| F vs B | 3.905e+00, (5.75, 2.05) | 4.536e+00, (6.05, 0.05) | 2.438e+01, (6.35, 0.85) | 4.692e+00 | 4.626, 5.813, 25.338 |
+| F vs A | 3.516e+00, (5.75, 2.05) | 4.029e+00, (6.05, 0.05) | 5.910e+01, (1.55, 0.05) | 4.123e+00 | 4.626, 5.813, 25.338 |
+
+On the drift case D's flow differs from B's by 0.064 m/s in u and 0.084 m/s in v (5% and 7% of
+the largest u and v), both at the return-4 cells, and by 0.126 m/s on the floor faces: fixing the
+returns' flows at the equal-velocity split changes the room where the returns sit and little
+elsewhere. The demeaned pressure differs by 0.81 Pa at the return-1 cell, where D's uniform 1.23
+m/s face replaces B's 1.19 to 1.22. E's flow is D's to 0.010 m/s. On the 40x15 ladder the gap is
+larger: 0.29 m/s in u at (4.9, 2.1), the litho tool's corner, and 0.24 m/s in v over return 4, 32%
+and 18% of the largest components, at both rungs.
+
+### 7.5 Measurement 3: VAL-001
+
+| Path | Outer | Stop | REQ-S02 metric | Equal to the baseline's 4.1077e-4 to three figures | Face hash (u then v) | Equals the baseline's | Mean p change per outer, last 100 (Pa) | last 10 | `\|\|b\|\|` end | Worst cell at end | Reversed faces, most | Held shut, most |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| committed | 1,559 (+0.0%) | error_estimate_and_continuity | 4.10770e-04 | True | c7d88d919e1141a5... | True | -2.38e-10 | -1.5e-10 | 7.38e-13 | 3.8e-16 | [0] | [0] |
+| B | 1,533 (-1.7%) | error_estimate_and_continuity | 4.49223e-04 | False | 968f06183cb7edfb... | False | -3.01e-10 | -1.9e-10 | 2.36e-12 | 4.3e-16 | [0] | [0] |
+| C | 1,533 (-1.7%) | error_estimate_and_continuity | 4.49223e-04 | False | 4d42e2b1e3dd7127... | False | -3.01e-10 | -1.9e-10 | 2.36e-12 | 4.3e-16 | [0] | [0] |
+| F | 1,559 (+0.0%) | error_estimate_and_continuity | 4.10770e-04 | True | 9b4f42a94dcefdbc... | False | +7.27e-11 | +4.5e-11 | 7.15e-13 | 4.4e-16 | [0] | [0] |
+
+| Grid | Path | Outer | REQ-S02 metric | Metric minus the committed path's | max abs du at cell centres vs committed (m/s), column | max abs v in the last column (m/s) | max abs (outlet face minus interior face) (m/s) |
+|---|---|---|---|---|---|---|---|
+| 40x20 | committed | 408 | 1.99904e-03 | +0.00e+00 | 0.00e+00, column 0 of 40 | 8.59e-09 | 3.36e-09 |
+| 40x20 | B | 399 | 2.04699e-03 | +4.79e-05 | 3.42e-02, column 39 of 40 | 2.96e-02 | 1.72e-02 |
+| 40x20 | F | 408 | 1.99904e-03 | +5.97e-12 | 2.01e-10, column 39 of 40 | 8.50e-09 | 3.31e-09 |
+| 80x40 | committed | 1,559 | 4.10770e-04 | +0.00e+00 | 0.00e+00, column 0 of 80 | 4.38e-09 | 8.72e-10 |
+| 80x40 | B | 1,533 | 4.49223e-04 | +3.85e-05 | 4.71e-02, column 79 of 80 | 3.68e-02 | 1.66e-02 |
+| 80x40 | F | 1,559 | 4.10770e-04 | +7.06e-13 | 1.31e-11, column 79 of 80 | 4.38e-09 | 8.71e-10 |
+| 160x80 | committed | 6,103 | 1.56823e-04 | +0.00e+00 | 0.00e+00, column 0 of 160 | 2.21e-09 | 2.22e-10 |
+| 160x80 | B | 6,019 | 1.53702e-04 | -3.12e-06 | 5.81e-02, column 159 of 160 | 4.30e-02 | 1.61e-02 |
+| 160x80 | F | 6,103 | 1.56823e-04 | -9.02e-14 | 5.35e-12, column 159 of 160 | 2.22e-09 | 2.22e-10 |
+
+**The committed path reproduces the baseline.** 1,559 outer iterations, the metric 4.10770e-4 and
+the face hash c7d88d91... equal to the `staggered-cg` row's (ae24b120, 63d655ba), and no drift:
+-2.4e-10 Pa per outer iteration over the last 100, -1.5e-10 over the last 10, falling, with
+`||b||` 7.4e-13 at the stop. VAL-001's single outlet carries outflow at every face in every
+iteration, so A's copy and the corrected face agree there to the correction's own move.
+
+**B and C change VAL-001's converged answer.** Both stop at 1,533 (-1.7%), inside the 10%
+predicted, but the metric is 4.49223e-4 against 4.10770e-4: equal to one figure, not three, 9%
+larger. The difference sits in the exit column. Under the committed path the transverse velocity
+in the last column is 4e-9 m/s and each outlet face equals its interior neighbour to 9e-10; under
+B the last column carries v up to 0.037 m/s (0.37 of the mean velocity) and the outlet faces differ
+from their neighbours by up to 0.017 m/s, with the cell-centred u differing from the committed
+path's by 0.047 m/s in that column and by 1.5e-5 m/s at mid-channel. The same structure appears on
+40x20 (v 0.030 m/s) and 160x80 (v 0.043 m/s) and does not fall with the grid; the metric's
+difference is +4.8e-5, +3.8e-5 and -3.1e-6 on the three grids (the 160x80 pair stops at 6,103 and
+6,019 outer iterations), so at mid-channel the two answers approach each other under refinement
+while the exit column does not. The committed copy gives each outlet face the zero-gradient value, the fully developed outflow condition, and continuity then
+forces v_n = v_s in each exit cell; B and C give the face only the value that closes its cell,
+which is also what a column of nonzero v with a compensating outlet face satisfies. The discrete
+problem B and C solve has a weaker outlet condition and a different solution. The metric is
+still 40 times inside REQ-S02's 1e-2, so the candidate is not inaccurate; it is a different
+discretisation of the exit, and the prediction's reading stands: the candidate changes the
+converged answer, not only the path, and is wrong for VAL-001 as VAL-001's bitwise clause reads.
+
+### 7.6 Pass 1 against pass 2
+
+Every run of the tables was also made in the first pass, before the velocity-step count was
+made 1-based and before the 160x80 pair was added (`results/builder41/pass1/`). The 48 runs
+the two passes share have the same face hash and the same outer count in both; the three
+160x80 runs exist in the second pass only. The control (`control.json`) holds in both passes:
+the residual histories of the two predictors are equal bitwise over 50 outer iterations and
+their face hashes are 828112bc...
+
+## 8. Arm F, found on the way (written after the runs)
+
+Section 7.5's finding says what B and C lack: an outlet condition on the face's momentum. The
+textbook outflow treatment (Patankar 1980, the outflow boundary; Versteeg and Malalasekera 2007,
+chapter 9, outlet boundary conditions)
+copies the interior as A does, scales the copies by one factor so the total outflow equals the
+inflow, and then holds the outlet faces as known in the pressure correction, which leaves the
+pressure to a pin. It keeps the zero-gradient condition and cannot drift, since the faces are not
+corrected. It was run as arm F through the same subclass: each pressure return copies its interior
+neighbour, inward faces are held shut as under A, the open copies are scaled so that the returns
+and the hood together carry the supply (the equal-velocity split is used instead whenever the
+copies carry no outflow, which happened once per run, at rest), and all return faces leave the
+masks, so the corrector pins. F ran the drift case at the three levels and to 3,000 iterations,
+both rungs of the ladder, and VAL-001 on 40x20, 80x40 and 160x80.
+
+- **VAL-001.** F reproduces the committed path: 1,559 outer iterations, the metric 4.10770e-4 to
+  the twelfth figure (+7e-13), the last column's v 4.4e-9 and the outlet faces equal to their
+  neighbours to 9e-10, no drift (+4.5e-11 Pa per outer iteration over the last 10). The face hash
+  differs: the pressure level is the pin's, not the outlet's, and the path differs by the scaling,
+  which ends at 1 + 2e-16.
+- **The drift case.** No drift (-2.0e-8 over the last 100 at the stop, 1e-15 at 3,000), `||b||`
+  5.5e-9 at the stop, the same counts at 1e-8, 1e-4 and 1e-2 (969 to 970 outer iterations). But
+  the flow is wrong: the whole supply leaves through return 4 at 3.1 to 6.0 m/s while returns 1 to
+  3 carry 0.002 m/s or less, with one face of returns 1 and 3 held shut from outer 175 on, and
+  the largest speed 5.8 m/s against B's 1.29. One scale factor applied to every return cannot set
+  the split between returns; whatever split the copies happen to carry is what the scaling
+  preserves, and the iteration found a split with three returns dead. A single-outlet case cannot
+  show this.
+- **The ladder.** F does not converge at either rung (cap at 3,000, residual 0.095 and 0.15 at the
+  end, `||b||` 2.2 and 3.8, up to four faces held shut at once). The hold-shut rule under a
+  scaled copy flaps as it does under A.
+
+F is therefore the right outflow condition for VAL-001 and the wrong one for a room with several
+returns, unless the split between returns is set some other way, which is what D does.
+
+## 9. Predictions against measurement (written after the runs)
+
+| Prediction | Outcome | Measured |
+|---|---|---|
+| (a) A reproduces #61 within 2%: +0.088 Pa, `\|\|b\|\|` about 0.079, all beside the open returns | Holds | +0.0882 Pa per outer iteration, `\|\|b\|\|` 0.0793, share 1.000; stops at 588 and 233 as recorded |
+| (b) B and C remove the drift: below 1e-6 Pa per outer, `\|\|b\|\|` below 1e-6 | Holds | -4.9e-7 (last 100), -1.8e-8 (last 10), 1e-15 at 3,000; `\|\|b\|\|` 1.9e-8 at the stop, 3e-15 at 3,000 |
+| (c) CG at 1e-4 meets the error-estimate stop under B, C and D, never under A | Holds | B, C, D stop at 206, 206, 177 at 1e-4 and at 1e-2; A never in 20,000 at either |
+| (d) D has no drift, no reversed face, `\|\|b\|\|` at rounding | Holds | 1e-17 Pa per outer at 3,000; no face reversed or shut; `\|\|b\|\|` 8e-16 at 3,000 (1.9e-8 at the stop, where the velocity was still moving) |
+| (e) E0 drifts and E does not | Holds | E0 +0.118 Pa per outer; E 1e-15 at 3,000 |
+| (f) VAL-001 under B and C: metric equal to three figures, hashes differ, count within 10%, committed path no drift | Fails on the metric | 4.492e-4 against 4.108e-4 (one figure); hashes differ; 1,533 (-1.7%); committed drift -2e-10 |
+| (g) Ladder: no arm diverges at Re 895; every arm diverges or ends growing at Re 8,950 | Fails on the second half | Nothing diverged. B, C, D, E, E0 converge at both rungs (435 to 402 and 2,510 to 1,632); A ends growing at both, at 17 m/s; F ends at the cap at both |
+
+The builder's (section 5.2): (a) held, and A0 showed the tangential condition moved nothing the
+table can see; (b) held, with B and C agreeing to 3e-10 m/s, but the counts were not "within 20%
+of A's 588": they were 206, 65% fewer; (c) held at 1e-2 as well; (d) held; (e) wrong in its
+detail, E0's rate is above A's, not below; (f) wrong on the metric, for the reason section 7.5
+gives; (g) wrong, as the orchestrator's.
+
+**Stop-and-report items.** None fired: A reproduced #61 to the digits recorded; every arm was built
+through the subclass; no pressure solve failed or was refused in any run.
+
+## 10. What this implies (written after the runs; questions, not decisions)
+
+**Which arm removes the drift, and at what cost.** Every rule but the copy removes it: B and C
+(the corrected face kept; the cell closed before prediction), D (fixed flows), E (fixed flows at
+three returns, B at one) and F (the scaled copy held). The costs measured:
+
+- B and C: the same iteration to 3e-10 m/s. On the room they converge in a third of A's outer
+  iterations, with no face ever reversing, and at Re 895 and Re 8,950 on 40x15 where A does not
+  converge at all. Their cost is the outlet condition they leave out: on VAL-001 the exit column
+  carries a transverse velocity of 0.037 m/s and the metric moves from 4.108e-4 to 4.492e-4 on
+  80x40, with the exit column's structure on every grid tried. Whether that same freedom changes
+  the room's answer at the returns in a way that matters is not something VAL-001 can say; the return faces under B vary across one return
+  (1.19 to 1.30 m/s at return 2), as a pressure outlet's would, and no reference exists for the
+  room. The question for step 3: is a face value fixed by cell continuity alone an acceptable
+  pressure outlet, or does the rebuilt outlet need a momentum condition on the face as well (a
+  half-cell momentum equation at the outlet face with the outlet pressure in its source, which
+  neither the probes nor `src/` has)?
+- D: no outlet condition is needed because no face is free. The cost is the split: the returns'
+  flows become configured inputs, and the room's flow differs from B's by 0.08 m/s at the return
+  cells on 80x30 and 0.29 m/s at the litho tool's corner on 40x15. The ECR-002 design (ADR-012
+  decision 1 as taken) treats the split as something the room sets; D takes it from the user.
+- E: D's answer with one return left to the pressure, which then carries exactly the share the
+  split would have given it. It changes nothing D does not, and removes the need for one input.
+- F: correct for one outlet and degenerate for several. Not a candidate for the room as it stands.
+
+**Whether ADR-012 decision 1's rejection of option 2 still holds.** Option 2 was set aside as
+"compatible only when the shares sum to the supply exactly, the closed cavity's case". Measured:
+the committed corrector solves that case as it is, through the subclass alone, in 177 outer
+iterations with the signed domain sum at 2e-15 and every correction converging to its relative
+level; the compatibility is exact when the shares are formed from the face widths, as D forms
+them, and the projection the ECR-003 solve already runs removes the rounding residue. What the
+rejection said about the corrector is no longer the case. What it said about the input remains:
+the split must sum to the supply less the hood, so a configured split is a derived quantity (a
+share per return, the velocities computed) or a validated one (refused when it does not sum).
+The questions: does Alex want the returns' split to be an input of the room's configuration at
+all, given that it moves the room's flow by the amounts above; and if the hood is a fixed flow
+(decision 2 of 2026-10-04) and the returns are pressure outlets, which of B, C or a face momentum
+condition is the pressure outlet the rebuild adopts?
+
+**What REQ-S16 and REQ-S18's "VAL-001 bitwise" would have to say.** No deliberate outlet fix
+keeps VAL-001's faces bitwise. B and C change the metric (4.108e-4 to 4.492e-4, both inside
+REQ-S02's 1e-2) and the exit column's structure; F keeps the metric to 7e-13 and changes the
+hash through the pin and the path; D does not apply to a single outlet without becoming F. If
+the pressure outlet is rebuilt, the clause would read as ECR-003's did for its change: VAL-001 and
+VAL-002 within REQ-S02 and REQ-S03, and a baseline retaken at the step's base, with the hash
+machine-specific as section 2.3 of the baseline report records. Under B or C the retaken VAL-001
+baseline would carry the exit-column structure section 7.5 describes; under F or a face momentum
+condition it would not. Which of those is acceptable as "VAL-001 passes" is the question the
+requirement's wording has to answer before step 3 builds anything; today it answers "bitwise",
+which none of them can meet. VAL-002 has no outlet and stays bitwise under every arm.
+
+**Whether ADR-013 decision 3's `pressure_rtol` default could be relaxed.** Issue #61's reason
+for a tight default was this room: under the copy, only a correction below about 2.5e-7 of the
+standing imbalance lets the error-estimate rule stop. With the drift gone that reason is gone:
+under B, C and D the rule stops at the same outer iteration at 1e-8, 1e-4 and 1e-2, and the work
+per correction falls by a quarter at 1e-4 and by half to four fifths at 1e-2. The other reasons
+ADR-013 B gives were not measured here: the start from rest at real air (one part in ten blew up
+within three outer iterations on 40x15 and 80x30 at real air) and reproducibility (two CG
+implementations at one part in ten reached states 9.9e-5 m/s apart). The question is therefore
+whether, after step 3 adopts a rule without the standing imbalance, the guard and tight-start
+options of decision 3 are revisited against those two remaining reasons, measured on the rooms
+step 5 runs, rather than against this one, which no longer needs the tight level under any rule
+but the copy.
+
+**Found on the way, for step 5.** On 40x15 at one momentum sweep the laminar room converges at
+Re 895 and Re 8,950 under every rule that is not the copy. Every earlier measurement of this
+ladder (the Reynolds report, section 8; test 33b; ADR-012 D's reading that nothing converges
+above Re 895) was made under the copy. Step 5's convergence measurement on 80x30 and 200x75 at
+real air would be made under step 3's outlets; whether ADR-013 decision 6's finding (no
+convergence on either at real air with ten sweeps) was the outlets' or the grid's is open until
+then.
+
+## Appendix: the scripts
+
+`docs/reports/probe41/`, committed with this report:
+
+- `outlet41.py`: the arms (`ArmSolver`, `Segment`, the rules), `SweepPredictor`,
+  `RecordingCorrector`, the rooms, the runner, the control and the comparisons.
+- `run41.sh`: every run in the order launched.
+- `summary41.py`: the tables of section 7 from the records under `results/builder41/`.
+
+| File | SHA-256 |
+|---|---|
+| `outlet41.py` | 95f508484c6f1e727701136583d23ee1b59dd207603e37cac3d362e38418dc5c |
+| `run41.sh` | 0bd95df59b14a9d7934ec8167510725167a4419ba60ff7854a6b9ee29a3c674a |
+| `summary41.py` | 512053cc1eae9ce24923961c5d0e970e0df8d63e626b2515cd230005d1c309a1 |
+
