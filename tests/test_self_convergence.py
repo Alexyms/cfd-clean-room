@@ -8,12 +8,14 @@ carry an order other than the one it is told to expect.
 from __future__ import annotations
 
 import sys
+import warnings
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
+import yaml
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
@@ -21,13 +23,16 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 import self_convergence  # noqa: E402 -- scripts/ is not a package; path set above
 
 from src.config import SimConfig  # noqa: E402 -- follows sys.path.insert
-from src.mesh import Mesh  # noqa: E402 -- follows sys.path.insert
+from src.mesh import FLUID, Mesh  # noqa: E402 -- follows sys.path.insert
 from src.pressure import (  # noqa: E402 -- follows sys.path.insert
     PRESSURE_SOLVER_VERSION,
     STAGGERED_METHODS,
 )
 from src.stopping import IterationState  # noqa: E402 -- follows sys.path.insert
-from validation.cases import load_case  # noqa: E402 -- follows sys.path.insert
+from validation.cases import (  # noqa: E402 -- follows sys.path.insert
+    case_path,
+    load_case,
+)
 from validation.metrics import (  # noqa: E402 -- follows sys.path.insert
     GHIA_U_VAL,
     GHIA_U_Y,
@@ -134,15 +139,28 @@ def test_true_centerline_meets_smooth_faces_at_second_order() -> None:
 
 
 def _smooth_faces(n: int) -> tuple[np.ndarray, np.ndarray]:
-    """Cell-centered u, v of the smooth faces used above, on an n x n grid."""
+    """Cell-centered u, v of smooth faces on an n x n grid.
+
+    u varies along x with the faces f of the test above, exact value 0.1 at
+    0.5. v varies along y with its own faces g, a larger sine, exact value 0.2
+    at 0.5, so that the two fields and their gaps differ and a swap of u and v
+    anywhere in the pipeline changes a result.
+    """
 
     def f(s: np.ndarray) -> np.ndarray:
         t = s - 0.5
         return 0.1 * np.sin(np.pi * s) + t * (1.0 - 4.0 * t**2)
 
-    uf = np.tile(f(np.arange(n + 1) / n), (n, 1))
+    def g(s: np.ndarray) -> np.ndarray:
+        t = s - 0.5
+        return 0.2 * np.sin(np.pi * s) + 0.3 * t * (1.0 - 4.0 * t**2)
+
+    faces = np.arange(n + 1) / n
+    uf = np.tile(f(faces), (n, 1))
+    vf = np.tile(g(faces), (n, 1))
     u = 0.5 * (uf[:, :-1] + uf[:, 1:])
-    return u, u.T.copy()
+    v = 0.5 * (vf[:, :-1] + vf[:, 1:])
+    return u, v.T.copy()
 
 
 def _save_fields(
@@ -224,14 +242,15 @@ def test_saved_fields_of_another_order_fail_the_gap_order_check(
 def test_face_gap_matches_the_mean_of_the_two_middle_columns(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """face_gap on the 20x20 grid equals the middle-column mean minus the exact face.
+    """face_gap on the 20x20 grid equals the middle-line mean minus the exact face.
 
     Issue 47 D2: the entry was written for every saved field and asserted
-    nowhere. On the smooth faces u varies along x only and the exact face on
-    x = 0.5 is f(0.5) = 0.1. The true-centerline profile is the mean of the
-    two columns whose centers bracket 0.5 (columns 9 and 10 of 20), read here
-    from the file that was saved, so the gap is that mean minus 0.1 in every
-    row, and the same for v by symmetry.
+    nowhere. On the smooth faces u varies along x only and its exact face on
+    x = 0.5 is 0.1; v varies along y only, from its own faces, and its exact
+    face on y = 0.5 is 0.2. The true-centerline profile is the mean of the two
+    lines whose centers bracket 0.5 (columns of u, rows of v, 9 and 10 of 20),
+    read here from the file that was saved, so each gap is that mean minus the
+    exact face. The two gaps differ (test 39 T-S2), so a swap fails.
     """
     fields = {n: _smooth_faces(n) for n in self_convergence.GRIDS}
     _save_fields(tmp_path, fields)
@@ -239,11 +258,51 @@ def test_face_gap_matches_the_mean_of_the_two_middle_columns(
     out = self_convergence.extrapolation()
     entry = out["metric"][f"{self_convergence.STAGGERED_METHOD}_20"]["face_gap"]
     with np.load(tmp_path / f"{self_convergence.STAGGERED_METHOD}_20.npz") as saved:
-        middle = 0.5 * (saved["u"][:, 9] + saved["u"][:, 10])
-    expected = float(np.abs(middle - 0.1).max())
-    assert expected > 1e-6
-    assert entry["u"] == pytest.approx(expected, rel=1e-9)
-    assert entry["v"] == pytest.approx(expected, rel=1e-9)
+        middle_u = 0.5 * (saved["u"][:, 9] + saved["u"][:, 10])
+        middle_v = 0.5 * (saved["v"][9, :] + saved["v"][10, :])
+    expected_u = float(np.abs(middle_u - 0.1).max())
+    expected_v = float(np.abs(middle_v - 0.2).max())
+    assert min(expected_u, expected_v) > 1e-6
+    assert abs(expected_u - expected_v) > 1e-4
+    assert entry["u"] == pytest.approx(expected_u, rel=1e-9)
+    assert entry["v"] == pytest.approx(expected_v, rel=1e-9)
+
+
+@pytest.mark.unit
+def test_offset_errors_append_the_walls_the_mesh_has() -> None:
+    """On a cavity of side 0.5 the profiles end at 0.5, not at the literal 1 (review 21b S6).
+
+    The expected errors interpolate the same centerline faces with the walls
+    written out from the known side. With the walls hardcoded at 1.0 the
+    profile reaches the lid half a unit past the domain, and every Ghia
+    station above the last node reads a different value.
+    """
+    n, side = 16, 0.5
+    raw = yaml.safe_load(case_path("cavity").read_text(encoding="utf-8"))
+    raw["domain"].update({"width": side, "height": side, "nx": n, "ny": n})
+    raw["boundaries"]["lid"]["x_end"] = side
+    config = SimConfig.from_dict(raw)
+    mesh = Mesh(config)
+    # u is zero, so the lid's wall value alone shapes the u profile above the last
+    # node; v has a half sine across its rows, so the v profile is not zero there.
+    # Both errors then move when the far wall moves.
+    sine = 0.2 * np.sin(np.pi * (np.arange(n) + 0.5) / n)
+    fields = {"u": np.zeros((n, n)), "v": np.repeat(sine[:, None], n, axis=1)}
+    out = self_convergence.offset_errors(n, fields, config)
+    u_line, v_line, _ = self_convergence.centerline_faces(fields["u"], fields["v"])
+    col = mesh.cell_type[:, n // 2] == FLUID
+    row = mesh.cell_type[n // 2, :] == FLUID
+    lid = raw["boundaries"]["lid"]["u_velocity"]
+    y = [0.0, *np.asarray(mesh.yc)[col], side]
+    x = [0.0, *np.asarray(mesh.xc)[row], side]
+    u_err = np.interp(GHIA_U_Y, y, [0.0, *u_line[col], lid]) / lid - np.array(
+        GHIA_U_VAL
+    )
+    v_err = np.interp(GHIA_V_X, x, [0.0, *v_line[row], 0.0]) / lid - np.array(
+        GHIA_V_VAL
+    )
+    assert out["on_centerline"]["u"] == pytest.approx(np.abs(u_err).max(), rel=1e-12)
+    assert out["on_centerline"]["v"] == pytest.approx(np.abs(v_err).max(), rel=1e-12)
 
 
 @pytest.mark.unit
@@ -274,6 +333,24 @@ def test_order_change_names_a_station_undefined_under_one_reading() -> None:
     assert change["max"] == pytest.approx(0.5)
     assert change["at"] == 0.3
     assert change["undefined_in_one"] == [0.2]
+
+
+@pytest.mark.unit
+def test_order_change_raises_no_warning_on_non_finite_orders() -> None:
+    """inf - inf and nan - x are not formed for orders that are then discarded.
+
+    Two extrapolation tests printed an invalid-value RuntimeWarning from this
+    line (test 39); the result is the same, the warning is gone.
+    """
+    stations = np.array([0.1, 0.2, 0.3, 0.4])
+    a = np.array([np.inf, np.nan, 2.0, 1.0])
+    b = np.array([np.inf, 1.0, 2.5, np.nan])
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        change = self_convergence.order_change(a, b, stations)
+    assert change["max"] == pytest.approx(0.5)
+    assert change["at"] == 0.3
+    assert change["undefined_in_one"] == [0.2, 0.4]
 
 
 @pytest.mark.unit
