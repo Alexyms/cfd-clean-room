@@ -1526,13 +1526,19 @@ class TestEddyViscosityFaceRule:
         assert not nu_u[:, [0, -1]].any() and not nu_v[[0, -1], :].any()
 
     def test_the_mean_is_not_the_arithmetic_one(self) -> None:
-        """The control: at the face between 4 and 2 (1e-3) the arithmetic mean
-        of the cell values is 3.0e-3 on a uniform mesh, and with the 0.10 / 0.05
-        weights it is 3.33e-3, against the harmonic 3.0e-3 above."""
+        """The control: at the x face between 3 and 5 (1e-3), centre distances
+        0.10 and 0.05, the harmonic mean is 45/13 = 3.46e-3, the plain
+        arithmetic mean 4.0e-3, linear interpolation to the face 4.33e-3, and
+        the arithmetic mean weighted by each cell's own distance 3.67e-3. The
+        face value is the first and none of the others. The face between 4 and 2
+        cannot serve: there the harmonic and plain arithmetic means are both
+        3.0e-3."""
         _, solver = _solver_with_schmidt(SCHMIDT)
         nu_u, _ = solver._face_eddy_viscosity(self.NU)
-        arithmetic = (0.10 * 2.0e-3 + 0.05 * 4.0e-3) / 0.15
-        assert abs(nu_u[0, 2] - arithmetic) > 2.0e-4
+        value = nu_u[1, 2]
+        assert value == pytest.approx(45.0e-3 / 13.0, rel=1e-14)
+        for arithmetic in (4.0e-3, 13.0e-3 / 3.0, 11.0e-3 / 3.0):
+            assert abs(value - arithmetic) > 1.5e-4
 
     def test_a_uniform_field_gives_the_uniform_value_on_a_stretched_mesh(self) -> None:
         """Equal cell values give that value on every interior face, to rounding,
@@ -1626,12 +1632,14 @@ class TestEddyViscosityRefusals:
     def test_a_bad_field_is_refused_and_the_budget_untouched(
         self, make: object, error: type[Exception], message: str
     ) -> None:
+        """Each bad field is refused before the budget is touched."""
         mesh, solver = _solver_with_schmidt(SCHMIDT)
         with pytest.raises(error, match=message):
             self._step(solver, mesh, make())  # type: ignore[operator]
         assert solver.budget[0] == MassBudget()
 
     def test_one_negative_cell_among_good_ones_is_refused(self) -> None:
+        """One negative non-SOLID cell is enough for a refusal."""
         mesh, solver = _solver_with_schmidt(SCHMIDT)
         field = np.full((3, 3), 1.0e-3)
         field[2, 1] = -1.0e-9
@@ -1639,6 +1647,7 @@ class TestEddyViscosityRefusals:
             self._step(solver, mesh, field)
 
     def test_a_field_without_turbulent_schmidt_is_refused_naming_the_key(self) -> None:
+        """A field with no Sc_t configured is refused, the message naming the key."""
         mesh, solver = _solver_with_schmidt(None)
         with pytest.raises(ValueError, match=r"transport\.turbulent_schmidt"):
             self._step(solver, mesh, np.full((3, 3), 1.0e-3))
@@ -1672,6 +1681,8 @@ class TestEddyViscosityRefusals:
 
 @pytest.mark.unit
 class TestEddyViscosityPositivity:
+    """A field keeps the concentration non-negative (REQ-T12, ADR-012 F)."""
+
     def test_a_narrow_spike_and_a_large_step_keep_the_field_non_negative(self) -> None:
         """REQ-T12's argument carries over: the implicit matrix is an M-matrix
         for any non-negative conductance. A spike of nu_t two cells wide, in a
@@ -1691,9 +1702,10 @@ class TestEddyViscosityPositivity:
             assert solver.diffusion_converged
             assert c.min() >= 0.0
             assert np.isfinite(c).all()
-        # The control that the field acted: the hot cell shared with its
-        # spike neighbour, far more than Brownian motion alone moves in 25 s.
-        assert c[2, 7] > 0.1 * c[2, 6]
+        # The control that the field acted: the hot cell and its spike
+        # neighbour end within 0.1% of each other (ratio 0.9996), where the
+        # same five steps with no field leave the neighbour at 0.088 of it.
+        assert c[2, 7] > 0.5 * c[2, 6]
         assert abs(solver.budget[0].relative()) < 1e-12
 
 

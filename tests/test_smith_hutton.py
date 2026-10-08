@@ -131,7 +131,7 @@ def test_smith_hutton_bounds_hold_at_every_step_with_an_eddy_viscosity_field_val
     every step as they do without the field. Every implicit solve must
     converge; a capped one is a stop (prompt 40). Measured on 2026-10-07: the
     bounds hold to the same rounding allowance, and the budget closes to
-    5.7e-12, the 1e-13 implicit tolerance summed over the run.
+    5.7e-12; the test asserts 1e-10.
     """
     case = smith_hutton_case(TURBULENT_SCHMIDT)
     nu_t = prescribed_eddy_viscosity(case.mesh, SUPPLY_SPEED)
