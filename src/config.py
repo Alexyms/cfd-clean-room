@@ -175,12 +175,18 @@ class TransportSpec:
         system per class per step.
     diffusion_tol : float
         Tolerance the implicit diffusion solve iterates to.
+    turbulent_schmidt : float or None
+        Sc_t of ``D_t = nu_t / Sc_t``, the turbulent particle diffusivity
+        (REQ-T13, ADR-012 F and decision 8): positive and finite, with no
+        default in code. None when the key is absent, and the solver then
+        refuses an eddy viscosity field. A laminar configuration needs none.
     """
 
     cfl_number: float
     advection_scheme: str
     max_diffusion_iter: int
     diffusion_tol: float
+    turbulent_schmidt: float | None = None
 
 
 @dataclass(frozen=True)
@@ -272,7 +278,13 @@ UMIST = "umist"
 UPWIND = "upwind"
 ADVECTION_SCHEMES: tuple[str, ...] = (UMIST, UPWIND)
 _TRANSPORT_KEYS: frozenset[str] = frozenset(
-    {"cfl_number", "advection_scheme", "max_diffusion_iter", "diffusion_tol"}
+    {
+        "cfl_number",
+        "advection_scheme",
+        "max_diffusion_iter",
+        "diffusion_tol",
+        "turbulent_schmidt",
+    }
 )
 
 # Turbulence section (ADR-012 I), optional: absent means the model is off.
@@ -882,8 +894,9 @@ class SimConfig:
         """Parse the transport section into a TransportSpec.
 
         ``cfl_number`` must lie in (0, CFL_NUMBER_BOUND]; ``advection_scheme``
-        defaults to umist; the other two keys are required. Any other key
-        raises.
+        defaults to umist; ``turbulent_schmidt`` is optional, positive and
+        finite when present, and None when absent; the other two keys are
+        required. Any other key raises.
         """
         if not isinstance(section, dict):
             raise ValueError("transport must be a mapping")
@@ -907,6 +920,14 @@ class SimConfig:
                     f"transport.advection_scheme must be one of "
                     f"{list(ADVECTION_SCHEMES)}, got '{scheme}'"
                 )
+        # No default: the key is needed exactly where an eddy viscosity field
+        # is used, and a value assumed here would be a parameter defined in
+        # code (REQ-C01).
+        turbulent_schmidt = None
+        if "turbulent_schmidt" in section:
+            turbulent_schmidt = cls._require_positive_float(
+                section, "turbulent_schmidt", "transport"
+            )
         return TransportSpec(
             cfl_number=cfl_number,
             advection_scheme=scheme,
@@ -916,6 +937,7 @@ class SimConfig:
             diffusion_tol=cls._require_positive_float(
                 section, "diffusion_tol", "transport"
             ),
+            turbulent_schmidt=turbulent_schmidt,
         )
 
     @classmethod
