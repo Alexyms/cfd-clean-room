@@ -65,7 +65,10 @@ _INWARD_SIGN: dict[str, float] = {
 }
 
 
-@dataclass(frozen=True)
+# eq=False because the default __eq__ compares the array fields elementwise
+# and raises on the ambiguous truth value (issue 51 D2); identity is the only
+# comparison that makes sense for data built once from the mesh.
+@dataclass(frozen=True, eq=False)
 class TangentialCondition:
     """Dirichlet data for the tangential velocity along one domain edge.
 

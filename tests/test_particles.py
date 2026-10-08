@@ -5,6 +5,7 @@ transport properties across size classes. Validation tests verify
 computed values against hand-calculated analytical solutions.
 """
 
+import numpy as np
 import pytest
 import yaml
 
@@ -157,6 +158,28 @@ class TestParticlePhysicsUnit:
             physics.settling_velocity(-1)
         with pytest.raises(IndexError):
             physics.settling_velocity(5)
+
+    @pytest.mark.parametrize("value", [True, False, np.True_, np.False_])
+    def test_bool_size_class_is_refused_by_every_method(
+        self, physics: ParticlePhysics, value: object
+    ) -> None:
+        """A bool is not a class index: ``True`` would silently read as class 1.
+
+        Issue 51 D1. Every public method takes the index, so each is tried;
+        the range check alone accepted 0 and 1 as bools. A plain integer
+        and a NumPy integer are still accepted.
+        """
+        calls = [
+            physics.cunningham_correction,
+            physics.settling_velocity,
+            physics.diffusion_coeff,
+            physics.hepa_efficiency,
+            lambda k: physics.deposition_velocity(k, "floor"),
+        ]
+        for call in calls:
+            with pytest.raises(TypeError, match="size_class must be an int"):
+                call(value)
+        assert physics.settling_velocity(np.int64(1)) == physics.settling_velocity(1)
 
     def test_deposition_floor_greater_than_wall(self, physics: ParticlePhysics) -> None:
         """Floor deposition velocity exceeds wall deposition velocity.
