@@ -21,7 +21,7 @@ class BoundarySpec:
     ----------
     type : str
         Boundary condition type: "velocity_inlet", "pressure_outlet",
-        or "wall".
+        "fixed_flow_outlet" or "wall".
     location : str
         Domain edge: "top", "bottom", "left", or "right".
     x_start : float or None
@@ -34,7 +34,10 @@ class BoundarySpec:
         End of boundary segment along y axis (for left/right).
     velocity : float or None
         Prescribed velocity magnitude for velocity_inlet type.
-        Applied normal to the wall surface.
+        Applied normal to the wall surface. On a fixed_flow_outlet, the
+        outward normal velocity it holds, or None for an outlet that
+        shares the inflow the stated outlets leave (ADR-012 D, amended
+        2026-10-08).
     u_velocity : float or None
         Explicit u-component for velocity_inlet. When present,
         overrides the automatic normal decomposition of velocity.
@@ -226,7 +229,12 @@ class TurbulenceSpec:
     tol: float
 
 
-_VALID_BOUNDARY_TYPES: set[str] = {"velocity_inlet", "pressure_outlet", "wall"}
+_VALID_BOUNDARY_TYPES: set[str] = {
+    "velocity_inlet",
+    "pressure_outlet",
+    "fixed_flow_outlet",
+    "wall",
+}
 _VALID_BOUNDARY_LOCATIONS: set[str] = {"top", "bottom", "left", "right"}
 
 # Stopping rules the solver block may name (src/stopping.py). velocity_step is
@@ -638,6 +646,32 @@ class SimConfig:
                                 "scalar layer treats it as a wall"
                             )
 
+            if bc_type == "fixed_flow_outlet":
+                # A fixed flow is a normal velocity and nothing else. The inlet's
+                # component and concentration keys describe air entering, and
+                # the outlet carries nothing in (ADR-011 E).
+                for key in (
+                    "u_velocity",
+                    "v_velocity",
+                    "concentration",
+                    "hepa_filtered",
+                    "deposition_surface",
+                ):
+                    if key in spec:
+                        raise ValueError(
+                            f"{ctx}.{key} is not valid on a fixed_flow_outlet; "
+                            "it holds an outward normal 'velocity' only"
+                        )
+                if spec.get("velocity") is not None:
+                    bc_velocity = self._finite_number(
+                        spec["velocity"], f"{ctx}.velocity"
+                    )
+                    if bc_velocity <= 0:
+                        raise ValueError(
+                            f"{ctx}.velocity must be positive (outward), "
+                            f"got {spec['velocity']}"
+                        )
+
             # Coordinate validation based on boundary orientation
             bc_x_start = None
             bc_x_end = None
@@ -734,6 +768,7 @@ class SimConfig:
             )
 
         self._reject_overlapping_segments()
+        self._check_fixed_flow_outlets()
 
         # Obstacles (optional)
         obstacles_raw = raw.get("obstacles", [])
@@ -835,6 +870,41 @@ class SimConfig:
                         f"the {a.location} edge ([{a0}, {a1}] and [{b0}, {b1}]); "
                         "segments on one edge must not overlap"
                     )
+
+    def _check_fixed_flow_outlets(self) -> None:
+        """Raise unless the fixed-flow outlets leave the flow balance determined.
+
+        Without a pressure outlet the outflow must equal the inflow, so
+        at least one fixed-flow outlet has to state no velocity and take
+        the remainder; if every one stated a velocity the configuration
+        would over-determine the balance. With a pressure outlet, that
+        outlet balances the flow and every fixed-flow outlet must state
+        its velocity. What needs the mesh (a remainder that is not
+        positive) is checked when the boundary is built.
+        """
+        fixed = {
+            name: spec
+            for name, spec in self.boundaries.items()
+            if spec.type == "fixed_flow_outlet"
+        }
+        if not fixed:
+            return
+        unstated = [name for name, spec in fixed.items() if spec.velocity is None]
+        has_pressure_outlet = any(
+            spec.type == "pressure_outlet" for spec in self.boundaries.values()
+        )
+        if has_pressure_outlet and unstated:
+            raise ValueError(
+                f"boundaries {unstated} are fixed_flow_outlet segments with no "
+                "velocity, but the configuration has a pressure_outlet that "
+                "balances the flow; give each fixed_flow_outlet a velocity"
+            )
+        if not has_pressure_outlet and not unstated:
+            raise ValueError(
+                f"every fixed_flow_outlet {sorted(fixed)} states a velocity and the "
+                "configuration has no pressure_outlet, so nothing balances the "
+                "flow; leave the velocity off at least one of them"
+            )
 
     @staticmethod
     def _segment_range(spec: BoundarySpec) -> tuple[float, float]:

@@ -2,7 +2,7 @@
 
 **Project:** CFD Clean Room Simulation
 **Status:** ECR-001 closed; the staggered Navier-Stokes solver is built and validated and is the only solver (ADR-010; the collocated solver was retired on 2026-10-02, tag `collocated-final`). ECR-002, the k-epsilon turbulence model (ADR-012), was accepted on 2026-10-04; step 1, the model on a prescribed face field, is built (`src/scalar_scheme.py`, `src/turbulence.py`), step 2, the turbulent diffusivity in the transport solver, is built (`src/solver_transport.py`), and section 2 marks what of each requirement remains. ECR-003, the pressure correction solver (ADR-013), was accepted on 2026-10-06 and closed on 2026-10-07: its step 1 replaced the weighted Jacobi sweep by Jacobi-preconditioned conjugate gradients (REQ-S08 amended), and its step 2 retook the laminar baseline (REQ-S02, REQ-S03). Phase status is in `docs/PROJECT_PLAN.md`.
-**Last Updated:** 2026-10-07
+**Last Updated:** 2026-10-08
 
 This document is the single reference for system architecture, requirements, module interfaces, and dependency relationships. Review and test, run before each pull request as `/cfd-review` and `/cfd-test` in fresh Claude Code sessions (`.claude/commands/`), check branches against this document under the policy in `docs/REVIEW_POLICY.md`. Keep it current.
 
@@ -158,12 +158,12 @@ When a PR modifies a module, the reviewer verifies impact on downstream modules.
 
 | Modified Module | Check These Downstream Modules | What to Check |
 |-----------------|-------------------------------|---------------|
-| config.py | boundary_concentration, boundary_registry, boundary_staggered, mesh, momentum, particles, pressure, solver_staggered, solver_transport, turbulence; monitor, scenarios, time_integration (planned) | New/changed/removed config fields are handled by all consumers. No module accesses a field that no longer exists. No module ignores a new field it should use. The optional transport block (SimConfig.transport, a TransportSpec of cfl_number, advection_scheme, max_diffusion_iter, diffusion_tol and the optional turbulent_schmidt, None when absent) is read by solver_transport, which refuses a configuration without it, and refuses an eddy viscosity field when turbulent_schmidt is absent; the optional turbulence block (SimConfig.turbulence, a TurbulenceSpec, None when absent) by turbulence, which refuses a configuration without it, and by no other module until ECR-002 step 6; the segment keys (concentration, hepa_filtered, deposition_surface, each allowed on one segment type) by boundary_concentration (ADR-011 E and I); output_interval becomes FieldHistory's interval. pressure_rtol and max_pressure_iter are read by pressure (ECR-003 step 1); pressure_tol is refused at load, so no module can read it. SOLVER_KEYS is the one ordered list of solver keys and scripts/benchmark.py records every row's params from it, so a key added here is in every row (GitHub issue 38). CFL_NUMBER_BOUND, PRESSURE_RTOL_BOUNDS, the scheme names and the deposition surface names are this module's constants and consumers import them. |
+| config.py | boundary_concentration, boundary_registry, boundary_staggered, mesh, momentum, particles, pressure, solver_staggered, solver_transport, turbulence; monitor, scenarios, time_integration (planned) | New/changed/removed config fields are handled by all consumers. No module accesses a field that no longer exists. No module ignores a new field it should use. The optional transport block (SimConfig.transport, a TransportSpec of cfl_number, advection_scheme, max_diffusion_iter, diffusion_tol and the optional turbulent_schmidt, None when absent) is read by solver_transport, which refuses a configuration without it, and refuses an eddy viscosity field when turbulent_schmidt is absent; the optional turbulence block (SimConfig.turbulence, a TurbulenceSpec, None when absent) by turbulence, which refuses a configuration without it, and by no other module until ECR-002 step 6; the segment keys (concentration, hepa_filtered, deposition_surface, each allowed on one segment type) by boundary_concentration (ADR-011 E and I); output_interval becomes FieldHistory's interval. pressure_rtol and max_pressure_iter are read by pressure (ECR-003 step 1); pressure_tol is refused at load, so no module can read it. SOLVER_KEYS is the one ordered list of solver keys and scripts/benchmark.py records every row's params from it, so a key added here is in every row (GitHub issue 38). CFL_NUMBER_BOUND, PRESSURE_RTOL_BOUNDS, the scheme names and the deposition surface names are this module's constants and consumers import them. The boundary type `fixed_flow_outlet` (ECR-002 step 3, ADR-012 D as amended 2026-10-08) is read by boundary_registry (`condition_of`, `fixed_flow_condition`) and boundary_staggered (the resolved velocities); a configuration with no pressure_outlet needs at least one fixed-flow outlet that states no velocity, and one with a pressure_outlet needs every fixed-flow outlet to state its velocity, both refused at load. |
 | constants.py | particles | Constant names and SI values unchanged; no module defines its own copy (REQ-C04). |
 | mesh.py | boundary_staggered, momentum, pressure, scalar_scheme, solver_staggered, staggered, solver_transport, turbulence; monitor (planned) | Grid dimensions, cell arrays, and coordinate arrays are consumed correctly. Shape assumptions still hold. Centers stay face midpoints; staggered averaging depends on it. solver_transport and turbulence read dx_face and dy_face for the diffusive flux on a stretched mesh and cell_type for which cells hold a scalar; scalar_scheme reads the node and face coordinates for its axes; turbulence reads the face coordinates for the corner derivatives. |
 | staggered.py | solver_staggered, boundary_staggered, boundary_concentration, momentum, pressure, solver_transport, turbulence; tests/test_constancy.py, tests/test_conservation.py | Face array shapes and the face-to-center averaging contract unchanged. FaceVelocities (ADR-011 A, REQ-S13) is the transport solver's and the k-epsilon model's input type, so its field names, shapes and read-only owning float64 copies are part of that contract and the layout module is no longer internal to the velocity solver alone. edge_cells and edge_cell_inputs are where both boundary layers read which cells sit behind an edge's faces and which are SOLID; a change there moves both layers together, which the agreement test cannot see, so tests/test_staggered.py::TestEdgeCells checks them directly. |
-| boundary_registry.py | boundary_staggered, boundary_concentration | Coverage rule (same edge, inclusive range, first match in configuration order, wall by default, SOLID cells walls) and the prescribed-velocity decomposition unchanged. coverage_along is the one derivation of which faces a segment covers; both layers call it on staggered.edge_cell_inputs, and tests/test_boundary_concentration.py checks they agree on every committed configuration and on two with an obstacle on an edge under an inlet. A change here moves both layers. |
-| boundary_staggered.py | momentum, pressure, solver_staggered | Normal imposition writes domain faces only. Tangential data shape [n+1], outlet data shape [n], wall_distance semantics and the inward flux sign unchanged. |
+| boundary_registry.py | boundary_staggered, boundary_concentration | Coverage rule (same edge, inclusive range, first match in configuration order, wall by default, SOLID cells walls) and the prescribed-velocity decomposition unchanged. A fixed_flow_outlet carries its stated velocity outward, or zero when it states none; the share of a segment that states none is the velocity layer's to resolve (fixed_flow_condition), so a layer reading `condition_of` alone sees zero for it. coverage_along is the one derivation of which faces a segment covers; both layers call it on staggered.edge_cell_inputs, and tests/test_boundary_concentration.py checks they agree on every committed configuration and on two with an obstacle on an edge under an inlet. A change here moves both layers. |
+| boundary_staggered.py | momentum, pressure, solver_staggered | Normal imposition writes domain faces only. Tangential data shape [n+1], outlet data shape [n], wall_distance semantics and the inward flux sign unchanged. A fixed-flow outlet face is Dirichlet in both components (its resolved outward velocity, tangential zero), is not a pressure outlet and not inlet flux, and does not enter get_max_boundary_velocity; a domain whose only outlets are fixed-flow reports has_pressure_outlet False, which is what engages the corrector's pin (ECR-002 step 3). |
 | boundary_concentration.py | solver_transport | ConcentrationFaces array names, shapes and dtypes (face-shaped, read-only; float64 inflow and deposition, int32 surface codes, bool settling_v), the surface codes SURFACE_NONE 0, SURFACE_FLOOR 1, SURFACE_CEILING 2, SURFACE_WALL 3 the budget books deposition to, the settling_v mask (there is no settling_u; settling acts in -y), and the derivation of each condition from the registry's velocity type with the segment keys concentration, hepa_filtered and deposition_surface unchanged (ADR-011 E). |
 | momentum.py | pressure, solver_staggered, scalar_scheme | MomentumPrediction shapes and the meaning of a_p_u and a_p_v (un-relaxed diagonal, positive exactly at the unknown faces) unchanged; boundary entries of u and v read as given and never written. scalar_scheme reads quick_face_values only, for the transport solver: its signature, the `left` index of the low-side node of each face, the `positive` flow mask, the far node one past the upstream node (or one past the downstream node where that does not exist) and the caller placing the boundary value at its physical location as the end node; a change to any of these changes the transport face value. |
 | turbulence.py | tests/test_turbulence.py, tests/test_decaying_turbulence.py; solver_staggered (planned, ECR-002 step 6) | TurbulenceState's fields (k, eps and the kinematic nu_t, [ny, nx], read-only, SOLID zero) and the positivity promise: step raises PositivityError unless k and eps are positive and finite at every non-SOLID cell. TurbulenceConditions' fields, shapes and dtypes, built by the caller every step (step 6 builds them from the wall functions, the inlet keys and the staggered boundary layer's tangential values); a wall cell needs its eps held and its production given together, its eps following k, or k runs away beside a shear (prompt 35). step's two kinds of dt: None the per-cell pseudo-time step, capped, an error on a field at rest; a float one true-time step, refused above the stable step. VARIANTS' values are the sourced ones (results/builder35/constants.md); a change to one passes every test but tests/test_turbulence.py::TestConstants. |
@@ -195,10 +195,10 @@ Generated. The responsibility and serves columns are editorial and come from `do
 <!-- BEGIN GENERATED: components -->
 | Module | Lines | Responsibility | Declares it serves |
 |---|---|---|---|
-| `src/boundary_concentration.py` | 324 | Derives the per-face concentration conditions of each particle class from the registry's shared coverage and ParticlePhysics: the concentration an inlet carries, the deposition velocity and surface code at every wall and obstacle face, and the mask of faces that carry the settling increment, as read-only face-shaped data for the transport solver. | S12.1, T09, T10 |
-| `src/boundary_registry.py` | 315 | Interprets the configured boundary segments once, answering which segment covers each point along a domain edge and which condition and prescribed velocity hold there, SOLID cells read as walls, for both boundary imposition layers: the staggered velocity layer and the concentration layer. | S12.1 |
-| `src/boundary_staggered.py` | 418 | Writes Dirichlet normal velocities exactly into the staggered domain-face entries and exposes the tangential wall values, wall distances and pressure outlets as data for the momentum and pressure steps. | S12 |
-| `src/config.py` | 1127 | Loads the YAML configuration into typed dataclasses and rejects missing keys, wrong types and out-of-range values at load time. | A02, A03, C01, C02, S10 |
+| `src/boundary_concentration.py` | 327 | Derives the per-face concentration conditions of each particle class from the registry's shared coverage and ParticlePhysics: the concentration an inlet carries, the deposition velocity and surface code at every wall and obstacle face, and the mask of faces that carry the settling increment, as read-only face-shaped data for the transport solver. | S12.1, T09, T10 |
+| `src/boundary_registry.py` | 360 | Interprets the configured boundary segments once, answering which segment covers each point along a domain edge and which condition and prescribed velocity hold there, SOLID cells read as walls, for both boundary imposition layers: the staggered velocity layer and the concentration layer. | S12.1 |
+| `src/boundary_staggered.py` | 518 | Writes Dirichlet normal velocities exactly into the staggered domain-face entries and exposes the tangential wall values, wall distances and pressure outlets as data for the momentum and pressure steps. | S12 |
+| `src/config.py` | 1197 | Loads the YAML configuration into typed dataclasses and rejects missing keys, wrong types and out-of-range values at load time. | A02, A03, C01, C02, S10 |
 | `src/constants.py` | 8 | Holds the physical constants shared by every module so that none of them defines its own copy. | C04 |
 | `src/mesh.py` | 423 | Builds the structured grid, uniform or geometrically clustered at the walls, with the face, center, width and center-to-center arrays a face-based stencil needs, and classifies each cell as FLUID, SOLID or BOUNDARY. | S11 |
 | `src/momentum.py` | 522 | Predicts u* and v* on the staggered grid with QUICK advection by deferred correction over an upwind implicit matrix, one under-relaxed Jacobi sweep per call, and returns the diagonal coefficients the pressure correction needs. | S07, S09 |
@@ -209,9 +209,9 @@ Generated. The responsibility and serves columns are editorial and come from `do
 | `src/solver_transport.py` | 891 | Advances one particle class one explicit step on the staggered face velocities: QUICK's face value bounded by the UMIST limiter under forward Euler at a Courant number the configuration sets, implicit diffusion and deposition by Jacobi on per-face conductances, the Brownian coefficient plus nu_t / Sc_t on interior faces when handed an eddy viscosity field, the settling increment on interior faces, sources added and booked, SOLID cells zero; keeps one MassBudget per class and defines FieldHistory, the output contract for the animation. | N01, T01, T03, T04, T05, T06, T07, T08, T11, T12, T13 |
 | `src/staggered.py` | 324 | Defines the staggered (MAC) field layout: shapes and allocation of face-centered u and v and cell-centered p, the face-to-center averaging the solver applies before returning, and FaceVelocities, the read-only face pair the solver exposes and the transport solver advects with. | S07, S13 |
 | `src/stopping.py` | 228 | Decides when the steady outer iteration has converged, on four conditions: (a) the iteration error estimated from the step and its fitted geometric rate, over a physical velocity scale; (b) the worst per-cell mass imbalance against its own tolerance; (c) the summed imbalance over the through-flow, which shares the tolerance of (a); and (d) the signed imbalance summed over the domain, which shares the tolerance of (b). Also defines IterationState, the snapshot a solver hands its callback once per outer iteration. | S01, S04 |
-| `src/turbulence.py` | 926 | Advances the k-epsilon model's k and eps one step on a prescribed face velocity field, standard or RNG with each variant's constants as module data: advection, explicit growth from the strain the faces give and implicit decay and diffusion through the shared scalar scheme, boundary values from a conditions object the caller builds each step, the kinematic eddy viscosity, and an assertion that k and eps are positive and finite after every step. | S14, S15 |
+| `src/turbulence.py` | 928 | Advances the k-epsilon model's k and eps one step on a prescribed face velocity field, standard or RNG with each variant's constants as module data: advection, explicit growth from the strain the faces give and implicit decay and diffusion through the shared scalar scheme, boundary values from a conditions object the caller builds each step, the kinematic eddy viscosity, and an assertion that k and eps are positive and finite after every step. | S14, S15 |
 
-Total 16 Python files, 7187 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
+Total 16 Python files, 7407 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
 
 `Declares it serves` is an EDITORIAL CLAIM read from `docs/system_map_annotations.toml`. It says which requirements a module is meant to satisfy, not that it does. Whether a requirement is met is answered by the tests named in the register's `Verified By` column.
 <!-- END GENERATED: components -->
@@ -236,7 +236,7 @@ Generated. Static import analysis cannot see a function bound into a registry by
 |---|---|
 | Scope | `src/**/*.py` |
 | Files hashed | 16 |
-| Digest | `sha256:528fb3d08759af310f23242a68f61b294f699023b653f5c58591a217ea4deb08` |
+| Digest | `sha256:4add1a042bade059afa8fe002ee27906f2ee5eed0c534ef8f31e517aeac18583` |
 
 This is what lets the document answer whether it is current, which is the one question a stale table cannot be asked. `python scripts/gen_system_map.py --check` recomputes the whole set of generated regions, this digest included, and exits non-zero on any disagreement.
 
@@ -311,11 +311,11 @@ SimConfig:
 
 ```
 BoundarySpec:
-    type: str  # "wall", "velocity_inlet", "pressure_outlet"
+    type: str  # "wall", "velocity_inlet", "pressure_outlet", "fixed_flow_outlet"
     location: str  # "top", "bottom", "left", "right"
     x_start, x_end: float | None  # for top/bottom segments
     y_start, y_end: float | None  # for left/right segments
-    velocity: float | None  # magnitude, decomposed normal to the boundary
+    velocity: float | None  # magnitude, decomposed normal to the boundary; on a fixed_flow_outlet, the outward normal velocity it holds, None to share the remaining inflow
     u_velocity: float | None  # explicit x-component at the face
     v_velocity: float | None  # explicit y-component at the face
     # ADR-011 E; each validated at load, allowed on one segment type only, keyword-only
@@ -323,6 +323,16 @@ BoundarySpec:
     hepa_filtered: bool                # velocity_inlet only; default False
     deposition_surface: str | None     # wall only: floor, ceiling, wall or none; None lets the edge decide
 ```
+
+A `fixed_flow_outlet` (ECR-002 step 3, ADR-012 D as amended 2026-10-08)
+holds an outward normal velocity and zero tangential velocity. It takes an
+optional positive finite `velocity` and refuses `u_velocity`, `v_velocity`,
+`concentration`, `hepa_filtered` and `deposition_surface`, each naming the
+segment. With no pressure_outlet in the file, at least one fixed-flow outlet
+must state no velocity, and those share what the stated ones leave of the
+discrete inflow at one face velocity; with a pressure_outlet, every fixed-flow
+outlet must state its velocity. Both rules are checked at load; a remainder
+that is zero or negative on the mesh is refused when the boundary is built.
 
 A `concentration` or `hepa_filtered` key on a segment that is not a
 velocity_inlet, or on a velocity_inlet whose normal velocity is zero (a
@@ -401,7 +411,11 @@ EDGES = ("bottom", "top", "left", "right")
 EdgeCondition: bc_type, u_prescribed, v_prescribed   # frozen
 EdgeCoverage: name, spec, condition, solid           # frozen; UNCOVERED and BEHIND_SOLID are the segment-less values
 covers(spec, edge, coordinate) -> bool       # same edge, inclusive range
-condition_of(spec, edge) -> EdgeCondition    # magnitude decomposed inward, or explicit u/v
+condition_of(spec, edge) -> EdgeCondition    # magnitude decomposed inward, or explicit u/v;
+                                             # fixed_flow_outlet: its stated velocity outward, zero if none
+fixed_flow_condition(edge, speed) -> EdgeCondition
+                                             # type FIXED_FLOW_OUTLET, normal component signed along the axis
+                                             # for an outward speed, tangential zero
 BoundaryRegistry:
     __init__(config: SimConfig)
     boundaries -> dict[str, BoundarySpec]
@@ -432,18 +446,29 @@ StaggeredBoundary:
     __init__(mesh: Mesh, config: SimConfig)
     apply_normal_velocity(u, v) -> None
         writes u[:, 0], u[:, nx], v[0, :], v[ny, :] where the condition is
-        Dirichlet (wall 0, inlet prescribed), exactly; outlet faces and every
-        other entry untouched; ValueError on non-staggered shapes
+        Dirichlet (wall 0, inlet prescribed, fixed-flow outlet its resolved
+        outward velocity), exactly; pressure outlet faces and every other
+        entry untouched; ValueError on non-staggered shapes
     tangential_conditions() -> dict[edge, TangentialCondition]
         component ("u" on bottom/top, "v" on left/right), is_dirichlet [n+1],
         value [n+1], wall_distance = dy_face[0], dy_face[ny], dx_face[0] or
         dx_face[nx]; arrays read-only
+        a fixed-flow outlet's tangential locations are Dirichlet zero
     pressure_outlets() -> dict[edge, PressureOutletCondition]
-        is_outlet [n], pressure (gauge datum, 0.0); arrays read-only
-    has_pressure_outlet() -> bool
+        is_outlet [n], pressure (gauge datum, 0.0); arrays read-only; a
+        fixed-flow outlet is not a pressure outlet
+    has_pressure_outlet() -> bool            # False when the only outlets are fixed-flow
+    fixed_flow_velocities() -> dict[str, float]
+        outward normal velocity per fixed_flow_outlet segment, configuration
+        order, m/s: the stated value, or the equal share of the discrete
+        inflow less the stated outflow over the faces the shared coverage
+        gives the segments that state none (the face widths of the mesh, so
+        outflow equals inflow to rounding on any mesh); a copy. __init__
+        raises ValueError when those segments cover no face or the remainder
+        is zero or negative, naming inflow, stated outflow and remainder
     get_inlet_flux(name) -> float            # sum of inward normal velocity times face width
-    get_total_inlet_flux() -> float
-    get_max_boundary_velocity() -> float
+    get_total_inlet_flux() -> float          # velocity inlets only; a fixed-flow outlet is not counted
+    get_max_boundary_velocity() -> float     # inlets and walls; a fixed-flow outlet is not counted
     A SOLID cell on an edge is a wall on every query.
 ```
 
@@ -1094,3 +1119,4 @@ ADR-008, ADR-010, ADR-011, ADR-012 and ADR-013 are files in `docs/ADR/`; the oth
 | 2026-10-07 | ECR-003 steps 2 and 3 (prompt 38); the request closed. REQ-S02's and REQ-S03's rationales name the values of the `staggered-cg` rows at 311034e (4.108e-4 and 3.024e-3; u 1.057e-3 and v 7.356e-4 of the lid speed) and say that the orders of convergence were measured under the weighted Jacobi correction and are not retaken, with the largest change the measured field differences can cause beside each (0.003 on 1.99, 6e-4 on the cavity's); the requirement texts are unchanged. A dated note beside the 2026-10-01 entry on condition (d): the net-outflow oscillation was the Jacobi correction's. Section 6's ADR-013 row: built, with planned against built. Line 4 records the closure. No module, contract, cascade row or generated region changed. | Alex Moroz-Smietana |
 | 2026-10-07 | The cleanup pull request (prompt 39, branch fix/deferred-findings-cleanup), which closes GitHub issues 33, 36, 40, 42, 45, 47, 51 and 63. src/pressure.py: PRESSURE_BLAS_THREADS = 1, applied by conjugate_gradient around the CG loop with threadpoolctl (user_api blas, one ThreadpoolController built at import); threadpoolctl>=3.2 is added to requirements.txt; ECR-003 criterion 4 is met under the default environment and the face hash of val001_80x40 is unchanged, so PRESSURE_SOLVER_VERSION stays 2 (docs/reports/blas_threads.md). The unreachable-region refusal's message no longer says every correction would reach the cap. src/mesh.py: OBSTACLE_EDGE_TOLERANCE (1e-9 of the local cell width) on all four obstacle edges, which moves 50 cells of clean_room_default (column 57, the server rack's x_end edge) and no cell of any validation configuration. src/particles.py: TypeError for a bool or np.bool_ size_class. src/boundary_staggered.py: TangentialCondition has eq=False. src/solver_transport.py: a 0-d bool array is refused as dt. validation/metrics.py: lid_velocity and inlet_velocity are public and poiseuille_reference holds the analytic profile. validation/cases.py: load_wall_clustered validates before it divides. The contracts of mesh.py, particles.py, pressure.py and solver_transport.py are updated. No requirement changed. | Alex Moroz-Smietana |
 | 2026-10-07 | ECR-002 step 2 built (prompt 40, branch feature/ecr002-transport-coupling): solve_timestep gains the keyword-only `eddy_viscosity` (REQ-T13, ADR-012 F). The diffusivity of an interior face between two non-SOLID cells is the Brownian coefficient plus nu_t / Sc_t, the face value of nu_t the distance-weighted harmonic mean of the two cell values (zero when either is), formed once per call and passed to the implicit solve as per-face conductances; every other face, the advection, settling, deposition, sources, budget and stable_dt are unchanged, and None is the laminar path with every field the 43 step-taking tests of the seven transport files return hashed equal to origin/main's at 4ece52f (20,662 steps; results/builder40/). `transport.turbulent_schmidt` is a new optional key (TransportSpec.turbulent_schmidt, None when absent, no default in code); the default configuration carries 0.7. The field is refused before any arithmetic when it is not a float64 ndarray, has the wrong shape, is not finite or is negative in a non-SOLID cell, or when Sc_t is not configured; values in SOLID cells are not read. REQ-T01 and REQ-T13 move from planned to built with their tests named. The new gate rows beside VAL-007, VAL-012 and VAL-013 run a prescribed non-uniform field (validation.transport_cases.prescribed_eddy_viscosity); VAL-012's at the committed implicit tolerance never iterates, so it also runs at 1e-15, where the departure falls from 4.0e-12 to 1.9e-12: the smoothing prompt 40's revised prediction (c) allows (its erratum). No requirement text changed. | Alex Moroz-Smietana |
+| 2026-10-08 | ECR-002 step 3 built (prompt 42, branch feature/ecr002-fixed-flow-outlets): the boundary type `fixed_flow_outlet`. config.py accepts it with an optional positive `velocity`, refuses the inlet's component and concentration keys on it, and checks the two decision 4 rules that need no mesh at load; boundary_registry.py gains FIXED_FLOW_OUTLET and fixed_flow_condition; boundary_staggered.py resolves each segment's outward velocity once, from the shared coverage and the mesh's face widths, exposes it as fixed_flow_velocities(), writes it as a Dirichlet normal velocity with zero tangential velocity, leaves the segment out of the inlet flux, the pressure outlets and get_max_boundary_velocity, and refuses a remainder that is not positive; boundary_concentration.py needs no code (a fixed-flow outlet is an outflow face with no deposition), and turbulence.py a note for step 6. The product configuration moves its four returns (no velocity) and the hood (0.5 m/s) to the new type, so it has no pressure outlet and the corrector takes its closed-domain path. REQ-S18 and the other records follow in the same pull request. | Alex Moroz-Smietana |

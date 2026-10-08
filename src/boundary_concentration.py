@@ -18,8 +18,11 @@ The conditions, per face, for particle class k:
   ``inflow_u``, ``inflow_v``. A ``velocity_inlet`` whose normal velocity
   is zero (a tangential lid) admits no air and is a moving surface
   particles land on: a wall below (ADR-011 E, amended 2026-10-03).
-- Outlet (``pressure_outlet``): nothing is carried in; a reversed outlet
-  face brings clean air. The outflow is the solver's, from the upwind cell.
+- Outlet (``pressure_outlet`` or ``fixed_flow_outlet``): nothing is carried
+  in; a reversed outlet face brings clean air. The outflow is the solver's,
+  from the upwind cell, and the budget books it as outflow. A fixed-flow
+  outlet never reverses, since its face holds an outward velocity, and
+  neither kind deposits.
 - Wall: a deposition flux at ``deposition_velocity(k, surface)`` where the
   surface is the edge's own (bottom is floor, top is ceiling, left and right
   are walls) unless the covering wall segment names a ``deposition_surface``;
