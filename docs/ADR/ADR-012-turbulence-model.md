@@ -30,6 +30,20 @@ as they were put.
    ECR-002 criterion 6 compares the built treatment against the probe rerun with the hood's
    tangential velocity held at zero, not against the probe as run, which kept it at zero gradient
    (test 33b, B2).
+   Amended 2026-10-08 (Alex, prompt 42, ECR-002 step 3): option (2), every opening at a set
+   flow, is taken in place of option (1). The four floor returns and the hood are fixed-flow
+   outlets, ducted to fans as in a real clean room. A segment states its outward velocity (the
+   hood's fan, 0.5 m/s) or states none; those that state none share what the stated ones leave
+   of the discrete inflow, at one face velocity. With no pressure outlet left, the pressure
+   system is the closed cavity's, which the corrector solves with its projection and pin. The
+   objection put to option (2) below, a singular system compatible only when the shares sum to
+   the supply exactly, is answered twice: ECR-003's closed-domain path solves that system as it
+   stands, and the remainder rule forms the shares from the face widths of the mesh, so they
+   sum exactly on any grid. The evidence is the outlet probe
+   (`docs/reports/ecr002_step3_outlet_probe.md`, sections 7.3 and 7.7). Option (1) as taken on
+   2026-10-04, with the held-shut rule and the open-outlet-faces argument it needed, is not
+   built. The zero-gradient copy stays the pressure outlet's rule, correct for developed
+   outflow normal to the face, as in VAL-001.
 2. The variant: both built; RNG for the product, standard for the published comparisons, both
    run on the product and their difference reported.
 3. The wall treatment: scalable wall functions.
@@ -87,6 +101,8 @@ there.
 mesh, and it is the condition CFD codes ship for openings air can turn back through (OpenFOAM's
 `inletOutlet`). It is recommended for what the openings do, not for convergence, which ECR-002
 step 5 measures.
+*Note, 2026-10-08.* Option (2) is the one taken (the amendment under decision 1 at the head of
+the decisions). It was "not measured" when this was written; the outlet probe measured it.
 
 **2. Which k-epsilon (section A).**
 *Picture.* The model keeps two extra numbers in every cell: how much churning energy the air
@@ -507,6 +523,24 @@ entering air takes the room's pressure less its dynamic head, which was not meas
 outlet is expected to carry outflow at every face in every iteration and VAL-002 has no outlet, so
 both would stay bitwise under (1); the step checks it.
 
+*Note, 2026-10-08 (step 3 built; decision 1 amended).* Option (2) was built, not option (1). The
+floor returns and the hood are `fixed_flow_outlet` segments. The optional `velocity` is outward.
+With no pressure outlet in the configuration at least one fixed-flow outlet states none, and
+those share the remainder of the discrete inflow at one face velocity
+(`StaggeredBoundary.fixed_flow_velocities`), so outflow equals inflow to rounding on any mesh;
+with a pressure outlet, every fixed-flow outlet states its velocity. A remainder that is zero or
+negative on the mesh is refused when the boundary is built, naming inflow, stated outflow and
+remainder, in place of "refuses exhausts whose total reaches the supply" above. Faces hold the
+velocity as a Dirichlet value with zero tangential velocity; the concentration layer carries the
+upwind cell's value out and deposits nothing; `get_total_inlet_flux` and
+`get_max_boundary_velocity` do not count them. The corrector is unchanged:
+`has_pressure_outlet` is False, so it takes its closed-domain path. `_extrapolate_outlets` is
+unchanged and stays the pressure outlet's rule, a zero-gradient copy that is correct for
+developed outflow normal to the face (VAL-001's outlet, which stays bitwise). Where outlet cells
+take air sideways it cannot close the cell and the room's pressure climbs without end (GitHub
+issue 61), which is why the product room has no pressure outlet. The probe's arm D0 is the
+reference the built room reproduces bit for bit (ECR-002 criterion 6).
+
 **The outer iteration.** Momentum prediction, pressure correction (unchanged but for the open
 outlet faces), then the k and eps step of section C on the corrected faces, then `mu_t = (1 - a_t)
 mu_t_old + a_t rho C_mu k^2 / eps` with `alpha_turbulence` = a_t. The k and eps step reads the
@@ -788,6 +822,12 @@ version moved into the rule (section E). `src/solver_transport.py`: the `eddy_vi
 `src/config.py`: the keys and the exhaust segment type. `src/boundary_registry.py`,
 `src/boundary_staggered.py`, `src/boundary_concentration.py`: the fixed-flow exhaust (D); wall
 distances and tangential conditions already reach the stencil as data.
+
+*Note, 2026-10-08.* `src/pressure.py` gains no open-outlet-faces argument
+(`correct(prediction, p, open_outlets=None)` below is not built), and `src/solver_staggered.py`
+needs no outlet condition per outer iteration beyond the copy it has. The exhaust segment type is
+`fixed_flow_outlet`, with the remainder rule of section D's note in place of the refusal when the
+exhausts' total reaches the supply's.
 
 **Draft contracts** (SYSTEM.md section 4 gains them when ECR-002 is accepted).
 

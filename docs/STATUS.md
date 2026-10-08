@@ -39,11 +39,18 @@ report, section 8) found air entering through them in every run that diverges, t
 sitting at the hood exhaust at ten times the viscosity. Giving the entering air a condition, or
 fixing the hood's flow, moves and delays the divergence and converges nothing above a hundred
 times the viscosity, and on the product mesh the growth starts inside the room before any outlet
-face reverses. The outlets are part of how the solve diverges, not why it does not converge.
-Those runs used the solver's one momentum sweep per outer iteration; with ten, the laminar
+face reverses. Those runs used the solver's one momentum sweep per outer iteration; with ten, the laminar
 coarse room converges at real air and at ten times its viscosity (test 34b, step 0's report
 section 7.6), so on that grid the non-convergence was the one-sweep iteration repelling a steady
-solution that exists, not the Reynolds number. The flow is turbulent all the same, and k-epsilon
+solution that exists, not the Reynolds number.
+All of that was measured with the copy at every open outlet. The outlet probe of ECR-002
+step 3 (`docs/reports/ecr002_step3_outlet_probe.md`, sections 7.3 and 7.7) corrects it on the coarse
+room: at one momentum sweep, the copy at every open return fails at Re 895 and 8,950 with or
+without the reversed faces held shut (arms A and A-open), while fixed-flow outlets converge at
+both (arms D and D0). So "the outlets are part of how the solve diverges, not why it does not
+converge" no longer holds on that grid, and step 0's "one sweep repels" was measured under the
+copy rule. Step 3 is built with fixed-flow outlets for every return and the hood; whether real
+air converges on 80x30 and 200x75 under them is step 5's question. The flow is turbulent all the same, and k-epsilon
 stays decided for the particles' mixing. ADR-004's "laminar flow" is the clean-room sense,
 a unidirectional supply, not the Navier-Stokes one. The evidence, with the controls the probes
 lack, is `docs/reports/product_case_reynolds.md`. Alex decided the same day to add a k-epsilon
@@ -352,8 +359,10 @@ it: the CG solve runs under a BLAS limit of one thread (`PRESSURE_BLAS_THREADS` 
 `src/pressure.py`), the measurement is `docs/reports/blas_threads.md`, and the cost criterion now
 holds under the default environment. ECR-002 step 2, the turbulent diffusivity in the transport
 solver (REQ-T13), is built on `feature/ecr002-transport-coupling` and waits for review and test;
-the tests are named in `docs/SYSTEM.md`. Next: ECR-002 steps 3 to 5; step 5 retakes step 0's sweep
-result with CG.
+the tests are named in `docs/SYSTEM.md`. ECR-002 step 3, the outlets, is built on
+`feature/ecr002-fixed-flow-outlets` and waits for review and test: the returns and the hood are
+fixed-flow outlets, the product room has no pressure outlet, and its pressure no longer drifts
+(issue 61). Next: ECR-002 steps 4 and 5; step 5 retakes step 0's sweep result with CG.
 
 Deferred findings from earlier pull requests were open as GitHub issues, and every open one now
 has a disposition. The cleanup pull request (branch `fix/deferred-findings-cleanup`) closes issues
