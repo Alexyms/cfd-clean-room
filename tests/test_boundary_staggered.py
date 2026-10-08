@@ -182,7 +182,7 @@ class TestNormalImposition:
             "x_start": 0.6,
             "x_end": 1.1,
             "y_start": 0.0,
-            "y_end": 0.3,
+            "y_end": 0.2,
         }
         mesh, bc = _build(_config({"inlet": bottom_inlet}, obstacles=[block]))
         solid = mesh.cell_type[0, :] == SOLID
@@ -293,7 +293,7 @@ class TestTangentialData:
             "x_start": 0.6,
             "x_end": 1.1,
             "y_start": 0.0,
-            "y_end": 0.3,
+            "y_end": 0.2,
         }
         mesh, bc = _build(_config({"lid": lid}, obstacles=[block]))
         solid = mesh.cell_type[0, :] == SOLID
@@ -412,7 +412,7 @@ class TestFluxAndScales:
             "x_start": 0.6,
             "x_end": 1.1,
             "y_start": 0.0,
-            "y_end": 0.3,
+            "y_end": 0.2,
         }
         mesh, bc = _build(_config({"inlet": bottom_inlet}, obstacles=[block]))
         open_faces = mesh.cell_type[0, :] != SOLID
