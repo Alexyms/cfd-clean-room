@@ -20,8 +20,16 @@ from src.scalar_scheme import (
     implicit_step,
     mesh_axes,
 )
+from src.solver_transport import TransportSolver
 from src.staggered import u_shape, v_shape
-from validation.transport_cases import random_face_field, transport_config
+from validation.transport_cases import (
+    FixedConditions,
+    ScalarPhysics,
+    random_face_field,
+    transport_config,
+    uniform_face_field,
+    zero_conditions,
+)
 
 OBSTACLE = [
     {"name": "block", "x_start": 0.6, "x_end": 0.9, "y_start": 0.0, "y_end": 0.4}
@@ -395,3 +403,136 @@ def test_the_axes_carry_the_mesh_nodes_and_the_solid_mask() -> None:
     assert axis_y.solid_ext.shape == (nx, ny + 2)
     assert np.array_equal(axis_y.solid_ext[:, 1:-1], solid.T)
     assert not axis_x.solid_ext[:, [0, -1]].any()
+
+
+BROWNIAN = 1.0e-4
+SCHMIDT = 0.7
+
+
+def _harmonic(nu_p: float, nu_e: float, d_p: float, d_e: float) -> float:
+    """The distance-weighted harmonic mean of two values, written from the formula."""
+    if nu_p == 0.0 or nu_e == 0.0:
+        return 0.0
+    return (d_p + d_e) / (d_p / nu_p + d_e / nu_e)
+
+
+def _face_conductances(
+    mesh: Mesh, nu_t: np.ndarray, d_brownian: float, schmidt: float
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """``(D_B + nu_f / Sc_t) A_f / d_f`` on every interior face, by plain loops.
+
+    Returns the two conductance arrays and the diffusivity on every interior
+    face between non-SOLID cells, flattened, for the control's mean.
+    """
+    solid = mesh.cell_type == SOLID
+    ny, nx = solid.shape
+    g_u = np.zeros(u_shape(mesh))
+    g_v = np.zeros(v_shape(mesh))
+    diffusivities = []
+    for j in range(ny):
+        for i in range(1, nx):
+            if solid[j, i - 1] or solid[j, i]:
+                continue
+            nu_f = _harmonic(
+                nu_t[j, i - 1],
+                nu_t[j, i],
+                mesh.x[i] - mesh.xc[i - 1],
+                mesh.xc[i] - mesh.x[i],
+            )
+            d = d_brownian + nu_f / schmidt
+            diffusivities.append(d)
+            g_u[j, i] = d * mesh.dy_cell[j] / mesh.dx_face[i]
+    for j in range(1, ny):
+        for i in range(nx):
+            if solid[j - 1, i] or solid[j, i]:
+                continue
+            nu_f = _harmonic(
+                nu_t[j - 1, i],
+                nu_t[j, i],
+                mesh.y[j] - mesh.yc[j - 1],
+                mesh.yc[j] - mesh.y[j],
+            )
+            d = d_brownian + nu_f / schmidt
+            diffusivities.append(d)
+            g_v[j, i] = d * mesh.dx_cell[i] / mesh.dy_face[j]
+    return g_u, g_v, np.array(diffusivities)
+
+
+@pytest.mark.unit
+class TestPiecewiseDiffusivity:
+    """REQ-T13: ADR-012 F asks the dense-solve test for a per-face coefficient."""
+
+    def _room(self) -> tuple[Mesh, TransportSolver]:
+        """The stretched 11 by 7 room with one SOLID cell, Brownian 1e-4 m^2/s."""
+        stretch = {"x": {"stretch_ratio": 1.25}, "y": {"stretch_ratio": 1.15}}
+        plain = Mesh(transport_config(1.5, 0.9, 11, 7, mesh=stretch))
+        obstacle = {
+            "name": "b",
+            "x_start": float(plain.x[4]),
+            "x_end": float(plain.x[5]),
+            "y_start": float(plain.y[3]),
+            "y_end": float(plain.y[4]),
+        }
+        config = transport_config(
+            1.5,
+            0.9,
+            11,
+            7,
+            mesh=stretch,
+            obstacles=[obstacle],
+            diffusion_tol=1e-14,
+            max_diffusion_iter=20000,
+            turbulent_schmidt=SCHMIDT,
+        )
+        mesh = Mesh(config)
+        assert (mesh.cell_type == SOLID).sum() == 1
+        solver = TransportSolver(
+            mesh,
+            config,
+            ScalarPhysics(settling=0.0, diffusion=BROWNIAN),
+            FixedConditions(zero_conditions(mesh)),
+        )
+        return mesh, solver
+
+    def _field(self, mesh: Mesh) -> np.ndarray:
+        """nu_t from 5e-5 to 1.5e-3 m^2/s, a column of zeros, and 9 m^2/s in the SOLID cell."""
+        ny, nx = mesh.cell_type.shape
+        i, j = np.meshgrid(np.arange(nx), np.arange(ny))
+        field = 5.0e-5 * 30.0 ** ((i + 0.5 * j) / (nx - 1 + 0.5 * (ny - 1)))
+        field[:, 7] = 0.0
+        field[mesh.cell_type == SOLID] = 9.0
+        return field
+
+    def test_the_step_with_a_field_matches_a_dense_solve_with_the_same_diffusivity(
+        self,
+    ) -> None:
+        mesh, solver = self._room()
+        nu_t = self._field(mesh)
+        solid = mesh.cell_type == SOLID
+        rng = np.random.default_rng(31)
+        c = np.where(solid, 0.0, rng.uniform(0.5, 1.5, size=solid.shape))
+        dt = 5.0
+        got = solver.solve_timestep(
+            c, uniform_face_field(mesh, 0.0, 0.0), 0, dt, eddy_viscosity=nu_t
+        )
+        assert solver.diffusion_converged and solver.last_diffusion_sweeps > 0
+
+        g_u, g_v, diffusivities = _face_conductances(mesh, nu_t, BROWNIAN, SCHMIDT)
+        expected = _dense(mesh, c, dt, g_u, g_v, np.zeros(solid.shape))
+        assert np.allclose(got, expected, rtol=1e-12, atol=1e-14)
+        # The faces in the zero column carry the Brownian coefficient alone, so
+        # the test covers the zero branch as well as the spread of the rest.
+        assert diffusivities.min() == pytest.approx(BROWNIAN, rel=1e-15)
+        assert diffusivities.max() > 10.0 * BROWNIAN
+
+        # The control: the same system with the field's mean diffusivity on
+        # every face is a different system, far outside the tolerance.
+        mean = diffusivities.mean()
+        uniform_u = np.where(
+            g_u > 0.0, mean * mesh.dy_cell[:, None] / mesh.dx_face[None, :], 0.0
+        )
+        uniform_v = np.where(
+            g_v > 0.0, mean * mesh.dx_cell[None, :] / mesh.dy_face[:, None], 0.0
+        )
+        wrong = _dense(mesh, c, dt, uniform_u, uniform_v, np.zeros(solid.shape))
+        assert np.max(np.abs(wrong - expected) / expected.max()) > 1e-4

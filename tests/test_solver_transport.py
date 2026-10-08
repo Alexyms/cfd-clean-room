@@ -1471,3 +1471,227 @@ class TestEddyViscosityNoneAndZero:
         b = solver.solve_timestep(c, still, 0, 0.5, eddy_viscosity=np.zeros((5, 7)))
         assert solver.last_diffusion_sweeps > 0
         assert a.tobytes() == b.tobytes()
+
+
+def _solver_with_schmidt(
+    turbulent_schmidt: float | None, nx: int = 3, ny: int = 3
+) -> tuple[Mesh, TransportSolver]:
+    """A closed stretched room of 0.4 m by 0.5 m: widths 0.1, 0.2, 0.1 and 0.1, 0.3, 0.1."""
+    config = transport_config(
+        0.4,
+        0.5,
+        nx,
+        ny,
+        mesh={"x": {"stretch_ratio": 2.0}, "y": {"stretch_ratio": 3.0}},
+        turbulent_schmidt=turbulent_schmidt,
+    )
+    return _solver(config, ScalarPhysics(settling=0.0, diffusion=1.0e-4))
+
+
+@pytest.mark.unit
+class TestEddyViscosityFaceRule:
+    """The face value of nu_t is the distance-weighted harmonic mean (ADR-012 F)."""
+
+    # Cell values, rows are y. Row 1 has a zero in its first cell, so the
+    # harmonic mean's zero branch is crossed on both axes.
+    NU = 1.0e-3 * np.array([[1.0, 4.0, 2.0], [0.0, 3.0, 5.0], [2.5, 2.5, 2.5]])
+
+    def test_the_face_values_match_a_hand_calculation_on_both_axes(self) -> None:
+        """Centre distances are half the cell widths on this mesh (0.05, 0.10, 0.05 in x
+        and 0.05, 0.15, 0.15, 0.05 in y), so each entry is worked out by hand:
+        x face between 4 and 2 (1e-3) is 0.15 / (0.10/4 + 0.05/2) = 3.0e-3."""
+        mesh, solver = _solver_with_schmidt(SCHMIDT)
+        assert np.allclose(mesh.dx_cell, [0.1, 0.2, 0.1])
+        assert np.allclose(mesh.dy_cell, [0.1, 0.3, 0.1])
+        nu_u, nu_v = solver._face_eddy_viscosity(self.NU)
+        expected_u = 1.0e-3 * np.array(
+            [
+                [0.0, 2.0, 3.0, 0.0],
+                [0.0, 0.0, 45.0 / 13.0, 0.0],
+                [0.0, 2.5, 2.5, 0.0],
+            ]
+        )
+        expected_v = 1.0e-3 * np.array(
+            [
+                [0.0, 0.0, 0.0],
+                [0.0, 3.2, 40.0 / 11.0],
+                [0.0, 20.0 / 7.0, 4.0],
+                [0.0, 0.0, 0.0],
+            ]
+        )
+        assert np.allclose(nu_u, expected_u, rtol=1e-14, atol=0.0)
+        assert np.allclose(nu_v, expected_v, rtol=1e-14, atol=0.0)
+        # Exact zeros, not small numbers: next to a zero cell and on the domain faces.
+        assert nu_u[1, 1] == 0.0 and nu_v[1, 0] == 0.0 and nu_v[2, 0] == 0.0
+        assert not nu_u[:, [0, -1]].any() and not nu_v[[0, -1], :].any()
+
+    def test_the_mean_is_not_the_arithmetic_one(self) -> None:
+        """The control: at the face between 4 and 2 (1e-3) the arithmetic mean
+        of the cell values is 3.0e-3 on a uniform mesh, and with the 0.10 / 0.05
+        weights it is 3.33e-3, against the harmonic 3.0e-3 above."""
+        _, solver = _solver_with_schmidt(SCHMIDT)
+        nu_u, _ = solver._face_eddy_viscosity(self.NU)
+        arithmetic = (0.10 * 2.0e-3 + 0.05 * 4.0e-3) / 0.15
+        assert abs(nu_u[0, 2] - arithmetic) > 2.0e-4
+
+    def test_a_uniform_field_gives_the_uniform_value_on_a_stretched_mesh(self) -> None:
+        """Equal cell values give that value on every interior face, to rounding,
+        whatever the spacing: the weights are distances, not a fixed half."""
+        config = transport_config(
+            1.5,
+            0.9,
+            11,
+            7,
+            mesh={"x": {"stretch_ratio": 1.25}, "y": {"stretch_ratio": 1.15}},
+            turbulent_schmidt=SCHMIDT,
+        )
+        mesh, solver = _solver(config)
+        assert not mesh.is_uniform
+        for value in (1.0e-3, 5.0e-5, 1.5e-3, 0.7):
+            nu_u, nu_v = solver._face_eddy_viscosity(np.full((7, 11), value))
+            assert np.all(np.abs(nu_u[:, 1:-1] - value) <= 1e-15 * value)
+            assert np.all(np.abs(nu_v[1:-1, :] - value) <= 1e-15 * value)
+
+    def test_a_solid_cell_and_the_domain_faces_carry_no_value(self) -> None:
+        """A face next to a SOLID cell gets zero whatever that cell holds, and a
+        domain face gets zero: the wall flux keeps the Brownian rule."""
+        mesh, solver = _one_solid_cell_room(SCHMIDT)
+        solid = mesh.cell_type == SOLID
+        assert solid.sum() == 1
+        j, i = np.argwhere(solid)[0]
+        field = np.full(solid.shape, 1.0e-3)
+        field[solid] = 5.0
+        nu_u, nu_v = solver._face_eddy_viscosity(solver._check_eddy_viscosity(field))
+        assert nu_u[j, i] == 0.0 and nu_u[j, i + 1] == 0.0
+        assert nu_v[j, i] == 0.0 and nu_v[j + 1, i] == 0.0
+        assert not nu_u[:, [0, -1]].any() and not nu_v[[0, -1], :].any()
+        assert nu_u[j, i - 1] == pytest.approx(1.0e-3, rel=1e-15)
+
+
+def _one_solid_cell_room(
+    turbulent_schmidt: float | None,
+) -> tuple[Mesh, TransportSolver]:
+    """A stretched 11 by 7 room, closed, with one obstacle cell inside it."""
+    stretch = {"x": {"stretch_ratio": 1.25}, "y": {"stretch_ratio": 1.15}}
+    plain = Mesh(transport_config(1.5, 0.9, 11, 7, mesh=stretch))
+    i, j = 4, 3
+    obstacle = {
+        "name": "b",
+        "x_start": float(plain.x[i]),
+        "x_end": float(plain.x[i + 1]),
+        "y_start": float(plain.y[j]),
+        "y_end": float(plain.y[j + 1]),
+    }
+    config = transport_config(
+        1.5,
+        0.9,
+        11,
+        7,
+        mesh=stretch,
+        obstacles=[obstacle],
+        diffusion_tol=1e-14,
+        max_diffusion_iter=20000,
+        turbulent_schmidt=turbulent_schmidt,
+    )
+    return _solver(config, ScalarPhysics(settling=0.0, diffusion=1.0e-4))
+
+
+@pytest.mark.unit
+class TestEddyViscosityRefusals:
+    """Every check runs before any arithmetic (the sources' pattern)."""
+
+    def _step(self, solver: TransportSolver, mesh: Mesh, field: object) -> np.ndarray:
+        return solver.solve_timestep(
+            np.ones((3, 3)),
+            uniform_face_field(mesh, 0.0, 0.0),
+            0,
+            0.1,
+            eddy_viscosity=field,  # type: ignore[arg-type]
+        )
+
+    @pytest.mark.parametrize(
+        ("make", "error", "message"),
+        [
+            (lambda: np.zeros((3, 4)), ValueError, "shape"),
+            (lambda: np.zeros((9,)), ValueError, "shape"),
+            (lambda: np.zeros((3, 3), dtype=np.float32), TypeError, "float64"),
+            (lambda: np.zeros((3, 3), dtype=np.int64), TypeError, "float64"),
+            (lambda: np.zeros((3, 3), dtype=bool), TypeError, "float64"),
+            (lambda: [[0.0] * 3] * 3, TypeError, "ndarray"),
+            (lambda: np.full((3, 3), np.nan), ValueError, "finite"),
+            (lambda: np.full((3, 3), np.inf), ValueError, "finite"),
+            (lambda: np.full((3, 3), -1.0e-12), ValueError, "non-negative"),
+        ],
+    )
+    def test_a_bad_field_is_refused_and_the_budget_untouched(
+        self, make: object, error: type[Exception], message: str
+    ) -> None:
+        mesh, solver = _solver_with_schmidt(SCHMIDT)
+        with pytest.raises(error, match=message):
+            self._step(solver, mesh, make())  # type: ignore[operator]
+        assert solver.budget[0] == MassBudget()
+
+    def test_one_negative_cell_among_good_ones_is_refused(self) -> None:
+        mesh, solver = _solver_with_schmidt(SCHMIDT)
+        field = np.full((3, 3), 1.0e-3)
+        field[2, 1] = -1.0e-9
+        with pytest.raises(ValueError, match="non-negative"):
+            self._step(solver, mesh, field)
+
+    def test_a_field_without_turbulent_schmidt_is_refused_naming_the_key(self) -> None:
+        mesh, solver = _solver_with_schmidt(None)
+        with pytest.raises(ValueError, match=r"transport\.turbulent_schmidt"):
+            self._step(solver, mesh, np.full((3, 3), 1.0e-3))
+        assert solver.budget[0] == MassBudget()
+        # The key is needed only where the field is used.
+        self._step(solver, mesh, None)
+
+    def test_any_value_in_a_solid_cell_is_accepted_and_changes_nothing(self) -> None:
+        """Negative, NaN, infinite and large values in the SOLID cell give the
+        bits a zero there gives; the same value in a live cell is refused."""
+        mesh, solver = _one_solid_cell_room(SCHMIDT)
+        solid = mesh.cell_type == SOLID
+        j, i = np.argwhere(solid)[0]
+        c = np.where(solid, 0.0, 1.0 + 0.1 * np.arange(solid.size).reshape(solid.shape))
+        faces = uniform_face_field(mesh, 0.0, 0.0)
+        base = np.full(solid.shape, 1.0e-3)
+        base[solid] = 0.0
+        reference = solver.solve_timestep(c, faces, 0, 0.5, eddy_viscosity=base)
+        for value in (-3.0, np.nan, np.inf, 1.0e3):
+            field = base.copy()
+            field[solid] = value
+            _, other = _one_solid_cell_room(SCHMIDT)
+            got = other.solve_timestep(c, faces, 0, 0.5, eddy_viscosity=field)
+            assert got.tobytes() == reference.tobytes()
+            live = base.copy()
+            live[j, i - 1] = value
+            if value != 1.0e3:
+                with pytest.raises(ValueError):
+                    other.solve_timestep(c, faces, 0, 0.5, eddy_viscosity=live)
+
+
+@pytest.mark.unit
+class TestEddyViscosityPositivity:
+    def test_a_narrow_spike_and_a_large_step_keep_the_field_non_negative(self) -> None:
+        """REQ-T12's argument carries over: the implicit matrix is an M-matrix
+        for any non-negative conductance. A spike of nu_t two cells wide, in a
+        field of zeros and one tiny value, acts on one hot cell at a diffusion
+        number near 18, far above the room's. The harmonic mean is zero at
+        both edges of the spike, so only the face inside it diffuses."""
+        mesh, solver = _one_solid_cell_room(SCHMIDT)
+        solid = mesh.cell_type == SOLID
+        field = np.zeros(solid.shape)
+        field[2, 6:8] = 0.05
+        field[3, 2:4] = 1.0e-9
+        c = np.zeros(solid.shape)
+        c[2, 6] = 1.0e5
+        faces = uniform_face_field(mesh, 0.0, 0.0)
+        for _ in range(5):
+            c = solver.solve_timestep(c, faces, 0, 5.0, eddy_viscosity=field)
+            assert solver.diffusion_converged
+            assert c.min() >= 0.0
+            assert np.isfinite(c).all()
+        # The control that the field acted: the hot cell shared with its
+        # spike neighbour, far more than Brownian motion alone moves in 25 s.
+        assert c[2, 7] > 0.1 * c[2, 6]
+        assert abs(solver.budget[0].relative()) < 1e-12
