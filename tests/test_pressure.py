@@ -24,6 +24,7 @@ from collections.abc import Callable
 import numpy as np
 import pytest
 import yaml
+from threadpoolctl import threadpool_info, threadpool_limits
 
 import src.pressure as pressure
 from src.boundary_staggered import StaggeredBoundary
@@ -31,6 +32,7 @@ from src.config import SimConfig
 from src.mesh import FLUID, SOLID, Mesh
 from src.momentum import MomentumPrediction, MomentumPredictor
 from src.pressure import (
+    PRESSURE_BLAS_THREADS,
     PRESSURE_SOLVER_VERSION,
     RESIDUAL_FLOOR,
     STAGGERED_METHOD,
@@ -1244,3 +1246,64 @@ class TestConjugateGradient:
             conjugate_gradient(
                 lambda x: apply_operator(c, x), inv.T.copy(), -b, 1e-8, 0.0, 50
             )
+
+    @staticmethod
+    def _blas_threads() -> int:
+        """The BLAS pool's thread count as the process reports it now."""
+        return max(
+            lib["num_threads"] for lib in threadpool_info() if lib["user_api"] == "blas"
+        )
+
+    @pytest.mark.parametrize("path", ["conjugate_gradient", "correct"])
+    def test_blas_pool_is_limited_inside_the_solve_and_restored_after(
+        self, path: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The pool holds PRESSURE_BLAS_THREADS threads at every operator product, then reverts.
+
+        The process starts the test with two BLAS threads, so a solve that
+        leaves the setting alone reports two, whatever the machine's default
+        is; a machine whose BLAS cannot run two is skipped, since nothing
+        distinguishes the limit there. The operator is wrapped to record the
+        pool's size from inside the loop, once through ``conjugate_gradient``
+        and once through ``PressureCorrector.correct``, which is the path the
+        solver takes. Defect caught: the ``with`` block deleted, or moved off
+        the loop (ADR-013 "Planned against built", docs/reports/blas_threads.md).
+        """
+        pc, c, b, pred, p = self._system(CHANNEL)
+        f = _projected_rhs(pc, c, b)
+        seen: list[int] = []
+
+        def recording(coefficients: PressureCoefficients, x: np.ndarray) -> np.ndarray:
+            seen.append(self._blas_threads())
+            return apply_operator(coefficients, x)
+
+        with threadpool_limits(limits=2, user_api="blas"):
+            before = self._blas_threads()
+            if before < 2:
+                pytest.skip("this BLAS cannot run two threads")
+            if path == "correct":
+                monkeypatch.setattr(pressure, "apply_operator", recording)
+                pc.correct(pred, p)
+            else:
+                conjugate_gradient(
+                    lambda x: recording(c, x), _inverse_diagonal(c), f, 1e-8, 0.0, 5000
+                )
+            assert len(seen) > 1
+            assert set(seen) == {PRESSURE_BLAS_THREADS}
+            assert self._blas_threads() == before
+
+    def test_blas_pool_is_restored_when_the_solve_raises(self) -> None:
+        """A failure inside the loop leaves the process's BLAS setting as it was."""
+        pc, c, b, _pred, _p = self._system(CHANNEL)
+        f = _projected_rhs(pc, c, b)
+
+        def failing(x: np.ndarray) -> np.ndarray:
+            raise RuntimeError("operator failed")
+
+        with threadpool_limits(limits=2, user_api="blas"):
+            before = self._blas_threads()
+            if before < 2:
+                pytest.skip("this BLAS cannot run two threads")
+            with pytest.raises(RuntimeError, match="operator failed"):
+                conjugate_gradient(failing, _inverse_diagonal(c), f, 1e-8, 0.0, 50)
+            assert self._blas_threads() == before

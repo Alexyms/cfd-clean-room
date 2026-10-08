@@ -70,6 +70,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 import numpy as np
+from threadpoolctl import ThreadpoolController
 
 from src.boundary_staggered import StaggeredBoundary
 from src.config import SimConfig
@@ -109,6 +110,21 @@ RESIDUAL_FLOOR = 1e-13
 # uses the same value for its reference velocity, so the two agree on which
 # inflow counts as zero.
 ZERO_SCALE = 1e-30
+
+# BLAS threads the conjugate gradient solve may use. The loop forms three
+# dot products per iteration over the whole grid, and above about 10,000
+# elements OpenBLAS splits each across its thread pool at a fixed cost of
+# about 0.33 ms per call, against 4 to 5 us of arithmetic on one thread. On a
+# 200x75 mesh that made a correction 1.05 s instead of 0.14 s. One thread is
+# faster at every length measured up to 1,000,000 elements, past the product
+# mesh by a factor of 60 (docs/reports/blas_threads.md). It is a property of
+# the library on this solve's vector lengths, not a tolerance a case chooses,
+# so it is a constant here rather than a configuration key.
+PRESSURE_BLAS_THREADS = 1
+
+# Discovering the loaded BLAS libraries is the expensive part of threadpoolctl,
+# so it happens once at import and each solve only enters and leaves the limit.
+_BLAS_CONTROLLER = ThreadpoolController()
 
 
 @dataclass(frozen=True)
@@ -288,9 +304,30 @@ def conjugate_gradient(
     drifted cannot end a correction early (ADR-013 B). The three
     reductions per iteration are ``vdot`` in NumPy's order; a different
     order moved a correction's faces by at most 1.6e-12 m/s on the
-    product mesh (the report, section 12.2).
+    product mesh (the report, section 12.2). The solve runs with the BLAS
+    pool limited to PRESSURE_BLAS_THREADS threads and restores the process's
+    setting on leaving, so nothing else in the process is affected.
     """
     _check_solve_arguments(inverse_diagonal, f, rtol, floor, max_iter)
+    with _BLAS_CONTROLLER.limit(limits=PRESSURE_BLAS_THREADS, user_api="blas"):
+        return _conjugate_gradient_loop(
+            apply, inverse_diagonal, f, rtol, floor, max_iter
+        )
+
+
+def _conjugate_gradient_loop(
+    apply: Callable[[np.ndarray], np.ndarray],
+    inverse_diagonal: np.ndarray,
+    f: np.ndarray,
+    rtol: float,
+    floor: float,
+    max_iter: int,
+) -> ConjugateGradientResult:
+    """Iterate ``conjugate_gradient`` on arguments it has already checked.
+
+    Split out so the BLAS thread limit wraps the loop and every return in
+    it with one ``with`` block.
+    """
     x = np.zeros_like(f)
     r = f.copy()
     f_norm = float(np.sqrt(np.vdot(f, f)))
