@@ -413,6 +413,21 @@ def cavity_true_centerline_profiles(
     first and last faces, and the wall values are appended at those faces. On
     the unit cavity that is x = 0.5 and y = 0.5 with walls at 0 and 1, where
     Ghia's stations lie.
+
+    The wall-adjacent ring row is dropped. The outer ring of the cavity's
+    cells is BOUNDARY, so each profile runs from the second cell straight to
+    the wall value appended at the face. The ring was kept out because, for
+    the collocated solver (retired 2026-10-02), a BOUNDARY cell held the
+    ghost value that places the wall condition at the face and not a solution
+    at its center, and the metric still reads one set of profiles for its
+    three readers: the Marchi metric (VAL-002 and ECR-001 criteria 3 and 3a),
+    the Ghia r2 metric, and the viewer's centerline panel. Every stored
+    ``_cubic`` and ``_r2`` row was scored this way, so the metric is kept as
+    built (Alex, 2026-10-07, option 1 of GitHub issue 42). The cost is on the
+    coarsest grid only. At 20x20 the Marchi station y = 0.9375 is read on the
+    nodes 0.825, 0.875, 0.925 and the lid, across the dropped cell at 0.975,
+    and the Marchi u error reads 2.144e-2 where keeping the ring would read
+    1.787e-2. At 40x40 and 80x80 the two agree to rounding.
     """
     u_lid = lid_velocity(config)
     xc, yc = np.asarray(mesh.xc), np.asarray(mesh.yc)

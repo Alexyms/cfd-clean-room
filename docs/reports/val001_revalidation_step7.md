@@ -75,12 +75,12 @@ further developed, it stays near 2.
 
 **Limit of the instrument.** The two-column station and the pair restriction each carry an O(h^2)
 error of their own. On a parabola the restriction misses by P'' h^2 / 32, 9.4e-5 at 40x20, about
-half the signal (d1 RMS 1.69e-4), so the instrument pulls a lower order toward 2: synthetic q = 1.5
-and 1.8 at about twice the real signal read 1.62 and 1.85, so near 1.8 the judged order can read about
-0.05 high (review 25 S2; stated here and in `scripts/val001_order.py`'s docstring, and the control, which
-runs q = 2 and q = 1, does not cover that band). On these fields the pull is absent. With
-the parabola subtracted from every grid first, which leaves the differences alone and moves the
-restriction onto the small f - P, the order is 1.996 against the judged 1.993
+half the signal (d1 RMS 1.69e-4), so the instrument pulls a lower order toward 2: synthetic q =
+1.5 and 1.8 at about twice the real signal read 1.62 and 1.85, so near 1.8 the judged order can
+read about 0.05 high (review 25 S2; stated here and in `scripts/val001_order.py`'s docstring, and
+the control, which runs q = 2 and q = 1, does not cover that band). On these fields the pull is
+absent. With the parabola subtracted from every grid first, which leaves the differences alone and
+moves the restriction onto the small f - P, the order is 1.996 against the judged 1.993
 (`results/builder25/restriction_bias.json`). The instrument cannot show an order above 2.
 
 ## 3. Prediction check
