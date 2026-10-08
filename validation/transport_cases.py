@@ -246,6 +246,7 @@ def transport_config(
     output_interval: int = SOLVER_BLOCK["output_interval"],
     obstacles: list[dict] | None = None,
     mesh: dict | None = None,
+    turbulent_schmidt: float | None = None,
 ) -> SimConfig:
     """A validated configuration carrying a transport section.
 
@@ -273,24 +274,30 @@ def transport_config(
         Obstacles in the file's form.
     mesh : dict, optional
         The file's ``mesh`` section, for a stretched case; absent is uniform.
+    turbulent_schmidt : float, optional
+        Sc_t for a case that hands the solver an eddy viscosity field; None
+        leaves the key out, as a laminar configuration does.
 
     Returns
     -------
     SimConfig
         Validated as a file would be.
     """
+    transport = {
+        "cfl_number": cfl_number,
+        "advection_scheme": scheme,
+        "max_diffusion_iter": max_diffusion_iter,
+        "diffusion_tol": diffusion_tol,
+    }
+    if turbulent_schmidt is not None:
+        transport["turbulent_schmidt"] = turbulent_schmidt
     raw = {
         "domain": {"width": width, "height": height, "nx": nx, "ny": ny},
         "mesh": mesh or {},
         "fluid": {**AIR, "density": rho},
         "particles": PARTICLES,
         "solver": {**SOLVER_BLOCK, "output_interval": output_interval},
-        "transport": {
-            "cfl_number": cfl_number,
-            "advection_scheme": scheme,
-            "max_diffusion_iter": max_diffusion_iter,
-            "diffusion_tol": diffusion_tol,
-        },
+        "transport": transport,
         "boundaries": boundaries or {},
         "obstacles": obstacles or [],
         "sensors": [{"name": "centre", "x": width / 2.0, "y": height / 2.0}],

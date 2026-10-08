@@ -44,6 +44,17 @@ SOLID cell. No diffusion crosses any of them. A far-upstream node that falls
 in a SOLID cell is read as the upstream cell's value, the zero-gradient wall
 rule the domain edges use. SOLID cells are zero after every step.
 
+Turbulent diffusion (ADR-012 F, REQ-T13). Called with an ``eddy_viscosity``
+field, the diffusivity of a class on an interior face is its Brownian
+coefficient plus ``nu_t / Sc_t``, the same for every class: the classes are
+tracers to the turbulence. ``nu_t`` is given per cell; the face value is
+the distance-weighted harmonic mean of the two cell values, which is zero
+when either is. It reaches computation as the conductance of the implicit
+solve and nowhere else; the advection, settling, deposition and budget are
+the laminar path's, and a wall face keeps the Brownian deposition rule
+(ADR-012 decision 7). Called without the field the arithmetic is the
+laminar path's, bit for bit (REQ-S16).
+
 Settling (ADR-011 D). The class's settling velocity is subtracted from the
 vertical face velocity on the faces ``settling_v`` marks, horizontal faces
 between two non-SOLID cells, and nowhere else; every other horizontal face
@@ -286,6 +297,36 @@ class FieldHistory:
         np.savez(path, **arrays)
 
 
+def _harmonic_mean(
+    low: np.ndarray, high: np.ndarray, d_low: np.ndarray, d_high: np.ndarray
+) -> np.ndarray:
+    """Distance-weighted harmonic mean of two cell values at the face between them.
+
+    Parameters
+    ----------
+    low, high : np.ndarray
+        The non-negative cell values on the two sides, same shape.
+    d_low, d_high : np.ndarray
+        Distances from the face to the two cell centres, positive,
+        broadcastable to the shape of ``low``.
+
+    Returns
+    -------
+    np.ndarray
+        ``(d_low + d_high) / (d_low / low + d_high / high)``, and zero where
+        either value is zero.
+
+    Notes
+    -----
+    Evaluated as ``(d_low + d_high) low high / (d_low high + d_high low)``,
+    the same number for positive values, so that a zero on either side gives
+    zero without a division by zero.
+    """
+    denominator = d_low * high + d_high * low
+    safe = np.where(denominator > 0.0, denominator, 1.0)
+    return np.where(denominator > 0.0, (d_low + d_high) * low * high / safe, 0.0)
+
+
 class ParticleProperties(Protocol):
     """What the solver reads of a particle model: ParticlePhysics satisfies it.
 
@@ -323,7 +364,8 @@ class TransportSolver:
         The computational mesh, uniform or stretched.
     config : SimConfig
         Must carry a ``transport`` section: cfl_number, advection_scheme,
-        max_diffusion_iter, diffusion_tol. Supplies the class count.
+        max_diffusion_iter, diffusion_tol, and, for a call with an eddy
+        viscosity field, turbulent_schmidt. Supplies the class count.
     physics : ParticlePhysics or ParticleProperties
         Supplies ``settling_velocity`` and ``diffusion_coeff`` per class;
         nothing else of it is read.
@@ -365,6 +407,7 @@ class TransportSolver:
         self._upwind = spec.advection_scheme == UPWIND
         self._max_sweeps = spec.max_diffusion_iter
         self._tol = spec.diffusion_tol
+        self._schmidt = spec.turbulent_schmidt
         self._u_shape = u_shape(mesh)
         self._v_shape = v_shape(mesh)
         self._p_shape = p_shape(mesh)
@@ -401,6 +444,11 @@ class TransportSolver:
         self._conductance_v = np.where(
             inner_v, self._area_v / mesh.dy_face[:, None], 0.0
         )
+        # Distances from an interior face to the two cell centres it joins,
+        # for the harmonic mean of nu_t. The mesh's own coordinates, so the
+        # weights hold on a stretched mesh.
+        self._reach_x = (mesh.x[1:-1] - mesh.xc[:-1], mesh.xc[1:] - mesh.x[1:-1])
+        self._reach_y = (mesh.y[1:-1] - mesh.yc[:-1], mesh.yc[1:] - mesh.y[1:-1])
 
         self._axis_x, self._axis_y = mesh_axes(mesh)
 
@@ -518,8 +566,15 @@ class TransportSolver:
             second, non-negative, zero in SOLID cells; None is zero. Added as
             ``sources dt`` and ``sum(sources V) dt`` is booked.
         eddy_viscosity : np.ndarray, optional
-            Turbulent viscosity per cell, ``nu_t`` in m^2/s, kinematic.
-            None is the laminar path.
+            Turbulent viscosity per cell, ``nu_t`` in m^2/s (kinematic),
+            float64, shape [ny, nx], finite and non-negative in every
+            non-SOLID cell; values in SOLID cells are not read. None is the
+            laminar path, bitwise. With a field, every interior face between
+            two non-SOLID cells diffuses with ``D_B + nu_f / Sc_t``, where
+            ``nu_f`` is the harmonic mean of the two cell values weighted by
+            the distances from the face to the cell centres, and zero when
+            either cell's value is zero. Every other face is unchanged, so a
+            wall face's flux and deposition keep the Brownian rule.
 
         Returns
         -------
@@ -531,19 +586,20 @@ class TransportSolver:
         ------
         TypeError
             If ``size_class`` or ``dt`` is a bool (Python's, numpy's, or for
-            ``dt`` a 0-d bool array), or ``size_class`` is not an int.
+            ``dt`` a 0-d bool array), or ``size_class`` is not an int, or
+            ``eddy_viscosity`` is not a float64 ndarray.
         IndexError
             If ``size_class`` is outside the configured classes.
         ValueError
             If ``dt`` is not finite and positive or exceeds ``stable_dt``, a
             shape does not fit the mesh, an array holds a value that is not
-            finite, or a source is negative or sits in a SOLID cell. Every
-            check runs before any arithmetic, so a bad input leaves the
-            budget untouched.
+            finite, a source is negative or sits in a SOLID cell, an eddy
+            viscosity is negative or not finite in a non-SOLID cell, or an
+            eddy viscosity is given and ``transport.turbulent_schmidt`` is
+            not configured. Every check runs before any arithmetic, so a bad
+            input leaves the budget untouched.
         """
         k = self._check_class(size_class)
-        if eddy_viscosity is not None:
-            raise NotImplementedError("the eddy_viscosity path is not built yet")
         c = np.array(C_k, dtype=np.float64, order="C", copy=True)
         if c.shape != self._p_shape:
             raise ValueError(f"expected C_k of shape {self._p_shape}, got {c.shape}")
@@ -581,6 +637,9 @@ class TransportSolver:
                 raise ValueError("sources must be non-negative (ADR-011 B)")
             if np.any(rate[self._solid] != 0.0):
                 raise ValueError("a source sits in a SOLID cell")
+        nu_t = None
+        if eddy_viscosity is not None:
+            nu_t = self._check_eddy_viscosity(eddy_viscosity)
         c[self._solid] = 0.0
         budget = self.budget[k]
         mesh = self._mesh
@@ -624,7 +683,14 @@ class TransportSolver:
         budget.inflow += float(inflow) * dt
         budget.outflow += float(outflow) * dt
 
-        c_new = self._implicit_step(c_star, dt, self._diffusion[k], k)
+        if nu_t is None:
+            g_u = self._diffusion[k] * self._conductance_u
+            g_v = self._diffusion[k] * self._conductance_v
+        else:
+            nu_u, nu_v = self._face_eddy_viscosity(nu_t)
+            g_u = (self._diffusion[k] + nu_u / self._schmidt) * self._conductance_u
+            g_v = (self._diffusion[k] + nu_v / self._schmidt) * self._conductance_v
+        c_new = self._implicit_step(c_star, dt, g_u, g_v, k)
         self._book_deposition(c_new, dt, k, conditions)
         budget.current = MassBudget.in_domain(c_new, mesh)
         return np.ascontiguousarray(c_new)
@@ -652,6 +718,31 @@ class TransportSolver:
             )
         if not (np.isfinite(u).all() and np.isfinite(v).all()):
             raise ValueError(f"{what} must be finite")
+
+    def _check_eddy_viscosity(self, field: np.ndarray) -> np.ndarray:
+        """The eddy viscosity as the solver reads it, or a refusal before any arithmetic.
+
+        Returns a copy with SOLID cells set to zero, so no value there is
+        read: the harmonic mean treats a zero as no diffusion across the face.
+        """
+        if self._schmidt is None:
+            raise ValueError(
+                "an eddy_viscosity field needs transport.turbulent_schmidt in the "
+                "configuration (REQ-T13)"
+            )
+        if not isinstance(field, np.ndarray) or field.dtype != np.float64:
+            got = field.dtype if isinstance(field, np.ndarray) else type(field).__name__
+            raise TypeError(f"eddy_viscosity must be a float64 ndarray, got {got}")
+        if field.shape != self._p_shape:
+            raise ValueError(
+                f"expected eddy_viscosity of shape {self._p_shape}, got {field.shape}"
+            )
+        live = field[self._live]
+        if not np.isfinite(live).all():
+            raise ValueError("eddy_viscosity must be finite in every non-SOLID cell")
+        if np.any(live < 0.0):
+            raise ValueError("eddy_viscosity must be non-negative (ADR-012 F)")
+        return np.where(self._live, field, 0.0)
 
     def _check_conditions(self, faces: ConcentrationFaces, k: int) -> None:
         """Shapes, dtypes and finiteness of a class's faces, before any arithmetic.
@@ -712,19 +803,48 @@ class TransportSolver:
             v_adv = v_adv + np.where(self._inner_v, v_ext.v, 0.0)
         return u_adv, v_adv
 
+    def _face_eddy_viscosity(self, nu_t: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Face values of nu_t: the harmonic mean of the two cells, distance weighted.
+
+        Parameters
+        ----------
+        nu_t : np.ndarray
+            Eddy viscosity per cell, [ny, nx], zero in SOLID cells.
+
+        Returns
+        -------
+        tuple[np.ndarray, np.ndarray]
+            The values on the u faces [ny, nx+1] and the v faces [ny+1, nx],
+            zero on every domain face.
+
+        Notes
+        -----
+        ``nu_f = (d_P + d_E) / (d_P / nu_P + d_E / nu_E)`` for a face at
+        distance ``d_P`` from P's centre and ``d_E`` from E's (Patankar's
+        interface conductivity), evaluated by ``_harmonic_mean``.
+        """
+        nu_u = np.zeros(self._u_shape)
+        nu_v = np.zeros(self._v_shape)
+        nu_u[:, 1:-1] = _harmonic_mean(
+            nu_t[:, :-1], nu_t[:, 1:], *(r[None, :] for r in self._reach_x)
+        )
+        nu_v[1:-1, :] = _harmonic_mean(
+            nu_t[:-1, :], nu_t[1:, :], *(r[:, None] for r in self._reach_y)
+        )
+        return nu_u, nu_v
+
     def _implicit_step(
-        self, c_star: np.ndarray, dt: float, diffusivity: float, k: int
+        self, c_star: np.ndarray, dt: float, g_u: np.ndarray, g_v: np.ndarray, k: int
     ) -> np.ndarray:
         """Backward Euler diffusion and deposition, by ``scalar_scheme.implicit_step``.
 
-        ``G_f = D A_f / d_f`` on the interior faces between non-SOLID cells,
-        formed here before the solve, and the deposition sink of every wall
-        face of P in the diagonal, so the step cannot take a cell below zero
+        ``g_u`` and ``g_v`` are the conductances ``G_f = D_f A_f / d_f``,
+        formed by the caller: zero on every face but the interior ones
+        between non-SOLID cells. The deposition sink of every wall face of P
+        is in the diagonal, so the step cannot take a cell below zero
         (ADR-011 C). Records the sweeps and whether the tolerance was met,
         and logs a warning at the cap.
         """
-        g_u = diffusivity * self._conductance_u
-        g_v = diffusivity * self._conductance_v
         result = implicit_step(
             c_star,
             self._volume,

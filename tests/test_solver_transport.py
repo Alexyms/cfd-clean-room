@@ -1368,3 +1368,106 @@ class TestWithTheRealBoundaryLayer:
             for name in ("floor", "ceiling", "wall", "obstacle")
         )
         assert abs(budget.relative()) < 1e-12
+
+
+# ---------------------------------------------------------------------------
+# The eddy viscosity field (ECR-002 step 2, REQ-T13, ADR-012 F)
+# ---------------------------------------------------------------------------
+
+SCHMIDT = 0.7
+
+
+def _everything_on(
+    turbulent_schmidt: float | None = SCHMIDT,
+) -> tuple[Mesh, TransportSolver, FaceVelocities, np.ndarray]:
+    """The budget test's room with inlet, outlet, obstacle, settling, deposition and a source."""
+    config = transport_config(
+        1.6,
+        0.9,
+        16,
+        9,
+        boundaries={
+            "in": {
+                "type": "velocity_inlet",
+                "location": "left",
+                "y_start": 0.2,
+                "y_end": 0.7,
+                "velocity": 0.2,
+                "concentration": [3.0e5],
+            },
+            "out": {
+                "type": "pressure_outlet",
+                "location": "right",
+                "y_start": 0.1,
+                "y_end": 0.8,
+            },
+        },
+        obstacles=[
+            {"name": "b", "x_start": 0.6, "x_end": 0.9, "y_start": 0.3, "y_end": 0.5}
+        ],
+        diffusion_tol=1e-14,
+        turbulent_schmidt=turbulent_schmidt,
+    )
+    mesh = Mesh(config)
+    physics = ParticlePhysics(config)
+    boundary = ConcentrationBoundary(mesh, config, physics, BoundaryRegistry(config))
+    solver = TransportSolver(mesh, config, physics, boundary)
+    rate = np.zeros((9, 16))
+    rate[4, 12] = 2.0e4
+    return mesh, solver, _random_faces(mesh, 21, scale=0.3), rate
+
+
+@pytest.mark.unit
+class TestEddyViscosityNoneAndZero:
+    """REQ-S16: the laminar path is the field path at nu_t = 0, bit for bit."""
+
+    def test_a_field_of_zeros_is_bitwise_the_laminar_path(self) -> None:
+        """30 steps on a random face field, sources, settling and deposition all
+        active: every returned field and every budget term is identical."""
+        mesh, laminar, faces, rate = _everything_on()
+        _, turbulent, _, _ = _everything_on()
+        zeros = np.zeros((9, 16))
+        c_a = c_b = _random_field(mesh, 22) * 1e5
+        dt = laminar.stable_dt(faces, 0)
+        for _ in range(30):
+            c_a = laminar.solve_timestep(c_a, faces, 0, dt, sources=rate)
+            c_b = turbulent.solve_timestep(
+                c_b, faces, 0, dt, sources=rate, eddy_viscosity=zeros
+            )
+            assert c_a.tobytes() == c_b.tobytes()
+        assert laminar.budget[0] == turbulent.budget[0]
+        assert laminar.last_diffusion_sweeps == turbulent.last_diffusion_sweeps
+        # The control: a real field changes the bits, so the comparison above
+        # could have failed.
+        _, third, _, _ = _everything_on()
+        field = np.full((9, 16), 1.0e-3)
+        moved = third.solve_timestep(
+            _random_field(mesh, 22) * 1e5, faces, 0, dt, eddy_viscosity=field
+        )
+        plain = laminar.solve_timestep(_random_field(mesh, 22) * 1e5, faces, 0, dt)
+        assert moved.tobytes() != plain.tobytes()
+
+    def test_a_field_of_zeros_is_bitwise_on_a_stretched_mesh_at_a_resolved_diffusivity(
+        self,
+    ) -> None:
+        """The same, where the Brownian coefficient is large enough to matter."""
+        config = transport_config(
+            1.0,
+            0.6,
+            7,
+            5,
+            diffusion_tol=1e-14,
+            mesh={"x": {"stretch_ratio": 1.3}, "y": {"stretch_ratio": 1.2}},
+            turbulent_schmidt=SCHMIDT,
+        )
+        mesh = Mesh(config)
+        physics = ScalarPhysics(settling=0.0, diffusion=2.0e-3)
+        solver = TransportSolver(
+            mesh, config, physics, FixedConditions(zero_conditions(mesh))
+        )
+        c = _random_field(mesh, 5)
+        still = uniform_face_field(mesh, 0.0, 0.0)
+        a = solver.solve_timestep(c, still, 0, 0.5)
+        b = solver.solve_timestep(c, still, 0, 0.5, eddy_viscosity=np.zeros((5, 7)))
+        assert solver.last_diffusion_sweeps > 0
+        assert a.tobytes() == b.tobytes()
