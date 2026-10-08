@@ -210,6 +210,7 @@ class TestSimConfigValid:
             advection_scheme="umist",
             max_diffusion_iter=200,
             diffusion_tol=1e-8,
+            turbulent_schmidt=0.7,
         )
         supply = config.boundaries["hepa_supply"]
         assert supply.hepa_filtered is True
@@ -1342,6 +1343,47 @@ class TestTransportSection:
             SimConfig.from_dict(self._raw(tmp_path, cfl_numbre=0.1))
         with pytest.raises(ValueError, match="transport must be a mapping"):
             SimConfig.from_dict(self._raw(tmp_path, transport=[0.1]))
+
+    def test_turbulent_schmidt_absent_is_none_with_no_default(
+        self, tmp_path: Path
+    ) -> None:
+        """REQ-T13: the key is optional and nothing in code stands in for it."""
+        spec = SimConfig.from_dict(self._raw(tmp_path)).transport
+        assert spec.turbulent_schmidt is None
+
+    @pytest.mark.parametrize(
+        ("given", "expected"),
+        [(0.7, 0.7), (1, 1.0), (0.2, 0.2), (1.3, 1.3), (50, 50.0)],
+    )
+    def test_turbulent_schmidt_valid_values_are_read_as_floats(
+        self, tmp_path: Path, given: object, expected: float
+    ) -> None:
+        """Any positive finite number is read; the literature range is not enforced."""
+        spec = SimConfig.from_dict(
+            self._raw(tmp_path, turbulent_schmidt=given)
+        ).transport
+        assert spec.turbulent_schmidt == expected
+        assert isinstance(spec.turbulent_schmidt, float)
+
+    @pytest.mark.parametrize(
+        ("bad", "error"),
+        [
+            (0.0, ValueError),
+            (-0.7, ValueError),
+            (float("nan"), ValueError),
+            (float("inf"), ValueError),
+            (True, TypeError),
+            (False, TypeError),
+            ("0.7", TypeError),
+            (None, TypeError),
+        ],
+    )
+    def test_turbulent_schmidt_bad_values_are_rejected(
+        self, tmp_path: Path, bad: object, error: type[Exception]
+    ) -> None:
+        """Zero, negative, non-finite, bool, string and null are refused at load."""
+        with pytest.raises(error, match=r"transport\.turbulent_schmidt"):
+            SimConfig.from_dict(self._raw(tmp_path, turbulent_schmidt=bad))
 
 
 TURBULENCE = {
