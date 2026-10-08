@@ -3,12 +3,14 @@
 Usage:
     python outlet41.py drift ARM RTOL [--n-outer N] [--hood-gradient] [--tag TAG]
     python outlet41.py ladder ARM RUNG [--n-outer N]       RUNG is 895 or 8950
-    python outlet41.py val001 ARM [--grid NX NY]           ARM is committed, B or C
+    python outlet41.py val001 ARM [--grid NX NY]           ARM is committed, B, C or F
     python outlet41.py control                             sweep predictor vs frozen34
     python outlet41.py compare NAME_1 NAME_2 [--grid NX NY] measurement 4
 
-ARM is one of A, B, C, D, E, E0 (section 2 of the report) or F (section 8). Nothing under
-src/ is edited or patched: the arms override StaggeredSolver's outlet
+ARM is one of A, B, C, D, E, E0 (section 2 of the report), F (section 8), or
+Aopen and D0 (section 5.3: A's copy with the hold-shut rule off; D with the
+returns' tangential velocity held at zero). Nothing under src/ is edited or
+patched: the arms override StaggeredSolver's outlet
 extrapolation, the corrector is a subclass that records its right-hand
 side, and the ten-sweep predictor is a subclass of MomentumPredictor. Every
 run writes NAME.json and NAME.npz under results/builder41/.
@@ -51,7 +53,7 @@ from src.momentum import (  # noqa: E402
 )
 from src.pressure import PressureCorrection, PressureCorrector  # noqa: E402
 from src.solver_staggered import StaggeredSolver  # noqa: E402
-from src.staggered import edge_cell_inputs  # noqa: E402
+from src.staggered import FaceVelocities, edge_cell_inputs  # noqa: E402
 from src.stopping import IterationState  # noqa: E402
 from validation.cases import load_case, load_preset  # noqa: E402
 from validation.metrics import poiseuille_l2_error  # noqa: E402
@@ -68,6 +70,8 @@ RULES = {
     "E": "stick",
     "E0": "copy",
     "F": "scaled",
+    "Aopen": "copy_open",
+    "D0": "fixed",
 }
 
 
@@ -82,28 +86,33 @@ def segment_names(mesh: Mesh, cfg: SimConfig, edge: str) -> np.ndarray:
     return np.array([c.name or "" for c in cover])
 
 
-def hold_hood_tangential(boundary: StaggeredBoundary) -> int:
-    """Test 33b's tangD: every non-Dirichlet right-edge tangential location becomes zero.
+def hold_tangential(boundary: StaggeredBoundary, edge: str) -> int:
+    """Every non-Dirichlet tangential location along an edge becomes Dirichlet zero.
 
-    Returns the number of locations switched. On the product configuration
-    those are the hood's, the only pressure outlet on the right edge.
+    Test 33b's tangD, for any edge. Returns the number of locations switched.
+    On the product configuration the right edge's are the hood's (the only
+    pressure outlet there) and the bottom edge's are the four returns'. The
+    wrapper composes: a second call on another edge keeps the first.
     """
     original = boundary.tangential_conditions
-    right = original()["right"]
-    switched = int((~right.is_dirichlet).sum())
+    condition = original()[edge]
+    switched = int((~condition.is_dirichlet).sum())
 
     def wrapped() -> dict:
         out = dict(original())
-        r = out["right"]
-        value = np.array(r.value)
-        value[~r.is_dirichlet] = 0.0
-        out["right"] = replace(
-            r, is_dirichlet=np.ones_like(r.is_dirichlet), value=value
-        )
+        c = out[edge]
+        value = np.array(c.value)
+        value[~c.is_dirichlet] = 0.0
+        out[edge] = replace(c, is_dirichlet=np.ones_like(c.is_dirichlet), value=value)
         return out
 
     boundary.tangential_conditions = wrapped  # type: ignore[method-assign]
     return switched
+
+
+def hold_hood_tangential(boundary: StaggeredBoundary) -> int:
+    """The hood's tangential velocity held at zero: hold_tangential on the right edge."""
+    return hold_tangential(boundary, "right")
 
 
 # ---------------------------------------------------------------------------
@@ -242,10 +251,11 @@ class Segment:
     """One outlet segment and the rule its faces follow.
 
     rule is "copy" (arm A), "stick" (B), "local" (C), "fixed" (a held
-    outward normal speed) or "scaled" (arm F, found on the way: the copy,
-    scaled with every other scaled segment so the outflow equals the
-    supply, then held for the correction); mask is the segment's cells
-    along its edge.
+    outward normal speed, arms D, D0 and the hood), "scaled" (arm F, found
+    on the way: the copy, scaled with every other scaled segment so the
+    outflow equals the supply, then held for the correction) or "copy_open"
+    (arm A-open: the copy with no face ever held shut); mask is the
+    segment's cells along its edge.
     """
 
     name: str
@@ -404,7 +414,7 @@ class ArmSolver(StaggeredSolver):
                 open_faces[seg.edge] &= ~m
                 continue
             interior = interior_row(u, v, seg.edge)
-            if seg.rule in ("copy", "scaled"):
+            if seg.rule in ("copy", "scaled", "copy_open"):
                 candidate = interior[m].copy()
             elif seg.rule == "local":
                 candidate = closing_velocity(u, v, seg.edge, self._mesh)[m]
@@ -418,6 +428,10 @@ class ArmSolver(StaggeredSolver):
             else:
                 raise ValueError(f"unknown rule {seg.rule!r}")
             face[m] = candidate
+            if seg.rule == "copy_open":
+                # A-open: an inward copy stays open and is corrected like any
+                # other outlet face.
+                continue
             reversed_faces = np.zeros_like(m)
             reversed_faces[m] = inward(candidate, seg.edge)
             face[reversed_faces] = 0.0
@@ -533,12 +547,20 @@ def product_room(
     stopping: dict | None,
     hood_gradient: bool,
 ) -> Room:
-    """The product room under one arm."""
+    """The product room under one arm.
+
+    The hood's tangential velocity is held at zero unless hood_gradient
+    keeps the pressure outlet's zero gradient (control A0). Under D0 the
+    floor returns' tangential velocity is held at zero as well; under every
+    other arm it stays the pressure outlet's zero gradient, as the committed
+    boundary layer gives it.
+    """
     raw = product_raw(nx, ny, mu_factor, n_outer, rtol, stopping)
     cfg = SimConfig.from_dict(raw)
     mesh = Mesh(cfg)
     boundary = StaggeredBoundary(mesh, cfg)
     switched = 0 if hood_gradient else hold_hood_tangential(boundary)
+    returns_switched = hold_tangential(boundary, "bottom") if arm == "D0" else 0
     segments, split = product_segments(mesh, cfg, boundary, arm)
     solver = ArmSolver(mesh, cfg, boundary, segments, sweeps)
     meta = {
@@ -558,13 +580,15 @@ def product_room(
         "convergence_tol": cfg.convergence_tol,
         "hood_tangential": "zero_gradient" if hood_gradient else "zero",
         "hood_tangential_switched": switched,
+        "return_tangential": "zero" if arm == "D0" else "zero_gradient",
+        "return_tangential_switched": returns_switched,
         "split": split,
     }
     return Room(name, cfg, mesh, boundary, solver, segments, meta)
 
 
 def val001_room(name: str, arm: str, grid: tuple[int, int] | None = None) -> Room:
-    """VAL-001 as the harness loads it, under the committed solver or arm B or C.
+    """VAL-001 as the harness loads it, under the committed solver or arm B, C or F.
 
     The preset is val001_80x40; with grid the case file is loaded on that
     grid instead (validation.cases.load_case), every other key unchanged.
@@ -582,7 +606,7 @@ def val001_room(name: str, arm: str, grid: tuple[int, int] | None = None) -> Roo
         segments = [Segment("outlet", "right", outlet, RULES[arm])]
         solver = ArmSolver(mesh, cfg, boundary, segments, 1)
     meta = {
-        "case": "val001_80x40",
+        "case": f"val001_{cfg.nx}x{cfg.ny}",
         "arm": arm,
         "nx": cfg.nx,
         "ny": cfg.ny,
@@ -706,10 +730,13 @@ def run(room: Room, log_every: int = 100) -> dict:
     drift = (
         float(np.mean(np.diff(p_mean[-(window + 1) :]))) if window > 0 else float("nan")
     )
-    faces = solver.face_velocities
-    assert faces is not None
     u_f, v_f = corrector.last_u, corrector.last_v
     assert u_f is not None and v_f is not None
+    faces = solver.face_velocities
+    if faces is None:
+        # A diverged run leaves the loop before the solver keeps its faces;
+        # the last correction's are the ones to hash.
+        faces = FaceVelocities.copy_of(u_f, v_f)
     out = {
         "name": room.name,
         "started": started,
@@ -734,6 +761,10 @@ def run(room: Room, log_every: int = 100) -> dict:
         "closed_most": [int(x) for x in np.max(np.array(rec["closed"]), axis=0)],
         "reversed_end": rec["reversed"][-1],
         "closed_end": rec["closed"][-1],
+        "reversed_any_iterations": int(
+            np.sum(np.array(rec["reversed"]).sum(axis=1) > 0)
+        ),
+        "closed_any_iterations": int(np.sum(np.array(rec["closed"]).sum(axis=1) > 0)),
         "cap_hits": int(sum(rec["cap"])),
         "pinned_iterations": int(sum(rec["pinned"])),
         "fallback_iterations": getattr(solver, "fallback_iterations", 0),
@@ -780,6 +811,7 @@ def run(room: Room, log_every: int = 100) -> dict:
 
 
 def drift(args: argparse.Namespace) -> None:
+    """Measurement 1: the 80x30 drift case under one arm at one pressure_rtol."""
     rtol = float(args.rtol)
     tag = args.tag or f"drift_{args.arm}_{args.rtol}" + (
         "_gradient" if args.hood_gradient else ""
@@ -806,6 +838,7 @@ def drift(args: argparse.Namespace) -> None:
 
 
 def ladder(args: argparse.Namespace) -> None:
+    """Measurement 2: one rung of the 40x15 ladder under one arm."""
     tag = f"ladder_{args.arm}_{args.rung}"
     room = product_room(
         tag,
@@ -823,6 +856,7 @@ def ladder(args: argparse.Namespace) -> None:
 
 
 def val001(args: argparse.Namespace) -> None:
+    """Measurement 3: VAL-001 under the committed path or arm B, C or F."""
     grid = tuple(args.grid) if args.grid else None
     suffix = f"_{grid[0]}x{grid[1]}" if grid else ""
     run(val001_room(f"val001_{args.arm}{suffix}", args.arm, grid))
@@ -873,31 +907,36 @@ def control(args: argparse.Namespace) -> None:
 
 
 def compare(args: argparse.Namespace) -> None:
-    """Measurement 4: the largest cell-centred velocity difference between two runs."""
+    """Measurement 4: the largest cell-centred difference between two runs.
+
+    Differences, their argmax and the scales are taken over non-SOLID cells
+    only (review 41 B1: the pressure is 0 in SOLID cells, so a difference
+    there is the difference of the two means). The scale is the first-named
+    run's, and the record says so.
+    """
     a = np.load(OUT / f"{args.names[0]}.npz")
     b = np.load(OUT / f"{args.names[1]}.npz")
     nx, ny = args.grid
     cfg = SimConfig.from_dict(product_raw(nx, ny, 1.0, 1, 1e-8, None))
     mesh = Mesh(cfg)
+    fluid = mesh.cell_type != SOLID
     xc, yc = np.meshgrid(mesh.xc, mesh.yc)
-    out: dict = {"names": list(args.names)}
-    for comp in ("u_c", "v_c"):
-        diff = np.abs(a[comp] - b[comp])
-        k = int(np.argmax(diff))
-        out[comp] = {
-            "max_abs_diff": float(diff.flat[k]),
+    out: dict = {"names": list(args.names), "scale_of": args.names[0]}
+
+    def largest(diff: np.ndarray, scale_field: np.ndarray) -> dict:
+        masked = np.where(fluid, diff, 0.0)
+        k = int(np.argmax(masked))
+        return {
+            "max_abs_diff": float(masked.flat[k]),
             "at": (round(float(xc.flat[k]), 3), round(float(yc.flat[k]), 3)),
-            "scale": float(np.max(np.abs(a[comp]))),
+            "scale": float(np.max(np.abs(scale_field[fluid]))),
         }
-    pa = a["p"] - np.mean(a["p"][mesh.cell_type != SOLID])
-    pb = b["p"] - np.mean(b["p"][mesh.cell_type != SOLID])
-    dp = np.abs(pa - pb)
-    k = int(np.argmax(dp))
-    out["p_demeaned"] = {
-        "max_abs_diff": float(dp.flat[k]),
-        "at": (round(float(xc.flat[k]), 3), round(float(yc.flat[k]), 3)),
-        "scale": float(np.max(np.abs(pa))),
-    }
+
+    for comp in ("u_c", "v_c"):
+        out[comp] = largest(np.abs(a[comp] - b[comp]), a[comp])
+    pa = a["p"] - np.mean(a["p"][fluid])
+    pb = b["p"] - np.mean(b["p"][fluid])
+    out["p_demeaned"] = largest(np.abs(pa - pb), pa)
     for comp, edge, row in (("v_faces", "bottom", 0), ("u_faces", "right", -1)):
         fa = a[comp][row, :] if edge == "bottom" else a[comp][:, row]
         fb = b[comp][row, :] if edge == "bottom" else b[comp][:, row]
@@ -908,6 +947,7 @@ def compare(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
+    """Dispatch one of the modes the module docstring lists."""
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="mode", required=True)
     p = sub.add_parser("drift")
