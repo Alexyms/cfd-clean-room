@@ -390,17 +390,42 @@ def centerline_faces(
     return uf[:, n // 2], vf[n // 2, :], residual
 
 
-def offset_errors(n: int, fields: dict[str, np.ndarray]) -> dict:
+def offset_errors(
+    n: int, fields: dict[str, np.ndarray], config: SimConfig | None = None
+) -> dict:
     """The Ghia errors as validation.metrics takes them, half a cell off the
-    centerline, against the same profile taken on the centerline itself."""
-    config = load_case("cavity", grid=(n, n))
+    centerline, against the same profile taken on the centerline itself.
+
+    Parameters
+    ----------
+    n : int
+        Cells per side.
+    fields : dict[str, np.ndarray]
+        The staggered solver's cell-centered ``u`` and ``v``, shape [n, n].
+    config : SimConfig, optional
+        The cavity configuration; the committed case at n x n when omitted.
+        Given, it lets a test run the function on a cavity whose side is not 1.
+
+    Returns
+    -------
+    dict
+        metric (the metric's components), recovery_residual and on_centerline
+        (the largest u and v errors on the centerlines themselves).
+
+    Notes
+    -----
+    The walls are appended at the mesh's own first and last faces, as
+    face_profiles and the metric append them.
+    """
+    if config is None:
+        config = load_case("cavity", grid=(n, n))
     mesh = Mesh(config)
     u, v = fields["u"], fields["v"]
     out = {"metric": cavity_centerline_errors(config, mesh, u, v).components}
     u_line, v_line, out["recovery_residual"] = centerline_faces(u, v)
     col, row = mesh.cell_type[:, n // 2] == FLUID, mesh.cell_type[n // 2, :] == FLUID
-    y = [0.0, *np.asarray(mesh.yc)[col], 1.0]
-    x = [0.0, *np.asarray(mesh.xc)[row], 1.0]
+    y = [mesh.y[0], *np.asarray(mesh.yc)[col], mesh.y[-1]]
+    x = [mesh.x[0], *np.asarray(mesh.xc)[row], mesh.x[-1]]
     u_lid = lid_velocity(config)
     u_err = np.interp(GHIA_U_Y, y, [0.0, *u_line[col], u_lid]) / u_lid - GHIA_U_VAL
     v_err = np.interp(GHIA_V_X, x, [0.0, *v_line[row], 0.0]) / u_lid - GHIA_V_VAL
@@ -508,7 +533,10 @@ def order_change(a: np.ndarray, b: np.ndarray, stations: np.ndarray) -> dict:
         differences alone would drop those silently.
     """
     both = np.isfinite(a) & np.isfinite(b)
-    change = np.where(both, np.abs(a - b), -1.0)
+    # The difference is formed only where both orders are finite: inf - inf and
+    # nan - x would raise an invalid-value warning for values that are then discarded.
+    gap = np.abs(np.where(both, a, 0.0) - np.where(both, b, 0.0))
+    change = np.where(both, gap, -1.0)
     k = int(np.argmax(change))
     return {
         "max": float(change[k]) if both.any() else None,
