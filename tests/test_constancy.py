@@ -39,12 +39,18 @@ from src.staggered import FaceVelocities, u_shape, v_shape
 from validation.cases import case_path
 from validation.transport_cases import (
     CFL_NUMBER,
+    TURBULENT_SCHMIDT,
     FixedConditions,
     ScalarPhysics,
     conditions_with,
+    prescribed_eddy_viscosity,
 )
 
 GRID = (40, 20)
+# The implicit tolerance this module has always run at, and the tightest the
+# Jacobi sweep reaches here (1e-16 caps at 100 sweeps on rounding).
+COMMITTED_TOLERANCE = 1.0e-10
+TIGHT_TOLERANCE = 1.0e-15
 # About 40 s on the solver's faces. Under weighted Jacobi this put the
 # predicted departure (about 2e-7) six orders above the rounding floor; under
 # conjugate gradients the faces' own imbalance is rounding, and the length
@@ -60,16 +66,25 @@ PLANTED_RISE = 1.0e-3 * PLANTED_SPEED
 PLANTED_STEPS = 10
 
 
-def _channel_config() -> SimConfig:
-    """VAL-001 at 40x20, as committed, with a transport section added."""
+def _channel_config(
+    turbulent_schmidt: float | None = None, diffusion_tol: float = 1.0e-10
+) -> SimConfig:
+    """VAL-001 at 40x20, as committed, with a transport section added.
+
+    ``turbulent_schmidt`` adds Sc_t to the section for a run that hands the
+    solver an eddy viscosity field; ``diffusion_tol`` is the implicit solve's
+    tolerance, the committed 1e-10 unless a test asks for another.
+    """
     raw = yaml.safe_load(case_path("poiseuille").read_text(encoding="utf-8"))
     raw["domain"]["nx"], raw["domain"]["ny"] = GRID
     raw["transport"] = {
         "cfl_number": CFL_NUMBER,
         "advection_scheme": "umist",
         "max_diffusion_iter": 100,
-        "diffusion_tol": 1.0e-10,
+        "diffusion_tol": diffusion_tol,
     }
+    if turbulent_schmidt is not None:
+        raw["transport"]["turbulent_schmidt"] = turbulent_schmidt
     config = SimConfig.from_dict(raw)
     assert config.stopping_rule == "error_estimate"
     return config
@@ -229,3 +244,101 @@ def test_a_planted_imbalance_drifts_by_the_mechanism_the_bound_describes_val012(
     assert departure == pytest.approx(predicted, rel=1e-9)
     assert departure <= bound
     assert departure >= bound / 10.0
+
+
+def _field_drift(
+    mesh: Mesh,
+    config: SimConfig,
+    faces: FaceVelocities,
+    steps: int,
+    eddy_viscosity: np.ndarray,
+) -> tuple[float, float, list[int]]:
+    """``_drift`` with an eddy viscosity field: departure, T, and the sweeps of each step.
+
+    Every implicit solve must converge; a capped one is a stop (prompt 40).
+    """
+    inflow_u = np.zeros(u_shape(mesh))
+    inflow_u[:, 0] = 1.0
+    conditions = FixedConditions(conditions_with(mesh, inflow_u=inflow_u))
+    solver = TransportSolver(
+        mesh, config, ScalarPhysics(settling=0.0, diffusion=0.0), conditions
+    )
+    dt = solver.stable_dt(faces, 0)
+    c = np.ones((config.ny, config.nx))
+    sweeps: list[int] = []
+    for _ in range(steps):
+        c = solver.solve_timestep(c, faces, 0, dt, eddy_viscosity=eddy_viscosity)
+        assert solver.diffusion_converged
+        sweeps.append(solver.last_diffusion_sweeps)
+    live = mesh.cell_type != SOLID
+    return float(np.abs(c[live] - 1.0).max()), steps * dt, sweeps
+
+
+@pytest.mark.validation
+@pytest.mark.parametrize("tolerance", [COMMITTED_TOLERANCE, TIGHT_TOLERANCE])
+def test_uniform_field_drifts_within_the_bound_with_an_eddy_viscosity_field_val012(
+    tolerance: float,
+) -> None:
+    """VAL-012 with a field, ECR-002 criterion 5: the departure is at most the bound.
+
+    The test above on the same faces, with nu_t handed to every step: a
+    non-uniform field from ``prescribed_eddy_viscosity`` (cell Peclet numbers
+    8 to 250 on ``nu_t / 0.7``, the inlet speed, a band of zero columns).
+
+    Predicted before it ran: the diffusive flux of a uniform field is zero
+    for any conductance, so the departure equals the field-free one to
+    within 1e-12. At the committed implicit tolerance of 1e-10 that holds
+    exactly and for a plain reason: the solve never iterates (0 sweeps in
+    2,389 steps), because the field after an advection step departs from
+    uniform by 4e-12 and the residual that departure gives is below the
+    tolerance. That row therefore shows only that the field path does not
+    disturb the advection. At 1e-15 the solve does iterate (one sweep a
+    step) and the prediction fails: the faces' own 6e-16 kg/s imbalance
+    leaves a real 4e-12 non-uniformity, which the diffusivity smooths, and
+    the departure falls to 1.9e-12. That is the field acting as it should,
+    so the tight row asserts the departure at most the field-free one and at
+    most the bound, and that the field did reach the solve.
+    """
+    config = _channel_config(TURBULENT_SCHMIDT, diffusion_tol=tolerance)
+    mesh, faces, imbalance, solve_seconds = _solve_faces(config)
+    nu_t = prescribed_eddy_viscosity(mesh, config.boundaries["inlet"].velocity)
+    transport = TransportSolver(
+        mesh,
+        config,
+        ScalarPhysics(settling=0.0, diffusion=0.0),
+        FixedConditions(conditions_with(mesh)),
+    )
+    steps = math.ceil(SIMULATED_SECONDS / transport.stable_dt(faces, 0))
+    start = perf_counter()
+    departure, t_total, sweeps = _field_drift(mesh, config, faces, steps, nu_t)
+    seconds = perf_counter() - start
+    free, _ = _drift(mesh, config, faces, steps)
+
+    bound, _rate = _bound(mesh, config, imbalance, t_total)
+    print(
+        f"VAL-012 with a field, tolerance {tolerance:g}: VAL-001 {GRID[0]}x{GRID[1]} "
+        f"solved in {solve_seconds:.1f} s; {steps} steps, T = {t_total:.2f} s, in "
+        f"{seconds:.1f} s; departure {departure:.3e} against {free:.3e} without the "
+        f"field; bound {bound:.3e}; departure / bound {departure / bound:.3f}"
+    )
+    print(
+        f"  implicit sweeps per step with the field: max {max(sweeps)}, mean "
+        f"{sum(sweeps) / len(sweeps):.2f}, all {len(sweeps)} solves converged"
+    )
+    assert departure <= bound
+    if tolerance == COMMITTED_TOLERANCE:
+        assert abs(departure - free) <= 1.0e-12
+    else:
+        assert max(sweeps) > 0
+        assert departure <= free
+
+    # The planted control of the test above, with the field on: the perturbed
+    # face's drift still exceeds the bound, so the bound is not vacuous here.
+    u = faces.u.copy()
+    u[GRID[1] // 2, GRID[0] // 2] += 1.0e-6
+    perturbed = FaceVelocities.copy_of(u, faces.v)
+    control, _, _ = _field_drift(mesh, config, perturbed, steps, nu_t)
+    print(
+        f"  control, one interior face perturbed by 1e-6 m/s: departure {control:.3e}"
+    )
+    assert control > bound
