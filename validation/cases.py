@@ -116,9 +116,19 @@ def load_wall_clustered(name: str, grid: tuple[int, int] | None = None) -> SimCo
         The case with ``mesh.y`` replaced by a wall spacing of
         WALL_SPACING_FRACTION * height / ny, the ratio left for the mesh to
         derive. The x axis and every other parameter come from the file.
+
+    Raises
+    ------
+    ValueError
+        If the case file or the grid fails SimConfig's validation, before
+        the spacing is computed.
     """
     raw = _raw_case(name, grid)
-    spacing = WALL_SPACING_FRACTION * raw["domain"]["height"] / raw["domain"]["ny"]
+    # The unclustered case is validated first, so a missing, zero or mistyped
+    # height or cell count is refused by SimConfig with its message and not
+    # met as a TypeError or a division by zero in the arithmetic below.
+    base = SimConfig.from_dict(raw)
+    spacing = WALL_SPACING_FRACTION * base.room_height / base.ny
     raw["mesh"] = {**(raw.get("mesh") or {}), "y": {"min_wall_spacing": spacing}}
     return SimConfig.from_dict(raw)
 

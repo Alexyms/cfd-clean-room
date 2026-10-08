@@ -255,6 +255,26 @@ def lid_velocity(config: SimConfig) -> float:
     return float(lids[0].u_velocity)
 
 
+def poiseuille_reference(y: np.ndarray, height: float, u_mean: float) -> np.ndarray:
+    """Plane Poiseuille profile at the given heights.
+
+    Parameters
+    ----------
+    y : np.ndarray
+        Heights above the lower wall, in m.
+    height : float
+        Channel height H, in m.
+    u_mean : float
+        Mean speed, which a uniform inlet sets, in m/s.
+
+    Returns
+    -------
+    np.ndarray
+        u(y) = 1.5 u_mean 4 y (H - y) / H^2, in m/s, the shape of y.
+    """
+    return 1.5 * u_mean * 4.0 * y * (height - y) / height**2
+
+
 def poiseuille_profiles(
     config: SimConfig, mesh: Mesh, u: np.ndarray
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -278,9 +298,7 @@ def poiseuille_profiles(
     fluid = mesh.cell_type[:, i_mid] == FLUID
     y = np.asarray(mesh.yc)[fluid]
     u_num = u[fluid, i_mid]
-    height = config.room_height
-    u_max = 1.5 * inlet_velocity(config)
-    u_ref = u_max * 4.0 * y * (height - y) / height**2
+    u_ref = poiseuille_reference(y, config.room_height, inlet_velocity(config))
     return y, u_num, u_ref
 
 
