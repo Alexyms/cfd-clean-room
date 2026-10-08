@@ -611,7 +611,9 @@ AGREEMENT = _agreement_configs()
 def test_both_layers_agree_on_which_faces_are_inlets(name: str) -> None:
     """REQ-S12.1, the trap of prompt 31, exact on every configuration.
 
-    S: faces the staggered layer writes a nonzero normal velocity to. T:
+    S: faces the staggered layer writes a nonzero normal velocity into the
+    room to (a fixed-flow outlet writes a nonzero velocity out of it, which
+    is no inlet). T:
     faces the concentration layer marks as inlets, made visible through
     the contract by giving every air-admitting velocity_inlet segment a
     concentration. The two sets are equal: no face drives air in without a
@@ -628,7 +630,11 @@ def test_both_layers_agree_on_which_faces_are_inlets(name: str) -> None:
     v[:] = np.nan
     staggered.apply_normal_velocity(u, v)
     written_u, written_v = ~np.isnan(u), ~np.isnan(v)
-    s_u, s_v = written_u & (u != 0.0), written_v & (v != 0.0)
+    # Into the room: positive on the left and bottom edges, negative on the
+    # right and top. Only domain faces are written, so the interior stays False.
+    s_u, s_v = np.zeros_like(written_u), np.zeros_like(written_v)
+    s_u[:, 0], s_u[:, -1] = u[:, 0] > 0.0, u[:, -1] < 0.0
+    s_v[0, :], s_v[-1, :] = v[0, :] > 0.0, v[-1, :] < 0.0
     z_u, z_v = written_u & (u == 0.0), written_v & (v == 0.0)
 
     faces = ConcentrationBoundary(
