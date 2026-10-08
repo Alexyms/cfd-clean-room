@@ -1252,7 +1252,16 @@ class TestConjugateGradient:
         mesh, _bc, pc, pred, p = _predicted(
             _config(boundaries, obstacles=[along]), outlet=outlet
         )
-        assert (mesh.cell_type == SOLID).any()
+        # The wall fills the same two rows (flow along x) or two columns (flow
+        # along y) the whole way across, so the open cells are two parts that
+        # each touch the outlet's edge. A wall that did not split the room would
+        # leave the single-component defect uncaught.
+        expected = np.zeros(mesh.cell_type.shape, dtype=bool)
+        if outlet in ("left", "right"):
+            expected[2:4, :] = True
+        else:
+            expected[:, 3:5] = True
+        assert np.array_equal(mesh.cell_type == SOLID, expected)
         assert not pc.needs_pin
         out = pc.correct(pred, p)
         assert out.reached_cap is False
@@ -1303,6 +1312,18 @@ class TestConjugateGradient:
             conjugate_gradient(
                 lambda x: apply_operator(c, x), inv.T.copy(), -b, 1e-8, 0.0, 50
             )
+
+    def test_the_thread_count_is_the_one_the_measurement_supports(self) -> None:
+        """PRESSURE_BLAS_THREADS is 1, the decision Alex took on the probe table (test 39).
+
+        The tests of the limit follow the constant, so a change to 2 passed them.
+        This one does not follow it.
+        """
+        assert PRESSURE_BLAS_THREADS == 1, (
+            "PRESSURE_BLAS_THREADS is 1 because one thread is no slower below 9,600 "
+            "elements and faster from 12,800 to 1,000,000; a different value needs "
+            "the measurement of docs/reports/blas_threads.md repeated first"
+        )
 
     @staticmethod
     def _blas_threads() -> int:

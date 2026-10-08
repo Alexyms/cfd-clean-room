@@ -114,12 +114,14 @@ ZERO_SCALE = 1e-30
 # BLAS threads the conjugate gradient solve may use. The loop forms three
 # dot products per iteration over the whole grid, and above about 10,000
 # elements OpenBLAS splits each across its thread pool at a fixed cost of
-# about 0.33 ms per call, against 4 to 5 us of arithmetic on one thread. On a
+# 0.35 to 0.37 ms per call, against 4 to 5 us of arithmetic on one thread. On a
 # 200x75 mesh that made a correction 1.05 s instead of 0.14 s. One thread is
-# faster at every length measured up to 1,000,000 elements, past the product
-# mesh by a factor of 60 (docs/reports/blas_threads.md). It is a property of
-# the library on this solve's vector lengths, not a tolerance a case chooses,
-# so it is a constant here rather than a configuration key.
+# no slower up to 9,600 elements and faster from 12,800 to 1,000,000; the
+# product mesh has 15,000, and threads pay only between 1,000,000 and
+# 1,500,000 (the probe table of docs/reports/blas_threads.md). It is a
+# property of the library on this solve's vector lengths, not a tolerance a
+# case chooses, so it is a constant here rather than a configuration key. A
+# change to it repeats that measurement.
 PRESSURE_BLAS_THREADS = 1
 
 # Discovering the loaded BLAS libraries is the expensive part of threadpoolctl,
@@ -306,7 +308,7 @@ def conjugate_gradient(
     order moved a correction's faces by at most 1.6e-12 m/s on the
     product mesh (the report, section 12.2). The solve runs with the BLAS
     pool limited to PRESSURE_BLAS_THREADS threads and restores the process's
-    setting on leaving, so nothing else in the process is affected.
+    setting on leaving, so nothing else is affected after it returns.
     """
     _check_solve_arguments(inverse_diagonal, f, rtol, floor, max_iter)
     with _BLAS_CONTROLLER.limit(limits=PRESSURE_BLAS_THREADS, user_api="blas"):
