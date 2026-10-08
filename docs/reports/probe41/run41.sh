@@ -62,4 +62,19 @@ wait
 "$PY" "$PROBE" compare drift_F_1e-8 drift_A_1e-8 > "$LOGS/compare_F_A.log" 2>&1
 "$PY" "$PROBE" compare ladder_B_8950 ladder_D_8950 --grid 40 15 > "$LOGS/compare_ladder_B_D_8950.log" 2>&1
 "$PY" "$PROBE" compare ladder_B_895 ladder_D_895 --grid 40 15 > "$LOGS/compare_ladder_B_D_895.log" 2>&1
+
+# Prompt 41b: the two arms of section 5.3, then their comparisons.
+for rtol in 1e-8 1e-4 1e-2; do
+  launch "drift_D0_${rtol}" drift D0 "$rtol"
+done
+launch drift_D0_1e-8_long drift D0 1e-8 --long --n-outer 3000
+for arm in Aopen D0; do
+  for rung in 895 8950; do
+    launch "ladder_${arm}_${rung}" ladder "$arm" "$rung"
+  done
+done
+wait
+"$PY" "$PROBE" compare drift_D0_1e-8 drift_D_1e-8 > "$LOGS/compare_D0_D.log" 2>&1
+"$PY" "$PROBE" compare ladder_D0_895 ladder_D_895 --grid 40 15 > "$LOGS/compare_ladder_D0_D_895.log" 2>&1
+"$PY" "$PROBE" compare ladder_D0_8950 ladder_D_8950 --grid 40 15 > "$LOGS/compare_ladder_D0_D_8950.log" 2>&1
 echo "all runs finished $(date -Iseconds)"

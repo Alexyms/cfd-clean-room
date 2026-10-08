@@ -17,26 +17,46 @@ BASELINE_OUTER = 1559
 
 
 def load(name: str) -> dict | None:
+    """The record NAME.json under results/builder41, or None when there is none."""
     path = OUT / f"{name}.json"
     return json.loads(path.read_text()) if path.exists() else None
 
 
 def fmt(x: float, digits: int = 3) -> str:
+    """x in scientific notation to the given significant figures."""
     return f"{x:.{digits - 1}e}"
 
 
+# The relative change of the velocity residual over the last 100 outer
+# iterations below which a capped run is called flat rather than growing or
+# falling (review 41 S2: arm A at 1e-2 ends with a residual equal to nine
+# figures at both ends of the window).
+FLAT_CHANGE = 0.01
+
+
 def end_state(d: dict) -> str:
+    """The stop reason, or for a capped run its residual's trend over the last 100."""
     if d["stop"] == "diverged":
         return "diverged"
     if d["stop"] == "max_simple_iter":
         res = np.array(d["residual"])
+        if res[-1] < d.get("convergence_tol", 1e-6):
+            # The velocity step met its tolerance; the cap came from the
+            # continuity conditions (or, in a --long run, from tolerances no
+            # run meets), so the residual's trend is rounding, not a trend.
+            return "cap, velocity step met"
         tail = res[-100:]
-        trend = "growing" if tail[-1] > tail[0] else "falling"
+        change = (tail[-1] - tail[0]) / tail[0]
+        if abs(change) < FLAT_CHANGE:
+            trend = "flat"
+        else:
+            trend = "growing" if change > 0 else "falling"
         return f"cap, {trend}"
     return d["stop"]
 
 
 def last_window(d: dict, n: int) -> float:
+    """Mean change of the mean pressure per outer iteration over the last n."""
     p = np.array(d["p_mean"])
     if p.size < n + 1:
         return float("nan")
@@ -44,6 +64,7 @@ def last_window(d: dict, n: int) -> float:
 
 
 def drift_table() -> None:
+    """Section 7.1: every drift-case run at its stop."""
     print("### Measurement 1: the drift case\n")
     print(
         "| Arm | rtol | Stop | velocity_step at | Outer | Mean p change per outer, last 100 (Pa) | last 10 | `\\|\\|b\\|\\|` end | Share beside open faces | Worst cell at end (kg/s per m) | Signed sum | Reversed, most at once | Held shut, most at once | CG per correction, median [max] | Cap hits | s |"
@@ -72,6 +93,7 @@ def drift_table() -> None:
 
 
 def long_table() -> None:
+    """Section 7.2: the pressure's movement in the 3,000-iteration runs."""
     print(
         "### Measurement 1, continued: the pressure's movement past the stop (3,000 outer iterations, rtol 1e-8)\n"
     )
@@ -103,6 +125,7 @@ def long_table() -> None:
 
 
 def ladder_table() -> None:
+    """Section 7.3: every ladder run at its end."""
     print("### Measurement 2: the ladder\n")
     print(
         "| Re | Arm | Outer | End | Residual: least, at end | Largest speed at end (m/s), cell | Reversed faces, most at once (returns 1 to 4, hood) | Held shut, most at once | Mean p change per outer, last 100 (Pa) | `\\|\\|b\\|\\|` end | s |"
@@ -123,6 +146,7 @@ def ladder_table() -> None:
 
 
 def val001_table() -> None:
+    """Section 7.5: VAL-001 80x40 against the baseline row."""
     print("### Measurement 3: VAL-001 80x40\n")
     print(
         "| Path | Outer | Stop | REQ-S02 metric | Equal to the baseline's 4.1077e-4 to three figures | Face hash (u then v) | Equals the baseline's | Mean p change per outer, last 100 (Pa) | last 10 | `\\|\\|b\\|\\|` end | Worst cell at end | Reversed faces, most | Held shut, most |"
@@ -134,7 +158,8 @@ def val001_table() -> None:
             print(f"| {arm} | (missing) |")
             continue
         metric = d["metric"]["value"]
-        three = f"{metric:.3e}" == f"{BASELINE_METRIC:.3e}"
+        # Three significant figures: one digit before the point and two after.
+        three = f"{metric:.2e}" == f"{BASELINE_METRIC:.2e}"
         print(
             f"| {arm} | {d['outer']:,} ({(d['outer'] - BASELINE_OUTER) / BASELINE_OUTER:+.1%}) | {d['stop']} | {metric:.5e} | {three} | "
             f"{d['face_hash'][:16]}... | {d['face_hash'] == BASELINE_HASH} | {d['p_drift_last100']:+.2e} | {last_window(d, 10):+.1e} | "
@@ -144,11 +169,12 @@ def val001_table() -> None:
 
 
 def compare_table() -> None:
+    """Section 7.4: the flows against each other, over non-SOLID cells."""
     print(
         "### Measurement 4: arm D's flow against arm B's at their stops (rtol 1e-8)\n"
     )
     print(
-        "| Pair | max abs du (m/s), cell | max abs dv (m/s), cell | max abs dp after removing each mean (Pa), cell | Floor faces, max abs dv (m/s) | Scale: max abs u, v, p (B) |"
+        "| Pair | max abs du (m/s), cell | max abs dv (m/s), cell | max abs dp after removing each mean (Pa), cell | Floor faces, max abs dv (m/s) | Scale: max abs u, v, p of the first-named run, fluid cells |"
     )
     print("|---|---|---|---|---|---|")
     for pair in (
@@ -173,6 +199,7 @@ def compare_table() -> None:
 
 
 def grid_table() -> None:
+    """Section 7.5, continued: the committed path, B and F on three grids."""
     print(
         "### Measurement 3, continued: the committed path against arms B and F on three grids\n"
     )
@@ -202,8 +229,62 @@ def grid_table() -> None:
     print()
 
 
+def fix_table() -> None:
+    """Section 7.7: the fix pass's arms, A-open and D0, with every run's face hash."""
+    print("### The fix pass: A-open and D0 (prompt 41b)\n")
+    print(
+        "| Run | Outer | End | velocity_step at | Residual: least, at end | Largest speed at end (m/s), cell | Mean p change per outer, last 100 (Pa) | last 10 | `\\|\\|b\\|\\|` end | Worst cell at end | Reversed faces, most at once | Iterations with any reversed | Held shut, most | Iterations with any held shut | CG per correction, median [max] | Face hash (u then v) |"
+    )
+    print("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+    names = [f"drift_D0_{r}" for r in ("1e-8", "1e-4", "1e-2")] + ["drift_D0_1e-8_long"]
+    names += [
+        f"ladder_{arm}_{rung}" for arm in ("Aopen", "D0") for rung in ("895", "8950")
+    ]
+    for name in names:
+        d = load(name)
+        if d is None:
+            print(f"| {name} | (missing) |")
+            continue
+        print(
+            f"| {name} | {d['outer']:,} | {end_state(d)} | {d['velocity_step_outer']} | "
+            f"{fmt(d['residual_min'])}, {fmt(d['residual_end'])} | {d['max_speed_end']:.3g}, {tuple(d['at_end'])} | "
+            f"{d['p_drift_last100']:+.2e} | {last_window(d, 10):+.1e} | {fmt(d['b_norm_end'])} | {fmt(d['worst_end'], 2)} | "
+            f"{d['reversed_most']} | {d['reversed_any_iterations']} of {d['outer']:,} | {d['closed_most']} | "
+            f"{d['closed_any_iterations']} of {d['outer']:,} | {d['inner_median']:.0f} [{d['inner_max']}] | {d['face_hash']} |"
+        )
+    print()
+    print(
+        "| Pair | max abs du (m/s), cell | max abs dv (m/s), cell | max abs dp after removing each mean (Pa), cell | Floor faces, max abs dv (m/s) | Scale: max abs u, v, p of the first-named run, fluid cells |"
+    )
+    print("|---|---|---|---|---|---|")
+    for pair in (
+        ("drift_D0_1e-8", "drift_D_1e-8"),
+        ("ladder_D0_895", "ladder_D_895"),
+        ("ladder_D0_8950", "ladder_D_8950"),
+    ):
+        d = load(f"compare_{pair[0]}_vs_{pair[1]}")
+        if d is None:
+            print(f"| {pair} | (missing) |")
+            continue
+        print(
+            f"| {pair[0]} vs {pair[1]} | {d['u_c']['max_abs_diff']:.3e}, {tuple(d['u_c']['at'])} | "
+            f"{d['v_c']['max_abs_diff']:.3e}, {tuple(d['v_c']['at'])} | {d['p_demeaned']['max_abs_diff']:.3e}, {tuple(d['p_demeaned']['at'])} | "
+            f"{d['bottom_faces_max_abs_diff']:.3e} | {d['u_c']['scale']:.3f}, {d['v_c']['scale']:.3f}, {d['p_demeaned']['scale']:.3f} |"
+        )
+    print()
+
+
 def main() -> None:
-    which = sys.argv[1:] or ["drift", "long", "ladder", "val001", "grid", "compare"]
+    """Print the tables named on the command line, or all of them."""
+    which = sys.argv[1:] or [
+        "drift",
+        "long",
+        "ladder",
+        "val001",
+        "grid",
+        "compare",
+        "fix",
+    ]
     for name in which:
         {
             "drift": drift_table,
@@ -211,6 +292,7 @@ def main() -> None:
             "ladder": ladder_table,
             "val001": val001_table,
             "grid": grid_table,
+            "fix": fix_table,
             "compare": compare_table,
         }[name]()
 
