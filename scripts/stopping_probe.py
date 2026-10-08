@@ -40,20 +40,32 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-# self_convergence already imports the solver, mesh, config and Marchi names
-# this script uses, so they are read from it: sc.Mesh, sc.MARCHI_U_ROWS.
+# face_profiles is the one name read through self_convergence (prompt 23 asked
+# for the cavity profiles to come from it); every other name is imported from
+# the module that defines it, so pruning an import in self_convergence cannot
+# break this script at run time.
 import self_convergence as sc  # noqa: E402 -- path set above
 
+from src.boundary_staggered import StaggeredBoundary  # noqa: E402 -- path set above
+from src.config import SimConfig  # noqa: E402 -- path set above
+from src.mesh import FLUID, Mesh  # noqa: E402 -- path set above
 from src.pressure import PRESSURE_SOLVER_VERSION  # noqa: E402 -- path set above
+from src.solver_staggered import StaggeredSolver  # noqa: E402 -- path set above
 from src.stopping import (  # noqa: E402 -- path set above
     RATE_WINDOW,
     RULE_VERSION,
     ErrorEstimateRule,
     ImbalanceSummary,
+    IterationState,
 )
-from validation.cases import with_velocity_step  # noqa: E402 -- path set above
+from validation.cases import (  # noqa: E402 -- path set above
+    case_path,
+    with_velocity_step,
+)
 from validation.metrics import (  # noqa: E402 -- path set above
-    _inlet_velocity,
+    MARCHI_U_ROWS,
+    MARCHI_V_ROWS,
+    inlet_velocity,
     lagrange,
     lid_velocity,
     poiseuille_l2_error,
@@ -91,19 +103,52 @@ TIGHT_TRUTH_TOL = 1.0e-13
 
 
 def case_name(case: str, n: int) -> str:
-    """File stem of a case at n cells along x (n / 2 up the channel)."""
+    """File stem of a case at n cells along x (n / 2 up the channel).
+
+    Parameters
+    ----------
+    case : str
+        "cavity" or "poiseuille".
+    n : int
+        Cells along x.
+
+    Returns
+    -------
+    str
+        ``<case>_<n>x<ny>``, ny equal to n for the cavity and n // 2 for the
+        channel.
+    """
     return f"{case}_{n}x{n if case == 'cavity' else n // 2}"
 
 
 def case_config(
     case: str, n: int, tol: float | None = None, rule: str | None = None
-) -> sc.SimConfig:
+) -> SimConfig:
     """The committed case at n cells along x; tolerance or rule, and cap, set if given.
 
+    Parameters
+    ----------
+    case : str
+        "cavity" or "poiseuille".
+    n : int
+        Cells along x.
+    tol : float, optional
+        ``convergence_tol`` to set in memory; the cap is set with it.
+    rule : str, optional
+        ``stopping_rule`` to set in memory; the cap is set with it.
+
+    Returns
+    -------
+    SimConfig
+        The case file's configuration with the grid, tolerance and rule
+        replaced as given. The case file is not touched.
+
+    Notes
+    -----
     Without a rule it is velocity_step, the rule every truth and snapshot here
     was solved under, whatever the case file now names.
     """
-    raw = yaml.safe_load(sc.case_path(case).read_text(encoding="utf-8"))
+    raw = yaml.safe_load(case_path(case).read_text(encoding="utf-8"))
     raw["domain"]["nx"], raw["domain"]["ny"] = n, (n if case == "cavity" else n // 2)
     if tol is not None:
         raw["solver"]["convergence_tol"] = tol
@@ -111,15 +156,29 @@ def case_config(
         raw["solver"]["stopping_rule"] = rule
     if tol is not None or rule is not None:
         raw["solver"]["max_simple_iter"] = MAX_OUTER[case]
-    config = sc.SimConfig.from_dict(raw)
+    config = SimConfig.from_dict(raw)
     return config if rule is not None else with_velocity_step(config)
 
 
 def instrument(
-    solver: sc.StaggeredSolver,
+    solver: StaggeredSolver,
 ) -> tuple[list[float], list[int], list[float], list[float]]:
     """Record each outer iteration's worst imbalance, iterations, absolute and signed sum.
 
+    Parameters
+    ----------
+    solver : StaggeredSolver
+        Not yet solved. Its corrector's ``correct`` is wrapped on the instance.
+
+    Returns
+    -------
+    tuple[list[float], list[int], list[float], list[float]]
+        Per outer iteration, filled as the solve runs: the worst per-cell mass
+        imbalance of the corrected faces, the pressure iterations, the sum of
+        absolute imbalances and the signed sum.
+
+    Notes
+    -----
     The wrapper returns the corrector's own result object, so the solve is
     unchanged; the same-computation control checks that bitwise.
     """
@@ -146,6 +205,18 @@ def instrument(
 def written_by_this_solver(path: Path) -> bool:
     """Whether a saved solve holds the current PRESSURE_SOLVER_VERSION.
 
+    Parameters
+    ----------
+    path : Path
+        A saved ``.npz``; it need not exist.
+
+    Returns
+    -------
+    bool
+        True only when the file exists and stores the current version.
+
+    Notes
+    -----
     A file without the key was written before the key existed, by the
     weighted Jacobi sweep, and is not reused.
     """
@@ -160,6 +231,22 @@ def written_by_this_solver(path: Path) -> bool:
 def solve_truth(case: str, n: int) -> Path:
     """Solve to TRUTH_TOL wrapped, keeping snapshots.
 
+    Parameters
+    ----------
+    case : str
+        "cavity" or "poiseuille".
+    n : int
+        Cells along x.
+
+    Returns
+    -------
+    Path
+        The ``.npz`` under OUT_DIR holding level, iteration, residual,
+        imbalance, iterations, elapsed, reference_velocity, reached, the
+        snapshots u_<k> and v_<k> and the pressure solver version.
+
+    Notes
+    -----
     An existing file is returned unsolved only when it was written by the
     current pressure solve (written_by_this_solver); otherwise it is solved
     again and overwritten.
@@ -168,8 +255,8 @@ def solve_truth(case: str, n: int) -> Path:
     if written_by_this_solver(path):
         return path
     config = case_config(case, n, TRUTH_TOL)
-    mesh = sc.Mesh(config)
-    solver = sc.StaggeredSolver(mesh, config, sc.StaggeredBoundary(mesh, config))
+    mesh = Mesh(config)
+    solver = StaggeredSolver(mesh, config, StaggeredBoundary(mesh, config))
     imbalance, iterations, _total, _signed = instrument(solver)
     levels = sorted({*LEVELS, case_config(case, n).convergence_tol}, reverse=True)
     taken: list[tuple[float, int]] = []
@@ -177,7 +264,7 @@ def solve_truth(case: str, n: int) -> Path:
     elapsed: list[float] = []
     start = time.perf_counter()
 
-    def observe(state: sc.IterationState) -> None:
+    def observe(state: IterationState) -> None:
         elapsed.append(time.perf_counter() - start)
         while levels and state.residual < levels[0]:
             snaps[f"u_{len(taken)}"], snaps[f"v_{len(taken)}"] = (
@@ -209,14 +296,33 @@ def solve_truth(case: str, n: int) -> Path:
 def control(case: str, n: int) -> dict:
     """An unwrapped solve at the committed tolerance against the wrapped snapshot there.
 
+    Parameters
+    ----------
+    case : str
+        "cavity" or "poiseuille".
+    n : int
+        Cells along x.
+
+    Returns
+    -------
+    dict
+        outer, seconds and bitwise_equal; for the channel also l2, the
+        metric of the unwrapped field, and l2_equals_stored.
+
+    Raises
+    ------
+    SystemExit
+        Unless u and v are bitwise equal and the outer counts agree.
+
+    Notes
+    -----
     The saved control is reused only when the current pressure solve wrote
-    it (written_by_this_solver). Raises SystemExit unless u and v are
-    bitwise equal and the outer counts agree.
+    it (written_by_this_solver).
     """
     name, config = case_name(case, n), case_config(case, n)
-    path, mesh = OUT_DIR / f"{name}_control.npz", sc.Mesh(config)
+    path, mesh = OUT_DIR / f"{name}_control.npz", Mesh(config)
     if not written_by_this_solver(path):
-        solver = sc.StaggeredSolver(mesh, config, sc.StaggeredBoundary(mesh, config))
+        solver = StaggeredSolver(mesh, config, StaggeredBoundary(mesh, config))
         start = time.perf_counter()
         u, v, _p = solver.solve_steady()
         seconds = time.perf_counter() - start
@@ -246,7 +352,21 @@ def control(case: str, n: int) -> dict:
 
 
 def rho_hat(history: np.ndarray, window: int) -> float:
-    """exp of the least-squares slope of log(residual) over the last window entries; NaN if short."""
+    """Per-iteration convergence rate fitted to the tail of a residual history.
+
+    Parameters
+    ----------
+    history : np.ndarray
+        Residual per outer iteration, shape [outer].
+    window : int
+        Number of trailing entries to fit.
+
+    Returns
+    -------
+    float
+        exp of the least-squares slope of log(residual) over the last window
+        entries; NaN if the history is shorter than the window.
+    """
     if len(history) < window:
         return float("nan")
     return float(np.exp(np.polyfit(np.arange(window), np.log(history[-window:]), 1)[0]))
@@ -255,7 +375,18 @@ def rho_hat(history: np.ndarray, window: int) -> float:
 def estimate(step: float, rho: float) -> float:
     """Iteration error left by a geometric iteration after a step: step rho / (1 - rho).
 
-    Infinite for a rate of 1 or more; NaN when there is no rate.
+    Parameters
+    ----------
+    step : float
+        Largest velocity change of the last outer iteration, in m/s.
+    rho : float
+        Convergence rate per outer iteration, from rho_hat.
+
+    Returns
+    -------
+    float
+        The estimate in m/s. Infinite for a rate of 1 or more; NaN when there
+        is no rate.
     """
     return float("inf") if rho >= 1.0 else step * rho / (1.0 - rho)
 
@@ -266,15 +397,47 @@ def true_error(
     truth: tuple[np.ndarray, np.ndarray],
     fluid: np.ndarray,
 ) -> float:
-    """Largest abs difference from the truth in u or v over the FLUID cells."""
+    """Largest abs difference from the truth in u or v over the FLUID cells.
+
+    Parameters
+    ----------
+    u, v : np.ndarray
+        Cell-centered fields, shape [ny, nx].
+    truth : tuple[np.ndarray, np.ndarray]
+        The reference u and v, same shape.
+    fluid : np.ndarray
+        Boolean mask of the FLUID cells, same shape.
+
+    Returns
+    -------
+    float
+        The largest absolute difference, in m/s.
+    """
     return float(
         max(np.abs(u - truth[0])[fluid].max(), np.abs(v - truth[1])[fluid].max())
     )
 
 
-def channel_readings(config: sc.SimConfig, mesh: sc.Mesh, u: np.ndarray) -> dict:
+def channel_readings(config: SimConfig, mesh: Mesh, u: np.ndarray) -> dict:
     """poiseuille_l2_error at nx/2, nx/4 and 3nx/4, and the range of u_num / u_ref at nx/2.
 
+    Parameters
+    ----------
+    config : SimConfig
+        Channel case configuration.
+    mesh : Mesh
+        Mesh of the solve.
+    u : np.ndarray
+        Cell-centered x-velocity, shape [ny, nx].
+
+    Returns
+    -------
+    dict
+        ratio_min and ratio_max of u_num / u_ref at nx/2, and the metric's
+        value at the three columns as l2, l2_quarter and l2_three_quarter.
+
+    Notes
+    -----
     Each column is rolled to nx // 2, where the metric reads; every interior
     channel column has the same FLUID rows, so the metric's mask still applies.
     """
@@ -294,24 +457,53 @@ def channel_readings(config: sc.SimConfig, mesh: sc.Mesh, u: np.ndarray) -> dict
     return out
 
 
-def wall_stencil_profile(config: sc.SimConfig, mesh: sc.Mesh) -> np.ndarray:
+def wall_stencil_profile(config: SimConfig, mesh: Mesh) -> np.ndarray:
     """Fully developed discrete u under the half-cell wall stencil, all ny rows (INFERRED).
 
+    Parameters
+    ----------
+    config : SimConfig
+        Channel case configuration.
+    mesh : Mesh
+        Mesh of the solve.
+
+    Returns
+    -------
+    np.ndarray
+        u per row, shape [ny], in m/s.
+
+    Notes
+    -----
     The interior three-point difference is exact for a parabola; the wall row's
     (u_0 - 0) / (dy / 2) is not, and shifts it by dy^2 / 4. Scaled so the
     midpoint sum carries the inflow.
     """
     y, dy, height = np.asarray(mesh.yc), np.asarray(mesh.dy_cell), config.room_height
     shape = y * (height - y) + dy**2 / 4.0
-    return shape * _inlet_velocity(config) * height / float(np.sum(shape * dy))
+    return shape * inlet_velocity(config) * height / float(np.sum(shape * dy))
 
 
 def marchi_stations(
-    config: sc.SimConfig, mesh: sc.Mesh, u: np.ndarray, v: np.ndarray
+    config: SimConfig, mesh: Mesh, u: np.ndarray, v: np.ndarray
 ) -> np.ndarray:
-    """u then v at Marchi's 30 stations, as marchi_comparison takes them, over the lid speed."""
+    """u then v at Marchi's 30 stations, as marchi_comparison takes them, over the lid speed.
+
+    Parameters
+    ----------
+    config : SimConfig
+        Cavity case configuration; supplies the lid speed.
+    mesh : Mesh
+        Mesh of the solve.
+    u, v : np.ndarray
+        Cell-centered fields, shape [ny, nx].
+
+    Returns
+    -------
+    np.ndarray
+        The 30 normalized values, shape [30]: Marchi's u stations, then v.
+    """
     lines = sc.face_profiles(mesh, u, v, lid_velocity(config))
-    rows = (sc.MARCHI_U_ROWS, sc.MARCHI_V_ROWS)
+    rows = (MARCHI_U_ROWS, MARCHI_V_ROWS)
     return np.concatenate(
         [
             lagrange(*ln, np.array([r[0] for r in rs]))
@@ -323,16 +515,36 @@ def marchi_stations(
 def analyse(case: str, n: int) -> dict:
     """Every snapshot of one case against its truth, and the truth against its reference.
 
+    Parameters
+    ----------
+    case : str
+        "cavity" or "poiseuille".
+    n : int
+        Cells along x.
+
+    Returns
+    -------
+    dict
+        The case summary: reference and physical velocity, outer count, seconds,
+        final residual and when the imbalance fell below its bound; then, if
+        TRUTH_TOL was reached, the truth's rate and remaining error, its
+        discretization error against the reference and one row per snapshot.
+        A case that did not reach TRUTH_TOL returns the first group and its
+        whole residual history as ``residual_history``, and nothing that needs
+        a truth.
+
+    Notes
+    -----
     The truth is read through solve_truth, so a file another solver wrote is
     solved again first, whatever ran before this call.
     """
     config = case_config(case, n)
-    mesh = sc.Mesh(config)
-    fluid = mesh.cell_type == sc.FLUID
+    mesh = Mesh(config)
+    fluid = mesh.cell_type == FLUID
     with np.load(solve_truth(case, n)) as saved:
         d = {k: saved[k] for k in saved.files}
     res, ref_vel, imb = d["residual"], float(d["reference_velocity"]), d["imbalance"]
-    phys = lid_velocity(config) if case == "cavity" else _inlet_velocity(config)
+    phys = lid_velocity(config) if case == "cavity" else inlet_velocity(config)
     below = np.flatnonzero(imb < IMBALANCE_BOUND)
     out: dict = {
         "reference_velocity": ref_vel,
@@ -350,13 +562,19 @@ def analyse(case: str, n: int) -> dict:
         below.size and below[0] + below.size == len(res)
     )
     if not out["reached"]:
+        # Prompt 23: a case that cannot reach TRUTH_TOL is reported with its
+        # residual history, so the stall can be read from the summary.
+        out["residual_history"] = res.tolist()
         return out
     last = len(d["level"]) - 1
     truth = (d[f"u_{last}"], d[f"v_{last}"])
-    est_truth = estimate(res[-1] * ref_vel, rho_hat(res, WINDOW))
-    out["truth"] = {"rho_hat": rho_hat(res, WINDOW), "remaining_error": est_truth}
+    rho_truth = rho_hat(res, WINDOW)
+    out["truth"] = {
+        "rho_hat": rho_truth,
+        "remaining_error": estimate(res[-1] * ref_vel, rho_truth),
+    }
     if case == "cavity":
-        marchi = np.array([r[1] for r in (*sc.MARCHI_U_ROWS, *sc.MARCHI_V_ROWS)])
+        marchi = np.array([r[1] for r in (*MARCHI_U_ROWS, *MARCHI_V_ROWS)])
         at_truth = marchi_stations(config, mesh, *truth)
         out["discretization"] = float(np.abs(at_truth - marchi).max())
     else:
@@ -416,9 +634,28 @@ def analyse(case: str, n: int) -> dict:
 def tight_truth(case: str, n: int) -> Path:
     """The case under the default rule to TIGHT_TRUTH_TOL, beside the probe's truth.
 
+    Parameters
+    ----------
+    case : str
+        "cavity" or "poiseuille".
+    n : int
+        Cells along x.
+
+    Returns
+    -------
+    Path
+        The ``.npz`` holding tol, u, v, outer, imbalance and the pressure
+        solver version.
+
+    Raises
+    ------
+    SystemExit
+        If the cap stops the solve before TIGHT_TRUTH_TOL.
+
+    Notes
+    -----
     Solved once, and again if the file does not hold TIGHT_TRUTH_TOL as its
-    tolerance or was not written by the current pressure solve. Raises
-    SystemExit if the cap stops it first.
+    tolerance or was not written by the current pressure solve.
     """
     path = OUT_DIR / f"{case_name(case, n)}_truth13.npz"
     stale = True
@@ -428,8 +665,8 @@ def tight_truth(case: str, n: int) -> Path:
     if stale:
         print(f"{path.stem}: solving to {TIGHT_TRUTH_TOL:.0e}", flush=True)
         config = case_config(case, n, TIGHT_TRUTH_TOL)
-        mesh = sc.Mesh(config)
-        solver = sc.StaggeredSolver(mesh, config, sc.StaggeredBoundary(mesh, config))
+        mesh = Mesh(config)
+        solver = StaggeredSolver(mesh, config, StaggeredBoundary(mesh, config))
         u, v, _p = solver.solve_steady()
         if not solver.converged:
             raise SystemExit(f"{path.stem} did not reach {TIGHT_TRUTH_TOL:.0e}")
@@ -450,6 +687,23 @@ def tight_truth(case: str, n: int) -> Path:
 def rule_parameters(scale: float, flux: float, tols: tuple[float, float]) -> np.ndarray:
     """What a saved rule solve is reused under: the rule's inputs and both versions.
 
+    Parameters
+    ----------
+    scale : float
+        Largest prescribed boundary velocity, m/s.
+    flux : float
+        The solver's flux scale F, kg/s per unit depth.
+    tols : tuple[float, float]
+        ``iteration_error_tol`` and ``mass_imbalance_tol``.
+
+    Returns
+    -------
+    np.ndarray
+        scale, flux, both tolerances, RATE_WINDOW, RULE_VERSION and
+        PRESSURE_SOLVER_VERSION, shape [7].
+
+    Notes
+    -----
     A new condition changes no tolerance, so RULE_VERSION is in the key; a
     new pressure solve changes every field beyond rounding, so
     PRESSURE_SOLVER_VERSION is too.
@@ -462,22 +716,45 @@ def rule_parameters(scale: float, flux: float, tols: tuple[float, float]) -> np.
 def verify_rule(case: str, n: int) -> dict:
     """One error_estimate solve at the default tolerances, its stop read against the truth.
 
+    Parameters
+    ----------
+    case : str
+        "cavity" or "poiseuille".
+    n : int
+        Cells along x.
+
+    Returns
+    -------
+    dict
+        The rule's outer count and seconds against the default rule's, the
+        stop reason, the outer iteration from which each condition held, the
+        estimate and summed imbalance at the stop, the true error relative to
+        the velocity scale, and for the channel the metric at the stop and at
+        the truth.
+
+    Raises
+    ------
+    SystemExit
+        If a fresh rule replaying the history does not stop where the solver
+        did, or the recorded worst or signed sum at the stop is not the
+        returned field's.
+
+    Notes
+    -----
     The corrector is wrapped as in the truth solve, so every iteration's
     imbalance is known and the wall time compares with the default rule's
     snapshot. A saved solve is reused only if its rule parameters,
     RULE_VERSION and PRESSURE_SOLVER_VERSION match. The truth and the default
     rule's outer count and seconds are read through solve_truth, so a truth
     another solver wrote is solved again first (review 37 B1). Each condition
-    is dated from the start of its final run. Raises SystemExit if a fresh
-    rule replaying the history does not stop where the solver did, or the
-    recorded worst or signed sum at the stop is not the returned field's. The
-    channel is read against its TIGHT_TRUTH_TOL truth.
+    is dated from the start of its final run. The channel is read against its
+    TIGHT_TRUTH_TOL truth.
     """
     name, config = case_name(case, n), case_config(case, n, rule="error_estimate")
-    mesh, path = sc.Mesh(config), OUT_DIR / f"{name}_rule.npz"
-    boundary = sc.StaggeredBoundary(mesh, config)
+    mesh, path = Mesh(config), OUT_DIR / f"{name}_rule.npz"
+    boundary = StaggeredBoundary(mesh, config)
     # The flux scale the solver built, so the stored parameters are the rule's own.
-    solver = sc.StaggeredSolver(mesh, config, boundary)
+    solver = StaggeredSolver(mesh, config, boundary)
     scale, flux = boundary.get_max_boundary_velocity(), solver.flux_scale
     tols = (config.iteration_error_tol, config.mass_imbalance_tol)
     params = rule_parameters(scale, flux, tols)
@@ -515,7 +792,7 @@ def verify_rule(case: str, n: int) -> dict:
         at_tol = saved["level"] == case_config(case, n).convergence_tol
         default_outer = int(saved["iteration"][np.flatnonzero(at_tol)[0]]) + 1
         default_seconds = float(saved["elapsed"][default_outer - 1])
-    fluid = mesh.cell_type == sc.FLUID
+    fluid = mesh.cell_type == FLUID
     out: dict = {}
     if case == "poiseuille":
         with np.load(tight_truth(case, n)) as saved:
@@ -555,7 +832,23 @@ def verify_rule(case: str, n: int) -> dict:
 def main(argv: list[str] | None = None) -> int:
     """Run the controls and the five solves, then analyse the saved fields into summary.json.
 
-    With --verify-rule, solve and read each case under error_estimate instead.
+    Parameters
+    ----------
+    argv : list[str], optional
+        Command-line arguments; ``sys.argv`` when omitted. With
+        ``--verify-rule``, solve and read each case under error_estimate
+        instead.
+
+    Returns
+    -------
+    int
+        Exit status, 0 when the run completes.
+
+    Raises
+    ------
+    SystemExit
+        If a control fails, the 80x40 channel does not reach TRUTH_TOL, or the
+        solve time passes BUDGET_SECONDS.
     """
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--verify-rule", action="store_true")

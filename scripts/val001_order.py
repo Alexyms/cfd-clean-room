@@ -52,7 +52,7 @@ from src.solver_staggered import (  # noqa: E402 -- follows sys.path.insert
 from src.stopping import RULE_VERSION  # noqa: E402 -- follows sys.path.insert
 from validation.cases import load_case  # noqa: E402 -- follows sys.path.insert
 from validation.metrics import (  # noqa: E402 -- follows sys.path.insert
-    _inlet_velocity,
+    inlet_velocity,
     poiseuille_l2_error,
 )
 
@@ -182,7 +182,7 @@ def run_control(u_mean: float) -> dict[str, dict]:
 
 def main() -> int:
     """Run the control, the three solves and the orders; print and save summary.json."""
-    u_mean = _inlet_velocity(load_case("poiseuille"))
+    u_mean = inlet_velocity(load_case("poiseuille"))
     summary: dict = {"control": run_control(u_mean)}
     saved = [solve(nx, ny) for nx, ny in GRIDS]
     fields = [s["u"] for s in saved]

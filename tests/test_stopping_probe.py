@@ -7,6 +7,7 @@ its log, and the true-error check tells a FLUID cell from a non-FLUID one.
 
 from __future__ import annotations
 
+import ast
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -195,7 +196,7 @@ def _refuse_to_solve(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     deciding anything; only solve_steady refuses.
     """
 
-    class Sentinel(stopping_probe.sc.StaggeredSolver):
+    class Sentinel(stopping_probe.StaggeredSolver):
         def __init__(self, mesh: Mesh, config: SimConfig, boundary: object) -> None:
             super().__init__(mesh, config, boundary)
             self.asked = config
@@ -204,7 +205,7 @@ def _refuse_to_solve(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
             raise _BuiltError(self.asked)
 
     monkeypatch.setattr(stopping_probe, "OUT_DIR", tmp_path)
-    monkeypatch.setattr(stopping_probe.sc, "StaggeredSolver", Sentinel)
+    monkeypatch.setattr(stopping_probe, "StaggeredSolver", Sentinel)
 
 
 def _save_truth(
@@ -215,24 +216,29 @@ def _save_truth(
     case: str = "cavity",
     n: int = 20,
     elapsed: np.ndarray | None = None,
+    residual: np.ndarray | None = None,
+    reached: bool = True,
+    iteration: tuple[int, int] = (3, 5),
 ) -> None:
     """A truth file as solve_truth writes it, its second snapshot at the case tolerance.
 
     Complete, so a reader that skipped the version check would read it
     without error rather than fail on a missing key. ``elapsed`` defaults
-    to a few seconds.
+    to a few seconds, ``residual`` to the case tolerance six times, and
+    ``iteration`` is where the two snapshots were taken.
     """
     tol = stopping_probe.case_config(case, n).convergence_tol
+    history = np.full(6, tol) if residual is None else residual
     np.savez(
         path,
         level=np.array([10.0 * tol, tol]),
-        iteration=np.array([3, 5]),
-        residual=np.full(6, tol),
-        imbalance=np.zeros(6),
-        iterations=np.full(6, 9),
-        elapsed=np.arange(6.0) if elapsed is None else elapsed,
+        iteration=np.array(iteration),
+        residual=history,
+        imbalance=np.zeros(len(history)),
+        iterations=np.full(len(history), 9),
+        elapsed=np.arange(float(len(history))) if elapsed is None else elapsed,
         reference_velocity=1.0,
-        reached=True,
+        reached=reached,
         u_0=u,
         v_0=v,
         u_1=u,
@@ -327,9 +333,9 @@ def test_readers_of_the_truth_re_solve_a_truth_this_solver_did_not_write(
     zeros = np.zeros((20, 20))
     _save_truth(tmp_path / f"{name}.npz", saved, zeros, zeros)
     config = stopping_probe.case_config("cavity", 20, rule="error_estimate")
-    mesh = stopping_probe.sc.Mesh(config)
-    boundary = stopping_probe.sc.StaggeredBoundary(mesh, config)
-    flux = stopping_probe.sc.StaggeredSolver(mesh, config, boundary).flux_scale
+    mesh = stopping_probe.Mesh(config)
+    boundary = stopping_probe.StaggeredBoundary(mesh, config)
+    flux = stopping_probe.StaggeredSolver(mesh, config, boundary).flux_scale
     tols = (config.iteration_error_tol, config.mass_imbalance_tol)
     params = stopping_probe.rule_parameters(
         boundary.get_max_boundary_velocity(), flux, tols
@@ -346,9 +352,9 @@ def _poiseuille_rule_files(tmp_path: Path, case: str, n: int) -> str:
     """Write the rule file verify_rule reads, current for a case; return the case's name."""
     name = stopping_probe.case_name(case, n)
     config = stopping_probe.case_config(case, n, rule="error_estimate")
-    mesh = stopping_probe.sc.Mesh(config)
-    boundary = stopping_probe.sc.StaggeredBoundary(mesh, config)
-    flux = stopping_probe.sc.StaggeredSolver(mesh, config, boundary).flux_scale
+    mesh = stopping_probe.Mesh(config)
+    boundary = stopping_probe.StaggeredBoundary(mesh, config)
+    flux = stopping_probe.StaggeredSolver(mesh, config, boundary).flux_scale
     tols = (config.iteration_error_tol, config.mass_imbalance_tol)
     params = stopping_probe.rule_parameters(
         boundary.get_max_boundary_velocity(), flux, tols
@@ -438,6 +444,97 @@ def test_main_reads_its_budget_through_the_identity_check(
     with pytest.raises(_BuiltError) as asked:
         stopping_probe.main([])
     assert asked.value.args[0].convergence_tol == stopping_probe.TRUTH_TOL
+
+
+def _analyse_truth(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, **truth: object
+) -> dict:
+    """Run analyse on a cavity truth file written by this solver, with no solve available."""
+    _refuse_to_solve(monkeypatch, tmp_path)
+    name = stopping_probe.case_name("cavity", 20)
+    zeros = np.zeros((20, 20))
+    _save_truth(tmp_path / f"{name}.npz", CURRENT, zeros, zeros, **truth)
+    return stopping_probe.analyse("cavity", 20)
+
+
+@pytest.mark.unit
+def test_analyse_reports_a_case_that_never_reached_the_truth_with_its_history(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The unreached path returns the residual history, as prompt 23 asked.
+
+    Issue 36: the path returned only the final residual and had never run, since
+    all five cases reached TRUTH_TOL. A truth that stopped at the cap with
+    reached False is planted. Defect caught: the history dropped, or the path
+    carrying on into a truth that does not exist.
+    """
+    history = np.logspace(-3, -6, 6)
+    out = _analyse_truth(tmp_path, monkeypatch, residual=history, reached=False)
+    assert out["reached"] is False
+    assert out["residual_history"] == history.tolist()
+    assert out["final_residual"] == history[-1]
+    assert out["outer"] == 6
+    assert "truth" not in out
+    assert "snapshots" not in out
+    assert "discretization" not in out
+
+
+@pytest.mark.unit
+def test_analyse_fits_the_truths_rate_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """rho_hat is formed once for the truth, not once for the estimate and once for the report.
+
+    Issue 36: two consecutive lines made the same call. The history is as long
+    as the window so the fit exists; the snapshots read shorter prefixes, so a
+    call on the whole history is the truth's.
+    """
+    history = 1e-3 * 0.9 ** np.arange(stopping_probe.WINDOW)
+    seen: list[int] = []
+    real = stopping_probe.rho_hat
+
+    def counting(values: np.ndarray, window: int) -> float:
+        seen.append(len(values))
+        return real(values, window)
+
+    monkeypatch.setattr(stopping_probe, "rho_hat", counting)
+    zeros = np.zeros((20, 20))
+    _refuse_to_solve(monkeypatch, tmp_path)
+    name = stopping_probe.case_name("cavity", 20)
+    _save_truth(
+        tmp_path / f"{name}.npz",
+        CURRENT,
+        zeros,
+        zeros,
+        residual=np.concatenate([history, history[-1] * 0.9 ** np.arange(1, 3)]),
+        iteration=(10, 20),
+    )
+    out = stopping_probe.analyse("cavity", 20)
+    whole = len(history) + 2
+    assert seen.count(whole) == 1
+    assert out["truth"]["rho_hat"] == pytest.approx(0.9, rel=1e-6)
+
+
+@pytest.mark.unit
+def test_the_script_reads_only_face_profiles_through_self_convergence() -> None:
+    """Every other name is imported from the module that defines it (issue 36).
+
+    The names were read inside function bodies as ``sc.<name>``, so pruning
+    an import in self_convergence broke this script at run time, not when
+    tests were collected. ``sc.face_profiles`` is the one use prompt 23 asked
+    for.
+    """
+    tree = ast.parse(
+        (REPO_ROOT / "scripts" / "stopping_probe.py").read_text(encoding="utf-8")
+    )
+    used = {
+        node.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "sc"
+    }
+    assert used == {"face_profiles"}
 
 
 @pytest.mark.unit

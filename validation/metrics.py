@@ -201,8 +201,25 @@ class ErrorMetric:
         return out
 
 
-def _inlet_velocity(config: SimConfig) -> float:
-    """Prescribed magnitude of the single velocity inlet in the case."""
+def inlet_velocity(config: SimConfig) -> float:
+    """Prescribed magnitude of the single velocity inlet in the case.
+
+    Parameters
+    ----------
+    config : SimConfig
+        Channel case configuration.
+
+    Returns
+    -------
+    float
+        The inlet's ``velocity``, the mean speed of the Poiseuille profile,
+        in m/s.
+
+    Raises
+    ------
+    ValueError
+        Unless the case has exactly one velocity inlet with a ``velocity``.
+    """
     inlets = [
         spec for spec in config.boundaries.values() if spec.type == "velocity_inlet"
     ]
@@ -262,7 +279,7 @@ def poiseuille_profiles(
     y = np.asarray(mesh.yc)[fluid]
     u_num = u[fluid, i_mid]
     height = config.room_height
-    u_max = 1.5 * _inlet_velocity(config)
+    u_max = 1.5 * inlet_velocity(config)
     u_ref = u_max * 4.0 * y * (height - y) / height**2
     return y, u_num, u_ref
 
