@@ -38,6 +38,16 @@ registry's ``coverage_along`` on the coordinates and SOLID mask
 layer makes (REQ-S12.1); nothing here decides coverage or its inputs on its
 own, and the inlet flux is attributed to a segment by the name that
 coverage gives each face.
+
+A ``fixed_flow_outlet`` is an inlet run backwards (ADR-012 D, amended
+2026-10-08): its faces hold an outward normal velocity as a Dirichlet value
+and a zero tangential velocity, and it is neither a pressure outlet nor part
+of the inlet flux. A segment states its velocity or states none. Those that
+state none share, at one face velocity, what the stated outlets leave of the
+discrete inflow (``fixed_flow_velocities``), so outflow equals inflow to
+rounding on any mesh, however the faces round each opening. A domain whose
+only outlets are fixed-flow therefore has no pressure outlet and the pressure
+correction takes its closed-domain path.
 """
 
 from dataclasses import dataclass
@@ -46,11 +56,13 @@ import numpy as np
 
 from src.boundary_registry import (
     EDGES,
+    FIXED_FLOW_OUTLET,
     PRESSURE_OUTLET,
     VELOCITY_INLET,
     BoundaryRegistry,
     EdgeCondition,
     EdgeCoverage,
+    fixed_flow_condition,
 )
 from src.config import SimConfig
 from src.mesh import Mesh
@@ -86,8 +98,9 @@ class TangentialCondition:
         "u" on the bottom and top edges, "v" on the left and right edges.
     is_dirichlet : np.ndarray
         Boolean, shape [nx+1] or [ny+1]. True where the wall value is
-        prescribed (wall, velocity_inlet, or a face of a SOLID edge cell);
-        False at pressure outlets, where the component has zero gradient.
+        prescribed (wall, velocity_inlet, fixed_flow_outlet, or a face of a
+        SOLID edge cell); False at pressure outlets, where the component
+        has zero gradient.
     value : np.ndarray
         Prescribed tangential velocity at the wall, same shape. Zero
         wherever ``is_dirichlet`` is False.
@@ -135,6 +148,12 @@ class StaggeredBoundary:
         widths, the wall-to-first-center distances and ``cell_type``.
     config : SimConfig
         Simulation configuration with boundary definitions.
+
+    Raises
+    ------
+    ValueError
+        If the fixed-flow outlets that state no velocity cover no face, or
+        the inflow the stated ones leave for them is zero or negative.
     """
 
     def __init__(self, mesh: Mesh, config: SimConfig) -> None:
@@ -149,8 +168,9 @@ class StaggeredBoundary:
             edge: self._registry.coverage_along(edge, *edge_cell_inputs(mesh, edge))
             for edge in EDGES
         }
+        self._fixed_flow: dict[str, float] = self._resolve_fixed_flows()
         self._cell_conditions: dict[str, list[EdgeCondition]] = {
-            edge: [point.condition for point in coverage]
+            edge: [self._resolved_condition(point, edge) for point in coverage]
             for edge, coverage in self._cell_coverage.items()
         }
 
@@ -211,6 +231,68 @@ class StaggeredBoundary:
         if edge in ("top", "bottom"):
             return condition.u_prescribed
         return condition.v_prescribed
+
+    def _resolved_condition(self, point: EdgeCoverage, edge: str) -> EdgeCondition:
+        """The coverage's condition, with a fixed-flow outlet's share filled in."""
+        if point.condition.bc_type != FIXED_FLOW_OUTLET:
+            return point.condition
+        assert point.name is not None
+        return fixed_flow_condition(edge, self._fixed_flow[point.name])
+
+    def _resolve_fixed_flows(self) -> dict[str, float]:
+        """The outward normal velocity of every fixed-flow outlet segment.
+
+        A segment that states a velocity keeps it. The rest share the
+        discrete inflow less the stated outlets' discrete outflow at one
+        face velocity, over their covered face widths. The widths come from
+        the faces the shared coverage gives each segment, so the balance
+        holds on the mesh the solver runs, not on the configured lengths.
+
+        Raises
+        ------
+        ValueError
+            If a segment that states no velocity has no face to share the
+            remainder over, or the remainder is zero or negative.
+        """
+        fixed = {
+            name: spec
+            for name, spec in self._registry.boundaries.items()
+            if spec.type == FIXED_FLOW_OUTLET
+        }
+        lengths: dict[str, float] = {}
+        for name, spec in fixed.items():
+            covered = np.array(
+                [p.name == name for p in self._cell_coverage[spec.location]],
+                dtype=bool,
+            )
+            lengths[name] = float(self._face_widths(spec.location)[covered].sum())
+        resolved: dict[str, float] = {
+            name: spec.velocity
+            for name, spec in fixed.items()
+            if spec.velocity is not None
+        }
+        shared = [name for name, spec in fixed.items() if spec.velocity is None]
+        if not shared:
+            return resolved
+        inflow = self.get_total_inlet_flux()
+        stated_outflow = sum(resolved[name] * lengths[name] for name in resolved)
+        remainder = inflow - stated_outflow
+        shared_length = sum(lengths[name] for name in shared)
+        if shared_length <= 0.0:
+            raise ValueError(
+                f"fixed_flow_outlet segments {shared} state no velocity and cover "
+                "no face of this mesh, so they cannot carry the remaining flow"
+            )
+        if remainder <= 0.0:
+            raise ValueError(
+                f"the stated fixed-flow outlets already carry the whole inflow: "
+                f"inflow {inflow:.6g} m^2/s, stated outflow {stated_outflow:.6g} "
+                f"m^2/s, remainder {remainder:.6g} m^2/s for {shared}, which must "
+                "be positive"
+            )
+        for name in shared:
+            resolved[name] = remainder / shared_length
+        return {name: resolved[name] for name in fixed}
 
     # ------------------------------------------------------------------
     # Construction of the data deliverables
@@ -327,6 +409,19 @@ class StaggeredBoundary:
         """
         return dict(self._outlets)
 
+    def fixed_flow_velocities(self) -> dict[str, float]:
+        """Outward normal velocity of every fixed-flow outlet segment, by name.
+
+        Returns
+        -------
+        dict[str, float]
+            Segment name to velocity in m/s, positive out of the domain, in
+            configuration order: the stated value, or the equal share of
+            the remaining discrete inflow for a segment that states none.
+            Empty when the configuration has no fixed-flow outlet. A copy.
+        """
+        return dict(self._fixed_flow)
+
     def has_pressure_outlet(self) -> bool:
         """Return True if any edge cell is a pressure outlet.
 
@@ -403,7 +498,10 @@ class StaggeredBoundary:
         """Largest absolute prescribed velocity component on any edge.
 
         Both components count, so a tangential lid sets the scale of a
-        closed cavity. SOLID edge cells contribute zero.
+        closed cavity. SOLID edge cells contribute zero. A fixed-flow
+        outlet contributes nothing: its velocity is what the flow balance
+        leaves, not something the room is driven by, and counting it would
+        move the stopping rule's velocity scale with the outlet layout.
 
         Returns
         -------
@@ -414,5 +512,7 @@ class StaggeredBoundary:
         max_vel = 0.0
         for conditions in self._cell_conditions.values():
             for c in conditions:
+                if c.bc_type == FIXED_FLOW_OUTLET:
+                    continue
                 max_vel = max(max_vel, abs(c.u_prescribed), abs(c.v_prescribed))
         return max_vel

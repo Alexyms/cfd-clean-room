@@ -51,7 +51,9 @@ Boundaries (ADR-012 C) arrive as data, a TurbulenceConditions the caller
 builds for every step (ECR-002 step 1; step 6 builds it from the wall
 functions, the inlet keys and the staggered boundary layer's tangential
 values). The inflow values are read where a domain face's flux points into
-the room, as the transport solver reads a concentration. Faces beside a SOLID
+the room, as the transport solver reads a concentration. A fixed_flow_outlet
+holds an outward velocity (ADR-012 D, amended 2026-10-08), so its faces never
+read an inflow value and step 6 builds none for them. Faces beside a SOLID
 cell carry no flux. Diffusion crosses only faces between two non-SOLID cells,
 so a wall, an obstacle face and an outlet face held shut carry nothing. In
 the cells the conditions name, eps is held at the given value and the

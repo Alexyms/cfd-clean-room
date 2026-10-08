@@ -35,6 +35,7 @@ EDGES: tuple[str, str, str, str] = ("bottom", "top", "left", "right")
 WALL: str = "wall"
 VELOCITY_INLET: str = "velocity_inlet"
 PRESSURE_OUTLET: str = "pressure_outlet"
+FIXED_FLOW_OUTLET: str = "fixed_flow_outlet"
 
 
 @dataclass(frozen=True)
@@ -44,11 +45,20 @@ class EdgeCondition:
     Parameters
     ----------
     bc_type : str
-        One of "wall", "velocity_inlet", "pressure_outlet".
+        One of "wall", "velocity_inlet", "pressure_outlet",
+        "fixed_flow_outlet".
     u_prescribed : float
         x-velocity at the domain face. Zero for wall and pressure_outlet.
     v_prescribed : float
         y-velocity at the domain face. Zero for wall and pressure_outlet.
+
+    Notes
+    -----
+    A fixed_flow_outlet carries its outward normal velocity here, but only
+    a stated one: a segment that states none shares the inflow the stated
+    outlets leave, which depends on the mesh, so ``condition_of`` carries
+    zero for it and the velocity layer replaces that with
+    ``fixed_flow_condition`` once the share is resolved.
     """
 
     bc_type: str
@@ -123,6 +133,32 @@ def covers(spec: BoundarySpec, edge: str, coordinate: float) -> bool:
     )
 
 
+def fixed_flow_condition(edge: str, speed: float) -> EdgeCondition:
+    """The condition of a fixed-flow outlet face leaving a domain edge at a given speed.
+
+    Parameters
+    ----------
+    edge : str
+        One of "bottom", "top", "left", "right".
+    speed : float
+        Outward normal velocity in m/s, positive out of the domain.
+
+    Returns
+    -------
+    EdgeCondition
+        Type "fixed_flow_outlet" with the normal component signed along the
+        coordinate axis (negative on the bottom and left edges) and a zero
+        tangential component.
+    """
+    if edge == "top":
+        return EdgeCondition(FIXED_FLOW_OUTLET, 0.0, speed)
+    if edge == "bottom":
+        return EdgeCondition(FIXED_FLOW_OUTLET, 0.0, -speed)
+    if edge == "left":
+        return EdgeCondition(FIXED_FLOW_OUTLET, -speed, 0.0)
+    return EdgeCondition(FIXED_FLOW_OUTLET, speed, 0.0)
+
+
 def condition_of(spec: BoundarySpec, edge: str) -> EdgeCondition:
     """The condition a segment prescribes on the edge it sits on.
 
@@ -141,7 +177,7 @@ def condition_of(spec: BoundarySpec, edge: str) -> EdgeCondition:
     Raises
     ------
     ValueError
-        If the segment type is not one of the three known types.
+        If the segment type is not one of the four known types.
 
     Notes
     -----
@@ -149,12 +185,21 @@ def condition_of(spec: BoundarySpec, edge: str) -> EdgeCondition:
     them directly, with a missing component read as zero; this is how a
     tangential lid is written. Otherwise the ``velocity`` magnitude is
     decomposed normal to the edge, pointing into the domain.
+
+    A fixed-flow outlet carries its stated ``velocity`` pointing out of the
+    domain, or zero when it states none. The share of a segment that
+    states none is a property of the mesh and is not known here.
     """
     if spec.type == WALL:
         return NO_SLIP_WALL
 
     if spec.type == PRESSURE_OUTLET:
         return EdgeCondition(PRESSURE_OUTLET, 0.0, 0.0)
+
+    if spec.type == FIXED_FLOW_OUTLET:
+        return fixed_flow_condition(
+            edge, spec.velocity if spec.velocity is not None else 0.0
+        )
 
     if spec.type != VELOCITY_INLET:
         raise ValueError(f"Unrecognized boundary type: {spec.type}")
