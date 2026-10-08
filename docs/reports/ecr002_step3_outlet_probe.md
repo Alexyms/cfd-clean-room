@@ -283,7 +283,7 @@ changed. The scripts import nothing from `results/`, except the control, which i
   right edge only. So arms D and E hold the returns' normal velocity and leave their tangential
   velocity free, which is not the fixed-flow segment REQ-S18 defines (an outward normal velocity
   and zero tangential velocity). D0 (section 7.7) holds both, through the same wrapper on the
-  bottom edge (24 locations on 80x30, 14 on 40x15), and is the boundary step 3 builds.
+  bottom edge (24 locations on 80x30, 10 on 40x15): the fixed-flow segment as REQ-S18 defines it.
 - Measurement 4 and the other comparisons take the difference, its location and the scale over
   non-SOLID cells only, and the scale is the first-named run's (review 41 B1: the pressure is 0
   in SOLID cells, so a difference there was the difference of the two means). The nine
@@ -351,7 +351,7 @@ velocity-step stop at 115, against A's 588 and 233: the standing imbalance was c
 velocity's convergence as well as the pressure's. No return face ever pointed into the room
 under B or C, so the hold-shut rule never acted.
 
-**D has no drift, no reversed face, and `||b||` at rounding.** 177 outer iterations, the fewest
+**D has no drift and no reversed face; `||b||` is 1.9e-8 at the stop, with the velocity still moving.** 177 outer iterations, the fewest
 of any arm, the velocity-step stop at 103; `||b||` 1.9e-8 at the stop with no cell beside an
 open face (there is none); the worst cell 4.0e-14. The committed corrector solved the closed
 system through the subclass alone: none of the 177 corrections reached the cap (313 CG
@@ -635,8 +635,10 @@ The builder's (section 5.2): (a) held, and A0 showed the tangential condition mo
 table can see; (b) held, with B and C agreeing to 3e-10 m/s, but the counts were not "within 20%
 of A's 588": they were 206, 65% fewer; (c) held at 1e-2 as well; (d) held; (e) wrong in its
 detail, E0's rate is above A's, not below; (f) wrong on the metric, for the reason section 7.5
-gives; (g) wrong, as the orchestrator's. The builder's of section 5.3: (h) held in kind, A-open
-diverging at both rungs as T2 did, and sooner (843 and 370 against T2's 2,165 and 615); (i) held
+gives; (g) wrong, as the orchestrator's. The builder's of section 5.3: (h) held in kind and was wrong in
+detail: A-open diverged at both rungs (843 and 370), where the builder expected a run ending
+growing at Re 895; T2, its Jacobi-era counterpart, passed 5 m/s at 2,165 at Re 895 without
+reaching the divergence threshold and diverged at 615 at Re 8,950; (i) held
 on the counts, which are D's exactly, and was wrong on the amount, 0.097 m/s against the 0.05
 predicted.
 
@@ -675,8 +677,8 @@ three returns, B at one) and F (the scaled copy held). The costs measured:
 **Whether ADR-012 decision 1's rejection of option 2 still holds.** Option 2 was set aside as
 "compatible only when the shares sum to the supply exactly, the closed cavity's case". Measured:
 the committed corrector solves that case as it is, through the subclass alone, in 177 outer
-iterations with the signed domain sum at 2e-15 and every correction converging to its relative
-level; the compatibility is exact when the shares are formed from the face widths, as D forms
+iterations with the signed domain sum at 2e-15 and no correction at its cap (the records keep
+`||b||` per correction but not which criterion stopped each solve; section 7.1); the compatibility is exact when the shares are formed from the face widths, as D forms
 them, and the projection the ECR-003 solve already runs removes the rounding residue. What the
 rejection said about the corrector is no longer the case. What it said about the input remains:
 the split must sum to the supply less the hood, so a configured split is a derived quantity (a
