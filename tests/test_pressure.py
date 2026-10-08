@@ -161,22 +161,72 @@ def _build(
     )
 
 
+def _extrapolate_outlet(u: np.ndarray, v: np.ndarray, outlet: str | None) -> None:
+    """Copy the inward face to the outlet face on ``outlet``, as the solver does."""
+    if outlet == "right":
+        u[:, -1] = u[:, -2]
+    elif outlet == "left":
+        u[:, 0] = u[:, 1]
+    elif outlet == "top":
+        v[-1, :] = v[-2, :]
+    elif outlet == "bottom":
+        v[0, :] = v[1, :]
+
+
 def _predicted(
-    config: SimConfig, sweeps: int = 5, outlet_right: bool = False
+    config: SimConfig,
+    sweeps: int = 5,
+    outlet_right: bool = False,
+    outlet: str | None = None,
 ) -> tuple[Mesh, StaggeredBoundary, PressureCorrector, MomentumPrediction, np.ndarray]:
-    """A non-trivial u*, v* from a few predictor sweeps starting from rest."""
+    """A non-trivial u*, v* from a few predictor sweeps starting from rest.
+
+    ``outlet`` names the edge whose outlet faces copy their inward neighbour
+    between sweeps; ``outlet_right`` is the same for the right edge.
+    """
+    edge = "right" if outlet_right else outlet
     mesh, bc, mp, pc = _build(config)
     u, v, p = allocate_fields(mesh)
     bc.apply_normal_velocity(u, v)
-    if outlet_right:
-        u[:, -1] = u[:, -2]
+    _extrapolate_outlet(u, v, edge)
     pred = mp.predict(u, v, p)
     for _ in range(sweeps - 1):
         u, v = pred.u_star, pred.v_star
-        if outlet_right:
-            u[:, -1] = u[:, -2]
+        _extrapolate_outlet(u, v, edge)
         pred = mp.predict(u, v, p)
     return mesh, bc, pc, pred, p
+
+
+def _outlet_rooms(outlet: str) -> tuple[dict, dict, dict, dict]:
+    """A room whose pressure outlet is on ``outlet``, and three walls for it.
+
+    Returns the boundaries (an inlet on the opposite edge), a wall across the
+    flow that strands the inlet side, a wall one cell in from the outlet that
+    strands both sides, and a wall along the flow that leaves each side its
+    own way out.
+    """
+    flow_x = outlet in ("left", "right")
+    opposite = {"right": "left", "left": "right", "bottom": "top", "top": "bottom"}
+    span = {"y_start": 0.0, "y_end": 1.0} if flow_x else {"x_start": 0.0, "x_end": 2.0}
+    speed = {"left": 0.3, "right": -0.3, "bottom": 0.3, "top": -0.3}[opposite[outlet]]
+    inlet = _inlet(opposite[outlet], speed if flow_x else 0.0, 0.0 if flow_x else speed)
+    boundaries = {
+        "inlet": inlet,
+        "outlet": {"type": "pressure_outlet", "location": outlet, **span},
+    }
+    if flow_x:
+        # Cells are 0.25 wide: the column beside the outlet is 0 or 7.
+        one_in = (0.25, 0.5) if outlet == "left" else (1.5, 1.75)
+        across = PARTITION
+        liner = {**PARTITION, "x_start": one_in[0], "x_end": one_in[1]}
+        along = SHELF
+    else:
+        # Cells are 1/6 high: the row beside the outlet is 0 or 5.
+        one_in = (1 / 6, 2 / 6) if outlet == "bottom" else (4 / 6, 5 / 6)
+        across = SHELF
+        liner = {**SHELF, "y_start": one_in[0], "y_end": one_in[1]}
+        along = PARTITION
+    return boundaries, across, liner, along
 
 
 def _case_with(name: str, n: int, **solver_keys: object) -> SimConfig:
@@ -1172,31 +1222,37 @@ class TestConjugateGradient:
         _mesh, _bc, _mp, one = _build(_config(CAVITY, obstacles=[BLOCK]))
         assert one.needs_pin
 
-    def test_open_domain_with_a_component_no_outlet_reaches_is_refused(self) -> None:
-        """The same wall across the channel leaves the inlet side no outlet: refused.
+    @pytest.mark.parametrize("outlet", ["right", "left", "bottom", "top"])
+    def test_open_domain_with_a_component_no_outlet_reaches_is_refused(
+        self, outlet: str
+    ) -> None:
+        """A wall across the flow leaves the inlet side no outlet: refused, on every edge.
 
-        Review 37 S7, confirmed by test 37: the left part's block of the
+        Review 37 S7, confirmed by test 37: the inlet side's block of the
         operator has no p' = 0 row and its right-hand side carries the
         inflow, which no p' removes, so every correction ran to the cap and
-        left the faces 189 times more unbalanced than u*. A shelf the full
-        length splits the channel too, but each part reaches the outlet, so
-        it is accepted and its correction converges. A wall one column in
-        from the outlet strands both parts: the edge column touches the outlet,
-        but its outlet faces borrow no diagonal, since the face inward of each
-        is a SOLID cell's, so no p' = 0 sits in its rows. Defect caught: the
+        left the faces 189 times more unbalanced than u*. A wall along the
+        flow splits the room too, but each part reaches the outlet, so it is
+        accepted and its correction converges. A wall one cell in from the
+        outlet strands both parts: the edge cells touch the outlet, but
+        their outlet faces borrow no diagonal, since the face inward of each
+        is a SOLID cell's, so no p' = 0 sits in their rows. Defect caught: the
         check skipped on an open domain, an open domain held to one
-        component, or an outlet cell counted without its inward neighbour.
+        component, or an outlet cell counted without its inward neighbour,
+        each on any one edge (test 37b: seven planted defects in the left,
+        bottom and top handling passed when only the right edge was tried).
         """
+        boundaries, across, liner, along = _outlet_rooms(outlet)
         stranded = r"open domain: 1 of the 2 connected components .* no pressure outlet"
-        with pytest.raises(ValueError, match=stranded):
-            _build(_config(CHANNEL, obstacles=[PARTITION]))
-        liner = {**PARTITION, "x_start": 1.5, "x_end": 1.75}
+        with pytest.raises(ValueError, match=stranded) as refused:
+            _build(_config(boundaries, obstacles=[across]))
+        assert "no outflow to balance" in str(refused.value)
         with pytest.raises(ValueError, match=r"open domain: 2 of the 2 connected"):
-            _build(_config(CHANNEL, obstacles=[liner]))
+            _build(_config(boundaries, obstacles=[liner]))
         mesh, _bc, pc, pred, p = _predicted(
-            _config(CHANNEL, obstacles=[SHELF]), outlet_right=True
+            _config(boundaries, obstacles=[along]), outlet=outlet
         )
-        assert (mesh.cell_type[2:4, :] == SOLID).all()
+        assert (mesh.cell_type == SOLID).any()
         assert not pc.needs_pin
         out = pc.correct(pred, p)
         assert out.reached_cap is False
@@ -1208,6 +1264,7 @@ class TestConjugateGradient:
         ("keyword", "value"),
         [
             ("rtol", True),
+            ("rtol", False),
             ("rtol", -1e-8),
             ("rtol", 1.0),
             ("rtol", float("nan")),
