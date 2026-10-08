@@ -196,6 +196,46 @@ correction, or a refusal) is a finding for that arm.
   Re 8,950: A, B, C, E and E0 end growing or diverge; D, which cannot reverse a return face, I
   also expect to end growing, because the growth sits in the gap over return 4 inside the room.
 
+### 5.3 The fix pass's two arms (prompt 41b, 2026-10-08; committed before any new run)
+
+Review 41 B3 and S4 asked for two arms the first pass did not have. The ladder of section 7.3
+separates the arms that fail (A, F) from those that converge (B, C, D, E, E0), but two mechanisms
+travel together in the failing arms: the copy at every open return, and the hold-shut rule acting
+in nearly every iteration. Arms D and E left the floor returns' tangential velocity at the pressure
+outlet's zero gradient, while a fixed-flow outlet as REQ-S18 defines it holds it at zero.
+
+- **A-open.** Arm A's copy at every open return with the hold-shut rule off: a face whose copied
+  velocity points into the room stays open and is corrected like any other outlet face. The hood
+  as in every arm. Both ladder rungs, to 3,000 outer iterations or divergence, recording reversed
+  faces per segment per iteration (most at once and the number of iterations with any reversed).
+  If A-open converges, the hold-shut rule is implicated; if it fails, the copy is.
+- **D0.** Arm D with the floor returns' tangential velocity held at zero (Dirichlet), as the
+  hood's already is. The drift case at 1e-8, 1e-4 and 1e-2 and both ladder rungs, with the same
+  measurements as arm D and the face hash of every run; D0 against D as measurement 4 compares
+  flows, over non-SOLID cells.
+
+**The orchestrator's predictions.**
+
+- (h) A-open: no prediction on convergence; that is the question. It records reversed faces in
+  most iterations at both rungs.
+- (i) D0 converges at both rungs and on the drift case at every level, with no drift (the
+  mechanism needs a copied face, and D0 has none). Its counts differ from D's by under 10%; its
+  flow differs from D's mostly in the cells beside the returns.
+
+**The builder's (written with the orchestrator's, before any new run).**
+
+- (h) A-open is prompt 33b's T2 (the hood fixed, the returns copied, nothing held shut) under
+  the built hood condition and the CG solve. T2 was measured: at Re 895 it was bounded to the
+  cut at 1,001 and, continued in test 33b, passed 5 m/s at outer 2,165; at Re 8,950 it diverged
+  at outer 615. I expect A-open to repeat that, diverging at Re 8,950 within about 700 outer
+  iterations and ending growing at Re 895, with faces reversed in most iterations once the growth
+  starts. That reading implicates the copy, not the hold-shut rule, which under B, C, D, E and E0
+  never acted.
+- (i) As the orchestrator's. The returns' tangential condition changes the wall shear on the
+  floor's u faces at 22 of 80 columns on 80x30 and 13 of 40 on 40x15, so I expect D0's counts
+  within 5% of D's (177; 391; 1,632) and its flow within 0.05 m/s of D's, largest beside the
+  returns.
+
 ## 6. Method as built (written after the runs)
 
 Everything ran as section 4 planned it, with these additions and adaptations.
