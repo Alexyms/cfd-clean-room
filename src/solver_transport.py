@@ -525,8 +525,8 @@ class TransportSolver:
         Raises
         ------
         TypeError
-            If ``size_class`` or ``dt`` is a bool (Python's or numpy's), or
-            ``size_class`` is not an int.
+            If ``size_class`` or ``dt`` is a bool (Python's, numpy's, or for
+            ``dt`` a 0-d bool array), or ``size_class`` is not an int.
         IndexError
             If ``size_class`` is outside the configured classes.
         ValueError
@@ -542,7 +542,11 @@ class TransportSolver:
             raise ValueError(f"expected C_k of shape {self._p_shape}, got {c.shape}")
         if not np.isfinite(c).all():
             raise ValueError("C_k must be finite")
-        if isinstance(dt, (bool, np.bool_)):
+        # A 0-d bool array is neither a bool nor an np.bool_ and would step
+        # with dt = 1.0.
+        if isinstance(dt, (bool, np.bool_)) or (
+            isinstance(dt, np.ndarray) and dt.dtype == np.bool_
+        ):
             raise TypeError("dt must be a number, not a bool")
         if not math.isfinite(dt):
             raise ValueError(f"dt must be finite, got {dt}")

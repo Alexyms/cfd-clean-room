@@ -350,7 +350,9 @@ class TestArgumentChecks:
             with pytest.raises(ValueError, match="dt must be finite"):
                 self.solver.solve_timestep(self.c, self.faces, 0, dt)
 
-    def test_conditions_with_a_nan_or_the_wrong_dtype_are_refused(self) -> None:
+    def test_conditions_with_a_nan_or_a_negative_deposition_are_refused(
+        self,
+    ) -> None:
         inflow_u = np.zeros(u_shape(self.mesh))
         inflow_u[0, 0] = np.nan
         with pytest.raises(ValueError, match="inflow_u must be finite"):
@@ -398,12 +400,16 @@ class TestArgumentChecks:
         with pytest.raises(ValueError, match=f"{name} must have dtype {stated}"):
             TransportSolver(self.mesh, self.config, INERT, FixedConditions(wrong))
 
-    def test_a_numpy_bool_dt_is_refused_like_a_python_one(self) -> None:
+    @pytest.mark.parametrize(
+        "dt", [np.True_, np.array(True)], ids=["np.bool_", "0-d bool array"]
+    )
+    def test_a_numpy_bool_dt_is_refused_like_a_python_one(self, dt: object) -> None:
         """np.True_ is not a bool subclass; at rest stable_dt is infinite and
-        the step would otherwise run with dt = 1.0 (test 32b check 21)."""
+        the step would otherwise run with dt = 1.0 (test 32b check 21). A 0-d
+        bool array is neither, and read as 1.0 the same way (test 32c)."""
         still = uniform_face_field(self.mesh, 0.0, 0.0)
         with pytest.raises(TypeError, match="dt must be a number"):
-            self.solver.solve_timestep(self.c, still, 0, np.True_)
+            self.solver.solve_timestep(self.c, still, 0, dt)
         assert self.solver.budget[0].initial is None
 
     def test_the_input_field_is_not_modified_and_the_output_is_fresh(self) -> None:
@@ -683,14 +689,28 @@ class TestAdvection:
         # The row beside the obstacle has no SOLID far node and is the plain scheme.
         assert out[3, 5] != pytest.approx(along[3, 5] * (1.0 - courant), rel=1e-6)
 
-    def test_a_domain_face_behind_an_edge_obstacle_carries_no_flux(self) -> None:
-        """An obstacle on the bottom edge under an inlet whose faces all carry
-        3.0, the SOLID column's face included: data the boundary layer never
+    @pytest.mark.parametrize("edge", ["bottom", "top", "left", "right"])
+    def test_a_domain_face_behind_an_edge_obstacle_carries_no_flux(
+        self, edge: str
+    ) -> None:
+        """An obstacle on a domain edge under an inlet whose faces all carry
+        3.0, the SOLID cell's face included: data the boundary layer never
         produces, so the solver's own mask is what is tested. The face behind
-        the SOLID cell carries nothing: inflow is booked for the nine live
-        faces, the SOLID cell and the cell above it stay empty, and the
-        budget closes. With the mask removed the tenth face's mass is booked
-        in and then zeroed with the SOLID cell, a tenth of the supply lost."""
+        the SOLID cell carries nothing: inflow is booked for the live faces
+        only, the SOLID cell and the cell inward of it stay empty, and the
+        budget closes. With the mask removed the SOLID cell's face is booked
+        in and then zeroed with the cell, its share of the supply lost.
+
+        Run on all four edges (test 32c): the mask is one line per edge in
+        the solver, and removing any one of them passed every other test.
+        """
+        spans = {
+            "bottom": (0.4, 0.5, 0.0, 0.1),
+            "top": (0.4, 0.5, 0.4, 0.5),
+            "left": (0.0, 0.1, 0.2, 0.3),
+            "right": (0.9, 1.0, 0.2, 0.3),
+        }
+        x_start, x_end, y_start, y_end = spans[edge]
         config = transport_config(
             1.0,
             0.5,
@@ -699,27 +719,54 @@ class TestAdvection:
             obstacles=[
                 {
                     "name": "b",
-                    "x_start": 0.4,
-                    "x_end": 0.5,
-                    "y_start": 0.0,
-                    "y_end": 0.1,
+                    "x_start": x_start,
+                    "x_end": x_end,
+                    "y_start": y_start,
+                    "y_end": y_end,
                 }
             ],
         )
         mesh = Mesh(config)
-        assert mesh.cell_type[0, 4] == SOLID
+        solid_cell = {"bottom": (0, 4), "top": (4, 4), "left": (2, 0), "right": (2, 9)}[
+            edge
+        ]
+        assert mesh.cell_type[solid_cell] == SOLID
+        assert int((mesh.cell_type == SOLID).sum()) == 1
+        inflow_u = np.zeros(u_shape(mesh))
         inflow_v = np.zeros(v_shape(mesh))
-        inflow_v[0, :] = 3.0
-        mesh, solver = _solver(config, inflow_v=inflow_v)
-        faces = uniform_face_field(mesh, 0.0, 0.2)
+        # Inward velocity on the edge, and the inflow on every face of it.
+        if edge == "bottom":
+            inflow_v[0, :] = 3.0
+            u_in, v_in = 0.0, 0.2
+        elif edge == "top":
+            inflow_v[-1, :] = 3.0
+            u_in, v_in = 0.0, -0.2
+        elif edge == "left":
+            inflow_u[:, 0] = 3.0
+            u_in, v_in = 0.2, 0.0
+        else:
+            inflow_u[:, -1] = 3.0
+            u_in, v_in = -0.2, 0.0
+        mesh, solver = _solver(config, inflow_u=inflow_u, inflow_v=inflow_v)
+        faces = uniform_face_field(mesh, u_in, v_in)
         dt = solver.stable_dt(faces, 0)
-        courant = 0.2 * dt / mesh.dy
+        courant = 0.2 * dt / mesh.dx
         out = solver.solve_timestep(np.zeros((5, 10)), faces, 0, dt)
         budget = solver.budget[0]
-        assert budget.inflow == pytest.approx(9 * 0.2 * mesh.dx * dt * 3.0, rel=1e-13)
-        assert out[0, 4] == 0.0 and out[1, 4] == 0.0
-        live = [i for i in range(10) if i != 4]
-        assert np.allclose(out[0, live], 3.0 * courant, rtol=1e-13, atol=0.0)
+        edge_cells = {
+            "bottom": out[0, :],
+            "top": out[-1, :],
+            "left": out[:, 0],
+            "right": out[:, -1],
+        }[edge]
+        behind = solid_cell[1] if edge in ("bottom", "top") else solid_cell[0]
+        live = [k for k in range(edge_cells.size) if k != behind]
+        area = mesh.dx if edge in ("bottom", "top") else mesh.dy
+        assert budget.inflow == pytest.approx(
+            len(live) * 0.2 * area * dt * 3.0, rel=1e-13
+        )
+        assert np.count_nonzero(out) == len(live)
+        assert np.allclose(edge_cells[live], 3.0 * courant, rtol=1e-13, atol=0.0)
         assert abs(budget.relative()) < 1e-14
 
 
