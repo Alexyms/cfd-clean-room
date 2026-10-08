@@ -133,30 +133,117 @@ def test_true_centerline_meets_smooth_faces_at_second_order() -> None:
     assert np.all(np.abs(orders["offset"] - 1.0) < tol), orders
 
 
-@pytest.mark.integration
-def test_true_centerline_meets_the_saved_staggered_faces_at_second_order() -> None:
-    """The saved staggered solves: the gap is second order, the offset one first order.
+def _smooth_faces(n: int) -> tuple[np.ndarray, np.ndarray]:
+    """Cell-centered u, v of the smooth faces used above, on an n x n grid."""
 
-    Each order is assigned to whichever of 1 and 2 it is nearer, which is the
-    question asked, not a tolerance. The gaps are printed for the report. The
-    fields are gitignored, so this skips where they have not been saved.
+    def f(s: np.ndarray) -> np.ndarray:
+        t = s - 0.5
+        return 0.1 * np.sin(np.pi * s) + t * (1.0 - 4.0 * t**2)
+
+    uf = np.tile(f(np.arange(n + 1) / n), (n, 1))
+    u = 0.5 * (uf[:, :-1] + uf[:, 1:])
+    return u, u.T.copy()
+
+
+def _save_fields(
+    directory: Path, fields: dict[int, tuple[np.ndarray, np.ndarray]]
+) -> None:
+    """Write fields in the layout solve_and_save and solve_tight leave under results/.
+
+    The tight file holds the same field at every snapshot tolerance, so the
+    station tables are computed on it and reveal nothing about the solver.
     """
-    paths = {
-        n: self_convergence.FIELD_DIR / f"staggered-cg_{n}.npz"
-        for n in self_convergence.GRIDS
-    }
-    if not all(p.exists() for p in paths.values()):
-        pytest.skip(
-            "saved staggered fields not present; run scripts/self_convergence.py"
+    case_tol = load_case("cavity").convergence_tol
+    tags = [
+        f"{t:.0e}"
+        for t in (case_tol, *self_convergence.SNAPSHOT_TOLS, self_convergence.TIGHT_TOL)
+    ]
+    for n, (u, v) in fields.items():
+        np.savez(directory / f"{self_convergence.STAGGERED_METHOD}_{n}.npz", u=u, v=v)
+        snapshots = {
+            key: value
+            for t in tags
+            for key, value in ((f"u_{t}", u), (f"v_{t}", v), (f"outer_{t}", 7))
+        }
+        np.savez(
+            directory / f"{self_convergence.STAGGERED_METHOD}_{n}_tol1e-9.npz",
+            seconds=1.5,
+            **snapshots,
         )
+
+
+def _saved_gap_orders(directory: Path, monkeypatch: pytest.MonkeyPatch) -> np.ndarray:
+    """Order of the true-centerline u gap per refinement step, read back from extrapolation."""
+    monkeypatch.setattr(self_convergence, "FIELD_DIR", directory)
+    out = self_convergence.extrapolation()
+    gaps = [
+        out["metric"][f"{self_convergence.STAGGERED_METHOD}_{n}"]["face_gap"]["u"]
+        for n in self_convergence.GRIDS
+    ]
+    return np.log2(np.divide(gaps[:-1], gaps[1:]))
+
+
+@pytest.mark.integration
+def test_saved_staggered_faces_are_met_at_second_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Saved fields of a known order come back from extrapolation at that order.
+
+    Issue 47 D1: the test that read the real saved fields skipped whenever
+    results/self_convergence was absent, so it had never run in CI. The fields
+    here are the smooth faces of the test above, written in the layout the
+    script saves, whose true-centerline gap is second order.
+    """
+    _save_fields(tmp_path, {n: _smooth_faces(n) for n in self_convergence.GRIDS})
+    orders = _saved_gap_orders(tmp_path, monkeypatch)
+    assert np.all(np.abs(orders - 2.0) < self_convergence.CONTROL_TOL), orders
+
+
+@pytest.mark.integration
+def test_saved_fields_of_another_order_fail_the_gap_order_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The planted wrong order: fields with a first-order error move the order off 2.
+
+    A perturbation of size 1/n in every cell is first order in the gap. If the
+    check above could not fail, it would certify the instrument regardless of
+    the fields it reads.
+    """
     fields = {}
-    for n, path in paths.items():
-        with np.load(path) as data:
-            fields[n] = (data["u"], data["v"])
-    orders = _gap_orders(fields)
-    print(f"gap orders [u, v] per step: {orders}")
-    assert np.all(np.abs(orders["true"] - 2.0) < 0.5), orders
-    assert np.all(np.abs(orders["offset"] - 1.0) < 0.5), orders
+    for n in self_convergence.GRIDS:
+        u, _v = _smooth_faces(n)
+        bump = np.cos(np.pi * (np.arange(n) + 0.5) / n)[None, :] / n
+        fields[n] = (u + bump, (u + bump).T.copy())
+    _save_fields(tmp_path, fields)
+    orders = _saved_gap_orders(tmp_path, monkeypatch)
+    assert not np.all(np.abs(orders - 2.0) < self_convergence.CONTROL_TOL), orders
+    assert np.all(np.abs(orders - 1.0) < 0.2), orders
+
+
+@pytest.mark.integration
+def test_face_gap_matches_the_mean_of_the_two_middle_columns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """face_gap on the 20x20 grid equals the middle-column mean minus the exact face.
+
+    Issue 47 D2: the entry was written for every saved field and asserted
+    nowhere. On the smooth faces u varies along x only and the exact face on
+    x = 0.5 is f(0.5) = 0.1. The true-centerline profile is the mean of the
+    two columns whose centers bracket 0.5 (columns 9 and 10 of 20), read here
+    from the file that was saved, so the gap is that mean minus 0.1 in every
+    row, and the same for v by symmetry.
+    """
+    fields = {n: _smooth_faces(n) for n in self_convergence.GRIDS}
+    _save_fields(tmp_path, fields)
+    monkeypatch.setattr(self_convergence, "FIELD_DIR", tmp_path)
+    out = self_convergence.extrapolation()
+    entry = out["metric"][f"{self_convergence.STAGGERED_METHOD}_20"]["face_gap"]
+    with np.load(tmp_path / f"{self_convergence.STAGGERED_METHOD}_20.npz") as saved:
+        middle = 0.5 * (saved["u"][:, 9] + saved["u"][:, 10])
+    expected = float(np.abs(middle - 0.1).max())
+    assert expected > 1e-6
+    assert entry["u"] == pytest.approx(expected, rel=1e-9)
+    assert entry["v"] == pytest.approx(expected, rel=1e-9)
 
 
 @pytest.mark.unit
