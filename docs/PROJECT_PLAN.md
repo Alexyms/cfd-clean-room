@@ -257,6 +257,8 @@ step 5's dependency is met.
 |---------|-------------|-----------|--------|
 | VAL-008 | Grid convergence | Observed order within 0.2 of theoretical | NOT RUN |
 
+Note (issue 53 D6, 2026-10-08): on a stretched mesh the transport limiter's clamp is applied to the quadratic `quick_face_values` returns, with the other three limiter terms in their uniform-mesh form (ADR-011 B). The stretched case is tested for diffusion against a dense solve and not for advection accuracy, which VAL-008 measures here.
+
 ### Validation and Showcase Case: the Square Cylinder (Alex, 2026-10-04)
 
 Laminar flow past a square cylinder in a channel is Phase 4's validation and showcase case, since it needs the time-accurate solve this phase builds. Reference: Sohankar, Norberg and Davidson (1998), "Low-Reynolds-number flow around a square cylinder at incidence: study of blockage, onset of vortex shedding and outlet boundary condition", Int. J. Numer. Meth. Fluids 26, 39-56 (https://www.cfd-sweden.se/lada/postscript_files/Sohankar_num-fluids.pdf). At 5% solid blockage and zero incidence the onset of vortex shedding is at Re_cr = 51.2 +/- 1.0 on the cylinder's side (page 51 and Table V; Norberg's near-zero-blockage experiments give 47 +/- 2, the +/- 2 Alex's note carried), and the Strouhal number at Re 100 is 0.146 (Table IV, case 1; 0.147 in Table II's case 1). The showcase runs Re 40 (steady, below onset), 60 and 100 (shedding). The criteria are set when Phase 4 is designed; ECR-002's backward-facing step (VAL-019) is the turbulent separation case, this one the laminar unsteady one.
@@ -358,6 +360,8 @@ Laminar flow past a square cylinder in a channel is Phase 4's validation and sho
 | README.md (final version) | NOT STARTED | Project overview, setup instructions, results summary |
 | docs/reports/ (all phase reports) | NOT STARTED | Completion reports for phases 1-6 |
 | Interactive web visualization | STRETCH | JavaScript renderer with time scrubbing |
+
+Note (issue 53 D5, 2026-10-08): `FieldHistory.record` keeps frames at `step % every == 0`, so the last frame of the rotating puff is step 3920 of 3959. An animation that wants the final frame records it explicitly or chooses `every` to divide the step count.
 
 ### Gate Criteria
 

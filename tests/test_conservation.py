@@ -76,6 +76,23 @@ def _report(label: str, budget: MassBudget, dt: float, seconds: float) -> None:
     )
 
 
+def _carried_row(config: SimConfig, mesh: Mesh, faces: FaceVelocities) -> int:
+    """The middle left-edge row that carries the inlet concentration inward.
+
+    Read from the boundary layer's own inflow array, not from the sign of the
+    face velocity alone: a row where the random field points inward but the
+    inlet does not cover it carries nothing in, and the control would then
+    subtract a flux the budget never booked (issue 53 D1).
+    """
+    boundary = ConcentrationBoundary(
+        mesh, config, ParticlePhysics(config), BoundaryRegistry(config)
+    )
+    carried = boundary.faces_for(0).inflow_u[:, 0] > 0.0
+    rows = np.flatnonzero(carried & (faces.u[:, 0] > 0.0))
+    assert rows.size > 0
+    return int(rows[rows.size // 2])
+
+
 def _dropped_face_control(
     budget: MassBudget, faces: FaceVelocities, mesh: Mesh, dt: float, row: int
 ) -> float:
@@ -124,8 +141,7 @@ def test_mass_conservation_on_a_random_face_field_val007() -> None:
     assert budget.deposited["obstacle"] == 0.0
 
     # Planted control: an inlet row whose random face velocity points inward.
-    inward = np.flatnonzero(faces.u[:, 0] > 0.0)
-    row = int(inward[len(inward) // 2])
+    row = _carried_row(config, mesh, faces)
     control = _dropped_face_control(budget, faces, mesh, dt, row)
     print(f"  control, inlet face at row {row} dropped from the booking: {control:.3e}")
     assert abs(control) > CRITERION
@@ -169,6 +185,7 @@ def test_mass_conservation_on_the_val001_faces_val007() -> None:
     assert abs(budget.relative()) < ROUNDING_EXPECTATION
     assert budget.inflow > 0.0 and budget.outflow > 0.0 and budget.source > 0.0
     assert budget.deposited["floor"] > 0.0 and budget.deposited["ceiling"] > 0.0
-    control = _dropped_face_control(budget, faces, mesh, dt, 10)
-    print(f"  control, inlet face at row 10 dropped from the booking: {control:.3e}")
+    row = _carried_row(config, mesh, faces)
+    control = _dropped_face_control(budget, faces, mesh, dt, row)
+    print(f"  control, inlet face at row {row} dropped from the booking: {control:.3e}")
     assert abs(control) > CRITERION
