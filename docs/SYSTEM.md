@@ -236,7 +236,7 @@ Generated. Static import analysis cannot see a function bound into a registry by
 |---|---|
 | Scope | `src/**/*.py` |
 | Files hashed | 16 |
-| Digest | `sha256:179dee335ac624dfb29e211d1c5373b8b874703f7dfb04f8f6312c5fb84e3a5a` |
+| Digest | `sha256:4fcc88fb212b21ed51dd605471ffc7edf7620bb9e6103e3686cea295a2c468a2` |
 
 This is what lets the document answer whether it is current, which is the one question a stale table cannot be asked. `python scripts/gen_system_map.py --check` recomputes the whole set of generated regions, this digest included, and exits non-zero on any disagreement.
 

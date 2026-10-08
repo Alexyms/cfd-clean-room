@@ -117,8 +117,8 @@ ZERO_SCALE = 1e-30
 # 0.35 to 0.37 ms per call, against 4 to 5 us of arithmetic on one thread. On a
 # 200x75 mesh that made a correction 1.05 s instead of 0.14 s. One thread is
 # no slower up to 9,600 elements and faster from 12,800 to 1,000,000; the
-# product mesh has 15,000, and threads pay only between 1,000,000 and
-# 1,500,000 (the probe table of docs/reports/blas_threads.md). It is a
+# product mesh has 15,000, and threads pay only above a crossover between
+# 1,000,000 and 1,500,000 (the probe table of docs/reports/blas_threads.md). It is a
 # property of the library on this solve's vector lengths, not a tolerance a
 # case chooses, so it is a constant here rather than a configuration key. A
 # change to it repeats that measurement.
