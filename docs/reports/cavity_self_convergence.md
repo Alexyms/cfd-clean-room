@@ -490,8 +490,8 @@ Ghia's.
 - **Old against new per station, and the 40x40 station locations:** one-off evaluations of
   the two profile functions on the saved fields, not committed.
 - **Agreement with test 21:** a one-off comparison of these fields and floor values with the
-  tester's own work (`docs/prompts/test-21.md`, C20 and C23): an independent re-solve of the
+  tester's own work (test 21, C20 and C23, as posted on PR 32): an independent re-solve of the
   three grids to 1e-9, an independent recovery of the faces from the far wall, and a
   recomputation of the metric and the station orders from those fields. Its scratch files
   were not committed; the comparison is repeated by running `--solve-tight` and
-  `--extrapolate` at the commit of this report and reading the numbers against that file.
+  `--extrapolate` at the commit of this report and reading the numbers against test 21's tables.
