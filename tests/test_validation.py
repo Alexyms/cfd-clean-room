@@ -36,6 +36,7 @@ from validation.metrics import (
     cavity_true_centerline_profiles,
     centroid,
     field_minimum,
+    inlet_velocity,
     lagrange,
     lid_velocity,
     peak_retention,
@@ -203,7 +204,16 @@ class TestPoiseuilleMetric:
 
 @pytest.mark.unit
 class TestLidVelocity:
-    """The public reader the cavity metrics and the scripts share."""
+    """The public readers the metrics and the scripts share."""
+
+    def test_inlet_velocity_reads_the_channel_inlet(self) -> None:
+        config = load_case("poiseuille", grid=(8, 8))
+        assert inlet_velocity(config) == config.boundaries["inlet"].velocity
+
+    def test_inlet_velocity_refuses_a_case_without_one_inlet_velocity(self) -> None:
+        """The cavity's lid sets u_velocity and no magnitude."""
+        with pytest.raises(ValueError, match="exactly one velocity inlet"):
+            inlet_velocity(load_case("cavity", grid=(8, 8)))
 
     def test_reads_the_cavity_lids_speed(self) -> None:
         assert lid_velocity(load_case("cavity", grid=(8, 8))) == 1.0
