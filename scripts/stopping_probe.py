@@ -55,6 +55,7 @@ from validation.cases import with_velocity_step  # noqa: E402 -- path set above
 from validation.metrics import (  # noqa: E402 -- path set above
     _inlet_velocity,
     lagrange,
+    lid_velocity,
     poiseuille_l2_error,
     poiseuille_profiles,
 )
@@ -309,7 +310,7 @@ def marchi_stations(
     config: sc.SimConfig, mesh: sc.Mesh, u: np.ndarray, v: np.ndarray
 ) -> np.ndarray:
     """u then v at Marchi's 30 stations, as marchi_comparison takes them, over the lid speed."""
-    lines = sc.face_profiles(mesh, u, v, sc._lid_velocity(config))
+    lines = sc.face_profiles(mesh, u, v, lid_velocity(config))
     rows = (sc.MARCHI_U_ROWS, sc.MARCHI_V_ROWS)
     return np.concatenate(
         [
@@ -331,7 +332,7 @@ def analyse(case: str, n: int) -> dict:
     with np.load(solve_truth(case, n)) as saved:
         d = {k: saved[k] for k in saved.files}
     res, ref_vel, imb = d["residual"], float(d["reference_velocity"]), d["imbalance"]
-    phys = sc._lid_velocity(config) if case == "cavity" else _inlet_velocity(config)
+    phys = lid_velocity(config) if case == "cavity" else _inlet_velocity(config)
     below = np.flatnonzero(imb < IMBALANCE_BOUND)
     out: dict = {
         "reference_velocity": ref_vel,

@@ -316,23 +316,36 @@ class _ScriptedSolver:
 
 @pytest.mark.unit
 @pytest.mark.parametrize(
-    ("cap", "ulps", "stops"),
+    ("cap", "ulps", "component", "stops"),
     [
-        (99, 0, None),
-        (99, 1, "differs from the saved field"),
-        (3, 0, "8x8 stopped before reaching 1e-08"),
+        (99, 0, "u", None),
+        (99, 1, "u", "differs from the saved field"),
+        (99, 1, "v", "differs from the saved field"),
+        (3, 0, "u", "8x8 stopped before reaching 1e-08"),
     ],
 )
 def test_solve_tight_keeps_only_a_whole_continuation_of_the_saved_field(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cap: int, ulps: int, stops: str
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    cap: int,
+    ulps: int,
+    component: str,
+    stops: str | None,
 ) -> None:
-    """One ulp off the saved field, or a cap before 1e-9, stops it; else all is kept."""
+    """One ulp off the saved u or v, or a cap before 1e-9, stops it; else all is kept.
+
+    Test 21c F2: only u was perturbed, so dropping the v comparison from the
+    bitwise control passed every test.
+    """
     monkeypatch.setattr(self_convergence, "FIELD_DIR", tmp_path)
     monkeypatch.setattr(self_convergence, "StaggeredSolver", _ScriptedSolver)
     monkeypatch.setattr(self_convergence, "TIGHT_MAX_ITER", cap)
-    saved = np.ones((8, 8))  # iteration 1 is the first below 1e-6
-    saved[0, 0] = np.nextafter(1.0, 2.0) if ulps else 1.0
-    np.savez(tmp_path / "staggered-cg_8.npz", u=saved, v=np.ones((8, 8)))
+    fields = {
+        "u": np.ones((8, 8)),
+        "v": np.ones((8, 8)),
+    }  # iteration 1 is the first below 1e-6
+    fields[component][0, 0] = np.nextafter(1.0, 2.0) if ulps else 1.0
+    np.savez(tmp_path / "staggered-cg_8.npz", **fields)
     if stops:
         with pytest.raises(SystemExit, match=stops):
             self_convergence.solve_tight(8)
@@ -388,6 +401,29 @@ def test_solve_tight_and_solve_and_save_skip_a_field_another_solver_saved(
 
 
 @pytest.mark.unit
+def test_solve_tight_checks_for_the_saved_field_before_it_solves(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With no saved field it stops at once, without building the solver (review 21b S5).
+
+    The continuation takes minutes to hours; the check used to come after it, so
+    a missing field was reported only when the solve had finished and its
+    result was about to be thrown away.
+    """
+
+    class BuiltError(Exception):
+        pass
+
+    def spy(mesh: Mesh, config: SimConfig, boundary: object) -> None:
+        raise BuiltError
+
+    monkeypatch.setattr(self_convergence, "FIELD_DIR", tmp_path)
+    monkeypatch.setattr(self_convergence, "StaggeredSolver", spy)
+    with pytest.raises(SystemExit, match=r"staggered-cg_8\.npz is missing"):
+        self_convergence.solve_tight(8)
+
+
+@pytest.mark.unit
 def test_every_solve_is_pinned_to_velocity_step(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -407,6 +443,8 @@ def test_every_solve_is_pinned_to_velocity_step(
     for method in self_convergence.METHODS:
         with pytest.raises(BuiltError):
             self_convergence.solve_and_save(method, 8)
+    ones = np.ones((8, 8))
+    np.savez(tmp_path / f"{self_convergence.STAGGERED_METHOD}_8.npz", u=ones, v=ones)
     with pytest.raises(BuiltError):
         self_convergence.solve_tight(8)
     # One solve per method, staggered-cg alone since the retirement, then
@@ -446,6 +484,61 @@ def test_station_orders_keep_each_interpolation_under_its_own_key() -> None:
 
 
 @pytest.mark.unit
+def test_station_orders_returns_every_key_each_under_its_own_interpolation() -> None:
+    """The cubic and quintic readings differ in what is licensed, and no key crosses over.
+
+    Test 21c F1: licensed_quintic was asserted on a profile licensed under both,
+    so swapping it with licensed passed, and order2_quintic_minus_ghia was
+    asserted nowhere. sin(12 s) has enough curvature that the cubic reading is
+    licensed at 5 of the 15 stations and the quintic at all 15. Every key is
+    compared with a value formed here from richardson.
+    """
+    profiles = {}
+    for n in self_convergence.GRIDS:
+        s = np.array([0.0, *(np.arange(n) + 0.5) / n, 1.0])
+        profiles[n] = (s, np.sin(12.0 * s) + (1.0 / n) ** 2 * (1.0 + s))
+    out = self_convergence.station_orders(profiles, GHIA_U_Y, GHIA_U_VAL)
+    stations, ref = np.array(GHIA_U_Y[1:-1]), np.array(GHIA_U_VAL[1:-1])
+    cubic = self_convergence.richardson(profiles, stations)
+    quintic = self_convergence.richardson(profiles, stations, k=6)
+    assert set(out) == {
+        "station",
+        "order",
+        "order_quintic",
+        "licensed",
+        "licensed_quintic",
+        "f80_minus_ghia",
+        "step_40_to_80",
+        "order2_minus_ghia",
+        "order2_quintic_minus_ghia",
+        "interpolation_estimate",
+        "quintic_order_change",
+    }
+    assert out["licensed"] == cubic["licensed"].tolist()
+    assert out["licensed_quintic"] == quintic["licensed"].tolist()
+    assert sum(out["licensed"]) == 5 and sum(out["licensed_quintic"]) == 15
+    assert out["licensed"] != out["licensed_quintic"]
+    np.testing.assert_array_equal(out["order"], cubic["order"])
+    np.testing.assert_array_equal(out["order_quintic"], quintic["order"])
+    np.testing.assert_array_equal(out["f80_minus_ghia"], cubic["f80"] - ref)
+    np.testing.assert_array_equal(out["step_40_to_80"], cubic["f80"] - cubic["f40"])
+    np.testing.assert_array_equal(out["order2_minus_ghia"], cubic["value"] - ref)
+    np.testing.assert_array_equal(
+        out["order2_quintic_minus_ghia"], quintic["value"] - ref
+    )
+    assert not np.allclose(
+        out["order2_minus_ghia"], out["order2_quintic_minus_ghia"], rtol=0.0, atol=1e-6
+    )
+    for n in self_convergence.GRIDS:
+        shift = np.abs(quintic[f"f{n}"] - cubic[f"f{n}"])
+        got = out["interpolation_estimate"][n]
+        assert got == {"max": float(shift.max()), "at": float(stations[shift.argmax()])}
+    assert out["quintic_order_change"] == self_convergence.order_change(
+        cubic["order"], quintic["order"], stations
+    )
+
+
+@pytest.mark.unit
 def test_extrapolation_carries_known_orders_through_to_its_output(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -456,18 +549,22 @@ def test_extrapolation_carries_known_orders_through_to_its_output(
     """
     monkeypatch.setattr(self_convergence, "FIELD_DIR", tmp_path)
     q = {"1e-06": 1.0, "1e-07": 1.5, "1e-08": 2.0, "1e-09": 2.1}
-    fields = {}
+    fields, fields_v = {}, {}
     for n in self_convergence.GRIDS:
         snaps: dict[str, np.ndarray] = {}
         c = (np.arange(n) + 0.5) / n
         for t in q:
             e = float(n) ** -q[t]
             u, v = _cells(c**3 + e * c * (1 - c), c * (1 - c) * (c + e))
-            fields[n, t] = u
+            fields[n, t], fields_v[n, t] = u, v
             snaps |= {f"u_{t}": u, f"v_{t}": v, f"outer_{t}": np.array(1)}
         np.savez(tmp_path / f"staggered-cg_{n}_tol1e-9.npz", seconds=1.0, **snaps)
         for method in self_convergence.METHODS:
-            np.savez(tmp_path / f"{method}_{n}.npz", u=fields[n, "1e-06"], v=v)
+            np.savez(
+                tmp_path / f"{method}_{n}.npz",
+                u=fields[n, "1e-06"],
+                v=fields_v[n, "1e-06"],
+            )
     out = self_convergence.extrapolation()
     for axis, positions, ghia, limit in (
         ("u", GHIA_U_Y, GHIA_U_VAL, lambda s: s**3),
@@ -486,6 +583,9 @@ def test_extrapolation_carries_known_orders_through_to_its_output(
     for n in self_convergence.GRIDS:
         change = np.abs(fields[n, "1e-09"] - fields[n, "1e-06"]).max()
         assert out["iteration"][n]["u_change"] == change
+        change_v = np.abs(fields_v[n, "1e-09"] - fields_v[n, "1e-06"]).max()
+        assert out["iteration"][n]["v_change"] == change_v
+        assert change_v != change
 
 
 # The Marchi stations paired with a Ghia station under GHIA_PAIR = 3/128, as the

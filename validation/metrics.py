@@ -211,8 +211,25 @@ def _inlet_velocity(config: SimConfig) -> float:
     return float(inlets[0].velocity)
 
 
-def _lid_velocity(config: SimConfig) -> float:
-    """Tangential speed of the single moving lid in the cavity case."""
+def lid_velocity(config: SimConfig) -> float:
+    """Tangential speed of the single moving lid in the cavity case.
+
+    Parameters
+    ----------
+    config : SimConfig
+        Cavity case configuration.
+
+    Returns
+    -------
+    float
+        The lid's ``u_velocity``, the normalization of Ghia's and Marchi's
+        tables, in m/s.
+
+    Raises
+    ------
+    ValueError
+        Unless the case has exactly one velocity inlet with a ``u_velocity``.
+    """
     lids = [
         spec for spec in config.boundaries.values() if spec.type == "velocity_inlet"
     ]
@@ -270,7 +287,7 @@ def cavity_centerline_profiles(
         (y, u along x = 0.5, x, v along y = 0.5). The floor and lid values
         bound the u profile; both side walls bound the v profile.
     """
-    u_lid = _lid_velocity(config)
+    u_lid = lid_velocity(config)
     i_mid = config.nx // 2
     fluid_col = mesh.cell_type[:, i_mid] == FLUID
     y_profile = [0.0, *np.asarray(mesh.yc)[fluid_col], 1.0]
@@ -362,7 +379,7 @@ def cavity_true_centerline_profiles(
     the unit cavity that is x = 0.5 and y = 0.5 with walls at 0 and 1, where
     Ghia's stations lie.
     """
-    u_lid = _lid_velocity(config)
+    u_lid = lid_velocity(config)
     xc, yc = np.asarray(mesh.xc), np.asarray(mesh.yc)
     i, wx = _bracket(xc, 0.5 * (mesh.x[0] + mesh.x[-1]))
     col = (mesh.cell_type[:, i] == FLUID) & (mesh.cell_type[:, i + 1] == FLUID)
@@ -438,7 +455,7 @@ def cavity_centerline_errors(
     y_profile, u_profile, x_profile, v_profile = cavity_centerline_profiles(
         config, mesh, u, v
     )
-    u_lid = _lid_velocity(config)
+    u_lid = lid_velocity(config)
     u_err = float(
         np.max(np.abs(np.interp(GHIA_U_Y, y_profile, u_profile) / u_lid - GHIA_U_VAL))
     )
@@ -482,7 +499,7 @@ def cavity_true_centerline_errors(
     y_profile, u_profile, x_profile, v_profile = cavity_true_centerline_profiles(
         config, mesh, u, v
     )
-    u_lid = _lid_velocity(config)
+    u_lid = lid_velocity(config)
     u_err = float(
         np.max(np.abs(np.interp(GHIA_U_Y, y_profile, u_profile) / u_lid - GHIA_U_VAL))
     )
@@ -530,7 +547,7 @@ def cavity_marchi_centerline_errors(
     y_profile, u_profile, x_profile, v_profile = cavity_true_centerline_profiles(
         config, mesh, u, v
     )
-    u_lid = _lid_velocity(config)
+    u_lid = lid_velocity(config)
     components: dict[str, float] = {}
     for axis, nodes, values, rows in (
         ("u", y_profile, u_profile, MARCHI_U_ROWS),

@@ -37,6 +37,7 @@ from validation.metrics import (
     centroid,
     field_minimum,
     lagrange,
+    lid_velocity,
     peak_retention,
     poiseuille_l2_error,
     poiseuille_profiles,
@@ -198,6 +199,19 @@ class TestPoiseuilleMetric:
         mesh = Mesh(config)
         u = np.full((config.ny, config.nx), 0.1)
         assert poiseuille_l2_error(config, mesh, u).value > 0.1
+
+
+@pytest.mark.unit
+class TestLidVelocity:
+    """The public reader the cavity metrics and the scripts share."""
+
+    def test_reads_the_cavity_lids_speed(self) -> None:
+        assert lid_velocity(load_case("cavity", grid=(8, 8))) == 1.0
+
+    def test_refuses_a_case_without_one_lid_with_a_u_velocity(self) -> None:
+        """The Poiseuille inlet sets a magnitude, not a tangential lid speed."""
+        with pytest.raises(ValueError, match="exactly one lid"):
+            lid_velocity(load_case("poiseuille", grid=(8, 8)))
 
 
 @pytest.mark.unit

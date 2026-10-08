@@ -81,6 +81,10 @@ the split is systematic. The quantities away from the lid corners (centerline ex
 interior energy) converge at 2.1 to 3.1, and the field norms, which the corners dominate
 (section 4), at 0.6 to 1.8.
 
+These orders were taken on the fields stopped at 1e-6, which section 9.2 shows carry an
+iteration error of about 1e-3 at 80x80. On the converged fields the functional orders
+above 2 fall toward 2 (section 9.2, test 21 C23); read section 9 before using them.
+
 ## 4. Where the difference lives
 
 The share of the squared L2 norm of d2 on the 40x40 grid. The regions are:
@@ -151,6 +155,11 @@ between samples.
 The offset happens to flatter the collocated solver. On the centerline its 80x80 errors
 are u 0.0139 and v 0.0156, both still below 2%.
 
+Section 9 revises the floor above. Section 9.1 takes the metric on the true centerline,
+and sections 9.2 and 9.3 read the floor stations on fields converged to 1e-9, where the
+converged solution differs from Ghia there by about 0.5% of the lid speed in u and 0.8%
+to 0.9% in v; whether that gap is Ghia's is left open.
+
 ## 6. The collocated solver is pre-asymptotic on these grids
 
 The collocated momentum equation uses the hybrid scheme: a face is upwind when
@@ -198,6 +207,11 @@ first-order source that this measurement does not separate (HYPOTHESISED).
    0.5 + h/2, which adds a first-order error, 0.023, 0.015 and 0.007 in the staggered v
    error. INFERRED: together with the floor it accounts for the metric's apparent order of
    about 0.5, a first-order term shrinking onto a constant.
+
+Section 9 revises candidates 4 and 5. Candidate 5 is fixed under the metric
+`max_normalized_centerline_error_r2` (9.1). Candidate 4 stays open: on fields converged to
+1e-9 the floor stations keep their distance from Ghia (9.3), and only an independent
+reference, Marchi, Suero and Araki (2009), can say whose floor it is.
 
 **The fix the evidence points at, described and not made.** `validation/metrics.py` should
 take the profiles on x = 0.5 and y = 0.5, from the faces where a solver has them and from
@@ -475,5 +489,9 @@ Ghia's.
 - **VAL-002:** `pytest tests/test_lid_cavity.py -s`.
 - **Old against new per station, and the 40x40 station locations:** one-off evaluations of
   the two profile functions on the saved fields, not committed.
-- **Agreement with test 21:** a one-off comparison of these fields and floor values with
-  `results/tester21/`, not committed.
+- **Agreement with test 21:** a one-off comparison of these fields and floor values with the
+  tester's own work (`docs/prompts/test-21.md`, C20 and C23): an independent re-solve of the
+  three grids to 1e-9, an independent recovery of the faces from the far wall, and a
+  recomputation of the metric and the station orders from those fields. Its scratch files
+  were not committed; the comparison is repeated by running `--solve-tight` and
+  `--extrapolate` at the commit of this report and reading the numbers against that file.
