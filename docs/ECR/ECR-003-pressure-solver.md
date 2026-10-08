@@ -322,7 +322,7 @@ ECR-002 step 5's dependency on this request is met.
    (`docs/reports/ecr003_step2_baseline.md`, section 11). Whether the criterion is held to the
    default thread setting, and how the setting is fixed, was decided by Alex on 2026-10-07: the code sets one BLAS thread for the pressure solve (threadpoolctl, one named constant), built in the cleanup pull request with the dot-product timing extended to a million elements. Meshes below about
    10,000 cells, the step 2 cases among them, are not affected.
-   *Note 2026-10-08:* now met under the default environment. `src/pressure.py` limits the BLAS
+   *Note 2026-10-07:* now met under the default environment. `src/pressure.py` limits the BLAS
    pool to one thread around the CG loop (`PRESSURE_BLAS_THREADS`); the three 200x75 systems
    solve in 133.6, 139.4 and 134.3 ms by the medians of seven solves with the three thread
    variables unset, and `val001_80x40`'s final faces hash as in the step 2 report

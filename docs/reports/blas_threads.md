@@ -2,7 +2,7 @@
 
 ## Prediction
 
-Prediction (orchestrator, 2026-10-08). Threaded `np.vdot` pays a fixed cost of about 0.33 ms per
+Prediction (orchestrator, 2026-10-07). Threaded `np.vdot` pays a fixed cost of about 0.33 ms per
 call (the section 11 table) and saves per-element time only once the vector streams from memory
 at more than one core's bandwidth. With one core reading about 10 GB/s, two float64 vectors of N
 elements take about 1.6 N ns on one thread; break-even against 0.33 ms is a few hundred thousand
@@ -15,7 +15,7 @@ within 20% of the 136 to 143 ms one-thread figures.
 
 ## 1. What was measured
 
-**Date:** 2026-10-08. **Tree:** branch `fix/deferred-findings-cleanup` from main at 43d60ab. The
+**Date:** 2026-10-07. **Tree:** branch `fix/deferred-findings-cleanup` from main at 43d60ab. The
 predictions above were committed before any probe ran (`docs: record the BLAS thread
 predictions`).
 
@@ -155,5 +155,5 @@ on a mesh that large.
 ## 6. Where it is recorded
 
 ADR-013 "Planned against built" has a row for the thread limit. ECR-003 criterion 4 carries a dated
-note (2026-10-08) that it is met under the default environment. `docs/SYSTEM.md`'s `pressure.py`
+note (2026-10-07) that it is met under the default environment. `docs/SYSTEM.md`'s `pressure.py`
 contract names the limit and the dependency. `requirements.txt` gains `threadpoolctl>=3.2`.
