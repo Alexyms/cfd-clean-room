@@ -8,6 +8,8 @@ diffusion-dominated (0.1 um) to settling-dominated (5.0 um).
 
 import math
 
+import numpy as np
+
 from src.config import SimConfig
 from src.constants import BOLTZMANN_CONSTANT, GRAVITY
 
@@ -68,9 +70,15 @@ class ParticlePhysics:
 
         Raises
         ------
+        TypeError
+            If size_class is a bool (``True`` would read as class 1).
         IndexError
             If size_class is outside the valid range.
         """
+        if isinstance(size_class, bool | np.bool_):
+            raise TypeError(
+                f"size_class must be an int, got {type(size_class).__name__}"
+            )
         if size_class < 0 or size_class >= self._n_classes:
             raise IndexError(
                 f"size_class {size_class} out of range [0, {self._n_classes - 1}]"

@@ -232,6 +232,20 @@ class TestTangentialData:
         assert data["left"].wall_distance == mesh.dx_face[0]
         assert data["right"].wall_distance == mesh.dx_face[-1]
 
+    def test_conditions_are_compared_and_hashed_by_identity(self) -> None:
+        """eq=False, so == and hash never hit the ndarray truth value (issue 51 D2).
+
+        Two boundaries built from the same configuration hold equal arrays in
+        different objects. With the dataclass default ``==`` would compare the
+        arrays and raise on their truth value; by identity it is False.
+        """
+        config = _config(CHANNEL)
+        a = _build(config)[1].tangential_conditions()["bottom"]
+        b = _build(config)[1].tangential_conditions()["bottom"]
+        assert a == a
+        assert a != b
+        assert len({a, b}) == 2
+
     def test_stretched_wall_distance_is_not_half_the_mean_spacing(self) -> None:
         """On a clustered mesh the first center is closer to the wall than dy/2."""
         mesh, bc = _build(_config(CHANNEL, mesh=STRETCHED))
