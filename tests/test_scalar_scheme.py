@@ -506,6 +506,7 @@ class TestPiecewiseDiffusivity:
     def test_the_step_with_a_field_matches_a_dense_solve_with_the_same_diffusivity(
         self,
     ) -> None:
+        """The implicit step with a per-face diffusivity agrees with a dense solve."""
         mesh, solver = self._room()
         nu_t = self._field(mesh)
         solid = mesh.cell_type == SOLID

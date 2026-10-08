@@ -67,7 +67,7 @@ PLANTED_STEPS = 10
 
 
 def _channel_config(
-    turbulent_schmidt: float | None = None, diffusion_tol: float = 1.0e-10
+    turbulent_schmidt: float | None = None, diffusion_tol: float = COMMITTED_TOLERANCE
 ) -> SimConfig:
     """VAL-001 at 40x20, as committed, with a transport section added.
 
@@ -285,18 +285,18 @@ def test_uniform_field_drifts_within_the_bound_with_an_eddy_viscosity_field_val0
     non-uniform field from ``prescribed_eddy_viscosity`` (cell Peclet numbers
     8 to 250 on ``nu_t / 0.7``, the inlet speed, a band of zero columns).
 
-    Predicted before it ran: the diffusive flux of a uniform field is zero
-    for any conductance, so the departure equals the field-free one to
-    within 1e-12. At the committed implicit tolerance of 1e-10 that holds
+    Predicted (prompt 40, (c) as revised in its erratum): the diffusive flux
+    of a uniform field is zero for any conductance, so the field adds no
+    departure of its own and can only smooth what the face imbalances make;
+    the departure is at most the field-free one. At the committed implicit tolerance of 1e-10 that holds
     exactly and for a plain reason: the solve never iterates (0 sweeps in
     2,389 steps), because the field after an advection step departs from
     uniform by 4e-12 and the residual that departure gives is below the
     tolerance. That row therefore shows only that the field path does not
     disturb the advection. At 1e-15 the solve does iterate (one sweep a
-    step) and the prediction fails: the faces' own 6e-16 kg/s imbalance
-    leaves a real 4e-12 non-uniformity, which the diffusivity smooths, and
-    the departure falls to 1.9e-12. That is the field acting as it should,
-    so the tight row asserts the departure at most the field-free one and at
+    step): the faces' own 6e-16 kg/s imbalance leaves a real 4e-12
+    non-uniformity, which the diffusivity smooths, and the departure falls
+    to 1.9e-12, as the revised prediction allows. So the tight row asserts the departure at most the field-free one and at
     most the bound, and that the field did reach the solve.
     """
     config = _channel_config(TURBULENT_SCHMIDT, diffusion_tol=tolerance)
