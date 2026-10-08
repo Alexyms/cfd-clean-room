@@ -1695,3 +1695,49 @@ class TestEddyViscosityPositivity:
         # spike neighbour, far more than Brownian motion alone moves in 25 s.
         assert c[2, 7] > 0.1 * c[2, 6]
         assert abs(solver.budget[0].relative()) < 1e-12
+
+
+@pytest.mark.unit
+class TestEddyViscosityIsADiffusivity:
+    """A uniform field adds nu_t / Sc_t to the Brownian coefficient, on both axes."""
+
+    @pytest.mark.parametrize("schmidt", [0.2, 0.7, 1.3, 5.0])
+    def test_a_uniform_field_equals_a_larger_brownian_coefficient(
+        self, schmidt: float
+    ) -> None:
+        """The harmonic mean of equal values is that value, so a uniform nu_t
+        is the same system as a Brownian coefficient raised by nu_t / Sc_t.
+        A random 2D field on a stretched mesh moves in both directions; a
+        Sc_t that multiplies, or a field on one axis only, gives another
+        field. The control: the unshifted coefficient gives a far one."""
+        nu_t, d_brownian, dt = 3.0e-3, 2.0e-3, 0.5
+        config = transport_config(
+            1.0,
+            0.6,
+            7,
+            5,
+            diffusion_tol=1e-14,
+            mesh={"x": {"stretch_ratio": 1.3}, "y": {"stretch_ratio": 1.2}},
+            turbulent_schmidt=schmidt,
+        )
+        mesh = Mesh(config)
+
+        def solver_for(diffusion: float) -> TransportSolver:
+            return TransportSolver(
+                mesh,
+                config,
+                ScalarPhysics(settling=0.0, diffusion=diffusion),
+                FixedConditions(zero_conditions(mesh)),
+            )
+
+        c = _random_field(mesh, 5)
+        still = uniform_face_field(mesh, 0.0, 0.0)
+        got = solver_for(d_brownian).solve_timestep(
+            c, still, 0, dt, eddy_viscosity=np.full(c.shape, nu_t)
+        )
+        shifted = solver_for(d_brownian + nu_t / schmidt).solve_timestep(
+            c, still, 0, dt
+        )
+        unshifted = solver_for(d_brownian).solve_timestep(c, still, 0, dt)
+        assert np.allclose(got, shifted, rtol=1e-11, atol=1e-14)
+        assert np.max(np.abs(got - unshifted)) > 1e-3 * np.max(np.abs(got - c))
