@@ -72,11 +72,11 @@ from validation.metrics import (  # noqa: E402 -- follows sys.path.insert
     GHIA_V_X,
     MARCHI_U_ROWS,
     MARCHI_V_ROWS,
-    _lid_velocity,
     cavity_centerline_errors,
     cavity_true_centerline_errors,
     cavity_true_centerline_profiles,
     lagrange,
+    lid_velocity,
 )
 
 GRIDS = (20, 40, 80)
@@ -144,13 +144,19 @@ def solve_tight(n: int) -> Path:
     Raises
     ------
     SystemExit
-        If the solve stops before TIGHT_TOL, or if the snapshot at the case's
-        tolerance is not bitwise identical to the saved staggered field, in
-        which case this is not a continuation of that computation.
+        If the saved staggered field is missing (checked before the solve,
+        which takes minutes), if the solve stops before TIGHT_TOL, or if the
+        snapshot at the case's tolerance is not bitwise identical to the saved
+        field, in which case this is not a continuation of that computation.
     """
     path = FIELD_DIR / f"{STAGGERED_METHOD}_{n}_tol1e-9.npz"
     if path.exists():
         return path
+    saved_path = FIELD_DIR / f"{STAGGERED_METHOD}_{n}.npz"
+    if not saved_path.exists():
+        raise SystemExit(
+            f"{saved_path.name} is missing; solve_and_save writes it first"
+        )
     raw = yaml.safe_load(case_path("cavity").read_text(encoding="utf-8"))
     raw["domain"]["nx"] = raw["domain"]["ny"] = n
     case_tol = float(raw["solver"]["convergence_tol"])
@@ -174,7 +180,7 @@ def solve_tight(n: int) -> Path:
     if levels:
         raise SystemExit(f"{n}x{n} stopped before reaching {levels[0]:.0e}")
     tag = f"{case_tol:.0e}"
-    with np.load(FIELD_DIR / f"{STAGGERED_METHOD}_{n}.npz") as saved:
+    with np.load(saved_path) as saved:
         same = np.array_equal(snaps[f"u_{tag}"], saved["u"]) and np.array_equal(
             snaps[f"v_{tag}"], saved["v"]
         )
@@ -395,7 +401,7 @@ def offset_errors(n: int, fields: dict[str, np.ndarray]) -> dict:
     col, row = mesh.cell_type[:, n // 2] == FLUID, mesh.cell_type[n // 2, :] == FLUID
     y = [0.0, *np.asarray(mesh.yc)[col], 1.0]
     x = [0.0, *np.asarray(mesh.xc)[row], 1.0]
-    u_lid = _lid_velocity(config)
+    u_lid = lid_velocity(config)
     u_err = np.interp(GHIA_U_Y, y, [0.0, *u_line[col], u_lid]) / u_lid - GHIA_U_VAL
     v_err = np.interp(GHIA_V_X, x, [0.0, *v_line[row], 0.0]) / u_lid - GHIA_V_VAL
     out["on_centerline"] = {
@@ -660,7 +666,7 @@ def extrapolation() -> dict:
     configs = {n: load_case("cavity", grid=(n, n)) for n in GRIDS}
     meshes = {n: Mesh(configs[n]) for n in GRIDS}
     # The metric's own reader, so the script and the metric normalize alike.
-    u_lid = _lid_velocity(configs[GRIDS[0]])
+    u_lid = lid_velocity(configs[GRIDS[0]])
     case_tol = configs[GRIDS[0]].convergence_tol
     tags = [f"{t:.0e}" for t in (case_tol, *SNAPSHOT_TOLS, TIGHT_TOL)]
     out: dict = {"metric": {}, "iteration": {}, "stations": {}, "settling": {}}
@@ -741,7 +747,7 @@ def marchi_comparison() -> dict:
     """
     grids = (*GRIDS, 100)
     configs = {n: load_case("cavity", grid=(n, n)) for n in grids}
-    u_lid = _lid_velocity(configs[GRIDS[0]])
+    u_lid = lid_velocity(configs[GRIDS[0]])
     lines = {n: face_profiles(Mesh(configs[n]), *tight_field(n), u_lid) for n in grids}
     refs = {
         "u": (MARCHI_U_ROWS, GHIA_U_Y, GHIA_U_VAL),

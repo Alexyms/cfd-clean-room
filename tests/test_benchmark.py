@@ -28,6 +28,7 @@ from validation.cases import (  # noqa: E402 -- follows sys.path.insert
     with_velocity_step,
 )
 from validation.metrics import (  # noqa: E402 -- follows sys.path.insert
+    MARCHI_REFERENCE,
     cavity_marchi_centerline_errors,
 )
 
@@ -225,6 +226,45 @@ def test_harness_scores_the_cavity_on_the_true_centerlines() -> None:
     accuracy = benchmark.accuracy_of("cavity", config, mesh, u, v)
     assert accuracy["metric"] == "max_normalized_centerline_error_cubic"
     assert accuracy == cavity_marchi_centerline_errors(config, mesh, u, v).as_dict()
+
+
+@pytest.mark.unit
+def test_accuracy_of_refuses_a_case_family_it_does_not_know() -> None:
+    """A family other than poiseuille or cavity is refused, not scored as a cavity."""
+    config = load_case("cavity", grid=(8, 8))
+    mesh = Mesh(config)
+    u = v = np.zeros((8, 8))
+    for kind in ("couette", "", "Cavity"):
+        with pytest.raises(ValueError, match="unknown case family"):
+            benchmark.accuracy_of(kind, config, mesh, u, v)
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("family", ["poiseuille", "cavity"])
+def test_harness_record_carries_its_family_metric_in_accuracy_and_trajectory(
+    monkeypatch: pytest.MonkeyPatch, family: str
+) -> None:
+    """The record path scores each family on its own metric (test 21b F2).
+
+    The test above reaches accuracy_of directly; a run_case that bypassed it
+    would pass. Here the record's accuracy and its trajectory's last error
+    come out of a short run, and the metric and reference are the family's.
+    """
+    raw = yaml.safe_load(case_path(family).read_text(encoding="utf-8"))
+    raw["domain"]["nx"], raw["domain"]["ny"] = 8, 8
+    raw["solver"].update(
+        stopping_rule="error_estimate", convergence_tol=10.0, max_simple_iter=3
+    )
+    config = SimConfig.from_dict(raw)
+    monkeypatch.setitem(benchmark.CASES, "tiny_family", (family, 8, 8))
+    monkeypatch.setattr(benchmark, "load_preset", lambda case_id: config)
+    row = benchmark.run_case("tiny_family", "staggered-cg", 1, 1)
+    expected = {
+        "poiseuille": ("l2_relative_error_u_midchannel", "analytical_poiseuille"),
+        "cavity": ("max_normalized_centerline_error_cubic", MARCHI_REFERENCE),
+    }[family]
+    assert (row["accuracy"]["metric"], row["accuracy"]["reference"]) == expected
+    assert row["trajectory"][-1]["error"] == row["accuracy"]["value"]
 
 
 @pytest.mark.integration

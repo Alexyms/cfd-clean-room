@@ -396,10 +396,18 @@ def accuracy_of(
         The metric's as_dict: its name, value, reference and components. The
         cavity is scored against Marchi et al. (2009), ECR-001 criteria 3
         and 3a since step 8.
+
+    Raises
+    ------
+    ValueError
+        If ``kind`` is neither "poiseuille" nor "cavity"; a third family
+        would otherwise be scored as a cavity.
     """
     if kind == "poiseuille":
         return poiseuille_l2_error(config, mesh, u).as_dict()
-    return cavity_marchi_centerline_errors(config, mesh, u, v).as_dict()
+    if kind == "cavity":
+        return cavity_marchi_centerline_errors(config, mesh, u, v).as_dict()
+    raise ValueError(f"unknown case family {kind!r}; expected 'poiseuille' or 'cavity'")
 
 
 def run_case(case_id: str, method: str, sample_every: int, concurrent: int) -> dict:
