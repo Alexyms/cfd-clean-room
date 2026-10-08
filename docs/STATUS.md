@@ -346,15 +346,19 @@ under Jacobi and are not retaken; the field differences bound how far they could
 gate rows in `docs/PROJECT_PLAN.md`). On the 80x80 cavity no cost difference between CG and Jacobi is resolved against the spread
 between identical runs (the report, section 5). Found on the way: on meshes above about 10,000 cells, the product's among them,
 OpenBLAS's default threads make each CG correction several times slower than the one-thread
-timing ECR-003's cost criterion was met with; Alex decided on 2026-10-07 that the code sets one
-thread, built in the cleanup pull request
-(`docs/reports/ecr003_step2_baseline.md`, section 11). Next: ECR-002 steps 2 to 5; step 5 retakes
-step 0's sweep result with CG.
+timing ECR-003's cost criterion was met with (`docs/reports/ecr003_step2_baseline.md`, section
+11). Alex decided on 2026-10-07 that the code sets one thread, and the cleanup pull request built
+it: the CG solve runs under a BLAS limit of one thread (`PRESSURE_BLAS_THREADS` in
+`src/pressure.py`), the measurement is `docs/reports/blas_threads.md`, and the cost criterion now
+holds under the default environment. Next: ECR-002 steps 2 to 5; step 5 retakes step 0's sweep
+result with CG.
 
-Deferred findings from earlier pull requests are open as GitHub issues 33, 36, 40, 42, 45, 47, 51,
-53 and 58; issue 61 holds the outlet finding for ECR-002 step 3, and issue 63 the two tests test
-37b found missing in ECR-003 step 1. Issue 38's last item, the solver-key list held once, was done
-in ECR-003 step 1's pull request, which closed it.
+Deferred findings from earlier pull requests were open as GitHub issues, and every open one now
+has a disposition. The cleanup pull request (branch `fix/deferred-findings-cleanup`) closes issues
+33, 36, 40, 42, 45, 47, 51 and 63 and takes the small items of issue 53. Still open: issue 53's
+D3 and D4, which are for the Phase 3 gate report; issue 58, which closes with ECR-002 step 6; and
+issue 61, the outlet finding, which closes with ECR-002 step 3. Issue 38's last item, the
+solver-key list held once, was done in ECR-003 step 1's pull request, which closed it.
 
 With the review Action removed, its repository secret and the GitHub App it used are
 still installed. Removing them is Alex's, after merge.
