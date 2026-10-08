@@ -69,6 +69,15 @@ BOUNDARY: int = 2
 # domain scale.
 _RATIO_TOLERANCE: float = 1e-14
 
+# How far outside an obstacle's bounds a cell center may sit and still count
+# as inside it, as a fraction of that cell's width. An obstacle edge drawn
+# through a cell center (an edge at 2.3 m on a 0.04 m grid) meets a center
+# computed to within an ulp of it, and the inclusive comparison then decides
+# by rounding which side the cell falls on: xc[57] on the product mesh is
+# 2.3000000000000003. The tolerance is far above rounding (about 1e-16 of the
+# coordinate) and far below any width a geometry means.
+OBSTACLE_EDGE_TOLERANCE: float = 1e-9
+
 
 def wall_spacing_for_ratio(length: float, n: int, ratio: float) -> float:
     """Wall-adjacent cell width of a symmetric geometric distribution.
@@ -317,13 +326,16 @@ class Mesh:
         """
         cell_type = np.full((ny, nx), FLUID, dtype=np.int32)
 
-        # Mark obstacle cells (center inside obstacle bounding box)
+        # Mark obstacle cells (center inside obstacle bounding box, to within
+        # OBSTACLE_EDGE_TOLERANCE of a cell width on every edge)
+        tol_x = OBSTACLE_EDGE_TOLERANCE * self.dx_cell
+        tol_y = OBSTACLE_EDGE_TOLERANCE * self.dy_cell
         for obs in obstacles:
             for j in range(ny):
                 for i in range(nx):
                     if (
-                        obs.x_start <= self.xc[i] <= obs.x_end
-                        and obs.y_start <= self.yc[j] <= obs.y_end
+                        obs.x_start - tol_x[i] <= self.xc[i] <= obs.x_end + tol_x[i]
+                        and obs.y_start - tol_y[j] <= self.yc[j] <= obs.y_end + tol_y[j]
                     ):
                         cell_type[j, i] = SOLID
 
