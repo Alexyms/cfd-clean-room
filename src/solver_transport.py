@@ -495,6 +495,8 @@ class TransportSolver:
         dt: float,
         v_ext: FaceVelocities | None = None,
         sources: np.ndarray | None = None,
+        *,
+        eddy_viscosity: np.ndarray | None = None,
     ) -> np.ndarray:
         """Advance one class by one step and book the budget.
 
@@ -515,6 +517,9 @@ class TransportSolver:
             Rate of the class, [ny, nx], particles per cubic metre per
             second, non-negative, zero in SOLID cells; None is zero. Added as
             ``sources dt`` and ``sum(sources V) dt`` is booked.
+        eddy_viscosity : np.ndarray, optional
+            Turbulent viscosity per cell, ``nu_t`` in m^2/s, kinematic.
+            None is the laminar path.
 
         Returns
         -------
@@ -537,6 +542,8 @@ class TransportSolver:
             budget untouched.
         """
         k = self._check_class(size_class)
+        if eddy_viscosity is not None:
+            raise NotImplementedError("the eddy_viscosity path is not built yet")
         c = np.array(C_k, dtype=np.float64, order="C", copy=True)
         if c.shape != self._p_shape:
             raise ValueError(f"expected C_k of shape {self._p_shape}, got {c.shape}")
