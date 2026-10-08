@@ -2,3 +2,4 @@ numpy>=1.26
 pyyaml>=6.0
 matplotlib>=3.8
 h5py>=3.10
+threadpoolctl>=3.2

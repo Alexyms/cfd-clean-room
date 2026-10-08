@@ -203,7 +203,7 @@ Generated. The responsibility and serves columns are editorial and come from `do
 | `src/mesh.py` | 411 | Builds the structured grid, uniform or geometrically clustered at the walls, with the face, center, width and center-to-center arrays a face-based stencil needs, and classifies each cell as FLUID, SOLID or BOUNDARY. | S11 |
 | `src/momentum.py` | 522 | Predicts u* and v* on the staggered grid with QUICK advection by deferred correction over an upwind implicit matrix, one under-relaxed Jacobi sweep per call, and returns the diagonal coefficients the pressure correction needs. | S07, S09 |
 | `src/particles.py` | 255 | Computes per-size-class transport properties: Cunningham correction, settling velocity, Brownian diffusion, deposition velocity and HEPA efficiency. | T03, T04, T09, T10 |
-| `src/pressure.py` | 736 | Assembles the staggered pressure correction equation from the momentum diagonals with the discrete divergence of u* as its right-hand side, solves it by conjugate gradients preconditioned with its diagonal to a relative residual, a rounding floor or a reported iteration cap, corrects the face velocities and updates the pressure. | S04, S08 |
+| `src/pressure.py` | 773 | Assembles the staggered pressure correction equation from the momentum diagonals with the discrete divergence of u* as its right-hand side, solves it by conjugate gradients preconditioned with its diagonal to a relative residual, a rounding floor or a reported iteration cap, corrects the face velocities and updates the pressure. | S04, S08 |
 | `src/scalar_scheme.py` | 308 | Holds the cell-centred scalar scheme the transport solver and the k-epsilon model share: QUICK's face value bounded by the UMIST limiter, the advective flux along one axis with the inflow value or the upwind cell at a domain face, and the backward Euler solve of diffusion with a non-negative cell sink by Jacobi, on per-face conductances with one step or a step per cell, with an optional mask of cells held at their value. | S15, T12 |
 | `src/solver_staggered.py` | 331 | Runs steady SIMPLE on the staggered grid as one outer loop over the momentum predictor and the pressure correction, returning cell-centered fields through the harness's callback shape and exposing the final faces as FaceVelocities; stops by the velocity-step rule or, when configured, by the error-estimate rule. | S01, S02, S03, S04, S05, S07, S13 |
 | `src/solver_transport.py` | 760 | Advances one particle class one explicit step on the staggered face velocities: QUICK's face value bounded by the UMIST limiter under forward Euler at a Courant number the configuration sets, implicit diffusion and deposition by Jacobi, the settling increment on interior faces, sources added and booked, SOLID cells zero; keeps one MassBudget per class and defines FieldHistory, the output contract for the animation. | N01, T01, T03, T04, T05, T06, T07, T08, T11, T12 |
@@ -211,7 +211,7 @@ Generated. The responsibility and serves columns are editorial and come from `do
 | `src/stopping.py` | 228 | Decides when the steady outer iteration has converged, on four conditions: (a) the iteration error estimated from the step and its fitted geometric rate, over a physical velocity scale; (b) the worst per-cell mass imbalance against its own tolerance; (c) the summed imbalance over the through-flow, which shares the tolerance of (a); and (d) the signed imbalance summed over the domain, which shares the tolerance of (b). Also defines IterationState, the snapshot a solver hands its callback once per outer iteration. | S01, S04 |
 | `src/turbulence.py` | 926 | Advances the k-epsilon model's k and eps one step on a prescribed face velocity field, standard or RNG with each variant's constants as module data: advection, explicit growth from the strain the faces give and implicit decay and diffusion through the shared scalar scheme, boundary values from a conditions object the caller builds each step, the kinematic eddy viscosity, and an assertion that k and eps are positive and finite after every step. | S14, S15 |
 
-Total 16 Python files, 6968 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
+Total 16 Python files, 7005 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
 
 `Declares it serves` is an EDITORIAL CLAIM read from `docs/system_map_annotations.toml`. It says which requirements a module is meant to satisfy, not that it does. Whether a requirement is met is answered by the tests named in the register's `Verified By` column.
 <!-- END GENERATED: components -->
@@ -236,7 +236,7 @@ Generated. Static import analysis cannot see a function bound into a registry by
 |---|---|
 | Scope | `src/**/*.py` |
 | Files hashed | 16 |
-| Digest | `sha256:6787c4ab393caec8b52a69df424daa460bdc6fc8098f8bb40140b74bd14992ec` |
+| Digest | `sha256:b93deea887fb48c3729f8a44154a07ea53e920257d1fbee00a171338f3263886` |
 
 This is what lets the document answer whether it is current, which is the one question a stale table cannot be asked. `python scripts/gen_system_map.py --check` recomputes the whole set of generated regions, this digest included, and exits non-zero on any disagreement.
 
@@ -496,6 +496,10 @@ STAGGERED_METHOD = STAGGERED_METHODS[PRESSURE_SOLVER_VERSION]   # the scripts im
                                          # a version without a label fails at import
 RESIDUAL_FLOOR = 1e-13                   # times the flux scale F; the face arithmetic's rounding
 ZERO_SCALE = 1e-30                       # guard on a zero inflow, shared with solver_staggered
+PRESSURE_BLAS_THREADS = 1                # BLAS threads the CG loop may use, applied by
+                                         # threadpoolctl (user_api="blas"); a constant, not a
+                                         # key: docs/reports/blas_threads.md. The one
+                                         # dependency ECR-003 added: threadpoolctl>=3.2
 apply_operator(coefficients, x) -> [ny, nx]
     (A x)_P = a_P x_P - sum(a_nb x_nb); zero at a cell with no equation; the five
     terms in the order the probe of docs/reports/pressure_solver_ecr003.md used
@@ -506,7 +510,9 @@ conjugate_gradient(apply, inverse_diagonal, f, rtol, floor, max_iter)
     failed confirmation restarts from the true residual and goes on; max_iter caps
     it; a zero f returns at once with no iteration; raises ValueError unless
     inverse_diagonal is f's shape, rtol a number in [0, 1), floor a finite number
-    of at least 0 and max_iter a positive int, a bool refused for each
+    of at least 0 and max_iter a positive int, a bool refused for each; the loop
+    runs inside a limit of PRESSURE_BLAS_THREADS BLAS threads and the process's
+    setting is restored on leaving, by return or by exception
 ConjugateGradientResult: x, iterations: int, reached_cap: bool,
     residual_norm: float,                # the true residual's 2-norm at exit
     products: int                        # every product with the operator: one per
