@@ -89,6 +89,12 @@ PLANTS = {
         "            viscosity_ok = nu_estimate < self._error_tol",
         "            viscosity_ok = True",
     ),
+    # Commit D
+    "VAL-016 (a): the wall-cell production scaled by 1.01": (
+        "src/turbulence.py",
+        "        return u_k**3 / (KAPPA * y_p), u_k**2 * slip / (y_p * log_term)",
+        "        return u_k**3 / (KAPPA * y_p), 1.01 * u_k**2 * slip / (y_p * log_term)",
+    ),
 }
 TESTS = [
     "tests/test_wall_functions.py",
@@ -96,6 +102,7 @@ TESTS = [
     "tests/test_coupled_solve.py",
     "tests/test_momentum.py",
     "tests/test_stopping.py",
+    "tests/test_turbulent_channel.py",
 ]
 
 
