@@ -18,7 +18,7 @@ from src.config import SimConfig
 from src.mesh import Mesh
 from src.momentum import MomentumPredictor
 from src.pressure import PressureCorrector
-from src.solver_staggered import StaggeredSolver
+from src.solver_staggered import StaggeredSolver, rule_version
 from src.staggered import FaceVelocities, allocate_fields
 from src.turbulence import (
     KEpsilonModel,
@@ -32,12 +32,16 @@ ALPHA_TURBULENCE = 0.6
 
 
 def _channel(
-    max_simple_iter: int = 1, turbulence: bool = True, inlet: bool = True
+    max_simple_iter: int = 1,
+    turbulence: bool = True,
+    inlet: bool = True,
+    inlets: dict | None = None,
 ) -> SimConfig:
     """A short channel, 1.2 by 0.3 m on 12 by 6 cells, one obstacle on the floor.
 
     Inlet on the left at 2 m/s, pressure outlet on the right, walls at rest
-    above and below. ``inlet`` False closes the left edge.
+    above and below. ``inlet`` False closes the left edge; ``inlets`` takes
+    the left edge's segments in place of the one inlet.
     """
     boundaries = {
         "outlet": {
@@ -47,7 +51,9 @@ def _channel(
             "y_end": 0.3,
         }
     }
-    if inlet:
+    if inlets is not None:
+        boundaries |= inlets
+    elif inlet:
         boundaries["inlet"] = {
             "type": "velocity_inlet",
             "location": "left",
@@ -92,6 +98,30 @@ def _channel(
             "tol": 1.0e-12,
         }
     return SimConfig.from_dict(raw)
+
+
+# The left inlet split in two, 2 m/s below and 1 m/s above, with different k
+# and eps, so the inflow-weighted start is not either inlet's.
+TWO_INLETS = {
+    "low": {
+        "type": "velocity_inlet",
+        "location": "left",
+        "y_start": 0.0,
+        "y_end": 0.15,
+        "velocity": 2.0,
+        "turbulence_intensity": 0.05,
+        "dissipation_length": 0.03,
+    },
+    "high": {
+        "type": "velocity_inlet",
+        "location": "left",
+        "y_start": 0.15,
+        "y_end": 0.3,
+        "velocity": 1.0,
+        "turbulence_intensity": 0.2,
+        "dissipation_length": 0.3,
+    },
+}
 
 
 def _solver(config: SimConfig) -> tuple[Mesh, StaggeredBoundary, StaggeredSolver]:
@@ -185,10 +215,33 @@ class TestWhatTheSolverExposes:
         assert set(solver.stage_seconds) == {"momentum", "pressure", "correct"}
 
     def test_the_rule_version_is_recorded(self) -> None:
-        _, _, coupled = _solver(_channel())
-        _, _, laminar = _solver(_channel(turbulence=False))
-        assert laminar.rule_version == 3
-        assert coupled.rule_version == 3
+        """4 with condition (e), 3 without; the function agrees without a solver."""
+        config, laminar_config = _channel(), _channel(turbulence=False)
+        _, _, coupled = _solver(config)
+        _, _, laminar = _solver(laminar_config)
+        assert laminar.rule_version == rule_version(laminar_config) == 3
+        assert coupled.rule_version == rule_version(config) == 4
+
+    def test_condition_e_scales_by_boundary_data(self) -> None:
+        """nu_scale is nu plus the largest inlet eddy viscosity, not a field's maximum.
+
+        Two inlets that differ, so the inflow-weighted start, whose eddy
+        viscosity is the field's maximum at the first iteration, is not the
+        larger inlet's (ADR-012 E).
+        """
+        config = _channel(inlets=TWO_INLETS)
+        mesh, boundary, solver = _solver(config)
+        c_mu = 0.09
+        k1, k2 = 1.5 * (0.05 * 2.0) ** 2, 1.5 * (0.2 * 1.0) ** 2
+        e1, e2 = k1**1.5 / 0.03, k2**1.5 / 0.3
+        largest = max(c_mu * k1**2 / e1, c_mu * k2**2 / e2)
+        start = KEpsilonModel(mesh, config).initial(
+            *TurbulenceBoundary(mesh, config, boundary).initial_values()
+        )
+        assert float(start.nu_t.max()) < 0.9 * largest
+        rule = solver._new_rule()
+        assert rule is not None
+        assert rule._nu_scale == pytest.approx(config.mu / config.rho + largest)
 
 
 @pytest.mark.unit

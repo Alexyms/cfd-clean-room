@@ -90,7 +90,8 @@ from src.momentum import MomentumPredictor
 from src.pressure import ZERO_SCALE, PressureCorrector
 from src.staggered import FaceVelocities, allocate_fields, p_shape, to_cell_centers
 from src.stopping import (
-    RULE_VERSION,
+    RULE_VERSION_WITH_E,
+    RULE_VERSION_WITHOUT_E,
     ErrorEstimateRule,
     ImbalanceSummary,
     IterationState,
@@ -103,6 +104,30 @@ from src.turbulence import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def rule_version(config: SimConfig) -> int | None:
+    """The stopping rule's version a solver built from ``config`` applies.
+
+    Parameters
+    ----------
+    config : SimConfig
+        The configuration a solver would be built from.
+
+    Returns
+    -------
+    int or None
+        ``StaggeredSolver(...).rule_version`` without building a solver, for
+        a script that decides from it whether a saved solve can be reused:
+        None under velocity_step, 4 under error_estimate with the turbulence
+        section (condition (e) on, ADR-012 E), 3 without it.
+    """
+    if config.stopping_rule != ERROR_ESTIMATE:
+        return None
+    if config.turbulence is not None:
+        return RULE_VERSION_WITH_E
+    return RULE_VERSION_WITHOUT_E
+
 
 _STOP_REASONS = {
     VELOCITY_STEP: "velocity_step_below_tol",
@@ -162,9 +187,11 @@ class StaggeredSolver:
         Read-only. The flux scale the error_estimate rule was built with, kg/s
         per unit depth; None under velocity_step.
     rule_version : int or None
-        Read-only. The version of the stopping rule a solve applies, which
-        the harness and the scripts store with what they save; None under
-        velocity_step.
+        Read-only. The version of the stopping rule a solve applies, its
+        rule's ``version``: 3, or 4 with the turbulence section, whose
+        condition (e) bounds the eddy viscosity's iteration error; None
+        under velocity_step. The harness and the scripts store it with what
+        they save (``rule_version`` gives it from a configuration).
     turbulence_state : TurbulenceState or None
         k, eps and the under-relaxed nu_t at the end of the last coupled
         solve, converged or not, read-only arrays; None without the
@@ -216,7 +243,8 @@ class StaggeredSolver:
         self.stop_reason: str | None = None
         self._flux_scale: float | None = None
         # Built once here so a zero velocity scale raises at construction.
-        self._new_rule()
+        rule = self._new_rule()
+        self._rule_version = None if rule is None else rule.version
 
     @property
     def flux_scale(self) -> float | None:
@@ -226,7 +254,7 @@ class StaggeredSolver:
     @property
     def rule_version(self) -> int | None:
         """The stopping rule's version a solve applies; None under velocity_step."""
-        return RULE_VERSION if self._stopping_rule == ERROR_ESTIMATE else None
+        return self._rule_version
 
     def _zero_stage_seconds(self) -> dict[str, float]:
         stages = {"momentum": 0.0, "pressure": 0.0, "correct": 0.0}
@@ -255,7 +283,9 @@ class StaggeredSolver:
         formed once there so the pressure solve's rounding floor and this
         rule read the same F. It is not built from reference_velocity, the
         inflow over one cell spacing: that moves with the grid, and so would
-        the bound on the summed imbalance.
+        the bound on the summed imbalance. With the turbulence section the
+        rule takes condition (e), its nu_scale the molecular nu plus the
+        largest inlet eddy viscosity (ADR-012 E).
         """
         if self._stopping_rule != ERROR_ESTIMATE:
             return None
@@ -266,7 +296,14 @@ class StaggeredSolver:
                 "boundary prescribes a velocity; give one or use velocity_step"
             )
         self._flux_scale = self._corrector.flux_scale
-        return ErrorEstimateRule(scale, self._flux_scale, *self._rule_tols)
+        # Without the section the call is the laminar one, so a rule a test or
+        # a probe substitutes still fits.
+        if self._walls is None:
+            return ErrorEstimateRule(scale, self._flux_scale, *self._rule_tols)
+        nu_scale = self._mu / self._rho + self._walls.largest_inlet_eddy_viscosity()
+        return ErrorEstimateRule(
+            scale, self._flux_scale, *self._rule_tols, nu_scale=nu_scale
+        )
 
     def _imbalance_summary(self, u: np.ndarray, v: np.ndarray) -> ImbalanceSummary:
         """Worst, absolute-summed and signed-summed per-cell imbalance, one evaluation."""
@@ -420,8 +457,13 @@ class StaggeredSolver:
             t2 = perf_counter()
             self.stage_seconds["pressure"] += t2 - t1
 
+            viscosity_step = None
             if state is not None:
+                nu_t_old = state.nu_t
                 state = self._turbulence_step(state, u, v, iteration)
+                viscosity_step = float(
+                    np.max(np.abs(state.nu_t[self._live] - nu_t_old[self._live]))
+                )
                 t3 = perf_counter()
                 self.stage_seconds["turbulence"] += t3 - t2
                 t2 = t3
@@ -453,7 +495,13 @@ class StaggeredSolver:
                 # allowed to stop on one (ADR-013 B).
                 stop = residual < self._convergence_tol and not corrected.reached_cap
             else:
-                stop = rule.update(max(du, dv), partial(self._imbalance_summary, u, v))
+                imbalance = partial(self._imbalance_summary, u, v)
+                if viscosity_step is None:
+                    stop = rule.update(max(du, dv), imbalance)
+                else:
+                    stop = rule.update(
+                        max(du, dv), imbalance, viscosity_step=viscosity_step
+                    )
 
             if iteration % 50 == 0 or stop:
                 logger.info("SIMPLE iter %4d: residual = %.6e", iteration, residual)

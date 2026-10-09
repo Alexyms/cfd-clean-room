@@ -76,12 +76,26 @@ PLANTS = {
         "        if model is not None and eddy_viscosity is not None:",
         "        if False:",
     ),
+    # Commit C
+    "condition (e): nu_scale from the field's maximum": (
+        "src/solver_staggered.py",
+        "        nu_scale = self._mu / self._rho + self._walls.largest_inlet_eddy_viscosity()",
+        "        nu_scale = self._mu / self._rho + float(\n"
+        "            self._model.initial(*self._initial_turbulence).nu_t.max()\n"
+        "        )",
+    ),
+    "condition (e): not required for the stop": (
+        "src/stopping.py",
+        "            viscosity_ok = nu_estimate < self._error_tol",
+        "            viscosity_ok = True",
+    ),
 }
 TESTS = [
     "tests/test_wall_functions.py",
     "tests/test_config.py",
     "tests/test_coupled_solve.py",
     "tests/test_momentum.py",
+    "tests/test_stopping.py",
 ]
 
 

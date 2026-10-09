@@ -20,8 +20,8 @@ from src.config import SOLVER_KEYS, SimConfig  # noqa: E402 -- follows sys.path.
 from src.mesh import Mesh  # noqa: E402 -- follows sys.path.insert
 from src.solver_staggered import (  # noqa: E402 -- follows sys.path.insert
     StaggeredSolver,
+    rule_version,
 )
-from src.stopping import RULE_VERSION  # noqa: E402 -- follows sys.path.insert
 from validation.cases import (  # noqa: E402 -- follows sys.path.insert
     case_path,
     load_case,
@@ -294,7 +294,8 @@ def test_harness_row_takes_the_cap_from_the_solver(
     assert row["work"]["outer_iterations"] == 20
     assert row["trajectory"][-1]["residual"] < 10.0
     assert row["params"]["stopping_rule"] == "error_estimate"
-    assert row["params"]["rule_version"] == RULE_VERSION
+    # Read from the solver since ECR-002 step 6: 3 for a laminar solve.
+    assert row["params"]["rule_version"] == rule_version(config) == 3
 
 
 @pytest.mark.unit
