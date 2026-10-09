@@ -371,8 +371,10 @@ ECR-002 step 5, the convergence measurement, is on `docs/ecr002-step5-convergenc
 (`docs/reports/ecr002_step5_convergence.md`): one momentum sweep converges nothing on 80x30 or
 200x75; ten sweeps converge the uniform top of k-epsilon's range on 200x75 (2,329 outer
 iterations) and nothing else there, and nothing below about 5e-4 m^2/s on 80x30 at any sweep
-count; the step 4 corner rule decides the middle row on 80x30; `pressure_rtol` 1e-4 reproduces
-1e-8. What step 6 needs is a question for Alex, in the report's section 7.
+count measured; the step 4 corner rule decides the middle row on 80x30; `pressure_rtol` 1e-4
+reproduces 1e-8; the bounded rows are periodic oscillations located, on 80x30, in the column
+between the door wall and the server rack. Next: Alex's decisions on the sweep count, the
+corner rule and a stronger aid before step 6 opens, from the report's section 7.
 
 Deferred findings from earlier pull requests were open as GitHub issues, and every open one now
 has a disposition. The cleanup pull request (branch `fix/deferred-findings-cleanup`) closes issues
