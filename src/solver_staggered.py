@@ -34,8 +34,23 @@ domain (docs/reports/staggered_integration_step6.md).
 
 ``solve_steady(eddy_viscosity=...)`` holds a prescribed kinematic eddy
 viscosity for the whole solve and hands the predictor ``mu + rho nu_t``
-(ECR-002 step 4); step 5 drives prescribed fields through it, and step 6
-replaces it with the model's field each outer iteration.
+(ECR-002 step 4); step 5 drove prescribed fields through it.
+
+With the configuration's turbulence section the solve is the coupled one
+(ADR-012 D, ECR-002 step 6), and a prescribed field is refused: one source of
+nu_t per solve. Each outer iteration predicts the momentum with ``mu + rho
+nu_t`` and the wall functions' viscosity on the wall faces
+(``TurbulenceBoundary.wall_viscosity`` over
+``MomentumPredictor.stencil_viscosity``), corrects the pressure, takes one
+pseudo-time step of k and eps on the corrected faces
+(``KEpsilonModel.step`` with ``TurbulenceBoundary.conditions``), then
+under-relaxes the eddy viscosity, ``nu_t = (1 - a_t) nu_t_old + a_t C_mu
+k^2 / eps`` with a_t ``alpha_turbulence``. The solve starts from k and eps
+uniform at the inlets' inflow-weighted means and nu_t from them. The step
+raises PositivityError unless k and eps are positive and finite in every
+non-SOLID cell (REQ-S15); the solve stops there, naming the outer iteration.
+The last solve's k, eps and nu_t are ``turbulence_state``. Without the
+section every line runs as before.
 
 The faces of the last solve are kept as ``face_velocities`` (REQ-S13):
 the transport solver advects with them because the cell means the contract
@@ -74,7 +89,18 @@ from src.mesh import FLUID, SOLID, Mesh
 from src.momentum import MomentumPredictor
 from src.pressure import ZERO_SCALE, PressureCorrector
 from src.staggered import FaceVelocities, allocate_fields, p_shape, to_cell_centers
-from src.stopping import ErrorEstimateRule, ImbalanceSummary, IterationState
+from src.stopping import (
+    RULE_VERSION,
+    ErrorEstimateRule,
+    ImbalanceSummary,
+    IterationState,
+)
+from src.turbulence import (
+    KEpsilonModel,
+    PositivityError,
+    TurbulenceBoundary,
+    TurbulenceState,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -135,12 +161,22 @@ class StaggeredSolver:
     flux_scale : float or None
         Read-only. The flux scale the error_estimate rule was built with, kg/s
         per unit depth; None under velocity_step.
+    rule_version : int or None
+        Read-only. The version of the stopping rule a solve applies, which
+        the harness and the scripts store with what they save; None under
+        velocity_step.
+    turbulence_state : TurbulenceState or None
+        k, eps and the under-relaxed nu_t at the end of the last coupled
+        solve, converged or not, read-only arrays; None without the
+        turbulence section or before a solve completes.
 
     Raises
     ------
     ValueError
         Under error_estimate, if no boundary prescribes a velocity to scale by.
-        The message names stopping_rule and the boundaries.
+        The message names stopping_rule and the boundaries. With the
+        turbulence section, if no velocity inlet admits air: the coupled
+        solve starts from the inlets' k and eps.
     """
 
     def __init__(
@@ -159,6 +195,15 @@ class StaggeredSolver:
         self._rule_tols = (config.iteration_error_tol, config.mass_imbalance_tol)
         self._fluid = mesh.cell_type == FLUID
         self._outlets = boundary.pressure_outlets()
+        self._model: KEpsilonModel | None = None
+        self._walls: TurbulenceBoundary | None = None
+        if config.turbulence is not None:
+            self._model = KEpsilonModel(mesh, config)
+            self._walls = TurbulenceBoundary(mesh, config, boundary)
+            self._alpha_turbulence = config.turbulence.alpha_turbulence
+            # Raises here, before any solve, when no inlet sets the supply's k.
+            self._initial_turbulence = self._walls.initial_values()
+        self.turbulence_state: TurbulenceState | None = None
 
         self.reference_velocity: float = self._reference_velocity()
         self.residual_history: list[float] = []
@@ -178,9 +223,16 @@ class StaggeredSolver:
         """The error_estimate rule's flux scale, kg/s per unit depth; None otherwise."""
         return self._flux_scale
 
-    @staticmethod
-    def _zero_stage_seconds() -> dict[str, float]:
-        return {"momentum": 0.0, "pressure": 0.0, "correct": 0.0}
+    @property
+    def rule_version(self) -> int | None:
+        """The stopping rule's version a solve applies; None under velocity_step."""
+        return RULE_VERSION if self._stopping_rule == ERROR_ESTIMATE else None
+
+    def _zero_stage_seconds(self) -> dict[str, float]:
+        stages = {"momentum": 0.0, "pressure": 0.0, "correct": 0.0}
+        if self._model is not None:
+            stages["turbulence"] = 0.0
+        return stages
 
     def _reference_velocity(self) -> float:
         """The collocated solver's reference velocity, from the staggered layer's inputs."""
@@ -279,6 +331,8 @@ class StaggeredSolver:
             transport solver's convention), held fixed for the solve. The
             predictor receives ``mu_eff = mu + rho nu_t`` each outer
             iteration (ADR-012 D). None is the laminar path, bitwise.
+            Refused with the turbulence section, whose model is the solve's
+            one source of nu_t.
 
         Returns
         -------
@@ -292,13 +346,28 @@ class StaggeredSolver:
             If ``eddy_viscosity`` is not a float64 ndarray.
         ValueError
             If ``eddy_viscosity`` has the wrong shape, or a non-finite or
-            negative value in a non-SOLID cell.
+            negative value in a non-SOLID cell, or is given with the
+            turbulence section present.
+        PositivityError
+            In the coupled solve, if k or eps is not positive and finite at a
+            non-SOLID cell after an outer iteration's step; the message names
+            the outer iteration and the first such cell.
         """
+        model, walls = self._model, self._walls
+        if model is not None and eddy_viscosity is not None:
+            raise ValueError(
+                "eddy_viscosity is refused with the turbulence section present: the "
+                "k-epsilon model is the solve's one source of nu_t"
+            )
         mu_eff = (
             None
             if eddy_viscosity is None
             else self._effective_viscosity(eddy_viscosity)
         )
+        state: TurbulenceState | None = None
+        if model is not None:
+            state = model.initial(*self._initial_turbulence)
+        self.turbulence_state = None
         u, v, p = allocate_fields(self._mesh)
         self._boundary.apply_normal_velocity(u, v)
 
@@ -318,7 +387,18 @@ class StaggeredSolver:
             self._extrapolate_outlets(u, v)
             # Without a field the call is the laminar one, so a predictor a
             # probe substitutes (docs/reports/probe41/outlet41.py) still fits.
-            if mu_eff is None:
+            if state is not None and walls is not None:
+                coupled = self._effective_viscosity(state.nu_t)
+                prediction = self._predictor.predict(
+                    u,
+                    v,
+                    p,
+                    mu_eff=coupled,
+                    wall_mu=walls.wall_viscosity(
+                        state.k, self._predictor.stencil_viscosity(coupled)
+                    ),
+                )
+            elif mu_eff is None:
                 prediction = self._predictor.predict(u, v, p)
             else:
                 prediction = self._predictor.predict(u, v, p, mu_eff=mu_eff)
@@ -339,6 +419,12 @@ class StaggeredSolver:
                     )
             t2 = perf_counter()
             self.stage_seconds["pressure"] += t2 - t1
+
+            if state is not None:
+                state = self._turbulence_step(state, u, v, iteration)
+                t3 = perf_counter()
+                self.stage_seconds["turbulence"] += t3 - t2
+                t2 = t3
 
             u_prev, v_prev = u_c, v_c
             u_c, v_c = to_cell_centers(u, v)
@@ -383,4 +469,24 @@ class StaggeredSolver:
             logger.warning("Not converged: stopped at max_simple_iter")
         self.last_mass_imbalance = self._corrector.mass_imbalance(u, v)
         self.face_velocities = FaceVelocities.copy_of(u, v)
+        self.turbulence_state = state
         return u_c, v_c, np.ascontiguousarray(p)
+
+    def _turbulence_step(
+        self, state: TurbulenceState, u: np.ndarray, v: np.ndarray, iteration: int
+    ) -> TurbulenceState:
+        """One k and eps step on the corrected faces, then the relaxed nu_t (ADR-012 D)."""
+        assert self._model is not None and self._walls is not None
+        faces = FaceVelocities.copy_of(u, v)
+        try:
+            stepped = self._model.step(
+                state, faces, self._walls.conditions(state, faces)
+            )
+        except PositivityError as err:
+            raise PositivityError(
+                f"outer iteration {iteration}: {err}", err.minimum
+            ) from err
+        a_t = self._alpha_turbulence
+        nu_t = (1.0 - a_t) * state.nu_t + a_t * stepped.nu_t
+        nu_t.setflags(write=False)
+        return TurbulenceState(k=stepped.k, eps=stepped.eps, nu_t=nu_t)

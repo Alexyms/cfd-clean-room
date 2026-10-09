@@ -65,10 +65,23 @@ PLANTS = {
         "            if not admits_air:\n                raise ValueError(",
         "            if False:\n                raise ValueError(",
     ),
+    # Commit B
+    "relaxation: alpha_turbulence ignored": (
+        "src/solver_staggered.py",
+        "        nu_t = (1.0 - a_t) * state.nu_t + a_t * stepped.nu_t",
+        "        nu_t = np.array(stepped.nu_t)",
+    ),
+    "refusal: eddy_viscosity with the model on accepted": (
+        "src/solver_staggered.py",
+        "        if model is not None and eddy_viscosity is not None:",
+        "        if False:",
+    ),
 }
 TESTS = [
     "tests/test_wall_functions.py",
     "tests/test_config.py",
+    "tests/test_coupled_solve.py",
+    "tests/test_momentum.py",
 ]
 
 

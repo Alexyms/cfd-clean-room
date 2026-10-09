@@ -96,7 +96,9 @@ as an explicit source on the current field. This is the probe's arithmetic
 
 The wall viscosity (ADR-012 B). ``wall_mu`` replaces the viscosity of the
 wall stencil face by face, for the wall functions of ECR-002 step 6. Without
-it the stencil takes air's viscosity or the field's edge value.
+it the stencil takes air's viscosity or the field's edge value, which
+``stencil_viscosity`` returns in ``wall_mu``'s layout, so that a caller can
+replace some faces and keep the rest.
 
 Momentum sweeps. ``solver.momentum_sweeps`` Jacobi sweeps of the
 under-relaxed equations run per call, on the coefficients and sources of the
@@ -512,6 +514,41 @@ class MomentumPredictor:
             a_p_u=c_u.a_p,
             a_p_v=np.ascontiguousarray(c_vt.a_p.T),
         )
+
+    def stencil_viscosity(self, mu_eff: np.ndarray) -> dict[str, np.ndarray]:
+        """The viscosity the wall stencil takes at each face when ``wall_mu`` is None.
+
+        Parameters
+        ----------
+        mu_eff : np.ndarray
+            Dynamic effective viscosity per cell, as ``predict`` takes it.
+
+        Returns
+        -------
+        dict[str, np.ndarray]
+            ``wall_mu``'s layout: keys "u" and "v", float64 [ny+1, nx+1] by
+            corner. At every face the wall stencil reads, the value
+            ``predict(u, v, p, mu_eff)`` puts there, the field's face rule
+            (at a domain edge the width-weighted mean of the two wall cells,
+            at an obstacle face the wall cell's value carried across the
+            SOLID cell); air's viscosity on every other face, which is not
+            read. ``predict`` given it as ``wall_mu`` is bitwise ``predict``
+            without ``wall_mu``.
+
+        Raises
+        ------
+        TypeError, ValueError
+            As ``predict`` raises on ``mu_eff``.
+        """
+        mu_cells = self._check_mu_eff(mu_eff)
+        u_corner = self._corner_viscosity(mu_cells, self._for_u)
+        v_corner = self._corner_viscosity(np.ascontiguousarray(mu_cells.T), self._for_v)
+        return {
+            "u": np.where(self._wall_read["u"], u_corner, self._mu),
+            "v": np.where(
+                self._wall_read["v"], np.ascontiguousarray(v_corner.T), self._mu
+            ),
+        }
 
     # ------------------------------------------------------------------
     # Assembly in the component's own frame: transverse rows, own axis last

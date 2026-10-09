@@ -909,6 +909,34 @@ class TestWallViscosity:
         expected = (config.mu - corner[0, i]) * mesh.dx_face[i] / mesh.dy_face[0]
         assert b.a_p_u[0, i] - a.a_p_u[0, i] == pytest.approx(expected, rel=1e-9)
 
+    @pytest.mark.parametrize("sweeps", [1, 10])
+    def test_the_stencils_own_viscosity_changes_no_bit(self, sweeps: int) -> None:
+        """stencil_viscosity given back as wall_mu is the path without wall_mu (step 6).
+
+        On the product room at 40x15, with an inlet, fixed-flow outlets and
+        obstacles, so every kind of face the stencil reads is in it.
+        """
+        config = _product_room(sweeps)
+        mesh, bc, mp = _build(config)
+        u, v, p = _random_state(mesh, bc, np.random.default_rng(445))
+        mu = _random_field(mesh, np.random.default_rng(446), config.mu)
+        own = mp.stencil_viscosity(mu)
+        a = mp.predict(u, v, p, mu_eff=mu)
+        b = mp.predict(u, v, p, mu_eff=mu, wall_mu=own)
+        assert a.u_star.tobytes() == b.u_star.tobytes()
+        assert a.v_star.tobytes() == b.v_star.tobytes()
+        assert a.a_p_u.tobytes() == b.a_p_u.tobytes()
+        assert a.a_p_v.tobytes() == b.a_p_v.tobytes()
+        # It is the field's face rule where read, and air's viscosity elsewhere.
+        corner = mp._corner_viscosity(mu, mp._for_u)
+        read = mp._wall_read["u"]
+        np.testing.assert_array_equal(own["u"][read], corner[read])
+        assert (own["u"][~read] == config.mu).all()
+        # Another value at one read face changes the prediction.
+        own["u"][read.nonzero()[0][0], read.nonzero()[1][0]] *= 3.0
+        c = mp.predict(u, v, p, mu_eff=mu, wall_mu=own)
+        assert a.u_star.tobytes() != c.u_star.tobytes()
+
     def test_faces_that_are_not_wall_faces_are_not_read(self) -> None:
         """NaN everywhere but at the faces the wall stencil crosses is accepted."""
         config = _config(CAVITY)
