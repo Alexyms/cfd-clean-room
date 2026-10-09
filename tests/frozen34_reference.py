@@ -66,5 +66,6 @@ def load_frozen_predictor() -> type:
         "_Orientation": momentum._Orientation,
     }
     # The executed text is the committed report's, the probe as reviewed.
-    exec(compile("\n\n".join(pieces), str(REPORT), "exec"), namespace)
+    filename = "<frozen34.py, report appendix B>"
+    exec(compile("\n\n".join(pieces), filename, "exec"), namespace)
     return namespace["FrozenPredictor"]

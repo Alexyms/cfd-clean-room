@@ -51,9 +51,15 @@ interior node is ``(phi_P - phi_wall) / wall_distance`` times the face
 width, with no value stored outside the domain.
 
 Obstacles. A u or v face bounding a SOLID cell is not an unknown and is
-predicted as zero. A neighbouring unknown sees it as a fixed zero at its
-storage location; the half-cell wall distance applies at domain edges only.
-Obstacle accuracy is not a Phase 2 validation target.
+predicted as zero. A tangential unknown whose transverse neighbour is such a
+face takes the wall stencil the domain edges have (ADR-012 B, ECR-002 step
+4): the wall lies at the cell face between them, half the unknown's cell
+width away, with the wall value zero, so the neighbour's coefficient moves
+into the diagonal. Where the neighbour face bounds a SOLID cell on one side
+only, at an obstacle's corner, the face is a wall over its whole span, as
+the viscosity field's face rule treats a SOLID cell as a domain edge. The
+QUICK correction is unchanged there: it still reads the zero stored at the
+SOLID face's own location.
 
 A viscosity field (ADR-012 D, ECR-002 step 4). ``predict`` takes an optional
 dynamic viscosity per cell, ``mu_eff``; without it the scalar lines run
@@ -186,6 +192,47 @@ class _Orientation:
     low: TangentialCondition
     high: TangentialCondition
     solid: np.ndarray
+    walls: "_ObstacleWalls"
+
+
+@dataclass(frozen=True)
+class _ObstacleWalls:
+    """The obstacle faces one component's wall stencil crosses, in its own frame.
+
+    ``face`` [nt+1, ns+1] is True at a transverse face between an unknown and
+    a neighbour face that bounds a SOLID cell; ``distance`` [nt+1, ns+1] is
+    the unknown's distance to that face (1.0 where ``face`` is False).
+    ``north`` and ``south`` [nt, ns-1] mark the unknowns whose north or south
+    face is one. A face borders at most one unknown, the other side being a
+    face of a SOLID cell.
+    """
+
+    face: np.ndarray
+    distance: np.ndarray
+    north: np.ndarray
+    south: np.ndarray
+
+
+def _obstacle_walls(
+    solid: np.ndarray, t_faces: np.ndarray, t_centers: np.ndarray
+) -> _ObstacleWalls:
+    """Locate the obstacle faces of one component from its SOLID mask [nt, ns]."""
+    nt, ns = solid.shape
+    solid_face = solid[:, :-1] | solid[:, 1:]
+    unknown = ~solid_face
+    north = np.zeros((nt, ns - 1), dtype=bool)
+    south = np.zeros((nt, ns - 1), dtype=bool)
+    north[:-1, :] = unknown[:-1, :] & solid_face[1:, :]
+    south[1:, :] = unknown[1:, :] & solid_face[:-1, :]
+    face = np.zeros((nt + 1, ns + 1), dtype=bool)
+    face[1:, 1:-1] |= north
+    face[:-1, 1:-1] |= south
+    distance = np.ones((nt + 1, ns + 1), dtype=np.float64)
+    below = (t_faces[1:] - t_centers)[:, None]
+    above = (t_centers - t_faces[:-1])[:, None]
+    distance[1:, 1:-1] = np.where(north, below, distance[1:, 1:-1])
+    distance[:-1, 1:-1] = np.where(south, above, distance[:-1, 1:-1])
+    return _ObstacleWalls(face=face, distance=distance, north=north, south=south)
 
 
 def _lagrange_weights(
@@ -311,6 +358,7 @@ class MomentumPredictor:
             low=tangential["bottom"],
             high=tangential["top"],
             solid=solid,
+            walls=_obstacle_walls(solid, mesh.y, mesh.yc),
         )
         self._for_v = _Orientation(
             s_faces=mesh.y,
@@ -324,6 +372,7 @@ class MomentumPredictor:
             low=tangential["left"],
             high=tangential["right"],
             solid=np.ascontiguousarray(solid.T),
+            walls=_obstacle_walls(np.ascontiguousarray(solid.T), mesh.x, mesh.xc),
         )
         # The faces whose wall viscosity reaches an unknown's equation, in
         # the global [ny+1, nx+1] corner layout of wall_mu.
@@ -388,10 +437,12 @@ class MomentumPredictor:
             [ny+1, nx+1] indexed by corner: entry ``[j, i]`` is the face
             through ``(x[i], y[j])`` that the component's wall stencil
             crosses, horizontal for "u" (bottom and top edges) and vertical
-            for "v" (left and right edges). Read only at the faces whose
-            tangential condition is a Dirichlet value and that border an
-            unknown; there it must be finite and positive, and elsewhere it
-            is not read. None uses air's viscosity or the field's.
+            for "v" (left and right edges, obstacle sides). Read only at the
+            faces the wall stencil crosses: domain-edge faces whose
+            tangential condition is a Dirichlet value, and faces between an
+            unknown and a neighbour face bounding a SOLID cell, each beside
+            an unknown; there it must be finite and positive, and elsewhere
+            it is not read. None uses air's viscosity or the field's.
 
         Returns
         -------
@@ -526,7 +577,7 @@ class MomentumPredictor:
         read = np.zeros((nt + 1, ns + 1), dtype=bool)
         read[0, 1:-1] = o.low.is_dirichlet[1:-1] & unknown[0, :]
         read[-1, 1:-1] = o.high.is_dirichlet[1:-1] & unknown[-1, :]
-        return read
+        return read | o.walls.face
 
     def _assemble(
         self,
@@ -579,6 +630,16 @@ class MomentumPredictor:
         d_t[-1, :] = np.where(
             o.high.is_dirichlet, mu_high * o.ds_face / o.high.wall_distance, 0
         )
+        # Obstacle faces: the wall at the face, half the unknown's cell away,
+        # with the viscosity the domain edges would take there.
+        walls = o.walls
+        if walls.face.any():
+            mu_wall = mu if mu_cells is None else corner
+            if wall is not None:
+                mu_wall = wall
+            d_t = np.where(
+                walls.face, mu_wall * o.ds_face[None, :] / walls.distance, d_t
+            )
 
         # Upwind coefficients on the unknown block [nt, ns-1]
         f_e, f_w = f_s[:, 1:], f_s[:, :-1]
@@ -602,6 +663,11 @@ class MomentumPredictor:
         a_p[0, :] -= np.where(lo, 0.0, a_sth[0, :])
         a_n[-1, :] = 0.0
         a_sth[0, :] = 0.0
+        # The wall value at an obstacle is zero, so its coefficient leaves
+        # nothing in the source; the neighbour face it multiplied is no
+        # unknown.
+        a_n[walls.north] = 0.0
+        a_sth[walls.south] = 0.0
 
         b_deferred = self._deferred_correction(u, f_s, f_t, o)
         if mu_cells is not None:

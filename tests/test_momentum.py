@@ -14,7 +14,12 @@ import yaml
 from src.boundary_staggered import StaggeredBoundary
 from src.config import SimConfig
 from src.mesh import SOLID, Mesh
-from src.momentum import MomentumPredictor, _Orientation, quick_face_values
+from src.momentum import (
+    MomentumCoefficients,
+    MomentumPredictor,
+    _Orientation,
+    quick_face_values,
+)
 from src.staggered import allocate_fields
 from tests.frozen34_reference import load_frozen_predictor
 from validation.cases import CONFIG_DIR
@@ -521,12 +526,14 @@ def _hand_corner(mu: np.ndarray, o: _Orientation, j: int, i: int) -> float:
     return float((w_0 * m_0 + w_1 * m_1) / (w_0 + w_1))
 
 
-def _product_room(sweeps: int) -> SimConfig:
+def _product_room(sweeps: int, obstacles: bool = True) -> SimConfig:
     """The committed product configuration on the 40x15 grid of the ladder."""
     raw = yaml.safe_load(
         (CONFIG_DIR / "clean_room_default.yaml").read_text(encoding="utf-8")
     )
     raw["domain"]["nx"], raw["domain"]["ny"] = 40, 15
+    if not obstacles:
+        raw["obstacles"] = []
     raw["solver"]["alpha_velocity"] = 0.5
     raw["solver"]["momentum_sweeps"] = sweeps
     return SimConfig.from_dict(raw)
@@ -661,15 +668,25 @@ class TestStressSource:
 
 @pytest.mark.integration
 class TestFieldPathAgainstTheProbe:
-    """predict with mu_eff is frozen34.py's FrozenPredictor (form b, stress on), to the bit."""
+    """The field path is frozen34.py's FrozenPredictor (form b, stress on), to the bit.
+
+    The probe kept the obstacle stencil the scalar path had then (a SOLID
+    face a whole cell away). Since the obstacle stencil was built, the two
+    agree to the bit in a room without obstacles, and in the product room
+    everywhere but at the unknowns beside an obstacle face, where the
+    difference is exactly the stencil's (TestObstacleWallStencil).
+    """
 
     @pytest.mark.parametrize("sweeps", [1, 10])
-    def test_three_random_states_of_the_product_room(self, sweeps: int) -> None:
+    def test_three_random_states_of_the_room_without_obstacles(
+        self, sweeps: int
+    ) -> None:
         """u*, v* and both diagonals equal at every face, one sweep and ten."""
         frozen = load_frozen_predictor()
-        config = _product_room(sweeps)
+        config = _product_room(sweeps, obstacles=False)
         mesh, bc, mp = _build(config)
         assert config.momentum_sweeps == sweeps
+        assert not (mesh.cell_type == SOLID).any()
         rng = np.random.default_rng(435 + sweeps)
         for _state in range(3):
             u, v, p = _random_state(mesh, bc, rng)
@@ -678,6 +695,53 @@ class TestFieldPathAgainstTheProbe:
             theirs = frozen(mesh, config, bc, mu_t, sweeps=sweeps).predict(u, v, p)
             for name in ("u_star", "v_star", "a_p_u", "a_p_v"):
                 assert np.array_equal(getattr(ours, name), getattr(theirs, name)), name
+
+    def test_product_room_coefficients_differ_only_beside_obstacle_faces(
+        self,
+    ) -> None:
+        """Three random states, both components: the stencil is the only difference."""
+        frozen = load_frozen_predictor()
+        config = _product_room(1)
+        mesh, bc, mp = _build(config)
+        rng = np.random.default_rng(438)
+        for _state in range(3):
+            u, v, _p = _random_state(mesh, bc, rng)
+            mu_t = _random_field(mesh, rng, config.mu) - config.mu
+            probe = frozen(mesh, config, bc, mu_t)
+            cells = config.mu + mu_t
+            pairs = (("u", mp._for_u, probe._for_u), ("v", mp._for_v, probe._for_v))
+            for comp, o, o_probe in pairs:
+                field = cells if comp == "u" else np.ascontiguousarray(cells.T)
+                a, b = (u, v) if comp == "u" else (v.T, u.T)
+                ours = mp._assemble(a, b, o, mu_cells=field)
+                theirs = probe._assemble_field(a, b, o_probe)
+                beside = np.zeros_like(ours.a_p, dtype=bool)
+                beside[:, 1:-1] = o.walls.north | o.walls.south
+                assert beside.any()
+                for name in ("a_s_plus", "a_s_minus", "b_boundary", "b_deferred"):
+                    assert np.array_equal(getattr(ours, name), getattr(theirs, name))
+                assert np.array_equal(ours.a_p[~beside], theirs.a_p[~beside])
+                assert np.all(ours.a_p[beside] > theirs.a_p[beside])
+                north = np.zeros_like(beside)
+                north[:, 1:-1] = o.walls.north
+                south = np.zeros_like(beside)
+                south[:, 1:-1] = o.walls.south
+                assert np.array_equal(ours.a_t_plus[~north], theirs.a_t_plus[~north])
+                assert np.array_equal(ours.a_t_minus[~south], theirs.a_t_minus[~south])
+                assert np.all(ours.a_t_plus[north] == 0.0)
+                assert np.all(ours.a_t_minus[south] == 0.0)
+
+    def test_ten_sweeps_on_the_same_coefficients(self) -> None:
+        """_sweep_n is the probe's on the product room's own coefficients."""
+        frozen = load_frozen_predictor()
+        config = _product_room(10)
+        mesh, bc, mp = _build(config)
+        u, v, p = _random_state(mesh, bc, np.random.default_rng(439))
+        mu_t = _random_field(mesh, np.random.default_rng(440), config.mu) - config.mu
+        probe = frozen(mesh, config, bc, mu_t, sweeps=10)
+        c = mp._assemble(u, v, mp._for_u, mu_cells=config.mu + mu_t)
+        b_p = mp._pressure_source(p, mp._for_u)
+        assert np.array_equal(mp._sweep_n(u, c, b_p), probe._sweep_n(u, c, b_p))
 
 
 @pytest.mark.unit
@@ -924,3 +988,147 @@ class TestMomentumSweeps:
         c = three._assemble(u, v, three._for_u)
         expected = three._sweep_n(u, c, three._pressure_source(p, three._for_u))
         assert np.array_equal(b.u_star, expected)
+
+
+# ---------------------------------------------------------------------------
+# The obstacle wall stencil (ADR-012 B, ECR-002 step 4)
+# ---------------------------------------------------------------------------
+
+
+def _floor_channel(solid_floor: bool, mesh_spec: dict | None = None) -> SimConfig:
+    """A 2 by 1 channel of six fluid rows; its floor the domain edge or a SOLID row.
+
+    With a SOLID floor the domain is one row taller and the inlet and outlet
+    cover the fluid rows only, so the fluid region is the same channel.
+    """
+    ny, height = 6, 1.0
+    base = height / ny if solid_floor else 0.0
+    span = {"y_start": base, "y_end": height + base}
+    boundaries = {
+        "inlet": {**CHANNEL["inlet"], **span},
+        "outlet": {**CHANNEL["outlet"], **span},
+    }
+    floor = {
+        "name": "floor",
+        "x_start": 0.0,
+        "x_end": 2.0,
+        "y_start": 0.0,
+        "y_end": base,
+    }
+    return _config(
+        boundaries,
+        ny=ny + (1 if solid_floor else 0),
+        height=height + base,
+        obstacles=[floor] if solid_floor else None,
+        mesh=mesh_spec,
+    )
+
+
+def _floor_states(rng: np.random.Generator) -> tuple[tuple, tuple, tuple]:
+    """The two channels' predictors and one random state shared by their fluid rows."""
+    edge_mesh, edge_bc, edge = _build(_floor_channel(False))
+    solid_mesh, solid_bc, solid = _build(_floor_channel(True))
+    assert np.all(solid_mesh.cell_type[0, :] == SOLID)
+    u, v, _p = _random_state(edge_mesh, edge_bc, rng)
+    u_s = np.vstack([np.zeros((1, u.shape[1])), u])
+    v_s = np.vstack([np.zeros((1, v.shape[1])), v])
+    solid_bc.apply_normal_velocity(u_s, v_s)
+    assert np.array_equal(u_s[1:, :], u) and np.array_equal(v_s[1:, :], v)
+    # A viscosity varying across the channel only, so both see the same field.
+    profile = 0.05 * (1.0 + 4.0 * edge_mesh.yc**2)
+    cells = np.tile(profile[:, None], (1, edge_mesh.xc.size))
+    cells_s = np.vstack([np.full((1, cells.shape[1]), np.nan), cells])
+    return (edge, u, v, cells), (solid, u_s, v_s, cells_s), (edge_mesh, solid_mesh)
+
+
+@pytest.mark.unit
+class TestObstacleWallStencil:
+    """A tangential unknown beside a SOLID face takes the domain edge's wall stencil."""
+
+    @staticmethod
+    def _both(
+        mp: MomentumPredictor, u: np.ndarray, v: np.ndarray, **kw: np.ndarray
+    ) -> tuple[MomentumCoefficients, MomentumCoefficients]:
+        """The u equation and the v equation in v's own frame (transposed)."""
+        c_u = mp._assemble(u, v, mp._for_u, **kw)
+        field = kw.get("mu_cells")
+        kw_v = dict(kw)
+        if field is not None:
+            kw_v["mu_cells"] = np.ascontiguousarray(field.T)
+        c_v = mp._assemble(v.T, u.T, mp._for_v, **kw_v)
+        return c_u, c_v
+
+    @pytest.mark.parametrize("with_field", [False, True])
+    def test_a_solid_floor_row_assembles_as_the_domain_floor(
+        self, with_field: bool
+    ) -> None:
+        """Every implicit coefficient and the boundary source of the fluid rows agree."""
+        (edge, u, v, cells), (solid, u_s, v_s, cells_s), _ = _floor_states(
+            np.random.default_rng(450)
+        )
+        kw_e = {"mu_cells": edge._check_mu_eff(cells)} if with_field else {}
+        kw_s = {"mu_cells": solid._check_mu_eff(cells_s)} if with_field else {}
+        e_u, e_vt = self._both(edge, u, v, **kw_e)
+        s_u, s_vt = self._both(solid, u_s, v_s, **kw_s)
+        names = ("a_p", "a_s_plus", "a_s_minus", "a_t_plus", "a_t_minus", "b_boundary")
+        for name in names:
+            # Rows of u above the SOLID row; columns of v (transposed rows)
+            # above the wall face, which is no unknown.
+            assert getattr(s_u, name)[1:, :] == pytest.approx(
+                getattr(e_u, name), rel=ROUNDING, abs=1e-15
+            ), name
+            assert getattr(s_vt, name)[:, 1:] == pytest.approx(
+                getattr(e_vt, name), rel=ROUNDING, abs=1e-15
+            ), name
+        assert np.all(s_u.a_t_minus[1, :] == 0.0)
+
+    def test_the_wall_is_half_the_unknowns_cell_away_by_hand(self) -> None:
+        """At rest, above a block's top and at its corner: four conductances, one to the face."""
+        config = _config(CAVITY, obstacles=[FLOOR_BLOCK], mesh=STRETCHED)
+        mesh, _bc, mp = _build(config)
+        solid = mesh.cell_type == SOLID
+        top = int(np.flatnonzero(solid.any(axis=1)).max())
+        columns = np.flatnonzero(solid[top])
+        j = top + 1
+        u, v, _p = allocate_fields(mesh)
+        c, _ = mp.momentum_coefficients(u, v)
+        mu = config.mu
+        # columns[0] is the face at the block's west side: its south
+        # neighbour bounds a SOLID cell on the east only, the corner.
+        for i in (columns[0], columns[1], columns[-1] + 1):
+            expected = mu * (
+                mesh.dy_cell[j] / mesh.dx_cell[i]
+                + mesh.dy_cell[j] / mesh.dx_cell[i - 1]
+                + mesh.dx_face[i] / mesh.dy_face[j + 1]
+                + mesh.dx_face[i] / (mesh.yc[j] - mesh.y[j])
+            )
+            assert c.a_p[j, i] == pytest.approx(expected, rel=ROUNDING), i
+            assert c.a_t_minus[j, i] == 0.0
+            assert c.b_boundary[j, i] == 0.0
+
+    def test_wall_mu_reaches_an_obstacle_face(self) -> None:
+        """The hook replaces the obstacle face's viscosity, and refuses NaN there."""
+        config = _config(CAVITY, obstacles=[FLOOR_BLOCK])
+        mesh, _bc, mp = _build(config)
+        solid = mesh.cell_type == SOLID
+        top = int(np.flatnonzero(solid.any(axis=1)).max())
+        i = int(np.flatnonzero(solid[top])[1])
+        j = top + 1
+        u, v, p = allocate_fields(mesh)
+        shape = (mesh.yc.size + 1, mesh.xc.size + 1)
+        walls = {"u": np.full(shape, config.mu), "v": np.full(shape, config.mu)}
+        a = mp.predict(u, v, p, wall_mu=walls)
+        walls["u"][j, i] = 5.0 * config.mu
+        b = mp.predict(u, v, p, wall_mu=walls)
+        expected = 4.0 * config.mu * mesh.dx_face[i] / (mesh.yc[j] - mesh.y[j])
+        assert b.a_p_u[j, i] - a.a_p_u[j, i] == pytest.approx(expected, rel=1e-12)
+        walls["u"][j, i] = np.nan
+        with pytest.raises(ValueError, match="finite"):
+            mp.predict(u, v, p, wall_mu=walls)
+
+    def test_a_room_without_obstacles_has_no_obstacle_face(self) -> None:
+        """The stencil acts only where a SOLID cell is, so VAL-001 and VAL-002 are untouched."""
+        _mesh, _bc, mp = _build(_config(CHANNEL, mesh=STRETCHED))
+        for o in (mp._for_u, mp._for_v):
+            assert not o.walls.face.any()
+            assert not o.walls.north.any() and not o.walls.south.any()
