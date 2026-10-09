@@ -383,6 +383,14 @@ obstacle faces need the wall stencil the domain edges have, with the half-cell d
 the wall function on it. That is part of ECR-002's momentum step, and it changes the laminar
 solver only in rooms with obstacles, none of which has a validated result.
 
+*Note, 2026-10-08 (step 4 built).* The paragraph above describes `momentum.py` before step 4.
+Step 4 built the obstacle wall stencil: the wall at the obstacle face, half the unknown's cell
+away, with the wall viscosity from the `wall_mu` hook when given, and, by Alex's extension of
+2026-10-08, Leonard's boundary form in the QUICK correction there; a face bounding SOLID on one
+side only is a wall over its whole span. Section D's step 4 note gives the measurements. The
+lines of `_assemble` cited in this section have moved; the wall rows now read `wall_mu` when it
+is given. The wall function itself is step 6's.
+
 ## C. Discretization of k and eps (REQ-S15, proposed; decision 4)
 **Where they live.** At cell centres, beside p and the concentrations, so that the corrected
 faces advect them with the fluxes continuity was enforced on (ADR-011 A), the scheme is exact on
@@ -547,6 +555,40 @@ mu_t_old + a_t rho C_mu k^2 / eps` with `alpha_turbulence` = a_t. The k and eps 
 corrected faces for the reason the transport solver does. `alpha_velocity` keeps its meaning; a
 value for the turbulent cases is a measurement of ECR-002 step 5, not a guess here. The pressure
 correction's d = A / a_P reads the larger a_P and needs no change.
+
+*Note, 2026-10-08 (step 4 built; the outlets' datum dropped).* Alex decided on 2026-10-08 that
+step 4 builds nothing for the outlets' datum. The modified pressure `p + (2/3) rho k` disagrees
+only with a boundary that holds the pressure; the product room has had no pressure outlet since
+step 3 (decision 1 as amended), and VAL-001, which has one, runs laminar. "ECR-002 step 4 decides
+whether to correct the datum per face" above is answered: no correction. The `momentum.py`
+contract in `docs/SYSTEM.md` says which pressure the solver returns.
+
+*Note, 2026-10-08 (step 4 built; the obstacle stencil and its corner rule).* The face rule, form
+b's stress source and the momentum sweep count are the step 0 probe's arithmetic
+(`frozen34.py`), and `MomentumPredictor.predict(u, v, p, mu_eff=...)` reproduces its
+FrozenPredictor bit for bit on the 40x15 product room before the obstacle stencil. The obstacle
+faces take the domain edge's wall stencil (section B, "Obstacle walls") in two parts. The
+diffusion: the wall at the face, half the unknown's cell away, wall value zero, the viscosity
+from `wall_mu` when given. The QUICK correction, added by Alex on 2026-10-08 beyond the prompt's
+text: with only the diffusion, a channel whose floor is a row of SOLID cells still differed from
+the domain-floor channel by 1.3e-4 m/s, 1.3e-3 of the 0.1 m/s inflow, where the flow develops,
+because QUICK took its far-upstream node from the zero stored at the SOLID face's location; with Leonard's boundary
+form there, as at a domain edge, the two channels agree to 6e-16 m/s. The corner rule is the
+same for both parts: a neighbour face that bounds a SOLID cell on one side only, at an
+obstacle's corner, is a wall over its whole span. The diffusion takes the half distance over
+the whole span. In the QUICK correction the face takes the wall value under both schemes and
+adds nothing, and the unknown beside it takes the wall as its far node. The viscosity field's
+face rule treats such a SOLID cell as it treats a domain edge, with the value of the non-SOLID
+cell across the row boundary. On the product room the stencil moves the 40x15 ladder's stops
+from 391 and 1,632 to 728 and 2,115 outer iterations and the 80x30 drift case's from 177 to
+176, with no divergence and no drift (prompt 43's pull request). The corner rule's QUICK half
+carries the whole rise at Re 895: the diffusion alone stops at 375, and with the corner faces'
+correction removed (the face back to QUICK, a probe in `docs/reports/probe43/`) the run stops at
+372. At Re 8,950 the same probe never converges in 3,000 outer iterations, though it stays
+bounded, while the committed rule converges at 2,115. The rule's correction is zero, so a corner
+face is advected by upwind with its true mass flux: first order at the corner, conservative, and
+the more dissipative choice. Whether it still slows the outer loop on finer grids, where corners
+are a smaller share of the room, is a question for step 5 (prompt 43b's pull-request section).
 
 ## E. The stopping rule (REQ-S01, clarified; rule version 4)
 ADR-010's conditions (a) to (d) bound the velocity's iteration error, the per-cell imbalance, the
@@ -828,6 +870,15 @@ distances and tangential conditions already reach the stencil as data.
 needs no outlet condition per outer iteration beyond the copy it has. The exhaust segment type is
 `fixed_flow_outlet`, with the remainder rule of section D's note in place of the refusal when the
 exhausts' total reaches the supply's.
+
+*Note, 2026-10-08 (step 4 built).* The momentum contract below was built as drafted for
+`predict`; `wall_mu` was given a layout of its own, the one `docs/SYSTEM.md`'s `momentum.py`
+contract states: a dict with keys "u" and "v", each [ny+1, nx+1] indexed by corner, read at the
+domain-edge wall faces and the obstacle faces. `KEpsilonModel.wall_viscosity`'s draft return,
+`dict[edge, ndarray]` per domain edge, is superseded by that layout, which is what step 6 must
+produce. `StaggeredSolver.eddy_viscosity` below is not built; step 4 built a `solve_steady`
+keyword, `eddy_viscosity`, that holds a prescribed field for the solve (`docs/SYSTEM.md`, the
+`solver_staggered.py` contract).
 
 **Draft contracts** (SYSTEM.md section 4 gains them when ECR-002 is accepted).
 

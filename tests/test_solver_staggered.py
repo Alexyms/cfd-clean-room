@@ -18,7 +18,7 @@ import yaml
 
 from src.boundary_staggered import StaggeredBoundary
 from src.config import SimConfig
-from src.mesh import Mesh
+from src.mesh import SOLID, Mesh
 from src.momentum import MomentumPrediction, MomentumPredictor
 from src.pressure import PressureCorrection, PressureCorrector
 from src.solver_staggered import StaggeredSolver
@@ -774,3 +774,94 @@ class TestCappedCorrections:
         assert (solver.converged, solver.stop_reason) == (False, "max_simple_iter")
         assert min(solver.residual_history) < config.convergence_tol
         assert np.abs(solver.last_mass_imbalance).max() > config.mass_imbalance_tol
+
+
+@pytest.mark.integration
+class TestEddyViscosity:
+    """solve_steady(eddy_viscosity=...) (ECR-002 step 4): mu + rho nu_t to the predictor."""
+
+    @staticmethod
+    def _faces(solver: StaggeredSolver) -> bytes:
+        faces = solver.face_velocities
+        assert faces is not None
+        return faces.u.tobytes() + faces.v.tobytes()
+
+    def test_a_zero_field_is_the_laminar_path_to_the_byte(self) -> None:
+        """Faces, residual history and stop of the channel equal the call without it."""
+        config = _channel()
+        mesh, _bc, laminar = _build(config)
+        laminar.solve_steady()
+        _mesh, _bc, zero = _build(config)
+        zero.solve_steady(eddy_viscosity=np.zeros(mesh.cell_type.shape))
+        assert self._faces(zero) == self._faces(laminar)
+        assert zero.residual_history == laminar.residual_history
+        assert zero.stop_reason == laminar.stop_reason
+
+    def test_a_uniform_field_is_a_laminar_solve_at_the_raised_viscosity(self) -> None:
+        """nu_t uniform gives, bit for bit, the configuration whose mu is mu + rho nu_t."""
+        config = _ruled("poiseuille", (12, 6), fluid={"density": 1.2})
+        nu_t = 0.004
+        raised = _ruled(
+            "poiseuille",
+            (12, 6),
+            fluid={"density": 1.2, "viscosity": config.mu + config.rho * nu_t},
+        )
+        mesh, _bc, field = _build(config)
+        field.solve_steady(eddy_viscosity=np.full(mesh.cell_type.shape, nu_t))
+        _mesh, _bc, laminar = _build(raised)
+        laminar.solve_steady()
+        assert self._faces(field) == self._faces(laminar)
+        assert field.residual_history == laminar.residual_history
+        _mesh, _bc, air = _build(config)
+        air.solve_steady()
+        assert self._faces(air) != self._faces(field)
+
+    def test_solid_cells_are_not_read(self) -> None:
+        """NaN in every SOLID cell solves as zeros there do."""
+        block = {
+            "name": "b",
+            "x_start": 0.25,
+            "x_end": 0.5,
+            "y_start": 0.0,
+            "y_end": 0.25,
+        }
+        config = _case("cavity", 8, obstacles=[block])
+        mesh, _bc, zeros = _build(config)
+        solid = mesh.cell_type == SOLID
+        assert solid.any()
+        nu_t = np.full(mesh.cell_type.shape, 1e-3)
+        zeros.solve_steady(eddy_viscosity=np.where(solid, 0.0, nu_t))
+        _mesh, _bc, holes = _build(config)
+        holes.solve_steady(eddy_viscosity=np.where(solid, np.nan, nu_t))
+        assert self._faces(holes) == self._faces(zeros)
+
+    @pytest.mark.parametrize(
+        ("bad", "error", "match"),
+        [
+            ("list", TypeError, "float64 ndarray"),
+            ("float32", TypeError, "float64 ndarray"),
+            ("shape", ValueError, "shape"),
+            ("nan", ValueError, "finite"),
+            ("negative", ValueError, "non-negative"),
+        ],
+    )
+    def test_a_malformed_field_is_refused_before_any_iteration(
+        self, bad: str, error: type[Exception], match: str
+    ) -> None:
+        """Type, shape, a non-finite or a negative value in a non-SOLID cell."""
+        config = _channel()
+        mesh, _bc, solver = _build(config)
+        good = np.zeros(mesh.cell_type.shape)
+        poisoned = good.copy()
+        poisoned[2, 3] = np.nan if bad == "nan" else -1e-6
+        field: object = {
+            "list": good.tolist(),
+            "float32": good.astype(np.float32),
+            "shape": good[:-1, :],
+            "nan": poisoned,
+            "negative": poisoned,
+        }[bad]
+        seen: list[IterationState] = []
+        with pytest.raises(error, match=match):
+            solver.solve_steady(on_iteration=seen.append, eddy_viscosity=field)  # type: ignore[arg-type]
+        assert seen == []

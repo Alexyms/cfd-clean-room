@@ -362,7 +362,12 @@ solver (REQ-T13), is built on `feature/ecr002-transport-coupling` and waits for 
 the tests are named in `docs/SYSTEM.md`. ECR-002 step 3, the outlets, is built on
 `feature/ecr002-fixed-flow-outlets` and waits for review and test: the returns and the hood are
 fixed-flow outlets, the product room has no pressure outlet, and its pressure no longer drifts
-(issue 61). Next: ECR-002 steps 4 and 5; step 5 retakes step 0's sweep result with CG.
+(issue 61). ECR-002 step 4, momentum with a viscosity field, is built on
+`feature/ecr002-viscosity-field` and waits for review and test: the face rule, the stress source,
+the wall-function hook, the sweep count and a prescribed eddy viscosity through the solver, with
+the laminar validation results bitwise; the obstacle faces now have the domain edge's wall
+stencil, which changes the laminar product room (it converges at more outer iterations). Next:
+ECR-002 step 5, which retakes step 0's sweep result with CG through `momentum_sweeps`.
 
 Deferred findings from earlier pull requests were open as GitHub issues, and every open one now
 has a disposition. The cleanup pull request (branch `fix/deferred-findings-cleanup`) closes issues
@@ -378,9 +383,9 @@ still installed. Removing them is Alex's, after merge.
 
 Step 0's question is answered (step 0's outcome B, then section 7's outcome A,
 `docs/reports/ecr002_step0_frozen_viscosity.md`): on the coarse room ten momentum sweeps per outer iteration converge the room across
-k-epsilon's range, where one sweep does not. A configurable momentum sweep count
-(default 1, so the laminar results stay bitwise) is built with step 4's viscosity field and used
-from step 5 on. Step 1 settled RNG's C_mu at 0.0845 (Alex, 2026-10-05) and found that a
+k-epsilon's range, where one sweep does not. The configurable momentum sweep count
+(`solver.momentum_sweeps`, default 1, so the laminar results stay bitwise) is built with step 4's
+viscosity field and used from step 5 on. Step 1 settled RNG's C_mu at 0.0845 (Alex, 2026-10-05) and found that a
 wall cell's held eps must follow k, so step 6 rebuilds the wall conditions every outer
 iteration (`docs/SYSTEM.md`, the turbulence.py contract). ECR-002's requirement and scope text entered `docs/SYSTEM.md` in step 0's pull
 request, since that edit moves the requirement register `tests/test_system_map.py` pins. The

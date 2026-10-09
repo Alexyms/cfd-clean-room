@@ -48,8 +48,8 @@ responsibility = "Assembles the staggered pressure correction equation from the 
 serves = ["REQ-S04", "REQ-S08"]
 
 [modules."src/momentum.py"]
-responsibility = "Predicts u* and v* on the staggered grid with QUICK advection by deferred correction over an upwind implicit matrix, one under-relaxed Jacobi sweep per call, and returns the diagonal coefficients the pressure correction needs."
-serves = ["REQ-S07", "REQ-S09"]
+responsibility = "Predicts u* and v* on the staggered grid with QUICK advection by deferred correction over an upwind implicit matrix, a configured number of under-relaxed Jacobi sweeps per call, an optional per-cell viscosity field with its face rule and stress source, and the domain edge's wall stencil at obstacle faces, and returns the diagonal coefficients the pressure correction needs."
+serves = ["REQ-S07", "REQ-S09", "REQ-S14"]
 
 [modules."src/scalar_scheme.py"]
 responsibility = "Holds the cell-centred scalar scheme the transport solver and the k-epsilon model share: QUICK's face value bounded by the UMIST limiter, the advective flux along one axis with the inflow value or the upwind cell at a domain face, and the backward Euler solve of diffusion with a non-negative cell sink by Jacobi, on per-face conductances with one step or a step per cell, with an optional mask of cells held at their value."
@@ -57,7 +57,7 @@ serves = ["REQ-T12", "REQ-S15"]
 
 [modules."src/solver_staggered.py"]
 responsibility = "Runs steady SIMPLE on the staggered grid as one outer loop over the momentum predictor and the pressure correction, returning cell-centered fields through the harness's callback shape and exposing the final faces as FaceVelocities; stops by the velocity-step rule or, when configured, by the error-estimate rule."
-serves = ["REQ-S01", "REQ-S02", "REQ-S03", "REQ-S04", "REQ-S05", "REQ-S07", "REQ-S13"]
+serves = ["REQ-S01", "REQ-S02", "REQ-S03", "REQ-S04", "REQ-S05", "REQ-S07", "REQ-S13", "REQ-S14"]
 
 [modules."src/solver_transport.py"]
 responsibility = "Advances one particle class one explicit step on the staggered face velocities: QUICK's face value bounded by the UMIST limiter under forward Euler at a Courant number the configuration sets, implicit diffusion and deposition by Jacobi on per-face conductances, the Brownian coefficient plus nu_t / Sc_t on interior faces when handed an eddy viscosity field, the settling increment on interior faces, sources added and booked, SOLID cells zero; keeps one MassBudget per class and defines FieldHistory, the output contract for the animation."

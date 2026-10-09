@@ -1119,6 +1119,46 @@ class TestMeshStretching:
 
 
 @pytest.mark.unit
+class TestMomentumSweepsKey:
+    """solver.momentum_sweeps (ECR-002 step 4): optional, a positive int, default 1."""
+
+    def _raw(self, tmp_path: Path, **keys: object) -> dict:
+        with open(_write_config(tmp_path), encoding="utf-8") as handle:
+            raw = yaml.safe_load(handle)
+        raw["solver"].update(keys)
+        return raw
+
+    def test_absent_gives_one_and_a_given_count_is_read(self, tmp_path: Path) -> None:
+        """No key is the one sweep every stored result used; ten is read as ten."""
+        assert SimConfig(_write_config(tmp_path)).momentum_sweeps == 1
+        given = SimConfig.from_dict(self._raw(tmp_path, momentum_sweeps=10))
+        assert given.momentum_sweeps == 10
+
+    def test_it_is_a_solver_key_after_the_required_ones(self) -> None:
+        """The harness records it from SOLVER_KEYS, directly after pressure_rtol."""
+        index = SOLVER_KEYS.index("momentum_sweeps")
+        assert SOLVER_KEYS[index - 1] == "pressure_rtol"
+
+    @pytest.mark.parametrize(
+        ("bad", "error"),
+        [
+            (0, ValueError),
+            (-3, ValueError),
+            (True, TypeError),
+            (2.0, TypeError),
+            ("10", TypeError),
+            (None, TypeError),
+        ],
+    )
+    def test_bad_values_are_refused(
+        self, tmp_path: Path, bad: object, error: type[Exception]
+    ) -> None:
+        """Not positive, a bool, a float, a string or null is refused, naming the key."""
+        with pytest.raises(error, match=r"solver\.momentum_sweeps"):
+            SimConfig.from_dict(self._raw(tmp_path, momentum_sweeps=bad))
+
+
+@pytest.mark.unit
 class TestStoppingRuleKeys:
     """The optional stopping keys default and validate; unknown solver keys are refused."""
 
@@ -1242,9 +1282,9 @@ class TestPressureKeys:
         assert RETIRED_PRESSURE_TOL_KEY == "pressure_tol"
 
     def test_solver_keys_is_the_one_ordered_list(self) -> None:
-        """Twelve keys, nine required then three optional, pressure_rtol among them."""
+        """Thirteen keys, nine required then four optional, pressure_rtol among them."""
         assert isinstance(SOLVER_KEYS, tuple)
-        assert len(SOLVER_KEYS) == len(set(SOLVER_KEYS)) == 12
+        assert len(SOLVER_KEYS) == len(set(SOLVER_KEYS)) == 13
         assert "pressure_rtol" in SOLVER_KEYS
         assert SOLVER_KEYS[-3:] == (
             "stopping_rule",

@@ -32,6 +32,11 @@ collocated layer's is two corner cells short on VAL-001, so the two
 reference velocities differ by 40/38 there and agree exactly on a closed
 domain (docs/reports/staggered_integration_step6.md).
 
+``solve_steady(eddy_viscosity=...)`` holds a prescribed kinematic eddy
+viscosity for the whole solve and hands the predictor ``mu + rho nu_t``
+(ECR-002 step 4); step 5 drives prescribed fields through it, and step 6
+replaces it with the model's field each outer iteration.
+
 The faces of the last solve are kept as ``face_velocities`` (REQ-S13):
 the transport solver advects with them because the cell means the contract
 returns do not carry the continuity the stopping rule enforced on the faces.
@@ -65,7 +70,7 @@ import numpy as np
 
 from src.boundary_staggered import StaggeredBoundary
 from src.config import ERROR_ESTIMATE, VELOCITY_STEP, SimConfig
-from src.mesh import FLUID, Mesh
+from src.mesh import FLUID, SOLID, Mesh
 from src.momentum import MomentumPredictor
 from src.pressure import ZERO_SCALE, PressureCorrector
 from src.staggered import FaceVelocities, allocate_fields, p_shape, to_cell_centers
@@ -146,6 +151,8 @@ class StaggeredSolver:
         self._predictor = MomentumPredictor(mesh, config, boundary)
         self._corrector = PressureCorrector(mesh, config, boundary)
         self._rho = config.rho
+        self._mu = config.mu
+        self._live = mesh.cell_type != SOLID
         self._convergence_tol = config.convergence_tol
         self._max_simple_iter = config.max_simple_iter
         self._stopping_rule = config.stopping_rule
@@ -230,8 +237,32 @@ class StaggeredSolver:
         v[0, bottom] = v[1, bottom]
         v[-1, top] = v[-2, top]
 
+    def _effective_viscosity(self, eddy_viscosity: np.ndarray) -> np.ndarray:
+        """``mu + rho nu_t`` per cell, or a refusal before any arithmetic.
+
+        SOLID cells take air's viscosity; the predictor reads none of them.
+        """
+        field = eddy_viscosity
+        if not isinstance(field, np.ndarray) or field.dtype != np.float64:
+            got = field.dtype if isinstance(field, np.ndarray) else type(field).__name__
+            raise TypeError(f"eddy_viscosity must be a float64 ndarray, got {got}")
+        shape = p_shape(self._mesh)
+        if field.shape != shape:
+            raise ValueError(
+                f"expected eddy_viscosity of shape {shape}, got {field.shape}"
+            )
+        live = field[self._live]
+        if not np.isfinite(live).all():
+            raise ValueError("eddy_viscosity must be finite in every non-SOLID cell")
+        if np.any(live < 0.0):
+            raise ValueError("eddy_viscosity must be non-negative (ADR-012 D)")
+        return self._mu + self._rho * np.where(self._live, field, 0.0)
+
     def solve_steady(
-        self, on_iteration: Callable[[IterationState], None] | None = None
+        self,
+        on_iteration: Callable[[IterationState], None] | None = None,
+        *,
+        eddy_viscosity: np.ndarray | None = None,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Solve for steady-state velocity and pressure fields.
 
@@ -242,13 +273,32 @@ class StaggeredSolver:
             v, the pressure, the residual and the corrector's iteration
             count for that iteration. The arrays are fresh each iteration and
             must not be modified.
+        eddy_viscosity : np.ndarray, optional
+            Kinematic eddy viscosity nu_t per cell, m^2/s, shape [ny, nx],
+            float64, finite and non-negative in every non-SOLID cell (the
+            transport solver's convention), held fixed for the solve. The
+            predictor receives ``mu_eff = mu + rho nu_t`` each outer
+            iteration (ADR-012 D). None is the laminar path, bitwise.
 
         Returns
         -------
         tuple[np.ndarray, np.ndarray, np.ndarray]
             (u, v, p) at cell centers, each shape [ny, nx], dtype float64,
             C-contiguous.
+
+        Raises
+        ------
+        TypeError
+            If ``eddy_viscosity`` is not a float64 ndarray.
+        ValueError
+            If ``eddy_viscosity`` has the wrong shape, or a non-finite or
+            negative value in a non-SOLID cell.
         """
+        mu_eff = (
+            None
+            if eddy_viscosity is None
+            else self._effective_viscosity(eddy_viscosity)
+        )
         u, v, p = allocate_fields(self._mesh)
         self._boundary.apply_normal_velocity(u, v)
 
@@ -266,7 +316,12 @@ class StaggeredSolver:
         for iteration in range(self._max_simple_iter):
             t0 = perf_counter()
             self._extrapolate_outlets(u, v)
-            prediction = self._predictor.predict(u, v, p)
+            # Without a field the call is the laminar one, so a predictor a
+            # probe substitutes (docs/reports/probe41/outlet41.py) still fits.
+            if mu_eff is None:
+                prediction = self._predictor.predict(u, v, p)
+            else:
+                prediction = self._predictor.predict(u, v, p, mu_eff=mu_eff)
             t1 = perf_counter()
             self.stage_seconds["momentum"] += t1 - t0
 
