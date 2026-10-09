@@ -1193,9 +1193,9 @@ def test_a_solid_floor_channel_solves_as_the_domain_floor_channel() -> None:
 
     Before the stencil the SOLID floor's first row differs by a first-order
     amount (the wall a whole cell away). With the diffusive stencil and not
-    QUICK's boundary form it differs by about 1e-4 of the inflow near the
-    inlet, where the flow is developing (docs/reports/probe43/field43.py
-    floor). With both, the fluid faces agree to rounding.
+    QUICK's boundary form it differs by about 1.3e-4 m/s, 1.3e-3 of the
+    0.1 m/s inflow, near the inlet, where the flow is developing
+    (docs/reports/probe43/field43.py floor). With both, the fluid faces agree to rounding.
     """
     solver_keys = {"max_simple_iter": 5000, "convergence_tol": 1e-10}
     edge_cfg = _floor_channel(False, solver=solver_keys)

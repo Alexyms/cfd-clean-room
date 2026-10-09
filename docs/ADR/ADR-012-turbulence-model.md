@@ -563,8 +563,8 @@ faces take the domain edge's wall stencil (section B, "Obstacle walls") in two p
 diffusion: the wall at the face, half the unknown's cell away, wall value zero, the viscosity
 from `wall_mu` when given. The QUICK correction, added by Alex on 2026-10-08 beyond the prompt's
 text: with only the diffusion, a channel whose floor is a row of SOLID cells still differed from
-the domain-floor channel by 1.3e-4 of the inflow where the flow develops, because QUICK took
-its far-upstream node from the zero stored at the SOLID face's location; with Leonard's boundary
+the domain-floor channel by 1.3e-4 m/s, 1.3e-3 of the 0.1 m/s inflow, where the flow develops,
+because QUICK took its far-upstream node from the zero stored at the SOLID face's location; with Leonard's boundary
 form there, as at a domain edge, the two channels agree to 6e-16 m/s. The corner rule is the
 same for both parts: a neighbour face that bounds a SOLID cell on one side only, at an
 obstacle's corner, is a wall over its whole span. The diffusion takes the half distance over
