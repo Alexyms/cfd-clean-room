@@ -2,7 +2,7 @@
 
 Usage:
     python conv44.py base GRID                       the Re 90 base field, ten sweeps, to the stop
-    python conv44.py run GRID FIELD SWEEPS [--rtol R] [--corner-free] [--cap N] [--tag T]
+    python conv44.py run GRID FIELD SWEEPS [--rtol R] [--corner-free] [--cap N] [--tag T] [--locate]
     python conv44.py cavity N                        the lid-driven cavity at Re 1,000 on N x N
 
 GRID is 40x15, 80x30 or 200x75. FIELD is U1, U2, U3 (uniform effective
@@ -22,7 +22,9 @@ the face hash, and a hook that keeps the solver's stopping rule so its
 estimate history can be recorded. `--corner-free` is measurement 4's one
 counterfactual: the predictor is tail43.corner_free_class(), the committed
 `_deferred_correction` with the two lines that zero the QUICK correction at
-obstacle faces removed. Records go to results/builder44/ as NAME.json and
+obstacle faces removed. `--locate` adds to the record the cell of the
+largest change of each component between successive iterates (round 2,
+prompt 44b item 4). Records go to results/builder44/ as NAME.json and
 NAME.npz; the base field of each grid to base_GRID.npz and .json.
 
 One BLAS thread: the CG solve runs under src/pressure.py's limit, and this
@@ -61,7 +63,7 @@ from src.config import SimConfig  # noqa: E402
 from src.mesh import SOLID, Mesh  # noqa: E402
 from src.solver_staggered import StaggeredSolver  # noqa: E402
 from src.staggered import FaceVelocities  # noqa: E402
-from src.stopping import IterationState  # noqa: E402
+from src.stopping import ErrorEstimateRule, IterationState  # noqa: E402
 from validation.metrics import cavity_true_centerline_profiles  # noqa: E402
 
 OUT = ROOT / "results" / "builder44"
@@ -234,9 +236,22 @@ def eddy_field(
 # ---------------------------------------------------------------------------
 
 
-def run_room(room: probe.Room, eddy: np.ndarray | None, log_every: int = 100) -> dict:
-    """Run a room to its stop, divergence or cap; write NAME.json and NAME.npz."""
+def run_room(
+    room: probe.Room,
+    eddy: np.ndarray | None,
+    log_every: int = 100,
+    locate: bool = False,
+) -> dict:
+    """Run a room to its stop, divergence or cap; write NAME.json and NAME.npz.
+
+    With locate, the record also carries, per outer iteration, the cell of
+    the largest change of each cell-centred component between successive
+    iterates (the change the residual measures) and that change in m/s.
+    The commit is read when the run starts, so the record names the tree
+    it measured.
+    """
     OUT.mkdir(parents=True, exist_ok=True)
+    tree = commit()
     solver = room.solver
     corrector: probe.RecordingCorrector = solver._corrector  # type: ignore[assignment]
     mesh = room.mesh
@@ -251,7 +266,7 @@ def run_room(room: probe.Room, eddy: np.ndarray | None, log_every: int = 100) ->
     held: dict = {}
     new_rule = solver._new_rule
 
-    def keep_rule():  # type: ignore[no-untyped-def]
+    def keep_rule() -> ErrorEstimateRule | None:
         rule = new_rule()
         held["rule"] = rule
         return rule
@@ -261,6 +276,9 @@ def run_room(room: probe.Room, eddy: np.ndarray | None, log_every: int = 100) ->
     rec: dict[str, list] = {
         k: [] for k in ("residual", "inner", "cap", "max_speed", "at")
     }
+    if locate:
+        rec.update({k: [] for k in ("du_at", "du", "dv_at", "dv")})
+    previous: dict[str, np.ndarray] = {}
     vs_stop: dict[str, int] = {}
     last: dict[str, np.ndarray] = {}
     t0 = time.perf_counter()
@@ -276,6 +294,20 @@ def run_room(room: probe.Room, eddy: np.ndarray | None, log_every: int = 100) ->
         rec["cap"].append(bool(record.reached_cap))
         rec["max_speed"].append(top)
         rec["at"].append((round(float(xc.flat[k]), 4), round(float(yc.flat[k]), 4)))
+        if locate:
+            for comp, field in (("u", state.u), ("v", state.v)):
+                change = (
+                    np.abs(field - previous[comp])
+                    if comp in previous
+                    else np.abs(field)
+                )
+                change[~not_solid] = 0.0
+                kc = int(np.argmax(change))
+                rec[f"d{comp}_at"].append(
+                    (round(float(xc.flat[kc]), 4), round(float(yc.flat[kc]), 4))
+                )
+                rec[f"d{comp}"].append(float(change.flat[kc]))
+            previous["u"], previous["v"] = state.u.copy(), state.v.copy()
         last["u_c"], last["v_c"], last["p"] = (
             state.u.copy(),
             state.v.copy(),
@@ -319,7 +351,7 @@ def run_room(room: probe.Room, eddy: np.ndarray | None, log_every: int = 100) ->
     estimate = list(rule.estimate_history) if rule is not None else []
     out = {
         "name": room.name,
-        "commit": commit(),
+        "commit": tree,
         "started": started,
         "seconds": seconds,
         "seconds_per_outer": seconds / max(n, 1),
@@ -444,6 +476,8 @@ def run(args: argparse.Namespace) -> None:
         name += f"_r{args.rtol}"
     if args.corner_free:
         name += "_cf"
+    if args.locate:
+        name += "_loc"
     if args.tag:
         name += f"_{args.tag}"
     raw, cfg = product_config(grid, 1.0, cap, rtol, sweeps)
@@ -459,6 +493,7 @@ def run(args: argparse.Namespace) -> None:
         "momentum_sweeps_key": cfg.momentum_sweeps,
         "pressure_rtol": rtol,
         "corner_free": bool(args.corner_free),
+        "locate": bool(args.locate),
         "stopping": raw["solver"]["stopping_rule"],
         "iteration_error_tol": cfg.iteration_error_tol,
         "mass_imbalance_tol": cfg.mass_imbalance_tol,
@@ -466,7 +501,7 @@ def run(args: argparse.Namespace) -> None:
         "cap": cap,
     }
     room = build_room(name, cfg, meta, corner_free=args.corner_free)
-    run_room(room, eddy, log_every=args.log_every)
+    run_room(room, eddy, log_every=args.log_every, locate=args.locate)
 
 
 def extremes(positions: list[float], values: list[float]) -> dict:
@@ -556,6 +591,7 @@ def main() -> None:
     p.add_argument("--cap", type=int, default=0)
     p.add_argument("--tag", default="")
     p.add_argument("--log-every", type=int, default=100)
+    p.add_argument("--locate", action="store_true")
     p.set_defaults(func=run)
     p = sub.add_parser("cavity")
     p.add_argument("n", type=int)

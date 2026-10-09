@@ -8,14 +8,16 @@ Usage:
     python tables44.py corner          measurement 4: the corner-free runs against the committed rule
     python tables44.py rtol            measurement 5: pressure_rtol 1e-4 and 1e-2 against 1e-8
     python tables44.py cavity          measurement 6: the cavity's stops and centreline extremes
+    python tables44.py openings        each opening's discrete faces, width and velocity per grid
     python tables44.py all             everything above
 
 Reads results/builder44/*.json and *.npz, prints markdown tables, and keeps
 every number it printed in results/builder44/tables_MODE.json. Each run is
 classified by the report's section 2.1 rules, in order: diverged (the run
 stopped past 100 m/s or non-finite), converged (the solver's own stop),
-growing (at the cap with the largest speed above 5 m/s), bounded and not
-converged (at the cap under 5 m/s), with step 0's sub-classes falling,
+growing (at the cap with the median of the largest speed over the last
+500 iterations above 5 m/s), bounded and not converged (at the cap with that
+median under 5 m/s), with step 0's sub-classes falling,
 stalled or neither over the last 500 iterations.
 """
 
@@ -31,6 +33,9 @@ import yaml
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(HERE))
+
+from src.mesh import SOLID  # noqa: E402
 
 OUT = ROOT / "results" / "builder44"
 GRIDS = ("40x15", "80x30", "200x75")
@@ -91,7 +96,8 @@ def classify(rec: dict) -> tuple[str, str]:
         return "diverged", ""
     if rec["stop"] == "error_estimate_and_continuity":
         return "converged", ""
-    if rec["max_speed_end"] > GROWING_SPEED:
+    speeds = np.array(rec["max_speed"])[-WINDOW:]
+    if float(np.median(speeds)) > GROWING_SPEED:
         return "growing", ""
     res = np.array(rec["residual"])
     w = res[-WINDOW:]
@@ -272,7 +278,7 @@ def base(_args: argparse.Namespace) -> None:
 
 def field_difference(a: dict, b: dict) -> dict:
     """Largest and RMS cell-centred velocity difference over non-SOLID cells, and the faces'."""
-    solid = a["cell_type"] == 2
+    solid = a["cell_type"] == SOLID
     du = np.where(solid, 0.0, b["u_c"] - a["u_c"])
     dv = np.where(solid, 0.0, b["v_c"] - a["v_c"])
     speed = np.hypot(du, dv)
@@ -444,7 +450,7 @@ def interpolated(
 ) -> tuple[np.ndarray, np.ndarray]:
     """u and v of a record at points, SOLID cells at zero."""
     f = fields(name)
-    solid = f["cell_type"] == 2
+    solid = f["cell_type"] == SOLID
     u = np.where(solid, 0.0, f["u_c"])
     v = np.where(solid, 0.0, f["v_c"])
     return bilinear(f["xc"], f["yc"], u, px, py), bilinear(f["xc"], f["yc"], v, px, py)
@@ -726,6 +732,59 @@ def cavity(_args: argparse.Namespace) -> None:
     keep("cavity", rows)
 
 
+def openings(_args: argparse.Namespace) -> None:
+    """Each opening's faces, discrete width and velocity on every grid (round 2, item 5)."""
+    import conv44
+
+    from src.boundary_staggered import StaggeredBoundary
+    from src.mesh import Mesh
+
+    rows: dict[str, dict] = {}
+    for grid in GRIDS:
+        raw, cfg = conv44.product_config(grid, 1.0, 1, 1e-8, 1)
+        mesh = Mesh(cfg)
+        boundary = StaggeredBoundary(mesh, cfg)
+        resolved = boundary.fixed_flow_velocities()
+        for name, segment in cfg.boundaries.items():
+            block = raw["boundaries"][name]
+            if segment.location == "left":
+                continue
+            mask = conv44.probe.segment_names(mesh, cfg, segment.location) == name
+            widths = (
+                mesh.dx_cell if segment.location in ("bottom", "top") else mesh.dy_cell
+            )
+            axis = "x" if segment.location in ("bottom", "top") else "y"
+            rows.setdefault(
+                name, {"span": [block[f"{axis}_start"], block[f"{axis}_end"]]}
+            )[grid] = {
+                "faces": int(mask.sum()),
+                "width": float(widths[mask].sum()),
+                "velocity": float(resolved.get(name, block.get("velocity"))),
+            }
+        rows.setdefault("inflow (m^2/s)", {"span": None})[grid] = {
+            "faces": None,
+            "width": None,
+            "velocity": float(boundary.get_total_inlet_flux()),
+        }
+    headers = [
+        "Opening",
+        "Configured span (m)",
+        *[f"{g}: faces, width (m), velocity (m/s)" for g in GRIDS],
+    ]
+    table = []
+    for name, r in rows.items():
+        span = f"{r['span'][0]:g} to {r['span'][1]:g}" if r["span"] else "-"
+        cells = [
+            f"{r[g]['velocity']:.4f}"
+            if r[g]["faces"] is None
+            else f"{r[g]['faces']}, {r[g]['width']:.2f}, {r[g]['velocity']:.4f}"
+            for g in GRIDS
+        ]
+        table.append([name, span, *cells])
+    print_table(headers, table)
+    keep("openings", rows)
+
+
 def everything(args: argparse.Namespace) -> None:
     """Every table."""
     for name, func in (
@@ -736,6 +795,7 @@ def everything(args: argparse.Namespace) -> None:
         ("corner", corner),
         ("rtol", rtol),
         ("cavity", cavity),
+        ("openings", openings),
     ):
         print(f"### {name}\n")
         func(args)
@@ -753,6 +813,7 @@ def main() -> None:
         ("corner", corner),
         ("rtol", rtol),
         ("cavity", cavity),
+        ("openings", openings),
         ("all", everything),
     ):
         sub.add_parser(name).set_defaults(func=func)
