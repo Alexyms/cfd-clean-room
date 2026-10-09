@@ -109,15 +109,17 @@ results = {}
 base_failed, base_summary = run()
 results["control (no defect)"] = {"failed": base_failed, "summary": base_summary}
 for label, keys in GROUPS.items():
-    originals = {}
-    for key in keys:
-        rel, old, new = PLANTS[key]
-        path = root / rel
-        text = path.read_bytes().decode().replace("\r\n", "\n")
-        assert text.count(old) == 1, (key, text.count(old))
-        originals[path] = path.read_bytes()
-        path.write_bytes(text.replace(old, new).replace("\n", "\r\n").encode())
+    originals: dict[Path, bytes] = {}
     try:
+        for key in keys:
+            rel, old, new = PLANTS[key]
+            path = root / rel
+            # The true original, once: a second plant in the same file must
+            # not overwrite it with the file the first plant has edited.
+            originals.setdefault(path, path.read_bytes())
+            text = path.read_bytes().decode().replace("\r\n", "\n")
+            assert text.count(old) == 1, (key, text.count(old))
+            path.write_bytes(text.replace(old, new).replace("\n", "\r\n").encode())
         failed, summary = run()
     finally:
         for path, data in originals.items():
