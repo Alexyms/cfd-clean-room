@@ -304,6 +304,14 @@ refused a layout, and no arm had to stop for want of a `src/` change. Arm E ran 
 the largest return (floor_return_1, seven faces), since B removed the drift on its own (section
 7.1), as the arm's definition prescribes.
 
+*Note, 2026-10-08 (ECR-002 step 3, prompt 42b).* `outlet41.py` reads
+`configs/clean_room_default.yaml` (`product_raw`). That file changed in step 3: its
+five outlets are now `fixed_flow_outlet`, so after step 3 the script builds a room with no
+pressure outlet, and the arms that leave a return at the copy rule (A, A-open, E and E0 at
+least) no longer measure what this report records. The script reproduces the records of this
+report at commit b961f15 and not after step 3. The built room is checked against arm D0
+by `docs/reports/probe42/fixed42.py`, which wants the shipped file.
+
 ## 7. Results (written after the runs)
 
 ### 7.1 Measurement 1: the drift case
