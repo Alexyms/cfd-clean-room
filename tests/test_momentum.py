@@ -9,12 +9,15 @@ exact value by a few ulps of the values involved.
 
 import numpy as np
 import pytest
+import yaml
 
 from src.boundary_staggered import StaggeredBoundary
 from src.config import SimConfig
 from src.mesh import SOLID, Mesh
-from src.momentum import MomentumPredictor, quick_face_values
+from src.momentum import MomentumPredictor, _Orientation, quick_face_values
 from src.staggered import allocate_fields
+from tests.frozen34_reference import load_frozen_predictor
+from validation.cases import CONFIG_DIR
 
 STRETCHED = {"x": {"stretch_ratio": 1.15}, "y": {"stretch_ratio": 1.25}}
 ROUNDING = 1e-12
@@ -59,6 +62,7 @@ def _config(
     obstacles: list[dict] | None = None,
     mesh: dict | None = None,
     mu: float = 0.05,
+    sweeps: int | None = None,
 ) -> SimConfig:
     raw = {
         "domain": {"width": width, "height": height, "nx": nx, "ny": ny},
@@ -88,6 +92,8 @@ def _config(
     }
     if mesh is not None:
         raw["mesh"] = mesh
+    if sweeps is not None:
+        raw["solver"]["momentum_sweeps"] = sweeps
     return SimConfig.from_dict(raw)
 
 
@@ -456,3 +462,465 @@ class TestPrediction:
         mesh = Mesh(config)
         with pytest.raises(ValueError, match="2 cells"):
             MomentumPredictor(mesh, config, StaggeredBoundary(mesh, config))
+
+
+# ---------------------------------------------------------------------------
+# The viscosity field, the wall viscosity and the sweep count (ECR-002 step 4)
+# ---------------------------------------------------------------------------
+
+# A block standing on the floor of the 2 m by 1 m box, so the face rule meets
+# SOLID cells across row boundaries and across columns.
+FLOOR_BLOCK = {
+    "name": "block",
+    "x_start": 0.75,
+    "x_end": 1.25,
+    "y_start": 0.0,
+    "y_end": 0.5,
+}
+
+
+def _random_field(mesh: Mesh, rng: np.random.Generator, mu: float) -> np.ndarray:
+    """A positive viscosity per cell spread over four decades above mu."""
+    return mu * (1.0 + 10.0 ** rng.uniform(-2.0, 2.0, mesh.cell_type.shape))
+
+
+def _random_state(
+    mesh: Mesh, bc: StaggeredBoundary, rng: np.random.Generator
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    u, v, p = allocate_fields(mesh)
+    u[:] = rng.normal(0.0, 0.5, u.shape)
+    v[:] = rng.normal(0.0, 0.5, v.shape)
+    p[:] = rng.normal(0.0, 0.1, p.shape)
+    bc.apply_normal_velocity(u, v)
+    return u, v, p
+
+
+def _hand_corner(mu: np.ndarray, o: _Orientation, j: int, i: int) -> float:
+    """ADR-012 D's rule at one transverse face, written out from the coordinates."""
+    nt = mu.shape[0]
+    columns = []
+    for c, width in (
+        (i - 1, o.s_faces[i] - o.s_centers[i - 1]),
+        (i, o.s_centers[i] - o.s_faces[i]),
+    ):
+        if j == 0:
+            value = mu[0, c]
+        elif j == nt:
+            value = mu[nt - 1, c]
+        else:
+            low, high = mu[j - 1, c], mu[j, c]
+            if o.solid[j - 1, c] and not o.solid[j, c]:
+                low = high
+            if o.solid[j, c] and not o.solid[j - 1, c]:
+                high = low
+            d_low = o.t_faces[j] - o.t_centers[j - 1]
+            d_high = o.t_centers[j] - o.t_faces[j]
+            value = (d_low + d_high) / (d_low / low + d_high / high)
+        columns.append((width, value))
+    (w_0, m_0), (w_1, m_1) = columns
+    return float((w_0 * m_0 + w_1 * m_1) / (w_0 + w_1))
+
+
+def _product_room(sweeps: int) -> SimConfig:
+    """The committed product configuration on the 40x15 grid of the ladder."""
+    raw = yaml.safe_load(
+        (CONFIG_DIR / "clean_room_default.yaml").read_text(encoding="utf-8")
+    )
+    raw["domain"]["nx"], raw["domain"]["ny"] = 40, 15
+    raw["solver"]["alpha_velocity"] = 0.5
+    raw["solver"]["momentum_sweeps"] = sweeps
+    return SimConfig.from_dict(raw)
+
+
+@pytest.mark.unit
+class TestViscosityFaceRule:
+    """ADR-012 D's face rule: harmonic across the row boundary, width mean across columns."""
+
+    def test_a_uniform_mesh_face_by_hand(self) -> None:
+        """Cells 1 and 3 in series give 1.5; beside cells of 2, the width mean is 1.75."""
+        mesh, _bc, mp = _build(_config(CAVITY))
+        mu = np.full(mesh.cell_type.shape, 2.0)
+        mu[2, 3], mu[3, 3] = 1.0, 3.0
+        corner = mp._corner_viscosity(mu, mp._for_u)
+        assert corner[3, 4] == pytest.approx(1.75, rel=ROUNDING)
+        assert corner[3, 3] == pytest.approx(1.75, rel=ROUNDING)
+        assert corner[3, 5] == 2.0
+
+    @pytest.mark.parametrize("component", ["u", "v"])
+    def test_every_face_on_a_stretched_mesh_with_solid_cells(
+        self, component: str
+    ) -> None:
+        """Both axes, every interior column, edge rows and SOLID neighbours included."""
+        mesh, _bc, mp = _build(_config(CAVITY, obstacles=[FLOOR_BLOCK], mesh=STRETCHED))
+        assert (mesh.cell_type == SOLID).any()
+        mu = _random_field(mesh, np.random.default_rng(431), 0.05)
+        o = mp._for_u if component == "u" else mp._for_v
+        cells = mu if component == "u" else np.ascontiguousarray(mu.T)
+        corner = mp._corner_viscosity(cells, o)
+        nt, ns = cells.shape
+        beside_solid = 0
+        for j in range(nt + 1):
+            for i in range(1, ns):
+                expected = _hand_corner(cells, o, j, i)
+                assert corner[j, i] == pytest.approx(expected, rel=ROUNDING), (j, i)
+                if 0 < j < nt and (o.solid[j - 1, i] != o.solid[j, i]):
+                    beside_solid += 1
+        assert beside_solid > 0
+
+    def test_a_solid_cell_contributes_its_neighbours_value(self) -> None:
+        """Across an obstacle top the face carries the wall cell's value, no SOLID value."""
+        mesh, _bc, mp = _build(_config(CAVITY, obstacles=[FLOOR_BLOCK]))
+        solid = mesh.cell_type == SOLID
+        mu = np.full(mesh.cell_type.shape, 0.05)
+        mu[solid] = 1.0e6
+        top = int(np.flatnonzero(solid.any(axis=1)).max())
+        columns = np.flatnonzero(solid[top])
+        mu[top + 1, columns] = 0.2
+        corner = mp._corner_viscosity(mu, mp._for_u)
+        inner = columns[1:]
+        assert np.all(corner[top + 1, inner] == 0.2)
+
+    def test_a_uniform_field_returns_itself_exactly(self) -> None:
+        """Equal inputs return the input to the bit at every face, both means."""
+        mesh, _bc, mp = _build(_config(CAVITY, obstacles=[FLOOR_BLOCK], mesh=STRETCHED))
+        value = 0.0371
+        for o, shape in (
+            (mp._for_u, mesh.cell_type.shape),
+            (mp._for_v, mesh.cell_type.shape[::-1]),
+        ):
+            cells = np.full(shape, value)
+            assert np.all(mp._corner_viscosity(cells, o) == value)
+            assert np.all(mp._face_viscosity(cells, o) == value)
+
+    def test_the_assembly_reads_the_rule(self) -> None:
+        """At rest the transverse coefficient is the corner value times width over distance."""
+        mesh, _bc, mp = _build(_config(CAVITY, obstacles=[FLOOR_BLOCK], mesh=STRETCHED))
+        mu = mp._check_mu_eff(_random_field(mesh, np.random.default_rng(432), 0.05))
+        u, v, _p = allocate_fields(mesh)
+        o = mp._for_u
+        c = mp._assemble(u, v, o, mu_cells=mu)
+        corner = mp._corner_viscosity(mu, o)
+        unknown = c.a_p > 0.0
+        nt = mu.shape[0]
+        checked = 0
+        for j in range(nt - 1):
+            for i in range(1, mu.shape[1]):
+                if unknown[j, i] and unknown[j + 1, i]:
+                    expected = corner[j + 1, i] * o.ds_face[i] / o.dt_face[j + 1]
+                    assert c.a_t_plus[j, i] == pytest.approx(expected, rel=ROUNDING)
+                    checked += 1
+        assert checked > 0
+
+
+@pytest.mark.unit
+class TestStressSource:
+    """Form b of the stress terms a varying viscosity adds (ADR-012 D)."""
+
+    def test_zero_for_any_uniform_field(self) -> None:
+        """A uniform viscosity on a random, divergent velocity field gives exact zeros."""
+        mesh, bc, mp = _build(_config(CAVITY, obstacles=[FLOOR_BLOCK], mesh=STRETCHED))
+        u, v, _p = _random_state(mesh, bc, np.random.default_rng(433))
+        for value in (0.05, 3.7e-4, 12.0):
+            for comp, o in (("u", mp._for_u), ("v", mp._for_v)):
+                cells = np.full(o.solid.shape, value)
+                corner = mp._corner_viscosity(cells, o)
+                a, b = (u, v) if comp == "u" else (v.T, u.T)
+                assert np.all(mp._stress_source(a, b, o, cells, corner) == 0.0)
+
+    def test_equal_to_the_probes_on_a_varying_field(self) -> None:
+        """Bitwise frozen34.py's form b, both components, a SOLID-adjacent spread."""
+        frozen = load_frozen_predictor()
+        config = _product_room(1)
+        mesh, bc, mp = _build(config)
+        rng = np.random.default_rng(434)
+        u, v, _p = _random_state(mesh, bc, rng)
+        mu_t = _random_field(mesh, rng, config.mu) - config.mu
+        probe = frozen(mesh, config, bc, mu_t)
+        cells = config.mu + mu_t
+        for comp, o in (("u", mp._for_u), ("v", mp._for_v)):
+            field = cells if comp == "u" else np.ascontiguousarray(cells.T)
+            a, b = (u, v) if comp == "u" else (v.T, u.T)
+            corner = mp._corner_viscosity(field, o)
+            ours = mp._stress_source(a, b, o, field, corner)
+            theirs, _pair = probe.stress_source(a, b, o, field, corner)
+            assert np.array_equal(ours, theirs), comp
+            assert np.any(ours != 0.0)
+
+    def test_linear_viscosity_on_a_linear_velocity_by_hand(self) -> None:
+        """mu = mu0 + rho (1 + x), u = x, v = 0: d/dx(mu du/dx) = rho, so rho per unit volume."""
+        config = _config(CAVITY, mesh=STRETCHED)
+        mesh, _bc, mp = _build(config)
+        mu = config.mu + config.rho * (1.0 + np.tile(mesh.xc, (mesh.yc.size, 1)))
+        u = np.tile(mesh.x, (mesh.yc.size, 1))
+        v = np.zeros((mesh.y.size, mesh.xc.size))
+        o = mp._for_u
+        source = mp._stress_source(u, v, o, mu, mp._corner_viscosity(mu, o))
+        volume = o.dt_cell[:, None] * o.ds_face[None, 1:-1]
+        assert source == pytest.approx(config.rho * volume, rel=1e-12)
+
+
+@pytest.mark.integration
+class TestFieldPathAgainstTheProbe:
+    """predict with mu_eff is frozen34.py's FrozenPredictor (form b, stress on), to the bit."""
+
+    @pytest.mark.parametrize("sweeps", [1, 10])
+    def test_three_random_states_of_the_product_room(self, sweeps: int) -> None:
+        """u*, v* and both diagonals equal at every face, one sweep and ten."""
+        frozen = load_frozen_predictor()
+        config = _product_room(sweeps)
+        mesh, bc, mp = _build(config)
+        assert config.momentum_sweeps == sweeps
+        rng = np.random.default_rng(435 + sweeps)
+        for _state in range(3):
+            u, v, p = _random_state(mesh, bc, rng)
+            mu_t = _random_field(mesh, rng, config.mu) - config.mu
+            ours = mp.predict(u, v, p, mu_eff=config.mu + mu_t)
+            theirs = frozen(mesh, config, bc, mu_t, sweeps=sweeps).predict(u, v, p)
+            for name in ("u_star", "v_star", "a_p_u", "a_p_v"):
+                assert np.array_equal(getattr(ours, name), getattr(theirs, name)), name
+
+
+@pytest.mark.unit
+class TestFieldPathLimits:
+    """The field path's two exact limits, and that SOLID cells are not read."""
+
+    def test_a_uniform_field_equal_to_air_is_the_scalar_path_to_the_byte(self) -> None:
+        """Coefficients and the prediction, on a stretched mesh with an obstacle."""
+        config = _config(CAVITY, obstacles=[FLOOR_BLOCK], mesh=STRETCHED)
+        mesh, bc, mp = _build(config)
+        u, v, p = _random_state(mesh, bc, np.random.default_rng(436))
+        air = np.full(mesh.cell_type.shape, config.mu)
+        scalar = mp._assemble(u, v, mp._for_u)
+        field = mp._assemble(u, v, mp._for_u, mu_cells=mp._check_mu_eff(air))
+        for name in ("a_p", "a_s_plus", "a_s_minus", "a_t_plus", "a_t_minus"):
+            assert getattr(scalar, name).tobytes() == getattr(field, name).tobytes()
+        assert np.array_equal(scalar.b_deferred, field.b_deferred)
+        a, b = mp.predict(u, v, p), mp.predict(u, v, p, mu_eff=air)
+        assert a.u_star.tobytes() == b.u_star.tobytes()
+        assert a.v_star.tobytes() == b.v_star.tobytes()
+        assert a.a_p_u.tobytes() == b.a_p_u.tobytes()
+        assert a.a_p_v.tobytes() == b.a_p_v.tobytes()
+
+    def test_solid_cells_are_not_read(self) -> None:
+        """NaN in every SOLID cell predicts what any finite value there does."""
+        config = _config(CAVITY, obstacles=[FLOOR_BLOCK], mesh=STRETCHED)
+        mesh, bc, mp = _build(config)
+        rng = np.random.default_rng(437)
+        u, v, p = _random_state(mesh, bc, rng)
+        mu = _random_field(mesh, rng, config.mu)
+        solid = mesh.cell_type == SOLID
+        holes = mu.copy()
+        holes[solid] = np.nan
+        a, b = mp.predict(u, v, p, mu_eff=mu), mp.predict(u, v, p, mu_eff=holes)
+        assert np.array_equal(a.u_star, b.u_star)
+        assert np.array_equal(a.v_star, b.v_star)
+
+    @pytest.mark.parametrize(
+        ("bad", "error", "match"),
+        [
+            ("list", TypeError, "float64 ndarray"),
+            ("int", TypeError, "float64 ndarray"),
+            ("shape", ValueError, "shape"),
+            ("nan", ValueError, "finite"),
+            ("inf", ValueError, "finite"),
+            ("zero", ValueError, "positive"),
+            ("negative", ValueError, "positive"),
+        ],
+    )
+    def test_a_malformed_field_is_refused(
+        self, bad: str, error: type[Exception], match: str
+    ) -> None:
+        """Type, shape, and a non-finite or non-positive value in a non-SOLID cell."""
+        config = _config(CAVITY, obstacles=[FLOOR_BLOCK])
+        mesh, _bc, mp = _build(config)
+        u, v, p = allocate_fields(mesh)
+        good = np.full(mesh.cell_type.shape, config.mu)
+        field: object = {
+            "list": good.tolist(),
+            "int": good.astype(np.int64),
+            "shape": good[:, :-1],
+            "nan": np.where(
+                np.arange(good.size).reshape(good.shape) == 0, np.nan, good
+            ),
+            "inf": np.where(
+                np.arange(good.size).reshape(good.shape) == 0, np.inf, good
+            ),
+            "zero": np.where(np.arange(good.size).reshape(good.shape) == 0, 0.0, good),
+            "negative": -good,
+        }[bad]
+        with pytest.raises(error, match=match):
+            mp.predict(u, v, p, mu_eff=field)  # type: ignore[arg-type]
+
+
+@pytest.mark.unit
+class TestWallViscosity:
+    """The wall viscosity hook of ADR-012 B: one value per wall face, None today."""
+
+    @staticmethod
+    def _walls(mesh: Mesh, value: float) -> dict[str, np.ndarray]:
+        shape = (mesh.yc.size + 1, mesh.xc.size + 1)
+        return {"u": np.full(shape, value), "v": np.full(shape, value)}
+
+    def test_air_at_every_wall_face_is_the_path_without_it(self) -> None:
+        """With and without a field, wall_mu equal to the stencil's own value changes no bit."""
+        config = _config(CAVITY, mesh=STRETCHED)
+        mesh, bc, mp = _build(config)
+        u, v, p = _random_state(mesh, bc, np.random.default_rng(438))
+        a = mp.predict(u, v, p)
+        b = mp.predict(u, v, p, wall_mu=self._walls(mesh, config.mu))
+        assert a.u_star.tobytes() == b.u_star.tobytes()
+        assert a.v_star.tobytes() == b.v_star.tobytes()
+        air = np.full(mesh.cell_type.shape, config.mu)
+        c = mp.predict(u, v, p, mu_eff=air, wall_mu=self._walls(mesh, config.mu))
+        assert a.u_star.tobytes() == c.u_star.tobytes()
+
+    def test_it_replaces_the_wall_rows_conductance(self) -> None:
+        """At rest, the floor row's diagonal moves by (mu_w - mu) dx_face / wall distance."""
+        config = _config(CAVITY, mesh=STRETCHED)
+        mesh, _bc, mp = _build(config)
+        u, v, p = allocate_fields(mesh)
+        walls = self._walls(mesh, config.mu)
+        walls["u"][0, :] = 7.0 * config.mu
+        walls["v"][:, -1] = 3.0 * config.mu
+        a = mp.predict(u, v, p)
+        b = mp.predict(u, v, p, wall_mu=walls)
+        i = 3
+        expected = 6.0 * config.mu * mesh.dx_face[i] / mesh.dy_face[0]
+        assert b.a_p_u[0, i] - a.a_p_u[0, i] == pytest.approx(expected, rel=1e-12)
+        assert np.array_equal(a.a_p_u[1:, :], b.a_p_u[1:, :])
+        j = 2
+        expected_v = 2.0 * config.mu * mesh.dy_face[j] / mesh.dx_face[-1]
+        assert b.a_p_v[j, -1] - a.a_p_v[j, -1] == pytest.approx(expected_v, rel=1e-12)
+
+    def test_it_replaces_the_fields_edge_value(self) -> None:
+        """With a field, the wall row reads wall_mu in place of the wall cells' mean."""
+        config = _config(CAVITY, mesh=STRETCHED)
+        mesh, _bc, mp = _build(config)
+        u, v, p = allocate_fields(mesh)
+        mu = _random_field(mesh, np.random.default_rng(439), config.mu)
+        walls = self._walls(mesh, config.mu)
+        a = mp.predict(u, v, p, mu_eff=mu)
+        b = mp.predict(u, v, p, mu_eff=mu, wall_mu=walls)
+        corner = mp._corner_viscosity(mu, mp._for_u)
+        i = 3
+        expected = (config.mu - corner[0, i]) * mesh.dx_face[i] / mesh.dy_face[0]
+        assert b.a_p_u[0, i] - a.a_p_u[0, i] == pytest.approx(expected, rel=1e-9)
+
+    def test_faces_that_are_not_wall_faces_are_not_read(self) -> None:
+        """NaN everywhere but at the faces the wall stencil crosses is accepted."""
+        config = _config(CAVITY)
+        mesh, bc, mp = _build(config)
+        u, v, p = _random_state(mesh, bc, np.random.default_rng(440))
+        walls = self._walls(mesh, np.nan)
+        walls["u"][0, 1:-1] = walls["u"][-1, 1:-1] = config.mu
+        walls["v"][1:-1, 0] = walls["v"][1:-1, -1] = config.mu
+        a = mp.predict(u, v, p)
+        b = mp.predict(u, v, p, wall_mu=walls)
+        assert a.u_star.tobytes() == b.u_star.tobytes()
+        assert a.v_star.tobytes() == b.v_star.tobytes()
+
+    @pytest.mark.parametrize(
+        ("bad", "error", "match"),
+        [
+            ("tuple", TypeError, "dict"),
+            ("keys", ValueError, "keys 'u' and 'v'"),
+            ("extra", ValueError, "keys 'u' and 'v'"),
+            ("list", TypeError, "float64 ndarray"),
+            ("int", TypeError, "float64 ndarray"),
+            ("shape", ValueError, "shape"),
+            ("nan_floor", ValueError, "finite"),
+            ("zero_floor", ValueError, "positive"),
+            ("negative_side", ValueError, "positive"),
+        ],
+    )
+    def test_a_malformed_hook_is_refused(
+        self, bad: str, error: type[Exception], match: str
+    ) -> None:
+        """Container, keys, dtype, shape, and a bad value at a wall face are each refused."""
+        config = _config(CAVITY)
+        mesh, _bc, mp = _build(config)
+        u, v, p = allocate_fields(mesh)
+        walls = self._walls(mesh, config.mu)
+        hook: object = walls
+        if bad == "tuple":
+            hook = (walls["u"], walls["v"])
+        elif bad == "keys":
+            hook = {"u": walls["u"]}
+        elif bad == "extra":
+            hook = {**walls, "w": walls["u"]}
+        elif bad == "list":
+            walls["u"] = walls["u"].tolist()  # type: ignore[assignment]
+        elif bad == "int":
+            walls["v"] = walls["v"].astype(np.int64)
+        elif bad == "shape":
+            walls["v"] = walls["v"][:-1, :]
+        elif bad == "nan_floor":
+            walls["u"][0, 3] = np.nan
+        elif bad == "zero_floor":
+            walls["u"][0, 3] = 0.0
+        else:
+            walls["v"][2, -1] = -config.mu
+        with pytest.raises(error, match=match):
+            mp.predict(u, v, p, wall_mu=hook)  # type: ignore[arg-type]
+
+
+@pytest.mark.unit
+class TestMomentumSweeps:
+    """solver.momentum_sweeps Jacobi sweeps per outer iteration on one assembly."""
+
+    def test_one_sweep_is_the_committed_sweep_to_the_byte(self) -> None:
+        """_sweep_n at one sweep returns _sweep's array, both components."""
+        config = _config(CAVITY, obstacles=[FLOOR_BLOCK], mesh=STRETCHED)
+        mesh, bc, mp = _build(config)
+        assert config.momentum_sweeps == 1
+        u, v, p = _random_state(mesh, bc, np.random.default_rng(441))
+        c = mp._assemble(u, v, mp._for_u)
+        b_p = mp._pressure_source(p, mp._for_u)
+        assert mp._sweep_n(u, c, b_p).tobytes() == mp._sweep(u, c, b_p).tobytes()
+
+    def test_three_sweeps_iterate_the_neighbours_with_the_sources_held(self) -> None:
+        """Three sweeps equal three Jacobi steps written out face by face."""
+        raw_sweeps = 3
+        base = _config(
+            CAVITY, obstacles=[FLOOR_BLOCK], mesh=STRETCHED, sweeps=raw_sweeps
+        )
+        mesh, bc, mp = _build(base)
+        u, v, p = _random_state(mesh, bc, np.random.default_rng(442))
+        c = mp._assemble(u, v, mp._for_u)
+        b_p = mp._pressure_source(p, mp._for_u)
+        alpha = base.alpha_velocity
+        b = c.b_boundary + c.b_deferred + b_p + (1.0 - alpha) / alpha * c.a_p * u
+        current = u.copy()
+        nt, ns1 = u.shape
+        for _ in range(raw_sweeps):
+            following = u.copy()
+            for j in range(nt):
+                for i in range(1, ns1 - 1):
+                    if c.a_p[j, i] <= 0.0:
+                        following[j, i] = 0.0
+                        continue
+                    total = b[j, i]
+                    total += c.a_s_plus[j, i] * current[j, i + 1]
+                    total += c.a_s_minus[j, i] * current[j, i - 1]
+                    if j + 1 < nt:
+                        total += c.a_t_plus[j, i] * current[j + 1, i]
+                    if j > 0:
+                        total += c.a_t_minus[j, i] * current[j - 1, i]
+                    following[j, i] = total / (c.a_p[j, i] / alpha)
+            current = following
+        swept = mp._sweep_n(u, c, b_p)
+        assert swept == pytest.approx(current, rel=1e-12, abs=1e-14)
+        assert not np.allclose(swept, mp._sweep(u, c, b_p))
+
+    def test_the_predictor_reads_the_count_from_the_configuration(self) -> None:
+        """predict at three sweeps differs from one and equals three sweeps of _sweep_n."""
+        base = _config(CAVITY, mesh=STRETCHED)
+        mesh, bc, one = _build(base)
+        three = MomentumPredictor(mesh, _config(CAVITY, mesh=STRETCHED, sweeps=3), bc)
+        u, v, p = _random_state(mesh, bc, np.random.default_rng(443))
+        a, b = one.predict(u, v, p), three.predict(u, v, p)
+        assert not np.array_equal(a.u_star, b.u_star)
+        assert np.array_equal(a.a_p_u, b.a_p_u)
+        c = three._assemble(u, v, three._for_u)
+        expected = three._sweep_n(u, c, three._pressure_source(p, three._for_u))
+        assert np.array_equal(b.u_star, expected)

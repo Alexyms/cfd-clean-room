@@ -246,6 +246,9 @@ DEFAULT_ITERATION_ERROR_TOL = 1.0e-6
 # ECR-001 acceptance criterion 6: the per-cell imbalance and its signed domain
 # sum each below 1e-10, absolute.
 DEFAULT_MASS_IMBALANCE_TOL = 1.0e-10
+# Momentum Jacobi sweeps per outer iteration (ECR-002 step 4). One is the
+# sweep every stored result was produced with.
+DEFAULT_MOMENTUM_SWEEPS = 1
 # The relative residual the pressure correction solves to (REQ-S08 as amended
 # 2026-10-06, ADR-013 D). The lower bound: on the product's first correction
 # from rest the true residual cannot fall below about 1.3e-13 of the flux
@@ -257,7 +260,7 @@ PRESSURE_RTOL_BOUNDS: tuple[float, float] = (1.0e-10, 1.0)
 # change per sweep, which means nothing for the conjugate gradient solve. It is
 # refused by name so a saved configuration cannot be read as the new key.
 RETIRED_PRESSURE_TOL_KEY = "pressure_tol"
-# Every key the solver block accepts, nine required and three optional, in the
+# Every key the solver block accepts, nine required and four optional, in the
 # order the harness records them: it reads this tuple, so a key added here is
 # in every harness row (GitHub issue 38). With optional keys a misspelt one
 # would otherwise fall back to its default.
@@ -271,6 +274,7 @@ SOLVER_KEYS: tuple[str, ...] = (
     "alpha_pressure",
     "max_pressure_iter",
     "pressure_rtol",
+    "momentum_sweeps",
     "stopping_rule",
     "iteration_error_tol",
     "mass_imbalance_tol",
@@ -543,6 +547,9 @@ class SimConfig:
                 f"solver.pressure_rtol must be in [{lower}, {upper}), the relative "
                 f"residual the pressure correction solves to, got {self.pressure_rtol}"
             )
+        self.momentum_sweeps: int = self._optional_positive_int(
+            solver, "momentum_sweeps", "solver", DEFAULT_MOMENTUM_SWEEPS
+        )
         # Optional: absent keys give the velocity-step rule and its behaviour.
         self.stopping_rule: str = VELOCITY_STEP
         if "stopping_rule" in solver:
@@ -1158,6 +1165,15 @@ class SimConfig:
         if key not in section:
             return default
         return cls._require_positive_float(section, key, context)
+
+    @classmethod
+    def _optional_positive_int(
+        cls, section: dict, key: str, context: str, default: int
+    ) -> int:
+        """A positive integer value if the key is present, else the default."""
+        if key not in section:
+            return default
+        return cls._require_positive_int(section, key, context)
 
     @staticmethod
     def _require_positive_int(section: dict, key: str, context: str) -> int:
