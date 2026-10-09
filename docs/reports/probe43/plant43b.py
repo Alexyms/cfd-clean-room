@@ -7,8 +7,9 @@ ROOT is a scratch git worktree of the branch (the script edits src/momentum.py
 there and puts it back byte for byte); PYTHON is the interpreter that runs
 pytest there. The test files are the three review 43 named. The mutants:
 review 43 B2's three (a) to (c), test 43's M12, two more on the high side
-of the obstacle stencil and two on the low side. Output is JSON: the failing tests with no
-mutant (the control) and under each.
+of the obstacle stencil, two on the low side, and one in the N-sweep
+loop for test 43 S2. Output is JSON: the failing tests with no mutant
+(the control) and under each.
 """
 
 import json
@@ -50,6 +51,10 @@ PLANTS = {
     "low side: blocked_pos never set": (
         "        blocked_pos[:, 1:] = o.solid[:, :-1]",
         "        blocked_pos[:, 1:] = False",
+    ),
+    "sweeps: the loop body keeps non-unknown faces (test 43 S2)": (
+        "            following[interior] = np.where(unknown, numerator / a_p_ur, 0.0)[interior]",
+        "            following[interior] = np.where(unknown, numerator / a_p_ur, phi)[interior]",
     ),
     "low side: wall_pos takes the stored value as far node": (
         "        q_t = np.where(pos_t & south[r - 1, :], wall_pos, q_t)",

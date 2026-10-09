@@ -18,7 +18,7 @@ committed `solver.momentum_sweeps: 10`, not the probe's SweepPredictor.
 The script imports src/ from the tree it sits in, so a copy placed in a
 worktree of another commit measures that commit. Records go to
 results/builder43/ under that tree; D0's are read from results/builder41/ of
-the main tree (MAIN_RESULTS).
+the main checkout (MAIN_RESULTS, found through git's common directory).
 
 `val --zero` passes a field of zeros as `eddy_viscosity`, which the predictor
 receives as a uniform field equal to air's viscosity. `frozen` compares
@@ -35,6 +35,7 @@ the largest velocity difference over the fluid faces.
 import argparse
 import hashlib
 import json
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -43,7 +44,20 @@ import numpy as np
 import yaml
 
 ROOT = Path(__file__).resolve().parents[3]
-MAIN_RESULTS = Path(r"C:\Users\tomat\Projects\cfd_clean_room\results")
+# The checkout the script was committed in: from a worktree copy, the main
+# tree's results/ is still where D0's records live (git's common directory).
+MAIN_RESULTS = (
+    Path(
+        subprocess.run(
+            ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+    ).parent
+    / "results"
+)
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "docs" / "reports" / "probe41"))
 
@@ -239,7 +253,7 @@ def frozen(_args: argparse.Namespace) -> None:
 
 
 def channel(floor: str, ny_fluid: int, nx: int) -> tuple[Mesh, StaggeredSolver]:
-    """VAL-001's fluid and inflow in a 4 by 1 channel; floor 'edge' or 'solid'."""
+    """VAL-001's fluid and inflow in a 2 by 0.5 channel; floor 'edge' or 'solid'."""
     height, width = 0.5, 2.0
     dy = height / ny_fluid
     base = dy if floor == "solid" else 0.0

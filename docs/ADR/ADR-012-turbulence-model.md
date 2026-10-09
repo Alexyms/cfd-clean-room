@@ -383,6 +383,14 @@ obstacle faces need the wall stencil the domain edges have, with the half-cell d
 the wall function on it. That is part of ECR-002's momentum step, and it changes the laminar
 solver only in rooms with obstacles, none of which has a validated result.
 
+*Note, 2026-10-08 (step 4 built).* The paragraph above describes `momentum.py` before step 4.
+Step 4 built the obstacle wall stencil: the wall at the obstacle face, half the unknown's cell
+away, with the wall viscosity from the `wall_mu` hook when given, and, by Alex's extension of
+2026-10-08, Leonard's boundary form in the QUICK correction there; a face bounding SOLID on one
+side only is a wall over its whole span. Section D's step 4 note gives the measurements. The
+lines of `_assemble` cited in this section have moved; the wall rows now read `wall_mu` when it
+is given. The wall function itself is step 6's.
+
 ## C. Discretization of k and eps (REQ-S15, proposed; decision 4)
 **Where they live.** At cell centres, beside p and the concentrations, so that the corrected
 faces advect them with the fluxes continuity was enforced on (ADR-011 A), the scheme is exact on
@@ -855,6 +863,15 @@ distances and tangential conditions already reach the stencil as data.
 needs no outlet condition per outer iteration beyond the copy it has. The exhaust segment type is
 `fixed_flow_outlet`, with the remainder rule of section D's note in place of the refusal when the
 exhausts' total reaches the supply's.
+
+*Note, 2026-10-08 (step 4 built).* The momentum contract below was built as drafted for
+`predict`; `wall_mu` was given a layout of its own, the one `docs/SYSTEM.md`'s `momentum.py`
+contract states: a dict with keys "u" and "v", each [ny+1, nx+1] indexed by corner, read at the
+domain-edge wall faces and the obstacle faces. `KEpsilonModel.wall_viscosity`'s draft return,
+`dict[edge, ndarray]` per domain edge, is superseded by that layout, which is what step 6 must
+produce. `StaggeredSolver.eddy_viscosity` below is not built; step 4 built a `solve_steady`
+keyword, `eddy_viscosity`, that holds a prescribed field for the solve (`docs/SYSTEM.md`, the
+`solver_staggered.py` contract).
 
 **Draft contracts** (SYSTEM.md section 4 gains them when ECR-002 is accepted).
 

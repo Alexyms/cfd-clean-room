@@ -963,14 +963,35 @@ class TestMomentumSweeps:
     """solver.momentum_sweeps Jacobi sweeps per outer iteration on one assembly."""
 
     def test_one_sweep_is_the_committed_sweep_to_the_byte(self) -> None:
-        """_sweep_n at one sweep returns _sweep's array, both components."""
+        """The N-sweep loop run once returns _sweep's array, both components.
+
+        _sweep_n returns _sweep directly at one sweep, so calling it at one
+        sweep would compare _sweep with itself. The count here is an int that
+        is one for range() and compares unequal to 1, so the loop body runs
+        once instead (test 43 S2).
+        """
+
+        class _OnceThroughTheLoop(int):
+            def __eq__(self, other: object) -> bool:
+                return False
+
+            def __ne__(self, other: object) -> bool:
+                return True
+
+            __hash__ = int.__hash__
+
         config = _config(CAVITY, obstacles=[FLOOR_BLOCK], mesh=STRETCHED)
         mesh, bc, mp = _build(config)
         assert config.momentum_sweeps == 1
         u, v, p = _random_state(mesh, bc, np.random.default_rng(441))
-        c = mp._assemble(u, v, mp._for_u)
-        b_p = mp._pressure_source(p, mp._for_u)
-        assert mp._sweep_n(u, c, b_p).tobytes() == mp._sweep(u, c, b_p).tobytes()
+        mp._n_sweeps = _OnceThroughTheLoop(1)
+        assert mp._n_sweeps != 1 and len(range(mp._n_sweeps)) == 1
+        for phi, o, pressure in ((u, mp._for_u, p), (v.T, mp._for_v, p.T)):
+            other = v if o is mp._for_u else u.T
+            c = mp._assemble(phi, other, o)
+            b_p = mp._pressure_source(pressure, o)
+            looped = mp._sweep_n(phi, c, b_p)
+            assert looped.tobytes() == mp._sweep(phi, c, b_p).tobytes()
 
     def test_three_sweeps_iterate_the_neighbours_with_the_sources_held(self) -> None:
         """Three sweeps equal three Jacobi steps written out face by face."""

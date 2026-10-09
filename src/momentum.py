@@ -205,9 +205,9 @@ class _Orientation:
 
 @dataclass(frozen=True)
 class _ObstacleWalls:
-    """The obstacle faces one component's wall stencil crosses, in its own frame.
+    """Obstacle faces of one component's wall stencil.
 
-    ``face`` [nt+1, ns+1] is True at a transverse face between an unknown and
+    In the component's own frame. ``face`` [nt+1, ns+1] is True at a transverse face between an unknown and
     a neighbour face that bounds a SOLID cell; ``distance`` [nt+1, ns+1] is
     the unknown's distance to that face (1.0 where ``face`` is False).
     ``north`` and ``south`` [nt, ns-1] mark the unknowns whose north or south
@@ -224,7 +224,10 @@ class _ObstacleWalls:
 def _obstacle_walls(
     solid: np.ndarray, t_faces: np.ndarray, t_centers: np.ndarray
 ) -> _ObstacleWalls:
-    """Locate the obstacle faces of one component from its SOLID mask [nt, ns]."""
+    """Locate the obstacle faces of one component.
+
+    ``solid`` is the SOLID mask in the component's frame, [nt, ns].
+    """
     nt, ns = solid.shape
     solid_face = solid[:, :-1] | solid[:, 1:]
     unknown = ~solid_face
@@ -254,14 +257,17 @@ def _lagrange_weights(
 
 
 def _lerp(a: np.ndarray, b: np.ndarray, frac_b: np.ndarray) -> np.ndarray:
-    """Weighted arithmetic mean ``a + (b - a) frac_b``; exactly ``a`` when ``a == b``."""
+    """Weighted arithmetic mean.
+
+    ``a + (b - a) frac_b``, which is exactly ``a`` when ``a == b``.
+    """
     return a + (b - a) * frac_b
 
 
 def _harmonic(a: np.ndarray, b: np.ndarray, frac_a: np.ndarray) -> np.ndarray:
-    """Weighted harmonic mean ``1 / (frac_a / a + (1 - frac_a) / b)``.
+    """Weighted harmonic mean.
 
-    Written as ``a`` plus a correction so that it returns ``a`` exactly when
+    ``1 / (frac_a / a + (1 - frac_a) / b)``, written as ``a`` plus a correction so that it returns ``a`` exactly when
     ``a == b``; both must be positive.
     """
     frac_b = 1.0 - frac_a
@@ -519,9 +525,9 @@ class MomentumPredictor:
             )
 
     def _check_mu_eff(self, mu_eff: np.ndarray) -> np.ndarray:
-        """The viscosity field as the assembly reads it, or a refusal before any arithmetic.
+        """Check the viscosity field and return the copy the assembly reads.
 
-        Returns a copy with SOLID cells set to air's viscosity: the face rule
+        A malformed field is refused before any arithmetic. Returns a copy with SOLID cells set to air's viscosity: the face rule
         never reads them at an unknown, and a positive value there keeps the
         harmonic mean defined on faces that are not unknowns.
         """
@@ -543,7 +549,7 @@ class MomentumPredictor:
         return np.where(self._live, mu_eff, self._mu)
 
     def _check_wall_mu(self, wall_mu: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
-        """The wall viscosities as given, or a refusal before any arithmetic."""
+        """Check the wall viscosities; refuse a malformed hook before any arithmetic."""
         if not isinstance(wall_mu, dict):
             raise TypeError(
                 f"wall_mu must be a dict with keys 'u' and 'v', got {type(wall_mu).__name__}"
@@ -579,7 +585,10 @@ class MomentumPredictor:
 
     @staticmethod
     def _wall_faces(o: _Orientation) -> np.ndarray:
-        """Transverse faces whose wall viscosity an unknown reads, [nt+1, ns+1], own frame."""
+        """Transverse faces whose wall viscosity an unknown reads.
+
+        Boolean, [nt+1, ns+1], in the component's own frame.
+        """
         nt, ns = o.solid.shape
         unknown = ~(o.solid[:, :-1] | o.solid[:, 1:])
         read = np.zeros((nt + 1, ns + 1), dtype=bool)
@@ -745,9 +754,9 @@ class MomentumPredictor:
     def _obstacle_streamwise(
         u: np.ndarray, q_s: np.ndarray, pos_s: np.ndarray, o: _Orientation
     ) -> np.ndarray:
-        """Streamwise face values with the boundary form beyond an obstacle's wall node.
+        """Streamwise QUICK face values with the boundary form at obstacles.
 
-        The face at ``s_centers[k]`` lies between nodes k and k+1. With the
+        The boundary form applies beyond an obstacle's wall node. The face at ``s_centers[k]`` lies between nodes k and k+1. With the
         flow toward increasing s its far-upstream node is k-1, which lies
         inside the obstacle when cell k-1 is SOLID (node k is then on the
         wall); the quadratic takes node k+2 instead. The opposite direction
@@ -779,9 +788,9 @@ class MomentumPredictor:
     def _obstacle_transverse(
         u: np.ndarray, q_t: np.ndarray, pos_t: np.ndarray, o: _Orientation
     ) -> np.ndarray:
-        """Interior transverse face values with the wall as far node beside an obstacle.
+        """Interior transverse QUICK face values with the boundary form at obstacles.
 
-        The face at ``t_faces[r]`` lies between rows r-1 and r. With the
+        Beside an obstacle face the wall is the far node. The face at ``t_faces[r]`` lies between rows r-1 and r. With the
         flow toward increasing t the upstream node is row r-1; when that
         unknown's south face is an obstacle face, the far node is the wall
         value, zero, at ``t_faces[r-1]``. The opposite direction mirrors it
@@ -819,9 +828,9 @@ class MomentumPredictor:
 
     @staticmethod
     def _corner_viscosity(mu: np.ndarray, o: _Orientation) -> np.ndarray:
-        """mu at every transverse face of the component, shape [nt+1, ns+1].
+        """mu at every transverse face of the component.
 
-        Harmonic across the row boundary in each column, distance-weighted;
+        Shape [nt+1, ns+1]. Harmonic across the row boundary in each column, distance-weighted;
         then arithmetic across the two columns, width-weighted. A SOLID cell
         takes the value of the non-SOLID cell across the row boundary.
         """
@@ -848,7 +857,10 @@ class MomentumPredictor:
 
     @staticmethod
     def _face_viscosity(mu: np.ndarray, o: _Orientation) -> np.ndarray:
-        """mu at the component's own interior faces, [nt, ns-1]: the two cells' width mean."""
+        """mu at the component's own interior faces.
+
+        Shape [nt, ns-1]: the width-weighted mean of the face's two cells.
+        """
         w_l = o.s_faces[1:-1] - o.s_centers[:-1]
         w_r = o.s_centers[1:] - o.s_faces[1:-1]
         return _lerp(mu[:, :-1], mu[:, 1:], (w_r / (w_l + w_r))[None, :])
@@ -861,9 +873,9 @@ class MomentumPredictor:
         mu: np.ndarray,
         corner: np.ndarray,
     ) -> np.ndarray:
-        """Form b of the stress terms a varying viscosity adds, on the unknown block [nt, ns-1].
+        """Form b of the stress terms a varying viscosity adds.
 
-        du/dx is differenced at cell centres and dv/dx at the corners, the
+        On the unknown block, [nt, ns-1]. du/dx is differenced at cell centres and dv/dx at the corners, the
         two domain-edge rows included; there the corner value equals the
         face's own, so form b has no edge term.
         """
