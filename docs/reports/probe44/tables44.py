@@ -295,18 +295,46 @@ def converged(rec: dict) -> bool:
     return rec["stop"] == "error_estimate_and_continuity"
 
 
+def converged_run(recs: dict, field: str, grid: str, sweeps: int) -> str | None:
+    """The converged record of a field, grid and sweep count: the row, or its 15,000-cap rerun."""
+    for name in (f"{field}_{grid}_s{sweeps}", f"{field}_{grid}_s{sweeps}_cap15k"):
+        if name in recs and converged(recs[name]):
+            return name
+    return None
+
+
+def choose_runs(recs: dict, field: str) -> dict[str, str] | None:
+    """One converged record per grid for a field, at one sweep count where one converged everywhere.
+
+    Ten sweeps first, then one; otherwise the lowest converged count per
+    grid. None when some grid has no converged record.
+    """
+    for sweeps in (10, 1):
+        chosen = {g: converged_run(recs, field, g, sweeps) for g in GRIDS}
+        if all(chosen.values()):
+            return chosen  # type: ignore[return-value]
+    chosen = {}
+    for g in GRIDS:
+        name = converged_run(recs, field, g, 1) or converged_run(recs, field, g, 10)
+        if name is None:
+            return None
+        chosen[g] = name
+    return chosen
+
+
 def pairs(_args: argparse.Namespace) -> None:
     """Measurement 2: one sweep against ten where both converged."""
     recs = records()
     rows = []
     for field in FIELDS:
         for grid in GRIDS:
-            one, ten = f"{field}_{grid}_s1", f"{field}_{grid}_s10"
-            if one not in recs or ten not in recs:
+            one, ten = (
+                converged_run(recs, field, grid, 1),
+                converged_run(recs, field, grid, 10),
+            )
+            if one is None or ten is None:
                 continue
             a, b = recs[one], recs[ten]
-            if not (converged(a) and converged(b)):
-                continue
             d = field_difference(fields(one), fields(ten))
             rows.append(
                 {
@@ -430,14 +458,8 @@ def grids(_args: argparse.Namespace) -> None:
     rows = []
     sensor_rows = []
     for field in FIELDS:
-        chosen = {}
-        for grid in GRIDS:
-            for sweeps in (1, 10):
-                name = f"{field}_{grid}_s{sweeps}"
-                if name in recs and converged(recs[name]):
-                    chosen[grid] = name
-                    break
-        if len(chosen) < 3:
+        chosen = choose_runs(recs, field)
+        if chosen is None:
             continue
         fine = chosen["200x75"]
         for key, (px, py, labels) in points.items():
