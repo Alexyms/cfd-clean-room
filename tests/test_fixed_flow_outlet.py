@@ -184,7 +184,8 @@ class TestConfiguration:
             match=r"boundaries\.drain\.velocity is not valid on a pressure_outlet",
         ):
             _channel({"inlet": INLET, "drain": pressure | {"velocity": 0.1}})
-        assert _channel({"inlet": INLET, "drain": pressure}).boundaries["drain"]
+        drain = _channel({"inlet": INLET, "drain": pressure}).boundaries["drain"]
+        assert drain.type == "pressure_outlet"
 
     def test_a_blank_velocity_on_a_fixed_flow_outlet_is_refused(self) -> None:
         """Stating none means leaving the key out; a YAML null is a slip."""
