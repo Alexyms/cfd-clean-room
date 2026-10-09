@@ -495,19 +495,21 @@ class StaggeredBoundary:
         return total
 
     def get_max_boundary_velocity(self) -> float:
-        """Largest absolute prescribed velocity component on any edge.
+        """Largest velocity the room is driven by: inlets and moving walls.
 
         Both components count, so a tangential lid sets the scale of a
-        closed cavity. SOLID edge cells contribute zero. A fixed-flow
-        outlet contributes nothing: its velocity is what the flow balance
-        leaves, not something the room is driven by, and counting it would
-        move the stopping rule's velocity scale with the outlet layout.
+        closed cavity. SOLID edge cells contribute zero. An outlet's
+        velocity is what leaves, so a fixed-flow outlet does not set the
+        scale, whether it states its velocity or shares the remainder. A
+        configuration with a fixed-flow outlet must have a velocity inlet
+        (config.py), so the scale is never left to the outlets.
 
         Returns
         -------
         float
-            Maximum of |u_prescribed| and |v_prescribed| over all edge
-            cells; 0.0 when nothing is prescribed.
+            Maximum of |u_prescribed| and |v_prescribed| over the edge
+            cells that are not fixed-flow outlets; 0.0 when nothing is
+            prescribed.
         """
         max_vel = 0.0
         for conditions in self._cell_conditions.values():

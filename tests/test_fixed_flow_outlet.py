@@ -12,7 +12,7 @@ test_fixed_flow_product.py.
 import numpy as np
 import pytest
 
-from src.boundary_concentration import ConcentrationBoundary
+from src.boundary_concentration import ConcentrationBoundary, ConcentrationFaces
 from src.boundary_registry import (
     FIXED_FLOW_OUTLET,
     BoundaryRegistry,
@@ -158,6 +158,41 @@ class TestConfiguration:
         }
         with pytest.raises(ValueError, match=r"no pressure_outlet.*leave the velocity"):
             _channel(boundaries)
+
+    def test_a_fixed_flow_outlet_without_a_velocity_inlet_is_refused(self) -> None:
+        """No inlet means make-up air would enter through a pressure outlet (#61)."""
+        pressure = {"type": "pressure_outlet", "location": "right"} | {
+            "y_start": 0.0,
+            "y_end": 0.5,
+        }
+        boundaries = {"fan": _outlet(0.5, 1.0, 0.05), "open": pressure}
+        with pytest.raises(ValueError, match=r"need a velocity_inlet.*issue 61"):
+            _channel(boundaries)
+        # The nearest valid form: the same room with an inlet to drive it.
+        assert (
+            _channel({"inlet": INLET} | boundaries).boundaries["fan"].velocity == 0.05
+        )
+
+    def test_velocity_on_a_pressure_outlet_is_refused(self) -> None:
+        """It means an outward flow on a fixed_flow_outlet, so it is not ignored here."""
+        pressure = {"type": "pressure_outlet", "location": "right"} | {
+            "y_start": 0.0,
+            "y_end": 1.0,
+        }
+        with pytest.raises(
+            ValueError,
+            match=r"boundaries\.drain\.velocity is not valid on a pressure_outlet",
+        ):
+            _channel({"inlet": INLET, "drain": pressure | {"velocity": 0.1}})
+        assert _channel({"inlet": INLET, "drain": pressure}).boundaries["drain"]
+
+    def test_a_blank_velocity_on_a_fixed_flow_outlet_is_refused(self) -> None:
+        """Stating none means leaving the key out; a YAML null is a slip."""
+        blank = _outlet(0.0, 1.0) | {"velocity": None}
+        with pytest.raises(ValueError, match=r"boundaries\.drain\.velocity is blank"):
+            _channel({"inlet": INLET, "drain": blank})
+        omitted = _channel({"inlet": INLET, "drain": _outlet(0.0, 1.0)})
+        assert omitted.boundaries["drain"].velocity is None
 
     def test_an_unstated_fixed_flow_outlet_beside_a_pressure_outlet_is_refused(
         self,
@@ -347,8 +382,13 @@ class TestStaggeredFaces:
             assert not np.any(outlet.is_outlet)
 
     def test_the_outlet_is_not_counted_in_the_inlet_flux(self) -> None:
-        _, _, bc = self._drain()
-        assert bc.get_inlet_flux("drain") == 0.0
+        """One outlet states 0.05 m/s, so an outlet counted as inflow shows as nonzero."""
+        config = _channel(
+            {"inlet": INLET, "a": _outlet(0.0, 0.4, 0.05), "b": _outlet(0.4, 1.0)}
+        )
+        _, bc = _build(config)
+        assert bc.get_inlet_flux("a") == 0.0
+        assert bc.get_inlet_flux("b") == 0.0
         assert bc.get_total_inlet_flux() == bc.get_inlet_flux("inlet")
         assert bc.get_total_inlet_flux() == pytest.approx(0.1, rel=1e-14)
 
@@ -381,7 +421,7 @@ class TestConcentrationChannel:
     """The scalar layer books a fixed-flow outlet as it books a pressure outlet."""
 
     def test_the_faces_are_those_of_a_pressure_outlet_over_the_same_range(self) -> None:
-        def faces_of(outlet_type: str):
+        def faces_of(outlet_type: str) -> ConcentrationFaces:
             outlet = _outlet(0.0, 1.0)
             outlet["type"] = outlet_type
             config = _channel({"inlet": INLET, "drain": outlet})

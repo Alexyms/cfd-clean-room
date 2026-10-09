@@ -16,7 +16,11 @@ import numpy as np
 import pytest
 import yaml
 
-from src.boundary_concentration import SURFACE_NONE, ConcentrationBoundary
+from src.boundary_concentration import (
+    SURFACE_NONE,
+    ConcentrationBoundary,
+    ConcentrationFaces,
+)
 from src.boundary_registry import FIXED_FLOW_OUTLET, BoundaryRegistry
 from src.boundary_staggered import StaggeredBoundary
 from src.config import SimConfig
@@ -232,7 +236,9 @@ class TestProductRoomBalance:
 class TestProductConcentrationFaces:
     """A fixed-flow outlet carries nothing in and deposits nothing."""
 
-    def _faces(self, nx: int, ny: int, size_class: int = 0):
+    def _faces(
+        self, nx: int, ny: int, size_class: int = 0
+    ) -> tuple[SimConfig, Mesh, ConcentrationFaces]:
         config = SimConfig.from_dict(_product_raw(nx, ny))
         mesh = Mesh(config)
         boundary = ConcentrationBoundary(
