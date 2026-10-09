@@ -14,6 +14,8 @@ A from-scratch Computational Fluid Dynamics engine simulating clean room airflow
 
 The simulation domain is a vertical cross-section of a semiconductor clean room with HEPA supply vents, return vents, an entry door, process equipment, and a laminar flow hood.
 
+The product's purpose is comparative (a stakeholder need, recorded by Alex on 2026-10-09, prompt 45): the tool says where particles accumulate in the room and how a change of layout moves that. It does not defend absolute particle counts. Its product validation (VAL-018, ECR-002 step 8) asks for the deposition hotspots and the ranking of layouts to be stable under grid refinement, under the two k-epsilon variants, and across the turbulent Schmidt number's literature range (0.2 to 1.3).
+
 ---
 
 ## 2. Requirements

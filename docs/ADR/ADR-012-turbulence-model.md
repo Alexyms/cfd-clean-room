@@ -556,6 +556,19 @@ corrected faces for the reason the transport solver does. `alpha_velocity` keeps
 value for the turbulent cases is a measurement of ECR-002 step 5, not a guess here. The pressure
 correction's d = A / a_P reads the larger a_P and needs no change.
 
+*Note, 2026-10-09 (Alex, before step 6; prompt 45).* Three decisions on step 5's outcome
+(`docs/reports/ecr002_step5_convergence.md`, section 7). (1) The product solver settings, for when
+the product room runs the model: `momentum_sweeps` 10, the only count that converged anything on
+the finer grids; `pressure_rtol` 1e-4, which reproduced 1e-8's outer count to the iteration on the
+fixed-flow room, with one row at 1e-8 kept as a check (ADR-013 decision 3, amended the same day);
+`max_simple_iter` 10,000, since the error-estimate stop came 1.6 to 2.5 times after the
+velocity-step stop in every converged row and 500 cuts every converged fine-grid row. They are
+applied to `configs/clean_room_default.yaml` in step 8 and used by the product measurement of
+prompt 46. (2) Step 4's corner rule stays; it is revisited only if a later step shows it deciding
+convergence. (3) The coupled solve comes first, with no convergence aid built in advance. If the
+coupled product room does not converge (prompt 46), the step stops there and the aid is chosen
+then, from step 0's ranking (`docs/reports/ecr002_step0_frozen_viscosity.md`, section 6.6).
+
 *Note, 2026-10-08 (step 4 built; the outlets' datum dropped).* Alex decided on 2026-10-08 that
 step 4 builds nothing for the outlets' datum. The modified pressure `p + (2/3) rho k` disagrees
 only with a boundary that holds the pressure; the product room has had no pressure outlet since
@@ -780,6 +793,29 @@ them (section A), and y+ at every wall node, which section B estimated without a
 is conditional on the convergence hypothesis of section D: ECR-002 step 5 measures convergence
 at the core's effective viscosity before the coupled solve, and if that measurement fails, VAL-018
 changes rather than the tolerance.
+
+*Note, 2026-10-09 (Alex; prompt 45).* The product's purpose is comparative, a stakeholder need now
+stated in `docs/SYSTEM.md` section 1: the tool says where particles accumulate and how a layout
+change moves that; it does not defend absolute counts. VAL-018's criterion follows from it, set
+for step 8: the deposition hotspots and the ranking of layouts stable under grid refinement, under
+the two k-epsilon variants, and across the turbulent Schmidt number's literature range (0.2 to
+1.3, section F). Convergence within the cap, above, is what makes the comparison possible; the
+stability of the ranking is what the product is judged on.
+
+*(vi) Two cases added (Alex, 2026-10-09; prompt 45). Thresholds OPEN until Alex sets them from
+first results.*
+*VAL-020, a planar impinging slot jet.* Section A found that no planned case tells the standard
+model from RNG where a jet strikes a surface; this one does. Data: Khayrullina, van Hooff, Blocken
+and van Heijst (2017), Experiments in Fluids 58(4):31, DOI 10.1007/s00348-017-2315-0 (open
+access), with the same authors' steady RANS comparison (2019), European Journal of Mechanics
+B/Fluids 75:228-243, DOI 10.1016/j.euromechflu.2018.10.003. Alternatives closer to the product's
+regime: Ashforth-Frost, Jambunathan and Whitney (1997), Experimental Thermal and Fluid Science 14;
+Zhe and Modi (2001), Journal of Fluids Engineering 123(1):112-120.
+*VAL-021, a trend-level concentration check.* The two-dimensional model's high- and
+low-concentration regions against a measured three-dimensional room, compared for trend, not
+point by point. Data: Zhang and Chen (2006), Atmospheric Environment 40(18):3396-3408, DOI
+10.1016/j.atmosenv.2006.01.014, or Murakami, Kato, Nagano and Tanaka (1992), ASHRAE Transactions
+98(1):82-97.
 
 **(v) Grid convergence under wall functions (premise review S10).** VAL-008 (Phase 4) asks for an
 observed order within 0.2 of the theoretical one. Under wall functions refinement moves the
