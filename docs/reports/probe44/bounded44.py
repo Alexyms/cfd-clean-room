@@ -46,21 +46,35 @@ def load(name: str) -> dict:
 
 
 def period_of(series: np.ndarray) -> dict:
-    """First autocorrelation peak after the autocorrelation goes negative, and its height."""
-    x = series - series.mean()
-    if x.size < 50 or np.allclose(x, 0.0):
-        return {"period": None, "height": None}
-    denominator = float(x @ x)
-    n = x.size
-    lags = range(1, n // 2)
-    acf = np.array([float(x[:-lag] @ x[lag:]) / denominator for lag in lags])
-    negative = np.flatnonzero(acf < 0.0)
+    """compare34b's period, and separately the strongest recurrence.
+
+    ``period`` is step 0's measure (``compare34b.py``, step 0's report,
+    appendix H): the first lag after the autocorrelation first goes negative
+    at which it is a local maximum and positive, with its height, so a weak
+    peak is reported as weak. ``strongest`` is the lag of the highest
+    autocorrelation from that first negative lag to half the series, with its
+    height; it is what round 2 first reported as the period (test 44b, B2).
+    """
+    a = np.asarray(series, dtype=float)
+    a = a - a.mean()
+    none = {"period": None, "height": None, "strongest": None, "strongest_height": None}
+    if a.size < 50 or not np.any(a):
+        return none
+    full = np.correlate(a, a, mode="full")[a.size - 1 :]
+    corr = full / full[0]
+    negative = np.nonzero(corr < 0.0)[0]
     if negative.size == 0:
-        return {"period": None, "height": None}
+        return none
     start = int(negative[0])
-    rest = acf[start:]
-    peak = int(np.argmax(rest)) + start
-    return {"period": int(lags[peak]), "height": float(acf[peak])}
+    out = dict(none)
+    for k in range(start + 1, corr.size - 1):
+        if corr[k] >= corr[k - 1] and corr[k] >= corr[k + 1] and corr[k] > 0.0:
+            out["period"], out["height"] = k, float(corr[k])
+            break
+    half = a.size // 2
+    k = int(np.argmax(corr[start:half])) + start
+    out["strongest"], out["strongest_height"] = k, float(corr[k])
+    return out
 
 
 def history(args: argparse.Namespace) -> None:

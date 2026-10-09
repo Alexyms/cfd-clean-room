@@ -97,11 +97,13 @@ beside other runs are not like for like with the baseline report's single-proces
 The effective kinematic viscosity is air's (1.81e-5 / 1.2 = 1.508e-5 m^2/s) plus
 `eddy_viscosity`. Uniform fields set `eddy_viscosity` so that the sum equals the stated value.
 
-| Name | Field | Grid | Outer: one, ten | Wall (s): one, ten | max |du|, |dv| (m/s) | Largest speed difference, at | RMS, median | Largest / tolerance (4.5e-7 m/s) |
-|---|---|---|---|---|---|---|---|
-| U1 | 40x15 | 1,535, 333 | 25, 7 | 1.31e-07, 2.50e-07 | 2.51e-07, (1.3, 1.1) | 2.96e-08, 6.00e-13 | 0.557 |
-| U2 | 40x15 | 5,012, 334 | 83, 6 | 1.56e-07, 1.80e-07 | 1.81e-07, (1.3, 0.5) | 3.32e-08, 4.06e-11 | 0.403 |
-| U3 | 40x15 | 10,254, 344 | 167, 6 | 6.57e-08, 1.14e-07 | 1.17e-07, (1.1, 1.3) | 1.72e-08, 2.17e-11 | 0.26 |
+| Name | Field | Effective viscosity (m^2/s) | `eddy_viscosity` |
+|---|---|---|---|
+| U1 | uniform | 1.5e-3 (top of the range; step 4's Re 895 rung) | 1.4849e-3 |
+| U2 | uniform | 1.5e-4 (step 4's Re 8,950 rung) | 1.3492e-4 |
+| U3 | uniform | 6.5e-5 (bottom of the range) | 4.9917e-5 |
+| Z2, Z3, Z4 | step 0's zero-equation field, scaled to core medians 1.5e-3, 5e-4 and 1.5e-4 | as step 0 | `s nu_t0` |
+| L | none | air (laminar) | None |
 
 U1 and U2 are not quite step 4's rungs: the ladder scaled the molecular viscosity by 100 and 10
 (1.508e-3 and 1.508e-4 m^2/s); here the molecular viscosity stays air's and the field makes up the
@@ -420,9 +422,12 @@ classification stands on the prompt's caps, and these say what the caps cut.
 In every converged product row the rule's stop comes 1.55 to 2.45 times later than the
 velocity-step stop would have (2.4 and 3.0 on the cavity): the step falls below 1e-6 of the
 reference velocity about halfway, and the rule
-waits for its estimate, `step rho / (1 - rho)` over 0.45 m/s, to fall below 1e-6; the estimate
-over the residual is rho / (1 - rho), 860 to 14,900 at the stops, so rho is 0.9988 to 0.99993
-there. At one sweep on 40x15 that is the difference
+waits for its estimate, `step rho / (1 - rho)` over 0.45 m/s, to fall below 1e-6. The residual
+divides the same step by a different scale, the inflow over one cell spacing (16.2, 31.5 and
+79.2 m/s on the three grids), so the estimate over the residual, 780 to 24,100 at the stops, is
+rho / (1 - rho) times that scale over 0.45; rho at the stops is 0.956 to 0.998 (0.9968 and 0.9984
+for the two runs past the cap). Round 2 read the ratio as rho / (1 - rho) itself and gave 0.9988
+to 0.99993; round 3 corrected it (test 44b, B1). At one sweep on 40x15 that is the difference
 between 706 and 1,535 (U1) and between 4,187 and 10,254 (U3). The continuity conditions never bind
 in a converged row: the worst per-cell imbalance at every stop at `pressure_rtol` 1e-8 is below
 2.5e-13 kg/s per metre of depth against tolerances of 8e-8 to 3.2e-9 (2.4e-11 at most in the 1e-2
@@ -444,26 +449,32 @@ solve is exhausted at ten; what remains is not the inner solve.
 Prompt 44b item 4. `bounded44.py history` reads the residual and the largest speed over the last
 2,000 iterations of a record (the whole run past outer 100 for a shorter one) and reports the
 amplitude as the 95th over the 5th percentile, the drift as the least-squares slope of log10 of
-the residual per thousand iterations, and the period as the lag of the first autocorrelation peak
-after the autocorrelation first goes negative, with the peak's height, the measure `compare34b.py`
-used (step 0's report, section 7.1), so a weak peak is not read as a period.
+the residual per thousand iterations, and two autocorrelation measures of the log residual and of
+the largest speed: the period as `compare34b.py` measured it (step 0's report, appendix H), the
+first positive local maximum after the autocorrelation first goes negative, with its height, so a
+weak peak is read as weak; and the strongest recurrence, the highest autocorrelation from that
+lag to half the tail. Round 2 reported the second as the first (test 44b, B2); round 3 reports
+both.
 
-| Run | Tail (iterations) | Residual: least, median, largest | Amplitude (p95 / p5) | Drift (decades per thousand) | Period (height) | Largest speed: range (m/s), period (height) |
+| Run | Tail (iterations) | Residual: least, median, largest | Amplitude (p95 / p5) | Drift (decades per thousand) | Residual: period (height); strongest (height) | Largest speed: range (m/s); period (height); strongest (height) |
 |---|---|---|---|---|---|---|
-| U2_80x30_s1 | 667, to divergence | 2.4e-2, 0.13, 0.77 | 14.7 | +1.97 | none (no peak above zero) | 2.8 to 100, none |
-| U2_80x30_s10 | 2,000 | 1.2e-3, 2.1e-3, 4.0e-3 | 2.4 | -0.001 | 85 (0.68) | 1.452 to 1.501, 30 (0.98) |
-| U2_200x75_s10 | 2,000 | 1.0e-3, 3.9e-3, 7.1e-3 | 3.7 | -0.008 | 350 (0.58) | 1.66 to 2.00, 352 (0.57) |
-| Z2_200x75_s10 | 2,000 | 2.7e-4, 6.3e-4, 1.6e-3 | 2.9 | +0.018 | 298 (0.58) | 1.595 to 1.602, 83 (0.88) |
+| U2_80x30_s1 | 667, to divergence | 2.4e-2, 0.13, 0.77 | 14.7 | +1.97 | none; none (no positive peak) | 2.8 to 100; none; none |
+| U2_80x30_s10 | 2,000 | 1.2e-3, 2.1e-3, 4.0e-3 | 2.4 | -0.001 | 11 (0.21); 85 (0.68), 43 (0.67) close behind | 1.452 to 1.501; 30 (0.98); 30 (0.98) |
+| U2_200x75_s10 | 2,000 | 1.0e-3, 3.9e-3, 7.1e-3 | 3.7 | -0.008 | 115 (0.10); 350 (0.58) | 1.66 to 2.00; 105 (0.30); 352 (0.57) |
+| Z2_200x75_s10 | 2,000 | 2.7e-4, 6.3e-4, 1.6e-3 | 2.9 | +0.018 | 36 (0.02); 298 (0.58) | 1.595 to 1.602; 83 (0.88); 83 (0.88) |
 
 Reading. U2 at one sweep on 80x30 is growth, not an oscillation: the residual rises two decades
 per thousand iterations with no periodic structure until the speed passes 100 m/s at outer 767.
-The three ten-sweep rows are periodic with no drift: the residual repeats every 85 outer
-iterations on 80x30 (a strong peak, 0.68) over a 2.4-fold range, and every 300 to 350 on 200x75
-over a 2.9- to 3.7-fold range, with the log residual's slope under 0.02 decades per thousand, so
-they neither fall nor grow over the tail. The largest speed oscillates with the residual: on
-80x30 at a period of 30, a third of the residual's (its cell alternates between two cells, so its
-period need not be the flow's), and on 200x75 U2 at the residual's period; Z2's largest speed
-moves by 0.008 m/s over its cycle, U2's by 0.35.
+The three ten-sweep rows neither fall nor grow: the log residual's slope is under 0.02 decades
+per thousand over a 2.4- to 3.7-fold range. They are not cleanly periodic. By step 0's measure
+every residual's first peak is weak (0.21 at 11 iterations on 80x30, 0.10 at 115 and 0.02 at 36 on
+200x75); the residual recurs more strongly at longer lags (0.68 at 85 on 80x30, with 0.67 at 43
+close behind, and 0.58 at about 300 to 350 on 200x75), which reads as an irregular wandering with
+a recurring component, not a single clean cycle. The largest speed is more regular than the
+residual: on 80x30 it repeats every 30 iterations (0.98; its cell alternates between two cells,
+so that period need not be the flow's), on Z2 every 83 (0.88), and on 200x75 U2 weakly at 105
+(0.30) and more strongly at 352 (0.57); Z2's largest speed moves by 0.008 m/s over the tail,
+U2's by 0.35.
 
 Where. The records keep the cell of the largest speed, not of the largest change, so 80x30 U2
 at ten sweeps was rerun with `conv44.py --locate` (`run44.sh locate`), which records per outer
@@ -471,14 +482,20 @@ iteration the cell of the largest change of each cell-centred component between 
 iterates, the change the residual measures. The rerun reproduces the recorded row bit for bit:
 face hash f972cd575f6c8f2e, and the residual, CG and largest-speed histories equal. Over the last
 2,000 iterations the largest change of u sits in the column between the door wall and the server
-rack, directly above return 1 (x 0.5 to 1.25) at 0.75 to 1.05 m above the floor, in 99.7% of the
-iterations (most often (1.25, 0.85), (1.15, 0.85), (1.15, 0.95) and (1.15, 0.75)); the largest
-change of v sits in the same column in 84% ((1.05, 0.85), (1.05, 0.95), (1.05, 0.75)) and within
-0.2 m of the rack's face in 16% ((1.45, 1.15)). None sits at a return's faces, the hood, an
+rack, above return 1 (x 0.5 to 1.25), in 99.7% of the iterations, at cells spanning x 1.05 to
+1.35 and 0.65 to 1.55 m above the floor, 70% of them between 0.75 and 1.05 m (most often
+(1.25, 0.85), (1.15, 0.85), (1.15, 0.95) and (1.15, 0.75)); the largest change of v sits in the
+same column in 84% ((1.05, 0.85), (1.05, 0.95), (1.05, 0.75)), 69% of all iterations between 0.75
+and 1.05 m, and within 0.2 m of the rack's face in 16% ((1.45, 1.15)). Round 2 gave the 99.7% as
+the share in the 0.75 to 1.05 m band; it is the share in the column (test 44b, B3). None sits at a return's faces, the hood, an
 equipment top, the supply row or the core above the equipment. The change is 0.03 to 0.13 m/s per
 outer iteration (median 0.05 for u and 0.065 for v) in a column whose speeds are about 1 m/s.
 `bounded44.py where` assigns each cell to a region from the configuration, with 0.2 m as the
-reach of a return, the hood, an obstacle face or top and the supply row. On 200x75 the location
+reach of a return, the hood, an obstacle face or top and the supply row. `--locate` takes the
+largest change over every non-SOLID cell, the domain-edge ring included, where the residual reads
+FLUID cells only (review 44b, S1); every cell it named here is interior, so the two agree on this
+row. The rerun's record names commit 14e7597, the branch head when it ran; the `--locate` code it
+ran was committed afterwards, in c8693f7 (test 44b, S2). On 200x75 the location
 is not measured: the largest speed's cell there moves among the ends of return 1 and the gap
 above return 2 (section 5.3), which says where the speed is largest, not where it changes most.
 
@@ -492,9 +509,9 @@ the reruns past the cap):
 
 | Field | Grid | Outer: one, ten | Wall (s): one, ten | max |du|, |dv| (m/s) | Largest speed difference, at | RMS, median | Largest / tolerance (4.5e-7 m/s) |
 |---|---|---|---|---|---|---|---|
-| U1 | 40x15 | 1,535, 333 | 25, 7 | 1.31e-07, 2.50e-07 | 2.51e-07, (1.3, 1.1) | 2.55e-08, 1.70e-13 | 0.557 |
-| U2 | 40x15 | 5,012, 334 | 83, 6 | 1.56e-07, 1.80e-07 | 1.81e-07, (1.3, 0.5) | 2.81e-08, 4.63e-12 | 0.403 |
-| U3 | 40x15 | 10,254, 344 | 167, 6 | 6.57e-08, 1.14e-07 | 1.17e-07, (1.1, 1.3) | 1.51e-08, 2.58e-12 | 0.26 |
+| U1 | 40x15 | 1,535, 333 | 25, 7 | 1.31e-07, 2.50e-07 | 2.51e-07, (1.3, 1.1) | 2.96e-08, 6.00e-13 | 0.557 |
+| U2 | 40x15 | 5,012, 334 | 83, 6 | 1.56e-07, 1.80e-07 | 1.81e-07, (1.3, 0.5) | 3.32e-08, 4.06e-11 | 0.403 |
+| U3 | 40x15 | 10,254, 344 | 167, 6 | 6.57e-08, 1.14e-07 | 1.17e-07, (1.1, 1.3) | 1.72e-08, 2.17e-11 | 0.26 |
 
 The two paths land within the stopping tolerance of each other: the largest cell-centred
 difference is 0.26 to 0.56 of 4.5e-7 m/s, the RMS an eighth to a fifth of the largest, and the
@@ -538,8 +555,9 @@ if SOLID before interpolating, which put its largest differences at the edge cel
 never changed, since no sensor lies in an edge cell.
 
 The largest differences sit at obstacle faces and in the jet along the door wall. 40x15 against
-200x75 differs by up to 0.65 m/s in v at (4.98, 1.2), one cell's width from the etch chamber's
-left face, and by 0.53 m/s in v at the near_door sensor; 80x30 against 200x75 by 0.44 m/s in v at
+200x75 differs by up to 0.65 m/s in v at (4.98, 1.2), 0.02 m from the etch chamber's left face
+at x 5.0, where on 40x15 the interpolation puts 40% of its weight on the SOLID cell centre at
+x 5.1, held at zero, and on 200x75 the point is a fluid cell centre, and by 0.53 m/s in v at the near_door sensor; 80x30 against 200x75 by 0.44 m/s in v at
 (2.30, 1.2), the server rack's right face, which the staircase puts at x 2.3 on 80x30 and 2.32 on
 200x75, so the point is a wall value on one grid and a jet value on the other, and by 0.19 m/s
 at near_door. More than 0.2 m from any obstacle rectangle the largest differences are 0.58 m/s
@@ -600,7 +618,9 @@ order under refinement.
 the cap on 80x30 (section 5.3); with the corner QUICK zeroing removed it converges at 2,293
 (velocity_step at 982). On 200x75 removing the rule does not converge U2 at ten sweeps: bounded to
 the cap either way, with the same residual level (medians per thousand 3.6e-3 to 4.0e-3 without
-the rule, 3.7e-3 to 4.0e-3 with it) and the same swinging cell. On 40x15 at one sweep the finding
+the rule, 3.7e-3 to 4.0e-3 with it) and the largest speed moving among the same cells, most often
+(0.5, 0.02) and (1.22, 0.02), the ends of return 1, in 8% and 5% of the iterations after the
+first thousand either way. On 40x15 at one sweep the finding
 was the reverse (prompt 43b: the committed rule converged Re 8,950 at 2,115 and the corner-free
 run never did). The corner treatment is a first-order choice at a few faces that changes whether
 the iteration converges at the middle of the range, in one direction on the coarse grid and the
@@ -633,13 +653,13 @@ iterations per correction on 80x30 and 445 against 735 on 200x75 (the wall times
 s on 200x75, were taken at different machine loads, 0.153 against 0.225 s per outer iteration, so
 the CG counts are the comparison). **1e-2** stops at 764 against 745 on 80x30 (2.6% more) and at
 3,981 against 2,329 on 200x75 (71% more), the faces within 3e-8 m/s of the 1e-8 fields, with 37
-and 83 CG iterations per correction; on 200x75 the run still took 225 s against 524, because a
+and 83 CG iterations per correction; on 200x75 the run took 225 s against 524 (different machine loads again), because a
 correction at 1e-2 costs a ninth of one at 1e-8 and the outer loop took less than twice as many.
 U2 converges at none of the three tolerances on either grid; its rows are bounded to the cap with
 the same tails (on 200x75 the residual's median per thousand after the first thousand is 3.7e-3 to
 4.0e-3 at 1e-8, 3.5e-3 to 4.0e-3 at 1e-4 and 3.0e-3 to 4.0e-3 at 1e-2), so the pressure tolerance
 neither causes nor cures that, and the 1e-2 row costs a fifth of the 1e-8 row's wall time (539
-against 2,798 s) for the same non-answer.
+against 2,798 s, taken at different machine loads) for the same non-answer.
 
 ADR-013 B's table found 1e-2 and 1e-4 never met the per-cell condition on the 80x30 room at Re 90
 under the old outlets, where the outlets held a standing imbalance that the loose correction left
@@ -673,10 +693,10 @@ no claim here rests on them.
 | (a) U1 converges at one sweep on all three grids; 200x75 count two to ten times 40x15's | **Fails.** U1 converges at one sweep on 40x15 only (1,535); on 80x30 it is bounded to the cap and on 200x75 it diverges at 824. At ten sweeps it converges on all three, 333, 745 and 2,329: the 200x75 count is 7.0 times the 40x15 count at ten sweeps |
 | (b) U2 converges at one sweep on 40x15 and 80x30; ten on 200x75 | **Fails.** One sweep: 40x15 only (5,012, past the prompt's cap); 80x30 diverges at 767. Ten sweeps: bounded to the cap on 80x30 (5,000) and on 200x75 (10,000) |
 | (c) U3 does not converge at one sweep on 200x75; ten: no prediction | Holds on the first part: diverges at 463. Ten sweeps: bounded to the cap at 10,000, the residual between 1e-3 and 7e-3 |
-| (d) Each Z field converges wherever the uniform field at its median does | **Fails on 200x75.** Z2 converges where U1 does on 40x15 (one sweep) and 80x30 (ten), and not on 200x75, where U1 converges at ten sweeps and Z2 stays bounded with its residual steady at 6e-4 and its largest speed steady to 7e-3 m/s. Z4 follows U2 everywhere (one sweep on 40x15; bounded at ten on both finer grids). Z3 has no uniform twin: it converges at ten sweeps on 80x30 where Z4 does not, and is bounded on 200x75. On 40x15 at one sweep the Z fields converge in fewer iterations than their uniform twins (502 against 1,535; 3,528 against 5,012) |
+| (d) Each Z field converges wherever the uniform field at its median does | **Fails on 200x75.** Z2 converges where U1 does on 40x15 (one sweep) and 80x30 (ten), and not on 200x75, where U1 converges at ten sweeps and Z2 stays bounded with its residual steady at 6e-4 and its largest speed steady to 8e-3 m/s. Z4 follows U2 everywhere (one sweep on 40x15; bounded at ten on both finer grids). Z3 has no uniform twin: it converges at ten sweeps on 80x30 where Z4 does not, and is bounded on 200x75. On 40x15 at one sweep the Z fields converge in fewer iterations than their uniform twins (502 against 1,535; 3,528 against 5,012) |
 | (e) L converges on 40x15 at ten sweeps and on neither finer grid | **Holds.** 373 on 40x15; bounded to the cap on 80x30 at ten and fifty sweeps; bounded to the cap at 10,000 at ten sweeps on 200x75. ADR-013 decision 6's finding stands under the fixed-flow outlets |
 | (f) One and ten sweeps agree within ten times the tolerance | **Holds**, within the tolerance itself: 0.26 to 0.56 of 4.5e-7 m/s |
-| (g) U1: 40x15 against 200x75 exceeds 0.1 m/s; 80x30 against 200x75 under half of it | **Fails as written** (re-scored in round 2 from the corrected tables). First part holds: 0.65 m/s at (4.98, 1.2), 0.53 at the near_door sensor. Second part: the largest difference of 80x30 against 200x75 over every point is 0.44 m/s, 0.68 of 40x15's 0.65, not under half; both sit at obstacle faces where the staircase differs between grids. More than 0.2 m from any obstacle the ratio is 0.36 (0.21 against 0.58), at the sensors 0.34 to 0.37, and for the RMS over the lines 0.22 to 0.37, so on every measure but the obstacle-face maximum it holds. Section 3.2's failure outcome, 80x30 as far from 200x75 as 40x15, is not what the numbers show |
+| (g) U1: 40x15 against 200x75 exceeds 0.1 m/s; 80x30 against 200x75 under half of it | **Fails as written** (re-scored in round 2 from the corrected tables). First part holds: 0.65 m/s at (4.98, 1.2), 0.53 at the near_door sensor. Second part: the largest difference of 80x30 against 200x75 over every point is 0.44 m/s, 0.68 of 40x15's 0.65, not under half; both sit at obstacle faces where the staircase differs between grids, and both are interpolations that weight a SOLID cell centre held at zero on the coarser grid (section 5.5). More than 0.2 m from any obstacle the ratio is 0.36 (0.21 against 0.58), at the sensors 0.34 to 0.37, and for the RMS over the lines 0.22 to 0.37, so on every measure but the obstacle-face maximum it holds. Section 3.2's failure outcome, 80x30 as far from 200x75 as 40x15, is not what the numbers show |
 | (h) The corner rule raises U1's count on 200x75 by under 20% | **Holds:** 5.7% (2,329 against 2,203); 4.5% on 80x30 |
 | (i) 1e-2 stops at the same count as 1e-8 within 1%, U1 and U2, both finer grids | **Fails.** U1: 2.6% more on 80x30, 71% more on 200x75. U2 converges at neither tolerance. 1e-4, not predicted, stops at the same count to the iteration on both grids |
 | (j) The cavity converges at one sweep on both grids; 80x80 extremes within 5% of the recalled values | **Holds:** 6,039 and 16,668; 2.4% to 2.5% from the recalled values |
@@ -715,12 +735,13 @@ rule's QUICK half is kept, given that it moves the answer by 0.1 m/s at obstacle
 40x15 and 80x30; and whether a stronger aid (step 0 section 6.6's continuation in viscosity or
 pseudo-transient continuation) is built before step 6 for the lower half of the range, or whether
 the coupled solve is first tried at ten sweeps and its own field, since the model's field has not
-been shown to behave as a uniform one. The bounded rows are periodic oscillations with no drift
-(section 5.3.4): on 80x30 U2 at ten sweeps the residual repeats every 85 outer iterations over a
-2.4-fold range, and the largest change between iterates sits in the column between the door wall
-and the server rack, above return 1 at mid-height, at 0.03 to 0.13 m/s per iteration, not at an
-obstacle corner, a return face or the hood; on 200x75 U2 and Z2 the period is 300 to 350
-iterations and the location is not measured. Whether that oscillation is the iteration's (a fixed
+been shown to behave as a uniform one. The bounded rows neither fall nor grow and are not cleanly
+periodic (section 5.3.4): on 80x30 U2 at ten sweeps the residual wanders over a 2.4-fold range,
+its strongest recurrence at 43 and 85 outer iterations, and the largest change between iterates
+sits in the column between the door wall and the server rack, above return 1, mostly 0.75 to
+1.05 m above the floor, at 0.03 to 0.13 m/s per iteration, not at an obstacle corner, a return
+face or the hood; on 200x75 U2 and Z2 the strongest recurrence is at 300 to 350 iterations and
+the location is not measured. Whether that oscillation is the iteration's (a fixed
 point the ten-sweep SIMPLE loop circles, as one sweep circled Z2's on 40x15 in step 0) or the
 flow's (no steady solution in that column at that mixing) is the question an aid would have to
 answer first, and this measurement does not.
@@ -735,7 +756,8 @@ stands as written therefore depends on what the coupled field's effective viscos
 be, which step 6 measures. What cap it should carry is a question: the rule's stop comes 1.6 to
 2.5 times later than the velocity-step stop in every converged row, the probe's cap of 5,000 on
 40x15 cut two one-sweep rows that converge at 5,012 and 10,254, and the product configuration's
-own `max_simple_iter` is 500, which every converged row here exceeds. On which grid: the
+own `max_simple_iter` is 500, which every converged row exceeds except the 40x15 ten-sweep rows
+(333 to 373) and the base fields on 40x15 and 80x30 (100 and 176). On which grid: the
 measurement says 80x30 is not resolved to better than 0.2 m/s at a sensor against 200x75, and
 200x75 is not shown to be resolved; 40x15 is a different room at the returns (section 5.2). If
 VAL-018 is scored on 200x75, as the plan says, its count and cost are the ones above; if on 80x30
@@ -795,6 +817,9 @@ regenerated from the records (no solve), and the values that moved are these, ol
 | | largest far from obstacles, 40x15; 80x30 | 0.479; 0.252 | 0.164; 0.0274 at (1.06, 1.20) |
 | Measurement 3, horizontal y = 1.2, v | RMS, 40x15; 80x30 | 0.242; 0.0897 | 0.235; 0.0878 (largest unchanged, 0.646; 0.439) |
 | | largest far from obstacles, 80x30 | 0.245 at (0.10, 1.20) | 0.211 at (0.90, 1.20) |
+| Measurement 3, horizontal y = 1.2 | RMS far from obstacles, u, 40x15; 80x30 | 0.0842; 0.0246 | 0.0585; 0.0118 |
+| | RMS far from obstacles, v, 40x15; 80x30 | 0.198; 0.0763 | 0.186; 0.0733 |
+| Measurement 3, vertical x = 2.7 | RMS far from obstacles | as the RMS (every point is far) | as the RMS |
 | Measurement 3, sensors | all values | unchanged | unchanged |
 | Measurement 2 | RMS, U1; U2; U3 | 2.55e-8; 2.81e-8; 1.51e-8 | 2.96e-8; 3.32e-8; 1.72e-8 |
 | | median, U1; U2; U3 | 1.7e-13; 4.6e-12; 2.6e-12 | 6.0e-13; 4.1e-11; 2.2e-11 (largest unchanged) |
@@ -805,7 +830,7 @@ regenerated from the records (no solve), and the values that moved are these, ol
 Every outer count, stop, classification (but for the window amendment below), face difference
 and hash is unchanged. What changed in the reading: measurement 3's largest differences moved
 from the edge cells on return 2 and beside the hood to the obstacle faces and the door-side jet,
-and are smaller (0.65 and 0.44 m/s against 1.26 and 0.61); the RMS values moved by under 10%; the
+and are smaller (0.65 and 0.44 m/s against 1.26 and 0.61); the RMS values fell by about 30% to 40% for v on the vertical line and u on the horizontal one and moved by under 5% elsewhere, and measurement 2's medians rose 3.5 to 9 times; the
 sensor values did not move; prediction (g) was re-scored (section 6) and fails as written on the
 obstacle-face maximum where the first version had it failing on edge cells; the corner rule's
 RMS footprint rose by 14% to 16% and its observed order is stated against the true refinement
@@ -824,8 +849,8 @@ sweep on 40x15" (U2 and U3 past the cap, L growing); the one-sweep rates (0.9966
 ten); the ladder comparison (3.0% and 0.8%, cause open); the 80x30 one-sweep tails and the
 ten-sweep largest-speed cells (U2 moves between two cells); (0.5, 0.02) is return 1's first
 cell, not the supply's; the 200x75 largest-speed cells and ranges; Z4 was run at one and ten
-sweeps, not fifty (also in the ECR-002 notes and STATUS). Section 5.3.2's rho (0.9988 to 0.99993,
-not 0.997). Section 5.4's cells (beside the rack's left face, not its top). Section 5.5's sensor
+sweeps, not fifty (also in the ECR-002 notes and STATUS). Section 5.3.2's rho (round 2 gave 0.9988 to 0.99993;
+round 3 corrected it to 0.956 to 0.998, so the first version's 0.997 was of the right size). Section 5.4's cells (beside the rack's left face, not its top). Section 5.5's sensor
 sentence (40x15's v offsets 0.001, 0.020 and 0.29) and RMS factors (2.7 to 4.5 over the lines).
 Section 5.6's order claim and section 7's "first order" (observed orders 0.2 and 0.7 against the
 2.5 refinement ratio). Section 5.7's wall-time comparison (different loads; CG counts given) and
@@ -833,3 +858,25 @@ the 1e-2 medians. Section 5.8's order claim on the recalled cavity values (remov
 builder's (i) (failed on both grids). Section 7's cap sentence (now a question, with the product
 configuration's `max_simple_iter` of 500 named). The ECR-002 history row moved to date order and
 STATUS keeps its "Next:" pointer.
+
+## 10. Round 3 corrections (2026-10-09, orchestrator)
+
+Review 44b and test 44b found the round 2 edit had overwritten section 2.2's field table with
+measurement 2's regenerated rows, and four further errors. Closed by the orchestrator through the
+bridge, each figure checked against the value the checkers computed independently:
+
+- Section 2.2's table restored from 1bdb2bf; measurement 2's regenerated rows put in section 5.4
+  (review 44b C1, test 44b C1). `git diff 1bdb2bf HEAD` above section 5 now shows the header block
+  only.
+- Section 5.3.2's rho: 0.956 to 0.998 at the stops (test 44b B1).
+- `bounded44.py`'s `period_of` now computes `compare34b.py`'s measure and reports the strongest
+  recurrence beside it; section 5.3.4, section 7 and the notes no longer call the bounded rows
+  periodic (test 44b B2).
+- The located share restated: 99.7% in the column, 70% (u) and 69% (v) in the 0.75 to 1.05 m band
+  (test 44b B3).
+- Review 44b B1: the RMS sentence and the `max_simple_iter` sentence corrected, section 5.6's
+  "same swinging cell" replaced from the records, section 6 (d)'s 7e-3 made 8e-3.
+- Suggestions: both maxima behind (g) named as interpolations against a SOLID centre (review S2);
+  section 9's table gains the RMS-far values (review S3, test S1); the two 1e-2 wall-time
+  comparisons marked as different loads (review S4); `--locate`'s cell set and the rerun's
+  commit stated (review S1, test S2); the etch chamber point placed 0.02 m from its face (test S4).
