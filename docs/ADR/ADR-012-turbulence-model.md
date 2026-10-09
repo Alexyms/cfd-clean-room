@@ -581,7 +581,14 @@ adds nothing, and the unknown beside it takes the wall as its far node. The visc
 face rule treats such a SOLID cell as it treats a domain edge, with the value of the non-SOLID
 cell across the row boundary. On the product room the stencil moves the 40x15 ladder's stops
 from 391 and 1,632 to 728 and 2,115 outer iterations and the 80x30 drift case's from 177 to
-176, with no divergence and no drift (prompt 43's pull request).
+176, with no divergence and no drift (prompt 43's pull request). The corner rule's QUICK half
+carries the whole rise at Re 895: the diffusion alone stops at 375, and with the corner faces'
+correction removed (the face back to QUICK, a probe in `docs/reports/probe43/`) the run stops at
+372. At Re 8,950 the same probe never converges in 3,000 outer iterations, though it stays
+bounded, while the committed rule converges at 2,115. The rule's correction is zero, so a corner
+face is advected by upwind with its true mass flux: first order at the corner, conservative, and
+the more dissipative choice. Whether it still slows the outer loop on finer grids, where corners
+are a smaller share of the room, is a question for step 5 (prompt 43b's pull-request section).
 
 ## E. The stopping rule (REQ-S01, clarified; rule version 4)
 ADR-010's conditions (a) to (d) bound the velocity's iteration error, the per-cell imbalance, the

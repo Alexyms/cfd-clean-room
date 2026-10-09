@@ -485,6 +485,15 @@ FLOOR_BLOCK = {
     "y_start": 0.0,
     "y_end": 0.5,
 }
+# Clear of every wall, so each component's frame has obstacle faces and
+# corners on both of its sides (test 43b B1).
+FLOATING_BLOCK = {
+    "name": "block",
+    "x_start": 0.75,
+    "x_end": 1.25,
+    "y_start": 0.3,
+    "y_end": 0.7,
+}
 
 
 def _random_field(mesh: Mesh, rng: np.random.Generator, mu: float) -> np.ndarray:
@@ -1160,6 +1169,33 @@ class TestObstacleWallStencil:
             assert c.a_t_minus[j, i] == 0.0
             assert c.b_boundary[j, i] == 0.0
 
+    def test_the_wall_below_a_block_is_half_the_unknowns_cell_away_by_hand(
+        self,
+    ) -> None:
+        """At rest, under a block's bottom and at its corners: the north side's mirror."""
+        config = _config(CAVITY, obstacles=[FLOATING_BLOCK], mesh=STRETCHED)
+        mesh, _bc, mp = _build(config)
+        solid = mesh.cell_type == SOLID
+        bottom = int(np.flatnonzero(solid.any(axis=1)).min())
+        columns = np.flatnonzero(solid[bottom])
+        j = bottom - 1
+        assert j >= 1, "a fluid row with its own south neighbour lies below"
+        u, v, _p = allocate_fields(mesh)
+        c, _ = mp.momentum_coefficients(u, v)
+        mu = config.mu
+        # columns[0] and columns[-1] + 1 are the corners: the north neighbour
+        # face bounds a SOLID cell on one side only.
+        for i in (columns[0], columns[1], columns[-1] + 1):
+            expected = mu * (
+                mesh.dy_cell[j] / mesh.dx_cell[i]
+                + mesh.dy_cell[j] / mesh.dx_cell[i - 1]
+                + mesh.dx_face[i] / mesh.dy_face[j]
+                + mesh.dx_face[i] / (mesh.y[j + 1] - mesh.yc[j])
+            )
+            assert c.a_p[j, i] == pytest.approx(expected, rel=ROUNDING), i
+            assert c.a_t_plus[j, i] == 0.0
+            assert c.b_boundary[j, i] == 0.0
+
     @pytest.mark.parametrize("with_field", [False, True])
     def test_the_quick_correction_takes_the_boundary_form_at_the_floor_row(
         self, with_field: bool
@@ -1509,29 +1545,36 @@ def test_an_obstacle_corner_face_adds_nothing_to_the_deferred_source(
     change when that velocity does. A face away from every obstacle is the
     control: there the same change moves the source.
     """
-    config = _config(CAVITY, obstacles=[FLOOR_BLOCK], mesh=STRETCHED)
+    config = _config(CAVITY, obstacles=[FLOATING_BLOCK], mesh=STRETCHED)
     mesh, bc, mp = _build(config)
     u, v, _p = _random_state(mesh, bc, np.random.default_rng(462))
     o = mp._for_u if component == "u" else mp._for_v
     own, other = (u, v) if component == "u" else (v.T.copy(), u.T.copy())
     solid = o.solid
-    nt = solid.shape[0]
+    nt, ns = solid.shape
+    # The corners come from the SOLID mask itself, not from the wall masks
+    # the code under test builds, so a corner the code drops is still checked
+    # (test 43b B1).
     cases = []
-    for side, mask in (("south", o.walls.south), ("north", o.walls.north)):
-        for j, k in zip(*np.nonzero(mask), strict=True):
-            i = k + 1  # the unknown's index along its own axis
-            r = j - 1 if side == "south" else j + 1  # the neighbour face's row
-            face = j if side == "south" else j + 1  # the transverse face's row
-            if solid[r, i - 1] != solid[r, i]:
-                open_column = i if solid[r, i - 1] else i - 1
-                cases.append((j, i, face, open_column))
-    assert cases, "the block has corners in this frame"
+    for j in range(nt):
+        for i in range(1, ns):  # the unknown's index along its own axis
+            if solid[j, i - 1] or solid[j, i]:
+                continue  # not a fluid unknown
+            for side, r, face in (("south", j - 1, j), ("north", j + 1, j + 1)):
+                # r is the neighbour face's row of cells, face the transverse
+                # face's row between them.
+                if 0 <= r < nt and solid[r, i - 1] != solid[r, i]:
+                    open_column = i if solid[r, i - 1] else i - 1
+                    cases.append((side, j, i, face, open_column))
+    assert {case[0] for case in cases} == {"south", "north"}, (
+        "the block has corners on both sides of this frame"
+    )
 
     def deferred(other_field: np.ndarray) -> np.ndarray:
         return mp._assemble(own, other_field, o).b_deferred
 
     base = deferred(other)
-    for j, i, face, open_column in cases:
+    for _side, j, i, face, open_column in cases:
         nudged = other.copy()
         nudged[face, open_column] += 0.37
         assert deferred(nudged)[j, i] == base[j, i], (j, i)
