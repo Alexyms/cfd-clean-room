@@ -58,8 +58,16 @@ width away, with the wall value zero, so the neighbour's coefficient moves
 into the diagonal. Where the neighbour face bounds a SOLID cell on one side
 only, at an obstacle's corner, the face is a wall over its whole span, as
 the viscosity field's face rule treats a SOLID cell as a domain edge. The
-QUICK correction is unchanged there: it still reads the zero stored at the
-SOLID face's own location.
+QUICK correction takes Leonard's boundary form there, as at a domain edge:
+for that unknown the far-upstream node of the quadratic is the wall value,
+zero, at the face, not the zero stored at the SOLID face's own location a
+whole cell further; and for the normal component, a far-upstream node that
+lies beyond a wall node (inside the obstacle) is replaced by the next node
+downstream. The obstacle face itself, like a domain edge face, takes the
+wall value under both schemes and adds nothing; at a corner that holds over
+the whole span, as for the diffusion. With the boundary form, a channel
+whose floor is a row of SOLID cells is the channel whose floor is the domain
+edge to rounding.
 
 A viscosity field (ADR-012 D, ECR-002 step 4). ``predict`` takes an optional
 dynamic viscosity per cell, ``mu_eff``; without it the scalar lines run
@@ -704,6 +712,9 @@ class MomentumPredictor:
         # included as nodes.
         pos_s = f_s > 0.0
         q_s = quick_face_values(u, o.s_faces, np.arange(ns), o.s_centers, pos_s)
+        obstacles = bool(o.solid.any())
+        if obstacles:
+            q_s = self._obstacle_streamwise(u, q_s, pos_s, o)
         up_s = np.where(pos_s, u[:, :-1], u[:, 1:])
         dq_s = (q_s - up_s) * f_s
 
@@ -720,11 +731,85 @@ class MomentumPredictor:
         q_t = quick_face_values(
             ext.T, t_nodes, np.arange(1, nt), o.t_faces[1:-1], pos_t.T
         ).T
+        if obstacles:
+            q_t = self._obstacle_transverse(u, q_t, pos_t, o)
         up_t = np.where(pos_t, u[:-1, :], u[1:, :])
         dq_t = np.zeros((nt + 1, ns + 1), dtype=np.float64)
         dq_t[1:-1, :] = (q_t - up_t) * f_t[1:-1, :]
+        if obstacles:
+            dq_t[o.walls.face] = 0.0
 
         return -(dq_s[:, 1:] - dq_s[:, :-1] + dq_t[1:, 1:-1] - dq_t[:-1, 1:-1])
+
+    @staticmethod
+    def _obstacle_streamwise(
+        u: np.ndarray, q_s: np.ndarray, pos_s: np.ndarray, o: _Orientation
+    ) -> np.ndarray:
+        """Streamwise face values with the boundary form beyond an obstacle's wall node.
+
+        The face at ``s_centers[k]`` lies between nodes k and k+1. With the
+        flow toward increasing s its far-upstream node is k-1, which lies
+        inside the obstacle when cell k-1 is SOLID (node k is then on the
+        wall); the quadratic takes node k+2 instead. The opposite direction
+        mirrors it. A face whose replacement node does not exist borders no
+        unknown, so the choice there is never read.
+        """
+        n = o.s_faces.size
+        k = np.arange(o.solid.shape[1])
+        blocked_pos = np.zeros(o.solid.shape, dtype=bool)
+        blocked_pos[:, 1:] = o.solid[:, :-1]
+        blocked_neg = np.zeros(o.solid.shape, dtype=bool)
+        blocked_neg[:, :-1] = o.solid[:, 1:]
+        # The replacement nodes, kept distinct from k and k+1 everywhere so
+        # the weights stay finite where they are not used.
+        far_pos = np.where(k + 2 <= n - 1, k + 2, k - 1)
+        far_neg = np.where(k - 1 >= 0, k - 1, k + 2)
+        w_pos = _lagrange_weights(
+            o.s_faces[far_pos], o.s_faces[k], o.s_faces[k + 1], o.s_centers
+        )
+        w_neg = _lagrange_weights(
+            o.s_faces[far_neg], o.s_faces[k + 1], o.s_faces[k], o.s_centers
+        )
+        alt_pos = w_pos[0] * u[:, far_pos] + w_pos[1] * u[:, k] + w_pos[2] * u[:, k + 1]
+        alt_neg = w_neg[0] * u[:, far_neg] + w_neg[1] * u[:, k + 1] + w_neg[2] * u[:, k]
+        q_s = np.where(pos_s & blocked_pos, alt_pos, q_s)
+        return np.where(~pos_s & blocked_neg, alt_neg, q_s)
+
+    @staticmethod
+    def _obstacle_transverse(
+        u: np.ndarray, q_t: np.ndarray, pos_t: np.ndarray, o: _Orientation
+    ) -> np.ndarray:
+        """Interior transverse face values with the wall as far node beside an obstacle.
+
+        The face at ``t_faces[r]`` lies between rows r-1 and r. With the
+        flow toward increasing t the upstream node is row r-1; when that
+        unknown's south face is an obstacle face, the far node is the wall
+        value, zero, at ``t_faces[r-1]``. The opposite direction mirrors it
+        with the north face.
+        """
+        nt = u.shape[0]
+        r = np.arange(1, nt)
+        x_f = o.t_faces[r][:, None]
+        _w, w_c, w_d = _lagrange_weights(
+            o.t_faces[r - 1][:, None],
+            o.t_centers[r - 1][:, None],
+            o.t_centers[r][:, None],
+            x_f,
+        )
+        wall_pos = w_c * u[r - 1, :] + w_d * u[r, :]
+        _w, w_c, w_d = _lagrange_weights(
+            o.t_faces[r + 1][:, None],
+            o.t_centers[r][:, None],
+            o.t_centers[r - 1][:, None],
+            x_f,
+        )
+        wall_neg = w_c * u[r, :] + w_d * u[r - 1, :]
+        south = np.zeros(u.shape, dtype=bool)
+        south[:, 1:-1] = o.walls.south
+        north = np.zeros(u.shape, dtype=bool)
+        north[:, 1:-1] = o.walls.north
+        q_t = np.where(pos_t & south[r - 1, :], wall_pos, q_t)
+        return np.where(~pos_t & north[r, :], wall_neg, q_t)
 
     # ------------------------------------------------------------------
     # The viscosity field (ADR-012 D), in the component's own frame: cells

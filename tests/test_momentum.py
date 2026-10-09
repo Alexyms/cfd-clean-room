@@ -20,6 +20,7 @@ from src.momentum import (
     _Orientation,
     quick_face_values,
 )
+from src.solver_staggered import StaggeredSolver
 from src.staggered import allocate_fields
 from tests.frozen34_reference import load_frozen_predictor
 from validation.cases import CONFIG_DIR
@@ -68,6 +69,7 @@ def _config(
     mesh: dict | None = None,
     mu: float = 0.05,
     sweeps: int | None = None,
+    solver: dict | None = None,
 ) -> SimConfig:
     raw = {
         "domain": {"width": width, "height": height, "nx": nx, "ny": ny},
@@ -99,6 +101,7 @@ def _config(
         raw["mesh"] = mesh
     if sweeps is not None:
         raw["solver"]["momentum_sweeps"] = sweeps
+    raw["solver"].update(solver or {})
     return SimConfig.from_dict(raw)
 
 
@@ -526,6 +529,28 @@ def _hand_corner(mu: np.ndarray, o: _Orientation, j: int, i: int) -> float:
     return float((w_0 * m_0 + w_1 * m_1) / (w_0 + w_1))
 
 
+def _beyond_quick_reach(solid: np.ndarray) -> np.ndarray:
+    """Faces of one component's frame [nt, ns+1] two nodes or more from a SOLID face.
+
+    QUICK's stencil reaches two nodes along either axis, so the boundary
+    form at an obstacle changes the deferred correction only nearer than
+    that.
+    """
+    nt, ns = solid.shape
+    near = np.zeros((nt, ns + 1), dtype=bool)
+    near[:, :-1] |= solid
+    near[:, 1:] |= solid
+    grown = near.copy()
+    for shift in (1, 2):
+        grown[shift:, :] |= near[:-shift, :]
+        grown[:-shift, :] |= near[shift:, :]
+        grown[:, shift:] |= near[:, :-shift]
+        grown[:, :-shift] |= near[:, shift:]
+    far = ~grown
+    far[:, 0] = far[:, -1] = False
+    return far
+
+
 def _product_room(sweeps: int, obstacles: bool = True) -> SimConfig:
     """The committed product configuration on the 40x15 grid of the ladder."""
     raw = yaml.safe_load(
@@ -671,10 +696,12 @@ class TestFieldPathAgainstTheProbe:
     """The field path is frozen34.py's FrozenPredictor (form b, stress on), to the bit.
 
     The probe kept the obstacle stencil the scalar path had then (a SOLID
-    face a whole cell away). Since the obstacle stencil was built, the two
-    agree to the bit in a room without obstacles, and in the product room
-    everywhere but at the unknowns beside an obstacle face, where the
-    difference is exactly the stencil's (TestObstacleWallStencil).
+    face a whole cell away, and QUICK's far node at the SOLID face's stored
+    zero). Since the obstacle stencil was built, the two agree to the bit in
+    a room without obstacles, and in the product room everywhere but at the
+    unknowns beside an obstacle face, where the implicit coefficients differ
+    exactly by the stencil, and within QUICK's reach of a SOLID face, where
+    the deferred correction takes the boundary form (TestObstacleWallStencil).
     """
 
     @pytest.mark.parametrize("sweeps", [1, 10])
@@ -718,8 +745,11 @@ class TestFieldPathAgainstTheProbe:
                 beside = np.zeros_like(ours.a_p, dtype=bool)
                 beside[:, 1:-1] = o.walls.north | o.walls.south
                 assert beside.any()
-                for name in ("a_s_plus", "a_s_minus", "b_boundary", "b_deferred"):
+                for name in ("a_s_plus", "a_s_minus", "b_boundary"):
                     assert np.array_equal(getattr(ours, name), getattr(theirs, name))
+                far = _beyond_quick_reach(o.solid)
+                assert far.sum() >= 100
+                assert np.array_equal(ours.b_deferred[far], theirs.b_deferred[far])
                 assert np.array_equal(ours.a_p[~beside], theirs.a_p[~beside])
                 assert np.all(ours.a_p[beside] > theirs.a_p[beside])
                 north = np.zeros_like(beside)
@@ -995,7 +1025,9 @@ class TestMomentumSweeps:
 # ---------------------------------------------------------------------------
 
 
-def _floor_channel(solid_floor: bool, mesh_spec: dict | None = None) -> SimConfig:
+def _floor_channel(
+    solid_floor: bool, mesh_spec: dict | None = None, solver: dict | None = None
+) -> SimConfig:
     """A 2 by 1 channel of six fluid rows; its floor the domain edge or a SOLID row.
 
     With a SOLID floor the domain is one row taller and the inlet and outlet
@@ -1021,6 +1053,7 @@ def _floor_channel(solid_floor: bool, mesh_spec: dict | None = None) -> SimConfi
         height=height + base,
         obstacles=[floor] if solid_floor else None,
         mesh=mesh_spec,
+        solver=solver,
     )
 
 
@@ -1106,6 +1139,26 @@ class TestObstacleWallStencil:
             assert c.a_t_minus[j, i] == 0.0
             assert c.b_boundary[j, i] == 0.0
 
+    @pytest.mark.parametrize("with_field", [False, True])
+    def test_the_quick_correction_takes_the_boundary_form_at_the_floor_row(
+        self, with_field: bool
+    ) -> None:
+        """The deferred correction of the fluid rows equals the domain floor's too."""
+        (edge, u, v, cells), (solid, u_s, v_s, cells_s), _ = _floor_states(
+            np.random.default_rng(451)
+        )
+        kw_e = {"mu_cells": edge._check_mu_eff(cells)} if with_field else {}
+        kw_s = {"mu_cells": solid._check_mu_eff(cells_s)} if with_field else {}
+        e_u, e_vt = self._both(edge, u, v, **kw_e)
+        s_u, s_vt = self._both(solid, u_s, v_s, **kw_s)
+        assert np.any(e_u.b_deferred != 0.0) and np.any(e_vt.b_deferred != 0.0)
+        assert s_u.b_deferred[1:, :] == pytest.approx(
+            e_u.b_deferred, rel=ROUNDING, abs=1e-15
+        )
+        assert s_vt.b_deferred[:, 1:] == pytest.approx(
+            e_vt.b_deferred, rel=ROUNDING, abs=1e-15
+        )
+
     def test_wall_mu_reaches_an_obstacle_face(self) -> None:
         """The hook replaces the obstacle face's viscosity, and refuses NaN there."""
         config = _config(CAVITY, obstacles=[FLOOR_BLOCK])
@@ -1132,3 +1185,33 @@ class TestObstacleWallStencil:
         for o in (mp._for_u, mp._for_v):
             assert not o.walls.face.any()
             assert not o.walls.north.any() and not o.walls.south.any()
+
+
+@pytest.mark.integration
+def test_a_solid_floor_channel_solves_as_the_domain_floor_channel() -> None:
+    """The obstacle stencil's test: the two channels agree to rounding, same stop.
+
+    Before the stencil the SOLID floor's first row differs by a first-order
+    amount (the wall a whole cell away). With the diffusive stencil and not
+    QUICK's boundary form it differs by about 1e-4 of the inflow near the
+    inlet, where the flow is developing (docs/reports/probe43/field43.py
+    floor). With both, the fluid faces agree to rounding.
+    """
+    solver_keys = {"max_simple_iter": 5000, "convergence_tol": 1e-10}
+    edge_cfg = _floor_channel(False, solver=solver_keys)
+    solid_cfg = _floor_channel(True, solver=solver_keys)
+    edge_mesh = Mesh(edge_cfg)
+    solid_mesh = Mesh(solid_cfg)
+    edge = StaggeredSolver(edge_mesh, edge_cfg, StaggeredBoundary(edge_mesh, edge_cfg))
+    solid = StaggeredSolver(
+        solid_mesh, solid_cfg, StaggeredBoundary(solid_mesh, solid_cfg)
+    )
+    edge.solve_steady()
+    solid.solve_steady()
+    assert edge.converged and solid.converged
+    assert len(edge.residual_history) == len(solid.residual_history)
+    fe, fs = edge.face_velocities, solid.face_velocities
+    assert fe is not None and fs is not None
+    assert np.abs(fs.u[1:, :] - fe.u).max() < 1e-12
+    assert np.abs(fs.v[1:, :] - fe.v).max() < 1e-12
+    assert np.abs(fe.v).max() > 1e-3
