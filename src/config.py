@@ -646,6 +646,13 @@ class SimConfig:
                                 "scalar layer treats it as a wall"
                             )
 
+            if bc_type == "pressure_outlet" and "velocity" in spec:
+                # velocity means an outward flow on a fixed_flow_outlet, so on a
+                # pressure outlet, whose velocity the room finds, it is a slip.
+                raise ValueError(
+                    f"{ctx}.velocity is not valid on a pressure_outlet; the room "
+                    "sets its velocity (use a fixed_flow_outlet to hold one)"
+                )
             if bc_type == "fixed_flow_outlet":
                 # A fixed flow is a normal velocity and nothing else. The inlet's
                 # component and concentration keys describe air entering, and
@@ -662,7 +669,15 @@ class SimConfig:
                             f"{ctx}.{key} is not valid on a fixed_flow_outlet; "
                             "it holds an outward normal 'velocity' only"
                         )
-                if spec.get("velocity") is not None:
+                # "States none" is written by leaving the key out; a blank value
+                # (YAML null) is a slip, and reading it as "none" would let the
+                # hood quietly take a share of the remainder.
+                if "velocity" in spec and spec["velocity"] is None:
+                    raise ValueError(
+                        f"{ctx}.velocity is blank; give a positive outward "
+                        "velocity, or leave the key out to share the remaining flow"
+                    )
+                if "velocity" in spec:
                     bc_velocity = self._finite_number(
                         spec["velocity"], f"{ctx}.velocity"
                     )
@@ -880,7 +895,9 @@ class SimConfig:
         would over-determine the balance. With a pressure outlet, that
         outlet balances the flow and every fixed-flow outlet must state
         its velocity. What needs the mesh (a remainder that is not
-        positive) is checked when the boundary is built.
+        positive) is checked when the boundary is built. A fixed-flow
+        outlet also needs a velocity inlet: the room's velocity scale comes
+        from what drives it in, not from what leaves.
         """
         fixed = {
             name: spec
@@ -889,6 +906,13 @@ class SimConfig:
         }
         if not fixed:
             return
+        if not any(spec.type == "velocity_inlet" for spec in self.boundaries.values()):
+            raise ValueError(
+                f"fixed_flow_outlet segments {sorted(fixed)} need a velocity_inlet "
+                "to drive the room. Without one, make-up air would enter through a "
+                "pressure outlet, the regime the outlet's zero-gradient copy "
+                "handles badly (GitHub issue 61), and this code does not support it"
+            )
         unstated = [name for name, spec in fixed.items() if spec.velocity is None]
         has_pressure_outlet = any(
             spec.type == "pressure_outlet" for spec in self.boundaries.values()
