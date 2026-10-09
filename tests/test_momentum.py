@@ -1215,3 +1215,309 @@ def test_a_solid_floor_channel_solves_as_the_domain_floor_channel() -> None:
     assert np.abs(fs.u[1:, :] - fe.u).max() < 1e-12
     assert np.abs(fs.v[1:, :] - fe.v).max() < 1e-12
     assert np.abs(fe.v).max() > 1e-3
+
+
+# ---------------------------------------------------------------------------
+# The obstacle stencil on every side and at a corner (review 43 B2, test 43 B1)
+# ---------------------------------------------------------------------------
+
+# Stretched along the walls only: across them the two channels must share
+# their cells, and a stretched axis spreads its spacing over the whole domain.
+ALONG_X = {"x": {"stretch_ratio": 1.15}, "y": {"stretch_ratio": 1.0}}
+ALONG_Y = {"x": {"stretch_ratio": 1.0}, "y": {"stretch_ratio": 1.15}}
+SOLVE_KEYS = {"max_simple_iter": 5000, "convergence_tol": 1e-10}
+
+
+def _x_channel(floor: bool, ceiling: bool, solver: dict | None = None) -> SimConfig:
+    """CHANNEL's 2 by 1 flow along x over six fluid rows; SOLID rows below and above as asked."""
+    ny, height = 6, 1.0
+    dy = height / ny
+    base = dy if floor else 0.0
+    span = {"y_start": base, "y_end": base + height}
+    # One value for the domain's extent and the last obstacle's end, so no
+    # rounding puts the obstacle outside the domain.
+    total = base + height + (dy if ceiling else 0.0)
+    obstacles = []
+    if floor:
+        obstacles.append(
+            {"name": "floor", "x_start": 0.0, "x_end": 2.0, "y_start": 0.0, "y_end": dy}
+        )
+    if ceiling:
+        top = base + height
+        obstacles.append(
+            {
+                "name": "ceiling",
+                "x_start": 0.0,
+                "x_end": 2.0,
+                "y_start": top,
+                "y_end": total,
+            }
+        )
+    return _config(
+        {
+            "inlet": {**CHANNEL["inlet"], **span},
+            "outlet": {**CHANNEL["outlet"], **span},
+        },
+        ny=ny + int(floor) + int(ceiling),
+        height=total,
+        obstacles=obstacles or None,
+        mesh=ALONG_X,
+        solver=solver,
+    )
+
+
+def _y_channel(sides: bool, solver: dict | None = None) -> SimConfig:
+    """A 1 by 2 channel driven along y over six fluid columns; SOLID columns at both sides."""
+    nx, width, height = 6, 1.0, 2.0
+    dx = width / nx
+    left = dx if sides else 0.0
+    span = {"x_start": left, "x_end": left + width}
+    total = width + (2 * dx if sides else 0.0)
+    boundaries = {
+        "inlet": {
+            "type": "velocity_inlet",
+            "location": "bottom",
+            "velocity": 0.3,
+            **span,
+        },
+        "outlet": {"type": "pressure_outlet", "location": "top", **span},
+    }
+    obstacles = None
+    if sides:
+        right = left + width
+        obstacles = [
+            {
+                "name": "west",
+                "x_start": 0.0,
+                "x_end": dx,
+                "y_start": 0.0,
+                "y_end": height,
+            },
+            {
+                "name": "east",
+                "x_start": right,
+                "x_end": total,
+                "y_start": 0.0,
+                "y_end": height,
+            },
+        ]
+    return _config(
+        boundaries,
+        nx=nx + (2 if sides else 0),
+        ny=8,
+        width=total,
+        height=height,
+        obstacles=obstacles,
+        mesh=ALONG_Y,
+        solver=solver,
+    )
+
+
+def _pad(a: np.ndarray, axis: int, low: bool, high: bool) -> np.ndarray:
+    """``a`` with a row (axis 0) or column (axis 1) of zeros added on the sides asked."""
+    pieces = []
+    shape = list(a.shape)
+    shape[axis] = 1
+    if low:
+        pieces.append(np.zeros(shape))
+    pieces.append(a)
+    if high:
+        pieces.append(np.zeros(shape))
+    return np.concatenate(pieces, axis=axis)
+
+
+def _coefficients(
+    mp: MomentumPredictor, u: np.ndarray, v: np.ndarray, cells: np.ndarray | None
+) -> tuple[MomentumCoefficients, MomentumCoefficients]:
+    """Both equations, v in its own frame (transposed), with or without a field."""
+    if cells is None:
+        return mp._assemble(u, v, mp._for_u), mp._assemble(v.T, u.T, mp._for_v)
+    field = mp._check_mu_eff(cells)
+    return (
+        mp._assemble(u, v, mp._for_u, mu_cells=field),
+        mp._assemble(v.T, u.T, mp._for_v, mu_cells=np.ascontiguousarray(field.T)),
+    )
+
+
+COEFFICIENT_NAMES = (
+    "a_p",
+    "a_s_plus",
+    "a_s_minus",
+    "a_t_plus",
+    "a_t_minus",
+    "b_boundary",
+    "b_deferred",
+)
+
+
+def _part(c: MomentumCoefficients, index: tuple[slice, slice]) -> MomentumCoefficients:
+    """The same equation restricted to one block of its faces."""
+    return MomentumCoefficients(**{n: getattr(c, n)[index] for n in COEFFICIENT_NAMES})
+
+
+def _assert_same(ours: MomentumCoefficients, theirs: MomentumCoefficients) -> None:
+    """Every coefficient and source of the two equations, to rounding."""
+    for name in COEFFICIENT_NAMES:
+        assert getattr(ours, name) == pytest.approx(
+            getattr(theirs, name), rel=ROUNDING, abs=1e-15
+        ), name
+
+
+def _solve(config: SimConfig) -> StaggeredSolver:
+    mesh = Mesh(config)
+    solver = StaggeredSolver(mesh, config, StaggeredBoundary(mesh, config))
+    solver.solve_steady()
+    assert solver.converged
+    return solver
+
+
+@pytest.mark.unit
+class TestObstacleStencilOnEverySide:
+    """SOLID rows and columns on the high side and on both sides equal the domain edges.
+
+    The floor tests reach only the low side in each frame. A SOLID ceiling
+    reaches walls.north, wall_neg and blocked_neg (u and v frames); SOLID
+    side columns reach the v frame's transverse paths and the u frame's
+    streamwise ones, low and high.
+    """
+
+    @pytest.mark.parametrize(
+        ("floor", "ceiling"), [(False, True), (True, True)], ids=["ceiling", "both"]
+    )
+    @pytest.mark.parametrize("with_field", [False, True], ids=["air", "field"])
+    def test_solid_rows_assemble_as_the_domain_edges(
+        self, floor: bool, ceiling: bool, with_field: bool
+    ) -> None:
+        """Every coefficient and source of the fluid rows, the deferred correction included."""
+        edge_mesh, edge_bc, edge = _build(_x_channel(False, False))
+        solid_mesh, solid_bc, solid = _build(_x_channel(floor, ceiling))
+        rows = slice(int(floor), solid_mesh.yc.size - int(ceiling))
+        assert np.all(solid_mesh.cell_type[rows, :] != SOLID)
+        assert np.all(solid_mesh.cell_type[-1, :] == SOLID)
+        u, v, _p = _random_state(edge_mesh, edge_bc, np.random.default_rng(460))
+        u_s, v_s = _pad(u, 0, floor, ceiling), _pad(v, 0, floor, ceiling)
+        solid_bc.apply_normal_velocity(u_s, v_s)
+        assert np.array_equal(u_s[rows, :], u)
+        cells = cells_s = None
+        if with_field:
+            profile = 0.05 * (1.0 + 4.0 * edge_mesh.yc**2)
+            cells = np.tile(profile[:, None], (1, edge_mesh.xc.size))
+            cells_s = np.full(solid_mesh.cell_type.shape, np.nan)
+            cells_s[rows, :] = cells
+        e_u, e_vt = _coefficients(edge, u, v, cells)
+        s_u, s_vt = _coefficients(solid, u_s, v_s, cells_s)
+        _assert_same(_part(s_u, np.s_[rows, :]), e_u)
+        faces = slice(int(floor), int(floor) + v.shape[0])
+        _assert_same(_part(s_vt, np.s_[:, faces]), e_vt)
+        # The path this test exists for is taken.
+        assert solid._for_u.walls.north.any()
+
+    @pytest.mark.parametrize("with_field", [False, True], ids=["air", "field"])
+    def test_solid_columns_assemble_as_the_domain_sides(self, with_field: bool) -> None:
+        """A channel along y: every coefficient and source beside both SOLID columns."""
+        edge_mesh, edge_bc, edge = _build(_y_channel(False))
+        solid_mesh, solid_bc, solid = _build(_y_channel(True))
+        columns = slice(1, solid_mesh.xc.size - 1)
+        assert np.all(solid_mesh.cell_type[:, 0] == SOLID)
+        assert np.all(solid_mesh.cell_type[:, -1] == SOLID)
+        assert np.all(solid_mesh.cell_type[:, columns] != SOLID)
+        u, v, _p = _random_state(edge_mesh, edge_bc, np.random.default_rng(461))
+        u_s, v_s = _pad(u, 1, True, True), _pad(v, 1, True, True)
+        solid_bc.apply_normal_velocity(u_s, v_s)
+        assert np.array_equal(v_s[:, columns], v)
+        cells = cells_s = None
+        if with_field:
+            profile = 0.05 * (1.0 + 4.0 * edge_mesh.xc**2)
+            cells = np.tile(profile[None, :], (edge_mesh.yc.size, 1))
+            cells_s = np.full(solid_mesh.cell_type.shape, np.nan)
+            cells_s[:, columns] = cells
+        e_u, e_vt = _coefficients(edge, u, v, cells)
+        s_u, s_vt = _coefficients(solid, u_s, v_s, cells_s)
+        faces = slice(1, 1 + u.shape[1])
+        _assert_same(_part(s_u, np.s_[:, faces]), e_u)
+        _assert_same(_part(s_vt, np.s_[columns, :]), e_vt)
+        walls = solid._for_v.walls
+        assert walls.north.any() and walls.south.any()
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("case", ["ceiling", "floor_and_ceiling", "sides"])
+def test_solid_walls_solve_as_the_domain_edges(case: str) -> None:
+    """Each channel solves to the faces of its domain-edge twin within 1e-12, same stop."""
+    if case == "sides":
+        edge, solid = (
+            _solve(_y_channel(False, SOLVE_KEYS)),
+            _solve(_y_channel(True, SOLVE_KEYS)),
+        )
+        fe, fs = edge.face_velocities, solid.face_velocities
+        assert fe is not None and fs is not None
+        pairs = ((fs.u[:, 1:-1], fe.u), (fs.v[:, 1:-1], fe.v))
+        tangential = np.abs(fe.u).max()
+    else:
+        floor = case == "floor_and_ceiling"
+        edge = _solve(_x_channel(False, False, SOLVE_KEYS))
+        solid = _solve(_x_channel(floor, True, SOLVE_KEYS))
+        fe, fs = edge.face_velocities, solid.face_velocities
+        assert fe is not None and fs is not None
+        start = int(floor)
+        pairs = (
+            (fs.u[start : start + fe.u.shape[0], :], fe.u),
+            (fs.v[start : start + fe.v.shape[0], :], fe.v),
+        )
+        tangential = np.abs(fe.v).max()
+    assert len(edge.residual_history) == len(solid.residual_history)
+    for ours, theirs in pairs:
+        assert np.abs(ours - theirs).max() < 1e-12
+    # The flow develops, so the QUICK boundary form is exercised, not idle.
+    assert tangential > 1e-3
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("component", ["u", "v"])
+def test_an_obstacle_corner_face_adds_nothing_to_the_deferred_source(
+    component: str,
+) -> None:
+    """The corner rule's QUICK half, by a construction where it must hold.
+
+    At an obstacle's corner the neighbour face bounds a SOLID cell on one
+    side only, so mass crosses the face through its open half. The corner
+    rule makes the face a wall over its whole span: its face value is the
+    wall's under QUICK and under upwind alike, so its correction is zero
+    whatever that mass flux. The unknown beside it reads the open half's
+    normal velocity through that face alone, so its deferred source must not
+    change when that velocity does. A face away from every obstacle is the
+    control: there the same change moves the source.
+    """
+    config = _config(CAVITY, obstacles=[FLOOR_BLOCK], mesh=STRETCHED)
+    mesh, bc, mp = _build(config)
+    u, v, _p = _random_state(mesh, bc, np.random.default_rng(462))
+    o = mp._for_u if component == "u" else mp._for_v
+    own, other = (u, v) if component == "u" else (v.T.copy(), u.T.copy())
+    solid = o.solid
+    nt = solid.shape[0]
+    cases = []
+    for side, mask in (("south", o.walls.south), ("north", o.walls.north)):
+        for j, k in zip(*np.nonzero(mask), strict=True):
+            i = k + 1  # the unknown's index along its own axis
+            r = j - 1 if side == "south" else j + 1  # the neighbour face's row
+            face = j if side == "south" else j + 1  # the transverse face's row
+            if solid[r, i - 1] != solid[r, i]:
+                open_column = i if solid[r, i - 1] else i - 1
+                cases.append((j, i, face, open_column))
+    assert cases, "the block has corners in this frame"
+
+    def deferred(other_field: np.ndarray) -> np.ndarray:
+        return mp._assemble(own, other_field, o).b_deferred
+
+    base = deferred(other)
+    for j, i, face, open_column in cases:
+        nudged = other.copy()
+        nudged[face, open_column] += 0.37
+        assert deferred(nudged)[j, i] == base[j, i], (j, i)
+    # Control: an unknown with no obstacle in reach answers the same nudge.
+    far = _beyond_quick_reach(solid)
+    j, i = (int(n) for n in np.argwhere(far[1 : nt - 1, :])[0])
+    j += 1
+    nudged = other.copy()
+    nudged[j, i] += 0.37
+    assert deferred(nudged)[j, i] != base[j, i]
