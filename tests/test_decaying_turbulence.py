@@ -54,7 +54,8 @@ def _box(variant: str) -> SimConfig:
         "mesh": {"x": {"stretch_ratio": 1.2}},
         "fluid": AIR,
         "particles": PARTICLES,
-        "solver": SOLVER_BLOCK,
+        # The model is on only under the error_estimate rule (ECR-002 step 6).
+        "solver": {**SOLVER_BLOCK, "stopping_rule": "error_estimate"},
         "turbulence": {
             "model": "k_epsilon",
             "variant": variant,

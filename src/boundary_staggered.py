@@ -48,6 +48,11 @@ discrete inflow (``fixed_flow_velocities``), so outflow equals inflow to
 rounding on any mesh, however the faces round each opening. A domain whose
 only outlets are fixed-flow therefore has no pressure outlet and the pressure
 correction takes its closed-domain path.
+
+Which edge faces are walls is data too (``wall_faces``, ECR-002 step 6): a
+face with zero normal velocity that is not an outlet, at rest or moving,
+which is where the wall functions of ADR-012 B apply. An inlet that admits
+air and either kind of outlet is not a wall.
 """
 
 from dataclasses import dataclass
@@ -59,6 +64,7 @@ from src.boundary_registry import (
     FIXED_FLOW_OUTLET,
     PRESSURE_OUTLET,
     VELOCITY_INLET,
+    WALL,
     BoundaryRegistry,
     EdgeCondition,
     EdgeCoverage,
@@ -115,6 +121,35 @@ class TangentialCondition:
     is_dirichlet: np.ndarray
     value: np.ndarray
     wall_distance: float
+
+
+@dataclass(frozen=True, eq=False)
+class EdgeWalls:
+    """Which faces along one domain edge are walls (ECR-002 step 6).
+
+    A wall is a face with zero normal velocity that is not an outlet: a
+    ``wall`` segment, a point no segment covers, or a ``velocity_inlet``
+    whose normal component is zero (a moving wall). An inlet that admits
+    air, a ``pressure_outlet`` and a ``fixed_flow_outlet`` are not walls.
+
+    Parameters
+    ----------
+    edge : str
+        One of "bottom", "top", "left", "right".
+    cells : np.ndarray
+        Boolean, [nx] on the bottom and top edges, [ny] on the left and
+        right edges: True where the edge cell's own face is a wall and the
+        cell is not SOLID (a SOLID cell has no face toward the flow).
+    corners : np.ndarray
+        Boolean, [nx+1] or [ny+1], at the tangential storage locations of
+        ``TangentialCondition``, from the same coverage: True where the
+        condition there is a wall, a point bounding a SOLID edge cell
+        included.
+    """
+
+    edge: str
+    cells: np.ndarray
+    corners: np.ndarray
 
 
 @dataclass(frozen=True)
@@ -187,6 +222,7 @@ class StaggeredBoundary:
 
         self._tangential = {edge: self._build_tangential(edge) for edge in EDGES}
         self._outlets = {edge: self._build_outlet(edge) for edge in EDGES}
+        self._walls = {edge: self._build_walls(edge) for edge in EDGES}
 
     # ------------------------------------------------------------------
     # Geometry helpers
@@ -298,8 +334,8 @@ class StaggeredBoundary:
     # Construction of the data deliverables
     # ------------------------------------------------------------------
 
-    def _build_tangential(self, edge: str) -> TangentialCondition:
-        """Tangential data at every storage location along an edge.
+    def _corner_conditions(self, edge: str) -> list[EdgeCondition]:
+        """The condition at every tangential storage location along an edge.
 
         The condition at a storage coordinate is the registry's answer at
         that coordinate, so at a point where two segments meet the first in
@@ -310,13 +346,16 @@ class StaggeredBoundary:
         solid_face = np.zeros(solid.shape[0] + 1, dtype=bool)
         solid_face[:-1] |= solid
         solid_face[1:] |= solid
-
-        conditions = [
+        return [
             point.condition
             for point in self._registry.coverage_along(
                 edge, self._face_coordinates(edge), solid_face
             )
         ]
+
+    def _build_tangential(self, edge: str) -> TangentialCondition:
+        """Tangential data at every storage location along an edge (``_corner_conditions``)."""
+        conditions = self._corner_conditions(edge)
         is_dirichlet = np.array(
             [c.bc_type != PRESSURE_OUTLET for c in conditions], dtype=bool
         )
@@ -334,6 +373,31 @@ class StaggeredBoundary:
             value=value,
             wall_distance=self._wall_distance(edge),
         )
+
+    @staticmethod
+    def _is_wall(condition: EdgeCondition, edge: str) -> bool:
+        """Zero normal velocity and not an outlet: a wall at rest or moving."""
+        if condition.bc_type == WALL:
+            return True
+        return (
+            condition.bc_type == VELOCITY_INLET
+            and StaggeredBoundary._normal_component(condition, edge) == 0.0
+        )
+
+    def _build_walls(self, edge: str) -> EdgeWalls:
+        """The wall faces along an edge, per edge cell and per corner."""
+        solid = self._solid_along(edge)
+        cells = np.array(
+            [self._is_wall(c, edge) for c in self._cell_conditions[edge]], dtype=bool
+        )
+        cells &= ~solid
+        corners = np.array(
+            [self._is_wall(c, edge) for c in self._corner_conditions(edge)],
+            dtype=bool,
+        )
+        cells.flags.writeable = False
+        corners.flags.writeable = False
+        return EdgeWalls(edge=edge, cells=cells, corners=corners)
 
     def _build_outlet(self, edge: str) -> PressureOutletCondition:
         """Outlet mask along an edge; the value is the gauge datum."""
@@ -408,6 +472,16 @@ class StaggeredBoundary:
             Keys "bottom", "top", "left", "right". The arrays are read-only.
         """
         return dict(self._outlets)
+
+    def wall_faces(self) -> dict[str, EdgeWalls]:
+        """Which edge faces are walls, keyed by edge name (ECR-002 step 6).
+
+        Returns
+        -------
+        dict[str, EdgeWalls]
+            Keys "bottom", "top", "left", "right". The arrays are read-only.
+        """
+        return dict(self._walls)
 
     def fixed_flow_velocities(self) -> dict[str, float]:
         """Outward normal velocity of every fixed-flow outlet segment, by name.

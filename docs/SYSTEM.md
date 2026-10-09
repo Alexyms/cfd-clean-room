@@ -129,10 +129,10 @@ solver_staggered                   .                     .                  X   
 solver_transport                   X                     .                  .             X         .       X       .          X         .            X               .                 .              X         .          .
 staggered                          .                     .                  .             .         .       X       .          .         .            .               .                 .              .         .          .
 stopping                           .                     .                  .             .         .       .       .          .         .            .               .                 .              .         .          .
-turbulence                         .                     .                  .             X         .       X       .          .         .            X               .                 .              X         .          .
+turbulence                         .                     X                  X             X         .       X       .          .         .            X               .                 .              X         .          .
 ```
 
-Rows import columns. Edges, 42 total:
+Rows import columns. Edges, 44 total:
 
 ```
 boundary_concentration -> boundary_registry, config, mesh, particles, staggered
@@ -146,7 +146,7 @@ scalar_scheme          -> mesh, momentum
 solver_staggered       -> boundary_staggered, config, mesh, momentum, pressure, staggered, stopping
 solver_transport       -> boundary_concentration, config, mesh, particles, scalar_scheme, staggered
 staggered              -> mesh
-turbulence             -> config, mesh, scalar_scheme, staggered
+turbulence             -> boundary_registry, boundary_staggered, config, mesh, scalar_scheme, staggered
 ```
 
 Cycles of any length: **none**. Checked by depth-first search over the whole graph, not by looking for mutual pairs. A three-module cycle is the one that actually happens and a pair check answers 'none' in its presence.
@@ -199,8 +199,8 @@ Generated. The responsibility and serves columns are editorial and come from `do
 |---|---|---|---|
 | `src/boundary_concentration.py` | 327 | Derives the per-face concentration conditions of each particle class from the registry's shared coverage and ParticlePhysics: the concentration an inlet carries, the deposition velocity and surface code at every wall and obstacle face, and the mask of faces that carry the settling increment, as read-only face-shaped data for the transport solver. | S12.1, T09, T10 |
 | `src/boundary_registry.py` | 360 | Interprets the configured boundary segments once, answering which segment covers each point along a domain edge and which condition and prescribed velocity hold there, SOLID cells read as walls, for both boundary imposition layers: the staggered velocity layer and the concentration layer. | S12.1 |
-| `src/boundary_staggered.py` | 520 | Writes Dirichlet normal velocities exactly into the staggered domain-face entries and exposes the tangential wall values, wall distances and pressure outlets as data for the momentum and pressure steps. | S12 |
-| `src/config.py` | 1237 | Loads the YAML configuration into typed dataclasses and rejects missing keys, wrong types and out-of-range values at load time. | A02, A03, C01, C02, S10 |
+| `src/boundary_staggered.py` | 594 | Writes Dirichlet normal velocities exactly into the staggered domain-face entries and exposes the tangential wall values, wall distances and pressure outlets as data for the momentum and pressure steps. | S12 |
+| `src/config.py` | 1320 | Loads the YAML configuration into typed dataclasses and rejects missing keys, wrong types and out-of-range values at load time. | A02, A03, C01, C02, S10 |
 | `src/constants.py` | 8 | Holds the physical constants shared by every module so that none of them defines its own copy. | C04 |
 | `src/mesh.py` | 423 | Builds the structured grid, uniform or geometrically clustered at the walls, with the face, center, width and center-to-center arrays a face-based stencil needs, and classifies each cell as FLUID, SOLID or BOUNDARY. | S11 |
 | `src/momentum.py` | 983 | Predicts u* and v* on the staggered grid with QUICK advection by deferred correction over an upwind implicit matrix, a configured number of under-relaxed Jacobi sweeps per call, an optional per-cell viscosity field with its face rule and stress source, and the domain edge's wall stencil at obstacle faces, and returns the diagonal coefficients the pressure correction needs. | S07, S09, S14 |
@@ -211,9 +211,9 @@ Generated. The responsibility and serves columns are editorial and come from `do
 | `src/solver_transport.py` | 891 | Advances one particle class one explicit step on the staggered face velocities: QUICK's face value bounded by the UMIST limiter under forward Euler at a Courant number the configuration sets, implicit diffusion and deposition by Jacobi on per-face conductances, the Brownian coefficient plus nu_t / Sc_t on interior faces when handed an eddy viscosity field, the settling increment on interior faces, sources added and booked, SOLID cells zero; keeps one MassBudget per class and defines FieldHistory, the output contract for the animation. | N01, T01, T03, T04, T05, T06, T07, T08, T11, T12, T13 |
 | `src/staggered.py` | 324 | Defines the staggered (MAC) field layout: shapes and allocation of face-centered u and v and cell-centered p, the face-to-center averaging the solver applies before returning, and FaceVelocities, the read-only face pair the solver exposes and the transport solver advects with. | S07, S13 |
 | `src/stopping.py` | 228 | Decides when the steady outer iteration has converged, on four conditions: (a) the iteration error estimated from the step and its fitted geometric rate, over a physical velocity scale; (b) the worst per-cell mass imbalance against its own tolerance; (c) the summed imbalance over the through-flow, which shares the tolerance of (a); and (d) the signed imbalance summed over the domain, which shares the tolerance of (b). Also defines IterationState, the snapshot a solver hands its callback once per outer iteration. | S01, S04 |
-| `src/turbulence.py` | 928 | Advances the k-epsilon model's k and eps one step on a prescribed face velocity field, standard or RNG with each variant's constants as module data: advection, explicit growth from the strain the faces give and implicit decay and diffusion through the shared scalar scheme, boundary values from a conditions object the caller builds each step, the kinematic eddy viscosity, and an assertion that k and eps are positive and finite after every step. | S14, S15 |
+| `src/turbulence.py` | 1516 | Advances the k-epsilon model's k and eps one step on a prescribed face velocity field, standard or RNG with each variant's constants as module data: advection, explicit growth from the strain the faces give and implicit decay and diffusion through the shared scalar scheme, boundary values from a conditions object the caller builds each step, the kinematic eddy viscosity, and an assertion that k and eps are positive and finite after every step. | S14, S15 |
 
-Total 16 Python files, 7965 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
+Total 16 Python files, 8710 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
 
 `Declares it serves` is an EDITORIAL CLAIM read from `docs/system_map_annotations.toml`. It says which requirements a module is meant to satisfy, not that it does. Whether a requirement is met is answered by the tests named in the register's `Verified By` column.
 <!-- END GENERATED: components -->
@@ -238,7 +238,7 @@ Generated. Static import analysis cannot see a function bound into a registry by
 |---|---|
 | Scope | `src/**/*.py` |
 | Files hashed | 16 |
-| Digest | `sha256:8f4e931b2f555aad95ab9342821be18af27fa9491aea5eef6c0b89964f401741` |
+| Digest | `sha256:acba0b587199526c54dc15c0520cab92103c7cd6c49dbcadd286e6707572ff7c` |
 
 This is what lets the document answer whether it is current, which is the one question a stale table cannot be asked. `python scripts/gen_system_map.py --check` recomputes the whole set of generated regions, this digest included, and exits non-zero on any disagreement.
 

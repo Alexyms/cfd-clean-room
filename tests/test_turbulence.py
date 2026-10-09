@@ -77,7 +77,8 @@ def _config(
         "mesh": mesh or {},
         "fluid": {**AIR, "viscosity": viscosity},
         "particles": PARTICLES,
-        "solver": SOLVER_BLOCK,
+        # The model is on only under the error_estimate rule (ECR-002 step 6).
+        "solver": {**SOLVER_BLOCK, "stopping_rule": "error_estimate"},
         "turbulence": {
             "model": "k_epsilon",
             "variant": variant,
@@ -1347,9 +1348,19 @@ CONSTANCY_SECONDS = 40.0
 
 @pytest.fixture(scope="module")
 def val001_faces() -> tuple[Mesh, FaceVelocities, np.ndarray, SimConfig]:
-    """VAL-001 at 40x20 solved under its own rule, its faces and their imbalance."""
+    """VAL-001 at 40x20 solved under its own rule, its faces and their imbalance.
+
+    The flow is solved laminar; the configuration returned is the same case
+    with a turbulence section, for the model alone (step 6 would couple a
+    solve with the section present).
+    """
     raw = yaml.safe_load(case_path("poiseuille").read_text(encoding="utf-8"))
     raw["domain"]["nx"], raw["domain"]["ny"] = 40, 20
+    laminar = SimConfig.from_dict(raw)
+    for spec in raw["boundaries"].values():
+        if spec["type"] == "velocity_inlet":
+            spec["turbulence_intensity"] = 0.05
+            spec["dissipation_length"] = 0.1
     raw["turbulence"] = {
         "model": "k_epsilon",
         "wall_treatment": "scalable_wall_functions",
@@ -1359,9 +1370,9 @@ def val001_faces() -> tuple[Mesh, FaceVelocities, np.ndarray, SimConfig]:
         "tol": 1.0e-12,
     }
     config = SimConfig.from_dict(raw)
-    mesh = Mesh(config)
-    boundary = StaggeredBoundary(mesh, config)
-    solver = StaggeredSolver(mesh, config, boundary)
+    mesh = Mesh(laminar)
+    boundary = StaggeredBoundary(mesh, laminar)
+    solver = StaggeredSolver(mesh, laminar, boundary)
     solver.solve_steady()
     faces = solver.face_velocities
     imbalance = PressureCorrector(mesh, config, boundary).mass_imbalance(
