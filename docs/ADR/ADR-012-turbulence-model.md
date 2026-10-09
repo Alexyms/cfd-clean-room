@@ -548,6 +548,33 @@ corrected faces for the reason the transport solver does. `alpha_velocity` keeps
 value for the turbulent cases is a measurement of ECR-002 step 5, not a guess here. The pressure
 correction's d = A / a_P reads the larger a_P and needs no change.
 
+*Note, 2026-10-08 (step 4 built; the outlets' datum dropped).* Alex decided on 2026-10-08 that
+step 4 builds nothing for the outlets' datum. The modified pressure `p + (2/3) rho k` disagrees
+only with a boundary that holds the pressure; the product room has had no pressure outlet since
+step 3 (decision 1 as amended), and VAL-001, which has one, runs laminar. "ECR-002 step 4 decides
+whether to correct the datum per face" above is answered: no correction. The `momentum.py`
+contract in `docs/SYSTEM.md` says which pressure the solver returns.
+
+*Note, 2026-10-08 (step 4 built; the obstacle stencil and its corner rule).* The face rule, form
+b's stress source and the momentum sweep count are the step 0 probe's arithmetic
+(`frozen34.py`), and `MomentumPredictor.predict(u, v, p, mu_eff=...)` reproduces its
+FrozenPredictor bit for bit on the 40x15 product room before the obstacle stencil. The obstacle
+faces take the domain edge's wall stencil (section B, "Obstacle walls") in two parts. The
+diffusion: the wall at the face, half the unknown's cell away, wall value zero, the viscosity
+from `wall_mu` when given. The QUICK correction, added by Alex on 2026-10-08 beyond the prompt's
+text: with only the diffusion, a channel whose floor is a row of SOLID cells still differed from
+the domain-floor channel by 1.3e-4 of the inflow where the flow develops, because QUICK took
+its far-upstream node from the zero stored at the SOLID face's location; with Leonard's boundary
+form there, as at a domain edge, the two channels agree to 6e-16 m/s. The corner rule is the
+same for both parts: a neighbour face that bounds a SOLID cell on one side only, at an
+obstacle's corner, is a wall over its whole span. The diffusion takes the half distance over
+the whole span. In the QUICK correction the face takes the wall value under both schemes and
+adds nothing, and the unknown beside it takes the wall as its far node. The viscosity field's
+face rule treats such a SOLID cell as it treats a domain edge, with the value of the non-SOLID
+cell across the row boundary. On the product room the stencil moves the 40x15 ladder's stops
+from 391 and 1,632 to 728 and 2,115 outer iterations and the 80x30 drift case's from 177 to
+176, with no divergence and no drift (prompt 43's pull request).
+
 ## E. The stopping rule (REQ-S01, clarified; rule version 4)
 ADR-010's conditions (a) to (d) bound the velocity's iteration error, the per-cell imbalance, the
 summed imbalance over the through-flow and the signed domain sum. Under k-epsilon the iterate
