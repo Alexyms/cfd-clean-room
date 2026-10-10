@@ -1644,19 +1644,25 @@ class TestInletTurbulenceKeys:
         with pytest.raises(ValueError, match=rf"belt\.{key} is not valid.*zero"):
             SimConfig.from_dict(raw)
 
-    @pytest.mark.parametrize("segment_type", ["wall", "pressure_outlet"])
+    @pytest.mark.parametrize("key", sorted(INLET_TURBULENCE))
+    @pytest.mark.parametrize(
+        "segment_type", ["wall", "pressure_outlet", "fixed_flow_outlet"]
+    )
     def test_each_is_refused_on_another_segment_type(
-        self, tmp_path: Path, segment_type: str
+        self, tmp_path: Path, segment_type: str, key: str
     ) -> None:
+        """Every segment type but the inlet refuses each key (review 45 S6)."""
         raw = self._raw(tmp_path, **INLET_TURBULENCE)
         raw["boundaries"]["side"] = {
             "type": segment_type,
             "location": "left",
             "y_start": 0.0,
             "y_end": 3.0,
-            "turbulence_intensity": 0.05,
+            key: INLET_TURBULENCE[key],
         }
-        with pytest.raises(ValueError, match="only valid on a velocity_inlet"):
+        with pytest.raises(
+            ValueError, match=rf"side\.{key} is only valid on a velocity_inlet"
+        ):
             SimConfig.from_dict(raw)
 
     @pytest.mark.parametrize(

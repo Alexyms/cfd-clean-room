@@ -10,9 +10,13 @@ tests/test_turbulent_channel.py. Each planted defect of prompt 45's list for
 commit B fails a test here (docs/reports/probe45/plant45.py).
 """
 
+from collections.abc import Callable
+from itertools import pairwise
+
 import numpy as np
 import pytest
 
+from src import solver_staggered
 from src.boundary_staggered import StaggeredBoundary
 from src.config import SimConfig
 from src.mesh import Mesh
@@ -20,10 +24,12 @@ from src.momentum import MomentumPredictor
 from src.pressure import PressureCorrector
 from src.solver_staggered import StaggeredSolver, rule_version
 from src.staggered import FaceVelocities, allocate_fields
+from src.stopping import ErrorEstimateRule, ImbalanceSummary
 from src.turbulence import (
     KEpsilonModel,
     PositivityError,
     TurbulenceBoundary,
+    TurbulenceConditions,
     TurbulenceState,
 )
 from validation.transport_cases import AIR, PARTICLES, SOLVER_BLOCK
@@ -222,6 +228,62 @@ class TestWhatTheSolverExposes:
         assert laminar.rule_version == rule_version(laminar_config) == 3
         assert coupled.rule_version == rule_version(config) == 4
 
+    def test_condition_e_receives_the_largest_change_of_nu_t(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Each outer iteration hands the rule max |nu_t_new - nu_t_old| over non-SOLID cells.
+
+        Test 45 B1: the step (e) is fed was pinned by nothing. The eddy
+        viscosity before and after each of four outer iterations is taken
+        from solves capped at 1, 2, 3 and 4 iterations (the solve is
+        deterministic) and from the start state, and the largest change is
+        formed here; the rule records what the solver passed it.
+        """
+        received: list[float] = []
+
+        class Recording(ErrorEstimateRule):
+            def update(
+                self,
+                step: float,
+                imbalance: Callable[[], ImbalanceSummary],
+                viscosity_step: float | None = None,
+            ) -> bool:
+                assert viscosity_step is not None
+                received.append(viscosity_step)
+                return super().update(step, imbalance, viscosity_step=viscosity_step)
+
+        monkeypatch.setattr(solver_staggered, "ErrorEstimateRule", Recording)
+        n = 4
+        _, _, solver = _solver(_channel(max_simple_iter=n))
+        solver.solve_steady()
+        assert len(received) == n
+        passed = list(received)
+
+        config = _channel()
+        mesh, boundary, _ = _solver(config)
+        live = mesh.cell_type != 1
+        start = KEpsilonModel(mesh, config).initial(
+            *TurbulenceBoundary(mesh, config, boundary).initial_values()
+        )
+        history = [np.array(start.nu_t)]
+        for cap in range(1, n + 1):
+            _, _, capped = _solver(_channel(max_simple_iter=cap))
+            capped.solve_steady()
+            assert capped.turbulence_state is not None
+            history.append(np.array(capped.turbulence_state.nu_t))
+        expected = [
+            float(np.abs(after[live] - before[live]).max())
+            for before, after in pairwise(history)
+        ]
+        assert passed == expected
+        # Not every change is in one row of cells, so a step over part of the
+        # field would show.
+        rows = {
+            int(np.argmax(np.abs(after - before).max(axis=1)))
+            for before, after in pairwise(history)
+        }
+        assert rows != {0}
+
     def test_condition_e_scales_by_boundary_data(self) -> None:
         """nu_scale is nu plus the largest inlet eddy viscosity, not a field's maximum.
 
@@ -265,7 +327,13 @@ class TestRefusals:
         calls = []
         real_step = KEpsilonModel.step
 
-        def step(self, state, faces, conditions, dt=None):  # type: ignore[no-untyped-def]
+        def step(
+            self: KEpsilonModel,
+            state: TurbulenceState,
+            faces: FaceVelocities,
+            conditions: TurbulenceConditions,
+            dt: float | None = None,
+        ) -> TurbulenceState:
             calls.append(1)
             if len(calls) == 3:
                 raise PositivityError("k is not positive and finite at 1 cell", -1.0)
