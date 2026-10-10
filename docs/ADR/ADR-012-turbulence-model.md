@@ -391,6 +391,26 @@ side only is a wall over its whole span. Section D's step 4 note gives the measu
 lines of `_assemble` cited in this section have moved; the wall rows now read `wall_mu` when it
 is given. The wall function itself is step 6's.
 
+*Note, 2026-10-09 (step 6 built; prompt 45).* The wall functions are `src/turbulence.py`'s
+`TurbulenceBoundary`, built per solver from the staggered boundary layer. kappa 0.41 and E 9.793
+are module constants; the floor y*_0 is computed from them (`log_law_floor`, 11.528), never typed.
+A wall is a domain-edge face with zero normal velocity that is not an outlet, at rest or moving
+(`StaggeredBoundary.wall_faces`, read at the same coverage as the tangential condition), and every
+obstacle face, the step 4 corner rule included; an inlet that admits air and either kind of outlet
+take no wall function and keep the stencil's own viscosity. `wall_viscosity` puts `mu_w = rho
+C_mu^(1/4) k_P^(1/2) kappa y_P / ln(E max(y*, y*_0))` on each such face in `wall_mu`'s layout, y_P
+the unknown's half cell and k_P the mean of the two cells the unknown lies between. At y* = y*_0 it
+is mu exactly; below the floor it is `mu y* / y*_0`, less than mu. Three rules the design left to
+the build, stated in the class's docstring. (1) The wall cell's production per unit density is
+`(tau_w / rho) u_k / (kappa y_P)`, `u_k = C_mu^(1/4) k_P^(1/2)`, tau_w the wall function's shear on
+the cell-centre slip: the standard form, `P_k = tau_w (dU/dy)_P` with the log law's gradient
+(Launder and Spalding 1974; Versteeg and Malalasekera 2007, chapter 9); in the log layer it equals
+the held eps. (2) A cell with more than one wall face takes the arithmetic mean of its walls' eps
+and productions: the single-wall rule on one wall, symmetric under reflection, and OpenFOAM's
+corner weighting. (3) The inflow-weighted means of the inlet faces' k and eps are the uniform
+state the coupled solve starts from. The inflow values are `k = 1.5 (I |u_n|)^2`, `eps =
+k^(3/2) / l_e`; every other domain face carries the adjacent cell's value.
+
 ## C. Discretization of k and eps (REQ-S15, proposed; decision 4)
 **Where they live.** At cell centres, beside p and the concentrations, so that the corrected
 faces advect them with the fluxes continuity was enforced on (ADR-011 A), the scheme is exact on
@@ -450,6 +470,61 @@ pressure-outlet face the air turns inward through takes what decision 1 gives it
 air for a concentration, since k has no clean state. Walls and obstacle faces: no advective flux
 (the normal velocity is zero, REQ-S12), zero diffusive flux of k, eps in the wall cell held at the
 wall function's value (section B) by a dominant diagonal, P_k in the wall cell from the wall shear.
+
+*Note, 2026-10-09 (step 6; prompt 45): `cfl_number` 0.5 and the coupled iteration.* At the bound,
+`cfl_number` 0.5, the coupled plane Couette solve of G (ii) locks into a limit cycle and never
+stops: a period of about 10.3 outer iterations in u, k, nu_t and v alike, the wall cell's k
+swinging 0.6% (a 6 m channel, 60 by 12 cells, standard model). The period and the amplitude do
+not change with the momentum sweeps (5, 10, 20), `alpha_velocity` 0.3 or `alpha_turbulence` 1.0,
+so it lives in the k and eps step, not the flow's iteration. At 0.25 the same case stops by its
+rule at outer 642, and every VAL-016 run uses 0.25. ADR-011 B's bound is the limited scheme's
+positivity bound under forward Euler; at the bound itself the steady pseudo-time iteration need
+not converge. Product runs (prompt 46) need a value below 0.5.
+
+*Note, 2026-10-09 (step 6; prompt 45): positivity needs a converged correction.* The step's
+positivity (above) holds for corrected faces that close every cell. On the 48-row Couette case (a
+120 m channel in 0.25 m by 6.25 mm cells) every early correction stopped at the committed cap of
+5,000 CG iterations, the first leaving a cell imbalance of 23% of the flux scale; the solve then
+diverged as a whole, the imbalance reaching 1e24 times the flux scale and k 1e22, the implicit k
+and eps solves stopping at their own cap (GitHub issue 58's case), and k went negative at outer
+iteration 6, where `PositivityError` stopped it. With the cap at 100,000 the same twelve outer
+iterations converge every correction (about 15,000 iterations each), keep the imbalance near 1e-11
+of the flux scale and keep k and eps smooth and positive. The assertion did its job; the cause
+was the capped correction, which the solver already reports (`pressure_cap_hits`). `python
+docs/reports/probe45/positivity45.py 5000` and `... 100000` reproduce it (records
+`results/builder45/couette/positivity_*.json`).
+
+*Note, 2026-10-09 (step 6; prompt 45): a known limitation, the strain beside a wall.* The step's
+strain takes du/dy at the four corners of a cell from the face differences and averages them to
+the centre (above). In the second cell from a wall, where the profile is the wall function's
+log law, that overstates the strain on every grid, so the production nu_t S^2 there, and with it
+k, is too large; the excess diffuses into the core. Measured on plane Couette flow (G (ii)) against
+the model's own refined answer (the 1D solve with the same wall cells, 161 sub-cells per 2D cell),
+the second cell's du/dy is 34.4% high and S^2 81% high for the standard model, 32.8% to 33.0%
+and 76% to 77% for RNG, the same on 12 and 24 rows; its k is 29% to 41% high (1.29 to 1.41). The
+figures first reported, 33% and 77% (standard) and 31% and 71% (RNG), k 27% to 39%, were against
+a reference refined to 21 sub-cells; refining it to 41, 81 and 161 raises them by about one
+point. The orchestrator's estimate, 12.5% in du/dy and 27% in S^2, took the exact face gradients
+of a log law; the stencil's own difference quotients give 20.7% and 46% on an exact log law. The
+measured ratio R = S_st / g(1.5 h), S_st the stencil's value at the second cell's centre and
+g(1.5 h) the refined solve's true gradient there, is the product of three factors:
+
+- F1 = 1.125, averaging the exact face gradients of a log law (1 / h and 1 / (2 h)) against its
+  gradient at the centre (1 / (1.5 h));
+- F2 = 1.0730, the difference quotients between cell centres in place of those exact gradients,
+  on the same log law ((ln 3 + ln(5 / 3)) / 2 / (1 / 1.5) = 1.2071 = F1 F2);
+- F3 = R / (F1 F2), measured: the solved profile against the log law. It is the stencil on the
+  solved profile over the stencil on the log law with the same u_tau (1.110 standard, 1.161 RNG,
+  12 rows), times the log law's centre gradient over the true one (1.003 and 0.948). Most of it
+  is the step from the wall cell to the second cell, 15% to 19% larger than the log law's.
+
+Standard, 12 rows: 1.125 x 1.0730 x 1.1130 = 1.3435; RNG, 12 rows: 1.125 x 1.0730 x 1.0999 =
+1.3277. `python docs/reports/probe45/mech45.py` reproduces the table (about a minute; record
+`results/builder45/couette/mech45.json`). The limitation applies beside every wall and obstacle
+face, the equipment tops included, wherever a wall cell's neighbour sits in the log layer. In the
+core of plane Couette flow it raises k above `u_tau^2 / sqrt(C_mu)` by 6% to 15% on 12 rows and 2%
+to 4% on 24 (G (ii)'s note). A fix (a gradient consistent with the wall function in the second
+cell, or production limited there) is a candidate for a later step, not this one.
 
 ## D. Coupling into the flow solver (REQ-S14, S16, S18 and S01, proposed; decision 1)
 **The viscosity field.** `mu_e = mu + mu_t` per cell. `MomentumPredictor` gains an optional
@@ -603,6 +678,21 @@ face is advected by upwind with its true mass flux: first order at the corner, c
 the more dissipative choice. Whether it still slows the outer loop on finer grids, where corners
 are a smaller share of the room, is a question for step 5 (prompt 43b's pull-request section).
 
+*Note, 2026-10-09 (step 6 built; prompt 45): the outer iteration.* With the configuration's
+turbulence section `StaggeredSolver.solve_steady` runs the outer iteration above in that order:
+the prediction with `mu_eff = mu + rho nu_t` and `wall_mu` from the wall functions (section B's
+note) over `MomentumPredictor.stencil_viscosity`, the stencil's own viscosity on every face the
+wall functions do not set; the correction; one pseudo-time step of k and eps on the corrected
+faces; then nu_t relaxed by `alpha_turbulence`. k and eps are not relaxed. A prescribed
+`eddy_viscosity` is refused with the section present (one source of nu_t per solve), and a
+configuration with no velocity inlet that admits air is refused when the solver is built, since
+the start and condition (e)'s scale come from the inlets. A PositivityError from the step stops
+the solve and names the outer iteration. Without the section every call is the laminar one, the
+rule's and the predictor's alike, so a probe's or a test's substitute still fits and VAL-001, its
+stretched twin, VAL-002 and the 40x15 ladder are bitwise the base at every commit of the step.
+The solver exposes the last solve's `turbulence_state` (k, eps, nu_t, read-only) in place of the
+draft's `eddy_viscosity` attribute.
+
 ## E. The stopping rule (REQ-S01, clarified; rule version 4)
 ADR-010's conditions (a) to (d) bound the velocity's iteration error, the per-cell imbalance, the
 summed imbalance over the through-flow and the signed domain sum. Under k-epsilon the iterate
@@ -630,6 +720,19 @@ version today, read it from the solver. Rejected: a bound on the k and eps steps
 momentum and transport read only nu_t; and no fifth condition, which would let a solve stop with
 the viscosity still moving. On the product case `mass_imbalance_tol` follows ADR-011 G's formula
 `1e-4 rho V_min / t_end`, unchanged.
+
+*Note, 2026-10-09 (step 6 built; prompt 45).* Built as drafted: `ErrorEstimateRule(...,
+nu_scale=None)`, `update(step, imbalance, viscosity_step=None)`, with nu_scale the molecular nu
+plus the largest `C_mu k_in^2 / eps_in` over the inlet faces, and `version` 3 without (e), 4 with
+it. The imbalance is asked for only when (a) and, with it on, (e) hold. `RULE_VERSION` is gone;
+`RULE_VERSION_WITHOUT_E` and `RULE_VERSION_WITH_E` name the two values, and
+`solver_staggered.rule_version(config)` gives a solver's version without building one, which
+`scripts/val001_order.py` needs to decide reuse before it builds a solver; `scripts/benchmark.py`
+and `scripts/stopping_probe.py` read the same. Three tests changed with it, as section I's
+cascade rows foresaw: `tests/test_benchmark.py` (the import and the version assertion),
+`tests/test_stopping_probe.py` (the version an argument of `rule_parameters`) and
+`tests/test_val001_order.py` (the version patched through `rule_version`). In every VAL-016 run,
+on both variants and every grid, (e) is the last of the five conditions to hold.
 
 ## F. Coupling into transport (REQ-T13, proposed; decisions 7 and 8)
 **The diffusivity.** `D_k = D_B,k + nu_t / Sc_t` per face: the class's Brownian coefficient plus
@@ -723,6 +826,57 @@ before the finer one runs, the gap falling under refinement. The plane channel s
 reported physics case: its skin friction against Dean's (1978) correlation `Cf = 0.073
 Re_m^-0.25`, which the build fetches and checks before quoting, unscored. Couette tests the model
 as built; the channel and the step below test it against physics.
+
+*Note, 2026-10-09 (step 6 built; Alex's decision of that day; prompt 45): VAL-016's criterion is
+split.* Under wall functions refinement moves the first node's y+ (G (v)), so "the gap falling
+under refinement" is not defined: the reference itself changes with the wall cell. And the
+criterion as written mixed two questions, whether the code solves its equations and whether the
+model has the property, which the measurement separates. As built
+(`tests/test_turbulent_channel.py`, the reference in `tests/couette_reference.py`, which imports
+nothing from `src/`):
+(a) the implementation: in the developed section the 2D solve equals the one-dimensional solve
+on the same grid (the 2D stencil's own x-invariant limit: the same wall cells, the same face rule,
+the same corner-averaged strain) in u / U_w and k / u_tau^2 to within 1e-4, each k over its own
+u_tau. A wall-cell production scaled by 1.01 fails it.
+(b) the model: the refined one-dimensional solve (41 sub-cells per 2D cell, the same wall cells)
+keeps the core k (0.2 H to 0.8 H) within 1% of `u_tau^2 / sqrt(C_mu)`, each variant against its
+own C_mu.
+(c) reported, unscored: the 2D core k against `u_tau^2 / sqrt(C_mu)` and the first node's y+ on
+every grid run. It is above the model's by the second-cell strain overshoot of section C's note.
+The suite runs (a) on one grid and one variant (the standard model on 12 rows, about 46 s) and
+(b) for both variants; the matrix is `docs/reports/probe45/couette45.py` and `tables45.py`.
+The case: U_w 15.7 m/s (Re_tau 2,990 to 3,070), the inlet at U_w / 2 with an intensity of 6% and
+a dissipation length of 0.1 m, a 120 m channel (400 gaps), 1 m cells along x on 12 rows and 0.5 m
+on 24 (aspect ratios near 40), `cfl_number` 0.25 (section C's note), ten momentum sweeps. Every run stops by `error_estimate_and_continuity` under rule version 4, condition (e)
+the last of the five to hold, and no k or eps solve reaches its cap.
+
+| Variant | Rows | first-node y+ | (a) max du / U_w | (a) max d(k / u_tau^2) | (b) core k ratio | (c) 2D core k ratio |
+|---|---|---|---|---|---|---|
+| standard | 12 | 256 | 5.5e-8 | 1.3e-5 | 0.9995 to 1.0015 | 1.058 to 1.155 |
+| standard | 24 | 127 | 1.1e-7 | 1.8e-5 | 0.9985 to 0.9986 | 1.016 to 1.042 |
+| RNG | 12 | 252 | 2.7e-7 | 1.4e-5 | 0.9994 to 1.0011 | 1.059 to 1.134 |
+| RNG | 24 | 125 | 8.5e-7 | 7.6e-5 | 0.9984 to 0.9985 | 1.018 to 1.042 |
+| standard | 48 | 63 | not run to its stop | | 0.9977 to 0.9984 | 1.004 to 1.012 (1D, same grid) |
+| RNG | 48 | 62 | not run to its stop | | 0.9974 to 0.9981 | 1.005 to 1.014 (1D, same grid) |
+
+The 48-row 2D runs were stopped unfinished: on those cells (0.25 m by 6.25 mm) a converged
+correction takes about 15,000 CG iterations, so an outer iteration takes about 9 s and a run some
+hours, and at the committed cap of 5,000 the solve diverges (section C's note on positivity). Their
+(c) values are the same-grid one-dimensional solve's, which (a) shows the 2D one equals on 12 and
+24 rows.
+
+The development length is about 200 gaps, not the 40 written above. On a 90 m channel in 0.3 m
+cells, against the profile at 270 gaps, the change is 1.5e-2 of U_w in u and 5e-2 in k (relative to
+its maximum) at 60 gaps, 6e-4 and 2e-2 at 120, 1.8e-5 and 1.7e-3 at 180 and 1.7e-5 and 2.2e-4 at
+210; on the 120 m channels the profile changes by about 1e-6 of U_w or less and 1e-5 in k between 240
+and 270 gaps. The streamwise spacing changes the developed answer by less than 1e-5 of U_w (0.1
+against 0.3 m). The core is
+slow because its k decays before the shear from the walls reaches it. The plane channel, reported
+and unscored: its skin friction from the developed pressure gradient (and, equally to 1e-8, from
+the wall function's shear) is 0.977 and 0.981 of Dean's correlation for the standard model on 12
+and 24 rows and 0.953 and 0.950 for RNG, with `Cf = tau_w / (rho U_m^2 / 2)` and `Re_m = U_m 2h /
+nu` = 156,000, 2h the full gap. Dean (1978), J. Fluids Eng. 100:215-223, was checked from its
+abstract only; the full-height convention is the one channel DNS matches.
 
 *VAL-019, the backward-facing step (decision 3 of 2026-10-04).* The NASA Turbulence Modeling
 Resource's case of Driver and Seegmiller (1985) [13]: Reynolds number about 36,000 on the step
@@ -915,6 +1069,20 @@ domain-edge wall faces and the obstacle faces. `KEpsilonModel.wall_viscosity`'s 
 produce. `StaggeredSolver.eddy_viscosity` below is not built; step 4 built a `solve_steady`
 keyword, `eddy_viscosity`, that holds a prescribed field for the solve (`docs/SYSTEM.md`, the
 `solver_staggered.py` contract).
+
+*Note, 2026-10-09 (step 6 built; prompt 45).* Built against the draft below. The inlet keys as
+drafted: required on every velocity inlet that admits air when the section is present, refused
+on any other segment, on an inlet with zero normal velocity and with the section absent; and the
+section is refused at load under `velocity_step`. `KEpsilonModel.wall_viscosity` is not built: its
+final form is `TurbulenceBoundary(mesh, config, boundary).wall_viscosity(k, elsewhere)`, which
+returns `wall_mu` in the step 4 layout, mu_w on the wall-function faces and `elsewhere`'s value,
+`MomentumPredictor.stencil_viscosity(mu_eff)` in the solver, on every other face the stencil
+reads. The same class builds each step's `TurbulenceConditions` (`conditions(state, faces)`),
+the start (`initial_values`) and condition (e)'s inlet scale (`largest_inlet_eddy_viscosity`).
+`StaggeredBoundary` gains `wall_faces()` and `MomentumPredictor` `stencil_viscosity(mu_eff)`, two
+additions the draft did not list; `turbulence.py` now imports `boundary_registry` (the inlet
+coverage, as the concentration layer reads it) and `boundary_staggered`. The stopping rule as
+drafted (section E's note); `StaggeredSolver.eddy_viscosity` is `turbulence_state`.
 
 **Draft contracts** (SYSTEM.md section 4 gains them when ECR-002 is accepted).
 

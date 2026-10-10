@@ -216,6 +216,7 @@ def case_raw(
     dx: float,
     cfl: float,
     tol: float = 1e-6,
+    max_pressure_iter: int = 5000,
 ) -> dict:
     """The 2D case as a configuration mapping, for SimConfig.from_dict.
 
@@ -223,7 +224,8 @@ def case_raw(
     with INTENSITY and DISSIPATION_LENGTH, a pressure outlet on the right,
     the lower wall at rest and, for Couette, the upper wall a velocity inlet
     with zero normal velocity moving at U_W. Ten momentum sweeps, the
-    error_estimate rule at ``tol``, the pseudo-time Courant number ``cfl``.
+    error_estimate rule at ``tol``, the pseudo-time Courant number ``cfl``,
+    ``max_pressure_iter`` conjugate-gradient iterations at most per correction.
     """
     inlet_speed = U_W / 2.0 if kind == "couette" else U_M
     boundaries = {
@@ -250,7 +252,7 @@ def case_raw(
         "solver": {
             "dt": 0.01, "t_end": 1.0, "output_interval": 10, "convergence_tol": 1e-6,
             "max_simple_iter": 20000, "alpha_velocity": 0.7, "alpha_pressure": 0.3,
-            "max_pressure_iter": 5000, "pressure_rtol": 1e-8,
+            "max_pressure_iter": max_pressure_iter, "pressure_rtol": 1e-8,
             "stopping_rule": "error_estimate", "momentum_sweeps": 10,
             "iteration_error_tol": tol,
         },

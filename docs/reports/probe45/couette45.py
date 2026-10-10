@@ -97,7 +97,14 @@ def run(args: argparse.Namespace) -> None:
 
     solver_staggered.ErrorEstimateRule = RecordingRule
     raw = case_raw(
-        args.kind, args.variant, args.ny, args.length, args.dx, args.cfl, args.tol
+        args.kind,
+        args.variant,
+        args.ny,
+        args.length,
+        args.dx,
+        args.cfl,
+        args.tol,
+        args.max_pressure_iter,
     )
     config = SimConfig.from_dict(raw)
     mesh = Mesh(config)
@@ -170,6 +177,8 @@ def run(args: argparse.Namespace) -> None:
         "iteration_error_tol": args.tol,
         "stop": solver.stop_reason, "outer": n, "seconds": seconds,
         "rule_version": solver.rule_version, "nu_scale": rule._nu_scale,
+        "pressure_cap_hits": solver.pressure_cap_hits,
+        "max_pressure_iter": args.max_pressure_iter,
         "from_when": {key: from_when(flags) for key, flags in holds.items()},
         "station_x": float(mesh.x[station]), "profile_change_against_station": along,
         "yc": yc.tolist(), "u": us.tolist(), "k": ks.tolist(), "nu_t": ns.tolist(),
@@ -234,6 +243,7 @@ def main() -> None:
     p.add_argument("--cfl", type=float, default=0.25)
     p.add_argument("--label", default="")
     p.add_argument("--tol", type=float, default=1e-6)
+    p.add_argument("--max-pressure-iter", type=int, default=5000)
     p = sub.add_parser("reference")
     p.add_argument("variant", choices=sorted(VARIANTS))
     p.add_argument("ny", type=int)

@@ -373,13 +373,24 @@ ECR-002 step 5, the convergence measurement, is on `docs/ecr002-step5-convergenc
 iterations) and nothing else there, and nothing below about 5e-4 m^2/s on 80x30 at any sweep
 count measured; the step 4 corner rule decides the middle row on 80x30; `pressure_rtol` 1e-4
 reproduces 1e-8; the bounded rows neither converge nor grow, wandering without a clean period,
-located on 80x30 in the column between the door wall and the server rack. Next: Alex's decisions on the sweep count, the
-corner rule and a stronger aid before step 6 opens, from the report's section 7.
+located on 80x30 in the column between the door wall and the server rack. Alex decided on
+2026-10-09: ten sweeps, a looser pressure tolerance and a larger cap for the product room in step
+8, the corner rule kept, and the coupled solve built first with no aid (ADR-012 D's note).
+ECR-002 step 6, the coupled solve, is built on `feature/ecr002-coupled-solve` and waits for review
+and test: the scalable wall functions, the k and eps step inside the outer iteration, and a fifth
+stopping condition that refuses to stop while the eddy viscosity moves, with the laminar
+validation results bitwise. Plane Couette flow (VAL-016) passes as Alex split it: the code
+reproduces its own one-dimensional limit, and the model's core k has the property the design
+expects, while the two-dimensional strain beside a wall overstates the turbulence there on every
+grid, a known limitation (ADR-012 C). The coupled iteration cycles at the pseudo-time step's
+upper bound and converges below it. Next: review and test 45, then prompt 46, the product room
+under the model.
 
 Deferred findings from earlier pull requests were open as GitHub issues, and every open one now
 has a disposition. The cleanup pull request (branch `fix/deferred-findings-cleanup`) closes issues
 33, 36, 40, 42, 45, 47, 51 and 63 and takes the small items of issue 53. Still open: issue 53's
-D3 and D4, which are for the Phase 3 gate report; issue 58, which closes with ECR-002 step 6; and
+D3 and D4, which are for the Phase 3 gate report; issue 58, which step 6 was to decide and did not
+(no k or eps solve reached its cap in any step 6 run; the decision stays open); and
 issue 61, the outlet finding, which closes with ECR-002 step 3. Issue 38's last item, the
 solver-key list held once, was done in ECR-003 step 1's pull request, which closed it.
 

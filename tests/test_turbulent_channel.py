@@ -13,7 +13,8 @@ The criterion is split (Alex, 2026-10-09; ADR-012 G's note of that date):
     its own C_mu.
 (c) Reported, not scored: the 2D core-k excess and the first node's y+ on
     every grid, in docs/reports/probe45/ with the full matrix (both variants,
-    12, 24 and 48 rows, the plane channel against Dean) and its runtimes.
+    12 and 24 rows, the plane channel against Dean) and its runtimes, and in
+    ADR-012 G's note of 2026-10-09.
 
 Here, to keep the suite's cost under a minute (46 s on this machine), (a)
 runs one grid and one variant: the standard model on 12 rows, a 120 m channel (400 gaps; the
