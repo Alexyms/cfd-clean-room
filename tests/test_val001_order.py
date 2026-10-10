@@ -191,10 +191,11 @@ def test_saved_solve_is_reused_only_while_its_parameters_match(
 def test_saved_solve_is_not_reused_under_another_rule_version(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A file saved under one RULE_VERSION builds a solver under another.
+    """A file saved under one rule version builds a solver under another.
 
     Defect caught: the version dropped from the key. A new stopping condition
     changes no solver parameter, so without it the file would be reused.
+    Since ECR-002 step 6 the version is read from the solver's rule_version.
     """
 
     class SolverBuiltError(Exception):
@@ -208,7 +209,8 @@ def test_saved_solve_is_not_reused_under_another_rule_version(
     config = val001_order.load_case("poiseuille", grid=(12, 6))
     params = val001_order.reuse_key(config)
     np.savez(tmp_path / "poiseuille_12x6.npz", params=params, u=np.ones((6, 12)))
-    monkeypatch.setattr(val001_order, "RULE_VERSION", val001_order.RULE_VERSION + 1)
+    assert val001_order.rule_version(config) == 3
+    monkeypatch.setattr(val001_order, "rule_version", lambda _config: 4)
     with pytest.raises(SolverBuiltError):
         val001_order.solve(12, 6)
 

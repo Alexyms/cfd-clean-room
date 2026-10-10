@@ -143,16 +143,14 @@ def test_true_error_ignores_an_offset_outside_the_fluid(
 
 
 @pytest.mark.unit
-def test_rule_parameters_change_with_the_rule_version(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A saved rule solve is solved again under another RULE_VERSION.
+def test_rule_parameters_change_with_the_rule_version() -> None:
+    """A saved rule solve is solved again under another rule version.
 
     Defect caught: the version dropped from the stored parameters (test 28 S1).
+    Since ECR-002 step 6 the version is an argument, read from the solver.
     """
-    before = stopping_probe.rule_parameters(0.1, 0.05, (1e-6, 1e-10))
-    monkeypatch.setattr(stopping_probe, "RULE_VERSION", stopping_probe.RULE_VERSION + 1)
-    after = stopping_probe.rule_parameters(0.1, 0.05, (1e-6, 1e-10))
+    before = stopping_probe.rule_parameters(0.1, 0.05, (1e-6, 1e-10), 3)
+    after = stopping_probe.rule_parameters(0.1, 0.05, (1e-6, 1e-10), 4)
     assert not np.array_equal(before, after)
 
 
@@ -166,13 +164,13 @@ def test_rule_parameters_change_with_the_pressure_solver_version(
     not be served as the conjugate gradient solve's. Defect caught: the
     solver's version dropped from the stored parameters.
     """
-    before = stopping_probe.rule_parameters(0.1, 0.05, (1e-6, 1e-10))
+    before = stopping_probe.rule_parameters(0.1, 0.05, (1e-6, 1e-10), 3)
     monkeypatch.setattr(
         stopping_probe,
         "PRESSURE_SOLVER_VERSION",
         stopping_probe.PRESSURE_SOLVER_VERSION + 1,
     )
-    after = stopping_probe.rule_parameters(0.1, 0.05, (1e-6, 1e-10))
+    after = stopping_probe.rule_parameters(0.1, 0.05, (1e-6, 1e-10), 3)
     assert not np.array_equal(before, after)
     assert before[-1] == stopping_probe.PRESSURE_SOLVER_VERSION - 1
 
@@ -335,10 +333,13 @@ def test_readers_of_the_truth_re_solve_a_truth_this_solver_did_not_write(
     config = stopping_probe.case_config("cavity", 20, rule="error_estimate")
     mesh = stopping_probe.Mesh(config)
     boundary = stopping_probe.StaggeredBoundary(mesh, config)
-    flux = stopping_probe.StaggeredSolver(mesh, config, boundary).flux_scale
+    solver = stopping_probe.StaggeredSolver(mesh, config, boundary)
     tols = (config.iteration_error_tol, config.mass_imbalance_tol)
     params = stopping_probe.rule_parameters(
-        boundary.get_max_boundary_velocity(), flux, tols
+        boundary.get_max_boundary_velocity(),
+        solver.flux_scale,
+        tols,
+        solver.rule_version,
     )
     np.savez(tmp_path / f"{name}_rule.npz", params=params)
     for reader in (stopping_probe.verify_rule, stopping_probe.analyse):
@@ -354,10 +355,13 @@ def _poiseuille_rule_files(tmp_path: Path, case: str, n: int) -> str:
     config = stopping_probe.case_config(case, n, rule="error_estimate")
     mesh = stopping_probe.Mesh(config)
     boundary = stopping_probe.StaggeredBoundary(mesh, config)
-    flux = stopping_probe.StaggeredSolver(mesh, config, boundary).flux_scale
+    solver = stopping_probe.StaggeredSolver(mesh, config, boundary)
     tols = (config.iteration_error_tol, config.mass_imbalance_tol)
     params = stopping_probe.rule_parameters(
-        boundary.get_max_boundary_velocity(), flux, tols
+        boundary.get_max_boundary_velocity(),
+        solver.flux_scale,
+        tols,
+        solver.rule_version,
     )
     np.savez(tmp_path / f"{name}_rule.npz", params=params)
     return name

@@ -27,6 +27,14 @@ that carries the detail. The ranking is the builder's, from the measurements.
 3. The stop: relative residual `pressure_rtol`, default 1e-8, with the rounding floor and the cap
    reported. To be revisited after ECR-002 step 3 rebuilds the outlets, with the guard and
    tight-start options as the candidates.
+   Amended 2026-10-09 (Alex, prompt 45), for the product room only: `pressure_rtol` 1e-4, with one
+   row at 1e-8 kept as a check. ECR-002 step 3 removed the standing imbalance that was (1)'s
+   reason beyond the start (the product's returns and hood are fixed-flow outlets), and step 5
+   measured 1e-4 on that room: the same outer count as 1e-8 to the iteration, the faces within
+   4.4e-10 m/s, 40% fewer CG iterations per correction on 200x75
+   (`docs/reports/ecr002_step5_convergence.md`, section 5.7). Applied to
+   `configs/clean_room_default.yaml` in ECR-002 step 8. The default and the validation cases keep
+   1e-8.
 4. The keys: `pressure_rtol` in [1e-10, 1); `pressure_tol` refused at load with a message;
    `max_pressure_iter` the CG cap, 5,000 in committed files; the weighted sweep and `JACOBI_WEIGHT`
    removed with their tests.

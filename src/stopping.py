@@ -24,6 +24,16 @@ at the bound it names; (a) and (c) are no clause of it. The signed sum is the
 net mass flux out of the domain: (c) holds it to iteration_error_tol of
 flux_scale, (d) to criterion 6's absolute bound (section 10).
 
+With the turbulence model on the iterate carries k and eps as well, and a slow
+mode in eps moves the eddy viscosity, and through it the velocity, more
+slowly than the velocity's own rate shows. Condition (e) (ADR-012 E, ECR-002
+step 6) is (a)'s estimate on the eddy viscosity: the largest change of nu_t
+over the outer iteration, the same rate fit, over ``nu_scale``, the molecular
+nu plus the largest inlet eddy viscosity, boundary data fixed per solve.
+The rule's version (``ErrorEstimateRule.version``) is 3 without (e) and 4
+with it, and the solver reports it, so a laminar solve, which applies
+version 3's conditions, still records 3.
+
 IterationState, the snapshot a solver hands its on_iteration callback once
 per outer iteration, is defined here as well: the module that defines when
 an outer iteration ends also defines what each iteration reports.
@@ -45,9 +55,12 @@ import numpy as np
 # decade, 100 spans 1.4 decades and is full by outer iteration 142, the
 # residual's 1e-5, where 200 was not.
 RATE_WINDOW = 100
-# Which conditions update applies: 1 was (a) and (b), 2 added (c), 3 added (d).
-# Scripts store it with saved solves; a new condition leaves the tolerances alike.
-RULE_VERSION = 3
+# Which conditions update applies: 1 was (a) and (b), 2 added (c), 3 added (d),
+# 4 adds (e), which applies only with the turbulence model on. A rule's version
+# is ErrorEstimateRule.version; the scripts read it through the solver and store
+# it with saved solves, since a new condition leaves the tolerances alike.
+RULE_VERSION_WITHOUT_E = 3
+RULE_VERSION_WITH_E = 4
 
 
 # eq=False because the default __eq__ compares the array fields elementwise
@@ -128,7 +141,11 @@ class ErrorEstimateRule:
     tolerance of (a), since both bound a velocity error relative to its
     scale. Condition (d): the absolute value of the signed imbalance summed
     over the domain is below ``mass_imbalance_tol``, criterion 6's domain-sum
-    clause. The imbalance is asked for only when (a) holds.
+    clause. Condition (e), only when ``nu_scale`` is given: ``viscosity_step
+    * rho_hat_nu / (1 - rho_hat_nu) / nu_scale`` is below
+    ``iteration_error_tol``, rho_hat_nu fitted to the viscosity steps as
+    rho_hat is to the velocity steps. The imbalance is asked for only when
+    (a) and, with it on, (e) hold.
 
     Parameters
     ----------
@@ -148,6 +165,12 @@ class ErrorEstimateRule:
         Bound on the worst absolute per-cell imbalance and on the absolute
         signed domain sum, kg/s per unit depth
         (PressureCorrector.mass_imbalance). Positive and finite.
+    nu_scale : float, optional
+        The kinematic viscosity (e) is relative to, m^2/s: the molecular nu
+        plus the largest inlet eddy viscosity ``C_mu k_in^2 / eps_in``. A
+        field maximum would move with the iterate and the grid, and one
+        cell's overshoot would loosen (e) everywhere (ADR-012 E). None, the
+        default, leaves (e) off. Positive and finite when given.
 
     Attributes
     ----------
@@ -156,6 +179,8 @@ class ErrorEstimateRule:
         is none: fewer than RATE_WINDOW steps, a step in the window that is
         zero or not finite, or rho_hat not strictly between 0 and 1. A stall
         therefore never reads as convergence.
+    viscosity_estimate_history : list[float]
+        (e)'s left side after each step, ``inf`` likewise; empty with (e) off.
 
     Raises
     ------
@@ -169,13 +194,17 @@ class ErrorEstimateRule:
         flux_scale: float,
         iteration_error_tol: float,
         mass_imbalance_tol: float,
+        nu_scale: float | None = None,
     ) -> None:
-        for name, value in (
+        checked = [
             ("velocity_scale", velocity_scale),
             ("flux_scale", flux_scale),
             ("iteration_error_tol", iteration_error_tol),
             ("mass_imbalance_tol", mass_imbalance_tol),
-        ):
+        ]
+        if nu_scale is not None:
+            checked.append(("nu_scale", nu_scale))
+        for name, value in checked:
             # bool is an int; True would pass as 1.0.
             if isinstance(value, bool) or not (math.isfinite(value) and value > 0.0):
                 raise ValueError(f"{name} must be positive and finite, got {value}")
@@ -183,23 +212,37 @@ class ErrorEstimateRule:
         self._flux_scale = flux_scale
         self._error_tol = iteration_error_tol
         self._imbalance_tol = mass_imbalance_tol
+        self._nu_scale = nu_scale
         self._steps: deque[float] = deque(maxlen=RATE_WINDOW)
+        self._nu_steps: deque[float] = deque(maxlen=RATE_WINDOW)
         self.estimate_history: list[float] = []
+        self.viscosity_estimate_history: list[float] = []
 
-    def _estimate(self) -> float:
-        """The current estimate over velocity_scale, or inf when there is none."""
-        if len(self._steps) < RATE_WINDOW:
+    @property
+    def version(self) -> int:
+        """Which conditions update applies: 3 without (e), 4 with it."""
+        return RULE_VERSION_WITHOUT_E if self._nu_scale is None else RULE_VERSION_WITH_E
+
+    @staticmethod
+    def _estimate_of(steps: deque[float], scale: float) -> float:
+        """The estimate of one history over its scale, or inf when there is none."""
+        if len(steps) < RATE_WINDOW:
             return math.inf
-        steps = np.array(self._steps)
-        if not np.all(np.isfinite(steps) & (steps > 0.0)):
+        values = np.array(steps)
+        if not np.all(np.isfinite(values) & (values > 0.0)):
             return math.inf
-        x = np.arange(steps.size) - (steps.size - 1) / 2.0
-        rho = math.exp(float(x @ np.log(steps)) / float(x @ x))
+        x = np.arange(values.size) - (values.size - 1) / 2.0
+        rho = math.exp(float(x @ np.log(values)) / float(x @ x))
         if not 0.0 < rho < 1.0:
             return math.inf
-        return float(steps[-1]) * rho / (1.0 - rho) / self._scale
+        return float(values[-1]) * rho / (1.0 - rho) / scale
 
-    def update(self, step: float, imbalance: Callable[[], ImbalanceSummary]) -> bool:
+    def update(
+        self,
+        step: float,
+        imbalance: Callable[[], ImbalanceSummary],
+        viscosity_step: float | None = None,
+    ) -> bool:
         """Record one outer iteration and answer whether the solve has converged.
 
         Parameters
@@ -208,17 +251,38 @@ class ErrorEstimateRule:
             Largest change of the velocity over the outer iteration, m/s.
         imbalance : Callable[[], ImbalanceSummary]
             Returns the current field's imbalance readings from one
-            evaluation. Called only when condition (a) holds.
+            evaluation. Called only when condition (a) and, with it on,
+            condition (e) hold.
+        viscosity_step : float, optional
+            Largest change of the kinematic eddy viscosity over the outer
+            iteration, m^2/s. Required with (e) on and refused with it off.
 
         Returns
         -------
         bool
-            True when conditions (a), (b), (c) and (d) all hold.
+            True when conditions (a), (b), (c) and (d), and (e) when it is
+            on, all hold.
+
+        Raises
+        ------
+        ValueError
+            If ``viscosity_step`` is given with (e) off or missing with it on.
         """
+        if (viscosity_step is None) != (self._nu_scale is None):
+            raise ValueError(
+                "viscosity_step is given exactly when the rule has a nu_scale "
+                "(condition (e), ADR-012 E)"
+            )
         self._steps.append(float(step))
-        estimate = self._estimate()
+        estimate = self._estimate_of(self._steps, self._scale)
         self.estimate_history.append(estimate)
-        if not estimate < self._error_tol:
+        viscosity_ok = True
+        if self._nu_scale is not None:
+            self._nu_steps.append(float(viscosity_step))
+            nu_estimate = self._estimate_of(self._nu_steps, self._nu_scale)
+            self.viscosity_estimate_history.append(nu_estimate)
+            viscosity_ok = nu_estimate < self._error_tol
+        if not (estimate < self._error_tol and viscosity_ok):
             return False
         found = imbalance()
         return (

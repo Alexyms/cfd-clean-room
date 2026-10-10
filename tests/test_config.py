@@ -5,6 +5,7 @@ and rejects invalid configurations with clear error messages at load
 time (REQ-C02).
 """
 
+import dataclasses
 from pathlib import Path
 
 import pytest
@@ -1426,6 +1427,9 @@ class TestTransportSection:
             SimConfig.from_dict(self._raw(tmp_path, turbulent_schmidt=bad))
 
 
+# The keys a velocity inlet that admits air states with the model on.
+INLET_TURBULENCE = {"turbulence_intensity": 0.05, "dissipation_length": 0.1}
+
 TURBULENCE = {
     "model": "k_epsilon",
     "wall_treatment": "scalable_wall_functions",
@@ -1441,9 +1445,16 @@ class TestTurbulenceSection:
     """The optional turbulence section (ADR-012 I, ECR-002 step 1): defaults, ranges, types, unknown keys."""
 
     def _raw(self, tmp_path: Path, turbulence: object = None, **keys: object) -> dict:
+        """The base configuration with the section, as step 6 requires it.
+
+        The model runs under the error_estimate rule only, and the supply,
+        which admits air, states its turbulence keys.
+        """
         with open(_write_config(tmp_path), encoding="utf-8") as handle:
             raw = yaml.safe_load(handle)
         raw["turbulence"] = TURBULENCE | keys if turbulence is None else turbulence
+        raw["solver"]["stopping_rule"] = "error_estimate"
+        raw["boundaries"]["hepa_supply"].update(INLET_TURBULENCE)
         return raw
 
     def test_absent_section_gives_none(self, tmp_path: Path) -> None:
@@ -1485,13 +1496,28 @@ class TestTurbulenceSection:
     def test_the_section_changes_nothing_else_in_the_configuration(
         self, tmp_path: Path
     ) -> None:
-        """Until ECR-002 step 6 nothing else reads it, so every other field is the same."""
+        """Every other field is the same, but for the inlet keys the section requires.
+
+        Changed in ECR-002 step 6 (prompt 45): with the section present the
+        supply must state its turbulence keys, and without it may not, so the
+        two configurations differ by those two fields of the supply alone.
+        """
         raw = self._raw(tmp_path)
         with_section = vars(SimConfig.from_dict(raw))
         del raw["turbulence"]
+        for key in INLET_TURBULENCE:
+            del raw["boundaries"]["hepa_supply"][key]
         without = vars(SimConfig.from_dict(raw))
         assert with_section.pop("turbulence") is not None
         assert without.pop("turbulence") is None
+        supply = with_section["boundaries"]["hepa_supply"]
+        assert (supply.turbulence_intensity, supply.dissipation_length) == (0.05, 0.1)
+        with_section["boundaries"] = {
+            name: dataclasses.replace(
+                spec, turbulence_intensity=None, dissipation_length=None
+            )
+            for name, spec in with_section["boundaries"].items()
+        }
         assert with_section.keys() == without.keys()
         for key in without:
             assert with_section[key] == without[key], key
@@ -1567,6 +1593,115 @@ class TestTurbulenceSection:
             SimConfig.from_dict(self._raw(tmp_path, c_mu=0.09))
         with pytest.raises(ValueError, match="turbulence must be a mapping"):
             SimConfig.from_dict(self._raw(tmp_path, turbulence=["k_epsilon"]))
+
+
+@pytest.mark.unit
+class TestInletTurbulenceKeys:
+    """The inlet keys and the stopping rule with the model on (ECR-002 step 6, item 1)."""
+
+    def _raw(self, tmp_path: Path, model: bool = True, **supply: object) -> dict:
+        with open(_write_config(tmp_path), encoding="utf-8") as handle:
+            raw = yaml.safe_load(handle)
+        raw["solver"]["stopping_rule"] = "error_estimate"
+        if model:
+            raw["turbulence"] = dict(TURBULENCE)
+        raw["boundaries"]["hepa_supply"].update(supply)
+        return raw
+
+    def test_an_inlet_that_admits_air_states_both(self, tmp_path: Path) -> None:
+        config = SimConfig.from_dict(self._raw(tmp_path, **INLET_TURBULENCE))
+        spec = config.boundaries["hepa_supply"]
+        assert (spec.turbulence_intensity, spec.dissipation_length) == (0.05, 0.1)
+
+    @pytest.mark.parametrize("key", sorted(INLET_TURBULENCE))
+    def test_each_is_required_with_the_model_on(self, tmp_path: Path, key: str) -> None:
+        given = {k: v for k, v in INLET_TURBULENCE.items() if k != key}
+        with pytest.raises(ValueError, match=rf"hepa_supply\.{key}'.*admits air"):
+            SimConfig.from_dict(self._raw(tmp_path, **given))
+
+    @pytest.mark.parametrize("key", sorted(INLET_TURBULENCE))
+    def test_each_is_refused_with_the_model_off(self, tmp_path: Path, key: str) -> None:
+        raw = self._raw(tmp_path, model=False, **{key: INLET_TURBULENCE[key]})
+        with pytest.raises(ValueError, match=rf"{key} is read only by the k-epsilon"):
+            SimConfig.from_dict(raw)
+
+    @pytest.mark.parametrize("key", sorted(INLET_TURBULENCE))
+    def test_each_is_refused_on_an_inlet_with_zero_normal_velocity(
+        self, tmp_path: Path, key: str
+    ) -> None:
+        """A moving wall admits no air; it needs neither key and takes neither."""
+        raw = self._raw(tmp_path, **INLET_TURBULENCE)
+        raw["boundaries"]["belt"] = {
+            "type": "velocity_inlet",
+            "location": "bottom",
+            "x_start": 2.0,
+            "x_end": 4.0,
+            "u_velocity": 0.3,
+            "v_velocity": 0.0,
+        }
+        assert SimConfig.from_dict(raw).boundaries["belt"].turbulence_intensity is None
+        raw["boundaries"]["belt"][key] = INLET_TURBULENCE[key]
+        with pytest.raises(ValueError, match=rf"belt\.{key} is not valid.*zero"):
+            SimConfig.from_dict(raw)
+
+    @pytest.mark.parametrize("key", sorted(INLET_TURBULENCE))
+    @pytest.mark.parametrize(
+        "segment_type", ["wall", "pressure_outlet", "fixed_flow_outlet"]
+    )
+    def test_each_is_refused_on_another_segment_type(
+        self, tmp_path: Path, segment_type: str, key: str
+    ) -> None:
+        """Every segment type but the inlet refuses each key (review 45 S6)."""
+        raw = self._raw(tmp_path, **INLET_TURBULENCE)
+        raw["boundaries"]["side"] = {
+            "type": segment_type,
+            "location": "left",
+            "y_start": 0.0,
+            "y_end": 3.0,
+            key: INLET_TURBULENCE[key],
+        }
+        with pytest.raises(
+            ValueError, match=rf"side\.{key} is only valid on a velocity_inlet"
+        ):
+            SimConfig.from_dict(raw)
+
+    @pytest.mark.parametrize(
+        ("key", "bad", "error"),
+        [
+            ("turbulence_intensity", 0.0, ValueError),
+            ("turbulence_intensity", 1.0, ValueError),
+            ("turbulence_intensity", -0.05, ValueError),
+            ("turbulence_intensity", 5.0, ValueError),
+            ("turbulence_intensity", float("nan"), ValueError),
+            ("turbulence_intensity", True, TypeError),
+            ("turbulence_intensity", "0.05", TypeError),
+            ("turbulence_intensity", None, TypeError),
+            ("dissipation_length", 0.0, ValueError),
+            ("dissipation_length", -0.1, ValueError),
+            ("dissipation_length", float("inf"), ValueError),
+            ("dissipation_length", False, TypeError),
+            ("dissipation_length", None, TypeError),
+        ],
+    )
+    def test_bad_values_are_rejected(
+        self, tmp_path: Path, key: str, bad: object, error: type[Exception]
+    ) -> None:
+        keys = INLET_TURBULENCE | {key: bad}
+        with pytest.raises(error, match=key):
+            SimConfig.from_dict(self._raw(tmp_path, **keys))
+
+    @pytest.mark.parametrize("rule", ["velocity_step", None])
+    def test_the_velocity_step_rule_is_refused_with_the_model_on(
+        self, tmp_path: Path, rule: str | None
+    ) -> None:
+        """Named or by default: rule version 4 scores the turbulent cases."""
+        raw = self._raw(tmp_path, **INLET_TURBULENCE)
+        if rule is None:
+            del raw["solver"]["stopping_rule"]
+        else:
+            raw["solver"]["stopping_rule"] = rule
+        with pytest.raises(ValueError, match=r"stopping_rule must be 'error_estimate'"):
+            SimConfig.from_dict(raw)
 
 
 WALL_SEGMENT = {"type": "wall", "location": "left", "y_start": 0.0, "y_end": 3.0}

@@ -48,19 +48,29 @@ reads that zero at the corner itself. So a no-slip wall gives the full shear
 across the half cell beside it.
 
 Boundaries (ADR-012 C) arrive as data, a TurbulenceConditions the caller
-builds for every step (ECR-002 step 1; step 6 builds it from the wall
-functions, the inlet keys and the staggered boundary layer's tangential
-values). The inflow values are read where a domain face's flux points into
-the room, as the transport solver reads a concentration. A fixed_flow_outlet
-holds an outward velocity (ADR-012 D, amended 2026-10-08), so its faces never
-read an inflow value and step 6 builds none for them. Faces beside a SOLID
-cell carry no flux. Diffusion crosses only faces between two non-SOLID cells,
-so a wall, an obstacle face and an outlet face held shut carry nothing. In
-the cells the conditions name, eps is held at the given value and the
-production is the given one.
+builds for every step. The inflow values are read where a domain face's flux
+points into the room, as the transport solver reads a concentration. A
+fixed_flow_outlet holds an outward velocity (ADR-012 D, amended 2026-10-08),
+so its faces never read an inflow value. Faces beside a SOLID cell carry no
+flux. Diffusion crosses only faces between two non-SOLID cells, so a wall,
+an obstacle face and an outlet face carry nothing. In the cells the
+conditions name, eps is held at the given value and the production is the
+given one.
 
 After every step k > 0 and eps > 0 at every non-SOLID cell, or the step
 raises PositivityError (REQ-S15).
+
+Wall functions (ADR-012 B, ECR-002 step 6). TurbulenceBoundary builds the
+coupled solve's boundary data from the staggered boundary layer: the wall
+viscosity of the momentum wall stencil (``wall_viscosity``, in
+``MomentumPredictor.predict``'s ``wall_mu`` layout), the conditions of each
+step (``conditions``: the inflow values, the edges' tangential velocities,
+eps held and the production given in the wall cells) and the inlet values
+the solve starts from. A wall is a face with zero normal velocity that is
+not an outlet (``StaggeredBoundary.wall_faces``), at rest or moving, and
+every obstacle face; an inlet that admits air and an outlet are not walls.
+The constants are Launder and Spalding's, kappa 0.41 and E 9.793, and the
+floor of the scalable form is computed from them (``log_law_floor``).
 """
 
 import logging
@@ -69,10 +79,18 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from src.boundary_registry import VELOCITY_INLET, BoundaryRegistry
+from src.boundary_staggered import StaggeredBoundary
 from src.config import RNG, STANDARD, SimConfig
 from src.mesh import SOLID, Mesh
 from src.scalar_scheme import advective_flux, implicit_step, mesh_axes
-from src.staggered import FaceVelocities, p_shape, u_shape, v_shape
+from src.staggered import (
+    FaceVelocities,
+    edge_cell_inputs,
+    p_shape,
+    u_shape,
+    v_shape,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +146,116 @@ VARIANTS: dict[str, VariantConstants] = {
         beta=0.012,
     ),
 }
+
+
+# The law of the wall, u+ = ln(E y+) / kappa (ADR-012 B): Launder and Spalding
+# (1974). Model constants, as the variants' are, not configuration.
+KAPPA = 0.41
+E_WALL = 9.793
+
+
+def log_law_floor(kappa: float, e: float) -> float:
+    """The scalable form's floor y*_0, where u+ = y+ meets u+ = ln(E y+) / kappa.
+
+    Parameters
+    ----------
+    kappa : float
+        The von Karman constant, positive.
+    e : float
+        The log law's constant E, with ``ln(E / kappa) > 1`` so that the two
+        laws meet.
+
+    Returns
+    -------
+    float
+        The root of ``kappa y = ln(E y)`` above ``1 / kappa``, by Newton's
+        method from ``2 / kappa``. ``kappa y - ln(E y)`` is convex with its
+        least value at ``1 / kappa``, so it has one root on each side; the
+        lower lies below y+ of 1 and means nothing here. 11.53 for kappa
+        0.41 and E 9.793 (ADR-012 B).
+
+    Raises
+    ------
+    ValueError
+        If the two laws do not meet, or Newton's method does not settle.
+    """
+    if not math.log(e / kappa) > 1.0:
+        raise ValueError(f"u+ = y+ and u+ = ln({e} y+) / {kappa} do not meet")
+    y = 2.0 / kappa
+    for _ in range(100):
+        step = (kappa * y - math.log(e * y)) / (kappa - 1.0 / y)
+        y -= step
+        if abs(step) <= 4.0 * math.ulp(y):
+            return y
+    raise ValueError("Newton's method did not settle on the log-law floor")
+
+
+Y_STAR_FLOOR = log_law_floor(KAPPA, E_WALL)
+
+
+def wall_viscosity(
+    k_p: np.ndarray, y_p: np.ndarray, c_mu: float, rho: float, nu: float
+) -> np.ndarray:
+    """The scalable wall function as a viscosity on the wall face (ADR-012 B).
+
+    Parameters
+    ----------
+    k_p : np.ndarray
+        k at the first node, m^2/s^2, positive.
+    y_p : np.ndarray
+        The node's distance to the wall, m, positive; same shape.
+    c_mu : float
+        The variant's C_mu.
+    rho, nu : float
+        Density, kg/m^3, and molecular kinematic viscosity, m^2/s.
+
+    Returns
+    -------
+    np.ndarray
+        ``mu_w = rho C_mu^(1/4) k_p^(1/2) kappa y_p / ln(E max(y*, y*_0))``,
+        Pa s, with ``y* = C_mu^(1/4) k_p^(1/2) y_p / nu``.
+
+    Notes
+    -----
+    The wall stencil ``mu_w (u_P - u_wall) / y_p`` then carries the log
+    law's shear ``tau_w = rho C_mu^(1/4) k_p^(1/2) kappa (u_P - u_wall) /
+    ln(E y*)``, with k, not u_tau, as the velocity scale, so it stays finite
+    at a stagnation point. At ``y* = y*_0``, ``kappa y*_0 = ln(E y*_0)``
+    makes ``mu_w = rho nu = mu`` exactly. Above the floor ``mu_w > mu`` and
+    grows with y*. Below it the log law is still evaluated at y*_0 (the
+    scalable form, Grotjans and Menter 1998), so ``mu_w = mu y* / y*_0``,
+    less than mu: a node inside the viscous sublayer is treated as at its
+    edge, and the wall shear goes to zero with k, as at a stagnation point.
+    """
+    u_k = c_mu**0.25 * np.sqrt(k_p)
+    y_star = u_k * y_p / nu
+    return rho * u_k * KAPPA * y_p / np.log(E_WALL * np.maximum(y_star, Y_STAR_FLOOR))
+
+
+def inflow_values(
+    intensity: float, normal_speed: float, dissipation_length: float
+) -> tuple[float, float]:
+    """k and eps carried in by an inlet face (ADR-012 C).
+
+    Parameters
+    ----------
+    intensity : float
+        The segment's ``turbulence_intensity`` I, a fraction.
+    normal_speed : float
+        The face's normal velocity |u_n|, m/s.
+    dissipation_length : float
+        The segment's ``dissipation_length`` l_e, m.
+
+    Returns
+    -------
+    tuple[float, float]
+        ``k = 1.5 (I |u_n|)^2`` and ``eps = k^(3/2) / l_e``: the
+        specification's convention, with no C_mu^(3/4) (ADR-012 C). A
+        source writing ``eps = C_mu^(3/4) k^(3/2) / l`` maps to
+        ``l_e = l / C_mu^(3/4)``.
+    """
+    k = 1.5 * (intensity * abs(normal_speed)) ** 2
+    return k, k**1.5 / dissipation_length
 
 
 class PositivityError(RuntimeError):
@@ -887,6 +1015,466 @@ class KEpsilonModel:
             raise ValueError(
                 "conditions.production must be non-negative where it is given"
             )
+
+
+@dataclass(frozen=True, eq=False)
+class _VelocityWalls:
+    """The wall-function faces of one velocity component.
+
+    ``mask`` is [ny+1, nx+1] in ``wall_mu``'s layout; ``rows`` and ``cols``
+    index its True entries; ``frame_t`` and ``frame_s`` locate each face's
+    unknown in the component's own frame, where it lies between cells
+    ``[t, s-1]`` and ``[t, s]``; ``distance`` is the unknown's distance to
+    the face.
+    """
+
+    mask: np.ndarray
+    rows: np.ndarray
+    cols: np.ndarray
+    frame_t: np.ndarray
+    frame_s: np.ndarray
+    distance: np.ndarray
+
+
+def _velocity_walls(
+    solid: np.ndarray,
+    low: np.ndarray,
+    high: np.ndarray,
+    t_faces: np.ndarray,
+    t_centers: np.ndarray,
+    transpose: bool,
+) -> _VelocityWalls:
+    """Locate one component's wall-function faces, in its own frame.
+
+    ``solid`` is [nt, ns] with the component's own axis last; ``low`` and
+    ``high`` [ns+1] mark the wall corners of the two transverse domain
+    edges. An unknown's transverse face is a wall where it lies on such an
+    edge corner, or where the neighbour face beyond it bounds a SOLID cell
+    on either side: the momentum stencil's obstacle faces, its corner rule
+    included. ``transpose`` maps the frame to ``wall_mu``'s layout for v.
+    """
+    nt, ns = solid.shape
+    bounds_solid = np.zeros((nt, ns + 1), dtype=bool)
+    bounds_solid[:, 1:-1] = solid[:, :-1] | solid[:, 1:]
+    unknown = np.zeros((nt, ns + 1), dtype=bool)
+    unknown[:, 1:-1] = ~bounds_solid[:, 1:-1]
+    south = np.zeros((nt, ns + 1), dtype=bool)
+    north = np.zeros((nt, ns + 1), dtype=bool)
+    south[0, :] = low
+    south[1:, :] = bounds_solid[:-1, :]
+    north[-1, :] = high
+    north[:-1, :] = bounds_solid[1:, :]
+    t_s, s_s = np.nonzero(south & unknown)
+    t_n, s_n = np.nonzero(north & unknown)
+    face_t = np.concatenate((t_s, t_n + 1))
+    face_s = np.concatenate((s_s, s_n))
+    distance = np.concatenate(
+        (t_centers[t_s] - t_faces[t_s], t_faces[t_n + 1] - t_centers[t_n])
+    )
+    mask = np.zeros((nt + 1, ns + 1), dtype=bool)
+    mask[face_t, face_s] = True
+    rows, cols = face_t, face_s
+    if transpose:
+        mask, rows, cols = np.ascontiguousarray(mask.T), face_s, face_t
+    mask.flags.writeable = False
+    return _VelocityWalls(
+        mask=mask,
+        rows=rows,
+        cols=cols,
+        frame_t=np.concatenate((t_s, t_n)),
+        frame_s=face_s,
+        distance=distance,
+    )
+
+
+@dataclass(frozen=True)
+class _InletFace:
+    """One domain face that admits air: its inflow values and its inflow."""
+
+    k: float
+    eps: float
+    inflow: float
+
+
+class TurbulenceBoundary:
+    """The coupled solve's boundary data for k, eps and the walls (ADR-012 B, C).
+
+    Built once per solver from the staggered boundary layer; each outer
+    iteration asks it for the wall viscosity of the momentum prediction and
+    the conditions of the k and eps step.
+
+    Parameters
+    ----------
+    mesh : Mesh
+        The computational mesh, uniform or stretched.
+    config : SimConfig
+        Must carry a ``turbulence`` section; supplies the variant's C_mu,
+        rho, mu and each inlet's ``turbulence_intensity`` and
+        ``dissipation_length``.
+    boundary : StaggeredBoundary
+        Supplies the wall faces and the edges' tangential conditions.
+
+    Attributes
+    ----------
+    wall_faces : dict[str, np.ndarray]
+        Keys "u" and "v", bool [ny+1, nx+1] in ``wall_mu``'s layout, read-only:
+        the faces the wall function sets. Every domain-edge face of a wall
+        (zero normal velocity, not an outlet) beside an unknown, and every
+        obstacle face. Not an inlet that admits air, not an outlet.
+    wall_cells : np.ndarray
+        Bool [ny, nx], read-only: the non-SOLID cells with at least one wall
+        face, where eps is held and the production given.
+
+    Raises
+    ------
+    ValueError
+        Without a turbulence section, or if a velocity inlet that admits air
+        lacks its turbulence keys.
+
+    Notes
+    -----
+    The wall cells (ADR-012 B, C). For each wall face of a cell, with y_P the
+    distance from the cell centre to that face, k_P the cell's k and
+    ``u_k = C_mu^(1/4) k_P^(1/2)``:
+
+    - eps held at ``C_mu^(3/4) k_P^(3/2) / (kappa y_P) = u_k^3 / (kappa y_P)``;
+    - the production per unit density
+      ``P = (tau_w / rho) u_k / (kappa y_P)``, with
+      ``tau_w / rho = u_k kappa |U_P - U_wall| / ln(E max(y*, y*_0))`` the
+      wall function's shear (the same law ``wall_viscosity`` codes, at the
+      cell centre) and ``u_k / (kappa y_P)`` the log law's velocity gradient
+      at the node. That is ``P = u_k^2 |U_P - U_wall| / (y_P ln(E max(y*,
+      y*_0)))``. Source: the standard wall-function production of Launder
+      and Spalding (1974), as Versteeg and Malalasekera (2007, chapter 9)
+      write it: ``P_k = tau_w (dU/dy)_P`` with ``(dU/dy)_P = u_k / (kappa
+      y_P)``. In the log layer, where ``|U_P - U_wall| = (u_k / kappa) ln(E
+      y*)``, it equals the held eps.
+
+    U_P is the cell-centre velocity along the wall, the mean of the cell's
+    two faces parallel to it (a face beside a SOLID cell reads as zero, as
+    in the step), and U_wall the edge's tangential velocity at the cell, the
+    mean of its two corners' values, or zero at an obstacle.
+
+    A cell with more than one wall face (a corner) takes the arithmetic mean
+    of its walls' eps and of their productions. On one wall it is that
+    wall's rule; a reflection of the room maps a cell's set of walls onto
+    the reflected cell's, so the mean is symmetric under reflection. It is
+    the rule OpenFOAM's epsilonWallFunction applies through its corner
+    weights, one over the number of wall faces of the cell.
+
+    The inflow (ADR-012 C): ``inflow_values`` per inlet face. An outlet face
+    the flux turns inward through takes the adjacent cell's value, and so
+    does every other domain face, where no flux enters and nothing is read;
+    beside a SOLID edge cell, where no flux crosses, the largest k or eps of
+    the field stands in. A tangential velocity at a pressure outlet, zero
+    gradient in the momentum layer, is the adjacent face's.
+
+    The initial state (ECR-002 step 6): k and eps uniform at their means over
+    the inlet faces weighted by each face's inflow, the values the supply
+    carries in as a whole. Where the inlets agree, their common value.
+    """
+
+    def __init__(
+        self, mesh: Mesh, config: SimConfig, boundary: StaggeredBoundary
+    ) -> None:
+        if config.turbulence is None:
+            raise ValueError(
+                "the k-epsilon boundary needs a turbulence section in the configuration"
+            )
+        self._c_mu = VARIANTS[config.turbulence.variant].c_mu
+        self._rho = config.rho
+        self._nu = config.mu / config.rho
+        self._p_shape = p_shape(mesh)
+        solid = mesh.cell_type == SOLID
+        self._solid = solid
+        self._live = ~solid
+        self._live_u = np.ones(u_shape(mesh), dtype=bool)
+        self._live_u[:, 0] = ~solid[:, 0]
+        self._live_u[:, -1] = ~solid[:, -1]
+        self._live_u[:, 1:-1] = ~solid[:, :-1] & ~solid[:, 1:]
+        self._live_v = np.ones(v_shape(mesh), dtype=bool)
+        self._live_v[0, :] = ~solid[0, :]
+        self._live_v[-1, :] = ~solid[-1, :]
+        self._live_v[1:-1, :] = ~solid[:-1, :] & ~solid[1:, :]
+        walls = boundary.wall_faces()
+        self._tangential = boundary.tangential_conditions()
+
+        self._velocity = {
+            "u": _velocity_walls(
+                solid,
+                walls["bottom"].corners,
+                walls["top"].corners,
+                mesh.y,
+                mesh.yc,
+                transpose=False,
+            ),
+            "v": _velocity_walls(
+                np.ascontiguousarray(solid.T),
+                walls["left"].corners,
+                walls["right"].corners,
+                mesh.x,
+                mesh.xc,
+                transpose=True,
+            ),
+        }
+        self.wall_faces: dict[str, np.ndarray] = {
+            key: walls_.mask for key, walls_ in self._velocity.items()
+        }
+
+        # The wall cells: per side, which cells have a wall there, the
+        # centre's distance to it and the wall's own velocity along it.
+        ny, nx = self._p_shape
+        live = self._live
+        south = np.zeros((ny, nx), dtype=bool)
+        north = np.zeros((ny, nx), dtype=bool)
+        west = np.zeros((ny, nx), dtype=bool)
+        east = np.zeros((ny, nx), dtype=bool)
+        south[0, :] = walls["bottom"].cells
+        south[1:, :] = solid[:-1, :]
+        north[-1, :] = walls["top"].cells
+        north[:-1, :] = solid[1:, :]
+        west[:, 0] = walls["left"].cells
+        west[:, 1:] = solid[:, :-1]
+        east[:, -1] = walls["right"].cells
+        east[:, :-1] = solid[:, 1:]
+        mean = {
+            edge: 0.5 * (cond.value[:-1] + cond.value[1:])
+            for edge, cond in self._tangential.items()
+        }
+        moving = {side: np.zeros((ny, nx)) for side in ("s", "n", "w", "e")}
+        moving["s"][0, :] = mean["bottom"]
+        moving["n"][-1, :] = mean["top"]
+        moving["w"][:, 0] = mean["left"]
+        moving["e"][:, -1] = mean["right"]
+        ones = np.ones((ny, nx))
+        self._sides = (
+            (south & live, (mesh.yc - mesh.y[:-1])[:, None] * ones, moving["s"], "u"),
+            (north & live, (mesh.y[1:] - mesh.yc)[:, None] * ones, moving["n"], "u"),
+            (west & live, (mesh.xc - mesh.x[:-1])[None, :] * ones, moving["w"], "v"),
+            (east & live, (mesh.x[1:] - mesh.xc)[None, :] * ones, moving["e"], "v"),
+        )
+        count = sum(side[0].astype(np.int64) for side in self._sides)
+        self._wall_count = np.maximum(count, 1)
+        self.wall_cells: np.ndarray = count > 0
+        self.wall_cells.flags.writeable = False
+
+        self._inlets = self._inlet_faces(mesh, config)
+
+    # ------------------------------------------------------------------
+    # Public interface
+    # ------------------------------------------------------------------
+
+    def wall_viscosity(
+        self, k: np.ndarray, elsewhere: dict[str, np.ndarray]
+    ) -> dict[str, np.ndarray]:
+        """``wall_mu`` for the momentum prediction: mu_w on every wall-function face.
+
+        Parameters
+        ----------
+        k : np.ndarray
+            The current k, [ny, nx], positive in every non-SOLID cell.
+        elsewhere : dict[str, np.ndarray]
+            Keys "u" and "v", [ny+1, nx+1]: the viscosity every other face
+            of the wall stencil keeps (an inlet's or an outlet's face).
+
+        Returns
+        -------
+        dict[str, np.ndarray]
+            New arrays, ``elsewhere``'s values with ``wall_viscosity`` of
+            the face's unknown in place on the wall-function faces: y_P the
+            unknown's distance to the face (half its cell), k_P the mean of
+            the two cells the unknown lies between.
+        """
+        out = {}
+        for key, frame in (("u", k), ("v", k.T)):
+            walls = self._velocity[key]
+            field = np.array(elsewhere[key], dtype=np.float64, copy=True)
+            k_p = 0.5 * (
+                frame[walls.frame_t, walls.frame_s - 1]
+                + frame[walls.frame_t, walls.frame_s]
+            )
+            field[walls.rows, walls.cols] = wall_viscosity(
+                k_p, walls.distance, self._c_mu, self._rho, self._nu
+            )
+            out[key] = field
+        return out
+
+    def conditions(
+        self, state: TurbulenceState, faces: FaceVelocities
+    ) -> TurbulenceConditions:
+        """The k and eps step's conditions from the current state and corrected faces.
+
+        Parameters
+        ----------
+        state : TurbulenceState
+            The iterate whose k the wall cells' values are formed from.
+        faces : FaceVelocities
+            The corrected faces of this outer iteration.
+
+        Returns
+        -------
+        TurbulenceConditions
+            The inflow values, the edges' tangential velocities, eps held and
+            the production given in the wall cells (the class Notes).
+        """
+        k, eps = state.k, state.eps
+        u = np.where(self._live_u, faces.u, 0.0)
+        v = np.where(self._live_v, faces.v, 0.0)
+        along = {
+            "u": 0.5 * (u[:, :-1] + u[:, 1:]),
+            "v": 0.5 * (v[:-1, :] + v[1:, :]),
+        }
+        eps_sum = np.zeros(self._p_shape)
+        production_sum = np.zeros(self._p_shape)
+        for mask, distance, wall_speed, component in self._sides:
+            eps_w, production_w = self._wall_cell_values(
+                k, distance, np.abs(along[component] - wall_speed)
+            )
+            eps_sum += np.where(mask, eps_w, 0.0)
+            production_sum += np.where(mask, production_w, 0.0)
+        held = np.array(self.wall_cells)
+        adjacent = {
+            "bottom": faces.u[0, :],
+            "top": faces.u[-1, :],
+            "left": faces.v[:, 0],
+            "right": faces.v[:, -1],
+        }
+        tangential = {
+            edge: np.where(cond.is_dirichlet, cond.value, adjacent[edge])
+            for edge, cond in self._tangential.items()
+        }
+        inflow_k_u, inflow_k_v = self._inflow(k, "k")
+        inflow_eps_u, inflow_eps_v = self._inflow(eps, "eps")
+        return TurbulenceConditions(
+            inflow_k_u=inflow_k_u,
+            inflow_k_v=inflow_k_v,
+            inflow_eps_u=inflow_eps_u,
+            inflow_eps_v=inflow_eps_v,
+            tangential_bottom=np.array(tangential["bottom"], dtype=np.float64),
+            tangential_top=np.array(tangential["top"], dtype=np.float64),
+            tangential_left=np.array(tangential["left"], dtype=np.float64),
+            tangential_right=np.array(tangential["right"], dtype=np.float64),
+            eps_held=held,
+            eps_wall=np.where(held, eps_sum / self._wall_count, 0.0),
+            production_given=held.copy(),
+            production=np.where(held, production_sum / self._wall_count, 0.0),
+        )
+
+    def initial_values(self) -> tuple[float, float]:
+        """The uniform k and eps the coupled solve starts from (class Notes).
+
+        Returns
+        -------
+        tuple[float, float]
+            k (m^2/s^2) and eps (m^2/s^3): their means over the inlet faces
+            weighted by each face's inflow.
+
+        Raises
+        ------
+        ValueError
+            If no velocity inlet admits air: nothing sets the supply's
+            turbulence.
+        """
+        inlets = self._require_inlets()
+        total = sum(face.inflow for face in inlets)
+        k = sum(face.k * face.inflow for face in inlets) / total
+        eps = sum(face.eps * face.inflow for face in inlets) / total
+        return k, eps
+
+    def largest_inlet_eddy_viscosity(self) -> float:
+        """The largest ``C_mu k_in^2 / eps_in`` over the inlet faces, m^2/s.
+
+        Condition (e)'s scale takes it (ADR-012 E): boundary data, fixed per
+        solve.
+
+        Raises
+        ------
+        ValueError
+            If no velocity inlet admits air.
+        """
+        return max(self._c_mu * face.k**2 / face.eps for face in self._require_inlets())
+
+    # ------------------------------------------------------------------
+    # Parts
+    # ------------------------------------------------------------------
+
+    def _wall_cell_values(
+        self, k: np.ndarray, y_p: np.ndarray, slip: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """One wall's held eps and production per cell (class Notes)."""
+        u_k = self._c_mu**0.25 * np.sqrt(k)
+        y_star = u_k * y_p / self._nu
+        log_term = np.log(E_WALL * np.maximum(y_star, Y_STAR_FLOOR))
+        return u_k**3 / (KAPPA * y_p), u_k**2 * slip / (y_p * log_term)
+
+    def _inflow(self, q: np.ndarray, name: str) -> tuple[np.ndarray, np.ndarray]:
+        """The inflow arrays of one quantity: inlet values, else the adjacent cell's."""
+        ny, nx = self._p_shape
+        stand_in = float(q[self._live].max())
+        edge_cells = {
+            "bottom": q[0, :],
+            "top": q[-1, :],
+            "left": q[:, 0],
+            "right": q[:, -1],
+        }
+        values = {}
+        for edge, cells in edge_cells.items():
+            row = np.where(cells > 0.0, cells, stand_in)
+            for index, face in self._inlet_by_edge[edge].items():
+                row[index] = getattr(face, name)
+            values[edge] = row
+        flow_u = np.zeros((ny, nx + 1))
+        flow_v = np.zeros((ny + 1, nx))
+        flow_u[:, 0], flow_u[:, -1] = values["left"], values["right"]
+        flow_v[0, :], flow_v[-1, :] = values["bottom"], values["top"]
+        return flow_u, flow_v
+
+    def _inlet_faces(self, mesh: Mesh, config: SimConfig) -> list[_InletFace]:
+        """Every domain face that admits air, from the shared coverage (REQ-S12.1)."""
+        registry = BoundaryRegistry(config)
+        widths = {
+            "bottom": mesh.dx_cell,
+            "top": mesh.dx_cell,
+            "left": mesh.dy_cell,
+            "right": mesh.dy_cell,
+        }
+        self._inlet_by_edge: dict[str, dict[int, _InletFace]] = {}
+        faces: list[_InletFace] = []
+        for edge, width in widths.items():
+            by_index: dict[int, _InletFace] = {}
+            coverage = registry.coverage_along(edge, *edge_cell_inputs(mesh, edge))
+            for index, point in enumerate(coverage):
+                if point.spec is None or point.condition.bc_type != VELOCITY_INLET:
+                    continue
+                c = point.condition
+                normal = c.v_prescribed if edge in ("bottom", "top") else c.u_prescribed
+                if normal == 0.0:
+                    continue
+                spec = point.spec
+                if spec.turbulence_intensity is None or spec.dissipation_length is None:
+                    raise ValueError(
+                        f"boundary '{point.name}' admits air but states no "
+                        "turbulence_intensity or dissipation_length"
+                    )
+                k_in, eps_in = inflow_values(
+                    spec.turbulence_intensity, normal, spec.dissipation_length
+                )
+                face = _InletFace(
+                    k=k_in, eps=eps_in, inflow=abs(normal) * float(width[index])
+                )
+                by_index[index] = face
+                faces.append(face)
+            self._inlet_by_edge[edge] = by_index
+        return faces
+
+    def _require_inlets(self) -> list[_InletFace]:
+        if not self._inlets:
+            raise ValueError(
+                "no velocity inlet admits air, so nothing sets the supply's k and "
+                "eps: the coupled solve takes its initial state and condition "
+                "(e)'s scale from the inlets"
+            )
+        return self._inlets
 
 
 def _corner_difference(

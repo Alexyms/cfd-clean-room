@@ -3,7 +3,8 @@
 Solves the channel at 40x20, 80x40 and 160x80 with the staggered solver under
 the case file's stopping rule. Fields are saved under results/val001_order/
 (gitignored) under reuse_key, the solver parameters they were solved with, the
-stopping rule's RULE_VERSION and the pressure solve's PRESSURE_SOLVER_VERSION,
+stopping rule's version (read from the solver's ``rule_version``) and the
+pressure solve's PRESSURE_SOLVER_VERSION,
 and a saved field is re-solved only when that key differs from the current one.
 A solve that reaches its cap stops the script.
 
@@ -61,8 +62,8 @@ from src.pressure import (  # noqa: E402 -- follows sys.path.insert
 )
 from src.solver_staggered import (  # noqa: E402 -- follows sys.path.insert
     StaggeredSolver,
+    rule_version,
 )
-from src.stopping import RULE_VERSION  # noqa: E402 -- follows sys.path.insert
 from validation.cases import load_case  # noqa: E402 -- follows sys.path.insert
 from validation.metrics import (  # noqa: E402 -- follows sys.path.insert
     inlet_velocity,
@@ -94,7 +95,8 @@ def reuse_key(config: SimConfig) -> str:
     A saved field is a function of the domain, the grid and its clustering,
     the fluid and the inlet as well as of the solver block (review 25 S8), so
     a case file edited in any of them is solved again. A new stopping
-    condition changes no solver parameter, so RULE_VERSION joins them. Nor
+    condition changes no solver parameter, so the rule's version joins them,
+    read from the solver's ``rule_version`` without building one. Nor
     need a new pressure solve: ECR-003 changed the field only because
     pressure_rtol replaced pressure_tol, so PRESSURE_SOLVER_VERSION joins
     them too (review 37 S4).
@@ -112,7 +114,7 @@ def reuse_key(config: SimConfig) -> str:
     }
     key = solver_parameters(config) | {
         "case": case,
-        "rule_version": RULE_VERSION,
+        "rule_version": rule_version(config),
         "pressure_solver_version": PRESSURE_SOLVER_VERSION,
     }
     return json.dumps(key, sort_keys=True)

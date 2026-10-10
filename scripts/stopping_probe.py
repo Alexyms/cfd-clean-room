@@ -53,7 +53,6 @@ from src.pressure import PRESSURE_SOLVER_VERSION  # noqa: E402 -- path set above
 from src.solver_staggered import StaggeredSolver  # noqa: E402 -- path set above
 from src.stopping import (  # noqa: E402 -- path set above
     RATE_WINDOW,
-    RULE_VERSION,
     ErrorEstimateRule,
     ImbalanceSummary,
     IterationState,
@@ -684,7 +683,9 @@ def tight_truth(case: str, n: int) -> Path:
     return path
 
 
-def rule_parameters(scale: float, flux: float, tols: tuple[float, float]) -> np.ndarray:
+def rule_parameters(
+    scale: float, flux: float, tols: tuple[float, float], version: int
+) -> np.ndarray:
     """What a saved rule solve is reused under: the rule's inputs and both versions.
 
     Parameters
@@ -695,22 +696,22 @@ def rule_parameters(scale: float, flux: float, tols: tuple[float, float]) -> np.
         The solver's flux scale F, kg/s per unit depth.
     tols : tuple[float, float]
         ``iteration_error_tol`` and ``mass_imbalance_tol``.
+    version : int
+        The rule's version, read from the solver (``rule_version``).
 
     Returns
     -------
     np.ndarray
-        scale, flux, both tolerances, RATE_WINDOW, RULE_VERSION and
+        scale, flux, both tolerances, RATE_WINDOW, the rule's version and
         PRESSURE_SOLVER_VERSION, shape [7].
 
     Notes
     -----
-    A new condition changes no tolerance, so RULE_VERSION is in the key; a
-    new pressure solve changes every field beyond rounding, so
+    A new condition changes no tolerance, so the rule's version is in the
+    key; a new pressure solve changes every field beyond rounding, so
     PRESSURE_SOLVER_VERSION is too.
     """
-    return np.array(
-        [scale, flux, *tols, RATE_WINDOW, RULE_VERSION, PRESSURE_SOLVER_VERSION]
-    )
+    return np.array([scale, flux, *tols, RATE_WINDOW, version, PRESSURE_SOLVER_VERSION])
 
 
 def verify_rule(case: str, n: int) -> dict:
@@ -743,8 +744,8 @@ def verify_rule(case: str, n: int) -> dict:
     -----
     The corrector is wrapped as in the truth solve, so every iteration's
     imbalance is known and the wall time compares with the default rule's
-    snapshot. A saved solve is reused only if its rule parameters,
-    RULE_VERSION and PRESSURE_SOLVER_VERSION match. The truth and the default
+    snapshot. A saved solve is reused only if its rule parameters, the
+    rule's version and PRESSURE_SOLVER_VERSION match. The truth and the default
     rule's outer count and seconds are read through solve_truth, so a truth
     another solver wrote is solved again first (review 37 B1). Each condition
     is dated from the start of its final run. The channel is read against its
@@ -757,7 +758,7 @@ def verify_rule(case: str, n: int) -> dict:
     solver = StaggeredSolver(mesh, config, boundary)
     scale, flux = boundary.get_max_boundary_velocity(), solver.flux_scale
     tols = (config.iteration_error_tol, config.mass_imbalance_tol)
-    params = rule_parameters(scale, flux, tols)
+    params = rule_parameters(scale, flux, tols, solver.rule_version)
     stale = True
     if path.exists():
         with np.load(path) as saved:

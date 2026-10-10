@@ -16,7 +16,9 @@ Each row runs the case file's stopping rule, and its params say which. A
 velocity-step stop is labelled residual_below_tol, the label every stored
 velocity-step row carries, including the collocated-jacobi rows taken before
 that solver was retired (tag collocated-final). An error_estimate row also
-records the rule's RULE_VERSION in its params.
+records the rule's version in its params, read from the solver
+(``rule_version``, ECR-002 step 6): 3, or 4 with the turbulence model's
+condition (e).
 
 The method label names the pressure solve as well as the grid: staggered-cg
 since ECR-003 step 1 (2026-10-06), when conjugate gradients replaced the
@@ -69,10 +71,10 @@ from src.pressure import (  # noqa: E402 -- follows sys.path.insert
 )
 from src.solver_staggered import (  # noqa: E402 -- follows sys.path.insert
     StaggeredSolver,
+    rule_version,
 )
 from src.staggered import allocate_fields  # noqa: E402 -- follows sys.path.insert
 from src.stopping import (  # noqa: E402 -- follows sys.path.insert
-    RULE_VERSION,
     IterationState,
 )
 from validation.cases import (  # noqa: E402 -- follows sys.path.insert
@@ -131,7 +133,7 @@ def solver_parameters(config: SimConfig) -> dict:
     """
     params = {name: getattr(config, name) for name in SOLVER_KEYS}
     if config.stopping_rule == ERROR_ESTIMATE:
-        params["rule_version"] = RULE_VERSION
+        params["rule_version"] = rule_version(config)
     return params
 
 

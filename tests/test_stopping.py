@@ -201,3 +201,84 @@ def test_a_scale_or_tolerance_not_positive_and_finite_is_rejected(
     args[position] = bad
     with pytest.raises(ValueError, match="must be positive and finite"):
         ErrorEstimateRule(*args)
+
+
+# ---------------------------------------------------------------------------
+# Condition (e) and the rule's version (ADR-012 E, ECR-002 step 6)
+# ---------------------------------------------------------------------------
+
+# A kinematic scale that is not 1, so a rule that forgot to divide by it fails.
+NU_SCALE = 2.5e-3
+
+
+def _rule_e() -> ErrorEstimateRule:
+    """The rule at the default tolerances with condition (e) on."""
+    return ErrorEstimateRule(SCALE, FLUX, 1e-6, 1e-10, nu_scale=NU_SCALE)
+
+
+@pytest.mark.unit
+def test_the_version_is_the_rules() -> None:
+    """3 without (e), 4 with it: a laminar solve records the conditions it applies."""
+    assert _rule().version == 3
+    assert _rule_e().version == 4
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("rho", [0.5, 0.9, 0.999])
+def test_condition_e_is_the_estimate_on_the_eddy_viscosity(rho: float) -> None:
+    """step_nu rho / (1 - rho) / nu_scale, fitted over the window as (a) is."""
+    rule = _rule_e()
+    nu_steps = _geometric(rho, RATE_WINDOW + 20, 1e-9)
+    for nu_step in nu_steps:
+        rule.update(1e-12, lambda: _summary(), viscosity_step=float(nu_step))
+    expected = 1e-9 * rho / (1.0 - rho) / NU_SCALE
+    assert rule.viscosity_estimate_history[-1] == pytest.approx(expected, rel=1e-9)
+    assert len(rule.viscosity_estimate_history) == RATE_WINDOW + 20
+    assert math.isinf(rule.viscosity_estimate_history[RATE_WINDOW - 2])
+
+
+@pytest.mark.unit
+def test_condition_e_holds_the_stop_until_the_viscosity_settles() -> None:
+    """(a) to (d) met from the window's end; (e) decides the stop, then it stops.
+
+    The velocity steps fall fast, the viscosity's slowly, so the stop is
+    where (e)'s estimate first falls below the tolerance, and the imbalance
+    is not asked for before that.
+    """
+    rule = _rule_e()
+    n = 4 * RATE_WINDOW
+    velocity = 1e-2 * 0.5 ** np.arange(n)
+    viscosity = 1e-3 * 0.95 ** np.arange(n)
+    asked = []
+
+    def summary() -> ImbalanceSummary:
+        asked.append(len(rule.estimate_history))
+        return _summary()
+
+    stops = [
+        rule.update(float(s), summary, viscosity_step=float(e))
+        for s, e in zip(velocity, viscosity, strict=True)
+    ]
+    first = stops.index(True)
+    nu_estimates = np.array(rule.viscosity_estimate_history)
+    assert first == int(np.argmax(nu_estimates < 1e-6))
+    assert np.array(rule.estimate_history)[RATE_WINDOW - 1 : first].max() < 1e-6
+    assert asked[0] == first + 1
+    without = _rule()
+    assert _feed(without, velocity).index(True) == RATE_WINDOW - 1 < first
+
+
+@pytest.mark.unit
+def test_the_viscosity_step_is_given_exactly_with_condition_e() -> None:
+    """Defect caught: (e) silently skipped when the step is missing, or a step fed to no scale."""
+    with pytest.raises(ValueError, match="viscosity_step is given exactly"):
+        _rule_e().update(1e-3, lambda: _summary())
+    with pytest.raises(ValueError, match="viscosity_step is given exactly"):
+        _rule().update(1e-3, lambda: _summary(), viscosity_step=1e-6)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("bad", [0.0, -1.0, math.inf, math.nan, True])
+def test_a_nu_scale_not_positive_and_finite_is_rejected(bad: float) -> None:
+    with pytest.raises(ValueError, match="nu_scale must be positive and finite"):
+        ErrorEstimateRule(SCALE, FLUX, 1e-6, 1e-10, nu_scale=bad)

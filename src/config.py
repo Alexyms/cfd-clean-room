@@ -57,8 +57,17 @@ class BoundarySpec:
         edge's default surface for deposition. None means the edge
         decides (bottom is floor, top is ceiling, left and right are
         walls).
+    turbulence_intensity : float or None
+        velocity_inlet only, with the turbulence section present: the
+        intensity I of the air entering, a fraction in (0, 1), which sets
+        the inflow ``k = 1.5 (I |u_n|)^2`` (ADR-012 C). None otherwise.
+    dissipation_length : float or None
+        Likewise: the length l_e in ``eps = k^(3/2) / l_e``, metres,
+        positive, in ADR-012 C's convention, with no ``C_mu^(3/4)``. None
+        otherwise.
 
-    The three concentration keys are keyword-only. A velocity_inlet whose
+    The three concentration keys and the two turbulence keys are
+    keyword-only. A velocity_inlet whose
     prescribed normal component is zero (a tangential lid) admits no air
     and is a wall to the scalar layer (ADR-011 E, amended 2026-10-03), so
     it may carry neither ``concentration`` nor ``hepa_filtered``.
@@ -76,6 +85,8 @@ class BoundarySpec:
     concentration: tuple[float, ...] | None = field(default=None, kw_only=True)
     hepa_filtered: bool = field(default=False, kw_only=True)
     deposition_surface: str | None = field(default=None, kw_only=True)
+    turbulence_intensity: float | None = field(default=None, kw_only=True)
+    dissipation_length: float | None = field(default=None, kw_only=True)
 
 
 @dataclass(frozen=True)
@@ -196,9 +207,11 @@ class TransportSpec:
 class TurbulenceSpec:
     """The turbulence section: what the k-epsilon model reads (ADR-012 I).
 
-    Present means the model is configured; absent, the model is off and
-    every other result is unchanged. Until ECR-002 step 6 couples the model
-    into the flow solver, nothing in the solver reads it either.
+    Present means the model is on: the flow solver runs the coupled k and
+    eps iteration (ECR-002 step 6), every velocity inlet that admits air
+    states ``turbulence_intensity`` and ``dissipation_length``, and the
+    stopping rule must be ``error_estimate``. Absent, the model is off and
+    every other result is unchanged.
 
     Parameters
     ----------
@@ -339,6 +352,8 @@ _SEGMENT_KEYS: frozenset[str] = frozenset(
         "concentration",
         "hepa_filtered",
         "deposition_surface",
+        "turbulence_intensity",
+        "dissipation_length",
     }
 )
 
@@ -576,6 +591,14 @@ class SimConfig:
         self.turbulence: TurbulenceSpec | None = None
         if "turbulence" in raw:
             self.turbulence = self._parse_turbulence(raw["turbulence"])
+            if self.stopping_rule != ERROR_ESTIMATE:
+                raise ValueError(
+                    "with the turbulence section present solver.stopping_rule must be "
+                    f"'{ERROR_ESTIMATE}', got '{self.stopping_rule}': the turbulent "
+                    "validation (VAL-018, ECR-002 criterion 10) is scored under rule "
+                    "version 4, whose condition (e) refuses to stop while the eddy "
+                    "viscosity is still moving, which the velocity step cannot see"
+                )
 
         # Boundaries
         boundaries_raw = self._require_section(raw, "boundaries")
@@ -607,6 +630,7 @@ class SimConfig:
             bc_velocity = None
             bc_u_velocity = None
             bc_v_velocity = None
+            admits_air = False
             if bc_type == "velocity_inlet":
                 # Support explicit u/v components or normal-direction magnitude
                 raw_u = spec.get("u_velocity")
@@ -644,6 +668,7 @@ class SimConfig:
                 normal = (
                     bc_v_velocity if bc_location in ("top", "bottom") else bc_u_velocity
                 )
+                admits_air = bool(normal) if has_components else True
                 if has_components and not normal:
                     for key in ("concentration", "hepa_filtered"):
                         if key in spec:
@@ -774,6 +799,10 @@ class SimConfig:
                         f"{list(DEPOSITION_SURFACES)}, got '{bc_deposition_surface}'"
                     )
 
+            bc_intensity, bc_length = self._inlet_turbulence(
+                spec, ctx, bc_type, admits_air
+            )
+
             self.boundaries[name] = BoundarySpec(
                 type=bc_type,
                 location=bc_location,
@@ -787,6 +816,8 @@ class SimConfig:
                 concentration=bc_concentration,
                 hepa_filtered=bc_hepa_filtered,
                 deposition_surface=bc_deposition_surface,
+                turbulence_intensity=bc_intensity,
+                dissipation_length=bc_length,
             )
 
         self._reject_overlapping_segments()
@@ -867,6 +898,58 @@ class SimConfig:
             if number < 0:
                 raise ValueError(f"thresholds.{key} must be non-negative, got {val}")
             self.thresholds[str(key)] = number
+
+    def _inlet_turbulence(
+        self, spec: dict, ctx: str, bc_type: str, admits_air: bool
+    ) -> tuple[float | None, float | None]:
+        """The two inlet turbulence keys of one segment, checked (ADR-012 C, I).
+
+        Air entering carries k and eps, so with the turbulence section present
+        every velocity inlet that admits air states both. Nothing else may: on
+        another segment type, or an inlet whose normal velocity is zero (a
+        moving wall), no air enters, and with the model off nothing reads them.
+
+        Returns
+        -------
+        tuple[float | None, float | None]
+            ``turbulence_intensity`` in (0, 1) and ``dissipation_length``,
+            positive, in metres; both None where the segment takes neither.
+        """
+        keys = ("turbulence_intensity", "dissipation_length")
+        for key in keys:
+            if key not in spec:
+                continue
+            self._require_segment_type(spec, key, ctx, bc_type, "velocity_inlet")
+            if self.turbulence is None:
+                raise ValueError(
+                    f"{ctx}.{key} is read only by the k-epsilon model, and the "
+                    "configuration has no turbulence section"
+                )
+            if not admits_air:
+                raise ValueError(
+                    f"{ctx}.{key} is not valid on a velocity_inlet whose normal "
+                    "velocity is zero: no air crosses it, so it carries no k or eps"
+                )
+        if self.turbulence is None or not admits_air:
+            return None, None
+        for key in keys:
+            if key not in spec:
+                raise ValueError(
+                    f"Missing required key: '{ctx}.{key}'. With the turbulence "
+                    "section present every velocity_inlet that admits air states "
+                    "turbulence_intensity and dissipation_length, from which the "
+                    "model takes the inflow k and eps (ADR-012 C)"
+                )
+        intensity = self._finite_number(
+            spec["turbulence_intensity"], f"{ctx}.turbulence_intensity"
+        )
+        if not 0.0 < intensity < 1.0:
+            raise ValueError(
+                f"{ctx}.turbulence_intensity must be a fraction in (0, 1), got "
+                f"{intensity}"
+            )
+        length = self._require_positive_float(spec, "dissipation_length", ctx)
+        return intensity, length
 
     def _reject_overlapping_segments(self) -> None:
         """Raise if two segments on one edge overlap.
