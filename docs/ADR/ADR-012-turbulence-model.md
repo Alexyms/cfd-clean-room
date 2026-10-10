@@ -728,10 +728,11 @@ it. The imbalance is asked for only when (a) and, with it on, (e) hold. `RULE_VE
 `RULE_VERSION_WITHOUT_E` and `RULE_VERSION_WITH_E` name the two values, and
 `solver_staggered.rule_version(config)` gives a solver's version without building one, which
 `scripts/val001_order.py` needs to decide reuse before it builds a solver; `scripts/benchmark.py`
-and `scripts/stopping_probe.py` read the same. Three tests changed with it, as section I's
-cascade rows foresaw: `tests/test_benchmark.py` (the import and the version assertion),
-`tests/test_stopping_probe.py` (the version an argument of `rule_parameters`) and
-`tests/test_val001_order.py` (the version patched through `rule_version`). In every VAL-016 run,
+and `scripts/stopping_probe.py` read the same. The two tests section I's cascade rows name
+changed with it: `tests/test_benchmark.py` (the import and the version assertion) and
+`tests/test_stopping_probe.py` (the version an argument of `rule_parameters`). A third, which
+those rows did not foresee, changed too: `tests/test_val001_order.py`, which patched
+`val001_order.RULE_VERSION` and now patches `rule_version` (review 45 S3). In every VAL-016 run,
 on both variants and every grid, (e) is the last of the five conditions to hold.
 
 ## F. Coupling into transport (REQ-T13, proposed; decisions 7 and 8)

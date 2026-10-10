@@ -1,7 +1,7 @@
 # Project Plan
 
 **Project:** CFD Clean Room Simulation
-**Last Updated:** 2026-10-08
+**Last Updated:** 2026-10-09
 **Current Phase:** Phase 3 (Transport Solver), in progress: design accepted (ADR-011, decisions of 2026-10-03); the product case blocked on ECR-002 (accepted 2026-10-04); Phase 2 complete
 
 This document tracks development progress by phase. Code review reads this document to determine the current phase and verify that PRs are in scope; the policy is `docs/REVIEW_POLICY.md`. Update this document as work progresses.

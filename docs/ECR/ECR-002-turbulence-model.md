@@ -371,7 +371,9 @@ The change is accepted when all of the following are demonstrated:
    iteration and stops on it naming the iteration (`tests/test_coupled_solve.py`). It held in every
    VAL-016 solve that ran with its pressure corrections converged. The argument assumes corrected
    faces that close every cell; on 48 rows with the corrections capped at 5,000 CG iterations it
-   failed at outer iterations 5 and 6, which ADR-012 C's note of that date records.
+   failed once, at outer iteration 6, which ADR-012 C's note of that date records
+   (`results/builder45/couette/positivity_5000.json`). Corrected 2026-10-09 (review 45 B2):
+   "outer iterations 5 and 6" stood here, which no record shows.
 4. **Plane Couette flow (VAL-016).** In the developed section, k within 1% of `u_tau^2 /
    sqrt(C_mu)` across the core at Re_tau about 3,000, with u_tau from the constant stress; u /
    U_w and k / u_tau^2 against a one-dimensional solve of the same model and wall treatment

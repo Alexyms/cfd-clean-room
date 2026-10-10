@@ -1,7 +1,7 @@
 """Plant each defect of prompt 45 in a scratch worktree and list the tests that fail.
 
 Usage:
-    python plant45.py ROOT PYTHON
+    python plant45.py ROOT PYTHON [VAL016_CAP]
 
 ROOT is a scratch git worktree of the branch (the script edits files under
 its src/ and puts them back byte for byte); PYTHON is the interpreter that
@@ -10,6 +10,11 @@ files with no defect (the control) and under each planted defect. A defect
 whose code is not in the worktree's commit is reported as not applicable. A
 plant counts as caught only when pytest exits 1 (tests ran and failed); exit
 4 or 5 is a missing test file, not a kill.
+
+VAL016_CAP, when given, lowers VAL-016's max_simple_iter in ROOT's copy of
+tests/couette_reference.py (left lowered: ROOT is scratch), so a wall-function
+plant that stops the Couette solve converging fails in minutes instead of
+running to 20,000 outer iterations (prompt 45b).
 """
 
 import json
@@ -19,6 +24,15 @@ from pathlib import Path
 
 root = Path(sys.argv[1]).resolve()
 python = sys.argv[2]
+if len(sys.argv) > 3:
+    reference = root / "tests" / "couette_reference.py"
+    text = reference.read_text(encoding="utf-8")
+    if text.count('"max_simple_iter": 20000') != 1:
+        raise SystemExit("VAL-016's cap is not where plant45.py expects it")
+    reference.write_text(
+        text.replace('"max_simple_iter": 20000', f'"max_simple_iter": {sys.argv[3]}'),
+        encoding="utf-8",
+    )
 
 PLANTS = {
     # Commit A
@@ -88,6 +102,38 @@ PLANTS = {
         "src/stopping.py",
         "            viscosity_ok = nu_estimate < self._error_tol",
         "            viscosity_ok = True",
+    ),
+    # Prompt 45b (test 45 B1 and B2, review 45 B1)
+    "condition (e)'s step scaled by 1e-3": (
+        "src/solver_staggered.py",
+        "np.max(np.abs(state.nu_t[self._live] - nu_t_old[self._live]))",
+        "np.max(np.abs(state.nu_t[self._live] - nu_t_old[self._live])) * 1e-3",
+    ),
+    "wall viscosity: k_P from one cell": (
+        "src/turbulence.py",
+        "                + frame[walls.frame_t, walls.frame_s]\n",
+        "                + frame[walls.frame_t, walls.frame_s - 1]\n",
+    ),
+    "wall viscosity: y_P the full cell (south faces)": (
+        "src/turbulence.py",
+        "(t_centers[t_s] - t_faces[t_s], t_faces[t_n + 1] - t_centers[t_n])",
+        "(t_faces[t_s + 1] - t_faces[t_s], t_faces[t_n + 1] - t_centers[t_n])",
+    ),
+    "wall-cell production without the y*_0 floor": (
+        "src/turbulence.py",
+        "        log_term = np.log(E_WALL * np.maximum(y_star, Y_STAR_FLOOR))\n"
+        "        return u_k**3",
+        "        log_term = np.log(E_WALL * y_star)\n        return u_k**3",
+    ),
+    "moving walls: bottom and top swapped": (
+        "src/turbulence.py",
+        '        moving["s"][0, :] = mean["bottom"]\n        moving["n"][-1, :] = mean["top"]',
+        '        moving["s"][0, :] = mean["top"]\n        moving["n"][-1, :] = mean["bottom"]',
+    ),
+    "moving walls: the left edge's line dropped": (
+        "src/turbulence.py",
+        '        moving["w"][:, 0] = mean["left"]\n',
+        "",
     ),
     # Commit D
     "VAL-016 (a): the wall-cell production scaled by 1.01": (
