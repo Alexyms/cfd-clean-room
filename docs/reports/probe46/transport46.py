@@ -442,7 +442,7 @@ def run(args: argparse.Namespace) -> None:
                 "outflow": budget.outflow,
                 "deposited": dict(budget.deposited),
                 "current": budget.current,
-                "relative_residual": budget.relative,
+                "relative_residual": budget.relative(),
             },
             "deposition_rate_total": total_faces,
             "deposition_rate_over_source": total_faces / args.emission,
