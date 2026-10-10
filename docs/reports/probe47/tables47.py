@@ -50,6 +50,8 @@ TRANSPORT = re.compile(
 # Prompt 46's standard_80x30 row, which the control is expected to reproduce.
 PROMPT46_CONTROL_HASH = "6ab5e2c7d5a1fa0c"
 SENSOR_NAMES = ("near_door", "above_gap_1", "above_gap_2", "hood_entry")
+SURFACE_SHARE_FLOOR = 1e-6
+TIMING_GRIDS = ("160x60", "320x120")
 
 
 def load(name: str) -> dict:
@@ -177,6 +179,53 @@ def matrix(_args: argparse.Namespace) -> None:
     ]
     print_table(headers, table)
     keep("matrix", rows)
+
+
+def timing(_args: argparse.Namespace) -> None:
+    """The timing probes: seconds per outer iteration and the projection at the cap."""
+    rows = []
+    for grid in TIMING_GRIDS:
+        path = OUT / f"standard_{grid}_time.json"
+        if not path.exists():
+            continue
+        r = load(path.stem)
+        rows.append(
+            {
+                "grid": grid,
+                "outer": r["outer"],
+                "seconds_per_outer": r["seconds_per_outer"],
+                "inner_mean": r["inner_mean"],
+                "k_sweeps_mean": r["k_sweeps_mean"],
+                "eps_sweeps_mean": r["eps_sweeps_mean"],
+                "share_pressure": r["stage_seconds"]["pressure"] / r["seconds"],
+                "share_turbulence": r["stage_seconds"]["turbulence"] / r["seconds"],
+                "minutes_at_cap": r["seconds_per_outer"] * 10000 / 60,
+                "started": r["started"],
+            }
+        )
+    headers = [
+        "Grid",
+        "Outer",
+        "Seconds per outer",
+        "CG per correction (mean)",
+        "k, eps sweeps (mean)",
+        "Share of wall: pressure, turbulence",
+        "Minutes at the 10,000 cap",
+    ]
+    table = [
+        [
+            r["grid"],
+            fmt(r["outer"]),
+            f"{r['seconds_per_outer']:.3f}",
+            f"{r['inner_mean']:.0f}",
+            f"{r['k_sweeps_mean']:.1f}, {r['eps_sweeps_mean']:.1f}",
+            f"{r['share_pressure']:.2f}, {r['share_turbulence']:.2f}",
+            f"{r['minutes_at_cap']:.0f}",
+        ]
+        for r in rows
+    ]
+    print_table(headers, table)
+    keep("timing", rows)
 
 
 def tail_step(rec: dict, n: int = 2000) -> dict:
@@ -658,11 +707,15 @@ def transport(_args: argparse.Namespace) -> None:
         ]
         surfaces: list[str] = []
         for label, k in columns:
-            for s in recs[label]["per_class"][k]["by_surface"]:
-                if s not in surfaces:
+            shares = recs[label]["per_class"][k]["by_surface_share"]
+            for s, share in shares.items():
+                # Below a millionth of the total a surface's value is the
+                # scheme's tail, not transport; such rows are left out.
+                if s not in surfaces and (share or 0.0) >= SURFACE_SHARE_FLOOR:
                     surfaces.append(s)
         print(
-            f"Deposition per surface, source {source}, share of the deposition total:"
+            f"Deposition per surface, source {source}, share of the deposition total "
+            f"(surfaces with at least {SURFACE_SHARE_FLOOR:g} of it in some column):"
         )
         headers = ["Surface"] + [
             f"{label[len('transport_') :]}, {recs[label]['per_class'][k]['diameter'] * 1e6:g} um"
@@ -787,6 +840,7 @@ def compare(_args: argparse.Namespace) -> None:
 def everything(args: argparse.Namespace) -> None:
     """Every table, in the report's order."""
     for f in (
+        timing,
         matrix,
         cycle,
         limiter,
@@ -806,6 +860,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="mode", required=True)
     for name, func in (
+        ("timing", timing),
         ("matrix", matrix),
         ("cycle", cycle),
         ("limiter", limiter),
