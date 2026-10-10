@@ -224,6 +224,10 @@ class TurbulenceSpec:
     cfl_number : float
         The pseudo-time Courant number of the k and eps step, in
         (0, CFL_NUMBER_BOUND] (ADR-012 C).
+    advection_scheme : str
+        The face value k and eps are advected with: "upwind" (the default,
+        ADR-012 C's note of 2026-10-10) or "umist" (QUICK bounded by the
+        UMIST limiter, the step as first built).
     alpha_turbulence : float
         Under-relaxation of the eddy viscosity in the coupled solve, in
         (0, 1].
@@ -237,6 +241,7 @@ class TurbulenceSpec:
     variant: str
     wall_treatment: str
     cfl_number: float
+    advection_scheme: str
     alpha_turbulence: float
     max_iter: int
     tol: float
@@ -330,6 +335,7 @@ _TURBULENCE_KEYS: frozenset[str] = frozenset(
         "variant",
         "wall_treatment",
         "cfl_number",
+        "advection_scheme",
         "alpha_turbulence",
         "max_iter",
         "tol",
@@ -1128,9 +1134,10 @@ class SimConfig:
     def _parse_turbulence(cls, section: object) -> TurbulenceSpec:
         """Parse the turbulence section into a TurbulenceSpec.
 
-        ``variant`` defaults to standard; every other key is required.
-        ``cfl_number`` must lie in (0, CFL_NUMBER_BOUND] and
-        ``alpha_turbulence`` in (0, 1]. Any other key raises.
+        ``variant`` defaults to standard and ``advection_scheme`` to upwind;
+        every other key is required. ``cfl_number`` must lie in
+        (0, CFL_NUMBER_BOUND] and ``alpha_turbulence`` in (0, 1]. Any other
+        key raises.
         """
         if not isinstance(section, dict):
             raise ValueError("turbulence must be a mapping")
@@ -1155,11 +1162,20 @@ class SimConfig:
                 f"turbulence.cfl_number must be in (0, {CFL_NUMBER_BOUND}], the "
                 f"limited scheme's stability bound, got {cfl_number}"
             )
+        # Upwind, not the transport section's umist: the limited value's branch
+        # switching accompanies the coupled solve's non-convergence on the
+        # product room, and upwind converges it (ADR-012 C, note of 2026-10-10).
+        scheme = UPWIND
+        if "advection_scheme" in section:
+            scheme = cls._require_choice(
+                section, "advection_scheme", "turbulence", ADVECTION_SCHEMES
+            )
         return TurbulenceSpec(
             model=model,
             variant=variant,
             wall_treatment=wall_treatment,
             cfl_number=cfl_number,
+            advection_scheme=scheme,
             alpha_turbulence=cls._require_relaxation_factor(
                 section, "alpha_turbulence", "turbulence"
             ),

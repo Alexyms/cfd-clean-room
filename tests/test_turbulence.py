@@ -12,7 +12,10 @@ ECR-002 step 1. VAL-015 is in tests/test_decaying_turbulence.py. Here:
 - positivity (REQ-S15, ECR-002 criterion 3) on the Smith-Hutton field and a
   random divergence-free field with production on, with the planted
   explicit decay as its control;
-- constancy on the VAL-001 faces, production and decay switched off.
+- constancy on the VAL-001 faces, production and decay switched off;
+- the advection scheme (ADR-012 C's note of 2026-10-10): upwind, the default,
+  against a hand computation, and the positivity, boundary and constancy
+  tests under both schemes (prompt 48).
 
 Each planted defect of prompt 35's traps fails a test here; the mutation logs
 are results/builder35/mutation35.md and mutation35b.md. Meshes are non-square
@@ -54,6 +57,8 @@ from validation.transport_cases import (
 )
 
 VARIANT_NAMES = ["standard", "rng"]
+# The two face values k and eps can be advected with (turbulence.advection_scheme).
+SCHEMES = ["upwind", "umist"]
 SMITH_HUTTON_SPEED = 0.45
 
 
@@ -70,8 +75,12 @@ def _config(
     obstacles: list[dict] | None = None,
     mesh: dict | None = None,
     viscosity: float = AIR["viscosity"],
+    scheme: str | None = None,
 ) -> SimConfig:
-    """A validated configuration with a turbulence section, air at rho 1.2."""
+    """A validated configuration with a turbulence section, air at rho 1.2.
+
+    ``scheme`` None leaves ``advection_scheme`` out, so the default holds.
+    """
     raw = {
         "domain": {"width": width, "height": height, "nx": nx, "ny": ny},
         "mesh": mesh or {},
@@ -93,6 +102,8 @@ def _config(
         "sensors": [{"name": "centre", "x": width / 2.0, "y": height / 2.0}],
         "thresholds": {"5e-06": 100.0},
     }
+    if scheme is not None:
+        raw["turbulence"]["advection_scheme"] = scheme
     return SimConfig.from_dict(raw)
 
 
@@ -1006,15 +1017,18 @@ class TestBoundaries:
         assert np.array_equal(leaving.k, reference.k)
         assert np.array_equal(leaving.eps, reference.eps)
 
+    @pytest.mark.parametrize("scheme", SCHEMES)
     @pytest.mark.parametrize("variant", VARIANT_NAMES)
     def test_nothing_crosses_a_wall_or_an_obstacle_face(
-        self, monkeypatch: pytest.MonkeyPatch, variant: str
+        self, monkeypatch: pytest.MonkeyPatch, variant: str, scheme: str
     ) -> None:
         """Production and decay off, a closed box with an obstacle, one
         true-time step for every cell: the content sum(k V) is conserved,
         though the faces of the obstacle hold a velocity, and the obstacle
         stays empty. (The pseudo-time step is per cell and conserves nothing,
-        ADR-012 C, so the check needs a uniform step.)"""
+        ADR-012 C, so the check needs a uniform step.) Both schemes: the
+        limited value reads a far node inside the obstacle by its own rule
+        (prompt 48)."""
         obstacle = [
             {"name": "b", "x_start": 0.5, "x_end": 0.8, "y_start": 0.0, "y_end": 0.35}
         ]
@@ -1027,6 +1041,7 @@ class TestBoundaries:
                 variant,
                 obstacles=obstacle,
                 mesh={"x": {"stretch_ratio": 1.2}},
+                scheme=scheme,
             )
         )
         solid = mesh.cell_type == SOLID
@@ -1139,6 +1154,149 @@ class TestBoundaries:
 
 
 # ---------------------------------------------------------------------------
+# The advection scheme (ADR-012 C's note of 2026-10-10; prompt 48)
+# ---------------------------------------------------------------------------
+
+
+def _through_flow_field(mesh: Mesh, seed: int) -> FaceVelocities:
+    """Random face velocities of both signs on every face, the domain faces included.
+
+    Not divergence-free: step 1 does not need it, and a field that crosses
+    every domain face in both directions reads the inflow value on some
+    faces and the edge cell on others.
+    """
+    rng = np.random.default_rng(seed)
+    u = rng.uniform(-0.3, 0.3, size=u_shape(mesh))
+    v = rng.uniform(-0.2, 0.2, size=v_shape(mesh))
+    return FaceVelocities.copy_of(u, v)
+
+
+def _upwind_by_loop(
+    mesh: Mesh,
+    faces: FaceVelocities,
+    q: np.ndarray,
+    inflow_u: np.ndarray,
+    inflow_v: np.ndarray,
+    dt_cell: float | np.ndarray,
+) -> np.ndarray:
+    """Step 1 with the upwind value, face by face, from the faces alone.
+
+    A face carries a flux when both its cells are non-SOLID, or at a domain
+    face when its one cell is. The value is the cell the flux comes from;
+    at a domain face where the flux points in, the inflow value. The face
+    areas are the cell heights (vertical faces) and widths (horizontal).
+    """
+    ny, nx = mesh.cell_type.shape
+    solid = mesh.cell_type == SOLID
+    dt = np.broadcast_to(dt_cell, (ny, nx))
+    flux_u = np.zeros(u_shape(mesh))
+    for j in range(ny):
+        for f in range(nx + 1):
+            west = None if f == 0 else (j, f - 1)
+            east = None if f == nx else (j, f)
+            if any(c is not None and solid[c] for c in (west, east)):
+                continue
+            speed = faces.u[j, f]
+            if speed > 0.0:
+                value = inflow_u[j, f] if west is None else q[west]
+            else:
+                value = inflow_u[j, f] if east is None else q[east]
+            flux_u[j, f] = speed * mesh.dy_cell[j] * value
+    flux_v = np.zeros(v_shape(mesh))
+    for f in range(ny + 1):
+        for i in range(nx):
+            south = None if f == 0 else (f - 1, i)
+            north = None if f == ny else (f, i)
+            if any(c is not None and solid[c] for c in (south, north)):
+                continue
+            speed = faces.v[f, i]
+            if speed > 0.0:
+                value = inflow_v[f, i] if south is None else q[south]
+            else:
+                value = inflow_v[f, i] if north is None else q[north]
+            flux_v[f, i] = speed * mesh.dx_cell[i] * value
+    out = np.empty((ny, nx))
+    for j in range(ny):
+        for i in range(nx):
+            net = flux_u[j, i + 1] - flux_u[j, i] + flux_v[j + 1, i] - flux_v[j, i]
+            volume = mesh.dx_cell[i] * mesh.dy_cell[j]
+            out[j, i] = q[j, i] - dt[j, i] * net / volume
+    return out
+
+
+@pytest.mark.unit
+class TestAdvectionScheme:
+    @pytest.mark.parametrize("scheme", [None, "upwind", "umist"])
+    def test_step_one_is_the_hand_upwind_value_unless_umist_is_asked_for(
+        self, scheme: str | None
+    ) -> None:
+        """One pseudo-time step, production on, on a stretched room with an
+        obstacle and a field of both signs on every face: with the key
+        absent or ``upwind`` the step equals the same step with step 1
+        replaced by the face-by-face upwind computation, to rounding, so the
+        default is upwind. With ``umist`` the two differ, so the field tells
+        the face values apart and the key reaches the step. Planted: the
+        limited value used under ``upwind``, which fails the first two."""
+        obstacle = [
+            {"name": "b", "x_start": 0.6, "x_end": 0.9, "y_start": 0.0, "y_end": 0.3}
+        ]
+        config = _config(
+            1.5,
+            0.9,
+            9,
+            6,
+            obstacles=obstacle,
+            mesh={"x": {"stretch_ratio": 1.2}, "y": {"stretch_ratio": 1.1}},
+            scheme=scheme,
+        )
+        mesh, model = _model(config)
+        faces = _through_flow_field(mesh, seed=12)
+        rng = np.random.default_rng(13)
+        conditions = dataclasses.replace(
+            TurbulenceConditions.uniform(mesh, 1.0e-3, 1.0e-4),
+            inflow_k_u=rng.uniform(1e-3, 3e-3, u_shape(mesh)),
+            inflow_k_v=rng.uniform(1e-3, 3e-3, v_shape(mesh)),
+            inflow_eps_u=rng.uniform(1e-4, 3e-4, u_shape(mesh)),
+            inflow_eps_v=rng.uniform(1e-4, 3e-4, v_shape(mesh)),
+        )
+        live = mesh.cell_type != SOLID
+        k = np.where(live, rng.uniform(0.5e-3, 4e-3, live.shape), 0.0)
+        eps = np.where(live, rng.uniform(0.5e-4, 4e-4, live.shape), 0.0)
+        state = model.state(k, eps)
+        built = model.step(state, faces, conditions)
+
+        def by_hand(
+            q: np.ndarray,
+            flux_u: np.ndarray,
+            flux_v: np.ndarray,
+            inflow_u: np.ndarray,
+            inflow_v: np.ndarray,
+            dt_cell: float | np.ndarray,
+        ) -> np.ndarray:
+            return _upwind_by_loop(mesh, faces, q, inflow_u, inflow_v, dt_cell)
+
+        hand_model = KEpsilonModel(mesh, config)
+        hand_model._advect = by_hand  # type: ignore[method-assign]
+        hand = hand_model.step(state, faces, conditions)
+        same = np.allclose(built.k, hand.k, rtol=1e-12, atol=0.0) and np.allclose(
+            built.eps, hand.eps, rtol=1e-12, atol=0.0
+        )
+        if scheme == "umist":
+            assert not same
+        else:
+            assert same
+
+    def test_the_default_is_upwind_bit_for_bit(self) -> None:
+        """The key absent and the key ``upwind`` give the same step bitwise."""
+        absent = _random_case("standard")
+        given = _random_case("standard", "upwind")
+        state = absent[1].state(*_bounded_start(absent[0].cell_type.shape, seed=5))
+        one = absent[1].step(state, absent[2], absent[3](state))
+        two = given[1].step(state, given[2], given[3](state))
+        assert np.array_equal(one.k, two.k) and np.array_equal(one.eps, two.eps)
+
+
+# ---------------------------------------------------------------------------
 # Positivity (REQ-S15, ECR-002 criterion 3)
 # ---------------------------------------------------------------------------
 
@@ -1149,7 +1307,7 @@ KAPPA = 0.41  # the stand-in wall function's von Karman constant (ADR-012 B)
 
 
 def _smith_hutton_case(
-    variant: str,
+    variant: str, scheme: str | None = None
 ) -> tuple[Mesh, KEpsilonModel, FaceVelocities, Callable]:
     """The Smith-Hutton field, 40x20, with ten wall cells as step 6 will give them.
 
@@ -1162,7 +1320,9 @@ def _smith_hutton_case(
     low while the production raises k, nu_t grows as k^2 / eps, and k runs
     away (prompt 35, results/builder35/runaway35.md).
     """
-    mesh, model = _model(_config(2.0, 1.0, 40, 20, variant, tol=1e-10, max_iter=500))
+    mesh, model = _model(
+        _config(2.0, 1.0, 40, 20, variant, tol=1e-10, max_iter=500, scheme=scheme)
+    )
     faces = smith_hutton_face_field(mesh, SMITH_HUTTON_SPEED)
     base = _smith_hutton_conditions(mesh, 1.0e-3, 1.0e-4)
     wall = np.zeros(mesh.cell_type.shape, dtype=bool)
@@ -1184,7 +1344,7 @@ def _smith_hutton_case(
 
 
 def _random_case(
-    variant: str,
+    variant: str, scheme: str | None = None
 ) -> tuple[Mesh, KEpsilonModel, FaceVelocities, Callable]:
     """A random divergence-free field in a closed stretched room with an obstacle."""
     obstacle = [
@@ -1201,6 +1361,7 @@ def _random_case(
             max_iter=500,
             obstacles=obstacle,
             mesh={"x": {"stretch_ratio": 1.15}, "y": {"stretch_ratio": 1.1}},
+            scheme=scheme,
         )
     )
     faces = _streamfunction_field(mesh, seed=21, scale=0.06)
@@ -1230,17 +1391,22 @@ def _bounded_start(shape: tuple[int, int], seed: int) -> tuple[np.ndarray, np.nd
 
 @pytest.mark.unit
 class TestPositivity:
+    """Every positivity case and its control runs under both advection
+    schemes (prompt 48): ADR-012 C's argument covers each, upwind as the
+    limited value at psi = 0."""
+
+    @pytest.mark.parametrize("scheme", SCHEMES)
     @pytest.mark.parametrize("variant", VARIANT_NAMES)
     @pytest.mark.parametrize("case", list(CASES))
     def test_k_and_eps_stay_positive_and_every_solve_converges(
-        self, case: str, variant: str
+        self, case: str, variant: str, scheme: str
     ) -> None:
         """Production on, from a non-uniform start: the Smith-Hutton field from
         the patchy start for 300 pseudo-time steps, the random field from a
         start whose nu_t stays bounded for 40. At every step both implicit
         solves meet their tolerance, so each state is the step's own, and the
         step's assertion holds; the run produced and moved k."""
-        mesh, model, faces, conditions_for = CASES[case](variant)
+        mesh, model, faces, conditions_for = CASES[case](variant, scheme)
         live = mesh.cell_type != SOLID
         if case == "smith_hutton":
             k, eps = _patchy_start(model, mesh.cell_type.shape, seed=3)
@@ -1260,16 +1426,18 @@ class TestPositivity:
             least_k = min(least_k, float(state.k[live].min()))
             least_eps = min(least_eps, float(state.eps[live].min()))
         print(
-            f"positivity {case} {variant}: {steps} steps, most sweeps {most_sweeps}; "
+            f"positivity {case} {variant} {scheme}: {steps} steps, "
+            f"most sweeps {most_sweeps}; "
             f"least k {least_k:.3e}, least eps {least_eps:.3e}; end k "
             f"[{state.k[live].min():.3e}, {state.k[live].max():.3e}]"
         )
         assert least_k > 0.0 and least_eps > 0.0
         assert not np.allclose(state.k[live], k[live])
 
+    @pytest.mark.parametrize("scheme", SCHEMES)
     @pytest.mark.parametrize("variant", VARIANT_NAMES)
     def test_a_long_run_stays_positive_while_its_solves_are_truncated(
-        self, variant: str
+        self, variant: str, scheme: str
     ) -> None:
         """The random field from the patchy start for 300 pseudo-time steps.
         The frozen strain grows k without a steady state, nu_t with it, and
@@ -1282,7 +1450,7 @@ class TestPositivity:
         iterate is positive as the converged one is. Whether the coupled solve
         should iterate further is a question for steps 5 and 6, not this
         test."""
-        mesh, model, faces, conditions_for = CASES["random"](variant)
+        mesh, model, faces, conditions_for = CASES["random"](variant, scheme)
         live = mesh.cell_type != SOLID
         state = model.state(*_patchy_start(model, mesh.cell_type.shape, seed=3))
         truncated = 0
@@ -1293,7 +1461,8 @@ class TestPositivity:
             least_k = min(least_k, float(state.k[live].min()))
             least_eps = min(least_eps, float(state.eps[live].min()))
         print(
-            f"long run {variant}: {truncated} of {POSITIVITY_STEPS} steps truncated; "
+            f"long run {variant} {scheme}: {truncated} of {POSITIVITY_STEPS} "
+            "steps truncated; "
             f"least k {least_k:.3e}, least eps {least_eps:.3e}"
         )
         # The run exists to exercise truncated solves; if they all converge,
@@ -1302,15 +1471,16 @@ class TestPositivity:
         assert least_k > 0.0 and least_eps > 0.0
         assert np.all(np.isfinite(state.k)) and np.all(np.isfinite(state.eps))
 
+    @pytest.mark.parametrize("scheme", SCHEMES)
     @pytest.mark.parametrize("variant", VARIANT_NAMES)
     @pytest.mark.parametrize("case", list(CASES))
     def test_the_planted_explicit_decay_goes_negative(
-        self, monkeypatch: pytest.MonkeyPatch, case: str, variant: str
+        self, monkeypatch: pytest.MonkeyPatch, case: str, variant: str, scheme: str
     ) -> None:
         """The control: the same start with the decay moved to step 2's explicit
         growth, ``k - dt eps``, takes k below zero within a few steps at a
         Courant number of 1/2, and the step's assertion names it."""
-        mesh, model, faces, conditions_for = CASES[case](variant)
+        mesh, model, faces, conditions_for = CASES[case](variant, scheme)
         _explicit_decay(model, monkeypatch)
         state = model.state(*_patchy_start(model, mesh.cell_type.shape, seed=3))
         with pytest.raises(PositivityError) as raised:
@@ -1347,12 +1517,12 @@ CONSTANCY_SECONDS = 40.0
 
 
 @pytest.fixture(scope="module")
-def val001_faces() -> tuple[Mesh, FaceVelocities, np.ndarray, SimConfig]:
+def val001_faces() -> tuple[Mesh, FaceVelocities, np.ndarray, dict[str, SimConfig]]:
     """VAL-001 at 40x20 solved under its own rule, its faces and their imbalance.
 
-    The flow is solved laminar; the configuration returned is the same case
-    with a turbulence section, for the model alone (step 6 would couple a
-    solve with the section present).
+    The flow is solved laminar; the configurations returned, one per
+    advection scheme, are the same case with a turbulence section, for the
+    model alone (step 6 would couple a solve with the section present).
     """
     raw = yaml.safe_load(case_path("poiseuille").read_text(encoding="utf-8"))
     raw["domain"]["nx"], raw["domain"]["ny"] = 40, 20
@@ -1369,7 +1539,11 @@ def val001_faces() -> tuple[Mesh, FaceVelocities, np.ndarray, SimConfig]:
         "max_iter": 500,
         "tol": 1.0e-12,
     }
-    config = SimConfig.from_dict(raw)
+    configs = {}
+    for scheme in SCHEMES:
+        raw["turbulence"]["advection_scheme"] = scheme
+        configs[scheme] = SimConfig.from_dict(raw)
+    config = configs["upwind"]
     mesh = Mesh(laminar)
     boundary = StaggeredBoundary(mesh, laminar)
     solver = StaggeredSolver(mesh, laminar, boundary)
@@ -1378,7 +1552,7 @@ def val001_faces() -> tuple[Mesh, FaceVelocities, np.ndarray, SimConfig]:
     imbalance = PressureCorrector(mesh, config, boundary).mass_imbalance(
         faces.u, faces.v
     )
-    return mesh, faces, imbalance, config
+    return mesh, faces, imbalance, configs
 
 
 def _drift(
@@ -1407,15 +1581,19 @@ def _drift(
 
 
 @pytest.mark.integration
+@pytest.mark.parametrize("scheme", SCHEMES)
 def test_uniform_k_and_eps_stay_uniform_on_the_val001_faces(
-    val001_faces: tuple[Mesh, FaceVelocities, np.ndarray, SimConfig],
+    val001_faces: tuple[Mesh, FaceVelocities, np.ndarray, dict[str, SimConfig]],
     monkeypatch: pytest.MonkeyPatch,
+    scheme: str,
 ) -> None:
     """Production and decay off, uniform k and eps with the inlet carrying the
     same: the departure stays within the transport scheme's constancy bound,
     max |b_P| T / (rho V_P) (REQ-T11, VAL-012); one interior face perturbed
-    by 1e-6 m/s breaks it, so the bound can fail."""
-    mesh, faces, imbalance, config = val001_faces
+    by 1e-6 m/s breaks it, so the bound can fail. Under both schemes
+    (prompt 48)."""
+    mesh, faces, imbalance, configs = val001_faces
+    config = configs[scheme]
     k_drift, eps_drift, t_total = _drift(
         mesh, config, faces, CONSTANCY_SECONDS, monkeypatch
     )
@@ -1428,7 +1606,7 @@ def test_uniform_k_and_eps_stay_uniform_on_the_val001_faces(
         mesh, config, FaceVelocities.copy_of(u, faces.v), CONSTANCY_SECONDS, monkeypatch
     )
     print(
-        f"constancy: T {t_total:.2f} s; departure k {k_drift:.3e}, eps "
+        f"constancy {scheme}: T {t_total:.2f} s; departure k {k_drift:.3e}, eps "
         f"{eps_drift:.3e}; bound {bound:.3e}; perturbed face {control:.3e}"
     )
     assert k_drift <= bound and eps_drift <= bound
