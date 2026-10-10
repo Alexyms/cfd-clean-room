@@ -31,15 +31,25 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
 sys.path.insert(0, str(ROOT))
 
+from src.mesh import SOLID  # noqa: E402
+
 OUT = ROOT / "results" / "builder46"
 GRIDS = ("40x15", "80x30", "200x75")
 VARIANTS = ("standard", "rng")
 NAME = re.compile(r"^(?P<variant>standard|rng)_(?P<grid>\d+x\d+)(?P<rest>.*)$")
 GROWING_SPEED = 5.0
 WINDOW = 500
+# The prompt's two pairs, then the supplementary pairs the converged rows
+# allow when a prompt pair is missing a record (the report's section 5.6).
 PAIRS = (
     ("grids, standard", "standard_80x30", "standard_200x75"),
     ("variants, 200x75", "standard_200x75", "rng_200x75"),
+    ("supplementary: grids, rng", "rng_40x15", "rng_80x30"),
+    (
+        "supplementary: rng 80x30 against standard 200x75",
+        "rng_80x30",
+        "standard_200x75",
+    ),
 )
 
 
@@ -346,6 +356,41 @@ def inlet(_args: argparse.Namespace) -> None:
     keep("inlet", rows)
 
 
+def viscosity_where(name: str) -> dict | None:
+    """Where the largest nu_t change sits over a located record's tail (bounded44's regions)."""
+    path = OUT / f"{name}.json"
+    if not path.exists():
+        return None
+    rec = json.loads(path.read_text())
+    if "dnu_at" not in rec:
+        return None
+    sys.path.insert(0, str(ROOT / "docs" / "reports" / "probe44"))
+    import collections
+
+    import bounded44
+    import yaml
+
+    raw = yaml.safe_load((ROOT / "configs/clean_room_default.yaml").read_text())
+    boxes = bounded44.regions(raw)
+    tops = max(o["y_end"] for o in raw["obstacles"])
+    n = len(rec["residual"])
+    tail = min(bounded44.TAIL, max(n - 100, 0))
+    cells = [tuple(c) for c in rec["dnu_at"][-tail:]]
+    sizes = np.array(rec["dnu"][-tail:])
+    by_region = collections.Counter(
+        bounded44.region_of(x, y, boxes, tops) for x, y in cells
+    )
+    return {
+        "share_by_region": {k: v / tail for k, v in by_region.most_common()},
+        "cells": collections.Counter(cells).most_common(3),
+        "change_m2_per_s": {
+            "least": float(sizes.min()),
+            "median": float(np.median(sizes)),
+            "largest": float(sizes.max()),
+        },
+    }
+
+
 def bounded(_args: argparse.Namespace) -> None:
     """The bounded rows' characterisation, from bounded46.py's output files."""
     rows = []
@@ -355,7 +400,9 @@ def bounded(_args: argparse.Namespace) -> None:
         b = json.loads(path.read_text())
         where_path = OUT / f"bounded_where_{b['name']}.json"
         where = json.loads(where_path.read_text()) if where_path.exists() else None
-        rows.append({"history": b, "where": where})
+        rows.append(
+            {"history": b, "where": where, "nu_where": viscosity_where(b["name"])}
+        )
     headers = [
         "Run",
         "Outer, tail",
@@ -364,16 +411,33 @@ def bounded(_args: argparse.Namespace) -> None:
         "Drift (log10 per 1,000)",
         "Period (height); strongest (height)",
         "Largest speed: least, largest; cells",
-        "Located: share by region (largest of u, v)",
+        "Located: share by region (largest of u, v); cells",
+        "Largest nu_t change: share by region; cells; size (m^2/s)",
     ]
     table = []
     for r in rows:
         h = r["history"]
         res, sp = h["residual"], h["max_speed"]
-        located = "-"
+        located, nu_located = "-", "-"
         if r["where"]:
-            share = r["where"]["largest_of_both"]["share_by_region"]
-            located = "; ".join(f"{k} {v:.2f}" for k, v in list(share.items())[:3])
+            both = r["where"]["largest_of_both"]
+            located = (
+                "; ".join(
+                    f"{k} {v:.2f}" for k, v in list(both["share_by_region"].items())[:3]
+                )
+                + "; "
+                + ", ".join(str(tuple(c[0])) for c in both["cells"][:3])
+            )
+        if r["nu_where"]:
+            w = r["nu_where"]
+            nu_located = (
+                "; ".join(
+                    f"{k} {v:.2f}" for k, v in list(w["share_by_region"].items())[:3]
+                )
+                + "; "
+                + ", ".join(str(tuple(c[0])) for c in w["cells"][:3])
+                + f"; {w['change_m2_per_s']['median']:.2g}"
+            )
         table.append(
             [
                 h["name"],
@@ -386,6 +450,7 @@ def bounded(_args: argparse.Namespace) -> None:
                 f"{sp['least']:.3g}, {sp['largest']:.3g}; "
                 + ", ".join(str(tuple(c[0])) for c in sp["cells"][:2]),
                 located,
+                nu_located,
             ]
         )
     print_table(headers, table)
@@ -565,9 +630,75 @@ def compare(_args: argparse.Namespace) -> None:
     keep("compare", rows)
 
 
+def rtol(_args: argparse.Namespace) -> None:
+    """The 1e-8 check row against the 1e-4 row on 200x75: counts, CG work and the field difference."""
+    pairs = [("standard_200x75", "standard_200x75_r1e-8")]
+    rows = []
+    for base, check in pairs:
+        if not (OUT / f"{base}.json").exists() or not (OUT / f"{check}.json").exists():
+            continue
+        a, b = load(base), load(check)
+        fa, fb = dict(np.load(OUT / f"{base}.npz")), dict(np.load(OUT / f"{check}.npz"))
+        live = fa["cell_type"] != SOLID
+        rows.append(
+            {
+                "base": base,
+                "check": check,
+                "outer": [a["outer"], b["outer"]],
+                "stop": [a["stop"], b["stop"]],
+                "inner_mean": [a["inner_mean"], b["inner_mean"]],
+                "seconds": [a["seconds"], b["seconds"]],
+                "faces_max_abs_du": float(np.abs(fb["u_faces"] - fa["u_faces"]).max()),
+                "faces_max_abs_dv": float(np.abs(fb["v_faces"] - fa["v_faces"]).max()),
+                "cells_max_speed_difference": float(
+                    np.hypot(fb["u_c"] - fa["u_c"], fb["v_c"] - fa["v_c"])[live].max()
+                ),
+                "nu_t_max_abs_difference": float(
+                    np.abs(fb["nu_t"] - fa["nu_t"])[live].max()
+                ),
+                "nu_t_max_relative_difference": float(
+                    (
+                        np.abs(fb["nu_t"][live] - fa["nu_t"][live]) / fa["nu_t"][live]
+                    ).max()
+                ),
+                "k_max_relative_difference": float(
+                    (np.abs(fb["k"][live] - fa["k"][live]) / fa["k"][live]).max()
+                ),
+                "face_hash": [a["face_hash"], b["face_hash"]],
+            }
+        )
+    headers = [
+        "Rows (1e-4, 1e-8)",
+        "Outer",
+        "Stop",
+        "CG per correction (mean)",
+        "Wall (s)",
+        "Faces: max |du|, max |dv| (m/s)",
+        "Cells: max speed difference (m/s)",
+        "nu_t: max |difference| (m^2/s), max relative",
+        "k: max relative difference",
+    ]
+    table = [
+        [
+            f"{r['base']}, {r['check']}",
+            ", ".join(f"{x:,}" for x in r["outer"]),
+            ", ".join(r["stop"]),
+            ", ".join(f"{x:.0f}" for x in r["inner_mean"]),
+            ", ".join(f"{x:.0f}" for x in r["seconds"]),
+            f"{r['faces_max_abs_du']:.2e}, {r['faces_max_abs_dv']:.2e}",
+            f"{r['cells_max_speed_difference']:.2e}",
+            f"{r['nu_t_max_abs_difference']:.2e}, {r['nu_t_max_relative_difference']:.2e}",
+            f"{r['k_max_relative_difference']:.2e}",
+        ]
+        for r in rows
+    ]
+    print_table(headers, table)
+    keep("rtol", rows)
+
+
 def everything(args: argparse.Namespace) -> None:
     """Every table, in the report's order."""
-    for f in (matrix, converged_rows, inlet, bounded, transport, compare):
+    for f in (matrix, converged_rows, inlet, rtol, bounded, transport, compare):
         print(f"### {f.__name__}")
         f(args)
 
@@ -580,6 +711,7 @@ def main() -> None:
         ("matrix", matrix),
         ("converged", converged_rows),
         ("inlet", inlet),
+        ("rtol", rtol),
         ("bounded", bounded),
         ("transport", transport),
         ("compare", compare),

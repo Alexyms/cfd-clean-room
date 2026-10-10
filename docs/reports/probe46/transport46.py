@@ -2,6 +2,8 @@
 
 Usage:
     python transport46.py run NAME [--cap-seconds S] [--window W]
+    python transport46.py rescore NAME    the surfaces, segments and hotspots again from
+                                          the saved fields, the march untouched
 
 NAME is a converged record of coupled46.py under results/builder46/. The
 committed TransportSolver steps two classes, 0.5 and 5 micrometres (indices
@@ -247,6 +249,9 @@ def by_surface(
 
     A segment is named by its surface and the start of its 0.2 m bin along
     the surface: x for floors, tops and the ceiling, y for walls and sides.
+    A floor piece's name carries its x interval, which the staircase moves
+    between grids, so a floor segment is keyed as "floor" alone and the bin
+    says where it is.
     """
     surfaces: dict[str, float] = {}
     segments: dict[str, float] = {}
@@ -254,7 +259,8 @@ def by_surface(
         value = float(rate_v[j, i])
         surfaces[label] = surfaces.get(label, 0.0) + value
         x = float(mesh.xc[i])
-        key = f"{label} | x {math.floor(x / SEGMENT + EDGE_TOL) * SEGMENT:.1f}"
+        kind = "floor" if label.startswith("floor ") else label
+        key = f"{kind} | x {math.floor(x / SEGMENT + EDGE_TOL) * SEGMENT:.1f}"
         segments[key] = segments.get(key, 0.0) + value
     for (j, i), label in names_u.items():
         value = float(rate_u[j, i])
@@ -263,6 +269,65 @@ def by_surface(
         key = f"{label} | y {math.floor(y / SEGMENT + EDGE_TOL) * SEGMENT:.1f}"
         segments[key] = segments.get(key, 0.0) + value
     return surfaces, segments
+
+
+def score(
+    rate_u: np.ndarray,
+    rate_v: np.ndarray,
+    mesh: Mesh,
+    cond: object,
+    raw: dict,
+    emission: float,
+) -> dict:
+    """The per-surface and per-segment deposition of one class, and its hotspots."""
+    names_u, names_v = surface_names(mesh, cond, raw)
+    surfaces, segments = by_surface(rate_u, rate_v, names_u, names_v, mesh)
+    ranked = sorted(segments.items(), key=lambda kv: -kv[1])
+    total_faces = float(rate_u.sum() + rate_v.sum())
+    return {
+        "deposition_rate_total": total_faces,
+        "deposition_rate_over_source": total_faces / emission,
+        "by_surface": dict(sorted(surfaces.items(), key=lambda kv: -kv[1])),
+        "by_surface_share": {
+            s: v / total_faces if total_faces > 0.0 else None
+            for s, v in sorted(surfaces.items(), key=lambda kv: -kv[1])
+        },
+        "segments": dict(ranked),
+        "hotspots": [s for s, _ in ranked[:HOTSPOTS]],
+        "hotspot_rates": [v for _, v in ranked[:HOTSPOTS]],
+    }
+
+
+def rescore(args: argparse.Namespace) -> None:
+    """Recompute a record's surfaces, segments and hotspots from its saved fields.
+
+    The march is not repeated: the fields, the budget and the history stay
+    as recorded, and only the scoring keys are rewritten.
+    """
+    name = args.name
+    path = OUT / f"transport_{name}.json"
+    out = json.loads(path.read_text())
+    kept = np.load(OUT / f"transport_{name}.npz")
+    flow = json.loads((OUT / f"{name}.json").read_text())
+    raw = flow["raw"]
+    cfg = SimConfig.from_dict(raw)
+    mesh = Mesh(cfg)
+    physics = ParticlePhysics(cfg)
+    boundary = ConcentrationBoundary(mesh, cfg, physics, BoundaryRegistry(cfg))
+    for k in CLASSES:
+        cond = boundary.faces_for(k)
+        rate_u, rate_v = face_deposition(kept[f"C_{k}"], mesh, cond)
+        assert np.array_equal(rate_u, kept[f"deposition_u_{k}"])
+        assert np.array_equal(rate_v, kept[f"deposition_v_{k}"])
+        out["per_class"][str(k)].update(
+            score(rate_u, rate_v, mesh, cond, raw, out["source"]["emission"])
+        )
+    out["rescored"] = datetime.now().isoformat(timespec="seconds")
+    path.write_text(json.dumps(out, default=float))
+    print(
+        name,
+        {k: v["hotspots"] for k, v in out["per_class"].items()},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -410,14 +475,11 @@ def run(args: argparse.Namespace) -> None:
         c = fields[k]
         cond = boundary.faces_for(k)
         rate_u, rate_v = face_deposition(c, mesh, cond)
-        names_u, names_v = surface_names(mesh, cond, raw)
-        surfaces, segments = by_surface(rate_u, rate_v, names_u, names_v, mesh)
-        ranked = sorted(segments.items(), key=lambda kv: -kv[1])
+        scored = score(rate_u, rate_v, mesh, cond, raw, args.emission)
         budget = solver.budget[k]
         last = history[k][-1]
         readings = last["sensors"]
         order = sorted(range(len(readings)), key=lambda i: -readings[i])
-        total_faces = float(rate_u.sum() + rate_v.sum())
         out["per_class"][str(k)] = {
             "diameter": cfg.particle_sizes[k],
             "settling_velocity": physics.settling_velocity(k),
@@ -444,20 +506,11 @@ def run(args: argparse.Namespace) -> None:
                 "current": budget.current,
                 "relative_residual": budget.relative(),
             },
-            "deposition_rate_total": total_faces,
-            "deposition_rate_over_source": total_faces / args.emission,
             "outflow_rate_over_source": last.get("outflow_rate", 0.0) / args.emission,
             "budget_deposition_rate_over_source": (
                 last.get("deposition_rate", 0.0) / args.emission
             ),
-            "by_surface": dict(sorted(surfaces.items(), key=lambda kv: -kv[1])),
-            "by_surface_share": {
-                s: v / total_faces if total_faces > 0.0 else None
-                for s, v in sorted(surfaces.items(), key=lambda kv: -kv[1])
-            },
-            "segments": dict(ranked),
-            "hotspots": [s for s, _ in ranked[:HOTSPOTS]],
-            "hotspot_rates": [v for _, v in ranked[:HOTSPOTS]],
+            **scored,
             "history": history[k],
         }
         arrays[f"C_{k}"] = c
@@ -497,6 +550,9 @@ def main() -> None:
     p.add_argument("--window", type=float, default=WINDOW)
     p.add_argument("--emission", type=float, default=EMISSION)
     p.set_defaults(func=run)
+    p = sub.add_parser("rescore")
+    p.add_argument("name")
+    p.set_defaults(func=rescore)
     args = parser.parse_args()
     args.func(args)
 
