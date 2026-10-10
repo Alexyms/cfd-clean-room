@@ -48,6 +48,8 @@ as they were put.
    run on the product and their difference reported.
 3. The wall treatment: scalable wall functions.
 4. k and eps: the transport scheme in pseudo-time, growth explicit and decay implicit.
+   Amended 2026-10-10 (Alex, prompt 48, ECR-002 step 6): the advection's face value is plain
+   upwind by default, chosen by a turbulence key; section C's and section I's notes of that date.
 5. The pressure solve: ECR-003, conjugate gradients against multigrid measured on the product
    mesh, landing before ECR-002 step 5, the first step that solves the 200x75 room to tolerance.
    Steps 0 to 4 do not wait for it.
@@ -525,6 +527,22 @@ face, the equipment tops included, wherever a wall cell's neighbour sits in the 
 core of plane Couette flow it raises k above `u_tau^2 / sqrt(C_mu)` by 6% to 15% on 12 rows and 2%
 to 4% on 24 (G (ii)'s note). A fix (a gradient consistent with the wall function in the second
 cell, or production limited there) is a candidate for a later step, not this one.
+
+*Note, 2026-10-10 (Alex, before step 8; prompt 48).* k and eps are advected by plain upwind.
+Option (1)'s step stands with one change: step 1 takes the upwind cell's value at every interior
+face in place of the UMIST-limited QUICK value; steps 2 and 3, the boundary values and the
+pseudo-time step are unchanged. Section I's key of the same date chooses the face value, and
+absent means upwind; `umist` keeps the step as first built. The evidence is prompt 47's
+(`docs/reports/ecr002_step6_comparative.md`, sections 5.2, 5.3 and 6.1). Upwind converges the
+standard variant on 80x30, 160x60 and 320x120, where the limited value leaves 80x30 and 320x120
+bounded at the cap. In the 80x30 cycle the limiter's clamp switches branch on a few tens of faces
+every tail iteration, with no flux changing sign; that accompanies the non-convergence and is not
+shown to cause it. On 160x60, where both converge, the five largest deposition segments, the
+largest of them and the sensor order are the same under both for every source and class.
+Positivity is unchanged: the upwind value is the limited value at psi = 0, so ADR-011 B's lemma
+covers it at the same Courant bound. The cost the alternatives name, upwind's numerical diffusion
+where k and eps are made in thin shear layers, is what step 7 measures: its validation cases run
+under both schemes.
 
 ## D. Coupling into the flow solver (REQ-S14, S16, S18 and S01, proposed; decision 1)
 **The viscosity field.** `mu_e = mu + mu_t` per cell. `MomentumPredictor` gains an optional
@@ -1085,6 +1103,11 @@ additions the draft did not list; `turbulence.py` now imports `boundary_registry
 coverage, as the concentration layer reads it) and `boundary_staggered`. The stopping rule as
 drafted (section E's note); `StaggeredSolver.eddy_viscosity` is `turbulence_state`.
 
+*Note, 2026-10-10 (Alex; prompt 48).* The turbulence section gains `advection_scheme`, `upwind`
+or `umist`, the transport section's key of the same name and values, validated as the other keys
+are (type, value, any other string refused). Absent means `upwind` (section C's note of the same
+date). The transport section's key, and its `umist` default, are unchanged.
+
 **Draft contracts** (SYSTEM.md section 4 gains them when ECR-002 is accepted).
 
 ```
@@ -1137,6 +1160,10 @@ prolongation (multigrid) or global reductions (conjugate gradients).
 ## J. What this design does not decide
 The product mesh: ADR-010 and ADR-011 left it to a measurement on the product case, and the wall
 treatment now adds a y+ to that measurement; the 200 x 75 mesh is the default, not a decision.
+*Note, 2026-10-10 (Alex; prompt 48):* the product grid is 320 x 120, which represents every
+stated position of the room exactly (each is a multiple of 0.05 m; 200 x 75 rounds fourteen of
+them), with 160 x 60 as its coarser check; 640 x 240 waits for Phase 6. ECR-002 section 8 step 8
+carries it.
 Thermal effects: buoyancy from hot equipment stays out of scope (SYSTEM.md section 5); a k
 equation is where a buoyancy production term would go. Three dimensions: out of scope; item 0
 shows what a two-dimensional comparison cannot see. The supply's inlet turbulence: no value is
