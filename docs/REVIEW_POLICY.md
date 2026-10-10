@@ -130,6 +130,24 @@ Classify every finding into one of three severity levels. State the severity inl
 
 **Suggestion** -- Style improvements, docstring wording, class/variable naming tweaks, additional edge-case tests beyond the core validation, stale metadata (dates, status lines), minor inconsistencies that do not affect correctness or downstream consumers.
 
+### What blocks (Alex, 2026-10-09)
+
+Only three kinds of finding block a merge or force another round:
+
+1. A wrong computed result: the solver, a boundary condition, a scheme or a measurement
+   instrument computes something other than what its contract says.
+2. A wrong basis for a decision: a number or claim that a decision, a criterion or a
+   prediction's verdict rests on, and that the records contradict.
+3. A load-bearing behaviour left untested: boundary physics, the stopping rule, positivity,
+   conservation, and the tests that pin them.
+
+Everything else is a Suggestion whatever its other merits: prose that misstates a number no
+decision rests on, dates, wording, ordering, formatting, line widths, docstrings. Suggestions
+are batched and fixed by the orchestrator directly, with no prompt and no further round.
+Record keeping and wording changes are not reviewed or tested at all. A report states its
+numbers in tables generated from the records and points to them; a sentence that restates a
+table's number is a liability, not a service.
+
 ### Evidence Rules
 
 Every finding has to be checkable against the file without re-reading the whole
