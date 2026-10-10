@@ -306,7 +306,7 @@ The timing probes ran first (09:48), 20 outer iterations each, two processes at 
 
 The projection at the cap was under two hours of wall time for the longest row, so the set
 ran as planned. The five 80x30 rows of measurement 1 were launched together at 09:48:42 and the
-four rows of measurement 2 at 09:49:40, nine processes at once on twelve cores; the marches of
+four rows of measurement 2 at 09:48:54, nine processes at once on twelve cores; the marches of
 measurement 3 followed as rows converged (section 5.4). The wall times in the tables were taken
 beside other runs.
 
@@ -327,7 +327,21 @@ diagnostic's row, which wraps two functions without changing their values, repro
 Upwind advection of k and eps converges the row by the rule; the corner rule's removal and the
 halved `alpha_turbulence` leave it bounded at the cap with the same small velocity step
 (the tail column: about 1e-4 of the scale at the largest) and the same refusal of conditions
-(a) and (e). The bounded rows' tails, with the regions of largest change:
+(a) and (e). The limiter diagnostic's record of the branch switches:
+
+<!-- tables47 limiter begin -->
+| Run | Faces per iteration (4 calls) | Tail iterations | Branch switches per iteration: least, median, largest; iterations with none | Flux sign switches per iteration: least, median, largest; iterations with none | Median switches per call (k x, k y, eps x, eps y) | Faces that switched at least once in the tail | Faces switching most (call, x, y, share of tail) | Regions of those faces | Branch shares at the end (zero, 2r, (1+3r)/4, quick, 2, c_c) |
+|---|---|---|---|---|---|---|---|---|---|
+| standard_80x30_limiter | 9,380 | 2,000 | 3, 22, 45; 0 | 0, 0, 0; 2000 | 1, 11, 1, 8 | 234 | k_y (2.55, 1) 0.21; k_y (2.55, 0.6) 0.21; k_y (2.35, 1.3) 0.20; eps_y (2.35, 1.3) 0.20; k_y (2.35, 1.7) 0.20; k_y (2.55, 0.8) 0.20; eps_y (2.35, 1.7) 0.20; k_y (2.55, 0.9) 0.19 | etch_chamber face 8; server_rack face 7; gap between equipment 5 | 1,496, 689, 2,416, 2,243, 160, 2,376 |
+
+Branch and sign switches per iteration, medians per thousand iterations:
+| Run | 1 | 1,001 | 2,001 | 3,001 | 4,001 | 5,001 | 6,001 | 7,001 | 8,001 | 9,001 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| standard_80x30_limiter (branch) | 24 | 22 | 22 | 22 | 22 | 22 | 22 | 22 | 22 | 22 |
+| standard_80x30_limiter (sign) | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+<!-- tables47 limiter end -->
+
+The bounded rows' tails, with the regions of largest change:
 
 <!-- tables47 bounded begin -->
 | Run | Outer, tail | Residual: least, median, largest | Amplitude p95/p5 | Drift (log10 per 1,000) | Period (height); strongest (height) | Largest speed: least, largest; cells | Located: share by region (largest of u, v); cells | Largest nu_t change: share by region; cells; size (m^2/s) |
@@ -340,6 +354,36 @@ halved `alpha_turbulence` leave it bounded at the cap with the same small veloci
 | standard_80x30_corner | 10,000, 2,000 | 7.28e-07, 1.28e-06, 1.76e-06 | 1.93 | 0.00261 | 28 (0.23); 408 (0.76) | 1.39, 1.39; (2.75, 1.35) | server_rack top 0.34; return 2 0.31; etch_chamber top 0.16; (2.25, 2.15), (2.35, 0.15), (4.95, 2.05) | server_rack face 0.57; server_rack top 0.41; etch_chamber top 0.02; (2.35, 2.05), (2.35, 1.85), (2.35, 1.95); 1e-05 |
 | standard_80x30_limiter | 10,000, 2,000 | 7.46e-07, 1.32e-06, 1.96e-06 | 1.99 | -0.00203 | 28 (0.33); 342 (0.68) | 1.4, 1.4; (2.75, 1.35) | return 2 0.43; server_rack top 0.27; etch_chamber top 0.13; (2.35, 0.15), (2.35, 2.05), (4.95, 2.05) | server_rack face 0.44; server_rack top 0.44; etch_chamber top 0.10; (2.35, 2.05), (4.95, 2.05), (2.35, 1.85); 9.7e-06 |
 <!-- tables47 bounded end -->
+
+### 5.3 Measurement 2: the exact grid pair
+
+The matrix of every run and the converged rows' readings (added after test 47, which found the
+section cited but missing; the tables are the generated ones, unchanged):
+
+<!-- tables47 matrix begin -->
+| Run | Class | Stop | Outer | Residual: least (at), end | Readings at stop (a), (b), (c), (d), (e) | Holds from (a), (b), (c), (d), (e) | Largest speed at end (m/s), cell | Peak speed | CG per correction: mean, largest | Cap hits | k, eps sweeps (mean) | Wall (s), per outer | Face hash |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| standard_80x30 | bounded (neither) | max_simple_iter | 10,000 | 7.43e-07 (5,352), 9.32e-07 | 0.021, 6.9e-10, 3.9e-08, 2e-15, 40 | -, 187, 164, 1, - | 1.4, (2.75, 1.35) | 1.62 | 223, 287 | 0 | 23.8, 18.9 | 384, 0.038 | 6ab5e2c7d5a1fa0c |
+| standard_80x30_upwind | converged | error_estimate_and_continuity | 1,046 | 1.68e-12 (1,046), 1.68e-12 | 5.9e-09, 6.8e-14, 2.2e-12, 2e-15, 9.8e-07 | 788, 192, 181, 1, 1,046 | 1.41, (2.75, 1.35) | 1.63 | 253, 287 | 0 | 19.5, 15.8 | 39, 0.038 | 28f437c84e3d5057 |
+| standard_80x30_corner | bounded (neither) | max_simple_iter | 10,000 | 7.28e-07 (8,827), 1.47e-06 | -, 1.2e-09, 5e-08, 2e-15, 6.9e+02 | -, 183, 162, 1, - | 1.39, (2.75, 1.35) | 1.57 | 222, 287 | 0 | 24.8, 19.8 | 388, 0.039 | f0a8cb0764883cbf |
+| standard_80x30_alpha | bounded (neither) | max_simple_iter | 10,000 | 7.73e-07 (924), 1.04e-06 | 0.021, 7.9e-10, 4.5e-08, 2e-15, 68 | -, 193, 168, 1, - | 1.4, (2.75, 1.35) | 1.63 | 226, 284 | 0 | 23.8, 18.8 | 388, 0.039 | e1a44d7f25d3bdb6 |
+| standard_80x30_limiter | bounded (neither) | max_simple_iter | 10,000 | 7.43e-07 (5,352), 9.32e-07 | 0.021, 6.9e-10, 3.9e-08, 2e-15, 40 | -, 187, 164, 1, - | 1.4, (2.75, 1.35) | 1.62 | 223, 287 | 0 | 23.8, 18.9 | 413, 0.041 | 6ab5e2c7d5a1fa0c |
+| standard_160x60 | converged | error_estimate_and_continuity | 2,732 | 3.13e-13 (2,732), 3.13e-13 | 6.5e-09, 1.2e-13, 3.1e-12, 5.5e-15, 1e-06 | 1,980, 397, 340, 1, 2,732 | 1.5, (0.525, 0.025) | 1.68 | 357, 574 | 0 | 45.5, 35.1 | 310, 0.114 | cea39bd670cf68a6 |
+| standard_160x60_upwind | converged | error_estimate_and_continuity | 2,003 | 5.49e-13 (2,002), 5.49e-13 | 9.4e-09, 5.8e-14, 3.4e-12, 5.5e-15, 1e-06 | 1,432, 398, 374, 1, 2,003 | 1.54, (0.525, 0.025) | 1.75 | 399, 574 | 0 | 37.4, 28.2 | 230, 0.115 | 73f5eaded654a1a7 |
+| rng_160x60 | bounded (stalled) | max_simple_iter | 10,000 | 3.74e-04 (455), 5.72e-04 | 3.6e+04, 1.7e-07, 1.4e-05, 5.5e-15, 7.6e+03 | -, -, -, 1, - | 1.56, (0.525, 0.025) | 1.9 | 303, 575 | 0 | 36.2, 31.3 | 1030, 0.103 | 9c7e473bb0c71fc2 |
+| standard_320x120 | bounded (stalled) | max_simple_iter | 10,000 | 6.24e-08 (4,943), 9.29e-08 | 0.18, 2.2e-11, 6.5e-09, 8.5e-15, - | -, 1,068, 799, 1, - | 1.64, (0.5125, 0.0125) | 2.13 | 590, 1118 | 0 | 101.5, 74.2 | 5331, 0.533 | e12d5b6cbf84ddad |
+| standard_320x120_upwind | converged | error_estimate_and_continuity | 4,472 | 1.94e-13 (4,472), 1.94e-13 | 1.2e-08, 1.4e-13, 3.7e-12, 8.6e-15, 1e-06 | 3,530, 1,068, 762, 1, 4,472 | 1.69, (0.5125, 0.0125) | 2.13 | 713, 1118 | 0 | 87.8, 63.7 | 2556, 0.572 | a055b8e30d9b00ca |
+| rng_320x120 | bounded (stalled) | max_simple_iter | 10,000 | 2.36e-04 (1,532), 2.80e-04 | 7.5e+02, 6.4e-08, 2.2e-05, 8.6e-15, 2.1e+03 | -, -, -, 1, - | 1.74, (0.5125, 0.0125) | 2.41 | 351, 1121 | 0 | 77.7, 65.5 | 3942, 0.394 | ac1505efddd8ec95 |
+<!-- tables47 matrix end -->
+
+<!-- tables47 converged_rows begin -->
+| Run | Outer, stop | Readings at stop (a), (b), (c), (d), (e) | Holds from (a), (b), (c), (d), (e) | Wall (s) | Inlet nu_t / nu | Core nu_t / nu: median, 95th | y+ nodes | y+: median, least, largest | Share below 11.53: all; domain, tops, sides | Figure |
+|---|---|---|---|---|---|---|---|---|---|---|
+| standard_80x30_upwind | 1,046, error_estimate_and_continuity | 5.9e-09, 6.8e-14, 2.2e-12, 2e-15, 9.8e-07 | 788, 192, 181, 1, 1,046 | 39 | 16.4 | 17.4, 56.5 | 257 | 105, 8.19, 536 | 0.023; 0.062, 0, 0.0072 | ecr002_step6_standard_80x30_upwind.png |
+| standard_160x60 | 2,732, error_estimate_and_continuity | 6.5e-09, 1.2e-13, 3.1e-12, 5.5e-15, 1e-06 | 1,980, 397, 340, 1, 2,732 | 310 | 16.4 | 17, 93.1 | 514 | 79.6, 3.55, 329 | 0.037; 0.094, 0, 0.014 | ecr002_step6_standard_160x60.png |
+| standard_160x60_upwind | 2,003, error_estimate_and_continuity | 9.4e-09, 5.8e-14, 3.4e-12, 5.5e-15, 1e-06 | 1,432, 398, 374, 1, 2,003 | 230 | 16.4 | 17.1, 58 | 514 | 61.8, 4.08, 296 | 0.035; 0.094, 0, 0.011 | ecr002_step6_standard_160x60_upwind.png |
+| standard_320x120_upwind | 4,472, error_estimate_and_continuity | 1.2e-08, 1.4e-13, 3.7e-12, 8.6e-15, 1e-06 | 3,530, 1,068, 762, 1, 4,472 | 2556 | 16.4 | 17, 56.2 | 1,028 | 34.3, 2.11, 167 | 0.096; 0.24, 0, 0.038 | ecr002_step6_standard_320x120_upwind.png |
+<!-- tables47 converged_rows end -->
 
 What the tables say. The standard variant converges on 160x60 and does not converge on
 320x120. On 320x120 its residual fell as on 160x60 to about outer 1,800 and then sat between
@@ -482,7 +526,7 @@ The five segments of largest deposition (surface | bin start), rate per s per m 
 The figures `ecr002_step6_<room>_<source>_concentration.png` beside this report show each
 class's concentration on a log scale down to a millionth of its peak, with the deposition
 panel. The panel's two classes share one bar scale, the largest segment's rate, and the 5
-micrometre class deposits about a hundred times the 0.5 micrometre class on the same faces
+micrometre class deposits about 75 times the 0.5 micrometre class on the same faces
 (the hotspot table's rates), so the 0.5 micrometre bars stand at about a hundredth of the 5
 micrometre bars' length; the hotspot table carries both classes' values.
 
@@ -514,7 +558,7 @@ pair, and between the two schemes on 160x60 and on 320x120 where both converged.
 
 | Prediction | Measured |
 |---|---|
-| (a) Upwind advection of k and eps converges the coarse-grid cycle; the corner rule's removal and the halved `alpha_turbulence` do not. The cycle is a limiter switching branch near the rack's corner, iteration to iteration | **Holds.** Upwind converges (1,046 outer iterations); the other two arms are bounded at the cap with the control's velocity step. The limiter diagnostic finds branch switches in every tail iteration (the "least" column is never zero) and no flux sign change, on the vertical faces beside the rack's east face and the etch chamber's west face in the gaps, along the faces' height rather than at the rack's corner alone (section 5.2) |
+| (a) Upwind advection of k and eps converges the coarse-grid cycle; the corner rule's removal and the halved `alpha_turbulence` do not. The cycle is a limiter switching branch near the rack's corner, iteration to iteration | **Holds.** Upwind converges (1,046 outer iterations); the other two arms are bounded at the cap with the control's velocity step. The limiter diagnostic finds branch switches in every tail iteration (the "least" column is never zero) and no flux sign change, on the vertical faces beside the rack's east face and the etch chamber's west face in the gaps, along the faces' height rather than at the rack's corner alone (section 5.2). The switching is shown to accompany the cycle, not to cause it: test 47 froze the limiter's branches from outer 4,000 and the run failed positivity at 4,023, so the counterfactual that would settle cause could not be run. What the decision rests on is measured directly: upwind converges and moves no hotspot (section 6.1) |
 | (b) The standard model converges on 160x60 and on 320x120 | **Fails on 320x120.** Converges on 160x60 (2,732); bounded on 320x120 from about outer 1,800 at a residual of 6e-8 to 1e-7 (section 5.3) |
 | (c) RNG converges on 160x60; 320x120 no prediction | **Fails.** Bounded on both, as on 200x75, a 19-iteration cycle in the gap above return 2 (the bounded table) |
 | (d) S1 and S3 pass the check on the first placement; S2 is carried into the nearest gap's return and needs moving | **Holds for S1 and S3, fails for S2.** S2 is carried into return 2 as predicted, but it passes the check through the surfaces clause (the litho tool's west face and the floor above the floor) and is not moved (the checks table) |
@@ -541,6 +585,13 @@ same segment, and the sensor order is the same. The change that converges the it
 not move a hotspot on this grid.
 
 **Between variants:** no row; RNG converged on neither grid.
+
+**What agrees and what does not.** The hotspots' locations and the sensor order hold between
+grids; their amplitudes do not. The `near_door` reading falls 4.3 times from 160x60 to 320x120,
+and S3's largest floor bin 6.3 times (test 47). The comparative claim (where particles collect,
+and in what order) stands on this room; an absolute deposition figure would not. S2's agreement
+is the weakest evidence of the three: its source sits on the litho tool's top, so most of its
+hotspots are on that one surface and would agree on almost any grid.
 
 ### 6.2 Builder's predictions (section 3.2), scored
 
