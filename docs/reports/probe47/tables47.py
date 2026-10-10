@@ -769,6 +769,18 @@ def pairs(recs: dict[str, dict]) -> list[tuple[str, str, str, str]]:
             b = by.get((f"rng_{grid}", source))
             if a and b:
                 out.append((f"variants, {grid}", source, a, b))
+        # The supplementary pairs of the upwind arm (the report's section
+        # 5.3): between its two grids, and against the committed scheme on
+        # each grid where both converge.
+        a = by.get(("standard_160x60_upwind", source))
+        b = by.get(("standard_320x120_upwind", source))
+        if a and b:
+            out.append(("supplementary: grids, upwind", source, a, b))
+        for grid in ("160x60", "320x120"):
+            a = by.get((f"standard_{grid}", source))
+            b = by.get((f"standard_{grid}_upwind", source))
+            if a and b:
+                out.append((f"supplementary: schemes, {grid}", source, a, b))
     return out
 
 

@@ -42,7 +42,7 @@ def main() -> None:
     t = tables()
     text = REPORT.read_text()
     pattern = re.compile(
-        r"(<!-- tables47 (\w+) begin -->\n).*?(\n<!-- tables47 \2 end -->)", re.S
+        r"(<!-- tables47 (\w+) begin -->)\n.*?(<!-- tables47 \2 end -->)", re.S
     )
     missing: list[str] = []
 
@@ -51,7 +51,7 @@ def main() -> None:
         if mode not in t:
             missing.append(mode)
             return m.group(0)
-        return f"{m.group(1)}{t[mode]}{m.group(3)}"
+        return f"{m.group(1)}\n{t[mode]}\n{m.group(3)}"
 
     new, n = pattern.subn(replace, text)
     REPORT.write_text(new)

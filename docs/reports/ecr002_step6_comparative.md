@@ -278,3 +278,329 @@ What each outcome means, written with the predictions:
   measurements 3 and 5 are skipped, the report is written.
 - The run set would exceed about eight hours: the estimate and a reduced set are reported first
   (320x120 is about 2.6 times 200x75's cells).
+
+## 5. Results (written after the runs)
+
+### 5.1 Order, cost and the rooms
+
+`rooms47.py` on the four grids. Section 1's claim holds for the exact pair; 200x75 rounds
+fourteen positions, not the twelve the prompt counted (the supply's two ends are among them):
+
+<!-- tables47 rooms begin -->
+| Grid | Cell dx, dy (m) | Positions on faces | Rounded | Rounded positions |
+|---|---|---|---|---|
+| 80x30 | 0.1, 0.1 | 36 of 38 | 2 | floor_return_1.x_end 1.25; floor_return_2.x_end 2.95 |
+| 160x60 | 0.05, 0.05 | 38 of 38 | 0 | - |
+| 200x75 | 0.04, 0.04 | 24 of 38 | 14 | hepa_supply.x_start 0.5; hepa_supply.x_end 7.5; door.y_end 2.1; floor_return_1.x_start 0.5; floor_return_1.x_end 1.25; floor_return_2.x_end 2.95; floor_return_3.x_end 4.9; floor_return_4.x_start 5.7; floor_return_4.x_end 6.3; hood_exhaust.y_start 0.9; server_rack.x_start 1.5; server_rack.x_end 2.3; litho_tool.x_end 4.5; hood_bench.y_end 0.9 |
+| 320x120 | 0.025, 0.025 | 38 of 38 | 0 | - |
+<!-- tables47 rooms end -->
+
+The timing probes ran first (09:48), 20 outer iterations each, two processes at once:
+
+<!-- tables47 timing begin -->
+| Grid | Outer | Seconds per outer | CG per correction (mean) | k, eps sweeps (mean) | Share of wall: pressure, turbulence | Minutes at the 10,000 cap |
+|---|---|---|---|---|---|---|
+| 160x60 | 20 | 0.104 | 540 | 9.6, 7.5 | 0.68, 0.17 | 17 |
+| 320x120 | 20 | 0.561 | 974 | 26.2, 16.5 | 0.78, 0.13 | 93 |
+<!-- tables47 timing end -->
+
+The projection at the cap was under two hours of wall time for the longest row, so the set
+ran as planned. The five 80x30 rows of measurement 1 were launched together at 09:48:42 and the
+four rows of measurement 2 at 09:49:40, nine processes at once on twelve cores; the marches of
+measurement 3 followed as rows converged (section 5.4). The wall times in the tables were taken
+beside other runs.
+
+### 5.2 Measurement 1: the coarse-grid cycle, diagnosed
+
+<!-- tables47 cycle begin -->
+| Run (arm) | Change | Class | Outer | Residual at end | Readings at stop (a), (b), (c), (d), (e) | Holds from (a), (b), (c), (d), (e) | Tail velocity step: median, largest (over 0.45 m/s) | Face hash (equals prompt 46's row) |
+|---|---|---|---|---|---|---|---|---|
+| standard_80x30 (control) | none | bounded (neither) | 10,000 | 9.32e-07 | 0.021, 6.9e-10, 3.9e-08, 2e-15, 40 | -, 187, 164, 1, - | 9.2e-05, 0.00014 | 6ab5e2c7d5a1fa0c (yes) |
+| standard_80x30_upwind (upwind) | k and eps advected by upwind | converged | 1,046 | 1.68e-12 | 5.9e-09, 6.8e-14, 2.2e-12, 2e-15, 9.8e-07 | 788, 192, 181, 1, 1,046 | 1.4e-06, 0.045 | 28f437c84e3d5057 (no) |
+| standard_80x30_corner (corner) | momentum corner rule removed | bounded (neither) | 10,000 | 1.47e-06 | -, 1.2e-09, 5e-08, 2e-15, 6.9e+02 | -, 183, 162, 1, - | 9e-05, 0.00012 | f0a8cb0764883cbf (no) |
+| standard_80x30_alpha (alpha) | alpha_turbulence 0.35 | bounded (neither) | 10,000 | 1.04e-06 | 0.021, 7.9e-10, 4.5e-08, 2e-15, 68 | -, 193, 168, 1, - | 7.9e-05, 0.00013 | e1a44d7f25d3bdb6 (no) |
+| standard_80x30_limiter (limiter) | none (branches recorded) | bounded (neither) | 10,000 | 9.32e-07 | 0.021, 6.9e-10, 3.9e-08, 2e-15, 40 | -, 187, 164, 1, - | 9.2e-05, 0.00014 | 6ab5e2c7d5a1fa0c (yes) |
+<!-- tables47 cycle end -->
+
+The control reproduces prompt 46's row bit for bit (the face hash column) and the limiter
+diagnostic's row, which wraps two functions without changing their values, reproduces it too.
+Upwind advection of k and eps converges the row by the rule; the corner rule's removal and the
+halved `alpha_turbulence` leave it bounded at the cap with the same small velocity step
+(the tail column: about 1e-4 of the scale at the largest) and the same refusal of conditions
+(a) and (e). The bounded rows' tails, with the regions of largest change:
+
+<!-- tables47 bounded begin -->
+| Run | Outer, tail | Residual: least, median, largest | Amplitude p95/p5 | Drift (log10 per 1,000) | Period (height); strongest (height) | Largest speed: least, largest; cells | Located: share by region (largest of u, v); cells | Largest nu_t change: share by region; cells; size (m^2/s) |
+|---|---|---|---|---|---|---|---|---|
+| rng_160x60 | 10,000, 2,000 | 4.82e-04, 5.53e-04, 6.05e-04 | 1.18 | 0.000612 | 10 (0.24); 19 (0.99) | 1.56, 1.56; (0.525, 0.025) | gap between equipment 1.00; (2.975, 1.675), (2.925, 1.475), (2.875, 1.325) | gap between equipment 1.00; (2.975, 0.875), (2.975, 1.125), (2.975, 0.925); 8.1e-05 |
+| rng_320x120 | 10,000, 2,000 | 2.69e-04, 2.89e-04, 3.09e-04 | 1.09 | 0.000393 | 9 (0.31); 19 (0.73) | 1.74, 1.74; (0.5125, 0.0125) | gap between equipment 0.54; hood_bench face 0.35; hood_bench top 0.11; (6.2625, 0.6375), (2.9125, 1.5375), (2.9375, 1.6125) | gap between equipment 0.78; hood_bench face 0.21; etch_chamber face 0.00; (2.9625, 1.2125), (2.9625, 1.2625), (2.9625, 1.1875); 4.5e-05 |
+| standard_320x120 | 10,000, 2,000 | 6.24e-08, 8.72e-08, 9.93e-08 | 1.5 | 0.000454 | 29 (0.8); 57 (0.97) | 1.64, 1.64; (0.5125, 0.0125) | litho_tool top 1.00; (4.5125, 1.9375), (4.5125, 1.9125), (4.5125, 1.8875) | litho_tool top 1.00; (4.5125, 2.0375), (4.5375, 2.0125), (4.5625, 2.0125); 1.1e-06 |
+| standard_80x30 | 10,000, 2,000 | 7.46e-07, 1.32e-06, 1.96e-06 | 1.99 | -0.00203 | 28 (0.33); 342 (0.68) | 1.4, 1.4; (2.75, 1.35) | return 2 0.43; server_rack top 0.27; etch_chamber top 0.13; (2.35, 0.15), (2.35, 2.05), (4.95, 2.05) | server_rack face 0.44; server_rack top 0.44; etch_chamber top 0.10; (2.35, 2.05), (4.95, 2.05), (2.35, 1.85); 9.7e-06 |
+| standard_80x30_alpha | 10,000, 2,000 | 7.74e-07, 1.13e-06, 1.91e-06 | 1.77 | -0.000466 | 32 (0.4); 192 (0.59) | 1.4, 1.4; (2.75, 1.35) | return 2 0.33; etch_chamber face 0.22; etch_chamber top 0.15; (2.35, 0.15), (4.95, 2.05), (4.85, 0.15) | server_rack top 0.42; server_rack face 0.38; etch_chamber top 0.15; (2.35, 2.05), (4.95, 2.05), (2.45, 2.05); 8.4e-06 |
+| standard_80x30_corner | 10,000, 2,000 | 7.28e-07, 1.28e-06, 1.76e-06 | 1.93 | 0.00261 | 28 (0.23); 408 (0.76) | 1.39, 1.39; (2.75, 1.35) | server_rack top 0.34; return 2 0.31; etch_chamber top 0.16; (2.25, 2.15), (2.35, 0.15), (4.95, 2.05) | server_rack face 0.57; server_rack top 0.41; etch_chamber top 0.02; (2.35, 2.05), (2.35, 1.85), (2.35, 1.95); 1e-05 |
+| standard_80x30_limiter | 10,000, 2,000 | 7.46e-07, 1.32e-06, 1.96e-06 | 1.99 | -0.00203 | 28 (0.33); 342 (0.68) | 1.4, 1.4; (2.75, 1.35) | return 2 0.43; server_rack top 0.27; etch_chamber top 0.13; (2.35, 0.15), (2.35, 2.05), (4.95, 2.05) | server_rack face 0.44; server_rack top 0.44; etch_chamber top 0.10; (2.35, 2.05), (4.95, 2.05), (2.35, 1.85); 9.7e-06 |
+<!-- tables47 bounded end -->
+
+What the tables say. The standard variant converges on 160x60 and does not converge on
+320x120. On 320x120 its residual fell as on 160x60 to about outer 1,800 and then sat between
+6e-8 and 1e-7 to the cap (the bounded table's amplitude and drift), a cycle of the kind the
+80x30 control shows at 1e-6: continuity met (conditions (b), (c) and (d) hold from the
+iterations the matrix gives), the velocity step steady, conditions (a) and (e) refusing. It
+recurs at 29 and 57 outer iterations (the bounded table's period and strongest columns) and
+its largest change of velocity and of nu_t sits in every tail iteration at the litho tool's
+east top corner (x 4.51 to 4.56, y 1.89 to 2.04), the shear layer leaving the corner into the
+gap above return 3. RNG is bounded on both exact grids as it was on 200x75 (prompt 46): its velocity step
+is about a twelfth of the scale, its per-cell imbalance tens of times its tolerance (the matrix
+table's (b) reading against `mass_imbalance_tol`, 5.0e-9 on 160x60 and 1.25e-9 on 320x120), and
+the recurrence is clean at a period of 19 outer iterations on both grids (the bounded table),
+located in the gap above return 2 between 0.9 and 1.7 m up, a quarter metre from the litho
+tool's west face.
+
+**The supplementary pair.** When the standard row's residual on 320x120 had sat flat for 900
+iterations (outer 1,800 to 2,700), the one arm of measurement 1 that converged the 80x30 cycle,
+upwind advection of k and eps, was run on both exact grids (`run47.sh pair-upwind`, launched
+10:17), beside the prompt's rows and labelled apart from them. It converges on both: 2,003
+outer iterations on 160x60 and 4,472 on 320x120, against 2,732 for the committed scheme on
+160x60. The three converged rooms (standard 160x60, upwind 160x60, upwind 320x120) have the
+same core eddy viscosity (the converged table's median) and the same flow pattern (the
+figures); their y+ medians fall with the cell size as the first node moves toward the wall,
+and the share of nodes below the scalable floor rises to about a tenth on 320x120, a quarter
+of the domain-wall nodes. Measurements 3 and 5 run on the committed scheme where it converged
+(160x60) and on the upwind pair, and the comparison between grids the prompt asked for is
+scored on the upwind pair, with the comparison between the two schemes on 160x60 beside it so
+the reader can see what the scheme changes.
+
+### 5.4 Measurement 3: where particles go
+
+**The discrimination check**, on the committed scheme's converged 160x60 room:
+
+<!-- tables47 checks begin -->
+| Source (record) | Square (m) | Class (um) | Source-cell C, floor (per m^3) | Sensors above the floor (excluding one inside the square) | Surfaces above the floor (excluding ones the square touches) | Discriminates | Verdict; move |
+|---|---|---|---|---|---|---|---|
+| S3 (standard_160x60) | [6.15, 6.25, 1.15, 1.25] | 0.5 | 1.04e+05, 0.104 | none | floor 1.6e+03, hood_bench west 1.5e+03, etch_chamber east 44 | yes | passes |
+|  |  | 5 | 1.04e+05, 0.104 | none | floor 1.6e+03, hood_bench west 1.5e+03, etch_chamber east 43 | yes |  |
+| S2 (standard_160x60) | [3.8, 3.9, 2.0, 2.1] | 0.5 | 6.84e+05, 0.684 | none | litho_tool west 1.2e+05, floor 4.9e+04, litho_tool east 12 | yes | passes |
+|  |  | 5 | 6.83e+05, 0.683 | none | litho_tool west 1.2e+05, floor 4.8e+04, litho_tool east 12 | yes |  |
+| S1 (standard_160x60) | [0.75, 0.85, 1.15, 1.25] | 0.5 | 7.47e+04, 0.0747 | near_door 4.7e+02 | floor 9.7e+03, server_rack west 8.9e+03 | yes | passes |
+|  |  | 5 | 7.46e+04, 0.0746 | near_door 4.6e+02 | floor 9.7e+03, server_rack west 8.9e+03 | yes |  |
+<!-- tables47 checks end -->
+
+All three sources pass on the first placement, so none moves and `sources.json` was never
+written. S1 is the only source a sensor reads: `near_door`, 0.3 m above it in the column that
+descends to return 1. S2 and S3 pass through the surfaces clause alone, with no sensor above
+the floor; `hood_entry` lies inside S3's square and is excluded by the method. Every plume ends
+in a return: S1's in return 1, S2's in return 2 after running down the litho tool's west face,
+S3's in return 4 directly below it, and the deposition is a small part of the emission (the
+transport table's deposition over Q column). The check as the prompt specifies it is met;
+whether a source whose plume a return captures within a metre is the source VAL-018 wants is a
+question for section 7.
+
+**The Courant check**, S1 on the same room at 0.1 and 0.4:
+
+<!-- tables47 cfl begin -->
+| Rows (0.4, check), class (um) | Courant | dt (s) | Steady at (s) | Wall (s) | Sensors: largest difference over the largest reading | Surfaces: largest difference over the largest rate | Hotspots equal | Sensor order equal |
+|---|---|---|---|---|---|---|---|---|
+| transport_standard_160x60_S1, transport_standard_160x60_S1_cfl0.1, 0.5 | 0.4, 0.1 | 0.008, 0.002 | 68, 68 | 150, 549 | 8.53e-06 | 6.00e-06 | yes | yes |
+| transport_standard_160x60_S1, transport_standard_160x60_S1_cfl0.1, 5 | 0.4, 0.1 | 0.008, 0.002 | 68, 68 | 150, 549 | 8.56e-06 | 6.02e-06 | yes | yes |
+<!-- tables47 cfl end -->
+
+The two marches stop at the same simulated time with the sensors and the per-surface rates
+within 1e-5 of each other relative to their largest values, the same five hotspots and the
+same sensor order, at a quarter of the wall time; the 0.4 marches stand.
+
+**The marches**, every converged room, every source, both classes:
+
+<!-- tables47 transport begin -->
+| Run, class (um) | Stop, t (s) | Last window: total, sensor change; removal / Q | Deposition / Q (faces; budget), outflow / Q | Budget residual | Source-cell C, floor | Sensors above the floor, in order (per m^3) |
+|---|---|---|---|---|---|---|
+| standard_160x60_S1, 0.5 | steady, 68 | 1.6e-05, 9.8e-05; 0.99998 | 2.405e-06 (2.405e-06), 1 | 1.8e-07 | 7.47e+04, 0.0747 | near_door (468) |
+| standard_160x60_S1, 5 | steady, 68 | 1.6e-05, 9.7e-05; 0.99998 | 0.0001778 (0.0001778), 0.9998 | 1.8e-07 | 7.46e+04, 0.0746 | near_door (459) |
+| standard_160x60_S2, 0.5 | steady, 43 | 9.3e-05, 1.9e-06; 0.99934 | 0.0002976 (0.0002976), 0.999 | -2.8e-06 | 6.84e+05, 0.684 | none |
+| standard_160x60_S2, 5 | steady, 43 | 9.2e-05, 1.9e-06; 0.99937 | 0.02256 (0.02256), 0.9768 | -2.8e-06 | 6.83e+05, 0.683 | none |
+| standard_160x60_S3, 0.5 | steady, 10 | 9.1e-05, 2.5e-12; 0.99991 | 1.688e-07 (1.68e-07), 0.9999 | 1.4e-07 | 1.04e+05, 0.104 | none |
+| standard_160x60_S3, 5 | steady, 10 | 9e-05, 1.9e-12; 0.99991 | 1.258e-05 (1.253e-05), 0.9999 | 1.4e-07 | 1.04e+05, 0.104 | none |
+| standard_160x60_upwind_S1, 0.5 | steady, 84 | 1.6e-05, 9.6e-05; 0.99998 | 1.818e-06 (1.818e-06), 1 | 3.4e-07 | 7.69e+04, 0.0769 | near_door (400) |
+| standard_160x60_upwind_S1, 5 | steady, 84 | 1.6e-05, 9.6e-05; 0.99998 | 0.0001338 (0.0001338), 0.9998 | 3.4e-07 | 7.69e+04, 0.0769 | near_door (392) |
+| standard_160x60_upwind_S2, 0.5 | steady, 51 | 9.2e-05, 1.7e-06; 0.99933 | 0.0003003 (0.0003003), 0.999 | -3.1e-06 | 6.85e+05, 0.685 | none |
+| standard_160x60_upwind_S2, 5 | steady, 51 | 9e-05, 1.7e-06; 0.99935 | 0.02276 (0.02276), 0.9766 | -3.7e-06 | 6.84e+05, 0.684 | none |
+| standard_160x60_upwind_S3, 0.5 | steady, 10 | 9.6e-05, 3.6e-12; 0.9999 | 8.021e-08 (7.962e-08), 0.9999 | 2.5e-07 | 1.03e+05, 0.103 | none |
+| standard_160x60_upwind_S3, 5 | steady, 10 | 9.6e-05, 3.6e-12; 0.9999 | 5.965e-06 (5.922e-06), 0.9999 | 2.5e-07 | 1.03e+05, 0.103 | none |
+| standard_320x120_upwind_S1, 0.5 | steady, 91 | 7.1e-06, 9.5e-05; 0.99999 | 7.668e-07 (7.668e-07), 1 | 2.1e-07 | 7.85e+04, 0.0785 | near_door (93.6) |
+| standard_320x120_upwind_S1, 5 | steady, 91 | 7e-06, 9.5e-05; 0.99999 | 5.64e-05 (5.64e-05), 0.9999 | 2.1e-07 | 7.84e+04, 0.0784 | near_door (91) |
+| standard_320x120_upwind_S2, 0.5 | steady, 55 | 9.6e-05, 1.2e-08; 0.99923 | 0.0003684 (0.0003684), 0.9989 | -5.6e-06 | 7.29e+05, 0.729 | none |
+| standard_320x120_upwind_S2, 5 | steady, 55 | 9.4e-05, 1.3e-08; 0.99926 | 0.02792 (0.02792), 0.9713 | -5.5e-06 | 7.28e+05, 0.728 | none |
+| standard_320x120_upwind_S3, 0.5 | steady, 4 | 6.5e-05, 3.8e-16; 0.99993 | 1.232e-08 (1.194e-08), 0.9999 | 1.3e-07 | 1.09e+05, 0.109 | none |
+| standard_320x120_upwind_S3, 5 | steady, 4 | 6.4e-05, 5.1e-16; 0.99993 | 9.266e-07 (8.992e-07), 0.9999 | 1.3e-07 | 1.09e+05, 0.109 | none |
+
+Deposition per surface, source S1, share of the deposition total (surfaces with at least 1e-06 of it in some column):
+| Surface | standard_160x60_S1, 0.5 um | standard_160x60_S1, 5 um | standard_160x60_upwind_S1, 0.5 um | standard_160x60_upwind_S1, 5 um | standard_320x120_upwind_S1, 0.5 um | standard_320x120_upwind_S1, 5 um |
+|---|---|---|---|---|---|---|
+| floor 1.25-1.50 | 0.968 | 1 | 0.965 | 1 | 0.967 | 1 |
+| server_rack west | 0.0317 | 3.29e-05 | 0.035 | 3.64e-05 | 0.0331 | 3.44e-05 |
+| server_rack top | 8.75e-07 | 8.94e-07 | 1.01e-06 | 1.04e-06 | 7.64e-07 | 7.83e-07 |
+
+Deposition per surface, source S2, share of the deposition total (surfaces with at least 1e-06 of it in some column):
+| Surface | standard_160x60_S2, 0.5 um | standard_160x60_S2, 5 um | standard_160x60_upwind_S2, 0.5 um | standard_160x60_upwind_S2, 5 um | standard_320x120_upwind_S2, 0.5 um | standard_320x120_upwind_S2, 5 um |
+|---|---|---|---|---|---|---|
+| litho_tool top | 0.956 | 0.959 | 0.953 | 0.956 | 0.955 | 0.958 |
+| floor 2.95-3.20 | 0.0418 | 0.0414 | 0.0448 | 0.0444 | 0.0427 | 0.042 |
+| litho_tool west | 0.00257 | 2.56e-06 | 0.00263 | 2.62e-06 | 0.00261 | 2.59e-06 |
+| floor 4.50-4.60 | 1.68e-06 | 1.6e-06 | 9.24e-07 | 8.8e-07 | 4.25e-07 | 3.96e-07 |
+
+Deposition per surface, source S3, share of the deposition total (surfaces with at least 1e-06 of it in some column):
+| Surface | standard_160x60_S3, 0.5 um | standard_160x60_S3, 5 um | standard_160x60_upwind_S3, 0.5 um | standard_160x60_upwind_S3, 5 um | standard_320x120_upwind_S3, 0.5 um | standard_320x120_upwind_S3, 5 um |
+|---|---|---|---|---|---|---|
+| floor 6.30-6.40 | 0.94 | 0.967 | 0.949 | 0.98 | 0.977 | 0.999 |
+| floor 5.60-5.70 | 0.032 | 0.0326 | 0.0195 | 0.0199 | 0.000617 | 0.000618 |
+| hood_bench west | 0.0281 | 2.91e-05 | 0.0311 | 3.23e-05 | 0.0219 | 2.25e-05 |
+| etch_chamber east | 0.000343 | 3.51e-07 | 0.000183 | 1.87e-07 | 2.95e-06 | 2.96e-09 |
+| hood_bench top | 2.43e-06 | 2.5e-06 | 2.2e-06 | 2.26e-06 | 5.05e-07 | 5.09e-07 |
+
+The five segments of largest deposition (surface | bin start), rate per s per m depth:
+| Run, class (um) | 1 | 2 | 3 | 4 | 5 |
+|---|---|---|---|---|---|
+| standard_160x60_S1, 0.5 | floor | x 1.2 (0.0142) | floor | x 1.4 (0.00908) | server_rack west | y 0.0 (0.000111) | server_rack west | y 0.2 (0.000103) | server_rack west | y 0.4 (9.19e-05) |
+| standard_160x60_S1, 5 | floor | x 1.2 (1.09) | floor | x 1.4 (0.693) | server_rack west | y 0.0 (8.55e-06) | server_rack west | y 0.2 (7.94e-06) | server_rack west | y 0.4 (7.05e-06) |
+| standard_160x60_S2, 0.5 | litho_tool top | x 3.6 (1.12) | litho_tool top | x 3.4 (0.745) | litho_tool top | x 3.8 (0.497) | litho_tool top | x 3.2 (0.478) | floor | x 3.0 (0.0998) |
+| standard_160x60_S2, 5 | litho_tool top | x 3.6 (85.7) | litho_tool top | x 3.4 (56.4) | litho_tool top | x 3.8 (38) | litho_tool top | x 3.2 (36) | floor | x 3.0 (7.49) |
+| standard_160x60_S3, 0.5 | floor | x 6.2 (0.00159) | floor | x 5.6 (5.4e-05) | hood_bench west | y 0.0 (1.8e-05) | hood_bench west | y 0.2 (1.23e-05) | hood_bench west | y 0.4 (8.77e-06) |
+| standard_160x60_S3, 5 | floor | x 6.2 (0.122) | floor | x 5.6 (0.0041) | hood_bench west | y 0.0 (1.39e-06) | hood_bench west | y 0.2 (9.52e-07) | hood_bench west | y 0.4 (6.76e-07) |
+| standard_160x60_upwind_S1, 0.5 | floor | x 1.2 (0.0108) | floor | x 1.4 (0.0068) | server_rack west | y 0.0 (8.34e-05) | server_rack west | y 0.2 (7.78e-05) | server_rack west | y 0.4 (7.16e-05) |
+| standard_160x60_upwind_S1, 5 | floor | x 1.2 (0.82) | floor | x 1.4 (0.518) | server_rack west | y 0.0 (6.4e-06) | server_rack west | y 0.2 (5.97e-06) | server_rack west | y 0.4 (5.49e-06) |
+| standard_160x60_upwind_S2, 0.5 | litho_tool top | x 3.6 (1.13) | litho_tool top | x 3.4 (0.753) | litho_tool top | x 3.8 (0.495) | litho_tool top | x 3.2 (0.482) | floor | x 3.0 (0.108) |
+| standard_160x60_upwind_S2, 5 | litho_tool top | x 3.6 (86.2) | litho_tool top | x 3.4 (57) | litho_tool top | x 3.8 (37.9) | litho_tool top | x 3.2 (36.3) | floor | x 3.0 (8.1) |
+| standard_160x60_upwind_S3, 0.5 | floor | x 6.2 (0.000761) | floor | x 5.6 (1.56e-05) | hood_bench west | y 0.0 (8.49e-06) | hood_bench west | y 0.2 (6.35e-06) | hood_bench west | y 0.4 (5.06e-06) |
+| standard_160x60_upwind_S3, 5 | floor | x 6.2 (0.0585) | floor | x 5.6 (0.00119) | hood_bench west | y 0.0 (6.56e-07) | hood_bench west | y 0.2 (4.9e-07) | hood_bench west | y 0.4 (3.9e-07) |
+| standard_320x120_upwind_S1, 0.5 | floor | x 1.2 (0.00456) | floor | x 1.4 (0.00285) | server_rack west | y 0.0 (3.46e-05) | server_rack west | y 0.2 (3.2e-05) | server_rack west | y 0.4 (2.89e-05) |
+| standard_320x120_upwind_S1, 5 | floor | x 1.2 (0.347) | floor | x 1.4 (0.217) | server_rack west | y 0.0 (2.65e-06) | server_rack west | y 0.2 (2.44e-06) | server_rack west | y 0.4 (2.21e-06) |
+| standard_320x120_upwind_S2, 0.5 | litho_tool top | x 3.6 (1.34) | litho_tool top | x 3.4 (1.01) | litho_tool top | x 3.2 (0.715) | litho_tool top | x 3.8 (0.451) | floor | x 3.0 (0.126) |
+| standard_320x120_upwind_S2, 5 | litho_tool top | x 3.6 (102) | litho_tool top | x 3.4 (76.9) | litho_tool top | x 3.2 (53.8) | litho_tool top | x 3.8 (34.6) | floor | x 3.0 (9.42) |
+| standard_320x120_upwind_S3, 0.5 | floor | x 6.2 (0.00012) | hood_bench west | y 0.0 (1.29e-06) | hood_bench west | y 0.2 (7.32e-07) | hood_bench west | y 0.4 (3.93e-07) | hood_bench west | y 0.6 (2.24e-07) |
+| standard_320x120_upwind_S3, 5 | floor | x 6.2 (0.00926) | floor | x 5.6 (5.72e-06) | hood_bench west | y 0.0 (9.97e-08) | hood_bench west | y 0.2 (5.65e-08) | hood_bench west | y 0.4 (3.03e-08) |
+<!-- tables47 transport end -->
+
+The figures `ecr002_step6_<room>_<source>_concentration.png` beside this report show each
+class's concentration on a log scale down to a millionth of its peak, with the deposition
+panel. The panel's two classes share one bar scale, the largest segment's rate, and the 5
+micrometre class deposits about a hundred times the 0.5 micrometre class on the same faces
+(the hotspot table's rates), so the 0.5 micrometre bars stand at about a hundredth of the 5
+micrometre bars' length; the hotspot table carries both classes' values.
+
+### 5.5 Measurement 5: the comparative check
+
+<!-- tables47 compare begin -->
+| Pair, source, class (um) | Hotspots in common (of 5) | In common | Largest: first | Largest: second | Same surface | Sensor order above the floor: first | Second | Orders equal |
+|---|---|---|---|---|---|---|---|---|
+| supplementary: grids, upwind, S1, 0.5 | 5 | floor | x 1.2; floor | x 1.4; server_rack west | y 0.0; server_rack west | y 0.2; server_rack west | y 0.4 | floor | x 1.2 | floor | x 1.2 | yes | near_door | near_door | yes |
+| supplementary: grids, upwind, S1, 5 | 5 | floor | x 1.2; floor | x 1.4; server_rack west | y 0.0; server_rack west | y 0.2; server_rack west | y 0.4 | floor | x 1.2 | floor | x 1.2 | yes | near_door | near_door | yes |
+| supplementary: schemes, 160x60, S1, 0.5 | 5 | floor | x 1.2; floor | x 1.4; server_rack west | y 0.0; server_rack west | y 0.2; server_rack west | y 0.4 | floor | x 1.2 | floor | x 1.2 | yes | near_door | near_door | yes |
+| supplementary: schemes, 160x60, S1, 5 | 5 | floor | x 1.2; floor | x 1.4; server_rack west | y 0.0; server_rack west | y 0.2; server_rack west | y 0.4 | floor | x 1.2 | floor | x 1.2 | yes | near_door | near_door | yes |
+| supplementary: grids, upwind, S2, 0.5 | 5 | litho_tool top | x 3.6; litho_tool top | x 3.4; litho_tool top | x 3.8; litho_tool top | x 3.2; floor | x 3.0 | litho_tool top | x 3.6 | litho_tool top | x 3.6 | yes | none | none | yes |
+| supplementary: grids, upwind, S2, 5 | 5 | litho_tool top | x 3.6; litho_tool top | x 3.4; litho_tool top | x 3.8; litho_tool top | x 3.2; floor | x 3.0 | litho_tool top | x 3.6 | litho_tool top | x 3.6 | yes | none | none | yes |
+| supplementary: schemes, 160x60, S2, 0.5 | 5 | litho_tool top | x 3.6; litho_tool top | x 3.4; litho_tool top | x 3.8; litho_tool top | x 3.2; floor | x 3.0 | litho_tool top | x 3.6 | litho_tool top | x 3.6 | yes | none | none | yes |
+| supplementary: schemes, 160x60, S2, 5 | 5 | litho_tool top | x 3.6; litho_tool top | x 3.4; litho_tool top | x 3.8; litho_tool top | x 3.2; floor | x 3.0 | litho_tool top | x 3.6 | litho_tool top | x 3.6 | yes | none | none | yes |
+| supplementary: grids, upwind, S3, 0.5 | 4 | floor | x 6.2; hood_bench west | y 0.0; hood_bench west | y 0.2; hood_bench west | y 0.4 | floor | x 6.2 | floor | x 6.2 | yes | none | none | yes |
+| supplementary: grids, upwind, S3, 5 | 5 | floor | x 6.2; floor | x 5.6; hood_bench west | y 0.0; hood_bench west | y 0.2; hood_bench west | y 0.4 | floor | x 6.2 | floor | x 6.2 | yes | none | none | yes |
+| supplementary: schemes, 160x60, S3, 0.5 | 5 | floor | x 6.2; floor | x 5.6; hood_bench west | y 0.0; hood_bench west | y 0.2; hood_bench west | y 0.4 | floor | x 6.2 | floor | x 6.2 | yes | none | none | yes |
+| supplementary: schemes, 160x60, S3, 5 | 5 | floor | x 6.2; floor | x 5.6; hood_bench west | y 0.0; hood_bench west | y 0.2; hood_bench west | y 0.4 | floor | x 6.2 | floor | x 6.2 | yes | none | none | yes |
+<!-- tables47 compare end -->
+
+The prompt's two comparisons as written: between grids with the standard variant, no pair
+(the standard row is bounded on 320x120); between variants, no pair on either grid (RNG is
+bounded on both). The table scores the pairs the records allow: between grids on the upwind
+pair, and between the two schemes on 160x60 and on 320x120 where both converged.
+
+## 6. Predictions against the measurement
+
+| Prediction | Measured |
+|---|---|
+| (a) Upwind advection of k and eps converges the coarse-grid cycle; the corner rule's removal and the halved `alpha_turbulence` do not. The cycle is a limiter switching branch near the rack's corner, iteration to iteration | **Holds.** Upwind converges (1,046 outer iterations); the other two arms are bounded at the cap with the control's velocity step. The limiter diagnostic finds branch switches in every tail iteration (the "least" column is never zero) and no flux sign change, on the vertical faces beside the rack's east face and the etch chamber's west face in the gaps, along the faces' height rather than at the rack's corner alone (section 5.2) |
+| (b) The standard model converges on 160x60 and on 320x120 | **Fails on 320x120.** Converges on 160x60 (2,732); bounded on 320x120 from about outer 1,800 at a residual of 6e-8 to 1e-7 (section 5.3) |
+| (c) RNG converges on 160x60; 320x120 no prediction | **Fails.** Bounded on both, as on 200x75, a 19-iteration cycle in the gap above return 2 (the bounded table) |
+| (d) S1 and S3 pass the check on the first placement; S2 is carried into the nearest gap's return and needs moving | **Holds for S1 and S3, fails for S2.** S2 is carried into return 2 as predicted, but it passes the check through the surfaces clause (the litho tool's west face and the floor above the floor) and is not moved (the checks table) |
+| (e) Between grids, for every source that passes: the largest deposition location is the same surface, at least three of five hotspots shared, the sensor order the same | **Not scorable as written** (no converged standard pair). On the upwind pair: section 6.1 |
+| (f) Between variants, where both converge: the largest location the same surface, three of five hotspots shared | **Not scorable.** RNG converges on neither exact grid |
+
+### 6.1 The comparative check on the pairs the records allow
+
+The sentences point at the compare table's rows.
+
+**Between grids, on the upwind pair (160x60 against 320x120), for every source and class:**
+the largest deposition location is the same segment, not only the same surface (the "same
+surface" column is yes in every row, and the two "largest" columns name the same segment); the
+five hotspots are shared five of five for S1 and S2 in both classes and for S3 at 5
+micrometres, and four of five for S3 at 0.5 micrometres (the floor segment at x 5.6, beside
+return 4, drops out of the top five on the finer grid); and the sensor order above the floor is
+the same (`near_door` alone for S1, no sensor for S2 and S3). Read against prediction (e)'s
+three clauses, every clause holds on this pair for every source, with the sensor clause holding
+on one sensor or none.
+
+**Between the two schemes on 160x60 (the committed limited QUICK value against upwind for k and
+eps), for every source and class:** the five hotspots are the same five, the largest is the
+same segment, and the sensor order is the same. The change that converges the iteration does
+not move a hotspot on this grid.
+
+**Between variants:** no row; RNG converged on neither grid.
+
+### 6.2 Builder's predictions (section 3.2), scored
+
+(a) held in both clauses, and the diagnostic's placement (faces beside the rack and in the
+gaps, no sign changes) is as written; the halved `alpha_turbulence` did not shrink the tail's
+velocity step by half (the cycle table's tail column). (b) was wrong in both halves: the
+standard variant converged on 160x60, where I expected it bounded, and stalled on 320x120,
+where I expected it to converge; the 160x60 count is below 200x75's, not above. (c) was wrong
+on 160x60 (bounded, not converged) and right on 320x120. (d) held: S2 passed through the
+surfaces clause and no sensor other than `near_door` and the one inside S3 reads above the
+floor. (e) and (f) are scored in section 6.1 on the pairs that exist. The Courant check held
+to 1e-5, better than the 1e-4 allowed.
+
+## 7. What this implies
+
+Stated as questions, as the prompt asks; no decision is taken here.
+
+- **Does the product grid move to the exact pair?** 200x75 rounds fourteen stated positions to
+  whole faces and 160x60 and 320x120 round none (section 5.1), so a comparison on the exact
+  pair is of one room at two resolutions where every comparison so far was of two rooms. The
+  committed scheme converges on 160x60 in fewer outer iterations than on 200x75; whether
+  VAL-018's grid should be 160x60, with 320x120 as its refinement check, is the question the
+  prompt names, and the answer depends on the next one.
+- **Does the k and eps advection change?** The one change that converges the 80x30 cycle is
+  upwind advection of k and eps, and the same change converges 320x120 where the committed
+  scheme does not; the mechanism is the limiter switching branch in the shear layers beside the
+  obstacle faces (section 5.2). ADR-012 C chose the limited QUICK value over upwind for its
+  accuracy in thin shear layers and named upwind's numerical diffusion as the cost. The three
+  converged rooms show the same core eddy viscosity and flow pattern under either scheme, and
+  on 160x60 the two schemes give the same five hotspots for every source and class (the
+  compare table, the "schemes" rows). Whether k and eps take upwind (the transport section's
+  `advection_scheme` key, which the turbulence section does not yet carry), whether the
+  limiter is frozen once the residual is small, or whether the cycle is accepted as a stopping
+  question (a bound on the step in m/s beside the estimate, as prompt 46's section 7 asked) is
+  a decision for Alex before step 8.
+- **Does the comparative claim hold?** On the pair that converged, section 6.1 says what held
+  and what did not, source by source. The sources the prompt placed all end in a return within
+  a metre, so the hotspots are the footprints of plumes on their way to a return, and only one
+  sensor reads any of them. The claim VAL-018 makes is about hotspots and rankings; a ranking
+  of sensors needs sensors in plumes, and the sensor rows of the compare table are nearly
+  empty. Whether the product's sensors move (into the gaps, onto the tops, before the returns)
+  or whether VAL-018 is scored on deposition alone is the question prompt 46's section 7
+  asked and this measurement sharpens.
+- **Is RNG a product variant?** It converges on no exact grid and on no grid finer than 80x30
+  under this iteration, in a clean 19-iteration cycle in the gap above return 2. The
+  between-variants half of VAL-018's criterion cannot be scored until it does, or until VAL-020
+  decides between the variants on a case that converges.
+- **Does the near-wall treatment matter at 320x120?** A tenth of the wall nodes sit below the
+  scalable floor there, a quarter of the domain-wall nodes (the converged table). ADR-012's
+  second-cell overshoot and the floor's clamp both grow in reach as the first node moves toward
+  the wall; whether the hotspot differences between the grids, where there are any, come from
+  that is not measured here.
+
+## 8. What this does not settle
+
+- Whether the committed scheme converges on 320x120 at a smaller `cfl_number` or more momentum
+  sweeps: one setting was run, as the prompt fixed it.
+- Whether upwind advection of k and eps changes the converged k field where it matters (the
+  shear layers): the core medians agree and the hotspots agree on 160x60; the shear layers'
+  profiles are not compared.
+- Whether the sources the prompt placed are the product's: all three sit in capture zones.
+- RNG's cycle: located and timed, not probed.
+- The 0.1 against 0.4 Courant check was run on one source and one room.

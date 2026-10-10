@@ -412,12 +412,15 @@ def concentration(args: argparse.Namespace) -> None:
         handles.append(
             Rectangle((0, 0), 1, 1, color=colour, label=f"{c['diameter'] * 1e6:g} um")
         )
-    ax.legend(handles=handles, loc="upper left", fontsize=7, framealpha=0.9)
+    # Above the supply bar, which would otherwise cover the legend's text.
+    ax.legend(handles=handles, loc="upper left", fontsize=7, framealpha=0.9).set_zorder(
+        20
+    )
     ax.set_title(
-        f"deposition per 0.2 m segment, bars standing on their surfaces; "
-        f"scale: a bar of {BAR_LENGTH} m is {largest:.3g} particles per s per m depth "
-        f"(the largest segment; bars under a thousandth of it not drawn)",
-        fontsize=9,
+        f"deposition per 0.2 m segment, as bars standing on their surfaces\n"
+        f"scale: a {BAR_LENGTH} m bar is {largest:.3g} particles per s per m depth "
+        f"(the largest segment); bars below 1e-3 of it omitted",
+        fontsize=8,
     )
     fig.suptitle(rec["name"], fontsize=10)
     path = (
@@ -442,7 +445,9 @@ def everything(_args: argparse.Namespace) -> None:
         if rec.get("stop") == "error_estimate_and_continuity" and "core" in rec:
             fields(argparse.Namespace(name=stem))
     for path in sorted(OUT.glob("transport_*.json")):
-        if path.stem.endswith("_smoke"):
+        # A tagged record (the Courant check row) is compared in a table,
+        # not drawn.
+        if path.stem.endswith("_smoke") or re.search(r"_S\d+m?_", path.stem):
             continue
         concentration(argparse.Namespace(label=path.stem))
 
