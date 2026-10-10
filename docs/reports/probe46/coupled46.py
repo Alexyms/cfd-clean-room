@@ -35,6 +35,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import ClassVar
 
 import numpy as np
 import yaml
@@ -51,7 +52,11 @@ from src import solver_staggered  # noqa: E402
 from src.boundary_staggered import StaggeredBoundary  # noqa: E402
 from src.config import SimConfig  # noqa: E402
 from src.mesh import SOLID, Mesh  # noqa: E402
-from src.stopping import ErrorEstimateRule, ImbalanceSummary, IterationState  # noqa: E402
+from src.stopping import (  # noqa: E402
+    ErrorEstimateRule,
+    ImbalanceSummary,
+    IterationState,
+)
 from src.turbulence import (  # noqa: E402
     VARIANTS,
     Y_STAR_FLOOR,
@@ -95,7 +100,7 @@ class RecordingRule(ErrorEstimateRule):
     readings.
     """
 
-    instances: list["RecordingRule"] = []
+    instances: ClassVar[list["RecordingRule"]] = []
 
     def __init__(self, *args: float, **kwargs: float | None) -> None:
         super().__init__(*args, **kwargs)
@@ -227,9 +232,7 @@ def wall_y_star(
             kind = np.where(cols == nx - 1, "domain", "obstacle side")
         kinds[name] = np.where(mask, kind, "")
     values = np.concatenate([f[np.isfinite(f)] for f in fields.values()])
-    kind_values = np.concatenate(
-        [kinds[n][np.isfinite(fields[n])] for n in names]
-    )
+    kind_values = np.concatenate([kinds[n][np.isfinite(fields[n])] for n in names])
     stats = {
         "nodes": int(values.size),
         "median": float(np.median(values)),
