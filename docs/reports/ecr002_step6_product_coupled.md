@@ -219,7 +219,7 @@ The projection of the full set at the cap was under an hour of wall time in para
 set ran as planned. The seven matrix rows and the two inlet rows were launched together at
 20:59:09 (nine processes, one BLAS thread each); the three located reruns and the three
 transport marches followed as rows ended, so at most eleven processes ran at once on twelve
-cores. The sum of the flow rows' wall times is 68 minutes; the longest single row was RNG on
+cores. The sum of the nine flow rows' wall times is 59 minutes (58.9); the longest single row was RNG on
 200x75 to the cap, 21.5 minutes. The wall times in the tables were taken beside other runs.
 
 Three deviations from section 2, none of which changes a measurement. (1) The scripts were
@@ -439,15 +439,19 @@ The five segments of largest deposition (surface | bin start), rate per s per m 
 
 What the tables show. The source sits in return 2's capture zone: every march reaches its
 steady rule within about a minute of simulated time, the removal rate equals the emission to
-the rule's tolerance, and the outflow carries all but a part in ten thousand (5 micrometres) or
-a part in a million (0.5 micrometres) of it. The deposition that does occur lies on the gap's
+the rule's tolerance, and the outflow carries all but about 2e-4 of it for 5 micrometres and about 1.5e-5 for
+0.5 micrometres on the finer grids (on 200x75 the 0.5 micrometre outflow still exceeds the
+emission by 3e-5 at the stop, the plume draining; `tables_transport.json`). The deposition that does occur lies on the gap's
 floor beside return 2 and on the two faces that bound the gap; on 40x15 the rack's east face
 takes most of the 0.5 micrometre deposition, on the finer grids the litho tool's west face
 and the floor piece east of the return. The four sensors read nothing: their largest value is
 1e-12 per cubic metre on 80x30 and 1e-27 on 200x75 against a source-cell concentration of
 1e4 to 1e5, so the sensor orders in the tables are the scheme's tails, not transport, and
 their agreement or disagreement between rows means nothing. The concentration pictures
-(`ecr002_step6_<run>_concentration.png`) show the plume confined to the gap below the source.
+(`ecr002_step6_<run>_concentration.png`) show the plume held in the gap: it rises from the source along the litho tool's west face to
+about the equipment tops' height (y about 2 m) in the small upward eddy there, and the gap's
+downflow returns it to return 2 (test 46 found the earlier "confined below the source" contradicted
+by the saved fields).
 
 ## 6. Predictions against the measurement
 
@@ -456,12 +460,13 @@ their agreement or disagreement between rows means nothing. The concentration pi
 | (a) The standard variant converges on all three grids | **Fails.** It converges on 200x75 (3,421) and reaches the cap on 40x15 and 80x30, bounded in small cycles (section 5.2) |
 | (b) RNG converges on 40x15 and 80x30; 200x75 no prediction | **Holds** on the two grids predicted (694 and 1,407). On 200x75 it is bounded at the cap |
 | (c) The core's median nu_t / nu at the baseline inlet between 10 and 100, about 16 from the inlet alone | **Holds.** The converged table gives 16 to 17 on every converged baseline row, the inlet's value; the tops' production shows in the 95th percentile, not the median |
-| (d) First-node y+ on 200x75 between about 5 and 100, below 11.53 near the tops' stagnation points and in slow corners | **Holds in range, fails in place.** The median is 65 and the range 2.8 to 271, wider than predicted at both ends; the share below 11.53 is 4.5% of the nodes, all on the domain walls and the obstacle sides, none on the equipment tops (the by-kind shares in the converged table) |
+| (d) First-node y+ on 200x75 between about 5 and 100, below 11.53 near the tops' stagnation points and in slow corners | **Fails** in range and in place. The median is 65 and the range 2.8 to 271, wider than predicted at both ends; the share below 11.53 is 4.5% of the nodes, all on the domain walls and the obstacle sides, none on the equipment tops (the by-kind shares in the converged table) |
 | (e) `pressure_rtol` 1e-4 and 1e-8 stop at the same outer count on 200x75 | **Holds** to the iteration, 3,421, with the faces within 1.1e-11 m/s and nu_t within 1.3e-10 relative (the rtol table) |
 | (f) 5 micrometres: the largest deposition on the floor nearest the source on both grids and both variants; 0.5 micrometres: the sensors keep their order between 80x30 and 200x75 | **Not scored as asked** (section 5.5). On the rows that converged the 5 micrometre hotspot is the gap's floor beside return 2 on every grid, and the 0.5 micrometre sensor order agrees between RNG 80x30 and standard 200x75, but the sensors read the scheme's tails, so the agreement carries no meaning |
 
-Builder's predictions (section 3.2): (a) held (bounded on 200x75 was wrong in direction: it
-converged there and stalled on the coarse grids); (b) failed, RNG does not follow the standard
+Builder's predictions (section 3.2): (a) failed on all three grids: I predicted the standard
+variant converged on 40x15 and 80x30 and bounded on 200x75, and it is the reverse (corrected
+after test 46, which found this scored as held); (b) failed, RNG does not follow the standard
 variant grid for grid but mirrors it; (c) held, nearer 16; (d) the largest y+ is at return 1's
 corner, not above 70 only but 271, and the share below the floor is 4.5%, below the fifth I
 gave, and on the walls and sides rather than the tops and ceiling; (e) held to the iteration,
