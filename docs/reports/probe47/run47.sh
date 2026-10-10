@@ -9,6 +9,9 @@
 #   cycle      measurement 1: the 80x30 control, the three counterfactuals and
 #              the limiter diagnostic
 #   pair       measurement 2: both variants on 160x60 and 320x120
+#   pair-upwind  the supplementary pair: the upwind arm of measurement 1 on both
+#              exact grids, launched when the standard 320x120 row's residual
+#              had sat flat for 900 iterations (section 5.3)
 #   check NAME SOURCE [ARGS]   measurement 3's discrimination check, one source,
 #              on a converged record (transport47.py check)
 #   march NAME SOURCE [ARGS]   measurement 3's march, one source, on a converged
@@ -55,6 +58,12 @@ case "$stage" in
     done
     wait
     ;;
+  pair-upwind)
+    for grid in 160x60 320x120; do
+      launch "standard_${grid}_upwind" "$PROBE" run "$grid" standard --arm upwind
+    done
+    wait
+    ;;
   check)
     launch "check_${3}_${2}" "$TRANSPORT" check "$2" "$3" "${@:4}"
     wait
@@ -77,7 +86,7 @@ case "$stage" in
     "$PY" docs/reports/probe47/tables47.py all
     ;;
   *)
-    echo "usage: run47.sh rooms | time | cycle | pair | check NAME SOURCE | march NAME SOURCE | bounded NAME... | figures | tables" >&2
+    echo "usage: run47.sh rooms | time | cycle | pair | pair-upwind | check NAME SOURCE | march NAME SOURCE | bounded NAME... | figures | tables" >&2
     exit 2
     ;;
 esac
