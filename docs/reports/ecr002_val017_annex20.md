@@ -167,7 +167,9 @@ not measurements; the twenty-iteration timing before the runs gave 0.11 s per ou
 | standard_216x72_umist_tol1e-13 | bounded (falling) | max_simple_iter | 12,000 | 3.87e-11 (12,000), 3.87e-11 | 6.7e-08, 2.1e-15, 6.8e-12, 2.5e-18, 1.7e-05 | 11,145, 2,532, 2,568, 1, - | 0.469, (1.1875, 2.9375) | 498, 562 | 0 | 399.1, 285.2 | 3506, 0.292 | 615f7e9011a637a1 |
 | rng_216x72_upwind | bounded (stalled) | max_simple_iter | 10,000 | 2.26e-07 (10,000), 2.26e-07 | 0.0016, 3.8e-13, 3e-09, 3.2e-18, 0.25 | -, 5,500, 5,534, 1, - | 0.47, (1.4375, 2.9375) | 480, 568 | 0 | 244.8, 195.9 | 3397, 0.340 | a7f3fcc58f9f5b37 |
 | standard_375x125_upwind | bounded (stalled) | max_simple_iter | 10,000 | 1.05e-06 (10,000), 1.05e-06 | 0.011, 2.5e-12, 2.1e-08, 7.8e-19, 4.5 | -, 6,482, 6,540, 1, - | 0.465, (0.636, 2.964) | 840, 1004 | 0 | 415.9, 351.2 | 37904, 3.790 | 58133c4dba3caecf |
+| standard_375x125_upwind_sweeps2000 | bounded (stalled) | max_simple_iter | 10,000 | 1.05e-06 (10,000), 1.05e-06 | 0.011, 2.5e-12, 2.1e-08, 2.2e-18, 4.5 | -, 6,413, 6,449, 1, - | 0.465, (0.636, 2.964) | 843, 1004 | 0 | 558.9, 358.3 | 12005, 1.201 | 3c54b7f9c36922c9 |
 | standard_375x125_umist | bounded (stalled) | max_simple_iter | 10,000 | 1.23e-06 (10,000), 1.23e-06 | 0.016, 2.6e-12, 2.6e-08, 1.6e-18, 5.8 | -, 6,256, 6,314, 1, - | 0.464, (0.636, 2.964) | 850, 961 | 0 | 409.5, 348.0 | 38032, 3.803 | f673061631392c20 |
+| standard_375x125_umist_sweeps2000 | bounded (stalled) | max_simple_iter | 10,000 | 1.23e-06 (10,000), 1.23e-06 | 0.016, 2.6e-12, 2.6e-08, 2.5e-18, 5.8 | -, 6,203, 6,344, 1, - | 0.464, (0.636, 2.964) | 847, 961 | 0 | 551.9, 355.3 | 12144, 1.214 | dcf2fa9266c62442 |
 <!-- tables49 matrix end -->
 
 No run diverged, raised a positivity error or reached the pressure cap (the cap-hits column).
@@ -195,7 +197,9 @@ error over `nu_scale`, never holds, and the records say why:
 | standard_216x72_umist_tol1e-13 | bounded (falling), 12,000 | 1e-13 | 4.93e-05; 2.22; 910 | 3.5e-12, 0.07; 0.9963 | 1.7e-05 (12,000); 6.7e-08, 11,145 | -; 11,160 | -; 11,160 |
 | rng_216x72_upwind | bounded (stalled), 10,000 | - | 4.72e-05; 2.08; 734 | 3.5e-08, 7.4e+02; 0.9978 | 0.25 (10,000); 0.0016, - | -; - | -; - |
 | standard_375x125_upwind | bounded (stalled), 10,000 | - | 4.9e-05; 2.2; 880 | 3.1e-07, 6.4e+03; 0.9988 | 4.5 (10,000); 0.011, - | -; - | -; - |
+| standard_375x125_upwind_sweeps2000 | bounded (stalled), 10,000 | 1e-10 | 4.9e-05; 2.2; 880 | 3.1e-07, 6.3e+03; 0.9988 | 4.5 (10,000); 0.011, - | -; - | -; - |
 | standard_375x125_umist | bounded (stalled), 10,000 | - | 4.9e-05; 2.2; 886 | 3.6e-07, 7.3e+03; 0.9989 | 5.8 (10,000); 0.016, - | -; - | -; - |
+| standard_375x125_umist_sweeps2000 | bounded (stalled), 10,000 | 1e-10 | 4.9e-05; 2.2; 886 | 3.6e-07, 7.3e+03; 0.9989 | 5.8 (10,000); 0.016, - | -; - | -; - |
 <!-- tables49 rule_e end -->
 
 The largest change of nu_t per outer iteration stops falling before the end of each run: it
@@ -233,7 +237,9 @@ the jet was 27):
 | standard_216x72_umist_tol1e-13 | bounded (falling) | 12,000, 3506 | 6.7e-08, 2.1e-15, 6.8e-12, 2.5e-18, 1.7e-05 | 11,145, 2,532, 2,568, 1, - | 2.22 | 376, 832, 910 | 560; 22.6, 2.11, 48.2; 0.24 | 33.2 (29.6, 35.5) | 17.9 (14.5, 21.3) | ecr002_val017_standard_216x72_umist_tol1e-13.png |
 | rng_216x72_upwind | bounded (stalled) | 10,000, 3397 | 0.0016, 3.8e-13, 3e-09, 3.2e-18, 0.25 | -, 5,500, 5,534, 1, - | 2.08 | 320, 689, 734 | 560; 23.5, 2.76, 35.8; 0.21 | 34 (31.5, 34.9) | 19.2 (16.4, 21.9) | ecr002_val017_rng_216x72_upwind.png |
 | standard_375x125_upwind | bounded (stalled) | 10,000, 37904 | 0.011, 2.5e-12, 2.1e-08, 7.8e-19, 4.5 | -, 6,482, 6,540, 1, - | 2.2 | 355, 803, 880 | 973; 12.7, 0.816, 26.2; 0.45 | 18.5 (16.7, 19.2) | 9.55 (7.54, 11.6) | ecr002_val017_standard_375x125_upwind.png |
+| standard_375x125_upwind_sweeps2000 | bounded (stalled) | 10,000, 12005 | 0.011, 2.5e-12, 2.1e-08, 2.2e-18, 4.5 | -, 6,413, 6,449, 1, - | 2.2 | 355, 803, 880 | 973; 12.7, 0.816, 26.2; 0.45 | 18.5 (16.7, 19.2) | 9.55 (7.54, 11.6) | ecr002_val017_standard_375x125_upwind_sweeps2000.png |
 | standard_375x125_umist | bounded (stalled) | 10,000, 38032 | 0.016, 2.6e-12, 2.6e-08, 1.6e-18, 5.8 | -, 6,256, 6,314, 1, - | 2.2 | 363, 809, 886 | 973; 12.7, 0.776, 27; 0.45 | 18.5 (16.7, 19.1) | 9.5 (7.49, 11.6) | ecr002_val017_standard_375x125_umist.png |
+| standard_375x125_umist_sweeps2000 | bounded (stalled) | 10,000, 12144 | 0.016, 2.6e-12, 2.6e-08, 2.5e-18, 5.8 | -, 6,203, 6,344, 1, - | 2.2 | 363, 809, 886 | 973; 12.7, 0.776, 27; 0.45 | 18.5 (16.7, 19.1) | 9.5 (7.49, 11.6) | ecr002_val017_standard_375x125_umist_sweeps2000.png |
 <!-- tables49 converged end -->
 
 Along the ceiling jet between x = H and 2H the coarse grid's first node sits in the log layer and
@@ -291,10 +297,18 @@ where it sits a constant few hundredths of u0 below the data over most of the le
 | standard_375x125_upwind | bounded (stalled) | x = 2H (6.0 m) | 0.076 (0.88) | 0.036 | +0.011 | 0.197 | 0.084 | 25 (24) |
 | standard_375x125_upwind | bounded (stalled) | y = H - h/2 (2.916 m), the ceiling jet | 0.201 (8.60) | 0.069 | +0.013 | 0.176 | 0.082 | 28 (27) |
 | standard_375x125_upwind | bounded (stalled) | y = h/2 (0.084 m), the floor | 0.099 (8.94) | 0.055 | -0.039 | 0.029 | 0.009 | 28 (27) |
+| standard_375x125_upwind_sweeps2000 | bounded (stalled) | x = H (3.0 m) | 0.137 (2.73) | 0.066 | -0.036 | 0.023 | 0.010 | 25 (25) |
+| standard_375x125_upwind_sweeps2000 | bounded (stalled) | x = 2H (6.0 m) | 0.076 (0.88) | 0.036 | +0.011 | 0.197 | 0.084 | 25 (24) |
+| standard_375x125_upwind_sweeps2000 | bounded (stalled) | y = H - h/2 (2.916 m), the ceiling jet | 0.201 (8.60) | 0.069 | +0.013 | 0.176 | 0.082 | 28 (27) |
+| standard_375x125_upwind_sweeps2000 | bounded (stalled) | y = h/2 (0.084 m), the floor | 0.099 (8.94) | 0.055 | -0.039 | 0.029 | 0.009 | 28 (27) |
 | standard_375x125_umist | bounded (stalled) | x = H (3.0 m) | 0.140 (2.73) | 0.067 | -0.035 | 0.020 | 0.009 | 25 (25) |
 | standard_375x125_umist | bounded (stalled) | x = 2H (6.0 m) | 0.076 (0.88) | 0.036 | +0.011 | 0.194 | 0.082 | 25 (24) |
 | standard_375x125_umist | bounded (stalled) | y = H - h/2 (2.916 m), the ceiling jet | 0.188 (8.60) | 0.065 | +0.008 | 0.199 | 0.092 | 28 (27) |
 | standard_375x125_umist | bounded (stalled) | y = h/2 (0.084 m), the floor | 0.102 (8.94) | 0.055 | -0.037 | 0.031 | 0.011 | 28 (27) |
+| standard_375x125_umist_sweeps2000 | bounded (stalled) | x = H (3.0 m) | 0.140 (2.73) | 0.067 | -0.035 | 0.020 | 0.009 | 25 (25) |
+| standard_375x125_umist_sweeps2000 | bounded (stalled) | x = 2H (6.0 m) | 0.076 (0.88) | 0.036 | +0.011 | 0.194 | 0.082 | 25 (24) |
+| standard_375x125_umist_sweeps2000 | bounded (stalled) | y = H - h/2 (2.916 m), the ceiling jet | 0.188 (8.60) | 0.065 | +0.008 | 0.199 | 0.092 | 28 (27) |
+| standard_375x125_umist_sweeps2000 | bounded (stalled) | y = h/2 (0.084 m), the floor | 0.102 (8.94) | 0.055 | -0.037 | 0.031 | 0.011 | 28 (27) |
 <!-- tables49 lines end -->
 
 The figures, one per line, with the measured points, every compared row and the digitized
@@ -342,9 +356,19 @@ lower edge at x = H.
 
 ### 5.5 The fine-grid rows with the sweep cap raised
 
-The two `_sweeps2000` rows of section 5.2, if they finished before this report was committed,
-appear in the tables above under their tag; a row absent from the tables did not finish in the
-build's time and has no record.
+The two `_sweeps2000` rows (375x125, `max_iter` 2000, everything else the file's) are in the
+tables above under their tag. They stop in the same state as the capped pair: the same class,
+the same residual and readings at the cap to three figures (the matrix), the same floor of the
+nu_t step (the condition (e) table), and every line value within the rounding the test pins of
+the capped row's (section 5.4's table; the largest difference over the four lines is below 2e-6
+u/u0 for either scheme). The k solve, free of the 500-sweep cap, takes several hundred sweeps
+more on average and still reaches 2,000 at a few dozen outer iterations (the sweeps column, and
+the scalar cap-hit counts in the records). So the sweep cap is not what stalls the fine grid:
+the fine grid converges at about half the residual per thousand outer iterations under either
+cap, and reaches the file's cap with an estimated iteration error of a hundredth of u0 (the
+matrix's (a) column), which is what the grid comparison of section 5.4 carries. Where the k
+and eps solves do reach their cap the fields do not move by more than that rounding, which is
+the answer issue 58 was waiting for on this case.
 
 ## 6. Predictions against measurement
 
@@ -352,8 +376,8 @@ build's time and has no record.
 | Prediction | Measured | Holds |
 |---|---|---|
 | (a) both schemes converge on both grids | standard_216x72_upwind: bounded (falling); standard_216x72_umist: bounded (falling); standard_375x125_upwind: bounded (stalled); standard_375x125_umist: bounded (stalled) | no |
-| (b) the jet within 0.1 u0 up to x/H 2 | standard_216x72_upwind (bounded (falling)): 0.074 at 0.01 m; standard_216x72_upwind_tol1e-13 (bounded (falling)): 0.074 at 0.01 m; standard_216x72_umist (bounded (falling)): 0.073 at 0.01 m; standard_216x72_umist_tol1e-13 (bounded (falling)): 0.073 at 0.01 m; rng_216x72_upwind (bounded (stalled)): 0.073 at 0.01 m; standard_375x125_upwind (bounded (stalled)): 0.081 at 0.01 m; standard_375x125_umist (bounded (stalled)): 0.081 at 0.01 m | yes |
-| (c) the floor's sign right everywhere, its departure above the jet's | standard_216x72_upwind (bounded (falling)): 22 of 28 signs, floor 0.086 against jet 0.179; standard_216x72_upwind_tol1e-13 (bounded (falling)): 22 of 28 signs, floor 0.086 against jet 0.179; standard_216x72_umist (bounded (falling)): 22 of 28 signs, floor 0.088 against jet 0.193; standard_216x72_umist_tol1e-13 (bounded (falling)): 22 of 28 signs, floor 0.088 against jet 0.193; rng_216x72_upwind (bounded (stalled)): 22 of 28 signs, floor 0.120 against jet 0.232; standard_375x125_upwind (bounded (stalled)): 21 of 28 signs, floor 0.099 against jet 0.201; standard_375x125_umist (bounded (stalled)): 21 of 28 signs, floor 0.102 against jet 0.188 | no |
+| (b) the jet within 0.1 u0 up to x/H 2 | standard_216x72_upwind (bounded (falling)): 0.074 at 0.01 m; standard_216x72_upwind_tol1e-13 (bounded (falling)): 0.074 at 0.01 m; standard_216x72_umist (bounded (falling)): 0.073 at 0.01 m; standard_216x72_umist_tol1e-13 (bounded (falling)): 0.073 at 0.01 m; rng_216x72_upwind (bounded (stalled)): 0.073 at 0.01 m; standard_375x125_upwind (bounded (stalled)): 0.081 at 0.01 m; standard_375x125_upwind_sweeps2000 (bounded (stalled)): 0.081 at 0.01 m; standard_375x125_umist (bounded (stalled)): 0.081 at 0.01 m; standard_375x125_umist_sweeps2000 (bounded (stalled)): 0.081 at 0.01 m | yes |
+| (c) the floor's sign right everywhere, its departure above the jet's | standard_216x72_upwind (bounded (falling)): 22 of 28 signs, floor 0.086 against jet 0.179; standard_216x72_upwind_tol1e-13 (bounded (falling)): 22 of 28 signs, floor 0.086 against jet 0.179; standard_216x72_umist (bounded (falling)): 22 of 28 signs, floor 0.088 against jet 0.193; standard_216x72_umist_tol1e-13 (bounded (falling)): 22 of 28 signs, floor 0.088 against jet 0.193; rng_216x72_upwind (bounded (stalled)): 22 of 28 signs, floor 0.120 against jet 0.232; standard_375x125_upwind (bounded (stalled)): 21 of 28 signs, floor 0.099 against jet 0.201; standard_375x125_upwind_sweeps2000 (bounded (stalled)): 21 of 28 signs, floor 0.099 against jet 0.201; standard_375x125_umist (bounded (stalled)): 21 of 28 signs, floor 0.102 against jet 0.188; standard_375x125_umist_sweeps2000 (bounded (stalled)): 21 of 28 signs, floor 0.102 against jet 0.188 | no |
 | (d) schemes differ by under half the larger distance from the data, every line | schemes, 216x72 x3: 0.009 against 0.5 x 0.126; schemes, 216x72 x6: 0.004 against 0.5 x 0.075; schemes, 216x72 y2916: 0.050 against 0.5 x 0.193; schemes, 216x72 y0084: 0.008 against 0.5 x 0.088; schemes, 375x125 x3: 0.006 against 0.5 x 0.140; schemes, 375x125 x6: 0.003 against 0.5 x 0.076; schemes, 375x125 y2916: 0.029 against 0.5 x 0.201; schemes, 375x125 y0084: 0.006 against 0.5 x 0.102 | yes |
 | (e) grids differ by less than either differs from the data, every line | grids, upwind x3: 0.030 against 0.123; grids, upwind x6: 0.024 against 0.074; grids, upwind y2916: 0.122 against 0.179; grids, upwind y0084: 0.014 against 0.086; grids, umist x3: 0.026 against 0.126; grids, umist x6: 0.023 against 0.075; grids, umist y2916: 0.157 against 0.188; grids, umist y0084: 0.013 against 0.088 | yes |
 <!-- tables49 predictions end -->
@@ -408,10 +432,13 @@ Questions, not decisions.
    tolerance, and under neither change alone. Which scale, and which tolerance, is a change to
    ADR-012 E and `src/stopping.py` for Alex; until then the VAL-017 test pins the run's record at
    the cap and expects its convergence clause to fail (strict xfail).
-4. **The k and eps sweep cap.** On 375x125 the implicit solves reach `max_iter` 500 from
-   mid-run (issue 58's open decision), and from there the residual stalls where on 216x72 it
-   keeps falling. The case keeps the product's value; whether the case or the product raises
-   it is Alex's, and the product's 320x120 grid is as fine as this one.
+4. **The k and eps sweep cap, and the fine grid's slowness.** On 375x125 the implicit solves
+   reach `max_iter` 500 from mid-run (issue 58's open decision); with the cap at 2,000 the
+   fields and the readings are the same to the test's rounding (section 5.5), so the cap costs
+   nothing on this case and the decision can rest on that. What the fine grid does show is a
+   coupled iteration that converges at half the rate per outer iteration of the coarse one and
+   is far from the rule's stop at 10,000 iterations; the product's 320x120 grid is as fine. A
+   cap of several times 10,000, or a convergence aid, is a question for step 8.
 5. **The test's cost.** The VAL-017 test runs the case to its cap, about eighteen minutes alone
    on this machine, in the validation tier that CI runs. Does it stay there, or become a harness
    row as the 80x80 cavity and VAL-018 are?
