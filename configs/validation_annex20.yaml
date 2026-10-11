@@ -1,0 +1,108 @@
+# VAL-017: the IEA Annex 20 two-dimensional isothermal room (ADR-012 G (iii)).
+#
+# Nielsen (1990), "Specification of a Two-Dimensional Test Case", Aalborg
+# University R9040: a room L 9.0 m by H 3.0 m, a slot inlet h = 0.168 m under
+# the ceiling on the left wall, an outlet t = 0.48 m at the foot of the right
+# wall, u0 = 0.455 m/s and nu = 15.3e-6 m^2/s (Re 5,000 on h), inlet k and eps
+# from a 4% intensity and a dissipation length h / 10 in the specification's
+# convention, eps = k^(3/2) / l_e (ADR-012 C). Measured u / u0 along x = H,
+# x = 2H, y = h/2 and y = H - h/2 is in validation/annex20.py with its
+# provenance; no threshold is set (ADR-012 decision 6, OPEN).
+#
+# The model is the standard k-epsilon variant with k and eps advected by the
+# turbulence section's default (upwind), and the solver keys are the ones the
+# product runs (ADR-012 D's note of 2026-10-09; ECR-002 section 8, step 8).
+#
+# Loaded by validation.cases.load_annex20, which scales the inlet velocity so
+# that the faces the slot covers carry u0 h exactly on any grid (ADR-012 G
+# (iii)); u0 itself stays the normalisation of every comparison. 216x72, the
+# grid below and the ADR's, puts the slot over 4.03 cells with its edge off a
+# face; 375x125 is the coarsest grid on which the slot and the outlet both
+# fall on whole faces. The presets are val017_216x72 and val017_375x125.
+
+domain:
+  width: 9.0
+  height: 3.0
+  nx: 216
+  ny: 72
+
+mesh:
+  # Uniform: the wall functions take the first node where the grid puts it
+  # (ADR-012 B), and ADR-012 G (v) reports a grid sensitivity, not an order.
+  x:
+    stretch_ratio: 1.0
+  y:
+    stretch_ratio: 1.0
+
+fluid:
+  # The specification gives nu = 15.3e-6 m^2/s (air at 20 C); the density is
+  # air's round value, and nothing compared depends on it.
+  density: 1.2
+  viscosity: 1.836e-5
+  temperature: 293.0
+
+particles:
+  density: 1000.0
+  sizes: [0.1e-6]
+  mean_free_path: 67.0e-9
+  boundary_layer_thickness: 1.0e-3
+  hepa_reference:
+    diameters: [0.1e-6]
+    efficiencies: [0.99999]
+
+solver:
+  dt: 0.01
+  t_end: 60.0
+  output_interval: 10
+  convergence_tol: 1.0e-6
+  max_simple_iter: 10000
+  alpha_velocity: 0.5
+  alpha_pressure: 0.3
+  max_pressure_iter: 5000
+  pressure_rtol: 1.0e-4
+  momentum_sweeps: 10
+  stopping_rule: error_estimate
+  iteration_error_tol: 1.0e-6
+  # ADR-011 G's per-cell bound, 1e-4 rho V_min / t_end, taken on the finer
+  # preset (0.024 m cells, t_end above), so one value serves both grids and
+  # the coarser one meets it the more easily.
+  mass_imbalance_tol: 1.152e-9
+
+turbulence:
+  model: k_epsilon
+  variant: standard
+  wall_treatment: scalable_wall_functions
+  cfl_number: 0.25
+  alpha_turbulence: 0.7
+  max_iter: 500
+  tol: 1.0e-10
+
+boundaries:
+  inlet:
+    type: velocity_inlet
+    location: left
+    y_start: 2.832
+    y_end: 3.0
+    velocity: 0.455
+    turbulence_intensity: 0.04
+    dissipation_length: 0.0168
+
+  # The outlet states no velocity, so it takes the whole inflow at one face
+  # velocity (ADR-012 D, amended 2026-10-08). The air reaches it coming down
+  # the right wall, sideways into the outlet cells, the arrangement under
+  # which the pressure outlet's copy drifted (GitHub issue 61).
+  outlet:
+    type: fixed_flow_outlet
+    location: right
+    y_start: 0.0
+    y_end: 0.48
+
+obstacles: []
+
+sensors:
+  - name: center
+    x: 4.5
+    y: 1.5
+
+thresholds:
+  "0.1e-6": 100.0
