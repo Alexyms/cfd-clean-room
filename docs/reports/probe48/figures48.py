@@ -16,6 +16,7 @@ results/builder48/figures.json.
 
 import argparse
 import json
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -31,12 +32,27 @@ DRAWN = OUT / "figures"
 PUBLISHED = ROOT / "docs" / "reports"
 figures47.OUT = OUT
 figures47.FIGURES = DRAWN
+FLOW = re.compile(r"^(standard|rng)_\d+x\d+_(upwind|umist)$")
+MARCH = re.compile(r"^transport_(standard|rng)_\d+x\d+_(upwind|umist)_S\d$")
 
 
-def draw(args: argparse.Namespace) -> None:
-    """Every figure into results/builder48/figures/."""
+def draw(_args: argparse.Namespace) -> None:
+    """Every figure into results/builder48/figures/.
+
+    figures47's own `all` reads every JSON file in the directory; this
+    build's directory also holds the laminar, plant and test records, so
+    the flow and march records are picked by name here.
+    """
     DRAWN.mkdir(parents=True, exist_ok=True)
-    figures47.everything(args)
+    for path in sorted(OUT.glob("*.json")):
+        if not FLOW.match(path.stem):
+            continue
+        rec = json.loads(path.read_text())
+        if rec.get("stop") == "error_estimate_and_continuity" and "core" in rec:
+            figures47.fields(argparse.Namespace(name=path.stem))
+    for path in sorted(OUT.glob("transport_*.json")):
+        if MARCH.match(path.stem):
+            figures47.concentration(argparse.Namespace(label=path.stem))
 
 
 def publish(_args: argparse.Namespace) -> None:
