@@ -32,6 +32,9 @@ from matplotlib.patches import FancyArrowPatch, Rectangle
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "docs" / "reports" / "probe46"))
+
+from tables46 import classify  # noqa: E402
 
 from validation import annex20  # noqa: E402
 
@@ -39,8 +42,9 @@ OUT = ROOT / "results" / "builder49"
 FIGURES = ROOT / "docs" / "reports"
 DIGITIZED = OUT / "rong_nielsen_2008_digitized.json"
 DPI = 90
-NAME = re.compile(r"^(standard|rng)_\d+x\d+_(upwind|umist)$")
+NAME = re.compile(r"^(standard|rng)_\d+x\d+_(upwind|umist)(_.*)?$")
 CONVERGED = "error_estimate_and_continuity"
+AT_CAP_COMPARED = "bounded"
 INLET_COLOUR = "tab:blue"
 OUTLET_COLOUR = "tab:orange"
 LINE_COLOUR = "0.3"
@@ -58,6 +62,17 @@ def load(name: str) -> tuple[dict, dict]:
     """A record and its arrays."""
     rec = json.loads((OUT / f"{name}.json").read_text())
     return rec, dict(np.load(OUT / f"{name}.npz"))
+
+
+def record_class(rec: dict) -> str:
+    """tables46's class, with its sub-class."""
+    cls, sub = classify(rec)
+    return cls + (f" ({sub})" if sub else "")
+
+
+def compared(rec: dict) -> bool:
+    """Converged, or bounded at the cap: the records whose fields are drawn."""
+    return rec["stop"] == CONVERGED or record_class(rec).startswith(AT_CAP_COMPARED)
 
 
 def edges(xc: np.ndarray, yc: np.ndarray, raw: dict) -> tuple[np.ndarray, np.ndarray]:
@@ -155,7 +170,8 @@ def fields(args: argparse.Namespace) -> None:
     fig.colorbar(strm.lines, ax=ax, label="speed (m/s)", shrink=0.9)
     draw_room(ax, raw)
     ax.set_title(
-        f"{rec['name']}: streamlines coloured by speed ({rec['outer']:,} outer iterations)"
+        f"{rec['name']}: streamlines coloured by speed ({rec['outer']:,} outer "
+        f"iterations, {record_class(rec)})"
     )
     ax = axes[1]
     pm = ax.pcolormesh(
@@ -207,11 +223,13 @@ def published_curve(key: str) -> tuple[np.ndarray, np.ndarray, str]:
 
 
 def converged_lines() -> dict[str, dict]:
-    """The line samples of every converged record."""
+    """The line samples of every compared record (converged, or falling at the cap)."""
     out = {}
     for path in sorted(OUT.glob("lines_*.json")):
         rec = json.loads(path.read_text())
-        if rec["stop"] == CONVERGED and NAME.match(rec["name"]):
+        flow = json.loads((OUT / f"{rec['name']}.json").read_text())
+        if compared(flow) and NAME.match(rec["name"]):
+            rec["_class"] = record_class(flow)
             out[rec["name"]] = rec
     return out
 
@@ -241,7 +259,7 @@ def lines(_args: argparse.Namespace) -> None:
                     style,
                     color=colour,
                     lw=1.2,
-                    label=name,
+                    label=f"{name} ({rec['_class']})",
                 )
             ax.plot(
                 meas,
@@ -273,7 +291,7 @@ def lines(_args: argparse.Namespace) -> None:
                     style,
                     color=colour,
                     lw=1.2,
-                    label=name,
+                    label=f"{name} ({rec['_class']})",
                 )
             ax.plot(
                 stations,
@@ -304,7 +322,7 @@ def everything(_args: argparse.Namespace) -> None:
         if not NAME.match(path.stem):
             continue
         rec = json.loads(path.read_text())
-        if rec.get("stop") == CONVERGED and "core" in rec:
+        if "stop" in rec and compared(rec) and "core" in rec:
             fields(argparse.Namespace(name=path.stem))
     lines(argparse.Namespace())
 

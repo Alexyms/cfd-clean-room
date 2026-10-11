@@ -2,6 +2,7 @@
 
 Usage:
     python annex49.py run GRID [--scheme S] [--variant V] [--cap N] [--log-every N]
+                           [--tol T --max-iter M --tag TAG]
     python annex49.py lines NAME       the four lines of a record, u / u0 at the stations
 
 GRID is 216x72 or 375x125. The run is the validation case as the suite loads
@@ -15,7 +16,9 @@ results/builder49/. With --scheme absent the turbulence section carries no
 `advection_scheme` key, so the committed default (upwind) holds; --scheme
 umist states the key. --variant rng states the variant in place of the
 file's standard. NAME is VARIANT_GRID_SCHEME, SCHEME the scheme the parsed
-configuration holds.
+configuration holds. A labelled supplement states --tag (appended to NAME)
+with the keys it changes: --tol and --max-iter set the turbulence section's
+implicit k and eps solve tolerance and sweep cap in place of the file's.
 
 The room has no equipment, so prompt 46's core (the cells above the
 equipment tops) is replaced by every non-SOLID cell. After a run whose faces
@@ -64,7 +67,14 @@ def whole_room(mesh: Mesh, _raw: dict) -> np.ndarray:
 coupled46.core_mask = whole_room
 
 
-def annex_raw(grid: str, variant: str, scheme: str, cap: int) -> dict:
+def annex_raw(
+    grid: str,
+    variant: str,
+    scheme: str,
+    cap: int,
+    tol: float = 0.0,
+    max_iter: int = 0,
+) -> dict:
     """The case file regridded, the inlet scaled as the loader scales it."""
     nx, ny = GRIDS[grid]
     raw = yaml.safe_load(case_path("annex20").read_text(encoding="utf-8"))
@@ -76,6 +86,10 @@ def annex_raw(grid: str, variant: str, scheme: str, cap: int) -> dict:
         raw["turbulence"]["advection_scheme"] = scheme
     if cap:
         raw["solver"]["max_simple_iter"] = cap
+    if tol:
+        raw["turbulence"]["tol"] = tol
+    if max_iter:
+        raw["turbulence"]["max_iter"] = max_iter
     return raw
 
 
@@ -114,10 +128,12 @@ def lines_of(name: str) -> dict:
 
 def run(args: argparse.Namespace) -> None:
     """One row through prompt 46's runner."""
-    raw = annex_raw(args.grid, args.variant, args.scheme, args.cap)
+    raw = annex_raw(
+        args.grid, args.variant, args.scheme, args.cap, args.tol, args.max_iter
+    )
     config = SimConfig.from_dict(raw)
     scheme = config.turbulence.advection_scheme
-    name = f"{args.variant}_{args.grid}_{scheme}"
+    name = f"{args.variant}_{args.grid}_{scheme}" + (f"_{args.tag}" if args.tag else "")
     inlet = raw["boundaries"]["inlet"]
     meta = {
         "case": "annex20",
@@ -138,6 +154,9 @@ def run(args: argparse.Namespace) -> None:
         "iteration_error_tol": raw["solver"]["iteration_error_tol"],
         "mass_imbalance_tol": raw["solver"]["mass_imbalance_tol"],
         "cap": raw["solver"]["max_simple_iter"],
+        "turbulence_tol": raw["turbulence"]["tol"],
+        "turbulence_max_iter": raw["turbulence"]["max_iter"],
+        "tag": args.tag,
         "locate": True,
     }
     rec = coupled46.run_room(name, raw, meta, log_every=args.log_every, locate=True)
@@ -167,6 +186,9 @@ def main() -> None:
     p.add_argument("--variant", choices=("standard", "rng"), default="standard")
     p.add_argument("--cap", type=int, default=0)
     p.add_argument("--log-every", type=int, default=100)
+    p.add_argument("--tol", type=float, default=0.0)
+    p.add_argument("--max-iter", type=int, default=0)
+    p.add_argument("--tag", default="")
     p.set_defaults(func=run)
     p = sub.add_parser("lines")
     p.add_argument("name")

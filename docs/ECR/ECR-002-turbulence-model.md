@@ -428,6 +428,21 @@ The change is accepted when all of the following are demonstrated:
 9. **The Annex 20 room (VAL-017).** OPEN: the threshold set by Alex from the departure of the
    published standard k-epsilon prediction (Rong and Nielsen 2008) at the lines decision 6
    scores, or the spread across that report's models (ADR-012 G (iii)). Method: test and report.
+   *Note 2026-10-11 (prompt 49, measured; status stays OPEN until Alex sets the allowance).* The
+   first coupled results are `docs/reports/ecr002_val017_annex20.md`: the case (`configs/validation_annex20.yaml`, presets `val017_216x72` and
+   `val017_375x125`), the data and Rong and Nielsen's digitized line with their provenance
+   (`validation/annex20.py`), the four runs (standard, `upwind` and `umist`, both grids) and
+   RNG on 216x72, the comparison tables and figures, and `tests/test_annex20.py`. No standard
+   row stops by the rule. On 216x72 each reaches the cap with the residual falling, conditions
+   (b) to (d) met and (a) at its threshold, because condition (e)'s scale, the inlet's eddy
+   viscosity, is about twice nu on this case while the room makes several hundred nu (the
+   report, section 5.2; a decision for Alex on ADR-012 E's scale); on 375x125 each stalls at the
+   cap with the k and eps solves at their sweep cap (issue 58's case). The lines are compared
+   at the cap, labelled by class: on the scored lines the
+   solver's departure is below the published prediction's, the two schemes differ by a fraction
+   of either's distance from the data (prediction (d) holds), and the floor line's departure is
+   the model's, shared with the published run. The test pins the 216x72 run's record and expects
+   its convergence clause to fail (strict xfail) until (e) is decided.
 10. **The product room (VAL-018).** Conditional on step 5: the product configuration stops by
    `error_estimate_and_continuity` under rule version 4 within its cap, with `mass_imbalance_tol`
    from ADR-011 G's formula. Method: harness row and the step 8 report.
@@ -507,3 +522,4 @@ architecture, and the acceptance criteria are sufficient to close the change.
 | 2026-10-10 | Alex's decisions on prompt 47 (prompt 48): k and eps advected by upwind through a turbulence key `advection_scheme`, absent meaning upwind; the product grid 320x120 with 160x60 its coarser check; RNG rerun under upwind on the exact pair. Notes in section 8 steps 6, 7 and 8 and criterion 10; ADR-012 decision 4 and sections C, I and J carry the dated amendments. | Alex Moroz-Smietana |
 | 2026-10-10 | Step 6, the key built and the variants measured (prompt 48): `turbulence.advection_scheme`, upwind by default; parity with prompt 47's upwind arm bit for bit; RNG bounded on both exact grids under upwind; `docs/reports/ecr002_step6_variants.md`; note in section 8 step 6. No decision taken. | Claude (builder) |
 | 2026-10-11 | Alex's decision before step 7 (prompt 49): the product runs the standard variant until VAL-020 says which model is right at the equipment tops; VAL-018's variant clause waits for VAL-020; RNG's cycle is probed only if VAL-020 favours RNG. Note in section 8 step 8; ADR-012 decision 2 carries the dated amendment. | Alex Moroz-Smietana |
+| 2026-10-11 | Step 7, first case, VAL-017 measured (prompt 49, branch feature/ecr002-val017-annex20): the Annex 20 case, its loader and its data built; four standard runs and one RNG run; the comparison against the measurements and the published standard k-epsilon, reported, unscored; condition (e) found unattainable on this case (its inlet scale). Note under criterion 9; `docs/reports/ecr002_val017_annex20.md`. No threshold set. | Claude (builder) |

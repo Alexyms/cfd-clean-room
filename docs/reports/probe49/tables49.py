@@ -9,6 +9,8 @@ Usage:
     python tables49.py schemes      item 4: upwind against umist on each grid, per line
     python tables49.py grids        item 4: 216x72 against 375x125 under each scheme
     python tables49.py predictions  section 6: (a) to (e) scored from the records
+    python tables49.py rule_e       section 5.2: condition (e) on every row, its floor and
+                                    its scale, and when it would hold under a room-sized scale
     python tables49.py all          everything above
 
 Reads results/builder49/NAME.json, NAME.npz and lines_NAME.json (annex49.py),
@@ -42,8 +44,12 @@ GRIDS = ("216x72", "375x125")
 SCHEMES = ("upwind", "umist")
 VARIANTS = ("standard", "rng")
 NAME = re.compile(
-    r"^(?P<variant>standard|rng)_(?P<grid>\d+x\d+)_(?P<scheme>upwind|umist)$"
+    r"^(?P<variant>standard|rng)_(?P<grid>\d+x\d+)_(?P<scheme>upwind|umist)(?P<tag>_.*)?$"
 )
+# A record at the cap enters the comparison, labelled by its class, when it is
+# bounded there (any of tables46's sub-classes): neither diverged, growing nor
+# stopped by a positivity error. The class column of every table says which.
+AT_CAP_COMPARED = "bounded"
 CONVERGED = "error_estimate_and_continuity"
 JET_LIMIT = 2 * annex20.HEIGHT  # x/H 2, prediction (b)
 JET_TOL = 0.1  # u0, prediction (b)
@@ -70,6 +76,9 @@ def records() -> dict[str, dict]:
             m["variant"],
             m["scheme"],
         )
+        rec["_tag"] = m["tag"] or ""
+        cls, sub = classify(rec)
+        rec["_class"] = cls + (f" ({sub})" if sub else "")
         found[path.stem] = rec
     return dict(
         sorted(
@@ -78,18 +87,25 @@ def records() -> dict[str, dict]:
                 GRIDS.index(kv[1]["_grid"]),
                 VARIANTS.index(kv[1]["_variant"]),
                 SCHEMES.index(kv[1]["_scheme"]),
+                kv[1]["_tag"],
             ),
         )
     )
 
 
+def compared(rec: dict) -> bool:
+    """Whether a record's fields enter the comparison: converged, or bounded at the cap."""
+    return rec["stop"] == CONVERGED or rec["_class"].startswith(AT_CAP_COMPARED)
+
+
 def lines_records() -> dict[str, dict]:
-    """The line samples of every converged record that has them."""
+    """The line samples of every compared record that has them, with its class."""
     out = {}
     for name, rec in records().items():
         path = OUT / f"lines_{name}.json"
-        if rec["stop"] == CONVERGED and path.exists():
+        if compared(rec) and path.exists():
             out[name] = json.loads(path.read_text())
+            out[name]["_class"] = rec["_class"]
     return out
 
 
@@ -107,7 +123,6 @@ def matrix(_args: argparse.Namespace) -> None:
     """Item 3: every flow run, one line each."""
     rows = []
     for name, rec in records().items():
-        cls, sub = classify(rec)
         rows.append(
             {
                 "name": name,
@@ -115,8 +130,11 @@ def matrix(_args: argparse.Namespace) -> None:
                 "variant": rec["_variant"],
                 "advection_scheme": rec["_scheme"],
                 "scheme_key_stated": rec.get("scheme_key_stated"),
+                "tag": rec["_tag"],
+                "turbulence_tol": rec.get("turbulence_tol"),
+                "turbulence_max_iter": rec.get("turbulence_max_iter"),
                 "inlet_velocity": rec.get("inlet_velocity"),
-                "class": cls + (f" ({sub})" if sub else ""),
+                "class": rec["_class"],
                 "stop": rec["stop"],
                 "outer": rec["outer"],
                 "residual_min": rec["residual_min"],
@@ -196,12 +214,13 @@ def converged_rows(_args: argparse.Namespace) -> None:
     """Item 3: the converged rooms' readings, eddy viscosity and y+."""
     rows = []
     for name, rec in records().items():
-        if rec["stop"] != CONVERGED or "core" not in rec:
+        if not compared(rec) or "core" not in rec:
             continue
         y = rec["y_star"]
         rows.append(
             {
                 "name": name,
+                "class": rec["_class"],
                 "outer": rec["outer"],
                 "seconds": rec["seconds"],
                 "readings_at_stop": rec["readings_at_stop"],
@@ -218,6 +237,7 @@ def converged_rows(_args: argparse.Namespace) -> None:
         )
     headers = [
         "Run",
+        "Class",
         "Outer, wall (s)",
         "Readings at stop (a), (b), (c), (d), (e)",
         "Holds from (a), (b), (c), (d), (e)",
@@ -234,6 +254,7 @@ def converged_rows(_args: argparse.Namespace) -> None:
         table.append(
             [
                 r["name"],
+                r["class"],
                 f"{r['outer']:,}, {r['seconds']:.0f}",
                 readings_cell(r),
                 from_when_cell(r),
@@ -301,6 +322,7 @@ def lines(_args: argparse.Namespace) -> None:
             rows.append(
                 {
                     "name": name,
+                    "class": rec["_class"],
                     "line": key,
                     "label": annex20.LINES[key].label,
                     "against_data": line["against_data"],
@@ -314,6 +336,7 @@ def lines(_args: argparse.Namespace) -> None:
             )
     headers = [
         "Run",
+        "Class",
         "Line",
         "Against the data: largest |d| (at, m)",
         "RMS",
@@ -325,6 +348,7 @@ def lines(_args: argparse.Namespace) -> None:
     table = [
         [
             r["name"],
+            r["class"],
             r["label"],
             f"{r['against_data']['max_abs']:.3f} ({r['data_max_at']:.2f})",
             f"{r['against_data']['rms']:.3f}",
@@ -429,9 +453,12 @@ def predictions(_args: argparse.Namespace) -> None:
     standard = [f"standard_{g}_{s}" for g in GRIDS for s in SCHEMES]
     out: dict[str, dict] = {}
     # (a) both schemes converge on both grids.
-    stops = {n: recs[n]["stop"] if n in recs else "not run" for n in standard}
-    out["a"] = {"stops": stops, "holds": all(s == CONVERGED for s in stops.values())}
-    # (b) the jet line within 0.1 u0 up to x/H 2, per converged run.
+    stops = {n: recs[n]["_class"] if n in recs else "not run" for n in standard}
+    out["a"] = {
+        "classes": stops,
+        "holds": all(s == "converged" for s in stops.values()),
+    }
+    # (b) the jet line within 0.1 u0 up to x/H 2, per compared run (its class named).
     jet = annex20.LINES["y2916"]
     inside = np.array(jet.stations) <= JET_LIMIT
     b_rows = {}
@@ -439,6 +466,7 @@ def predictions(_args: argparse.Namespace) -> None:
         d = np.array(lr["lines"]["y2916"]["u_over_u0"]) - np.array(jet.measured)
         worst = float(np.abs(d[inside]).max())
         b_rows[n] = {
+            "class": lr["_class"],
             "largest_abs_diff_to_2H": worst,
             "at": float(
                 np.array(jet.stations)[inside][int(np.argmax(np.abs(d[inside])))]
@@ -457,6 +485,7 @@ def predictions(_args: argparse.Namespace) -> None:
         m = np.array(floor.measured)
         signs = int(np.sum(np.sign(v) == np.sign(m)))
         c_rows[n] = {
+            "class": lr["_class"],
             "stations": int(m.size),
             "same_sign": signs,
             "floor_max": lr["lines"]["y0084"]["against_data"]["max_abs"],
@@ -531,20 +560,20 @@ def predictions(_args: argparse.Namespace) -> None:
         [
             "(b) the jet within 0.1 u0 up to x/H 2",
             "; ".join(
-                f"{n}: {r['largest_abs_diff_to_2H']:.3f} at {r['at']:.2f} m"
+                f"{n} ({r['class']}): {r['largest_abs_diff_to_2H']:.3f} at {r['at']:.2f} m"
                 for n, r in b_rows.items()
             )
-            or "no converged run",
+            or "no compared run",
             "yes" if out["b"]["holds"] else "no",
         ],
         [
             "(c) the floor's sign right everywhere, its departure above the jet's",
             "; ".join(
-                f"{n}: {r['same_sign']} of {r['stations']} signs, floor {r['floor_max']:.3f} "
-                f"against jet {r['jet_max']:.3f}"
+                f"{n} ({r['class']}): {r['same_sign']} of {r['stations']} signs, floor "
+                f"{r['floor_max']:.3f} against jet {r['jet_max']:.3f}"
                 for n, r in c_rows.items()
             )
-            or "no converged run",
+            or "no compared run",
             "yes" if out["c"]["holds"] else "no",
         ],
         [
@@ -571,6 +600,108 @@ def predictions(_args: argparse.Namespace) -> None:
     keep("predictions", out)
 
 
+FLOOR_WINDOW = (
+    200  # outer iterations: the tail over which the viscosity step's floor is read
+)
+
+
+def rule_e(_args: argparse.Namespace) -> None:
+    """Condition (e) on every row: its readings, the step's floor and an alternative scale.
+
+    (e) is the velocity-step estimate applied to the largest change of nu_t
+    over ``nu_scale``, the molecular nu plus the largest inlet eddy viscosity
+    (ADR-012 E; src/stopping.py). The record keeps the step and the estimate
+    every outer iteration, so the table reads the step's floor (its median
+    over the last FLOOR_WINDOW iterations and the ratio of successive steps
+    there), the first iteration at which (e) holds, and the iteration at
+    which the rule would have stopped, the first at which all five conditions
+    hold at once: under the rule's scale, and, since the estimate is linear
+    in 1 / scale, under nu plus the final field's largest nu_t in its place.
+    The rows are not re-run; the alternative is a reading of the records for
+    Alex's decision, not a built change.
+    """
+    rows = []
+    for name, rec in records().items():
+        rd = rec["readings"]
+        steps = np.array([np.nan if x is None else x for x in rd["viscosity_step"]])
+        est = np.array([np.nan if x is None else x for x in rd["e"]])
+        tol = rec["iteration_error_tol"]
+        nu_scale = rec["nu_scale"]
+        arrays = np.load(OUT / f"{name}.npz")
+        nu_t_max = float(arrays["nu_t"].max()) if "nu_t" in arrays else float("nan")
+        alt_scale = rec["nu_air"] + nu_t_max
+        tail = steps[-FLOOR_WINDOW:]
+        ratios = tail[1:] / tail[:-1]
+        holds = est < tol
+        holds_alt = est * nu_scale / alt_scale < tol
+        tol_b = rec["mass_imbalance_tol"]
+        a_ok = np.array([np.nan if x is None else x for x in rd["a"]]) < tol
+        b_ok = np.array(rd["b"]) < tol_b
+        c_ok = np.array(rd["c"]) < tol
+        d_ok = np.array(rd["d"]) < tol_b
+        four = a_ok & b_ok & c_ok & d_ok
+
+        def first(flags: np.ndarray) -> int | None:
+            hits = np.where(flags)[0]
+            return int(hits[0]) + 1 if hits.size else None
+
+        finite = np.where(np.isfinite(est))[0]
+        rows.append(
+            {
+                "name": name,
+                "class": rec["_class"],
+                "turbulence_tol": rec.get("turbulence_tol"),
+                "outer": rec["outer"],
+                "nu_scale": nu_scale,
+                "inlet_nu_t_over_nu": (nu_scale - rec["nu_air"]) / rec["nu_air"],
+                "room_nu_t_max_over_nu": nu_t_max / rec["nu_air"],
+                "alt_scale": alt_scale,
+                "step_floor": float(np.nanmedian(tail)),
+                "step_floor_over_tol_scale": float(
+                    np.nanmedian(tail) / (tol * nu_scale)
+                ),
+                "step_ratio_tail_median": float(np.nanmedian(ratios)),
+                "e_last_finite": float(est[finite[-1]]) if finite.size else None,
+                "e_last_finite_at": int(finite[-1]) + 1 if finite.size else None,
+                "e_at_stop": rec["readings_at_stop"].get("e"),
+                "a_at_stop": rec["readings_at_stop"].get("a"),
+                "a_from": rec["from_when"].get("a"),
+                "e_first_at": first(holds),
+                "e_first_at_under_alt_scale": first(holds_alt),
+                "four_first_at": first(four),
+                "would_stop_at": first(four & holds),
+                "would_stop_at_under_alt_scale": first(four & holds_alt),
+            }
+        )
+    headers = [
+        "Run",
+        "Class, outer",
+        "k, eps tol",
+        "nu_scale (m^2/s); inlet nu_t / nu; room's largest nu_t / nu",
+        "nu_t step at the end: floor (m^2/s), over tol x nu_scale; step ratio",
+        "(e): last finite estimate (at); (a) at the stop, holds from",
+        "(e) first holds at: rule's scale; nu + the room's largest nu_t",
+        "Would stop at (all five): rule's scale; the room's",
+    ]
+    table = [
+        [
+            r["name"],
+            f"{r['class']}, {r['outer']:,}",
+            fmt(r["turbulence_tol"], 1),
+            f"{r['nu_scale']:.3g}; {r['inlet_nu_t_over_nu']:.3g}; {r['room_nu_t_max_over_nu']:.3g}",
+            f"{r['step_floor']:.2g}, {r['step_floor_over_tol_scale']:.2g}; "
+            f"{r['step_ratio_tail_median']:.4f}",
+            f"{fmt(r['e_last_finite'], 2)} ({fmt(r['e_last_finite_at'])}); "
+            f"{fmt(r['a_at_stop'], 2)}, {fmt(r['a_from'])}",
+            f"{fmt(r['e_first_at'])}; {fmt(r['e_first_at_under_alt_scale'])}",
+            f"{fmt(r['would_stop_at'])}; {fmt(r['would_stop_at_under_alt_scale'])}",
+        ]
+        for r in rows
+    ]
+    print_table(headers, table)
+    keep("rule_e", rows)
+
+
 def everything(args: argparse.Namespace) -> None:
     """Every table, in the report's order."""
     for name, f in MODES:
@@ -586,6 +717,7 @@ MODES = (
     ("schemes", schemes),
     ("grids", grids),
     ("predictions", predictions),
+    ("rule_e", rule_e),
 )
 
 

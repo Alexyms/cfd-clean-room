@@ -142,3 +142,297 @@ What each outcome means:
 - The data cannot be obtained, or its four lines cannot be matched to the specification's.
 - A positivity error, or a capped pressure correction.
 - Neither scheme converges on either grid: report the characterisation and stop.
+
+## 5. Results (written after the runs)
+
+### 5.1 Order and cost
+
+The five rows of item 3 were launched together on 2026-10-10 at 22:16 (`run49.sh flows`), one
+BLAS thread each on twenty-four cores; the two 216x72 diagnostic rows of section 5.2 followed on
+2026-10-11 beside them, and two 375x125 diagnostics with the tighter tolerance were started and
+stopped unfinished for their cost (no record). The wall times in the tables were taken beside
+other runs and beside the suite's VAL-017 test, and the two 375x125 rows of item 3 span a
+night during which the machine slept, so their wall time and seconds per outer iteration are
+not measurements; the twenty-iteration timing before the runs gave 0.11 s per outer iteration on
+216x72 and 0.42 s on 375x125, alone.
+
+### 5.2 Item 3: the runs
+
+<!-- tables49 matrix begin -->
+| Run | Class | Stop | Outer | Residual: least (at), end | Readings at stop (a), (b), (c), (d), (e) | Holds from (a), (b), (c), (d), (e) | Largest speed at end (m/s), cell | CG per correction: mean, largest | Cap hits | k, eps sweeps (mean) | Wall (s), per outer | Face hash |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| standard_216x72_upwind | bounded (falling) | max_simple_iter | 10,000 | 6.87e-10 (10,000), 6.87e-10 | 1.3e-06, 4.8e-15, 9.9e-12, 1.8e-18, - | -, 2,549, 2,585, 1, - | 0.47, (1.0625, 2.9375) | 506, 561 | 0 | 271.8, 181.5 | 3449, 0.345 | e0abd8ec606da62b |
+| standard_216x72_upwind_tol1e-13 | bounded (falling) | max_simple_iter | 12,000 | 4.65e-11 (12,000), 4.65e-11 | 6.1e-08, 2.4e-15, 6.5e-12, 7.7e-19, - | 11,159, 2,549, 2,584, 1, - | 0.47, (1.0625, 2.9375) | 502, 561 | 0 | 392.5, 280.0 | 3443, 0.287 | dc4ed49e5598ec21 |
+| standard_216x72_umist | bounded (falling) | max_simple_iter | 10,000 | 6.35e-10 (10,000), 6.35e-10 | 7.2e-07, 2.2e-15, 9.2e-12, 2.3e-18, - | 9,934, 2,532, 2,568, 1, - | 0.469, (1.1875, 2.9375) | 505, 562 | 0 | 277.3, 185.9 | 3577, 0.358 | 11d0922bdc7e09e9 |
+| standard_216x72_umist_tol1e-13 | bounded (falling) | max_simple_iter | 12,000 | 3.87e-11 (12,000), 3.87e-11 | 6.7e-08, 2.1e-15, 6.8e-12, 2.5e-18, 1.7e-05 | 11,145, 2,532, 2,568, 1, - | 0.469, (1.1875, 2.9375) | 498, 562 | 0 | 399.1, 285.2 | 3506, 0.292 | 615f7e9011a637a1 |
+| rng_216x72_upwind | bounded (stalled) | max_simple_iter | 10,000 | 2.26e-07 (10,000), 2.26e-07 | 0.0016, 3.8e-13, 3e-09, 3.2e-18, 0.25 | -, 5,500, 5,534, 1, - | 0.47, (1.4375, 2.9375) | 480, 568 | 0 | 244.8, 195.9 | 3397, 0.340 | a7f3fcc58f9f5b37 |
+| standard_375x125_upwind | bounded (stalled) | max_simple_iter | 10,000 | 1.05e-06 (10,000), 1.05e-06 | 0.011, 2.5e-12, 2.1e-08, 7.8e-19, 4.5 | -, 6,482, 6,540, 1, - | 0.465, (0.636, 2.964) | 840, 1004 | 0 | 415.9, 351.2 | 37904, 3.790 | 58133c4dba3caecf |
+| standard_375x125_umist | bounded (stalled) | max_simple_iter | 10,000 | 1.23e-06 (10,000), 1.23e-06 | 0.016, 2.6e-12, 2.6e-08, 1.6e-18, 5.8 | -, 6,256, 6,314, 1, - | 0.464, (0.636, 2.964) | 850, 961 | 0 | 409.5, 348.0 | 38032, 3.803 | f673061631392c20 |
+<!-- tables49 matrix end -->
+
+No run diverged, raised a positivity error or reached the pressure cap (the cap-hits column).
+None stopped by the rule either. On 216x72 the standard rows reach the cap with the residual
+still falling, the class step 5's rule names bounded (falling), conditions (b), (c) and (d)
+holding from the first quarter of the run and (a) holding, or at its threshold, at the cap (the
+matrix's readings and holds-from columns). On 375x125 they reach the cap stalled: the implicit k
+and eps solves hit their 500-sweep cap from the middle of the run on (the k and eps sweeps
+column; the logs mark the first at outer 2,300 for upwind), the first coupled runs to do so
+(GitHub issue 58's case), and from there the residual falls by about half per thousand
+iterations, with (b), (c) and (d) met and (a) two orders above its tolerance at the cap. RNG on
+216x72 is bounded (stalled), as it was on the product's exact grids (prompt 48). Two further
+375x125 rows with the sweep cap raised to 2,000 (`_sweeps2000`, everything else the file's)
+were started after the first pair finished; section 5.5 says what became of them.
+
+**Why the 216x72 rows do not stop.** Condition (e), the eddy viscosity's estimated iteration
+error over `nu_scale`, never holds, and the records say why:
+
+<!-- tables49 rule_e begin -->
+| Run | Class, outer | k, eps tol | nu_scale (m^2/s); inlet nu_t / nu; room's largest nu_t / nu | nu_t step at the end: floor (m^2/s), over tol x nu_scale; step ratio | (e): last finite estimate (at); (a) at the stop, holds from | (e) first holds at: rule's scale; nu + the room's largest nu_t | Would stop at (all five): rule's scale; the room's |
+|---|---|---|---|---|---|---|---|
+| standard_216x72_upwind | bounded (falling), 10,000 | - | 4.93e-05; 2.22; 898 | 1.9e-10, 3.8; 1.0002 | 0.19 (9,705); 1.3e-06, - | -; - | -; - |
+| standard_216x72_upwind_tol1e-13 | bounded (falling), 12,000 | 1e-13 | 4.93e-05; 2.22; 898 | 4.9e-12, 0.099; 0.9976 | 0.0024 (11,963); 6.1e-08, 11,159 | -; 11,206 | -; 11,206 |
+| standard_216x72_umist | bounded (falling), 10,000 | - | 4.93e-05; 2.22; 910 | 1e-10, 2.1; 1.0003 | 0.098 (9,824); 7.2e-07, 9,934 | -; - | -; - |
+| standard_216x72_umist_tol1e-13 | bounded (falling), 12,000 | 1e-13 | 4.93e-05; 2.22; 910 | 3.5e-12, 0.07; 0.9963 | 1.7e-05 (12,000); 6.7e-08, 11,145 | -; 11,160 | -; 11,160 |
+| rng_216x72_upwind | bounded (stalled), 10,000 | - | 4.72e-05; 2.08; 734 | 3.5e-08, 7.4e+02; 0.9978 | 0.25 (10,000); 0.0016, - | -; - | -; - |
+| standard_375x125_upwind | bounded (stalled), 10,000 | - | 4.9e-05; 2.2; 880 | 3.1e-07, 6.4e+03; 0.9988 | 4.5 (10,000); 0.011, - | -; - | -; - |
+| standard_375x125_umist | bounded (stalled), 10,000 | - | 4.9e-05; 2.2; 886 | 3.6e-07, 7.3e+03; 0.9989 | 5.8 (10,000); 0.016, - | -; - | -; - |
+<!-- tables49 rule_e end -->
+
+The largest change of nu_t per outer iteration stops falling before the end of each run: it
+floors at a few times the k and eps solves' tolerance times the scale (the floor column), so the
+rate fit (e) rests on finds no contraction and its estimate is infinite from there (the last
+finite estimate column). The scale is the molecular nu plus the inlet's eddy viscosity (ADR-012
+E). On this case that is about twice nu, because the specification's inlet turbulence is weak,
+while the room's shear layer makes several hundred nu (the scale column): (e) asks nu_t to settle
+to a millionth of the inlet's value, a billionth of the room's. The two labelled diagnostics,
+the 216x72 rows rerun with the k and eps solve tolerance a thousand times tighter (`_tol1e-13`,
+`max_iter` 2000, the cap 12,000), lower the floor by about forty times and still do not stop:
+the step then sits below the tolerance as a raw step, not as an estimate. Read from the same
+records, the rule would have stopped at the table's last column under a scale of nu plus the
+room's largest nu_t, with the tighter tolerance; under the file's tolerance it would not, since
+(a) closes only where the nu_t step has already floored. Both are readings of the records, not
+built changes: (e)'s scale is ADR-012 E's, and the decision is Alex's (section 7). The stricter
+tolerance moves no line value by more than the rounding the test pins (section 5.4's table, the
+`_tol1e-13` rows against their untagged twins).
+
+The prompt's third stop condition, neither scheme converging on either grid, is met as the rule
+classifies the runs. The comparison below is reported all the same, each row labelled by its
+class, because what the rule refuses to call converged is converged for the comparison's
+purpose: the matrix's velocity-step and residual columns put the remaining iteration error
+several orders below the differences the comparison reads, which are hundredths of u0.
+
+The rows compared, their readings and the first-node y+ (the ADR's estimate for 216x72 along
+the jet was 27):
+
+<!-- tables49 converged begin -->
+| Run | Class | Outer, wall (s) | Readings at stop (a), (b), (c), (d), (e) | Holds from (a), (b), (c), (d), (e) | Inlet nu_t / nu | Room nu_t / nu: median, 95th, largest | y+ nodes; median, least, largest; share below 11.53 | Ceiling y+ for H < x < 2H: median (least, largest) | Floor y+ for H < x < 2H: median (least, largest) | Figure |
+|---|---|---|---|---|---|---|---|---|---|---|
+| standard_216x72_upwind | bounded (falling) | 10,000, 3449 | 1.3e-06, 4.8e-15, 9.9e-12, 1.8e-18, - | -, 2,549, 2,585, 1, - | 2.22 | 367, 821, 898 | 560; 22.6, 2.32, 46; 0.23 | 33 (29.5, 35.8) | 18 (14.7, 21.2) | ecr002_val017_standard_216x72_upwind.png |
+| standard_216x72_upwind_tol1e-13 | bounded (falling) | 12,000, 3443 | 6.1e-08, 2.4e-15, 6.5e-12, 7.7e-19, - | 11,159, 2,549, 2,584, 1, - | 2.22 | 367, 821, 898 | 560; 22.6, 2.32, 46; 0.23 | 33 (29.5, 35.8) | 18 (14.7, 21.2) | ecr002_val017_standard_216x72_upwind_tol1e-13.png |
+| standard_216x72_umist | bounded (falling) | 10,000, 3577 | 7.2e-07, 2.2e-15, 9.2e-12, 2.3e-18, - | 9,934, 2,532, 2,568, 1, - | 2.22 | 376, 832, 910 | 560; 22.6, 2.11, 48.2; 0.24 | 33.2 (29.6, 35.5) | 17.9 (14.5, 21.3) | ecr002_val017_standard_216x72_umist.png |
+| standard_216x72_umist_tol1e-13 | bounded (falling) | 12,000, 3506 | 6.7e-08, 2.1e-15, 6.8e-12, 2.5e-18, 1.7e-05 | 11,145, 2,532, 2,568, 1, - | 2.22 | 376, 832, 910 | 560; 22.6, 2.11, 48.2; 0.24 | 33.2 (29.6, 35.5) | 17.9 (14.5, 21.3) | ecr002_val017_standard_216x72_umist_tol1e-13.png |
+| rng_216x72_upwind | bounded (stalled) | 10,000, 3397 | 0.0016, 3.8e-13, 3e-09, 3.2e-18, 0.25 | -, 5,500, 5,534, 1, - | 2.08 | 320, 689, 734 | 560; 23.5, 2.76, 35.8; 0.21 | 34 (31.5, 34.9) | 19.2 (16.4, 21.9) | ecr002_val017_rng_216x72_upwind.png |
+| standard_375x125_upwind | bounded (stalled) | 10,000, 37904 | 0.011, 2.5e-12, 2.1e-08, 7.8e-19, 4.5 | -, 6,482, 6,540, 1, - | 2.2 | 355, 803, 880 | 973; 12.7, 0.816, 26.2; 0.45 | 18.5 (16.7, 19.2) | 9.55 (7.54, 11.6) | ecr002_val017_standard_375x125_upwind.png |
+| standard_375x125_umist | bounded (stalled) | 10,000, 38032 | 0.016, 2.6e-12, 2.6e-08, 1.6e-18, 5.8 | -, 6,256, 6,314, 1, - | 2.2 | 363, 809, 886 | 973; 12.7, 0.776, 27; 0.45 | 18.5 (16.7, 19.1) | 9.5 (7.49, 11.6) | ecr002_val017_standard_375x125_umist.png |
+<!-- tables49 converged end -->
+
+Along the ceiling jet between x = H and 2H the coarse grid's first node sits in the log layer and
+the fine grid's at its lower edge (the ceiling column against the scalable floor of 11.53); on
+the floor under the return flow both sit lower, the fine grid's below the floor. The figures,
+one per compared row, `ecr002_val017_<row>.png` (streamlines coloured by speed, nu_t / nu, k;
+the slot, the outlet and the four lines marked). The jet runs along the ceiling to the end wall,
+turns down it into the outlet and feeds one room-filling eddy; the corner eddy under the ceiling
+at the end wall, which the measurements show (section 5.3), is small on every grid and smaller
+on the coarse one.
+
+### 5.3 Item 1: the published prediction's own departure
+
+<!-- tables49 published begin -->
+| Line | Stations (held by the published line) | Published minus measured: largest |d| (at, m) | RMS | Mean |
+|---|---|---|---|---|
+| x = H (3.0 m) | 25 (25) | 0.149 (2.73) | 0.070 | -0.032 |
+| x = 2H (6.0 m) | 25 (24) | 0.185 (0.12) | 0.093 | +0.059 |
+| y = H - h/2 (2.916 m), the ceiling jet | 28 (27) | 0.366 (8.60) | 0.136 | +0.071 |
+| y = h/2 (0.084 m), the floor | 28 (27) | 0.070 (8.94) | 0.052 | -0.041 |
+<!-- tables49 published end -->
+
+Rong and Nielsen's standard k-epsilon, digitized as section 2.2 describes, departs most from the
+data on the ceiling-jet line at the end wall, where the measured corner eddy reverses the flow
+and the published line does not (`ecr002_val017_line_y2916.png`), and least along the floor,
+where it sits a constant few hundredths of u0 below the data over most of the length
+(`ecr002_val017_line_y0084.png`).
+
+### 5.4 Item 4: the comparison
+
+<!-- tables49 lines begin -->
+| Run | Class | Line | Against the data: largest |d| (at, m) | RMS | Mean | Against the published line: largest |d| | RMS | Stations |
+|---|---|---|---|---|---|---|---|---|
+| standard_216x72_upwind | bounded (falling) | x = H (3.0 m) | 0.123 (2.77) | 0.059 | -0.036 | 0.053 | 0.022 | 25 (25) |
+| standard_216x72_upwind | bounded (falling) | x = 2H (6.0 m) | 0.074 (0.88) | 0.037 | +0.008 | 0.203 | 0.087 | 25 (24) |
+| standard_216x72_upwind | bounded (falling) | y = H - h/2 (2.916 m), the ceiling jet | 0.179 (8.60) | 0.080 | -0.020 | 0.238 | 0.121 | 28 (27) |
+| standard_216x72_upwind | bounded (falling) | y = h/2 (0.084 m), the floor | 0.086 (8.94) | 0.058 | -0.043 | 0.021 | 0.011 | 28 (27) |
+| standard_216x72_upwind_tol1e-13 | bounded (falling) | x = H (3.0 m) | 0.123 (2.77) | 0.059 | -0.036 | 0.053 | 0.022 | 25 (25) |
+| standard_216x72_upwind_tol1e-13 | bounded (falling) | x = 2H (6.0 m) | 0.074 (0.88) | 0.037 | +0.008 | 0.203 | 0.087 | 25 (24) |
+| standard_216x72_upwind_tol1e-13 | bounded (falling) | y = H - h/2 (2.916 m), the ceiling jet | 0.179 (8.60) | 0.080 | -0.020 | 0.238 | 0.121 | 28 (27) |
+| standard_216x72_upwind_tol1e-13 | bounded (falling) | y = h/2 (0.084 m), the floor | 0.086 (8.94) | 0.058 | -0.043 | 0.021 | 0.011 | 28 (27) |
+| standard_216x72_umist | bounded (falling) | x = H (3.0 m) | 0.126 (2.73) | 0.060 | -0.035 | 0.046 | 0.019 | 25 (25) |
+| standard_216x72_umist | bounded (falling) | x = 2H (6.0 m) | 0.075 (0.88) | 0.037 | +0.008 | 0.199 | 0.085 | 25 (24) |
+| standard_216x72_umist | bounded (falling) | y = H - h/2 (2.916 m), the ceiling jet | 0.193 (8.03) | 0.088 | -0.029 | 0.273 | 0.138 | 28 (27) |
+| standard_216x72_umist | bounded (falling) | y = h/2 (0.084 m), the floor | 0.088 (8.94) | 0.056 | -0.040 | 0.029 | 0.011 | 28 (27) |
+| standard_216x72_umist_tol1e-13 | bounded (falling) | x = H (3.0 m) | 0.126 (2.73) | 0.060 | -0.035 | 0.046 | 0.019 | 25 (25) |
+| standard_216x72_umist_tol1e-13 | bounded (falling) | x = 2H (6.0 m) | 0.075 (0.88) | 0.037 | +0.008 | 0.199 | 0.085 | 25 (24) |
+| standard_216x72_umist_tol1e-13 | bounded (falling) | y = H - h/2 (2.916 m), the ceiling jet | 0.193 (8.03) | 0.088 | -0.029 | 0.273 | 0.138 | 28 (27) |
+| standard_216x72_umist_tol1e-13 | bounded (falling) | y = h/2 (0.084 m), the floor | 0.088 (8.94) | 0.056 | -0.040 | 0.029 | 0.011 | 28 (27) |
+| rng_216x72_upwind | bounded (stalled) | x = H (3.0 m) | 0.139 (2.73) | 0.080 | -0.042 | 0.059 | 0.033 | 25 (25) |
+| rng_216x72_upwind | bounded (stalled) | x = 2H (6.0 m) | 0.093 (0.08) | 0.048 | +0.007 | 0.270 | 0.117 | 25 (24) |
+| rng_216x72_upwind | bounded (stalled) | y = H - h/2 (2.916 m), the ceiling jet | 0.232 (8.03) | 0.099 | -0.014 | 0.313 | 0.162 | 28 (27) |
+| rng_216x72_upwind | bounded (stalled) | y = h/2 (0.084 m), the floor | 0.120 (7.56) | 0.089 | -0.080 | 0.071 | 0.046 | 28 (27) |
+| standard_375x125_upwind | bounded (stalled) | x = H (3.0 m) | 0.137 (2.73) | 0.066 | -0.036 | 0.023 | 0.010 | 25 (25) |
+| standard_375x125_upwind | bounded (stalled) | x = 2H (6.0 m) | 0.076 (0.88) | 0.036 | +0.011 | 0.197 | 0.084 | 25 (24) |
+| standard_375x125_upwind | bounded (stalled) | y = H - h/2 (2.916 m), the ceiling jet | 0.201 (8.60) | 0.069 | +0.013 | 0.176 | 0.082 | 28 (27) |
+| standard_375x125_upwind | bounded (stalled) | y = h/2 (0.084 m), the floor | 0.099 (8.94) | 0.055 | -0.039 | 0.029 | 0.009 | 28 (27) |
+| standard_375x125_umist | bounded (stalled) | x = H (3.0 m) | 0.140 (2.73) | 0.067 | -0.035 | 0.020 | 0.009 | 25 (25) |
+| standard_375x125_umist | bounded (stalled) | x = 2H (6.0 m) | 0.076 (0.88) | 0.036 | +0.011 | 0.194 | 0.082 | 25 (24) |
+| standard_375x125_umist | bounded (stalled) | y = H - h/2 (2.916 m), the ceiling jet | 0.188 (8.60) | 0.065 | +0.008 | 0.199 | 0.092 | 28 (27) |
+| standard_375x125_umist | bounded (stalled) | y = h/2 (0.084 m), the floor | 0.102 (8.94) | 0.055 | -0.037 | 0.031 | 0.011 | 28 (27) |
+<!-- tables49 lines end -->
+
+The figures, one per line, with the measured points, every compared row and the digitized
+published line: `ecr002_val017_line_x3.png`, `ecr002_val017_line_x6.png`,
+`ecr002_val017_line_y2916.png`, `ecr002_val017_line_y0084.png`.
+
+On three of the four lines this solver's standard variant sits nearer the data than the
+published standard k-epsilon does, and on the floor line the two predictions sit nearer each
+other than either sits to the data (the "against the published line" columns): the floor's
+departure is the model's, shared by the two codes. On x = 2H the published line leaves the
+return flow by the floor at half the measured strength (its wall cells), where this solver
+follows the measurements to the floor (`ecr002_val017_line_x6.png`). The largest differences on
+every line are at the end wall, in the corner the measurements show reversed, and in the jet's
+lower edge at x = H.
+
+**The two schemes against each other, on each grid:**
+
+<!-- tables49 schemes begin -->
+| Pair | Line | Between upwind and umist: largest |d| | RMS | upwind against the data: largest |d|, RMS | umist against the data: largest |d|, RMS | Ratio: between over the larger against the data |
+|---|---|---|---|---|---|---|
+| schemes, 216x72 | x = H (3.0 m) | 0.009 | 0.004 | 0.123, 0.059 | 0.126, 0.060 | 0.08 |
+| schemes, 216x72 | x = 2H (6.0 m) | 0.004 | 0.002 | 0.074, 0.037 | 0.075, 0.037 | 0.05 |
+| schemes, 216x72 | y = H - h/2 (2.916 m), the ceiling jet | 0.050 | 0.020 | 0.179, 0.080 | 0.193, 0.088 | 0.26 |
+| schemes, 216x72 | y = h/2 (0.084 m), the floor | 0.008 | 0.004 | 0.086, 0.058 | 0.088, 0.056 | 0.09 |
+| schemes, 375x125 | x = H (3.0 m) | 0.006 | 0.002 | 0.137, 0.066 | 0.140, 0.067 | 0.04 |
+| schemes, 375x125 | x = 2H (6.0 m) | 0.003 | 0.001 | 0.076, 0.036 | 0.076, 0.036 | 0.04 |
+| schemes, 375x125 | y = H - h/2 (2.916 m), the ceiling jet | 0.029 | 0.011 | 0.201, 0.069 | 0.188, 0.065 | 0.14 |
+| schemes, 375x125 | y = h/2 (0.084 m), the floor | 0.006 | 0.002 | 0.099, 0.055 | 0.102, 0.055 | 0.06 |
+<!-- tables49 schemes end -->
+
+**The two grids against each other, under each scheme:**
+
+<!-- tables49 grids begin -->
+| Pair | Line | Between 216x72 and 375x125: largest |d| | RMS | 216x72 against the data: largest |d|, RMS | 375x125 against the data: largest |d|, RMS | Ratio: between over the larger against the data |
+|---|---|---|---|---|---|---|
+| grids, upwind | x = H (3.0 m) | 0.030 | 0.014 | 0.123, 0.059 | 0.137, 0.066 | 0.22 |
+| grids, upwind | x = 2H (6.0 m) | 0.024 | 0.007 | 0.074, 0.037 | 0.076, 0.036 | 0.32 |
+| grids, upwind | y = H - h/2 (2.916 m), the ceiling jet | 0.122 | 0.048 | 0.179, 0.080 | 0.201, 0.069 | 0.61 |
+| grids, upwind | y = h/2 (0.084 m), the floor | 0.014 | 0.006 | 0.086, 0.058 | 0.099, 0.055 | 0.14 |
+| grids, umist | x = H (3.0 m) | 0.026 | 0.011 | 0.126, 0.060 | 0.140, 0.067 | 0.18 |
+| grids, umist | x = 2H (6.0 m) | 0.023 | 0.007 | 0.075, 0.037 | 0.076, 0.036 | 0.31 |
+| grids, umist | y = H - h/2 (2.916 m), the ceiling jet | 0.157 | 0.058 | 0.193, 0.088 | 0.188, 0.065 | 0.82 |
+| grids, umist | y = h/2 (0.084 m), the floor | 0.013 | 0.005 | 0.088, 0.056 | 0.102, 0.055 | 0.13 |
+<!-- tables49 grids end -->
+
+### 5.5 The fine-grid rows with the sweep cap raised
+
+The two `_sweeps2000` rows of section 5.2, if they finished before this report was committed,
+appear in the tables above under their tag; a row absent from the tables did not finish in the
+build's time and has no record.
+
+## 6. Predictions against measurement
+
+<!-- tables49 predictions begin -->
+| Prediction | Measured | Holds |
+|---|---|---|
+| (a) both schemes converge on both grids | standard_216x72_upwind: bounded (falling); standard_216x72_umist: bounded (falling); standard_375x125_upwind: bounded (stalled); standard_375x125_umist: bounded (stalled) | no |
+| (b) the jet within 0.1 u0 up to x/H 2 | standard_216x72_upwind (bounded (falling)): 0.074 at 0.01 m; standard_216x72_upwind_tol1e-13 (bounded (falling)): 0.074 at 0.01 m; standard_216x72_umist (bounded (falling)): 0.073 at 0.01 m; standard_216x72_umist_tol1e-13 (bounded (falling)): 0.073 at 0.01 m; rng_216x72_upwind (bounded (stalled)): 0.073 at 0.01 m; standard_375x125_upwind (bounded (stalled)): 0.081 at 0.01 m; standard_375x125_umist (bounded (stalled)): 0.081 at 0.01 m | yes |
+| (c) the floor's sign right everywhere, its departure above the jet's | standard_216x72_upwind (bounded (falling)): 22 of 28 signs, floor 0.086 against jet 0.179; standard_216x72_upwind_tol1e-13 (bounded (falling)): 22 of 28 signs, floor 0.086 against jet 0.179; standard_216x72_umist (bounded (falling)): 22 of 28 signs, floor 0.088 against jet 0.193; standard_216x72_umist_tol1e-13 (bounded (falling)): 22 of 28 signs, floor 0.088 against jet 0.193; rng_216x72_upwind (bounded (stalled)): 22 of 28 signs, floor 0.120 against jet 0.232; standard_375x125_upwind (bounded (stalled)): 21 of 28 signs, floor 0.099 against jet 0.201; standard_375x125_umist (bounded (stalled)): 21 of 28 signs, floor 0.102 against jet 0.188 | no |
+| (d) schemes differ by under half the larger distance from the data, every line | schemes, 216x72 x3: 0.009 against 0.5 x 0.126; schemes, 216x72 x6: 0.004 against 0.5 x 0.075; schemes, 216x72 y2916: 0.050 against 0.5 x 0.193; schemes, 216x72 y0084: 0.008 against 0.5 x 0.088; schemes, 375x125 x3: 0.006 against 0.5 x 0.140; schemes, 375x125 x6: 0.003 against 0.5 x 0.076; schemes, 375x125 y2916: 0.029 against 0.5 x 0.201; schemes, 375x125 y0084: 0.006 against 0.5 x 0.102 | yes |
+| (e) grids differ by less than either differs from the data, every line | grids, upwind x3: 0.030 against 0.123; grids, upwind x6: 0.024 against 0.074; grids, upwind y2916: 0.122 against 0.179; grids, upwind y0084: 0.014 against 0.086; grids, umist x3: 0.026 against 0.126; grids, umist x6: 0.023 against 0.075; grids, umist y2916: 0.157 against 0.188; grids, umist y0084: 0.013 against 0.088 | yes |
+<!-- tables49 predictions end -->
+
+Orchestrator's, as written in section 3.1:
+
+- (a) fails as the rule classifies the runs: no standard row stops by the rule on either grid,
+  for the reason section 5.2 gives, every one of them falling at the cap.
+- (b) holds on every compared row: the jet line is within 0.1 u0 of the data up to x/H 2 (the
+  table's measured column), and its worst station there is the first one, at the slot's lip.
+- (c) fails on its sign clause and holds on its magnitude clause: at the stations nearest the
+  inlet wall, where the measured floor velocity is slightly forward and the computed (and the
+  published) slightly backward, the signs differ, with both magnitudes small
+  (`ecr002_val017_line_y0084.png`); everywhere else the sign agrees, and the floor's departure
+  exceeds the jet's on no row, the jet's end-wall corner being the larger.
+- (d) holds on every line and both grids, with margin: the schemes differ by a small fraction of
+  either's distance from the data (the ratio column of section 5.4's schemes table), most on the
+  jet line, least on the vertical lines.
+- (e) holds on every line under both schemes, with the jet line the closest (the ratio column
+  of section 5.4's grids table), scored from the fine-grid rows as they stand, stalled at the cap
+  with an estimated iteration error of a hundredth of u0 (the matrix's (a) column), an order
+  below the grid differences on the jet and of their order on the vertical lines.
+
+Builder's (section 3.2), scored apart: (a) wrong, for a reason the builder did not consider,
+the stopping rule's scale rather than the physics; (b) wrong on 216x72, which held where the
+builder expected one or two stations out; (c) wrong on the sign clause, right on the magnitude
+clause; (d) right, with the jet line the closest as expected; (e) wrong at the end wall, where
+the grids differ most but still by less than either differs from the data.
+
+## 7. What this implies
+
+Questions, not decisions.
+
+1. **Upwind for rooms.** (d) holds with margin on both grids: the scheme moves the lines by a
+   fraction of the model's own error, and the product's default stands. Does step 7's other case
+   (VAL-019, the step) need the pair run as well, or is this result enough for rooms?
+2. **The allowance for VAL-017.** ADR-012 G (iii)'s route is the published standard k-epsilon
+   departure, line by line (section 5.3's table), on the lines decision 6 scores (x = H and the
+   ceiling jet), with the symmetry-plane shortfall keeping x = 2H unscored. On both scored lines
+   this solver's departure is below the published one (section 5.4's table), so an allowance of
+   "no worse than Rong and Nielsen" passes as it stands; the alternative is a fixed band in u / u0
+   on each scored line, which the same table gives the basis for. Three cautions: the published
+   values near the jet carry the digitizing uncertainty of section 2.2; the floor line, which the
+   two codes agree on and the data do not, is the model's departure and would fail any band
+   tighter than the published one; and the scored lines' worst stations are the end-wall corner,
+   where every 2D k-epsilon misses the measured eddy.
+3. **Condition (e)'s scale.** The rule cannot stop this case because (e) is scaled by the inlet's
+   eddy viscosity, which here is far below the room's (section 5.2). The product's inlet (5%,
+   0.1 m) gave an inlet eddy viscosity of the core's order, which is why the product rows
+   stopped; a HEPA ceiling with a weaker stated turbulence would behave as this room does. The
+   records show the rule stopping under nu plus the room's largest nu_t with a tighter k and eps
+   tolerance, and under neither change alone. Which scale, and which tolerance, is a change to
+   ADR-012 E and `src/stopping.py` for Alex; until then the VAL-017 test pins the run's record at
+   the cap and expects its convergence clause to fail (strict xfail).
+4. **The k and eps sweep cap.** On 375x125 the implicit solves reach `max_iter` 500 from
+   mid-run (issue 58's open decision), and from there the residual stalls where on 216x72 it
+   keeps falling. The case keeps the product's value; whether the case or the product raises
+   it is Alex's, and the product's 320x120 grid is as fine as this one.
+5. **The test's cost.** The VAL-017 test runs the case to its cap, about eighteen minutes alone
+   on this machine, in the validation tier that CI runs. Does it stay there, or become a harness
+   row as the 80x80 cavity and VAL-018 are?
+6. **Two dimensions at x = 2H.** The solver follows the symmetry-plane profile there more closely
+   than the flux argument of section 2.2 expects on average; the integrated shortfall is spread
+   over the stations rather than concentrated in the return flow. Unscored, as decided.
+
+## 8. Reproducing
+
+From the repository root, `.venv` active, `results/builder33/sources/` and
+`results/builder33b/sources/` holding the workbook and the PDF named in section 2.2 (untracked;
+addresses and checksums there):
+
+```
+python docs/reports/probe49/digitize49.py curves      # the published line (probe venv: xlrd, pymupdf, cv2)
+python docs/reports/probe49/data49.py                 # the tables of validation/annex20.py
+bash docs/reports/probe49/run49.sh flows              # the five rows (an hour on 216x72, two on 375x125)
+python docs/reports/probe49/annex49.py run 216x72 --tol 1e-13 --max-iter 2000 --cap 12000 --tag tol1e-13
+python docs/reports/probe49/annex49.py run 216x72 --scheme umist --tol 1e-13 --max-iter 2000 --cap 12000 --tag tol1e-13
+bash docs/reports/probe49/run49.sh tables             # every table, to results/builder49/tables_*.json
+bash docs/reports/probe49/run49.sh figures            # every figure, beside this report
+python docs/reports/probe49/assemble49.py --check     # the report's tables against the records
+pytest tests/test_annex20.py -v                       # the unit tests, then the VAL-017 run
+```

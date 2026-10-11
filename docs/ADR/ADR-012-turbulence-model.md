@@ -972,6 +972,17 @@ stays OPEN (decision 6). A further reference the decision did not list: the W/H 
 profile at x/H = 2.0 and Re 7,100 ([4] figure 10), the measurement nearest two dimensions at that
 section, jet and floor return only (premise review S5).
 
+*Note 2026-10-11 (ECR-002 step 7, first case; prompt 49).* Built and measured as above
+(`configs/validation_annex20.yaml`, `validation/annex20.py`, `tests/test_annex20.py`;
+`docs/reports/ecr002_val017_annex20.md`), on 216x72 and on 375x125, the coarsest grid on which the
+slot and the outlet both fall on whole faces; the loader scales the inlet velocity to the covered
+faces. The published prediction was digitized from [10]'s figures 5 and 9 and stored at the
+stations beside the data. No standard row stops by the rule: section E's condition (e) is scaled
+by the inlet eddy viscosity, about twice nu here, while the room makes several hundred nu, so the
+nu_t step floors (at the k and eps solves' tolerance) above what (e) asks; the fields at the cap
+are compared, labelled. The threshold stays OPEN (decision 6); the report's section 7 puts the
+allowance, (e)'s scale and the k and eps sweep cap to Alex.
+
 **(iv) The product room converges.** VAL-018: `configs/clean_room_default.yaml` with the model
 on, `stopping_rule: error_estimate`, `mass_imbalance_tol` from ADR-011 G's formula at its t_end,
 stops by `error_estimate_and_continuity` under rule version 4 within its cap, on the product

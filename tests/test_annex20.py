@@ -7,9 +7,20 @@ measurements by validation.annex20, which stores them with their provenance
 and Rong and Nielsen's (2008) published standard k-epsilon prediction beside
 them. No threshold is set: ADR-012 decision 6 leaves the allowance OPEN until
 Alex sets it from the first coupled results, which are prompt 49's
-(docs/reports/ecr002_val017_annex20.md). The validation test here checks that
-the case converges and reproduces its recorded line values, and prints the
-comparison with the data without scoring it.
+(docs/reports/ecr002_val017_annex20.md).
+
+The validation tests run the case once, on 216x72 under the default scheme,
+as the suite loads it (about 18 minutes alone on this machine; the suite's
+long case, as the 80x80 cavity is judged from a harness row). The solve
+reaches its 10,000-iteration cap with the residual still falling: conditions
+(a) to (d) of the stopping rule hold at the cap, and condition (e) cannot,
+because its scale is the inlet's eddy viscosity (2.2 nu here) while the room
+makes up to 900 nu, so the eddy-viscosity step's floor sits above what (e)
+asks (the report, section 5.2). The first test pins the record of that run
+(the readings and the four lines, to the recorded rounding) and prints the
+comparison with the data without scoring it; the second asserts the stop by
+the rule and is expected to fail, strictly, until Alex decides on (e)'s
+scale, so the decision flips it rather than a quiet pass.
 
 The unit tests pin the loader (the scaled flux on both presets, the outlet
 taking the whole inflow, the file's settings), the stored data (counts,
@@ -23,6 +34,7 @@ import pytest
 
 from src.boundary_staggered import StaggeredBoundary
 from src.mesh import Mesh
+from src.solver_staggered import StaggeredSolver
 from validation import annex20
 from validation.cases import (
     ANNEX20_GRIDS,
@@ -34,6 +46,131 @@ from validation.cases import (
 
 U0_H = annex20.U0 * annex20.SLOT
 NU_SPEC = 15.3e-6
+RECORD_PRESET = "val017_216x72"
+# The record of the committed case on 216x72 under the default scheme (prompt
+# 49, results/builder49/standard_216x72_upwind, commit 6be9c2f): the stop,
+# the residual and the worst per-cell imbalance at the cap, and u / u0 at the
+# measurement stations of the four lines, rounded to five decimals.
+RECORD_STOP = "max_simple_iter"
+RECORD_OUTER = 10000
+RECORD_RESIDUAL_BOUND = 1.0e-8  # the record's 6.9e-10, with room for another machine
+RECORD_ROUNDING = 2.0e-5  # five decimals, and the iteration error at the cap (1e-6 u0)
+RECORD_LINES: dict[str, tuple[float, ...]] = {
+    "x3": (
+        0.81869,
+        0.72997,
+        0.63237,
+        0.56600,
+        0.50661,
+        0.41295,
+        0.27224,
+        0.16616,
+        0.11402,
+        0.05887,
+        0.03237,
+        0.01133,
+        -0.01777,
+        -0.04530,
+        -0.07193,
+        -0.09764,
+        -0.12458,
+        -0.13839,
+        -0.14770,
+        -0.15488,
+        -0.16114,
+        -0.16600,
+        -0.16904,
+        -0.16927,
+        -0.15160,
+    ),
+    "x6": (
+        0.58298,
+        0.62671,
+        0.61521,
+        0.59073,
+        0.56551,
+        0.50730,
+        0.45451,
+        0.37402,
+        0.29706,
+        0.20497,
+        0.13233,
+        0.07701,
+        0.01916,
+        -0.03464,
+        -0.08849,
+        -0.13970,
+        -0.19494,
+        -0.22903,
+        -0.25513,
+        -0.27627,
+        -0.29299,
+        -0.30861,
+        -0.32173,
+        -0.33017,
+        -0.33548,
+    ),
+    "y2916": (
+        1.00781,
+        1.01921,
+        1.00547,
+        0.95640,
+        0.89901,
+        0.84603,
+        0.80017,
+        0.76281,
+        0.72887,
+        0.69642,
+        0.66788,
+        0.64654,
+        0.62183,
+        0.59002,
+        0.56273,
+        0.52763,
+        0.48048,
+        0.34576,
+        0.24082,
+        0.18316,
+        0.11168,
+        0.05880,
+        0.02398,
+        0.00076,
+        -0.00408,
+        -0.02135,
+        -0.03665,
+        -0.04137,
+    ),
+    "y0084": (
+        0.00039,
+        -0.00605,
+        -0.01405,
+        -0.02171,
+        -0.03079,
+        -0.04099,
+        -0.05246,
+        -0.06823,
+        -0.07671,
+        -0.08677,
+        -0.09736,
+        -0.10955,
+        -0.12820,
+        -0.15038,
+        -0.17117,
+        -0.20319,
+        -0.23212,
+        -0.26216,
+        -0.28921,
+        -0.31762,
+        -0.33658,
+        -0.34525,
+        -0.33687,
+        -0.29931,
+        -0.19608,
+        -0.06849,
+        0.13874,
+        0.31025,
+    ),
+}
 
 
 def _layer(config) -> tuple[Mesh, StaggeredBoundary]:
@@ -216,3 +353,64 @@ class TestSampling:
             annex20.line_errors(np.zeros(3), (0.0, 0.0))
         with pytest.raises(ValueError, match="holds no station"):
             annex20.line_errors(np.zeros(2), (None, None))
+
+
+@pytest.fixture(scope="module")
+def annex20_216x72() -> dict:
+    """The committed case on 216x72 under the default scheme, run to its stop or cap."""
+    config = load_preset(RECORD_PRESET)
+    mesh = Mesh(config)
+    solver = StaggeredSolver(mesh, config, StaggeredBoundary(mesh, config))
+    solver.solve_steady()
+    faces = solver.face_velocities
+    assert faces is not None
+    return {
+        "config": config,
+        "solver": solver,
+        "lines": annex20.sample_lines(mesh, np.array(faces.u)),
+    }
+
+
+@pytest.mark.validation
+def test_annex20_216x72_reproduces_its_record_val017(annex20_216x72: dict) -> None:
+    """VAL-017: the run reaches its record's stop and reproduces its four lines.
+
+    No threshold against the data is applied (ADR-012 decision 6, OPEN); the
+    comparison is printed. The solve raises on a negative k or eps, so
+    positivity is asserted by running at all; no pressure correction and no
+    k or eps solve reaches its cap.
+    """
+    solver, config = annex20_216x72["solver"], annex20_216x72["config"]
+    assert solver.stop_reason == RECORD_STOP
+    assert len(solver.residual_history) == RECORD_OUTER
+    assert solver.residual_history[-1] < RECORD_RESIDUAL_BOUND
+    assert solver.pressure_cap_hits == 0
+    assert solver.rule_version == 4
+    assert float(np.abs(solver.last_mass_imbalance).max()) < config.mass_imbalance_tol
+    state = solver.turbulence_state
+    assert state is not None
+    assert float(state.k[state.k > 0.0].min()) > 0.0
+    for key, line in annex20.LINES.items():
+        values = annex20_216x72["lines"][key]
+        recorded = np.array(RECORD_LINES[key])
+        against_data = annex20.line_errors(values, line.measured)
+        against_record = np.abs(values - recorded).max()
+        print(
+            f"VAL-017 {line.label}: against the data max |d| {against_data.max_abs:.4f}, "
+            f"rms {against_data.rms:.4f} (unscored); against the record "
+            f"{against_record:.2e}"
+        )
+        assert against_record < RECORD_ROUNDING, key
+
+
+@pytest.mark.validation
+@pytest.mark.xfail(
+    strict=True,
+    reason="condition (e) cannot hold on this case with its inlet scale "
+    "(docs/reports/ecr002_val017_annex20.md, section 5.2); for Alex",
+)
+def test_annex20_216x72_stops_by_the_rule_val017(annex20_216x72: dict) -> None:
+    """VAL-017: the coupled solve stops by its rule, condition (e) included."""
+    solver = annex20_216x72["solver"]
+    assert solver.converged is True
+    assert solver.stop_reason == "error_estimate_and_continuity"
