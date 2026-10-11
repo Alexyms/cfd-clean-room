@@ -376,15 +376,24 @@ reproduces 1e-8; the bounded rows neither converge nor grow, wandering without a
 located on 80x30 in the column between the door wall and the server rack. Alex decided on
 2026-10-09: ten sweeps, a looser pressure tolerance and a larger cap for the product room in step
 8, the corner rule kept, and the coupled solve built first with no aid (ADR-012 D's note).
-ECR-002 step 6, the coupled solve, is built on `feature/ecr002-coupled-solve` and waits for review
-and test: the scalable wall functions, the k and eps step inside the outer iteration, and a fifth
+ECR-002 step 6, the coupled solve, is merged: the scalable wall functions, the k and eps step inside the outer iteration, and a fifth
 stopping condition that refuses to stop while the eddy viscosity moves, with the laminar
 validation results bitwise. Plane Couette flow (VAL-016) passes as Alex split it: the code
 reproduces its own one-dimensional limit, and the model's core k has the property the design
 expects, while the two-dimensional strain beside a wall overstates the turbulence there on every
 grid, a known limitation (ADR-012 C). The coupled iteration cycles at the pseudo-time step's
-upper bound and converges below it. Next: review and test 45, then prompt 46, the product room
-under the model.
+upper bound and converges below it. The product room under the model was measured in prompts 46
+and 47 (`docs/reports/ecr002_step6_product_coupled.md`, `docs/reports/ecr002_step6_comparative.md`):
+the coarse-grid cycle of the standard variant accompanies the limited face value of k and eps
+(its branch switching; cause not shown), and
+160x60 and 320x120 represent every stated position of the room exactly. Alex decided on
+2026-10-10 that k and eps are advected by upwind (a turbulence key, upwind by default) and that the
+product grid is 320x120 with 160x60 its check. Prompt 48 built the key on
+`feature/ecr002-turbulence-advection` (`docs/reports/ecr002_step6_variants.md`): the standard
+variant converges on both exact grids, bit for bit prompt 47's upwind runs, and RNG converges on
+neither, so the comparison between the variants has no pair and the product runs the standard
+variant alone until VAL-020 decides between them. Next: review and test 48, then Alex's
+questions in that report's section 7 (ADR-012 decision 2, VAL-018's variant clause, RNG's cycle).
 
 Deferred findings from earlier pull requests were open as GitHub issues, and every open one now
 has a disposition. The cleanup pull request (branch `fix/deferred-findings-cleanup`) closes issues

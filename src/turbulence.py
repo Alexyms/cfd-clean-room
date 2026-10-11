@@ -18,7 +18,9 @@ with RNG's ``R = C_mu eta^3 (1 - eta / eta_0) / (1 + beta eta^3) eps^2 / k``,
 The step (ADR-012 C). One step of the transport scheme
 (``src/scalar_scheme.py``) per quantity, in three parts:
 
-1. advection with the UMIST-limited QUICK face value, forward Euler;
+1. advection with the configured face value, forward Euler: plain upwind
+   (``advection_scheme`` absent or ``upwind``, ADR-012 C's note of
+   2026-10-10) or the UMIST-limited QUICK value (``umist``);
 2. the explicit growth, ``dt P`` for k and ``dt (C_1 (eps / k) P - min(R, 0))``
    for eps, from the previous iterate;
 3. one implicit solve per quantity for diffusion and decay together, the
@@ -81,7 +83,7 @@ import numpy as np
 
 from src.boundary_registry import VELOCITY_INLET, BoundaryRegistry
 from src.boundary_staggered import StaggeredBoundary
-from src.config import RNG, STANDARD, SimConfig
+from src.config import RNG, STANDARD, UPWIND, SimConfig
 from src.mesh import SOLID, Mesh
 from src.scalar_scheme import advective_flux, implicit_step, mesh_axes
 from src.staggered import (
@@ -417,8 +419,9 @@ class KEpsilonModel:
     mesh : Mesh
         The computational mesh, uniform or stretched.
     config : SimConfig
-        Must carry a ``turbulence`` section: variant, cfl_number, max_iter,
-        tol. Supplies the density and molecular viscosity.
+        Must carry a ``turbulence`` section: variant, cfl_number,
+        advection_scheme, max_iter, tol. Supplies the density and molecular
+        viscosity.
 
     Attributes
     ----------
@@ -444,6 +447,7 @@ class KEpsilonModel:
         self.constants: VariantConstants = VARIANTS[spec.variant]
         self._mesh = mesh
         self._cfl = spec.cfl_number
+        self._upwind = spec.advection_scheme == UPWIND
         self._max_iter = spec.max_iter
         self._tol = spec.tol
         self._nu = config.mu / config.rho
@@ -863,9 +867,9 @@ class KEpsilonModel:
         inflow_v: np.ndarray,
         dt_cell: float | np.ndarray,
     ) -> np.ndarray:
-        """Step 1: forward Euler with the limited face value, the step per cell."""
-        adv_u = advective_flux(q, flux_u, inflow_u, self._axis_x, False)
-        adv_v = advective_flux(q.T, flux_v.T, inflow_v.T, self._axis_y, False).T
+        """Step 1: forward Euler with the configured face value, the step per cell."""
+        adv_u = advective_flux(q, flux_u, inflow_u, self._axis_x, self._upwind)
+        adv_v = advective_flux(q.T, flux_v.T, inflow_v.T, self._axis_y, self._upwind).T
         divergence = adv_u[:, 1:] - adv_u[:, :-1] + adv_v[1:, :] - adv_v[:-1, :]
         return q - dt_cell * divergence / self._volume
 

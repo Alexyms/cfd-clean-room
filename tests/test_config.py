@@ -1467,12 +1467,14 @@ class TestTurbulenceSection:
     def test_present_section_is_read_with_standard_the_default(
         self, tmp_path: Path
     ) -> None:
+        """A present section parses with the standard variant and upwind advection by default."""
         spec = SimConfig.from_dict(self._raw(tmp_path)).turbulence
         assert spec == TurbulenceSpec(
             model="k_epsilon",
             variant="standard",
             wall_treatment="scalable_wall_functions",
             cfl_number=0.4,
+            advection_scheme="upwind",
             alpha_turbulence=0.7,
             max_iter=300,
             tol=1e-9,
@@ -1492,6 +1494,46 @@ class TestTurbulenceSection:
             given.alpha_turbulence,
             given.max_iter,
         ) == ("rng", 0.5, 1.0, 1)
+
+    @pytest.mark.parametrize("scheme", ["upwind", "umist"])
+    def test_the_advection_scheme_is_read_as_given(
+        self, tmp_path: Path, scheme: str
+    ) -> None:
+        """Either value is read as stated (ADR-012 I, note of 2026-10-10)."""
+        spec = SimConfig.from_dict(
+            self._raw(tmp_path, advection_scheme=scheme)
+        ).turbulence
+        assert spec.advection_scheme == scheme
+
+    def test_the_two_sections_advection_schemes_are_independent(
+        self, tmp_path: Path
+    ) -> None:
+        """Absent from both sections, k and eps take upwind and the particles
+        keep umist; a value in one section does not reach the other."""
+        raw = self._raw(tmp_path)
+        raw["transport"] = {
+            "cfl_number": 0.1,
+            "max_diffusion_iter": 200,
+            "diffusion_tol": 1e-8,
+        }
+        config = SimConfig.from_dict(raw)
+        assert (
+            config.turbulence.advection_scheme,
+            config.transport.advection_scheme,
+        ) == (
+            "upwind",
+            "umist",
+        )
+        raw["turbulence"]["advection_scheme"] = "umist"
+        raw["transport"]["advection_scheme"] = "upwind"
+        config = SimConfig.from_dict(raw)
+        assert (
+            config.turbulence.advection_scheme,
+            config.transport.advection_scheme,
+        ) == (
+            "umist",
+            "upwind",
+        )
 
     def test_the_section_changes_nothing_else_in_the_configuration(
         self, tmp_path: Path
@@ -1541,6 +1583,12 @@ class TestTurbulenceSection:
             ("cfl_number", True, TypeError),
             ("cfl_number", "0.4", TypeError),
             ("cfl_number", float("nan"), ValueError),
+            ("advection_scheme", "quick", ValueError),
+            ("advection_scheme", "UPWIND", ValueError),
+            ("advection_scheme", "", ValueError),
+            ("advection_scheme", 1, TypeError),
+            ("advection_scheme", True, TypeError),
+            ("advection_scheme", None, TypeError),
             ("alpha_turbulence", 0.0, ValueError),
             ("alpha_turbulence", -0.5, ValueError),
             ("alpha_turbulence", 1.0000001, ValueError),
