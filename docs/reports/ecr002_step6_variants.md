@@ -216,7 +216,7 @@ smaller. Its largest velocity change sits where that one did, in the gap above r
 about 1.3 and 1.5 m up (the bounded table's located column; prompt 47's report, section 5.3). The
 19-iteration recurrence that was clean on both grids under the limited value is gone; the
 strongest recurrence is now a longer one on each grid (the RNG table's last column). The velocity
-step is larger under upwind on both grids, an eighth to a seventh of the velocity scale against
+step is larger under upwind on both grids, about an eighth of the velocity scale on 160x60 and a sixth on 320x120 against
 about a thirteenth, and the tail's residual is higher; the per-cell imbalance at the stop stays
 tens of times its tolerance on 160x60 and over a hundred on 320x120 (the RNG table).
 

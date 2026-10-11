@@ -1467,7 +1467,7 @@ class TestTurbulenceSection:
     def test_present_section_is_read_with_standard_the_default(
         self, tmp_path: Path
     ) -> None:
-        """Changed in prompt 48: the spec carries advection_scheme, upwind when absent."""
+        """A present section parses with the standard variant and upwind advection by default."""
         spec = SimConfig.from_dict(self._raw(tmp_path)).turbulence
         assert spec == TurbulenceSpec(
             model="k_epsilon",

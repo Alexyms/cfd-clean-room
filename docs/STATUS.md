@@ -384,7 +384,8 @@ expects, while the two-dimensional strain beside a wall overstates the turbulenc
 grid, a known limitation (ADR-012 C). The coupled iteration cycles at the pseudo-time step's
 upper bound and converges below it. The product room under the model was measured in prompts 46
 and 47 (`docs/reports/ecr002_step6_product_coupled.md`, `docs/reports/ecr002_step6_comparative.md`):
-the coarse-grid cycle of the standard variant lives in the limited face value of k and eps, and
+the coarse-grid cycle of the standard variant accompanies the limited face value of k and eps
+(its branch switching; cause not shown), and
 160x60 and 320x120 represent every stated position of the room exactly. Alex decided on
 2026-10-10 that k and eps are advected by upwind (a turbulence key, upwind by default) and that the
 product grid is 320x120 with 160x60 its check. Prompt 48 built the key on
