@@ -53,9 +53,16 @@ at the inlet wall, and the top station of x = 2H, where the line turns to
 the ceiling within a pixel row) holds None. The record with every
 intermediate number is results/builder49/rong_nielsen_2008_digitized.json.
 
-No threshold is set here: ADR-012 decision 6 leaves VAL-017's allowance OPEN
-until Alex sets it from these first coupled results. The errors this module
-computes are reported, not scored.
+The allowance (Alex, 2026-10-11; ADR-012 decision 6, amended): on each line
+of SCORED_LINES, x = H and the ceiling jet, the RMS of u / u0 against the
+measurements, over the stations the line holds, is no larger than the
+published prediction's RMS against the same measurements on that line
+(``published_rms``: 0.0703 at x = H over its 25 stations, 0.1356 on the jet
+over the 27 the published line reaches, the 0.070 and 0.136 the decision
+cites). The allowance is computed from the stored values, so it has no
+second copy. x = 2H and the floor are reported, not scored: the measured
+room is three-dimensional at x = 2H, and the floor line is the model's own
+departure, which the published run shares. ``score_lines`` applies it.
 """
 
 from dataclasses import dataclass
@@ -378,6 +385,104 @@ def line_errors(
         rms=float(np.sqrt(np.mean(diff**2))),
         stations=int(held.sum()),
     )
+
+
+# The lines decision 6 scores, in the order the harness records them.
+SCORED_LINES: tuple[str, ...] = ("x3", "y2916")
+
+
+@dataclass(frozen=True)
+class LineScore:
+    """One line's RMS against the measurements, beside the published RMS.
+
+    Parameters
+    ----------
+    key : str
+        The line's key in LINES.
+    rms : float
+        RMS of u / u0 minus the measurements over every station of the line.
+    stations : int
+        How many stations the RMS is taken over: all the line holds.
+    allowance : float
+        The published prediction's RMS against the measurements on the same
+        line (``published_rms``).
+    scored : bool
+        Whether the line is one of SCORED_LINES.
+    passed : bool or None
+        ``rms <= allowance`` on a scored line; None on an unscored one.
+    """
+
+    key: str
+    rms: float
+    stations: int
+    allowance: float
+    scored: bool
+    passed: bool | None
+
+
+def published_rms(key: str) -> float:
+    """The published prediction's RMS against the measurements on one line.
+
+    Parameters
+    ----------
+    key : str
+        A key of LINES.
+
+    Returns
+    -------
+    float
+        RMS of the published u / u0 minus the measured, over the stations the
+        published line reaches.
+    """
+    line = LINES[key]
+    return line_errors(np.array(line.measured), line.published).rms
+
+
+def score_lines(values: dict[str, np.ndarray]) -> dict[str, LineScore]:
+    """Each line's RMS against the measurements, and on a scored line pass or fail.
+
+    Parameters
+    ----------
+    values : dict[str, np.ndarray]
+        u / u0 at each line's stations, as ``sample_lines`` returns them; a
+        value for every key of LINES.
+
+    Returns
+    -------
+    dict[str, LineScore]
+        One score per key of LINES, in LINES' order.
+
+    Raises
+    ------
+    ValueError
+        If a line is missing, its values are not one per station, or a value
+        is not finite: a NaN would make the RMS NaN, and ``NaN <= allowance``
+        is False, so the line would fail without saying why.
+    """
+    missing = [key for key in LINES if key not in values]
+    if missing:
+        raise ValueError(f"no values for the lines {missing}")
+    scores = {}
+    for key, line in LINES.items():
+        sampled = np.asarray(values[key], dtype=np.float64)
+        if sampled.shape != (len(line.stations),):
+            raise ValueError(
+                f"{key}: {sampled.shape} values against {len(line.stations)} stations"
+            )
+        if not np.isfinite(sampled).all():
+            raise ValueError(f"{key}: a sampled value is not finite")
+        errors = line_errors(sampled, line.measured)
+        allowance = published_rms(key)
+        scored = key in SCORED_LINES
+        scores[key] = LineScore(
+            key=key,
+            rms=errors.rms,
+            stations=errors.stations,
+            allowance=allowance,
+            scored=scored,
+            passed=bool(errors.rms <= allowance) if scored else None,
+        )
+    return scores
 
 
 def vertical_line_flux(line: Line) -> float:

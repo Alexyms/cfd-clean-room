@@ -1,16 +1,17 @@
-"""Plant each defect of prompt 50's commit A in a scratch copy and list the tests that fail.
+"""Plant each defect of prompt 50's commits A and C in a scratch copy; list the tests that fail.
 
 Usage:
     python plant50.py PYTHON
 
 PYTHON is the interpreter that runs pytest. The script copies src/, tests/,
-validation/, configs/ and pyproject.toml of the tree it sits in to
+validation/, configs/, scripts/ and pyproject.toml of the tree it sits in to
 results/builder50/plant_tree/ (scratch, rebuilt every run), so the working
 tree is never edited. For each plant it changes one line of the copy, runs
-the rule's and the coupled solve's tests there, and puts the file back byte
-for byte. The output is JSON: the failing tests with no defect (the control)
-and under each plant, also written to results/builder50/plants.json. A plant
-counts as caught only when pytest exits 1 (tests ran and failed).
+the rule's, the coupled solve's, the Annex 20 and the harness tests there,
+and puts the file back byte for byte. The output is JSON: the failing tests
+with no defect (the control) and under each plant, also written to
+results/builder50/plants.json. A plant counts as caught only when pytest
+exits 1 (tests ran and failed).
 """
 
 import json
@@ -22,13 +23,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 TREE = ROOT / "results" / "builder50" / "plant_tree"
 OUT = ROOT / "results" / "builder50" / "plants.json"
-COPIED = ("src", "tests", "validation", "configs")
+COPIED = ("src", "tests", "validation", "configs", "scripts")
 
 # The tests the plants are aimed at: condition (e) on synthetic histories, and
 # what the coupled solve hands the rule.
 TESTS = (
     "tests/test_stopping.py",
     "tests/test_coupled_solve.py",
+    "tests/test_annex20.py",
+    "tests/test_benchmark.py",
 )
 
 SCALE_LINE = "                nu_scale = viscosity_scale(self._mu / self._rho, state.nu_t, fluid)"
@@ -91,6 +94,45 @@ PLANTS = {
         "src/stopping.py",
         "        if not isinstance(viscosity_condition, bool):",
         "        if False:",
+    ),
+    # Commit C: the allowance (validation/annex20.py) and the row.
+    "the comparison reversed": (
+        "validation/annex20.py",
+        "            passed=bool(errors.rms <= allowance) if scored else None,",
+        "            passed=bool(errors.rms >= allowance) if scored else None,",
+    ),
+    "the RMS over the published line's stations only": (
+        "validation/annex20.py",
+        "        errors = line_errors(sampled, line.measured)",
+        "        errors = line_errors(sampled, tuple("
+        "None if q is None else m for q, m in zip(line.published, line.measured)))",
+    ),
+    "a non-finite value accepted": (
+        "validation/annex20.py",
+        "        if not np.isfinite(sampled).all():",
+        "        if False:",
+    ),
+    "x = 2H scored": (
+        "validation/annex20.py",
+        'SCORED_LINES: tuple[str, ...] = ("x3", "y2916")',
+        'SCORED_LINES: tuple[str, ...] = ("x3", "x6", "y2916")',
+    ),
+    "the smaller ratio as the row's value": (
+        "scripts/benchmark.py",
+        '        "value": max(score.rms / score.allowance for score in scored),',
+        '        "value": min(score.rms / score.allowance for score in scored),',
+    ),
+    "every line in the row's pass": (
+        "scripts/benchmark.py",
+        "    scored = [scores[key] for key in annex20.SCORED_LINES]",
+        "    scored = list(scores.values())",
+    ),
+    "the turbulence section left out of the params": (
+        "scripts/benchmark.py",
+        "    if config.turbulence is not None:\n"
+        '        params["turbulence"] = dataclasses.asdict(config.turbulence)',
+        "    if False:\n"
+        '        params["turbulence"] = dataclasses.asdict(config.turbulence)',
     ),
 }
 
