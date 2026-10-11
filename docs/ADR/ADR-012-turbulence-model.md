@@ -544,6 +544,15 @@ covers it at the same Courant bound. The cost the alternatives name, upwind's nu
 where k and eps are made in thin shear layers, is what step 7 measures: its validation cases run
 under both schemes.
 
+*Note, 2026-10-10 (built; prompt 48).* Built as above: `KEpsilonModel` reads the key and passes it
+to the shared `advective_flux`, the call prompt 47's upwind arm made from a subclass. Through the
+key the standard variant reproduces that arm bit for bit on 80x30, 160x60 and 320x120, every
+saved field and the residual history included. The positivity tests, their control, the
+wall-crossing test and the VAL-001 constancy test run under both schemes. RNG under upwind stays
+bounded on both exact grids, in the same gap above return 2 and with a larger velocity step than
+under the limited value (`docs/reports/ecr002_step6_variants.md`, section 5.4), so its cycle is not
+the limiter's.
+
 ## D. Coupling into the flow solver (REQ-S14, S16, S18 and S01, proposed; decision 1)
 **The viscosity field.** `mu_e = mu + mu_t` per cell. `MomentumPredictor` gains an optional
 cell field, None by default; with None the assembly runs the present scalar lines unchanged, so
@@ -1106,7 +1115,8 @@ drafted (section E's note); `StaggeredSolver.eddy_viscosity` is `turbulence_stat
 *Note, 2026-10-10 (Alex; prompt 48).* The turbulence section gains `advection_scheme`, `upwind`
 or `umist`, the transport section's key of the same name and values, validated as the other keys
 are (type, value, any other string refused). Absent means `upwind` (section C's note of the same
-date). The transport section's key, and its `umist` default, are unchanged.
+date). The transport section's key, and its `umist` default, are unchanged. Built as drafted
+(prompt 48): `TurbulenceSpec.advection_scheme`, parsed by `_require_choice` as `variant` is.
 
 **Draft contracts** (SYSTEM.md section 4 gains them when ECR-002 is accepted).
 
