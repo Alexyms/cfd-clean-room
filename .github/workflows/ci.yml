@@ -61,21 +61,6 @@ jobs:
       - name: Ensure test directories exist
         run: mkdir -p tests reports
 
-      - name: Run unit tests
-        run: |
-          source .venv/bin/activate
-          pytest tests/ -v -m unit --junitxml=reports/unit-results.xml || true
-
-      - name: Run integration tests
-        run: |
-          source .venv/bin/activate
-          pytest tests/ -v -m integration --junitxml=reports/integration-results.xml || true
-
-      - name: Run validation tests
-        run: |
-          source .venv/bin/activate
-          pytest tests/ -v -m validation --junitxml=reports/validation-results.xml || true
-
       - name: Run all tests with coverage
         run: |
           source .venv/bin/activate
