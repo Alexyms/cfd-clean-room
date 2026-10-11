@@ -103,7 +103,10 @@ class TestLoader:
             assert preset.endswith(f"{nx}x{ny}")
 
     def test_the_file_holds_the_case_as_the_design_states_it(self) -> None:
-        """Standard variant, the default scheme, the product's solver keys."""
+        """Standard variant, the default scheme, the product's solver keys but the cap.
+
+        The cap is the stop under rule version 5 plus 20%, rounded up (prompt 50).
+        """
         config = load_case("annex20")
         assert config.turbulence is not None
         assert config.turbulence.variant == "standard"
@@ -112,7 +115,7 @@ class TestLoader:
         assert config.stopping_rule == "error_estimate"
         assert config.momentum_sweeps == 10
         assert config.pressure_rtol == 1.0e-4
-        assert config.max_simple_iter == 10000
+        assert config.max_simple_iter == 14000
         assert (config.room_width, config.room_height) == (9.0, 3.0)
         assert config.obstacles == []
 
