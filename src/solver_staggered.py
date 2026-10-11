@@ -62,7 +62,10 @@ collocated rule: the residual below ``convergence_tol``. ``error_estimate``
 prescribed boundary velocity below ``iteration_error_tol``, the worst
 per-cell mass imbalance below ``mass_imbalance_tol``, the summed imbalance
 over the through-flow below ``iteration_error_tol``, and the absolute signed
-domain sum of the imbalance below ``mass_imbalance_tol``. Reaching
+domain sum of the imbalance below ``mass_imbalance_tol``; with the turbulence
+section, condition (e) as well, the eddy viscosity's estimated iteration
+error over the molecular nu plus the median nu_t of the FLUID cells, formed
+each outer iteration from the iterate just computed. Reaching
 ``max_simple_iter`` is not convergence under either.
 
 A pressure correction that stops at ``max_pressure_iter`` is reported, not
@@ -95,6 +98,7 @@ from src.stopping import (
     ErrorEstimateRule,
     ImbalanceSummary,
     IterationState,
+    viscosity_scale,
 )
 from src.turbulence import (
     KEpsilonModel,
@@ -119,7 +123,7 @@ def rule_version(config: SimConfig) -> int | None:
     int or None
         ``StaggeredSolver(...).rule_version`` without building a solver, for
         a script that decides from it whether a saved solve can be reused:
-        None under velocity_step, 4 under error_estimate with the turbulence
+        None under velocity_step, 5 under error_estimate with the turbulence
         section (condition (e) on, ADR-012 E), 3 without it.
     """
     if config.stopping_rule != ERROR_ESTIMATE:
@@ -188,7 +192,7 @@ class StaggeredSolver:
         per unit depth; None under velocity_step.
     rule_version : int or None
         Read-only. The version of the stopping rule a solve applies, its
-        rule's ``version``: 3, or 4 with the turbulence section, whose
+        rule's ``version``: 3, or 5 with the turbulence section, whose
         condition (e) bounds the eddy viscosity's iteration error; None
         under velocity_step. The harness and the scripts store it with what
         they save (``rule_version`` gives it from a configuration).
@@ -284,8 +288,8 @@ class StaggeredSolver:
         rule read the same F. It is not built from reference_velocity, the
         inflow over one cell spacing: that moves with the grid, and so would
         the bound on the summed imbalance. With the turbulence section the
-        rule takes condition (e), its nu_scale the molecular nu plus the
-        largest inlet eddy viscosity (ADR-012 E).
+        rule takes condition (e), and solve_steady passes it each outer
+        iteration's scale (``viscosity_scale``, ADR-012 E).
         """
         if self._stopping_rule != ERROR_ESTIMATE:
             return None
@@ -300,9 +304,8 @@ class StaggeredSolver:
         # a probe substitutes still fits.
         if self._walls is None:
             return ErrorEstimateRule(scale, self._flux_scale, *self._rule_tols)
-        nu_scale = self._mu / self._rho + self._walls.largest_inlet_eddy_viscosity()
         return ErrorEstimateRule(
-            scale, self._flux_scale, *self._rule_tols, nu_scale=nu_scale
+            scale, self._flux_scale, *self._rule_tols, viscosity_condition=True
         )
 
     def _imbalance_summary(self, u: np.ndarray, v: np.ndarray) -> ImbalanceSummary:
@@ -457,13 +460,14 @@ class StaggeredSolver:
             t2 = perf_counter()
             self.stage_seconds["pressure"] += t2 - t1
 
-            viscosity_step = None
+            viscosity_step = nu_scale = None
             if state is not None:
                 nu_t_old = state.nu_t
                 state = self._turbulence_step(state, u, v, iteration)
                 viscosity_step = float(
                     np.max(np.abs(state.nu_t[self._live] - nu_t_old[self._live]))
                 )
+                nu_scale = viscosity_scale(self._mu / self._rho, state.nu_t, fluid)
                 t3 = perf_counter()
                 self.stage_seconds["turbulence"] += t3 - t2
                 t2 = t3
@@ -500,7 +504,10 @@ class StaggeredSolver:
                     stop = rule.update(max(du, dv), imbalance)
                 else:
                     stop = rule.update(
-                        max(du, dv), imbalance, viscosity_step=viscosity_step
+                        max(du, dv),
+                        imbalance,
+                        viscosity_step=viscosity_step,
+                        nu_scale=nu_scale,
                     )
 
             if iteration % 50 == 0 or stop:

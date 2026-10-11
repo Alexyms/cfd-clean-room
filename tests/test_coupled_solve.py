@@ -19,7 +19,7 @@ import pytest
 from src import solver_staggered
 from src.boundary_staggered import StaggeredBoundary
 from src.config import SimConfig
-from src.mesh import Mesh
+from src.mesh import FLUID, SOLID, Mesh
 from src.momentum import MomentumPredictor
 from src.pressure import PressureCorrector
 from src.solver_staggered import StaggeredSolver, rule_version
@@ -221,12 +221,12 @@ class TestWhatTheSolverExposes:
         assert set(solver.stage_seconds) == {"momentum", "pressure", "correct"}
 
     def test_the_rule_version_is_recorded(self) -> None:
-        """4 with condition (e), 3 without; the function agrees without a solver."""
+        """5 with condition (e), 3 without; the function agrees without a solver."""
         config, laminar_config = _channel(), _channel(turbulence=False)
         _, _, coupled = _solver(config)
         _, _, laminar = _solver(laminar_config)
         assert laminar.rule_version == rule_version(laminar_config) == 3
-        assert coupled.rule_version == rule_version(config) == 4
+        assert coupled.rule_version == rule_version(config) == 5
 
     def test_condition_e_receives_the_largest_change_of_nu_t(
         self, monkeypatch: pytest.MonkeyPatch
@@ -239,38 +239,8 @@ class TestWhatTheSolverExposes:
         deterministic) and from the start state, and the largest change is
         formed here; the rule records what the solver passed it.
         """
-        received: list[float] = []
-
-        class Recording(ErrorEstimateRule):
-            def update(
-                self,
-                step: float,
-                imbalance: Callable[[], ImbalanceSummary],
-                viscosity_step: float | None = None,
-            ) -> bool:
-                assert viscosity_step is not None
-                received.append(viscosity_step)
-                return super().update(step, imbalance, viscosity_step=viscosity_step)
-
-        monkeypatch.setattr(solver_staggered, "ErrorEstimateRule", Recording)
-        n = 4
-        _, _, solver = _solver(_channel(max_simple_iter=n))
-        solver.solve_steady()
-        assert len(received) == n
-        passed = list(received)
-
-        config = _channel()
-        mesh, boundary, _ = _solver(config)
+        passed, _, mesh, history = _four_outer_iterations(monkeypatch)
         live = mesh.cell_type != 1
-        start = KEpsilonModel(mesh, config).initial(
-            *TurbulenceBoundary(mesh, config, boundary).initial_values()
-        )
-        history = [np.array(start.nu_t)]
-        for cap in range(1, n + 1):
-            _, _, capped = _solver(_channel(max_simple_iter=cap))
-            capped.solve_steady()
-            assert capped.turbulence_state is not None
-            history.append(np.array(capped.turbulence_state.nu_t))
         expected = [
             float(np.abs(after[live] - before[live]).max())
             for before, after in pairwise(history)
@@ -284,26 +254,84 @@ class TestWhatTheSolverExposes:
         }
         assert rows != {0}
 
-    def test_condition_e_scales_by_boundary_data(self) -> None:
-        """nu_scale is nu plus the largest inlet eddy viscosity, not a field's maximum.
+    def test_condition_e_scales_by_the_median_of_the_iterate(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Each outer iteration's scale is nu plus the median nu_t of its own FLUID cells.
 
-        Two inlets that differ, so the inflow-weighted start, whose eddy
-        viscosity is the field's maximum at the first iteration, is not the
-        larger inlet's (ADR-012 E).
+        ADR-012 E, amended 2026-10-11 (rule version 5). The scale is formed
+        here from the solves capped at 1 to 4 iterations, over the FLUID
+        cells (the channel's obstacle and its ring are not FLUID), and it
+        changes from one iteration to the next, so a scale formed once at
+        the first iteration fails. Defects caught: the first iteration's
+        median kept; the median over every non-SOLID cell; the inlet scale.
         """
-        config = _channel(inlets=TWO_INLETS)
-        mesh, boundary, solver = _solver(config)
-        c_mu = 0.09
-        k1, k2 = 1.5 * (0.05 * 2.0) ** 2, 1.5 * (0.2 * 1.0) ** 2
-        e1, e2 = k1**1.5 / 0.03, k2**1.5 / 0.3
-        largest = max(c_mu * k1**2 / e1, c_mu * k2**2 / e2)
-        start = KEpsilonModel(mesh, config).initial(
-            *TurbulenceBoundary(mesh, config, boundary).initial_values()
-        )
-        assert float(start.nu_t.max()) < 0.9 * largest
-        rule = solver._new_rule()
-        assert rule is not None
-        assert rule._nu_scale == pytest.approx(config.mu / config.rho + largest)
+        _, scales, mesh, history = _four_outer_iterations(monkeypatch)
+        config = _channel()
+        fluid = mesh.cell_type == FLUID
+        assert not np.array_equal(fluid, mesh.cell_type != SOLID)
+        nu = config.mu / config.rho
+        expected = [nu + float(np.median(after[fluid])) for after in history[1:]]
+        assert scales == expected
+        assert len(set(scales)) == len(scales)
+        every_live = [
+            nu + float(np.median(after[mesh.cell_type != SOLID]))
+            for after in history[1:]
+        ]
+        assert scales != every_live
+        inlet = TurbulenceBoundary(
+            mesh, config, StaggeredBoundary(mesh, config)
+        ).largest_inlet_eddy_viscosity()
+        assert all(scale != pytest.approx(nu + inlet) for scale in scales)
+
+
+def _four_outer_iterations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[list[float], list[float], Mesh, list[np.ndarray]]:
+    """What the solver hands condition (e) over four outer iterations, and nu_t around them.
+
+    Returns the viscosity steps and scales the rule received, the channel's
+    mesh, and the eddy viscosity at the start and after each of the four
+    iterations, from solves capped at 1, 2, 3 and 4 (the solve is
+    deterministic).
+    """
+    steps: list[float] = []
+    scales: list[float] = []
+
+    class Recording(ErrorEstimateRule):
+        def update(
+            self,
+            step: float,
+            imbalance: Callable[[], ImbalanceSummary],
+            viscosity_step: float | None = None,
+            nu_scale: float | None = None,
+        ) -> bool:
+            assert viscosity_step is not None and nu_scale is not None
+            steps.append(viscosity_step)
+            scales.append(nu_scale)
+            return super().update(
+                step, imbalance, viscosity_step=viscosity_step, nu_scale=nu_scale
+            )
+
+    n = 4
+    with monkeypatch.context() as patch:
+        patch.setattr(solver_staggered, "ErrorEstimateRule", Recording)
+        _, _, solver = _solver(_channel(max_simple_iter=n))
+        solver.solve_steady()
+    assert len(steps) == len(scales) == n
+
+    config = _channel()
+    mesh, boundary, _ = _solver(config)
+    start = KEpsilonModel(mesh, config).initial(
+        *TurbulenceBoundary(mesh, config, boundary).initial_values()
+    )
+    history = [np.array(start.nu_t)]
+    for cap in range(1, n + 1):
+        _, _, capped = _solver(_channel(max_simple_iter=cap))
+        capped.solve_steady()
+        assert capped.turbulence_state is not None
+        history.append(np.array(capped.turbulence_state.nu_t))
+    return steps, scales, mesh, history
 
 
 @pytest.mark.unit

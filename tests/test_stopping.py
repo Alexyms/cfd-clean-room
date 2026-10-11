@@ -14,6 +14,7 @@ from src.stopping import (
     ErrorEstimateRule,
     ImbalanceSummary,
     IterationState,
+    viscosity_scale,
 )
 
 SCALE = 0.1
@@ -204,23 +205,49 @@ def test_a_scale_or_tolerance_not_positive_and_finite_is_rejected(
 
 
 # ---------------------------------------------------------------------------
-# Condition (e) and the rule's version (ADR-012 E, ECR-002 step 6)
+# Condition (e) and the rule's version (ADR-012 E, ECR-002 steps 6 and 7)
 # ---------------------------------------------------------------------------
 
 # A kinematic scale that is not 1, so a rule that forgot to divide by it fails.
 NU_SCALE = 2.5e-3
+# Air's kinematic viscosity on the Annex 20 room, and the room's median eddy
+# viscosity over it on 216x72 (docs/reports/ecr002_val017_annex20.md, section
+# 5.2): the scale (e) takes there since 2026-10-11, against the inlet's 2.22 nu.
+NU_AIR = 15.3e-6
+ROOM_SCALE = NU_AIR * (1.0 + 367.0)
 
 
 def _rule_e() -> ErrorEstimateRule:
     """The rule at the default tolerances with condition (e) on."""
-    return ErrorEstimateRule(SCALE, FLUX, 1e-6, 1e-10, nu_scale=NU_SCALE)
+    return ErrorEstimateRule(SCALE, FLUX, 1e-6, 1e-10, viscosity_condition=True)
+
+
+def _feed_e(
+    rule: ErrorEstimateRule,
+    nu_steps: np.ndarray,
+    nu_scales: np.ndarray | float,
+) -> list[bool]:
+    """Feed (e) a history beside velocity steps that meet (a) from the window's end."""
+    scales = np.broadcast_to(np.asarray(nu_scales, dtype=float), nu_steps.shape)
+    velocity = 1e-12 * 0.5 ** np.arange(nu_steps.size)
+    return [
+        rule.update(
+            float(s), lambda: _summary(), viscosity_step=float(e), nu_scale=float(n)
+        )
+        for s, e, n in zip(velocity, nu_steps, scales, strict=True)
+    ]
+
+
+def _first_stop(answers: list[bool]) -> int | None:
+    """The index of the first True, or None when the history never stops."""
+    return answers.index(True) if True in answers else None
 
 
 @pytest.mark.unit
 def test_the_version_is_the_rules() -> None:
-    """3 without (e), 4 with it: a laminar solve records the conditions it applies."""
+    """3 without (e), 5 with it: a laminar solve records the conditions it applies."""
     assert _rule().version == 3
-    assert _rule_e().version == 4
+    assert _rule_e().version == 5
 
 
 @pytest.mark.unit
@@ -230,11 +257,14 @@ def test_condition_e_is_the_estimate_on_the_eddy_viscosity(rho: float) -> None:
     rule = _rule_e()
     nu_steps = _geometric(rho, RATE_WINDOW + 20, 1e-9)
     for nu_step in nu_steps:
-        rule.update(1e-12, lambda: _summary(), viscosity_step=float(nu_step))
+        rule.update(
+            1e-12, lambda: _summary(), viscosity_step=float(nu_step), nu_scale=NU_SCALE
+        )
     expected = 1e-9 * rho / (1.0 - rho) / NU_SCALE
     assert rule.viscosity_estimate_history[-1] == pytest.approx(expected, rel=1e-9)
     assert len(rule.viscosity_estimate_history) == RATE_WINDOW + 20
     assert math.isinf(rule.viscosity_estimate_history[RATE_WINDOW - 2])
+    assert rule.viscosity_scale_history == [NU_SCALE] * (RATE_WINDOW + 20)
 
 
 @pytest.mark.unit
@@ -256,7 +286,7 @@ def test_condition_e_holds_the_stop_until_the_viscosity_settles() -> None:
         return _summary()
 
     stops = [
-        rule.update(float(s), summary, viscosity_step=float(e))
+        rule.update(float(s), summary, viscosity_step=float(e), nu_scale=NU_SCALE)
         for s, e in zip(velocity, viscosity, strict=True)
     ]
     first = stops.index(True)
@@ -269,16 +299,141 @@ def test_condition_e_holds_the_stop_until_the_viscosity_settles() -> None:
 
 
 @pytest.mark.unit
-def test_the_viscosity_step_is_given_exactly_with_condition_e() -> None:
-    """Defect caught: (e) silently skipped when the step is missing, or a step fed to no scale."""
-    with pytest.raises(ValueError, match="viscosity_step is given exactly"):
-        _rule_e().update(1e-3, lambda: _summary())
-    with pytest.raises(ValueError, match="viscosity_step is given exactly"):
-        _rule().update(1e-3, lambda: _summary(), viscosity_step=1e-6)
+def test_a_room_sized_scale_stops_where_one_165_times_smaller_does_not() -> None:
+    """The Annex 20 shape: the same contracting history, two scales.
+
+    The viscosity steps contract at 0.998 per outer iteration, the rate
+    prompt 49's records show, from a size at which the room's scale (nu
+    plus its median nu_t, 368 nu) is met inside the history. The inlet's
+    scale is 165 times smaller, and contracting the estimate by 165 at that
+    rate takes about 2,550 more iterations than the history holds. Defect
+    caught: the scale not applied, or applied as a product.
+    """
+    n = 3 * RATE_WINDOW
+    rho = 0.998
+    # The room's estimate crosses the tolerance half way from 150 to 151.
+    start = 1e-6 * ROOM_SCALE * (1.0 - rho) / rho / rho**150.5
+    nu_steps = start * rho ** np.arange(n)
+    room = _feed_e(_rule_e(), nu_steps, ROOM_SCALE)
+    small_rule = _rule_e()
+    small = _feed_e(small_rule, nu_steps, ROOM_SCALE / 165.0)
+    assert _first_stop(room) == 151
+    assert _first_stop(small) is None
+    assert small_rule.viscosity_estimate_history[-1] == pytest.approx(
+        165.0 * 1e-6 * rho ** (n - 1 - 150.5), rel=1e-6
+    )
+
+
+@pytest.mark.unit
+def test_the_scale_is_the_median_of_the_fluid_cells() -> None:
+    """nu plus the median of nu_t over FLUID cells, whatever the other cells hold.
+
+    Defects caught: the maximum in place of the median; the median over
+    every cell; nu left out.
+    """
+    nu_t = np.array(
+        [
+            [9e9, 9e9, 9e9, 9e9],
+            [9e9, 1.0e-3, 2.0e-3, 9e9],
+            [9e9, 4.0e-3, 8.0e-3, 9e9],
+            [9e9, 3.0e-3, 9e9, 9e9],
+        ]
+    )
+    fluid = nu_t < 1.0
+    assert viscosity_scale(NU_AIR, nu_t, fluid) == NU_AIR + 3.0e-3
+
+
+@pytest.mark.unit
+def test_one_cells_overshoot_leaves_the_stop_unchanged() -> None:
+    """One FLUID cell's nu_t raised a thousandfold moves neither the scale nor the stop.
+
+    The overshoot is the stagnation anomaly ADR-012 E names. The history
+    contracts at 0.95 and stops at outer iteration 301 under the field's
+    scale; a scale a thousand times larger, which the field's maximum would
+    give, stops 135 iterations sooner. Defect caught: the maximum in place
+    of the median.
+    """
+    rng = np.random.default_rng(50)
+    nu_t = rng.uniform(1e-3, 2e-3, size=(12, 20))
+    fluid = np.zeros_like(nu_t, dtype=bool)
+    fluid[1:-1, 1:-1] = True
+    spiked = nu_t.copy()
+    top = np.unravel_index(np.argmax(np.where(fluid, nu_t, 0.0)), nu_t.shape)
+    spiked[top] *= 1000.0
+    base, overshoot = (viscosity_scale(NU_AIR, f, fluid) for f in (nu_t, spiked))
+    assert overshoot == base
+    n = 4 * RATE_WINDOW
+    start = 1e-6 * base * (0.05 / 0.95) / 0.95**300.5
+    nu_steps = start * 0.95 ** np.arange(n)
+    stop = _first_stop(_feed_e(_rule_e(), nu_steps, base))
+    assert stop is not None and stop > RATE_WINDOW + 150
+    assert _first_stop(_feed_e(_rule_e(), nu_steps, overshoot)) == stop
+    largest = NU_AIR + float(spiked[fluid].max())
+    sooner = _first_stop(_feed_e(_rule_e(), nu_steps, largest))
+    assert sooner is not None and sooner < stop - 100
+
+
+@pytest.mark.unit
+def test_each_step_is_estimated_over_the_scale_passed_with_it() -> None:
+    """The scale of the step at hand, not the first one: the median moves with the iterate.
+
+    The steps contract at 0.9 and the scale doubles at outer iteration 150;
+    every estimate is the step's own over that step's scale. Defect caught:
+    the first scale kept for the solve.
+    """
+    n = 2 * RATE_WINDOW
+    nu_steps = _geometric(0.9, n, 1e-9)
+    scales = np.where(np.arange(n) < 150, NU_SCALE, 2.0 * NU_SCALE)
+    rule = _rule_e()
+    _feed_e(rule, nu_steps, scales)
+    estimates = np.array(rule.viscosity_estimate_history)[RATE_WINDOW - 1 :]
+    expected = nu_steps[RATE_WINDOW - 1 :] * 9.0 / scales[RATE_WINDOW - 1 :]
+    np.testing.assert_allclose(estimates, expected, rtol=1e-9)
+    assert rule.viscosity_scale_history == list(scales)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("viscosity_step", "nu_scale"), [(None, None), (1e-6, None), (None, NU_SCALE)]
+)
+def test_condition_e_needs_the_step_and_its_scale(
+    viscosity_step: float | None, nu_scale: float | None
+) -> None:
+    """Defect caught: (e) silently skipped when the step or the scale is missing."""
+    with pytest.raises(ValueError, match="given exactly when the rule applies"):
+        _rule_e().update(
+            1e-3, lambda: _summary(), viscosity_step=viscosity_step, nu_scale=nu_scale
+        )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("viscosity_step", "nu_scale"), [(1e-6, NU_SCALE), (1e-6, None), (None, NU_SCALE)]
+)
+def test_a_laminar_rule_refuses_a_viscosity_step_or_scale(
+    viscosity_step: float | None, nu_scale: float | None
+) -> None:
+    """Defect caught: a step or a scale fed to a rule without (e), silently ignored."""
+    with pytest.raises(ValueError, match="given exactly when the rule applies"):
+        _rule().update(
+            1e-3, lambda: _summary(), viscosity_step=viscosity_step, nu_scale=nu_scale
+        )
 
 
 @pytest.mark.unit
 @pytest.mark.parametrize("bad", [0.0, -1.0, math.inf, math.nan, True])
 def test_a_nu_scale_not_positive_and_finite_is_rejected(bad: float) -> None:
+    """Defect caught: the per-step scale's validation removed; the step recorded first."""
+    rule = _rule_e()
     with pytest.raises(ValueError, match="nu_scale must be positive and finite"):
-        ErrorEstimateRule(SCALE, FLUX, 1e-6, 1e-10, nu_scale=bad)
+        rule.update(1e-3, lambda: _summary(), viscosity_step=1e-6, nu_scale=bad)
+    assert rule.estimate_history == []
+    assert rule.viscosity_scale_history == []
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("bad", [1, "yes", None])
+def test_viscosity_condition_must_be_a_bool(bad: object) -> None:
+    """Defect caught: a truthy value turning (e) on, or a scale passed where the flag goes."""
+    with pytest.raises(TypeError, match="viscosity_condition must be a bool"):
+        ErrorEstimateRule(SCALE, FLUX, 1e-6, 1e-10, viscosity_condition=bad)  # type: ignore[arg-type]

@@ -406,7 +406,7 @@ def test_annex20_216x72_reproduces_its_record_val017(annex20_216x72: dict) -> No
     assert len(solver.residual_history) == RECORD_OUTER
     assert solver.residual_history[-1] < RECORD_RESIDUAL_BOUND
     assert solver.pressure_cap_hits == 0
-    assert solver.rule_version == 4
+    assert solver.rule_version == 5
     assert float(np.abs(solver.last_mass_imbalance).max()) < config.mass_imbalance_tol
     state = solver.turbulence_state
     assert state is not None

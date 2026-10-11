@@ -1748,7 +1748,7 @@ class TestInletTurbulenceKeys:
     def test_the_velocity_step_rule_is_refused_with_the_model_on(
         self, tmp_path: Path, rule: str | None
     ) -> None:
-        """Named or by default: rule version 4 scores the turbulent cases."""
+        """Named or by default: the rule with condition (e) scores the turbulent cases."""
         raw = self._raw(tmp_path, **INLET_TURBULENCE)
         if rule is None:
             del raw["solver"]["stopping_rule"]
