@@ -46,6 +46,12 @@ as they were put.
    outflow normal to the face, as in VAL-001.
 2. The variant: both built; RNG for the product, standard for the published comparisons, both
    run on the product and their difference reported.
+   Amended 2026-10-11 (Alex, prompt 49, before ECR-002 step 7): the product runs the standard
+   variant until VAL-020 (the impinging jet) says which model is right at the equipment tops,
+   because RNG converges on neither exact grid under either advection scheme (prompts 47 and 48,
+   `docs/reports/ecr002_step6_comparative.md` and `docs/reports/ecr002_step6_variants.md`).
+   VAL-018's variant clause waits for VAL-020, and RNG's cycle is probed only if VAL-020 favours
+   RNG. Both variants stay built; the published comparisons of step 7 run the standard variant.
 3. The wall treatment: scalable wall functions.
 4. k and eps: the transport scheme in pseudo-time, growth explicit and decay implicit.
    Amended 2026-10-10 (Alex, prompt 48, ECR-002 step 6): the advection's face value is plain
