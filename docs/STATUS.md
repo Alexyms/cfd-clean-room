@@ -398,8 +398,9 @@ ECR-002 step 7's first case, VAL-017, the Annex 20 room, is built and measured o
 `feature/ecr002-val017-annex20` (`docs/reports/ecr002_val017_annex20.md`): the case, its loader,
 the measurements and Rong and Nielsen's (2008) digitized standard k-epsilon line with their
 provenance, four standard runs (both advection schemes, both grids) and one RNG run. The two
-schemes differ by a fraction of the model's own distance from the data, so upwind stands for
-rooms; on the scored lines the solver sits nearer the data than the published prediction; the
+schemes differ by a fraction of the model's own distance from the data, so by the outcome
+written with the predictions upwind stands for rooms (the report's section 7 question 1 asks
+whether VAL-019 needs the pair as well); on the scored lines the solver sits nearer the data than the published prediction; the
 floor line's departure is the model's. No standard row stops by the rule: condition (e) is
 scaled by the inlet's eddy viscosity, about twice nu on this case while the room makes several
 hundred nu, so the eddy-viscosity step floors above what (e) asks. The fields at the cap are

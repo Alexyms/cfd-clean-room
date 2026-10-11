@@ -180,7 +180,8 @@ matrix's readings and holds-from columns). On 375x125 they reach the cap stalled
 and eps solves hit their 500-sweep cap from the middle of the run on (the k and eps sweeps
 column; the logs mark the first at outer 2,300 for upwind), the first coupled runs to do so
 (GitHub issue 58's case), and from there the residual falls by about half per thousand
-iterations, with (b), (c) and (d) met and (a) two orders above its tolerance at the cap. RNG on
+iterations, with (b), (c) and (d) met and (a) four orders above its tolerance at the cap (0.011
+and 0.016, about a hundredth of u0, against 1e-6). RNG on
 216x72 is bounded (stalled), as it was on the product's exact grids (prompt 48). Two further
 375x125 rows with the sweep cap raised to 2,000 (`_sweeps2000`, everything else the file's)
 were started after the first pair finished; section 5.5 says what became of them.
@@ -221,9 +222,15 @@ tolerance moves no line value by more than the rounding the test pins (section 5
 
 The prompt's third stop condition, neither scheme converging on either grid, is met as the rule
 classifies the runs. The comparison below is reported all the same, each row labelled by its
-class, because what the rule refuses to call converged is converged for the comparison's
-purpose: the matrix's velocity-step and residual columns put the remaining iteration error
-several orders below the differences the comparison reads, which are hundredths of u0.
+class, with the remaining iteration error stated beside it. Reading (a) is the estimated
+iteration error of the velocity over the velocity scale, a field maximum. On 216x72 it is about
+1e-6 of u0, far below every difference read. On 375x125 it is 0.011 to 0.016 of u0: an order
+below the grid differences on the jet line, but of the same order as those on the vertical
+lines and above the RMS grid difference on x = 2H (section 5.4). The scheme comparison (d) and
+the grid comparison (e) hold with more than that margin everywhere except (e) under umist on
+the jet line, where the margin is about twice the estimate (test 49, 2026-10-11). Whether the
+error at the vertical lines' stations is below the grid differences there, rather than only
+its field maximum, is not measured: the estimate's cell sits at the end-wall corner.
 
 The rows compared, their readings and the first-node y+ (the ADR's estimate for 216x72 along
 the jet was 27):
@@ -320,9 +327,9 @@ published standard k-epsilon does, and on the floor line the two predictions sit
 other than either sits to the data (the "against the published line" columns): the floor's
 departure is the model's, shared by the two codes. On x = 2H the published line leaves the
 return flow by the floor at half the measured strength (its wall cells), where this solver
-follows the measurements to the floor (`ecr002_val017_line_x6.png`). The largest differences on
-every line are at the end wall, in the corner the measurements show reversed, and in the jet's
-lower edge at x = H.
+follows the measurements to the floor (`ecr002_val017_line_x6.png`). The largest differences
+are at the end wall on the two horizontal lines, in the corner the measurements show reversed,
+at the jet's lower edge on x = H, and in the return flow 0.88 m above the floor on x = 2H.
 
 **The two schemes against each other, on each grid:**
 
@@ -388,11 +395,14 @@ Orchestrator's, as written in section 3.1:
   for the reason section 5.2 gives, every one of them falling at the cap.
 - (b) holds on every compared row: the jet line is within 0.1 u0 of the data up to x/H 2 (the
   table's measured column), and its worst station there is the first one, at the slot's lip.
-- (c) fails on its sign clause and holds on its magnitude clause: at the stations nearest the
-  inlet wall, where the measured floor velocity is slightly forward and the computed (and the
-  published) slightly backward, the signs differ, with both magnitudes small
-  (`ecr002_val017_line_y0084.png`); everywhere else the sign agrees, and the floor's departure
-  exceeds the jet's on no row, the jet's end-wall corner being the larger.
+- (c) fails on both clauses as the table scores it, over the whole of each line. The sign
+  clause: at the stations nearest the inlet wall, where the measured floor velocity is slightly
+  forward and the computed (and the published) slightly backward, the signs differ, with both
+  magnitudes small (`ecr002_val017_line_y0084.png`); 22 of 28 signs agree on 216x72 and 21 of 28
+  on 375x125. The magnitude clause: the floor's largest departure (0.086 to 0.120) is below the
+  jet line's (0.179 to 0.232) on every row, the jet's end-wall corner being the larger, and the
+  RMS agrees. The prediction named no metric or extent; scored up to x/H 2, as (b) is, the
+  floor's RMS departure is about twice the jet's and the magnitude clause would hold (test 49).
 - (d) holds on every line and both grids, with margin: the schemes differ by a small fraction of
   either's distance from the data (the ratio column of section 5.4's schemes table), most on the
   jet line, least on the vertical lines.
@@ -403,8 +413,8 @@ Orchestrator's, as written in section 3.1:
 
 Builder's (section 3.2), scored apart: (a) wrong, for a reason the builder did not consider,
 the stopping rule's scale rather than the physics; (b) wrong on 216x72, which held where the
-builder expected one or two stations out; (c) wrong on the sign clause, right on the magnitude
-clause; (d) right, with the jet line the closest as expected; (e) wrong at the end wall, where
+builder expected one or two stations out; (c) wrong on both clauses over the whole lines (on the
+magnitude clause, right only if the jet is scored up to x/H 2); (d) right, with the jet line the closest as expected; (e) wrong at the end wall, where
 the grids differ most but still by less than either differs from the data.
 
 ## 7. What this implies

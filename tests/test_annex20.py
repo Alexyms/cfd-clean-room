@@ -312,6 +312,27 @@ class TestData:
         }
         assert missing == {"x3": [], "x6": [0], "y2916": [0], "y0084": [0]}
 
+    def test_the_stored_values_are_the_ones_checked_against_the_workbook(
+        self,
+    ) -> None:
+        """Pins every stored station, measurement and published value.
+
+        Test 49 (2026-10-11) matched all 106 stations and measurements to the
+        workbook, which is not committed, so the values are pinned by a hash
+        of their repr instead: a changed value fails here.
+        """
+        import hashlib
+
+        payload = repr(
+            [
+                (key, line.stations, line.measured, line.published)
+                for key, line in sorted(annex20.LINES.items())
+            ]
+        )
+        assert hashlib.sha256(payload.encode()).hexdigest() == (
+            "3e53d338c7414577e38dadd6f0c69bbc3ce7f272ec225aac3e078212f5cf4c00"
+        )
+
 
 @pytest.mark.unit
 class TestSampling:
