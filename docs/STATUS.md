@@ -392,8 +392,21 @@ product grid is 320x120 with 160x60 its check. Prompt 48 built the key on
 `feature/ecr002-turbulence-advection` (`docs/reports/ecr002_step6_variants.md`): the standard
 variant converges on both exact grids, bit for bit prompt 47's upwind runs, and RNG converges on
 neither, so the comparison between the variants has no pair and the product runs the standard
-variant alone until VAL-020 decides between them. Next: review and test 48, then Alex's
-questions in that report's section 7 (ADR-012 decision 2, VAL-018's variant clause, RNG's cycle).
+variant alone until VAL-020 decides between them; prompt 48 is merged (PR 75), and Alex decided
+on 2026-10-11 that the product runs the standard variant until VAL-020 (ADR-012 decision 2).
+ECR-002 step 7's first case, VAL-017, the Annex 20 room, is built and measured on
+`feature/ecr002-val017-annex20` (`docs/reports/ecr002_val017_annex20.md`): the case, its loader,
+the measurements and Rong and Nielsen's (2008) digitized standard k-epsilon line with their
+provenance, four standard runs (both advection schemes, both grids) and one RNG run. The two
+schemes differ by a fraction of the model's own distance from the data, so by the outcome
+written with the predictions upwind stands for rooms (the report's section 7 question 1 asks
+whether VAL-019 needs the pair as well); on the scored lines the solver sits nearer the data than the published prediction; the
+floor line's departure is the model's. No standard row stops by the rule: condition (e) is
+scaled by the inlet's eddy viscosity, about twice nu on this case while the room makes several
+hundred nu, so the eddy-viscosity step floors above what (e) asks. The fields at the cap are
+compared, labelled; the VAL-017 test pins the 216x72 record and expects its convergence clause
+to fail until (e) is decided. Next: test 49, then Alex's questions in that report's section 7
+(the allowance, (e)'s scale, the k and eps sweep cap, the test's cost).
 
 Deferred findings from earlier pull requests were open as GitHub issues, and every open one now
 has a disposition. The cleanup pull request (branch `fix/deferred-findings-cleanup`) closes issues

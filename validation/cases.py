@@ -5,7 +5,9 @@ configs/, so the tests and the benchmark harness run the same solve from
 the same parameters. The overrides this module makes are the grid, which is
 the one axis a refinement study varies; the wall clustering ECR-001
 acceptance criterion 2 fixes, which load_wall_clustered derives from the
-case's own height and cell count rather than from a second file; and the
+case's own height and cell count rather than from a second file; the Annex
+20 inlet velocity, which load_annex20 scales so the faces the slot covers
+carry the specified flux on the grid at hand (ADR-012 G (iii)); and the
 stopping rule, which with_velocity_step pins to velocity_step for a solve
 that must reproduce a field saved under it. A named preset is loaded by
 load_preset, which picks the loader, so no consumer repeats that choice.
@@ -16,13 +18,16 @@ from pathlib import Path
 
 import yaml
 
+from src.boundary_staggered import StaggeredBoundary
 from src.config import VELOCITY_STEP, SimConfig
+from src.mesh import Mesh
 
 CONFIG_DIR = Path(__file__).resolve().parent.parent / "configs"
 
 CASE_FILES: dict[str, str] = {
     "poiseuille": "validation_poiseuille.yaml",
     "cavity": "validation_cavity.yaml",
+    "annex20": "validation_annex20.yaml",
 }
 
 # Named grid presets: identifier -> (case, nx, ny). The tuple does not say
@@ -36,11 +41,19 @@ CASE_GRIDS: dict[str, tuple[str, int, int]] = {
     "val002_20x20": ("cavity", 20, 20),
     "val002_40x40": ("cavity", 40, 40),
     "val002_80x80": ("cavity", 80, 80),
+    "val017_216x72": ("annex20", 216, 72),
+    "val017_375x125": ("annex20", 375, 125),
 }
 
 # Presets loaded by load_wall_clustered; every other preset takes its whole
 # mesh from the case file.
 WALL_CLUSTERED_GRIDS: frozenset[str] = frozenset({"val001_80x40_stretched"})
+
+# Presets loaded by load_annex20, which scales the inlet velocity to the grid.
+ANNEX20_GRIDS: frozenset[str] = frozenset({"val017_216x72", "val017_375x125"})
+
+# The Annex 20 case's inlet segment, whose velocity load_annex20 scales.
+ANNEX20_INLET = "inlet"
 
 # ECR-001 criterion 2, amended 2026-09-24: the wall-adjacent cell is this
 # fraction of the uniform spacing H / ny, and the geometric ratio is derived.
@@ -133,6 +146,54 @@ def load_wall_clustered(name: str, grid: tuple[int, int] | None = None) -> SimCo
     return SimConfig.from_dict(raw)
 
 
+def load_annex20(
+    name: str = "annex20", grid: tuple[int, int] | None = None
+) -> SimConfig:
+    """Load the Annex 20 room with its inlet carrying the specified flux exactly.
+
+    The slot is h = 0.168 m under a 3 m ceiling, so on most grids its edge
+    falls inside a cell and the faces the registry gives it span a little
+    more or less than h. ADR-012 G (iii) scales the inlet velocity so those
+    faces carry u0 h exactly: the ratio of the specified flux, the file's
+    velocity times the segment's height, to the flux the covered faces carry
+    at the file's velocity, read from the staggered boundary layer on the
+    unscaled case so the loader and the solver cannot disagree about a face.
+    On a grid where the slot falls on whole faces the factor is one.
+
+    Parameters
+    ----------
+    name : str
+        The case name, "annex20"; a parameter so load_preset can call every
+        loader the same way.
+    grid : tuple[int, int], optional
+        (nx, ny) to use instead of the values in the file.
+
+    Returns
+    -------
+    SimConfig
+        The case with the inlet's ``velocity`` scaled to the grid. The
+        inlet's turbulence intensity is unchanged, so its k follows the
+        scaled velocity. Every other parameter comes from the file.
+
+    Raises
+    ------
+    ValueError
+        If the case file or the grid fails SimConfig's validation, or the
+        boundary layer's: on a grid so coarse that the slot covers no face
+        the layer refuses the outlet, which would have no inflow to share,
+        before any scaling is attempted.
+    """
+    raw = _raw_case(name, grid)
+    base = SimConfig.from_dict(raw)
+    mesh = Mesh(base)
+    boundary = StaggeredBoundary(mesh, base)
+    inlet = raw["boundaries"][ANNEX20_INLET]
+    specified = inlet["velocity"] * (inlet["y_end"] - inlet["y_start"])
+    covered = boundary.get_inlet_flux(ANNEX20_INLET)
+    inlet["velocity"] = inlet["velocity"] * specified / covered
+    return SimConfig.from_dict(raw)
+
+
 def load_preset(case_id: str) -> SimConfig:
     """Load a named grid preset on the mesh its name promises.
 
@@ -145,7 +206,8 @@ def load_preset(case_id: str) -> SimConfig:
     -------
     SimConfig
         The preset's case at its grid, by load_wall_clustered for a preset
-        in WALL_CLUSTERED_GRIDS and by load_case for every other.
+        in WALL_CLUSTERED_GRIDS, by load_annex20 for one in ANNEX20_GRIDS
+        and by load_case for every other.
 
     Raises
     ------
@@ -158,7 +220,12 @@ def load_preset(case_id: str) -> SimConfig:
         raise KeyError(
             f"unknown grid preset {case_id!r}; known: {sorted(CASE_GRIDS)}"
         ) from None
-    loader = load_wall_clustered if case_id in WALL_CLUSTERED_GRIDS else load_case
+    if case_id in WALL_CLUSTERED_GRIDS:
+        loader = load_wall_clustered
+    elif case_id in ANNEX20_GRIDS:
+        loader = load_annex20
+    else:
+        loader = load_case
     return loader(kind, grid=(nx, ny))
 
 

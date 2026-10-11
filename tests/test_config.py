@@ -1294,10 +1294,16 @@ class TestPressureKeys:
         )
 
     def test_every_committed_configuration_names_the_new_key_and_cap(self) -> None:
-        """The three YAML files and the transport stand-ins carry 1e-8 and 5000."""
+        """Every YAML file and the transport stand-ins carry the key and the cap.
+
+        The laminar cases and the product file carry 1e-8; the Annex 20 case
+        (VAL-017, prompt 49) carries the turbulent product setting, 1e-4
+        (ADR-013 decision 3 as amended 2026-10-09; ECR-002 section 8, step 8).
+        """
+        turbulent = {"validation_annex20.yaml": 1e-4}
         for path in sorted(CONFIG_DIR.glob("*.yaml")):
             config = SimConfig(path)
-            assert config.pressure_rtol == 1e-8, path.name
+            assert config.pressure_rtol == turbulent.get(path.name, 1e-8), path.name
             assert config.max_pressure_iter == 5000, path.name
         assert SOLVER_BLOCK["pressure_rtol"] == 1e-8
         assert SOLVER_BLOCK["max_pressure_iter"] == 5000

@@ -46,6 +46,12 @@ as they were put.
    outflow normal to the face, as in VAL-001.
 2. The variant: both built; RNG for the product, standard for the published comparisons, both
    run on the product and their difference reported.
+   Amended 2026-10-11 (Alex, prompt 49, before ECR-002 step 7): the product runs the standard
+   variant until VAL-020 (the impinging jet) says which model is right at the equipment tops,
+   because RNG converges on neither exact grid under either advection scheme (prompts 47 and 48,
+   `docs/reports/ecr002_step6_comparative.md` and `docs/reports/ecr002_step6_variants.md`).
+   VAL-018's variant clause waits for VAL-020, and RNG's cycle is probed only if VAL-020 favours
+   RNG. Both variants stay built; the published comparisons of step 7 run the standard variant.
 3. The wall treatment: scalable wall functions.
 4. k and eps: the transport scheme in pseudo-time, growth explicit and decay implicit.
    Amended 2026-10-10 (Alex, prompt 48, ECR-002 step 6): the advection's face value is plain
@@ -965,6 +971,17 @@ four models is. Voigt (2000), which [10] cites for the same room, was not fetche
 stays OPEN (decision 6). A further reference the decision did not list: the W/H = 4.7 hot-wire
 profile at x/H = 2.0 and Re 7,100 ([4] figure 10), the measurement nearest two dimensions at that
 section, jet and floor return only (premise review S5).
+
+*Note 2026-10-11 (ECR-002 step 7, first case; prompt 49).* Built and measured as above
+(`configs/validation_annex20.yaml`, `validation/annex20.py`, `tests/test_annex20.py`;
+`docs/reports/ecr002_val017_annex20.md`), on 216x72 and on 375x125, the coarsest grid on which the
+slot and the outlet both fall on whole faces; the loader scales the inlet velocity to the covered
+faces. The published prediction was digitized from [10]'s figures 5 and 9 and stored at the
+stations beside the data. No standard row stops by the rule: section E's condition (e) is scaled
+by the inlet eddy viscosity, about twice nu here, while the room makes several hundred nu, so the
+nu_t step floors (at the k and eps solves' tolerance) above what (e) asks; the fields at the cap
+are compared, labelled. The threshold stays OPEN (decision 6); the report's section 7 puts the
+allowance, (e)'s scale and the k and eps sweep cap to Alex.
 
 **(iv) The product room converges.** VAL-018: `configs/clean_room_default.yaml` with the model
 on, `stopping_rule: error_estimate`, `mass_imbalance_tol` from ADR-011 G's formula at its t_end,
