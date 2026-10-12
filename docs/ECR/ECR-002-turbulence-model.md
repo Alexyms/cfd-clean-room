@@ -459,7 +459,8 @@ The change is accepted when all of the following are demonstrated:
    case file's `max_simple_iter` is 14,000 (the report's section 7 asks Alex to confirm it).
    Report 49's floor of the eddy-viscosity step was a pause at its cap, not the tolerance.
 10. **The product room (VAL-018).** Conditional on step 5: the product configuration stops by
-   `error_estimate_and_continuity` under rule version 4 within its cap, with `mass_imbalance_tol`
+   `error_estimate_and_continuity` under rule version 5 (amended 2026-10-11, prompt 50) within its
+   cap, with `mass_imbalance_tol`
    from ADR-011 G's formula. Method: harness row and the step 8 report.
 
    *Note 2026-10-09 (Alex, prompt 45):* the product's purpose is comparative, a stakeholder need

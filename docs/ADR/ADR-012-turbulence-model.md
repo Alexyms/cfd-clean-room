@@ -789,8 +789,9 @@ inlet turbulence too. The three reasons given above for the inlet value, answere
   field, so at the stop it is the converged field's median. What matters is that the scale be of
   the size of what the room makes. The inlet value is the size of what the user typed, and on
   Annex 20 it is about 165 times too small.
-- "and the grid": on Annex 20 the median moved 3% between 216x72 and 375x125 (367 and 355 nu)
-  and the maximum 2% (898 and 880), so neither moves enough with the grid to matter. The inlet
+- "and the grid": on Annex 20 the median over non-solid cells moved 3% between 216x72 and
+  375x125 (367 and 355 nu, report 49's figures; the FLUID-cell median the rule takes is 380 nu
+  on 216x72) and the maximum 2% (898 and 880), so neither moves enough with the grid to matter. The inlet
   value does not move at all, but it is the wrong size.
 - "one cell's overshoot would loosen (e) everywhere": the median ignores single cells, which is
   why the median and not the maximum.
@@ -997,7 +998,9 @@ changes: the published prediction's own departure from the data, line by line, d
 [10]'s figures 5 and 9 with the method of [1, section 6], is the reference a standard k-epsilon
 run here is held to (no worse than it by an allowance Alex sets), or the spread across [10]'s
 four models is. Voigt (2000), which [10] cites for the same room, was not fetched. The number
-stays OPEN (decision 6). A further reference the decision did not list: the W/H = 4.7 hot-wire
+stays OPEN (decision 6). *Note 2026-10-11: set by Alex (decision 6, amended): on x = H and the
+ceiling jet, the RMS against the measurements no larger than [10]'s published RMS on that line,
+0.070 and 0.136.* A further reference the decision did not list: the W/H = 4.7 hot-wire
 profile at x/H = 2.0 and Re 7,100 ([4] figure 10), the measurement nearest two dimensions at that
 section, jet and floor return only (premise review S5).
 
@@ -1014,7 +1017,8 @@ allowance, (e)'s scale and the k and eps sweep cap to Alex.
 
 **(iv) The product room converges.** VAL-018: `configs/clean_room_default.yaml` with the model
 on, `stopping_rule: error_estimate`, `mass_imbalance_tol` from ADR-011 G's formula at its t_end,
-stops by `error_estimate_and_continuity` under rule version 4 within its cap, on the product
+stops by `error_estimate_and_continuity` under rule version 5 (amended 2026-10-11, prompt 50)
+within its cap, on the product
 mesh. Reported: the outer count, wall time, the stop's five readings, nu_t / nu over the room,
 both variants' k, nu_t and concentration over the equipment tops and at the two sensors above
 them (section A), and y+ at every wall node, which section B estimated without a field. VAL-018
@@ -1188,8 +1192,9 @@ pressure.py:
         open_outlets: per edge, the pressure-outlet faces open this outer iteration
         (decision 1); None is every outlet face, today's path bitwise
 stopping.py:
-    ErrorEstimateRule.update(step, imbalance, viscosity_step=None)   # (e) when given
-    ErrorEstimateRule.version -> int   # 3 without (e), 4 with it; the solver exposes it
+    ErrorEstimateRule.update(step, imbalance, viscosity_step=None, nu_scale=None)
+        # (e) when given; nu_scale is nu plus the FLUID median of nu_t, per iteration
+    ErrorEstimateRule.version -> int   # 3 without (e), 5 with it (4 until 2026-10-11)
 solver_transport.py:
     solve_timestep(C_k, faces, size_class, dt, v_ext=None, sources=None, *, eddy_viscosity=None)
 ```

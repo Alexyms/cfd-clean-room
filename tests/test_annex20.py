@@ -12,7 +12,8 @@ larger than the published prediction's RMS on that line.
 The run itself is not here. It is the harness row ``val017_216x72``
 (``python scripts/benchmark.py --cases val017_216x72 --repeats 1``), scored by
 the allowance and recorded in benchmarks/results.jsonl, as the 80x80 cavity
-is: it costs about twenty minutes alone and ran twice per CI run while it
+is: it costs about twenty minutes alone (0.11 s per outer iteration; the
+stored row's 4,934 s were taken beside other runs) and ran twice per CI run while it
 was a suite test (prompt 50). Its record and the runs behind the case
 file's settings are docs/reports/ecr002_rule_e_scale.md; the first coupled
 results, with the comparison tables and figures, are
@@ -289,6 +290,21 @@ class TestAllowance:
         assert below[key].passed is True
         assert above[key].passed is False
         assert above[key].rms == pytest.approx(allowance, rel=1e-8)
+
+    def test_the_pass_reads_the_rms_not_the_worst_station(self) -> None:
+        """One station off by 0.2 on x = H: RMS 0.04, under 0.070; worst 0.2, over it.
+
+        Decision 6 chose the RMS because the worst station always falls in the
+        end-wall corner eddy. Defect caught: the pass read from the largest
+        difference, under which this line, and the recorded row's two scored
+        lines, would fail (test 49 and test 50).
+        """
+        x3 = annex20.LINES["x3"]
+        offset = np.zeros(len(x3.stations))
+        offset[12] = 0.2
+        scores = annex20.score_lines(self._values({"x3": offset}))
+        assert scores["x3"].rms == pytest.approx(0.2 / np.sqrt(25.0))
+        assert scores["x3"].passed is True
 
     def test_the_rms_is_over_every_station_of_the_line(self) -> None:
         """The jet's first station, which the published line misses, still counts.

@@ -30,7 +30,8 @@ fail on the two scored lines, and as the row's value the larger ratio of
 RMS to allowance over them, so 1 or below passes. The per-iteration callback
 carries no faces, so its trajectory samples record no error and the last
 entry carries the row's. The run moved here from the suite on 2026-10-11:
-it costs about 20 minutes alone.
+it costs about 20 minutes alone (the stored row's 4,934 s were taken beside
+other runs).
 
 The method label names the pressure solve as well as the grid: staggered-cg
 since ECR-003 step 1 (2026-10-06), when conjugate gradients replaced the
@@ -549,9 +550,10 @@ def run_case(case_id: str, method: str, sample_every: int, concurrent: int) -> d
                 "error": accuracy["value"],
             }
         )
-    else:
-        # The same field the row is scored on, so the two agree bitwise; for
-        # the Annex 20 room this is the trajectory's one error.
+    elif kind == ANNEX20_FAMILY:
+        # The Annex 20 callback carries no faces, so its samples hold no error;
+        # the last takes the row's. Every other family's last sample keeps its
+        # own, which the harness test compares with the row's accuracy.
         trajectory[-1]["error"] = accuracy["value"]
 
     # The solver knows which rule it ran and whether the cap stopped it; a

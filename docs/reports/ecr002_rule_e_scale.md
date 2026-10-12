@@ -168,7 +168,7 @@ condition (e) table) read the nu_t step at its cap as a floor at the k and eps s
 tolerance, about 1.9e-10 m^2/s, and concluded that under the file's tolerance the rule could not
 stop under any scale. The continued run shows a pause, not a floor: over the last hundred
 iterations before 10,000 the step's per-iteration ratio is about 1.00002, and from there it
-contracts again (about 0.9986 per iteration over 10,500 to 10,600, 0.998 after 11,000) to about
+contracts again (about 0.9986 per iteration over 10,500 to 10,600, 0.9974 after 11,000) to about
 1.7e-11 at the stop, below the value report 49 called the floor by a factor of ten. The rule's
 rate fit was infinite across the pause, which is what report 49 saw at its cap. What stopped
 prompt 49's rows was the 10,000 cap and (e)'s scale together, not the tolerance; the tighter
