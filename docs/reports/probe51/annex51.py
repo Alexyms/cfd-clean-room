@@ -18,7 +18,8 @@ holds the harness row as run_case returns it (stop, outer count, wall time,
 the pressure correction's CG iterations, the scored lines and their RMS),
 the trace's means and totals, the four lines and the face hash (prompt 41's
 measure); the final faces go to annex_LABEL.npz. ``--append`` appends the
-row to TREE's benchmarks/results.jsonl as the harness would; ``--cap N``
+row to the main checkout's benchmarks/results.jsonl as the harness would,
+so TREE can be a clean worktree whose row the harness marks clean; ``--cap N``
 stops at N outer iterations, a smoke run of the driver and never a
 measurement. One BLAS thread.
 
@@ -144,7 +145,9 @@ def run(args: argparse.Namespace) -> None:
     tree = commit(root)
     row = benchmark.run_case(CASE, benchmark.DEFAULT_METHOD, 100, args.concurrent)
     if args.append:
-        with benchmark.RESULTS_PATH.open("a", encoding="utf-8") as handle:
+        with (MAIN / "benchmarks" / "results.jsonl").open(
+            "a", encoding="utf-8"
+        ) as handle:
             handle.write(json.dumps(row) + "\n")
     solver = traced.instances[-1]
     faces = solver.face_velocities
