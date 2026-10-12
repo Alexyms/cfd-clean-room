@@ -52,7 +52,7 @@ responsibility = "Predicts u* and v* on the staggered grid with QUICK advection 
 serves = ["REQ-S07", "REQ-S09", "REQ-S14"]
 
 [modules."src/scalar_scheme.py"]
-responsibility = "Holds the cell-centred scalar scheme the transport solver and the k-epsilon model share: QUICK's face value bounded by the UMIST limiter, the advective flux along one axis with the inflow value or the upwind cell at a domain face, and the backward Euler solve of diffusion with a non-negative cell sink by Jacobi, on per-face conductances with one step or a step per cell, with an optional mask of cells held at their value."
+responsibility = "Holds the cell-centred scalar scheme the transport solver and the k-epsilon model share: QUICK's face value bounded by the UMIST limiter, the advective flux along one axis with the inflow value or the upwind cell at a domain face, and the backward Euler solve of diffusion with a non-negative cell sink by Jacobi or, for k and eps, by diagonal-preconditioned conjugate gradients that fall back to Jacobi on the cap or a non-positive value, on per-face conductances with one step or a step per cell, with an optional mask of cells held at their value."
 serves = ["REQ-T12", "REQ-S15"]
 
 [modules."src/solver_staggered.py"]

@@ -413,14 +413,26 @@ row `val017_216x72` stops by the rule under its file's k and eps tolerance and p
 lines; the product rows still stop, a little sooner, with fields unchanged to a few billionths.
 The run also showed that report 49's "floor" of the eddy-viscosity step was a pause at its
 cap, not the k and eps tolerance, so no tighter tolerance is needed on that case. CI now runs the
-suite once. Next: review and test 50, then Alex's questions in that report's section 7 (the
-Annex 20 cap, the tolerance for VAL-019, a note on report 49), then VAL-019.
+suite once. Prompt 50 is merged (PR 77).
+Prompt 51 (`feature/turbulence-cg-solve`, `docs/reports/turbulence_cg_solve.md`) solves k and
+eps by conjugate gradients. Its first pass stopped on a positivity error: on a frozen-strain test
+whose k system passed double precision's conditioning, a capped CG iterate went negative. Alex
+decided the same day that a CG solve reaching its cap, or ending with a value at or below zero,
+falls back to Jacobi from the explicit field. Built so, the laminar results and the Jacobi path
+are bit for bit main's, the Annex 20 and product rows stop where main's do with no fallback, and
+the k and eps solves take a fraction of their Jacobi iterations; the Annex 20 row's time per
+outer iteration falls by less than the 40% predicted. The harness's stage times show why: the
+pressure correction was already the larger stage on main, and is now most of the run. Next:
+review and test 51, then Alex's question in that report's section 8 (whether the next pass
+takes the CG loop or the pressure correction's successor), then VAL-019.
 
 Deferred findings from earlier pull requests were open as GitHub issues, and every open one now
 has a disposition. The cleanup pull request (branch `fix/deferred-findings-cleanup`) closes issues
 33, 36, 40, 42, 45, 47, 51 and 63 and takes the small items of issue 53. Still open: issue 53's
 D3 and D4, which are for the Phase 3 gate report; issue 58, which step 6 was to decide and did not
-(no k or eps solve reached its cap in any step 6 run; the decision stays open); and
+(no k or eps solve reached its cap in any step 6 run; the decision stays open; since prompt 51
+`max_iter` counts CG iterations, and a capped CG solve falls back to Jacobi from the explicit
+field and returns, with a warning, as before; no row of that report reached the cap); and
 issue 61, the outlet finding, which closes with ECR-002 step 3. Issue 38's last item, the
 solver-key list held once, was done in ECR-003 step 1's pull request, which closed it.
 

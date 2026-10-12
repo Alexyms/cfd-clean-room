@@ -18,6 +18,8 @@
 #   products  item 6: prompt 48's standard upwind product rows on 80x30 and
 #             160x60, on the base and on this checkout, launched together
 #   compare   the comparisons of items 4 to 6
+#   stop      the first pass's stop replayed, both schemes (stop51.py)
+#   tables    every table of the report, from the records (tables51.py)
 set -u
 PY=.venv/Scripts/python
 PROBE=docs/reports/probe51
@@ -71,8 +73,16 @@ case "$stage" in
       "$PY" "$PROBE/product51.py" compare "$grid" main cg
     done
     ;;
+  stop)
+    for scheme in upwind umist; do
+      "$PY" "$PROBE/stop51.py" "$scheme"
+    done
+    ;;
+  tables)
+    "$PY" "$PROBE/tables51.py"
+    ;;
   *)
-    echo "usage: run51.sh plants | laminar | annex | val016 | products | compare" >&2
+    echo "usage: run51.sh plants | laminar | annex | val016 | products | compare | stop | tables" >&2
     exit 2
     ;;
 esac
