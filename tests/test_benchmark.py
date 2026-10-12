@@ -16,15 +16,21 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 import benchmark  # noqa: E402 -- scripts/ is not a package; path set above
 
+from src.boundary_staggered import (  # noqa: E402 -- follows sys.path.insert
+    StaggeredBoundary,
+)
 from src.config import SOLVER_KEYS, SimConfig  # noqa: E402 -- follows sys.path.insert
 from src.mesh import Mesh  # noqa: E402 -- follows sys.path.insert
 from src.solver_staggered import (  # noqa: E402 -- follows sys.path.insert
     StaggeredSolver,
     rule_version,
 )
+from src.staggered import FaceVelocities  # noqa: E402 -- follows sys.path.insert
+from validation import annex20  # noqa: E402 -- follows sys.path.insert
 from validation.cases import (  # noqa: E402 -- follows sys.path.insert
     case_path,
     load_case,
+    load_preset,
     with_velocity_step,
 )
 from validation.metrics import (  # noqa: E402 -- follows sys.path.insert
@@ -265,6 +271,82 @@ def test_harness_record_carries_its_family_metric_in_accuracy_and_trajectory(
     }[family]
     assert (row["accuracy"]["metric"], row["accuracy"]["reference"]) == expected
     assert row["trajectory"][-1]["error"] == row["accuracy"]["value"]
+
+
+@pytest.mark.integration
+def test_the_annex20_row_is_scored_by_the_allowance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """VAL-017's row: the lines from the final faces, pass or fail per scored line.
+
+    Three outer iterations of the committed case on its own grid. The row's
+    lines are the ones the same three iterations give when solved here, its
+    value is the larger ratio of RMS to allowance over x = H and the jet, and
+    its trajectory carries an error only in its last entry. Defects caught:
+    the cell-centred field sampled; the smaller ratio as the value; an
+    unscored line in the pass.
+    """
+    config = load_preset("val017_216x72")
+    monkeypatch.setattr(config, "max_simple_iter", 3)
+    monkeypatch.setattr(benchmark, "load_preset", lambda case_id: config)
+    row = benchmark.run_case("val017_216x72", "staggered-cg", 1, 1)
+    accuracy = row["accuracy"]
+    assert (accuracy["metric"], accuracy["reference"]) == (
+        benchmark.ANNEX20_METRIC,
+        benchmark.ANNEX20_REFERENCE,
+    )
+
+    mesh = Mesh(config)
+    solver = StaggeredSolver(mesh, config, StaggeredBoundary(mesh, config))
+    solver.solve_steady()
+    assert solver.face_velocities is not None
+    sampled = annex20.sample_lines(mesh, np.array(solver.face_velocities.u))
+    scores = annex20.score_lines(sampled)
+    for key, score in scores.items():
+        assert accuracy["lines"][key] == {
+            "rms": score.rms,
+            "stations": score.stations,
+            "allowance": score.allowance,
+            "scored": key in annex20.SCORED_LINES,
+            "pass": score.passed,
+        }
+    ratios = [scores[key].rms / scores[key].allowance for key in annex20.SCORED_LINES]
+    assert ratios[0] != ratios[1]
+    assert accuracy["value"] == max(ratios)
+    # From rest, three iterations leave the room far from the data.
+    assert accuracy["passed"] is False
+    assert [entry["error"] for entry in row["trajectory"]] == [
+        None,
+        None,
+        accuracy["value"],
+    ]
+    assert row["params"]["rule_version"] == rule_version(config) == 5
+    assert row["params"]["turbulence"]["tol"] == config.turbulence.tol
+
+
+@pytest.mark.unit
+def test_the_annex20_value_and_pass_read_the_scored_lines_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """x = 2H and the floor are recorded but neither move the value nor fail the row.
+
+    The sampler is replaced by the measurements, a whole u0 off on the two
+    unscored lines. Defect caught: every line in the value and the pass,
+    which the short run above cannot show, its scored lines being the worst.
+    """
+    values = {
+        key: np.array(line.measured) + (1.0 if key in ("x6", "y0084") else 0.0)
+        for key, line in annex20.LINES.items()
+    }
+    monkeypatch.setattr(annex20, "sample_lines", lambda mesh, u: values)
+    faces = FaceVelocities.copy_of(np.zeros((2, 3)), np.zeros((3, 2)))
+    accuracy = benchmark.annex20_accuracy(Mesh(load_preset("val017_216x72")), faces)
+    assert accuracy["value"] == 0.0
+    assert accuracy["passed"] is True
+    for key in ("x6", "y0084"):
+        assert accuracy["lines"][key]["rms"] == pytest.approx(1.0)
+        assert accuracy["lines"][key]["pass"] is None
+        assert accuracy["components"][f"rms_{key}"] == pytest.approx(1.0)
 
 
 @pytest.mark.integration

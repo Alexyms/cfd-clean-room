@@ -17,8 +17,21 @@ velocity-step stop is labelled residual_below_tol, the label every stored
 velocity-step row carries, including the collocated-jacobi rows taken before
 that solver was retired (tag collocated-final). An error_estimate row also
 records the rule's version in its params, read from the solver
-(``rule_version``, ECR-002 step 6): 3, or 4 with the turbulence model's
-condition (e).
+(``rule_version``, ECR-002 step 6): 3, or with the turbulence model's
+condition (e) 4 until 2026-10-11 and 5 since (its scale, ADR-012 E). A row
+with the turbulence section records the section in its params as well.
+
+Three case families. Poiseuille and the cavity are scored from the
+cell-centred field, every trajectory sample and the row alike. The Annex 20
+room (VAL-017, ``val017_216x72``) is scored from the final face velocities
+by the allowance of ADR-012 decision 6 (``validation.annex20.score_lines``):
+each line's RMS against the measurements beside the published RMS, pass or
+fail on the two scored lines, and as the row's value the larger ratio of
+RMS to allowance over them, so 1 or below passes. The per-iteration callback
+carries no faces, so its trajectory samples record no error and the last
+entry carries the row's. The run moved here from the suite on 2026-10-11:
+it costs about 20 minutes alone (the stored row's 4,934 s were taken beside
+other runs).
 
 The method label names the pressure solve as well as the grid: staggered-cg
 since ECR-003 step 1 (2026-10-06), when conjugate gradients replaced the
@@ -37,6 +50,7 @@ Run:
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import datetime as dt
 import json
 import os
@@ -73,10 +87,14 @@ from src.solver_staggered import (  # noqa: E402 -- follows sys.path.insert
     StaggeredSolver,
     rule_version,
 )
-from src.staggered import allocate_fields  # noqa: E402 -- follows sys.path.insert
+from src.staggered import (  # noqa: E402 -- follows sys.path.insert
+    FaceVelocities,
+    allocate_fields,
+)
 from src.stopping import (  # noqa: E402 -- follows sys.path.insert
     IterationState,
 )
+from validation import annex20  # noqa: E402 -- follows sys.path.insert
 from validation.cases import (  # noqa: E402 -- follows sys.path.insert
     CASE_GRIDS,
     load_preset,
@@ -120,6 +138,11 @@ RETIRED_METHODS: dict[str, str] = {
 CASES = CASE_GRIDS
 DEFAULT_CASES = ["val001_80x40", "val002_20x20", "val002_40x40"]
 
+# The family validation.cases gives the Annex 20 presets, scored from the faces.
+ANNEX20_FAMILY = "annex20"
+ANNEX20_METRIC = "rms_u_over_published_rms_scored_lines"
+ANNEX20_REFERENCE = "annex20_measured_nielsen_1990; allowance rong_nielsen_2008_rms"
+
 # One stop_reason per rule. The velocity-step label is the one every row stored
 # before the staggered solver reported its own stop, and every collocated row has.
 STOP_LABELS = {"velocity_step_below_tol": "residual_below_tol"}
@@ -134,6 +157,10 @@ def solver_parameters(config: SimConfig) -> dict:
     params = {name: getattr(config, name) for name in SOLVER_KEYS}
     if config.stopping_rule == ERROR_ESTIMATE:
         params["rule_version"] = rule_version(config)
+    # The k and eps solve tolerance moves a coupled row's stop as much as any
+    # solver key does (docs/reports/ecr002_val017_annex20.md, section 5.2).
+    if config.turbulence is not None:
+        params["turbulence"] = dataclasses.asdict(config.turbulence)
     return params
 
 
@@ -412,6 +439,50 @@ def accuracy_of(
     raise ValueError(f"unknown case family {kind!r}; expected 'poiseuille' or 'cavity'")
 
 
+def annex20_accuracy(mesh: Mesh, faces: FaceVelocities) -> dict:
+    """The Annex 20 room's lines scored by the allowance of ADR-012 decision 6.
+
+    Parameters
+    ----------
+    mesh : Mesh
+        Mesh the faces belong to.
+    faces : FaceVelocities
+        The solve's final face velocities; u is sampled at the stations.
+
+    Returns
+    -------
+    dict
+        ``metric``, ``value`` (the larger ratio of RMS to allowance over the
+        scored lines; 1 or below passes), ``reference``, ``components``
+        (each line's RMS and allowance), ``lines`` (each line's RMS, station
+        count, allowance, whether it is scored and, if so, whether it
+        passes) and ``passed`` (every scored line passes).
+    """
+    scores = annex20.score_lines(annex20.sample_lines(mesh, np.array(faces.u)))
+    scored = [scores[key] for key in annex20.SCORED_LINES]
+    components: dict[str, float] = {}
+    for key, score in scores.items():
+        components[f"rms_{key}"] = score.rms
+        components[f"allowance_{key}"] = score.allowance
+    return {
+        "metric": ANNEX20_METRIC,
+        "value": max(score.rms / score.allowance for score in scored),
+        "reference": ANNEX20_REFERENCE,
+        "components": components,
+        "lines": {
+            key: {
+                "rms": score.rms,
+                "stations": score.stations,
+                "allowance": score.allowance,
+                "scored": score.scored,
+                "pass": score.passed,
+            }
+            for key, score in scores.items()
+        },
+        "passed": all(score.passed for score in scored),
+    }
+
+
 def run_case(case_id: str, method: str, sample_every: int, concurrent: int) -> dict:
     """Run one case once with the solver the method names and return its record.
 
@@ -438,8 +509,11 @@ def run_case(case_id: str, method: str, sample_every: int, concurrent: int) -> d
     momentum_updates, pressure_cells = staggered_updates(mesh, config)
     counter = WorkCounter(pressure_cells, momentum_updates)
 
-    def error_of(u: np.ndarray, v: np.ndarray) -> dict:
-        return accuracy_of(kind, config, mesh, u, v)
+    def error_of(u: np.ndarray, v: np.ndarray) -> float | None:
+        # The Annex 20 lines are sampled from faces, which the callback lacks.
+        if kind == ANNEX20_FAMILY:
+            return None
+        return accuracy_of(kind, config, mesh, u, v)["value"]
 
     work = counter.work
     trajectory: list[dict] = []
@@ -454,13 +528,17 @@ def run_case(case_id: str, method: str, sample_every: int, concurrent: int) -> d
                     "cell_updates": work["cell_updates"],
                     "elapsed_seconds": time.perf_counter() - t_start,
                     "residual": state.residual,
-                    "error": error_of(state.u, state.v)["value"],
+                    "error": error_of(state.u, state.v),
                 }
             )
 
     u, v, _p = solver.solve_steady(on_iteration=observe)
     wall = time.perf_counter() - t_start
-    accuracy = error_of(u, v)
+    if kind == ANNEX20_FAMILY:
+        assert solver.face_velocities is not None
+        accuracy = annex20_accuracy(mesh, solver.face_velocities)
+    else:
+        accuracy = accuracy_of(kind, config, mesh, u, v)
     final_iter = work["outer_iterations"] - 1
     if not trajectory or trajectory[-1]["outer_iteration"] != final_iter:
         trajectory.append(
@@ -472,6 +550,11 @@ def run_case(case_id: str, method: str, sample_every: int, concurrent: int) -> d
                 "error": accuracy["value"],
             }
         )
+    elif kind == ANNEX20_FAMILY:
+        # The Annex 20 callback carries no faces, so its samples hold no error;
+        # the last takes the row's. Every other family's last sample keeps its
+        # own, which the harness test compares with the row's accuracy.
+        trajectory[-1]["error"] = accuracy["value"]
 
     # The solver knows which rule it ran and whether the cap stopped it; a
     # velocity-step stop is stored under the label every stored row carries.

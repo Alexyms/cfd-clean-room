@@ -403,10 +403,18 @@ written with the predictions upwind stands for rooms (the report's section 7 que
 whether VAL-019 needs the pair as well); on the scored lines the solver sits nearer the data than the published prediction; the
 floor line's departure is the model's. No standard row stops by the rule: condition (e) is
 scaled by the inlet's eddy viscosity, about twice nu on this case while the room makes several
-hundred nu, so the eddy-viscosity step floors above what (e) asks. The fields at the cap are
-compared, labelled; the VAL-017 test pins the 216x72 record and expects its convergence clause
-to fail until (e) is decided. Next: test 49, then Alex's questions in that report's section 7
-(the allowance, (e)'s scale, the k and eps sweep cap, the test's cost).
+hundred nu. Prompt 49 is merged (PR 76). Alex decided on 2026-10-11 the VAL-017 allowance (the
+RMS on x = H and on the ceiling jet no larger than Rong and Nielsen's published RMS), that the
+run becomes a harness row, and that (e)'s scale is the molecular viscosity plus the median eddy
+viscosity of the FLUID cells, per outer iteration (ADR-012 decision 6 and section E, amended;
+rule version 5). Prompt 50 built them on `feature/ecr002-rule-e-scale`
+(`docs/reports/ecr002_rule_e_scale.md`): laminar stops are bit for bit unchanged; the Annex 20
+row `val017_216x72` stops by the rule under its file's k and eps tolerance and passes both scored
+lines; the product rows still stop, a little sooner, with fields unchanged to a few billionths.
+The run also showed that report 49's "floor" of the eddy-viscosity step was a pause at its
+cap, not the k and eps tolerance, so no tighter tolerance is needed on that case. CI now runs the
+suite once. Next: review and test 50, then Alex's questions in that report's section 7 (the
+Annex 20 cap, the tolerance for VAL-019, a note on report 49), then VAL-019.
 
 Deferred findings from earlier pull requests were open as GitHub issues, and every open one now
 has a disposition. The cleanup pull request (branch `fix/deferred-findings-cleanup`) closes issues

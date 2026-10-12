@@ -602,7 +602,7 @@ class SimConfig:
                     "with the turbulence section present solver.stopping_rule must be "
                     f"'{ERROR_ESTIMATE}', got '{self.stopping_rule}': the turbulent "
                     "validation (VAL-018, ECR-002 criterion 10) is scored under rule "
-                    "version 4, whose condition (e) refuses to stop while the eddy "
+                    "version 5, whose condition (e) refuses to stop while the eddy "
                     "viscosity is still moving, which the velocity step cannot see"
                 )
 

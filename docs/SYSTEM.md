@@ -2,7 +2,7 @@
 
 **Project:** CFD Clean Room Simulation
 **Status:** ECR-001 closed; the staggered Navier-Stokes solver is built and validated and is the only solver (ADR-010; the collocated solver was retired on 2026-10-02, tag `collocated-final`). ECR-002, the k-epsilon turbulence model (ADR-012), was accepted on 2026-10-04; step 1, the model on a prescribed face field, is built (`src/scalar_scheme.py`, `src/turbulence.py`), step 2, the turbulent diffusivity in the transport solver, is built (`src/solver_transport.py`), steps 3 to 5 built the fixed-flow outlets and the viscosity field and measured convergence, step 6, the coupled solve with wall functions and stopping condition (e), is built (`src/turbulence.py`, `src/solver_staggered.py`, `src/stopping.py`; VAL-016), and section 2 marks what of each requirement remains. ECR-003, the pressure correction solver (ADR-013), was accepted on 2026-10-06 and closed on 2026-10-07: its step 1 replaced the weighted Jacobi sweep by Jacobi-preconditioned conjugate gradients (REQ-S08 amended), and its step 2 retook the laminar baseline (REQ-S02, REQ-S03). Phase status is in `docs/PROJECT_PLAN.md`.
-**Last Updated:** 2026-10-09
+**Last Updated:** 2026-10-11
 
 This document is the single reference for system architecture, requirements, module interfaces, and dependency relationships. Review and test, run before each pull request as `/cfd-review` and `/cfd-test` in fresh Claude Code sessions (`.claude/commands/`), check branches against this document under the policy in `docs/REVIEW_POLICY.md`. Keep it current.
 
@@ -28,7 +28,7 @@ Since ECR-001 step 9 (2026-09-30), "the NS solver" in this table is the staggere
 
 | ID | Requirement | Rationale | Verified By |
 |----|-------------|-----------|-------------|
-| REQ-S01 | The NS solver shall converge to a steady-state velocity field with residuals below a configurable tolerance. | Velocity field accuracy depends on convergence. Divergent or under-converged solutions produce meaningless transport results. Clarified 2026-09-24, not amended: under the staggered solver's `error_estimate` stopping rule (`src/stopping.py`) the configurable tolerance, `iteration_error_tol`, applies to the estimated iteration error, the velocity step times rho_hat / (1 - rho_hat) over the largest prescribed boundary velocity, with rho_hat the step's fitted geometric rate. A small step is not a small error: the error left is about the step times rho / (1 - rho), and rho approaches 1 under refinement. The velocity-step residual against `convergence_tol` stays the default rule and keeps its meaning. See `docs/reports/stopping_rule_evidence.md`, sections 4 and 9. Clarified again 2026-10-04 (ECR-002, accepted), not amended: with the turbulence model on, the `error_estimate` rule also requires the estimated iteration error of the eddy viscosity, over a scale from boundary data (the molecular viscosity plus the largest inlet eddy viscosity), below `iteration_error_tol` (condition (e)), and the rule version a solve records is 3 without (e) and 4 with it. Momentum and transport read nu_t, so a solve must not stop with it still moving (ADR-012 E). Built in ECR-002 step 6 (prompt 45, 2026-10-09): `ErrorEstimateRule(..., nu_scale=...)`, its version a property of the rule, which the solver reports (`rule_version`); every VAL-016 run stops under version 4 with (e) the last condition to hold. | VAL-001, VAL-002; with the turbulence model, tests/test_stopping.py (the (e) tests), tests/test_coupled_solve.py::TestWhatTheSolverExposes (the step the solver hands (e) each outer iteration, prompt 45b), VAL-016 (tests/test_turbulent_channel.py) and VAL-018 (planned) |
+| REQ-S01 | The NS solver shall converge to a steady-state velocity field with residuals below a configurable tolerance. | Velocity field accuracy depends on convergence. Divergent or under-converged solutions produce meaningless transport results. Clarified 2026-09-24, not amended: under the staggered solver's `error_estimate` stopping rule (`src/stopping.py`) the configurable tolerance, `iteration_error_tol`, applies to the estimated iteration error, the velocity step times rho_hat / (1 - rho_hat) over the largest prescribed boundary velocity, with rho_hat the step's fitted geometric rate. A small step is not a small error: the error left is about the step times rho / (1 - rho), and rho approaches 1 under refinement. The velocity-step residual against `convergence_tol` stays the default rule and keeps its meaning. See `docs/reports/stopping_rule_evidence.md`, sections 4 and 9. Clarified again 2026-10-04 (ECR-002, accepted), not amended: with the turbulence model on, the `error_estimate` rule also requires the estimated iteration error of the eddy viscosity, over a scale from boundary data (the molecular viscosity plus the largest inlet eddy viscosity), below `iteration_error_tol` (condition (e)), and the rule version a solve records is 3 without (e) and 4 with it. Momentum and transport read nu_t, so a solve must not stop with it still moving (ADR-012 E). Built in ECR-002 step 6 (prompt 45, 2026-10-09): `ErrorEstimateRule(..., nu_scale=...)`, its version a property of the rule, which the solver reports (`rule_version`); every VAL-016 run stops under version 4 with (e) the last condition to hold. Clarified again 2026-10-11 (Alex, prompt 50; ADR-012 E, amended), not amended: (e)'s scale is the molecular viscosity plus the median eddy viscosity of the FLUID cells of the iterate just computed, formed every outer iteration (`stopping.viscosity_scale`) and passed with the step (`ErrorEstimateRule(..., viscosity_condition=True)`, `update(..., nu_scale=...)`), and the version with (e) on is 5. The inlet value was hundreds of times smaller than what a room with weak inlet turbulence makes, and no Annex 20 row could stop under it (`docs/reports/ecr002_val017_annex20.md`, section 5.2; `docs/reports/ecr002_rule_e_scale.md`). | VAL-001, VAL-002; with the turbulence model, tests/test_stopping.py (the (e) tests, the scale's median and its per-step use since prompt 50), tests/test_coupled_solve.py::TestWhatTheSolverExposes (the step and the scale the solver hands (e) each outer iteration, prompts 45b and 50), VAL-016 (tests/test_turbulent_channel.py), VAL-017 (the harness row `val017_216x72`) and VAL-018 (planned) |
 | REQ-S02 | The NS solver shall reproduce the Poiseuille flow parabolic velocity profile with L2 error < 1% on an 80x40 grid. | Validates basic FV discretization and pressure-velocity coupling against an exact analytical solution. Amended 2026-09-30 (ECR-001 step 9): the criterion returns from 2.5% to the original 1%, as ECR-001 section 6 records for the supersession of ADR-008, now that wall conditions are imposed directly on the staggered components (REQ-S12). The staggered solver measures 4.107e-4 on the uniform 80x40 grid and 3.024e-3 on the same grid clustered to a wall cell of 0.1 H / ny, and converges at order 1.99 under uniform refinement, judged without a reference (ECR-001 criteria 1, 2 and 4; `docs/reports/val001_revalidation_step7.md`, addendum, under stopping rule version 3). The 2.5% and its O(h) rationale belonged to the collocated ghost-cell walls (ADR-008), which measured 2.036e-2 against ADR-008's 2.5%; retired, tag `collocated-final`. Since ECR-003 (closed 2026-10-07) the pressure correction is solved by conjugate gradients, and the measured values are those of the `staggered-cg` rows at 311034e: 4.108e-4 uniform and 3.024e-3 clustered (`docs/reports/ecr003_step2_baseline.md`, section 4). The order 1.99 was measured under the weighted Jacobi correction and is not retaken; the measured CG-against-Jacobi field differences can move it by at most 0.003, and the realized change under CG is at most 3e-4 (section 10 there). | VAL-001 |
 | REQ-S03 | The NS solver shall reproduce the lid-driven cavity centerline velocity profiles at Re = 100 with a maximum error below 2% of the lid speed against Marchi, Suero and Araki (2009), reference `marchi_2009_re100`. Ghia et al. (1982), reference `ghia_1982_re100_r2`, is reported beside it and is not scored. | Validates nonlinear advection, 2D pressure gradients, and recirculation handling. Amended 2026-09-30 (ECR-001 step 9), per the amendment of 2026-09-24 under ECR-001 criteria 3 and 3a: scored against Ghia, a correctly converging scheme meets a floor of about 0.005 in u on the vertical centerline near y = 0.85 and 0.009 in v at the jet stations by the right wall, which is Ghia's own error, and a series that must fall under refinement then fails the right answer (`docs/reports/cavity_reference_marchi.md`, section 5). The staggered solver measures u 1.057e-3 and v 7.356e-4 of the lid speed at 80x80 against Marchi, falling at second order from 20x20 (`docs/reports/val002_revalidation_step8.md`). Until 2026-09-22 the Ghia v table in use was not Ghia's (ECR-001 erratum, section 12). Since ECR-003 (closed 2026-10-07), under `staggered-cg` at 311034e: u 1.057e-3 and v 7.356e-4 of the lid speed at 80x80 (`docs/reports/ecr003_step2_baseline.md`, section 4). The second-order fall (2.24 and 2.11 in u, 2.12 and 2.07 in v) was measured under the weighted Jacobi correction and is not retaken; the measured field differences can move each order by at most 6e-4 (section 10 there). | VAL-002 |
 | REQ-S04 | The velocity field shall satisfy the incompressibility constraint (divergence-free) to within configurable tolerance at every cell. | Mass conservation is fundamental. FV enforces this by construction, but numerical errors can accumulate. Clarified 2026-09-24, not amended: under the `error_estimate` stopping rule the per-cell tolerance, `mass_imbalance_tol`, is enforced at stopping. A solve is not converged until the worst absolute per-cell mass imbalance of its field is below it, which the velocity-step rule never checked. On an open domain the imbalance sets a drift of the through-flow that the velocity step does not see, and the per-cell bound alone lets that drift grow with the number of cells upstream, more on every finer grid. So the rule also requires the summed absolute imbalance, over rho times the inflow (on a closed domain rho times the velocity scale times the longer side), to be below `iteration_error_tol`. The flux through any cross-section differs from the inflow by at most the summed imbalance on one side of it, so this bounds the drift relative to the through-flow on any grid. Clarified again 2026-09-30: the rule also requires the absolute value of the signed imbalance summed over the domain, the net mass flux out of it, to be below `mass_imbalance_tol`. That is ECR-001 criterion 6's domain-sum clause at the bound the criterion names, beside the per-cell clause above. See `docs/reports/stopping_rule_evidence.md`, sections 4, 5, 9 and 10. Verification corrected 2026-09-30 (ECR-001 step 9): VAL-007 is the transport solver's conservation test (REQ-T05) and does not exist before Phase 3. The staggered VAL-001 and VAL-002 tests assert the stop `error_estimate_and_continuity`, which this tolerance gates. Clarified again 2026-10-06 (ECR-003, accepted), not amended: the corrected faces' per-cell imbalance equals the residual of the p' equation, so `pressure_rtol` bounds it relative to u*'s, and the stopping rule's per-cell condition can hold only where `pressure_rtol` times the 2-norm of b is below `mass_imbalance_tol`. Under ADR-011 G that tolerance shrinks with the smallest cell volume (3.2e-9 kg/s per metre on 200x75, 8e-10 on 400x150), and the standing norm of b at the product's converged state is not measured; the default 1e-8 met the condition on every case measured (`docs/reports/pressure_solver_ecr003.md`, sections 8 and 12). | Unit test, VAL-001, VAL-002; VAL-007 from Phase 3; tests/test_pressure.py (the identity between the residual and the corrected faces' imbalance) |
@@ -207,13 +207,13 @@ Generated. The responsibility and serves columns are editorial and come from `do
 | `src/particles.py` | 263 | Computes per-size-class transport properties: Cunningham correction, settling velocity, Brownian diffusion, deposition velocity and HEPA efficiency. | T03, T04, T09, T10 |
 | `src/pressure.py` | 779 | Assembles the staggered pressure correction equation from the momentum diagonals with the discrete divergence of u* as its right-hand side, solves it by conjugate gradients preconditioned with its diagonal to a relative residual, a rounding floor or a reported iteration cap, corrects the face velocities and updates the pressure. | S04, S08 |
 | `src/scalar_scheme.py` | 308 | Holds the cell-centred scalar scheme the transport solver and the k-epsilon model share: QUICK's face value bounded by the UMIST limiter, the advective flux along one axis with the inflow value or the upwind cell at a domain face, and the backward Euler solve of diffusion with a non-negative cell sink by Jacobi, on per-face conductances with one step or a step per cell, with an optional mask of cells held at their value. | S15, T12 |
-| `src/solver_staggered.py` | 540 | Runs steady SIMPLE on the staggered grid as one outer loop over the momentum predictor and the pressure correction, with the turbulence section one k and eps step and the relaxed eddy viscosity inside it, returning cell-centered fields through the harness's callback shape and exposing the final faces as FaceVelocities; stops by the velocity-step rule or, when configured, by the error-estimate rule. | S01, S02, S03, S04, S05, S07, S13, S14, S15 |
+| `src/solver_staggered.py` | 547 | Runs steady SIMPLE on the staggered grid as one outer loop over the momentum predictor and the pressure correction, with the turbulence section one k and eps step and the relaxed eddy viscosity inside it, returning cell-centered fields through the harness's callback shape and exposing the final faces as FaceVelocities; stops by the velocity-step rule or, when configured, by the error-estimate rule. | S01, S02, S03, S04, S05, S07, S13, S14, S15 |
 | `src/solver_transport.py` | 891 | Advances one particle class one explicit step on the staggered face velocities: QUICK's face value bounded by the UMIST limiter under forward Euler at a Courant number the configuration sets, implicit diffusion and deposition by Jacobi on per-face conductances, the Brownian coefficient plus nu_t / Sc_t on interior faces when handed an eddy viscosity field, the settling increment on interior faces, sources added and booked, SOLID cells zero; keeps one MassBudget per class and defines FieldHistory, the output contract for the animation. | N01, T01, T03, T04, T05, T06, T07, T08, T11, T12, T13 |
 | `src/staggered.py` | 324 | Defines the staggered (MAC) field layout: shapes and allocation of face-centered u and v and cell-centered p, the face-to-center averaging the solver applies before returning, and FaceVelocities, the read-only face pair the solver exposes and the transport solver advects with. | S07, S13 |
-| `src/stopping.py` | 292 | Decides when the steady outer iteration has converged, on four conditions: (a) the iteration error estimated from the step and its fitted geometric rate, over a physical velocity scale; (b) the worst per-cell mass imbalance against its own tolerance; (c) the summed imbalance over the through-flow, which shares the tolerance of (a); and (d) the signed imbalance summed over the domain, which shares the tolerance of (b); and with the turbulence model a fifth, (e), the same estimate on the eddy viscosity over a scale from the inlets. Also defines IterationState, the snapshot a solver hands its callback once per outer iteration. | S01, S04 |
+| `src/stopping.py` | 351 | Decides when the steady outer iteration has converged, on four conditions: (a) the iteration error estimated from the step and its fitted geometric rate, over a physical velocity scale; (b) the worst per-cell mass imbalance against its own tolerance; (c) the summed imbalance over the through-flow, which shares the tolerance of (a); and (d) the signed imbalance summed over the domain, which shares the tolerance of (b); and with the turbulence model a fifth, (e), the same estimate on the eddy viscosity over the molecular viscosity plus the median eddy viscosity of the FLUID cells, which the solver passes each outer iteration. Also defines IterationState, the snapshot a solver hands its callback once per outer iteration. | S01, S04 |
 | `src/turbulence.py` | 1520 | Advances the k-epsilon model's k and eps one step on a prescribed face velocity field, standard or RNG with each variant's constants as module data: advection, explicit growth from the strain the faces give and implicit decay and diffusion through the shared scalar scheme, boundary values from a conditions object the caller builds each step, the kinematic eddy viscosity, and an assertion that k and eps are positive and finite after every step; and the scalable wall functions, which build those conditions, the wall viscosity of the momentum wall faces and the inlet values the coupled solve starts from. | S14, S15, S17 |
 
-Total 16 Python files, 8985 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
+Total 16 Python files, 9051 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
 
 `Declares it serves` is an EDITORIAL CLAIM read from `docs/system_map_annotations.toml`. It says which requirements a module is meant to satisfy, not that it does. Whether a requirement is met is answered by the tests named in the register's `Verified By` column.
 <!-- END GENERATED: components -->
@@ -238,7 +238,7 @@ Generated. Static import analysis cannot see a function bound into a registry by
 |---|---|
 | Scope | `src/**/*.py` |
 | Files hashed | 16 |
-| Digest | `sha256:2e09787cea01b6d237c337b1461ee0968c4835ca8a30f35a9cf88daf305294ee` |
+| Digest | `sha256:b82ec214a5e24b4ca0051f40b82a97d77318e18728649fdffe1a9454859820c7` |
 
 This is what lets the document answer whether it is current, which is the one question a stale table cannot be asked. `python scripts/gen_system_map.py --check` recomputes the whole set of generated regions, this digest included, and exits non-zero on any disagreement.
 
@@ -308,7 +308,8 @@ SimConfig:
     # every key required but variant and advection_scheme; any other key raises ValueError at load, the model
     # constants included (they are src/turbulence.py's). With it present the flow solver runs
     # the coupled solve (ECR-002 step 6), stopping_rule must be error_estimate (refused at
-    # load otherwise, rule version 4 scores the turbulent cases), and every velocity_inlet
+    # load otherwise; the rule with condition (e), version 5 since 2026-10-11, scores the
+    # turbulent cases), and every velocity_inlet
     # that admits air states turbulence_intensity and dissipation_length.
     boundaries: dict[str, BoundarySpec]
     obstacles: list[ObstacleSpec]
@@ -681,8 +682,9 @@ StaggeredSolver:
             admits air. Without the section every call is the laminar one
     turbulence_state: TurbulenceState | None   # k, eps, relaxed nu_t of the last
                                 # coupled solve, read-only; None otherwise
-    rule_version: int | None    # read-only: 3, 4 with the turbulence section
-                                # (condition (e)), None under velocity_step
+    rule_version: int | None    # read-only: 3, 5 with the turbulence section
+                                # (condition (e); 4 until 2026-10-11), None under
+                                # velocity_step
 rule_version(config) -> int | None   # the same, without building a solver
     on_iteration: Callable[[IterationState], None] | None
         once per outer iteration with to_cell_centers of the corrected
@@ -725,7 +727,11 @@ rule_version(config) -> int | None   # the same, without building a solver
     get_total_inlet_flux() (closed: rho times that velocity times the longer
     side), never reference_velocity; a zero velocity scale raises at
     construction, naming stopping_rule; the continuity conditions refuse
-    what a capped correction leaves on their own.
+    what a capped correction leaves on their own. With the turbulence
+    section the rule is built with viscosity_condition=True and each update
+    also takes the largest nu_t change over non-SOLID cells and
+    viscosity_scale(mu / rho, nu_t, FLUID cells) of the iterate just
+    computed (ADR-012 E, amended 2026-10-11).
 ```
 
 ### stopping.py --> solver_staggered; scripts/benchmark.py, scripts/self_convergence.py, scripts/stopping_probe.py, scripts/val001_order.py
@@ -753,16 +759,20 @@ ImbalanceSummary:  # frozen, keyword-only, read by name; kg/s per unit depth
     worst: float         # largest absolute per-cell imbalance
     absolute_sum: float  # sum of the absolute per-cell imbalances
     signed_sum: float    # sum of the signed ones: net mass flux out of the domain
+viscosity_scale(nu: float, nu_t: ndarray, fluid: ndarray) -> float
+    # nu + median(nu_t[fluid]), m^2/s: (e)'s scale, which the solver forms from
+    # each outer iteration's relaxed nu_t over its FLUID cells (2026-10-11)
 ErrorEstimateRule:
     __init__(velocity_scale, flux_scale, iteration_error_tol, mass_imbalance_tol,
-             nu_scale=None)
-        each positive and finite and not bool, else ValueError
+             *, viscosity_condition=False)
+        the four each positive and finite and not bool, else ValueError
         flux_scale: kg/s per unit depth
-        nu_scale: m^2/s, molecular nu plus the largest inlet C_mu k^2 / eps
-            (boundary data); None leaves (e) off (ECR-002 step 6)
-    version -> int   # 3 without (e), 4 with it; the solver reports it
+        viscosity_condition: bool, else TypeError; True applies (e). Until
+            2026-10-11 the keyword was nu_scale, the molecular nu plus the
+            largest inlet C_mu k^2 / eps, fixed per solve (version 4)
+    version -> int   # 3 without (e), 5 with it; the solver reports it
     update(step: float, imbalance: Callable[[], ImbalanceSummary],
-           viscosity_step=None) -> bool
+           viscosity_step=None, nu_scale=None) -> bool
         step: largest velocity change of one outer iteration, m/s
         imbalance(): the current field's ImbalanceSummary, from one
             evaluation; called only when (a) holds
@@ -772,16 +782,21 @@ ErrorEstimateRule:
         (b) worst < mass_imbalance_tol  (ECR-001 criterion 6, per cell)
         (c) absolute_sum / flux_scale < iteration_error_tol  (bounds the flux drift)
         (d) |signed_sum| < mass_imbalance_tol  (criterion 6, domain sum)
-        (e) with nu_scale: viscosity_step rho_hat_nu / (1 - rho_hat_nu) / nu_scale
-            < iteration_error_tol, the same fit on the largest nu_t change of
-            each outer iteration; viscosity_step given exactly when nu_scale is
+        (e) with viscosity_condition: viscosity_step rho_hat_nu / (1 - rho_hat_nu)
+            / nu_scale < iteration_error_tol, the same fit on the largest nu_t
+            change of each outer iteration, over the scale passed with that
+            step; viscosity_step and nu_scale given exactly when (e) is on,
+            else ValueError; nu_scale positive and finite, else ValueError
+            before anything is recorded
         True when all four hold, and (e) when it is on; imbalance() is
             called only when (a) and (e) hold
     estimate_history: list[float]  # (a)'s left side per step; inf when none
     viscosity_estimate_history: list[float]  # (e)'s, likewise; empty with (e) off
+    viscosity_scale_history: list[float]  # the nu_scale of each step; empty with (e) off
 RATE_WINDOW = 100  # module constant, not configuration
-RULE_VERSION_WITHOUT_E = 3, RULE_VERSION_WITH_E = 4   # a rule's version; RULE_VERSION
-    # was retired in ECR-002 step 6: scripts read the version through the solver
+RULE_VERSION_WITHOUT_E = 3, RULE_VERSION_WITH_E = 5   # a rule's version (4 was (e) on
+    # the inlet scale); RULE_VERSION was retired in ECR-002 step 6: scripts read the
+    # version through the solver
 ```
 
 ### particles.py --> boundary_concentration, solver_transport
@@ -985,7 +1000,9 @@ TurbulenceBoundary:
         production (tau_w / rho) u_k / (kappa y_P) in every wall cell, a
         cell with several wall faces taking their mean
     initial_values() -> (k, eps)           # inflow-weighted means over the inlet faces
-    largest_inlet_eddy_viscosity() -> float   # condition (e)'s inlet scale
+    largest_inlet_eddy_viscosity() -> float   # condition (e)'s inlet scale until
+        # 2026-10-11; the solver no longer calls it (prompt 50 changed no
+        # turbulence code), its tests in tests/test_wall_functions.py stand
         both raise ValueError when no velocity inlet admits air
 ```
 
@@ -1252,3 +1269,4 @@ ADR-008, ADR-010, ADR-011, ADR-012 and ADR-013 are files in `docs/ADR/`; the oth
 | 2026-10-08 | ECR-002 step 3, fixes from review 42 and test 42 (prompt 42b). config.py refuses, at load, a fixed_flow_outlet in a file with no velocity_inlet, a `velocity` on a pressure_outlet and a blank `velocity` on a fixed_flow_outlet (Alex's decisions of 2026-10-08); `get_max_boundary_velocity` behaves as before and its docstring and contract line say what it measures (the largest velocity the room is driven by). REQ-S18's verification column no longer cites the gitignored results directory. REQ-S18 gains the velocity-inlet rule (review 42b S2). | Alex Moroz-Smietana |
 | 2026-10-09 | ECR-002 step 6 built (prompt 45, branch feature/ecr002-coupled-solve), the coupled solve. config.py: velocity inlets that admit air state turbulence_intensity and dissipation_length with the turbulence section, refused otherwise; the section is refused under velocity_step. boundary_staggered.py: wall_faces. turbulence.py: the wall functions (KAPPA, E_WALL, Y_STAR_FLOOR, wall_viscosity, inflow_values, TurbulenceBoundary). momentum.py: stencil_viscosity. solver_staggered.py: the coupled outer iteration, turbulence_state, rule_version and rule_version(config), eddy_viscosity refused with the section. stopping.py: condition (e), the version the rule's, RULE_VERSION retired. Contracts, cascade rows and REQ-S01, S14, S15 and S17 updated; turbulence.py now imports boundary_registry and boundary_staggered. VAL-016 split by Alex (2026-10-09): the implementation against the same-grid 1D solve, the model's core k against the refined one (tests/test_turbulent_channel.py). VAL-001, its stretched twin, VAL-002 and the 40x15 ladder bitwise the base at every code commit. | Claude (builder), Alex Moroz-Smietana |
 | 2026-10-10 | ECR-002 step 6, k and eps advected by upwind (prompt 48, branch feature/ecr002-turbulence-advection; Alex's decision of 2026-10-10, ADR-012 C and I). config.py: the turbulence block gains the optional `advection_scheme`, `upwind` or `umist`, absent meaning upwind, validated as `variant` is; the transport block's key and its umist default are unchanged. turbulence.py: step 1 takes the configured face value. The config.py and turbulence.py contracts, the config.py cascade row and REQ-S15's Verified By (the positivity tests under both schemes) say so. VAL-001, its stretched twin and VAL-002 hash to the base; no requirement's text changed. | Alex Moroz-Smietana |
+| 2026-10-11 | ECR-002 step 7, condition (e)'s scale (prompt 50, branch feature/ecr002-rule-e-scale; Alex's decision of 2026-10-11, ADR-012 E amended). stopping.py: `viscosity_scale`, the molecular nu plus the median nu_t of the FLUID cells; `ErrorEstimateRule` takes `viscosity_condition` at construction in place of `nu_scale`, and `update` takes `nu_scale` with each step; `viscosity_scale_history`; RULE_VERSION_WITH_E is 5. solver_staggered.py forms the scale from each outer iteration's relaxed nu_t and passes it; `rule_version` reports 5 with the turbulence section. REQ-S01 clarified again, not amended. No other module changes; `TurbulenceBoundary.largest_inlet_eddy_viscosity` is no longer called by the solver. |

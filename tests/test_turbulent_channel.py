@@ -93,11 +93,11 @@ def test_the_references_copied_constants_are_the_modules() -> None:
 
 
 @pytest.mark.validation
-def test_couette_converges_under_rule_version_4_val016(couette_2d: dict) -> None:
+def test_couette_converges_under_rule_version_5_val016(couette_2d: dict) -> None:
     """VAL-016: the coupled solve stops by its rule, condition (e) included."""
     solver = couette_2d["solver"]
     assert solver.stop_reason == "error_estimate_and_continuity"
-    assert solver.rule_version == 4
+    assert solver.rule_version == 5
     assert couette_2d["k_min"] > 0.0
 
 

@@ -7,7 +7,9 @@
 # from a 4% intensity and a dissipation length h / 10 in the specification's
 # convention, eps = k^(3/2) / l_e (ADR-012 C). Measured u / u0 along x = H,
 # x = 2H, y = h/2 and y = H - h/2 is in validation/annex20.py with its
-# provenance; no threshold is set (ADR-012 decision 6, OPEN).
+# provenance. The allowance is ADR-012 decision 6's, set 2026-10-11 (the RMS on x = H and
+# on the ceiling jet no larger than Rong and Nielsen's published RMS), applied by the
+# harness row val017_216x72 (scripts/benchmark.py).
 #
 # The model is the standard k-epsilon variant with k and eps advected by the
 # turbulence section's default (upwind), and the solver keys are the ones the
@@ -55,7 +57,11 @@ solver:
   t_end: 60.0
   output_interval: 10
   convergence_tol: 1.0e-6
-  max_simple_iter: 10000
+  # Under rule version 5 the 216x72 row stops at 11,441 at turbulence.tol 1e-10,
+  # the same outer iteration and lines as at 1e-13 (prompt 50,
+  # docs/reports/ecr002_rule_e_scale.md, section 5.1): the next round thousand
+  # above the stop plus 20%. It was 10,000, the product's, until 2026-10-11.
+  max_simple_iter: 14000
   alpha_velocity: 0.5
   alpha_pressure: 0.3
   max_pressure_iter: 5000

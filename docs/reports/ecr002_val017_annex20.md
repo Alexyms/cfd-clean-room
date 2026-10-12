@@ -220,6 +220,11 @@ built changes: (e)'s scale is ADR-012 E's, and the decision is Alex's (section 7
 tolerance moves no line value by more than the rounding the test pins (section 5.4's table, the
 `_tol1e-13` rows against their untagged twins).
 
+*Note 2026-10-12 (orchestrator, from prompt 50): the floor described above was a pause, not a
+floor. Continued past 10,000 iterations, the eddy-viscosity step contracts again and the rule
+stops at 11,441 at the file's own tolerance under rule version 5
+(`docs/reports/ecr002_rule_e_scale.md`, section 5.1). The tighter tolerance is not needed.*
+
 The prompt's third stop condition, neither scheme converging on either grid, is met as the rule
 classifies the runs. The comparison below is reported all the same, each row labelled by its
 class, with the remaining iteration error stated beside it. Reading (a) is the estimated

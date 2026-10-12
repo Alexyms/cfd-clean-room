@@ -1,32 +1,31 @@
-"""VAL-017, the Annex 20 room (ECR-002 step 7; ADR-012 G (iii)).
+"""VAL-017, the Annex 20 room (ECR-002 step 7; ADR-012 G (iii)): the unit tests.
 
 The case is configs/validation_annex20.yaml, loaded by validation.cases.
 load_annex20 with the inlet velocity scaled so the faces the slot covers
 carry u0 h on the grid at hand, and compared with Nielsen's (1990)
 measurements by validation.annex20, which stores them with their provenance
 and Rong and Nielsen's (2008) published standard k-epsilon prediction beside
-them. No threshold is set: ADR-012 decision 6 leaves the allowance OPEN until
-Alex sets it from the first coupled results, which are prompt 49's
-(docs/reports/ecr002_val017_annex20.md).
+them. The allowance (Alex, 2026-10-11; ADR-012 decision 6, amended): on x = H
+and on the ceiling jet, the RMS of u / u0 against the measurements is no
+larger than the published prediction's RMS on that line.
 
-The validation tests run the case once, on 216x72 under the default scheme,
-as the suite loads it (about 18 minutes alone on this machine; the suite's
-long case, as the 80x80 cavity is judged from a harness row). The solve
-reaches its 10,000-iteration cap with the residual still falling: conditions
-(a) to (d) of the stopping rule hold at the cap, and condition (e) cannot,
-because its scale is the inlet's eddy viscosity (2.2 nu here) while the room
-makes up to 900 nu, so the eddy-viscosity step's floor sits above what (e)
-asks (the report, section 5.2). The first test pins the record of that run
-(the readings and the four lines, to the recorded rounding) and prints the
-comparison with the data without scoring it; the second asserts the stop by
-the rule and is expected to fail, strictly, until Alex decides on (e)'s
-scale, so the decision flips it rather than a quiet pass.
+The run itself is not here. It is the harness row ``val017_216x72``
+(``python scripts/benchmark.py --cases val017_216x72 --repeats 1``), scored by
+the allowance and recorded in benchmarks/results.jsonl, as the 80x80 cavity
+is: it costs about twenty minutes alone (0.11 s per outer iteration; the
+stored row's 4,934 s were taken beside other runs) and ran twice per CI run while it
+was a suite test (prompt 50). Its record and the runs behind the case
+file's settings are docs/reports/ecr002_rule_e_scale.md; the first coupled
+results, with the comparison tables and figures, are
+docs/reports/ecr002_val017_annex20.md.
 
-The unit tests pin the loader (the scaled flux on both presets, the outlet
+These tests pin the loader (the scaled flux on both presets, the outlet
 taking the whole inflow, the file's settings), the stored data (counts,
-order, and the net flux the two vertical profiles carry, which reproduces
-the check of docs/reports/product_case_reynolds.md, section 6.3) and the
-line sampler (exact on a linear field, a face's own value on a face).
+order, the net flux the two vertical profiles carry, which reproduces the
+check of docs/reports/product_case_reynolds.md, section 6.3, and a hash of
+every stored value), the line sampler (exact on a linear field, a face's own
+value on a face) and the allowance (its two values from the stored data,
+the stations it is taken over, the boundary, the unscored lines).
 """
 
 import numpy as np
@@ -34,7 +33,6 @@ import pytest
 
 from src.boundary_staggered import StaggeredBoundary
 from src.mesh import Mesh
-from src.solver_staggered import StaggeredSolver
 from validation import annex20
 from validation.cases import (
     ANNEX20_GRIDS,
@@ -46,131 +44,6 @@ from validation.cases import (
 
 U0_H = annex20.U0 * annex20.SLOT
 NU_SPEC = 15.3e-6
-RECORD_PRESET = "val017_216x72"
-# The record of the committed case on 216x72 under the default scheme (prompt
-# 49, results/builder49/standard_216x72_upwind, commit 6be9c2f): the stop,
-# the residual and the worst per-cell imbalance at the cap, and u / u0 at the
-# measurement stations of the four lines, rounded to five decimals.
-RECORD_STOP = "max_simple_iter"
-RECORD_OUTER = 10000
-RECORD_RESIDUAL_BOUND = 1.0e-8  # the record's 6.9e-10, with room for another machine
-RECORD_ROUNDING = 2.0e-5  # five decimals, and the iteration error at the cap (1e-6 u0)
-RECORD_LINES: dict[str, tuple[float, ...]] = {
-    "x3": (
-        0.81869,
-        0.72997,
-        0.63237,
-        0.56600,
-        0.50661,
-        0.41295,
-        0.27224,
-        0.16616,
-        0.11402,
-        0.05887,
-        0.03237,
-        0.01133,
-        -0.01777,
-        -0.04530,
-        -0.07193,
-        -0.09764,
-        -0.12458,
-        -0.13839,
-        -0.14770,
-        -0.15488,
-        -0.16114,
-        -0.16600,
-        -0.16904,
-        -0.16927,
-        -0.15160,
-    ),
-    "x6": (
-        0.58298,
-        0.62671,
-        0.61521,
-        0.59073,
-        0.56551,
-        0.50730,
-        0.45451,
-        0.37402,
-        0.29706,
-        0.20497,
-        0.13233,
-        0.07701,
-        0.01916,
-        -0.03464,
-        -0.08849,
-        -0.13970,
-        -0.19494,
-        -0.22903,
-        -0.25513,
-        -0.27627,
-        -0.29299,
-        -0.30861,
-        -0.32173,
-        -0.33017,
-        -0.33548,
-    ),
-    "y2916": (
-        1.00781,
-        1.01921,
-        1.00547,
-        0.95640,
-        0.89901,
-        0.84603,
-        0.80017,
-        0.76281,
-        0.72887,
-        0.69642,
-        0.66788,
-        0.64654,
-        0.62183,
-        0.59002,
-        0.56273,
-        0.52763,
-        0.48048,
-        0.34576,
-        0.24082,
-        0.18316,
-        0.11168,
-        0.05880,
-        0.02398,
-        0.00076,
-        -0.00408,
-        -0.02135,
-        -0.03665,
-        -0.04137,
-    ),
-    "y0084": (
-        0.00039,
-        -0.00605,
-        -0.01405,
-        -0.02171,
-        -0.03079,
-        -0.04099,
-        -0.05246,
-        -0.06823,
-        -0.07671,
-        -0.08677,
-        -0.09736,
-        -0.10955,
-        -0.12820,
-        -0.15038,
-        -0.17117,
-        -0.20319,
-        -0.23212,
-        -0.26216,
-        -0.28921,
-        -0.31762,
-        -0.33658,
-        -0.34525,
-        -0.33687,
-        -0.29931,
-        -0.19608,
-        -0.06849,
-        0.13874,
-        0.31025,
-    ),
-}
 
 
 def _layer(config) -> tuple[Mesh, StaggeredBoundary]:
@@ -231,7 +104,10 @@ class TestLoader:
             assert preset.endswith(f"{nx}x{ny}")
 
     def test_the_file_holds_the_case_as_the_design_states_it(self) -> None:
-        """Standard variant, the default scheme, the product's solver keys."""
+        """Standard variant, the default scheme, the product's solver keys but the cap.
+
+        The cap is the stop under rule version 5 plus 20%, rounded up (prompt 50).
+        """
         config = load_case("annex20")
         assert config.turbulence is not None
         assert config.turbulence.variant == "standard"
@@ -240,7 +116,7 @@ class TestLoader:
         assert config.stopping_rule == "error_estimate"
         assert config.momentum_sweeps == 10
         assert config.pressure_rtol == 1.0e-4
-        assert config.max_simple_iter == 10000
+        assert config.max_simple_iter == 14000
         assert (config.room_width, config.room_height) == (9.0, 3.0)
         assert config.obstacles == []
 
@@ -376,62 +252,93 @@ class TestSampling:
             annex20.line_errors(np.zeros(2), (None, None))
 
 
-@pytest.fixture(scope="module")
-def annex20_216x72() -> dict:
-    """The committed case on 216x72 under the default scheme, run to its stop or cap."""
-    config = load_preset(RECORD_PRESET)
-    mesh = Mesh(config)
-    solver = StaggeredSolver(mesh, config, StaggeredBoundary(mesh, config))
-    solver.solve_steady()
-    faces = solver.face_velocities
-    assert faces is not None
-    return {
-        "config": config,
-        "solver": solver,
-        "lines": annex20.sample_lines(mesh, np.array(faces.u)),
-    }
+@pytest.mark.unit
+class TestAllowance:
+    def _values(
+        self, offset: dict[str, float | np.ndarray] | None = None
+    ) -> dict[str, np.ndarray]:
+        """The measurements themselves at every station, plus any offset per line."""
+        offset = offset or {}
+        return {
+            key: np.array(line.measured) + offset.get(key, 0.0)
+            for key, line in annex20.LINES.items()
+        }
 
+    def test_the_allowance_is_the_published_rms_the_decision_cites(self) -> None:
+        """0.070 at x = H over 25 stations, 0.136 on the jet over the 27 it reaches."""
+        assert annex20.SCORED_LINES == ("x3", "y2916")
+        assert round(annex20.published_rms("x3"), 3) == 0.070
+        assert round(annex20.published_rms("y2916"), 3) == 0.136
+        x3, jet = annex20.LINES["x3"], annex20.LINES["y2916"]
+        assert annex20.line_errors(np.array(x3.measured), x3.published).stations == 25
+        assert annex20.line_errors(np.array(jet.measured), jet.published).stations == 27
 
-@pytest.mark.validation
-def test_annex20_216x72_reproduces_its_record_val017(annex20_216x72: dict) -> None:
-    """VAL-017: the run reaches its record's stop and reproduces its four lines.
+    def test_the_measurements_pass_with_no_error(self) -> None:
+        scores = annex20.score_lines(self._values())
+        assert list(scores) == list(annex20.LINES)
+        for key, score in scores.items():
+            assert score.rms == 0.0
+            assert score.allowance == annex20.published_rms(key)
+            assert score.passed is (True if key in annex20.SCORED_LINES else None)
 
-    No threshold against the data is applied (ADR-012 decision 6, OPEN); the
-    comparison is printed. The solve raises on a negative k or eps, so
-    positivity is asserted by running at all; no pressure correction and no
-    k or eps solve reaches its cap.
-    """
-    solver, config = annex20_216x72["solver"], annex20_216x72["config"]
-    assert solver.stop_reason == RECORD_STOP
-    assert len(solver.residual_history) == RECORD_OUTER
-    assert solver.residual_history[-1] < RECORD_RESIDUAL_BOUND
-    assert solver.pressure_cap_hits == 0
-    assert solver.rule_version == 4
-    assert float(np.abs(solver.last_mass_imbalance).max()) < config.mass_imbalance_tol
-    state = solver.turbulence_state
-    assert state is not None
-    assert float(state.k[state.k > 0.0].min()) > 0.0
-    for key, line in annex20.LINES.items():
-        values = annex20_216x72["lines"][key]
-        recorded = np.array(RECORD_LINES[key])
-        against_data = annex20.line_errors(values, line.measured)
-        against_record = np.abs(values - recorded).max()
-        print(
-            f"VAL-017 {line.label}: against the data max |d| {against_data.max_abs:.4f}, "
-            f"rms {against_data.rms:.4f} (unscored); against the record "
-            f"{against_record:.2e}"
-        )
-        assert against_record < RECORD_ROUNDING, key
+    @pytest.mark.parametrize("key", ["x3", "y2916"])
+    def test_a_line_passes_at_its_allowance_and_fails_above_it(self, key: str) -> None:
+        """A uniform offset is its own RMS. Defect caught: the comparison reversed."""
+        allowance = annex20.published_rms(key)
+        below = annex20.score_lines(self._values({key: allowance * (1.0 - 1e-9)}))
+        above = annex20.score_lines(self._values({key: -allowance * (1.0 + 1e-9)}))
+        assert below[key].passed is True
+        assert above[key].passed is False
+        assert above[key].rms == pytest.approx(allowance, rel=1e-8)
 
+    def test_the_pass_reads_the_rms_not_the_worst_station(self) -> None:
+        """One station off by 0.2 on x = H: RMS 0.04, under 0.070; worst 0.2, over it.
 
-@pytest.mark.validation
-@pytest.mark.xfail(
-    strict=True,
-    reason="condition (e) cannot hold on this case with its inlet scale "
-    "(docs/reports/ecr002_val017_annex20.md, section 5.2); for Alex",
-)
-def test_annex20_216x72_stops_by_the_rule_val017(annex20_216x72: dict) -> None:
-    """VAL-017: the coupled solve stops by its rule, condition (e) included."""
-    solver = annex20_216x72["solver"]
-    assert solver.converged is True
-    assert solver.stop_reason == "error_estimate_and_continuity"
+        Decision 6 chose the RMS because the worst station always falls in the
+        end-wall corner eddy. Defect caught: the pass read from the largest
+        difference, under which this line, and the recorded row's two scored
+        lines, would fail (test 49 and test 50).
+        """
+        x3 = annex20.LINES["x3"]
+        offset = np.zeros(len(x3.stations))
+        offset[12] = 0.2
+        scores = annex20.score_lines(self._values({"x3": offset}))
+        assert scores["x3"].rms == pytest.approx(0.2 / np.sqrt(25.0))
+        assert scores["x3"].passed is True
+
+    def test_the_rms_is_over_every_station_of_the_line(self) -> None:
+        """The jet's first station, which the published line misses, still counts.
+
+        Defect caught: the RMS taken over the published line's stations only,
+        under which this line would score 0 and pass.
+        """
+        jet = annex20.LINES["y2916"]
+        offset = np.zeros(len(jet.stations))
+        offset[0] = 1.0
+        scores = annex20.score_lines(self._values({"y2916": offset}))
+        assert scores["y2916"].stations == 28
+        assert scores["y2916"].rms == pytest.approx(np.sqrt(1.0 / 28.0))
+        assert scores["y2916"].passed is False
+
+    def test_the_unscored_lines_never_fail(self) -> None:
+        """x = 2H and the floor are reported, with no pass or fail."""
+        scores = annex20.score_lines(self._values({"x6": 1.0, "y0084": 1.0}))
+        for key in ("x6", "y0084"):
+            assert scores[key].rms == pytest.approx(1.0)
+            assert scores[key].scored is False
+            assert scores[key].passed is None
+        assert scores["x3"].passed and scores["y2916"].passed
+
+    def test_a_missing_short_or_non_finite_line_is_refused(self) -> None:
+        values = self._values()
+        del values["x6"]
+        with pytest.raises(ValueError, match="no values for the lines"):
+            annex20.score_lines(values)
+        values = self._values()
+        values["x3"] = values["x3"][:-1]
+        with pytest.raises(ValueError, match=r"x3: .* against 25 stations"):
+            annex20.score_lines(values)
+        values = self._values()
+        values["y2916"][3] = np.nan
+        with pytest.raises(ValueError, match="y2916: a sampled value is not finite"):
+            annex20.score_lines(values)
