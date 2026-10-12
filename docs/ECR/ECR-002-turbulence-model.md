@@ -451,6 +451,13 @@ The change is accepted when all of the following are demonstrated:
    `scripts/benchmark.py`, scored by this allowance; the suite keeps the loader, data, sampler
    and data-hash tests. Method: harness row and report. Condition (e)'s scale changes first
    (ADR-012 E, amended the same day), so that the row can stop by the rule.
+   *Note 2026-10-11 (prompt 50, built and measured): PASS.* Under rule version 5 the row stops by
+   the rule on the committed case file, and both scored lines are within the allowance
+   (`docs/reports/ecr002_rule_e_scale.md`, sections 5.1 and 5.2, and the row in
+   `benchmarks/results.jsonl`). It stops at the file's k and eps tolerance, where 1e-13 stops at
+   the same outer iteration, so the tolerance stays; the stop is above the old 10,000 cap, so the
+   case file's `max_simple_iter` is 14,000 (the report's section 7 asks Alex to confirm it).
+   Report 49's floor of the eddy-viscosity step was a pause at its cap, not the tolerance.
 10. **The product room (VAL-018).** Conditional on step 5: the product configuration stops by
    `error_estimate_and_continuity` under rule version 4 within its cap, with `mass_imbalance_tol`
    from ADR-011 G's formula. Method: harness row and the step 8 report.
@@ -532,3 +539,4 @@ architecture, and the acceptance criteria are sufficient to close the change.
 | 2026-10-11 | Alex's decision before step 7 (prompt 49): the product runs the standard variant until VAL-020 says which model is right at the equipment tops; VAL-018's variant clause waits for VAL-020; RNG's cycle is probed only if VAL-020 favours RNG. Note in section 8 step 8; ADR-012 decision 2 carries the dated amendment. | Alex Moroz-Smietana |
 | 2026-10-11 | Step 7, first case, VAL-017 measured (prompt 49, branch feature/ecr002-val017-annex20): the Annex 20 case, its loader and its data built; four standard runs and one RNG run; the comparison against the measurements and the published standard k-epsilon, reported, unscored; condition (e) found unattainable on this case (its inlet scale). Note under criterion 9; `docs/reports/ecr002_val017_annex20.md`. No threshold set. | Claude (builder) |
 | 2026-10-11 | Alex's decisions on prompt 49 (prompt 50): the VAL-017 allowance (criterion 9's note), the VAL-017 run moved to a harness row, and condition (e)'s scale the molecular nu plus the FLUID-cell median of nu_t per outer iteration, rule version 5. Notes in section 8 step 7 and criterion 9; ADR-012 decision 6 and section E carry the dated amendments. | Alex Moroz-Smietana |
+| 2026-10-11 | Step 7, (e)'s scale built and VAL-017 run as a harness row (prompt 50, branch feature/ecr002-rule-e-scale): rule version 5, laminar stops bitwise unchanged, the Annex 20 row stops at the file's tolerance and passes the allowance, the product rows stop 2.4% sooner with fields unchanged to 7e-9; CI runs the suite once. Criterion 9 PASS; `docs/reports/ecr002_rule_e_scale.md`. | Claude (builder) |
