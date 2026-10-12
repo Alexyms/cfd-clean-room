@@ -232,7 +232,8 @@ class TurbulenceSpec:
         Under-relaxation of the eddy viscosity in the coupled solve, in
         (0, 1].
     max_iter : int
-        Cap on Jacobi sweeps of each implicit k and eps solve.
+        Cap on conjugate gradient iterations of each implicit k and eps
+        solve (Jacobi sweeps until prompt 51).
     tol : float
         Tolerance the implicit k and eps solves iterate to.
     """

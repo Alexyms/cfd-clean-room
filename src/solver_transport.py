@@ -101,7 +101,7 @@ from src.config import (
 )
 from src.mesh import SOLID, Mesh
 from src.particles import ParticlePhysics
-from src.scalar_scheme import advective_flux, implicit_step, mesh_axes
+from src.scalar_scheme import JACOBI, advective_flux, implicit_step, mesh_axes
 from src.staggered import FaceVelocities, p_shape, u_shape, v_shape
 
 logger = logging.getLogger(__name__)
@@ -855,13 +855,14 @@ class TransportSolver:
             self._solid,
             self._tol,
             self._max_sweeps,
+            method=JACOBI,
         )
         if not result.converged:
             logger.warning(
                 "implicit diffusion solve stopped at max_diffusion_iter %d",
                 self._max_sweeps,
             )
-        self.last_diffusion_sweeps = result.sweeps
+        self.last_diffusion_sweeps = result.iterations
         self.diffusion_converged = result.converged
         return result.field
 

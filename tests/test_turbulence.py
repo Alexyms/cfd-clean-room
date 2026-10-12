@@ -34,10 +34,17 @@ import numpy as np
 import pytest
 import yaml
 
+from src import turbulence
 from src.boundary_staggered import StaggeredBoundary
 from src.config import SimConfig
 from src.mesh import SOLID, Mesh
 from src.pressure import PressureCorrector
+from src.scalar_scheme import (
+    CONJUGATE_GRADIENT,
+    JACOBI,
+    ImplicitResult,
+    implicit_step,
+)
 from src.solver_staggered import StaggeredSolver
 from src.staggered import FaceVelocities, u_shape, v_shape
 from src.turbulence import (
@@ -1418,16 +1425,18 @@ class TestPositivity:
         produced = model.terms(state, faces, conditions_for(state)).production
         assert produced.max() > 0.0
         least_k = least_eps = math.inf
-        most_sweeps = 0
+        most_iterations = 0
         for n in range(steps):
             state = model.step(state, faces, conditions_for(state))
-            assert model.solves_converged, f"step {n}: sweeps {model.last_sweeps}"
-            most_sweeps = max(most_sweeps, *model.last_sweeps)
+            assert model.solves_converged, (
+                f"step {n}: iterations {model.last_iterations}"
+            )
+            most_iterations = max(most_iterations, *model.last_iterations)
             least_k = min(least_k, float(state.k[live].min()))
             least_eps = min(least_eps, float(state.eps[live].min()))
         print(
             f"positivity {case} {variant} {scheme}: {steps} steps, "
-            f"most sweeps {most_sweeps}; "
+            f"most iterations {most_iterations}; "
             f"least k {least_k:.3e}, least eps {least_eps:.3e}; end k "
             f"[{state.k[live].min():.3e}, {state.k[live].max():.3e}]"
         )
@@ -1435,41 +1444,84 @@ class TestPositivity:
         assert not np.allclose(state.k[live], k[live])
 
     @pytest.mark.parametrize("scheme", SCHEMES)
-    @pytest.mark.parametrize("variant", VARIANT_NAMES)
-    def test_a_long_run_stays_positive_while_its_solves_are_truncated(
-        self, variant: str, scheme: str
+    def test_a_long_standard_run_stays_positive_through_the_fallback(
+        self, scheme: str
     ) -> None:
-        """The random field from the patchy start for 300 pseudo-time steps.
-        The frozen strain grows k without a steady state, nu_t with it, and
-        the face conductances outgrow V / dt by orders, so the implicit solves
-        stop at their 500-sweep cap on most steps (test 35 check 7): the
-        states are truncated Jacobi iterates, not the step's solution.
-        Positivity holds all the same, because every Jacobi sweep is a
-        non-negative combination of a non-negative right-hand side and
-        non-negative neighbours (scalar_scheme.implicit_step), so a truncated
-        iterate is positive as the converged one is. Whether the coupled solve
-        should iterate further is a question for steps 5 and 6, not this
-        test."""
-        mesh, model, faces, conditions_for = CASES["random"](variant, scheme)
+        """The random field from the patchy start for 300 pseudo-time steps,
+        standard variant. The frozen strain grows k without a steady state,
+        nu_t with it, and the face conductances outgrow V / dt by orders, so
+        from about step 17 the stop sits under the residual's rounding and
+        every solve reaches its cap (test 35 check 7). A capped CG solve
+        falls back to Jacobi from the explicit field (prompt 51), so each
+        truncated state is a truncated Jacobi iterate, and positivity holds
+        because every Jacobi sweep is a non-negative combination of
+        non-negative values. Without the fallback, the truncated CG iterate
+        of k goes negative at step 151, where the k system's condition
+        number passes 5e15 (results/builder51/)."""
+        mesh, model, faces, conditions_for = CASES["random"]("standard", scheme)
         live = mesh.cell_type != SOLID
         state = model.state(*_patchy_start(model, mesh.cell_type.shape, seed=3))
-        truncated = 0
+        truncated = fell_back = truncated_without_fallback = 0
         least_k = least_eps = math.inf
         for _ in range(POSITIVITY_STEPS):
             state = model.step(state, faces, conditions_for(state))
             truncated += not model.solves_converged
+            fell_back += any(model.last_fallbacks)
+            truncated_without_fallback += not model.solves_converged and not any(
+                model.last_fallbacks
+            )
             least_k = min(least_k, float(state.k[live].min()))
             least_eps = min(least_eps, float(state.eps[live].min()))
         print(
-            f"long run {variant} {scheme}: {truncated} of {POSITIVITY_STEPS} "
-            "steps truncated; "
+            f"long run standard {scheme}: {truncated} of {POSITIVITY_STEPS} "
+            f"steps truncated, {fell_back} with a fallback; "
             f"least k {least_k:.3e}, least eps {least_eps:.3e}"
         )
-        # The run exists to exercise truncated solves; if they all converge,
-        # its docstring no longer describes it.
-        assert truncated > 0
+        # The run exists to exercise truncated solves and the fallback; if
+        # either stops happening, the docstring no longer describes it.
+        assert truncated > POSITIVITY_STEPS // 2
+        assert fell_back >= truncated and truncated_without_fallback == 0
         assert least_k > 0.0 and least_eps > 0.0
         assert np.all(np.isfinite(state.k)) and np.all(np.isfinite(state.eps))
+
+    @pytest.mark.parametrize("scheme", SCHEMES)
+    def test_a_long_rng_run_converges_and_stays_positive(self, scheme: str) -> None:
+        """The same 300 steps under RNG. RNG's R term damps the runaway, and
+        under CG every solve meets its tolerance, so this run, split from the
+        standard one, exercises converged CG solves over a long run rather
+        than truncated ones (prompt 51)."""
+        mesh, model, faces, conditions_for = CASES["random"]("rng", scheme)
+        live = mesh.cell_type != SOLID
+        state = model.state(*_patchy_start(model, mesh.cell_type.shape, seed=3))
+        least_k = least_eps = math.inf
+        for n in range(POSITIVITY_STEPS):
+            state = model.step(state, faces, conditions_for(state))
+            assert model.solves_converged, f"step {n}: {model.last_iterations}"
+            least_k = min(least_k, float(state.k[live].min()))
+            least_eps = min(least_eps, float(state.eps[live].min()))
+        print(
+            f"long run rng {scheme}: least k {least_k:.3e}, least eps {least_eps:.3e}"
+        )
+        assert least_k > 0.0 and least_eps > 0.0
+
+    def test_the_model_solves_k_and_eps_by_conjugate_gradients(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Both implicit solves of a step name CONJUGATE_GRADIENT (prompt 51),
+        and the model records their iterations and fallbacks."""
+        mesh, model, faces, conditions_for = CASES["random"]("standard")
+        methods: list[str] = []
+
+        def spy(*args: object, **kwargs: object) -> ImplicitResult:
+            methods.append(str(kwargs.get("method", JACOBI)))
+            return implicit_step(*args, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(turbulence, "implicit_step", spy)
+        state = model.state(*_bounded_start(mesh.cell_type.shape, seed=5))
+        model.step(state, faces, conditions_for(state))
+        assert methods == [CONJUGATE_GRADIENT, CONJUGATE_GRADIENT]
+        assert min(model.last_iterations) > 0
+        assert model.last_fallbacks == (0, 0)
 
     @pytest.mark.parametrize("scheme", SCHEMES)
     @pytest.mark.parametrize("variant", VARIANT_NAMES)
