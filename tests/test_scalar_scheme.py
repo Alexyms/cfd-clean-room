@@ -671,6 +671,85 @@ class TestConjugateGradient:
         r = _residual(result.field, c_star, volume, 1.0, g_u, g_v, diagonal, solid)
         assert np.abs(r).max() <= tol * np.abs(volume * c_star).max()
 
+    @pytest.mark.parametrize("seed", [207, 214])
+    def test_converged_means_the_true_residual_meets_the_stop(self, seed: int) -> None:
+        """On a stiff system whose stop rounding cannot reach, the residual
+        recursion drifts below the stop while the true residual stays above
+        it. The solve may only report converged if the true residual meets
+        the stop; otherwise it falls back. Defect caught: the confirmation on
+        the true residual removed, under which both seeds report converged
+        after 374 and 361 iterations with no fallback (review 51 B1, test 51;
+        seeds from results/tester51/survivors_t51.py's construction)."""
+        rng0 = np.random.default_rng(seed)
+        high = 10.0 ** rng0.uniform(2.0, 9.0)
+        mesh = Mesh(transport_config(1.3, 0.9, 40, 30))
+        solid = mesh.cell_type == SOLID
+        rng = np.random.default_rng(seed)
+        g_u = np.zeros(u_shape(mesh))
+        g_v = np.zeros(v_shape(mesh))
+        g_u[:, 1:-1] = rng.uniform(0.1 * high, high, (30, 39))
+        g_v[1:-1, :] = rng.uniform(0.1 * high, high, (29, 40))
+        volume = np.outer(mesh.dy_cell, mesh.dx_cell)
+        c_star = rng.uniform(0.5, 1.5, solid.shape)
+        dt = 10.0 ** rng.uniform(0.0, 4.0)
+        diagonal = np.zeros(solid.shape)
+        tol = 10.0 ** -rng.uniform(8.0, 12.0)
+        result = implicit_step(
+            c_star,
+            volume,
+            dt,
+            g_u,
+            g_v,
+            diagonal,
+            solid,
+            tol,
+            500,
+            method=CONJUGATE_GRADIENT,
+        )
+        r = _residual(result.field, c_star, volume, dt, g_u, g_v, diagonal, solid)
+        stop = tol * np.abs(volume / dt * c_star).max()
+        if result.converged and result.fallbacks == 0:
+            assert np.abs(r).max() <= stop
+        else:
+            assert result.fallbacks == 1
+
+    @pytest.mark.parametrize("method", [CONJUGATE_GRADIENT, JACOBI])
+    def test_the_stop_scale_counts_the_held_cells(self, method: str) -> None:
+        """The scale is the largest |b| over every cell, held ones included,
+        as Jacobi has always taken it: in the model a held wall eps holds the
+        largest |b| in most eps solves. Here one isolated held cell at 1e7
+        sets the scale, so the start already meets the stop and the solve
+        returns C* untouched. Defect caught: the scale over the unknowns
+        only, under which the stop is about 1e-9 of this one and the solve
+        iterates (test 51)."""
+        mesh = Mesh(transport_config(1.0, 0.5, 20, 10))
+        solid = mesh.cell_type == SOLID
+        rng = np.random.default_rng(53)
+        g_u, g_v = _conductances(mesh, rng, high=0.5)
+        held = np.zeros_like(solid)
+        held[5, 10] = True
+        g_u[5, 10] = g_u[5, 11] = 0.0
+        g_v[5, 10] = g_v[6, 10] = 0.0
+        c_star = rng.uniform(0.5, 1.5, size=solid.shape)
+        c_star[held] = 1.0e7
+        volume = np.outer(mesh.dy_cell, mesh.dx_cell)
+        diagonal = np.zeros_like(c_star)
+        result = implicit_step(
+            c_star,
+            volume,
+            1.0,
+            g_u,
+            g_v,
+            diagonal,
+            solid,
+            1e-3,
+            500,
+            held=held,
+            method=method,
+        )
+        assert result.converged and result.iterations == 0 and result.fallbacks == 0
+        assert np.array_equal(result.field, c_star)
+
     def test_a_held_cell_keeps_its_value_exactly(self) -> None:
         """Held cells are not unknowns under CG: their values are C*'s to the
         bit, with no fallback to supply them; leaving them as unknowns moves
