@@ -13,3 +13,6 @@
 *.so binary
 *.dylib binary
 *.dll binary
+# The fetched data files are compared with their published checksums
+# (tests/test_backward_step.py), so their bytes must not change on checkout.
+validation/data/** -text
