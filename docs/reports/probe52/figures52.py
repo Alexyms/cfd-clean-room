@@ -64,6 +64,26 @@ def load(name: str) -> tuple[dict, dict]:
     return rec, dict(np.load(OUT / f"{name}.npz"))
 
 
+def uniform_rows(
+    yc: np.ndarray, fields: tuple[np.ndarray, ...], count: int = 181
+) -> tuple[np.ndarray, list[np.ndarray]]:
+    """Cell-centre fields resampled on equally spaced rows, linear in y per column.
+
+    matplotlib's streamplot wants an equally spaced lattice; the mesh is
+    clustered in y. The streamlines are drawn from the resampled fields; the
+    colour maps keep the mesh's own cells.
+    """
+    y = np.linspace(float(yc[0]), float(yc[-1]), count)
+    out = []
+    for field in fields:
+        out.append(
+            np.stack(
+                [np.interp(y, yc, field[:, i]) for i in range(field.shape[1])], axis=1
+            )
+        )
+    return y, out
+
+
 def edges(mesh: Mesh) -> tuple[np.ndarray, np.ndarray]:
     return np.asarray(mesh.x) / H, np.asarray(mesh.y) / H
 
@@ -155,9 +175,10 @@ def fields(args: argparse.Namespace) -> None:
 
     fig = plt.figure(figsize=(11.0, 12.5), constrained_layout=True)
     grid = fig.add_gridspec(4, 1, height_ratios=[1.0, 2.2, 2.2, 2.2])
+    y_u, (u_u, v_u, speed_u) = uniform_rows(yc, (u, v, speed))
     ax = fig.add_subplot(grid[0])
     ax.streamplot(
-        xc, yc, u, v, color="0.4", density=(3.0, 0.5), linewidth=0.5, arrowsize=0.5
+        xc, y_u, u_u, v_u, color="0.4", density=(3.0, 0.5), linewidth=0.5, arrowsize=0.5
     )
     draw_geometry(ax, config, x_r, zoom=False)
     ax.set_xlim(-l_up, 50.0)
@@ -171,10 +192,10 @@ def fields(args: argparse.Namespace) -> None:
     ax = fig.add_subplot(grid[1])
     strm = ax.streamplot(
         xc[sel],
-        yc,
-        u[:, sel],
-        v[:, sel],
-        color=speed[:, sel],
+        y_u,
+        u_u[:, sel],
+        v_u[:, sel],
+        color=speed_u[:, sel],
         cmap="viridis",
         density=(2.0, 1.2),
         linewidth=0.7,
