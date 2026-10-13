@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+# Prompt 51 (k and eps by conjugate gradients): the runs, in stages, one BLAS
+# thread each. Run from the repository root: bash docs/reports/probe51/run51.sh
+# STAGE. The base is a worktree of origin/main at the branch point,
+# results/builder51/base (git worktree add --detach results/builder51/base
+# origin/main); the Annex 20 row of this branch runs from a clean worktree of
+# the branch, results/builder51/cg, so the harness marks its row clean. Logs
+# go to results/builder51/logs/, records to results/builder51/ of the main
+# checkout.
+# Stages, in the order they were run:
+#   plants    commit A's planted defects, alone (plant51.py)
+#   laminar   item 4: VAL-001, its stretched twin and VAL-002, and the Jacobi
+#             battery, on the base and on this checkout (check51.py)
+#   annex     item 5: the Annex 20 harness row on the base and on the
+#             branch's worktree, launched together and alone on the machine;
+#             the branch's row is appended to benchmarks/results.jsonl
+#   val016    item 6: VAL-016's criteria on the base and on this checkout
+#   products  item 6: prompt 48's standard upwind product rows on 80x30 and
+#             160x60, on the base and on this checkout, launched together
+#   compare   the comparisons of items 4 to 6
+#   stop      the first pass's stop replayed, both schemes (stop51.py)
+#   tables    every table of the report, from the records (tables51.py)
+set -u
+PY=.venv/Scripts/python
+PROBE=docs/reports/probe51
+BASE=results/builder51/base
+CG=results/builder51/cg
+LOGS=results/builder51/logs
+mkdir -p "$LOGS"
+export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1
+
+launch() {
+  local name=$1
+  shift
+  "$PY" "$@" > "$LOGS/$name.log" 2>&1 &
+}
+
+stage=${1:-}
+case "$stage" in
+  plants)
+    "$PY" "$PROBE/plant51.py"
+    ;;
+  laminar)
+    launch jacobi_base "$PROBE/check51.py" --root "$BASE" jacobi --label base
+    launch jacobi_A "$PROBE/check51.py" jacobi --label A
+    for c in val001_80x40 val001_80x40_stretched val002_80x80; do
+      launch "val_${c}_base" "$PROBE/check51.py" --root "$BASE" val "$c" --label base
+      launch "val_${c}_A" "$PROBE/check51.py" val "$c" --label A
+    done
+    wait
+    ;;
+  annex)
+    launch annex_main "$PROBE/annex51.py" run main --root "$BASE" --concurrent 2
+    launch annex_cg "$PROBE/annex51.py" run cg --root "$CG" --concurrent 2 --append
+    wait
+    ;;
+  val016)
+    launch val016_main "$PROBE/val016_51.py" main --root "$BASE"
+    launch val016_cg "$PROBE/val016_51.py" cg
+    wait
+    ;;
+  products)
+    for grid in 80x30 160x60; do
+      launch "product_${grid}_main" "$PROBE/product51.py" run "$grid" main --root "$BASE"
+      launch "product_${grid}_cg" "$PROBE/product51.py" run "$grid" cg
+    done
+    wait
+    ;;
+  compare)
+    "$PY" "$PROBE/check51.py" report --base base --built A
+    "$PY" "$PROBE/annex51.py" compare main cg
+    for grid in 80x30 160x60; do
+      "$PY" "$PROBE/product51.py" compare "$grid" main cg
+    done
+    ;;
+  stop)
+    for scheme in upwind umist; do
+      "$PY" "$PROBE/stop51.py" "$scheme"
+    done
+    ;;
+  tables)
+    "$PY" "$PROBE/tables51.py"
+    ;;
+  *)
+    echo "usage: run51.sh plants | laminar | annex | val016 | products | compare | stop | tables" >&2
+    exit 2
+    ;;
+esac

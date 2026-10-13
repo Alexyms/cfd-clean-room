@@ -85,7 +85,12 @@ from src.boundary_registry import VELOCITY_INLET, BoundaryRegistry
 from src.boundary_staggered import StaggeredBoundary
 from src.config import RNG, STANDARD, UPWIND, SimConfig
 from src.mesh import SOLID, Mesh
-from src.scalar_scheme import advective_flux, implicit_step, mesh_axes
+from src.scalar_scheme import (
+    CONJUGATE_GRADIENT,
+    advective_flux,
+    implicit_step,
+    mesh_axes,
+)
 from src.staggered import (
     FaceVelocities,
     edge_cell_inputs,
@@ -427,10 +432,14 @@ class KEpsilonModel:
     ----------
     constants : VariantConstants
         The configured variant's constants.
-    last_sweeps : tuple[int, int]
-        Jacobi sweeps of the last step's k and eps solves.
+    last_iterations : tuple[int, int]
+        Conjugate gradient iterations of the last step's k and eps solves.
+    last_fallbacks : tuple[int, int]
+        1 where the last step's k or eps solve fell back to Jacobi from the
+        explicit field (``scalar_scheme.implicit_step``), else 0.
     solves_converged : bool
-        Whether both of the last step's solves met ``tol`` within the cap.
+        Whether both of the last step's solves met ``tol`` within the cap,
+        the fallback's where there was one.
 
     Raises
     ------
@@ -482,7 +491,8 @@ class KEpsilonModel:
         self._w_east = (mesh.xc[1:] - mesh.x[1:-1]) / mesh.dx_face[1:-1]
         self._w_north = (mesh.yc[1:] - mesh.y[1:-1]) / mesh.dy_face[1:-1]
         self._axis_x, self._axis_y = mesh_axes(mesh)
-        self.last_sweeps: tuple[int, int] = (0, 0)
+        self.last_iterations: tuple[int, int] = (0, 0)
+        self.last_fallbacks: tuple[int, int] = (0, 0)
         self.solves_converged: bool = True
 
     # ------------------------------------------------------------------
@@ -718,7 +728,12 @@ class KEpsilonModel:
         eps_star = np.where(self._solid, 0.0, eps_star + dt_cell * terms.growth_eps)
         eps_star = np.where(c.eps_held, c.eps_wall, eps_star)
 
-        # Step 3: diffusion and decay, implicit, eps held where given.
+        # Step 3: diffusion and decay, implicit, eps held where given. Only
+        # diffusion and decay are implicit, so each system is symmetric
+        # positive definite and conjugate gradients solve it in far fewer
+        # iterations than Jacobi sweeps (prompt 51). A CG iterate has no sign
+        # guarantee, so a capped or non-positive CG solve falls back to Jacobi
+        # from the explicit field, whose iterates keep the sign.
         const = self.constants
         g_u_k, g_v_k = self._conductances(state.nu_t, const.sigma_k)
         g_u_e, g_v_e = self._conductances(state.nu_t, const.sigma_e)
@@ -732,6 +747,7 @@ class KEpsilonModel:
             self._solid,
             self._tol,
             self._max_iter,
+            method=CONJUGATE_GRADIENT,
         )
         eps_result = implicit_step(
             eps_star,
@@ -744,12 +760,20 @@ class KEpsilonModel:
             self._tol,
             self._max_iter,
             held=c.eps_held,
+            method=CONJUGATE_GRADIENT,
         )
-        self.last_sweeps = (k_result.sweeps, eps_result.sweeps)
+        self.last_iterations = (k_result.iterations, eps_result.iterations)
+        self.last_fallbacks = (k_result.fallbacks, eps_result.fallbacks)
+        if any(self.last_fallbacks):
+            logger.warning(
+                "CG k or eps solve fell back to Jacobi (k %d, eps %d)",
+                *self.last_fallbacks,
+            )
         self.solves_converged = k_result.converged and eps_result.converged
         if not self.solves_converged:
             logger.warning(
-                "implicit k or eps solve stopped at max_iter %d", self._max_iter
+                "implicit k or eps solve stopped at max_iter %d CG iterations",
+                self._max_iter,
             )
         self._check_positive(k_result.field, "k")
         self._check_positive(eps_result.field, "eps")

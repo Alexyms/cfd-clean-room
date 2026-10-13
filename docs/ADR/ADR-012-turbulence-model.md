@@ -569,6 +569,22 @@ bounded on both exact grids, in the same gap above return 2 and with a larger ve
 under the limited value (`docs/reports/ecr002_step6_variants.md`, section 5.4), so its cycle is not
 the limiter's.
 
+*Note, 2026-10-12 (step 7; prompt 51): step 3 solved by conjugate gradients.* Step 3's systems are
+symmetric positive definite, since only diffusion and the decay are implicit, so the k and eps
+solves use diagonal-preconditioned conjugate gradients in place of Jacobi. The stop and its
+meaning are unchanged: the largest residual over the solved cells against `tol` times the largest
+right-hand side, confirmed on the true residual; `max_iter` now counts CG iterations. The held
+wall-cell eps and the SOLID cells are fixed values, not unknowns. The positivity argument above
+is Jacobi's: every Jacobi iterate of a non-negative right-hand side is non-negative, and a CG
+iterate carries no such guarantee. The first pass found the case: on the long frozen-strain test
+the k system's condition number passed double precision and the capped CG iterate of k went
+negative in every cell (`docs/reports/turbulence_cg_solve.md`, section 3). Alex decided the same
+day that a CG solve reaching its cap, or ending with a value at or below zero in a cell it solves
+for, falls back to Jacobi from the explicit field: the result is then Jacobi's, bit for bit, and
+the argument above holds for it. Fallbacks are counted per solve and recorded per run. The
+transport solver stays on Jacobi, where concentrations reach zero. Nothing is clipped. The cost
+and the fallback counts on the Annex 20 and product rows are the report's sections 5 and 6.
+
 ## D. Coupling into the flow solver (REQ-S14, S16, S18 and S01, proposed; decision 1)
 **The viscosity field.** `mu_e = mu + mu_t` per cell. `MomentumPredictor` gains an optional
 cell field, None by default; with None the assembly runs the present scalar lines unchanged, so

@@ -13,8 +13,11 @@ that works only on a square uniform grid shows.
 import numpy as np
 import pytest
 
+from src import scalar_scheme, solver_transport
 from src.mesh import SOLID, Mesh
 from src.scalar_scheme import (
+    CONJUGATE_GRADIENT,
+    JACOBI,
     ImplicitResult,
     advective_flux,
     implicit_step,
@@ -72,8 +75,12 @@ def _dense(
     g_u: np.ndarray,
     g_v: np.ndarray,
     diagonal: np.ndarray,
+    held: np.ndarray | None = None,
 ) -> np.ndarray:
-    """The implicit system assembled densely, face by face, and solved directly."""
+    """The implicit system assembled densely, face by face, and solved directly.
+
+    SOLID rows read ``C_P = 0`` and held rows ``C_P = C*_P``.
+    """
     ny, nx = c_star.shape
     n = ny * nx
     idx = np.arange(n).reshape(ny, nx)
@@ -102,6 +109,11 @@ def _dense(
     a[solid, solid] = 1.0
     rhs = (over_dt * c_star).ravel()
     rhs[solid] = 0.0
+    if held is not None:
+        fixed = held.ravel()
+        a[fixed, :] = 0.0
+        a[fixed, fixed] = 1.0
+        rhs[fixed] = c_star.ravel()[fixed]
     return np.linalg.solve(a, rhs).reshape(ny, nx)
 
 
@@ -273,7 +285,7 @@ class TestPerCellStep:
         scalar = implicit_step(c_star, volume, 0.37, *args)
         array = implicit_step(c_star, volume, np.full(solid.shape, 0.37), *args)
         assert np.array_equal(scalar.field, array.field)
-        assert scalar.sweeps == array.sweeps
+        assert scalar.iterations == array.iterations
 
     def test_nothing_to_solve_returns_the_explicit_field(self) -> None:
         mesh = _mesh()
@@ -293,7 +305,7 @@ class TestPerCellStep:
         )
         assert isinstance(result, ImplicitResult)
         assert result.field is c_star
-        assert (result.sweeps, result.converged) == (0, True)
+        assert (result.iterations, result.converged) == (0, True)
 
     def test_the_sweep_cap_is_reported(self) -> None:
         mesh = _mesh()
@@ -312,7 +324,7 @@ class TestPerCellStep:
             1e-14,
             3,
         )
-        assert result.sweeps == 3
+        assert result.iterations == 3
         assert not result.converged
 
 
@@ -537,3 +549,353 @@ class TestPiecewiseDiffusivity:
         )
         wrong = _dense(mesh, c, dt, uniform_u, uniform_v, np.zeros(solid.shape))
         assert np.max(np.abs(wrong - expected) / expected.max()) > 1e-4
+
+
+def _cg_system(
+    mesh: Mesh, seed: int
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Diffusion, a sink in every cell and a per-cell step on the obstacle mesh.
+
+    Returns c_star, the step, g_u, g_v, the sink and a held mask of the top
+    row and one interior cell beside the obstacle, at values of their own.
+    """
+    rng = np.random.default_rng(seed)
+    solid = mesh.cell_type == SOLID
+    g_u, g_v = _conductances(mesh, rng, high=0.5)
+    c_star = np.where(solid, 0.0, rng.uniform(0.5, 1.5, size=solid.shape))
+    held = np.zeros_like(solid)
+    held[-1, :] = True
+    held[2, 1] = True
+    c_star[held] = 3.0
+    dt = rng.uniform(0.05, 5.0, size=solid.shape)
+    diagonal = np.where(solid, 0.0, rng.uniform(0.0, 0.3, size=solid.shape))
+    return c_star, dt, g_u, g_v, diagonal, held
+
+
+def _residual(
+    c: np.ndarray,
+    c_star: np.ndarray,
+    volume: np.ndarray,
+    dt: float | np.ndarray,
+    g_u: np.ndarray,
+    g_v: np.ndarray,
+    diagonal: np.ndarray,
+    fixed: np.ndarray,
+) -> np.ndarray:
+    """``b + sum G C_N - a_P C`` at the unknowns, zero at the fixed cells, face by face."""
+    over_dt = volume / dt
+    r = over_dt * c_star - (over_dt + diagonal) * c
+    r[:, 1:] += g_u[:, 1:-1] * (c[:, :-1] - c[:, 1:])
+    r[:, :-1] += g_u[:, 1:-1] * (c[:, 1:] - c[:, :-1])
+    r[1:, :] += g_v[1:-1, :] * (c[:-1, :] - c[1:, :])
+    r[:-1, :] += g_v[1:-1, :] * (c[1:, :] - c[:-1, :])
+    return np.where(fixed, 0.0, r)
+
+
+# The sign trap's seed and tolerance. Most seeds of the construction leave a
+# converged CG iterate negative somewhere; seed 0 does after 9 iterations, at
+# -1.6e-10 (results/builder51/seed_trap.py).
+SIGN_TRAP_SEED = 0
+SIGN_TRAP_TOL = 1.5e-5
+
+
+def _sign_trap(mesh: Mesh) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """A system whose converged CG iterate has a negative value (prompt 51).
+
+    A background of 1e-9 with three cells near 1, a sink up to 11 times
+    V / dt and weak diffusion: the solution is positive, but at a tolerance
+    of 1.5e-5 CG stops with an error larger than the background in some
+    cells. Returns c_star, g_u, g_v and the sink; the step is 1 s.
+    """
+    rng = np.random.default_rng(SIGN_TRAP_SEED)
+    solid = mesh.cell_type == SOLID
+    g_u, g_v = _conductances(mesh, rng, high=0.7)
+    c_star = np.where(solid, 0.0, 1e-9 * rng.uniform(0.5, 1.5, size=solid.shape))
+    c_star.flat[rng.integers(0, solid.size, size=3)] = rng.uniform(0.5, 1.5, size=3)
+    c_star[solid] = 0.0
+    diagonal = np.where(solid, 0.0, 11.0 * rng.uniform(0.0, 1.0, size=solid.shape))
+    return c_star, g_u, g_v, diagonal
+
+
+@pytest.mark.unit
+class TestConjugateGradient:
+    """The CG path of implicit_step (prompt 51): the system, the stop, the
+    held cells, the cap and the Jacobi fallback."""
+
+    def test_cg_and_jacobi_agree_and_both_match_a_dense_solve(self) -> None:
+        """Diffusion, a sink, a step per cell, held cells and a SOLID block:
+        both methods meet the tolerance and land on the dense solution, and CG
+        takes fewer iterations than Jacobi sweeps."""
+        mesh = _mesh()
+        solid = mesh.cell_type == SOLID
+        c_star, dt, g_u, g_v, diagonal, held = _cg_system(mesh, seed=41)
+        volume = np.outer(mesh.dy_cell, mesh.dx_cell)
+        args = (c_star, volume, dt, g_u, g_v, diagonal, solid, 1e-13, 20000)
+        cg = implicit_step(*args, held=held, method=CONJUGATE_GRADIENT)
+        jacobi = implicit_step(*args, held=held, method=JACOBI)
+        expected = _dense(mesh, c_star, dt, g_u, g_v, diagonal, held=held)
+        assert cg.converged and jacobi.converged
+        assert (cg.method, cg.fallbacks, jacobi.fallbacks) == (CONJUGATE_GRADIENT, 0, 0)
+        assert np.allclose(cg.field, expected, rtol=1e-10, atol=1e-14)
+        assert np.allclose(jacobi.field, expected, rtol=1e-10, atol=1e-14)
+        assert 0 < cg.iterations < jacobi.iterations
+
+    def test_the_stop_is_the_largest_residual_over_the_largest_rhs(self) -> None:
+        """The returned field's largest residual over the unknowns is at most
+        tol times the largest |b|. On this 40 by 30 field the 2-norm stop
+        CG's own loop in pressure.py uses, ``||r|| <= tol ||b||``, stops
+        earlier with the largest residual several times over that; the plant
+        of that stop fails here (prompt 51)."""
+        config = transport_config(2.0, 1.5, 40, 30)
+        mesh = Mesh(config)
+        rng = np.random.default_rng(43)
+        solid = mesh.cell_type == SOLID
+        g_u, g_v = _conductances(mesh, rng, high=0.05)
+        c_star = rng.uniform(0.5, 1.5, size=solid.shape)
+        volume = np.outer(mesh.dy_cell, mesh.dx_cell)
+        diagonal = np.zeros_like(c_star)
+        tol = 1e-6
+        result = implicit_step(
+            c_star,
+            volume,
+            1.0,
+            g_u,
+            g_v,
+            diagonal,
+            solid,
+            tol,
+            500,
+            method=CONJUGATE_GRADIENT,
+        )
+        assert result.converged and result.fallbacks == 0
+        r = _residual(result.field, c_star, volume, 1.0, g_u, g_v, diagonal, solid)
+        assert np.abs(r).max() <= tol * np.abs(volume * c_star).max()
+
+    @pytest.mark.parametrize("seed", [207, 214])
+    def test_converged_means_the_true_residual_meets_the_stop(self, seed: int) -> None:
+        """On a stiff system whose stop rounding cannot reach, the residual
+        recursion drifts below the stop while the true residual stays above
+        it. The solve may only report converged if the true residual meets
+        the stop; otherwise it falls back. Defect caught: the confirmation on
+        the true residual removed, under which both seeds report converged
+        after 374 and 361 iterations with no fallback (review 51 B1, test 51;
+        seeds from results/tester51/survivors_t51.py's construction)."""
+        rng0 = np.random.default_rng(seed)
+        high = 10.0 ** rng0.uniform(2.0, 9.0)
+        mesh = Mesh(transport_config(1.3, 0.9, 40, 30))
+        solid = mesh.cell_type == SOLID
+        rng = np.random.default_rng(seed)
+        g_u = np.zeros(u_shape(mesh))
+        g_v = np.zeros(v_shape(mesh))
+        g_u[:, 1:-1] = rng.uniform(0.1 * high, high, (30, 39))
+        g_v[1:-1, :] = rng.uniform(0.1 * high, high, (29, 40))
+        volume = np.outer(mesh.dy_cell, mesh.dx_cell)
+        c_star = rng.uniform(0.5, 1.5, solid.shape)
+        dt = 10.0 ** rng.uniform(0.0, 4.0)
+        diagonal = np.zeros(solid.shape)
+        tol = 10.0 ** -rng.uniform(8.0, 12.0)
+        result = implicit_step(
+            c_star,
+            volume,
+            dt,
+            g_u,
+            g_v,
+            diagonal,
+            solid,
+            tol,
+            500,
+            method=CONJUGATE_GRADIENT,
+        )
+        r = _residual(result.field, c_star, volume, dt, g_u, g_v, diagonal, solid)
+        stop = tol * np.abs(volume / dt * c_star).max()
+        if result.converged and result.fallbacks == 0:
+            assert np.abs(r).max() <= stop
+        else:
+            assert result.fallbacks == 1
+
+    @pytest.mark.parametrize("method", [CONJUGATE_GRADIENT, JACOBI])
+    def test_the_stop_scale_counts_the_held_cells(self, method: str) -> None:
+        """The scale is the largest |b| over every cell, held ones included,
+        as Jacobi has always taken it: in the model a held wall eps holds the
+        largest |b| in most eps solves. Here one isolated held cell at 1e7
+        sets the scale, so the start already meets the stop and the solve
+        returns C* untouched. Defect caught: the scale over the unknowns
+        only, under which the stop is about 1e-9 of this one and the solve
+        iterates (test 51)."""
+        mesh = Mesh(transport_config(1.0, 0.5, 20, 10))
+        solid = mesh.cell_type == SOLID
+        rng = np.random.default_rng(53)
+        g_u, g_v = _conductances(mesh, rng, high=0.5)
+        held = np.zeros_like(solid)
+        held[5, 10] = True
+        g_u[5, 10] = g_u[5, 11] = 0.0
+        g_v[5, 10] = g_v[6, 10] = 0.0
+        c_star = rng.uniform(0.5, 1.5, size=solid.shape)
+        c_star[held] = 1.0e7
+        volume = np.outer(mesh.dy_cell, mesh.dx_cell)
+        diagonal = np.zeros_like(c_star)
+        result = implicit_step(
+            c_star,
+            volume,
+            1.0,
+            g_u,
+            g_v,
+            diagonal,
+            solid,
+            1e-3,
+            500,
+            held=held,
+            method=method,
+        )
+        assert result.converged and result.iterations == 0 and result.fallbacks == 0
+        assert np.array_equal(result.field, c_star)
+
+    def test_a_held_cell_keeps_its_value_exactly(self) -> None:
+        """Held cells are not unknowns under CG: their values are C*'s to the
+        bit, with no fallback to supply them; leaving them as unknowns moves
+        them (the plant)."""
+        mesh = _mesh()
+        solid = mesh.cell_type == SOLID
+        c_star, dt, g_u, g_v, diagonal, held = _cg_system(mesh, seed=47)
+        result = implicit_step(
+            c_star,
+            np.outer(mesh.dy_cell, mesh.dx_cell),
+            dt,
+            g_u,
+            g_v,
+            diagonal,
+            solid,
+            1e-13,
+            20000,
+            held=held,
+            method=CONJUGATE_GRADIENT,
+        )
+        assert result.converged and result.fallbacks == 0
+        assert np.array_equal(result.field[held], c_star[held])
+        assert np.all(result.field[solid] == 0.0)
+
+    def test_the_cap_is_honoured_and_falls_back(self) -> None:
+        """Three CG iterations on a system that needs more: the count is the
+        cap, the solve falls back to Jacobi from C*, which caps at three
+        sweeps too, and the result says it did not converge."""
+        mesh = _mesh()
+        rng = np.random.default_rng(31)
+        solid = mesh.cell_type == SOLID
+        g_u, g_v = _conductances(mesh, rng, high=1e3)
+        c_star = np.where(solid, 0.0, rng.uniform(0.5, 1.0, size=solid.shape))
+        args = (
+            c_star,
+            np.outer(mesh.dy_cell, mesh.dx_cell),
+            1.0,
+            g_u,
+            g_v,
+            np.zeros_like(c_star),
+            solid,
+            1e-14,
+            3,
+        )
+        result = implicit_step(*args, method=CONJUGATE_GRADIENT)
+        jacobi = implicit_step(*args, method=JACOBI)
+        assert (result.iterations, result.fallbacks, result.fallback_sweeps) == (
+            3,
+            1,
+            3,
+        )
+        assert not result.converged
+        assert np.array_equal(result.field, jacobi.field)
+
+    def test_a_negative_converged_cg_value_falls_back_to_jacobi_from_c_star(
+        self,
+    ) -> None:
+        """CG meets the stop with a negative value in a cell it solves for;
+        the solve falls back, and the result is bitwise the Jacobi path's
+        from C*, non-negative. Planted, a fallback on the cap alone returns
+        the negative CG iterate, and a fallback restarted from the CG iterate
+        returns a different field (prompt 51)."""
+        mesh = _mesh()
+        solid = mesh.cell_type == SOLID
+        c_star, g_u, g_v, diagonal = _sign_trap(mesh)
+        volume = np.outer(mesh.dy_cell, mesh.dx_cell)
+        args = (c_star, volume, 1.0, g_u, g_v, diagonal, solid, SIGN_TRAP_TOL, 500)
+        # The premise: CG's own iterate converges with a negative value.
+        a_p = volume + g_u[:, :-1] + g_u[:, 1:] + g_v[:-1, :] + g_v[1:, :] + diagonal
+        stop = SIGN_TRAP_TOL * float(np.abs(volume * c_star).max())
+        own, iterations, converged = scalar_scheme._conjugate_gradient(
+            c_star.copy(), a_p, volume * c_star, g_u, g_v, solid, stop, 500
+        )
+        assert converged and iterations < 500
+        assert own[~solid].min() < 0.0
+
+        result = implicit_step(*args, method=CONJUGATE_GRADIENT)
+        jacobi = implicit_step(*args, method=JACOBI)
+        assert (result.iterations, result.fallbacks) == (iterations, 1)
+        assert result.fallback_sweeps == jacobi.iterations
+        assert result.converged
+        assert np.array_equal(result.field, jacobi.field)
+        assert result.field.min() >= 0.0
+
+    def test_a_zero_converged_cg_value_falls_back_too(self) -> None:
+        """The fallback's test is a value at or below zero: two sources in a
+        field of zeros and weak diffusion, so CG meets the stop in two
+        iterations with the cells its Krylov space has not reached still at
+        zero. Planted, a test of ``>= 0`` keeps the CG iterate."""
+        mesh = _mesh()
+        rng = np.random.default_rng(0)
+        solid = mesh.cell_type == SOLID
+        g_u, g_v = _conductances(mesh, rng, high=1e-3)
+        c_star = np.zeros(solid.shape)
+        c_star[0, 0] = 1.0
+        c_star[-1, -1] = 0.5
+        args = (
+            c_star,
+            np.outer(mesh.dy_cell, mesh.dx_cell),
+            1.0,
+            g_u,
+            g_v,
+            np.zeros_like(c_star),
+            solid,
+            1e-3,
+            500,
+        )
+        result = implicit_step(*args, method=CONJUGATE_GRADIENT)
+        jacobi = implicit_step(*args, method=JACOBI)
+        assert result.iterations < 500 and result.fallbacks == 1
+        assert result.converged
+        assert np.array_equal(result.field, jacobi.field)
+
+    def test_an_unknown_method_is_refused(self) -> None:
+        mesh = _mesh()
+        solid = mesh.cell_type == SOLID
+        c_star = np.where(solid, 0.0, 1.0)
+        with pytest.raises(ValueError, match="method must be one of"):
+            implicit_step(
+                c_star,
+                np.outer(mesh.dy_cell, mesh.dx_cell),
+                1.0,
+                np.zeros(u_shape(mesh)),
+                np.zeros(v_shape(mesh)),
+                np.zeros_like(c_star),
+                solid,
+                1e-10,
+                10,
+                method="gauss-seidel",
+            )
+
+    def test_the_transport_solver_asks_for_jacobi(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The transport solver's implicit step names JACOBI: its iterates
+        keep a concentration's sign down to zero (prompt 51). The plant, the
+        transport on CG, fails here."""
+        mesh, solver = TestPiecewiseDiffusivity()._room()
+        methods: list[str] = []
+
+        def spy(*args: object, **kwargs: object) -> ImplicitResult:
+            methods.append(str(kwargs.get("method", JACOBI)))
+            return implicit_step(*args, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(solver_transport, "implicit_step", spy)
+        solid = mesh.cell_type == SOLID
+        c = np.where(solid, 0.0, 1.0)
+        solver.solve_timestep(c, uniform_face_field(mesh, 0.0, 0.0), 0, 5.0)
+        assert methods == [JACOBI]
