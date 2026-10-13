@@ -21,7 +21,7 @@ records the rule's version in its params, read from the solver
 condition (e) 4 until 2026-10-11 and 5 since (its scale, ADR-012 E). A row
 with the turbulence section records the section in its params as well.
 
-Three case families. Poiseuille and the cavity are scored from the
+Four case families. Poiseuille and the cavity are scored from the
 cell-centred field, every trajectory sample and the row alike. The Annex 20
 room (VAL-017, ``val017_216x72``) is scored from the final face velocities
 by the allowance of ADR-012 decision 6 (``validation.annex20.score_lines``):
@@ -31,7 +31,13 @@ RMS to allowance over them, so 1 or below passes. The per-iteration callback
 carries no faces, so its trajectory samples record no error and the last
 entry carries the row's. The run moved here from the suite on 2026-10-11:
 it costs about 20 minutes alone (the stored row's 4,934 s were taken beside
-other runs).
+other runs). The backward-facing step (VAL-019, ``val019_656x60``) is
+reported, not scored: no allowance is set (ADR-012 G (ii), OPEN), so the
+row carries ``validation.backstep.evaluate``'s whole comparison (the
+reattachment length, the inflow check, each profile's and the wall
+coefficients' departures from Driver and Seegmiller), its value is the
+reattachment length's relative departure from the measured 6.26 H (NaN when
+the floor shear never turns positive), and ``passed`` is None.
 
 The method label names the pressure solve as well as the grid: staggered-cg
 since ECR-003 step 1 (2026-10-06), when conjugate gradients replaced the
@@ -94,7 +100,7 @@ from src.staggered import (  # noqa: E402 -- follows sys.path.insert
 from src.stopping import (  # noqa: E402 -- follows sys.path.insert
     IterationState,
 )
-from validation import annex20  # noqa: E402 -- follows sys.path.insert
+from validation import annex20, backstep  # noqa: E402 -- follows sys.path.insert
 from validation.cases import (  # noqa: E402 -- follows sys.path.insert
     CASE_GRIDS,
     load_preset,
@@ -142,6 +148,19 @@ DEFAULT_CASES = ["val001_80x40", "val002_20x20", "val002_40x40"]
 ANNEX20_FAMILY = "annex20"
 ANNEX20_METRIC = "rms_u_over_published_rms_scored_lines"
 ANNEX20_REFERENCE = "annex20_measured_nielsen_1990; allowance rong_nielsen_2008_rms"
+
+# The family validation.cases gives the backward-facing step presets, reported
+# from the final faces, pressure and k; no allowance is set.
+BACKSTEP_FAMILY = "backstep"
+BACKSTEP_METRIC = "x_r_relative_departure_report_only"
+BACKSTEP_REFERENCE = (
+    "driver_seegmiller_1985 x_r/H 6.26 +/- 0.10; report-only, no allowance "
+    "(ADR-012 G (ii) OPEN)"
+)
+
+# The families whose score needs the final faces, which the per-iteration
+# callback lacks: their trajectory samples carry no error but the last.
+FACE_SCORED_FAMILIES = (ANNEX20_FAMILY, BACKSTEP_FAMILY)
 
 # One stop_reason per rule. The velocity-step label is the one every row stored
 # before the staggered solver reported its own stop, and every collocated row has.
@@ -483,6 +502,62 @@ def annex20_accuracy(mesh: Mesh, faces: FaceVelocities) -> dict:
     }
 
 
+def backstep_accuracy(
+    mesh: Mesh, config: SimConfig, faces: FaceVelocities, p: np.ndarray, k: np.ndarray
+) -> dict:
+    """The backward-facing step's comparison with the data, reported and not scored.
+
+    Parameters
+    ----------
+    mesh : Mesh
+        Mesh the fields belong to.
+    config : SimConfig
+        The case, with its step obstacle and turbulence section.
+    faces : FaceVelocities
+        The solve's final face velocities; u is sampled.
+    p : np.ndarray
+        The final pressure on the cells, [ny, nx].
+    k : np.ndarray
+        The final turbulent kinetic energy on the cells, [ny, nx].
+
+    Returns
+    -------
+    dict
+        ``metric``, ``value`` (``|x_r / H - 6.26| / 6.26``, or NaN when the
+        floor shear never turns positive), ``reference``, ``components``
+        (the reattachment length, the centreline speed's ratio to U_ref,
+        delta_99 / H and Re_theta at x/H = -4, each profile's RMS, the Cf
+        and Cp RMS), ``report`` (``validation.backstep.evaluate``'s whole
+        dictionary) and ``passed`` None: nothing is scored until Alex sets
+        the allowance (ADR-012 G (ii)).
+    """
+    report = backstep.evaluate(mesh, config, np.array(faces.u), p, k)
+    x_r = report["x_r_over_h"]
+    value = (
+        float("nan")
+        if x_r is None
+        else abs(x_r - backstep.X_R_MEASURED) / backstep.X_R_MEASURED
+    )
+    components: dict[str, float | None] = {
+        "x_r_over_h": x_r,
+        "u_ref_over_measured": report["u_ref"]["over_measured"],
+        "delta_99_over_h": report["inflow"]["delta_99_over_h"],
+        "re_theta": report["inflow"]["re_theta"],
+        "rms_cf": report["cf"]["rms"],
+        "rms_cp": report["cp"]["rms"],
+    }
+    for station, errors in report["profiles"].items():
+        components[f"rms_profile_x{station}"] = errors["rms"]
+    return {
+        "metric": BACKSTEP_METRIC,
+        "value": value,
+        "reference": BACKSTEP_REFERENCE,
+        "components": components,
+        "report": report,
+        "passed": None,
+    }
+
+
 def run_case(case_id: str, method: str, sample_every: int, concurrent: int) -> dict:
     """Run one case once with the solver the method names and return its record.
 
@@ -510,8 +585,9 @@ def run_case(case_id: str, method: str, sample_every: int, concurrent: int) -> d
     counter = WorkCounter(pressure_cells, momentum_updates)
 
     def error_of(u: np.ndarray, v: np.ndarray) -> float | None:
-        # The Annex 20 lines are sampled from faces, which the callback lacks.
-        if kind == ANNEX20_FAMILY:
+        # The Annex 20 lines and the step's walls are read from the faces,
+        # which the callback lacks.
+        if kind in FACE_SCORED_FAMILIES:
             return None
         return accuracy_of(kind, config, mesh, u, v)["value"]
 
@@ -532,11 +608,17 @@ def run_case(case_id: str, method: str, sample_every: int, concurrent: int) -> d
                 }
             )
 
-    u, v, _p = solver.solve_steady(on_iteration=observe)
+    u, v, p = solver.solve_steady(on_iteration=observe)
     wall = time.perf_counter() - t_start
     if kind == ANNEX20_FAMILY:
         assert solver.face_velocities is not None
         accuracy = annex20_accuracy(mesh, solver.face_velocities)
+    elif kind == BACKSTEP_FAMILY:
+        assert solver.face_velocities is not None
+        assert solver.turbulence_state is not None
+        accuracy = backstep_accuracy(
+            mesh, config, solver.face_velocities, p, np.array(solver.turbulence_state.k)
+        )
     else:
         accuracy = accuracy_of(kind, config, mesh, u, v)
     final_iter = work["outer_iterations"] - 1
@@ -550,10 +632,11 @@ def run_case(case_id: str, method: str, sample_every: int, concurrent: int) -> d
                 "error": accuracy["value"],
             }
         )
-    elif kind == ANNEX20_FAMILY:
-        # The Annex 20 callback carries no faces, so its samples hold no error;
-        # the last takes the row's. Every other family's last sample keeps its
-        # own, which the harness test compares with the row's accuracy.
+    elif kind in FACE_SCORED_FAMILIES:
+        # These families' callbacks carry no faces, so their samples hold no
+        # error; the last takes the row's. Every other family's last sample
+        # keeps its own, which the harness test compares with the row's
+        # accuracy.
         trajectory[-1]["error"] = accuracy["value"]
 
     # The solver knows which rule it ran and whether the cap stopped it; a
