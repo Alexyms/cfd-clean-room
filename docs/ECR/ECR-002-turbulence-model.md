@@ -425,6 +425,23 @@ The change is accepted when all of the following are demonstrated:
    x/H = 1, 4, 6 and 10 against Driver and Seegmiller, the threshold set by Alex from a sourced
    range of standard k-epsilon results on this step (ADR-012 G (ii), decision 6). Method: test
    and report.
+   *Note 2026-10-13 (prompt 52, measured; status stays OPEN until Alex sets the allowance).* The
+   first coupled results are `docs/reports/ecr002_val019_backstep.md`: the case
+   (`configs/validation_backstep.yaml`, presets `val019_410x40`, `val019_656x60` and
+   `val019_984x90`, the upstream channel 114 H long from the precursor run), the Resource's data
+   with its provenance (`validation/backstep.py`, `validation/data/driver_seegmiller_1985/`), the
+   runs (standard with `upwind` on three grids, `umist` on the medium, RNG on the medium), the
+   comparison tables and figures, the harness row `val019_656x60` (reported, not scored) and
+   `tests/test_backward_step.py`. The grids are what the committed mesh can express (x uniform, y
+   clustered toward the walls with a face on the step height), not the stretched grids the prompt
+   asked for (the report, section 2.4). The coarse grid converges by the rule; the medium grid is
+   bounded at the cap in a cycle at the reattachment cell; RNG diverges at the pressure outlet.
+   The standard model with wall functions reattaches at x_r / H 4.86 on the medium grid, 22%
+   short of the measured 6.26 and shorter than the NPARC archive's low-Reynolds Chien k-epsilon
+   (5.3); above the step's top the profiles are within 0.05 U_ref of the data, the reversed flow
+   weaker than measured; the two schemes agree to 0.04 H and a tenth of the model's error. The
+   report's section 7 puts the allowance, the grid, the stop on a bounded cycle, RNG's outlet
+   and the cost to Alex.
 9. **The Annex 20 room (VAL-017).** OPEN: the threshold set by Alex from the departure of the
    published standard k-epsilon prediction (Rong and Nielsen 2008) at the lines decision 6
    scores, or the spread across that report's models (ADR-012 G (iii)). Method: test and report.
@@ -540,4 +557,5 @@ architecture, and the acceptance criteria are sufficient to close the change.
 | 2026-10-11 | Alex's decision before step 7 (prompt 49): the product runs the standard variant until VAL-020 says which model is right at the equipment tops; VAL-018's variant clause waits for VAL-020; RNG's cycle is probed only if VAL-020 favours RNG. Note in section 8 step 8; ADR-012 decision 2 carries the dated amendment. | Alex Moroz-Smietana |
 | 2026-10-11 | Step 7, first case, VAL-017 measured (prompt 49, branch feature/ecr002-val017-annex20): the Annex 20 case, its loader and its data built; four standard runs and one RNG run; the comparison against the measurements and the published standard k-epsilon, reported, unscored; condition (e) found unattainable on this case (its inlet scale). Note under criterion 9; `docs/reports/ecr002_val017_annex20.md`. No threshold set. | Claude (builder) |
 | 2026-10-11 | Alex's decisions on prompt 49 (prompt 50): the VAL-017 allowance (criterion 9's note), the VAL-017 run moved to a harness row, and condition (e)'s scale the molecular nu plus the FLUID-cell median of nu_t per outer iteration, rule version 5. Notes in section 8 step 7 and criterion 9; ADR-012 decision 6 and section E carry the dated amendments. | Alex Moroz-Smietana |
+| 2026-10-13 | Step 7, second case, VAL-019 measured (prompt 52, branch feature/ecr002-val019-backstep): the backward-facing step's case, loader, data and comparison built; the precursor sets the upstream length at 114 H; three standard grids, one umist run and one RNG run; the standard model reattaches 22% short on the medium grid, the schemes agreeing, RNG diverging at the outlet; reported, unscored. Note under criterion 8; `docs/reports/ecr002_val019_backstep.md`. No threshold set. | Claude (builder) |
 | 2026-10-11 | Step 7, (e)'s scale built and VAL-017 run as a harness row (prompt 50, branch feature/ecr002-rule-e-scale): rule version 5, laminar stops bitwise unchanged, the Annex 20 row stops at the file's tolerance and passes the allowance, the product rows stop 2.4% sooner with fields unchanged to 7e-9; CI runs the suite once. Criterion 9 PASS; `docs/reports/ecr002_rule_e_scale.md`. | Claude (builder) |
