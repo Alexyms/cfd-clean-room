@@ -8,7 +8,7 @@
 # downstream floor; the solver's x is the data's x plus L_UP.
 #
 # L_UP, the upstream length, is 114 H: the precursor run of prompt 52
-# (docs/reports/ecr002_val019_backstep.md, section 5.1) found the bottom
+# (docs/reports/ecr002_val019_backstep.md, section 2.3) found the bottom
 # wall's layer reaching 1.5 H at x/H = 109.9 and Re_theta 5,000 at
 # 94.9 from a uniform inlet, and Alex's decision of 2026-10-12 sets
 # L_UP to the first plus 4 H, rounded up to a whole H, so the layer at

@@ -250,6 +250,9 @@ recirculation" as the heights at or above the step's top, y/H >= 1, at x/H = 1 a
   together), the fine grid costs 3 h per 5,000 outer iterations and 12 h at the cap; the set is
   launched whole and the fine run's projection is read from its first hundreds of iterations, the
   report saying so if it is stopped.
+  *Note 2026-10-14 (orchestrator, test 52 S5): that was against this stop condition, which
+  asked for the estimate and a reduced set first. The fine run took 24.9 h and the medium 19 h; the
+  results stand, and the over-run is recorded here rather than authorised after the fact.*
 
 ## 5. Results (written after the runs)
 
@@ -415,9 +418,9 @@ at every station.
 <!-- tables52 coefficients end -->
 
 Figures: `ecr002_val019_cf.png` and `ecr002_val019_cp.png`. The computed skin friction follows
-the data upstream (3e-3 before the step), reaches its most negative value at x/H 2 to 3 as the
-data do, at a similar depth, and then crosses zero 1.4 to 1.8 H before the data and recovers
-earlier, to the data's level by x/H 20 (the Cf figure). The pressure coefficient's recovery is
+the data upstream (3e-3 before the step), reaches its most negative value at x/H 2.0 to 2.7, deeper than the data's
+(-1.13e-3 to -1.41e-3 against -1.02e-3) and 1.1 to 1.8 H earlier than the data's at x/H 3.8,
+then crosses zero 1.2 to 1.8 H before the data and recovers earlier, to the data's level by x/H 20 (the Cf figure). The pressure coefficient's recovery is
 the same story shifted: the computed minimum is deeper and the rise to the plateau about 1.5 H
 upstream of the data's, and the plateau itself, the datum, agrees. The top wall's Cp (thin
 lines) agrees with its data to the figure's width.
@@ -514,24 +517,29 @@ Questions, not decisions; the numbers are in the tables above.
    standard-with-wall-functions shortfall, 15%, which this result fails by 7 points; another, the
    NPARC k-epsilon values as VAL-017's allowance was set from Rong and Nielsen's, which it also
    fails; a third, a reported-only case with the profiles above the step scored (0.05 U_ref), which
-   it would pass. The report takes no position; the case stays OPEN. 2. **The grid.** The committed
+   it would pass. The report takes no position; the case stays OPEN.
+2. **The grid.** The committed
    mesh cannot cluster toward the step's corner or the reattachment region (section 2.4), so the
    medium grid's x spacing there is 0.25 H and the coarse-to-medium change in x_r is 0.35 H. The
    three grids give 4.51, 4.86 and 5.09 H at first order, the extrapolated length near 5.5 H, so
-   about a third of the medium grid's shortfall is the grid and two thirds the model. A mesh that
+   about half of the medium grid's shortfall is the grid and half the model (0.66 of 1.40 H,
+   47%, is the distance from 4.86 H to the extrapolated length; test 52, B2). A mesh that
    takes a face list per axis, or clusters toward interior lines, is a small `src/` change; whether
-   VAL-019 is worth it before VAL-020 is Alex's. 3. **The stop.** The medium grid does not stop by
+   VAL-019 is worth it before VAL-020 is Alex's.
+3. **The stop.** The medium grid does not stop by
    the rule: the iteration cycles at the reattachment cell with a velocity step of 1.7e-3 U_ref,
    the same kind of bounded cycle the product room showed at an obstacle corner (prompts 46 and
    47), while the coarse grid converges. The comparison is made at the cap, labelled, as VAL-017's
    375x125 was; the differences read (1.4 H in x_r, 0.05 to 0.19 in the profiles) are far above the
    cycle's amplitude. Whether a stop on a bounded cycle is wanted for the validation cases is the
-   open question prompt 47 raised. 4. **The variants.** RNG diverged at the pressure outlet, so
+   open question prompt 47 raised.
+4. **The variants.** RNG diverged at the pressure outlet, so
    ADR-012 A's ranking on separation has no pair here; the standard variant's own ranking against
    the data is the tables'. If VAL-020 favours RNG, its outlet behaviour needs its own probe before
-   the step is rerun with it. 5. **The cost, for decision 2.** The medium grid's 20,000 iterations
-   took 69,000 s beside five other runs (about 1.0 s per outer iteration when six ran, 0.67 alone over the third harness row (section 5.9),
-   95% of it the pressure correction), and the fine grid's 20,000 took 89,600 s (4.5 s per outer
+   the step is rerun with it.
+5. **The cost, for decision 2.** The medium grid's 20,000 iterations
+   took 69,000 s beside five other runs (about 1.0 s per outer iteration when six ran, 95% of it the pressure correction; 0.67 s alone
+   over the third harness row, 86% of it the pressure correction, section 5.9), and the fine grid's 20,000 took 89,600 s (4.5 s per outer
    iteration beside the others, 2.2 alone), 92% of it the pressure correction at 1,400 to 2,400
    conjugate-gradient iterations per correction. The multigrid successor (ADR-013) is the question
    Alex deferred to this timing and the product's.
@@ -540,7 +548,7 @@ Questions, not decisions; the numbers are in the tables above.
 
 - `ecr002_val019_standard_410x40_upwind.png`, `_656x60_upwind.png`, `_656x60_umist.png` and
   `_984x90_upwind.png`: the marked figure of each compared run (the whole domain; x/H -5 to 25 in
-  three panels; the step, inlet, outlet and reattachment point marked). -
-  `ecr002_val019_profile_x-4.png`, `_x1.png`, `_x4.png`, `_x6.png`, `_x10.png`: the profiles. -
-  `ecr002_val019_cf.png`, `ecr002_val019_cp.png`: the wall coefficients. -
-  `ecr002_val019_precursor.png`: the precursor's layer along the channel.
+  three panels; the step, inlet, outlet and reattachment point marked).
+- `ecr002_val019_profile_x-4.png`, `_x1.png`, `_x4.png`, `_x6.png`, `_x10.png`: the profiles.
+- `ecr002_val019_cf.png`, `ecr002_val019_cp.png`: the wall coefficients.
+- `ecr002_val019_precursor.png`: the precursor's layer along the channel.
