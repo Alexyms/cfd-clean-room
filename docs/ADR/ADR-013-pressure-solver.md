@@ -23,7 +23,18 @@ that carries the detail. The ranking is the builder's, from the measurements.
 1. The solver: Jacobi-preconditioned conjugate gradients in NumPy, with multigrid preconditioning
    of the same CG loop named as the successor if a finer mesh makes CG too slow. Chosen for the GPU
    path (one thread per cell, plus three reductions per iteration) as much as for speed.
+   Decided 2026-10-14 (Alex, prompt 53): build the named successor now, before VAL-020 and the
+   product on 320x120. Since prompt 51 the correction has been most of every run: 66% of the
+   Annex 20 run, 86% of the backward-facing step's medium grid alone and 92% of its fine grid, at
+   1,400 to 2,400 iterations per correction on the step, whose fine grid took 25 hours
+   (`docs/reports/turbulence_cg_solve.md`; `docs/reports/ecr002_val019_backstep.md`, section 7).
+   The successor is additive-correction (aggregation) multigrid preconditioning the same CG loop,
+   not the probe's bilinear geometric multigrid, whose setup by probing cost 120 to 175 ms every
+   correction (the report, section 7.3). Whether it becomes the default is decided on its
+   measurements.
 2. Dependencies: NumPy only; no SciPy or pyamg at runtime.
+   Confirmed 2026-10-14 (Alex, prompt 53) for the successor: NumPy only and data-parallel, so the
+   GPU path stands.
 3. The stop: relative residual `pressure_rtol`, default 1e-8, with the rounding floor and the cap
    reported. To be revisited after ECR-002 step 3 rebuilds the outlets, with the guard and
    tight-start options as the candidates.
