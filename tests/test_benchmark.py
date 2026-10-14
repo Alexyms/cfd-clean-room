@@ -27,6 +27,9 @@ from src.solver_staggered import (  # noqa: E402 -- follows sys.path.insert
     rule_version,
 )
 from src.staggered import FaceVelocities  # noqa: E402 -- follows sys.path.insert
+from tests import (  # noqa: E402 -- follows sys.path.insert
+    backstep_reference as reference,
+)
 from validation import annex20, backstep  # noqa: E402 -- follows sys.path.insert
 from validation.cases import (  # noqa: E402 -- follows sys.path.insert
     case_path,
@@ -348,6 +351,46 @@ def test_the_annex20_value_and_pass_read_the_scored_lines_only(
         assert accuracy["lines"][key]["rms"] == pytest.approx(1.0)
         assert accuracy["lines"][key]["pass"] is None
         assert accuracy["components"][f"rms_{key}"] == pytest.approx(1.0)
+
+
+@pytest.mark.unit
+def test_the_backstep_row_reads_each_component_from_its_own_report_entry() -> None:
+    """The row's value, components and report against a second computation on a known field.
+
+    The constructed field of tests/backstep_reference.py, whose every number
+    is computed again there, goes through the real ``backstep.evaluate`` (no
+    stand-in). The row's components are asserted by name against that
+    computation: the Cp RMS is not the Cf RMS, Re_theta is not delta_99, and
+    the centreline ratio is the computed one. Defects caught: a component
+    read from the wrong report entry; a value taken from the wrong length.
+    """
+    config = load_preset("val019_656x60")
+    mesh = Mesh(config)
+    u, p, k = reference.fields(mesh)
+    want = reference.expected(mesh, config, u, p, k)
+    faces = FaceVelocities.copy_of(u, np.zeros((mesh.yc.size + 1, mesh.xc.size)))
+    accuracy = benchmark.backstep_accuracy(mesh, config, faces, p, k)
+    reference.assert_matches(accuracy["report"], want)
+    x_r = want["x_r_over_h"]
+    assert accuracy["value"] == pytest.approx(abs(x_r - 6.26) / 6.26, rel=1e-12)
+    assert accuracy["passed"] is None
+    components = accuracy["components"]
+    named = {
+        "x_r_over_h": x_r,
+        "u_ref_over_measured": want["u_ref"]["over_measured"],
+        "delta_99_over_h": want["inflow"]["delta_99_over_h"],
+        "re_theta": want["inflow"]["re_theta"],
+        "rms_cf": want["cf"]["rms"],
+        "rms_cp": want["cp"]["rms"],
+    }
+    for station, errors in want["profiles"].items():
+        named[f"rms_profile_x{station}"] = errors["rms"]
+    assert set(components) == set(named)
+    for name, value in named.items():
+        assert components[name] == pytest.approx(value, rel=1e-10), name
+    # The components must differ from one another for the check above to
+    # tell a swapped pair.
+    assert len({round(v, 12) for v in named.values()}) == len(named)
 
 
 @pytest.mark.integration

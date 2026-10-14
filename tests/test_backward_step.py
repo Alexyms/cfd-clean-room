@@ -32,6 +32,7 @@ import pytest
 from src.boundary_staggered import StaggeredBoundary
 from src.mesh import SOLID, Mesh
 from src.turbulence import VARIANTS, Y_STAR_FLOOR, wall_viscosity
+from tests import backstep_reference as reference
 from validation import backstep
 from validation.cases import (
     BACKSTEP_GRIDS,
@@ -143,7 +144,9 @@ class TestLoader:
         inlet = config.boundaries["inlet"]
         # The channel accelerates as its layers grow, so the inlet is slower
         # than the centreline it must make; the precursor gave 0.947 U_ref.
-        assert 0.9 * backstep.U_REF < inlet.velocity < backstep.U_REF
+        # Pinned to the file's value: a looser bound let 43.5 m/s through,
+        # a centreline 3% high, and every comparison is normalised by it.
+        assert inlet.velocity == 41.862
         assert inlet.turbulence_intensity == 0.01
         assert inlet.dissipation_length == pytest.approx(H / 10)
 
@@ -539,6 +542,51 @@ class TestReport:
         # The reversed floor row ends between the faces at 5.5 H and 5.75 H.
         assert 5.5 < report["x_r_over_h"] < 5.75
         assert report["y_star"]["floor"] == Y_STAR_FLOOR
+
+    def test_every_number_of_the_report_is_the_constructed_fields(
+        self, medium: tuple
+    ) -> None:
+        """Each value of ``evaluate`` against a second computation on one known field.
+
+        The field (tests/backstep_reference.py) has a centreline speed 10%
+        off U_ref, a shear that changes sign inside a face pair, a pressure
+        and a k that differ from row to row and along the wall, and a
+        stress column and an error column that differ from the data they sit
+        beside. Defects caught: a profile compared with the stresses, Cf
+        with its error column, Cf or the profiles normalised by the
+        constant U_ref, Cp by 2 rho, y* read over the floor from x/H = 0
+        and not past reattachment.
+        """
+        config, mesh = medium
+        u, p, k = reference.fields(mesh)
+        want = reference.expected(mesh, config, u, p, k)
+        got = backstep.evaluate(mesh, config, u, p, k)
+        reference.assert_matches(got, want)
+        # The field is built so that each wrong reading differs from the
+        # right one by far more than the 1e-10 the comparison allows.
+        assert abs(got["u_ref"]["computed"] / backstep.U_REF - 1.0) > 0.05
+        assert 5.0 < got["x_r_over_h"] < 5.25
+        x_cell = (mesh.xc - reference.STEP_FACE_H * H) / H
+        k_floor = k[0, :]
+        past = np.median(k_floor[x_cell > got["x_r_over_h"]])
+        from_corner = np.median(k_floor[x_cell > 0.0])
+        assert abs(past / from_corner - 1.0) > 0.05
+
+    def test_the_constructed_layer_has_its_analytic_thicknesses(
+        self, medium: tuple
+    ) -> None:
+        """delta_99 = 0.4 ln(100) H and theta = 0.2 H for u = U (1 - exp(-d / 0.4 H))."""
+        config, mesh = medium
+        u, p, k = reference.fields(mesh)
+        inflow = backstep.evaluate(mesh, config, u, p, k)["inflow"]
+        assert inflow["delta_99_over_h"] == pytest.approx(
+            reference.LAYER * np.log(100.0), rel=0.03
+        )
+        nu = config.mu / config.rho
+        theta = 0.5 * reference.LAYER * H
+        assert inflow["re_theta"] == pytest.approx(
+            reference.CENTRE * theta / nu, rel=0.05
+        )
 
     def test_an_attached_floor_reports_no_reattachment(self, medium: tuple) -> None:
         config, mesh = medium
