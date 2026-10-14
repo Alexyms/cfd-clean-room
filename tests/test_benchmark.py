@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -26,7 +27,10 @@ from src.solver_staggered import (  # noqa: E402 -- follows sys.path.insert
     rule_version,
 )
 from src.staggered import FaceVelocities  # noqa: E402 -- follows sys.path.insert
-from validation import annex20  # noqa: E402 -- follows sys.path.insert
+from tests import (  # noqa: E402 -- follows sys.path.insert
+    backstep_reference as reference,
+)
+from validation import annex20, backstep  # noqa: E402 -- follows sys.path.insert
 from validation.cases import (  # noqa: E402 -- follows sys.path.insert
     case_path,
     load_case,
@@ -347,6 +351,133 @@ def test_the_annex20_value_and_pass_read_the_scored_lines_only(
         assert accuracy["lines"][key]["rms"] == pytest.approx(1.0)
         assert accuracy["lines"][key]["pass"] is None
         assert accuracy["components"][f"rms_{key}"] == pytest.approx(1.0)
+
+
+@pytest.mark.unit
+def test_the_backstep_row_reads_each_component_from_its_own_report_entry() -> None:
+    """The row's value, components and report against a second computation on a known field.
+
+    The constructed field of tests/backstep_reference.py, whose every number
+    is computed again there, goes through the real ``backstep.evaluate`` (no
+    stand-in). The row's components are asserted by name against that
+    computation: the Cp RMS is not the Cf RMS, Re_theta is not delta_99, and
+    the centreline ratio is the computed one. Defects caught: a component
+    read from the wrong report entry; a value taken from the wrong length.
+    """
+    config = load_preset("val019_656x60")
+    mesh = Mesh(config)
+    u, p, k = reference.fields(mesh)
+    want = reference.expected(mesh, config, u, p, k)
+    faces = FaceVelocities.copy_of(u, np.zeros((mesh.yc.size + 1, mesh.xc.size)))
+    accuracy = benchmark.backstep_accuracy(mesh, config, faces, p, k)
+    reference.assert_matches(accuracy["report"], want)
+    x_r = want["x_r_over_h"]
+    assert accuracy["value"] == pytest.approx(abs(x_r - 6.26) / 6.26, rel=1e-12)
+    assert accuracy["passed"] is None
+    components = accuracy["components"]
+    named = {
+        "x_r_over_h": x_r,
+        "u_ref_over_measured": want["u_ref"]["over_measured"],
+        "delta_99_over_h": want["inflow"]["delta_99_over_h"],
+        "re_theta": want["inflow"]["re_theta"],
+        "rms_cf": want["cf"]["rms"],
+        "rms_cp": want["cp"]["rms"],
+    }
+    for station, errors in want["profiles"].items():
+        named[f"rms_profile_x{station}"] = errors["rms"]
+    assert set(components) == set(named)
+    for name, value in named.items():
+        assert components[name] == pytest.approx(value, rel=1e-10), name
+    # The components must differ from one another for the check above to
+    # tell a swapped pair.
+    assert len({round(v, 12) for v in named.values()}) == len(named)
+
+
+@pytest.mark.integration
+def test_the_backstep_row_is_reported_not_scored(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """VAL-019's row: the whole comparison from the final faces, pressure and k, no pass.
+
+    Three outer iterations of the committed case on its own grid. The row's
+    report is the one the same three iterations give when evaluated here,
+    its value the reattachment length's relative departure (NaN when the
+    floor never reverses, as from rest it has not), ``passed`` None, and its
+    trajectory carries an error only in its last entry. Defects caught: the
+    cell-centred field read; a pass or fail recorded where no allowance is
+    set; a value that is not the departure of x_r.
+    """
+    config = load_preset("val019_656x60")
+    monkeypatch.setattr(config, "max_simple_iter", 3)
+    monkeypatch.setattr(benchmark, "load_preset", lambda case_id: config)
+    row = benchmark.run_case("val019_656x60", "staggered-cg", 1, 1)
+    accuracy = row["accuracy"]
+    assert (accuracy["metric"], accuracy["reference"]) == (
+        benchmark.BACKSTEP_METRIC,
+        benchmark.BACKSTEP_REFERENCE,
+    )
+    assert accuracy["passed"] is None
+
+    mesh = Mesh(config)
+    solver = StaggeredSolver(mesh, config, StaggeredBoundary(mesh, config))
+    _u, _v, p = solver.solve_steady()
+    assert solver.face_velocities is not None and solver.turbulence_state is not None
+    report = backstep.evaluate(
+        mesh,
+        config,
+        np.array(solver.face_velocities.u),
+        p,
+        np.array(solver.turbulence_state.k),
+    )
+    assert accuracy["report"] == report
+    x_r = report["x_r_over_h"]
+    if x_r is None:
+        assert math.isnan(accuracy["value"])
+    else:
+        assert accuracy["value"] == abs(x_r - 6.26) / 6.26
+    assert accuracy["components"]["x_r_over_h"] == x_r
+    assert (
+        accuracy["components"]["rms_profile_x1.0"] == report["profiles"]["1.0"]["rms"]
+    )
+    assert accuracy["components"]["rms_cf"] == report["cf"]["rms"]
+    errors = [entry["error"] for entry in row["trajectory"]]
+    assert errors[:2] == [None, None] and len(errors) == 3
+    assert errors[2] is accuracy["value"] or errors[2] == accuracy["value"]
+    assert row["params"]["rule_version"] == rule_version(config) == 5
+    assert row["grid"]["y"]["stretch_ratio"] > 1.0
+
+
+@pytest.mark.unit
+def test_the_backstep_value_is_the_departure_of_the_reattachment_length(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """x_r 5.0 H gives |5.0 - 6.26| / 6.26; no reattachment gives NaN; nothing passes."""
+    template = {
+        "u_ref": {"computed": 44.2, "over_measured": 1.0},
+        "inflow": {"delta_99_over_h": 1.5, "re_theta": 5000.0},
+        "profiles": {"1.0": {"rms": 0.1, "max_abs": 0.2, "stations": 28}},
+        "cf": {"rms": 1e-4, "max_abs": 2e-4, "stations": 20},
+        "cp": {"rms": 0.01, "max_abs": 0.02, "stations": 33},
+    }
+    faces = FaceVelocities.copy_of(np.zeros((2, 3)), np.zeros((3, 2)))
+    config = load_preset("val019_656x60")
+    mesh = Mesh(config)
+    for x_r, expected in ((5.0, abs(5.0 - 6.26) / 6.26), (None, float("nan"))):
+        monkeypatch.setattr(
+            backstep,
+            "evaluate",
+            lambda *_a, x_r=x_r, **_k: {**template, "x_r_over_h": x_r},
+        )
+        accuracy = benchmark.backstep_accuracy(
+            mesh, config, faces, np.zeros((2, 2)), np.ones((2, 2))
+        )
+        if x_r is None:
+            assert math.isnan(accuracy["value"])
+        else:
+            assert accuracy["value"] == pytest.approx(expected)
+        assert accuracy["passed"] is None
+        assert accuracy["components"]["x_r_over_h"] == x_r
+        assert accuracy["components"]["rms_profile_x1.0"] == 0.1
 
 
 @pytest.mark.integration

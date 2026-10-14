@@ -1,0 +1,128 @@
+# VAL-019: the backward-facing step of Driver and Seegmiller (1985), as the
+# NASA Turbulence Modeling Resource poses it (ADR-012 G (ii), source 13).
+#
+# Step height H = 0.0127 m. The step is the SOLID block "step" from the inlet
+# wall to x = L_UP, its top at H, so the upstream channel is 8 H tall (y from
+# H to 9 H) and the downstream channel 9 H (expansion ratio 1.125), both walls
+# straight. The data's frame has x/H = 0 at the step's face and y/H = 0 at the
+# downstream floor; the solver's x is the data's x plus L_UP.
+#
+# L_UP, the upstream length, is 114 H: the precursor run of prompt 52
+# (docs/reports/ecr002_val019_backstep.md, section 2.3) found the bottom
+# wall's layer reaching 1.5 H at x/H = 109.9 and Re_theta 5,000 at
+# 94.9 from a uniform inlet, and Alex's decision of 2026-10-12 sets
+# L_UP to the first plus 4 H, rounded up to a whole H, so the layer at
+# x/H = -4 is the measured one. The outlet is at x/H = +50, as the reference
+# grids have it: a pressure outlet, the outflow straight through the edge.
+#
+# U_ref 44.2 m/s at the channel centre at x/H = -4; nu = U_ref H / 36,000
+# (Re_H 36,000), the viscosity below being rho nu with rho air's round 1.2;
+# nothing compared depends on rho. The inlet is uniform at the speed that
+# makes the computed centreline U_ref within 1% at x/H = -4 (the channel
+# accelerates as its layers grow; the precursor gave the ratio), with a low
+# turbulence intensity (1%) and a dissipation length of H / 10. Every
+# comparison normalises by the computed centreline speed at x/H = -4, as the
+# data do (validation/backstep.py).
+#
+# Grids: x uniform, so the step's face at L_UP is a grid line (nx a multiple
+# of 82 puts it on one); y clustered toward the floor and the ceiling
+# (min_wall_spacing below, for this grid), the face ny / 6 from the floor
+# falling on the step height, which validation.cases.load_backstep derives
+# for any grid and the harness and tests load through. The presets are
+# val019_410x40 (coarse), val019_656x60 (medium, this file's grid and the
+# harness row's) and val019_984x90 (fine), each about 1.5 times the last per
+# axis. First-node y+ is reported against the scalable floor (11.53).
+#
+# The model and the solver keys are VAL-017's (configs/validation_annex20.yaml):
+# the standard variant, k and eps advected by the default (upwind), rule
+# version 5, pressure_rtol 1e-4, ten momentum sweeps; the cap 20,000 is the
+# prompt's. No threshold is set: the allowance is Alex's (ADR-012 G (ii),
+# OPEN), and the harness row val019_656x60 (scripts/benchmark.py) reports.
+
+domain:
+  width: 2.0827999999999998
+  height: 0.1143
+  nx: 656
+  ny: 60
+
+mesh:
+  x:
+    stretch_ratio: 1.0
+  y:
+    # load_backstep's value for 60 rows: face 10 on the step height. Stated
+    # here so the file alone loads the same grid the loader builds.
+    min_wall_spacing: 0.0010731728049046708
+
+fluid:
+  density: 1.2
+  # rho nu with nu = U_ref H / 36,000 = 1.5592777...e-5 m^2/s.
+  viscosity: 1.8711333333333334e-5
+  temperature: 293.0
+
+particles:
+  density: 1000.0
+  sizes: [0.1e-6]
+  mean_free_path: 67.0e-9
+  boundary_layer_thickness: 1.0e-3
+  hepa_reference:
+    diameters: [0.1e-6]
+    efficiencies: [0.99999]
+
+solver:
+  dt: 0.01
+  t_end: 60.0
+  output_interval: 10
+  convergence_tol: 1.0e-6
+  max_simple_iter: 20000
+  alpha_velocity: 0.5
+  alpha_pressure: 0.3
+  max_pressure_iter: 5000
+  pressure_rtol: 1.0e-4
+  momentum_sweeps: 10
+  stopping_rule: error_estimate
+  iteration_error_tol: 1.0e-6
+  # ADR-011 G's per-cell bound, 1e-4 rho V_min / t_end, on the finest preset's
+  # smallest cell (984x90: dx 164 H / 984 by the wall spacing 7.1112e-04 m),
+  # so one value serves the three grids and the coarser ones meet it the more
+  # easily.
+  mass_imbalance_tol: 3.0104e-12
+
+turbulence:
+  model: k_epsilon
+  variant: standard
+  wall_treatment: scalable_wall_functions
+  cfl_number: 0.25
+  alpha_turbulence: 0.7
+  max_iter: 500
+  tol: 1.0e-10
+
+boundaries:
+  inlet:
+    type: velocity_inlet
+    location: left
+    y_start: 0.0127
+    y_end: 0.1143
+    velocity: 41.862
+    turbulence_intensity: 0.01
+    dissipation_length: 0.00127
+
+  outlet:
+    type: pressure_outlet
+    location: right
+    y_start: 0.0
+    y_end: 0.1143
+
+obstacles:
+  - name: step
+    x_start: 0.0
+    x_end: 1.4478
+    y_start: 0.0
+    y_end: 0.0127
+
+sensors:
+  - name: centre
+    x: 1.5112999999999999
+    y: 0.0635
+
+thresholds:
+  "0.1e-6": 100.0

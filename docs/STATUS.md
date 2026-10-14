@@ -424,7 +424,18 @@ the k and eps solves take a fraction of their Jacobi iterations; the Annex 20 ro
 outer iteration falls by less than the 40% predicted. The harness's stage times show why: the
 pressure correction was already the larger stage on main, and is now most of the run. Next:
 review and test 51, then Alex's question in that report's section 8 (whether the next pass
-takes the CG loop or the pressure correction's successor), then VAL-019.
+takes the CG loop or the pressure correction's successor), then VAL-019. Prompt 51 is merged
+(PR 78).
+Prompt 52 (`feature/ecr002-val019-backstep`, `docs/reports/ecr002_val019_backstep.md`) builds and
+measures VAL-019, the backward-facing step of Driver and Seegmiller as the NASA Turbulence
+Modeling Resource poses it: the data committed with its provenance, the upstream channel's length
+set by a precursor run (114 H), three grids with the step's corner on grid lines, the harness row
+reported and not scored. The standard model with wall functions reattaches 22% short of the
+measured length on the medium grid, shorter than a published low-Reynolds k-epsilon, with the
+profiles above the step's top within 0.05 U_ref; the two k and eps advection schemes agree; the
+medium grid cycles at the reattachment cell instead of stopping by the rule; RNG diverges at the
+pressure outlet. The allowance, the grid (the committed mesh cannot cluster toward the step) and
+the stop on a bounded cycle are the report's questions for Alex.
 
 Deferred findings from earlier pull requests were open as GitHub issues, and every open one now
 has a disposition. The cleanup pull request (branch `fix/deferred-findings-cleanup`) closes issues

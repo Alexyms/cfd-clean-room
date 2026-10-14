@@ -978,6 +978,17 @@ reattachment length and the four profiles, with [12]'s 12 to 15% as context. Fro
 takes an outflow boundary at least 30 H downstream and a resolution study before any number is
 read. It ranks the variants on separation and reattachment (section A), not on impingement.
 
+*Note, 2026-10-12 (Alex, prompt 52; ECR-002 step 7, second case).* Two decisions before the case
+is built. (1) The inflow boundary layer is grown in a long upstream channel, as the reference
+grids do (the NPARC Alliance grid starts at x/H = -105), not prescribed as a profile at x/H = -4;
+no `src/` change. The channel's length is set by a precursor run of the channel alone: the
+distance from the inlet at which the bottom wall's boundary layer reaches 1.5 H and Re_theta
+5,000, plus 4 H, rounded up to a whole H, so the layer at x/H = -4 matches the measured one.
+(2) The step runs on the current pressure solve; whether ADR-013's multigrid successor is built
+is decided after this case's and the product's timings are in hand. The build and the first
+coupled results are `docs/reports/ecr002_val019_backstep.md`; the criterion stays OPEN until Alex
+sets the allowance from them.
+
 **(iii) The Annex 20 room, conditional on item 0.** The specification [4, pages 2 and 3] and
 the measurements [5] are in hand and their check is in [1, section 6]: at x/H = 1.0 the measured
 symmetry-plane profile carries 1.02 to 1.32 of the inlet flux u0 h, depending on how the strips
