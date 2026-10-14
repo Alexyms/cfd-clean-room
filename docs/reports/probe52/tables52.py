@@ -21,7 +21,8 @@ Reads results/builder52/NAME.json, NAME.npz and NAME_pmean.json
 markdown tables, and keeps every number it printed in
 results/builder52/tables_MODE.json. The classification is tables46's
 (imported): diverged, converged, growing, bounded with step 0's
-sub-classes, or a positivity error. The comparison numbers are
+sub-classes, or a positivity error, its growing threshold scaled to the
+case's speed. The comparison numbers are
 validation.backstep.evaluate's, recomputed here from each record's final
 faces, pressure and k, so the tables and the harness row read the same code.
 """
@@ -49,6 +50,10 @@ from validation import backstep  # noqa: E402
 
 OUT = ROOT / "results" / "builder52"
 tables46.OUT = OUT
+# tables46's growing threshold is 5 m/s, ten times a room's supply speed; the
+# step runs at U_ref 44.2 m/s, so the same ratio is ten times U_ref (the
+# runner's divergence guard).
+tables46.GROWING_SPEED = 10.0 * backstep.U_REF
 GRIDS = ("410x40", "656x60", "984x90")
 GRID_LABEL = {"410x40": "coarse", "656x60": "medium", "984x90": "fine"}
 REFINEMENT = 1.5
@@ -392,6 +397,14 @@ def reattachment(_args: argparse.Namespace) -> None:
             order = math.log(abs(d1) / abs(d2)) / math.log(REFINEMENT)
         spread = max(values) - min(values)
     fine_pair = abs(values[-1] - values[-2]) if len(values) >= 2 else None
+    extrapolated = None
+    if order is not None and order > 0:
+        extrapolated = values[-1] + (values[-1] - values[-2]) / (
+            REFINEMENT**order - 1.0
+        )
+        rows.append(
+            ["extrapolated (observed order, ratio 1.5)", "-", fmt(extrapolated, 4)]
+        )
     print_table(["Grid", "Class", "x_r / H (standard, upwind)"], rows)
     print(
         f"Observed order of x_r over the three grids (ratio {REFINEMENT} per axis): "
@@ -405,6 +418,7 @@ def reattachment(_args: argparse.Namespace) -> None:
         "observed_order": order,
         "spread_h": spread,
         "medium_fine_difference_h": fine_pair,
+        "extrapolated": extrapolated,
     }
     keep("reattachment", data)
 
@@ -742,37 +756,30 @@ def timing(_args: argparse.Namespace) -> None:
     keep("timing", data)
 
 
+MODES = (
+    ("precursor", precursor),
+    ("matrix", matrix),
+    ("walls", walls),
+    ("reattachment", reattachment),
+    ("profiles", profiles),
+    ("coefficients", coefficients),
+    ("schemes", schemes),
+    ("predictions", predictions),
+    ("timing", timing),
+)
+
+
 def everything(args: argparse.Namespace) -> None:
-    for mode in (
-        precursor,
-        matrix,
-        walls,
-        reattachment,
-        profiles,
-        coefficients,
-        schemes,
-        predictions,
-        timing,
-    ):
-        print(f"<!-- tables52 {mode.__name__} -->")
+    for name, mode in MODES:
+        print(f"<!-- tables52 {name} -->")
         mode(args)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="mode", required=True)
-    for fn in (
-        precursor,
-        matrix,
-        walls,
-        reattachment,
-        profiles,
-        coefficients,
-        schemes,
-        predictions,
-        timing,
-    ):
-        sub.add_parser(fn.__name__).set_defaults(func=fn)
+    for name, fn in MODES:
+        sub.add_parser(name).set_defaults(func=fn)
     sub.add_parser("all").set_defaults(func=everything)
     args = parser.parse_args()
     args.func(args)
