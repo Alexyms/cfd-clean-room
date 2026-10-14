@@ -458,7 +458,14 @@ third row, run in a worktree of d972311 with nothing changing, is appended after
 
 ### 5.9 The third harness row
 
-THIRD-ROW-PENDING
+The third row ran alone in a git worktree of d972311 (`results/builder52/worktree`, removed
+afterwards; `concurrent_processes` 1), from 2026-10-13 20:25 to 2026-10-14 00:10, and its record
+carries `git_dirty` false. Its value, every component and the whole stored report equal the first
+two rows' to every digit: the solve is bit for bit the same whatever the tree's documentation
+held. Alone it took 13,475 s for the 20,000 iterations, 0.67 s per outer iteration, 86% of it the
+pressure correction (its stage times), the one wall time of this report that is a measurement
+of the medium grid. It is the row of record; the two before it stay in the file, which is
+append-only.
 
 ## 6. Predictions against measurement
 
@@ -523,7 +530,7 @@ Questions, not decisions; the numbers are in the tables above.
    ADR-012 A's ranking on separation has no pair here; the standard variant's own ranking against
    the data is the tables'. If VAL-020 favours RNG, its outlet behaviour needs its own probe before
    the step is rerun with it. 5. **The cost, for decision 2.** The medium grid's 20,000 iterations
-   took 69,000 s beside five other runs (about 1.0 s per outer iteration when six ran, 0.81 alone,
+   took 69,000 s beside five other runs (about 1.0 s per outer iteration when six ran, 0.67 alone over the third harness row (section 5.9),
    95% of it the pressure correction), and the fine grid's 20,000 took 89,600 s (4.5 s per outer
    iteration beside the others, 2.2 alone), 92% of it the pressure correction at 1,400 to 2,400
    conjugate-gradient iterations per correction. The multigrid successor (ADR-013) is the question
