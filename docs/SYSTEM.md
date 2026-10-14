@@ -114,25 +114,26 @@ Generated from the import statements in `src/` by `scripts/gen_system_map.py`. R
 
 <!-- BEGIN GENERATED: dsm -->
 ```
-                         boundary_concentration  boundary_registry  boundary_staggered  config  constants  mesh  momentum  particles  pressure  scalar_scheme  solver_staggered  solver_transport  staggered  stopping  turbulence
-boundary_concentration             .                     X                  .             X         .       X       .          X         .            .               .                 .              X         .          .
-boundary_registry                  .                     .                  .             X         .       .       .          .         .            .               .                 .              .         .          .
-boundary_staggered                 .                     X                  .             X         .       X       .          .         .            .               .                 .              X         .          .
-config                             .                     .                  .             .         .       .       .          .         .            .               .                 .              .         .          .
-constants                          .                     .                  .             .         .       .       .          .         .            .               .                 .              .         .          .
-mesh                               .                     .                  .             X         .       .       .          .         .            .               .                 .              .         .          .
-momentum                           .                     .                  X             X         .       X       .          .         .            .               .                 .              X         .          .
-particles                          .                     .                  .             X         X       .       .          .         .            .               .                 .              .         .          .
-pressure                           .                     .                  X             X         .       X       X          .         .            .               .                 .              X         .          .
-scalar_scheme                      .                     .                  .             .         .       X       X          .         .            .               .                 .              .         .          .
-solver_staggered                   .                     .                  X             X         .       X       X          .         X            .               .                 .              X         X          X
-solver_transport                   X                     .                  .             X         .       X       .          X         .            X               .                 .              X         .          .
-staggered                          .                     .                  .             .         .       X       .          .         .            .               .                 .              .         .          .
-stopping                           .                     .                  .             .         .       .       .          .         .            .               .                 .              .         .          .
-turbulence                         .                     X                  X             X         .       X       .          .         .            X               .                 .              X         .          .
+                         boundary_concentration  boundary_registry  boundary_staggered  config  constants  mesh  momentum  multigrid  particles  pressure  scalar_scheme  solver_staggered  solver_transport  staggered  stopping  turbulence
+boundary_concentration             .                     X                  .             X         .       X       .          .          X         .            .               .                 .              X         .          .
+boundary_registry                  .                     .                  .             X         .       .       .          .          .         .            .               .                 .              .         .          .
+boundary_staggered                 .                     X                  .             X         .       X       .          .          .         .            .               .                 .              X         .          .
+config                             .                     .                  .             .         .       .       .          .          .         .            .               .                 .              .         .          .
+constants                          .                     .                  .             .         .       .       .          .          .         .            .               .                 .              .         .          .
+mesh                               .                     .                  .             X         .       .       .          .          .         .            .               .                 .              .         .          .
+momentum                           .                     .                  X             X         .       X       .          .          .         .            .               .                 .              X         .          .
+multigrid                          .                     .                  .             .         .       .       .          .          .         .            .               .                 .              .         .          .
+particles                          .                     .                  .             X         X       .       .          .          .         .            .               .                 .              .         .          .
+pressure                           .                     .                  X             X         .       X       X          X          .         .            .               .                 .              X         .          .
+scalar_scheme                      .                     .                  .             .         .       X       X          .          .         .            .               .                 .              .         .          .
+solver_staggered                   .                     .                  X             X         .       X       X          .          .         X            .               .                 .              X         X          X
+solver_transport                   X                     .                  .             X         .       X       .          .          X         .            X               .                 .              X         .          .
+staggered                          .                     .                  .             .         .       X       .          .          .         .            .               .                 .              .         .          .
+stopping                           .                     .                  .             .         .       .       .          .          .         .            .               .                 .              .         .          .
+turbulence                         .                     X                  X             X         .       X       .          .          .         .            X               .                 .              X         .          .
 ```
 
-Rows import columns. Edges, 45 total:
+Rows import columns. Edges, 46 total:
 
 ```
 boundary_concentration -> boundary_registry, config, mesh, particles, staggered
@@ -141,7 +142,7 @@ boundary_staggered     -> boundary_registry, config, mesh, staggered
 mesh                   -> config
 momentum               -> boundary_staggered, config, mesh, staggered
 particles              -> config, constants
-pressure               -> boundary_staggered, config, mesh, momentum, staggered
+pressure               -> boundary_staggered, config, mesh, momentum, multigrid, staggered
 scalar_scheme          -> mesh, momentum
 solver_staggered       -> boundary_staggered, config, mesh, momentum, pressure, staggered, stopping, turbulence
 solver_transport       -> boundary_concentration, config, mesh, particles, scalar_scheme, staggered
@@ -200,12 +201,13 @@ Generated. The responsibility and serves columns are editorial and come from `do
 | `src/boundary_concentration.py` | 327 | Derives the per-face concentration conditions of each particle class from the registry's shared coverage and ParticlePhysics: the concentration an inlet carries, the deposition velocity and surface code at every wall and obstacle face, and the mask of faces that carry the settling increment, as read-only face-shaped data for the transport solver. | S12.1, T09, T10 |
 | `src/boundary_registry.py` | 360 | Interprets the configured boundary segments once, answering which segment covers each point along a domain edge and which condition and prescribed velocity hold there, SOLID cells read as walls, for both boundary imposition layers: the staggered velocity layer and the concentration layer. | S12.1 |
 | `src/boundary_staggered.py` | 594 | Writes Dirichlet normal velocities exactly into the staggered domain-face entries and exposes the tangential wall values, wall distances, pressure outlets and wall faces as data for the momentum and pressure steps and the wall functions. | S12 |
-| `src/config.py` | 1337 | Loads the YAML configuration into typed dataclasses and rejects missing keys, wrong types and out-of-range values at load time. | A02, A03, C01, C02, S10 |
+| `src/config.py` | 1350 | Loads the YAML configuration into typed dataclasses and rejects missing keys, wrong types and out-of-range values at load time. | A02, A03, C01, C02, S10 |
 | `src/constants.py` | 8 | Holds the physical constants shared by every module so that none of them defines its own copy. | C04 |
 | `src/mesh.py` | 423 | Builds the structured grid, uniform or geometrically clustered at the walls, with the face, center, width and center-to-center arrays a face-based stencil needs, and classifies each cell as FLUID, SOLID or BOUNDARY. | S11 |
 | `src/momentum.py` | 1020 | Predicts u* and v* on the staggered grid with QUICK advection by deferred correction over an upwind implicit matrix, a configured number of under-relaxed Jacobi sweeps per call, an optional per-cell viscosity field with its face rule and stress source, and the domain edge's wall stencil at obstacle faces, and returns the diagonal coefficients the pressure correction needs. | S07, S09, S14 |
+| `src/multigrid.py` | 377 | Builds an additive-correction multigrid hierarchy from a five-point pressure system by 2x2 aggregation, its coarse operators the exact Galerkin sums with no probing, and applies one symmetric V-cycle with weighted Jacobi smoothing and a dense pseudo-inverse on the coarsest level as the preconditioner of the pressure correction's conjugate gradients. | S08 |
 | `src/particles.py` | 263 | Computes per-size-class transport properties: Cunningham correction, settling velocity, Brownian diffusion, deposition velocity and HEPA efficiency. | T03, T04, T09, T10 |
-| `src/pressure.py` | 779 | Assembles the staggered pressure correction equation from the momentum diagonals with the discrete divergence of u* as its right-hand side, solves it by conjugate gradients preconditioned with its diagonal to a relative residual, a rounding floor or a reported iteration cap, corrects the face velocities and updates the pressure. | S04, S08 |
+| `src/pressure.py` | 845 | Assembles the staggered pressure correction equation from the momentum diagonals with the discrete divergence of u* as its right-hand side, solves it by conjugate gradients preconditioned with its diagonal or, under the pressure_preconditioner key, with one multigrid V-cycle per iteration, to a relative residual, a rounding floor or a reported iteration cap, corrects the face velocities and updates the pressure. | S04, S08 |
 | `src/scalar_scheme.py` | 548 | Holds the cell-centred scalar scheme the transport solver and the k-epsilon model share: QUICK's face value bounded by the UMIST limiter, the advective flux along one axis with the inflow value or the upwind cell at a domain face, and the backward Euler solve of diffusion with a non-negative cell sink by Jacobi or, for k and eps, by diagonal-preconditioned conjugate gradients that fall back to Jacobi on the cap or a non-positive value, on per-face conductances with one step or a step per cell, with an optional mask of cells held at their value. | S15, T12 |
 | `src/solver_staggered.py` | 547 | Runs steady SIMPLE on the staggered grid as one outer loop over the momentum predictor and the pressure correction, with the turbulence section one k and eps step and the relaxed eddy viscosity inside it, returning cell-centered fields through the harness's callback shape and exposing the final faces as FaceVelocities; stops by the velocity-step rule or, when configured, by the error-estimate rule. | S01, S02, S03, S04, S05, S07, S13, S14, S15 |
 | `src/solver_transport.py` | 892 | Advances one particle class one explicit step on the staggered face velocities: QUICK's face value bounded by the UMIST limiter under forward Euler at a Courant number the configuration sets, implicit diffusion and deposition by Jacobi on per-face conductances, the Brownian coefficient plus nu_t / Sc_t on interior faces when handed an eddy viscosity field, the settling increment on interior faces, sources added and booked, SOLID cells zero; keeps one MassBudget per class and defines FieldHistory, the output contract for the animation. | N01, T01, T03, T04, T05, T06, T07, T08, T11, T12, T13 |
@@ -213,7 +215,7 @@ Generated. The responsibility and serves columns are editorial and come from `do
 | `src/stopping.py` | 351 | Decides when the steady outer iteration has converged, on four conditions: (a) the iteration error estimated from the step and its fitted geometric rate, over a physical velocity scale; (b) the worst per-cell mass imbalance against its own tolerance; (c) the summed imbalance over the through-flow, which shares the tolerance of (a); and (d) the signed imbalance summed over the domain, which shares the tolerance of (b); and with the turbulence model a fifth, (e), the same estimate on the eddy viscosity over the molecular viscosity plus the median eddy viscosity of the FLUID cells, which the solver passes each outer iteration. Also defines IterationState, the snapshot a solver hands its callback once per outer iteration. | S01, S04 |
 | `src/turbulence.py` | 1544 | Advances the k-epsilon model's k and eps one step on a prescribed face velocity field, standard or RNG with each variant's constants as module data: advection, explicit growth from the strain the faces give and implicit decay and diffusion through the shared scalar scheme, boundary values from a conditions object the caller builds each step, the kinematic eddy viscosity, and an assertion that k and eps are positive and finite after every step; and the scalable wall functions, which build those conditions, the wall viscosity of the momentum wall faces and the inlet values the coupled solve starts from. | S14, S15, S17 |
 
-Total 16 Python files, 9317 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
+Total 17 Python files, 9773 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
 
 `Declares it serves` is an EDITORIAL CLAIM read from `docs/system_map_annotations.toml`. It says which requirements a module is meant to satisfy, not that it does. Whether a requirement is met is answered by the tests named in the register's `Verified By` column.
 <!-- END GENERATED: components -->
@@ -237,8 +239,8 @@ Generated. Static import analysis cannot see a function bound into a registry by
 | Property | Value |
 |---|---|
 | Scope | `src/**/*.py` |
-| Files hashed | 16 |
-| Digest | `sha256:6bd216dcfaf8aa8a20eabf80c1fa2a9994777780f780deb0c37da2c5b8f00041` |
+| Files hashed | 17 |
+| Digest | `sha256:a8fdc0931c7a72e2431f40fb8cdb3071bf50f7a3faadd644e3f7ff50dfe019c4` |
 
 This is what lets the document answer whether it is current, which is the one question a stale table cannot be asked. `python scripts/gen_system_map.py --check` recomputes the whole set of generated regions, this digest included, and exits non-zero on any disagreement.
 

@@ -279,7 +279,14 @@ PRESSURE_RTOL_BOUNDS: tuple[float, float] = (1.0e-10, 1.0)
 # change per sweep, which means nothing for the conjugate gradient solve. It is
 # refused by name so a saved configuration cannot be read as the new key.
 RETIRED_PRESSURE_TOL_KEY = "pressure_tol"
-# Every key the solver block accepts, nine required and four optional, in the
+# The preconditioner of the pressure correction's conjugate gradients
+# (src/pressure.py): the diagonal, the solve every stored result was produced
+# with and the default, or one V-cycle of the additive-correction multigrid of
+# src/multigrid.py, ADR-013 decision 1's named successor (prompt 53).
+PRESSURE_JACOBI = "jacobi"
+MULTIGRID = "multigrid"
+PRESSURE_PRECONDITIONERS: tuple[str, ...] = (PRESSURE_JACOBI, MULTIGRID)
+# Every key the solver block accepts, nine required and five optional, in the
 # order the harness records them: it reads this tuple, so a key added here is
 # in every harness row (GitHub issue 38). With optional keys a misspelt one
 # would otherwise fall back to its default.
@@ -297,6 +304,7 @@ SOLVER_KEYS: tuple[str, ...] = (
     "stopping_rule",
     "iteration_error_tol",
     "mass_imbalance_tol",
+    "pressure_preconditioner",
 )
 
 # Transport section (ADR-011 I), optional: the velocity-only validation cases
@@ -587,6 +595,11 @@ class SimConfig:
         self.mass_imbalance_tol: float = self._optional_positive_float(
             solver, "mass_imbalance_tol", "solver", DEFAULT_MASS_IMBALANCE_TOL
         )
+        self.pressure_preconditioner: str = PRESSURE_JACOBI
+        if "pressure_preconditioner" in solver:
+            self.pressure_preconditioner = self._require_choice(
+                solver, "pressure_preconditioner", "solver", PRESSURE_PRECONDITIONERS
+            )
 
         # Transport (optional). Unknown keys raise as they do in the solver
         # block, so a misspelt key cannot fall back to a default.
