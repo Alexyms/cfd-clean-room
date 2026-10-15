@@ -32,6 +32,10 @@ that carries the detail. The ranking is the builder's, from the measurements.
    not the probe's bilinear geometric multigrid, whose setup by probing cost 120 to 175 ms every
    correction (the report, section 7.3). Whether it becomes the default is decided on its
    measurements.
+   Decided 2026-10-14 (Alex, prompt 54): `multigrid` becomes the default `pressure_preconditioner`,
+   from `docs/reports/pressure_multigrid.md`: every whole run stopped where its Jacobi record
+   did, with the same answers, and the step's medium grid ran 4.7 times faster per outer
+   iteration. `jacobi` stays selectable, for parity work and the Phase 6 port.
 2. Dependencies: NumPy only; no SciPy or pyamg at runtime.
    Confirmed 2026-10-14 (Alex, prompt 53) for the successor: NumPy only and data-parallel, so the
    GPU path stands.
