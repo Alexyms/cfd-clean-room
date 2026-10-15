@@ -117,7 +117,15 @@ def _config(
     mesh: dict | None = None,
     max_pressure_iter: int = 5000,
     pressure_rtol: float = TIGHT_RTOL,
+    preconditioner: str | None = "jacobi",
 ) -> SimConfig:
+    """A configuration for the corrector, on the diagonal preconditioner unless told otherwise.
+
+    These tests were written against the diagonal-preconditioned loop (cap
+    counts, the floor, iteration counts), and ``jacobi`` stays selectable
+    since prompt 54 made multigrid the default, so they state it. ``None``
+    leaves the key out, which is the default.
+    """
     raw = {
         "domain": {"width": 2.0, "height": 1.0, "nx": nx, "ny": ny},
         "fluid": {"density": 1.2, "viscosity": 0.05, "temperature": 293.0},
@@ -144,6 +152,8 @@ def _config(
         "sensors": [{"name": "center", "x": 1.0, "y": 0.5}],
         "thresholds": {"0.1e-6": 100.0},
     }
+    if preconditioner is not None:
+        raw["solver"]["pressure_preconditioner"] = preconditioner
     if mesh is not None:
         raw["mesh"] = mesh
     return SimConfig.from_dict(raw)
@@ -755,7 +765,7 @@ class TestCorrection:
             "reached_cap",
             "products",
         ]
-        assert PRESSURE_SOLVER_VERSION == 2
+        assert PRESSURE_SOLVER_VERSION == 3
 
     def test_each_solver_version_has_its_own_label(self) -> None:
         """The label the scripts file results under is the current version's, and unique.
@@ -765,7 +775,11 @@ class TestCorrection:
         the current version's.
         """
         assert STAGGERED_METHODS[PRESSURE_SOLVER_VERSION] == STAGGERED_METHOD
-        assert STAGGERED_METHODS == {1: "staggered-jacobi", 2: "staggered-cg"}
+        assert STAGGERED_METHODS == {
+            1: "staggered-jacobi",
+            2: "staggered-cg",
+            3: "staggered-mgcg",
+        }
         assert len(set(STAGGERED_METHODS.values())) == len(STAGGERED_METHODS)
 
 

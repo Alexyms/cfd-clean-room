@@ -41,10 +41,13 @@ the floor shear never turns positive), and ``passed`` is None.
 
 The method label names the pressure solve as well as the grid: staggered-cg
 since ECR-003 step 1 (2026-10-06), when conjugate gradients replaced the
-weighted Jacobi sweep. The 20 stored staggered-jacobi rows keep their label
-and summarize apart from the new ones, as the collocated rows do; run_case
-refuses both retired labels by name. Every row records the solver's
-pressure_cap_hits beside its stop.
+weighted Jacobi sweep, and staggered-mgcg since prompt 54 (2026-10-14), when
+multigrid became the preconditioner by default. The label selects the
+preconditioner: a staggered-cg row runs the diagonal whatever the case file
+says, so the stored rows keep their label and summarize apart from the
+multigrid ones, as the collocated rows do. The 20 stored staggered-jacobi rows
+keep their label too; run_case refuses both retired labels by name. Every row
+records the solver's pressure_cap_hits beside its stop.
 
 Run:
 
@@ -78,6 +81,8 @@ from src.boundary_staggered import (  # noqa: E402 -- follows sys.path.insert
 )
 from src.config import (  # noqa: E402 -- follows sys.path.insert
     ERROR_ESTIMATE,
+    MULTIGRID,
+    PRESSURE_JACOBI,
     SOLVER_KEYS,
     VELOCITY_STEP,
     SimConfig,
@@ -104,6 +109,7 @@ from validation import annex20, backstep  # noqa: E402 -- follows sys.path.inser
 from validation.cases import (  # noqa: E402 -- follows sys.path.insert
     CASE_GRIDS,
     load_preset,
+    with_pressure_preconditioner,
 )
 from validation.metrics import (  # noqa: E402 -- follows sys.path.insert
     cavity_marchi_centerline_errors,
@@ -116,9 +122,17 @@ from validation.metrics import (  # noqa: E402 -- follows sys.path.insert
 SCHEMA_VERSION = 2
 RESULTS_PATH = REPO_ROOT / "benchmarks" / "results.jsonl"
 # The method label selects the solver, so a row cannot claim one it did not run.
-# It is src/pressure.py's, looked up there by PRESSURE_SOLVER_VERSION.
+# The solver of record's is src/pressure.py's, looked up there by
+# PRESSURE_SOLVER_VERSION. The diagonal-preconditioned CG of version 2 stays
+# runnable under its own label, for parity work, and run_case sets the
+# preconditioner the label names.
+CG_JACOBI_METHOD = STAGGERED_METHODS[2]
 DEFAULT_METHOD = STAGGERED_METHOD
-METHODS = (STAGGERED_METHOD,)
+METHODS = (STAGGERED_METHOD, CG_JACOBI_METHOD)
+METHOD_PRECONDITIONERS: dict[str, str] = {
+    STAGGERED_METHODS[3]: MULTIGRID,
+    CG_JACOBI_METHOD: PRESSURE_JACOBI,
+}
 # Retired labels stay known so their stored rows still summarize; run_case
 # refuses each by name with where its solver went. The collocated solver was
 # retired on 2026-10-02 (tag collocated-final); the staggered solver's weighted
@@ -217,13 +231,23 @@ CELL_UPDATE_DEFINITIONS: dict[str, str] = {
         "per outer iteration for momentum, plus the cells with a pressure equation "
         "(a_P > 0) once per weighted Jacobi pressure sweep"
     ),
-    STAGGERED_METHOD: (
+    CG_JACOBI_METHOD: (
         "stencil evaluations at unknowns: the unknown u and v faces (a_p > 0) once "
         "per outer iteration for momentum, plus the cells with a pressure equation "
         "(a_P > 0) once per five-point product of the conjugate gradient solve: "
         "one per iteration and one per true-residual check, at exit, at a restart "
         "and at the cap; the diagonal scaling, the vector updates and the "
         "reductions are not counted"
+    ),
+    STAGGERED_METHODS[3]: (
+        "stencil evaluations at unknowns: the unknown u and v faces (a_p > 0) once "
+        "per outer iteration for momentum, plus the cells with a pressure equation "
+        "(a_P > 0) once per five-point product of the conjugate gradient solve: "
+        "one per iteration and one per true-residual check, at exit, at a restart "
+        "and at the cap; the vector updates and the reductions are not counted, "
+        "and neither are the multigrid V-cycle's own products and transfers, "
+        "which a cycle forms on every level and which a row of "
+        f"{CG_JACOBI_METHOD} has no counterpart of"
     ),
 }
 
@@ -570,10 +594,12 @@ def run_case(case_id: str, method: str, sample_every: int, concurrent: int) -> d
     """
     if method in RETIRED_METHODS:
         raise ValueError(f"method {method!r} {RETIRED_METHODS[method]}")
-    if method != STAGGERED_METHOD:
+    if method not in METHOD_PRECONDITIONERS:
         raise ValueError(f"unknown method {method!r}; known: {list(METHODS)}")
     kind, nx, ny = CASES[case_id]
-    config = load_preset(case_id)
+    config = with_pressure_preconditioner(
+        load_preset(case_id), METHOD_PRECONDITIONERS[method]
+    )
     solver_block = solver_parameters(config)
     mesh = Mesh(config)
 

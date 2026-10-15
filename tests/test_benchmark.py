@@ -35,6 +35,7 @@ from validation.cases import (  # noqa: E402 -- follows sys.path.insert
     case_path,
     load_case,
     load_preset,
+    with_pressure_preconditioner,
     with_velocity_step,
 )
 from validation.metrics import (  # noqa: E402 -- follows sys.path.insert
@@ -293,7 +294,7 @@ def test_the_annex20_row_is_scored_by_the_allowance(
     config = load_preset("val017_216x72")
     monkeypatch.setattr(config, "max_simple_iter", 3)
     monkeypatch.setattr(benchmark, "load_preset", lambda case_id: config)
-    row = benchmark.run_case("val017_216x72", "staggered-cg", 1, 1)
+    row = benchmark.run_case("val017_216x72", benchmark.DEFAULT_METHOD, 1, 1)
     accuracy = row["accuracy"]
     assert (accuracy["metric"], accuracy["reference"]) == (
         benchmark.ANNEX20_METRIC,
@@ -410,7 +411,7 @@ def test_the_backstep_row_is_reported_not_scored(
     config = load_preset("val019_656x60")
     monkeypatch.setattr(config, "max_simple_iter", 3)
     monkeypatch.setattr(benchmark, "load_preset", lambda case_id: config)
-    row = benchmark.run_case("val019_656x60", "staggered-cg", 1, 1)
+    row = benchmark.run_case("val019_656x60", benchmark.DEFAULT_METHOD, 1, 1)
     accuracy = row["accuracy"]
     assert (accuracy["metric"], accuracy["reference"]) == (
         benchmark.BACKSTEP_METRIC,
@@ -599,8 +600,96 @@ def test_run_case_refuses_the_retired_staggered_jacobi_label_by_name(
     monkeypatch.setitem(benchmark.CASES, "tiny_cavity", ("cavity", 6, 6))
     with pytest.raises(ValueError, match=r"staggered-jacobi.*2026-10-06.*ECR-003"):
         benchmark.run_case("tiny_cavity", "staggered-jacobi", 10, 1)
-    assert benchmark.METHODS == ("staggered-cg",)
-    assert benchmark.DEFAULT_METHOD == "staggered-cg"
+    assert benchmark.METHODS == ("staggered-mgcg", "staggered-cg")
+    assert benchmark.DEFAULT_METHOD == "staggered-mgcg"
+
+
+@pytest.mark.unit
+def test_summary_keeps_the_multigrid_label_apart_from_the_diagonal_one(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A staggered-mgcg row never pools with a staggered-cg row of the same case (prompt 54).
+
+    Defect caught: both preconditioners filed under one label, so a stored
+    diagonal-preconditioned row and a new multigrid row would summarize as
+    one median.
+    """
+    cg = _record("val002_20x20", 1, 9.0) | {"method": "staggered-cg"}
+    mg = _record("val002_20x20", 1, 5.0) | {"method": "staggered-mgcg"}
+    benchmark.print_summary(_write(tmp_path / "results.jsonl", [cg, cg, mg]))
+    rows = [
+        line.split()
+        for line in capsys.readouterr().out.splitlines()
+        if "val002_20x20" in line
+    ]
+    assert [row[0] for row in rows] == ["staggered-cg", "staggered-mgcg"]
+    assert [row[5] for row in rows] == ["2", "1"]
+
+
+@pytest.mark.unit
+def test_each_label_names_its_preconditioner_and_its_cell_update_definition() -> None:
+    """The label table, the methods and the work definitions agree, one per label."""
+    assert benchmark.STAGGERED_METHOD == "staggered-mgcg"
+    assert benchmark.METHOD_PRECONDITIONERS == {
+        "staggered-mgcg": "multigrid",
+        "staggered-cg": "jacobi",
+    }
+    assert set(benchmark.METHOD_PRECONDITIONERS) == set(benchmark.METHODS)
+    for method in benchmark.METHODS:
+        assert method in benchmark.CELL_UPDATE_DEFINITIONS
+    definitions = benchmark.CELL_UPDATE_DEFINITIONS
+    assert "multigrid" in definitions["staggered-mgcg"]
+    assert "multigrid" not in definitions["staggered-cg"]
+    assert "diagonal scaling" in definitions["staggered-cg"]
+
+
+@pytest.mark.integration
+def test_a_row_runs_the_preconditioner_its_label_names(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Each label runs its own preconditioner, whatever the case file names.
+
+    The case is loaded with the opposite preconditioner, so a label that
+    left the file's choice alone would record the wrong one. Multigrid takes
+    fewer CG iterations than the diagonal on the same case. Defect caught:
+    run_case ignoring the label's preconditioner, so a row claims a solver it
+    did not run.
+    """
+    real = benchmark.load_preset
+    monkeypatch.setitem(benchmark.CASES, "tiny_cavity", ("cavity", 12, 12))
+    rows = {}
+    for method, opposite in (
+        ("staggered-mgcg", "jacobi"),
+        ("staggered-cg", "multigrid"),
+    ):
+        monkeypatch.setattr(
+            benchmark,
+            "load_preset",
+            lambda case_id, o=opposite: with_pressure_preconditioner(
+                with_velocity_step(real(case_id)), o
+            ),
+        )
+        rows[method] = benchmark.run_case("tiny_cavity", method, 10, 1)
+    assert rows["staggered-mgcg"]["method"] == "staggered-mgcg"
+    assert rows["staggered-mgcg"]["params"]["pressure_preconditioner"] == "multigrid"
+    assert rows["staggered-cg"]["method"] == "staggered-cg"
+    assert rows["staggered-cg"]["params"]["pressure_preconditioner"] == "jacobi"
+    assert "multigrid" in rows["staggered-mgcg"]["work"]["cell_update_definition"]
+    mg_work, cg_work = (rows[m]["work"] for m in ("staggered-mgcg", "staggered-cg"))
+    assert mg_work["inner_iterations"] < cg_work["inner_iterations"]
+
+
+@pytest.mark.unit
+def test_with_pressure_preconditioner_copies_and_refuses_unknown_names() -> None:
+    """The helper sets the key on a copy, leaves the original, and refuses a bad name."""
+    config = load_case("cavity", grid=(6, 6))
+    assert config.pressure_preconditioner == "multigrid"
+    other = with_pressure_preconditioner(config, "jacobi")
+    assert other.pressure_preconditioner == "jacobi"
+    assert config.pressure_preconditioner == "multigrid"
+    assert other is not config and other.nx == config.nx
+    with pytest.raises(ValueError, match="must be one of"):
+        with_pressure_preconditioner(config, "amg")
 
 
 @pytest.mark.unit
@@ -642,7 +731,8 @@ def test_staggered_velocity_step_stop_has_the_collocated_label(
     assert set(SOLVER_KEYS) <= set(row["params"])
     assert row["params"]["pressure_rtol"] == 1e-8
     assert "pressure_tol" not in row["params"]
-    assert row["method"] == benchmark.STAGGERED_METHOD == "staggered-cg"
+    assert row["method"] == "staggered-cg" != benchmark.STAGGERED_METHOD
+    assert row["params"]["pressure_preconditioner"] == "jacobi"
     assert "conjugate gradient" in row["work"]["cell_update_definition"]
     assert set(row["work"]) == {
         "outer_iterations",

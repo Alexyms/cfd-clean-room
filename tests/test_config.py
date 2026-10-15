@@ -13,6 +13,7 @@ import yaml
 
 from src.config import (
     CFL_NUMBER_BOUND,
+    DEFAULT_PRESSURE_PRECONDITIONER,
     MULTIGRID,
     PRESSURE_JACOBI,
     PRESSURE_PRECONDITIONERS,
@@ -1297,17 +1298,18 @@ class TestPressureKeys:
             "pressure_preconditioner",
         )
 
-    def test_pressure_preconditioner_defaults_to_jacobi_and_reads_either_choice(
+    def test_pressure_preconditioner_defaults_to_multigrid_and_reads_either_choice(
         self, tmp_path: Path
     ) -> None:
-        """Absent is the diagonal every stored result used; each named choice is read.
+        """Absent is multigrid; each named choice, the diagonal included, is read.
 
-        Prompt 53: the multigrid preconditioner is selectable and the default
-        stays the diagonal. Defect caught: the default changed to multigrid.
+        Prompt 53 built the multigrid preconditioner as an option and prompt
+        54 made it the default. Defect caught: the default left at jacobi.
         """
         assert PRESSURE_PRECONDITIONERS == (PRESSURE_JACOBI, MULTIGRID)
         assert (PRESSURE_JACOBI, MULTIGRID) == ("jacobi", "multigrid")
-        assert SimConfig(_write_config(tmp_path)).pressure_preconditioner == "jacobi"
+        assert DEFAULT_PRESSURE_PRECONDITIONER == "multigrid"
+        assert SimConfig(_write_config(tmp_path)).pressure_preconditioner == "multigrid"
         for choice in PRESSURE_PRECONDITIONERS:
             raw = self._raw(tmp_path, pressure_preconditioner=choice)
             assert SimConfig.from_dict(raw).pressure_preconditioner == choice

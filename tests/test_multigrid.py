@@ -15,7 +15,9 @@ own transfer functions:
 - MG-PCG reaches the same relative residual as Jacobi-PCG on the same
   systems, the closed cavity among them, and lands within the tolerance's
   worth of a dense solve;
-- under the default key the correction is the Jacobi loop's, to the bit.
+- under the key ``jacobi`` the correction is the pre-prompt-53 diagonal loop's,
+  to the bit, and with the key absent it is the multigrid correction, to the
+  bit.
 """
 
 from collections.abc import Callable
@@ -579,7 +581,7 @@ class TestMultigridSolve:
         error = _range_part(pc, active, out.p_prime) - dense
         assert np.linalg.norm(error) <= np.linalg.norm(r) / smallest
         assert (out.p_prime[~active] == 0.0).all()
-        jacobi = _system(name)[0].correct(pred, p)
+        jacobi = _system(name, preconditioner="jacobi")[0].correct(pred, p)
         assert out.iterations < jacobi.iterations
 
     @pytest.mark.parametrize("when", ["first", "outer 100"])
@@ -620,7 +622,8 @@ class TestMultigridSolve:
         pc = PressureCorrector(mesh, mg_config, bc)
         assert pc.needs_pin
         out = pc.correct(pred, p)
-        jacobi = PressureCorrector(mesh, config, bc).correct(pred, p)
+        raw["solver"]["pressure_preconditioner"] = "jacobi"
+        jacobi = PressureCorrector(mesh, SimConfig.from_dict(raw), bc).correct(pred, p)
         c = pc.coefficients(pred.a_p_u, pred.a_p_v)
         f = _projected_rhs(pc, c, pc.mass_imbalance(pred.u_star, pred.v_star))
         active = c.a_p > 0.0
@@ -687,23 +690,23 @@ def _base_conjugate_gradient(
 
 
 @pytest.mark.unit
-class TestDefaultPath:
-    """With the key absent the correction is the base's Jacobi loop, to the bit."""
+class TestPreconditionerChoice:
+    """Key ``jacobi`` is the base's loop to the bit; with the key absent it is multigrid."""
 
     @pytest.mark.parametrize("name", sorted(SYSTEMS))
     @pytest.mark.parametrize("rtol", [TIGHT_RTOL, 1e-4])
-    def test_the_default_correction_is_the_base_loop_bitwise(
+    def test_the_jacobi_correction_is_the_base_loop_bitwise(
         self, name: str, rtol: float
     ) -> None:
         """p', the faces, p, the iterations and the products equal the base loop's exactly.
 
         The base loop is copied from the commit before the preconditioner
         became a callable, run on the same system with the same stop; the
-        corrector is built with no pressure_preconditioner key. Defect
-        caught: the default changed to multigrid, or the diagonal's product
-        reordered.
+        corrector is built with ``pressure_preconditioner: jacobi``, the
+        selectable parity path. Defect caught: the diagonal's product
+        reordered, or the key ignored.
         """
-        pc, c, b, pred, p = _system(name)
+        pc, c, b, pred, p = _system(name, preconditioner="jacobi")
         assert pc._multigrid is False
         pc._rtol = rtol
         out = pc.correct(pred, p)
@@ -722,8 +725,26 @@ class TestDefaultPath:
             x[active] -= x[pc.pin_cell]
         np.testing.assert_array_equal(out.p_prime, x)
         assert (out.iterations, out.products) == (iterations, products)
-        explicit = _system(name, preconditioner="jacobi")[0]
-        explicit._rtol = rtol
-        same = explicit.correct(pred, p)
+
+    @pytest.mark.parametrize("name", sorted(SYSTEMS))
+    def test_the_absent_key_is_the_multigrid_correction_bitwise(
+        self, name: str
+    ) -> None:
+        """A corrector built with no key is the one built with ``multigrid``, to the bit.
+
+        And it is not the diagonal's: fewer iterations, a different p'.
+        Defect caught: the default left at jacobi (prompt 54).
+        """
+        pc, _c, _b, pred, p = _system(name)
+        assert pc._multigrid is True
+        out = pc.correct(pred, p)
+        explicit = _system(name, preconditioner="multigrid")[0].correct(pred, p)
+        diagonal = _system(name, preconditioner="jacobi")[0].correct(pred, p)
         for field in ("u", "v", "p", "p_prime"):
-            np.testing.assert_array_equal(getattr(same, field), getattr(out, field))
+            np.testing.assert_array_equal(getattr(out, field), getattr(explicit, field))
+        assert (out.iterations, out.products) == (
+            explicit.iterations,
+            explicit.products,
+        )
+        assert out.iterations < diagonal.iterations
+        assert not np.array_equal(out.p_prime, diagonal.p_prime)

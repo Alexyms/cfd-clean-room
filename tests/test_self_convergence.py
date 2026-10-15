@@ -422,7 +422,7 @@ def test_solve_tight_keeps_only_a_whole_continuation_of_the_saved_field(
         "v": np.ones((8, 8)),
     }  # iteration 1 is the first below 1e-6
     fields[component][0, 0] = np.nextafter(1.0, 2.0) if ulps else 1.0
-    np.savez(tmp_path / "staggered-cg_8.npz", **fields)
+    np.savez(tmp_path / f"{self_convergence.STAGGERED_METHOD}_8.npz", **fields)
     if stops:
         with pytest.raises(SystemExit, match=stops):
             self_convergence.solve_tight(8)
@@ -437,7 +437,7 @@ def test_solve_tight_keeps_only_a_whole_continuation_of_the_saved_field(
 def test_solve_tight_and_solve_and_save_skip_a_field_another_solver_saved(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """With a staggered-jacobi field saved for the grid, both solve and file under staggered-cg.
+    """With a staggered-jacobi field saved for the grid, both solve and file under staggered-mgcg.
 
     Test 37 T-B1 (b): no test put a Jacobi-era file in FIELD_DIR, so
     solve_tight spelling the old label could return it unsolved. The name is
@@ -496,7 +496,9 @@ def test_solve_tight_checks_for_the_saved_field_before_it_solves(
 
     monkeypatch.setattr(self_convergence, "FIELD_DIR", tmp_path)
     monkeypatch.setattr(self_convergence, "StaggeredSolver", spy)
-    with pytest.raises(SystemExit, match=r"staggered-cg_8\.npz is missing"):
+    with pytest.raises(
+        SystemExit, match=rf"{self_convergence.STAGGERED_METHOD}_8\.npz is missing"
+    ):
         self_convergence.solve_tight(8)
 
 
@@ -524,7 +526,7 @@ def test_every_solve_is_pinned_to_velocity_step(
     np.savez(tmp_path / f"{self_convergence.STAGGERED_METHOD}_8.npz", u=ones, v=ones)
     with pytest.raises(BuiltError):
         self_convergence.solve_tight(8)
-    # One solve per method, staggered-cg alone since the retirement, then
+    # One solve per method, staggered-mgcg alone since prompt 54, then
     # solve_tight.
     assert rules == ["velocity_step"] * 2
 
@@ -635,7 +637,11 @@ def test_extrapolation_carries_known_orders_through_to_its_output(
             u, v = _cells(c**3 + e * c * (1 - c), c * (1 - c) * (c + e))
             fields[n, t], fields_v[n, t] = u, v
             snaps |= {f"u_{t}": u, f"v_{t}": v, f"outer_{t}": np.array(1)}
-        np.savez(tmp_path / f"staggered-cg_{n}_tol1e-9.npz", seconds=1.0, **snaps)
+        np.savez(
+            tmp_path / f"{self_convergence.STAGGERED_METHOD}_{n}_tol1e-9.npz",
+            seconds=1.0,
+            **snaps,
+        )
         for method in self_convergence.METHODS:
             np.savez(
                 tmp_path / f"{method}_{n}.npz",
@@ -720,7 +726,9 @@ def _marchi_fields(
         decoy = cells(n, 1.0)
         snaps = {"u_1e-09": fields[n][0], "v_1e-09": fields[n][1]}
         snaps |= {"u_1e-08": decoy[0], "v_1e-08": decoy[1]}
-        np.savez(builder / f"staggered-cg_{n}_tol1e-9.npz", **snaps)
+        np.savez(
+            builder / f"{self_convergence.STAGGERED_METHOD}_{n}_tol1e-9.npz", **snaps
+        )
     u, v = cells(80, 1.0)
     np.savez(
         builder / "staggered-jacobi_80_tol1e-9.npz", **{"u_1e-09": u, "v_1e-09": v}
@@ -732,7 +740,7 @@ def _marchi_fields(
 def test_tight_field_reads_the_current_labels_1e_9_snapshot_and_nothing_else(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """80 and 100 come from the staggered-cg files; the Jacobi-era decoy and the
+    """80 and 100 come from the staggered-mgcg files; the Jacobi-era decoy and the
     1e-08 snapshots are never read, and a grid with no file raises rather
     than falling back to a field of unknown solver."""
     fields = _marchi_fields(tmp_path, monkeypatch)
@@ -743,7 +751,7 @@ def test_tight_field_reads_the_current_labels_1e_9_snapshot_and_nothing_else(
     with pytest.raises(FileNotFoundError):
         self_convergence.tight_field(60)
     assert not hasattr(self_convergence, "TESTER_DIR")
-    assert self_convergence.METHODS == ("staggered-cg",)
+    assert self_convergence.METHODS == ("staggered-mgcg",)
 
 
 @pytest.mark.unit

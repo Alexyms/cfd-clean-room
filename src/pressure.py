@@ -3,8 +3,8 @@
 ECR-001 step 5 (REQ-S04, REQ-S08); the solve replaced in ECR-003 step 1
 (REQ-S08 as amended 2026-10-06, ADR-013). Given u*, v* and the un-relaxed
 momentum diagonals from MomentumPrediction, assemble the pressure correction
-equation, solve it by conjugate gradients preconditioned with its diagonal,
-correct the face velocities so the corrected field satisfies discrete
+equation, solve it by conjugate gradients preconditioned by multigrid (or
+by its diagonal, on request), correct the face velocities so the corrected field satisfies discrete
 continuity, and update p. StaggeredSolver runs the outer loop.
 
 The equation. The corrected velocity is ``u = u* + u'`` with ``u' = -d
@@ -50,10 +50,10 @@ refuses a component no outlet reaches.
 
 The solve. The matrix is symmetric and positive definite on an open domain
 and positive semi-definite on a closed one (the report, section 6), so
-conjugate gradients from p' = 0, preconditioned by the diagonal a_P, is the
-solve: one five-point product and one diagonal scaling per cell, both one
-thread per cell on the GPU path of Phase 6, plus three reductions per
-iteration. A correction stops at the first of: the residual's 2-norm at
+conjugate gradients from p' = 0 is the solve, preconditioned by the diagonal
+a_P or by multigrid (below). With the diagonal an iteration is one five-point
+product and one diagonal scaling per cell, both one thread per cell on the
+GPU path of Phase 6, plus three reductions. A correction stops at the first of: the residual's 2-norm at
 most pressure_rtol times the right-hand side's; the residual's 2-norm at
 most RESIDUAL_FLOOR times the flux scale F, where the face arithmetic's
 rounding lives; max_pressure_iter iterations, which the correction reports
@@ -65,10 +65,12 @@ the product mesh (docs/reports/pressure_solver_ecr003.md, section 7); its
 evidence is docs/reports/pressure_correction_step5.md.
 
 The preconditioner. The solver key pressure_preconditioner names it:
-``jacobi``, the diagonal above and the default, or ``multigrid``, one V-cycle
-of the additive-correction multigrid of src/multigrid.py per iteration,
-ADR-013 decision 1's named successor (prompt 53), built afresh each
-correction from that correction's coefficients. The stop, the floor and the
+``multigrid``, the default since prompt 54 (2026-10-14), one V-cycle of the
+additive-correction multigrid of src/multigrid.py per iteration, ADR-013
+decision 1's named successor (prompt 53), built afresh each correction from
+that correction's coefficients; or ``jacobi``, the diagonal above, kept for
+parity work and the Phase 6 port, and bitwise the solve every result stored
+before prompt 54 was produced with. The stop, the floor and the
 cap mean the same under either. On a closed domain the multigrid's
 preconditioned vector has its mean over the cells with an equation removed,
 so the search directions stay in the range: a V-cycle can add a constant the
@@ -92,10 +94,15 @@ from src.staggered import p_shape, u_shape, v_shape
 
 # Which solve wrote a saved pressure correction. 1 was the weighted Jacobi
 # sweep of ECR-001 step 5 (2026-09-22 to 2026-10-06); 2 is the conjugate
-# gradient solve of ECR-003. The scripts that reuse a saved solve store it with
-# the solve and solve again when it differs or is missing, so a field written by
-# one solver is never served as the other's.
-PRESSURE_SOLVER_VERSION = 2
+# gradient solve of ECR-003, preconditioned by its diagonal; 3 is the same loop
+# preconditioned by multigrid, the default since prompt 54 (2026-10-14), which
+# changes every iterate and so every saved history. Selecting the diagonal
+# gives version 2's results under version 3's number, so a saved solve is
+# comparable only to ones made under the same key. The scripts that reuse a
+# saved solve store the version with the solve and solve again when it differs
+# or is missing, so a field written by one solver is never served as the
+# other's.
+PRESSURE_SOLVER_VERSION = 3
 
 # The method label of the staggered solver under each pressure solve. The
 # harness records it in every row and the scripts that save fields put it in
@@ -103,7 +110,11 @@ PRESSURE_SOLVER_VERSION = 2
 # version here and imported by those scripts, so raising the version without
 # adding a label fails at import instead of filing the new solve's results
 # under the old label.
-STAGGERED_METHODS: dict[int, str] = {1: "staggered-jacobi", 2: "staggered-cg"}
+STAGGERED_METHODS: dict[int, str] = {
+    1: "staggered-jacobi",
+    2: "staggered-cg",
+    3: "staggered-mgcg",
+}
 STAGGERED_METHOD = STAGGERED_METHODS[PRESSURE_SOLVER_VERSION]
 
 # The rounding floor of the stop, as a fraction of the flux scale F (rho times
@@ -763,9 +774,9 @@ class PressureCorrector:
         Notes
         -----
         The solve is ``conjugate_gradient`` on ``A p' = -b`` from p' = 0,
-        preconditioned by a_P or, under pressure_preconditioner
-        ``multigrid``, by one V-cycle per iteration, to a residual 2-norm at most pressure_rtol
-        times the right-hand side's or at most RESIDUAL_FLOOR times
+        preconditioned by one multigrid V-cycle per iteration or, under
+        pressure_preconditioner ``jacobi``, by a_P, to a residual 2-norm at
+        most pressure_rtol times the right-hand side's or at most RESIDUAL_FLOOR times
         flux_scale, confirmed on the true residual, or to max_pressure_iter
         iterations. The residual ``b + A p'`` is the mass imbalance the
         corrected faces leave in each cell, so the relative level is the
