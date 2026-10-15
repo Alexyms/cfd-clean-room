@@ -479,6 +479,23 @@ planned it, against what was built and measured.
 | Decision 5: the C path deferred | Deferred; PROJECT_PLAN's Phase 6 deliverable `csolver/pressure_solve.cu` is a CG kernel | |
 | Decision 6: the outlet drift to ECR-002 step 3, the finer-grid non-convergence to ECR-002 step 5 | Issue 61 for step 3; step 5's row in ECR-002 section 8 names both the finer-grid finding and the sweep result it retakes under CG | Step 3 notes in ECR-002, 2026-10-07 |
 
+**Note 2026-10-14 (prompt 53): decision 1's named successor, built as an option.** Built as
+additive-correction (aggregation) multigrid preconditioning the same CG loop
+(`src/multigrid.py`), not the probe's bilinear geometric multigrid. With piecewise-constant
+prolongation the Galerkin coarse operator is a five-point stencil formed by sums, so the setup
+that cost 120 to 175 ms per correction by probing is a few array passes per level and three power
+iterations; the cycle is V(1,1) with weighted Jacobi, the coarsest level (at most 64 cells) solved
+by a dense pseudo-inverse, and on a closed domain the preconditioned vector's mean is removed.
+NumPy only and data-parallel on every level, so decision 2 and the GPU path stand. The solver key
+`pressure_preconditioner` selects it; the default stays the diagonal, and every laminar hash is
+unchanged under it. Measured in `docs/reports/pressure_multigrid.md`: every whole run reaches
+its Jacobi stop and answers; the correction's share of a turbulent run falls from most of it to
+about two fifths; per correction the step's medium grid and the product's 320x120 gain the most and
+the Annex 20 room the least. The coarse operators turned out weakly diagonally dominant by
+construction, so the power iterations, kept as the prompt asked, return 2 to within a percent
+(section 2 there). Whether `multigrid` becomes the default, with the laminar hashes rebaselined
+once, is Alex's decision on that report's section 8.
+
 ## Consequences
 **Positive.** A steady product solve takes minutes, not hours or days. The stop measures what it
 claims: the fraction of the imbalance a correction leaves. A correction cut short by the cap is

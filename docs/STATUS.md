@@ -436,6 +436,17 @@ profiles above the step's top within 0.05 U_ref; the two k and eps advection sch
 medium grid cycles at the reattachment cell instead of stopping by the rule; RNG diverges at the
 pressure outlet. The allowance, the grid (the committed mesh cannot cluster toward the step) and
 the stop on a bounded cycle are the report's questions for Alex.
+Prompt 53 (`feature/pressure-multigrid`, `docs/reports/pressure_multigrid.md`) builds ADR-013's
+named successor, which Alex decided on 2026-10-14 to take before VAL-020 and the product on
+320x120: additive-correction multigrid preconditioning the same conjugate gradient loop, NumPy
+only, selected by the solver key `pressure_preconditioner` and off by default, so every laminar
+result is unchanged. Under it every whole run measured stops where its Jacobi record stops, with
+the same answers to far inside the tolerances; the pressure correction falls from most of each
+turbulent run to under half of it, and the step's medium grid runs several times faster per
+outer iteration. The gain per correction falls short of the prediction on the Annex 20 room, the
+setup is a larger share than predicted on small systems, and a cycle costs more than its
+arithmetic because of NumPy's per-call cost on the coarse levels. Whether `multigrid` becomes
+the default is the report's question for Alex.
 
 Deferred findings from earlier pull requests were open as GitHub issues, and every open one now
 has a disposition. The cleanup pull request (branch `fix/deferred-findings-cleanup`) closes issues
