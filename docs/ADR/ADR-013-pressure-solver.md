@@ -490,8 +490,9 @@ NumPy only and data-parallel on every level, so decision 2 and the GPU path stan
 `pressure_preconditioner` selects it; the default stays the diagonal, and every laminar hash is
 unchanged under it. Measured in `docs/reports/pressure_multigrid.md`: every whole run reaches
 its Jacobi stop and answers; the correction's share of a turbulent run falls from most of it to
-about two fifths; per correction the step's medium grid and the product's 320x120 gain the most and
-the Annex 20 room the least. The coarse operators turned out weakly diagonally dominant by
+about two fifths; per correction the step's medium grid and the product's 320x120 gain the most, and
+the smaller systems (VAL-001, the cavity, the product's 160x60 and the Annex 20 room) gain
+less (review 53 S4). The coarse operators turned out weakly diagonally dominant by
 construction, so the power iterations, kept as the prompt asked, return 2 to within a percent
 (section 2 there). Whether `multigrid` becomes the default, with the laminar hashes rebaselined
 once, is Alex's decision on that report's section 8.

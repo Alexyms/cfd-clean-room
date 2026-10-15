@@ -381,7 +381,9 @@ positivity error or a k-epsilon fallback.
 ### 6.1 The answers
 
 Every run stops where its Jacobi record stops, by the same rule, within two outer iterations,
-and every answer moves by orders less than prompt 51's tolerances. The two preconditioners leave
+and every answer moves by far less than prompt 51's tolerances: by orders of magnitude on the
+Annex 20 lines and the product's faces, by about a fifth of the tolerance on the step's x_r
+(0.004 against 0.02 H; review 53 S3). The two preconditioners leave
 different p' errors in each correction (section 5); over a whole run they leave no trace in the
 answers beyond the differences tabled here.
 
@@ -473,7 +475,8 @@ Two cautions on reading it.
 - **In a run is not isolated.** On the Annex 20 room a Jacobi-PCG iteration inside the whole run
   costs well over its isolated time (the table's in-run column against section 5), while a
   multigrid iteration costs about its isolated time, so the run gains more than item 6 predicts:
-  the pressure stage falls more than the per-correction ratio there. On the step the two agree.
+  the pressure stage falls more than the per-correction ratio there. On the step the in-run and
+isolated costs per iteration are close (test 53 S3).
   Why the Jacobi loop runs slower inside this run was not measured.
 
 The pressure correction stops being most of the run: under multigrid it is 37% to 40% of the
