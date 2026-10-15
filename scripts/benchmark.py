@@ -622,7 +622,8 @@ def impinging_jet_accuracy(
         the whole centreline), ``reference``, ``components`` (the
         centreline RMS over the free-jet part and the impingement region,
         the potential core, the decay and spreading rates, the half-width
-        RMS, the stagnation ratio, the plate's first-node y*), ``report``
+        RMS, the stagnation ratio at the data's nearest station and at the
+        nearest Re 8,000 ring station, the plate's first-node y*), ``report``
         (``validation.impinging_jet.evaluate``'s whole dictionary) and
         ``passed`` None: nothing is scored until Alex sets the allowance
         (ECR-002 criterion 13).
@@ -639,6 +640,9 @@ def impinging_jet_accuracy(
         if half_width["errors"] is None
         else half_width["errors"]["rms"],
         "stagnation_k_ratio_isotropic": report["stagnation"]["ratio_isotropic"],
+        "stagnation_k_ratio_isotropic_ring": report["stagnation"][
+            "ring_ratio_isotropic"
+        ],
         "plate_y_star_median": report["y_star"]["median"],
     }
     return {

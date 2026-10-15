@@ -93,7 +93,7 @@ def fields(args: argparse.Namespace) -> None:
     cls_text = rec["_class"]
     st, ys = ev["stagnation"], ev["y_star"]
 
-    fig = plt.figure(figsize=(11.0, 12.0), constrained_layout=True)
+    fig = plt.figure(figsize=(9.0, 14.0), constrained_layout=True)
     grid = fig.add_gridspec(4, 1, height_ratios=[1.0, 2.0, 2.0, 2.0])
     y_u, (u_u, v_u, speed_u) = uniform_rows(yc, (u, v, speed))
     ax = fig.add_subplot(grid[0])
@@ -104,9 +104,10 @@ def fields(args: argparse.Namespace) -> None:
     ax.set_ylim(0.0, 1.0)
     ax.set_aspect(ij.H_JET / W)
     ax.set_title(
-        f"{rec['name']}: the whole domain, {rec['width_w']:.0f} w wide ({rec['outer']:,} outer "
-        f"iterations, {cls_text}); potential core {tables55.fmt(ev['potential_core_w']['computed'], 3)} w "
-        f"(data {ev['potential_core_w']['data']:.2f})"
+        f"{rec['name']}: the whole domain, {rec['width_w']:.0f} w wide\n"
+        f"({rec['outer']:,} outer iterations, {cls_text}); potential core "
+        f"{tables55.fmt(ev['potential_core_w']['computed'], 3)} w (data {ev['potential_core_w']['data']:.2f})",
+        fontsize=9,
     )
     sel = (xc >= -ZOOM_W - 1.0) & (xc <= ZOOM_W + 1.0)
     ax = fig.add_subplot(grid[1])
@@ -126,7 +127,8 @@ def fields(args: argparse.Namespace) -> None:
     ax.set_ylim(0.0, 1.0)
     ax.set_aspect(ij.H_JET / W)
     ax.set_title(
-        "streamlines coloured by speed (x / w across, y / h up from the plate)"
+        "streamlines coloured by speed\n(x / w across, y / h up from the plate)",
+        fontsize=9,
     )
     ax = fig.add_subplot(grid[2])
     pm = ax.pcolormesh(
@@ -145,7 +147,8 @@ def fields(args: argparse.Namespace) -> None:
     ax.set_aspect(ij.H_JET / W)
     core = rec["core"]
     ax.set_title(
-        f"nu_t / nu (median {core['nu_t_over_nu_median']:.3g}, largest {core['nu_t_over_nu_all_max']:.3g})"
+        f"nu_t / nu (median {core['nu_t_over_nu_median']:.3g}, largest {core['nu_t_over_nu_all_max']:.3g})",
+        fontsize=9,
     )
     ax = fig.add_subplot(grid[3])
     pm = ax.pcolormesh(
@@ -156,9 +159,10 @@ def fields(args: argparse.Namespace) -> None:
     ax.set_ylim(0.0, 1.0)
     ax.set_aspect(ij.H_JET / W)
     ax.set_title(
-        f"k / V0^2 (at the stagnation station {st['computed_at_data_station']:.4f} vs the PIV estimate "
-        f"{st['data_isotropic']:.4f}, ratio {st['ratio_isotropic']:.2f}; plate y+ median {ys['median']:.1f}, "
-        f"at the axis {ys['at_axis']:.1f}, floor {ys['floor']:.2f})"
+        f"k / V0^2: at the last ring station {st['computed_at_ring_station']:.4f} vs the PIV estimate "
+        f"{st['ring_isotropic']:.4f} (ratio {st['ring_ratio_isotropic']:.2f})\n"
+        f"plate y+ median {ys['median']:.1f}, at the axis {ys['at_axis']:.1f}, floor {ys['floor']:.2f}",
+        fontsize=9,
     )
     path = FIGURES / f"ecr002_val020_{rec['name']}.png"
     fig.savefig(path, dpi=DPI)

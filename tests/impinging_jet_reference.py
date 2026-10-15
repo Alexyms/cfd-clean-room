@@ -348,14 +348,25 @@ def expected(mesh: Mesh, config: SimConfig, v: np.ndarray, k: np.ndarray) -> dic
     k_c = k_axis(mesh, config, k, y_i)
     iso = [ij.K_ISOTROPIC * i * i for i in ij.INTENSITY_I]
     plane = [ij.K_IN_PLANE * i * i for i in ij.INTENSITY_I]
+    rings = [bool(r[2]) for r in ij.INTENSITY_ROWS]
+
+    def only(values: list[float]) -> list[float]:
+        return [v for v, ring in zip(values, rings, strict=True) if ring]
+
     out["k_axis"] = {
         "y_over_h": y_i.tolist(),
+        "ring": rings,
         "computed": k_c,
         "data_isotropic": iso,
         "data_in_plane": plane,
-        "errors_isotropic": errors(k_c, iso),
-        "errors_in_plane": errors(k_c, plane),
+        "errors_isotropic": errors(only(k_c), only(iso)),
+        "errors_in_plane": errors(only(k_c), only(plane)),
+        "errors_isotropic_all": errors(k_c, iso),
+        "errors_in_plane_all": errors(k_c, plane),
         "ratio_isotropic_median": float(
+            np.median([a / b for a, b in zip(only(k_c), only(iso), strict=True)])
+        ),
+        "ratio_isotropic_median_all": float(
             np.median([a / b for a, b in zip(k_c, iso, strict=True)])
         ),
     }
@@ -363,17 +374,25 @@ def expected(mesh: Mesh, config: SimConfig, v: np.ndarray, k: np.ndarray) -> dic
     on_axis = [axis_value(x, k[j]) / ij.V0**2 for j in range(k.shape[0])]
     rows = [j for j, yc in enumerate(mesh.yc) if 1.0 - yc / ij.H_JET > ij.IMPINGEMENT_H]
     peak = max(rows, key=lambda j: on_axis[j])
-    last = int(np.argmax(y_i))
+    last = max(range(len(y_i)), key=lambda i: y_i[i])
+    last_ring = max((i for i in range(len(y_i)) if rings[i]), key=lambda i: y_i[i])
     out["stagnation"] = {
         "first_cell": on_axis[0],
         "impingement_max": on_axis[peak],
         "impingement_max_y_over_h": 1.0 - float(mesh.yc[peak]) / ij.H_JET,
         "data_station_y_over_h": float(y_i[last]),
+        "data_station_ring": rings[last],
         "computed_at_data_station": k_c[last],
         "data_isotropic": iso[last],
         "data_in_plane": plane[last],
         "ratio_isotropic": k_c[last] / iso[last],
         "ratio_in_plane": k_c[last] / plane[last],
+        "ring_station_y_over_h": float(y_i[last_ring]),
+        "computed_at_ring_station": k_c[last_ring],
+        "ring_isotropic": iso[last_ring],
+        "ring_in_plane": plane[last_ring],
+        "ring_ratio_isotropic": k_c[last_ring] / iso[last_ring],
+        "ring_ratio_in_plane": k_c[last_ring] / plane[last_ring],
     }
     c_mu = VARIANTS[config.turbulence.variant].c_mu
     nu = config.mu / config.rho

@@ -523,6 +523,7 @@ def test_the_impinging_jet_row_reads_each_component_from_its_own_report_entry() 
         "spreading_rate": want["half_width"]["spreading_rate"]["computed"],
         "rms_half_width_w": want["half_width"]["errors"]["rms"],
         "stagnation_k_ratio_isotropic": want["stagnation"]["ratio_isotropic"],
+        "stagnation_k_ratio_isotropic_ring": want["stagnation"]["ring_ratio_isotropic"],
         "plate_y_star_median": want["y_star"]["median"],
     }
     components = accuracy["components"]

@@ -445,7 +445,10 @@ class TestReport:
             "y_star",
         }
         assert report["centreline"]["all"]["stations"] == 51
-        assert report["k_axis"]["errors_isotropic"]["stations"] == 40
+        assert report["k_axis"]["errors_isotropic"]["stations"] == 30
+        assert report["k_axis"]["errors_isotropic_all"]["stations"] == 40
+        assert report["stagnation"]["data_station_ring"] is False
+        assert report["stagnation"]["ring_station_y_over_h"] == 0.9731
         assert report["half_width"]["errors"]["stations"] == 11
         assert set(report["lateral"]) == {"4.8", "5.9", "7.9", "12.1", "14.9", "20.1"}
         assert report["lateral"]["4.8"]["source"] == "digitised"
@@ -508,5 +511,8 @@ class TestReport:
         assert report["half_velocity_h"]["computed"] == pytest.approx(
             ij.CENTRELINE_Y[0]
         )
-        assert report["k_axis"]["errors_isotropic"]["stations"] == 40
+        assert report["k_axis"]["errors_isotropic"]["stations"] == 30
+        assert report["k_axis"]["errors_isotropic_all"]["stations"] == 40
+        assert report["stagnation"]["data_station_ring"] is False
+        assert report["stagnation"]["ring_station_y_over_h"] == 0.9731
         assert report["centreline"]["all"]["stations"] == 51

@@ -280,6 +280,9 @@ CENTRELINE_Y = np.array([r[0] for r in CENTRELINE_ROWS])
 CENTRELINE_V = np.array([r[1] for r in CENTRELINE_ROWS])
 INTENSITY_Y = np.array([r[0] for r in INTENSITY_ROWS])
 INTENSITY_I = np.array([r[1] for r in INTENSITY_ROWS])
+# True where the Re 8,000 circle's own centre was read; False where the
+# centroid of the three series' symbols stands in, up to 0.02 above it.
+INTENSITY_RINGS = np.array([r[2] for r in INTENSITY_ROWS])
 HALF_WIDTH_Y = np.array([r[0] for r in HALF_WIDTH_ROWS])
 HALF_WIDTH_DELTA = np.array([r[1] for r in HALF_WIDTH_ROWS])
 
@@ -854,9 +857,12 @@ def evaluate(mesh: Mesh, config: SimConfig, v_faces: np.ndarray, k: np.ndarray) 
         or the Gaussian (``source`` says which), with the computed delta;
         ``lateral_intensity_48``: the model's I_uv estimate against the
         digitised profile; ``k_axis``: k / V0^2 at the 40 I_uv stations
-        against the isotropic and the in-plane estimates; ``stagnation``:
-        the three readings and the ratio to the data's estimate at the
-        data's nearest station to the plate; ``y_star``: the plate's first
+        against the isotropic and the in-plane estimates, the errors over
+        the 30 stations that hold the Re 8,000 circle's own value and,
+        with the suffix ``_all``, over every station; ``stagnation``: the
+        three readings, the ratio to the data's estimate at the data's
+        nearest station to the plate (a centroid station) and at the
+        nearest ring station (the ``ring_`` keys); ``y_star``: the plate's first
         node. JSON-serialisable (floats, ints, lists, strings, None). A
         reader that cannot be taken (a centreline that never halves, a
         profile that never halves) stores None for its value, so one
@@ -982,25 +988,38 @@ def evaluate(mesh: Mesh, config: SimConfig, v_faces: np.ndarray, k: np.ndarray) 
     k_axis = k_on_axis(mesh, config, k, INTENSITY_Y)
     iso = K_ISOTROPIC * INTENSITY_I**2
     plane = K_IN_PLANE * INTENSITY_I**2
+    rings = INTENSITY_RINGS
     report["k_axis"] = {
         "y_over_h": INTENSITY_Y.tolist(),
+        "ring": rings.tolist(),
         "computed": k_axis.tolist(),
         "data_isotropic": iso.tolist(),
         "data_in_plane": plane.tolist(),
-        "errors_isotropic": _errors_dict(errors(k_axis, iso)),
-        "errors_in_plane": _errors_dict(errors(k_axis, plane)),
-        "ratio_isotropic_median": float(np.median(k_axis / iso)),
+        "errors_isotropic": _errors_dict(errors(k_axis[rings], iso[rings])),
+        "errors_in_plane": _errors_dict(errors(k_axis[rings], plane[rings])),
+        "errors_isotropic_all": _errors_dict(errors(k_axis, iso)),
+        "errors_in_plane_all": _errors_dict(errors(k_axis, plane)),
+        "ratio_isotropic_median": float(np.median(k_axis[rings] / iso[rings])),
+        "ratio_isotropic_median_all": float(np.median(k_axis / iso)),
     }
     last = int(np.argmax(INTENSITY_Y))
+    last_ring = int(np.argmax(np.where(rings, INTENSITY_Y, -1.0)))
     readings = stagnation(mesh, config, k)
     report["stagnation"] = {
         **readings,
         "data_station_y_over_h": float(INTENSITY_Y[last]),
+        "data_station_ring": bool(rings[last]),
         "computed_at_data_station": float(k_axis[last]),
         "data_isotropic": float(iso[last]),
         "data_in_plane": float(plane[last]),
         "ratio_isotropic": float(k_axis[last] / iso[last]),
         "ratio_in_plane": float(k_axis[last] / plane[last]),
+        "ring_station_y_over_h": float(INTENSITY_Y[last_ring]),
+        "computed_at_ring_station": float(k_axis[last_ring]),
+        "ring_isotropic": float(iso[last_ring]),
+        "ring_in_plane": float(plane[last_ring]),
+        "ring_ratio_isotropic": float(k_axis[last_ring] / iso[last_ring]),
+        "ring_ratio_in_plane": float(k_axis[last_ring] / plane[last_ring]),
     }
     report["y_star"] = plate_y_star(mesh, config, k)
     return report

@@ -10,6 +10,7 @@ Usage:
     python tables55.py grids        item 4: the coarse grid against the fine
     python tables55.py width        item 2: the 68 w domain against the 100 w domain
     python tables55.py predictions  section 6: (a) to (j) scored from the records
+    python tables55.py cycle        section 5: where the bounded runs' largest changes sit
     python tables55.py timing       the run times
     python tables55.py all          everything above
 
@@ -405,10 +406,10 @@ def turbulence(_args: argparse.Namespace) -> None:
             [
                 label(name, rec),
                 status(rec),
-                f"{fmt(ka['errors_isotropic']['max_abs'], 3)}, {fmt(ka['errors_isotropic']['rms'], 3)}, {fmt(ka['errors_isotropic']['mean'], 2)}",
+                f"{fmt(ka['errors_isotropic']['max_abs'], 3)}, {fmt(ka['errors_isotropic']['rms'], 3)}, {fmt(ka['errors_isotropic']['mean'], 2)} ({ka['errors_isotropic']['stations']})",
                 fmt(ka["ratio_isotropic_median"], 3),
-                f"{fmt(st['computed_at_data_station'], 3)} vs {fmt(st['data_isotropic'], 3)} (in-plane {fmt(st['data_in_plane'], 3)}) at y/h {fmt(st['data_station_y_over_h'], 3)}",
-                f"{fmt(st['ratio_isotropic'], 3)}, {fmt(st['ratio_in_plane'], 3)}",
+                f"{fmt(st['computed_at_ring_station'], 3)} vs {fmt(st['ring_isotropic'], 3)} (in-plane {fmt(st['ring_in_plane'], 3)}) at y/h {fmt(st['ring_station_y_over_h'], 3)}; ratios {fmt(st['ring_ratio_isotropic'], 3)}, {fmt(st['ring_ratio_in_plane'], 3)}",
+                f"{fmt(st['computed_at_data_station'], 3)} vs {fmt(st['data_isotropic'], 3)} at y/h {fmt(st['data_station_y_over_h'], 3)}; ratios {fmt(st['ratio_isotropic'], 3)}, {fmt(st['ratio_in_plane'], 3)}",
                 fmt(st["first_cell"], 3),
                 f"{fmt(st['impingement_max'], 3)} at y/h {fmt(st['impingement_max_y_over_h'], 3)}",
                 f"{fmt(ys['median'], 3)}, {fmt(ys['at_axis'], 3)}, {fmt(ys['largest'], 3)}; floor {fmt(ys['floor'], 4)}",
@@ -427,10 +428,10 @@ def turbulence(_args: argparse.Namespace) -> None:
         [
             "Run",
             "Fields",
-            "k/V0^2 on the axis vs 0.75 I_uv^2: largest, RMS, mean",
-            "Median ratio model / estimate",
-            "Stagnation: model vs estimate (k/V0^2)",
-            "Ratio to isotropic, to in-plane",
+            "k/V0^2 on the axis vs 0.75 I_uv^2 over the ring stations: largest, RMS, mean (stations)",
+            "Median ratio model / estimate (ring stations)",
+            "Stagnation, the last ring station: model vs estimate (k/V0^2)",
+            "Stagnation, the last station (a centroid): model vs estimate",
             "First cell above the plate",
             "Largest on the axis in the impingement region",
             "Plate y+: median within 10 w, at the axis, largest; floor",
@@ -453,7 +454,7 @@ def quantities(ev: dict) -> dict[str, float | None]:
         else ev["half_width"]["errors"]["rms"],
         "spreading_rate": ev["half_width"]["spreading_rate"]["computed"],
         "k_axis_rms": ev["k_axis"]["errors_isotropic"]["rms"],
-        "stagnation_k": ev["stagnation"]["computed_at_data_station"],
+        "stagnation_k": ev["stagnation"]["computed_at_ring_station"],
     }
     for h in LATERAL_HEIGHTS:
         e = ev["lateral"][h]["errors"]
@@ -576,8 +577,8 @@ def width(_args: argparse.Namespace) -> None:
         "half_width_max_abs_w": float(hw.max()) if hw.size else None,
         "lateral_48_max_abs": float(lat.max()) if lat.size else None,
         "k_axis_max_abs": float(k_axis.max()),
-        "stagnation_k_68": a["stagnation"]["computed_at_data_station"],
-        "stagnation_k_100": b["stagnation"]["computed_at_data_station"],
+        "stagnation_k_68": a["stagnation"]["computed_at_ring_station"],
+        "stagnation_k_100": b["stagnation"]["computed_at_ring_station"],
         "potential_core_68": a["potential_core_w"]["computed"],
         "potential_core_100": b["potential_core_w"]["computed"],
         "status_68": status(recs[BASE][0]),
@@ -679,12 +680,12 @@ def predictions(_args: argparse.Namespace) -> None:
     for name in (BASE, FINE):
         if name in comp:
             st = comp[name][1]["stagnation"]
-            ok = st["ratio_isotropic"] > D_RATIO
+            ok = st["ring_ratio_isotropic"] > D_RATIO
             add(
                 "(d)",
                 f"standard overpredicts the stagnation k by more than 50% ({name})",
                 "HOLDS" if ok else "FAILS",
-                f"model {st['computed_at_data_station']:.4g} vs estimate {st['data_isotropic']:.4g} at y/h {st['data_station_y_over_h']}: ratio {st['ratio_isotropic']:.3f} (in-plane {st['ratio_in_plane']:.3f}); first cell {st['first_cell']:.4g}, largest in the impingement region {st['impingement_max']:.4g}",
+                f"model {st['computed_at_ring_station']:.4g} vs estimate {st['ring_isotropic']:.4g} at the last ring station y/h {st['ring_station_y_over_h']}: ratio {st['ring_ratio_isotropic']:.3f} (in-plane {st['ring_ratio_in_plane']:.3f}); at the last station y/h {st['data_station_y_over_h']} (a centroid) {st['ratio_isotropic']:.3f}; first cell {st['first_cell']:.4g}, largest in the impingement region {st['impingement_max']:.4g} at y/h {st['impingement_max_y_over_h']:.3f}",
             )
     # (e)
     for mode, first, second, rule in (
@@ -798,6 +799,60 @@ def predictions(_args: argparse.Namespace) -> None:
     keep("predictions", data)
 
 
+# The cycle's location: beside an outlet means within SIDE_W nozzle widths of
+# a side wall; in the jet means within JET_W of the axis.
+SIDE_W = 6.0
+JET_W = 6.0
+CYCLE_WINDOW = 2000
+
+
+def cycle(_args: argparse.Namespace) -> None:
+    """Where the largest change of u, v and nu_t sits over the last 2,000 outer iterations."""
+    rows, data = [], []
+    for name, rec in records().items():
+        if not rec.get("du_at"):
+            continue
+        config = SimConfig.from_dict(rec["raw"])
+        axis = ij.axis_x(config)
+        width, height = config.room_width, config.room_height
+        entry = {"name": name, "window": CYCLE_WINDOW}
+        cells = []
+        for comp in ("u", "v", "nu"):
+            at = np.array(rec[f"d{comp}_at"][-CYCLE_WINDOW:], dtype=float)
+            x, y = at[:, 0], at[:, 1]
+            from_side = np.minimum(x, width - x) / ij.W_JET
+            from_top = (height - y) / ij.W_JET
+            beside = from_side <= SIDE_W
+            jet = np.abs(x - axis) <= JET_W * ij.W_JET
+            step = np.array(rec[f"d{comp}"][-CYCLE_WINDOW:], dtype=float)
+            entry[comp] = {
+                "share_beside_an_outlet": float(beside.mean()),
+                "share_in_jet": float(jet.mean()),
+                "from_side_w_median": float(np.median(from_side)),
+                "from_top_w_median": float(np.median(from_top)),
+                "step_median": float(np.median(step)),
+                "step_max": float(step.max()),
+                "last_at": rec[f"d{comp}_at"][-1],
+            }
+            cells.append(
+                f"{beside.mean():.2f} / {jet.mean():.2f}; side {np.median(from_side):.1f} w, "
+                f"top {np.median(from_top):.1f} w; {fmt(float(np.median(step)), 2)}, {fmt(float(step.max()), 2)}"
+            )
+        rows.append([label(name, rec), rec["_class"], *cells])
+        data.append(entry)
+    print_table(
+        [
+            "Run",
+            "Class",
+            "du: share beside an outlet / in the jet; median place (from the side, from the top); step median, largest (m/s)",
+            "dv: the same",
+            "d nu_t: the same (m^2/s)",
+        ],
+        rows,
+    )
+    keep("cycle", data)
+
+
 def timing(_args: argparse.Namespace) -> None:
     """The run times."""
     rows, data = [], []
@@ -853,6 +908,7 @@ MODES = (
     ("grids", grids),
     ("width", width),
     ("predictions", predictions),
+    ("cycle", cycle),
     ("timing", timing),
 )
 
