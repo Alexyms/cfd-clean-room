@@ -1340,11 +1340,16 @@ class TestPressureKeys:
         """Every YAML file and the transport stand-ins carry the key and the cap.
 
         The laminar cases and the product file carry 1e-8; the Annex 20 case
-        (VAL-017, prompt 49) and the backward-facing step (VAL-019, prompt 52)
-        carry the turbulent product setting, 1e-4 (ADR-013 decision 3 as
-        amended 2026-10-09; ECR-002 section 8, step 8).
+        (VAL-017, prompt 49), the backward-facing step (VAL-019, prompt 52)
+        and the impinging jet (VAL-020, prompt 55) carry the turbulent
+        product setting, 1e-4 (ADR-013 decision 3 as amended 2026-10-09;
+        ECR-002 section 8, step 8).
         """
-        turbulent = {"validation_annex20.yaml": 1e-4, "validation_backstep.yaml": 1e-4}
+        turbulent = {
+            "validation_annex20.yaml": 1e-4,
+            "validation_backstep.yaml": 1e-4,
+            "validation_impinging_jet.yaml": 1e-4,
+        }
         for path in sorted(CONFIG_DIR.glob("*.yaml")):
             config = SimConfig(path)
             assert config.pressure_rtol == turbulent.get(path.name, 1e-8), path.name
