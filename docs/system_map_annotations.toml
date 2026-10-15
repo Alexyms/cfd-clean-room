@@ -44,8 +44,12 @@ responsibility = "Defines the staggered (MAC) field layout: shapes and allocatio
 serves = ["REQ-S07", "REQ-S13"]
 
 [modules."src/pressure.py"]
-responsibility = "Assembles the staggered pressure correction equation from the momentum diagonals with the discrete divergence of u* as its right-hand side, solves it by conjugate gradients preconditioned with its diagonal to a relative residual, a rounding floor or a reported iteration cap, corrects the face velocities and updates the pressure."
+responsibility = "Assembles the staggered pressure correction equation from the momentum diagonals with the discrete divergence of u* as its right-hand side, solves it by conjugate gradients preconditioned with its diagonal or, under the pressure_preconditioner key, with one multigrid V-cycle per iteration, to a relative residual, a rounding floor or a reported iteration cap, corrects the face velocities and updates the pressure."
 serves = ["REQ-S04", "REQ-S08"]
+
+[modules."src/multigrid.py"]
+responsibility = "Builds an additive-correction multigrid hierarchy from a five-point pressure system by 2x2 aggregation, its coarse operators the exact Galerkin sums with no probing, and applies one symmetric V-cycle with weighted Jacobi smoothing and a dense pseudo-inverse on the coarsest level as the preconditioner of the pressure correction's conjugate gradients."
+serves = ["REQ-S08"]
 
 [modules."src/momentum.py"]
 responsibility = "Predicts u* and v* on the staggered grid with QUICK advection by deferred correction over an upwind implicit matrix, a configured number of under-relaxed Jacobi sweeps per call, an optional per-cell viscosity field with its face rule and stress source, and the domain edge's wall stencil at obstacle faces, and returns the diagonal coefficients the pressure correction needs."

@@ -23,7 +23,18 @@ that carries the detail. The ranking is the builder's, from the measurements.
 1. The solver: Jacobi-preconditioned conjugate gradients in NumPy, with multigrid preconditioning
    of the same CG loop named as the successor if a finer mesh makes CG too slow. Chosen for the GPU
    path (one thread per cell, plus three reductions per iteration) as much as for speed.
+   Decided 2026-10-14 (Alex, prompt 53): build the named successor now, before VAL-020 and the
+   product on 320x120. Since prompt 51 the correction has been most of every run: 66% of the
+   Annex 20 run, 86% of the backward-facing step's medium grid alone and 92% of its fine grid, at
+   1,400 to 2,400 iterations per correction on the step, whose fine grid took 25 hours
+   (`docs/reports/turbulence_cg_solve.md`; `docs/reports/ecr002_val019_backstep.md`, section 7).
+   The successor is additive-correction (aggregation) multigrid preconditioning the same CG loop,
+   not the probe's bilinear geometric multigrid, whose setup by probing cost 120 to 175 ms every
+   correction (the report, section 7.3). Whether it becomes the default is decided on its
+   measurements.
 2. Dependencies: NumPy only; no SciPy or pyamg at runtime.
+   Confirmed 2026-10-14 (Alex, prompt 53) for the successor: NumPy only and data-parallel, so the
+   GPU path stands.
 3. The stop: relative residual `pressure_rtol`, default 1e-8, with the rounding floor and the cap
    reported. To be revisited after ECR-002 step 3 rebuilds the outlets, with the guard and
    tight-start options as the candidates.
@@ -467,6 +478,24 @@ planned it, against what was built and measured.
 | Section C: REQ-N03 as written; Phase 6's test runs both loops for the same iteration count | Not built (Phase 6). Step 2 found the face bits depend on the BLAS kernel: one thread or many gives the same hash on one machine, and OpenBLAS picks its `ddot` kernel by CPU | ECR-002 criterion 1 compares hashes taken on one machine [6, section 7] |
 | Decision 5: the C path deferred | Deferred; PROJECT_PLAN's Phase 6 deliverable `csolver/pressure_solve.cu` is a CG kernel | |
 | Decision 6: the outlet drift to ECR-002 step 3, the finer-grid non-convergence to ECR-002 step 5 | Issue 61 for step 3; step 5's row in ECR-002 section 8 names both the finer-grid finding and the sweep result it retakes under CG | Step 3 notes in ECR-002, 2026-10-07 |
+
+**Note 2026-10-14 (prompt 53): decision 1's named successor, built as an option.** Built as
+additive-correction (aggregation) multigrid preconditioning the same CG loop
+(`src/multigrid.py`), not the probe's bilinear geometric multigrid. With piecewise-constant
+prolongation the Galerkin coarse operator is a five-point stencil formed by sums, so the setup
+that cost 120 to 175 ms per correction by probing is a few array passes per level and three power
+iterations; the cycle is V(1,1) with weighted Jacobi, the coarsest level (at most 64 cells) solved
+by a dense pseudo-inverse, and on a closed domain the preconditioned vector's mean is removed.
+NumPy only and data-parallel on every level, so decision 2 and the GPU path stand. The solver key
+`pressure_preconditioner` selects it; the default stays the diagonal, and every laminar hash is
+unchanged under it. Measured in `docs/reports/pressure_multigrid.md`: every whole run reaches
+its Jacobi stop and answers; the correction's share of a turbulent run falls from most of it to
+about two fifths; per correction the step's medium grid and the product's 320x120 gain the most, and
+the smaller systems (VAL-001, the cavity, the product's 160x60 and the Annex 20 room) gain
+less (review 53 S4). The coarse operators turned out weakly diagonally dominant by
+construction, so the power iterations, kept as the prompt asked, return 2 to within a percent
+(section 2 there). Whether `multigrid` becomes the default, with the laminar hashes rebaselined
+once, is Alex's decision on that report's section 8.
 
 ## Consequences
 **Positive.** A steady product solve takes minutes, not hours or days. The stop measures what it

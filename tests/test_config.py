@@ -13,6 +13,9 @@ import yaml
 
 from src.config import (
     CFL_NUMBER_BOUND,
+    MULTIGRID,
+    PRESSURE_JACOBI,
+    PRESSURE_PRECONDITIONERS,
     PRESSURE_RTOL_BOUNDS,
     RETIRED_PRESSURE_TOL_KEY,
     SOLVER_KEYS,
@@ -1283,15 +1286,53 @@ class TestPressureKeys:
         assert RETIRED_PRESSURE_TOL_KEY == "pressure_tol"
 
     def test_solver_keys_is_the_one_ordered_list(self) -> None:
-        """Thirteen keys, nine required then four optional, pressure_rtol among them."""
+        """Fourteen keys, nine required then five optional, pressure_rtol among them."""
         assert isinstance(SOLVER_KEYS, tuple)
-        assert len(SOLVER_KEYS) == len(set(SOLVER_KEYS)) == 13
+        assert len(SOLVER_KEYS) == len(set(SOLVER_KEYS)) == 14
         assert "pressure_rtol" in SOLVER_KEYS
-        assert SOLVER_KEYS[-3:] == (
+        assert SOLVER_KEYS[-4:] == (
             "stopping_rule",
             "iteration_error_tol",
             "mass_imbalance_tol",
+            "pressure_preconditioner",
         )
+
+    def test_pressure_preconditioner_defaults_to_jacobi_and_reads_either_choice(
+        self, tmp_path: Path
+    ) -> None:
+        """Absent is the diagonal every stored result used; each named choice is read.
+
+        Prompt 53: the multigrid preconditioner is selectable and the default
+        stays the diagonal. Defect caught: the default changed to multigrid.
+        """
+        assert PRESSURE_PRECONDITIONERS == (PRESSURE_JACOBI, MULTIGRID)
+        assert (PRESSURE_JACOBI, MULTIGRID) == ("jacobi", "multigrid")
+        assert SimConfig(_write_config(tmp_path)).pressure_preconditioner == "jacobi"
+        for choice in PRESSURE_PRECONDITIONERS:
+            raw = self._raw(tmp_path, pressure_preconditioner=choice)
+            assert SimConfig.from_dict(raw).pressure_preconditioner == choice
+
+    @pytest.mark.parametrize(
+        ("bad", "error", "message"),
+        [
+            ("amg", ValueError, r"solver\.pressure_preconditioner must be one of"),
+            (
+                "Multigrid",
+                ValueError,
+                r"solver\.pressure_preconditioner must be one of",
+            ),
+            ("", ValueError, r"solver\.pressure_preconditioner must be one of"),
+            (True, TypeError, r"solver\.pressure_preconditioner must be a string"),
+            (1, TypeError, r"solver\.pressure_preconditioner must be a string"),
+            (None, TypeError, r"solver\.pressure_preconditioner must be a string"),
+        ],
+    )
+    def test_bad_pressure_preconditioner_is_rejected(
+        self, tmp_path: Path, bad: object, error: type[Exception], message: str
+    ) -> None:
+        """An unknown name, a case variant, a bool, a number or null: each refused by name."""
+        with pytest.raises(error, match=message):
+            SimConfig.from_dict(self._raw(tmp_path, pressure_preconditioner=bad))
 
     def test_every_committed_configuration_names_the_new_key_and_cap(self) -> None:
         """Every YAML file and the transport stand-ins carry the key and the cap.

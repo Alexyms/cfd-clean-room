@@ -63,6 +63,17 @@ residual formed once more at exit (ADR-013 B). Weighted Jacobi, the
 previous solve, needed hundreds of thousands of sweeps per correction on
 the product mesh (docs/reports/pressure_solver_ecr003.md, section 7); its
 evidence is docs/reports/pressure_correction_step5.md.
+
+The preconditioner. The solver key pressure_preconditioner names it:
+``jacobi``, the diagonal above and the default, or ``multigrid``, one V-cycle
+of the additive-correction multigrid of src/multigrid.py per iteration,
+ADR-013 decision 1's named successor (prompt 53), built afresh each
+correction from that correction's coefficients. The stop, the floor and the
+cap mean the same under either. On a closed domain the multigrid's
+preconditioned vector has its mean over the cells with an equation removed,
+so the search directions stay in the range: a V-cycle can add a constant the
+singular operator does not see, the likely cause of pyamg's CG failing on the
+cavity (docs/reports/pressure_solver_ecr003.md, section 7.5).
 """
 
 import math
@@ -73,9 +84,10 @@ import numpy as np
 from threadpoolctl import ThreadpoolController
 
 from src.boundary_staggered import StaggeredBoundary
-from src.config import SimConfig
+from src.config import MULTIGRID, SimConfig
 from src.mesh import FLUID, SOLID, Mesh
 from src.momentum import MomentumPrediction
+from src.multigrid import Multigrid
 from src.staggered import p_shape, u_shape, v_shape
 
 # Which solve wrote a saved pressure correction. 1 was the weighted Jacobi
@@ -252,9 +264,64 @@ def apply_operator(coefficients: PressureCoefficients, x: np.ndarray) -> np.ndar
     return y
 
 
+def jacobi_preconditioner(
+    coefficients: PressureCoefficients,
+) -> Callable[[np.ndarray], np.ndarray]:
+    """The diagonal preconditioner: ``r -> r / a_P`` where a_P > 0, zero elsewhere.
+
+    Parameters
+    ----------
+    coefficients : PressureCoefficients
+        The p' equation.
+
+    Returns
+    -------
+    Callable[[np.ndarray], np.ndarray]
+        The product of the inverse diagonal with its argument, the one
+        operation the solve applied before the preconditioner was a callable,
+        so its results are the same to the bit.
+    """
+    active = coefficients.a_p > 0.0
+    inverse_diagonal = np.where(
+        active, 1.0 / np.where(active, coefficients.a_p, 1.0), 0.0
+    )
+    return lambda r: inverse_diagonal * r
+
+
+def multigrid_preconditioner(
+    coefficients: PressureCoefficients, project: bool
+) -> Callable[[np.ndarray], np.ndarray]:
+    """One V-cycle of the additive-correction multigrid built on these coefficients.
+
+    Parameters
+    ----------
+    coefficients : PressureCoefficients
+        The p' equation; the hierarchy is built here, once per correction.
+    project : bool
+        True on a closed domain: the cycle's result has its mean over the
+        cells with an equation removed, so it stays in the operator's range.
+
+    Returns
+    -------
+    Callable[[np.ndarray], np.ndarray]
+        ``r -> M^-1 r``, symmetric and positive definite on the range.
+    """
+    hierarchy = Multigrid(coefficients, apply_operator)
+    if not project:
+        return hierarchy.cycle
+    active = coefficients.a_p > 0.0
+
+    def projected(r: np.ndarray) -> np.ndarray:
+        z = hierarchy.cycle(r)
+        z[active] -= z[active].mean()
+        return z
+
+    return projected
+
+
 def conjugate_gradient(
     apply: Callable[[np.ndarray], np.ndarray],
-    inverse_diagonal: np.ndarray,
+    precondition: Callable[[np.ndarray], np.ndarray],
     f: np.ndarray,
     rtol: float,
     floor: float,
@@ -267,9 +334,10 @@ def conjugate_gradient(
     apply : Callable[[np.ndarray], np.ndarray]
         Forms ``A x`` for a field of f's shape; A symmetric positive
         semi-definite, with f in its range.
-    inverse_diagonal : np.ndarray
-        The preconditioner ``M^-1``, here ``1 / a_P`` where a_P > 0 and zero
-        elsewhere, f's shape.
+    precondition : Callable[[np.ndarray], np.ndarray]
+        The preconditioner ``r -> M^-1 r``, symmetric and positive definite
+        on the range of A, returning an array of r's shape:
+        ``jacobi_preconditioner`` or ``multigrid_preconditioner``.
     f : np.ndarray
         Right-hand side; zero where there is no equation.
     rtol : float
@@ -290,10 +358,11 @@ def conjugate_gradient(
     Raises
     ------
     ValueError
-        If inverse_diagonal is not f's shape, rtol is not a number in
-        [0, 1), floor is not a finite number of at least zero, or max_iter
-        is not a positive integer; a bool is refused for each, as the
-        retired weighted sweep refused one for its weight.
+        If rtol is not a number in [0, 1), floor is not a finite number of
+        at least zero, or max_iter is not a positive integer; a bool is
+        refused for each, as the retired weighted sweep refused one for its
+        weight. Also if the preconditioner returns an array that is not f's
+        shape, checked on its first application.
 
     Notes
     -----
@@ -310,16 +379,14 @@ def conjugate_gradient(
     pool limited to PRESSURE_BLAS_THREADS threads and restores the process's
     setting on leaving, so nothing else is affected after it returns.
     """
-    _check_solve_arguments(inverse_diagonal, f, rtol, floor, max_iter)
+    _check_solve_arguments(rtol, floor, max_iter)
     with _BLAS_CONTROLLER.limit(limits=PRESSURE_BLAS_THREADS, user_api="blas"):
-        return _conjugate_gradient_loop(
-            apply, inverse_diagonal, f, rtol, floor, max_iter
-        )
+        return _conjugate_gradient_loop(apply, precondition, f, rtol, floor, max_iter)
 
 
 def _conjugate_gradient_loop(
     apply: Callable[[np.ndarray], np.ndarray],
-    inverse_diagonal: np.ndarray,
+    precondition: Callable[[np.ndarray], np.ndarray],
     f: np.ndarray,
     rtol: float,
     floor: float,
@@ -338,7 +405,11 @@ def _conjugate_gradient_loop(
         return ConjugateGradientResult(
             x=x, iterations=0, reached_cap=False, residual_norm=0.0, products=0
         )
-    z = inverse_diagonal * r
+    z = precondition(r)
+    if z.shape != f.shape:
+        raise ValueError(
+            f"the preconditioner returned shape {z.shape}, expected f's {f.shape}"
+        )
     p = z.copy()
     rz = float(np.vdot(r, z))
     k = 0
@@ -366,11 +437,11 @@ def _conjugate_gradient_loop(
                     residual_norm=r_norm,
                     products=k + checks,
                 )
-            z = inverse_diagonal * r
+            z = precondition(r)
             p = z.copy()
             rz = float(np.vdot(r, z))
             continue
-        z = inverse_diagonal * r
+        z = precondition(r)
         rz_new = float(np.vdot(r, z))
         p *= rz_new / rz
         p += z
@@ -385,24 +456,13 @@ def _conjugate_gradient_loop(
     )
 
 
-def _check_solve_arguments(
-    inverse_diagonal: np.ndarray,
-    f: np.ndarray,
-    rtol: float,
-    floor: float,
-    max_iter: int,
-) -> None:
+def _check_solve_arguments(rtol: float, floor: float, max_iter: int) -> None:
     """Raise ValueError unless conjugate_gradient's arguments are what it documents.
 
     rtol at or above 1 would stop at the first iteration, a negative rtol
     would silently leave only the floor, and a float or bool cap would run a
     count nobody asked for.
     """
-    if inverse_diagonal.shape != f.shape:
-        raise ValueError(
-            f"expected inverse_diagonal of f's shape {f.shape}, "
-            f"got {inverse_diagonal.shape}"
-        )
     if (
         isinstance(rtol, bool)
         or not isinstance(rtol, int | float)
@@ -427,7 +487,8 @@ class PressureCorrector:
     mesh : Mesh
         The computational mesh.
     config : SimConfig
-        Supplies rho, alpha_pressure, max_pressure_iter and pressure_rtol.
+        Supplies rho, alpha_pressure, max_pressure_iter, pressure_rtol and
+        pressure_preconditioner.
     boundary : StaggeredBoundary
         Supplies the pressure outlets and the flux scale's inputs.
 
@@ -469,6 +530,7 @@ class PressureCorrector:
         self._alpha_p = config.alpha_pressure
         self._max_iter = config.max_pressure_iter
         self._rtol = config.pressure_rtol
+        self._multigrid = config.pressure_preconditioner == MULTIGRID
         self._u_shape = u_shape(mesh)
         self._v_shape = v_shape(mesh)
         self._p_shape = p_shape(mesh)
@@ -701,7 +763,8 @@ class PressureCorrector:
         Notes
         -----
         The solve is ``conjugate_gradient`` on ``A p' = -b`` from p' = 0,
-        preconditioned by a_P, to a residual 2-norm at most pressure_rtol
+        preconditioned by a_P or, under pressure_preconditioner
+        ``multigrid``, by one V-cycle per iteration, to a residual 2-norm at most pressure_rtol
         times the right-hand side's or at most RESIDUAL_FLOOR times
         flux_scale, confirmed on the true residual, or to max_pressure_iter
         iterations. The residual ``b + A p'`` is the mass imbalance the
@@ -726,10 +789,13 @@ class PressureCorrector:
         if self.needs_pin:
             f[active] -= f[active].mean()
         f[~active] = 0.0
-        inverse_diagonal = np.where(active, 1.0 / np.where(active, c.a_p, 1.0), 0.0)
+        if self._multigrid:
+            precondition = multigrid_preconditioner(c, self.needs_pin)
+        else:
+            precondition = jacobi_preconditioner(c)
         solved = conjugate_gradient(
             lambda x: apply_operator(c, x),
-            inverse_diagonal,
+            precondition,
             f,
             self._rtol,
             RESIDUAL_FLOOR * self.flux_scale,

@@ -43,6 +43,7 @@ from src.pressure import (
     PressureCorrector,
     apply_operator,
     conjugate_gradient,
+    jacobi_preconditioner,
 )
 from src.solver_staggered import StaggeredSolver
 from src.staggered import allocate_fields
@@ -280,11 +281,6 @@ def _projected_rhs(
         f[active] -= f[active].mean()
     f[~active] = 0.0
     return f
-
-
-def _inverse_diagonal(c: PressureCoefficients) -> np.ndarray:
-    active = c.a_p > 0.0
-    return np.where(active, 1.0 / np.where(active, c.a_p, 1.0), 0.0)
 
 
 def _dense_solution(
@@ -780,7 +776,7 @@ class TestCorrection:
 
 def _reference_recursion_only_cg(
     apply: Callable[[np.ndarray], np.ndarray],
-    inverse_diagonal: np.ndarray,
+    precondition: Callable[[np.ndarray], np.ndarray],
     f: np.ndarray,
     stop: float,
     max_iter: int,
@@ -792,7 +788,7 @@ def _reference_recursion_only_cg(
     """
     x = np.zeros_like(f)
     r = f.copy()
-    z = inverse_diagonal * r
+    z = precondition(r)
     p = z.copy()
     rz = float(np.vdot(r, z))
     for _ in range(max_iter):
@@ -802,7 +798,7 @@ def _reference_recursion_only_cg(
         r -= alpha * q
         if float(np.sqrt(np.vdot(r, r))) <= stop:
             break
-        z = inverse_diagonal * r
+        z = precondition(r)
         rz_new = float(np.vdot(r, z))
         p *= rz_new / rz
         p += z
@@ -919,7 +915,7 @@ class TestConjugateGradient:
         def apply(x: np.ndarray) -> np.ndarray:
             return apply_operator(c, x)
 
-        inv = _inverse_diagonal(c)
+        inv = jacobi_preconditioner(c)
         rtol = config.pressure_rtol
         bare = conjugate_gradient(apply, inv, f, rtol, 0.0, config.max_pressure_iter)
         assert bare.iterations > out.iterations
@@ -932,7 +928,7 @@ class TestConjugateGradient:
         """One iteration fewer leaves the residual above rtol ||f||; tighter levels take more."""
         pc, c, b, _pred, _p = self._system(CHANNEL)
         f = _projected_rhs(pc, c, b)
-        inv = _inverse_diagonal(c)
+        inv = jacobi_preconditioner(c)
 
         def apply(x: np.ndarray) -> np.ndarray:
             return apply_operator(c, x)
@@ -966,7 +962,7 @@ class TestConjugateGradient:
         """
         pc, c, b, pred, p = self._system(CAVITY)
         f = _projected_rhs(pc, c, b)
-        inv = _inverse_diagonal(c)
+        inv = jacobi_preconditioner(c)
         assert RESIDUAL_FLOOR == 1e-13
         assert pc.flux_scale == pytest.approx(1.2 * 1.0 * 2.0)
         full = pc.correct(pred, p)
@@ -1023,7 +1019,7 @@ class TestConjugateGradient:
         """
         pc, c, b, _pred, _p = self._system(CHANNEL)
         f = _projected_rhs(pc, c, b)
-        inv = _inverse_diagonal(c)
+        inv = jacobi_preconditioner(c)
         rtol = 1e-8
         stop = rtol * float(np.linalg.norm(f))
         calls = {"n": 0}
@@ -1062,7 +1058,7 @@ class TestConjugateGradient:
         """
         pc, c, b, pred, p = self._system(CHANNEL)
         f = _projected_rhs(pc, c, b)
-        inv = _inverse_diagonal(c)
+        inv = jacobi_preconditioner(c)
         calls = {"n": 0, "lie_at": 0}
 
         def counted(x: np.ndarray) -> np.ndarray:
@@ -1092,7 +1088,12 @@ class TestConjugateGradient:
         pc, c, b, _pred, _p = self._system(CAVITY)
         f = _projected_rhs(pc, c, b)
         res = conjugate_gradient(
-            lambda x: apply_operator(c, x), _inverse_diagonal(c), f, TIGHT_RTOL, 0.0, 3
+            lambda x: apply_operator(c, x),
+            jacobi_preconditioner(c),
+            f,
+            TIGHT_RTOL,
+            0.0,
+            3,
         )
         assert isinstance(res, ConjugateGradientResult)
         assert (res.iterations, res.reached_cap) == (3, True)
@@ -1107,7 +1108,7 @@ class TestConjugateGradient:
         f = np.zeros(c.a_p.shape)
         res = conjugate_gradient(
             lambda x: apply_operator(c, x),
-            _inverse_diagonal(c),
+            jacobi_preconditioner(c),
             f,
             TIGHT_RTOL,
             0.0,
@@ -1299,18 +1300,23 @@ class TestConjugateGradient:
         args = {"rtol": 1e-8, "floor": 0.0, "max_iter": 50} | {keyword: value}
         with pytest.raises(ValueError, match=f"^{keyword} must be"):
             conjugate_gradient(
-                lambda x: apply_operator(c, x), _inverse_diagonal(c), -b, **args
+                lambda x: apply_operator(c, x), jacobi_preconditioner(c), -b, **args
             )
 
     def test_edge_arguments_are_accepted_and_a_wrong_shape_refused(self) -> None:
         """rtol 0 with floor 0 and one iteration is a legal, capped solve; shapes must match."""
         _pc, c, b, _pred, _p = self._system(CHANNEL)
-        inv = _inverse_diagonal(c)
+        inv = jacobi_preconditioner(c)
         res = conjugate_gradient(lambda x: apply_operator(c, x), inv, -b, 0.0, 0.0, 1)
         assert (res.iterations, res.reached_cap) == (1, True)
-        with pytest.raises(ValueError, match="inverse_diagonal"):
+        with pytest.raises(ValueError, match="preconditioner returned shape"):
             conjugate_gradient(
-                lambda x: apply_operator(c, x), inv.T.copy(), -b, 1e-8, 0.0, 50
+                lambda x: apply_operator(c, x),
+                lambda r: inv(r).T.copy(),
+                -b,
+                1e-8,
+                0.0,
+                50,
             )
 
     def test_the_thread_count_is_the_one_the_measurement_supports(self) -> None:
@@ -1364,7 +1370,12 @@ class TestConjugateGradient:
                 pc.correct(pred, p)
             else:
                 conjugate_gradient(
-                    lambda x: recording(c, x), _inverse_diagonal(c), f, 1e-8, 0.0, 5000
+                    lambda x: recording(c, x),
+                    jacobi_preconditioner(c),
+                    f,
+                    1e-8,
+                    0.0,
+                    5000,
                 )
             assert len(seen) > 1
             assert set(seen) == {PRESSURE_BLAS_THREADS}
@@ -1383,5 +1394,5 @@ class TestConjugateGradient:
             if before < 2:
                 pytest.skip("this BLAS cannot run two threads")
             with pytest.raises(RuntimeError, match="operator failed"):
-                conjugate_gradient(failing, _inverse_diagonal(c), f, 1e-8, 0.0, 50)
+                conjugate_gradient(failing, jacobi_preconditioner(c), f, 1e-8, 0.0, 50)
             assert self._blas_threads() == before
