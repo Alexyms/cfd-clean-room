@@ -27,20 +27,28 @@ The cycle. A V(nu, nu) cycle from zero with weighted Jacobi before and after
 the coarse correction, the same weight and sweep count both ways, so the
 cycle is a symmetric operator, and positive definite on the range while the
 weighted sweep is a contraction in the energy norm (``omega lambda_max <
-2``), as conjugate gradients requires. Each level's weight is
-``SMOOTHER_FACTOR / lambda`` with lambda the largest eigenvalue of ``D^-1 A``
-estimated by POWER_ITERATIONS power iterations; the Rayleigh quotient it
-returns is a lower bound, so the factor 4/3 keeps ``omega lambda_max`` below 2
-for any estimate above two thirds of the true value. Every operation is a
-whole-array NumPy expression: the per-cell structure of decision 1's GPU path
-holds on every level, and the coarsest solve is one small dense product.
+2``), as conjugate gradients requires. Every operation is a whole-array NumPy
+expression: the per-cell structure of decision 1's GPU path holds on every
+level, and the coarsest solve is one small dense product.
+
+The weight. Every level's operator is weakly diagonally dominant: the finest
+because a cell's diagonal is its couplings plus any outlet term, and each
+coarser one because the Galerkin diagonal, the children's diagonals less
+twice the couplings inside the group, leaves at least the couplings that
+leave the group. By Gershgorin the eigenvalues of ``D^-1 A`` lie in [0, 2] on
+every level, so the fixed weight ``omega = SMOOTHER_FACTOR / 2`` (2/3, the
+classic damping for the five-point stencil) gives ``omega lambda_max <= 4/3``,
+inside the limit, with no estimate of lambda_max. Prompt 53 built three power
+iterations per level for that estimate and they returned 2 to within a
+percent on every level of every system measured; prompt 54 replaced them.
+``Multigrid`` refuses a finest system that is not weakly diagonally dominant,
+since the bound would no longer hold.
 
 The cost this design removes. The geometric multigrid of ADR-013's probe
 (docs/reports/pressure_solver_ecr003.md, section 7.3) formed its coarse
 operators by probing with 25 coloured vectors per level, 120 to 175 ms per
 correction on the product mesh, every correction, since the coefficients
-change every outer iteration. Here the setup is a few strided sums per level
-and the power iterations.
+change every outer iteration. Here the setup is a few strided sums per level.
 """
 
 import dataclasses
@@ -60,20 +68,19 @@ COARSEST_CELLS = 64
 # V(nu, nu) cycle. Chosen on two systems outside prompt 53's measurement set,
 # the product room on 80x30 and the backward-facing step on 410x40
 # (docs/reports/pressure_multigrid.md, section 2): V(2, 2) and V(3, 3) took
-# one to five fewer CG iterations than V(1, 1) but more time per correction,
+# one to seven fewer CG iterations than V(1, 1) but more time per correction,
 # since each sweep is a full product on every level.
 SMOOTHING_SWEEPS = 1
 
-# Power iterations for each level's largest eigenvalue of D^-1 A, from the
-# checkerboard, which is the top eigenvector of a uniform five-point stencil.
-# On the same two systems two iterations came within 0.3% of a 200-iteration
-# estimate on every level; three leave a margin.
-POWER_ITERATIONS = 3
-
-# The weight is SMOOTHER_FACTOR / lambda_max(D^-1 A): 2/3 when lambda_max is 2,
-# the classic damping for the five-point stencil, and a contraction for any
-# estimate of lambda_max above two thirds of the true value.
+# The weight is SMOOTHER_FACTOR / 2: lambda_max(D^-1 A) is at most 2 on every
+# level (module docstring), so omega lambda_max is at most SMOOTHER_FACTOR,
+# inside the contraction limit 2.
 SMOOTHER_FACTOR = 4.0 / 3.0
+
+# Rounding allowed when testing a row for diagonal dominance: a diagonal is
+# the sum of its couplings formed in some order, so it can fall short of them
+# by a few units in the last place.
+DOMINANCE_TOLERANCE = 1.0e-12
 
 
 class FivePointCoefficients(Protocol):
@@ -101,17 +108,14 @@ class Level:
         ``omega / a_P`` where a_P > 0, zero elsewhere: one weighted Jacobi
         sweep is ``x += smoother * (r - A x)``.
     weight : float
-        omega, ``SMOOTHER_FACTOR / lambda`` with lambda the power-iteration
-        estimate of the largest eigenvalue of ``D^-1 A``.
-    eigenvalue : float
-        That estimate, recorded for the measurements.
+        omega, ``SMOOTHER_FACTOR / 2`` on a smoothed level; zero on the
+        coarsest, which is solved exactly.
     """
 
     coefficients: FivePointCoefficients
     active: np.ndarray
     smoother: np.ndarray
     weight: float
-    eigenvalue: float
 
 
 class Multigrid:
@@ -140,7 +144,10 @@ class Multigrid:
     Raises
     ------
     ValueError
-        If the five arrays are not all two-dimensional and of one shape.
+        If the five arrays are not all two-dimensional and of one shape, or
+        a row of the finest system is not weakly diagonally dominant (its
+        diagonal below the sum of its four couplings), which the weight's
+        bound needs.
     """
 
     def __init__(
@@ -161,9 +168,17 @@ class Multigrid:
                 "expected five two-dimensional coefficient arrays of one shape, got "
                 f"{[a.shape for a in arrays]}"
             )
+        # The coarse levels inherit dominance from the finest through the
+        # sums, so the finest is the only level that needs the check.
+        c = coefficients
+        couplings = (c.a_e + c.a_w) + (c.a_n + c.a_s)
+        if np.any(c.a_p * (1.0 + DOMINANCE_TOLERANCE) < couplings):
+            raise ValueError(
+                "the finest system is not weakly diagonally dominant: a diagonal "
+                "is below the sum of its couplings"
+            )
         self._apply = apply
         self.levels: list[Level] = []
-        c = coefficients
         active = coefficients.a_p > 0.0
         while True:
             ny, nx = c.a_p.shape
@@ -179,51 +194,17 @@ class Multigrid:
     def _level(
         self, c: FivePointCoefficients, active: np.ndarray, smoothed: bool
     ) -> Level:
-        """One level: its smoother's weight from a power-iteration estimate.
+        """One level, with the fixed weight on every level that is smoothed.
 
-        The coarsest level is solved exactly and never smoothed, so it gets
-        no estimate: its weight and eigenvalue are zero.
+        The coarsest level is solved exactly and never smoothed, so its
+        weight is zero.
         """
         has_diagonal = c.a_p > 0.0
         inverse = np.where(has_diagonal, 1.0 / np.where(has_diagonal, c.a_p, 1.0), 0.0)
-        eigenvalue = self._largest_eigenvalue(c, inverse) if smoothed else 0.0
-        weight = SMOOTHER_FACTOR / eigenvalue if eigenvalue > 0.0 else 0.0
+        weight = SMOOTHER_FACTOR / 2.0 if smoothed else 0.0
         return Level(
-            coefficients=c,
-            active=active,
-            smoother=weight * inverse,
-            weight=weight,
-            eigenvalue=eigenvalue,
+            coefficients=c, active=active, smoother=weight * inverse, weight=weight
         )
-
-    def _largest_eigenvalue(
-        self, c: FivePointCoefficients, inverse: np.ndarray
-    ) -> float:
-        """Estimate lambda_max(D^-1 A) by power iteration from the checkerboard.
-
-        Returns the Rayleigh quotient ``x.A x / x.D x`` of the last iterate
-        whose product was formed, a lower bound on the largest eigenvalue of
-        the pencil (A, D); zero for a level whose operator is zero. Each
-        iteration forms one product, and the quotient reuses it.
-        """
-        ny, nx = c.a_p.shape
-        x = np.where(
-            (np.arange(ny)[:, None] + np.arange(nx)[None, :]) % 2 == 0, 1.0, -1.0
-        )
-        x[inverse == 0.0] = 0.0
-        quotient = 0.0
-        for _ in range(POWER_ITERATIONS):
-            ax = self._apply(c, x)
-            mass = float(np.vdot(x, c.a_p * x))
-            if mass == 0.0:
-                return 0.0
-            quotient = float(np.vdot(x, ax)) / mass
-            y = inverse * ax
-            scale = float(np.abs(y).max())
-            if scale == 0.0:
-                return quotient
-            x = y / scale
-        return quotient
 
     def cycle(self, r: np.ndarray) -> np.ndarray:
         """One V(nu, nu) cycle from zero on ``A z = r``.
@@ -311,8 +292,20 @@ def coarsen(
 
 
 def restrict(r: np.ndarray) -> np.ndarray:
-    """``P^T r``: the sum over each 2x2 group, shape [ceil(ny/2), ceil(nx/2)].
+    """``P^T r``: the sum over each 2x2 group.
 
+    Parameters
+    ----------
+    r : np.ndarray
+        A fine-level vector, shape [ny, nx]; not modified.
+
+    Returns
+    -------
+    np.ndarray
+        The group sums, shape [ceil(ny/2), ceil(nx/2)].
+
+    Notes
+    -----
     The four children of a group are the four strided quarters of r; on an
     odd side the last group has no second child there, so the second
     quarters are one row or column short and add into the leading part.
@@ -326,7 +319,21 @@ def restrict(r: np.ndarray) -> np.ndarray:
 
 
 def add_prolonged(x: np.ndarray, z: np.ndarray) -> None:
-    """``x += P z`` in place: each fine cell of x gains its group's value in z."""
+    """``x += P z`` in place: each fine cell of x gains its group's value in z.
+
+    Parameters
+    ----------
+    x : np.ndarray
+        A fine-level vector, shape [ny, nx]; modified in place.
+    z : np.ndarray
+        The coarse-level vector, shape [ceil(ny/2), ceil(nx/2)]; not
+        modified.
+
+    Returns
+    -------
+    None
+        The result is in x.
+    """
     ny, nx = x.shape
     x[0::2, 0::2] += z
     x[1::2, 0::2] += z[: ny // 2, :]

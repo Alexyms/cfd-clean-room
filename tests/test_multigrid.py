@@ -9,6 +9,9 @@ own transfer functions:
   with odd sides so the lone edge cells are exercised;
 - the V-cycle is symmetric and positive on the range, the two properties
   conjugate gradients needs of a preconditioner;
+- every level's smoother weight is the fixed 2/3, justified by the weak
+  diagonal dominance of every level (Gershgorin: lambda_max(D^-1 A) <= 2),
+  checked densely;
 - MG-PCG reaches the same relative residual as Jacobi-PCG on the same
   systems, the closed cavity among them, and lands within the tolerance's
   worth of a dense solve;
@@ -189,6 +192,37 @@ def _dense_cycle(
     return matrix
 
 
+def _dominant_system(
+    ny: int, nx: int, extra: float, seed: int = 7
+) -> PressureCoefficients:
+    """Random positive couplings with a diagonal ``extra`` above their sum.
+
+    ``extra`` is an outlet term in every cell: zero gives a closed domain's
+    rows, a large value a diagonal far from the couplings, whose largest
+    eigenvalue of ``D^-1 A`` is well below 2.
+    """
+    rng = np.random.default_rng(seed)
+    a = rng.uniform(1.0, 2.0, size=(ny, nx))
+    a_e, a_n = a.copy(), a.copy()
+    a_e[:, -1] = 0.0
+    a_n[-1, :] = 0.0
+    a_w = np.zeros_like(a)
+    a_w[:, 1:] = a_e[:, :-1]
+    a_s = np.zeros_like(a)
+    a_s[1:, :] = a_n[:-1, :]
+    return PressureCoefficients(
+        a_p=a_e + a_w + a_n + a_s + extra, a_e=a_e, a_w=a_w, a_n=a_n, a_s=a_s
+    )
+
+
+def _largest_eigenvalue(c: PressureCoefficients) -> float:
+    """lambda_max of ``D^-1 A`` over the cells with an equation, densely."""
+    cells = np.flatnonzero(c.a_p.ravel() > 0.0)
+    scale = 1.0 / np.sqrt(c.a_p.ravel()[cells])
+    matrix = _dense_operator(c)[np.ix_(cells, cells)]
+    return float(np.linalg.eigvalsh(scale[:, None] * matrix * scale)[-1])
+
+
 def _projected_rhs(
     pc: PressureCorrector, c: PressureCoefficients, b: np.ndarray
 ) -> np.ndarray:
@@ -294,20 +328,9 @@ class TestCoarseOperator:
 
     def test_coarsening_stops_at_the_coarsest_size_or_a_side_of_one(self) -> None:
         """At most COARSEST_CELLS cells ends it, and so does a side of one cell."""
-        rng = np.random.default_rng(7)
 
         def chain(ny: int, nx: int) -> list[tuple[int, int]]:
-            a = rng.uniform(1.0, 2.0, size=(ny, nx))
-            a_e, a_n = a.copy(), a.copy()
-            a_e[:, -1] = 0.0
-            a_n[-1, :] = 0.0
-            a_w = np.zeros_like(a)
-            a_w[:, 1:] = a_e[:, :-1]
-            a_s = np.zeros_like(a)
-            a_s[1:, :] = a_n[:-1, :]
-            c = PressureCoefficients(
-                a_p=a_e + a_w + a_n + a_s + 0.1, a_e=a_e, a_w=a_w, a_n=a_n, a_s=a_s
-            )
+            c = _dominant_system(ny, nx, 0.1)
             return [
                 lv.coefficients.a_p.shape for lv in Multigrid(c, apply_operator).levels
             ]
@@ -340,28 +363,98 @@ class TestCoarseOperator:
 class TestCycle:
     """The V-cycle: its weights, symmetry and positivity, and what it leaves alone."""
 
-    @pytest.mark.parametrize("name", sorted(SYSTEMS))
-    def test_weights_come_from_a_lower_bound_close_to_the_largest_eigenvalue(
-        self, name: str
-    ) -> None:
-        """Each smoothed level's estimate is at most lambda_max(D^-1 A) and within 1% of it.
+    @pytest.mark.parametrize("name", [*sorted(SYSTEMS), "diagonal"])
+    def test_every_level_has_the_fixed_weight(self, name: str) -> None:
+        """omega is SMOOTHER_FACTOR / 2 on every smoothed level, whatever its coefficients.
 
-        A lower bound keeps ``omega lambda_max = 4/3 lambda_max / estimate``
-        above 4/3, and within 1% keeps it below 1.35, inside the contraction
-        limit 2. The coarsest level, solved exactly, has no smoother.
+        The open channels' levels have a largest eigenvalue of ``D^-1 A``
+        just below 2, and the last system has a diagonal far above its
+        couplings (1.4 and 1.2 on its two smoothed levels), so a weight
+        taken from an estimate of that eigenvalue would differ from 2/3 on
+        them. Defect caught: the power-iteration weight restored. The
+        coarsest level, solved exactly, has none, and the smoother is the
+        weight over the diagonal.
         """
-        _pc, c, _b, _pred, _p = _system(name)
+        if name == "diagonal":
+            c = _dominant_system(27, 19, extra=10.0)
+        else:
+            c = _system(name)[1]
         hierarchy = Multigrid(c, apply_operator)
         for level in hierarchy.levels[:-1]:
+            assert level.weight == SMOOTHER_FACTOR / 2
+            assert level.weight == pytest.approx(2.0 / 3.0, rel=1e-15)
             lc = level.coefficients
-            cells = np.flatnonzero(lc.a_p.ravel() > 0.0)
-            scale = 1.0 / np.sqrt(lc.a_p.ravel()[cells])
-            matrix = _dense_operator(lc)[np.ix_(cells, cells)]
-            largest = float(np.linalg.eigvalsh(scale[:, None] * matrix * scale)[-1])
-            assert largest * 0.99 <= level.eigenvalue <= largest * (1 + 1e-12)
-            assert level.weight == SMOOTHER_FACTOR / level.eigenvalue
-            assert level.weight * largest < 1.35
+            has = lc.a_p > 0.0
+            np.testing.assert_allclose(
+                level.smoother[has], SMOOTHER_FACTOR / 2 / lc.a_p[has], rtol=1e-14
+            )
+            assert (level.smoother[~has] == 0.0).all()
         assert hierarchy.levels[-1].weight == 0.0
+        assert (hierarchy.levels[-1].smoother == 0.0).all()
+
+    @pytest.mark.parametrize("name", [*sorted(SYSTEMS), "diagonal", "closed_rows"])
+    def test_every_level_is_dominant_and_lambda_max_is_at_most_two(
+        self, name: str
+    ) -> None:
+        """Gershgorin on every level, rows and then the dense largest eigenvalue.
+
+        Each row's diagonal is at least the sum of its couplings, so the
+        eigenvalues of ``D^-1 A`` lie in [0, 2] and the fixed weight leaves
+        ``omega lambda_max`` at most 4/3, inside the contraction limit 2.
+        This is the premise of the fixed weight; the systems include one
+        with no outlet term (a closed domain's rows) and one with a large
+        one.
+        """
+        if name == "diagonal":
+            c = _dominant_system(27, 19, extra=10.0)
+        elif name == "closed_rows":
+            c = _dominant_system(27, 19, extra=0.0)
+        else:
+            c = _system(name)[1]
+        hierarchy = Multigrid(c, apply_operator)
+        for level in hierarchy.levels:
+            lc = level.coefficients
+            couplings = (lc.a_e + lc.a_w) + (lc.a_n + lc.a_s)
+            assert (lc.a_p * (1 + 1e-12) >= couplings).all()
+        for level in hierarchy.levels[:-1]:
+            largest = _largest_eigenvalue(level.coefficients)
+            assert largest <= 2.0 * (1 + 1e-12)
+            assert level.weight * largest <= SMOOTHER_FACTOR * (1 + 1e-12)
+
+    def test_a_finest_system_that_is_not_dominant_is_refused(self) -> None:
+        """The bound needs dominance: a diagonal below its couplings raises, equal does not."""
+        c = _dominant_system(12, 12, extra=0.0)
+        Multigrid(c, apply_operator)
+        a_p = c.a_p.copy()
+        a_p[5, 5] *= 0.9
+        bad = PressureCoefficients(a_p=a_p, a_e=c.a_e, a_w=c.a_w, a_n=c.a_n, a_s=c.a_s)
+        with pytest.raises(ValueError, match="weakly diagonally dominant"):
+            Multigrid(bad, apply_operator)
+
+    @pytest.mark.parametrize("sweeps", [2, 3])
+    @pytest.mark.parametrize("name", sorted(SYSTEMS))
+    def test_more_than_one_sweep_keeps_the_cycle_symmetric_and_positive(
+        self, name: str, sweeps: int, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """nu above 1 runs the extra pre-smoothing sweeps, as many as the post-smoothing.
+
+        The built value is 1, so the extra loop never runs in the solver, but
+        the constant is a knob (prompt 53's choice of nu used it). With the
+        same count both ways the cycle is symmetric and positive on the
+        range; a pre-smoothing loop dropped or miscounted breaks the
+        symmetry. The cycle also differs from V(1, 1)'s.
+        """
+        pc, c, _b, _pred, _p = _system(name)
+        active = c.a_p > 0.0
+        once = _dense_cycle(Multigrid(c, apply_operator).cycle, active)
+        monkeypatch.setattr("src.multigrid.SMOOTHING_SWEEPS", sweeps)
+        matrix = _dense_cycle(Multigrid(c, apply_operator).cycle, active)
+        assert np.abs(matrix - matrix.T).max() <= 1e-12 * np.abs(matrix).max()
+        assert np.abs(matrix - once).max() > 1e-3 * np.abs(once).max()
+        basis = _range_basis(active, pc.needs_pin)
+        reduced = basis.T @ matrix @ basis
+        eigenvalues = np.linalg.eigvalsh(0.5 * (reduced + reduced.T))
+        assert eigenvalues[0] > 1e-6 * eigenvalues[-1] > 0.0
 
     @pytest.mark.parametrize("name", sorted(SYSTEMS))
     def test_the_cycle_is_symmetric(self, name: str) -> None:
