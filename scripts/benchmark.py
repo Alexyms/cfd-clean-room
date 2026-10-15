@@ -21,7 +21,7 @@ records the rule's version in its params, read from the solver
 condition (e) 4 until 2026-10-11 and 5 since (its scale, ADR-012 E). A row
 with the turbulence section records the section in its params as well.
 
-Four case families. Poiseuille and the cavity are scored from the
+Five case families. Poiseuille and the cavity are scored from the
 cell-centred field, every trajectory sample and the row alike. The Annex 20
 room (VAL-017, ``val017_216x72``) is scored from the final face velocities
 by the allowance of ADR-012 decision 6 (``validation.annex20.score_lines``):
@@ -37,7 +37,11 @@ row carries ``validation.backstep.evaluate``'s whole comparison (the
 reattachment length, the inflow check, each profile's and the wall
 coefficients' departures from Driver and Seegmiller), its value is the
 reattachment length's relative departure from the measured 6.26 H (NaN when
-the floor shear never turns positive), and ``passed`` is None.
+the floor shear never turns positive), and ``passed`` is None. The impinging
+jet (VAL-020, ``val020_272x90``) is reported the same way: the row carries
+``validation.impinging_jet.evaluate``'s whole comparison with Khayrullina et
+al. (2017), its value is the centreline's RMS departure in V_0,y / V0, and
+``passed`` is None (ECR-002 criterion 13, OPEN).
 
 The method label names the pressure solve as well as the grid: staggered-cg
 since ECR-003 step 1 (2026-10-06), when conjugate gradients replaced the
@@ -105,7 +109,11 @@ from src.staggered import (  # noqa: E402 -- follows sys.path.insert
 from src.stopping import (  # noqa: E402 -- follows sys.path.insert
     IterationState,
 )
-from validation import annex20, backstep  # noqa: E402 -- follows sys.path.insert
+from validation import (  # noqa: E402 -- follows sys.path.insert
+    annex20,
+    backstep,
+    impinging_jet,
+)
 from validation.cases import (  # noqa: E402 -- follows sys.path.insert
     CASE_GRIDS,
     load_preset,
@@ -172,9 +180,18 @@ BACKSTEP_REFERENCE = (
     "(ADR-012 G (ii) OPEN)"
 )
 
+# The family validation.cases gives the impinging jet presets, reported from
+# the final faces and k; no allowance is set.
+IMPINGING_JET_FAMILY = "impinging_jet"
+IMPINGING_JET_METRIC = "centreline_rms_v_over_v0_report_only"
+IMPINGING_JET_REFERENCE = (
+    "khayrullina_2017 case I digitised; report-only, no allowance "
+    "(ECR-002 criterion 13 OPEN)"
+)
+
 # The families whose score needs the final faces, which the per-iteration
 # callback lacks: their trajectory samples carry no error but the last.
-FACE_SCORED_FAMILIES = (ANNEX20_FAMILY, BACKSTEP_FAMILY)
+FACE_SCORED_FAMILIES = (ANNEX20_FAMILY, BACKSTEP_FAMILY, IMPINGING_JET_FAMILY)
 
 # One stop_reason per rule. The velocity-step label is the one every row stored
 # before the staggered solver reported its own stop, and every collocated row has.
@@ -582,6 +599,58 @@ def backstep_accuracy(
     }
 
 
+def impinging_jet_accuracy(
+    mesh: Mesh, config: SimConfig, faces: FaceVelocities, k: np.ndarray
+) -> dict:
+    """The impinging jet's comparison with the data, reported and not scored.
+
+    Parameters
+    ----------
+    mesh : Mesh
+        Mesh the fields belong to.
+    config : SimConfig
+        The case, with its nozzle and turbulence section.
+    faces : FaceVelocities
+        The solve's final face velocities; v is sampled.
+    k : np.ndarray
+        The final turbulent kinetic energy on the cells, [ny, nx].
+
+    Returns
+    -------
+    dict
+        ``metric``, ``value`` (the RMS of V_0,y / V0 against the data over
+        the whole centreline), ``reference``, ``components`` (the
+        centreline RMS over the free-jet part and the impingement region,
+        the potential core, the decay and spreading rates, the half-width
+        RMS, the stagnation ratio, the plate's first-node y*), ``report``
+        (``validation.impinging_jet.evaluate``'s whole dictionary) and
+        ``passed`` None: nothing is scored until Alex sets the allowance
+        (ECR-002 criterion 13).
+    """
+    report = impinging_jet.evaluate(mesh, config, np.array(faces.v), k)
+    half_width = report["half_width"]
+    components: dict[str, float | None] = {
+        "rms_centreline_free_jet": report["centreline"]["free_jet"]["rms"],
+        "rms_centreline_impingement": report["centreline"]["impingement"]["rms"],
+        "potential_core_w": report["potential_core_w"]["computed"],
+        "decay_rate": report["decay_rate"]["computed"],
+        "spreading_rate": half_width["spreading_rate"]["computed"],
+        "rms_half_width_w": None
+        if half_width["errors"] is None
+        else half_width["errors"]["rms"],
+        "stagnation_k_ratio_isotropic": report["stagnation"]["ratio_isotropic"],
+        "plate_y_star_median": report["y_star"]["median"],
+    }
+    return {
+        "metric": IMPINGING_JET_METRIC,
+        "value": report["centreline"]["all"]["rms"],
+        "reference": IMPINGING_JET_REFERENCE,
+        "components": components,
+        "report": report,
+        "passed": None,
+    }
+
+
 def run_case(case_id: str, method: str, sample_every: int, concurrent: int) -> dict:
     """Run one case once with the solver the method names and return its record.
 
@@ -644,6 +713,12 @@ def run_case(case_id: str, method: str, sample_every: int, concurrent: int) -> d
         assert solver.turbulence_state is not None
         accuracy = backstep_accuracy(
             mesh, config, solver.face_velocities, p, np.array(solver.turbulence_state.k)
+        )
+    elif kind == IMPINGING_JET_FAMILY:
+        assert solver.face_velocities is not None
+        assert solver.turbulence_state is not None
+        accuracy = impinging_jet_accuracy(
+            mesh, config, solver.face_velocities, np.array(solver.turbulence_state.k)
         )
     else:
         accuracy = accuracy_of(kind, config, mesh, u, v)
