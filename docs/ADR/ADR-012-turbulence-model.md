@@ -867,7 +867,10 @@ unchanged with `eddy_viscosity` None. Criterion: equal bits (REQ-S16). Verified 
 that touches momentum.py, solver_staggered.py or solver_transport.py. The baseline is the main
 branch at each step's base: ECR-003 (decision 5), if it goes first, changes every laminar bit
 and every stored outer count, the rows are retaken under it, and those are what later steps
-reproduce (premise review S11).
+reproduce (premise review S11). Note 2026-10-14 (prompt 54): multigrid became the default
+pressure preconditioner and the rows were retaken once more, under the label
+`staggered-mgcg`; the laminar hashes of record are in `docs/SYSTEM.md` (REQ-S16), beside
+the diagonal's.
 
 **(ii) The model's implementation, with known answers.**
 *VAL-015, decaying turbulence.* A closed 2.4 m by 1.5 m box, rho 1.2, zero velocity, uniform
