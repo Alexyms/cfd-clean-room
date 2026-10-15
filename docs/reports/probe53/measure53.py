@@ -1,7 +1,7 @@
 """Item 6 of prompt 53: one correction on each captured system, Jacobi-PCG against MG-PCG.
 
 Usage:
-    python measure53.py [--repeats N]
+    python measure53.py [--repeats N] [--name NAME]
 
 Loads the ten measurement systems of capture53.py (five cases, early and
 late) and solves each to its case's ``pressure_rtol``, with the floor and cap
@@ -13,8 +13,10 @@ repeats; for multigrid, each level's shape, cells with an equation,
 eigenvalue estimate and weight. It also records how far the two solutions
 lie apart, the largest difference of p' over the largest |p'| of the Jacobi
 solution, read on the range part (the mean over the cells with an equation
-removed on the closed cavity). Writes results/builder53/measure53.json of
-the main checkout. One BLAS thread; run it alone on the machine.
+removed on the closed cavity). Writes results/builder53/NAME.json of the
+main checkout (default measure53; a second pass, measure53_pass2, sizes how
+far this machine's timings drift between sessions). One BLAS thread; run it
+alone on the machine.
 """
 
 import os
@@ -71,6 +73,7 @@ def main() -> None:
     """Every system under both preconditioners; the record."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--repeats", type=int, default=5)
+    parser.add_argument("--name", default="measure53")
     args = parser.parse_args()
     commit = subprocess.run(
         ["git", "rev-parse", "--short", "HEAD"],
@@ -154,9 +157,8 @@ def main() -> None:
         "coarsest_cells": multigrid.COARSEST_CELLS,
         "rows": rows,
     }
-    (MAIN / "results" / "builder53" / "measure53.json").write_text(
-        json.dumps(record, indent=1)
-    )
+    out = MAIN / "results" / "builder53" / f"{args.name}.json"
+    out.write_text(json.dumps(record, indent=1))
 
 
 if __name__ == "__main__":

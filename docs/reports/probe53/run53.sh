@@ -10,7 +10,8 @@
 #   capture   item 6's systems from the base: five cases early and late, and the
 #             two development systems (capture53.py), launched together
 #   dev       nu and the power-iteration count on the development systems
-#             (dev53.py), alone
+#             (dev53.py), alone; first run on a draft of the cycle, rerun on
+#             commit A's code in the stage after (below)
 #   plants    commit A's planted defects (plant53.py)
 #   laminar   item 5: VAL-001, its stretched twin and VAL-002 under the default
 #             on the base and on commit A, launched together (check53.py)
@@ -21,6 +22,9 @@
 #             Annex 20 row again under jacobi, the product rows on 80x30 and
 #             160x60 under each, VAL-016 under multigrid, and VAL-001, its
 #             stretched twin and VAL-002 under multigrid
+#   after     alone, at the end: dev53.py rerun on the committed code, item 6's
+#             second pass (measure53_pass2) and a cycle's time by level
+#             (anatomy53.py)
 #   tables    every table of the report, from the records (tables53.py)
 set -u
 PY=.venv/Scripts/python
@@ -87,11 +91,16 @@ case "$stage" in
         --preconditioner multigrid
     done
     ;;
+  after)
+    alone dev "$PROBE/dev53.py"
+    alone measure_pass2 "$PROBE/measure53.py" --name measure53_pass2
+    alone anatomy "$PROBE/anatomy53.py"
+    ;;
   tables)
     "$PY" "$PROBE/tables53.py"
     ;;
   *)
-    echo "usage: run53.sh capture|dev|plants|laminar|measure|whole|tables" >&2
+    echo "usage: run53.sh capture|dev|plants|laminar|measure|whole|after|tables" >&2
     exit 2
     ;;
 esac

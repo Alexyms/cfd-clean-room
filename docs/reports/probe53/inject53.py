@@ -11,8 +11,9 @@ carries ``solver.pressure_preconditioner: P`` and passes the committed
 validation with it; then runs prompt 51's driver
 (docs/reports/probe51/product51.py ``run``, or val016_51.py) from this
 checkout unchanged, its records redirected to results/builder53/ of the main
-checkout, which also gain the preconditioner and the count of configurations
-built under it. The drivers build the product row of prompt 48 (standard upwind)
+checkout, which also gain the preconditioner, the count of configurations
+built under it, and every solver's pressure cap hits and stage seconds (the
+committed solver class is wrapped to keep its instances). The drivers build the product row of prompt 48 (standard upwind)
 and VAL-016's measurement exactly as they did for prompt 51, so the records
 compare with prompt 51's ``cg`` records, the Jacobi solve on the same code.
 """
@@ -44,6 +45,7 @@ PROBE51 = HERE / "docs" / "reports" / "probe51"
 
 
 INJECTED = [0]
+SOLVERS: list = []
 
 
 def inject(root: Path, preconditioner: str) -> None:
@@ -61,6 +63,17 @@ def inject(root: Path, preconditioner: str) -> None:
         INJECTED[0] += 1
 
     config_module.SimConfig._validate_and_load = with_key
+    solver_module = importlib.import_module("src.solver_staggered")
+    committed = solver_module.StaggeredSolver
+
+    class KeptSolver(committed):  # type: ignore[misc, valid-type]
+        """The committed solver, kept so its cap count and stage times can be read."""
+
+        def __init__(self, *a: object, **k: object) -> None:
+            super().__init__(*a, **k)
+            SOLVERS.append(self)
+
+    solver_module.StaggeredSolver = KeptSolver
 
 
 def main() -> None:
@@ -100,6 +113,9 @@ def main() -> None:
     record = json.loads(path.read_text())
     record["preconditioner"] = args.preconditioner
     record["configs_injected"] = INJECTED[0]
+    record["solvers"] = len(SOLVERS)
+    record["pressure_cap_hits"] = sum(solver.pressure_cap_hits for solver in SOLVERS)
+    record["stage_seconds"] = [dict(solver.stage_seconds) for solver in SOLVERS]
     path.write_text(json.dumps(record))
     print(
         f"{name}: {INJECTED[0]} configurations under {args.preconditioner}", flush=True
