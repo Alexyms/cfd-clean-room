@@ -509,6 +509,25 @@ The change is accepted when all of the following are demonstrated:
    authors' steady RANS comparison (2019), Eur J Mech B/Fluids 75:228-243, DOI
    10.1016/j.euromechflu.2018.10.003; alternatives closer to the product's regime in ADR-012 G
    (vi). Method: test and report.
+
+   *Note 2026-10-15 (prompt 55, measured; status stays OPEN until Alex sets the allowance).* The
+   case is built and measured on case I of Khayrullina et al. (2017), Re 8,000, w_jet 16 mm, h_jet /
+   w_jet 22.5, the data digitised from the paper's figures (`validation/impinging_jet.py`; the
+   lateral profiles at five of the six heights rest on the paper's Gaussian fit, the open-marker
+   curves not being readable). The domain is 68 w_jet wide with fixed-flow outlets over the whole of
+   both sides, a choice checked with a 100 w_jet run that moves the centreline by 0.03 V0 toward the
+   data. Standard with `upwind` on 272x90 and 408x135, with `umist` on 408x135, and RNG with `upwind`
+   on 408x135: no run stops by the rule; all five are bounded at the 20,000 cap in a cycle beside the
+   outlets, 3 to 4 w_jet from a side wall, the jet still; RNG's residual is the one still falling at
+   the cap (2.7e-6). At the cap the standard model's centreline is within 0.10 V0 (coarse) and 0.13
+   V0 (fine) of the data, its potential core 6.5 to 7.6 w_jet against 4.8, its spreading rate within
+   0.005 of the data's 0.099, and its k at the stagnation point 1.26 to 1.35 times the PIV estimate
+   0.75 I_uv^2 V0^2 (1.9 to 2.0 times the in-plane half-sum), while RNG's is within 1% of it with a
+   centreline 0.21 V0 off at worst. The harness row `val020_272x90` reports the same comparison;
+   `tests/test_impinging_jet.py` pins the loader, the data and the readers. By the outcome the prompt
+   wrote, RNG not converging within the cap means the product stays standard; the report's section
+   7 asks Alex whether that stands given RNG's falling residual, and about the allowance, the stop
+   on the outlet cycle and the domain width (`docs/reports/ecr002_val020_impinging_jet.md`).
 14. **A trend-level concentration check (VAL-021).** Added 2026-10-09 (Alex, prompt 45). OPEN:
    the threshold set by Alex from first results. The two-dimensional model's high- and
    low-concentration regions against a measured three-dimensional room, compared for trend, not
@@ -567,3 +586,4 @@ architecture, and the acceptance criteria are sufficient to close the change.
 | 2026-10-11 | Alex's decisions on prompt 49 (prompt 50): the VAL-017 allowance (criterion 9's note), the VAL-017 run moved to a harness row, and condition (e)'s scale the molecular nu plus the FLUID-cell median of nu_t per outer iteration, rule version 5. Notes in section 8 step 7 and criterion 9; ADR-012 decision 6 and section E carry the dated amendments. | Alex Moroz-Smietana |
 | 2026-10-13 | Step 7, second case, VAL-019 measured (prompt 52, branch feature/ecr002-val019-backstep): the backward-facing step's case, loader, data and comparison built; the precursor sets the upstream length at 114 H; three standard grids, one umist run and one RNG run; the standard model reattaches 22% short on the medium grid, the schemes agreeing, RNG diverging at the outlet; reported, unscored. Note under criterion 8; `docs/reports/ecr002_val019_backstep.md`. No threshold set. | Claude (builder) |
 | 2026-10-11 | Step 7, (e)'s scale built and VAL-017 run as a harness row (prompt 50, branch feature/ecr002-rule-e-scale): rule version 5, laminar stops bitwise unchanged, the Annex 20 row stops at the file's tolerance and passes the allowance, the product rows stop 2.4% sooner with fields unchanged to 7e-9; CI runs the suite once. Criterion 9 PASS; `docs/reports/ecr002_rule_e_scale.md`. | Claude (builder) |
+| 2026-10-15 | Step 7, third case, VAL-020 measured (prompt 55, branch feature/ecr002-val020-impinging-jet): the plane impinging jet's case, loader, digitised data and comparison built; standard on two grids and two schemes, RNG on the finer; every run bounded at the cap in a cycle beside the outlets, RNG's residual the one still falling; the standard centreline within 0.10 to 0.13 V0, the spreading rate within 0.005, the stagnation k 1.3 times the PIV estimate where RNG's is within 1%; reported, unscored. Note under criterion 13; `docs/reports/ecr002_val020_impinging_jet.md`. No threshold set. | Claude (builder) |
