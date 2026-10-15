@@ -500,6 +500,12 @@ laminar cases, where Jacobi needs a few hundred iterations, it stays the larger 
 
 Questions for Alex, with what the measurements say about each; not decisions.
 
+**Decision 2026-10-14 (Alex, prompt 54):** question 1's option (1). `multigrid` becomes the
+default `pressure_preconditioner` for every case: every whole run stopped where its Jacobi record
+did with the same answers, and the step's medium grid ran 4.7 times faster per outer iteration.
+`jacobi` stays selectable, for parity work and the Phase 6 port. The laminar hashes are
+rebaselined once, in the change that makes it the default.
+
 1. **The default.** By the prompt's reading of its outcomes, (d) and (f) holding means the default
    is Alex's to change. (f) holds with room for the session drift of section 6.2. (d) holds on the
    step and the product's 320x120 and fails on the Annex 20 room, where Jacobi-PCG needs only

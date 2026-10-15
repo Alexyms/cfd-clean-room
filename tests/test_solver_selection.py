@@ -56,9 +56,15 @@ def built(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 
 
 @pytest.mark.integration
-def test_harness_method_selects_the_solver(built: list[str], tmp_path: Path) -> None:
-    """The row's method, definition and stage keys all come from the solver that ran."""
-    method = "staggered-cg"
+@pytest.mark.parametrize("method", ["staggered-mgcg", "staggered-cg"])
+def test_harness_method_selects_the_solver(
+    built: list[str], tmp_path: Path, method: str
+) -> None:
+    """The row's method, definition and stage keys all come from the solver that ran.
+
+    The label also selects the pressure preconditioner the row records
+    (prompt 54).
+    """
     results = tmp_path / "results.jsonl"
     code = benchmark.main(
         [
@@ -78,6 +84,10 @@ def test_harness_method_selects_the_solver(built: list[str], tmp_path: Path) -> 
         json.loads(line) for line in results.read_text(encoding="utf-8").splitlines()
     ]
     assert row["method"] == method
+    assert (
+        row["params"]["pressure_preconditioner"]
+        == benchmark.METHOD_PRECONDITIONERS[method]
+    )
     assert (
         row["work"]["cell_update_definition"]
         == benchmark.CELL_UPDATE_DEFINITIONS[method]
@@ -175,7 +185,7 @@ def test_staggered_work_excludes_the_outlet_faces() -> None:
 @pytest.mark.integration
 def test_viewer_method_selects_the_solver(built: list[str], tmp_path: Path) -> None:
     """The viewer builds the named solver and names the file after the method."""
-    method = "staggered-cg"
+    method = view_field.DEFAULT_METHOD
     path = view_field.solve_and_save(TINY, tmp_path, method)
     assert built == ["staggered"]
     assert path == tmp_path / f"{TINY}_{method}.npz"
@@ -210,7 +220,11 @@ def test_every_script_files_its_results_under_the_current_solvers_one_label() ->
     label = STAGGERED_METHODS[PRESSURE_SOLVER_VERSION]
     for module in (benchmark, self_convergence, view_field):
         assert label == module.STAGGERED_METHOD, module.__name__
-        assert (label,) == module.METHODS
+        if module is benchmark:
+            # The harness also runs the diagonal, under its own label.
+            assert (label, benchmark.CG_JACOBI_METHOD) == module.METHODS
+        else:
+            assert (label,) == module.METHODS
         tree = ast.parse(Path(module.__file__).read_text(encoding="utf-8"))
         bound = [
             target.id

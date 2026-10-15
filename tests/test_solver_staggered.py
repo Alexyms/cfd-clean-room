@@ -201,7 +201,13 @@ class TestContract:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A solve that fails before its first correction reports none of the last one."""
-        config = _ruled("cavity", (6, 6), max_pressure_iter=2, max_simple_iter=5)
+        config = _ruled(
+            "cavity",
+            (6, 6),
+            pressure_preconditioner="jacobi",
+            max_pressure_iter=2,
+            max_simple_iter=5,
+        )
         _mesh, _bc, solver = _build(config)
         solver.solve_steady()
         assert solver.last_pressure_iterations == 2
@@ -643,6 +649,7 @@ class TestCappedCorrections:
             "cavity",
             (6, 6),
             stopping_rule="velocity_step",
+            pressure_preconditioner="jacobi",
             max_pressure_iter=1,
             max_simple_iter=12,
         )
@@ -672,6 +679,7 @@ class TestCappedCorrections:
             "cavity",
             (6, 6),
             stopping_rule="velocity_step",
+            pressure_preconditioner="jacobi",
             max_pressure_iter=1,
             max_simple_iter=2000,
         )

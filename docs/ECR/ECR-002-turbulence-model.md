@@ -361,6 +361,14 @@ The change is accepted when all of the following are demonstrated:
    there). The base's and the branch's hashes must come from the same machine, and the saved
    hashes belong to the machine that took them, the AMD Ryzen AI 9 HX 370 the rows record. On
    another machine the base is solved again there, at the step's base commit.
+
+   *Note 2026-10-14: the baseline again (prompt 54).* Multigrid became the default pressure
+   preconditioner, which changes every laminar bit once more. The rows are retaken under it
+   (`benchmarks/results.jsonl`, method `staggered-mgcg`, commit 759b3ad) and the face hashes
+   of `val001_80x40`, `val001_80x40_stretched` and `val002_80x80` under the default are in
+   `docs/SYSTEM.md` (REQ-S16) and `docs/reports/multigrid_default.md`; the `staggered-cg`
+   rows and hashes above are the diagonal's and are kept, and reproduce bitwise under the
+   solver key `pressure_preconditioner: jacobi`. Later steps reproduce the new rows.
 2. **Decaying turbulence (VAL-015).** In a closed box at rest, k and eps follow the exact solution
    of `dk/dt = -eps`, `deps/dt = -C_2 eps^2 / k` with an error that falls at first order in dt,
    observed order 0.9 to 1.1. Method: test.

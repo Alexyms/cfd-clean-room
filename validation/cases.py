@@ -22,7 +22,7 @@ import numpy as np
 import yaml
 
 from src.boundary_staggered import StaggeredBoundary
-from src.config import VELOCITY_STEP, SimConfig
+from src.config import PRESSURE_PRECONDITIONERS, VELOCITY_STEP, SimConfig
 from src.mesh import Mesh, geometric_faces, ratio_for_wall_spacing
 
 CONFIG_DIR = Path(__file__).resolve().parent.parent / "configs"
@@ -445,4 +445,37 @@ def with_velocity_step(config: SimConfig) -> SimConfig:
     """
     out = copy.copy(config)
     out.stopping_rule = VELOCITY_STEP
+    return out
+
+
+def with_pressure_preconditioner(config: SimConfig, preconditioner: str) -> SimConfig:
+    """A copy of a case configuration that names its pressure preconditioner.
+
+    The harness runs a case under the preconditioner its method label names
+    (scripts/benchmark.py), whatever the case file says. Nothing else changes.
+
+    Parameters
+    ----------
+    config : SimConfig
+        A loaded case configuration. Not modified.
+    preconditioner : str
+        One of ``PRESSURE_PRECONDITIONERS``.
+
+    Returns
+    -------
+    SimConfig
+        A shallow copy with ``pressure_preconditioner`` set.
+
+    Raises
+    ------
+    ValueError
+        If the preconditioner is not one of ``PRESSURE_PRECONDITIONERS``.
+    """
+    if preconditioner not in PRESSURE_PRECONDITIONERS:
+        raise ValueError(
+            f"pressure preconditioner must be one of {list(PRESSURE_PRECONDITIONERS)}, "
+            f"got {preconditioner!r}"
+        )
+    out = copy.copy(config)
+    out.pressure_preconditioner = preconditioner
     return out

@@ -3,7 +3,9 @@
 ## Status
 Accepted (built). Built in ECR-003 step 1 (prompts 37 to 37c, PR 62, merged 2026-10-07) and
 measured on the laminar baseline in step 2 (prompt 38); the section "Planned against built" was
-added at step 3 on 2026-10-07, when ECR-003 closed [5, 6].
+added at step 3 on 2026-10-07, when ECR-003 closed [5, 6]. Amended 2026-10-14 (prompt 54): multigrid
+preconditioning, decision 1's named successor, became the default; see the note under
+decision 1 and the last rows of the planned-against-built table.
 Accepted 2026-10-06 by Alex, each of the six decisions below as ranked first. Proposed 2026-10-06, with ECR-003 (`docs/ECR/ECR-003-pressure-solver.md`), from the measurements in
 `docs/reports/pressure_solver_ecr003.md` [1]. Premise review 36 and `/cfd-test 36` found no Critical
 and four distinct Bugs between them; the fix pass of prompt 36b revised this design on their
@@ -32,6 +34,10 @@ that carries the detail. The ranking is the builder's, from the measurements.
    not the probe's bilinear geometric multigrid, whose setup by probing cost 120 to 175 ms every
    correction (the report, section 7.3). Whether it becomes the default is decided on its
    measurements.
+   Decided 2026-10-14 (Alex, prompt 54): `multigrid` becomes the default `pressure_preconditioner`,
+   from `docs/reports/pressure_multigrid.md`: every whole run stopped where its Jacobi record
+   did, with the same answers, and the step's medium grid ran 4.7 times faster per outer
+   iteration. `jacobi` stays selectable, for parity work and the Phase 6 port.
 2. Dependencies: NumPy only; no SciPy or pyamg at runtime.
    Confirmed 2026-10-14 (Alex, prompt 53) for the successor: NumPy only and data-parallel, so the
    GPU path stands.
@@ -477,6 +483,8 @@ planned it, against what was built and measured.
 | ECR-003 section 4: a tight level "costs little against a sweep" | On the 80x80 cavity the two CG rows take between about 2% and 18% more wall time than the two Jacobi rows of identical arithmetic, inside the 7% to 8% spread between identical runs, with the outer counts within 0.27%: 265 CG iterations per correction at the median against the Jacobi row's 192 sweeps on average at its loose stop. Measured; no cost difference resolved; no action taken | The cost case rests on the product mesh, where a sweep-based correction needs 28,000 to 378,000 sweeps (section A), not on the validation cases [6, sections 4 and 5]. PROJECT_PLAN's efficiency pass lists a tolerance loose early and tight near the stop as a candidate, not decided |
 | Section C: REQ-N03 as written; Phase 6's test runs both loops for the same iteration count | Not built (Phase 6). Step 2 found the face bits depend on the BLAS kernel: one thread or many gives the same hash on one machine, and OpenBLAS picks its `ddot` kernel by CPU | ECR-002 criterion 1 compares hashes taken on one machine [6, section 7] |
 | Decision 5: the C path deferred | Deferred; PROJECT_PLAN's Phase 6 deliverable `csolver/pressure_solve.cu` is a CG kernel | |
+| Decision 1's named successor, multigrid preconditioning of the same CG loop "if a finer mesh makes CG too slow" | Built as an option in prompt 53 and the default since prompt 54 (Alex, 2026-10-14): `src/multigrid.py`, additive-correction multigrid by 2x2 aggregation, one V(1,1) cycle per CG iteration, the smoother weight fixed at 2/3 on every level. `pressure_preconditioner: jacobi` stays selectable and is bitwise the earlier loop, for parity work and the Phase 6 port | Every whole run measured stops where its Jacobi record stopped with the same answers, and the step's medium grid ran several times faster per outer iteration (`docs/reports/pressure_multigrid.md`). The coarse operators are weakly diagonally dominant by construction, so the power iterations of prompt 53 returned 2 within a percent and were replaced by the fixed weight with no change in any captured system's iteration count; `Multigrid` refuses a finest system that is not dominant (`docs/reports/multigrid_default.md`, sections 2 and 5) |
+| The solver version and the method label (review 37 S4) | `PRESSURE_SOLVER_VERSION` 3 with the label `staggered-mgcg`; the harness label selects the preconditioner, so `staggered-cg` runs the diagonal and its stored rows keep their label | The default changes every iterate and so every saved history; every laminar face hash is retaken once, beside the diagonal's, which are kept (`docs/reports/multigrid_default.md`, section 6; `docs/SYSTEM.md`, REQ-S16) |
 | Decision 6: the outlet drift to ECR-002 step 3, the finer-grid non-convergence to ECR-002 step 5 | Issue 61 for step 3; step 5's row in ECR-002 section 8 names both the finer-grid finding and the sweep result it retakes under CG | Step 3 notes in ECR-002, 2026-10-07 |
 
 **Note 2026-10-14 (prompt 53): decision 1's named successor, built as an option.** Built as
@@ -496,6 +504,8 @@ less (review 53 S4). The coarse operators turned out weakly diagonally dominant 
 construction, so the power iterations, kept as the prompt asked, return 2 to within a percent
 (section 2 there). Whether `multigrid` becomes the default, with the laminar hashes rebaselined
 once, is Alex's decision on that report's section 8.
+
+**Note 2026-10-14 (prompt 54): the successor is the default.** Alex decided on that report's section 8: `multigrid` is the default `pressure_preconditioner`, and `jacobi` stays selectable. The smoother weight is the fixed 2/3 on every level, the power iterations removed (the coarse operators are weakly diagonally dominant, so `lambda_max(D^-1 A)` is at most 2 by Gershgorin). The default changes every iterate, so `PRESSURE_SOLVER_VERSION` is 3 and the laminar baseline is retaken once; the measurements are in `docs/reports/multigrid_default.md`.
 
 ## Consequences
 **Positive.** A steady product solve takes minutes, not hours or days. The stop measures what it
