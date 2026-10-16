@@ -2,7 +2,7 @@
 
 Usage:
     python transport56.py run NAME SOURCE [--schmidt S] [--cfl C] [--cap-seconds T]
-                                          [--tag T] [--concurrent N]
+                                          [--tag T] [--concurrent N] [--at-cap]
 
 NAME is a converged flow record of coupled56.py under results/builder56/
 (L0_320x120 and the like); SOURCE is S1, S2 or S3, prompt 47's squares
@@ -12,7 +12,11 @@ differences, each marked `# prompt 56:` below: the turbulent Schmidt
 number is set in the configuration mapping the march builds
 (transport.turbulent_schmidt, --schmidt, 0.7 by default), the label
 carries it (transport_NAME_SOURCE_scS[_TAG]), and the record keeps the
-number of processes the march shared the machine with. Everything else,
+number of processes the march shared the machine with. A fourth, added
+after the flows ran: --at-cap marches the field of a record that reached
+max_simple_iter, as a labelled supplement (the label gains "_cap" and the
+record says so); without it such a record is refused, as prompt 47's
+march refused it. Everything else,
 the two classes, the Courant number 0.4, the frozen faces and eddy
 viscosity, the steady rule and the 600 s cap, the scoring, is the
 committed prompt 47 code, imported where it is a function.
@@ -92,6 +96,7 @@ def march(
     schmidt: float,
     concurrent: int,
     tag: str = "",
+    allow_cap: bool = False,
 ) -> dict:
     """March both classes on the record NAME from the source square to the steady rule or the cap.
 
@@ -99,7 +104,13 @@ def march(
     differences are marked.
     """
     rec = json.loads((OUT / f"{name}.json").read_text())
-    if rec["stop"] != "error_estimate_and_continuity":
+    at_cap = rec["stop"] == "max_simple_iter"  # prompt 56: the labelled supplement
+    if at_cap and not allow_cap:
+        raise ValueError(
+            f"{name} did not converge ({rec['stop']}); --at-cap marches the field at "
+            "the cap as a labelled supplement"
+        )
+    if not at_cap and rec["stop"] != "error_estimate_and_continuity":
         raise ValueError(f"{name} did not converge ({rec['stop']})")
     kept = np.load(OUT / f"{name}.npz")
     raw = json.loads(json.dumps(rec["raw"]))
@@ -125,7 +136,11 @@ def march(
     touched = surfaces_touched(box, raw)
     tree = commit()
     # prompt 56: the label carries the Schmidt number.
-    label = f"transport_{name}_{source_name}_sc{schmidt:g}" + (f"_{tag}" if tag else "")
+    label = (
+        f"transport_{name}_{source_name}_sc{schmidt:g}"
+        + ("_cap" if at_cap else "")
+        + (f"_{tag}" if tag else "")
+    )
     started = datetime.now().isoformat(timespec="seconds")
     print(
         f"{label} start {started} commit {tree} cfl {cfl} Sc_t {schmidt:g} dt {dt:.4e} "
@@ -214,6 +229,8 @@ def march(
         "flow_record": name,
         "flow_commit": rec["commit"],
         "flow_face_hash": rec["face_hash"],
+        "flow_stop": rec["stop"],  # prompt 56
+        "at_cap": at_cap,  # prompt 56: a supplement, not a converged room
         "commit": tree,
         "started": started,
         "seconds": seconds,
@@ -346,6 +363,7 @@ def run(args: argparse.Namespace) -> None:
         float(args.schmidt),
         args.concurrent,
         tag=args.tag,
+        allow_cap=args.at_cap,
     )
 
 
@@ -361,6 +379,7 @@ def main() -> None:
     p.add_argument("--cap-seconds", type=float, default=CAP_SECONDS)
     p.add_argument("--emission", type=float, default=EMISSION)
     p.add_argument("--tag", default="")
+    p.add_argument("--at-cap", action="store_true")
     p.add_argument("--concurrent", type=int, default=1)
     p.set_defaults(func=run)
     args = parser.parse_args()

@@ -26,7 +26,6 @@ the layout's score.
 
 import argparse
 import json
-import re
 import shutil
 import sys
 from pathlib import Path
@@ -45,6 +44,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "docs" / "reports" / "probe47"))
 
 import figures47  # noqa: E402
+import tables56  # noqa: E402
 from figures47 import (  # noqa: E402
     BAR_LENGTH,
     DPI,
@@ -75,7 +75,6 @@ PROCESS_SURFACES = ("litho_tool top", "etch_chamber top")
 CLASS_COLOUR = {"2": "tab:cyan", "4": "gold"}
 COLOUR_FLOOR = 1e-6
 BAR_FLOOR = 1e-3
-TRANSPORT = re.compile(r"^transport_L\d_\d+x\d+_S\d_sc[\d.]+$")
 
 
 def load(name: str) -> tuple[dict, dict]:
@@ -125,28 +124,26 @@ def process_deposition(marches: list[dict], k: str) -> dict[str, float]:
     return out
 
 
+def march_label(layout: str, source: str) -> str:
+    """The march record of a layout's source on the product grid at Sc_t 0.7, the supplement included."""
+    return tables56.transport_key(layout, PRODUCT_GRID, source, float(BASE_SC))
+
+
 def compare(args: argparse.Namespace) -> None:
     """The comparison figure of one class: the three layouts on 320x120 at Sc_t 0.7."""
     k = args.size_class
-    flows = {layout: load(f"{layout}_{PRODUCT_GRID}") for layout in LAYOUTS}
+    flows = {
+        layout: load(tables56.flow_name(layout, PRODUCT_GRID)) for layout in LAYOUTS
+    }
     marches = {
         layout: [
-            json.loads(
-                (
-                    OUT / f"transport_{layout}_{PRODUCT_GRID}_{source}_sc{BASE_SC}.json"
-                ).read_text()
-            )
+            json.loads((OUT / f"{march_label(layout, source)}.json").read_text())
             for source in SOURCES
         ]
         for layout in LAYOUTS
     }
     plumes = {
-        layout: dict(
-            np.load(
-                OUT
-                / f"transport_{layout}_{PRODUCT_GRID}_{PLUME_SOURCE}_sc{BASE_SC}.npz"
-            )
-        )
+        layout: dict(np.load(OUT / f"{march_label(layout, PLUME_SOURCE)}.npz"))
         for layout in LAYOUTS
     }
     diameter = marches["L0"][0]["per_class"][k]["diameter"]
@@ -196,9 +193,10 @@ def compare(args: argparse.Namespace) -> None:
                 strm.lines, ax=axes[0, :].tolist(), label="speed (m/s)", shrink=0.9
             )
         draw_room(ax, raw)
+        name = tables56.label_of(layout, PRODUCT_GRID)
         ax.set_title(
-            f"{layout}, {CHANGES[layout]}: streamlines coloured by speed "
-            f"({rec['outer']:,} outer iterations)",
+            f"{name}, {CHANGES[layout]}: streamlines coloured by speed "
+            f"({rec['outer']:,} outer iterations, {rec['stop']})",
             fontsize=9,
         )
 
@@ -243,7 +241,7 @@ def compare(args: argparse.Namespace) -> None:
             )
         s = scores[layout]
         ax.set_title(
-            f"{layout} score {s['score']:.3g} per s per m depth "
+            f"{name} score {s['score']:.3g} per s per m depth "
             f"(litho top {s[PROCESS_SURFACES[0]]:.3g}, etch top {s[PROCESS_SURFACES[1]]:.3g}); "
             f"deposition per 0.2 m segment, S1 to S3 summed",
             fontsize=8,
@@ -270,13 +268,11 @@ def everything(_args: argparse.Namespace) -> None:
         if rec.get("stop") == "error_estimate_and_continuity" and "core" in rec:
             fields(argparse.Namespace(name=path.stem))
     for path in sorted(OUT.glob("transport_*.json")):
-        if TRANSPORT.match(path.stem):
+        if tables56.TRANSPORT.match(path.stem):
             concentration(argparse.Namespace(label=path.stem))
     for k in ("2", "4"):
         if all(
-            (
-                OUT / f"transport_{layout}_{PRODUCT_GRID}_{source}_sc{BASE_SC}.json"
-            ).exists()
+            (OUT / f"{march_label(layout, source)}.json").exists()
             for layout in LAYOUTS
             for source in SOURCES
         ):

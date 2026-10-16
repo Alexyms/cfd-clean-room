@@ -79,7 +79,21 @@ CAP = 10000
 POSITION_TOL = 1e-9
 NAME = re.compile(r"^(?P<layout>L\d)_(?P<grid>\d+x\d+)(?P<rest>.*)$")
 TRANSPORT = re.compile(
-    r"^transport_(?P<flow>(?P<layout>L\d)_(?P<grid>\d+x\d+))_(?P<source>S\d)_sc(?P<sc>[\d.]+)(?P<tag>_.*)?$"
+    r"^transport_(?P<flow>(?P<layout>L\d)_(?P<grid>\d+x\d+)(?P<flowtag>_cap\d+)?)"
+    r"_(?P<source>S\d)_sc(?P<sc>[\d.]+)(?P<cap>_cap)?(?P<tag>_.*)?$"
+)
+# The supplementary rows (the report's section 5.2): L2 stopped by the rule on
+# no grid within the file's cap, so its marches run on the labelled rerun with
+# the cap at 12,000 (320x120, which stops by the rule) and on the field at the
+# cap (160x60, a cycle, not converged); the tables mark them L2*. A layout and
+# grid not listed here reads the run of the file's own cap.
+SUPPLEMENT: dict[tuple[str, str], tuple[str, str]] = {
+    ("L2", "320x120"): ("L2_320x120_cap12000", ""),
+    ("L2", "160x60"): ("L2_160x60", "_cap"),
+}
+LEGEND = (
+    "L2* is supplementary: on 320x120 the rerun with the cap at 12,000, which stops "
+    "by the rule; on 160x60 the field at the cap, a cycle the rule does not stop on."
 )
 
 
@@ -135,12 +149,24 @@ def transport_records() -> dict[str, dict]:
         rec = load(path.stem)
         rec["_flow"], rec["_layout"], rec["_grid"] = m["flow"], m["layout"], m["grid"]
         rec["_source"], rec["_sc"] = m["source"], float(m["sc"])
+        rec["_supplementary"] = bool(m["flowtag"] or m["cap"])
         out[path.stem] = rec
     return out
 
 
+def flow_name(layout: str, grid: str) -> str:
+    """The flow record a layout's marches on a grid read, the supplement included."""
+    return SUPPLEMENT.get((layout, grid), (f"{layout}_{grid}", ""))[0]
+
+
+def label_of(layout: str, grid: str) -> str:
+    """The layout's name in a table, starred when its row is supplementary."""
+    return layout + ("*" if (layout, grid) in SUPPLEMENT else "")
+
+
 def transport_key(layout: str, grid: str, source: str, sc: float) -> str:
-    return f"transport_{layout}_{grid}_{source}_sc{sc_key(sc)}"
+    flow, suffix = SUPPLEMENT.get((layout, grid), (f"{layout}_{grid}", ""))
+    return f"transport_{flow}_{source}_sc{sc_key(sc)}{suffix}"
 
 
 # ---------------------------------------------------------------------------
@@ -557,7 +583,8 @@ def transport(_args: argparse.Namespace) -> None:
                 f"it in some column):"
             )
             headers = ["Surface"] + [
-                f"{layout} {grid} Sc {sc_key(sc)}" for layout, grid, sc in present
+                f"{label_of(layout, grid)} {grid} Sc {sc_key(sc)}"
+                for layout, grid, sc in present
             ]
             table = [
                 [s]
@@ -626,6 +653,8 @@ def scores() -> dict:
             per_source[source] = {**parts, "sum": sum(parts.values())}
         out[f"{layout}/{grid}/{sc_key(sc)}/{k}"] = {
             "layout": layout,
+            "label": label_of(layout, grid),
+            "supplementary": (layout, grid) in SUPPLEMENT,
             "grid": grid,
             "sc": sc,
             "class": k,
@@ -648,6 +677,9 @@ def cases() -> list[tuple[str, float]]:
 def score(_args: argparse.Namespace) -> None:
     """The score per layout, grid, Sc_t and class, with its per-source terms."""
     s = scores()
+    if any(v["supplementary"] for v in s.values()):
+        print(LEGEND)
+        print()
     for k in CLASSES:
         rows = [v for v in s.values() if v["class"] == k]
         if not rows:
@@ -669,7 +701,7 @@ def score(_args: argparse.Namespace) -> None:
                 if v is None:
                     continue
                 table.append(
-                    [f"{layout}, {grid}, {sc_key(sc)}"]
+                    [f"{v['label']}, {grid}, {sc_key(sc)}"]
                     + [
                         f"{v['per_source'][src][PROCESS_SURFACES[0]]:.4g}, "
                         f"{v['per_source'][src][PROCESS_SURFACES[1]]:.4g}, "
@@ -703,6 +735,10 @@ def rankings(s: dict) -> list[dict]:
                     "diameter": s[score_key(order[0], grid, sc, k)]["diameter"],
                     "scores": entries,
                     "order": order,
+                    "labels": [label_of(layout, grid) for layout in order],
+                    "supplementary": [
+                        layout for layout in order if (layout, grid) in SUPPLEMENT
+                    ],
                     "l2_last": order[-1] == "L2",
                     "l0_or_l1_first": order[0] in ("L0", "L1"),
                 }
@@ -720,10 +756,13 @@ def ranking(_args: argparse.Namespace) -> None:
         "L2 last",
         "L0 or L1 first",
     ]
+    if any(r["supplementary"] for r in rows):
+        print(LEGEND)
+        print()
     table = [
         [
             f"{r['grid']}, {sc_key(r['sc'])}, {r['diameter'] * 1e6:g}",
-            " < ".join(r["order"]),
+            " < ".join(r["labels"]),
             ", ".join(f"{r['scores'][layout]:.4g}" for layout in LAYOUTS),
             "yes" if r["l2_last"] else "no",
             "yes" if r["l0_or_l1_first"] else "no",
@@ -808,10 +847,13 @@ def margins(_args: argparse.Namespace) -> None:
         "Sc_t's change to each score (320x120, largest of 0.2 and 1.3 against 0.7)",
         "Robust (exceeds every change)",
     ]
+    if any((layout, r["grid"]) in SUPPLEMENT for r in rows for layout in r["pair"]):
+        print(LEGEND)
+        print()
     table = [
         [
             f"{r['grid']}, {sc_key(r['sc'])}, {r['diameter'] * 1e6:g}",
-            ", ".join(r["pair"]),
+            ", ".join(label_of(layout, r["grid"]) for layout in r["pair"]),
             ", ".join(f"{v:.4g}" for v in r["scores"]),
             f"{r['difference']:.4g}; {fmt(r['relative'], 3)}",
             ", ".join(fmt(c, 3) for c in r["grid_change"]),
@@ -839,6 +881,10 @@ def hotspot_rows() -> list[dict]:
                 b = base["per_class"][k]
                 row = {
                     "layout": layout,
+                    "label": label_of(layout, PRODUCT_GRID),
+                    "supplementary": any(
+                        (layout, grid) in SUPPLEMENT for grid in GRIDS
+                    ),
                     "source": source,
                     "class": k,
                     "diameter": b["diameter"],
@@ -894,6 +940,9 @@ def hotspots(_args: argparse.Namespace) -> None:
             return "-"
         return f"{p['largest']}; {'yes' if p['largest_same_segment'] else 'no'}; {p['shared']}"
 
+    if any(r["supplementary"] for r in rows):
+        print(LEGEND)
+        print()
     table = []
     for r in rows:
         pairs = r["pairs"]
@@ -904,7 +953,7 @@ def hotspots(_args: argparse.Namespace) -> None:
         )
         table.append(
             [
-                f"{r['layout']}, {r['source']}, {r['diameter'] * 1e6:g}",
+                f"{r['label']}, {r['source']}, {r['diameter'] * 1e6:g}",
                 r["largest_320x120_sc0.7"],
                 cell(pairs.get("grids")),
                 cell(pairs.get("sc0.2")),
@@ -978,6 +1027,9 @@ def verdict(_args: argparse.Namespace) -> None:
         },
     }
     a["holds"] = all(v is True for v in a.values())
+    a["supplement_L2_320x120_cap12000_stops_by_the_rule"] = converged_run(
+        "L2_320x120_cap12000"
+    )
     out["a"] = a
 
     b = {
@@ -986,10 +1038,11 @@ def verdict(_args: argparse.Namespace) -> None:
         "l2_last": sum(r["l2_last"] for r in ranks),
         "l0_or_l1_first": sum(r["l0_or_l1_first"] for r in ranks),
         "failing": [
-            f"{r['grid']}, {sc_key(r['sc'])}, class {r['class']}: {' < '.join(r['order'])}"
+            f"{r['grid']}, {sc_key(r['sc'])}, class {r['class']}: {' < '.join(r['labels'])}"
             for r in ranks
             if not (r["l2_last"] and r["l0_or_l1_first"])
         ],
+        "l2_rows_supplementary": sum(bool(r["supplementary"]) for r in ranks),
     }
     b["holds"] = b["orderings"] == b["expected"] and not b["failing"]
     out["b"] = b
@@ -1068,7 +1121,8 @@ def verdict(_args: argparse.Namespace) -> None:
             "(b) L0 or L1 first and L2 last in every ordering",
             "yes" if b["holds"] else "no",
             f"{b['orderings']} of {b['expected']} orderings; L2 last in {b['l2_last']}, "
-            f"L0 or L1 first in {b['l0_or_l1_first']}; failing: {b['failing'] or 'none'}",
+            f"L0 or L1 first in {b['l0_or_l1_first']}; failing: {b['failing'] or 'none'}; "
+            f"orderings whose L2 row is supplementary (L2*): {b['l2_rows_supplementary']}",
         ],
         [
             "(c) L0 and L1's difference smaller than the grid's change to either score, for at least one class (320x120)",
