@@ -268,8 +268,9 @@ say, at the resolution they hold:
   changes on the coarse grid; on the product grid L0 is behind the other two in every case, and
   L1 against L2* is a tie in three cases of four. The relative differences in the margin table
   show how small the resolved margins are at this class.
-- **What the tool can say.** On the process-top and removal metrics the ranking is robust and
-  the same in every case: the layout that sweeps the litho-top emission across the room is
+- **What the tool can say.** On process-top deposition (M1) and on removal of the 5 um class
+  (M3) the ranking is robust and the same in every case (removal of the 0.5 um class is
+  resolved only in part, as above): the layout that sweeps the litho-top emission across the room is
   best, the room as it is worst, and closing return 3 (L1) improves on the room as it is by every
   metric where the difference is resolved. On operator exposure the same poor layout is never
   ahead, so the three metrics disagree on L2 as a designer would expect them to, and the tool

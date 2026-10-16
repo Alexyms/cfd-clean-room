@@ -526,7 +526,7 @@ Questions for Alex; no decision is taken here.
 1. *The variant.* RNG did not converge within the cap on this case either, so by the outcome the
    prompt wrote the product stays standard and VAL-018's variant clause closes as "RNG not runnable
    in this solver on four cases". Two facts cut the other way and should be weighed: RNG's residual
-   falls monotonically to 2.7e-6 at the cap, four orders below the standard runs' cycle, with (b)
+   falls monotonically to 2.7e-6 at the cap, below the standard runs' cycle (the matrix gives the ratio), with (b)
    and (c) met, so a longer cap might have stopped it by the rule; and on the cap's fields RNG's k at
    the stagnation point is within 1% of the PIV estimate where standard's is 26 to 35% above it,
    although RNG's centreline is the worse of the two by a wide margin (a 10 w_jet core, 0.21 V0 off

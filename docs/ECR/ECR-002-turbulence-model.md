@@ -429,7 +429,7 @@ The change is accepted when all of the following are demonstrated:
    below about 5e-4 m^2/s on 80x30 at any sweep count measured (one, ten and fifty), so step 6
    needs decisions from Alex on the sweep count, the corner rule and a stronger aid before it
    opens. The report decides none of them.
-8. **The backward-facing step (VAL-019).** OPEN: the reattachment length and the profiles at
+8. **The backward-facing step (VAL-019).** Originally OPEN (the outcome is in the notes below): the reattachment length and the profiles at
    x/H = 1, 4, 6 and 10 against Driver and Seegmiller, the threshold set by Alex from a sourced
    range of standard k-epsilon results on this step (ADR-012 G (ii), decision 6). Method: test
    and report.
@@ -456,7 +456,7 @@ The change is accepted when all of the following are demonstrated:
    the result. The row records its known departures (the bubble about 20% short on the medium
    grid, half of it the grid) and the harness row `val019_656x60` pins them against regression.
    ADR-012 G (ii) carries the note.
-9. **The Annex 20 room (VAL-017).** OPEN: the threshold set by Alex from the departure of the
+9. **The Annex 20 room (VAL-017).** Originally OPEN (the outcome is in the notes below): the threshold set by Alex from the departure of the
    published standard k-epsilon prediction (Rong and Nielsen 2008) at the lines decision 6
    scores, or the spread across that report's models (ADR-012 G (iii)). Method: test and report.
    *Note 2026-10-11 (prompt 49, measured; status stays OPEN until Alex sets the allowance).* The
@@ -544,7 +544,7 @@ The change is accepted when all of the following are demonstrated:
    *Note 2026-10-15 (prompt 58): holds through PR 84.* Steps whose review found no Critical and
    no Bug carry the test report alone, as the policy allows (`docs/REVIEW_POLICY.md`); the gate
    pull request carries `/cfd-test 58`.
-13. **A planar impinging slot jet (VAL-020).** Added 2026-10-09 (Alex, prompt 45). OPEN: the
+13. **A planar impinging slot jet (VAL-020).** Added 2026-10-09 (Alex, prompt 45). Originally OPEN (the outcome is in the notes below): the
    threshold set by Alex from first results. Tells the standard model from RNG where a jet strikes
    a surface, which ADR-012 A found no planned case could. Data: Khayrullina, van Hooff, Blocken
    and van Heijst (2017), Exp Fluids 58(4):31, DOI 10.1007/s00348-017-2315-0, with the same
@@ -577,7 +577,7 @@ The change is accepted when all of the following are demonstrated:
    row `val020_272x90` pins them against regression. The variant question it was built to answer
    is decided: the product runs the standard variant (ADR-012 decision 2 as amended; criterion
    10's note).
-14. **A trend-level concentration check (VAL-021).** Added 2026-10-09 (Alex, prompt 45). OPEN:
+14. **A trend-level concentration check (VAL-021).** Added 2026-10-09 (Alex, prompt 45). Originally OPEN (the outcome is in the notes below):
    the threshold set by Alex from first results. The two-dimensional model's high- and
    low-concentration regions against a measured three-dimensional room, compared for trend, not
    point by point: Zhang and Chen (2006), Atmos Environ 40(18):3396-3408, DOI
