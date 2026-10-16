@@ -195,9 +195,9 @@ def compare(args: argparse.Namespace) -> None:
         draw_room(ax, raw)
         name = tables56.label_of(layout, PRODUCT_GRID)
         ax.set_title(
-            f"{name}, {CHANGES[layout]}: streamlines coloured by speed "
-            f"({rec['outer']:,} outer iterations, {rec['stop']})",
-            fontsize=9,
+            f"{name}, {CHANGES[layout]}: streamlines coloured by speed\n"
+            f"{rec['outer']:,} outer iterations, {rec['stop']}",
+            fontsize=8,
         )
 
         ax = axes[1, col]
@@ -218,9 +218,9 @@ def compare(args: argparse.Namespace) -> None:
         draw_room(ax, raw, source=tuple(plume_rec["source"]["box"]))
         c = plume_rec["per_class"][k]
         ax.set_title(
-            f"{PLUME_SOURCE} plume, {um} um ({c['stop']} at {c['t_end']:.0f} s): "
+            f"{PLUME_SOURCE} plume, {um} um, {c['stop']} at {c['t_end']:.0f} s\n"
             f"litho top {c['by_surface'].get(PROCESS_SURFACES[0], 0.0):.3g}, "
-            f"etch top {c['by_surface'].get(PROCESS_SURFACES[1], 0.0):.3g} per s per m",
+            f"etch top {c['by_surface'].get(PROCESS_SURFACES[1], 0.0):.3g} per s per m depth",
             fontsize=8,
         )
 
@@ -242,7 +242,7 @@ def compare(args: argparse.Namespace) -> None:
         s = scores[layout]
         ax.set_title(
             f"{name} score {s['score']:.3g} per s per m depth "
-            f"(litho top {s[PROCESS_SURFACES[0]]:.3g}, etch top {s[PROCESS_SURFACES[1]]:.3g}); "
+            f"(litho top {s[PROCESS_SURFACES[0]]:.3g}, etch top {s[PROCESS_SURFACES[1]]:.3g})\n"
             f"deposition per 0.2 m segment, S1 to S3 summed",
             fontsize=8,
         )
