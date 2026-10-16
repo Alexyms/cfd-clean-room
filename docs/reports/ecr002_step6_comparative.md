@@ -503,24 +503,24 @@ Deposition per surface, source S3, share of the deposition total (surfaces with 
 The five segments of largest deposition (surface | bin start), rate per s per m depth:
 | Run, class (um) | 1 | 2 | 3 | 4 | 5 |
 |---|---|---|---|---|---|
-| standard_160x60_S1, 0.5 | floor | x 1.2 (0.0142) | floor | x 1.4 (0.00908) | server_rack west | y 0.0 (0.000111) | server_rack west | y 0.2 (0.000103) | server_rack west | y 0.4 (9.19e-05) |
-| standard_160x60_S1, 5 | floor | x 1.2 (1.09) | floor | x 1.4 (0.693) | server_rack west | y 0.0 (8.55e-06) | server_rack west | y 0.2 (7.94e-06) | server_rack west | y 0.4 (7.05e-06) |
-| standard_160x60_S2, 0.5 | litho_tool top | x 3.6 (1.12) | litho_tool top | x 3.4 (0.745) | litho_tool top | x 3.8 (0.497) | litho_tool top | x 3.2 (0.478) | floor | x 3.0 (0.0998) |
-| standard_160x60_S2, 5 | litho_tool top | x 3.6 (85.7) | litho_tool top | x 3.4 (56.4) | litho_tool top | x 3.8 (38) | litho_tool top | x 3.2 (36) | floor | x 3.0 (7.49) |
-| standard_160x60_S3, 0.5 | floor | x 6.2 (0.00159) | floor | x 5.6 (5.4e-05) | hood_bench west | y 0.0 (1.8e-05) | hood_bench west | y 0.2 (1.23e-05) | hood_bench west | y 0.4 (8.77e-06) |
-| standard_160x60_S3, 5 | floor | x 6.2 (0.122) | floor | x 5.6 (0.0041) | hood_bench west | y 0.0 (1.39e-06) | hood_bench west | y 0.2 (9.52e-07) | hood_bench west | y 0.4 (6.76e-07) |
-| standard_160x60_upwind_S1, 0.5 | floor | x 1.2 (0.0108) | floor | x 1.4 (0.0068) | server_rack west | y 0.0 (8.34e-05) | server_rack west | y 0.2 (7.78e-05) | server_rack west | y 0.4 (7.16e-05) |
-| standard_160x60_upwind_S1, 5 | floor | x 1.2 (0.82) | floor | x 1.4 (0.518) | server_rack west | y 0.0 (6.4e-06) | server_rack west | y 0.2 (5.97e-06) | server_rack west | y 0.4 (5.49e-06) |
-| standard_160x60_upwind_S2, 0.5 | litho_tool top | x 3.6 (1.13) | litho_tool top | x 3.4 (0.753) | litho_tool top | x 3.8 (0.495) | litho_tool top | x 3.2 (0.482) | floor | x 3.0 (0.108) |
-| standard_160x60_upwind_S2, 5 | litho_tool top | x 3.6 (86.2) | litho_tool top | x 3.4 (57) | litho_tool top | x 3.8 (37.9) | litho_tool top | x 3.2 (36.3) | floor | x 3.0 (8.1) |
-| standard_160x60_upwind_S3, 0.5 | floor | x 6.2 (0.000761) | floor | x 5.6 (1.56e-05) | hood_bench west | y 0.0 (8.49e-06) | hood_bench west | y 0.2 (6.35e-06) | hood_bench west | y 0.4 (5.06e-06) |
-| standard_160x60_upwind_S3, 5 | floor | x 6.2 (0.0585) | floor | x 5.6 (0.00119) | hood_bench west | y 0.0 (6.56e-07) | hood_bench west | y 0.2 (4.9e-07) | hood_bench west | y 0.4 (3.9e-07) |
-| standard_320x120_upwind_S1, 0.5 | floor | x 1.2 (0.00456) | floor | x 1.4 (0.00285) | server_rack west | y 0.0 (3.46e-05) | server_rack west | y 0.2 (3.2e-05) | server_rack west | y 0.4 (2.89e-05) |
-| standard_320x120_upwind_S1, 5 | floor | x 1.2 (0.347) | floor | x 1.4 (0.217) | server_rack west | y 0.0 (2.65e-06) | server_rack west | y 0.2 (2.44e-06) | server_rack west | y 0.4 (2.21e-06) |
-| standard_320x120_upwind_S2, 0.5 | litho_tool top | x 3.6 (1.34) | litho_tool top | x 3.4 (1.01) | litho_tool top | x 3.2 (0.715) | litho_tool top | x 3.8 (0.451) | floor | x 3.0 (0.126) |
-| standard_320x120_upwind_S2, 5 | litho_tool top | x 3.6 (102) | litho_tool top | x 3.4 (76.9) | litho_tool top | x 3.2 (53.8) | litho_tool top | x 3.8 (34.6) | floor | x 3.0 (9.42) |
-| standard_320x120_upwind_S3, 0.5 | floor | x 6.2 (0.00012) | hood_bench west | y 0.0 (1.29e-06) | hood_bench west | y 0.2 (7.32e-07) | hood_bench west | y 0.4 (3.93e-07) | hood_bench west | y 0.6 (2.24e-07) |
-| standard_320x120_upwind_S3, 5 | floor | x 6.2 (0.00926) | floor | x 5.6 (5.72e-06) | hood_bench west | y 0.0 (9.97e-08) | hood_bench west | y 0.2 (5.65e-08) | hood_bench west | y 0.4 (3.03e-08) |
+| standard_160x60_S1, 0.5 | floor \| x 1.2 (0.0142) | floor \| x 1.4 (0.00908) | server_rack west \| y 0.0 (0.000111) | server_rack west \| y 0.2 (0.000103) | server_rack west \| y 0.4 (9.19e-05) |
+| standard_160x60_S1, 5 | floor \| x 1.2 (1.09) | floor \| x 1.4 (0.693) | server_rack west \| y 0.0 (8.55e-06) | server_rack west \| y 0.2 (7.94e-06) | server_rack west \| y 0.4 (7.05e-06) |
+| standard_160x60_S2, 0.5 | litho_tool top \| x 3.6 (1.12) | litho_tool top \| x 3.4 (0.745) | litho_tool top \| x 3.8 (0.497) | litho_tool top \| x 3.2 (0.478) | floor \| x 3.0 (0.0998) |
+| standard_160x60_S2, 5 | litho_tool top \| x 3.6 (85.7) | litho_tool top \| x 3.4 (56.4) | litho_tool top \| x 3.8 (38) | litho_tool top \| x 3.2 (36) | floor \| x 3.0 (7.49) |
+| standard_160x60_S3, 0.5 | floor \| x 6.2 (0.00159) | floor \| x 5.6 (5.4e-05) | hood_bench west \| y 0.0 (1.8e-05) | hood_bench west \| y 0.2 (1.23e-05) | hood_bench west \| y 0.4 (8.77e-06) |
+| standard_160x60_S3, 5 | floor \| x 6.2 (0.122) | floor \| x 5.6 (0.0041) | hood_bench west \| y 0.0 (1.39e-06) | hood_bench west \| y 0.2 (9.52e-07) | hood_bench west \| y 0.4 (6.76e-07) |
+| standard_160x60_upwind_S1, 0.5 | floor \| x 1.2 (0.0108) | floor \| x 1.4 (0.0068) | server_rack west \| y 0.0 (8.34e-05) | server_rack west \| y 0.2 (7.78e-05) | server_rack west \| y 0.4 (7.16e-05) |
+| standard_160x60_upwind_S1, 5 | floor \| x 1.2 (0.82) | floor \| x 1.4 (0.518) | server_rack west \| y 0.0 (6.4e-06) | server_rack west \| y 0.2 (5.97e-06) | server_rack west \| y 0.4 (5.49e-06) |
+| standard_160x60_upwind_S2, 0.5 | litho_tool top \| x 3.6 (1.13) | litho_tool top \| x 3.4 (0.753) | litho_tool top \| x 3.8 (0.495) | litho_tool top \| x 3.2 (0.482) | floor \| x 3.0 (0.108) |
+| standard_160x60_upwind_S2, 5 | litho_tool top \| x 3.6 (86.2) | litho_tool top \| x 3.4 (57) | litho_tool top \| x 3.8 (37.9) | litho_tool top \| x 3.2 (36.3) | floor \| x 3.0 (8.1) |
+| standard_160x60_upwind_S3, 0.5 | floor \| x 6.2 (0.000761) | floor \| x 5.6 (1.56e-05) | hood_bench west \| y 0.0 (8.49e-06) | hood_bench west \| y 0.2 (6.35e-06) | hood_bench west \| y 0.4 (5.06e-06) |
+| standard_160x60_upwind_S3, 5 | floor \| x 6.2 (0.0585) | floor \| x 5.6 (0.00119) | hood_bench west \| y 0.0 (6.56e-07) | hood_bench west \| y 0.2 (4.9e-07) | hood_bench west \| y 0.4 (3.9e-07) |
+| standard_320x120_upwind_S1, 0.5 | floor \| x 1.2 (0.00456) | floor \| x 1.4 (0.00285) | server_rack west \| y 0.0 (3.46e-05) | server_rack west \| y 0.2 (3.2e-05) | server_rack west \| y 0.4 (2.89e-05) |
+| standard_320x120_upwind_S1, 5 | floor \| x 1.2 (0.347) | floor \| x 1.4 (0.217) | server_rack west \| y 0.0 (2.65e-06) | server_rack west \| y 0.2 (2.44e-06) | server_rack west \| y 0.4 (2.21e-06) |
+| standard_320x120_upwind_S2, 0.5 | litho_tool top \| x 3.6 (1.34) | litho_tool top \| x 3.4 (1.01) | litho_tool top \| x 3.2 (0.715) | litho_tool top \| x 3.8 (0.451) | floor \| x 3.0 (0.126) |
+| standard_320x120_upwind_S2, 5 | litho_tool top \| x 3.6 (102) | litho_tool top \| x 3.4 (76.9) | litho_tool top \| x 3.2 (53.8) | litho_tool top \| x 3.8 (34.6) | floor \| x 3.0 (9.42) |
+| standard_320x120_upwind_S3, 0.5 | floor \| x 6.2 (0.00012) | hood_bench west \| y 0.0 (1.29e-06) | hood_bench west \| y 0.2 (7.32e-07) | hood_bench west \| y 0.4 (3.93e-07) | hood_bench west \| y 0.6 (2.24e-07) |
+| standard_320x120_upwind_S3, 5 | floor \| x 6.2 (0.00926) | floor \| x 5.6 (5.72e-06) | hood_bench west \| y 0.0 (9.97e-08) | hood_bench west \| y 0.2 (5.65e-08) | hood_bench west \| y 0.4 (3.03e-08) |
 <!-- tables47 transport end -->
 
 The figures `ecr002_step6_<room>_<source>_concentration.png` beside this report show each
@@ -535,18 +535,18 @@ micrometre bars' length; the hotspot table carries both classes' values.
 <!-- tables47 compare begin -->
 | Pair, source, class (um) | Hotspots in common (of 5) | In common | Largest: first | Largest: second | Same surface | Sensor order above the floor: first | Second | Orders equal |
 |---|---|---|---|---|---|---|---|---|
-| supplementary: grids, upwind, S1, 0.5 | 5 | floor | x 1.2; floor | x 1.4; server_rack west | y 0.0; server_rack west | y 0.2; server_rack west | y 0.4 | floor | x 1.2 | floor | x 1.2 | yes | near_door | near_door | yes |
-| supplementary: grids, upwind, S1, 5 | 5 | floor | x 1.2; floor | x 1.4; server_rack west | y 0.0; server_rack west | y 0.2; server_rack west | y 0.4 | floor | x 1.2 | floor | x 1.2 | yes | near_door | near_door | yes |
-| supplementary: schemes, 160x60, S1, 0.5 | 5 | floor | x 1.2; floor | x 1.4; server_rack west | y 0.0; server_rack west | y 0.2; server_rack west | y 0.4 | floor | x 1.2 | floor | x 1.2 | yes | near_door | near_door | yes |
-| supplementary: schemes, 160x60, S1, 5 | 5 | floor | x 1.2; floor | x 1.4; server_rack west | y 0.0; server_rack west | y 0.2; server_rack west | y 0.4 | floor | x 1.2 | floor | x 1.2 | yes | near_door | near_door | yes |
-| supplementary: grids, upwind, S2, 0.5 | 5 | litho_tool top | x 3.6; litho_tool top | x 3.4; litho_tool top | x 3.8; litho_tool top | x 3.2; floor | x 3.0 | litho_tool top | x 3.6 | litho_tool top | x 3.6 | yes | none | none | yes |
-| supplementary: grids, upwind, S2, 5 | 5 | litho_tool top | x 3.6; litho_tool top | x 3.4; litho_tool top | x 3.8; litho_tool top | x 3.2; floor | x 3.0 | litho_tool top | x 3.6 | litho_tool top | x 3.6 | yes | none | none | yes |
-| supplementary: schemes, 160x60, S2, 0.5 | 5 | litho_tool top | x 3.6; litho_tool top | x 3.4; litho_tool top | x 3.8; litho_tool top | x 3.2; floor | x 3.0 | litho_tool top | x 3.6 | litho_tool top | x 3.6 | yes | none | none | yes |
-| supplementary: schemes, 160x60, S2, 5 | 5 | litho_tool top | x 3.6; litho_tool top | x 3.4; litho_tool top | x 3.8; litho_tool top | x 3.2; floor | x 3.0 | litho_tool top | x 3.6 | litho_tool top | x 3.6 | yes | none | none | yes |
-| supplementary: grids, upwind, S3, 0.5 | 4 | floor | x 6.2; hood_bench west | y 0.0; hood_bench west | y 0.2; hood_bench west | y 0.4 | floor | x 6.2 | floor | x 6.2 | yes | none | none | yes |
-| supplementary: grids, upwind, S3, 5 | 5 | floor | x 6.2; floor | x 5.6; hood_bench west | y 0.0; hood_bench west | y 0.2; hood_bench west | y 0.4 | floor | x 6.2 | floor | x 6.2 | yes | none | none | yes |
-| supplementary: schemes, 160x60, S3, 0.5 | 5 | floor | x 6.2; floor | x 5.6; hood_bench west | y 0.0; hood_bench west | y 0.2; hood_bench west | y 0.4 | floor | x 6.2 | floor | x 6.2 | yes | none | none | yes |
-| supplementary: schemes, 160x60, S3, 5 | 5 | floor | x 6.2; floor | x 5.6; hood_bench west | y 0.0; hood_bench west | y 0.2; hood_bench west | y 0.4 | floor | x 6.2 | floor | x 6.2 | yes | none | none | yes |
+| supplementary: grids, upwind, S1, 0.5 | 5 | floor \| x 1.2; floor \| x 1.4; server_rack west \| y 0.0; server_rack west \| y 0.2; server_rack west \| y 0.4 | floor \| x 1.2 | floor \| x 1.2 | yes | near_door | near_door | yes |
+| supplementary: grids, upwind, S1, 5 | 5 | floor \| x 1.2; floor \| x 1.4; server_rack west \| y 0.0; server_rack west \| y 0.2; server_rack west \| y 0.4 | floor \| x 1.2 | floor \| x 1.2 | yes | near_door | near_door | yes |
+| supplementary: schemes, 160x60, S1, 0.5 | 5 | floor \| x 1.2; floor \| x 1.4; server_rack west \| y 0.0; server_rack west \| y 0.2; server_rack west \| y 0.4 | floor \| x 1.2 | floor \| x 1.2 | yes | near_door | near_door | yes |
+| supplementary: schemes, 160x60, S1, 5 | 5 | floor \| x 1.2; floor \| x 1.4; server_rack west \| y 0.0; server_rack west \| y 0.2; server_rack west \| y 0.4 | floor \| x 1.2 | floor \| x 1.2 | yes | near_door | near_door | yes |
+| supplementary: grids, upwind, S2, 0.5 | 5 | litho_tool top \| x 3.6; litho_tool top \| x 3.4; litho_tool top \| x 3.8; litho_tool top \| x 3.2; floor \| x 3.0 | litho_tool top \| x 3.6 | litho_tool top \| x 3.6 | yes | none | none | yes |
+| supplementary: grids, upwind, S2, 5 | 5 | litho_tool top \| x 3.6; litho_tool top \| x 3.4; litho_tool top \| x 3.8; litho_tool top \| x 3.2; floor \| x 3.0 | litho_tool top \| x 3.6 | litho_tool top \| x 3.6 | yes | none | none | yes |
+| supplementary: schemes, 160x60, S2, 0.5 | 5 | litho_tool top \| x 3.6; litho_tool top \| x 3.4; litho_tool top \| x 3.8; litho_tool top \| x 3.2; floor \| x 3.0 | litho_tool top \| x 3.6 | litho_tool top \| x 3.6 | yes | none | none | yes |
+| supplementary: schemes, 160x60, S2, 5 | 5 | litho_tool top \| x 3.6; litho_tool top \| x 3.4; litho_tool top \| x 3.8; litho_tool top \| x 3.2; floor \| x 3.0 | litho_tool top \| x 3.6 | litho_tool top \| x 3.6 | yes | none | none | yes |
+| supplementary: grids, upwind, S3, 0.5 | 4 | floor \| x 6.2; hood_bench west \| y 0.0; hood_bench west \| y 0.2; hood_bench west \| y 0.4 | floor \| x 6.2 | floor \| x 6.2 | yes | none | none | yes |
+| supplementary: grids, upwind, S3, 5 | 5 | floor \| x 6.2; floor \| x 5.6; hood_bench west \| y 0.0; hood_bench west \| y 0.2; hood_bench west \| y 0.4 | floor \| x 6.2 | floor \| x 6.2 | yes | none | none | yes |
+| supplementary: schemes, 160x60, S3, 0.5 | 5 | floor \| x 6.2; floor \| x 5.6; hood_bench west \| y 0.0; hood_bench west \| y 0.2; hood_bench west \| y 0.4 | floor \| x 6.2 | floor \| x 6.2 | yes | none | none | yes |
+| supplementary: schemes, 160x60, S3, 5 | 5 | floor \| x 6.2; floor \| x 5.6; hood_bench west \| y 0.0; hood_bench west \| y 0.2; hood_bench west \| y 0.4 | floor \| x 6.2 | floor \| x 6.2 | yes | none | none | yes |
 <!-- tables47 compare end -->
 
 The prompt's two comparisons as written: between grids with the standard variant, no pair

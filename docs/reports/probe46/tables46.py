@@ -108,12 +108,17 @@ def fmt(x: object, digits: int = 3) -> str:
     return f"{x:.{digits}g}"
 
 
+def _cell(text: str) -> str:
+    """A cell's text with its own pipes escaped, so GFM keeps it one cell (ADR-014 I)."""
+    return text.replace("|", "\\|")
+
+
 def print_table(headers: list[str], rows: list[list[str]]) -> None:
     """A markdown table."""
-    print("| " + " | ".join(headers) + " |")
+    print("| " + " | ".join(_cell(h) for h in headers) + " |")
     print("|" + "---|" * len(headers))
     for r in rows:
-        print("| " + " | ".join(r) + " |")
+        print("| " + " | ".join(_cell(c) for c in r) + " |")
     print()
 
 
