@@ -74,6 +74,8 @@ BASE_SC = 0.7
 PROCESS_SURFACES = ("litho_tool top", "etch_chamber top")
 HOTSPOTS_SHARED = 3
 SURFACE_SHARE_FLOOR = 1e-6
+# The product file's cap, which the timing projection is made at.
+CAP = 10000
 POSITION_TOL = 1e-9
 NAME = re.compile(r"^(?P<layout>L\d)_(?P<grid>\d+x\d+)(?P<rest>.*)$")
 TRANSPORT = re.compile(
@@ -164,7 +166,7 @@ def timing(_args: argparse.Namespace) -> None:
                 "eps_sweeps_mean": r["eps_sweeps_mean"],
                 "share_pressure": r["stage_seconds"]["pressure"] / r["seconds"],
                 "share_turbulence": r["stage_seconds"]["turbulence"] / r["seconds"],
-                "minutes_at_cap": r["seconds_per_outer"] * r["cap"] / 60,
+                "minutes_at_cap": r["seconds_per_outer"] * CAP / 60,
                 "concurrent_processes": r.get("concurrent_processes"),
                 "started": r["started"],
             }
@@ -325,7 +327,7 @@ def matrix(_args: argparse.Namespace) -> None:
                 "class": cls + (f" ({sub})" if sub else ""),
                 "stop": rec["stop"],
                 "outer": rec["outer"],
-                "cap": rec.get("cap"),
+                "cap": rec["raw"]["solver"]["max_simple_iter"],
                 "residual_min": rec["residual_min"],
                 "residual_min_at": rec["residual_min_at"],
                 "residual_end": rec["residual_end"],

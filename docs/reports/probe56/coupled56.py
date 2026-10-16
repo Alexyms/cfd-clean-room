@@ -160,7 +160,7 @@ def meta_for(layout: str, grid: str, raw: dict, concurrent: int) -> dict:
         "stopping": block["stopping_rule"],
         "iteration_error_tol": block["iteration_error_tol"],
         "mass_imbalance_tol": block["mass_imbalance_tol"],
-        "cap": block["max_simple_iter"],
+        "max_simple_iter": block["max_simple_iter"],
         "concurrent_processes": concurrent,
         "locate": True,
     }
