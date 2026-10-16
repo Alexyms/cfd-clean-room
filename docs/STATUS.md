@@ -24,8 +24,10 @@ section 4, Retired modules). Phase 3 is most of the way through: the face-veloci
 the transport solver reads (REQ-S13), the transport configuration and the concentration
 boundary module were built in PR 31, and the transport solver itself in PR 32, with all seven
 of its gate rows measured and passing (VAL-003, VAL-004 in two rows, VAL-007, VAL-012, VAL-013,
-VAL-014). What remains of the phase is the product configuration's move to `error_estimate` and
-the gate report with ADR-011's planned-against-built table. Phases 4 through 7 have not begun.
+VAL-014). The product configuration's move to `error_estimate` landed with ECR-002 step 8 on
+2026-10-15 (prompt 56), which also measured the product room and two layouts; what remains of
+the phase is the gate report with ADR-011's planned-against-built table. Phases 4 through 7
+have not begun.
 
 The product room itself has never been solved, and on 2026-10-04 it was found that the laminar
 flow solver does not solve it. Its Reynolds number on the room height is
@@ -452,6 +454,27 @@ needed). `jacobi` stays selectable, for parity work and the Phase 6 port, and is
 loop every earlier result came from. The default changes every iterate, so the solver version
 is 3, the harness label is `staggered-mgcg` and the laminar face hashes were retaken once
 (REQ-S16 holds both sets).
+Prompt 55 (`feature/ecr002-val020-impinging-jet`, `docs/reports/ecr002_val020_impinging_jet.md`,
+merged as PR 82) measured VAL-020, the plane impinging jet: no run stops by the rule (a cycle
+beside the outlets), the standard model's centreline within 0.10 to 0.13 V0 of the data with a
+long potential core, its stagnation k 1.26 to 1.35 times the PIV estimate where RNG's is within
+1%. Alex decided on 2026-10-15 (prompt 56) that the product runs the standard variant and
+VAL-018's variant clause is closed, that VAL-019 and VAL-020 are report-only rows (status
+REPORTED), and that the product's configuration moves into `configs/clean_room_default.yaml`.
+Prompt 56 (`feature/ecr002-step8-product`, `docs/reports/ecr002_step8_product.md`) is ECR-002
+step 8: the default file is the product configuration (320x120, the k-epsilon section,
+`error_estimate`, the step 8 solver keys), the harness has a `product` family and the row
+`val018_320x120`, and two layouts stand beside the default (return 3 closed; the supply over the
+left half of the ceiling). The room as it is and the closed-return layout stop by the rule on
+both exact grids; the half-supply layout stops within the file's cap on neither, and stopped by
+the rule with the cap raised 8% on 320x120. The score the orchestrator fixed before the runs
+(deposition on the process tops) ranks the half-supply layout best and the room as it is worst
+in every ordering, on both grids and at Sc_t 0.2, 0.7 and 1.3, with margins several times the
+numerical changes, and the hotspots sit on the same segments throughout: the ranking is stable,
+which criterion 10 asks, and the predicted order failed, because the score rewards the layout
+that carries the litho-top emission across the room to the hood past the hood entry. Whether a
+score that counts the sensors is the product's, and how L2's convergence is read, are the
+report's questions for the gate report. Review and test 56 come before the pull request.
 
 Deferred findings from earlier pull requests were open as GitHub issues, and every open one now
 has a disposition. The cleanup pull request (branch `fix/deferred-findings-cleanup`) closes issues

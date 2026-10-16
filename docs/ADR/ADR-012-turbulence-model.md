@@ -1095,6 +1095,9 @@ refinement (160x60 against 320x120) and across the turbulent Schmidt number's ra
 `configs/clean_room_default.yaml` in the same step (ADR-013 decision 3 as amended; section D's
 note of 2026-10-09).
 
+*Note, 2026-10-15 (prompt 56, measured).* `docs/reports/ecr002_step8_product.md`. L0 (the room as it is) and L1 (return 3 closed) stop by the rule on both exact grids (L0 at 4,389 outer iterations on 320x120, the harness row `val018_320x120` at the same count, pass true); L2 (the supply over the left half of the ceiling) stops on neither within the file's cap, a cycle beside the door wall on 160x60 and on 320x120 a still field that only condition (e) refuses, which stops at 10,794 with the cap raised (a labelled supplement). The score (deposition on the litho tool's and the etch chamber's tops, summed over three sources, per class) ranks L2 < L1 < L0 in every ordering, on both grids and at Sc_t 0.2, 0.7 and 1.3, every margin several times the grid's and the Schmidt number's change to the scores; the largest deposition location is the same 0.2 m segment across grids and Schmidt numbers in all 18 rows and at least three of five hotspots are shared in 17. The stability clause of criterion 10 is met; the predicted order (L2 last, L0 and L1 near-equal) fails, because the score rewards the layout that sweeps the litho-top emission across the room to the hood, past the hood entry where a sensor reads it. The questions for Alex are the
+report's section 7.
+
 *(vi) Two cases added (Alex, 2026-10-09; prompt 45). Thresholds OPEN until Alex sets them from
 first results.*
 *VAL-020, a planar impinging slot jet.* Section A found that no planned case tells the standard
