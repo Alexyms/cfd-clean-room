@@ -913,3 +913,95 @@ def test_harness_row_records_each_axis_clustering(
     )
     assert stretched["y"]["min_wall_spacing"] == pytest.approx(0.00125, rel=1e-12)
     assert stretched["y"]["stretch_ratio"] == pytest.approx(1.2057, abs=1e-4)
+
+
+def _product_config(max_simple_iter: int) -> SimConfig:
+    """The product file on the 40x15 grid, capped, for a short harness run."""
+    raw = yaml.safe_load(case_path("product").read_text(encoding="utf-8"))
+    raw["domain"]["nx"], raw["domain"]["ny"] = 40, 15
+    raw["solver"]["max_simple_iter"] = max_simple_iter
+    return SimConfig.from_dict(raw)
+
+
+@pytest.mark.unit
+def test_the_product_value_is_the_outer_count_over_the_cap() -> None:
+    """VAL-018's row by hand: value, pass and the core median on a planted field.
+
+    The core is the non-SOLID cells above the equipment tops (2.0 m); nu_t
+    is planted at 10 nu there and 1,000 nu below, so a median over every
+    cell, or over the SOLID cells, would not read 10. Defects caught: a
+    value that is not outer over cap; a pass recorded for a capped solve; a
+    core that includes the gaps or the obstacles.
+    """
+    config = _product_config(10000)
+    mesh = Mesh(config)
+    nu = config.mu / config.rho
+    nu_t = np.full(mesh.cell_type.shape, 1000.0 * nu)
+    above = np.broadcast_to(np.asarray(mesh.yc)[:, None] > 2.0, nu_t.shape)
+    nu_t[above] = 10.0 * nu
+    imbalance = np.zeros(mesh.cell_type.shape)
+    imbalance[3, 7] = -4.0e-9
+    imbalance[9, 2] = 2.5e-9
+    row = benchmark.product_accuracy(mesh, config, 2500, True, imbalance, nu_t)
+    assert (row["metric"], row["reference"]) == (
+        benchmark.PRODUCT_METRIC,
+        benchmark.PRODUCT_REFERENCE,
+    )
+    assert row["value"] == 0.25
+    assert row["passed"] is True
+    assert row["components"] == {
+        "outer_iterations": 2500,
+        "max_simple_iter": 10000,
+        "worst_cell_imbalance": 4.0e-9,
+        "mass_imbalance_tol": config.mass_imbalance_tol,
+        "core_nu_t_over_nu_median": pytest.approx(10.0, rel=1e-12),
+    }
+    capped = benchmark.product_accuracy(mesh, config, 10000, False, imbalance, nu_t)
+    assert capped["value"] == 1.0
+    assert capped["passed"] is False
+
+
+@pytest.mark.integration
+def test_the_product_row_reports_the_stop_from_the_solver(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """VAL-018's row: three outer iterations of the product file on 40x15.
+
+    The cap stops the solve, so the row's value is 1 and its pass False;
+    the components are the solver's own last imbalance and final nu_t; the
+    trajectory carries an error in its last entry only; the params record
+    the turbulence section and rule version 5. Defects caught: a pass
+    recorded for a capped solve; a row scored from the cell-centred field;
+    a family dispatched to the laminar scorer, which would raise.
+    """
+    config = _product_config(3)
+    monkeypatch.setattr(benchmark, "load_preset", lambda case_id: config)
+    row = benchmark.run_case("val018_320x120", benchmark.DEFAULT_METHOD, 1, 1)
+    accuracy = row["accuracy"]
+    assert accuracy["metric"] == benchmark.PRODUCT_METRIC
+    assert accuracy["value"] == 1.0
+    assert accuracy["passed"] is False
+    assert row["outcome"]["converged"] is False
+    assert row["outcome"]["stop_reason"] == "max_simple_iter"
+    assert row["work"]["outer_iterations"] == 3
+
+    mesh = Mesh(config)
+    solver = StaggeredSolver(mesh, config, StaggeredBoundary(mesh, config))
+    solver.solve_steady()
+    assert solver.turbulence_state is not None
+    expected = benchmark.product_accuracy(
+        mesh,
+        config,
+        3,
+        solver.converged,
+        solver.last_mass_imbalance,
+        np.array(solver.turbulence_state.nu_t),
+    )
+    assert accuracy == expected
+    assert accuracy["components"]["worst_cell_imbalance"] > 0.0
+    errors = [entry["error"] for entry in row["trajectory"]]
+    assert errors[:2] == [None, None] and len(errors) == 3
+    assert errors[2] == accuracy["value"]
+    assert row["params"]["rule_version"] == rule_version(config) == 5
+    assert row["params"]["turbulence"]["variant"] == "standard"
+    assert row["params"]["turbulence"]["advection_scheme"] == "upwind"

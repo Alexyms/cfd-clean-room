@@ -197,13 +197,54 @@ class TestSimConfigValid:
         assert config.thresholds["0.5e-6"] == 3520.0
 
     def test_default_yaml_loads(self) -> None:
-        """The shipped clean_room_default.yaml loads without error."""
+        """The shipped clean_room_default.yaml loads on the product grid of step 8."""
         config = SimConfig("configs/clean_room_default.yaml")
-        assert config.nx == 200
-        assert config.ny == 75
+        assert config.nx == 320
+        assert config.ny == 120
         assert config.room_width == 8.0
         assert len(config.sensors) == 4
         assert len(config.obstacles) == 4
+
+    def test_default_yaml_is_the_product_configuration_of_step_8(self) -> None:
+        """The default file carries the settings prompts 46 to 48 measured the room under.
+
+        Alex's decision of 2026-10-15 (prompt 56; ECR-002 section 8, step 8's
+        note; ADR-013 decision 3 as amended): the k-epsilon section with the
+        standard variant and upwind advection, the error_estimate rule with
+        ADR-011 G's imbalance bound at the file's own cell volume, ten
+        momentum sweeps, pressure_rtol 1e-4, the 10,000 cap, alpha_velocity
+        0.5, the multigrid preconditioner stated, and the supply's inlet
+        turbulence at 5% and 0.1 m.
+        """
+        config = SimConfig(CONFIG_DIR / "clean_room_default.yaml")
+        assert config.turbulence == TurbulenceSpec(
+            model="k_epsilon",
+            variant="standard",
+            wall_treatment="scalable_wall_functions",
+            cfl_number=0.25,
+            advection_scheme="upwind",
+            alpha_turbulence=0.7,
+            max_iter=500,
+            tol=1e-10,
+        )
+        assert config.stopping_rule == "error_estimate"
+        assert config.iteration_error_tol == 1e-6
+        v_min = (config.room_width / config.nx) * (config.room_height / config.ny)
+        assert config.mass_imbalance_tol == pytest.approx(
+            1e-4 * config.rho * v_min / config.t_end, rel=1e-12
+        )
+        assert config.momentum_sweeps == 10
+        assert config.pressure_rtol == 1e-4
+        assert config.max_simple_iter == 10000
+        assert config.alpha_velocity == 0.5
+        assert config.pressure_preconditioner == "multigrid"
+        supply = config.boundaries["hepa_supply"]
+        assert supply.turbulence_intensity == 0.05
+        assert supply.dissipation_length == 0.1
+        for name, spec in config.boundaries.items():
+            if name != "hepa_supply":
+                assert spec.turbulence_intensity is None
+                assert spec.dissipation_length is None
 
     def test_default_yaml_carries_the_transport_section_and_a_filtered_supply(
         self,
@@ -1339,13 +1380,17 @@ class TestPressureKeys:
     def test_every_committed_configuration_names_the_new_key_and_cap(self) -> None:
         """Every YAML file and the transport stand-ins carry the key and the cap.
 
-        The laminar cases and the product file carry 1e-8; the Annex 20 case
-        (VAL-017, prompt 49), the backward-facing step (VAL-019, prompt 52)
-        and the impinging jet (VAL-020, prompt 55) carry the turbulent
+        The laminar cases carry 1e-8; the Annex 20 case (VAL-017, prompt 49),
+        the backward-facing step (VAL-019, prompt 52), the impinging jet
+        (VAL-020, prompt 55) and, since step 8 (prompt 56), the product file
+        and its two layouts (tests/test_layouts.py) carry the turbulent
         product setting, 1e-4 (ADR-013 decision 3 as amended 2026-10-09;
         ECR-002 section 8, step 8).
         """
         turbulent = {
+            "clean_room_default.yaml": 1e-4,
+            "clean_room_l1_return3_closed.yaml": 1e-4,
+            "clean_room_l2_left_supply.yaml": 1e-4,
             "validation_annex20.yaml": 1e-4,
             "validation_backstep.yaml": 1e-4,
             "validation_impinging_jet.yaml": 1e-4,
@@ -1513,11 +1558,14 @@ class TestTurbulenceSection:
         return raw
 
     def test_absent_section_gives_none(self, tmp_path: Path) -> None:
-        """Absent means the model is off: no committed configuration carries one."""
+        """Absent means the model is off: no laminar validation case carries one.
+
+        The product configuration has carried the section since ECR-002 step
+        8 (prompt 56); TestSimConfigValid pins what it says.
+        """
         assert SimConfig(_write_config(tmp_path)).turbulence is None
         assert load_case("poiseuille").turbulence is None
         assert load_case("cavity").turbulence is None
-        assert SimConfig(CONFIG_DIR / "clean_room_default.yaml").turbulence is None
 
     def test_present_section_is_read_with_standard_the_default(
         self, tmp_path: Path

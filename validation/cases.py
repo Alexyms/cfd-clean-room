@@ -35,6 +35,9 @@ CASE_FILES: dict[str, str] = {
     "annex20": "validation_annex20.yaml",
     "backstep": "validation_backstep.yaml",
     "impinging_jet": "validation_impinging_jet.yaml",
+    # The product room (VAL-018, ECR-002 step 8): the default file is the
+    # product configuration since prompt 56, so the harness runs it as a case.
+    "product": "clean_room_default.yaml",
 }
 
 # Named grid presets: identifier -> (case, nx, ny). The tuple does not say
@@ -55,6 +58,7 @@ CASE_GRIDS: dict[str, tuple[str, int, int]] = {
     "val019_984x90": ("backstep", 984, 90),
     "val020_272x90": ("impinging_jet", 272, 90),
     "val020_408x135": ("impinging_jet", 408, 135),
+    "val018_320x120": ("product", 320, 120),
 }
 
 # Presets loaded by load_wall_clustered; every other preset takes its whole

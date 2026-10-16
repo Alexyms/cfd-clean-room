@@ -21,7 +21,7 @@ records the rule's version in its params, read from the solver
 condition (e) 4 until 2026-10-11 and 5 since (its scale, ADR-012 E). A row
 with the turbulence section records the section in its params as well.
 
-Five case families. Poiseuille and the cavity are scored from the
+Six case families. Poiseuille and the cavity are scored from the
 cell-centred field, every trajectory sample and the row alike. The Annex 20
 room (VAL-017, ``val017_216x72``) is scored from the final face velocities
 by the allowance of ADR-012 decision 6 (``validation.annex20.score_lines``):
@@ -41,7 +41,12 @@ the floor shear never turns positive), and ``passed`` is None. The impinging
 jet (VAL-020, ``val020_272x90``) is reported the same way: the row carries
 ``validation.impinging_jet.evaluate``'s whole comparison with Khayrullina et
 al. (2017), its value is the centreline's RMS departure in V_0,y / V0, and
-``passed`` is None (ECR-002 criterion 13, OPEN).
+``passed`` is None (ECR-002 criterion 13, OPEN). The product room (VAL-018,
+``val018_320x120``) has no reference: its row carries the stop, the outer
+count over the cap as its value, ``passed`` whether the solve stopped by
+the rule within the cap (criterion 10's convergence clause), and the
+readings the step 8 report compares its runs by (the worst cell imbalance,
+the core eddy viscosity); the comparative clause is judged in that report.
 
 The method label names the pressure solve as well as the grid: staggered-cg
 since ECR-003 step 1 (2026-10-06), when conjugate gradients replaced the
@@ -91,7 +96,7 @@ from src.config import (  # noqa: E402 -- follows sys.path.insert
     VELOCITY_STEP,
     SimConfig,
 )
-from src.mesh import FLUID, Mesh  # noqa: E402 -- follows sys.path.insert
+from src.mesh import FLUID, SOLID, Mesh  # noqa: E402 -- follows sys.path.insert
 from src.momentum import MomentumPredictor  # noqa: E402 -- follows sys.path.insert
 from src.pressure import (  # noqa: E402 -- follows sys.path.insert
     STAGGERED_METHOD,
@@ -189,9 +194,25 @@ IMPINGING_JET_REFERENCE = (
     "(ECR-002 criterion 13 OPEN)"
 )
 
-# The families whose score needs the final faces, which the per-iteration
-# callback lacks: their trajectory samples carry no error but the last.
-FACE_SCORED_FAMILIES = (ANNEX20_FAMILY, BACKSTEP_FAMILY, IMPINGING_JET_FAMILY)
+# The product room (VAL-018), reported from the stop and the final state;
+# no reference exists, and criterion 10's convergence clause is the pass.
+PRODUCT_FAMILY = "product"
+PRODUCT_METRIC = "outer_iterations_over_cap_report_only"
+PRODUCT_REFERENCE = (
+    "none; ECR-002 criterion 10: the stop by error_estimate_and_continuity "
+    "within max_simple_iter is the pass, the comparative clause is "
+    "docs/reports/ecr002_step8_product.md"
+)
+
+# The families whose row needs the finished solve (the final faces, k, or
+# the stop), which the per-iteration callback lacks: their trajectory
+# samples carry no error but the last.
+FACE_SCORED_FAMILIES = (
+    ANNEX20_FAMILY,
+    BACKSTEP_FAMILY,
+    IMPINGING_JET_FAMILY,
+    PRODUCT_FAMILY,
+)
 
 # One stop_reason per rule. The velocity-step label is the one every row stored
 # before the staggered solver reported its own stop, and every collocated row has.
@@ -655,6 +676,63 @@ def impinging_jet_accuracy(
     }
 
 
+def product_accuracy(
+    mesh: Mesh,
+    config: SimConfig,
+    outer_iterations: int,
+    converged: bool,
+    imbalance: np.ndarray,
+    nu_t: np.ndarray,
+) -> dict:
+    """The product room's row: the stop within the cap, with the room's readings.
+
+    Parameters
+    ----------
+    mesh : Mesh
+        Mesh the fields belong to.
+    config : SimConfig
+        The product configuration, whose cap and imbalance tolerance the row
+        reports beside the readings.
+    outer_iterations : int
+        Outer iterations the solve took.
+    converged : bool
+        Whether the solve stopped by its rule (``StaggeredSolver.converged``).
+    imbalance : np.ndarray
+        The last correction's per-cell mass imbalance, [ny, nx], the reading
+        condition (b) compares with ``mass_imbalance_tol``.
+    nu_t : np.ndarray
+        The final eddy viscosity on the cells, [ny, nx].
+
+    Returns
+    -------
+    dict
+        ``metric``, ``value`` (the outer count over ``max_simple_iter``, so
+        below 1 is a stop before the cap), ``reference`` (none; the criterion
+        named), ``components`` (the outer count, the cap, the worst cell
+        imbalance and its tolerance, the median of nu_t / nu over the core,
+        the non-SOLID cells above the equipment tops) and ``passed``, the
+        stop by the rule within the cap: ECR-002 criterion 10's convergence
+        clause. Its comparative clause is the step 8 report's.
+    """
+    cap = config.max_simple_iter
+    tops = max(obstacle.y_end for obstacle in config.obstacles)
+    core = (mesh.cell_type != SOLID) & (np.asarray(mesh.yc)[:, None] > tops)
+    nu = config.mu / config.rho
+    return {
+        "metric": PRODUCT_METRIC,
+        "value": outer_iterations / cap,
+        "reference": PRODUCT_REFERENCE,
+        "components": {
+            "outer_iterations": int(outer_iterations),
+            "max_simple_iter": int(cap),
+            "worst_cell_imbalance": float(np.max(np.abs(imbalance))),
+            "mass_imbalance_tol": float(config.mass_imbalance_tol),
+            "core_nu_t_over_nu_median": float(np.median(nu_t[core] / nu)),
+        },
+        "passed": bool(converged),
+    }
+
+
 def run_case(case_id: str, method: str, sample_every: int, concurrent: int) -> dict:
     """Run one case once with the solver the method names and return its record.
 
@@ -723,6 +801,16 @@ def run_case(case_id: str, method: str, sample_every: int, concurrent: int) -> d
         assert solver.turbulence_state is not None
         accuracy = impinging_jet_accuracy(
             mesh, config, solver.face_velocities, np.array(solver.turbulence_state.k)
+        )
+    elif kind == PRODUCT_FAMILY:
+        assert solver.turbulence_state is not None
+        accuracy = product_accuracy(
+            mesh,
+            config,
+            work["outer_iterations"],
+            solver.converged,
+            solver.last_mass_imbalance,
+            np.array(solver.turbulence_state.nu_t),
         )
     else:
         accuracy = accuracy_of(kind, config, mesh, u, v)

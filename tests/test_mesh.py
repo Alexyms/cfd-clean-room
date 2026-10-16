@@ -503,16 +503,16 @@ class TestMeshIntegration:
         """Mesh initializes from clean_room_default.yaml without error."""
         config = SimConfig("configs/clean_room_default.yaml")
         mesh = Mesh(config)
-        assert mesh.cell_type.shape == (75, 200)
+        assert mesh.cell_type.shape == (120, 320)
 
     def test_default_config_shapes_and_dtypes(self) -> None:
         """Arrays from default config have correct shapes and dtypes."""
         config = SimConfig("configs/clean_room_default.yaml")
         mesh = Mesh(config)
-        assert mesh.x.shape == (201,)
-        assert mesh.y.shape == (76,)
-        assert mesh.xc.shape == (200,)
-        assert mesh.yc.shape == (75,)
+        assert mesh.x.shape == (321,)
+        assert mesh.y.shape == (121,)
+        assert mesh.xc.shape == (320,)
+        assert mesh.yc.shape == (120,)
         assert mesh.cell_type.dtype == np.int32
 
     def test_default_config_has_solid_cells(self) -> None:
@@ -520,7 +520,7 @@ class TestMeshIntegration:
 
         The four obstacles occupy a known area of the domain. SOLID
         cell count should be in a plausible range based on the
-        obstacle dimensions relative to the 200x75 grid.
+        obstacle dimensions relative to the 320x120 grid.
         """
         config = SimConfig("configs/clean_room_default.yaml")
         mesh = Mesh(config)
@@ -528,25 +528,28 @@ class TestMeshIntegration:
         # Obstacles span a meaningful fraction of the domain
         assert n_solid > 100
         # But not the entire domain
-        assert n_solid < 200 * 75 // 2
+        assert n_solid < 320 * 120 // 2
 
     def test_default_config_floor_cells_under_obstacles(self) -> None:
-        """The four obstacles hold 99 floor cells, the count exact arithmetic gives.
+        """The four obstacles hold 156 floor cells, the count exact arithmetic gives.
 
-        Issue 51 D3: the server rack ends at 2.3 m, a cell center on the 0.04 m
-        grid that rounds to 2.3000000000000003, and the inclusive comparison
-        counted 98. The columns are 21 (rack), 33 (litho tool), 15 (etch
-        chamber) and 30 (hood bench).
+        Issue 51 D3: on the 200x75 grid the server rack's end at 2.3 m was a
+        cell center that rounded one ulp outside, and the inclusive comparison
+        counted 98 of 99. On the product grid of step 8 (320x120, 2.5 cm cells)
+        every obstacle edge is a face, and the columns are 32 (rack), 52
+        (litho tool), 24 (etch chamber) and 48 (hood bench). The last column
+        under the rack, centre 2.2875 m, is the one the edge tolerance keeps.
         """
         mesh = Mesh(SimConfig("configs/clean_room_default.yaml"))
-        assert int(np.count_nonzero(mesh.cell_type[0] == SOLID)) == 99
-        assert mesh.cell_type[0, 57] == SOLID
+        assert int(np.count_nonzero(mesh.cell_type[0] == SOLID)) == 156
+        assert mesh.cell_type[0, 91] == SOLID
+        assert mesh.cell_type[0, 92] != SOLID
 
     def test_default_config_counts_sum(self) -> None:
         """FLUID + SOLID + BOUNDARY equals total cells for default config."""
         config = SimConfig("configs/clean_room_default.yaml")
         mesh = Mesh(config)
-        total = 200 * 75
+        total = 320 * 120
         n_fluid = int(np.sum(mesh.cell_type == FLUID))
         n_solid = int(np.sum(mesh.cell_type == SOLID))
         n_boundary = int(np.sum(mesh.cell_type == BOUNDARY))
