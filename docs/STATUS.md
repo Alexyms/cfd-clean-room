@@ -30,10 +30,12 @@ VAL-014). The product configuration's move to `error_estimate` landed with ECR-0
 prompt 58), is written with ADR-011's planned-against-built table and the comparative claim
 stated per metric; Alex set its verdict on 2026-10-16: CONDITIONAL PASS, the conditions
 being the report's stated limits, and Phase 3 is COMPLETE. Phase 4 opened on 2026-10-16 with
-its design pass, ADR-014 (Proposed, prompt 59,
-`docs/ADR/ADR-014-scenarios-and-time-integration.md`), written before any Phase 4 code as
-ADR-011 was for Phase 3; its decisions are Alex's to take, and its build has not begun. Phases 5
-through 7 have not begun.
+its design pass, ADR-014 (`docs/ADR/ADR-014-scenarios-and-time-integration.md`, prompt 59),
+written before any Phase 4 code as ADR-011 was for Phase 3. Alex accepted it the same day, the
+recommendation of each of its twelve decisions as written, with one amendment: equipment vents
+on the tools' faces, airflow only (its section J), built as step 0b before the scenario schema.
+Its build is under way in the order of its section G, step 0 (the housekeeping, the warm start
+and the steady checkpoint, prompt 60) first. Phases 5 through 7 have not begun.
 
 The product room itself has never been solved, and on 2026-10-04 it was found that the laminar
 flow solver does not solve it. Its Reynolds number on the room height is

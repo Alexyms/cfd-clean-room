@@ -261,7 +261,9 @@ step 5's dependency is met.
 
 | Deliverable | Status | Notes |
 |-------------|--------|-------|
-| docs/ADR/ADR-014-scenarios-and-time-integration.md | PROPOSED (prompt 59, 2026-10-16) | The Phase 4 design, before any code, as ADR-011 was for Phase 3: the two tiers, the steady extreme and the clean-out scenario (Alex, 2026-10-16) recorded as given; twelve decisions for Alex at its top, each with a picture, ranked options and the section carrying it; the probes and their tables under `docs/reports/probe59/`. The build order is its section G, eight ECR-style steps, the housekeeping batch and the warm start first. VAL-022 (the square cylinder, three rows) proposed with OPEN thresholds; VAL-008's row amended as section E proposes once decided |
+| docs/ADR/ADR-014-scenarios-and-time-integration.md | ACCEPTED (Alex, 2026-10-16; proposed in prompt 59 the same day) | Accepted with the recommendation of each of its twelve decisions as written; decision 11's thresholds stay OPEN until step 6; amended the same day with the equipment vents (section J, step 0b). The Phase 4 design, before any code, as ADR-011 was for Phase 3: the two tiers, the steady extreme and the clean-out scenario (Alex, 2026-10-16) recorded as given; twelve decisions for Alex at its top, each with a picture, ranked options and the section carrying it; the probes and their tables under `docs/reports/probe59/`. The build order is its section G, eight ECR-style steps, the housekeeping batch and the warm start first. VAL-022 (the square cylinder, three rows) proposed with OPEN thresholds; VAL-008's row amended as section E proposes once decided |
+| ADR-014 step 0: the housekeeping batch, the warm start, the steady checkpoint | IN PROGRESS (prompt 60) | Section I's batch; `FlowState` and `solve_steady(initial=...)` in src/solver_staggered.py; the steady checkpoint and its bitwise continuation (section D) |
+| ADR-014 step 0b: the equipment vents | NOT STARTED | Boundary segments on obstacle faces, a process exhaust (`fixed_flow_outlet`) and a cooling discharge (`velocity_inlet`), airflow only (section J) |
 | src/scenarios.py | NOT STARTED | Event management, source terms, BC modifications |
 | src/time_integration.py | NOT STARTED | Timestep loop, CFL enforcement, solver coordination |
 | src/io_manager.py | NOT STARTED | Output writing, checkpointing |
@@ -277,7 +279,8 @@ step 5's dependency is met.
 
 | Test ID | Description | Criterion | Status |
 |---------|-------------|-----------|--------|
-| VAL-008 | Grid convergence | Observed order within 0.2 of theoretical | NOT RUN |
+| VAL-008 | Grid convergence | Observed order within 0.2 of theoretical (to be amended at step 5 as ADR-014 E states: the smooth monotone front, Courant number halved per refinement, within 0.2 of 2 between grid pairs whose coarser grid has at least 10 cells across the front's width) | NOT RUN |
+| VAL-022 | The square cylinder at Re 40, 60 and 100 (ADR-014 F, three rows) | OPEN (proposed: St at Re 100 within 5% of 0.146 on the clustered grid; Re 40 steady and Re 60 shedding, bracketing Re_cr 51.2 +/- 1) | NOT RUN |
 
 Note (issue 53 D6, 2026-10-07): on a stretched mesh the transport limiter's clamp is applied to the quadratic `quick_face_values` returns, with the other three limiter terms in their uniform-mesh form (ADR-011 B). The stretched case is tested for diffusion against a dense solve and not for advection accuracy, which VAL-008 measures here.
 
@@ -295,7 +298,7 @@ Laminar flow past a square cylinder in a channel is Phase 4's validation and sho
 
 | Risk | Mitigation |
 |------|------------|
-| Scenario BC modifications create solver instability | Ramp event onset over multiple timesteps rather than step-change. |
+| Scenario BC modifications create solver instability | Ramp event onset over multiple timesteps rather than step-change. Under tier 1 (ADR-014 A) the flow's response to a boundary change is a warm-started steady re-solve, and the transport scheme is stable on any face field under its Courant bound, so no ramp is built. |
 
 ---
 
@@ -478,3 +481,4 @@ Phase 3 completion is the minimum viable portfolio artifact. A working, validate
 | 2026-10-15 | ECR-002 closed at step 9 (prompt 58, branch phase3/gate-report): ADR-012 Accepted (built) with planned against built (steps 0 to 8, condition (e)'s scale, the CG k and eps solve, the multigrid default); the request's closing note lists each criterion's outcome by reference; the Step 9 row above. | Alex Moroz-Smietana |
 | 2026-10-16 | Phase 3 gate report written (prompt 58, branch phase3/gate-report): `docs/reports/phase3_transport_report.md`, in the Phase 2 report's structure; the full suite and branch coverage from one run; the comparative claim stated per metric with ties from `docs/reports/probe58/` (metrics defined before computing, tables generated with a check mode, one figure); issue 53's D3 and D4 answered with recommendations, no change made; ADR-011's planned-against-built table added. Phase 3 at GATE REVIEW, the verdict for Alex. | Claude (builder) |
 | 2026-10-16 | ADR-014, the Phase 4 design, proposed (prompt 59, branch phase4/design): two tiers of time integration, short events as their steady extreme and a fourth reference scenario, the clean-out (Alex, 2026-10-16); twelve decisions put to Alex. The probes (`docs/reports/probe59/`, tables in `tables59.md`): prediction (a), a warm-started re-solve under a third of a solve from rest, fails (the stop is set by the slow mode's geometric decay, so the warm start saves little); the transport march at Courant 0.1 costs about 93 wall seconds per simulated second on 320x120 for the five classes, which sets a scenario's cost; the cylinder's implicit step converges in a handful of outer iterations at 1e-4 U per step; the limited scheme's observed order on a Gaussian pulse is between 1 and 2, VAL-008's criterion row proposed on a smooth monotone front. The Phase 4 deliverables table gains the ADR's row; nothing under src/, tests/ or configs/ changed. | Claude (builder) |
+| 2026-10-16 | ADR-014 accepted by Alex (prompt 60, commit 0): the recommendation of each of its twelve decisions as written, decision 11's thresholds left OPEN until step 6, and one amendment, the equipment vents as airflow only (ADR-014 J, step 0b, with its limit in section H). The Phase 4 deliverables gain rows for steps 0 and 0b; the validation gate gains VAL-022 (OPEN) and VAL-008's pending amendment; the onset-ramp risk says why tier 1 builds no ramp. | Claude (builder) |

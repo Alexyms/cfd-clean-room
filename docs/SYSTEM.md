@@ -179,10 +179,11 @@ When a PR modifies a module, the reviewer verifies impact on downstream modules.
 | stopping.py | solver_staggered, scripts/stopping_probe.py, scripts/val001_order.py, scripts/benchmark.py, scripts/self_convergence.py | IterationState's fields, which the solver hands its on_iteration callback and the harness reads, unchanged in position; the count field is pressure_iterations since 2026-10-06 (pressure_sweeps before), and pressure_products, added last the same day, both read by name in scripts/benchmark.py's WorkCounter, which counts the work in products. update(step, imbalance) answers converged only when the estimate, the worst imbalance, the absolute sum over flux_scale and the absolute signed sum are all below their tolerances; the imbalance callable, which returns an ImbalanceSummary read by name from one evaluation, is not called until the estimate is met; no estimate (inf) while the window is short, a step in it is zero or not finite, or rho_hat is outside (0, 1). RATE_WINDOW stays a module constant. Since ECR-002 step 6 the version is the rule's (ErrorEstimateRule.version: RULE_VERSION_WITHOUT_E 3, RULE_VERSION_WITH_E 4, with nu_scale given), read through the solver (StaggeredSolver.rule_version, solver_staggered.rule_version(config)) by stopping_probe and val001_order, which store it with their saved solves, so that they solve again, and by the harness, which records it in every error_estimate row, so that its summary keeps the versions apart. update's viscosity_step is given exactly when the rule has a nu_scale. |
 | solver_transport.py | time_integration, monitor (planned, Phases 4 and 5); the Phase 7 animation (FieldHistory); tests/test_solver_transport.py, tests/test_diffusion.py, tests/test_advection.py, tests/test_constancy.py, tests/test_smith_hutton.py, tests/test_conservation.py, tests/test_sealed_box.py; validation/transport_cases.py hands it stand-ins | solve_timestep takes FaceVelocities, not cell means, a sources rate array and the keyword-only eddy_viscosity field (nu_t per cell, m^2/s, None the laminar path bitwise; the face value is the distance-weighted harmonic mean, so a caller that hands another face rule changes the contract), and returns a new [ny, nx] float64 contiguous field with SOLID cells zero; stable_dt's definition, the sum of the two directional rates, infinite at rest; v_ext a FaceVelocities-shaped per-class drift on the interior faces, None read as zero (REQ-T06); MassBudget field names (initial, inflow, outflow, source, deposited by floor, ceiling, wall, obstacle, current) and that only the solver writes them; FieldHistory's record signature and npz keys (steps, times, C_<k>). The solver reads settling_velocity and diffusion_coeff of physics and faces_for of boundary and nothing else of either, so the validation cases hand it ScalarPhysics and FixedConditions (validation/transport_cases.py); a change to what it reads changes that contract. |
 | particles.py | boundary_concentration, solver_transport | Settling velocity, diffusion coefficient and deposition velocity interface unchanged. Return types, units and signs unchanged (settling positive downward, deposition non-negative; the floor value includes settling, which the solver must not add again, ADR-011 D). |
-| scenarios.py | time_integration; the boundary layers (planned, Phase 4) | Source term and BC modification interfaces unchanged. Event timing semantics unchanged. |
+| scenarios.py | time_integration; the boundary layers (planned, Phase 4) | Planned (ADR-014 G): intervals(), flow_states(), sources_at(t), conditions_for(interval) and initial_fields() unchanged in signature and meaning; the fingerprint is computed from the velocity-layer keys only, so a transport-only event never adds a flow state; an event's start and end are interval boundaries. |
 | monitor.py | time_integration | Update and query interfaces unchanged. Alert output format unchanged. |
 | csolver/ | solver_staggered (REQ-N03's NumPy reference, ADR-010), solver_transport; both planned, Phase 6 | CUDA kernel signatures match pybind11 declarations. Memory layout assumptions (row-major, contiguous, double precision) unchanged. |
-| time_integration.py | io_manager | Timestep sequence and output trigger logic unchanged. |
+| time_integration.py | nothing in src/ (planned, Phase 4; ADR-014 G: nothing imports it) | Timestep sequence and output trigger logic unchanged: one step for every class, the interval to the next switch divided into equal steps, the concentration fields and the budget carried across a switch unchanged (ADR-014 A). |
+| io_manager.py | time_integration (planned, Phase 4) | The run file's groups and dataset names (ADR-014 D) unchanged, so a run file written before a change still restarts after it. |
 
 ### 3.3 Cross-Cutting Concerns
 
@@ -325,6 +326,13 @@ SimConfig:
     boundaries: dict[str, BoundarySpec]
     obstacles: list[ObstacleSpec]
     # scenarios: deferred to Phase 4, loaded via separate scenario YAML files
+    # Planned (ADR-014 B and G, accepted 2026-10-16; built at step 1):
+    #   scenario: ScenarioSpec | None   # the merged base, the events, the run keys
+    #   ScenarioSpec: base, events: tuple[EventSpec, ...], checkpoint_interval
+    #   EventSpec: name, start, duration, change: Replace | Set | Source | Initial
+    # Planned (ADR-014 J, the equipment vents, step 0b): BoundarySpec gains
+    #   location "obstacle" with keys obstacle (an obstacle's name) and face
+    #   (top, bottom, left, right); velocity_inlet and fixed_flow_outlet only
     sensors: list[SensorSpec]
     thresholds: dict[str, float]
 ```
@@ -536,6 +544,9 @@ MomentumPredictor:
         a_p, a_s_plus, a_s_minus, a_t_plus, a_t_minus, b_boundary, b_deferred,
         each in the component's own shape; s is the component's axis
     predict(u, v, p, mu_eff=None, wall_mu=None) -> MomentumPrediction
+        Planned (ADR-014 decision 3 and G, step 6): transient=None, either
+            (dt, u_old, v_old) for implicit Euler or (dt, (u_n, u_nm1),
+            (v_n, v_nm1)) for BDF2; None bitwise the steady path, as mu_eff
         mu_eff: dynamic effective viscosity per cell, Pa s, [ny, nx] float64,
             finite and positive in every non-SOLID cell, SOLID cells not read;
             None is the scalar path with air's mu, bitwise, and a uniform field
@@ -750,6 +761,12 @@ StaggeredSolver:
             admits air. Without the section every call is the laminar one
     turbulence_state: TurbulenceState | None   # k, eps, relaxed nu_t of the last
                                 # coupled solve, read-only; None otherwise
+    Planned (ADR-014 A, D and G, accepted 2026-10-16):
+        FlowState(u, v, p, k, eps, nu_t, stop)   # frozen, read-only arrays (step 0)
+        solve_steady(..., initial: FlowState | None = None)   # the warm start (step 0)
+        flow_state -> FlowState     # the last solve's, converged or not (step 0)
+        solve_transient(dt, t_end, *, initial, step_tol, step_cap, on_step=None)
+            -> FlowState            # tier 2 (step 6)
     rule_version: int | None    # read-only: 3, 5 with the turbulence section
                                 # (condition (e); 4 until 2026-10-11), None under
                                 # velocity_step
@@ -1227,10 +1244,41 @@ AlertMonitor:
 
 ### scenarios.py --> time_integration; the boundary layers (planned, Phase 4)
 
+Planned (ADR-014 A, B and G, accepted 2026-10-16; built at step 2). The
+contract replaces the earlier draft's get_active_sources(t) and
+get_bc_modifications(t): a boundary modification is an interval's flow state,
+not a per-call mapping, and the sources at a time are one rate array per
+class.
+
 ```
-ScenarioManager:
-    get_active_sources(t: float) -> list[SourceTerm]
-    get_bc_modifications(t: float) -> dict
+ScenarioManager(config, mesh):
+    intervals() -> list[Interval]          # (t_start, t_end, flow_fingerprint, merged mapping)
+    flow_states() -> dict[str, dict]       # fingerprint -> the velocity-layer mapping
+    sources_at(t) -> dict[int, ndarray]    # class -> [ny, nx] rate, summed over active sources
+    conditions_for(interval) -> ConcentrationBoundary
+    initial_fields() -> dict[int, ndarray]
+```
+
+### time_integration.py --> nothing in src/ (planned, Phase 4)
+
+Planned (ADR-014 A, D and G; built at steps 4 and 6). Orchestrates both tiers
+and discretises nothing.
+
+```
+run(config, *, restart=None, on_step=None) -> RunRecord
+    tier 1: the intervals, the flow states (cached by fingerprint, warm-started
+            with solve_steady(initial=...)), the transport march at one step for
+            every class, stable_dt recomputed at each switch
+    tier 2: StaggeredSolver.solve_transient with the recorders of ADR-014 D
+```
+
+### io_manager.py --> time_integration (planned, Phase 4)
+
+Planned (ADR-014 D and G; built at step 3). One HDF5 run file per run.
+
+```
+RunFile(path).write_config / write_flow_state / write_frames / checkpoint / read_checkpoint
+    /config, /flow/<fingerprint>/, /transport/, /checkpoint/, /steady_checkpoint/
 ```
 
 ### Retired modules
@@ -1309,7 +1357,7 @@ ADR-008, ADR-010, ADR-011, ADR-012, ADR-013 and ADR-014 are files in `docs/ADR/`
 | ADR-011 | Transport Solver Architecture: Face-Advected Cell-Centred Concentration (Accepted at merge, PR 30) | Concentration at cell centres, advected by the staggered face velocities the NS solver exposes (REQ-S13), so a uniform haze drifts only at the rate the stopping rule bounds (REQ-T11, VAL-012). QUICK's face value bounded by the UMIST limiter under forward Euler at Courant number at most 1/2, non-negative and bounded (REQ-T12, VAL-013); implicit diffusion and deposition. Settling as a face increment between fluid cells only, every solid-facing or domain horizontal face taking the deposition velocity whole (VAL-014). One mass budget, sources included, for every conservation claim. VAL-004 in two rows with measured thresholds. Clean supply by default, no recirculation. Ten decisions of 2026-10-03 listed at its top; Accepted (built) with planned against built since the Phase 3 gate (2026-10-15, prompt 58). |
 | ADR-012 | Turbulence Model: k-epsilon on the Staggered Solver (Accepted 2026-10-04, with ECR-002; Accepted (built) 2026-10-15, ECR-002 closed, with planned against built) | The product room runs at Re 89,500 on its height and the laminar solver does not converge on it (`docs/reports/product_case_reynolds.md`). k-epsilon, both variants built, RNG for the product and standard for the published comparisons; scalable wall functions on walls and obstacle faces; k and eps by the transport scheme in pseudo-time, positive by construction; the eddy viscosity in the momentum conductances by Patankar's face rule, with the stress terms constant viscosity let drop as an explicit source; a fifth stopping condition on the eddy viscosity; particle diffusivity Brownian plus nu_t / Sc_t. The outlets gain a condition for entering air and the hood a fixed-flow exhaust segment (REQ-S18). The pressure solve moves to ECR-003. Nine decisions of 2026-10-04 listed at its top, the ninth a probe of convergence before the build (ECR-002 step 0); gains planned against built when ECR-002 closes. |
 | ADR-013 | Pressure Correction Solver: Jacobi-Preconditioned Conjugate Gradients (Accepted 2026-10-06, with ECR-003; built, with planned against built, ECR-003 closed 2026-10-07) | Weighted Jacobi needs 28,000 to 378,000 sweeps per correction on the product mesh to reach a relative residual of 1e-3 to 3e-3, and a steady product solve would take 10 to 42 hours; Jacobi-preconditioned CG reaches 1e-8 in about 860 iterations, 0.16 s, keeps the per-cell update the GPU path wants with three reductions per iteration, needs no new dependency and converges on the closed cavity with b projected onto the range (`docs/reports/pressure_solver_ecr003.md`). The stop is the relative residual `pressure_rtol`, default 1e-8, with a rounding floor and the iteration cap reported. Supersedes ADR-010's weighted sweep. Its named successor, multigrid preconditioning of the same loop, built 2026-10-14 as an option, the default unchanged (prompt 53, `docs/reports/pressure_multigrid.md`). |
-| ADR-014 | Scenarios and Time Integration: Piecewise-Steady Flow, Time-Accurate Transport, and a Transient Solve for the Cylinder (Proposed 2026-10-16, prompt 59, before the Phase 4 build) | Two tiers (Alex, 2026-10-16): the room's flow is a sequence of steady states, one per distinct set of velocity boundaries, each solved once per run and warm-started, with the particles marched through time on it; the square cylinder (VAL-022, proposed) runs a true transient, an implicit step with SIMPLE outer iterations inside it. Short events as their steady extreme; a fourth reference scenario, the clean-out. The transport march, not the flow, sets a scenario's cost, and a warm start saves little of a re-solve because the stop is set by the slow mode's geometric decay (`docs/reports/probe59/tables59.md`). Twelve decisions put to Alex at its top: the re-solve trigger and cache, the scenarios' Courant number, BDF2 with SIMPLE per step and a velocity-step criterion, the door as a two-way exchange, the scenario schema with `base:` inheritance (REQ-C03), within spec as every sensor below threshold with the ISO 14644-3 100:1 time reported, one HDF5 run file with checkpoint and restart, VAL-008 on a smooth monotone front with the Courant number halved per refinement, the cylinder's clustered grid and OPEN thresholds, the plan's three modules with the solver changes in the modules that own the arithmetic. |
+| ADR-014 | Scenarios and Time Integration: Piecewise-Steady Flow, Time-Accurate Transport, and a Transient Solve for the Cylinder (Proposed 2026-10-16, prompt 59, before the Phase 4 build; Accepted 2026-10-16 by Alex, with the equipment vents of its section J as an amendment) | Two tiers (Alex, 2026-10-16): the room's flow is a sequence of steady states, one per distinct set of velocity boundaries, each solved once per run and warm-started, with the particles marched through time on it; the square cylinder (VAL-022, proposed) runs a true transient, an implicit step with SIMPLE outer iterations inside it. Short events as their steady extreme; a fourth reference scenario, the clean-out. The transport march, not the flow, sets a scenario's cost, and a warm start saves little of a re-solve because the stop is set by the slow mode's geometric decay (`docs/reports/probe59/tables59.md`). Twelve decisions put to Alex at its top: the re-solve trigger and cache, the scenarios' Courant number, BDF2 with SIMPLE per step and a velocity-step criterion, the door as a two-way exchange, the scenario schema with `base:` inheritance (REQ-C03), within spec as every sensor below threshold with the ISO 14644-3 100:1 time reported, one HDF5 run file with checkpoint and restart, VAL-008 on a smooth monotone front with the Courant number halved per refinement, the cylinder's clustered grid and OPEN thresholds, the plan's three modules with the solver changes in the modules that own the arithmetic. |
 
 ---
 
@@ -1373,3 +1421,4 @@ ADR-008, ADR-010, ADR-011, ADR-012, ADR-013 and ADR-014 are files in `docs/ADR/`
 | 2026-10-15 | ECR-002 closed at step 9 (prompt 58, branch phase3/gate-report). The status line states the build; ADR-012's row reads Accepted (built) with planned against built. No module, interface, requirement text or generated region changed. | Alex Moroz-Smietana |
 | 2026-10-15 | ADR-011's planned-against-built table added at the Phase 3 gate (prompt 58); its row reads Accepted (built). No module, interface, requirement text or generated region changed. | Alex Moroz-Smietana |
 | 2026-10-16 | ADR-014, the Phase 4 design, proposed (prompt 59, branch phase4/design): two tiers of time integration, short events as their steady extreme and the clean-out scenario recorded as Alex's decisions of 2026-10-16; twelve decisions put to Alex with probes under `docs/reports/probe59/` (the warm-started re-solve of the product room against rest, the cylinder's implicit step at six settings and a long march, the transport scheme's observed order for VAL-008, the room's scales and the transport march's cost). Section 6 gains the row. The planned contracts of section 4 (scenarios.py, monitor.py) are unchanged until built; ADR-014 G carries the draft contracts for scenarios.py, time_integration.py, io_manager.py and the solver changes (a warm start and a transient loop in solver_staggered.py, a transient term in momentum.py, interior clustering in mesh.py, the scenario schema in config.py). Section 5 gains the clean-out as the fourth scenario (prompt 59b, under the scope change process). No module, generated region or requirement text changed. | Claude (builder) |
+| 2026-10-16 | ADR-014 accepted by Alex (prompt 60, commit 0): the recommendation of each of its twelve decisions as written, decision 11's thresholds left OPEN as its recommendation states, and one amendment, the equipment vents as airflow only (ADR-014 J, step 0b; the limit in H). Section 4 gains ADR-014 G's contracts, marked planned: the scenario section of SimConfig and the obstacle-face segment, the transient argument of predict, FlowState, the warm start, flow_state and solve_transient on StaggeredSolver, and the scenarios.py contract replaced (intervals, flow_states, sources_at, conditions_for, initial_fields); headings for time_integration.py and io_manager.py. Section 3.2's scenarios.py and time_integration.py rows rewritten to the planned contracts and an io_manager.py row added. Section 6's ADR-014 row reads Accepted. No module, requirement text or generated region changed. | Claude (builder) |
