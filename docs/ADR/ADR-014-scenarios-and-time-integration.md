@@ -270,10 +270,14 @@ four grids, at a fixed Courant number and at one halved with the spacing.
 (VAL-004's metric); the case is the smooth monotone front on the aligned channel (T5, "front"
 and "front_wide"), where the limiter leaves the face value QUICK's wherever the gradient ratio
 is near 1 and the theoretical order is the scheme's 2, with the Courant number halved per
-refinement so the time error falls as dx^2; the criterion stays "within 0.2 of 2", measured on
-a pair of grids whose coarser one resolves the front's width with at least 20 cells, since T5
-shows the order rising toward 2 as the front gains cells and reaching 1.8 and 1.9 only from 20
-cells per width on. A second row on the Gaussian pulse at the same rule reports its order with
+refinement so the time error falls as dx^2; the criterion stays "within 0.2 of 2", on the case
+T5 measured it on: the wide front (width 0.2 m, 3 widths of travel, its tail at the inlet about
+1e-4 of its height), where the pairs whose coarser grids hold 10 and 20 cells across the width
+give 1.83 and 1.90, two pairs behind the rule, and the pair at 5 cells gives 1.64. Cells per
+width alone does not set the order: the narrow front (width 0.1 m, 10 widths of travel) at the
+same 10 to 20 cells gives 1.67, on a grid twice as fine and at half the Courant number, so the
+longer travel, over which the limiter's first-order share accumulates, and the inlet's cut of
+its tail are what the row must hold fixed. A second row on the Gaussian pulse at the same rule reports its order with
 no threshold: a limited scheme's order at an extremum is the limiter's, and the plan's 2 was
 never a claim about it. A third row on the stretched mesh (issue 53 D6) reports the front's
 order under the uniform-mesh limiter terms.
@@ -282,9 +286,10 @@ Euler's 1 and the criterion "within 0.2 of 2" fails by construction; amend the p
 "within 0.2 of 1".
 (3) The plan's row as written, with the theoretical order left to the test: an unstated order is
 not a criterion.
-*Recommendation.* (1), with the plan's row amended to name the quantity, the case and the
-Courant rule. The measured orders are T5's; the recommendation stands or falls on the front's
-row there.
+*Recommendation.* (1), with the plan's row amended to name the quantity, the case, its
+parameters and the Courant rule. The measured orders are T5's; two measured pairs stand behind
+the rule, and a fifth grid (dx 0.0025 m, 80 cells per width) would give a third if two are
+judged too few.
 
 **11. The cylinder's grid, boundaries and thresholds (section F).**
 *Picture.* The paper resolves the body with cells of 0.004 d at its surface and 20 nodes per unit
@@ -561,15 +566,23 @@ with their times, the per-step counts and imbalances, and the lift and drag on t
 refinement: the relative L2 error against the exact translation on a sequence of grids, the
 order between successive grids as log2 of the error ratio, on the aligned channel of T5 with
 the time step's Courant number halved per refinement so the forward Euler error falls as dx^2.
-Three rows: the smooth monotone front (the criterion row, theoretical order 2, "within 0.2",
-measured on a pair of grids whose coarser one has at least 20 cells across the front's width,
-T5's wide front); the Gaussian pulse (reported, no threshold: the limiter is first order at an
-extremum, ADR-011 B, and its observed order on a pulse is between the two); the front on the
-stretched mesh (reported, issue 53 D6: the limiter's three uniform-mesh terms on a stretched
-mesh). T5 holds the probe's measurements for every row and both schemes, with upwind as the
-control at order 1. The front's upstream tail must be below the inflow's resolution at the
-inlet (the probe placed the wide front so that its tail at the inlet was below 1e-4 of its
-height), or the inlet's zero cuts the profile and the error floors.
+Three rows: the smooth monotone front (the criterion row, theoretical order 2, "within 0.2", as
+T5's wide front: width 0.2 m, 3 widths of travel on the 2.0 by 0.4 m channel at the supply
+speed, the front 4.5 widths from the inlet at the start, grids of 0.02 and 0.01 m or finer, the
+order read between pairs whose coarser grid holds at least 10 cells across the width); the
+Gaussian pulse (reported, no threshold: the limiter is first order at an extremum, ADR-011 B,
+and its observed order on a pulse is between the two); the front on the stretched mesh
+(reported, issue 53 D6: the limiter's three uniform-mesh terms on a stretched mesh). T5 holds
+the probe's measurements for every row and both schemes, with upwind as the control at order 1.
+What T5 shows about the rule: on the wide front the pairs with 10 and 20 cells across the width
+on their coarser grid pass (1.83, 1.90) and the pair with 5 does not (1.64); the narrow front at
+the same cell counts does not (1.67 at 10 to 20), though its grid is twice as fine and its
+Courant number half, because it travels 10 widths to the wide front's 3, over which the
+limiter's first-order share at the shoulders accumulates. The row therefore fixes the travel in
+widths with the resolution, and reads its order between the two finest grids. The front's upstream tail must be small against the error at the
+inlet (both probe fronts start 4.5 widths from it, a tail of about 1.2e-4 of the height), or
+the inlet's zero cuts the profile and the error floors, which the first placing of the wide
+front showed.
 
 **Why not the pulse at a fixed Courant number.** Under forward Euler the time error is O(dt) and
 dt = c dx / U, so at a fixed c the error falls as dx and the observed order tends to 1 whatever
@@ -578,9 +591,10 @@ The plan's "theoretical" must be the space scheme's, and the time step must be r
 than the mesh to see it.
 
 **The amendment proposed.** PROJECT_PLAN's VAL-008 row: "Observed order of the limited transport
-scheme on a smooth monotone front, Courant number halved per refinement, within 0.2 of 2 on a
-grid pair whose coarser grid has at least 20 cells across the front's width; the pulse and the
-stretched-mesh rows reported" (section G's step 5). REQ-N02's text stands; its
+scheme on a smooth monotone front (width 0.2 m, 3 widths of travel, 4.5 widths from the inlet at
+the start), Courant number halved per refinement, within 0.2 of 2 between grid pairs whose
+coarser grid has at least 10 cells across the front's width; the pulse and the stretched-mesh
+rows reported" (section G's step 5). REQ-N02's text stands; its
 rationale's "second-order scheme should reduce error by 4x" applies to the front row.
 
 ## F. The square cylinder (decision 11)
@@ -916,14 +930,15 @@ Period 1 / St = 6.85 time units at St 0.146; the paper's run is 6300 steps of 0.
   aligned and oblique channels, lower on the stretched mesh, and upwind's is below 1 at these
   resolutions (its asymptotic 1 is not reached while the pulse is five to twenty cells wide). The
   smooth monotone front's order under the halving rule rises grid by grid toward 2 as the front
-  gains cells: the narrow front (2.5 to 20 cells per width) does not reach 1.8 on any pair, and
-  the wide front, the same profile at twice the cells per width, is within 0.2 of 2 on its two
-  finest pairs (20 and 40 cells per width on the coarser grid of the pair). The limiter's
-  departure from QUICK where the gradient ratio leaves 1 at the front's shoulders shrinks with
-  the spacing, and so does its share of the error. Decision 10's row is therefore the front's
-  with the Courant number halved, measured on a pair whose coarser grid resolves the front's
-  width with at least 20 cells, which T5 shows is where the asymptotic order is read; the first
-  pair of a coarse ladder does not show it.
+  gains cells: the narrow front (2.5, 5, 10 and 20 cells across its width on the four grids)
+  does not reach 1.8 on any pair, and the wide front (5, 10, 20 and 40 cells) is within 0.2 of 2
+  on its two finest pairs, whose coarser grids hold 10 and 20 cells across the width. At the
+  same cell counts the two fronts differ (1.67 against 1.83 at 10 to 20 cells): the narrow one
+  travels 10 widths to the wide one's 3, and the limiter's departure from QUICK where the
+  gradient ratio leaves 1 at the front's shoulders, first order and shrinking with the spacing,
+  accumulates with the travel. Decision 10's row is therefore the wide front as measured, with
+  the Courant number halved, its order read between the two finest grids; two pairs stand
+  behind the rule.
 - *T6.* The transport march at the file's Courant number costs about 93 wall seconds per
   simulated second for the five classes on the product grid, about 1,100 steps per simulated
   second per class; the step is set by the return faces. The well-mixed 100:1 time of the slice
