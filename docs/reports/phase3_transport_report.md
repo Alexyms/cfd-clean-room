@@ -2,8 +2,11 @@
 
 **Date:** 2026-10-16 (the machine's local date; Alex's decisions before the gate are dated
 2026-10-15, prompt 58)
-**Phase Gate Verdict:** FOR ALEX'S DECISION (the Phase Gate Criteria section states what holds
-and what rests on his reading of the reported rows and the documented gap)
+**Phase Gate Verdict:** CONDITIONAL PASS (Alex, 2026-10-16). The conditions are the known
+limits beside the product claim: 2D; turbulence over equipment tops about 30% high (VAL-020); separation bubbles short on
+practical grids (VAL-019); the transport's turbulent spreading unvalidated against
+measurement (VAL-021, a documented gap); L2's cycle on 160x60. They are carried into
+Phase 4 as stated limits and into Phase 6 (3D, GPU) as the work that addresses them.
 **Branches Merged:** 30 pull requests, #46 to #84, and this one (`phase3/gate-report`):
 - The transport solver, ADR-011: #46 (the collocated solver retired, the first Phase 3 pull
   request), #48 (the design), #50 (face velocities, the transport configuration, the
@@ -166,8 +169,8 @@ have no uncovered line or branch.
    ECR-002 closed and built, the ADR-011 and ADR-012 rows read Accepted (built) with planned
    against built, and the Document History carries each change. The contracts were brought
    current at each step's pull request (the SYSTEM.md history rows of 2026-10-03 to 2026-10-15).
-6. **The report is filled out and committed.** Holds with this commit; the verdict line at the
-   head is Alex's to set, with PROJECT_PLAN's Phase 3 row at GATE REVIEW until he does.
+6. **The report is filled out and committed.** Holds; Alex set the verdict on 2026-10-16,
+   CONDITIONAL PASS (the line at the head), and PROJECT_PLAN's Phase 3 row reads COMPLETE.
 
 ## GitHub issue 53, D3 and D4
 
