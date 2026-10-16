@@ -251,7 +251,7 @@ step 5's dependency is met.
 
 ## Phase 4: Scenarios & Time Integration
 
-**Goal:** Build the scenario engine for contamination events and the time integration loop coordinating the NS and transport solvers. Implement the three reference scenarios.
+**Goal:** Build the scenario engine for contamination events and the time integration loop coordinating the NS and transport solvers. Implement the four reference scenarios (the clean-out added 2026-10-16, Alex's decision 3 of that date, ADR-014).
 
 **Branch prefix:** `phase4/`
 
@@ -261,12 +261,14 @@ step 5's dependency is met.
 
 | Deliverable | Status | Notes |
 |-------------|--------|-------|
+| docs/ADR/ADR-014-scenarios-and-time-integration.md | PROPOSED (prompt 59, 2026-10-16) | The Phase 4 design, before any code, as ADR-011 was for Phase 3: the two tiers, the steady extreme and the clean-out scenario (Alex, 2026-10-16) recorded as given; twelve decisions for Alex at its top, each with a picture, ranked options and the section carrying it; the probes and their tables under `docs/reports/probe59/`. The build order is its section G, eight ECR-style steps, the housekeeping batch and the warm start first. VAL-022 (the square cylinder, three rows) proposed with OPEN thresholds; VAL-008's row amended as section E proposes once decided |
 | src/scenarios.py | NOT STARTED | Event management, source terms, BC modifications |
 | src/time_integration.py | NOT STARTED | Timestep loop, CFL enforcement, solver coordination |
 | src/io_manager.py | NOT STARTED | Output writing, checkpointing |
 | configs/scenario_door_leak.yaml | NOT STARTED | Door seal failure scenario |
 | configs/scenario_filter_breach.yaml | NOT STARTED | HEPA filter breach scenario |
 | configs/scenario_equipment_dust.yaml | NOT STARTED | Equipment dust release scenario |
+| configs/scenario_clean_out.yaml | NOT STARTED | Clean-out (recovery) scenario, added 2026-10-16 (ADR-014 decision 3): the room uniformly contaminated, the supply clean, run until within spec (ADR-014 C) |
 | tests/test_scenarios.py | NOT STARTED | Unit tests: event timing, activation, expiration |
 | tests/test_time_integration.py | NOT STARTED | Integration tests: full timestep loop |
 | tests/test_grid_convergence.py | NOT STARTED | VAL-008 |
@@ -285,7 +287,7 @@ Laminar flow past a square cylinder in a channel is Phase 4's validation and sho
 
 ### Additional Gate Criteria
 
-- All three scenarios run to completion without error
+- All four scenarios run to completion without error (the clean-out added 2026-10-16, ADR-014)
 - Output files produced and loadable
 - All previous validation tests still pass
 
@@ -475,3 +477,4 @@ Phase 3 completion is the minimum viable portfolio artifact. A working, validate
 | 2026-10-15 | ECR-002 step 7, VAL-021 feasibility (prompt 57, branch feature/ecr002-val021-concentration, merged as PR 84): none of the three named candidates fits a 2D trend check; recommended closed as a documented gap (`docs/reports/ecr002_val021_feasibility.md`). The VAL-021 rows above carry Alex's decision of 2026-10-15 (prompt 58). | Claude (builder) |
 | 2026-10-15 | ECR-002 closed at step 9 (prompt 58, branch phase3/gate-report): ADR-012 Accepted (built) with planned against built (steps 0 to 8, condition (e)'s scale, the CG k and eps solve, the multigrid default); the request's closing note lists each criterion's outcome by reference; the Step 9 row above. | Alex Moroz-Smietana |
 | 2026-10-16 | Phase 3 gate report written (prompt 58, branch phase3/gate-report): `docs/reports/phase3_transport_report.md`, in the Phase 2 report's structure; the full suite and branch coverage from one run; the comparative claim stated per metric with ties from `docs/reports/probe58/` (metrics defined before computing, tables generated with a check mode, one figure); issue 53's D3 and D4 answered with recommendations, no change made; ADR-011's planned-against-built table added. Phase 3 at GATE REVIEW, the verdict for Alex. | Claude (builder) |
+| 2026-10-16 | ADR-014, the Phase 4 design, proposed (prompt 59, branch phase4/design): two tiers of time integration, short events as their steady extreme and a fourth reference scenario, the clean-out (Alex, 2026-10-16); twelve decisions put to Alex. The probes (`docs/reports/probe59/`, tables in `tables59.md`): prediction (a), a warm-started re-solve under a third of a solve from rest, fails (the stop is set by the slow mode's geometric decay, so the warm start saves little); the transport march at Courant 0.1 costs about 93 wall seconds per simulated second on 320x120 for the five classes, which sets a scenario's cost; the cylinder's implicit step converges in a handful of outer iterations at 1e-4 U per step; the limited scheme's observed order on a Gaussian pulse is between 1 and 2, VAL-008's criterion row proposed on a smooth monotone front. The Phase 4 deliverables table gains the ADR's row; nothing under src/, tests/ or configs/ changed. | Claude (builder) |
