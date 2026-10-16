@@ -107,3 +107,48 @@ Period 1 / St = 6.85 time units at St 0.146; the paper's run is 6300 steps of 0.
 | 0.5 | 1.007e-05 | 2.978e+05 | 0.0009058 | 1104 | 0.01591 | 17.56 |
 | 1 | 3.517e-05 | 8.53e+04 | 0.0009058 | 1104 | 0.01537 | 16.97 |
 | 5 | 7.779e-04 | 3857 | 0.0009058 | 1104 | 0.01433 | 15.82 |
+
+### T7. The clean-out at Courant 0.1 and 0.4 (160x60, L0 flow, Sc_t 0.7): the time error
+
+C0 = 1 in every non-SOLID cell at t = 0, the supply clean, the step the smaller stable_dt of the two classes (0.5 and 5 um), run until every sensor of both classes is below 1e-3 C0; N = 0.1798 per second (1 / N = 5.56 s).
+
+| Arm | dt (s) | Steps | Simulated end (s) | Stopped by | Wall (s) | Wall s per simulated s | Budget relative residual | Processes |
+|---|---|---|---|---|---|---|---|---|
+| 0.1 | 1.9781e-03 | 27,575 | 54.55 | sensors below 1e-3 | 380 | 6.97 | -1.2e-06, -1.2e-06 | 2 |
+| 0.4 | 7.9124e-03 | 6,892 | 54.53 | sensors below 1e-3 | 98 | 1.79 | -4.0e-07, -4.0e-07 | 2 |
+
+| Class (um) | Sensor | Level | First time below and staying below, Courant 0.1 (s) | Courant 0.4 (s) | 0.4 against 0.1 |
+|---|---|---|---|---|---|
+| 0.5 | near_door | 0.01 | 29.22 | 29.21 | -0.03% |
+| 0.5 | near_door | 0.001 | 54.55 | 54.53 | -0.03% |
+| 0.5 | above_gap_1 | 0.01 | 1.61 | 1.57 | -2.58% |
+| 0.5 | above_gap_1 | 0.001 | 1.80 | 1.73 | -3.63% |
+| 0.5 | above_gap_2 | 0.01 | 1.68 | 1.63 | -2.72% |
+| 0.5 | above_gap_2 | 0.001 | 1.87 | 1.81 | -3.17% |
+| 0.5 | hood_entry | 0.01 | 3.53 | 3.45 | -2.24% |
+| 0.5 | hood_entry | 0.001 | 3.77 | 3.66 | -2.94% |
+| 0.5 | free-area mean | 0.01 | not reached | not reached | - |
+| 0.5 | free-area mean | 0.001 | not reached | not reached | - |
+| 5 | near_door | 0.01 | 29.06 | 29.05 | -0.02% |
+| 5 | near_door | 0.001 | 54.36 | 54.35 | -0.02% |
+| 5 | above_gap_1 | 0.01 | 1.60 | 1.56 | -2.84% |
+| 5 | above_gap_1 | 0.001 | 1.80 | 1.73 | -3.52% |
+| 5 | above_gap_2 | 0.01 | 1.67 | 1.63 | -2.60% |
+| 5 | above_gap_2 | 0.001 | 1.87 | 1.80 | -3.49% |
+| 5 | hood_entry | 0.01 | 3.52 | 3.44 | -2.30% |
+| 5 | hood_entry | 0.001 | 3.76 | 3.65 | -3.00% |
+| 5 | free-area mean | 0.01 | not reached | not reached | - |
+| 5 | free-area mean | 0.001 | not reached | not reached | - |
+
+Largest relative difference of a sensor's recovery time, 0.4 against 0.1: 3.63% (prediction (c): under 2%).
+
+| Air changes N t | t (s) | Well-mixed exp(-N t) | Free-area mean, 0.5 um, Courant 0.1 | 0.4 | Free-area mean, 5 um, Courant 0.1 | 0.4 |
+|---|---|---|---|---|---|---|
+| 0 | 0.0 | 1.000e+00 | 1.000e+00 | 1.000e+00 | 1.000e+00 | 1.000e+00 |
+| 1 | 5.6 | 3.679e-01 | 1.929e-01 | 1.926e-01 | 1.922e-01 | 1.919e-01 |
+| 2 | 11.1 | 1.353e-01 | 1.025e-01 | 1.024e-01 | 1.020e-01 | 1.020e-01 |
+| 3 | 16.7 | 4.979e-02 | 7.103e-02 | 7.099e-02 | 7.063e-02 | 7.060e-02 |
+| 4 | 22.2 | 1.832e-02 | 5.324e-02 | 5.322e-02 | 5.283e-02 | 5.281e-02 |
+| 5 | 27.8 | 6.738e-03 | 4.212e-02 | 4.211e-02 | 4.170e-02 | 4.169e-02 |
+| 6 | 33.4 | 2.479e-03 | 3.456e-02 | 3.455e-02 | 3.411e-02 | 3.410e-02 |
+| 8 | 44.5 | 3.355e-04 | 2.507e-02 | 2.506e-02 | 2.458e-02 | 2.457e-02 |

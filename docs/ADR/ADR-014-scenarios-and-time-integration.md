@@ -87,21 +87,38 @@ cell whose two directional rates sum to about 110 per second (1.5 m/s along the 
 1.2 m/s into the return over 2.5 cm; T6's step at 0.1), not by the room. The Courant number is an accuracy choice
 below the limited scheme's stability bound of 1/2 (ADR-011 C): the forward Euler error
 steepens a pulse in proportion to it (ADR-011 H's table: peak and L2 at 0.1, 0.25 and 0.4).
+The steady comparison ECR-002 step 8's marches made between 0.4 and 0.1
+(`docs/reports/ecr002_step6_comparative.md`, section 5.4) cannot see that error: the explicit
+step's steady state solves the same discrete equation at any step, so two marches that agree at
+the end agree on the equation, not on the path. The scenarios are scored on transient
+quantities, a recovery time or a detection latency, which is where VAL-004's shape error at 0.4
+(L2 38% against 11% at 0.1 for the oblique pulse, ADR-011 H) would show. The probe of prompt 59b
+measured the time error on the quantity itself: the clean-out on 160x60 at 0.1 and at 0.4 (T7),
+every sensor's first time below 1e-2 and 1e-3 of the initial value, both classes.
 *Options, ranked.*
-(1) `cfl_number` 0.4 for the scenarios, 0.1 kept for the validation rows: 2.5 times fewer steps
-than 0.1 (about 37 wall seconds per simulated second), the value ECR-002 step 8's marches ran at
-and checked against 0.1 (`docs/reports/ecr002_step6_comparative.md`, section 5.4), at the cost
-of VAL-004's measured shape error at 0.4 (L2 38% against 11% at 0.1 for the oblique pulse). The
-scenarios are scored on sensor readings against thresholds and on recovery times, not on pulse
-shapes, and the comparative purpose (SYSTEM.md section 1) tolerates it.
+(1) `cfl_number` 0.4 for the scenarios, 0.1 kept for the validation rows: four times fewer
+steps than 0.1, since `stable_dt` is linear in the Courant number (about 23 wall seconds per
+simulated second on the product grid from T6; T7's two arms differ by 3.9 in wall time for 4.0
+in steps). What it costs in the answer, from T7: the sensors' recovery times at 0.4 are within
+3.7% of those at 0.1, earlier at 0.4 in every case, with the largest differences at the three
+sensors under the supply that clear within two seconds (2.2% to 3.6%) and the near-door sensor,
+which clears last at 29 and 55 s, within 0.03%; the free-area mean's decay is the same curve to
+three figures. A recovery or detection time read at 0.4 is therefore a few percent early on the
+fastest sensors and unchanged on the slow ones, against a comparative purpose (SYSTEM.md
+section 1) that ranks layouts and sensor positions.
 (2) Heun's method (the two-stage SSP Runge-Kutta member, ADR-011 C's recorded alternative): the
 same bound of 1/2, second-order in time, so 0.4 costs no steepening; two advection evaluations
-per step, so about 0.8 of option (1)'s cost per simulated second for a better answer. It touches
-`solve_timestep` only. ADR-011 deferred it to Phase 6, where the step is paid for on the GPU.
-(3) `cfl_number` 0.1 everywhere: the validation rows' accuracy at the full cost of T6.
-*Recommendation.* (1) now, (2) named as the first Phase 6 transport change, so the scenarios
-are repeatable on the GPU at the same Courant number with the time error removed rather than
-tolerated. The scenario files state their Courant number; nothing in the solver changes.
+per step, so about twice option (1)'s cost per simulated second (about 46 wall seconds) and half
+of option (3)'s, for the answer at 0.1's accuracy or better. It touches `solve_timestep` only.
+ADR-011 deferred it to Phase 6, where the step is paid for on the GPU.
+(3) `cfl_number` 0.1 everywhere: the validation rows' accuracy at the full cost of T6, about 93
+wall seconds per simulated second, four times option (1).
+*Recommendation.* (1) now, with T7's few percent stated beside every recovery and latency
+figure the scenarios report, and (2) named as the first Phase 6 transport change, so the
+scenarios are repeatable on the GPU at the same Courant number with the time error removed
+rather than tolerated. If a scenario's figure must hold to better than T7's difference, (3) is
+the fallback at four times the cost. The scenario files state their Courant number; nothing in
+the solver changes.
 
 **3. Tier 2's time discretisation (section A).**
 *Picture.* A time-accurate step needs the old time level in the momentum equation. Implicit Euler
@@ -415,7 +432,9 @@ convergence T1 measures; the transport scheme is stable at any face field under 
 **The transport step.** Decision 2. The scenario files state `transport.cfl_number`; the march
 runs every class at the one step above. T6 gives the cost per simulated second at the file's
 0.1, per class and for all five, measured on the L0 faces and eddy viscosity. The cost scales
-with the inverse of the Courant number and with the cell count.
+with the inverse of the Courant number and with the cell count. T7 gives the time error between
+0.1 and 0.4 on the quantity a scenario is scored on, the sensors' recovery times in the
+clean-out, and the free-area decay beside the well-mixed line.
 
 **Sources and inlet concentrations in time.** `time_integration.py` asks `scenarios.py` for the
 active sources at the step's time, sums them into one rate array per class, and passes it as
@@ -812,7 +831,7 @@ committed before it ran).**
 five processes sharing the machine and are stated with their process counts; counts are not
 affected by concurrency.
 
-**Results.** See `docs/reports/probe59/tables59.md` (T1 to T6), copied below.
+**Results.** See `docs/reports/probe59/tables59.md` (T1 to T7), copied below.
 
 ### T1. The product room re-solved to the door's states (320x120)
 
@@ -839,7 +858,7 @@ affected by concurrency.
 | E | 0.05 | 0.50 | 0.0001 | 1e-06 | 162.9, 17.5, 500 | 2.0, 4.1, 21.4, 50.5 | 33.73 | 0.207 | 2.6e-10 | 5 |
 | F | 0.025 | 0.25 | 0.0001 | 1e-06 | 199.6, 10, 500 | 1.2, 3.2, 19.2, 70.9 | 37.40 | 0.187 | 6.4e-10 | 5 |
 
-Start-up: 5 steady outer iterations from rest on 74x40 (2,960 cells), 0.014 s per outer with 1 processes.
+Start-up, rerun after the arms (the field the arms began from was overwritten by a smoke run and is not kept; the steady loop is deterministic, so the rerun is the same field): 200 steady outer iterations from rest on 370x200 (74,000 cells), 0.258 s per outer with 3 processes.
 
 ### T3. The long marches from the perturbed start-up: the cost as shedding develops
 
@@ -920,6 +939,51 @@ Period 1 / St = 6.85 time units at St 0.146; the paper's run is 6300 steps of 0.
 | 1 | 3.517e-05 | 8.53e+04 | 0.0009058 | 1104 | 0.01537 | 16.97 |
 | 5 | 7.779e-04 | 3857 | 0.0009058 | 1104 | 0.01433 | 15.82 |
 
+### T7. The clean-out at Courant 0.1 and 0.4 (160x60, L0 flow, Sc_t 0.7): the time error
+
+C0 = 1 in every non-SOLID cell at t = 0, the supply clean, the step the smaller stable_dt of the two classes (0.5 and 5 um), run until every sensor of both classes is below 1e-3 C0; N = 0.1798 per second (1 / N = 5.56 s).
+
+| Arm | dt (s) | Steps | Simulated end (s) | Stopped by | Wall (s) | Wall s per simulated s | Budget relative residual | Processes |
+|---|---|---|---|---|---|---|---|---|
+| 0.1 | 1.9781e-03 | 27,575 | 54.55 | sensors below 1e-3 | 380 | 6.97 | -1.2e-06, -1.2e-06 | 2 |
+| 0.4 | 7.9124e-03 | 6,892 | 54.53 | sensors below 1e-3 | 98 | 1.79 | -4.0e-07, -4.0e-07 | 2 |
+
+| Class (um) | Sensor | Level | First time below and staying below, Courant 0.1 (s) | Courant 0.4 (s) | 0.4 against 0.1 |
+|---|---|---|---|---|---|
+| 0.5 | near_door | 0.01 | 29.22 | 29.21 | -0.03% |
+| 0.5 | near_door | 0.001 | 54.55 | 54.53 | -0.03% |
+| 0.5 | above_gap_1 | 0.01 | 1.61 | 1.57 | -2.58% |
+| 0.5 | above_gap_1 | 0.001 | 1.80 | 1.73 | -3.63% |
+| 0.5 | above_gap_2 | 0.01 | 1.68 | 1.63 | -2.72% |
+| 0.5 | above_gap_2 | 0.001 | 1.87 | 1.81 | -3.17% |
+| 0.5 | hood_entry | 0.01 | 3.53 | 3.45 | -2.24% |
+| 0.5 | hood_entry | 0.001 | 3.77 | 3.66 | -2.94% |
+| 0.5 | free-area mean | 0.01 | not reached | not reached | - |
+| 0.5 | free-area mean | 0.001 | not reached | not reached | - |
+| 5 | near_door | 0.01 | 29.06 | 29.05 | -0.02% |
+| 5 | near_door | 0.001 | 54.36 | 54.35 | -0.02% |
+| 5 | above_gap_1 | 0.01 | 1.60 | 1.56 | -2.84% |
+| 5 | above_gap_1 | 0.001 | 1.80 | 1.73 | -3.52% |
+| 5 | above_gap_2 | 0.01 | 1.67 | 1.63 | -2.60% |
+| 5 | above_gap_2 | 0.001 | 1.87 | 1.80 | -3.49% |
+| 5 | hood_entry | 0.01 | 3.52 | 3.44 | -2.30% |
+| 5 | hood_entry | 0.001 | 3.76 | 3.65 | -3.00% |
+| 5 | free-area mean | 0.01 | not reached | not reached | - |
+| 5 | free-area mean | 0.001 | not reached | not reached | - |
+
+Largest relative difference of a sensor's recovery time, 0.4 against 0.1: 3.63% (prediction (c): under 2%).
+
+| Air changes N t | t (s) | Well-mixed exp(-N t) | Free-area mean, 0.5 um, Courant 0.1 | 0.4 | Free-area mean, 5 um, Courant 0.1 | 0.4 |
+|---|---|---|---|---|---|---|
+| 0 | 0.0 | 1.000e+00 | 1.000e+00 | 1.000e+00 | 1.000e+00 | 1.000e+00 |
+| 1 | 5.6 | 3.679e-01 | 1.929e-01 | 1.926e-01 | 1.922e-01 | 1.919e-01 |
+| 2 | 11.1 | 1.353e-01 | 1.025e-01 | 1.024e-01 | 1.020e-01 | 1.020e-01 |
+| 3 | 16.7 | 4.979e-02 | 7.103e-02 | 7.099e-02 | 7.063e-02 | 7.060e-02 |
+| 4 | 22.2 | 1.832e-02 | 5.324e-02 | 5.322e-02 | 5.283e-02 | 5.281e-02 |
+| 5 | 27.8 | 6.738e-03 | 4.212e-02 | 4.211e-02 | 4.170e-02 | 4.169e-02 |
+| 6 | 33.4 | 2.479e-03 | 3.456e-02 | 3.455e-02 | 3.411e-02 | 3.410e-02 |
+| 8 | 44.5 | 3.355e-04 | 2.507e-02 | 2.506e-02 | 2.458e-02 | 2.457e-02 |
+
 **Reading the tables (written after the runs, 2026-10-16).**
 - *T1, prediction (a): fails.* The warm arm's outer count is about 0.85 of the rest arm's and its
   wall time about the same fraction, not under a third. The two arms stop at the same state (the
@@ -972,6 +1036,19 @@ Period 1 / St = 6.85 time units at St 0.146; the paper's run is 6300 steps of 0.
   simulated second for the five classes on the product grid, about 1,100 steps per simulated
   second per class; the step is set by the return faces. The well-mixed 100:1 time of the slice
   is about 26 s against a turnover of about 5.6 s.
+- *T7, predictions (c) and (d) (prompt 59b).* (c) fails, narrowly: the largest relative
+  difference of a sensor's recovery time between 0.4 and 0.1 is 3.6%, at the three sensors under
+  the supply, which clear within two seconds; the near-door sensor, which clears last, differs
+  by 0.03%, and the free-area mean's curve is the same to three figures. Every 0.4 time is
+  earlier than its 0.1 time, the forward Euler steepening's direction. The builder's (c), which
+  expected the late 5 um crossings to differ most, was wrong about where the difference sits:
+  it is in the fast crossings, where a few hundredths of a second are a few percent. (d) holds,
+  more strongly than predicted: the mean falls below the well-mixed line in the first air
+  change (the supply short-circuits to the returns through the gaps) and then far above it,
+  about two orders of magnitude at eight air changes, as the recirculation zones empty last; the
+  mean's own 100:1 time is not reached by the time every sensor is below 1e-3. The clean-out on
+  this room is a sensor-placement question, which section C's recovery field is there to
+  answer.
 
 ## Consequences
 - The transport march, not the flow, sets a scenario's cost (T6); decision 2 and Phase 6's GPU

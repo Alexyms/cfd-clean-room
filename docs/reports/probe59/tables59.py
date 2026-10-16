@@ -293,6 +293,109 @@ def scales_table() -> list[str]:
     return lines
 
 
+CLEANOUT_ARMS = ("0.1", "0.4")
+CLEANOUT_MARKS = (0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0)  # in air changes 1 / N
+
+
+def cleanout_table() -> list[str]:
+    """T7: the clean-out march at Courant 0.1 and 0.4 (prompt 59b), the time error itself."""
+    lines = [
+        "### T7. The clean-out at Courant 0.1 and 0.4 (160x60, L0 flow, Sc_t 0.7): the time error",
+        "",
+    ]
+    arms = {c: load(f"cleanout_cfl{c}") for c in CLEANOUT_ARMS}
+    if any(rec is None for rec in arms.values()):
+        lines.append("not run")
+        return lines
+    first = arms[CLEANOUT_ARMS[0]]
+    lines.append(
+        f"C0 = {first['c0']:g} in every non-SOLID cell at t = 0, the supply clean, the step the "
+        f"smaller stable_dt of the two classes ({first['sizes_m'][0] * 1e6:g} and "
+        f"{first['sizes_m'][1] * 1e6:g} um), run until every sensor of both classes is below "
+        f"1e-3 C0; N = {first['air_change_rate_per_s']:.4f} per second (1 / N = "
+        f"{1.0 / first['air_change_rate_per_s']:.2f} s)."
+    )
+    lines.append("")
+    lines.append(
+        "| Arm | dt (s) | Steps | Simulated end (s) | Stopped by | Wall (s) | Wall s per simulated s | Budget relative residual | Processes |"
+    )
+    lines.append("|---|---|---|---|---|---|---|---|---|")
+    for c, rec in arms.items():
+        budget = ", ".join(f"{v:.1e}" for v in rec["budget_relative"].values())
+        lines.append(
+            f"| {c} | {rec['dt']:.4e} | {rec['steps']:,} | {rec['t_end']:.2f} | {rec['stopped_by']} | "
+            f"{rec['wall_seconds']:.0f} | {rec['wall_seconds_per_simulated_second']:.2f} | "
+            f"{budget} | {rec['concurrent_processes']} |"
+        )
+    lines.append("")
+    lines.append(
+        "| Class (um) | Sensor | Level | First time below and staying below, Courant 0.1 (s) | Courant 0.4 (s) | 0.4 against 0.1 |"
+    )
+    lines.append("|---|---|---|---|---|---|")
+    worst = 0.0
+    a, b = arms[CLEANOUT_ARMS[0]], arms[CLEANOUT_ARMS[1]]
+    for k, size in zip(a["classes"], a["sizes_m"], strict=True):
+        for sensor, levels in a["recovery"][str(k)].items():
+            for level, t_a in levels.items():
+                t_b = b["recovery"][str(k)][sensor][level]
+                if t_a is None or t_b is None:
+                    diff = "not reached"
+                else:
+                    rel = (t_b - t_a) / t_a if t_a > 0 else 0.0
+                    worst = max(worst, abs(rel))
+                    diff = f"{rel * 100:+.2f}%"
+                fa = "not reached" if t_a is None else f"{t_a:.2f}"
+                fb = "not reached" if t_b is None else f"{t_b:.2f}"
+                lines.append(
+                    f"| {size * 1e6:g} | {sensor} | {float(level):g} | {fa} | {fb} | {diff} |"
+                )
+        for level, t_a in a["mean_recovery"][str(k)].items():
+            t_b = b["mean_recovery"][str(k)][level]
+            fa = "not reached" if t_a is None else f"{t_a:.2f}"
+            fb = "not reached" if t_b is None else f"{t_b:.2f}"
+            diff = (
+                "-"
+                if t_a is None or t_b is None
+                else f"{(t_b - t_a) / t_a * 100:+.2f}%"
+            )
+            lines.append(
+                f"| {size * 1e6:g} | free-area mean | {float(level):g} | {fa} | {fb} | {diff} |"
+            )
+    lines.append("")
+    lines.append(
+        f"Largest relative difference of a sensor's recovery time, 0.4 against 0.1: "
+        f"{worst * 100:.2f}% (prediction (c): under 2%)."
+    )
+    lines.append("")
+    lines.append(
+        "| Air changes N t | t (s) | Well-mixed exp(-N t) | Free-area mean, 0.5 um, Courant 0.1 | 0.4 | Free-area mean, 5 um, Courant 0.1 | 0.4 |"
+    )
+    lines.append("|---|---|---|---|---|---|---|")
+    rate = a["air_change_rate_per_s"]
+    import math
+
+    for mark in CLEANOUT_MARKS:
+        t = mark / rate
+        cells = []
+        for rec in (a, b):
+            times = rec["times"]
+            idx = min(range(len(times)), key=lambda i: abs(times[i] - t))
+            cells.append(
+                (
+                    rec["means"][str(a["classes"][0])][idx],
+                    rec["means"][str(a["classes"][1])][idx],
+                    times[idx],
+                )
+            )
+        if cells[0][2] > a["t_end"] + 1e-9 or t > a["t_end"] + 1e-9:
+            break
+        lines.append(
+            f"| {mark:g} | {t:.1f} | {math.exp(-mark):.3e} | {cells[0][0]:.3e} | {cells[1][0]:.3e} | "
+            f"{cells[0][1]:.3e} | {cells[1][1]:.3e} |"
+        )
+    return lines
+
+
 def render() -> str:
     """The whole tables file as text."""
     parts = [
@@ -311,6 +414,7 @@ def render() -> str:
         showcase_table,
         order_table,
         scales_table,
+        cleanout_table,
     ):
         parts.extend(block())
         parts.append("")
