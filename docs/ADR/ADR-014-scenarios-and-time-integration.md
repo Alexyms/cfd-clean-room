@@ -751,15 +751,26 @@ Listed as the first build step's housekeeping, each with its location:
 - (b) One converged tier-2 time step of the cylinder at Re 100 costs under 50 outer iterations,
   and the showcase (a settled Strouhal number) fits in a few hours on this machine.
 
+**Predictions (orchestrator, 2026-10-16, prompt 59b, on the clean-out probe of decision 2;
+committed before it ran).**
+- (c) The sensors' recovery times at Courant 0.4 differ from those at 0.1 by under 2%.
+- (d) The volume average decays more slowly than the well-mixed exp(-N t) after the first air
+  change, because the recirculation zones empty last.
+
 **Builder (2026-10-16, before the runs, scored apart).**
 - (a) Holds on outer count; the wall ratio is close to the outer ratio since both arms run the
   same room. The back arm (closed from open) costs about as much as the warm arm.
 - (b) Holds at the 1e-4 U criterion by a wide margin; the long march's cost per step rises as
   shedding develops but stays under 50 outer iterations; one run of the paper's length at
   dt 0.05 fits in a few hours on the uniform grid with the probe's concurrency.
+- (c) Holds for the 1e-2 crossings and most 1e-3 crossings; the 5 um class's late crossings in
+  the lingering zones may differ by more, since the forward Euler error at 0.4 steepens
+  gradients and the tail of a decay is where a small absolute error is a large relative one.
+- (d) Holds: the supply short-circuits to the returns through the gaps, so the mean falls faster
+  than well-mixed at first and slower later.
 
-**Method.** `warm59.py` (T1), `cylinder59.py` (T2 to T4), `order59.py` (T5), `scales59.py` (T6);
-each script's docstring states its arms and what it writes. Wall times were taken with three to
+**Method.** `warm59.py` (T1), `cylinder59.py` (T2 to T4), `order59.py` (T5), `scales59.py` (T6),
+`cleanout59.py` (T7, prompt 59b); each script's docstring states its arms and what it writes. Wall times were taken with three to
 five processes sharing the machine and are stated with their process counts; counts are not
 affected by concurrency.
 
