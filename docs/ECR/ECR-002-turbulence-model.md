@@ -273,7 +273,7 @@ conductances by it (line 824); `stable_dt` does not read it.
 | `src/solver_staggered.py` | The outlet condition per outer iteration; the k and eps step in the outer loop; `eddy_viscosity`; the modified pressure. Amended 2026-10-08: step 3 changes nothing here; the pressure outlet's copy is as it was. | 3, 4, 6 |
 | `src/stopping.py` | Condition (e); the version a property of the rule. | 6 |
 | `src/config.py` | The `turbulence` section, `turbulent_schmidt`, the inlet keys, the exhaust segment type. | 1, 2, 3, 6 |
-| `configs/clean_room_default.yaml` | The hood as a fixed-flow exhaust (step 3; amended 2026-10-08: the four floor returns too); the turbulence section and `error_estimate` (ADR-011 decision 6; step 8). | 3, 8 |
+| `configs/clean_room_default.yaml` | The hood as a fixed-flow exhaust (step 3; amended 2026-10-08: the four floor returns too); the turbulence section and `error_estimate` (ADR-011 decision 6; step 8). Built 2026-10-15 (prompt 56): the product configuration of prompts 46 to 48 on 320x120, each key sourced in the file (step 8's note). | 3, 8 |
 | `scripts/benchmark.py`, `scripts/stopping_probe.py`, `scripts/val001_order.py` | Read the rule version from the solver; the harness records the turbulence keys. | 6 |
 | `validation/cases.py`, `validation/metrics.py` | The decaying box, plane Couette flow, the backward-facing step and the Annex 20 cases; their profile metrics. | 1, 6, 7 |
 

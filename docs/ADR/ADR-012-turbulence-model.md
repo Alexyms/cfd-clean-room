@@ -713,7 +713,7 @@ fixed-flow room, with one row at 1e-8 kept as a check (ADR-013 decision 3, amend
 `max_simple_iter` 10,000, since the error-estimate stop came 1.6 to 2.5 times after the
 velocity-step stop in every converged row and 500 cuts every converged fine-grid row. They are
 applied to `configs/clean_room_default.yaml` in step 8 and used by the product measurement of
-prompt 46. (2) Step 4's corner rule stays; it is revisited only if a later step shows it deciding
+prompt 46 (applied 2026-10-15, prompt 56, with the turbulence section and the 320x120 grid). (2) Step 4's corner rule stays; it is revisited only if a later step shows it deciding
 convergence. (3) The coupled solve comes first, with no convergence aid built in advance. If the
 coupled product room does not converge (prompt 46), the step stops there and the aid is chosen
 then, from step 0's ranking (`docs/reports/ecr002_step0_frozen_viscosity.md`, section 6.6).

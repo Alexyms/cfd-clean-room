@@ -3,12 +3,24 @@
 # Vertical cross-section of a semiconductor clean room with HEPA ceiling
 # supply, floor return vents between equipment, and a fume hood with
 # exhaust on the right wall. All values in SI units.
+#
+# Since ECR-002 step 8 (prompt 56, Alex's decision of 2026-10-15) this file is
+# the product configuration as prompts 46 to 48 measured it: the k-epsilon
+# model (the turbulence section), the error_estimate stopping rule and the
+# solver settings of ADR-012 D's note of 2026-10-09, on the 320x120 grid that
+# represents every stated position of the room exactly (ADR-012 decision 4 as
+# amended 2026-10-10; docs/reports/ecr002_step6_comparative.md, section 5.1).
+# Each key that moved here names its source beside it.
 
 domain:
   width: 8.0        # room width, meters
   height: 3.0       # room height, meters
-  nx: 200           # grid cells in x direction
-  ny: 75            # grid cells in y direction
+  # 320x120 (2.5 cm cells): the product grid, with 160x60 its coarser check
+  # (ECR-002 section 8, step 8's note of 2026-10-10). Every opening, obstacle
+  # edge and sensor sits on a multiple of 0.05 m, so both grids put them on
+  # cell faces; 200x75 rounded fourteen of them.
+  nx: 320           # grid cells in x direction
+  ny: 120           # grid cells in y direction
 
 mesh:
   # Geometric wall clustering per axis. stretch_ratio 1.0 is uniform. Give
@@ -36,18 +48,42 @@ solver:
   dt: 0.01           # time step, seconds
   t_end: 60.0        # simulation end time, seconds
   output_interval: 10  # write output every N timesteps
-  convergence_tol: 1.0e-6  # SIMPLE iteration convergence tolerance
-  max_simple_iter: 500     # max SIMPLE iterations per timestep
-  alpha_velocity: 0.7      # velocity under-relaxation factor (0, 1]
+  convergence_tol: 1.0e-6  # velocity-step tolerance; unused under error_estimate
+  # The stop (ADR-011 decision 6 of 2026-10-03; ADR-011 G): error_estimate,
+  # whose conditions are the iteration error of the velocity and of the eddy
+  # viscosity below iteration_error_tol and the continuity readings below
+  # mass_imbalance_tol = 1e-4 rho V_min / t_end, V_min the smallest cell
+  # volume per metre of depth (0.025 x 0.025 m^2): 1e-4 x 1.2 x 6.25e-4 / 60.
+  stopping_rule: error_estimate
+  iteration_error_tol: 1.0e-6
+  mass_imbalance_tol: 1.25e-9
+  # The cap, the sweep count and the pressure tolerance are ADR-012 D's note
+  # of 2026-10-09 (Alex, from ECR-002 step 5): ten momentum sweeps per outer
+  # iteration, the only count that converged the finer grids; pressure_rtol
+  # 1e-4, which reproduced 1e-8's outer count to the iteration with the faces
+  # within 4.4e-10 m/s (ADR-013 decision 3 as amended that day); the cap
+  # 10,000, since the error-estimate stop came 1.6 to 2.5 times after the
+  # velocity-step stop in every converged row. Prompt 48 measured 4,472 outer
+  # iterations on this grid (docs/reports/ecr002_step6_variants.md).
+  max_simple_iter: 10000
+  momentum_sweeps: 10
+  pressure_rtol: 1.0e-4
+  # alpha_velocity 0.5 is the value every product measurement since step 0 ran
+  # at (docs/reports/ecr002_step0_frozen_viscosity.md; prompts 44 to 48).
+  alpha_velocity: 0.5      # velocity under-relaxation factor (0, 1]
   alpha_pressure: 0.3      # pressure under-relaxation factor (0, 1]
-  max_pressure_iter: 5000  # CG iteration cap per pressure correction (861 needed on 200x75)
-  pressure_rtol: 1.0e-8    # relative residual the pressure correction solves to (ADR-013)
+  max_pressure_iter: 5000  # CG iteration cap per pressure correction
+  # multigrid is the default preconditioner since prompt 54 (ADR-013 decision 1
+  # as amended 2026-10-14); the key is stated so the file says what it runs.
+  pressure_preconditioner: multigrid
 
 transport:
   # ADR-011 I. cfl_number is the Courant number the explicit advection step
   # runs at, at most the limited scheme's stability bound of 1/2. The product
-  # case's own Courant number at dt 0.01 is 0.1125 (0.45 m/s over 0.04 m);
-  # 0.1 is the value the validation cases use and the solver steps at.
+  # case's own Courant number at dt 0.01 is 0.18 (0.45 m/s over 0.025 m);
+  # 0.1 is the value the validation cases use and the solver steps at. The
+  # steady-state marches of the step 8 measurement ran at 0.4, checked
+  # against 0.1 (docs/reports/ecr002_step6_comparative.md, section 5.4).
   cfl_number: 0.1
   advection_scheme: umist   # QUICK bounded by the UMIST limiter; or upwind
   max_diffusion_iter: 200   # Jacobi sweep cap per class per step
@@ -57,6 +93,23 @@ transport:
   # Read only when the flow solver hands transport an eddy viscosity field.
   turbulent_schmidt: 0.7
 
+# The k-epsilon model (ADR-012; ECR-002 step 6), the keys VAL-016 ran under
+# (tests/couette_reference.py) and every product measurement since prompt 46:
+# the standard variant (ADR-012 decision 2 as amended 2026-10-15), scalable
+# wall functions (decision 3), k and eps advected by upwind (decision 4 as
+# amended 2026-10-10), cfl_number 0.25 (0.5 cycles where 0.25 converges;
+# ADR-012 C's note of 2026-10-09), alpha_turbulence 0.7, and the CG solves of
+# k and eps to 1e-10 within 500 iterations (prompt 51).
+turbulence:
+  model: k_epsilon
+  variant: standard
+  wall_treatment: scalable_wall_functions
+  cfl_number: 0.25
+  advection_scheme: upwind
+  alpha_turbulence: 0.7
+  max_iter: 500
+  tol: 1.0e-10
+
 boundaries:
   hepa_supply:
     type: velocity_inlet
@@ -65,6 +118,11 @@ boundaries:
     x_end: 7.5
     velocity: 0.45    # downward laminar flow, m/s
     hepa_filtered: true   # clean supply: no concentration key (ADR-011 E)
+    # The inlet turbulence (ADR-012 B's inlet rule): the baseline every product
+    # measurement ran at, 5% intensity and a 0.1 m dissipation length, which
+    # gives nu_t / nu about 16 at the supply (prompt 46's report, section 5.3).
+    turbulence_intensity: 0.05
+    dissipation_length: 0.1
 
   door:
     type: wall

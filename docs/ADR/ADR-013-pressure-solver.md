@@ -52,6 +52,9 @@ that carries the detail. The ranking is the builder's, from the measurements.
    (`docs/reports/ecr002_step5_convergence.md`, section 5.7). Applied to
    `configs/clean_room_default.yaml` in ECR-002 step 8. The default and the validation cases keep
    1e-8.
+   Applied 2026-10-15 (prompt 56, ECR-002 step 8): the product file carries `pressure_rtol` 1e-4
+   with the rest of the product configuration; the laminar validation cases keep 1e-8, and the
+   1e-8 check row stays prompt 46's (`docs/reports/ecr002_step6_product_coupled.md`).
 4. The keys: `pressure_rtol` in [1e-10, 1); `pressure_tol` refused at load with a message;
    `max_pressure_iter` the CG cap, 5,000 in committed files; the weighted sweep and `JACOBI_WEIGHT`
    removed with their tests.
