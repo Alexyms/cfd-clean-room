@@ -126,8 +126,9 @@ two or more corrections without outer iteration, relying on a small step; the pa
 with outer iterations [1].
 *Options, ranked.*
 (1) SIMPLE outer iterations per step, as probed: no new corrector, the under-relaxation and the
-ten momentum sweeps of ADR-012 D's note as they stand, the step's criterion of decision 5. At
-the probe's state the step converged in 4 to 5 outer iterations to 1e-4 U (T2); the paper's
+ten momentum sweeps of ADR-012 D's note as they stand, the step's criterion of decision 5. From
+the start-up field the step converged in 3 to 4 outer iterations to 1e-4 U (T2), and in 7 to 8
+under developing shedding (T3), the figure the showcase's cost rests on (T4); the paper's
 SIMPLEC needed 23 to 29 per step with its criterion at the Neumann outlet [1, Table II].
 (2) PISO: fewer momentum assemblies per step, but a second corrector to build and a step bound by
 the scheme's own accuracy rather than by the physics; the existing corrector's `d` coefficient
@@ -143,8 +144,9 @@ what the probe used, at three levels.
 *Options, ranked.*
 (1) The velocity step below 1e-4 U per outer, with the continuity reading recorded every step
 (the worst cell imbalance, which T2 lists) and a cap per step that fails the run rather than
-hides a stall. Measured 4 to 5 outer iterations per step, every step (T2, arms A to C and the
-counts to 1e-4 in D to F).
+hides a stall. Measured 3 to 4 outer iterations per step, every step, from the start-up field
+(T2, arms A to C and the counts to 1e-4 in D to F), and 7 to 8 per step under developing
+shedding (T3, arm B's long march), which is the per-step cost the showcase is priced on.
 (2) 1e-5 U: 7 outer iterations on most steps, but a slow mode stalls some steps at that level
 for 34 to 212 outer iterations (T2, arm D's rows; `cylinder_D.json`), which the cap would have
 to tolerate; the per-step cost is then set by the stalls, not the typical step.
