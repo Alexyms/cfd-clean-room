@@ -13,7 +13,7 @@ Three cases, each for the UMIST-limited QUICK scheme and for upwind:
               the pulse, 0.5 (1 + tanh((x - x0) / w)) with w = 0.1 m (0.2 m for
               front_wide, the same front twice as resolved on each grid, started
               at x 0.9 m and moved 0.6 m so that its upstream tail at the inlet is
-              below 1e-4 of its height, since the inflow value is zero), so the
+              about 1.2e-4 of its height, since the inflow value is zero), so the
               limiter has no extremum to clip and the face value is QUICK's
               wherever the data are smooth (ADR-011 B's "second order on
               smooth monotone data")

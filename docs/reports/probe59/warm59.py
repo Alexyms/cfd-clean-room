@@ -62,6 +62,7 @@ from src.config import SimConfig  # noqa: E402
 from src.mesh import Mesh  # noqa: E402
 from src.solver_staggered import StaggeredSolver  # noqa: E402
 from src.stopping import IterationState  # noqa: E402
+from src.turbulence import TurbulenceState  # noqa: E402
 
 OUT = ROOT / "results" / "builder59"
 L0_DIR = ROOT / "results" / "builder56"
@@ -169,7 +170,7 @@ def solve(
         def fields_from_start(_mesh: Mesh) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
             return u0.copy(), v0.copy(), p0.copy()
 
-        def state_from_start(_k: float, _eps: float):
+        def state_from_start(_k: float, _eps: float) -> TurbulenceState:
             return model.state(k0.copy(), eps0.copy())
 
         solver_module.allocate_fields = fields_from_start

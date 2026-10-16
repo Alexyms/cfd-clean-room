@@ -40,7 +40,8 @@ Each record carries every step's outer count, wall time, stage seconds, the
 mass imbalance at the step's end and the vertical velocity one unit behind
 the body on the centreline. One BLAS thread. Records go to
 results/builder59/cylinder_<arm><tag>.json and the start-up state to
-cylinder_startup[_perturbed].npz.
+cylinder_startup_dx<dx>[_perturbed].npz, keyed by the grid so a smoke run on another
+grid cannot overwrite it.
 """
 
 import os
@@ -66,7 +67,11 @@ import src.solver_staggered as solver_module  # noqa: E402
 from src.boundary_staggered import StaggeredBoundary  # noqa: E402
 from src.config import SimConfig  # noqa: E402
 from src.mesh import Mesh  # noqa: E402
-from src.momentum import MomentumCoefficients, MomentumPredictor  # noqa: E402
+from src.momentum import (  # noqa: E402
+    MomentumCoefficients,
+    MomentumPredictor,
+    _Orientation,
+)
 from src.solver_staggered import StaggeredSolver  # noqa: E402
 
 OUT = ROOT / "results" / "builder59"
@@ -194,7 +199,14 @@ class ImplicitEulerPredictor(MomentumPredictor):
         self.u_old: np.ndarray | None = None
         self.v_old: np.ndarray | None = None
 
-    def _assemble(self, u, v, o, mu_cells=None, wall=None) -> MomentumCoefficients:
+    def _assemble(
+        self,
+        u: np.ndarray,
+        v: np.ndarray,
+        o: _Orientation,
+        mu_cells: np.ndarray | None = None,
+        wall: np.ndarray | None = None,
+    ) -> MomentumCoefficients:
         c = super()._assemble(u, v, o, mu_cells=mu_cells, wall=wall)
         assert self.u_old is not None and self.v_old is not None
         old = self.u_old if o is self._for_u else np.ascontiguousarray(self.v_old.T)
@@ -260,7 +272,7 @@ def startup(
         "concurrent_processes": concurrent,
     }
     OUT.mkdir(parents=True, exist_ok=True)
-    label = "cylinder_startup_perturbed" if perturb else "cylinder_startup"
+    label = f"cylinder_startup_dx{dx:g}" + ("_perturbed" if perturb else "")
     np.savez(
         OUT / f"{label}.npz",
         u_faces=np.array(faces.u),

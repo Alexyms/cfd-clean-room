@@ -251,7 +251,7 @@ step 5's dependency is met.
 
 ## Phase 4: Scenarios & Time Integration
 
-**Goal:** Build the scenario engine for contamination events and the time integration loop coordinating the NS and transport solvers. Implement the three reference scenarios.
+**Goal:** Build the scenario engine for contamination events and the time integration loop coordinating the NS and transport solvers. Implement the four reference scenarios (the clean-out added 2026-10-16, Alex's decision 3 of that date, ADR-014).
 
 **Branch prefix:** `phase4/`
 
@@ -268,6 +268,7 @@ step 5's dependency is met.
 | configs/scenario_door_leak.yaml | NOT STARTED | Door seal failure scenario |
 | configs/scenario_filter_breach.yaml | NOT STARTED | HEPA filter breach scenario |
 | configs/scenario_equipment_dust.yaml | NOT STARTED | Equipment dust release scenario |
+| configs/scenario_clean_out.yaml | NOT STARTED | Clean-out (recovery) scenario, added 2026-10-16 (ADR-014 decision 3): the room uniformly contaminated, the supply clean, run until within spec (ADR-014 C) |
 | tests/test_scenarios.py | NOT STARTED | Unit tests: event timing, activation, expiration |
 | tests/test_time_integration.py | NOT STARTED | Integration tests: full timestep loop |
 | tests/test_grid_convergence.py | NOT STARTED | VAL-008 |
@@ -286,7 +287,7 @@ Laminar flow past a square cylinder in a channel is Phase 4's validation and sho
 
 ### Additional Gate Criteria
 
-- All three scenarios run to completion without error
+- All four scenarios run to completion without error (the clean-out added 2026-10-16, ADR-014)
 - Output files produced and loadable
 - All previous validation tests still pass
 

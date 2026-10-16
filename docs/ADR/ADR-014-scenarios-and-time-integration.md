@@ -19,9 +19,11 @@ the records by `tables59.py`, whose `--check` regenerates and compares them.
 1. **Two tiers of time integration.**
    - *Tier 1, the room: piecewise-steady flow, time-accurate transport.* When an event changes
      the flow's boundaries, the flow is re-solved to its new steady state, warm-started from the
-     last, and the particles are marched through time on it. The room's air turnover (T6: the
-     free area over the supply flow, about 5.6 s; the room length over the supply speed, about
-     18 s) is short against particle residence (minutes) and against most events. Events that
+     last, and the particles are marched through time on it. The room's air turnover is short
+     against particle residence (minutes) and against most events. (Alex's note put the
+     turnover as the room length over the supply speed, about 8 m / 0.45 m/s, roughly 20 s; T6
+     gives that ratio as about 18 s and the free area over the supply flow as about 5.6 s, the
+     substitution made here.) Events that
      change only the transport (a filter breach: contaminated supply air; an equipment dust
      release: a source) need no flow re-solve.
    - *Tier 2, where unsteadiness is the point: time-accurate flow.* The square cylinder (Phase
@@ -48,10 +50,13 @@ which events change the flow, how the solver starts from the last state instead 
 and what that costs. The probe (T1) solved the product room to the open-door state from rest and
 from the converged closed-door state, and back. The warm start saved about a sixth of the
 outer iterations, not the two thirds prediction (a) expected: the `error_estimate` stop comes
-where the slow mode's geometric decay puts the estimated iteration error below its tolerance,
-and a start three times closer to the answer saves only the logarithm of three out of the
-logarithm of the whole descent. The cost of a flow state is therefore about one steady solve
-whatever it starts from, and what tier 1 can save is solving a state twice.
+where the slow mode's geometric decay puts the estimated iteration error below its tolerance.
+The warm arm's first residual is about a third of the rest arm's, but what the start saves is
+set by where the slow mode starts: the two residual tails are parallel and about 700 outer
+iterations apart at about 500 per decade (`warm.json`, `rest.json`), so the warm state begins
+the slow mode about 20 times smaller than rest does, and those 700 iterations are the saving.
+The cost of a flow state is therefore about one steady solve whatever it starts from, and what
+tier 1 can save is solving a state twice.
 *Options, ranked.*
 (1) The loader decides at load time: an event changes the flow if, and only if, it changes a
 key the velocity layer reads (a segment's type, extent or velocity). The run's distinct flow
@@ -60,7 +65,9 @@ boundary fingerprint, and each solve is warm-started from the nearest state alre
 (`solve_steady(initial=...)`, the faces, pressure, k and eps of a kept state, which the probe
 supplied by patching the two allocations and the design adds as an argument). A state's cost is
 T1's warm arm, about 0.85 of a solve from rest; a return to a state already solved costs
-nothing, which for the door (closed, open, closed) halves the run's flow cost.
+nothing, which for the door (closed, open, closed) makes the run's flow cost two solves of the
+three (T1: 0.71 of solving all three), or one solve when the closed state is already held in a
+run file (section D).
 (2) Re-solve at every event boundary, from the last state, no cache: the door's closing costs a
 second solve (T1's back arm) every time it closes.
 (3) Re-solve from rest at every switch: T1's rest arm per event.
@@ -75,8 +82,9 @@ it observes is the change that would shorten it, not a better start.
 grid at the file's Courant number of 0.1 the explicit scheme takes about 1,100 steps per
 simulated second per class, and the five classes together cost about 93 wall seconds per
 simulated second on this machine (T6): a 60 s scenario takes about an hour and a half of
-marching, a 600 s clean-out about 15 hours. The step is set by the fastest cells, the return
-faces at 1.2 m/s on 2.5 cm cells (T6), not by the room. The Courant number is an accuracy choice
+marching, a 600 s clean-out about 15 hours. The step is set by the fastest cell, a floor-return
+cell whose two directional rates sum to about 110 per second (1.5 m/s along the floor and
+1.2 m/s into the return over 2.5 cm; T6's step at 0.1), not by the room. The Courant number is an accuracy choice
 below the limited scheme's stability bound of 1/2 (ADR-011 C): the forward Euler error
 steepens a pulse in proportion to it (ADR-011 H's table: peak and L2 at 0.1, 0.25 and 0.4).
 *Options, ranked.*
@@ -179,8 +187,9 @@ concentration per class, and a fixed-flow outlet over the upper part at the same
 the offset (zero in the configured room). The returns keep their shares exactly, since the
 doorway's net flow is the offset. The exchange velocity and the split height are configuration,
 stated as an assumption: the probe used 0.25 m/s over the lower half (`warm59.py`), which a
-1.2 to 2.4 m^3 exchange over a 5 s opening of a 0.9 m wide door puts in range (0.27 to 0.53 m^2/s
-per metre of depth across 1.05 m). Corridor air enters, so the scenario produces contamination
+1.2 to 2.4 m^3 exchange over an assumed 5 s opening of a 0.9 m wide door puts just under
+(0.26 m^2/s per metre of depth across 1.05 m against 0.27 to 0.53; the opening's duration is
+the probe's assumption, not the source's). Corridor air enters, so the scenario produces contamination
 for Phase 5 to detect.
 (2) Outflow only, the pure positive-pressure picture: the door a fixed-flow outlet at the offset
 velocity, no corridor air; the scenario then shows a clean room staying clean, a control, not an
@@ -218,10 +227,14 @@ aligned, which `tests/test_layouts.py` already guards against for the two layout
 (the `thresholds` section). ISO 14644-3's recovery test measures the time for a challenge at 100
 times the target level to fall to the target, the 100:1 recovery time, with an alternative from
 the slope of the semi-log decay; it sets no acceptance limit and is meant for non-unidirectional
-rooms at rest [2, 3]. EU GMP Annex 1 gives a clean-up period of 15 to 20 minutes as guidance
-(2008 text), "less than 20 minutes" in the 2023 note [3]. A well-mixed room decays as
-C(t) = C0 exp(-N t); for this slice N is the supply flow over the free area, and the 100:1 time is
-ln(100) / N, about 26 s (T6).
+rooms at rest [2, 3], which the configured room, with a ceiling supply over 7 of its 8 m at
+0.45 m/s, is not by the usual reading: the 100:1 number is reported outside the test's intended
+scope, as a figure a reader knows, not as the test. EU GMP Annex 1 gives a clean-up period of
+15 to 20 minutes as guidance (2008 text), "less than 20 minutes" in the 2023 note [3]. A
+well-mixed room decays as C(t) = C0 exp(-N t); for this slice N is the supply flow over the free
+area, and the 100:1 time is ln(100) / N, about 26 s (T6). For a displacement flow the well-mixed
+line is a bound the room should beat, since the supply sweeps the slice in one turnover; lying
+above it is the signature of short-circuiting and of recirculation zones, which T7 measures.
 *Options, ranked.*
 (1) Every sensor below its class's threshold, for every class, and staying below: the alert
 system's own reading (REQ-A01, A03, A04), and ISO 14644-1's rule that each sampling location
@@ -295,7 +308,9 @@ judged too few.
 
 **11. The cylinder's grid, boundaries and thresholds (section F).**
 *Picture.* The paper resolves the body with cells of 0.004 d at its surface and 20 nodes per unit
-length, coarsening to 0.5 d in the far field, on 96x94 to 210x202 points, and its Strouhal number
+length, coarsening to 0.5 d in the far field in its default cases and 0.3 d in its Neumann case
+(Table IV case 2), with a far-field cell Reynolds number below 30 recommended, which at Re 100
+caps the far field at 0.3 d, on 96x94 to 210x202 points, and its Strouhal number
 at Re 100 is 0.146 on every grid of its refinement study (Table IV [1]); the onset of shedding is
 at Re 51.2 +/- 1 at 5% blockage (Table V [1]). This solver's mesh clusters toward the domain
 walls only, so the probe ran a uniform grid of 0.1 d (ten cells across the body, 370x200), the
@@ -630,12 +645,18 @@ grid is the row's grid and the uniform one the ladder's coarse rung.
 **The grid.** Decision 11: interior clustering in `mesh.py`, a list of breakpoints per axis with
 the spacing at each and geometric growth between, validated like the existing stretch keys; the
 cylinder's file states fine spacing at its four faces and coarsening to the far field, as the
-paper's hyperbolic tangent did [1, section 2]. The far-field cell Reynolds number stays below
-the paper's recommended 30 [1, section 4.3].
+paper's hyperbolic tangent did [1, section 2]. The far-field cell is at most 0.3 d, the paper's
+recommended cell Reynolds number of 30 at Re 100 [1, section 4.3; its Neumann case runs 0.3 d,
+Table IV case 2].
 
 ## G. Modules, interfaces and the build order (decision 12)
 
-**Contracts (draft; SYSTEM.md section 4 carries them marked planned when built).**
+**Contracts (draft).** They replace SYSTEM.md section 4's planned `ScenarioManager`:
+`get_active_sources(t)` becomes `sources_at(t)`, one rate array per class, and
+`get_bc_modifications(t)` becomes `intervals()` and `flow_states()`, since a boundary
+modification is an interval's flow state, not a per-call mapping; section 3.2's row that says
+those interfaces are unchanged goes with it. SYSTEM.md carries the contracts below, marked
+planned, when this ADR is accepted, and as built at the Phase 4 gate.
 
 ```
 config.py
@@ -757,7 +778,8 @@ Listed as the first build step's housekeeping, each with its location:
   the suite's unit and integration tiers) or strikes the item.
 - Stale branches: at 809d1c6, 17 local and 19 remote branches are merged into `main`
   (`git branch --merged main`, `git branch -r --merged main`); delete the merged ones, keeping
-  the annotated tags (`collocated-final`) and the backup refs memory names.
+  the annotated tag `collocated-final` and the backup branch
+  `backup/ecr-001-close-phase2-ecfa399`.
 
 ## Probes (committed before the runs; results after)
 
@@ -902,9 +924,9 @@ Period 1 / St = 6.85 time units at St 0.146; the paper's run is 6300 steps of 0.
 - *T1, prediction (a): fails.* The warm arm's outer count is about 0.85 of the rest arm's and its
   wall time about the same fraction, not under a third. The two arms stop at the same state (the
   cell-centred velocities of `rest.npz` and `warm.npz` agree to better than 1e-9 m/s); the warm
-  arm's first residual is about a third of the rest arm's and the descent from there is the same
-  geometric one, so the saving is the logarithm of that third over the logarithm of the whole
-  descent. The back arm, the closed state from the open one, costs about three quarters of the
+  arm's first residual is about a third of the rest arm's, and the two residual tails are
+  parallel about 700 outer iterations apart, the slow mode starting about 20 times smaller from
+  the warm state; that offset is the saving. The back arm, the closed state from the open one, costs about three quarters of the
   rest arm and returns to the step 8 state L0 to better than 1e-9 m/s in every cell (`back.npz`
   against `results/builder56/L0_320x120.npz`): the closed room has one steady state on this grid
   whichever state the solve starts from. Decision 1's cache, not its warm start, is what saves a
@@ -918,14 +940,19 @@ Period 1 / St = 6.85 time units at St 0.146; the paper's run is 6300 steps of 0.
   step's cost is the typical step's rather than the stalls'.
 - *T3 and T4.* Arm B's long march from the perturbed start keeps 7 to 8 outer iterations per step
   at 1e-4 U over 40 time units while the wake's oscillation grows band by band; the sign changes
-  of the wake velocity come about 3.8 time units apart in the last three bands, a period near
-  the paper's 6.85 on a grid and with lateral boundaries that are not the paper's, read off a
-  growing oscillation, not a settled one. One run of the paper's length at arm B's step costs
+  of the wake velocity come about 3.8 time units apart in the last three bands, a period of
+  about 7.6 and a Strouhal number of about 0.13, 10% below the paper's 0.146 and twice the 5%
+  threshold decision 11 proposes, read off a growing oscillation on the uniform probe grid with
+  freestream lateral boundaries; VAL-022's clustered grid is meant to close that gap, and
+  decision 11's options (3) and (4) are the next changes if it does not. One run of the paper's length at arm B's step costs
   about an hour and a half at the measured seconds per step with five processes sharing the
   machine (T4); the 1e-5 U march (arm D's tag `_long`, `logs/cylinder_long.log`) was stopped at
-  step 576 of 2,400 with its per-step count risen to 26 to 37 as the oscillation grew, and wrote
-  no record. Prediction (b)'s "few hours" holds at the recommended criterion on the uniform grid;
-  the clustered grid of decision 11 costs more per step in proportion to its cells.
+  step 576 of 2,400 with its per-step count at 26 to 44 in the log's samples (one every 48
+  steps) as the oscillation grew, and wrote no record. Prediction (b): its per-step half holds on the probe grid; its showcase half, the
+  time to a settled Strouhal number, is not measured: T3 is still growing at 40 time units (the
+  largest wake velocity rises band by band), the paper's 157.5 time units stand in for the
+  settling time in T4, and the proposed clustered grid's cost per step is not measured, so that
+  half is scored not measured, not holds.
 - *T5, VAL-008.* At a fixed Courant number every case's order tends to 1 under refinement, the
   limited scheme and upwind alike: forward Euler's. With the Courant number halved per
   refinement the Gaussian pulse's order under the limited scheme lies between 1 and 2 on the

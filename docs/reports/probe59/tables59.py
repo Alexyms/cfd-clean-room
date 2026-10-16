@@ -28,21 +28,15 @@ LONG_BAND = 200
 
 
 def load(name: str) -> dict | None:
+    """The record results/builder59/NAME.json as a mapping, or None when it was not written."""
     path = RESULTS / f"{name}.json"
     if not path.exists():
         return None
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def fmt(value: float | None, digits: int = 3) -> str:
-    if value is None:
-        return "not run"
-    if isinstance(value, int):
-        return f"{value:,}"
-    return f"{value:.{digits}g}"
-
-
 def room_table() -> list[str]:
+    """T1: the product room re-solved to the door's states, and the warm-over-rest ratios."""
     lines = [
         "### T1. The product room re-solved to the door's states (320x120)",
         "",
@@ -97,6 +91,7 @@ def room_table() -> list[str]:
 
 
 def cylinder_table() -> list[str]:
+    """T2: outer iterations per implicit Euler step for arms A to F, and the start-up line."""
     lines = [
         "### T2. The cylinder at Re 100: outer iterations per implicit Euler step, from the start-up field",
         "",
@@ -120,13 +115,20 @@ def cylinder_table() -> list[str]:
             f"{rec['seconds_per_outer']:.3f} | {rec['rows'][-1]['worst_imbalance']:.1e} | "
             f"{rec['concurrent_processes']} |"
         )
-    startup = load("cylinder_startup")
-    if startup:
-        lines.append("")
+    arm_a = load("cylinder_A")
+    startup = None if arm_a is None else load(f"cylinder_startup_dx{arm_a['dx']:g}")
+    lines.append("")
+    if startup is None:
+        lines.append("Start-up record: not kept.")
+    else:
         lines.append(
-            f"Start-up: {startup['outer']} steady outer iterations from rest on "
-            f"{startup['grid'][0]}x{startup['grid'][1]} ({startup['grid'][0] * startup['grid'][1]:,} cells), "
-            f"{startup['seconds_per_outer']:.3f} s per outer with {startup['concurrent_processes']} processes."
+            f"Start-up, rerun after the arms (the field the arms began from was overwritten by "
+            f"a smoke run and is not kept; the steady loop is deterministic, so the rerun is the "
+            f"same field): {startup['outer']} steady outer iterations from rest on "
+            f"{startup['grid'][0]}x{startup['grid'][1]} "
+            f"({startup['grid'][0] * startup['grid'][1]:,} cells), "
+            f"{startup['seconds_per_outer']:.3f} s per outer with "
+            f"{startup['concurrent_processes']} processes."
         )
     return lines
 
@@ -135,6 +137,7 @@ LONG_ARMS = ("B_long", "D_long")
 
 
 def long_table() -> list[str]:
+    """T3: the long marches in bands of LONG_BAND steps, with the wake sign changes."""
     lines = [
         "### T3. The long marches from the perturbed start-up: the cost as shedding develops",
         "",
@@ -184,6 +187,7 @@ def long_table() -> list[str]:
 
 
 def showcase_table() -> list[str]:
+    """T4: hours for one run of the paper's length from each arm's seconds per step."""
     lines = [
         "### T4. The showcase's cost from T2 and T3: one run at Re 100 to Sohankar's length",
         "",
@@ -215,6 +219,7 @@ def showcase_table() -> list[str]:
 
 
 def order_table() -> list[str]:
+    """T5: the observed orders of order59.py's cases."""
     data = load("order59")
     lines = [
         "### T5. The observed order of the transport scheme under refinement (VAL-008)",
@@ -239,6 +244,7 @@ def order_table() -> list[str]:
 
 
 def scales_table() -> list[str]:
+    """T6: the room's scales and the transport march's cost from scales59.py."""
     s = load("scales59")
     lines = [
         "### T6. The product room's scales and the transport march's cost (320x120, L0 faces)",
@@ -288,6 +294,7 @@ def scales_table() -> list[str]:
 
 
 def render() -> str:
+    """The whole tables file as text."""
     parts = [
         "# Prompt 59 probe tables",
         "",
