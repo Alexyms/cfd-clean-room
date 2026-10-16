@@ -1098,6 +1098,16 @@ note of 2026-10-09).
 *Note, 2026-10-15 (prompt 56, measured).* `docs/reports/ecr002_step8_product.md`. L0 (the room as it is) and L1 (return 3 closed) stop by the rule on both exact grids (L0 at 4,389 outer iterations on 320x120, the harness row `val018_320x120` at the same count, pass true); L2 (the supply over the left half of the ceiling) stops on neither within the file's cap, a cycle beside the door wall on 160x60 and on 320x120 a still field that only condition (e) refuses, which stops at 10,794 with the cap raised (a labelled supplement). The score (deposition on the litho tool's and the etch chamber's tops, summed over three sources, per class) ranks L2 < L1 < L0 in every ordering, on both grids and at Sc_t 0.2, 0.7 and 1.3, every margin several times the grid's and the Schmidt number's change to the scores; the largest deposition location is the same 0.2 m segment across grids and Schmidt numbers in all 18 rows and at least three of five hotspots are shared in 17. The stability clause of criterion 10 is met; the predicted order (L2 last, L0 and L1 near-equal) fails, because the score rewards the layout that sweeps the litho-top emission across the room to the hood, past the hood entry where a sensor reads it. The questions for Alex are the
 report's section 7.
 
+*Note, 2026-10-15 (Alex, prompt 58; before the Phase 3 gate).* The comparative claim is
+stated per metric, not by one combined score: step 8's single score (process-top deposition)
+ranked the deliberately poor layout best because it sweeps the litho-top emission across the
+room past the hood entry, and a combined score defined now would be fitted to the result.
+The Phase 3 gate report states the claim on three metrics defined before they are computed
+(`docs/reports/probe58/`): process-top deposition (step 8's score), operator exposure at the
+two operator-height sensors, and removal through the returns and the hood. The product's
+`max_simple_iter` becomes 15,000, inside which L2 on 320x120 stops by the rule; L2's 160x60
+cycle stays a recorded non-convergence (ECR-002 criterion 10 and step 8, notes of that date).
+
 *(vi) Two cases added (Alex, 2026-10-09; prompt 45). Thresholds OPEN until Alex sets them from
 first results.*
 *VAL-020, a planar impinging slot jet.* Section A found that no planned case tells the standard
@@ -1118,6 +1128,10 @@ low-concentration regions against a measured three-dimensional room, compared fo
 point by point. Data: Zhang and Chen (2006), Atmospheric Environment 40(18):3396-3408, DOI
 10.1016/j.atmosenv.2006.01.014, or Murakami, Kato, Nagano and Tanaka (1992), ASHRAE Transactions
 98(1):82-97.
+Note 2026-10-15 (Alex, prompt 58; decision 1): CLOSED as a documented gap, threshold N/A. No
+published measurement fits a 2D slice (`docs/reports/ecr002_val021_feasibility.md`); the
+transport's turbulent spreading stays unvalidated against measurement, a stated limit
+revisited with 3D in Phase 6.
 
 **(v) Grid convergence under wall functions (premise review S10).** VAL-008 (Phase 4) asks for an
 observed order within 0.2 of the theoretical one. Under wall functions refinement moves the

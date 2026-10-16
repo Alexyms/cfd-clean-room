@@ -212,7 +212,8 @@ class TestSimConfigValid:
         note; ADR-013 decision 3 as amended): the k-epsilon section with the
         standard variant and upwind advection, the error_estimate rule with
         ADR-011 G's imbalance bound at the file's own cell volume, ten
-        momentum sweeps, pressure_rtol 1e-4, the 10,000 cap, alpha_velocity
+        momentum sweeps, pressure_rtol 1e-4, the 15,000 cap (10,000 until Alex's
+        decision 3 of 2026-10-15, prompt 58), alpha_velocity
         0.5, the multigrid preconditioner stated, and the supply's inlet
         turbulence at 5% and 0.1 m.
         """
@@ -235,7 +236,7 @@ class TestSimConfigValid:
         )
         assert config.momentum_sweeps == 10
         assert config.pressure_rtol == 1e-4
-        assert config.max_simple_iter == 10000
+        assert config.max_simple_iter == 15000
         assert config.alpha_velocity == 0.5
         assert config.pressure_preconditioner == "multigrid"
         supply = config.boundaries["hepa_supply"]
