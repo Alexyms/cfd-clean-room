@@ -21,7 +21,7 @@ from src.boundary_staggered import (  # noqa: E402 -- follows sys.path.insert
     StaggeredBoundary,
 )
 from src.config import SOLVER_KEYS, SimConfig  # noqa: E402 -- follows sys.path.insert
-from src.mesh import Mesh  # noqa: E402 -- follows sys.path.insert
+from src.mesh import SOLID, Mesh  # noqa: E402 -- follows sys.path.insert
 from src.solver_staggered import (  # noqa: E402 -- follows sys.path.insert
     StaggeredSolver,
     rule_version,
@@ -915,6 +915,22 @@ def test_harness_row_records_each_axis_clustering(
     assert stretched["y"]["stretch_ratio"] == pytest.approx(1.2057, abs=1e-4)
 
 
+@pytest.mark.unit
+def test_the_product_preset_is_the_file_on_its_own_grid() -> None:
+    """``val018_320x120`` loads the product file on 320x120 with its own tolerance.
+
+    mass_imbalance_tol is 1e-4 rho V_min / t_end, V_min the smallest cell
+    area (configs/clean_room_default.yaml's comment), which is the file's
+    1.25e-9 on this grid (test 56 S1).
+    """
+    config = load_preset("val018_320x120")
+    assert (config.nx, config.ny) == (320, 120)
+    v_min = (config.room_width / config.nx) * (config.room_height / config.ny)
+    expected = 1e-4 * config.rho * v_min / config.t_end
+    assert config.mass_imbalance_tol == pytest.approx(expected, rel=1e-12)
+    assert config.mass_imbalance_tol == 1.25e-9
+
+
 def _product_config(max_simple_iter: int) -> SimConfig:
     """The product file on the 40x15 grid, capped, for a short harness run."""
     raw = yaml.safe_load(case_path("product").read_text(encoding="utf-8"))
@@ -929,9 +945,13 @@ def test_the_product_value_is_the_outer_count_over_the_cap() -> None:
 
     The core is the non-SOLID cells above the equipment tops (2.0 m); nu_t
     is planted at 10 nu there and 1,000 nu below, so a median over every
-    cell, or over the SOLID cells, would not read 10. Defects caught: a
-    value that is not outer over cap; a pass recorded for a capped solve; a
-    core that includes the gaps or the obstacles.
+    cell, or over the SOLID cells, would not read 10. Just under half the
+    core holds 20 nu, so its mean is near 15 while its median stays 10, and
+    a core read above the lowest top (the hood bench's, 0.9 m) takes in the
+    gaps between 0.9 and 2.0 m at 1,000 nu, which moves its median to 20
+    (test 56 S1). Defects caught: a value that is not outer over cap; a pass
+    recorded for a capped solve; a core that includes the gaps or the
+    obstacles, or is read above the lowest top; a mean for the median.
     """
     config = _product_config(10000)
     mesh = Mesh(config)
@@ -939,6 +959,17 @@ def test_the_product_value_is_the_outer_count_over_the_cap() -> None:
     nu_t = np.full(mesh.cell_type.shape, 1000.0 * nu)
     above = np.broadcast_to(np.asarray(mesh.yc)[:, None] > 2.0, nu_t.shape)
     nu_t[above] = 10.0 * nu
+    rows, cols = np.nonzero(above & (mesh.cell_type != SOLID))
+    # (n - 1) // 2 cells at 20 nu leave the middle of the sorted core at 10.
+    skewed = (rows.size - 1) // 2
+    nu_t[rows[:skewed], cols[:skewed]] = 20.0 * nu
+    gaps = (
+        (mesh.cell_type != SOLID)
+        & (np.asarray(mesh.yc)[:, None] > 0.9)
+        & (np.asarray(mesh.yc)[:, None] < 2.0)
+    )
+    # Enough gap cells at 1,000 nu that the wider core's middle is a 20.
+    assert np.count_nonzero(gaps) > 2
     imbalance = np.zeros(mesh.cell_type.shape)
     imbalance[3, 7] = -4.0e-9
     imbalance[9, 2] = 2.5e-9

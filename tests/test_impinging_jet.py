@@ -175,6 +175,18 @@ class TestData:
         assert ij.CENTRELINE_Y[0] > 0.06 and ij.CENTRELINE_Y[-1] < 1.0
         assert sum(r[2] for r in ij.INTENSITY_ROWS) == 30
 
+    def test_the_ranges_are_the_papers(self) -> None:
+        """The free-jet, impingement and plate-median ranges, pinned by value (test 55 S1).
+
+        The second computation (tests/impinging_jet_reference.py) reads the
+        same constants, so only a test of the values catches a changed one;
+        they set which stations enter prediction (c) and the y+ median.
+        """
+        assert ij.FREE_JET_H == 0.70
+        assert ij.NARROW_FREE_JET_H == 0.30
+        assert ij.IMPINGEMENT_H == 0.88
+        assert ij.PLATE_MEDIAN_HALF_WIDTH_W == 10.0
+
     def test_the_digitised_curves_match_the_numbers_the_paper_states(self) -> None:
         """Section 4.1 of the paper: the potential core, the half-velocity point, the I_uv peak, K_y."""
         core = ij.potential_core_w(ij.CENTRELINE_Y, ij.CENTRELINE_V)
