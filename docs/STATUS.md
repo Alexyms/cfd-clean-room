@@ -461,6 +461,11 @@ long potential core, its stagnation k 1.26 to 1.35 times the PIV estimate where 
 1%. Alex decided on 2026-10-15 (prompt 56) that the product runs the standard variant and
 VAL-018's variant clause is closed, that VAL-019 and VAL-020 are report-only rows (status
 REPORTED), and that the product's configuration moves into `configs/clean_room_default.yaml`.
+VAL-021's feasibility item (prompt 57, merged as PR 84) found no case that fits (Murakami's
+data are factor-of-two contour bands from 3D square-nozzle rooms; Zhang and Chen's own are
+non-isothermal; Lai and Chen has no measured data); recommended closed as a documented gap,
+and closed so by Alex on 2026-10-15 (prompt 58): the transport's turbulent spreading stays
+unvalidated against measurement, a stated limit revisited with 3D in Phase 6.
 Prompt 56 (`feature/ecr002-step8-product`, `docs/reports/ecr002_step8_product.md`) is ECR-002
 step 8: the default file is the product configuration (320x120, the k-epsilon section,
 `error_estimate`, the step 8 solver keys), the harness has a `product` family and the row

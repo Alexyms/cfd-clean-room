@@ -576,6 +576,14 @@ The change is accepted when all of the following are demonstrated:
    point by point: Zhang and Chen (2006), Atmos Environ 40(18):3396-3408, DOI
    10.1016/j.atmosenv.2006.01.014, or Murakami, Kato, Nagano and Tanaka (1992), ASHRAE Trans
    98(1):82-97. Method: test and report.
+   *Note 2026-10-15 (prompt 57):* feasibility item run on the three named candidates; none fits
+   (report `docs/reports/ecr002_val021_feasibility.md`). Zhang and Chen (2006) own data are
+   non-isothermal underfloor with heated manikins; Murakami et al. (1992) is isothermal but
+   published as five-band contour maps (edges 0, 0.4, 0.8, 1.6, 3.2) from square-nozzle 3D
+   rooms with point sources, which no 2D slice reproduces (the equivalent plane jet reaches
+   the floor at about 0.45 m/s against 1 m/s); Lai and Chen (2007) carries no measured
+   concentration. Recommended: VAL-021 closed as a documented gap, threshold N/A. Decision:
+   Alex (the note below).
    *Note 2026-10-15 (Alex, prompt 58; decision 1): CLOSED as a documented gap, threshold
    N/A.* No published measurement fits a 2D slice (`docs/reports/ecr002_val021_feasibility.md`).
    The transport's turbulent spreading stays unvalidated against measurement, a stated limit
@@ -636,3 +644,4 @@ architecture, and the acceptance criteria are sufficient to close the change.
 | 2026-10-15 | Alex's decisions before step 8 (prompt 56): the product runs the standard variant and VAL-018's variant clause is closed (ADR-012 decision 2 and section A, from VAL-020); VAL-019 and VAL-020 are report-only rows, status REPORTED (criteria 8 and 13, ADR-012 G); the product's configuration moves into `configs/clean_room_default.yaml` (ADR-013 decision 3 as amended). Notes in section 8 step 8 and criterion 10; the step 8 criterion set for VAL-018. | Alex Moroz-Smietana |
 | 2026-10-15 | Step 8 built and measured (prompt 56, branch feature/ecr002-step8-product): the product configuration into `configs/clean_room_default.yaml` with the harness family and the VAL-018 row; the two layouts; three layouts on two grids, 39 marches at three Schmidt numbers, the score, the ranking, the margins and the hotspots. The ranking L2 < L1 < L0 is stable under grid refinement and across the Schmidt number's range with wide margins; the predicted order fails. Notes under criterion 10 and step 8; `docs/reports/ecr002_step8_product.md`. | Claude (builder) |
 | 2026-10-15 | Alex's decisions before the Phase 3 gate (prompt 58): VAL-021 CLOSED as a documented gap, threshold N/A (criterion 14); the comparative claim stated per metric, not by one combined score (criterion 10, step 8); the product's `max_simple_iter` 15,000 (step 8; `configs/clean_room_default.yaml` and the two layout files, with the tests that read the key). ADR-012 G, SYSTEM.md section 1 and the PROJECT_PLAN rows carry the same notes. | Alex Moroz-Smietana |
+| 2026-10-15 | Prompt 57: VAL-021 feasibility, no case fits; recommendation to close as a documented gap (criterion 14's note; `docs/reports/ecr002_val021_feasibility.md`). Applied by the orchestrator in prompt 58 with test 57's two Suggestions on the report. | Alex Moroz-Smietana |

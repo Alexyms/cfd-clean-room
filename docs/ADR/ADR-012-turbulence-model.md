@@ -1128,6 +1128,8 @@ low-concentration regions against a measured three-dimensional room, compared fo
 point by point. Data: Zhang and Chen (2006), Atmospheric Environment 40(18):3396-3408, DOI
 10.1016/j.atmosenv.2006.01.014, or Murakami, Kato, Nagano and Tanaka (1992), ASHRAE Transactions
 98(1):82-97.
+2026-10-15: feasibility found no fitting case among the named data; see
+`docs/reports/ecr002_val021_feasibility.md`.
 Note 2026-10-15 (Alex, prompt 58; decision 1): CLOSED as a documented gap, threshold N/A. No
 published measurement fits a 2D slice (`docs/reports/ecr002_val021_feasibility.md`); the
 transport's turbulent spreading stays unvalidated against measurement, a stated limit
