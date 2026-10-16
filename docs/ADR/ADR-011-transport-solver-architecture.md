@@ -1,6 +1,8 @@
 # ADR-011: Transport Solver Architecture: Face-Advected Cell-Centred Concentration
 
 ## Status
+Accepted (built). The planned-against-built table below section J was added at the Phase 3
+gate on 2026-10-15 (prompt 58, `docs/reports/phase3_transport_report.md`), as decision 9 says.
 Accepted at merge (PR 30). Written 2026-10-03, before the Phase 3 build, from the staggered solver
 as ADR-010 records it, and proposed with three questions open. Alex decided them on 2026-10-03,
 with seven further points its premise review and test raised (review 30 and test 30, posted on
@@ -787,8 +789,33 @@ longer scenario tightens the velocity solve, and the product configuration must 
 `error_estimate` for the bound to apply to it.
 
 ## Planned against built
-To be filled at the Phase 3 gate, as ADR-010's table was at ECR-001 step 9: one row per decision
-above, with what was built and where it was measured, and the VAL-013 outlet profile beside it.
+Written 2026-10-15 at the Phase 3 gate (prompt 58), as ADR-010's table was at ECR-001 step 9: one
+row per decision above, with what was built and where it was measured, and the VAL-013 outlet
+profile beside it. Measured values live in the tests' printed lines and in the PROJECT_PLAN's
+Phase 3 validation table, which this table points at and does not restate.
+
+| ADR-011 planned | Built | Why, and where measured |
+|---|---|---|
+| Decision 1, sections B and C: QUICK's face value bounded by the UMIST limiter under forward Euler, Courant number at most 1/2 | As planned (PR 32); the face value, the advective flux and the implicit solve moved into `src/scalar_scheme.py` in ECR-002 step 1 so the turbulence model calls the same code, the transport gate bitwise | VAL-004's two rows and VAL-013 (`tests/test_advection.py`, `tests/test_smith_hutton.py`); `results/builder35/bitwise.md` |
+| Decision 2, section H: VAL-004's criterion with thresholds at 1.5 times the measured error, a rotating puff as its second row | As planned; both rows PASS (the PROJECT_PLAN's VAL-004 rows); item 0 of the build reproduced the prototype's figures first | `tests/test_advection.py`; `results/builder32/item0.md` |
+| Decision 3, section E: a clean supply by default, an inlet carrying a configured concentration times one minus the HEPA efficiency when filtered, no recirculation | As planned (PR 31), with the amendments of the fix pass: a zero-normal velocity inlet is a wall to the scalar layer, so the two boundary layers' inlet sets are equal on every configuration; unknown segment keys, overlapping segments and a concentration on a zero-normal inlet refused at load | Section E as amended; `tests/test_boundary_concentration.py`; the SYSTEM.md history row of 2026-10-03 (PR 31's fix pass) |
+| Decision 4, REQ-T12: non-negative and bounded concentration | As planned; VAL-013 PASS, and the case ends at its 20 s cap rather than below the steady clause ADR-011 H allows beside it (GitHub issue 53 D4, answered in the gate report) | `tests/test_smith_hutton.py`; the PROJECT_PLAN's VAL-013 row |
+| Decision 5, sections C and F: `solve_timestep` gains `sources`, booked in the budget | As planned; the built signature is `solve_timestep(C_k, faces, size_class, dt, v_ext=None, sources=None, *, eddy_viscosity=None)`, the last keyword ECR-002 step 2's | The `solver_transport.py` contract in `docs/SYSTEM.md`; `tests/test_solver_transport.py` |
+| Decision 6, section G: the product configuration adopts `error_estimate` with the derived `mass_imbalance_tol` when the product case is measured | Done in ECR-002 step 8 (prompt 56, 2026-10-15): `configs/clean_room_default.yaml` under `error_estimate` with the formula's tolerance at its own cell volume, on 320x120 | The PROJECT_PLAN's deliverable row; `tests/test_config.py` |
+| Decision 7, sections D and H: VAL-014, the sealed box, with the doubled-floor control | Built; the doubled-floor clause dropped (Alex, 2026-10-03) because the implicit deposition sink relaxes the floor row toward half the value, and the settling increment planted on the floor face is the control instead | Section H as amended; `tests/test_sealed_box.py`; the PROJECT_PLAN's VAL-014 row |
+| Decision 8, section C: a field-history writer for Phase 7 | As planned: `FieldHistory`, `every` from `output_interval`, frames at `step % every == 0` (the last frame is not the final step unless `every` divides the count; the PROJECT_PLAN's Phase 7 note, issue 53 D5) | `tests/test_advection.py` (the rotating puff under pytest's tmp_path); `results/builder32/puff_visual.py` |
+| Decision 9: Accepted at merge, planned against built at the Phase 3 gate | This table | |
+| Decision 10: the identifiers REQ-T12, VAL-012, VAL-013, VAL-014 | As planned; the register pin widened | `tests/test_system_map.py`; `docs/SYSTEM.md` section 2.2 |
+| Section A, REQ-S13: the NS solver exposes its face velocities | As planned (PR 31): `FaceVelocities` in `src/staggered.py`, `StaggeredSolver.face_velocities` set at the end of every solve, converged or not | `tests/test_constancy.py`, `tests/test_conservation.py`; the `solver_staggered.py` contract |
+| Section G, REQ-T11 and VAL-012: the departure of a uniform field at most the bound, and at least a tenth of it, on the solver's faces | Split (Alex, 2026-10-07, ECR-003 step 1): ECR-003's conjugate gradient correction balances the solver's faces to rounding, so the requirement's clause stays on them and the lower clause moved to a planted field with a known imbalance (ratio predicted and measured there) | `tests/test_constancy.py`; the PROJECT_PLAN's VAL-012 row; GitHub issue 53 D3, answered in the gate report |
+| Section H, VAL-003: the gate at a step where the backward Euler error is below the spatial one | As amended in PR 32's fix pass: the gate step chosen by the measured error split (diffusion number 0.1) | `tests/test_diffusion.py`; the PROJECT_PLAN's VAL-003 row |
+| Section H, VAL-007: one budget for every conservation claim | As planned, on a random face field and on the VAL-001 faces, every term on; re-checked under ECR-003's correction and with an eddy-viscosity field (ECR-002 criterion 5) | `tests/test_conservation.py`; `docs/reports/ecr003_step2_baseline.md`, section 8 |
+| Section H, VAL-013's outlet profile reported beside the bounds | Reported, unscored, by the test's printed line: the outlet profile against the inlet's mirror (largest difference and relative L2 in the PROJECT_PLAN's VAL-013 row) | `tests/test_smith_hutton.py` |
+| Section I: the `transport` section (`cfl_number`, `advection_scheme`, `max_diffusion_iter`, `diffusion_tol`) and the segment keys | As planned, plus `turbulent_schmidt` (ECR-002 step 2, no default in code); the validation cases at `cfl_number` 0.1 and the product at 0.1 | The `config.py` contract in `docs/SYSTEM.md`; `tests/test_config.py` |
+| Section I's modules: `boundary_concentration.py` and `solver_transport.py` new; `staggered.py`, `solver_staggered.py`, `config.py` extended; the rest consumed unchanged | As planned, with `validation/transport_cases.py` and `validation/metrics.py` as the tests' shared stand-ins (not in the plan) and `src/scalar_scheme.py` split out in ECR-002 step 1; the Protocols `ParticleProperties` and `ScalarConditions` name what the solver reads (issue 53 D2) | `docs/SYSTEM.md` sections 3 and 4; the PROJECT_PLAN's Phase 3 deliverables |
+| Section F, the diffusivity: the Brownian coefficient per class | Extended by ECR-002 step 2 (ADR-012 F): the Brownian coefficient plus nu_t / Sc_t on every interior face, the laminar path bitwise with no field | REQ-T13 in `docs/SYSTEM.md`; `tests/test_scalar_scheme.py`, `tests/test_solver_transport.py` |
+| Section J: the product mesh left to a measurement on the product case | 320x120 (Alex, 2026-10-10), the grid that represents every stated position of the room exactly, 160x60 its coarser check | ADR-012 J's note; `docs/reports/ecr002_step6_comparative.md`, section 5.1 |
+| Consequences: implicit diffusion costs a sweep or two per class on the product mesh; the product configuration must move to `error_estimate` | Under the turbulent diffusivity the transport solver's implicit solve stays on Jacobi (prompt 51's decision) and the marches of step 8 stop by their steady rule; the configuration moved | `docs/reports/ecr002_step8_product.md`, section 5.3 |
 
 ## Alternatives considered
 Each section names its own. Across the document: fully implicit advection (against the plan's
