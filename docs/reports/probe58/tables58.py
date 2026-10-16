@@ -5,8 +5,11 @@ Usage:
                                   write tables58.md and tables58.json beside this file
     python tables58.py figure     draw docs/reports/phase3_metrics.png
     python tables58.py all        both
+    python tables58.py assemble   splice the ranking and summary tables into the gate report
+                                  between its marker comments (the prose is not touched)
     python tables58.py --check    regenerate the tables and compare them with the committed
-                                  tables58.md and tables58.json; exit 1 on any difference
+                                  tables58.md and tables58.json and with the gate report's
+                                  spliced blocks; exit 1 on any difference
 
 The metrics are metrics58.md's, defined before this file existed: M1 the
 process-top deposition (step 8's score), M2 the operator exposure at the two
@@ -30,6 +33,8 @@ RECORDS = ROOT / "results" / "builder56"
 TABLES_MD = HERE / "tables58.md"
 TABLES_JSON = HERE / "tables58.json"
 FIGURE = ROOT / "docs" / "reports" / "phase3_metrics.png"
+REPORT = ROOT / "docs" / "reports" / "phase3_transport_report.md"
+SPLICED = ("ranking", "summary")
 
 LAYOUTS = ("L0", "L1", "L2")
 GRIDS = ("160x60", "320x120")
@@ -604,9 +609,53 @@ def write_tables(md: str, data: dict) -> None:
     print(f"wrote {TABLES_MD.relative_to(ROOT)} and {TABLES_JSON.relative_to(ROOT)}")
 
 
+def blocks(md: str) -> dict[str, str]:
+    """The generated tables keyed by their heading, as tables58.md holds them."""
+    parts = md.split("### ")
+    return {
+        part.split("\n", 1)[0]: part.split("\n", 1)[1].strip() for part in parts[1:]
+    }
+
+
+def report_blocks(text: str) -> dict[str, str]:
+    """The gate report's spliced blocks, keyed by mode, between its marker comments."""
+    out = {}
+    for mode in SPLICED:
+        begin, end = f"<!-- tables58 {mode} begin -->", f"<!-- tables58 {mode} end -->"
+        if begin in text and end in text:
+            out[mode] = text.split(begin, 1)[1].split(end, 1)[0].strip()
+    return out
+
+
+def assemble(md: str) -> None:
+    """Splice the ranking and summary tables into the report, keeping its line endings."""
+    raw = REPORT.read_bytes().decode("utf-8")
+    crlf = "\r\n" in raw
+    text = raw.replace("\r\n", "\n")
+    generated = blocks(md)
+    for mode in SPLICED:
+        begin, end = f"<!-- tables58 {mode} begin -->", f"<!-- tables58 {mode} end -->"
+        head, rest = text.split(begin, 1)
+        _, tail = rest.split(end, 1)
+        text = head + begin + "\n" + generated[mode] + "\n" + end + tail
+    if crlf:
+        text = text.replace("\n", "\r\n")
+    REPORT.write_bytes(text.encode("utf-8"))
+    print(f"spliced {', '.join(SPLICED)} into {REPORT.relative_to(ROOT)}")
+
+
 def check(md: str, data: dict) -> int:
     """Compare the regenerated tables with the committed files; 0 when equal."""
     ok = True
+    if REPORT.exists():
+        text = REPORT.read_bytes().decode("utf-8").replace("\r\n", "\n")
+        generated = blocks(md)
+        for mode, block in report_blocks(text).items():
+            if block != generated[mode]:
+                ok = False
+                print(
+                    f"the gate report's {mode} block differs from the regenerated table"
+                )
     committed_md = TABLES_MD.read_text(encoding="utf-8").replace("\r\n", "\n")
     if committed_md != md:
         ok = False
@@ -623,7 +672,10 @@ def check(md: str, data: dict) -> int:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument(
-        "mode", nargs="?", choices=["tables", "figure", "all"], default="all"
+        "mode",
+        nargs="?",
+        choices=["tables", "figure", "assemble", "all"],
+        default="all",
     )
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
@@ -635,6 +687,8 @@ def main() -> None:
         write_tables(md, data)
     if args.mode in ("figure", "all"):
         figure(data["values"], data["rankings"])
+    if args.mode == "assemble":
+        assemble(md)
 
 
 if __name__ == "__main__":

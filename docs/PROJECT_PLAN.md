@@ -1,8 +1,8 @@
 # Project Plan
 
 **Project:** CFD Clean Room Simulation
-**Last Updated:** 2026-10-15
-**Current Phase:** Phase 3 (Transport Solver), in progress: design accepted (ADR-011, decisions of 2026-10-03); the product case blocked on ECR-002 (accepted 2026-10-04); Phase 2 complete
+**Last Updated:** 2026-10-16
+**Current Phase:** Phase 3 (Transport Solver), GATE REVIEW: the gate report `docs/reports/phase3_transport_report.md` (2026-10-16, prompt 58) awaits Alex's verdict; ECR-002 closed 2026-10-15 and ECR-003 2026-10-07; Phase 2 complete
 
 This document tracks development progress by phase. Code review reads this document to determine the current phase and verify that PRs are in scope; the policy is `docs/REVIEW_POLICY.md`. Update this document as work progresses.
 
@@ -15,7 +15,7 @@ This document tracks development progress by phase. Code review reads this docum
 | 0 | Infrastructure | COMPLETE | PASS | -- |
 | 1 | Foundation | COMPLETE | PASS | phase1_foundation_report.md |
 | 2 | Navier-Stokes Solver | COMPLETE | PASS | phase2_navier_stokes_report.md |
-| 3 | Transport Solver | IN PROGRESS | -- | -- |
+| 3 | Transport Solver | GATE REVIEW | FOR DECISION (Alex) | phase3_transport_report.md |
 | 4 | Scenarios & Time Integration | NOT STARTED | -- | -- |
 | 5 | Alert Monitoring System | NOT STARTED | -- | -- |
 | 6 | CUDA Acceleration | NOT STARTED | -- | -- |
@@ -156,6 +156,8 @@ ECR-001 rebuilt the solver on a staggered grid in nine steps (2026-09-20 to 2026
 **Branch prefix:** `phase3/`
 
 **Depends on:** Phase 2 complete (NS solver produces velocity field)
+
+**Gate report:** `docs/reports/phase3_transport_report.md` (2026-10-16, prompt 58): the scope, the suite and coverage counts, the validation gate rows below, issue 53's D3 and D4 answered, the product claim per metric from `docs/reports/probe58/`, and the known limits. The verdict is Alex's; this phase is at GATE REVIEW until he sets it.
 
 ### Deliverables
 
@@ -472,3 +474,4 @@ Phase 3 completion is the minimum viable portfolio artifact. A working, validate
 | 2026-10-15 | Alex's decisions before the Phase 3 gate (prompt 58, branch phase3/gate-report): VAL-021 closed as a documented gap, threshold N/A (ECR-002 criterion 14; the row is added with prompt 57's record notes); the comparative claim stated per metric, not by one combined score (VAL-018 and Step 8 rows); the product's `max_simple_iter` 15,000 in `configs/clean_room_default.yaml` and the two layout files, with the tests that read the key. | Alex Moroz-Smietana |
 | 2026-10-15 | ECR-002 step 7, VAL-021 feasibility (prompt 57, branch feature/ecr002-val021-concentration, merged as PR 84): none of the three named candidates fits a 2D trend check; recommended closed as a documented gap (`docs/reports/ecr002_val021_feasibility.md`). The VAL-021 rows above carry Alex's decision of 2026-10-15 (prompt 58). | Claude (builder) |
 | 2026-10-15 | ECR-002 closed at step 9 (prompt 58, branch phase3/gate-report): ADR-012 Accepted (built) with planned against built (steps 0 to 8, condition (e)'s scale, the CG k and eps solve, the multigrid default); the request's closing note lists each criterion's outcome by reference; the Step 9 row above. | Alex Moroz-Smietana |
+| 2026-10-16 | Phase 3 gate report written (prompt 58, branch phase3/gate-report): `docs/reports/phase3_transport_report.md`, in the Phase 2 report's structure; the full suite and branch coverage from one run; the comparative claim stated per metric with ties from `docs/reports/probe58/` (metrics defined before computing, tables generated with a check mode, one figure); issue 53's D3 and D4 answered with recommendations, no change made; ADR-011's planned-against-built table added. Phase 3 at GATE REVIEW, the verdict for Alex. | Claude (builder) |

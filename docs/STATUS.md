@@ -25,9 +25,11 @@ the transport solver reads (REQ-S13), the transport configuration and the concen
 boundary module were built in PR 31, and the transport solver itself in PR 32, with all seven
 of its gate rows measured and passing (VAL-003, VAL-004 in two rows, VAL-007, VAL-012, VAL-013,
 VAL-014). The product configuration's move to `error_estimate` landed with ECR-002 step 8 on
-2026-10-15 (prompt 56), which also measured the product room and two layouts; what remains of
-the phase is the gate report with ADR-011's planned-against-built table. Phases 4 through 7
-have not begun.
+2026-10-15 (prompt 56), which also measured the product room and two layouts. ECR-002 closed on
+2026-10-15, and the Phase 3 gate report, `docs/reports/phase3_transport_report.md` (2026-10-16,
+prompt 58), is written with ADR-011's planned-against-built table and the comparative claim
+stated per metric; its verdict is Alex's, and the plan's Phase 3 row is at GATE REVIEW until he
+sets it. Phases 4 through 7 have not begun.
 
 The product room itself has never been solved, and on 2026-10-04 it was found that the laminar
 flow solver does not solve it. Its Reynolds number on the room height is
@@ -299,9 +301,9 @@ composition it was meant to guard is guarded by planting the settling increment 
 instead, which fails the exact line by half. The fix pass on review 32 and test 32 added the
 tests five documented solver behaviours lacked, refused NaN and bool inputs before any
 arithmetic, and moved VAL-003's gate step to where the measured error split puts the time error
-below the spatial one. Next: the product configuration's move to `error_estimate` when the
-product case is measured, and the Phase 3 gate report with ADR-011's planned-against-built
-table.
+below the spatial one. Both of the items that were next are done: the product configuration moved to
+`error_estimate` in ECR-002 step 8 (prompt 56), and the Phase 3 gate report with ADR-011's
+planned-against-built table was written in prompt 58.
 
 The product case now waits for ECR-002. Before ADR-012 named a turbulent validation case, the
 Annex 20 benchmark's data were checked against the property they cannot fake: in a flat room
@@ -488,7 +490,7 @@ the Phase 3 gate report.
 Deferred findings from earlier pull requests were open as GitHub issues, and every open one now
 has a disposition. The cleanup pull request (branch `fix/deferred-findings-cleanup`) closes issues
 33, 36, 40, 42, 45, 47, 51 and 63 and takes the small items of issue 53. Still open: issue 53's
-D3 and D4, which are for the Phase 3 gate report; issue 58, which step 6 was to decide and did not
+D3 and D4, answered in the Phase 3 gate report with a recommendation to close both (2026-10-16); issue 58, which step 6 was to decide and did not
 (no k or eps solve reached its cap in any step 6 run; the decision stays open; since prompt 51
 `max_iter` counts CG iterations, and a capped CG solve falls back to Jacobi from the explicit
 field and returns, with a warning, as before; no row of that report reached the cap); and
