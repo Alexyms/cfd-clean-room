@@ -1,0 +1,133 @@
+# VAL-020: the plane turbulent impinging jet of Khayrullina, van Hooff,
+# Blocken and van Heijst (2017), Exp Fluids 58(4):31, case I (ADR-012 G (vi);
+# ECR-002 criterion 13).
+#
+# The nozzle is w = 0.016 m wide in the top wall, the plate h = 0.360 m
+# below it (h / w = 22.5), Re = V0 w / nu = 8,000 in water (nu 1.0e-6 m^2/s,
+# the value the paper's Re 7,200 at 8 mm and 0.9 m/s gives), so V0 = 0.5 m/s.
+# The paper's enclosure is a water channel with the nozzle flush with its
+# top plate; its length along x is not stated. The choice here (prompt 55,
+# docs/reports/ecr002_val020_impinging_jet.md, section 2): the domain is
+# 68 w wide with the nozzle at its centre (33.5 w, 1.49 h, from the nozzle
+# edge to each side), the sides fixed-flow outlets over their whole height
+# taking equal shares of the inflow, the top and the plate walls with wall
+# functions; the report's section 2.4 checks the width with a 100 w run.
+# The frame is the solver's: y up from the plate, so the paper's y (down
+# from the nozzle) is h minus this file's y; validation/impinging_jet.py
+# converts.
+#
+# The inlet is a top-hat at V0. Its turbulence: the paper measures I_uv =
+# sqrt(u'^2 + v'^2) / V0 about 0.05 in the core at y = 2 w (its figure 3b);
+# the solver's intensity is per component, k = 1.5 (I V0)^2, so I = 0.05 /
+# sqrt(2) gives the k that estimate implies (w' taken as the mean of the
+# two measured components), 4.69e-4 m^2/s^2; the dissipation length is a
+# tenth of the nozzle width (eps = k^(3/2) / l_e, ADR-012 C), the prompt's
+# rule.
+#
+# Grids: x uniform, since the mesh clusters only toward the domain's walls
+# and the nozzle is at the centre; nx a multiple of 68 puts the nozzle on
+# whole faces (4 cells across it on 272, 6 on 408). y is clustered toward
+# the plate and the top wall (the nozzle's plane), the wall cell half the
+# uniform spacing, which validation.cases.load_impinging_jet derives for
+# any grid. The presets are val020_272x90 (this file's grid) and
+# val020_408x135, 1.5 times apart per axis. First-node y+ on the plate is
+# reported against the scalable floor (11.53).
+#
+# The model and the solver keys are VAL-019's (configs/validation_backstep.yaml):
+# the standard variant, k and eps advected by the default (upwind), rule
+# version 5, pressure_rtol 1e-4, ten momentum sweeps, the cap 20,000. No
+# threshold is set: the allowance is Alex's (ECR-002 criterion 13, OPEN),
+# and the harness row val020_272x90 (scripts/benchmark.py) reports.
+
+domain:
+  width: 1.088
+  height: 0.36
+  nx: 272
+  ny: 90
+
+mesh:
+  x:
+    stretch_ratio: 1.0
+  y:
+    # load_impinging_jet's value for 90 rows: half of 0.36 / 90. Stated
+    # here so the file alone loads the same grid the loader builds.
+    min_wall_spacing: 0.002
+
+fluid:
+  # Water: rho 998 kg/m^3 and mu = rho nu with nu = 1.0e-6 m^2/s. Nothing
+  # compared depends on rho.
+  density: 998.0
+  viscosity: 9.98e-4
+  temperature: 293.0
+
+particles:
+  density: 1000.0
+  sizes: [0.1e-6]
+  mean_free_path: 67.0e-9
+  boundary_layer_thickness: 1.0e-3
+  hepa_reference:
+    diameters: [0.1e-6]
+    efficiencies: [0.99999]
+
+solver:
+  dt: 0.01
+  t_end: 60.0
+  output_interval: 10
+  convergence_tol: 1.0e-6
+  max_simple_iter: 20000
+  alpha_velocity: 0.5
+  alpha_pressure: 0.3
+  max_pressure_iter: 5000
+  pressure_rtol: 1.0e-4
+  momentum_sweeps: 10
+  stopping_rule: error_estimate
+  iteration_error_tol: 1.0e-6
+  # ADR-011 G's per-cell bound, 1e-4 rho V_min / t_end, on the finer
+  # preset's smallest cell (408x135: dx 1.088 / 408 by the wall spacing
+  # 0.18 / 135), so one value serves both grids and the coarser one meets
+  # it the more easily.
+  mass_imbalance_tol: 5.914e-9
+
+turbulence:
+  model: k_epsilon
+  variant: standard
+  wall_treatment: scalable_wall_functions
+  cfl_number: 0.25
+  alpha_turbulence: 0.7
+  max_iter: 500
+  tol: 1.0e-10
+
+boundaries:
+  nozzle:
+    type: velocity_inlet
+    location: top
+    x_start: 0.536
+    x_end: 0.552
+    velocity: 0.5
+    turbulence_intensity: 0.035355
+    dissipation_length: 0.0016
+
+  # The two sides state no velocity, so each takes half the inflow at one
+  # face velocity (ADR-012 D, amended 2026-10-08), which is V0 w / (2 h),
+  # 0.011 m/s, over the whole side.
+  outlet_left:
+    type: fixed_flow_outlet
+    location: left
+    y_start: 0.0
+    y_end: 0.36
+
+  outlet_right:
+    type: fixed_flow_outlet
+    location: right
+    y_start: 0.0
+    y_end: 0.36
+
+obstacles: []
+
+sensors:
+  - name: stagnation
+    x: 0.544
+    y: 0.01
+
+thresholds:
+  "0.1e-6": 100.0

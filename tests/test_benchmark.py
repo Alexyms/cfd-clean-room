@@ -30,7 +30,14 @@ from src.staggered import FaceVelocities  # noqa: E402 -- follows sys.path.inser
 from tests import (  # noqa: E402 -- follows sys.path.insert
     backstep_reference as reference,
 )
-from validation import annex20, backstep  # noqa: E402 -- follows sys.path.insert
+from tests import (  # noqa: E402 -- follows sys.path.insert
+    impinging_jet_reference as jet_reference,
+)
+from validation import (  # noqa: E402 -- follows sys.path.insert
+    annex20,
+    backstep,
+    impinging_jet,
+)
 from validation.cases import (  # noqa: E402 -- follows sys.path.insert
     case_path,
     load_case,
@@ -479,6 +486,105 @@ def test_the_backstep_value_is_the_departure_of_the_reattachment_length(
         assert accuracy["passed"] is None
         assert accuracy["components"]["x_r_over_h"] == x_r
         assert accuracy["components"]["rms_profile_x1.0"] == 0.1
+
+
+@pytest.mark.unit
+def test_the_impinging_jet_row_reads_each_component_from_its_own_report_entry() -> None:
+    """The row's value, components and report against a second computation on a known field.
+
+    The constructed field of tests/impinging_jet_reference.py, whose every
+    number is computed again there, goes through the real
+    ``impinging_jet.evaluate`` (no stand-in). The row's value is the whole
+    centreline's RMS and each component is asserted by name against that
+    computation. Defects caught: a component read from the wrong report
+    entry; the value taken from the free-jet part instead of the whole line.
+    """
+    config = load_preset("val020_272x90")
+    mesh = Mesh(config)
+    v, k = jet_reference.fields(mesh, config)
+    want = jet_reference.expected(mesh, config, v, k)
+    faces = FaceVelocities.copy_of(np.zeros((mesh.yc.size, mesh.xc.size + 1)), v)
+    accuracy = benchmark.impinging_jet_accuracy(mesh, config, faces, k)
+    jet_reference.assert_matches(accuracy["report"], want)
+    assert accuracy["value"] == pytest.approx(
+        want["centreline"]["all"]["rms"], rel=1e-12
+    )
+    assert accuracy["value"] != pytest.approx(want["centreline"]["free_jet"]["rms"])
+    assert accuracy["passed"] is None
+    assert (accuracy["metric"], accuracy["reference"]) == (
+        benchmark.IMPINGING_JET_METRIC,
+        benchmark.IMPINGING_JET_REFERENCE,
+    )
+    named = {
+        "rms_centreline_free_jet": want["centreline"]["free_jet"]["rms"],
+        "rms_centreline_impingement": want["centreline"]["impingement"]["rms"],
+        "potential_core_w": want["potential_core_w"]["computed"],
+        "decay_rate": want["decay_rate"]["computed"],
+        "spreading_rate": want["half_width"]["spreading_rate"]["computed"],
+        "rms_half_width_w": want["half_width"]["errors"]["rms"],
+        "stagnation_k_ratio_isotropic": want["stagnation"]["ratio_isotropic"],
+        "stagnation_k_ratio_isotropic_ring": want["stagnation"]["ring_ratio_isotropic"],
+        "plate_y_star_median": want["y_star"]["median"],
+    }
+    components = accuracy["components"]
+    assert set(components) == set(named)
+    for name, value in named.items():
+        assert components[name] == pytest.approx(value, rel=1e-10), name
+    # The components must differ from one another for the check above to
+    # tell a swapped pair.
+    assert len({round(v, 12) for v in named.values()}) == len(named)
+
+
+@pytest.mark.integration
+def test_the_impinging_jet_row_is_reported_not_scored(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """VAL-020's row: the whole comparison from the final faces and k, no pass.
+
+    Three outer iterations of the committed case on its own grid. The row's
+    report is the one the same three iterations give when evaluated here,
+    its value the centreline's RMS, ``passed`` None, and its trajectory
+    carries an error only in its last entry. Defects caught: the
+    cell-centred field read; a pass or fail recorded where no allowance is
+    set; a value that is not the centreline's RMS.
+    """
+    config = load_preset("val020_272x90")
+    monkeypatch.setattr(config, "max_simple_iter", 3)
+    monkeypatch.setattr(benchmark, "load_preset", lambda case_id: config)
+    row = benchmark.run_case("val020_272x90", benchmark.DEFAULT_METHOD, 1, 1)
+    accuracy = row["accuracy"]
+    assert (accuracy["metric"], accuracy["reference"]) == (
+        benchmark.IMPINGING_JET_METRIC,
+        benchmark.IMPINGING_JET_REFERENCE,
+    )
+    assert accuracy["passed"] is None
+
+    mesh = Mesh(config)
+    solver = StaggeredSolver(mesh, config, StaggeredBoundary(mesh, config))
+    solver.solve_steady()
+    assert solver.face_velocities is not None and solver.turbulence_state is not None
+    report = impinging_jet.evaluate(
+        mesh,
+        config,
+        np.array(solver.face_velocities.v),
+        np.array(solver.turbulence_state.k),
+    )
+    assert accuracy["report"] == report
+    assert accuracy["value"] == report["centreline"]["all"]["rms"]
+    assert (
+        accuracy["components"]["rms_centreline_free_jet"]
+        == report["centreline"]["free_jet"]["rms"]
+    )
+    assert (
+        accuracy["components"]["stagnation_k_ratio_isotropic"]
+        == report["stagnation"]["ratio_isotropic"]
+    )
+    errors = [entry["error"] for entry in row["trajectory"]]
+    assert errors[:2] == [None, None] and len(errors) == 3
+    assert errors[2] is accuracy["value"] or errors[2] == accuracy["value"]
+    assert row["params"]["rule_version"] == rule_version(config) == 5
+    assert row["grid"]["y"]["stretch_ratio"] > 1.0
+    assert row["grid"]["x"]["stretch_ratio"] == 1.0
 
 
 @pytest.mark.integration

@@ -11,7 +11,9 @@ carry the specified flux on the grid at hand (ADR-012 G (iii)); and the
 stopping rule, which with_velocity_step pins to velocity_step for a solve
 that must reproduce a field saved under it; and the backward-facing step's
 y clustering, which load_backstep derives so that a face falls on the step
-height on any grid (ADR-012 G (ii)). A named preset is loaded by
+height on any grid (ADR-012 G (ii)); and the impinging jet's y clustering,
+which load_impinging_jet derives as a fixed fraction of the uniform spacing
+toward the plate and the nozzle's plane (ADR-012 G (vi)). A named preset is loaded by
 load_preset, which picks the loader, so no consumer repeats that choice.
 """
 
@@ -32,6 +34,7 @@ CASE_FILES: dict[str, str] = {
     "cavity": "validation_cavity.yaml",
     "annex20": "validation_annex20.yaml",
     "backstep": "validation_backstep.yaml",
+    "impinging_jet": "validation_impinging_jet.yaml",
 }
 
 # Named grid presets: identifier -> (case, nx, ny). The tuple does not say
@@ -50,6 +53,8 @@ CASE_GRIDS: dict[str, tuple[str, int, int]] = {
     "val019_410x40": ("backstep", 410, 40),
     "val019_656x60": ("backstep", 656, 60),
     "val019_984x90": ("backstep", 984, 90),
+    "val020_272x90": ("impinging_jet", 272, 90),
+    "val020_408x135": ("impinging_jet", 408, 135),
 }
 
 # Presets loaded by load_wall_clustered; every other preset takes its whole
@@ -71,6 +76,17 @@ BACKSTEP_GRIDS: frozenset[str] = frozenset(
 # The backward-facing step's obstacle, whose top edge is the step height and
 # whose right edge is the step's face at x = 0 of the case's frame.
 BACKSTEP_OBSTACLE = "step"
+
+# Presets loaded by load_impinging_jet, which clusters y toward the plate and
+# the nozzle's plane and checks the nozzle's edges fall on x faces.
+IMPINGING_JET_GRIDS: frozenset[str] = frozenset({"val020_272x90", "val020_408x135"})
+
+# The impinging jet's inlet segment, the nozzle in the top wall.
+IMPINGING_JET_INLET = "nozzle"
+
+# The impinging jet's wall cell as a fraction of the uniform spacing H / ny
+# (prompt 55; docs/reports/ecr002_val020_impinging_jet.md, section 2.3).
+IMPINGING_JET_WALL_FRACTION = 0.5
 
 # The step height's face is the one this share of ny up from the floor, so
 # the clustered cells under the step height are 1.5 times as many as a uniform
@@ -364,6 +380,60 @@ def load_backstep(
     return SimConfig.from_dict(raw)
 
 
+def load_impinging_jet(
+    name: str = "impinging_jet", grid: tuple[int, int] | None = None
+) -> SimConfig:
+    """Load the impinging jet with y clustered toward the plate and the nozzle's plane.
+
+    The nozzle is a slot in the top wall and the plate is the floor, so the
+    mesh's symmetric wall clustering puts the fine cells where the case
+    needs them (ADR-012 G (vi); prompt 55). This loader derives
+    ``mesh.y.min_wall_spacing`` as IMPINGING_JET_WALL_FRACTION of the
+    uniform spacing on the grid at hand, the same rule the committed file
+    carries for its own grid, and refuses a grid that puts a nozzle edge
+    off an x face, since the inlet's flux would then not be V0 w.
+
+    Parameters
+    ----------
+    name : str
+        The case name, "impinging_jet"; a parameter so load_preset can
+        call every loader the same way.
+    grid : tuple[int, int], optional
+        (nx, ny) to use instead of the values in the file.
+
+    Returns
+    -------
+    SimConfig
+        The case with ``mesh.y`` replaced by the derived wall spacing. The
+        x axis and every other parameter come from the file.
+
+    Raises
+    ------
+    ValueError
+        If the case file or the grid fails SimConfig's validation, if the
+        file names no velocity inlet called IMPINGING_JET_INLET on the top
+        wall, or if either edge of the nozzle does not fall on an x face.
+    """
+    raw = _raw_case(name, grid)
+    base = SimConfig.from_dict(raw)
+    inlet = base.boundaries.get(IMPINGING_JET_INLET)
+    if inlet is None or inlet.type != "velocity_inlet" or inlet.location != "top":
+        raise ValueError(
+            f"the case needs a velocity inlet named {IMPINGING_JET_INLET!r} on the top wall"
+        )
+    dx = base.room_width / base.nx
+    for edge in (inlet.x_start, inlet.x_end):
+        cells = edge / dx
+        if abs(cells - round(cells)) > FACE_TOLERANCE * base.nx:
+            raise ValueError(
+                f"the nozzle's edge at x = {edge} m is {cells} cells of {dx} m from the "
+                f"left wall; the grid must put it on a face"
+            )
+    spacing = IMPINGING_JET_WALL_FRACTION * base.room_height / base.ny
+    raw["mesh"] = {**(raw.get("mesh") or {}), "y": {"min_wall_spacing": spacing}}
+    return SimConfig.from_dict(raw)
+
+
 def step_corner_offsets(mesh: Mesh, config: SimConfig) -> tuple[float, float]:
     """How far the step's corner lies from the nearest grid line in each axis.
 
@@ -400,8 +470,8 @@ def load_preset(case_id: str) -> SimConfig:
     SimConfig
         The preset's case at its grid, by load_wall_clustered for a preset
         in WALL_CLUSTERED_GRIDS, by load_annex20 for one in ANNEX20_GRIDS,
-        by load_backstep for one in BACKSTEP_GRIDS and by load_case for
-        every other.
+        by load_backstep for one in BACKSTEP_GRIDS, by load_impinging_jet
+        for one in IMPINGING_JET_GRIDS and by load_case for every other.
 
     Raises
     ------
@@ -420,6 +490,8 @@ def load_preset(case_id: str) -> SimConfig:
         loader = load_annex20
     elif case_id in BACKSTEP_GRIDS:
         loader = load_backstep
+    elif case_id in IMPINGING_JET_GRIDS:
+        loader = load_impinging_jet
     else:
         loader = load_case
     return loader(kind, grid=(nx, ny))
