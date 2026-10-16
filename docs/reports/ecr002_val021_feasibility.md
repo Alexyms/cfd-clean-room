@@ -26,12 +26,15 @@ on a case and were not tested.
 ## 3. The candidates
 
 Files fetched 2026-10-15 into `results/builder57/src/` (untracked). All three were obtainable.
+The fourth row is the paper section 3.2 relies on for its Fig. 3 claim, not a candidate (added
+2026-10-15 on test 57's S3).
 
 | # | Source | Obtained from | SHA-256 | C1 | C2 | C3 | C4 |
 |---|--------|---------------|---------|----|----|----|----|
 | 1 | Zhang and Chen (2006), Atmos Environ 40(18):3396-3408 | engineering.purdue.edu/~yanchen/paper/2006-3.pdf (author copy, 20 pages) | f0f5656253f4e7f7... | fails | fails | holds | fails |
 | 2 | Murakami, Kato, Nagano, Tanaka (1992), ASHRAE Trans 98(1):82-97 | aivc.org/sites/default/files/airbase_5635.pdf (preprint scan, 16 pages, OCR) | 9d1eb1f31f5bd279... | holds | fails | holds | fails |
 | 3 | Lai and Chen (2007), Atmos Environ 41(25):5249-5256 | pmc.ncbi.nlm.nih.gov/articles/PMC7108307 (full text) | 45268fca7cc00dbc... (html) | holds | fails | holds | fails |
+| - | Zhang and Chen (2007), "Comparison of the Eulerian and Lagrangian methods for predicting particle transport in enclosed spaces", Atmos Environ 41(25):5236-5248; not a candidate, read for its Fig. 3 (section 3.2) | author's revision of 2007-08-21 (PDF metadata; the address was not recorded), `lai2007_zc2007.pdf`, 311,513 bytes | acaab8d7e9982d11... | - | - | - | - |
 
 The prompt's DOI for candidate 3 (10.1016/j.atmosenv.2006.05.088) is the one the PMC record carries.
 
@@ -171,7 +174,9 @@ a "Step 7, VAL-021" row beside the Step 7, VAL-020 row of the ECR-002 steps tabl
 add a change-log row dated 2026-10-15 (prompt 57, branch feature/ecr002-val021-concentration). No
 deliverable of the plan moves.
 
-**STATUS.** In the ECR-002 paragraph after VAL-020, one sentence: "VAL-021's feasibility item found
+**STATUS.** In the paragraph that describes VAL-020's measurement (the prompt 55 paragraph,
+which is STATUS's only description of VAL-020; reworded 2026-10-15 on test 57's S2), one
+sentence after it: "VAL-021's feasibility item found
 no case that fits (Murakami's data are factor-of-two contour bands from 3D square-nozzle rooms; Zhang
 and Chen's own are non-isothermal; Lai and Chen has no measured data); recommended closed as a
 documented gap." Do not restate the report's table.

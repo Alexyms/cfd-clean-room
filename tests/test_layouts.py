@@ -136,7 +136,7 @@ class TestLayoutFiles:
         assert config.turbulence.variant == "standard"
         assert config.stopping_rule == "error_estimate"
         assert config.momentum_sweeps == 10
-        assert config.max_simple_iter == 10000
+        assert config.max_simple_iter == 15000
 
 
 @pytest.mark.integration

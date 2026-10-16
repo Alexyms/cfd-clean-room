@@ -65,7 +65,11 @@ solver:
   # 10,000, since the error-estimate stop came 1.6 to 2.5 times after the
   # velocity-step stop in every converged row. Prompt 48 measured 4,472 outer
   # iterations on this grid (docs/reports/ecr002_step6_variants.md).
-  max_simple_iter: 10000
+  # Raised to 15,000 on 2026-10-15 (Alex, prompt 58; ECR-002 section 8, step
+  # 8's note): the half-supply layout L2 on 320x120 stops by the rule at
+  # 10,794 outer iterations, past the 10,000 cap step 8 ran under; runs that
+  # stop earlier are unaffected.
+  max_simple_iter: 15000
   momentum_sweeps: 10
   pressure_rtol: 1.0e-4
   # alpha_velocity 0.5 is the value every product measurement since step 0 ran
