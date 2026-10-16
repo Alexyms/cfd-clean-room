@@ -480,6 +480,10 @@ which criterion 10 asks, and the predicted order failed, because the score rewar
 that carries the litho-top emission across the room to the hood past the hood entry. Whether a
 score that counts the sensors is the product's, and how L2's convergence is read, are the
 report's questions for the gate report. Review and test 56 come before the pull request.
+ECR-002 closed on 2026-10-15 at step 9 (prompt 58, branch `phase3/gate-report`): ADR-012 is
+Accepted (built) with its planned-against-built table, the request's closing note lists each
+criterion's outcome by reference, and criterion 10's comparative claim is stated per metric in
+the Phase 3 gate report.
 
 Deferred findings from earlier pull requests were open as GitHub issues, and every open one now
 has a disposition. The cleanup pull request (branch `fix/deferred-findings-cleanup`) closes issues
