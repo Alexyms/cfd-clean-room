@@ -73,7 +73,7 @@ def _write(path: Path, records: list[dict]) -> Path:
 def test_summary_separates_rows_by_concurrent_processes(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Rows of one case taken under different loads are never pooled into one wall-time row."""
+    """Rows of one case under different loads never pool into one wall-time row."""
     path = _write(
         tmp_path / "results.jsonl",
         [
@@ -114,7 +114,7 @@ def test_summary_flags_case_recorded_under_mixed_load(
 def test_summary_notes_mixed_load_across_cases(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Different cases at different loads get a table-level note, as the 80x80 row did."""
+    """Cases at different loads get a table-level note, as the 80x80 row did."""
     path = _write(
         tmp_path / "results.jsonl",
         [_record("val002_40x40", 1, 85.0), _record("val002_80x80", 2, 669.0)],
@@ -155,7 +155,7 @@ def test_mixed_load_cases_detects_only_multi_load_pairs() -> None:
 def test_concurrent_rejects_values_below_one(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """--concurrent counts this process too, so zero and negatives are refused at parse time."""
+    """--concurrent counts this process too, so zero and negatives fail at parse."""
     for value in ("0", "-1"):
         with pytest.raises(SystemExit) as exc:
             benchmark.main(["--concurrent", value, "--summary"])
@@ -169,7 +169,7 @@ def test_concurrent_rejects_values_below_one(
 def test_summary_never_pools_two_references(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """One case scored against the old and the corrected Ghia table gets two error ranges.
+    """One case scored on the old and the corrected Ghia table gets two error ranges.
 
     Without the reference in the row key the stored ghia_1982_re100 rows and
     the ghia_1982_re100_r2 rows would print as one range spanning both tables.
@@ -198,7 +198,7 @@ def test_summary_never_pools_two_references(
 def test_summary_never_pools_two_metrics(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """One case scored by the offset and the true-centerline metric gets two error ranges.
+    """One case scored by the offset and true-centerline metrics gets two ranges.
 
     Both carry the same reference, so only the metric in the row key keeps
     them apart.
@@ -363,7 +363,7 @@ def test_the_annex20_value_and_pass_read_the_scored_lines_only(
 
 @pytest.mark.unit
 def test_the_backstep_row_reads_each_component_from_its_own_report_entry() -> None:
-    """The row's value, components and report against a second computation on a known field.
+    """The row's value, components and report against a second computation.
 
     The constructed field of tests/backstep_reference.py, whose every number
     is computed again there, goes through the real ``backstep.evaluate`` (no
@@ -405,7 +405,7 @@ def test_the_backstep_row_reads_each_component_from_its_own_report_entry() -> No
 def test_the_backstep_row_is_reported_not_scored(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """VAL-019's row: the whole comparison from the final faces, pressure and k, no pass.
+    """VAL-019's row: the comparison from the final faces, pressure and k, no pass.
 
     Three outer iterations of the committed case on its own grid. The row's
     report is the one the same three iterations give when evaluated here,
@@ -459,7 +459,7 @@ def test_the_backstep_row_is_reported_not_scored(
 def test_the_backstep_value_is_the_departure_of_the_reattachment_length(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """x_r 5.0 H gives |5.0 - 6.26| / 6.26; no reattachment gives NaN; nothing passes."""
+    """x_r 5.0 H gives |5.0 - 6.26| / 6.26; no reattachment is NaN; none passes."""
     template = {
         "u_ref": {"computed": 44.2, "over_measured": 1.0},
         "inflow": {"delta_99_over_h": 1.5, "re_theta": 5000.0},
@@ -490,7 +490,7 @@ def test_the_backstep_value_is_the_departure_of_the_reattachment_length(
 
 @pytest.mark.unit
 def test_the_impinging_jet_row_reads_each_component_from_its_own_report_entry() -> None:
-    """The row's value, components and report against a second computation on a known field.
+    """The row's value, components and report against a second computation.
 
     The constructed field of tests/impinging_jet_reference.py, whose every
     number is computed again there, goes through the real
@@ -646,7 +646,7 @@ def test_summary_never_pools_two_rule_versions(
 def test_summary_never_pools_two_rules(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Rows that differ only in stopping rule get two rows; a row without the key ran velocity_step."""
+    """Rows differing only in stopping rule get two rows; no key means velocity_step."""
     old = _record("val001_80x40", 1, 85.0, outer=570)
     new = _record("val001_80x40", 1, 96.0, outer=3154)
     new["params"] = {"stopping_rule": "error_estimate"}
@@ -714,7 +714,7 @@ def test_run_case_refuses_the_retired_staggered_jacobi_label_by_name(
 def test_summary_keeps_the_multigrid_label_apart_from_the_diagonal_one(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A staggered-mgcg row never pools with a staggered-cg row of the same case (prompt 54).
+    """A staggered-mgcg row never pools with a staggered-cg row of its case (prompt 54).
 
     Defect caught: both preconditioners filed under one label, so a stored
     diagonal-preconditioned row and a new multigrid row would summarize as
@@ -787,7 +787,7 @@ def test_a_row_runs_the_preconditioner_its_label_names(
 
 @pytest.mark.unit
 def test_with_pressure_preconditioner_copies_and_refuses_unknown_names() -> None:
-    """The helper sets the key on a copy, leaves the original, and refuses a bad name."""
+    """The helper sets the key on a copy, keeps the original, refuses a bad name."""
     config = load_case("cavity", grid=(6, 6))
     assert config.pressure_preconditioner == "multigrid"
     other = with_pressure_preconditioner(config, "jacobi")
@@ -800,7 +800,7 @@ def test_with_pressure_preconditioner_copies_and_refuses_unknown_names() -> None
 
 @pytest.mark.unit
 def test_every_solver_key_is_recorded_from_the_one_list() -> None:
-    """GitHub issue 38: the harness reads SOLVER_KEYS, so a key added there is in every row.
+    """GitHub issue 38: the harness reads SOLVER_KEYS, so a new key is in every row.
 
     Defect caught: a second list in the harness that a new key is not added to.
     """

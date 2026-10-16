@@ -1,4 +1,4 @@
-"""Tests for the coupled k-epsilon solve in the staggered solver (ECR-002 step 6, item 3).
+"""The coupled k-epsilon solve in the staggered solver (ECR-002 step 6, item 3).
 
 ADR-012 D's outer iteration: the momentum prediction with mu + rho nu_t and
 the wall functions' viscosity on the wall faces, the pressure correction, one
@@ -26,6 +26,7 @@ from src.solver_staggered import StaggeredSolver, rule_version
 from src.staggered import FaceVelocities, allocate_fields
 from src.stopping import ErrorEstimateRule, ImbalanceSummary
 from src.turbulence import (
+    VARIANTS,
     KEpsilonModel,
     PositivityError,
     TurbulenceBoundary,
@@ -231,7 +232,7 @@ class TestWhatTheSolverExposes:
     def test_condition_e_receives_the_largest_change_of_nu_t(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Each outer iteration hands the rule max |nu_t_new - nu_t_old| over non-SOLID cells.
+        """Each outer iteration hands the rule the largest nu_t change over live cells.
 
         Test 45 B1: the step (e) is fed was pinned by nothing. The eddy
         viscosity before and after each of four outer iterations is taken
@@ -257,7 +258,7 @@ class TestWhatTheSolverExposes:
     def test_condition_e_scales_by_the_median_of_the_iterate(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Each outer iteration's scale is nu plus the median nu_t of its own FLUID cells.
+        """Each outer iteration's scale is nu plus the median nu_t of its FLUID cells.
 
         ADR-012 E, amended 2026-10-11 (rule version 5). The scale is formed
         here from the solves capped at 1 to 4 iterations, over the FLUID
@@ -279,16 +280,18 @@ class TestWhatTheSolverExposes:
             for after in history[1:]
         ]
         assert scales != every_live
-        inlet = TurbulenceBoundary(
-            mesh, config, StaggeredBoundary(mesh, config)
-        ).largest_inlet_eddy_viscosity()
+        # The scale until 2026-10-11: the inlet's C_mu k^2 / eps, from its keys
+        # (ADR-012 C's inlet rule, k = 1.5 (I U)^2 and eps = k^1.5 / l_e).
+        k_in = 1.5 * (0.05 * 2.0) ** 2
+        eps_in = k_in**1.5 / 0.03
+        inlet = VARIANTS[config.turbulence.variant].c_mu * k_in**2 / eps_in
         assert all(scale != pytest.approx(nu + inlet) for scale in scales)
 
 
 def _four_outer_iterations(
     monkeypatch: pytest.MonkeyPatch,
 ) -> tuple[list[float], list[float], Mesh, list[np.ndarray]]:
-    """What the solver hands condition (e) over four outer iterations, and nu_t around them.
+    """What condition (e) receives over four outer iterations, and nu_t around them.
 
     Returns the viscosity steps and scales the rule received, the channel's
     mesh, and the eddy viscosity at the start and after each of the four

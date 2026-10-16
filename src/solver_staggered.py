@@ -267,7 +267,7 @@ class StaggeredSolver:
         return stages
 
     def _reference_velocity(self) -> float:
-        """The collocated solver's reference velocity, from the staggered layer's inputs."""
+        """The collocated solver's reference velocity, from the staggered inputs."""
         nx, ny = self._mesh.xc.shape[0], self._mesh.yc.shape[0]
         h = max(float(self._mesh.x[nx]) / nx, float(self._mesh.y[ny]) / ny)
         vol_flux = self._boundary.get_total_inlet_flux()
@@ -309,7 +309,7 @@ class StaggeredSolver:
         )
 
     def _imbalance_summary(self, u: np.ndarray, v: np.ndarray) -> ImbalanceSummary:
-        """Worst, absolute-summed and signed-summed per-cell imbalance, one evaluation."""
+        """Worst, absolute-summed and signed-summed cell imbalance, evaluated once."""
         imbalance = self._corrector.mass_imbalance(u, v)
         cells = np.abs(imbalance)
         return ImbalanceSummary(
@@ -319,7 +319,7 @@ class StaggeredSolver:
         )
 
     def _extrapolate_outlets(self, u: np.ndarray, v: np.ndarray) -> None:
-        """Give each pressure outlet face the value of its interior neighbour, in place."""
+        """Give each pressure outlet face its interior neighbour's value, in place."""
         left = self._outlets["left"].is_outlet
         right = self._outlets["right"].is_outlet
         bottom = self._outlets["bottom"].is_outlet
@@ -530,7 +530,7 @@ class StaggeredSolver:
     def _turbulence_step(
         self, state: TurbulenceState, u: np.ndarray, v: np.ndarray, iteration: int
     ) -> TurbulenceState:
-        """One k and eps step on the corrected faces, then the relaxed nu_t (ADR-012 D)."""
+        """One k and eps step on the corrected faces, then relaxed nu_t (ADR-012 D)."""
         assert self._model is not None and self._walls is not None
         faces = FaceVelocities.copy_of(u, v)
         try:

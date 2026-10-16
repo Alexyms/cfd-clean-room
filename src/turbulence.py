@@ -1,4 +1,4 @@
-"""The k-epsilon model on a prescribed face velocity field (ADR-012 A, C; ECR-002 step 1).
+"""k-epsilon on a prescribed face velocity field (ADR-012 A, C; ECR-002 step 1).
 
 Two quantities at the cell centres, beside the pressure: the turbulent kinetic
 energy k (m^2/s^2) and its dissipation rate eps (m^2/s^3). The model is
@@ -856,7 +856,7 @@ class KEpsilonModel:
         )
 
     def _rate(self, faces: FaceVelocities) -> np.ndarray:
-        """``max(|u_w|, |u_e|) / dx + max(|v_s|, |v_n|) / dy`` over the faces with a flux."""
+        """``max(|u_w|, |u_e|) / dx + max(|v_s|, |v_n|) / dy`` over faces with flux."""
         mesh = self._mesh
         u = np.abs(np.where(self._live_u, faces.u, 0.0))
         v = np.abs(np.where(self._live_v, faces.v, 0.0))
@@ -928,7 +928,7 @@ class KEpsilonModel:
     # ------------------------------------------------------------------
 
     def _check_positive(self, q: np.ndarray, name: str) -> None:
-        """Raise PositivityError unless q is positive and finite at every non-SOLID cell.
+        """Raise PositivityError unless q is positive and finite in each live cell.
 
         REQ-S15's assertion. An infinite value passes ``q > 0`` and is refused
         too: the eddy viscosity is not defined there either.
@@ -996,7 +996,7 @@ class KEpsilonModel:
             raise ValueError("faces must be finite")
 
     def _check_conditions(self, c: TurbulenceConditions) -> None:
-        """Shapes, dtypes, finiteness and ranges of the conditions, before any arithmetic."""
+        """The conditions' shapes, dtypes, finiteness and ranges, before arithmetic."""
         ny, nx = self._p_shape
         floats = {
             "inflow_k_u": self._u_shape,
@@ -1408,19 +1408,6 @@ class TurbulenceBoundary:
         k = sum(face.k * face.inflow for face in inlets) / total
         eps = sum(face.eps * face.inflow for face in inlets) / total
         return k, eps
-
-    def largest_inlet_eddy_viscosity(self) -> float:
-        """The largest ``C_mu k_in^2 / eps_in`` over the inlet faces, m^2/s.
-
-        Condition (e)'s scale takes it (ADR-012 E): boundary data, fixed per
-        solve.
-
-        Raises
-        ------
-        ValueError
-            If no velocity inlet admits air.
-        """
-        return max(self._c_mu * face.k**2 / face.eps for face in self._require_inlets())
 
     # ------------------------------------------------------------------
     # Parts

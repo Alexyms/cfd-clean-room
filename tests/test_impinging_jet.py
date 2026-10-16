@@ -79,7 +79,7 @@ class TestLoader:
 
     @pytest.mark.parametrize("preset", sorted(IMPINGING_JET_GRIDS))
     def test_the_two_sides_share_the_inflow(self, preset: str) -> None:
-        """Each fixed-flow outlet takes half of V0 w at one face velocity over the whole side."""
+        """Each fixed-flow outlet takes half of V0 w at one face velocity."""
         config = load_preset(preset)
         mesh = Mesh(config)
         boundary = StaggeredBoundary(mesh, config)
@@ -176,7 +176,7 @@ class TestData:
         assert sum(r[2] for r in ij.INTENSITY_ROWS) == 30
 
     def test_the_ranges_are_the_papers(self) -> None:
-        """The free-jet, impingement and plate-median ranges, pinned by value (test 55 S1).
+        """The free-jet, impingement and plate-median ranges, by value (test 55 S1).
 
         The second computation (tests/impinging_jet_reference.py) reads the
         same constants, so only a test of the values catches a changed one;
@@ -188,7 +188,7 @@ class TestData:
         assert ij.PLATE_MEDIAN_HALF_WIDTH_W == 10.0
 
     def test_the_digitised_curves_match_the_numbers_the_paper_states(self) -> None:
-        """Section 4.1 of the paper: the potential core, the half-velocity point, the I_uv peak, K_y."""
+        """Section 4.1: the potential core, the half-velocity point, peak I_uv, K_y."""
         core = ij.potential_core_w(ij.CENTRELINE_Y, ij.CENTRELINE_V)
         assert core == pytest.approx(ij.STATED["potential_core_w"], abs=0.1)
         half = ij.first_crossing(ij.CENTRELINE_Y, ij.CENTRELINE_V, 0.5)
@@ -292,7 +292,7 @@ class TestSampling:
 @pytest.mark.unit
 class TestReaders:
     def test_the_axis_fit_is_exact_on_a_parabola(self) -> None:
-        """a + b x^2 through four columns gives a; the pair formula (9 V_d - V_3d) / 8."""
+        """a + b x^2 through four columns gives a, as (9 V_d - V_3d) / 8 does."""
         x = np.array([-0.006, -0.002, 0.002, 0.006])
         values = 0.8 - 3.0 * x**2
         assert ij.axis_fit(x, values) == pytest.approx(0.8, rel=1e-12)
@@ -304,7 +304,7 @@ class TestReaders:
     def test_the_axis_fit_reads_a_four_cell_nozzle_better_than_the_nearest_column(
         self,
     ) -> None:
-        """A Gaussian of half-width 2 dx: the nearest column reads 0.958, the fit 0.993."""
+        """A Gaussian of half-width 2 dx: the nearest column 0.958, the fit 0.993."""
         dx = 1.0
         x = np.array([-1.5, -0.5, 0.5, 1.5]) * dx
         values = np.exp(ij.GAUSS_A * (x / (2.0 * dx)) ** 2)
@@ -334,7 +334,7 @@ class TestReaders:
             ij.first_crossing(np.array([0.3, 0.2]), np.array([1.0, 0.5]), 0.98)
 
     def test_the_decay_rate_of_an_exact_line_and_its_range(self) -> None:
-        """(V0 / V)^2 = 0.2 (y / w - y0 / w) exactly: K_u = 0.2 over the self-similar range only."""
+        """(V0 / V)^2 = 0.2 (y / w - y0 / w): K_u = 0.2 on the self-similar range."""
         y = np.array([0.2, 0.35, 0.5, 0.75, 0.9])
         distance = y * ij.H_JET / ij.W_JET - ij.VIRTUAL_ORIGIN_W
         v = 1.0 / np.sqrt(0.2 * distance)
@@ -391,7 +391,7 @@ class TestReaders:
             ij.half_width_w(mesh, config, np.zeros_like(v), 0.5)
 
     def test_the_centreline_of_a_field_linear_in_y(self, coarse: tuple) -> None:
-        """v = -V0 (1 - 0.5 y / H) in the solver's y, uniform in x: V_0,y / V0 = 0.5 + 0.5 s."""
+        """v = -V0 (1 - 0.5 y / H), uniform in x: V_0,y / V0 = 0.5 + 0.5 s."""
         config, mesh = coarse
         _xc, yf = np.meshgrid(mesh.xc, mesh.y)
         v = -ij.V0 * (1.0 - 0.5 * yf / ij.H_JET)
