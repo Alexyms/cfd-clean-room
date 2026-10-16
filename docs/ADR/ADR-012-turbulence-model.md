@@ -52,6 +52,13 @@ as they were put.
    `docs/reports/ecr002_step6_comparative.md` and `docs/reports/ecr002_step6_variants.md`).
    VAL-018's variant clause waits for VAL-020, and RNG's cycle is probed only if VAL-020 favours
    RNG. Both variants stay built; the published comparisons of step 7 run the standard variant.
+   Amended 2026-10-15 (Alex, prompt 56, before ECR-002 step 8): the product runs the standard
+   variant, and VAL-018's variant clause is closed. VAL-020
+   (`docs/reports/ecr002_val020_impinging_jet.md`): RNG matched the measured turbulence at the
+   impingement point where the standard model reads 26 to 35% high, but RNG's free jet was
+   worse (a potential core of 10.1 widths against the measured 4.8; the standard model's 6.5 to
+   7.6) and RNG has not converged on the product's grids (prompts 47 and 48). The caveat the
+   product carries: turbulence over the equipment tops reads about 30% high, which inflates turbulent mixing and absolute deposition there by a similar factor in every layout, so layout comparisons stand while absolute tool-top deposition reads high. Both variants stay built; RNG's cycle is not probed.
 3. The wall treatment: scalable wall functions.
 4. k and eps: the transport scheme in pseudo-time, growth explicit and decay implicit.
    Amended 2026-10-10 (Alex, prompt 48, ECR-002 step 6): the advection's face value is plain
@@ -334,6 +341,14 @@ for the comparisons whose published predictions are standard k-epsilon ones (Ann
 backward-facing step [12]); step 8 runs both on the product and reports k, nu_t and the
 concentration over the equipment tops and at the two sensors half a metre above them
 (`above_gap_1`, `above_gap_2`, y = 2.5 m).
+
+*Note, 2026-10-15 (Alex, prompt 56; decision 2 as amended).* VAL-020 was the case this section
+asked for, and it ranks the variants both ways: RNG's stagnation k is within 1% of the PIV
+estimate where the standard model's is 1.26 to 1.35 times it, and the standard model's free jet
+is nearer the data than RNG's (the potential core 6.5 to 7.6 widths against RNG's 10.1, measured
+4.8). With RNG converged on no product grid, the product runs the standard model with the stated
+caveat: turbulence over the equipment tops reads about 30% high, which inflates turbulent mixing and absolute deposition there by a similar factor in every layout, so layout comparisons stand while absolute tool-top deposition reads high. Step 8 runs one variant on the product; the comparison between variants on
+the tops is not made.
 
 **Cost.** Two scalar equations per outer iteration on the cell field, each the transport step of
 section C; RNG adds one source term. Against the pressure solve both are small (section H).
@@ -992,6 +1007,13 @@ is decided after this case's and the product's timings are in hand. The build an
 coupled results are `docs/reports/ecr002_val019_backstep.md`; the criterion stays OPEN until Alex
 sets the allowance from them.
 
+*Note, 2026-10-15 (Alex, prompt 56).* VAL-019 is a report-only validation row: no readable
+published standard k-epsilon reference exists on this case, and the run does not settle cleanly
+(the medium grid cycles at the reattachment cell), so an allowance set now would be fitted to
+the result. The row records its known departures (the bubble about 20% short on the medium
+grid, half of it the grid) and the harness row `val019_656x60` pins them against regression.
+Status REPORTED (ECR-002 criterion 8).
+
 **(iii) The Annex 20 room, conditional on item 0.** The specification [4, pages 2 and 3] and
 the measurements [5] are in hand and their check is in [1, section 6]: at x/H = 1.0 the measured
 symmetry-plane profile carries 1.02 to 1.32 of the inlet flux u0 h, depending on how the strips
@@ -1064,6 +1086,15 @@ the two k-epsilon variants, and across the turbulent Schmidt number's literature
 1.3, section F). Convergence within the cap, above, is what makes the comparison possible; the
 stability of the ranking is what the product is judged on.
 
+*Note, 2026-10-15 (Alex, prompt 56; before step 8).* The variant clause is closed (decision 2
+as amended): the product runs the standard variant with VAL-020's caveat, and VAL-018's
+criterion for step 8 is the deposition hotspots and the ranking of layouts stable under grid
+refinement (160x60 against 320x120) and across the turbulent Schmidt number's range (0.2 to
+1.3). The layouts, the score and the predictions are stated in
+`docs/reports/ecr002_step8_product.md` before any run. The product's configuration moves into
+`configs/clean_room_default.yaml` in the same step (ADR-013 decision 3 as amended; section D's
+note of 2026-10-09).
+
 *(vi) Two cases added (Alex, 2026-10-09; prompt 45). Thresholds OPEN until Alex sets them from
 first results.*
 *VAL-020, a planar impinging slot jet.* Section A found that no planned case tells the standard
@@ -1073,6 +1104,12 @@ access), with the same authors' steady RANS comparison (2019), European Journal 
 B/Fluids 75:228-243, DOI 10.1016/j.euromechflu.2018.10.003. Alternatives closer to the product's
 regime: Ashforth-Frost, Jambunathan and Whitney (1997), Experimental Thermal and Fluid Science 14;
 Zhe and Modi (2001), Journal of Fluids Engineering 123(1):112-120.
+*Note, 2026-10-15 (Alex, prompt 56).* VAL-020 is a report-only validation row, as VAL-019: no
+readable published standard k-epsilon reference on this case, and no run settles (the outlet
+cycle), so an allowance set now would be fitted to the result. The row records its known
+departures (the core long, the impingement turbulence high) and the harness row `val020_272x90`
+pins them. Status REPORTED (ECR-002 criterion 13); the variant decision it informed is decision
+2 as amended.
 *VAL-021, a trend-level concentration check.* The two-dimensional model's high- and
 low-concentration regions against a measured three-dimensional room, compared for trend, not
 point by point. Data: Zhang and Chen (2006), Atmospheric Environment 40(18):3396-3408, DOI
