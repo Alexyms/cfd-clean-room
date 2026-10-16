@@ -307,7 +307,7 @@ The timing probes ran first (17:43, two processes). Under the multigrid precondi
 product grid costs a third of what prompt 47 measured per outer iteration (its 0.561 s against
 the timing table's figure), so the projection at the cap was under half an hour for the longest
 row alone and the set ran as planned: the six flow runs and the harness row were launched
-together at 17:43:16, seven processes on twelve cores, the marches as rows converged (section
+together at 17:44:14 (the records' start times; the timing probes at 17:43:17), seven processes on twelve cores, the marches as rows converged (section
 5.3). The wall times in the tables were taken beside other runs and are not like for like: the
 machine has two kinds of core, and every 320x120 row shows the same pause, the stretch from outer
 3,500 to 3,900 taking about 1,400 s where the stretches before it took about 75 s (the logs), a
@@ -382,7 +382,7 @@ half of the room, under no supply.
 **The supplement.** The prompt's stop condition covers L0, which stopped. For L2 the comparison
 the step asks for needs a room that stopped by the rule, so one labelled run beyond the file's
 configuration was made: L2 on 320x120 again from rest with `max_simple_iter` 12,000
-(`L2_320x120_cap12000`), which stops by the rule at 10,794 outer iterations (the matrix), condition (e) the last to hold as in every converged row, the velocity step then 2e-10 m/s; the same room as the capped run, about 800 iterations on Its marches, and the 160x60 cap field's marches at
+(`L2_320x120_cap12000`), which stops by the rule at 10,794 outer iterations (the matrix), condition (e) the last to hold as in every converged row, the velocity step then 2e-10 m/s: the same room as the capped run, about 800 iterations on. Its marches, and the 160x60 cap field's marches at
 Sc_t 0.7 (`--at-cap`, the label `_cap`), are the rows marked L2* in the tables of sections 5.3 and
 5.4; a starred row is not a converged product-configuration run, and the ranking is read with
 that in view.
@@ -630,8 +630,8 @@ The five segments of largest deposition (surface | bin start), rate per s per m 
 | L2_320x120_cap12000_S3_sc1.3, 5 | floor | x 5.6 (3.25) | floor | x 6.2 (0.0316) | etch_chamber east | y 1.6 (6.76e-05) | etch_chamber east | y 1.4 (6.64e-05) | etch_chamber east | y 1.8 (6.52e-05) |
 <!-- tables56 transport end -->
 
-Thirty-nine marches: prompt 47's three sources at Sc_t 0.7 on the four converged
-product-configuration rooms and at 0.2 and 1.3 on the two converged 320x120 rooms (27), and the
+Thirty-six marches: prompt 47's three sources at Sc_t 0.7 on the four converged
+product-configuration rooms and at 0.2 and 1.3 on the two converged 320x120 rooms (24), and the
 L2* rows (the nine on the cap-12,000 room, the three on the 160x60 cap field at 0.7). Every march
 but one reaches the steady rule before the 600 s cap; the three S2 marches on L1 320x120 take 249
 to 437 s of simulated time to do so, their field steady long before (the last-window column's
@@ -774,15 +774,15 @@ Per comparison, over the rows (layout, source, class):
 **The ranking** is the same in every ordering the records allow: L2* < L1 < L0, the room as it
 is last, for both classes, on both grids and at every Schmidt number (the ranking table). The
 score is S2's deposition on the litho tool's top (section 5.3), and the layouts order by how much
-of that emission the air over the top carries away. **The margins** are wide: L1's score is 54 to
+of that emission the air over the top carries away. **The margins** are wide: L1's score is 53 to
 60% below L0's and L2*'s 74 to 78% below L1's (the margin table's relative column), and every
 neighbouring difference exceeds the grid's change to both scores and the Schmidt number's change
 to both, so every order is robust by section 2.6's rule. The grid moves L0's score by 19% (0.66
 of 3.5 at 0.5 um) and L1's by 10%, and the Schmidt number moves L0's by 22% and L1's by 13%,
 against differences of 2.0 and 1.1 between neighbours. **The hotspots** agree: the largest
-deposition location is the same segment on both grids and at every Schmidt number in all 18 rows
-(the hotspot summary), at least three of the five largest are shared in 17 of 18 between grids and
-at Sc_t 1.3 (the exception L2*'s S3 at 5 um at 1.3, 2 of 5, a floor segment and hood-bench top
+deposition location is the same segment on both grids and at Sc_t 1.3 in all 18 rows (the hotspot
+summary; 16 of 18 at Sc_t 0.2), at least three of the five largest are shared in 18 of 18 between
+grids and 17 of 18 at Sc_t 1.3 (the exception L2*'s S3 at 5 um at 1.3, 2 of 5, a floor segment and hood-bench top
 segments at rates four orders apart), and Sc_t 0.2 moves the most segments (8 not shared against 3
 between grids and 4 at 1.3) and the largest location in two rows, both L2*'s S1, the capped march
 of section 5.3, whose largest floor segment moves from x 0.4 to x 0.2 m; the sensor orders are
@@ -802,7 +802,7 @@ three layouts on 320x120 at Sc_t 0.7 side by side, the flow, S2's plume on one c
 the deposition bars summed over the three sources on one bar scale, each deposition panel titled
 with the layout's score. The plume panels are the mechanism of section 5.3 in one row: S2's cloud
 over the litho tool shrinks from L0 to L1 and in L2 streams east to the hood. The concentration
-figures of all 39 marches (prompt 47's format) are under `results/builder56/figures/`, untracked.
+figures of all 36 marches (prompt 47's format) are under `results/builder56/figures/`, untracked.
 
 ## 6. Predictions against the measurement
 

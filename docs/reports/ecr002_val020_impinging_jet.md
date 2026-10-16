@@ -258,7 +258,7 @@ magnitude above their tolerances and (d) met throughout. RNG's residual falls mo
 velocity-step and viscosity-step estimates, 0.008 and 1.5 against the tolerance 1e-6, keep (a) and
 (e) from holding, so it is bounded under the classification, falling rather than cycling. No pressure correction hit its cap, no positivity error was raised, and the outlets did
 not drift: the mean pressure moves by at most 1.3e-4 Pa per outer iteration over the last 200 (the
-width check), against a dynamic pressure of 125 Pa, four orders below the drift the copy rule
+width check), against a dynamic pressure of 125 Pa, five orders below the drift the copy rule
 showed on the product room (12 Pa per iteration, prompt 41). The three stop conditions of section
 4 were not met.
 
@@ -321,7 +321,7 @@ to widen it.
 
 The standard model with the top-hat inlet keeps its potential core 6.5 w_jet (coarse) and 7.6 w_jet
 (fine) long against the data's 4.8, and from there decays at a rate K_u of 0.11 to 0.12 against the
-digitised line's 0.195, so its centreline lies above the data by 0.06 to 0.09 V0 on average over the
+digitised line's 0.195, so its centreline lies above the data by 0.064 to 0.085 V0 on average over the
 free-jet part and by at most 0.10 V0 (coarse) or 0.13 V0 (fine) anywhere; it reaches half speed at
 y / h_jet 0.86 to 0.87 against the data's 0.82. In the impingement region it is within 0.03 to 0.04
 V0. RNG keeps a 10 w_jet core and lies 0.21 V0 above the data at worst. On K_u: the paper's text
@@ -512,8 +512,8 @@ stage most of the fine upwind run's. The set took 3.3 hours of wall time.
   of the data in each pair, the share undefined in substance); it holds on every other quantity.
 - (f) fails: the wider domain moves the centreline by 0.031 V0 and the half-width by 0.073 w_jet,
   both towards the data.
-- (g) holds on both grids: cores of 6.5 and 7.6 w_jet, the centreline above the data by 0.06 to
-  0.08 V0 on average over the free-jet part.
+- (g) holds on both grids: cores of 6.5 and 7.6 w_jet, the centreline above the data by 0.064 to
+  0.085 V0 on average over the free-jet part.
 - (h) holds on the coarse grid (K_y 0.104) and fails by 0.004 on the fine (0.096).
 - (i) holds: y+ 26 on the coarse grid's plate, 17 on the fine, both above the floor.
 - (j) holds: RNG does not converge within the cap, though it is the one run whose residual is still
