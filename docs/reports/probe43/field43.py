@@ -1,12 +1,18 @@
 """Demonstrations of prompt 43 (ECR-002 step 4): momentum with a viscosity field.
 
 Usage:
-    python field43.py val CASE [--zero] [--label L]      a VAL preset's stop, count and face hash
-    python field43.py ladder RUNG [--label L]            40x15 at Re 895 or 8950, one sweep
-    python field43.py drift RTOL [--long] [--label L]    80x30 drift case, momentum_sweeps 10
-    python field43.py compare NAME D0_NAME               a record against a D0 record
-    python field43.py frozen                             predict with mu_eff against frozen34.py
-    python field43.py floor [--ny N] [--label L]         obstacle-floor channel against domain floor
+    python field43.py val CASE [--zero] [--label L]
+        a VAL preset's stop, count and face hash
+    python field43.py ladder RUNG [--label L]
+        40x15 at Re 895 or 8950, one sweep
+    python field43.py drift RTOL [--long] [--label L]
+        80x30 drift case, momentum_sweeps 10
+    python field43.py compare NAME D0_NAME
+        a record against a D0 record
+    python field43.py frozen
+        predict with mu_eff against frozen34.py
+    python field43.py floor [--ny N] [--label L]
+        obstacle-floor channel against domain floor
 
 The solver is the committed StaggeredSolver on the committed configuration;
 nothing under src/ is subclassed for the physics. The product runs reuse the
@@ -18,7 +24,7 @@ committed `solver.momentum_sweeps: 10`, not the probe's SweepPredictor.
 The script imports src/ from the tree it sits in, so a copy placed in a
 worktree of another commit measures that commit. Records go to
 results/builder43/ under that tree; D0's are read from results/builder41/ of
-the main checkout (MAIN_RESULTS, found through git's common directory).
+the main checkout (``main_results``, through git's common directory).
 
 `val --zero` passes a field of zeros as `eddy_viscosity`, which the predictor
 receives as a uniform field equal to air's viscosity. `frozen` compares
@@ -44,20 +50,6 @@ import numpy as np
 import yaml
 
 ROOT = Path(__file__).resolve().parents[3]
-# The checkout the script was committed in: from a worktree copy, the main
-# tree's results/ is still where D0's records live (git's common directory).
-MAIN_RESULTS = (
-    Path(
-        subprocess.run(
-            ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
-            cwd=ROOT,
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout.strip()
-    ).parent
-    / "results"
-)
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "docs" / "reports" / "probe41"))
 
@@ -71,12 +63,27 @@ from src.solver_staggered import StaggeredSolver  # noqa: E402
 from validation.cases import load_preset  # noqa: E402
 
 OUT = ROOT / "results" / "builder43"
-PROBE_OUT = MAIN_RESULTS / "builder41"
 probe.OUT = OUT
 
 
+def main_results() -> Path:
+    """The main checkout's results/, where D0's records live (git's common dir).
+
+    Called when a record is read rather than at import (ADR-014 I), so
+    importing the script, as tail43.py does, runs no git command.
+    """
+    common = subprocess.run(
+        ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    return Path(common).parent / "results"
+
+
 def face_hash(u: np.ndarray, v: np.ndarray) -> str:
-    """Section 2.3 of docs/reports/ecr003_step2_baseline.md: SHA-256 over u's bytes then v's."""
+    """SHA-256 over u's bytes then v's (docs/reports/ecr003_step2_baseline.md 2.3)."""
     return hashlib.sha256(
         np.ascontiguousarray(u, dtype="<f8").tobytes()
         + np.ascontiguousarray(v, dtype="<f8").tobytes()
@@ -130,7 +137,7 @@ def built_room(
     sweeps: int,
     stopping: dict | None,
 ) -> probe.Room:
-    """The product room as the committed configuration builds it, sweeps from the config."""
+    """The product room as the committed configuration builds it, sweeps included."""
     raw = probe.product_raw(nx, ny, mu_factor, n_outer, rtol, stopping)
     raw["solver"]["momentum_sweeps"] = sweeps
     cfg = SimConfig.from_dict(raw)
@@ -181,7 +188,7 @@ def ladder(args: argparse.Namespace) -> None:
 def compare(args: argparse.Namespace) -> None:
     """Stop, counts, residual history and face hash of a record against a D0 record."""
     built = json.loads((OUT / f"{args.name}.json").read_text())
-    base = json.loads((PROBE_OUT / f"{args.d0}.json").read_text())
+    base = json.loads((main_results() / "builder41" / f"{args.d0}.json").read_text())
     a, b = np.array(built["residual"]), np.array(base["residual"])
     common = min(len(a), len(b))
     relative = np.abs(a[:common] - b[:common]) / np.abs(b[:common])
@@ -280,7 +287,7 @@ def channel(floor: str, ny_fluid: int, nx: int) -> tuple[Mesh, StaggeredSolver]:
 
 
 def floor(args: argparse.Namespace) -> None:
-    """The obstacle stencil's test: a SOLID floor row against the domain edge as floor."""
+    """The obstacle stencil's test: a SOLID floor row against the domain floor."""
     ny_fluid = args.ny
     nx = 4 * ny_fluid
     _mesh_e, edge = channel("edge", ny_fluid, nx)
