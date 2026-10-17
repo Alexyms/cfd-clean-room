@@ -425,7 +425,9 @@ are joined before the fingerprint is taken, so the breach's supply split into th
 the base's state, as section B's breach has one flow state; with the extents read literally it
 would have two. The joined state is the split one to the rounding of the inflow summed per
 segment, which the returns' shared velocity carries (1.1e-15 relative on 160x60 and 4.0e-15 on
-320x120), not bitwise.
+320x120), not bitwise. The rule was the builder's departure; *ratified (orchestrator and Alex,
+2026-10-17, review 62 S8)*. Each key of its equality clause, and pieces on two edges or two
+obstacle faces, are pinned by `tests/test_scenarios.py` (prompt 62b, review and test 62 B1).
 
 **The warm start.** `StaggeredSolver.solve_steady` gains `initial: FlowState | None`: the faces,
 pressure and, with the turbulence section, k and eps of a state, in place of the fields at rest
@@ -594,11 +596,26 @@ it except where these say otherwise, each with its reason.
    discharge that names its intake. The scenario layer refuses an interval in which an intake of
    the base's pair is present and no discharge returns it. Stopping the intake alone is refused
    by the pair's rule (the discharge names a missing segment), and changing the discharge's flow
-   alone by the balance check, both through the merged validation.
+   alone by the balance check, both through the merged validation. *Ratified (orchestrator and
+   Alex, 2026-10-17, review 62 S8)*, with this reason: once the discharge is removed nothing names
+   the intake, so the recirculating pair's balance check cannot see a half-stopped fan, and the
+   premise of prompt 62 that it would was wrong.
 6. *`threshold_factor` needs a threshold for every class*, matched by diameter
    (`SimConfig.class_thresholds`).
 7. *`checkpoint_interval`* (section G's `ScenarioSpec`) is the run file's and arrives with it at
    step 3.
+8. *Event times are read to one tolerance* (prompt 62b, review 62 S5). Two events written to meet
+   (one ends as the other starts) were refused as overlapping when the rounding of
+   `start + duration` put the end above the start (0.1 + 0.2 against 0.3), and on two segments
+   the same rounding left a sliver interval. `config.EVENT_TIME_RTOL`, 1e-9 of `t_end`, is the one
+   instant: an overlap is refused only beyond it, `times()` drops a boundary within it of the one
+   before or of `t_end`, `ScenarioSpec.is_active` reads start and end to it (so `active()` and
+   the manager's `sources_at` agree with `times()`), and an end past `t_end` by its rounding loads.
+9. *An interval's vents are checked on the mesh when the manager is built* (prompt 62b, review 62
+   S6): `ScenarioManager` runs `boundary_vents.vent_runs` on every interval's configuration, so a
+   replacement vent that covers no face, or a recirculating pair whose flows differ on the faces,
+   is refused before a run, as section J refuses a base vent. `scenarios.py` therefore imports
+   `boundary_vents` too, beside section G's list.
 
 ## C. Specification and recovery (decision 8)
 
