@@ -818,7 +818,9 @@ Phase 3's gate conditions, each with the scenarios it bears on, so Phase 4's out
   isothermal one and the mixing above the tool is the forced jet's alone. The discharge carries
   its configured concentration, not the mean of the air its intake drew in: the intake and the
   discharge are two segments the transport does not link, as the supply is not linked to the
-  returns (ADR-011 decision 3, no recirculation).
+  returns (ADR-011 decision 3, no recirculation). *Amended 2026-10-16 (prompt 61, section J's
+  amendment):* a discharge that names its intake in `recirculate_from` carries the intake's
+  concentration, lagged one transport step; the limit stands for a discharge that does not.
 
 ## I. The efficiency batch (step 0's housekeeping)
 Listed as the first build step's housekeeping, each with its location:
@@ -915,6 +917,24 @@ face beyond the outlet, which is inside the obstacle, and the copy's weakness to
   the budget booking it as outflow. Neither deposits: `surface_u` and `surface_v` are
   `SURFACE_NONE` on a vent's span, so the obstacle's deposition total counts its wall faces
   only.
+
+**Amendment of 2026-10-16 (prompt 61, the build date): recirculated discharge.** A cooling fan
+returns the room air its intake drew, contaminated as the room is; a zero default concentration
+makes every fan a clean-air source and would bias operator exposure (M2) and removal (M3) in the
+tool's favour, which is the comparison the product exists to make. A `velocity_inlet` vent takes
+an optional `recirculate_from: <segment name>`, naming a `fixed_flow_outlet` vent on the same
+obstacle. The discharge's concentration of each class is then the flux-weighted mean, over the
+intake's faces, of the room cells each draws from, lagged one transport step: the mean is formed
+from the field the step starts from, the field the explicit advection of that step reads.
+`hepa_filtered` applies to it as to any inlet (the mean times one less the class's efficiency).
+Refused at load: the named segment missing, not a fixed-flow vent, on another obstacle, or with
+`concentration` also given. The budget books the intake as outflow and the discharge as inflow,
+so the pair nets to zero when the two flows are equal and nothing is filtered: at every step,
+since both terms are formed from the same field, and so at steady state. Built in
+`boundary_concentration.py` (`Recirculation`, `ConcentrationFaces.recirculation`) and
+`solver_transport.py`; tested in `tests/test_solver_transport.py` (the pair's inflow equals its
+outflow over forty steps of a non-uniform field, and a uniform field stays uniform under the pair
+with no other source while a clean discharge empties the cells above it).
 
 **Validated at load (REQ-C02).** `obstacle` names an obstacle that exists; `face` is one of the
 four; the extent lies within the face's span and is not empty; the face does not lie on a domain

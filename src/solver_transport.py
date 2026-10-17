@@ -55,6 +55,18 @@ the laminar path's, and a wall face keeps the Brownian deposition rule
 (ADR-012 decision 7). Called without the field the arithmetic is the
 laminar path's, bit for bit (REQ-S16).
 
+Equipment vents (ADR-014 J, step 0b). A vent face bounds a SOLID cell and
+carries a flux all the same: the conditions name it (``vent_u``,
+``vent_v``), the solver advects through it with the face value
+``scalar_scheme.advective_flux`` gives a vent (the inflow value into the
+room, the room cell's value out of it) and books the flux in the budget's
+inflow or outflow as at a domain face. No diffusion, settling or drift
+crosses it. A discharge that recirculates (prompt 61's amendment) carries,
+for each class, the flux-weighted mean of the cells its intake draws from,
+in the field the step starts from, times the fraction it passes: the intake
+books it as outflow and the discharge as inflow, so the pair nets to zero
+when the two flows are equal and nothing is filtered.
+
 Settling (ADR-011 D). The class's settling velocity is subtracted from the
 vertical face velocity on the faces ``settling_v`` marks, horizontal faces
 between two non-SOLID cells, and nowhere else; every other horizontal face
@@ -137,9 +149,11 @@ class MassBudget:
         ``in_domain`` of the field first handed to the solver; None before
         the first step.
     inflow : float
-        Cumulative particles carried in through domain faces.
+        Cumulative particles carried in through domain faces and discharge
+        vents (ADR-014 J).
     outflow : float
-        Cumulative particles carried out through domain faces.
+        Cumulative particles carried out through domain faces and exhaust
+        vents, a recirculating discharge's intake included.
     source : float
         Cumulative ``sum(sources V) dt``.
     deposited : dict[str, float]
@@ -461,6 +475,33 @@ class TransportSolver:
         self._faces = [boundary.faces_for(k) for k in range(self._n_classes)]
         for k, faces in enumerate(self._faces):
             self._check_conditions(faces, k)
+        # The vents carry a flux through faces of SOLID cells (ADR-014 J). Every
+        # class names the same faces; None without vents, so the step runs the
+        # lines it always ran.
+        self._vent_u: np.ndarray | None = self._faces[0].vent_u
+        self._vent_v: np.ndarray | None = self._faces[0].vent_v
+        self._vents = self._vent_u is not None and self._vent_v is not None
+        if self._vents:
+            for k, faces in enumerate(self._faces):
+                if not (
+                    np.array_equal(faces.vent_u, self._vent_u)
+                    and np.array_equal(faces.vent_v, self._vent_v)
+                ):
+                    raise ValueError(
+                        f"class {k} names other vent faces than class 0; the vents "
+                        "are the room's, the same for every class"
+                    )
+            self._live_u = live_u | self._vent_u
+            self._live_v = live_v | self._vent_v
+            # Which side of each vent face is the obstacle, for the budget.
+            self._solid_low_u = np.zeros(self._u_shape, dtype=bool)
+            self._solid_low_u[:, 1:-1] = solid[:, :-1]
+            self._solid_high_u = np.zeros(self._u_shape, dtype=bool)
+            self._solid_high_u[:, 1:-1] = solid[:, 1:]
+            self._solid_low_v = np.zeros(self._v_shape, dtype=bool)
+            self._solid_low_v[1:-1, :] = solid[:-1, :]
+            self._solid_high_v = np.zeros(self._v_shape, dtype=bool)
+            self._solid_high_v[1:-1, :] = solid[1:, :]
         # Deposition per class: v_d A_f on every depositing face, and the sum
         # over a cell's faces that sits in its implicit diagonal. Each
         # depositing face has one non-SOLID neighbour, so adding a face to
@@ -650,12 +691,26 @@ class TransportSolver:
         u_adv, v_adv = self._advecting_velocities(faces, k, v_ext)
         flux_u = u_adv * self._area_u
         flux_v = v_adv * self._area_v
-        adv_u = advective_flux(
-            c, flux_u, conditions.inflow_u, self._axis_x, self._upwind
-        )
-        adv_v = advective_flux(
-            c.T, flux_v.T, conditions.inflow_v.T, self._axis_y, self._upwind
-        ).T
+        if self._vents:
+            inflow_u, inflow_v = self._recirculated(c, flux_u, flux_v, conditions)
+            adv_u = advective_flux(
+                c, flux_u, inflow_u, self._axis_x, self._upwind, self._vent_u
+            )
+            adv_v = advective_flux(
+                c.T,
+                flux_v.T,
+                inflow_v.T,
+                self._axis_y,
+                self._upwind,
+                np.ascontiguousarray(self._vent_v.T),
+            ).T
+        else:
+            adv_u = advective_flux(
+                c, flux_u, conditions.inflow_u, self._axis_x, self._upwind
+            )
+            adv_v = advective_flux(
+                c.T, flux_v.T, conditions.inflow_v.T, self._axis_y, self._upwind
+            ).T
         divergence = adv_u[:, 1:] - adv_u[:, :-1] + adv_v[1:, :] - adv_v[:-1, :]
         c_star = c - dt * divergence / self._volume
         if rate is not None:
@@ -680,6 +735,10 @@ class TransportSolver:
             - np.sum(np.where(flux_v[0, :] < 0.0, adv_v[0, :], 0.0))
             + np.sum(np.where(flux_v[-1, :] > 0.0, adv_v[-1, :], 0.0))
         )
+        if self._vents:
+            vent_in, vent_out = self._vent_fluxes(adv_u, adv_v, flux_u, flux_v)
+            inflow += vent_in
+            outflow += vent_out
         budget.inflow += float(inflow) * dt
         budget.outflow += float(outflow) * dt
 
@@ -781,6 +840,23 @@ class TransportSolver:
                 np.isfinite(array).all() and (array >= 0.0).all()
             ):
                 raise ValueError(f"class {k}: {name} must be finite and non-negative")
+        if (faces.vent_u is None) != (faces.vent_v is None):
+            raise ValueError(f"class {k}: vent_u and vent_v are given together or not")
+        for name in ("vent_u", "vent_v"):
+            array = getattr(faces, name)
+            if array is None:
+                continue
+            shape = self._u_shape if name == "vent_u" else self._v_shape
+            if array.shape != shape or array.dtype != np.bool_:
+                raise ValueError(f"class {k}: {name} must be bool of shape {shape}")
+        if faces.recirculation and faces.vent_u is None:
+            raise ValueError(f"class {k}: a recirculation needs the vent faces")
+        for pair in faces.recirculation:
+            if not 0.0 <= pair.passed <= 1.0:
+                raise ValueError(
+                    f"class {k}: a recirculation passes a fraction in [0, 1], got "
+                    f"{pair.passed}"
+                )
 
     # ------------------------------------------------------------------
     # The step's parts
@@ -802,6 +878,69 @@ class TransportSolver:
             u_adv = u_adv + np.where(self._inner_u, v_ext.u, 0.0)
             v_adv = v_adv + np.where(self._inner_v, v_ext.v, 0.0)
         return u_adv, v_adv
+
+    def _recirculated(
+        self,
+        c: np.ndarray,
+        flux_u: np.ndarray,
+        flux_v: np.ndarray,
+        conditions: ConcentrationFaces,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """The inflow arrays with each recirculating discharge's value filled in.
+
+        The value is the flux-weighted mean, over the intake's faces, of the
+        room cell each draws from, in ``c``, the field this step starts from,
+        times the fraction the discharge passes; zero when the intake draws
+        nothing.
+        """
+        if not conditions.recirculation:
+            return conditions.inflow_u, conditions.inflow_v
+        inflow_u = np.array(conditions.inflow_u, copy=True)
+        inflow_v = np.array(conditions.inflow_v, copy=True)
+        padded_x = np.pad(c, ((0, 0), (1, 1)))
+        padded_y = np.pad(c, ((1, 1), (0, 0)))
+        # A vent face's room cell is the one of its two cells that is not SOLID;
+        # c is zero in SOLID cells, so the sum of the two is the room cell.
+        room_u = padded_x[:, :-1] + padded_x[:, 1:]
+        room_v = padded_y[:-1, :] + padded_y[1:, :]
+        for pair in conditions.recirculation:
+            drawn = (
+                np.abs(flux_u[pair.intake_u]).sum()
+                + np.abs(flux_v[pair.intake_v]).sum()
+            )
+            carried = 0.0
+            if drawn > 0.0:
+                carried = (
+                    np.sum(np.abs(flux_u[pair.intake_u]) * room_u[pair.intake_u])
+                    + np.sum(np.abs(flux_v[pair.intake_v]) * room_v[pair.intake_v])
+                ) / drawn
+            inflow_u[pair.discharge_u] = pair.passed * carried
+            inflow_v[pair.discharge_v] = pair.passed * carried
+        return inflow_u, inflow_v
+
+    def _vent_fluxes(
+        self,
+        adv_u: np.ndarray,
+        adv_v: np.ndarray,
+        flux_u: np.ndarray,
+        flux_v: np.ndarray,
+    ) -> tuple[float, float]:
+        """Particles per second into and out of the room through the vent faces."""
+        assert self._vent_u is not None and self._vent_v is not None
+        vu, vv = self._vent_u, self._vent_v
+        into = (
+            np.sum(np.where(vu & self._solid_low_u & (flux_u > 0.0), adv_u, 0.0))
+            - np.sum(np.where(vu & self._solid_high_u & (flux_u < 0.0), adv_u, 0.0))
+            + np.sum(np.where(vv & self._solid_low_v & (flux_v > 0.0), adv_v, 0.0))
+            - np.sum(np.where(vv & self._solid_high_v & (flux_v < 0.0), adv_v, 0.0))
+        )
+        out = (
+            np.sum(np.where(vu & self._solid_high_u & (flux_u > 0.0), adv_u, 0.0))
+            - np.sum(np.where(vu & self._solid_low_u & (flux_u < 0.0), adv_u, 0.0))
+            + np.sum(np.where(vv & self._solid_high_v & (flux_v > 0.0), adv_v, 0.0))
+            - np.sum(np.where(vv & self._solid_low_v & (flux_v < 0.0), adv_v, 0.0))
+        )
+        return float(into), float(out)
 
     def _face_eddy_viscosity(self, nu_t: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """Face values of nu_t: the harmonic mean of the two cells, distance weighted.

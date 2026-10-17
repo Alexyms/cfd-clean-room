@@ -11,6 +11,7 @@ Meshes are small and, where it matters, non-square and stretched, so an
 index that works only on a square uniform grid shows.
 """
 
+import dataclasses
 import logging
 from pathlib import Path
 
@@ -25,16 +26,20 @@ from src.boundary_concentration import (
     ConcentrationFaces,
 )
 from src.boundary_registry import BoundaryRegistry
+from src.boundary_staggered import StaggeredBoundary
 from src.config import SimConfig
 from src.mesh import SOLID, Mesh
 from src.particles import ParticlePhysics
+from src.pressure import PressureCorrector
 from src.scalar_scheme import limited_face_values
+from src.solver_staggered import StaggeredSolver
 from src.solver_transport import (
     FieldHistory,
     MassBudget,
     TransportSolver,
 )
-from src.staggered import FaceVelocities, u_shape, v_shape
+from src.staggered import FaceVelocities, allocate_fields, u_shape, v_shape
+from tests.vent_cases import DISCHARGE, EXHAUST, INTAKE, vent_config, vent_raw
 from validation.metrics import centroid
 from validation.transport_cases import (
     FixedConditions,
@@ -1753,3 +1758,175 @@ class TestEddyViscosityIsADiffusivity:
         unshifted = solver_for(d_brownian).solve_timestep(c, still, 0, dt)
         assert np.allclose(got, shifted, rtol=1e-11, atol=1e-14)
         assert np.max(np.abs(got - unshifted)) > 1e-3 * np.max(np.abs(got - c))
+
+
+def _vent_transport(
+    vents: dict, **options: object
+) -> tuple[Mesh, SimConfig, TransportSolver, ConcentrationBoundary]:
+    config = vent_config(vents, **options)
+    mesh = Mesh(config)
+    physics = ParticlePhysics(config)
+    boundary = ConcentrationBoundary(mesh, config, physics, BoundaryRegistry(config))
+    return mesh, config, TransportSolver(mesh, config, physics, boundary), boundary
+
+
+def _vent_faces_only(mesh: Mesh, config: SimConfig) -> FaceVelocities:
+    """Zero everywhere but the faces the boundary writes, the vents among them."""
+    u, v, _ = allocate_fields(mesh)
+    StaggeredBoundary(mesh, config).apply_normal_velocity(u, v)
+    return FaceVelocities.copy_of(u, v)
+
+
+def _closed_box_faces(
+    vents: dict,
+) -> tuple[Mesh, SimConfig, FaceVelocities, np.ndarray]:
+    """The converged faces of a box whose only openings are the vents, and their imbalance.
+
+    Air 55 times as viscous, as tests/test_solver_staggered.py's vent solves.
+    """
+    raw = vent_raw(vents, supply=False, returns=False)
+    raw["fluid"]["viscosity"] = 1.0e-3
+    raw["solver"].update(
+        stopping_rule="error_estimate",
+        max_simple_iter=3000,
+        iteration_error_tol=1.0e-6,
+        mass_imbalance_tol=1.0e-10,
+    )
+    config = SimConfig.from_dict(raw)
+    mesh = Mesh(config)
+    boundary = StaggeredBoundary(mesh, config)
+    solver = StaggeredSolver(mesh, config, boundary)
+    solver.solve_steady()
+    assert solver.converged
+    faces = solver.face_velocities
+    assert faces is not None
+    imbalance = PressureCorrector(mesh, config, boundary).mass_imbalance(
+        np.array(faces.u), np.array(faces.v)
+    )
+    return mesh, config, faces, imbalance
+
+
+@pytest.mark.unit
+class TestVents:
+    """The vents in the transport step and its budget (ADR-014 J, step 0b)."""
+
+    def test_a_discharge_enters_the_inflow_at_velocity_span_and_concentration(
+        self,
+    ) -> None:
+        vent = {**DISCHARGE, "concentration": [400.0]}
+        mesh, config, solver, _ = _vent_transport({"discharge": vent})
+        faces = _vent_faces_only(mesh, config)
+        dt = 0.5 * solver.stable_dt(faces, 0)
+        c = np.zeros(mesh.cell_type.shape)
+        c = solver.solve_timestep(c, faces, 0, dt)
+        # 0.5 m/s over 0.25 m carrying 400 per cubic metre, the supply clean.
+        assert solver.budget[0].inflow == pytest.approx(
+            0.5 * 0.25 * 400.0 * dt, rel=1e-14
+        )
+        # It lands in the two cells above the vent.
+        assert c[4, 7] > 0.0 and c[4, 8] > 0.0
+
+    def test_an_exhaust_books_its_outflow_and_no_vent_face_deposits(self) -> None:
+        # A clean discharge balances the exhaust: a fixed-flow outlet needs an
+        # inlet to drive the room (config.py).
+        mesh, config, solver, boundary = _vent_transport(
+            {"discharge": DISCHARGE, "exhaust": {**EXHAUST, "velocity": 0.5}},
+            supply=False,
+            returns=False,
+        )
+        faces = _vent_faces_only(mesh, config)
+        dt = 0.5 * solver.stable_dt(faces, 0)
+        live = mesh.cell_type != SOLID
+        c = np.where(live, 100.0, 0.0)
+        solver.solve_timestep(c, faces, 0, dt)
+        budget = solver.budget[0]
+        # Out through 0.25 m at 0.5 m/s from cells at 100 per cubic metre.
+        assert budget.outflow == pytest.approx(0.5 * 0.25 * 100.0 * dt, rel=1e-14)
+        assert budget.inflow == 0.0
+        # The box's wall faces deposit; its two vent faces do not.
+        cond = boundary.faces_for(0)
+        box_walls = (cond.deposition_u[:, 1:-1] > 0.0).sum() + (
+            cond.deposition_v[1:-1, :] > 0.0
+        ).sum()
+        assert box_walls == 4 + 4 + 4 - 2 - 2
+        assert budget.deposited["obstacle"] > 0.0
+
+    def test_a_recirculating_pair_books_equal_inflow_and_outflow(self) -> None:
+        """The intake's outflow returns through the discharge, every step."""
+        vents = {
+            "discharge": {**DISCHARGE, "recirculate_from": "intake"},
+            "intake": INTAKE,
+        }
+        mesh, config, faces, _ = _closed_box_faces(vents)
+        physics = ParticlePhysics(config)
+        boundary = ConcentrationBoundary(
+            mesh, config, physics, BoundaryRegistry(config)
+        )
+        solver = TransportSolver(mesh, config, physics, boundary)
+        dt = solver.stable_dt(faces, 0)
+        x, y = np.meshgrid(mesh.xc, mesh.yc)
+        c = np.where(mesh.cell_type != SOLID, 50.0 + 40.0 * x + 30.0 * y, 0.0)
+        for _ in range(40):
+            c = solver.solve_timestep(c, faces, 0, dt)
+        budget = solver.budget[0]
+        assert budget.outflow > 0.0
+        assert budget.inflow == pytest.approx(budget.outflow, rel=1e-12)
+        # Filtered, the discharge returns the passed fraction of the intake's.
+        vents["discharge"]["hepa_filtered"] = True
+        config = vent_config(vents, supply=False, returns=False)
+        filtered = ConcentrationBoundary(
+            mesh, config, physics, BoundaryRegistry(config)
+        )
+        solver = TransportSolver(mesh, config, physics, filtered)
+        c = np.where(mesh.cell_type != SOLID, 50.0 + 40.0 * x + 30.0 * y, 0.0)
+        c = solver.solve_timestep(c, faces, 0, dt)
+        passed = 1.0 - physics.hepa_efficiency(0)
+        assert solver.budget[0].inflow == pytest.approx(
+            passed * solver.budget[0].outflow, rel=1e-12
+        )
+
+    def test_a_uniform_field_stays_uniform_under_a_recirculating_pair(self) -> None:
+        """REQ-T11 in a box whose only openings are a recirculating pair.
+
+        Deposition and settling off, no source. The departure is held to
+        the per-cell imbalance bound of tests/test_constancy.py, max |b_P| T
+        / (rho V_P), plus rounding. A clean discharge in the same box empties
+        the cells above it, so the recirculation is what keeps the field.
+        """
+        vents = {
+            "discharge": {**DISCHARGE, "recirculate_from": "intake"},
+            "intake": INTAKE,
+        }
+        mesh, config, faces, imbalance = _closed_box_faces(vents)
+        physics = ParticlePhysics(config)
+        live = mesh.cell_type != SOLID
+
+        def march(discharge: dict) -> np.ndarray:
+            cfg = vent_config(
+                {"discharge": discharge, "intake": INTAKE}, supply=False, returns=False
+            )
+            real = ConcentrationBoundary(mesh, cfg, physics, BoundaryRegistry(cfg))
+            quiet = dataclasses.replace(
+                real.faces_for(0),
+                deposition_u=np.zeros(u_shape(mesh)),
+                deposition_v=np.zeros(v_shape(mesh)),
+                settling_v=np.zeros(v_shape(mesh), dtype=bool),
+            )
+            solver = TransportSolver(
+                mesh,
+                cfg,
+                ScalarPhysics(settling=0.0, diffusion=1.0e-5),
+                FixedConditions(quiet),
+            )
+            dt = solver.stable_dt(faces, 0)
+            c = np.where(live, 1.0, 0.0)
+            for _ in range(200):
+                c = solver.solve_timestep(c, faces, 0, dt)
+            return c, 200 * dt
+
+        c, t_total = march(vents["discharge"])
+        volume = np.outer(mesh.dy_cell, mesh.dx_cell)
+        bound = float((np.abs(imbalance) * t_total / (config.rho * volume))[live].max())
+        assert np.abs(c[live] - 1.0).max() <= bound + 1.0e-12
+        clean, _ = march(DISCHARGE)
+        assert np.abs(clean[live] - 1.0).max() > 0.1

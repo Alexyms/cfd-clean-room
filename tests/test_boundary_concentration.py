@@ -32,6 +32,7 @@ from src.config import SimConfig
 from src.mesh import SOLID, Mesh
 from src.particles import ParticlePhysics
 from src.staggered import allocate_fields
+from tests.vent_cases import DISCHARGE, EXHAUST, INTAKE, vent_config
 from validation.cases import CONFIG_DIR, case_path, load_case
 
 SIZES = [0.1e-6, 0.3e-6, 0.5e-6, 1.0e-6, 5.0e-6]
@@ -670,3 +671,61 @@ def test_the_cavity_lid_is_a_ceiling_to_the_scalar_layer() -> None:
         )
         assert not faces.inflow_v.any() and not faces.inflow_u.any()
         assert not faces.settling_v[ny, :].any()
+
+
+@pytest.mark.unit
+class TestVents:
+    """The vents' scalar conditions (ADR-014 J, step 0b)."""
+
+    def _faces(self, **vents: dict) -> tuple[ConcentrationFaces, ParticlePhysics]:
+        config = vent_config(vents)
+        mesh = Mesh(config)
+        physics = ParticlePhysics(config)
+        boundary = ConcentrationBoundary(
+            mesh, config, physics, BoundaryRegistry(config)
+        )
+        return boundary.faces_for(0), physics
+
+    def test_a_discharge_carries_its_concentration_hepa_reduced_when_filtered(
+        self,
+    ) -> None:
+        faces, physics = self._faces(discharge={**DISCHARGE, "concentration": [400.0]})
+        assert faces.inflow_v[4, 7] == faces.inflow_v[4, 8] == 400.0
+        filtered = {**DISCHARGE, "concentration": [400.0], "hepa_filtered": True}
+        faces, _ = self._faces(discharge=filtered)
+        passed = 400.0 * (1.0 - physics.hepa_efficiency(0))
+        assert faces.inflow_v[4, 7] == passed
+        # Without the key the discharge is clean, as the supply is.
+        faces, _ = self._faces(discharge=DISCHARGE)
+        assert faces.inflow_v[4, 7] == 0.0
+
+    def test_no_vent_face_deposits_and_the_box_keeps_its_other_walls(self) -> None:
+        plain, _ = self._faces()
+        faces, _ = self._faces(discharge=DISCHARGE, exhaust=EXHAUST)
+        assert faces.surface_v[4, 7] == faces.surface_v[4, 8] == SURFACE_NONE
+        assert faces.surface_u[1, 10] == faces.surface_u[2, 10] == SURFACE_NONE
+        assert faces.deposition_v[4, 7] == faces.deposition_u[1, 10] == 0.0
+        assert faces.surface_v[4, 6] == faces.surface_v[4, 9] == SURFACE_FLOOR
+        assert faces.surface_u[0, 10] == faces.surface_u[3, 10] == SURFACE_WALL
+        changed_u = plain.surface_u != faces.surface_u
+        changed_v = plain.surface_v != faces.surface_v
+        assert np.argwhere(changed_u).tolist() == [[1, 10], [2, 10]]
+        assert np.argwhere(changed_v).tolist() == [[4, 7], [4, 8]]
+        assert np.argwhere(faces.vent_u).tolist() == [[1, 10], [2, 10]]
+        assert np.argwhere(faces.vent_v).tolist() == [[4, 7], [4, 8]]
+        assert plain.vent_u is None and plain.vent_v is None
+
+    def test_a_recirculating_discharge_names_its_intake(self) -> None:
+        vent = {**DISCHARGE, "recirculate_from": "intake", "hepa_filtered": True}
+        faces, physics = self._faces(discharge=vent, intake=INTAKE)
+        (pair,) = faces.recirculation
+        assert np.argwhere(pair.intake_u).tolist() == [[1, 6], [2, 6]]
+        assert not pair.intake_v.any() and not pair.discharge_u.any()
+        assert np.argwhere(pair.discharge_v).tolist() == [[4, 7], [4, 8]]
+        assert pair.passed == 1.0 - physics.hepa_efficiency(0)
+        # The value is the solver's to form each step; the static one is zero.
+        assert faces.inflow_v[4, 7] == 0.0
+        unfiltered, _ = self._faces(
+            discharge={**DISCHARGE, "recirculate_from": "intake"}, intake=INTAKE
+        )
+        assert unfiltered.recirculation[0].passed == 1.0
