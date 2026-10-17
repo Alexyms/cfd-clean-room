@@ -83,7 +83,7 @@ Diffusion still crosses no face of a SOLID cell. A vent is not a wall: its
 faces are not wall-function faces, the cell beside it holds no eps and takes
 no wall production from it, and a cell beside a vent and a wall elsewhere
 keeps the wall function on its wall faces only. The model and
-TurbulenceBoundary read the vents from ``boundary_staggered.vent_runs``, the
+TurbulenceBoundary read the vents from ``boundary_vents.vent_runs``, the
 derivation the velocity layer reads.
 """
 
@@ -94,12 +94,8 @@ from dataclasses import dataclass
 import numpy as np
 
 from src.boundary_registry import VELOCITY_INLET, BoundaryRegistry
-from src.boundary_staggered import (
-    StaggeredBoundary,
-    VentRun,
-    vent_face_masks,
-    vent_runs,
-)
+from src.boundary_staggered import StaggeredBoundary
+from src.boundary_vents import VentRun, vent_face_masks, vent_runs
 from src.config import RNG, STANDARD, UPWIND, SimConfig
 from src.mesh import SOLID, Mesh
 from src.scalar_scheme import (
