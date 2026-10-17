@@ -18,7 +18,8 @@ Each solve runs from rest through the committed StaggeredSolver of TREE,
 imported from TREE, with nothing replaced but the class, wrapped so its
 faces can be read; ``solve_steady`` is called with no ``initial`` and no
 ``resume``. The record, results/builder60/hash_LABEL.json of the main
-checkout, holds the face hash (SHA-256 over u's bytes then v's, as
+checkout (LABEL ending in --suffix when given, as the base
+commit's control runs do), holds the face hash (SHA-256 over u's bytes then v's, as
 docs/reports/probe41/outlet41.py), the stop, the outer count, the wall
 time and the process count. The hash of record each is compared with is
 docs/reports/multigrid_default.md's table (tables54 hashes) or the kept
@@ -119,6 +120,7 @@ def main() -> None:
     parser.add_argument("path", nargs="?")
     parser.add_argument("--root", required=True)
     parser.add_argument("--concurrent", type=int, default=1)
+    parser.add_argument("--suffix", default="", help="appended to the label")
     args = parser.parse_args()
     root = Path(args.root).resolve()
     kept = kept_solvers(root)
@@ -146,6 +148,7 @@ def main() -> None:
         solver = solve_raw(root, record["raw"])
         label = args.name
     wall = time.perf_counter() - t0
+    label += args.suffix
     faces = solver.face_velocities
     out = {
         "label": label,
