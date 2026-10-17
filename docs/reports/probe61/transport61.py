@@ -31,6 +31,7 @@ import os
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 
 import argparse
+import importlib
 import json
 import math
 import sys
@@ -52,6 +53,10 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(_TREE))
 sys.path.insert(0, str(ROOT / "docs" / "reports" / "probe47"))
 sys.path.insert(0, str(ROOT / "docs" / "reports" / "probe46"))
+# prompt 61: the tree's src imported before the probe modules, which put the
+# main checkout on the path; every later import of src reuses these.
+importlib.import_module("src.boundary_concentration")
+importlib.import_module("src.solver_transport")
 
 import transport46  # noqa: E402
 import transport47  # noqa: E402
