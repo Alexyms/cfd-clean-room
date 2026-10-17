@@ -77,7 +77,9 @@ None reads as zero (REQ-T06, ADR-007).
 
 The budget (ADR-011 F). ``MassBudget``, one per class, is written by the
 solver from the face fluxes it subtracts from the cells and the source array
-it adds, in the same step, and by nothing else. ``FieldHistory`` is the
+it adds, in the same step, and by nothing else; a restarted march hands back
+the totals its checkpoint carried with ``restore_budgets`` and steps on
+(ADR-014 D, step 3). ``FieldHistory`` is the
 output contract for Phase 7's animation; the solver never calls it, since it
 does not own the loop.
 
@@ -91,7 +93,8 @@ are the production types.
 
 import logging
 import math
-from dataclasses import dataclass, field
+from collections.abc import Sequence
+from dataclasses import dataclass, field, replace
 from os import PathLike
 from typing import Protocol
 
@@ -141,7 +144,8 @@ class MassBudget:
 
     Every term is a number of particles per metre of depth, since ``C`` is
     a number concentration and the depth is one metre. Written by
-    ``TransportSolver.solve_timestep`` only; tests and Phase 4 read it.
+    ``TransportSolver.solve_timestep`` only, and set whole from a checkpoint
+    by ``TransportSolver.restore_budgets``; tests and Phase 4 read it.
 
     Parameters
     ----------
@@ -390,7 +394,8 @@ class TransportSolver:
     Attributes
     ----------
     budget : list[MassBudget]
-        One per class, written by ``solve_timestep`` only.
+        One per class, written by ``solve_timestep`` only, and set whole
+        from a checkpoint by ``restore_budgets``.
     last_diffusion_sweeps : int
         Jacobi sweeps the last implicit solve took.
     diffusion_converged : bool
@@ -523,6 +528,45 @@ class TransportSolver:
     # ------------------------------------------------------------------
     # Public interface
     # ------------------------------------------------------------------
+
+    def restore_budgets(self, budgets: Sequence[MassBudget]) -> None:
+        """Continue the budgets a checkpointed march carried (ADR-014 D, step 3).
+
+        A restarted march sets each class's budget to the one its checkpoint
+        holds and then steps on, so the next step books onto the totals the
+        interrupted march had reached; ``solve_timestep`` writes the budget
+        from then on, as before.
+
+        Parameters
+        ----------
+        budgets : Sequence[MassBudget]
+            One per class, in class order; copied, so a later change to an
+            argument cannot reach the solver's.
+
+        Raises
+        ------
+        TypeError
+            If an element is not a MassBudget.
+        ValueError
+            If there is not one per class, or a budget's ``deposited`` keys
+            are not the four deposition surfaces.
+        """
+        if len(budgets) != self._n_classes:
+            raise ValueError(
+                f"restore_budgets needs one budget per class ({self._n_classes}), "
+                f"got {len(budgets)}"
+            )
+        for k, budget in enumerate(budgets):
+            if not isinstance(budget, MassBudget):
+                raise TypeError(
+                    f"budget {k} must be a MassBudget, got {type(budget).__name__}"
+                )
+            if tuple(budget.deposited) != DEPOSIT_SURFACES:
+                raise ValueError(
+                    f"budget {k} books deposition to {list(budget.deposited)}, not "
+                    f"{list(DEPOSIT_SURFACES)}"
+                )
+        self.budget = [replace(b, deposited=dict(b.deposited)) for b in budgets]
 
     def stable_dt(
         self,
