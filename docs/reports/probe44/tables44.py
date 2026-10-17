@@ -152,7 +152,7 @@ def row_of(rec: dict) -> dict:
 
 
 def _cell(text: str) -> str:
-    """A cell's text with its own pipes escaped, so GFM keeps it one cell (ADR-014 I)."""
+    """A cell's text with its pipes escaped, so GFM keeps it one cell (ADR-014 I)."""
     return text.replace("|", "\\|")
 
 

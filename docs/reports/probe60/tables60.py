@@ -71,7 +71,7 @@ def table(headers: list[str], rows: list[list[str]]) -> str:
 
 
 def hashes(results: Path) -> str:
-    """Prediction (a): each case from rest under the branch against its hash of record."""
+    """Prediction (a): each case from rest against its hash of record."""
     rows = []
     for label, source, origin in CASES:
         kept = load(results / source)

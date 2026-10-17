@@ -212,6 +212,10 @@ had restored every file: `results/builder60/suite_full.txt`, every test passed.
   remote before this step (after `git fetch --prune` the remote holds one branch besides
   `main`, `docs/ecr-003-pressure-solver`, not merged), so only the 16 merged
   local branches were deleted (`results/builder60/deleted_branches.txt`).
-  The docstring reflow covered the files the batch and the step changed under `src/` and
-  `tests/` and `field43.py`; `tables44.py` and `tables46.py`, archived generators whose only
-  change is the cell escape, keep their long usage lines.
+  The docstring reflow covered the docstring and comment lines of the files the batch and the
+  step changed under `src/` and `tests/`, of `field43.py`, and of the step's own additions to
+  the generators. Review 60 found ten lines it had missed (seven in `tests/test_stopping.py`,
+  three in the generators), and prompt 60b reflowed them. Lines over 88 columns that remain
+  are code that ruff does not split (an f-string inside a `raise`, a `# type: ignore`
+  comment) and the older docstring and usage lines of `tables44.py` and `tables46.py`,
+  archived generators whose only change in this branch is the cell escape.
