@@ -206,6 +206,14 @@ had restored every file: `results/builder60/suite_full.txt`, every test passed.
   has to give.
 - **`src/io_manager.py` exists from step 0**, holding only the steady checkpoint's group, as
   prompt 60 allowed; ADR-014 G lists it for step 3.
+- **`io_manager` depends on `solver_staggered`, not on the three modules section G lists.**
+  Section G's dependency line reads `io_manager.py -> solver_transport (FieldHistory),
+  staggered (FaceVelocities), turbulence (TurbulenceState)`. The built module reads and
+  writes a `SteadyCheckpoint` and its `FlowState`, which `src/solver_staggered.py` defines, and
+  imports only those two, so SYSTEM.md section 3.1 shows the single edge `io_manager ->
+  solver_staggered`. Step 3's `write_flow_state` imports the solver module for the same reason,
+  and the edge to `solver_transport` for `FieldHistory` is step 3's own. No cycle: nothing the
+  module imports imports it.
 - **Section I's items.** None was struck. `scripts/preflight.py` was added; the pipes were
   located by rendering the four reports' tables by GFM's rule (51 rows of 54 tables) and
   escaped; the 19 remote branches section I counted at 809d1c6 had been deleted on the
