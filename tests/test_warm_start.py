@@ -303,20 +303,25 @@ class TestWarmStart:
 @pytest.mark.integration
 class TestResume:
     @pytest.mark.parametrize("name", list(FIXTURES))
-    @pytest.mark.parametrize("cut", [1, 57, 150])
+    @pytest.mark.parametrize("cut", [1, 57, 150, -30])
     def test_a_capped_solve_resumed_is_the_uninterrupted_solve(
         self, name: str, cut: int, converged: dict
     ) -> None:
         """Cut at CUT outer and resumed, a solve reaches the uninterrupted one bitwise.
 
-        The cuts fall before the rule's window fills (1, 57) and after (150),
-        and both solves stop by the rule, so the stop's iteration is pinned
-        as well as the fields. Defects caught: nu_t rebuilt from k and eps on
-        resume (the warm start's rule); the rule's window not restored (a
-        later stop); the residual history or the cap hits restarted; the
+        The cuts fall before the rule's window fills (1, 57), after it (150)
+        and 30 outer iterations before the uninterrupted stop (-30), where a
+        window not restored cannot fill again in time; both solves stop by
+        the rule, so the stop's iteration is pinned as well as the fields.
+        Defects caught: nu_t rebuilt from k and eps on resume (the warm
+        start's rule); the rule's window not restored (a stop 100 outer
+        iterations after the cut, caught at -30 only, since the rule reads
+        nothing older than its window); the residual history restarted; the
         outer count restarted, so the cap is not the total.
         """
         make = FIXTURES[name]
+        if cut < 0:
+            cut += len(converged[name].residual_history)
         cut_solve = _solved(make(cap=cut))
         assert cut_solve.stop_reason == CAP_STOP
         checkpoint = cut_solve.steady_checkpoint
@@ -324,6 +329,25 @@ class TestResume:
         resumed = _solved(make(), resume=checkpoint)
         _same_bits(resumed, converged[name])
         assert resumed.converged
+
+    def test_a_resume_carries_the_cap_hits(self) -> None:
+        """Corrections capped before the cut still count after it.
+
+        The channel with max_pressure_iter 2 caps every correction, so the
+        solve runs to max_simple_iter with a cap hit per outer iteration.
+        Defect caught: pressure_cap_hits reset on resume, which the two
+        fixtures, capped nowhere, cannot see.
+        """
+
+        def capped(cap: int) -> SimConfig:
+            config = _channel(cap)
+            object.__setattr__(config, "max_pressure_iter", 2)
+            return config
+
+        whole = _solved(capped(40))
+        assert whole.pressure_cap_hits == 40
+        resumed = _solved(capped(40), resume=_solved(capped(25)).steady_checkpoint)
+        _same_bits(resumed, whole)
 
     def test_a_resume_past_the_cap_takes_no_iteration(self, converged: dict) -> None:
         """A checkpoint at the cap resumed under the same cap stops there, unchanged.
