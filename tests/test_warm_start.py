@@ -25,6 +25,9 @@ docstring:
   solve: every field, the residual history, the stop and its iteration.
 - A solve whose fields went non-finite returns them and keeps no state: its
   flow_state and steady_checkpoint are None, not the previous solve's.
+- A resume refuses the checkpoint it cannot continue: a negative nu_t in a
+  live cell, k or eps not positive, a rule version or a count that is not
+  one.
 """
 
 from dataclasses import replace
@@ -36,7 +39,7 @@ import yaml
 import src.solver_staggered as solver_module
 from src.boundary_staggered import StaggeredBoundary
 from src.config import ERROR_ESTIMATE, VELOCITY_STEP, SimConfig
-from src.mesh import Mesh
+from src.mesh import SOLID, Mesh
 from src.momentum import MomentumPrediction
 from src.pressure import PressureCorrection
 from src.solver_staggered import (
@@ -117,6 +120,18 @@ def converged() -> dict[str, StaggeredSolver]:
     return {name: _solved(make()) for name, make in FIXTURES.items()}
 
 
+@pytest.fixture(scope="module")
+def capped_checkpoint() -> SteadyCheckpoint:
+    """The product fixture cut at 5 outer iterations, for edits into bad ones."""
+    return _solved(_product(cap=5)).steady_checkpoint
+
+
+def _live_cell() -> tuple[int, int]:
+    """The first non-SOLID cell of the product fixture's mesh, as an index."""
+    live = np.argwhere(Mesh(_product()).cell_type != SOLID)[0]
+    return int(live[0]), int(live[1])
+
+
 @pytest.mark.unit
 class TestFlowState:
     def _arrays(self, ny: int = 3, nx: int = 4) -> dict[str, np.ndarray]:
@@ -186,6 +201,58 @@ class TestFlowState:
                         == getattr(turbulence, name).tobytes()
                     )
         assert _solver(_channel()).flow_state is None
+
+
+@pytest.mark.unit
+class TestSteadyCheckpoint:
+    def _fields(self, **change: object) -> dict:
+        """A valid checkpoint's arguments (version 3, nothing run), with CHANGE."""
+        state = FlowState(np.zeros((3, 5)), np.zeros((4, 4)), np.zeros((3, 4)))
+        return {
+            "state": state,
+            "residual_history": (),
+            "velocity_steps": (),
+            "viscosity_steps": (),
+            "rule_version": 3,
+            "pressure_cap_hits": 0,
+        } | change
+
+    @pytest.mark.parametrize(
+        ("change", "error", "match"),
+        [
+            ({"rule_version": True}, TypeError, "rule_version must be an int"),
+            ({"rule_version": 3.0}, TypeError, "rule_version must be an int"),
+            ({"rule_version": -1}, ValueError, "rule_version must be non-negative"),
+            (
+                {"pressure_cap_hits": True},
+                TypeError,
+                "pressure_cap_hits must be an int",
+            ),
+            (
+                {"pressure_cap_hits": 2.0},
+                TypeError,
+                "pressure_cap_hits must be an int",
+            ),
+            (
+                {"pressure_cap_hits": -1},
+                ValueError,
+                "pressure_cap_hits must be non-negative",
+            ),
+        ],
+    )
+    def test_a_rule_version_or_cap_hit_count_that_is_not_one_is_refused(
+        self, change: dict, error: type, match: str
+    ) -> None:
+        """The unchanged checkpoint is valid, as is a None rule version (velocity_step).
+
+        Defects caught: the rule_version check removed; the pressure_cap_hits
+        check removed. A bool, a float or a negative count would then reach a
+        resume, which compares the version and carries the count on.
+        """
+        SteadyCheckpoint(**self._fields())
+        SteadyCheckpoint(**self._fields(rule_version=None))
+        with pytest.raises(error, match=match):
+            SteadyCheckpoint(**self._fields(**change))
 
 
 @pytest.mark.integration
@@ -465,3 +532,43 @@ class TestResume:
             )
         with pytest.raises(TypeError, match="state must be a FlowState"):
             SteadyCheckpoint((), (), (), (), None, 0)  # type: ignore[arg-type]
+
+    def test_a_negative_nu_t_in_a_live_cell_is_refused(
+        self, capped_checkpoint: SteadyCheckpoint
+    ) -> None:
+        """A checkpoint edited to a negative eddy viscosity is refused before the solve.
+
+        Defect caught: the resume's own nu_t check removed. The first
+        iteration's viscosity check refuses the same field, but only after the
+        solve's history and cap hits were reset, with another message.
+        """
+        nu_t = np.array(capped_checkpoint.state.nu_t)
+        nu_t[_live_cell()] = -1e-6
+        bad = replace(
+            capped_checkpoint, state=replace(capped_checkpoint.state, nu_t=nu_t)
+        )
+        solver = _solver(_product())
+        with pytest.raises(ValueError, match="resume's nu_t is negative"):
+            solver.solve_steady(resume=bad)
+        assert solver.residual_history == [] and solver.flow_state is None
+
+    @pytest.mark.parametrize("value", [0.0, -1.0])
+    @pytest.mark.parametrize("name", ["k", "eps"])
+    def test_k_or_eps_not_positive_is_refused_on_a_resume(
+        self, name: str, value: float, capped_checkpoint: SteadyCheckpoint
+    ) -> None:
+        """A resume refuses k or eps not positive in a live cell, before any iteration.
+
+        Defect caught: the resume's k and eps taken without KEpsilonModel.state,
+        so the first k and eps step refuses them instead, after the solve has
+        loaded the checkpoint's history.
+        """
+        field = np.array(getattr(capped_checkpoint.state, name))
+        field[_live_cell()] = value
+        bad = replace(
+            capped_checkpoint, state=replace(capped_checkpoint.state, **{name: field})
+        )
+        solver = _solver(_product())
+        with pytest.raises(ValueError, match="positive"):
+            solver.solve_steady(resume=bad)
+        assert solver.residual_history == []

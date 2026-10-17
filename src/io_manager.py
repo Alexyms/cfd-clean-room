@@ -93,14 +93,18 @@ def read_steady_checkpoint(path: str | Path) -> SteadyCheckpoint:
     ------
     KeyError
         If the file holds no ``/steady_checkpoint/`` group.
+    ValueError
+        If the group holds some but not all of ``k``, ``eps`` and ``nu_t``.
     """
     with h5py.File(path, "r") as run_file:
         if STEADY_CHECKPOINT not in run_file:
             raise KeyError(f"{path} holds no /{STEADY_CHECKPOINT}/ group")
         group = run_file[STEADY_CHECKPOINT]
         arrays = {name: group[name][()] for name in _FIELDS}
-        if all(name in group for name in _TURBULENCE):
-            arrays |= {name: group[name][()] for name in _TURBULENCE}
+        # Whichever of k, eps and nu_t the group holds: FlowState refuses a
+        # partial set, where keying on all three would read a damaged coupled
+        # checkpoint back as a laminar one, with no error.
+        arrays |= {name: group[name][()] for name in _TURBULENCE if name in group}
         series = {name: tuple(float(x) for x in group[name][()]) for name in _SERIES}
         attrs = dict(group.attrs)
     reason = attrs.get("stop_reason")

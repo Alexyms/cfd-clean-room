@@ -107,6 +107,26 @@ class TestTheGroup:
             assert run_file["config"][()] == b"kept"
             assert "k" not in run_file[STEADY_CHECKPOINT]
 
+    @pytest.mark.parametrize(
+        "dropped", [("k",), ("eps",), ("nu_t",), ("k", "eps"), ("eps", "nu_t")]
+    )
+    def test_a_group_with_some_of_k_eps_nu_t_is_refused(
+        self, tmp_path: Path, dropped: tuple[str, ...]
+    ) -> None:
+        """A coupled group missing datasets is refused, not read back as laminar.
+
+        Defect caught: the read keyed on all three being present, so a damaged
+        coupled checkpoint came back as a laminar one without an error, to
+        resume with no turbulence or to fail in the solve it was given to.
+        """
+        path = tmp_path / "run.h5"
+        write_steady_checkpoint(path, self._checkpoint(True))
+        with h5py.File(path, "a") as run_file:
+            for name in dropped:
+                del run_file[STEADY_CHECKPOINT][name]
+        with pytest.raises(ValueError, match="given together or not at all"):
+            read_steady_checkpoint(path)
+
     def test_a_file_without_the_group_is_refused(self, tmp_path: Path) -> None:
         """Defect caught: an empty checkpoint returned for a file that holds none."""
         path = tmp_path / "run.h5"
