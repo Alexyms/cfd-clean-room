@@ -250,7 +250,9 @@ class ScenarioManager:
 
         logger.info(
             "scenario %s: %d intervals, %d distinct flow states",
-            self._spec.base_path.name,
+            self._spec.path.name
+            if self._spec.path is not None
+            else f"on {self._spec.base_path.name}",
             len(self._spans),
             self.n_flow_states,
         )

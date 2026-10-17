@@ -7,7 +7,7 @@ load time, and provides typed attribute access. Satisfies REQ-C01
 
 import math
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from itertools import pairwise
 from os import PathLike
 from pathlib import Path
@@ -405,6 +405,9 @@ class ScenarioSpec:
         The events, in file order.
     t_end : float
         ``solver.t_end`` of the merged base, seconds.
+    path : Path or None
+        The scenario file, resolved, when the configuration was loaded from
+        one; None from ``SimConfig.from_dict``.
 
     Notes
     -----
@@ -416,6 +419,7 @@ class ScenarioSpec:
     base: Mapping[str, object]
     events: tuple[EventSpec, ...]
     t_end: float
+    path: Path | None = None
 
     @property
     def time_tolerance(self) -> float:
@@ -816,6 +820,8 @@ class SimConfig:
     def __init__(self, yaml_path: str | PathLike[str]) -> None:
         path = Path(yaml_path)
         self._validate_and_load(_read_mapping(path), path.resolve().parent)
+        if self.scenario is not None:
+            self.scenario = replace(self.scenario, path=path.resolve())
 
     @classmethod
     def from_dict(

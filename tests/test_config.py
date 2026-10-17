@@ -2729,7 +2729,11 @@ class TestScenarioInheritance:
         raw = _scenario_raw(tmp_path, [])
         path = tmp_path / "scenario.yaml"
         path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
-        assert SimConfig(path).scenario.base_path == (tmp_path / "base.yaml").resolve()
+        spec = SimConfig(path).scenario
+        assert spec.base_path == (tmp_path / "base.yaml").resolve()
+        # The scenario keeps its own file; a mapping has none (review 62 S4).
+        assert spec.path == path.resolve()
+        assert _load_scenario(tmp_path, raw).scenario.path is None
 
     def test_a_relative_base_with_no_directory_is_refused(self, tmp_path: Path) -> None:
         raw = _scenario_raw(tmp_path, [])
@@ -2849,6 +2853,7 @@ class TestScenarioEvents:
             (None, ValueError, r"Missing required key: .*\.duration'"),
             (True, TypeError, r"\.duration must be a number, got bool"),
             (float("nan"), ValueError, r"\.duration must be finite"),
+            (float("inf"), ValueError, r"\.duration must be finite"),
             (0.0, ValueError, r"\.duration must be positive"),
             (-5.0, ValueError, r"\.duration must be positive"),
         ],
@@ -3307,6 +3312,21 @@ class TestScenarioInitial:
         )
         raw = _scenario_raw(tmp_path, [self._initial(concentration=[1.0] * 4 + [-2.0])])
         _refused_scenario(tmp_path, raw, r"concentration\[4\] must be non-negative")
+
+    @pytest.mark.parametrize(
+        ("values", "error", "match"),
+        [
+            (1.0, TypeError, r" must be a list"),
+            ([1.0] * 4 + [True], TypeError, r"\[4\] must be a number, got bool"),
+            ([1.0] * 4 + [float("nan")], ValueError, r"\[4\] must be finite"),
+        ],
+    )
+    def test_the_concentrations_type_and_entries(
+        self, tmp_path: Path, values: object, error: type, match: str
+    ) -> None:
+        """Review 62 S7: the rate and emission rejections, on the third caller."""
+        raw = _scenario_raw(tmp_path, [self._initial(concentration=values)])
+        _refused_scenario(tmp_path, raw, rf"initial\.concentration{match}", error)
 
     def test_an_initial_starts_at_zero_with_no_duration(self, tmp_path: Path) -> None:
         event = self._initial(threshold_factor=100.0)

@@ -286,6 +286,12 @@ class TestFlowStates:
         with caplog.at_level(logging.INFO, logger="src.scenarios"):
             _manager(config)
         assert "5 intervals, 2 distinct flow states" in caplog.text
+        # A mapping has no file of its own; the line names its base (review 62 S4).
+        assert "scenario on clean_room_default.yaml: 5 intervals" in caplog.text
+        caplog.clear()
+        with caplog.at_level(logging.INFO, logger="src.scenarios"):
+            _manager(SimConfig(CONFIG_DIR / "scenario_door_leak.yaml"))
+        assert "scenario scenario_door_leak.yaml: 3 intervals" in caplog.text
 
     def test_a_breach_of_transport_keys_keeps_the_bases_fingerprint(
         self, tmp_path: Path
