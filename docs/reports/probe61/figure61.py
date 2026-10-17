@@ -35,7 +35,7 @@ WINDOWS = (
 ROOMS = (("default_320x120", "default room"), ("vents_320x120", "vented room"))
 SOLID = 1
 EVERY = 4
-SPEED_MAX = 0.6
+SPEED_MAX = 1.5
 
 
 def centres(data: np.lib.npyio.NpzFile) -> tuple[np.ndarray, np.ndarray]:

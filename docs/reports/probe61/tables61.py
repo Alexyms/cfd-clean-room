@@ -245,7 +245,18 @@ def sensors(results: Path) -> str:
             cells = []
             for sensor in PREDICTION_D_SENSORS:
                 a, b = d["sensors"][sensor], v["sensors"][sensor]
-                cells += [f"{a:.3e}", f"{b:.3e}", "raised" if b > a else "lowered"]
+                # Step 8's floor (transport47.FLOOR_RATIO of the source cell): a
+                # reading below it is no particle reaching the sensor.
+                seen = [
+                    "yes" if sensor in room["sensors_above_floor"] else "no"
+                    for room in (d, v)
+                ]
+                cells += [
+                    f"{a:.3e}",
+                    f"{b:.3e}",
+                    "raised" if b > a else "lowered",
+                    " / ".join(seen),
+                ]
             rows.append([f"{d['diameter'] * 1e6:g}", source, *cells])
     return table(
         [
@@ -254,9 +265,11 @@ def sensors(results: Path) -> str:
             "near_door default",
             "near_door vents",
             "near_door",
+            "near_door above the floor (default / vents)",
             "above_gap_1 default",
             "above_gap_1 vents",
             "above_gap_1",
+            "above_gap_1 above the floor (default / vents)",
         ],
         rows,
     )
@@ -306,7 +319,7 @@ def plants(results: Path) -> str:
             [
                 p["plant"],
                 p["file"],
-                ", ".join(t.split("::")[-1] for t in p.get("tests", [])),
+                ", ".join(t.removeprefix("tests/") for t in p.get("tests", [])),
                 p.get("planted", p.get("error", "")),
                 "caught" if p.get("caught") else "SURVIVED",
             ]
