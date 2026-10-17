@@ -6,6 +6,7 @@ time (REQ-C02).
 """
 
 import dataclasses
+from itertools import pairwise
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,7 @@ import yaml
 from src.config import (
     CFL_NUMBER_BOUND,
     DEFAULT_PRESSURE_PRECONDITIONER,
+    EVENT_TIME_RTOL,
     MULTIGRID,
     PRESSURE_JACOBI,
     PRESSURE_PRECONDITIONERS,
@@ -2909,6 +2911,65 @@ class TestScenarioEvents:
             "set": {"segment": "hepa_supply", "keys": {"hepa_filtered": False}},
         }
         _load_scenario(tmp_path, _scenario_raw(tmp_path, [_door_open(), supply]))
+
+    def _wall_event(self, name: str, start: float, duration: float) -> dict:
+        return {
+            "name": name,
+            "start": start,
+            "duration": duration,
+            "set": {"segment": "door", "keys": {"deposition_surface": "none"}},
+        }
+
+    def test_back_to_back_events_meet_whatever_the_rounding(
+        self, tmp_path: Path
+    ) -> None:
+        """Review 62 S5: 0.1 + 0.2 is above 0.3 in doubles."""
+        assert 0.1 + 0.2 > 0.3
+        first = self._wall_event("first", 0.1, 0.2)
+        second = self._wall_event("second", 0.3, 0.2)
+        spec = _load_scenario(
+            tmp_path, _scenario_raw(tmp_path, [first, second])
+        ).scenario
+        # One instant at 0.3 s, no sliver interval, and one event active there.
+        assert spec.times() == (0.0, 0.1, 0.3, 0.5, 60.0)
+        assert [e.name for e in spec.active(0.3)] == ["second"]
+        assert [e.name for e in spec.active(0.1)] == ["first"]
+
+    def test_an_overlap_just_past_the_tolerance_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        tolerance = EVENT_TIME_RTOL * 60.0
+        second = self._wall_event("second", 0.3 - 2.0 * tolerance, 0.2)
+        raw = _scenario_raw(tmp_path, [self._wall_event("first", 0.1, 0.2), second])
+        _refused_scenario(
+            tmp_path, raw, r"'first' .* and 'second' .* both change segment 'door'"
+        )
+        # Within the tolerance the two still meet.
+        second["start"] = 0.3 - 0.5 * tolerance
+        _load_scenario(tmp_path, raw)
+
+    def test_events_on_two_segments_leave_no_sliver_interval(
+        self, tmp_path: Path
+    ) -> None:
+        supply = {
+            "name": "supply_breach",
+            "start": 0.3,
+            "duration": 5.0,
+            "set": {"segment": "hepa_supply", "keys": {"hepa_filtered": False}},
+        }
+        events = [self._wall_event("door_seal", 0.1, 0.2), supply]
+        spec = _load_scenario(tmp_path, _scenario_raw(tmp_path, events)).scenario
+        assert spec.times() == (0.0, 0.1, 0.3, 5.3, 60.0)
+        assert [e.name for e in spec.active(0.3)] == ["supply_breach"]
+
+    def test_an_end_within_the_tolerance_of_t_end_loads(self, tmp_path: Path) -> None:
+        """The end's rounding past t_end is not an end after it."""
+        raw = _scenario_raw(tmp_path, [self._wall_event("late", 0.1, 0.2)])
+        raw["solver"]["t_end"] = 0.3
+        assert 0.1 + 0.2 > 0.3
+        spec = _load_scenario(tmp_path, raw).scenario
+        assert spec.times() == (0.0, 0.1, 0.3)
+        assert all(b - a > spec.time_tolerance for a, b in pairwise(spec.times()))
 
 
 @pytest.mark.unit

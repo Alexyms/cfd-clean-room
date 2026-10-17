@@ -251,6 +251,45 @@ PLANTS.append(
 )
 
 
+# Prompt 62b (review 62 S5): the one time tolerance.
+PLANTS.append(
+    (
+        "time (62b): overlap read without the tolerance",
+        CONFIG,
+        "                if overlap > EVENT_TIME_RTOL * self.t_end:\n",
+        "                if overlap > 0.0:\n",
+        [TESTS_CONFIG],
+    )
+)
+PLANTS.append(
+    (
+        "time (62b): times() keeps slivers",
+        CONFIG,
+        "            if point - out[-1] > tolerance and self.t_end - point > tolerance:\n",
+        "            if out[-1] < point < self.t_end:\n",
+        [TESTS_CONFIG],
+    )
+)
+PLANTS.append(
+    (
+        "time (62b): is_active read without the tolerance",
+        CONFIG,
+        "        return event.start - tolerance <= t < event.end - tolerance\n",
+        "        return event.start <= t < event.end\n",
+        [TESTS_CONFIG, TESTS_SCENARIOS],
+    )
+)
+PLANTS.append(
+    (
+        "time (62b): t_end read without the tolerance",
+        CONFIG,
+        "            if start + duration - self.t_end > EVENT_TIME_RTOL * self.t_end:\n",
+        "            if start + duration > self.t_end:\n",
+        [TESTS_CONFIG],
+    )
+)
+
+
 def replace_once(path: Path, old: str, new: str) -> None:
     """Replace ``old`` by ``new`` once, keeping the file's newlines."""
     text = path.read_text(encoding="utf-8", newline="")

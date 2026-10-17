@@ -417,26 +417,69 @@ class ScenarioSpec:
     events: tuple[EventSpec, ...]
     t_end: float
 
+    @property
+    def time_tolerance(self) -> float:
+        """Seconds within which two event times are one instant.
+
+        ``EVENT_TIME_RTOL`` times ``t_end``: the overlap check, ``times`` and
+        ``active`` read the same instant, so they cannot disagree.
+        """
+        return EVENT_TIME_RTOL * self.t_end
+
     def times(self) -> tuple[float, ...]:
         """Every interval boundary: 0, each event's start and end, and t_end.
 
         Returns
         -------
         tuple[float, ...]
-            Sorted, without repeats. An initial event adds nothing.
+            Sorted. A time within ``time_tolerance`` of the boundary before
+            it, or of t_end, is that boundary, so no interval is shorter
+            than the tolerance. An initial event adds nothing.
         """
-        points = {0.0, self.t_end}
-        for event in self.events:
-            if event.end is not None:
-                points.update((event.start, event.end))
-        return tuple(sorted(points))
+        tolerance = self.time_tolerance
+        inner = sorted(
+            point
+            for event in self.events
+            if event.end is not None
+            for point in (event.start, event.end)
+        )
+        out = [0.0]
+        for point in inner:
+            if point - out[-1] > tolerance and self.t_end - point > tolerance:
+                out.append(point)
+        out.append(self.t_end)
+        return tuple(out)
+
+    def is_active(self, event: EventSpec, t: float) -> bool:
+        """Whether ``event`` is in force at time t, to ``time_tolerance``.
+
+        Active from its start and expired at its end, each read as the
+        instant ``times`` keeps: ``start - tol <= t < end - tol``. An initial
+        event is never active; it sets the fields at t = 0.
+
+        Parameters
+        ----------
+        event : EventSpec
+            One of ``events``.
+        t : float
+            Seconds.
+
+        Returns
+        -------
+        bool
+        """
+        if event.end is None:
+            return False
+        tolerance = self.time_tolerance
+        return event.start - tolerance <= t < event.end - tolerance
 
     def active(self, t: float) -> tuple[EventSpec, ...]:
         """The events in force at time t: ``start <= t < start + duration``.
 
         An event is active from its start and has expired at its end, so a
-        time on a boundary belongs to the interval that begins there. An
-        initial event is never active; it sets the fields at t = 0.
+        time on a boundary belongs to the interval that begins there; both
+        are read to ``time_tolerance`` (``is_active``). An initial event is
+        never active; it sets the fields at t = 0.
 
         Parameters
         ----------
@@ -448,11 +491,7 @@ class ScenarioSpec:
         tuple[EventSpec, ...]
             In file order.
         """
-        return tuple(
-            event
-            for event in self.events
-            if event.end is not None and event.start <= t < event.end
-        )
+        return tuple(event for event in self.events if self.is_active(event, t))
 
     def mapping(self, events: tuple[EventSpec, ...]) -> dict:
         """The merged base with the boundary changes of ``events`` applied.
@@ -752,6 +791,13 @@ SCENARIO_RUN_KEYS: tuple[tuple[str, str], ...] = (
 # The relative tolerance a threshold key's diameter is matched to a class's
 # at: both are parsed from the same decimal text, so they agree to rounding.
 _DIAMETER_MATCH_RTOL = 1.0e-9
+# Two event times closer than this times solver.t_end are one instant (review
+# 62 S5). start + duration carries the rounding of a sum, about 1e-16 of the
+# times (0.1 + 0.2 is above 0.3), so two events written to meet would otherwise
+# overlap by that much or leave a sliver interval between them. 1e-9 of t_end
+# is 1.2e-7 s at t_end 120 s, far below a transport step (a few milliseconds on
+# the product grid at Courant 0.4) and far above the rounding.
+EVENT_TIME_RTOL = 1.0e-9
 
 
 class SimConfig:
@@ -1763,7 +1809,8 @@ class SimConfig:
             for b in events[i + 1 :]:
                 if a.segment is None or a.segment != b.segment:
                     continue
-                if a.start < b.end and b.start < a.end:
+                overlap = min(a.end, b.end) - max(a.start, b.start)
+                if overlap > EVENT_TIME_RTOL * self.t_end:
                     raise ValueError(
                         f"{SCENARIO_KEY}.events: '{a.name}' [{a.start}, {a.end}) and "
                         f"'{b.name}' [{b.start}, {b.end}) both change segment "
@@ -1815,7 +1862,7 @@ class SimConfig:
                 )
         else:
             duration = self._require_positive_float(event, "duration", ctx)
-            if start + duration > self.t_end:
+            if start + duration - self.t_end > EVENT_TIME_RTOL * self.t_end:
                 raise ValueError(
                     f"{ctx} ends at {start + duration} s, after solver.t_end "
                     f"({self.t_end} s)"

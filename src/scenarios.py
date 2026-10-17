@@ -41,7 +41,14 @@ import numpy as np
 
 from src.boundary_concentration import ConcentrationBoundary
 from src.boundary_registry import BoundaryRegistry
-from src.config import BoundarySpec, Initial, ScenarioSpec, SimConfig, Source
+from src.config import (
+    BoundarySpec,
+    EventSpec,
+    Initial,
+    ScenarioSpec,
+    SimConfig,
+    Source,
+)
 from src.mesh import SOLID, Mesh
 from src.particles import ParticlePhysics
 
@@ -226,16 +233,11 @@ class ScenarioManager:
                 )
             self._spans.append((t0, t1, names))
 
-        self._sources: list[tuple[float, float, np.ndarray]] = []
+        self._sources: list[tuple[EventSpec, np.ndarray]] = []
         for event in self._spec.events:
             if isinstance(event.change, Source):
-                assert event.end is not None
                 self._sources.append(
-                    (
-                        event.start,
-                        event.end,
-                        self._source_rates(event.name, event.change),
-                    )
+                    (event, self._source_rates(event.name, event.change))
                 )
         self._initial: tuple[float, ...] = (0.0,) * self._n_classes
         for event in self._spec.events:
@@ -322,7 +324,7 @@ class ScenarioManager:
         """The source rate of every class at time t, summed over active sources.
 
         A source is active from its start and has expired at its end, as
-        every event is (``ScenarioSpec.active``).
+        every event is, to the time tolerance (``ScenarioSpec.is_active``).
 
         Parameters
         ----------
@@ -337,8 +339,8 @@ class ScenarioManager:
             active: ``solve_timestep``'s ``sources``. New arrays.
         """
         total = np.zeros((self._n_classes, *self._open.shape), dtype=np.float64)
-        for start, end, rates in self._sources:
-            if start <= t < end:
+        for event, rates in self._sources:
+            if self._spec.is_active(event, t):
                 total += rates
         return {k: np.ascontiguousarray(total[k]) for k in range(self._n_classes)}
 
