@@ -275,3 +275,28 @@ The full suite at ae1484f, the last commit to change code or tests: 1,728 passed
 (`results/builder61/suite_full.txt`). The run at 89b02c0 failed one test, which enumerates the
 committed configuration files and did not know `clean_room_vents.yaml`
 (`results/builder61/suite_full_89b02c0.txt`); ae1484f adds it.
+
+## 13. Prompt 61b: review 61's fix pass
+
+Review 61 found one Bug (B1): the vent tests pinned one orientation of each vent kind on one
+obstacle and one uniform mesh. Its three plants, run against the tests at 8c756d1
+(`docs/reports/probe61/plants61b.py review`, `results/builder61b/plants_review.json`): the swap of
+`solid_high_v` and `solid_low_v` in the out terms was caught, by a route the review did not name
+(the swap books the box's top discharge as outflow); the north wall line and the unweighted
+recirculated mean survived. Commit 9a0388b adds the shelf of `tests/vent_cases.py` (a floating
+obstacle with a discharge and an exhaust under it, a discharge on each side and an exhaust on
+top) with a test per layer, a recirculating pair on a stretched mesh whose intake faces carry
+unequal fluxes, with a source and deposition in the room, and direct tests of `covers_face` and
+`coverage_on` with two obstacles whose top vents share an x range. Against them every plant of
+`plants61b.py all` was caught: the review's three, the five previously unbooked terms of
+`_vent_fluxes`, the west wall line, the exhaust-on-a-v-face cell of `_inflow`, a bottom face read
+one row low, a bottom face mapped to the wrong room edge, and `covers_face` without the obstacle's
+name (`results/builder61b/plants_item1.json`; its first three rows are the review's plants against
+the old selection, kept as the before record).
+
+Review S6: a recirculating pair whose flows differ is refused at load and on the mesh (baa85dd),
+each refusal caught by its plant (`plants_pair.json`). The transport's REQ-S16 clause, measured
+(review S5): results/builder35's hash plugin over the nine transport test files, at origin/main
+and at 776b36a, gives bitwise equal fields and budgets in every one of main's 60 step-taking tests
+(`results/builder61b/gate_cmp_776b36a.txt`; at 8c756d1 too, `gate_cmp_8c756d1.txt`). The full
+suite at 776b36a: 1,745 passed (`results/builder61b/suite_full.txt`).
