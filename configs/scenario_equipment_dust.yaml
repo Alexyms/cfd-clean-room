@@ -9,7 +9,9 @@
 # just above the litho tool's top, the square [3.80, 3.90] x [2.00, 2.10] m
 # (sixteen cells on 320x120, its edges on cell faces), emitting 1.0e4
 # particles per second per metre of depth of each class, spread uniformly
-# over the square's cells. Prompt 47's emission was continuous; here it
+# over the square's cells. The equal value for every class is an assumption
+# carried from prompt 47, not a measurement of a tool's emission by size; the
+# schema takes a value per class. Prompt 47's emission was continuous; here it
 # lasts 30 s from 10 s, an assumption, so the run shows the release and the
 # room's clearing after it. In two dimensions the source is a line source
 # (ADR-014 H).

@@ -229,6 +229,28 @@ PLANTS.append(
 )
 
 
+# Prompt 62b (review 62 B2): the source's class index.
+_RATES = "        rates[:, cells] = per_class[:, None]\n"
+PLANTS.append(
+    (
+        "source (62b): every class given class 0's value",
+        SCENARIOS,
+        _RATES,
+        "        rates[:, cells] = per_class[0]\n",
+        [TESTS_SCENARIOS],
+    )
+)
+PLANTS.append(
+    (
+        "source (62b): the classes reversed",
+        SCENARIOS,
+        _RATES,
+        "        rates[:, cells] = per_class[::-1, None]\n",
+        [TESTS_SCENARIOS],
+    )
+)
+
+
 def replace_once(path: Path, old: str, new: str) -> None:
     """Replace ``old`` by ``new`` once, keeping the file's newlines."""
     text = path.read_text(encoding="utf-8", newline="")

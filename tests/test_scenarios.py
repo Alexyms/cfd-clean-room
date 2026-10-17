@@ -526,6 +526,35 @@ class TestSources:
         assert (rates[0] > 0).sum() == 16
         assert float((rates[0] * volume).sum()) == pytest.approx(EMISSION, rel=1e-12)
 
+    @pytest.mark.parametrize("form", ["emission", "rate"])
+    def test_each_class_carries_its_own_value(self, tmp_path: Path, form: str) -> None:
+        """Review 62 B2: five different values, so a class can only match its own."""
+        values = [1.0e3, 2.0e3, 3.0e3, 5.0e3, 8.0e3]
+        event = _source(10.0, 30.0)
+        del event["source"]["emission"]
+        event["source"][form] = values
+        config = _scenario(tmp_path, [event], (320, 120))
+        mesh = Mesh(config)
+        rates = ScenarioManager(config, mesh).sources_at(10.0)
+        volume = np.outer(mesh.dy_cell, mesh.dx_cell)
+        inside = rates[0] > 0
+        # The 0.1 m square on 2.5 cm cells: sixteen cells of 6.25e-4 m^2.
+        assert inside.sum() == 16
+        for k, value in enumerate(values):
+            assert np.array_equal(rates[k] > 0, inside), k
+            if form == "emission":
+                assert float((rates[k] * volume).sum()) == pytest.approx(
+                    value, rel=1e-12
+                )
+                assert np.all(
+                    rates[k][inside] == pytest.approx(value / 0.01, rel=1e-12)
+                )
+            else:
+                assert np.all(rates[k][inside] == value), k
+                assert float((rates[k] * volume).sum()) == pytest.approx(
+                    value * 0.01, rel=1e-12
+                )
+
     def test_a_rate_is_applied_as_stated(self, tmp_path: Path) -> None:
         event = _source(10.0, 30.0)
         event["source"]["rate"] = [7.0] * 5
