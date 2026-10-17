@@ -773,7 +773,14 @@ as `mu_eff` is), `mesh.py`'s the breakpoints.
    paths listed in section B, one test per rule, and the four reference files load.
 2. `scenarios.py`: intervals, fingerprints, sources, conditions; `tests/test_scenarios.py`:
    event activation at its start and expiration at its end, overlap refused, two openings give
-   two states not four, a source's rate sums to its emission over the box.
+   two states not four, a source's rate sums to its emission over the box. *Note (step 0b,
+   2026-10-16, review 61 S1 and S2):* in a room with a recirculating pair the removal is
+   `MassBudget.outflow - MassBudget.inflow`, since the budget books the intake as outflow and
+   the discharge as inflow; the HEPA capture of a filtered discharge is inside that difference
+   and `deposited` is not. The gross terms are what close `MassBudget.residual()`, so a step
+   that reads removal reads the difference, as `docs/reports/probe61/transport61.py` does.
+   `vent_runs` and `ROOM_EDGE_OF_FACE` move to a small module both boundary layers import,
+   with `ROOM_EDGE_OF_FACE` beside the registry, when this step next edits the dependency map.
 3. `io_manager.py`: the run file, the checkpoint, the restart; `tests/test_io_manager.py`: the
    bitwise restart for a march and for a steady solve, the configuration-hash mismatch refused.
 4. `time_integration.py`, tier 1: `tests/test_time_integration.py`: the hand-over (the
@@ -965,7 +972,8 @@ on a tool's side and a cooling discharge on a tool's top converges under the sto
 
 **As built (step 0b, prompt 61, 2026-10-16): the departures from this section.** The section
 was built as written except where these say otherwise, each with its reason; the build and its
-measurements are `docs/reports/adr014_step0b.md`.
+measurements are `docs/reports/adr014_step0b.md`. *Departures 1, 3 and 4 ratified (orchestrator
+and Alex, 2026-10-16, review 61 S4) as amendments of the accepted section.*
 1. *No angled jet on a vent.* `u_velocity` and `v_velocity` are refused on a vent, where the
    section kept their domain-edge meaning. Three layers read the tangential velocity on an
    obstacle face as zero: the momentum wall stencil and its QUICK boundary form (the wall value
