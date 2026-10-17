@@ -2518,3 +2518,32 @@ class TestVents:
             r"no pressure_outlet, so nothing balances the flow: the stated outflow "
             r"0\.45 m\^2/s differs from the inflow 0\.5 m\^2/s",
         )
+
+
+@pytest.mark.unit
+def test_the_vents_file_is_the_default_room_with_three_vents() -> None:
+    """configs/clean_room_vents.yaml (prompt 61): every other key the default file's."""
+    with open(CONFIG_DIR / "clean_room_default.yaml", encoding="utf-8") as handle:
+        default = yaml.safe_load(handle)
+    with open(CONFIG_DIR / "clean_room_vents.yaml", encoding="utf-8") as handle:
+        vented = yaml.safe_load(handle)
+    assert {k: v for k, v in vented.items() if k != "boundaries"} == {
+        k: v for k, v in default.items() if k != "boundaries"
+    }
+    added = {
+        k: v for k, v in vented["boundaries"].items() if k not in default["boundaries"]
+    }
+    assert {
+        k: v for k, v in vented["boundaries"].items() if k in default["boundaries"]
+    } == (default["boundaries"])
+    assert sorted(added) == ["etch_exhaust", "rack_discharge", "rack_intake"]
+    config = SimConfig(CONFIG_DIR / "clean_room_vents.yaml")
+    discharge = config.boundaries["rack_discharge"]
+    assert (discharge.obstacle, discharge.face) == ("server_rack", "top")
+    assert discharge.recirculate_from == "rack_intake"
+    # The rack's discharge returns what its intake draws: equal flows.
+    intake = config.boundaries["rack_intake"]
+    assert discharge.velocity * (discharge.x_end - discharge.x_start) == pytest.approx(
+        intake.velocity * (intake.y_end - intake.y_start), rel=1e-12
+    )
+    assert config.boundaries["etch_exhaust"].face == "right"
