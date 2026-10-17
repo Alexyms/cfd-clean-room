@@ -34,8 +34,10 @@ its design pass, ADR-014 (`docs/ADR/ADR-014-scenarios-and-time-integration.md`, 
 written before any Phase 4 code as ADR-011 was for Phase 3. Alex accepted it the same day, the
 recommendation of each of its twelve decisions as written, with one amendment: equipment vents
 on the tools' faces, airflow only (its section J), built as step 0b before the scenario schema.
-Its build is under way in the order of its section G, step 0 (the housekeeping, the warm start
-and the steady checkpoint, prompt 60) first. Phases 5 through 7 have not begun.
+Its build is under way in the order of its section G: step 0 (the housekeeping, the warm start
+and the steady checkpoint, prompt 60, `docs/reports/adr014_step0.md`) is built and goes to
+review and test before its pull request; step 0b, the vents, is next. Phases 5 through 7 have
+not begun.
 
 The product room itself has never been solved, and on 2026-10-04 it was found that the laminar
 flow solver does not solve it. Its Reynolds number on the room height is
