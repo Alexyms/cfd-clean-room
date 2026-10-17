@@ -195,17 +195,6 @@ def edge_cell_inputs(mesh: Mesh, edge: str) -> tuple[np.ndarray, np.ndarray]:
     return coordinates, solid
 
 
-# The domain edge an obstacle face plays to the room: the room lies above an
-# obstacle's top face as it lies above the domain's bottom edge, so a velocity
-# into the room through the top face is the bottom edge's inward velocity.
-ROOM_EDGE_OF_FACE: dict[str, str] = {
-    "top": "bottom",
-    "bottom": "top",
-    "left": "right",
-    "right": "left",
-}
-
-
 @dataclass(frozen=True, eq=False)
 class ObstacleFace:
     """The mesh faces on one face of one obstacle that border the room (ADR-014 J).

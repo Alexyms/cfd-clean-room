@@ -1,0 +1,41 @@
+# Reference scenario: an equipment dust release (ADR-014 B, decision 7)
+#
+# The default room (configs/clean_room_default.yaml, the room without vents,
+# Alex's decision of 2026-10-17) with a particle source on the litho tool's
+# top for 30 s. A source changes no boundary, so the run has one flow state.
+#
+# The source is prompt 47's S2, as ECR-002 step 8 ran it
+# (docs/reports/ecr002_step8_product.md, section 2.5): a process emission
+# just above the litho tool's top, the square [3.80, 3.90] x [2.00, 2.10] m
+# (sixteen cells on 320x120, its edges on cell faces), emitting 1.0e4
+# particles per second per metre of depth of each class, spread uniformly
+# over the square's cells. The equal value for every class is an assumption
+# carried from prompt 47, not a measurement of a tool's emission by size; the
+# schema takes a value per class. Prompt 47's emission was continuous; here it
+# lasts 30 s from 10 s, an assumption, so the run shows the release and the
+# room's clearing after it. In two dimensions the source is a line source
+# (ADR-014 H).
+#
+# The run keys of the scenario's own (ADR-014 B): t_end 120 s, the Courant
+# number 0.4 (ADR-014 decision 2), a frame every 100 steps (about 0.36 s on
+# the L0 faces, T6 of docs/reports/probe59/tables59.md).
+
+scenario:
+  base: clean_room_default.yaml
+  events:
+    - name: litho_dust
+      start: 10.0
+      duration: 30.0
+      source:
+        x_start: 3.80
+        x_end: 3.90
+        y_start: 2.00
+        y_end: 2.10
+        emission: [1.0e+4, 1.0e+4, 1.0e+4, 1.0e+4, 1.0e+4]
+
+solver:
+  t_end: 120.0
+  output_interval: 100
+
+transport:
+  cfl_number: 0.4

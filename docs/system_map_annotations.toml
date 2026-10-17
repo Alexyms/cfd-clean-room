@@ -23,9 +23,13 @@ serves = ["REQ-S12.1"]
 responsibility = "Writes Dirichlet normal velocities exactly into the staggered domain-face entries and exposes the tangential wall values, wall distances, pressure outlets and wall faces as data for the momentum and pressure steps and the wall functions."
 serves = ["REQ-S12"]
 
+[modules."src/boundary_vents.py"]
+responsibility = "Derives the mesh faces each equipment vent covers on its obstacle face, from the staggered layout's obstacle-face inputs and the registry's first-match coverage, with the face masks the velocity, turbulence and concentration layers read, and refuses a vent that covers no face or a recirculating pair whose flows differ on the faces."
+serves = ["REQ-S12.1"]
+
 [modules."src/config.py"]
 responsibility = "Loads the YAML configuration into typed dataclasses and rejects missing keys, wrong types and out-of-range values at load time."
-serves = ["REQ-C01", "REQ-C02", "REQ-S10", "REQ-A02", "REQ-A03"]
+serves = ["REQ-C01", "REQ-C02", "REQ-C03", "REQ-S10", "REQ-A02", "REQ-A03"]
 
 [modules."src/constants.py"]
 responsibility = "Holds the physical constants shared by every module so that none of them defines its own copy."
@@ -62,6 +66,10 @@ serves = ["REQ-S07", "REQ-S09", "REQ-S14"]
 [modules."src/scalar_scheme.py"]
 responsibility = "Holds the cell-centred scalar scheme the transport solver and the k-epsilon model share: QUICK's face value bounded by the UMIST limiter, the advective flux along one axis with the inflow value or the upwind cell at a domain face, and the backward Euler solve of diffusion with a non-negative cell sink by Jacobi or, for k and eps, by diagonal-preconditioned conjugate gradients that fall back to Jacobi on the cap or a non-positive value, on per-face conductances with one step or a step per cell, with an optional mask of cells held at their value."
 serves = ["REQ-T12", "REQ-S15"]
+
+[modules."src/scenarios.py"]
+responsibility = "Turns a loaded scenario into its intervals between event boundaries, keys each interval's flow state by a fingerprint of the segment keys the velocity layer reads so transport-only events add no state, and gives the source rate of every class at a time, an interval's concentration boundary and the initial fields on the mesh; it solves and marches nothing."
+serves = []
 
 [modules."src/solver_staggered.py"]
 responsibility = "Runs steady SIMPLE on the staggered grid as one outer loop over the momentum predictor and the pressure correction, with the turbulence section one k and eps step and the relaxed eddy viscosity inside it, returning cell-centered fields through the harness's callback shape and exposing the final faces as FaceVelocities; stops by the velocity-step rule or, when configured, by the error-estimate rule."

@@ -27,7 +27,7 @@ answers the same question on one obstacle face, with the same rules (the
 first covering segment in configuration order, a wall where none covers),
 on the face coordinates ``staggered.obstacle_face_inputs`` derives. A vent's
 condition is the one its segment would prescribe on the domain edge the face
-plays to the room (``staggered.ROOM_EDGE_OF_FACE``): the room lies above an
+plays to the room (``ROOM_EDGE_OF_FACE``, below): the room lies above an
 obstacle's top face as it lies above the domain's bottom edge.
 """
 
@@ -37,7 +37,6 @@ from dataclasses import dataclass
 import numpy as np
 
 from src.config import OBSTACLE_LOCATION, BoundarySpec, SimConfig
-from src.staggered import ROOM_EDGE_OF_FACE
 
 EDGES: tuple[str, str, str, str] = ("bottom", "top", "left", "right")
 OBSTACLE: str = OBSTACLE_LOCATION
@@ -46,6 +45,16 @@ WALL: str = "wall"
 VELOCITY_INLET: str = "velocity_inlet"
 PRESSURE_OUTLET: str = "pressure_outlet"
 FIXED_FLOW_OUTLET: str = "fixed_flow_outlet"
+
+# The domain edge an obstacle face plays to the room: the room lies above an
+# obstacle's top face as it lies above the domain's bottom edge, so a velocity
+# into the room through the top face is the bottom edge's inward velocity.
+ROOM_EDGE_OF_FACE: dict[str, str] = {
+    "top": "bottom",
+    "bottom": "top",
+    "left": "right",
+    "right": "left",
+}
 
 
 @dataclass(frozen=True)

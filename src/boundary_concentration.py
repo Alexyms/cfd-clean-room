@@ -43,7 +43,7 @@ The conditions, per face, for particle class k:
   SOLID cell. There is no ``settling_u``: settling acts in -y.
 
 Equipment vents (ADR-014 J, step 0b), from the faces
-``boundary_staggered.vent_runs`` gives each, the derivation the velocity
+``boundary_vents.vent_runs`` gives each, the derivation the velocity
 layer reads:
 
 - A discharge's faces are inlet faces: ``inflow_u``, ``inflow_v`` carry its
@@ -76,7 +76,7 @@ from src.boundary_registry import (
     BoundaryRegistry,
     EdgeCoverage,
 )
-from src.boundary_staggered import VentRun, vent_face_masks, vent_runs
+from src.boundary_vents import VentRun, vent_face_masks, vent_runs
 from src.config import (
     DEPOSITION_CEILING,
     DEPOSITION_FLOOR,

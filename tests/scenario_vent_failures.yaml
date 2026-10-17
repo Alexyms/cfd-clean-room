@@ -1,0 +1,47 @@
+# Test fixture (prompt 62): the vented room's two vent failures as events.
+#
+# Extends configs/clean_room_vents.yaml, the default room with the server
+# rack's cooling fan (an intake on its left face that its top discharge
+# returns) and the etch chamber's process exhaust (ADR-014 J). Not a
+# reference scenario: the reference four extend the room without vents
+# (Alex's decision of 2026-10-17); vents enter step 1 here.
+#
+# - The rack's fan stops from 10 s for 10 s: its discharge and its intake
+#   both removed, one event each over the same interval. An empty
+#   replacement removes a segment and the coverage rule's wall takes its
+#   faces (the amendment of 2026-10-17), since a wall is refused on an
+#   obstacle face.
+# - The etch chamber's exhaust fails from 30 s for 10 s, removed the same
+#   way; the returns take the flow it drew.
+#
+# Three flow states: the room as configured, the fan stopped, the exhaust
+# failed.
+
+scenario:
+  base: ../configs/clean_room_vents.yaml
+  events:
+    - name: fan_stops_discharge
+      start: 10.0
+      duration: 10.0
+      replace:
+        segment: rack_discharge
+        with: []
+    - name: fan_stops_intake
+      start: 10.0
+      duration: 10.0
+      replace:
+        segment: rack_intake
+        with: []
+    - name: exhaust_fails
+      start: 30.0
+      duration: 10.0
+      replace:
+        segment: etch_exhaust
+        with: []
+
+solver:
+  t_end: 60.0
+  output_interval: 100
+
+transport:
+  cfl_number: 0.4

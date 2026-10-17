@@ -6,9 +6,12 @@ load time, and provides typed attribute access. Satisfies REQ-C01
 """
 
 import math
-from dataclasses import dataclass, field
+from collections.abc import Mapping
+from dataclasses import dataclass, field, replace
+from itertools import pairwise
 from os import PathLike
 from pathlib import Path
+from types import MappingProxyType
 
 import yaml
 
@@ -265,6 +268,342 @@ class TurbulenceSpec:
     tol: float
 
 
+@dataclass(frozen=True)
+class Replace:
+    """An event's replacement of one boundary segment (ADR-014 B).
+
+    Parameters
+    ----------
+    segment : str
+        The name of the segment of the merged base that is replaced.
+    segments : tuple[tuple[str, Mapping[str, object]], ...]
+        The segments that take its place for the event's duration, in
+        configuration order, each a name and its keys as the file states
+        them (read-only; a list value is a tuple). Empty removes the
+        segment, and the coverage rule's default, a wall, takes its faces
+        (the amendment of 2026-10-17: a vent's removal is how a fan stops
+        or an exhaust fails, since a wall is refused on an obstacle face).
+    """
+
+    segment: str
+    segments: tuple[tuple[str, Mapping[str, object]], ...]
+
+
+@dataclass(frozen=True)
+class Set:
+    """An event's change of keys of one boundary segment in place (ADR-014 B).
+
+    Parameters
+    ----------
+    segment : str
+        The name of the segment of the merged base whose keys change.
+    keys : Mapping[str, object]
+        The keys and their new values, read-only, merged over the
+        segment's own for the event's duration.
+    """
+
+    segment: str
+    keys: Mapping[str, object]
+
+
+@dataclass(frozen=True)
+class Source:
+    """An event's particle source over a box (ADR-014 B).
+
+    Exactly one of ``rate`` and ``emission`` is given. The box's non-SOLID
+    cells are the mesh's, so the manager (src/scenarios.py) turns an
+    emission into a rate and refuses a box with no non-SOLID cell centre.
+
+    Parameters
+    ----------
+    x_start, x_end, y_start, y_end : float
+        The box, metres, within the domain and not empty.
+    rate : tuple[float, ...] or None
+        Per class, particles per cubic metre per second, uniform over the
+        non-SOLID cells whose centres lie in the box.
+    emission : tuple[float, ...] or None
+        Per class, particles per second per metre of depth, divided by the
+        box's non-SOLID area (prompt 47's convention).
+    """
+
+    x_start: float
+    x_end: float
+    y_start: float
+    y_end: float
+    rate: tuple[float, ...] | None = None
+    emission: tuple[float, ...] | None = None
+
+
+@dataclass(frozen=True)
+class Initial:
+    """The initial concentration of every class (ADR-014 B).
+
+    Parameters
+    ----------
+    values : tuple[float, ...]
+        Per class, particles per cubic metre, uniform over the non-SOLID
+        cells: the stated ``concentration``, or the class's threshold times
+        ``threshold_factor``.
+    threshold_factor : float or None
+        The factor when the event states one (the clean-out's 100, the
+        recovery test's challenge), else None.
+    """
+
+    values: tuple[float, ...]
+    threshold_factor: float | None = None
+
+
+@dataclass(frozen=True)
+class EventSpec:
+    """One event of a scenario (ADR-014 B).
+
+    Parameters
+    ----------
+    name : str
+        The event's name, unique in the scenario.
+    start : float
+        Start time, seconds, finite and non-negative; zero for an initial.
+    duration : float or None
+        Seconds, finite and positive; None for an initial.
+    change : Replace, Set, Source or Initial
+        What the event changes.
+    """
+
+    name: str
+    start: float
+    duration: float | None
+    change: Replace | Set | Source | Initial
+
+    @property
+    def end(self) -> float | None:
+        """``start + duration``, seconds; None for an initial."""
+        if self.duration is None:
+            return None
+        return self.start + self.duration
+
+    @property
+    def segment(self) -> str | None:
+        """The base segment a replace or a set touches; None otherwise."""
+        if isinstance(self.change, (Replace, Set)):
+            return self.change.segment
+        return None
+
+
+@dataclass(frozen=True, eq=False)
+class ScenarioSpec:
+    """The scenario section, validated (ADR-014 B, decision 7).
+
+    Parameters
+    ----------
+    base_path : Path
+        The base file the scenario extends, resolved.
+    base : Mapping[str, object]
+        The merged base: the base file's mapping with the scenario file's
+        own sections merged over it recursively (lists replace whole),
+        read-only. ``mapping(())`` gives an editable copy.
+    events : tuple[EventSpec, ...]
+        The events, in file order.
+    t_end : float
+        ``solver.t_end`` of the merged base, seconds.
+    path : Path or None
+        The scenario file, resolved, when the configuration was loaded from
+        one; None from ``SimConfig.from_dict``.
+
+    Notes
+    -----
+    ADR-014 G lists ``checkpoint_interval`` here; it is the run file's
+    (ADR-014 D, step 3) and arrives with it.
+    """
+
+    base_path: Path
+    base: Mapping[str, object]
+    events: tuple[EventSpec, ...]
+    t_end: float
+    path: Path | None = None
+
+    @property
+    def time_tolerance(self) -> float:
+        """Seconds within which two event times are one instant.
+
+        ``EVENT_TIME_RTOL`` times ``t_end``: the overlap check, ``times`` and
+        ``active`` read the same instant, so they cannot disagree.
+        """
+        return EVENT_TIME_RTOL * self.t_end
+
+    def times(self) -> tuple[float, ...]:
+        """Every interval boundary: 0, each event's start and end, and t_end.
+
+        Returns
+        -------
+        tuple[float, ...]
+            Sorted. A time within ``time_tolerance`` of the boundary before
+            it, or of t_end, is that boundary, so no interval is shorter
+            than the tolerance. An initial event adds nothing.
+        """
+        tolerance = self.time_tolerance
+        inner = sorted(
+            point
+            for event in self.events
+            if event.end is not None
+            for point in (event.start, event.end)
+        )
+        out = [0.0]
+        for point in inner:
+            if point - out[-1] > tolerance and self.t_end - point > tolerance:
+                out.append(point)
+        out.append(self.t_end)
+        return tuple(out)
+
+    def is_active(self, event: EventSpec, t: float) -> bool:
+        """Whether ``event`` is in force at time t, to ``time_tolerance``.
+
+        Active from its start and expired at its end, each read as the
+        instant ``times`` keeps: ``start - tol <= t < end - tol``. An initial
+        event is never active; it sets the fields at t = 0.
+
+        Parameters
+        ----------
+        event : EventSpec
+            One of ``events``.
+        t : float
+            Seconds.
+
+        Returns
+        -------
+        bool
+        """
+        if event.end is None:
+            return False
+        tolerance = self.time_tolerance
+        return event.start - tolerance <= t < event.end - tolerance
+
+    def active(self, t: float) -> tuple[EventSpec, ...]:
+        """The events in force at time t: ``start <= t < start + duration``.
+
+        An event is active from its start and has expired at its end, so a
+        time on a boundary belongs to the interval that begins there; both
+        are read to ``time_tolerance`` (``is_active``). An initial event is
+        never active; it sets the fields at t = 0.
+
+        Parameters
+        ----------
+        t : float
+            Seconds.
+
+        Returns
+        -------
+        tuple[EventSpec, ...]
+            In file order.
+        """
+        return tuple(event for event in self.events if self.is_active(event, t))
+
+    def mapping(self, events: tuple[EventSpec, ...]) -> dict:
+        """The merged base with the boundary changes of ``events`` applied.
+
+        A replacement's segments take the replaced segment's place in
+        configuration order; a set merges its keys over the segment's.
+        Sources and initials change no mapping.
+
+        Parameters
+        ----------
+        events : tuple[EventSpec, ...]
+            Usually ``active(t)``.
+
+        Returns
+        -------
+        dict
+            A new mapping with the structure of a configuration file.
+
+        Raises
+        ------
+        ValueError
+            If two active replacements give a segment the same name.
+        """
+        raw = _thaw(self.base)
+        boundaries: dict = raw["boundaries"]
+        for event in events:
+            change = event.change
+            if isinstance(change, Set):
+                boundaries[change.segment] = {
+                    **boundaries[change.segment],
+                    **_thaw(change.keys),
+                }
+            elif isinstance(change, Replace):
+                rebuilt: dict = {}
+                for name, spec in boundaries.items():
+                    pairs = (
+                        [(n, _thaw(s)) for n, s in change.segments]
+                        if name == change.segment
+                        else [(name, spec)]
+                    )
+                    for new_name, new_spec in pairs:
+                        if new_name in rebuilt:
+                            raise ValueError(
+                                f"scenario.events: '{event.name}' names a segment "
+                                f"'{new_name}' that another active event's segment "
+                                "already has"
+                            )
+                        rebuilt[new_name] = new_spec
+                boundaries = rebuilt
+        raw["boundaries"] = boundaries
+        return raw
+
+
+def _freeze(value: object) -> object:
+    """A read-only copy: a mapping becomes a MappingProxyType, a list a tuple."""
+    if isinstance(value, Mapping):
+        return MappingProxyType({k: _freeze(v) for k, v in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze(v) for v in value)
+    return value
+
+
+def _thaw(value: object) -> object:
+    """An editable copy of ``_freeze``'s output, as YAML would load it."""
+    if isinstance(value, Mapping):
+        return {k: _thaw(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_thaw(v) for v in value]
+    return value
+
+
+def _read_mapping(path: Path) -> dict:
+    """The YAML mapping a configuration file holds."""
+    if not path.exists():
+        raise FileNotFoundError(f"Configuration file not found: {path}")
+    with path.open("r", encoding="utf-8") as f:
+        raw = yaml.safe_load(f)
+    if not isinstance(raw, dict):
+        raise ValueError("Configuration file must contain a YAML mapping")
+    return raw
+
+
+def merge_mappings(base: dict, override: dict) -> dict:
+    """``override`` merged over ``base``, recursively (ADR-014 decision 7).
+
+    Where both hold a mapping under a key the two are merged; anything
+    else in ``override``, a list included, replaces the base's value
+    whole. Keys keep the base's order, with the override's new keys after.
+
+    Parameters
+    ----------
+    base, override : dict
+        Configuration mappings; neither is modified.
+
+    Returns
+    -------
+    dict
+        A new mapping.
+    """
+    merged = {k: _thaw(v) for k, v in base.items()}
+    for key, value in override.items():
+        if isinstance(merged.get(key), dict) and isinstance(value, dict):
+            merged[key] = merge_mappings(merged[key], value)
+        else:
+            merged[key] = _thaw(value)
+    return merged
+
+
 _VALID_BOUNDARY_TYPES: set[str] = {
     "velocity_inlet",
     "pressure_outlet",
@@ -428,6 +767,42 @@ DEPOSITION_SURFACES: tuple[str, ...] = (
     DEPOSITION_NONE,
 )
 
+# The scenario section (ADR-014 B, decision 7). A file with it extends the
+# file its base names: the file's own sections merge over the base's, and
+# the events change the merged boundaries, the sources and the initial field.
+SCENARIO_KEY = "scenario"
+_SCENARIO_KEYS: frozenset[str] = frozenset({"base", "events"})
+# The four changes; an event states exactly one.
+REPLACE = "replace"
+SET = "set"
+SOURCE = "source"
+INITIAL = "initial"
+EVENT_CHANGES: tuple[str, ...] = (REPLACE, SET, SOURCE, INITIAL)
+_EVENT_KEYS: frozenset[str] = frozenset({"name", "start", "duration", *EVENT_CHANGES})
+_REPLACE_KEYS: frozenset[str] = frozenset({"segment", "with"})
+_SET_KEYS: frozenset[str] = frozenset({"segment", "keys"})
+_SOURCE_BOX_KEYS: tuple[str, ...] = ("x_start", "x_end", "y_start", "y_end")
+_SOURCE_KEYS: frozenset[str] = frozenset({*_SOURCE_BOX_KEYS, "rate", "emission"})
+_INITIAL_KEYS: frozenset[str] = frozenset({"concentration", "threshold_factor"})
+# The run keys a scenario states in its own sections rather than inherits
+# (ADR-014 B: each reference scenario has its t_end, cfl_number and
+# output_interval of its own), as (section, key).
+SCENARIO_RUN_KEYS: tuple[tuple[str, str], ...] = (
+    ("solver", "t_end"),
+    ("solver", "output_interval"),
+    ("transport", "cfl_number"),
+)
+# The relative tolerance a threshold key's diameter is matched to a class's
+# at: both are parsed from the same decimal text, so they agree to rounding.
+_DIAMETER_MATCH_RTOL = 1.0e-9
+# Two event times closer than this times solver.t_end are one instant (review
+# 62 S5). start + duration carries the rounding of a sum, about 1e-16 of the
+# times (0.1 + 0.2 is above 0.3), so two events written to meet would otherwise
+# overlap by that much or leave a sliver interval between them. 1e-9 of t_end
+# is 1.2e-7 s at t_end 120 s, far below a transport step (a few milliseconds on
+# the product grid at Courant 0.4) and far above the rounding.
+EVENT_TIME_RTOL = 1.0e-9
+
 
 class SimConfig:
     """Simulation configuration loaded and validated from a YAML file.
@@ -444,19 +819,14 @@ class SimConfig:
 
     def __init__(self, yaml_path: str | PathLike[str]) -> None:
         path = Path(yaml_path)
-        if not path.exists():
-            raise FileNotFoundError(f"Configuration file not found: {yaml_path}")
-
-        with path.open("r", encoding="utf-8") as f:
-            raw = yaml.safe_load(f)
-
-        if not isinstance(raw, dict):
-            raise ValueError("Configuration file must contain a YAML mapping")
-
-        self._validate_and_load(raw)
+        self._validate_and_load(_read_mapping(path), path.resolve().parent)
+        if self.scenario is not None:
+            self.scenario = replace(self.scenario, path=path.resolve())
 
     @classmethod
-    def from_dict(cls, raw: dict) -> "SimConfig":
+    def from_dict(
+        cls, raw: dict, base_dir: str | PathLike[str] | None = None
+    ) -> "SimConfig":
         """Build a configuration from an already-parsed mapping.
 
         Applies exactly the validation the file constructor applies. Used
@@ -467,6 +837,10 @@ class SimConfig:
         ----------
         raw : dict
             Mapping with the same structure as a configuration file.
+        base_dir : str or Path, optional
+            The directory a scenario's relative ``base`` is read from, as
+            the file constructor reads it from the file's own directory.
+            None refuses a relative base.
 
         Returns
         -------
@@ -481,11 +855,22 @@ class SimConfig:
         if not isinstance(raw, dict):
             raise ValueError("Configuration must be a mapping")
         config = cls.__new__(cls)
-        config._validate_and_load(raw)
+        config._validate_and_load(
+            raw, None if base_dir is None else Path(base_dir).resolve()
+        )
         return config
 
-    def _validate_and_load(self, raw: dict) -> None:
+    def _validate_and_load(self, raw: dict, base_dir: Path | None = None) -> None:
         """Validate all parameters and store as typed attributes."""
+        # A scenario (ADR-014 B): the merged base loads as a file of its own,
+        # and the events are read against it.
+        self.scenario: ScenarioSpec | None = None
+        if SCENARIO_KEY in raw:
+            merged, base_path = self._merged_base(raw, base_dir)
+            self._validate_and_load(merged)
+            self.scenario = self._parse_scenario(raw, merged, base_path)
+            return
+
         # Domain
         domain = self._require_section(raw, "domain")
         if not isinstance(domain, dict):
@@ -1341,6 +1726,378 @@ class SimConfig:
         v = spec.v_velocity or 0.0
         inward = {"bottom": v, "top": -v, "left": u, "right": -u}[spec.location]
         return inward * (hi - lo)
+
+    # -- Scenarios (ADR-014 B) -----------------------------------------------
+
+    @staticmethod
+    def _merged_base(raw: dict, base_dir: Path | None) -> tuple[dict, Path]:
+        """The base file's mapping with the scenario file's sections merged over it.
+
+        Returns
+        -------
+        tuple[dict, Path]
+            The merged mapping, with no scenario section, and the base's
+            resolved path.
+        """
+        section = raw[SCENARIO_KEY]
+        if not isinstance(section, dict):
+            raise ValueError(f"{SCENARIO_KEY} must be a mapping")
+        for key in section:
+            if key not in _SCENARIO_KEYS:
+                raise ValueError(
+                    f"{SCENARIO_KEY}.{key} is not a recognised scenario key; "
+                    f"known: {sorted(_SCENARIO_KEYS)}"
+                )
+        name = SimConfig._require_string(section, "base", SCENARIO_KEY)
+        path = Path(name)
+        if not path.is_absolute():
+            if base_dir is None:
+                raise ValueError(
+                    f"{SCENARIO_KEY}.base '{name}' is relative and the mapping has "
+                    "no file to be relative to; pass base_dir to from_dict"
+                )
+            path = base_dir / path
+        base = _read_mapping(path)
+        if SCENARIO_KEY in base:
+            raise ValueError(
+                f"{SCENARIO_KEY}.base '{name}' is itself a scenario; a scenario "
+                "extends a configuration, not another scenario"
+            )
+        own = {k: v for k, v in raw.items() if k != SCENARIO_KEY}
+        for section_name, key in SCENARIO_RUN_KEYS:
+            block = own.get(section_name)
+            if not isinstance(block, dict) or key not in block:
+                raise ValueError(
+                    f"Missing required key: '{section_name}.{key}' in the scenario "
+                    "file itself. A scenario states its own run length, output "
+                    "interval and Courant number rather than inheriting the base's "
+                    "(ADR-014 B)"
+                )
+        return merge_mappings(base, own), path.resolve()
+
+    def _parse_scenario(self, raw: dict, merged: dict, base_path: Path) -> ScenarioSpec:
+        """The events, validated against the merged base, and every interval's file.
+
+        The merged base has loaded already, so this configuration's
+        attributes are the base's. Each distinct set of active boundary
+        events is applied to the merged base and the result validated as a
+        file of its own, so a replacement that overlaps a neighbour or
+        omits a required key fails here, before anything runs (REQ-C02).
+        """
+        section = raw[SCENARIO_KEY]
+        if "events" not in section:
+            raise ValueError(f"Missing required key: '{SCENARIO_KEY}.events'")
+        events_raw = section["events"]
+        if not isinstance(events_raw, list):
+            raise TypeError(
+                f"{SCENARIO_KEY}.events must be a list, got {type(events_raw).__name__}"
+            )
+        segments = list(merged["boundaries"])
+        events: list[EventSpec] = []
+        for i, event_raw in enumerate(events_raw):
+            events.append(
+                self._parse_event(event_raw, f"{SCENARIO_KEY}.events[{i}]", segments)
+            )
+        names = [event.name for event in events]
+        for name in names:
+            if names.count(name) > 1:
+                raise ValueError(
+                    f"{SCENARIO_KEY}.events: two events are named '{name}'; an "
+                    "event's name identifies it in the run's records"
+                )
+        initials = [e.name for e in events if isinstance(e.change, Initial)]
+        if len(initials) > 1:
+            raise ValueError(
+                f"{SCENARIO_KEY}.events: {initials} each set the initial field; a "
+                "run has one"
+            )
+        for i, a in enumerate(events):
+            for b in events[i + 1 :]:
+                if a.segment is None or a.segment != b.segment:
+                    continue
+                overlap = min(a.end, b.end) - max(a.start, b.start)
+                if overlap > EVENT_TIME_RTOL * self.t_end:
+                    raise ValueError(
+                        f"{SCENARIO_KEY}.events: '{a.name}' [{a.start}, {a.end}) and "
+                        f"'{b.name}' [{b.start}, {b.end}) both change segment "
+                        f"'{a.segment}' and overlap in time"
+                    )
+        spec = ScenarioSpec(
+            base_path=base_path,
+            base=_freeze(merged),
+            events=tuple(events),
+            t_end=self.t_end,
+        )
+        self._check_intervals(spec)
+        return spec
+
+    def _parse_event(self, event: object, ctx: str, segments: list[str]) -> EventSpec:
+        """One event: its name, its times and its one change."""
+        if not isinstance(event, dict):
+            raise ValueError(f"{ctx} must be a mapping")
+        for key in event:
+            if key not in _EVENT_KEYS:
+                raise ValueError(
+                    f"{ctx}.{key} is not a recognised event key; known: "
+                    f"{sorted(_EVENT_KEYS)}"
+                )
+        name = self._require_string(event, "name", ctx)
+        if not name.strip():
+            raise ValueError(f"{ctx}.name must not be empty")
+        ctx = f"{ctx} ('{name}')"
+        changes = [key for key in EVENT_CHANGES if key in event]
+        if len(changes) != 1:
+            raise ValueError(
+                f"{ctx} must state exactly one of {list(EVENT_CHANGES)}, got "
+                f"{changes or 'none'}"
+            )
+        kind = changes[0]
+        start = self._require_float(event, "start", ctx)
+        if start < 0:
+            raise ValueError(f"{ctx}.start must be non-negative, got {start}")
+        duration = None
+        if kind == INITIAL:
+            if "duration" in event:
+                raise ValueError(
+                    f"{ctx}.duration is not valid on an initial event: it sets the "
+                    "field at the start of the run"
+                )
+            if start != 0.0:
+                raise ValueError(
+                    f"{ctx}.start must be 0 on an initial event, got {start}"
+                )
+        else:
+            duration = self._require_positive_float(event, "duration", ctx)
+            if start + duration - self.t_end > EVENT_TIME_RTOL * self.t_end:
+                raise ValueError(
+                    f"{ctx} ends at {start + duration} s, after solver.t_end "
+                    f"({self.t_end} s)"
+                )
+        body = event[kind]
+        if not isinstance(body, dict):
+            raise ValueError(f"{ctx}.{kind} must be a mapping")
+        body_ctx = f"{ctx}.{kind}"
+        change: Replace | Set | Source | Initial
+        if kind == REPLACE:
+            change = self._parse_replace(body, body_ctx, segments)
+        elif kind == SET:
+            change = self._parse_set(body, body_ctx, segments)
+        elif kind == SOURCE:
+            change = self._parse_source(body, body_ctx)
+        else:
+            change = self._parse_initial(body, body_ctx)
+        return EventSpec(name=name, start=start, duration=duration, change=change)
+
+    @classmethod
+    def _event_keys(cls, body: dict, ctx: str, known: frozenset[str]) -> None:
+        """Raise on a key of an event's change that the change does not take."""
+        for key in body:
+            if key not in known:
+                raise ValueError(
+                    f"{ctx}.{key} is not a recognised key; known: {sorted(known)}"
+                )
+
+    @classmethod
+    def _target_segment(cls, body: dict, ctx: str, segments: list[str]) -> str:
+        """The base segment a replace or a set names."""
+        segment = cls._require_string(body, "segment", ctx)
+        if segment not in segments:
+            raise ValueError(
+                f"{ctx}.segment names '{segment}', which is not a segment of the "
+                f"base; known: {segments}"
+            )
+        return segment
+
+    def _parse_replace(self, body: dict, ctx: str, segments: list[str]) -> Replace:
+        """A replace: the base segment and its replacements, possibly none."""
+        self._event_keys(body, ctx, _REPLACE_KEYS)
+        segment = self._target_segment(body, ctx, segments)
+        if "with" not in body:
+            raise ValueError(f"Missing required key: '{ctx}.with'")
+        replacements = body["with"]
+        if not isinstance(replacements, list):
+            raise TypeError(
+                f"{ctx}.with must be a list of segments (empty removes the segment), "
+                f"got {type(replacements).__name__}"
+            )
+        out: list[tuple[str, Mapping[str, object]]] = []
+        for j, item in enumerate(replacements):
+            item_ctx = f"{ctx}.with[{j}]"
+            if not isinstance(item, dict):
+                raise ValueError(f"{item_ctx} must be a mapping")
+            name = self._require_string(item, "name", item_ctx)
+            if not name.strip():
+                raise ValueError(f"{item_ctx}.name must not be empty")
+            if name in segments and name != segment:
+                raise ValueError(
+                    f"{item_ctx}.name '{name}' is the name of another segment of the "
+                    "base"
+                )
+            if name in (n for n, _ in out):
+                raise ValueError(f"{item_ctx}.name '{name}' is given twice")
+            keys = {k: v for k, v in item.items() if k != "name"}
+            out.append((name, _freeze(keys)))
+        return Replace(segment=segment, segments=tuple(out))
+
+    def _parse_set(self, body: dict, ctx: str, segments: list[str]) -> Set:
+        """A set: the base segment and the keys it changes."""
+        self._event_keys(body, ctx, _SET_KEYS)
+        segment = self._target_segment(body, ctx, segments)
+        if "keys" not in body:
+            raise ValueError(f"Missing required key: '{ctx}.keys'")
+        keys = body["keys"]
+        if not isinstance(keys, dict) or not keys:
+            raise ValueError(f"{ctx}.keys must be a non-empty mapping of segment keys")
+        for key in keys:
+            if key not in _SEGMENT_KEYS:
+                raise ValueError(
+                    f"{ctx}.keys.{key} is not a recognised boundary key; known: "
+                    f"{sorted(_SEGMENT_KEYS)}"
+                )
+        return Set(segment=segment, keys=_freeze(keys))
+
+    def _parse_source(self, body: dict, ctx: str) -> Source:
+        """A source: the box and its rate or emission per class."""
+        self._event_keys(body, ctx, _SOURCE_KEYS)
+        x0, x1, y0, y1 = (self._require_float(body, k, ctx) for k in _SOURCE_BOX_KEYS)
+        if x0 >= x1 or y0 >= y1:
+            raise ValueError(
+                f"{ctx}: the box [{x0}, {x1}] x [{y0}, {y1}] is empty; x_start and "
+                "y_start must be less than x_end and y_end"
+            )
+        if x0 < 0 or x1 > self.room_width or y0 < 0 or y1 > self.room_height:
+            raise ValueError(
+                f"{ctx}: the box [{x0}, {x1}] x [{y0}, {y1}] is outside the domain "
+                f"[0, {self.room_width}] x [0, {self.room_height}]"
+            )
+        stated = [key for key in ("rate", "emission") if key in body]
+        if len(stated) != 1:
+            raise ValueError(
+                f"{ctx} must state exactly one of rate (per cubic metre per second) "
+                f"and emission (per second per metre of depth), got {stated or 'none'}"
+            )
+        values = self._class_values(body, stated[0], ctx)
+        return Source(
+            x_start=x0,
+            x_end=x1,
+            y_start=y0,
+            y_end=y1,
+            **{stated[0]: values},
+        )
+
+    def _parse_initial(self, body: dict, ctx: str) -> Initial:
+        """An initial: a concentration per class, or the thresholds times a factor."""
+        self._event_keys(body, ctx, _INITIAL_KEYS)
+        stated = [key for key in ("concentration", "threshold_factor") if key in body]
+        if len(stated) != 1:
+            raise ValueError(
+                f"{ctx} must state exactly one of concentration and threshold_factor, "
+                f"got {stated or 'none'}"
+            )
+        if stated[0] == "concentration":
+            return Initial(values=self._class_values(body, "concentration", ctx))
+        factor = self._require_positive_float(body, "threshold_factor", ctx)
+        return Initial(
+            values=tuple(t * factor for t in self.class_thresholds(ctx)),
+            threshold_factor=factor,
+        )
+
+    def class_thresholds(self, context: str = "thresholds") -> tuple[float, ...]:
+        """Each class's threshold, the ``thresholds`` key whose diameter is its size.
+
+        Parameters
+        ----------
+        context : str
+            Names the caller in the error.
+
+        Returns
+        -------
+        tuple[float, ...]
+            One per configured particle class, particles per cubic metre.
+
+        Raises
+        ------
+        ValueError
+            If a class has no threshold key of its diameter.
+        """
+        by_diameter: list[tuple[float, float]] = []
+        for key, value in self.thresholds.items():
+            try:
+                by_diameter.append((float(key), value))
+            except ValueError:
+                continue
+        out = []
+        for size in self.particle_sizes:
+            found = [
+                value
+                for diameter, value in by_diameter
+                if math.isclose(diameter, size, rel_tol=_DIAMETER_MATCH_RTOL)
+            ]
+            if len(found) != 1:
+                raise ValueError(
+                    f"{context}: the class of diameter {size} m has "
+                    f"{'no' if not found else len(found)} threshold keys of that "
+                    f"diameter; thresholds has {sorted(self.thresholds)}"
+                )
+            out.append(found[0])
+        return tuple(out)
+
+    def _class_values(self, section: dict, key: str, ctx: str) -> tuple[float, ...]:
+        """One finite non-negative number per configured particle class."""
+        values = self._require_float_list(section, key, ctx)
+        n_classes = len(self.particle_sizes)
+        if len(values) != n_classes:
+            raise ValueError(
+                f"{ctx}.{key} must have one value per particle class ({n_classes}), "
+                f"got {len(values)}"
+            )
+        for i, value in enumerate(values):
+            if value < 0:
+                raise ValueError(f"{ctx}.{key}[{i}] must be non-negative, got {value}")
+        return tuple(values)
+
+    @staticmethod
+    def _check_intervals(spec: ScenarioSpec) -> None:
+        """Raise unless every interval's configuration loads (ADR-014 B).
+
+        Each distinct set of active events is applied to the merged base and
+        validated as a file. A recirculating pair of the base also stays a
+        pair: an interval in which its intake still draws while no discharge
+        returns what it draws is refused, since a fan's two vents stop
+        together (the fan stop of prompt 62's fixtures).
+        """
+        base_boundaries = spec.base["boundaries"]
+        intakes = {
+            seg["recirculate_from"]: name
+            for name, seg in base_boundaries.items()
+            if "recirculate_from" in seg
+        }
+        times = spec.times()
+        checked: set[tuple[str, ...]] = set()
+        for t0, t1 in pairwise(times):
+            active = spec.active(t0)
+            names = tuple(e.name for e in active)
+            if names in checked:
+                continue
+            checked.add(names)
+            where = (
+                f"scenario: the configuration from {t0} s to {t1} s with "
+                f"{list(names) if names else 'no events'} active"
+            )
+            try:
+                mapping = spec.mapping(active)
+                SimConfig.from_dict(mapping)
+            except (TypeError, ValueError) as err:
+                raise type(err)(f"{where} does not load: {err}") from err
+            boundaries = mapping["boundaries"]
+            returned = {seg.get("recirculate_from") for seg in boundaries.values()}
+            for intake, discharge in intakes.items():
+                if intake in boundaries and intake not in returned:
+                    raise ValueError(
+                        f"{where}: the intake '{intake}' still draws while no "
+                        f"discharge returns it (the base's '{discharge}' does); a "
+                        "fan's intake and discharge stop together"
+                    )
 
     # -- Validation helpers --------------------------------------------------
 

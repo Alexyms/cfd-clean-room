@@ -412,6 +412,22 @@ the base boundaries with the active replacements applied. States are keyed by a 
 the velocity-layer keys of their boundary section, so a door that opens and closes twice has two
 states, not four solves. The loader reports the number of distinct states before the run starts,
 which is the run's flow cost in units of T1's warm arm.
+*Amendment of 2026-10-17 (Alex and the orchestrator, prompt 62's decision 3): the key set is
+stated, not inferred.* The velocity-layer keys are `scenarios.FLOW_KEYS`: `type`, `location`, the
+four extents, `velocity`, `u_velocity`, `v_velocity`, `obstacle`, `face`, `turbulence_intensity` and
+`dissipation_length` (the inlet turbulence changes the flow under k-epsilon), with the segments'
+order, since the coverage rule is first match in configuration order. The keys only the transport
+reads, `concentration`, `hepa_filtered`, `recirculate_from` and `deposition_surface`
+(`scenarios.TRANSPORT_KEYS`), are out; every segment key is in exactly one of the two, which
+`tests/test_scenarios.py` checks. *As built (step 2, prompt 62):* contiguous pieces of one segment
+(adjacent in configuration order, on one edge or face, end to start, every other flow key equal)
+are joined before the fingerprint is taken, so the breach's supply split into three panels keeps
+the base's state, as section B's breach has one flow state; with the extents read literally it
+would have two. The joined state is the split one to the rounding of the inflow summed per
+segment, which the returns' shared velocity carries (1.1e-15 relative on 160x60 and 4.0e-15 on
+320x120), not bitwise. The rule was the builder's departure; *ratified (orchestrator and Alex,
+2026-10-17, review 62 S8)*. Each key of its equality clause, and pieces on two edges or two
+obstacle faces, are pinned by `tests/test_scenarios.py` (prompt 62b, review and test 62 B1).
 
 **The warm start.** `StaggeredSolver.solve_steady` gains `initial: FlowState | None`: the faces,
 pressure and, with the turbulence section, k and eps of a state, in place of the fields at rest
@@ -497,6 +513,11 @@ the proposal, with the smaller as the ladder's check that the Strouhal number do
   a clean part, a breached part and a clean part). Whether the velocity layer changes decides
   the re-solve, by the fingerprint rule of section A; a replacement that keeps every velocity
   key (the breach) is a transport-only event by that rule, with no separate flag to get wrong.
+  *Amendment of 2026-10-17 (Alex and the orchestrator, prompt 62's decision 2): a replacement may
+  be empty.* `replace` with an empty list removes the named segment for the event's duration,
+  and the coverage rule's default, a wall, takes its faces. This is how a tool's exhaust fails or
+  a cooling fan stops: section J refuses `wall` on an obstacle face, so without removal neither
+  event could be written.
 - `set`: keys of a named segment changed in place (the whole-supply breach: `hepa_filtered`
   false and a `concentration` per class).
 - `source`: a box (`x_start`, `x_end`, `y_start`, `y_end`) and a `rate` per class, particles
@@ -547,6 +568,54 @@ so a replacement that overlaps a neighbouring segment or omits a required inlet 
 load. The merged base mapping and the validated event list are what `SimConfig` carries
 (`config.scenario`), and the file's own sections, when present, override the base's as decision 7
 says.
+
+**As built (steps 1 and 2, prompt 62, 2026-10-17).** The schema was built as this section states
+it except where these say otherwise, each with its reason.
+1. *The reference scenarios extend the room without vents* (Alex, 2026-10-17, prompt 62's
+   decision 1), so their results stay tied to Phase 3's validated room and the vent flows stay
+   assumptions; vents enter step 1 through a test fixture, `tests/scenario_vent_failures.yaml`
+   (a fan stop and an exhaust failure on `configs/clean_room_vents.yaml`). The note of section G
+   and the accepted status that the reference scenarios carry vents from the start are
+   superseded by this.
+2. *The run keys are stated in the file's own sections*, not in the `scenario` section:
+   `solver.t_end`, `solver.output_interval` and `transport.cfl_number`, each required in the
+   scenario file itself (`config.SCENARIO_RUN_KEYS`), so "of its own" is checked, not assumed, and
+   no key has two places to be written.
+3. *The event syntax.* `replace: {segment, with: [segments, each with a name]}`, `set: {segment,
+   keys: {...}}`, `source: {the box, rate or emission}`, `initial: {concentration or
+   threshold_factor}`. A replace or a set names a segment of the merged base; a replacement may
+   not take another base segment's name (it may reuse the replaced one's), and two concurrent
+   replacements may not give one name twice. Event names are unique (an event is named in the
+   run's records), and an initial states `start: 0`.
+4. *A source box's non-SOLID cell centre is checked by the manager*, which holds the mesh
+   (`ScenarioManager` refuses the box when it is built, before anything runs), as section J's
+   "covers at least one face" is checked when the boundary is built.
+5. *A fan's two vents stop together.* Stopping a recirculating discharge while its intake still
+   draws is not refused by any rule of a file: the intake is then a plain exhaust, and the room
+   balances. Prompt 62 expected the pair's balance check to refuse it; that check runs only on a
+   discharge that names its intake. The scenario layer refuses an interval in which an intake of
+   the base's pair is present and no discharge returns it. Stopping the intake alone is refused
+   by the pair's rule (the discharge names a missing segment), and changing the discharge's flow
+   alone by the balance check, both through the merged validation. *Ratified (orchestrator and
+   Alex, 2026-10-17, review 62 S8)*, with this reason: once the discharge is removed nothing names
+   the intake, so the recirculating pair's balance check cannot see a half-stopped fan, and the
+   premise of prompt 62 that it would was wrong.
+6. *`threshold_factor` needs a threshold for every class*, matched by diameter
+   (`SimConfig.class_thresholds`).
+7. *`checkpoint_interval`* (section G's `ScenarioSpec`) is the run file's and arrives with it at
+   step 3.
+8. *Event times are read to one tolerance* (prompt 62b, review 62 S5). Two events written to meet
+   (one ends as the other starts) were refused as overlapping when the rounding of
+   `start + duration` put the end above the start (0.1 + 0.2 against 0.3), and on two segments
+   the same rounding left a sliver interval. `config.EVENT_TIME_RTOL`, 1e-9 of `t_end`, is the one
+   instant: an overlap is refused only beyond it, `times()` drops a boundary within it of the one
+   before or of `t_end`, `ScenarioSpec.is_active` reads start and end to it (so `active()` and
+   the manager's `sources_at` agree with `times()`), and an end past `t_end` by its rounding loads.
+9. *An interval's vents are checked on the mesh when the manager is built* (prompt 62b, review 62
+   S6): `ScenarioManager` runs `boundary_vents.vent_runs` on every interval's configuration, so a
+   replacement vent that covers no face, or a recirculating pair whose flows differ on the faces,
+   is refused before a run, as section J refuses a base vent. `scenarios.py` therefore imports
+   `boundary_vents` too, beside section G's list.
 
 ## C. Specification and recovery (decision 8)
 
@@ -770,7 +839,8 @@ as `mu_eff` is), `mesh.py`'s the breakpoints.
    and the reference scenarios are written with vents from the start. *Built 2026-10-16 (prompt 61),*
    *with the departures section J lists at its end and the recirculated discharge of its amendment.*
 1. The scenario schema and inheritance in `config.py`: `tests/test_config.py` gains the rejection
-   paths listed in section B, one test per rule, and the four reference files load.
+   paths listed in section B, one test per rule, and the four reference files load. *Built
+   2026-10-17 (prompt 62), with the departures section B lists after its schema.*
 2. `scenarios.py`: intervals, fingerprints, sources, conditions; `tests/test_scenarios.py`:
    event activation at its start and expiration at its end, overlap refused, two openings give
    two states not four, a source's rate sums to its emission over the box. *Note (step 0b,
@@ -781,6 +851,11 @@ as `mu_eff` is), `mesh.py`'s the breakpoints.
    that reads removal reads the difference, as `docs/reports/probe61/transport61.py` does.
    `vent_runs` and `ROOM_EDGE_OF_FACE` move to a small module both boundary layers import,
    with `ROOM_EDGE_OF_FACE` beside the registry, when this step next edits the dependency map.
+   *Built 2026-10-17 (prompt 62):* `src/scenarios.py` with section A's key set and section B's
+   notes; `src/boundary_vents.py` holds `VentRun`, `VentFaces`, `vent_runs` and
+   `vent_face_masks`, and `ROOM_EDGE_OF_FACE` is `boundary_registry`'s, which no longer imports
+   `staggered`. `staggered -> config` stays: `obstacle_face_inputs` takes an `ObstacleSpec`.
+   Every hash of record unchanged.
 3. `io_manager.py`: the run file, the checkpoint, the restart; `tests/test_io_manager.py`: the
    bitwise restart for a march and for a steady solve, the configuration-hash mismatch refused.
 4. `time_integration.py`, tier 1: `tests/test_time_integration.py`: the hand-over (the

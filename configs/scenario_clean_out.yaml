@@ -1,0 +1,33 @@
+# Reference scenario: the clean-out, recovery (ADR-014 B and C; Alex's
+# decision 3 of 2026-10-16)
+#
+# The default room (configs/clean_room_default.yaml, the room without vents,
+# Alex's decision of 2026-10-17) starting with contaminated air, uniform
+# over the non-SOLID cells at the thresholds times 100 per class (after a
+# shutdown, say), the supply clean (the base's HEPA-filtered supply carries
+# no concentration). The factor 100 is ISO 14644-3's recovery challenge, so
+# the 100:1 recovery time is the time each reading falls to its threshold
+# (ADR-014 C). No boundary changes: one flow state.
+#
+# The run keys of the scenario's own (ADR-014 B): t_end 120 s, the Courant
+# number 0.4 (ADR-014 decision 2), a frame every 100 steps (about 0.36 s on
+# the L0 faces, T6 of docs/reports/probe59/tables59.md). 120 s is an
+# assumption with headroom: T7 of tables59.md has the last sensor (near_door)
+# below 1e-2 of its initial value at 29 s on 160x60, and the well-mixed 100:1
+# time is 25.6 s (T6). The march stops when the room is within spec or at
+# t_end (section C, step 4).
+
+scenario:
+  base: clean_room_default.yaml
+  events:
+    - name: contaminated_start
+      start: 0.0
+      initial:
+        threshold_factor: 100.0
+
+solver:
+  t_end: 120.0
+  output_interval: 100
+
+transport:
+  cfl_number: 0.4
