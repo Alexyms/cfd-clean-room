@@ -184,7 +184,7 @@ PLANTS: list[tuple[str, str, str, str, list[str]]] = [
         "turbulence: diffusion crosses the vent faces",
         "src/turbulence.py",
         "        # Diffusion crosses interior faces between two non-SOLID cells only.\n        self._inner_u = np.zeros(self._u_shape, dtype=bool)\n        self._inner_u[:, 1:-1] = live_u[:, 1:-1]",
-        "        # Diffusion crosses interior faces between two non-SOLID cells only.\n        self._inner_u = np.zeros(self._u_shape, dtype=bool)\n        self._inner_u[:, 1:-1] = (live_u | vent_face_masks(mesh, vent_runs(mesh, config, BoundaryRegistry(config))).normal_u)[:, 1:-1]",
+        "        # Diffusion crosses interior faces between two non-SOLID cells only.\n        opened = vent_face_masks(mesh, vent_runs(mesh, config, BoundaryRegistry(config)))\n        live_u = live_u | opened.normal_u\n        live_v = live_v | opened.normal_v\n        self._inner_u = np.zeros(self._u_shape, dtype=bool)\n        self._inner_u[:, 1:-1] = live_u[:, 1:-1]",
         [WALLS, COUPLED, NO_DIFFUSION],
     ),
     (

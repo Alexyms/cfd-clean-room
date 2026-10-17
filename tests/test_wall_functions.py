@@ -940,11 +940,12 @@ def test_no_diffusion_crosses_a_vent_face_into_the_obstacle() -> None:
     """ADR-014 J: the vent carries air, not k; the SOLID cell's zero is not a neighbour.
 
     k and eps uniform, the air still, nothing held, one true-time step of
-    one second: every cell only decays, by the same factor, so the cell above
-    the discharge ends where a cell far from the box ends. A conductance
-    across the vent face would drain it toward the SOLID cell's zero.
+    one second: every cell only decays, by the same factor, so the cells
+    above the discharge (v faces) and beside the intake (u faces) end where a
+    cell far from the box ends. A conductance across a vent face would drain
+    them toward the SOLID cell's zero.
     """
-    config = vent_config({"discharge": DISCHARGE}, turbulence=True)
+    config = vent_config({"discharge": DISCHARGE, "intake": INTAKE}, turbulence=True)
     mesh = Mesh(config)
     model = KEpsilonModel(mesh, config)
     state = model.initial(1.0e-3, 1.0e-4)
@@ -954,4 +955,7 @@ def test_no_diffusion_crosses_a_vent_face_into_the_obstacle() -> None:
     far = step.k[6, 3]
     assert step.k[4, 7] == pytest.approx(far, rel=1e-9)
     assert step.k[4, 8] == pytest.approx(far, rel=1e-9)
+    assert step.k[1, 5] == pytest.approx(far, rel=1e-9)
+    assert step.k[2, 5] == pytest.approx(far, rel=1e-9)
     assert step.eps[4, 7] == pytest.approx(step.eps[6, 3], rel=1e-9)
+    assert step.eps[1, 5] == pytest.approx(step.eps[6, 3], rel=1e-9)
