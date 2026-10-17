@@ -121,10 +121,17 @@ PLANTS: list[tuple[str, str, str, str, list[str]]] = [
         [TESTS_CONFIG, TESTS_SCENARIOS],
     ),
     (
-        "activation: active after the start and at the end",
+        "activation: not active at the start",
         CONFIG,
         "        return event.start - tolerance <= t < event.end - tolerance\n",
-        "        return event.start - tolerance < t <= event.end - tolerance\n",
+        "        return event.start + tolerance <= t < event.end - tolerance\n",
+        [TESTS_CONFIG, TESTS_SCENARIOS],
+    ),
+    (
+        "activation: still active at the end",
+        CONFIG,
+        "        return event.start - tolerance <= t < event.end - tolerance\n",
+        "        return event.start - tolerance <= t < event.end + tolerance\n",
         [TESTS_CONFIG, TESTS_SCENARIOS],
     ),
     (
