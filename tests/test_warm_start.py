@@ -27,7 +27,12 @@ docstring:
   flow_state and steady_checkpoint are None, not the previous solve's.
 - A resume refuses the checkpoint it cannot continue: a negative nu_t in a
   live cell, k or eps not positive, a rule version or a count that is not
-  one.
+  one, an eddy viscosity digest that is not one.
+- With ``checkpoint_interval`` set, ``on_checkpoint`` receives at every
+  multiple of it what a solve capped there leaves, counted from a resumed
+  solve's checkpoint, never on the converging iteration or a non-finite
+  one, and the solve is the same with or without it (ADR-014 step 3; the
+  restart through the run's checkpoint file is tests/test_io_manager.py's).
 """
 
 from dataclasses import replace
@@ -55,15 +60,22 @@ from validation.cases import case_path
 FIELDS = ("u", "v", "p", "k", "eps", "nu_t")
 
 
-def _channel(cap: int = 5000) -> SimConfig:
-    """VAL-001's channel on 40x20 under its own error_estimate rule."""
+def _channel(cap: int = 5000, interval: int | None = None) -> SimConfig:
+    """VAL-001's channel on 40x20 under its own error_estimate rule.
+
+    INTERVAL, when given, is ``solver.checkpoint_interval``.
+    """
     raw = yaml.safe_load(case_path("poiseuille").read_text(encoding="utf-8"))
     raw["domain"]["nx"], raw["domain"]["ny"] = 40, 20
     raw["solver"]["max_simple_iter"] = cap
+    if interval is not None:
+        raw["solver"]["checkpoint_interval"] = interval
     return SimConfig.from_dict(raw)
 
 
-def _product(cap: int = 5000, inlet: float | None = None) -> SimConfig:
+def _product(
+    cap: int = 5000, inlet: float | None = None, interval: int | None = None
+) -> SimConfig:
     """The product file on 40x15, its imbalance tolerance by the file's formula."""
     raw = yaml.safe_load(case_path("product").read_text(encoding="utf-8"))
     raw["domain"]["nx"], raw["domain"]["ny"] = 40, 15
@@ -74,15 +86,19 @@ def _product(cap: int = 5000, inlet: float | None = None) -> SimConfig:
     raw["solver"]["max_simple_iter"] = cap
     if inlet is not None:
         raw["boundaries"]["hepa_supply"]["velocity"] = inlet
+    if interval is not None:
+        raw["solver"]["checkpoint_interval"] = interval
     return SimConfig.from_dict(raw)
 
 
-def _cavity(rule: str, cap: int = 8) -> SimConfig:
+def _cavity(rule: str, cap: int = 8, interval: int | None = None) -> SimConfig:
     """VAL-002's cavity on 6x6 under either stopping rule, a few outer iterations."""
     raw = yaml.safe_load(case_path("cavity").read_text(encoding="utf-8"))
     raw["domain"]["nx"], raw["domain"]["ny"] = 6, 6
     raw["solver"]["max_simple_iter"] = cap
     raw["solver"]["stopping_rule"] = rule
+    if interval is not None:
+        raw["solver"]["checkpoint_interval"] = interval
     return SimConfig.from_dict(raw)
 
 
@@ -231,6 +247,31 @@ class TestSteadyCheckpoint:
         SteadyCheckpoint(**self._fields(rule_version=None))
         with pytest.raises(error, match=match):
             SteadyCheckpoint(**self._fields(**change))
+
+    @pytest.mark.parametrize(
+        ("digest", "error"),
+        [
+            (True, TypeError),
+            (b"0" * 64, TypeError),
+            ("0" * 63, ValueError),
+            ("A" * 64, ValueError),
+            ("g" * 64, ValueError),
+            (" " + "0" * 63, ValueError),
+        ],
+    )
+    def test_an_eddy_viscosity_digest_that_is_not_one_is_refused(
+        self, digest: object, error: type
+    ) -> None:
+        """None and 64 lowercase hexadecimal digits are digests; nothing else is.
+
+        Defect caught: the digest check removed, so a digest read back from a
+        damaged file as bytes or a short string reaches the resume's
+        comparison, which then refuses every field with a misleading message.
+        """
+        SteadyCheckpoint(**self._fields(eddy_viscosity_sha256=None))
+        SteadyCheckpoint(**self._fields(eddy_viscosity_sha256="0123456789abcdef" * 4))
+        with pytest.raises(error, match="eddy_viscosity_sha256 must be"):
+            SteadyCheckpoint(**self._fields(eddy_viscosity_sha256=digest))
 
 
 @pytest.mark.integration
@@ -508,6 +549,29 @@ class TestResume:
         ):
             _solver(_channel()).solve_steady(resume=checkpoint)
 
+    def test_another_eddy_viscosity_is_refused(self) -> None:
+        """A resume runs under the prescribed field its checkpoint's solve ran under.
+
+        The same field (a copy) resumes to the uninterrupted solve under it;
+        another field, none where there was one, and one where there was none
+        are each refused before any iteration (ADR-014 D's second note).
+        Defect caught: the digest comparison removed, so every one of the three
+        resumes runs and continues a solve that was not this one.
+        """
+        mesh = Mesh(_channel())
+        field = np.full(mesh.cell_type.shape, 2.0e-5)
+        under = _solved(_channel(cap=20), eddy_viscosity=field).steady_checkpoint
+        plain = _solved(_channel(cap=20)).steady_checkpoint
+        assert plain.eddy_viscosity_sha256 is None
+        assert under.eddy_viscosity_sha256 is not None
+        resumed = _solved(_channel(cap=40), eddy_viscosity=field.copy(), resume=under)
+        _same_bits(resumed, _solved(_channel(cap=40), eddy_viscosity=field))
+        for checkpoint, given in [(under, 1.5 * field), (under, None), (plain, field)]:
+            solver = _solver(_channel(cap=40))
+            with pytest.raises(ValueError, match="under the eddy_viscosity it ran"):
+                solver.solve_steady(eddy_viscosity=given, resume=checkpoint)
+            assert solver.residual_history == []
+
     def test_initial_and_resume_together_are_refused(self, converged: dict) -> None:
         """Defect caught: one of the two silently preferred."""
         checkpoint = _solved(_channel(cap=5)).steady_checkpoint
@@ -572,3 +636,112 @@ class TestResume:
         with pytest.raises(ValueError, match="positive"):
             solver.solve_steady(resume=bad)
         assert solver.residual_history == []
+
+
+def _same_state(handed: SteadyCheckpoint, capped: SteadyCheckpoint) -> None:
+    """A periodic checkpoint against the checkpoint a solve capped there leaves.
+
+    Everything bitwise but the stop reason: the periodic one's is None, the
+    capped one's CAP_STOP.
+    """
+    for name in FIELDS:
+        x, y = getattr(handed.state, name), getattr(capped.state, name)
+        assert (x is None) == (y is None), name
+        if x is not None:
+            assert x.tobytes() == y.tobytes(), name
+    assert handed.state.outer == capped.state.outer
+    assert handed.state.stop_reason is None and capped.state.stop_reason == CAP_STOP
+    for name in ("residual_history", "velocity_steps", "viscosity_steps"):
+        assert getattr(handed, name) == getattr(capped, name), name
+    assert (handed.rule_version, handed.pressure_cap_hits) == (
+        capped.rule_version,
+        capped.pressure_cap_hits,
+    )
+    assert handed.eddy_viscosity_sha256 == capped.eddy_viscosity_sha256
+
+
+@pytest.mark.integration
+class TestPeriodicCheckpoint:
+    """``solve_steady(on_checkpoint=...)`` every checkpoint_interval outer (step 3)."""
+
+    @pytest.mark.parametrize("name", list(FIXTURES))
+    def test_each_call_holds_what_a_solve_capped_there_leaves(self, name: str) -> None:
+        """Called at outer 10, 20 and 30 of a solve capped at 30, each the capped state.
+
+        The solve with the writer is the solve without it, bitwise. Defects
+        caught: the cadence off by one (``iteration % interval``, a call at
+        outer 1, 11 and 21); the checkpoint built before the iteration's
+        turbulence step or with the rule's window of the iteration before; a
+        writer that changes the iterates.
+        """
+        make = FIXTURES[name]
+        handed: list[SteadyCheckpoint] = []
+        with_writer = _solved(make(cap=30, interval=10), on_checkpoint=handed.append)
+        assert [c.state.outer for c in handed] == [10, 20, 30]
+        for checkpoint in handed:
+            capped = _solved(make(cap=checkpoint.state.outer)).steady_checkpoint
+            _same_state(checkpoint, capped)
+        _same_bits(with_writer, _solved(make(cap=30)))
+
+    def test_no_call_at_the_converged_stop_or_without_the_key(
+        self, converged: dict
+    ) -> None:
+        """An interval equal to the stop's iteration count is never called; nor is no key.
+
+        Defects caught: a call on the converging iteration (a converged
+        checkpoint, which a resume refuses, written over the last one that
+        could be resumed); a default cadence without the key.
+        """
+        stop = len(converged["channel"].residual_history)
+        handed: list[SteadyCheckpoint] = []
+        _solved(_channel(interval=stop), on_checkpoint=handed.append)
+        assert handed == []
+        _solved(_channel(cap=30), on_checkpoint=handed.append)
+        assert handed == []
+
+    def test_a_resumed_solve_counts_from_the_checkpoints_outer(self) -> None:
+        """Resumed from outer 25 under interval 10 and cap 40: calls at 30 and 40.
+
+        Defect caught: the cadence counted from the resume's first
+        iteration, which calls at 35 and so breaks the promise of at most an
+        interval lost.
+        """
+        handed: list[SteadyCheckpoint] = []
+        checkpoint = _solved(_channel(cap=25)).steady_checkpoint
+        _solved(
+            _channel(cap=40, interval=10),
+            resume=checkpoint,
+            on_checkpoint=handed.append,
+        )
+        assert [c.state.outer for c in handed] == [30, 40]
+
+    def test_no_call_when_a_field_is_not_finite(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A diverging iteration is skipped, not raised on: the solve still returns.
+
+        The corrector returns NaN in p on the last outer iteration, as in
+        ``TestTheSolveState``; the writer is called on every one before it.
+        Defect caught: the finiteness check left out of the periodic call, so
+        FlowState raises inside the loop and the diverged fields, which the
+        probe runners classify, never come back.
+        """
+        config = _cavity(VELOCITY_STEP, cap=8, interval=1)
+        solver = _solver(config)
+        correct = solver._corrector.correct
+        calls: list[int] = []
+
+        def corrected_to_nan(
+            prediction: MomentumPrediction, p: np.ndarray
+        ) -> PressureCorrection:
+            out = correct(prediction, p)
+            calls.append(1)
+            if len(calls) < config.max_simple_iter:
+                return out
+            return replace(out, p=np.full_like(out.p, np.nan))
+
+        monkeypatch.setattr(solver._corrector, "correct", corrected_to_nan)
+        handed: list[SteadyCheckpoint] = []
+        solver.solve_steady(on_checkpoint=handed.append)
+        assert [c.state.outer for c in handed] == list(range(1, 8))
+        assert solver.flow_state is None
