@@ -693,6 +693,49 @@ section D's: interrupted at a checkpoint and restarted, a run reproduces the uni
 fields bitwise, for a steady solve and for a transport march, which the deterministic arithmetic
 of both solvers allows.
 
+*Amendment (step 3, prompt 63, 2026-10-17; the orchestrator's three decisions of that date
+and the departures the build made).*
+1. **The checkpoints live in a checkpoint file beside the run file, replaced atomically.** The
+   note for step 3 asked for a crash-safe rewrite by writing a new group under a temporary name
+   and swapping it in. Inside one HDF5 file that protects little: HDF5 keeps no journal, and a
+   process killed while the file is open for writing can leave the whole file unreadable, the
+   frames included. So `/checkpoint/` and `/steady_checkpoint/` live in `<run>.checkpoint.h5`
+   (the run file's path less its suffix), and each checkpoint writes that file whole under
+   `<run>.checkpoint.h5.tmp` (mode "w", so a stale one an earlier crash left is truncated,
+   never read), copies the group it does not replace across, closes both files and moves the
+   new one over the old with `os.replace`, which is atomic on one volume, Windows included.
+   The run file is opened, appended and closed at each output, so a crash between writes
+   leaves it readable with every frame written before. "One HDF5 file per run" above becomes
+   one run file plus its checkpoint file. Step 0's two module functions, which wrote into the
+   run file in place, are replaced by `RunFile`'s methods; step 0's files are not read.
+2. **The restart's configuration hash leaves out the keys a continuation exists to change.**
+   Prompt 60's continuation test raises the cap, and a capped march is continued by raising
+   `t_end`, so a hash over the whole merged mapping would refuse the restarts this section
+   exists for. `/config` keeps the SHA-256 of the whole text as the records carry it, and
+   beside it the restart hash, the same over the mapping less
+   `io_manager.RESTART_EXCLUDED_KEYS`: `solver.max_simple_iter`, `solver.t_end`,
+   `solver.checkpoint_interval`. Every other change is refused, the message naming the first
+   key, in the file's order, that changed, was added or was removed. Key order counts, since a
+   boundary segment's place in the order is part of its meaning.
+3. **A resume refuses a changed `eddy_viscosity=`** (the note's second point).
+   `SteadyCheckpoint.eddy_viscosity_sha256` is the SHA-256 of the prescribed field's bytes, or
+   None, and `solve_steady(resume=)` refuses a mismatch either way, None against a digest
+   included.
+
+The departures, each needed by the restart as step 4 will call it: the cadence is handed out by
+the solver, `solve_steady(on_checkpoint=...)`, called every `checkpoint_interval` outer
+iterations with the checkpoint a solve capped there leaves (counted from a resumed solve's
+outer, never on the converging iteration); the steady checkpoint carries the fingerprint of
+the flow state it solves for, so a restart can tell which solve it continues; a restart drops
+the frames and sensor readings written after its checkpoint (`RunFile.discard_after`) before
+appending again; the restored budgets enter the transport solver through
+`TransportSolver.restore_budgets`, since its `budget` is written by `solve_timestep` only; the
+sensor readings are appended in batches at each output rather than per step. Section C's two
+recovery outputs are step 4's to compute and write. The march's checkpoint holds the class
+fields, the budgets, the step and the time and nothing of the vents: a recirculating discharge
+reads its intake from the field the step starts from, which `tests/test_io_manager.py`'s march
+restart shows on a vented room with a recirculating pair.
+
 **Tier 2.** The transient run's file holds the faces and pressure every `output_interval` steps
 with their times, the per-step counts and imbalances, and the lift and drag on the obstacle
 (section F), and checkpoints the two old levels for BDF2.
@@ -858,6 +901,9 @@ as `mu_eff` is), `mesh.py`'s the breakpoints.
    Every hash of record unchanged.
 3. `io_manager.py`: the run file, the checkpoint, the restart; `tests/test_io_manager.py`: the
    bitwise restart for a march and for a steady solve, the configuration-hash mismatch refused.
+   *Built 2026-10-17 (prompt 63), with section D's amendment of that date: the checkpoints in a*
+   *checkpoint file replaced atomically, the restart hash less the continuation keys, the*
+   *eddy viscosity digest. Every hash of record unchanged.*
 4. `time_integration.py`, tier 1: `tests/test_time_integration.py`: the hand-over (the
    concentration field and the budget's current mass carried across a switch unchanged), the
    step divides every interval, the sources enter the budget's source slot, the three
