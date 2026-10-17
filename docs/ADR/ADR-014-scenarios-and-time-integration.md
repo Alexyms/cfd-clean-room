@@ -601,7 +601,14 @@ detection latency is for the other three scenarios.
 - `/steady_checkpoint/`: during a steady solve, every `checkpoint_interval` outer iterations,
   the faces, pressure and turbulence state, with the outer count: a capped solve (prompts 49
   and 52) is continued with `initial=` from here, which is the warm start of section A applied
-  to the same state.
+  to the same state. *Note (step 0, prompt 60, 2026-10-16):* the warm start cannot continue a
+  solve bitwise, since it rebuilds nu_t from k and eps (the under-relaxed nu_t the next outer
+  iteration reads is not that) and starts the rule's window empty (so it cannot stop before
+  100 more outer iterations, wherever the interrupted solve would have stopped). Step 0
+  therefore builds the continuation as its own keyword, `solve_steady(resume=checkpoint)`, with
+  a `SteadyCheckpoint` that carries the relaxed nu_t, the rule's window, the residual history,
+  the cap hits and the outer count, and keeps `initial=` as section A's warm start. The group
+  holds the checkpoint whole (`docs/reports/adr014_step0.md`, section 7).
 
 **Restart.** `time_integration.run(config, restart=path)`: the configuration hash must match the
 file's, the flow states in the file are reused, the march resumes from the checkpoint's step
@@ -743,7 +750,11 @@ as `mu_eff` is), `mesh.py`'s the breakpoints.
 0. The housekeeping batch (section I) and the warm start: `solve_steady(initial=)`, `FlowState`;
    tests: a warm start from a converged state stops within the rule's window with the faces
    unchanged to rounding, a warm start from a wrong shape is refused; the steady checkpoint and
-   its bitwise continuation (section D).
+   its bitwise continuation (section D). *Note (step 0, 2026-10-16):* the faces move by the
+   iteration error the first solve's stop left, which the rule bounds by
+   `iteration_error_tol` times the velocity scale, so the test holds them to that bound, not to
+   rounding (`docs/reports/adr014_step0.md`, section 7); the continuation is `resume=`, not
+   `initial=` (section D's note).
 0b. The equipment vents (section J, the amendment of 2026-10-16): a boundary segment on an
    obstacle face, as a `velocity_inlet` (a cooling discharge) or a `fixed_flow_outlet` (a
    process exhaust), read by the velocity layer, the momentum and pressure steps, the wall
