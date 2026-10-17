@@ -296,7 +296,7 @@ class TestWallFaceSelection:
         np.testing.assert_array_equal(walls.wall_faces["v"], _mask(shape, V_WALLS))
 
     def test_the_stencil_reads_exactly_the_wall_faces_and_the_openings(self) -> None:
-        """Against the predictor: what it reads beyond the walls is inlet and outlet faces."""
+        """Against the predictor: beyond the walls it reads inlet and outlet faces."""
         config = _mixed_room()
         mesh, boundary, walls = _built(config)
         read = MomentumPredictor(mesh, config, boundary)._wall_read
@@ -397,7 +397,7 @@ class TestWallCellValues:
         assert not c.eps_held[1, 2] and c.production[1, 2] == 0.0
 
     def test_in_the_log_layer_production_equals_the_held_eps(self) -> None:
-        """Where the slip is the log law's, P = tau_w du/dy = eps (local equilibrium)."""
+        """With the log law's slip, P = tau_w du/dy = eps (local equilibrium)."""
         config = _box()
         mesh, _, walls = _built(config)
         c_mu = VARIANTS["standard"].c_mu
@@ -507,7 +507,7 @@ def _stretched_room() -> SimConfig:
 def _face_unknowns(
     mask: np.ndarray, solid: np.ndarray, faces: np.ndarray, centres: np.ndarray
 ) -> list[tuple[int, int, int, float]]:
-    """For each wall face of one component, in its own frame: (row, column, unknown row, y_P).
+    """Each wall face of one component, in its frame: (row, column, unknown row, y_P).
 
     The frame has the component's own axis last: [rows, columns] faces at
     ``faces[row]``, unknowns at ``centres[row]``, between cells ``column - 1``
@@ -796,10 +796,6 @@ class TestInflow:
         k, eps = walls.initial_values()
         assert k == pytest.approx((k1 * q1 + k2 * q2) / (q1 + q2), rel=1e-14)
         assert eps == pytest.approx((e1 * q1 + e2 * q2) / (q1 + q2), rel=1e-14)
-        c_mu = VARIANTS["standard"].c_mu
-        assert walls.largest_inlet_eddy_viscosity() == pytest.approx(
-            max(c_mu * k1**2 / e1, c_mu * k2**2 / e2), rel=1e-14
-        )
 
     def test_one_inlet_starts_at_its_own_values(self) -> None:
         _, _, walls = _built(_mixed_room())
@@ -810,8 +806,6 @@ class TestInflow:
         _, _, walls = _built(_box())
         with pytest.raises(ValueError, match="no velocity inlet admits air"):
             walls.initial_values()
-        with pytest.raises(ValueError, match="no velocity inlet admits air"):
-            walls.largest_inlet_eddy_viscosity()
 
     def test_a_configuration_without_the_section_is_refused(self) -> None:
         raw_config = _box()

@@ -200,7 +200,7 @@ class TestContract:
     def test_iteration_count_cap_hits_and_stage_timers_reset_at_the_start_of_each_solve(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A solve that fails before its first correction reports none of the last one."""
+        """A solve failing before its first correction reports none of the last one."""
         config = _ruled(
             "cavity",
             (6, 6),
@@ -233,7 +233,7 @@ class TestContract:
         assert solver.residual_history == []
 
     def test_error_estimate_flux_scale_is_the_correctors(self) -> None:
-        """One F for the rounding floor and the rule: the solver reads the corrector's."""
+        """One F for the rounding floor and the rule, the corrector's."""
         config = _ruled("poiseuille", (12, 6), stopping_rule="error_estimate")
         _mesh, _bc, solver = _build(config)
         assert solver.flux_scale == solver._corrector.flux_scale
@@ -312,7 +312,7 @@ class TestFaceVelocities:
     def test_arrays_are_owned_read_only_copies(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Writing raises; the solver's working arrays are not shared; a second solve leaves the first object alone."""
+        """Writing raises, nothing is shared, a second solve leaves the first alone."""
         corrections = _record_corrections(monkeypatch)
         config = _case("cavity", 6)
         _mesh, _bc, solver = _build(config)
@@ -367,7 +367,7 @@ def test_val001_40x20_continuity_remeasured_from_the_exposed_faces() -> None:
 
 @pytest.mark.integration
 class TestReferenceVelocity:
-    """The residual divides by reference_velocity, F_ref / (rho h) (SYSTEM.md, section 4)."""
+    """The residual divides by reference_velocity, F_ref / (rho h) (SYSTEM.md 4)."""
 
     @pytest.mark.parametrize(
         "case_id", [c for c, (kind, _nx, _ny) in CASE_GRIDS.items() if kind == "cavity"]
@@ -499,7 +499,7 @@ class TestPhysics:
         assert all(np.all(gap == 0.0) for gap in seen)
 
     def test_stretched_cavity_runs_and_returns_finite_fields(self) -> None:
-        """Runs on a stretched mesh, which the retired collocated solver refused. No accuracy claim."""
+        """Runs on a stretched mesh, which the collocated solver refused."""
         mesh_block = {"x": {"stretch_ratio": 1.2}, "y": {"stretch_ratio": 1.2}}
         config = _case("cavity", 8, mesh=mesh_block)
         mesh, _bc, solver = _build(config)
@@ -631,7 +631,7 @@ class TestStoppingRule:
 
 @pytest.mark.integration
 class TestCappedCorrections:
-    """A pressure correction that stops at max_pressure_iter is reported, not hidden (ADR-013 B).
+    """A correction stopped at max_pressure_iter is reported, not hidden (ADR-013 B).
 
     The report's probe room froze under the committed cap of 200 sweeps with
     47% of the supply unaccounted while the velocity-step rule called it
@@ -665,7 +665,7 @@ class TestCappedCorrections:
     def test_a_capped_outer_loop_that_converges_stops_on_an_uncapped_correction(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """One CG iteration per correction still converges the tiny cavity, and may stop.
+        """One CG iteration per correction still converges the tiny cavity and may stop.
 
         The outer loop converges on its own once b shrinks, and the last
         correction then meets its stop in one iteration rather than the cap,
@@ -696,7 +696,7 @@ class TestCappedCorrections:
     def test_velocity_step_does_not_stop_on_a_capped_correction(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The frozen shape: a small velocity step with the faces unbalanced is not a stop.
+        """The frozen shape: a small velocity step on unbalanced faces is not a stop.
 
         The limit of a cap is a correction truncated to nothing: the faces
         and the pressure returned as predicted, flagged capped. The momentum
@@ -758,7 +758,7 @@ class TestCappedCorrections:
     def test_error_estimate_refuses_the_frozen_state_through_continuity(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Under error_estimate the per-cell condition refuses what a truncated correction leaves."""
+        """Under error_estimate the per-cell condition refuses a capped correction."""
 
         def truncated(
             self: PressureCorrector, prediction: MomentumPrediction, p: np.ndarray
@@ -786,7 +786,7 @@ class TestCappedCorrections:
 
 @pytest.mark.integration
 class TestEddyViscosity:
-    """solve_steady(eddy_viscosity=...) (ECR-002 step 4): mu + rho nu_t to the predictor."""
+    """solve_steady(eddy_viscosity=...) (ECR-002 step 4): mu + rho nu_t predicts."""
 
     @staticmethod
     def _faces(solver: StaggeredSolver) -> bytes:
@@ -806,7 +806,7 @@ class TestEddyViscosity:
         assert zero.stop_reason == laminar.stop_reason
 
     def test_a_uniform_field_is_a_laminar_solve_at_the_raised_viscosity(self) -> None:
-        """nu_t uniform gives, bit for bit, the configuration whose mu is mu + rho nu_t."""
+        """Uniform nu_t gives, bit for bit, the configuration with mu + rho nu_t."""
         config = _ruled("poiseuille", (12, 6), fluid={"density": 1.2})
         nu_t = 0.004
         raised = _ruled(

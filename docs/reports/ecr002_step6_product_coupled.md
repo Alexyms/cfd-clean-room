@@ -315,7 +315,7 @@ The figures named in the last column are beside this report, one per converged r
 streamlines coloured by speed, nu_t / nu on a log scale and k. The check row at
 `pressure_rtol` 1e-8 against the 1e-4 row on 200x75:
 
-| Rows (1e-4, 1e-8) | Outer | Stop | CG per correction (mean) | Wall (s) | Faces: max |du|, max |dv| (m/s) | Cells: max speed difference (m/s) | nu_t: max |difference| (m^2/s), max relative | k: max relative difference |
+| Rows (1e-4, 1e-8) | Outer | Stop | CG per correction (mean) | Wall (s) | Faces: max \|du\|, max \|dv\| (m/s) | Cells: max speed difference (m/s) | nu_t: max \|difference\| (m^2/s), max relative | k: max relative difference |
 |---|---|---|---|---|---|---|---|---|
 | standard_200x75, standard_200x75_r1e-8 | 3,421, 3,421 | error_estimate_and_continuity, error_estimate_and_continuity | 455, 581 | 576, 670 | 1.05e-11, 9.78e-12 | 1.02e-11 | 6.66e-14, 1.32e-10 | 2.50e-10 |
 
@@ -421,21 +421,21 @@ Deposition per surface, rate (per s per m depth):
 The five segments of largest deposition (surface | bin start), rate per s per m depth:
 | Run, class (um) | 1 | 2 | 3 | 4 | 5 |
 |---|---|---|---|---|---|
-| rng_40x15, 0.5 | server_rack east | y 0.0 (0.00011) | server_rack east | y 0.2 (5.51e-05) | server_rack east | y 0.4 (4.58e-05) | floor | x 3.0 (2.85e-05) | server_rack east | y 0.6 (2.53e-05) |
-| rng_40x15, 5 | floor | x 3.0 (0.00218) | server_rack east | y 0.0 (8.47e-06) | server_rack east | y 0.2 (4.25e-06) | server_rack east | y 0.4 (3.53e-06) | server_rack east | y 0.6 (1.95e-06) |
-| rng_80x30, 0.5 | floor | x 3.0 (0.0205) | litho_tool west | y 0.0 (0.000125) | litho_tool west | y 0.2 (0.000114) | litho_tool west | y 0.4 (9.94e-05) | litho_tool west | y 0.6 (8.77e-05) |
-| rng_80x30, 5 | floor | x 3.0 (1.57) | floor | x 2.2 (2.51e-05) | litho_tool west | y 0.0 (9.57e-06) | litho_tool west | y 0.2 (8.73e-06) | litho_tool west | y 0.4 (7.63e-06) |
-| standard_200x75, 0.5 | floor | x 3.0 (0.0265) | floor | x 2.8 (0.00561) | litho_tool west | y 0.0 (0.000162) | litho_tool west | y 0.2 (0.000146) | litho_tool west | y 0.4 (0.000115) |
-| standard_200x75, 5 | floor | x 3.0 (2.03) | floor | x 2.8 (0.429) | litho_tool west | y 0.0 (1.24e-05) | litho_tool west | y 0.2 (1.12e-05) | litho_tool west | y 0.4 (8.83e-06) |
+| rng_40x15, 0.5 | server_rack east \| y 0.0 (0.00011) | server_rack east \| y 0.2 (5.51e-05) | server_rack east \| y 0.4 (4.58e-05) | floor \| x 3.0 (2.85e-05) | server_rack east \| y 0.6 (2.53e-05) |
+| rng_40x15, 5 | floor \| x 3.0 (0.00218) | server_rack east \| y 0.0 (8.47e-06) | server_rack east \| y 0.2 (4.25e-06) | server_rack east \| y 0.4 (3.53e-06) | server_rack east \| y 0.6 (1.95e-06) |
+| rng_80x30, 0.5 | floor \| x 3.0 (0.0205) | litho_tool west \| y 0.0 (0.000125) | litho_tool west \| y 0.2 (0.000114) | litho_tool west \| y 0.4 (9.94e-05) | litho_tool west \| y 0.6 (8.77e-05) |
+| rng_80x30, 5 | floor \| x 3.0 (1.57) | floor \| x 2.2 (2.51e-05) | litho_tool west \| y 0.0 (9.57e-06) | litho_tool west \| y 0.2 (8.73e-06) | litho_tool west \| y 0.4 (7.63e-06) |
+| standard_200x75, 0.5 | floor \| x 3.0 (0.0265) | floor \| x 2.8 (0.00561) | litho_tool west \| y 0.0 (0.000162) | litho_tool west \| y 0.2 (0.000146) | litho_tool west \| y 0.4 (0.000115) |
+| standard_200x75, 5 | floor \| x 3.0 (2.03) | floor \| x 2.8 (0.429) | litho_tool west \| y 0.0 (1.24e-05) | litho_tool west \| y 0.2 (1.12e-05) | litho_tool west \| y 0.4 (8.83e-06) |
 
 | Pair, class (um) | Hotspots in common (of 5) | In common | Only in the first | Only in the second | Sensor order, first | Sensor order, second | Orders agree |
 |---|---|---|---|---|---|---|---|
 | grids, standard | skipped: a record is missing |  |  |  |  |  |  |
 | variants, 200x75 | skipped: a record is missing |  |  |  |  |  |  |
-| supplementary: grids, rng, 0.5 | 1 | floor | x 3.0 | server_rack east | y 0.0; server_rack east | y 0.2; server_rack east | y 0.4; server_rack east | y 0.6 | litho_tool west | y 0.0; litho_tool west | y 0.2; litho_tool west | y 0.4; litho_tool west | y 0.6 | near_door > above_gap_1 > hood_entry > above_gap_2 | above_gap_1 > near_door > above_gap_2 > hood_entry | no |
-| supplementary: grids, rng, 5 | 1 | floor | x 3.0 | server_rack east | y 0.0; server_rack east | y 0.2; server_rack east | y 0.4; server_rack east | y 0.6 | floor | x 2.2; litho_tool west | y 0.0; litho_tool west | y 0.2; litho_tool west | y 0.4 | near_door > above_gap_1 > hood_entry > above_gap_2 | above_gap_1 > near_door > above_gap_2 > hood_entry | no |
-| supplementary: rng 80x30 against standard 200x75, 0.5 | 4 | floor | x 3.0; litho_tool west | y 0.0; litho_tool west | y 0.2; litho_tool west | y 0.4 | litho_tool west | y 0.6 | floor | x 2.8 | above_gap_1 > near_door > above_gap_2 > hood_entry | above_gap_1 > near_door > above_gap_2 > hood_entry | yes |
-| supplementary: rng 80x30 against standard 200x75, 5 | 4 | floor | x 3.0; litho_tool west | y 0.0; litho_tool west | y 0.2; litho_tool west | y 0.4 | floor | x 2.2 | floor | x 2.8 | above_gap_1 > near_door > above_gap_2 > hood_entry | above_gap_1 > near_door > above_gap_2 > hood_entry | yes |
+| supplementary: grids, rng, 0.5 | 1 | floor \| x 3.0 | server_rack east \| y 0.0; server_rack east \| y 0.2; server_rack east \| y 0.4; server_rack east \| y 0.6 | litho_tool west \| y 0.0; litho_tool west \| y 0.2; litho_tool west \| y 0.4; litho_tool west \| y 0.6 | near_door > above_gap_1 > hood_entry > above_gap_2 | above_gap_1 > near_door > above_gap_2 > hood_entry | no |
+| supplementary: grids, rng, 5 | 1 | floor \| x 3.0 | server_rack east \| y 0.0; server_rack east \| y 0.2; server_rack east \| y 0.4; server_rack east \| y 0.6 | floor \| x 2.2; litho_tool west \| y 0.0; litho_tool west \| y 0.2; litho_tool west \| y 0.4 | near_door > above_gap_1 > hood_entry > above_gap_2 | above_gap_1 > near_door > above_gap_2 > hood_entry | no |
+| supplementary: rng 80x30 against standard 200x75, 0.5 | 4 | floor \| x 3.0; litho_tool west \| y 0.0; litho_tool west \| y 0.2; litho_tool west \| y 0.4 | litho_tool west \| y 0.6 | floor \| x 2.8 | above_gap_1 > near_door > above_gap_2 > hood_entry | above_gap_1 > near_door > above_gap_2 > hood_entry | yes |
+| supplementary: rng 80x30 against standard 200x75, 5 | 4 | floor \| x 3.0; litho_tool west \| y 0.0; litho_tool west \| y 0.2; litho_tool west \| y 0.4 | floor \| x 2.2 | floor \| x 2.8 | above_gap_1 > near_door > above_gap_2 > hood_entry | above_gap_1 > near_door > above_gap_2 > hood_entry | yes |
 
 What the tables show. The source sits in return 2's capture zone: every march reaches its
 steady rule within about a minute of simulated time, the removal rate equals the emission to

@@ -1,18 +1,21 @@
 # ADR-014: Scenarios and Time Integration: Piecewise-Steady Flow, Time-Accurate Transport, and a Transient Solve for the Cylinder
 
 ## Status
-Proposed. Written 2026-10-16 (prompt 59, branch `phase4/design`), before the Phase 4 build, from
-the solver as ADR-010 to ADR-013 record it, the Phase 3 gate report's stated limits
+Accepted 2026-10-16 (Alex): the recommendation of each of the twelve decisions below, as
+written after rounds 1 and 2 of prompt 59, with one amendment of the same date, the equipment
+vents (section J, built as step 0b of section G; its limit in section H). The dated note under
+"Decisions for Alex" records it. The build has begun with step 0 (prompt 60).
+
+Written 2026-10-16 (prompt 59, branch `phase4/design`), before the Phase 4 build, from the
+solver as ADR-010 to ADR-013 record it, the Phase 3 gate report's stated limits
 (`docs/reports/phase3_transport_report.md`) and the probes under `docs/reports/probe59/`, whose
 records are in `results/builder59/` and whose tables are `docs/reports/probe59/tables59.md`.
-Phase 3 opened with ADR-011 before any code; Phase 4 opens the same way. Three decisions were
-taken by Alex on 2026-10-16 and are recorded below as given; the rest are put to Alex as a
-picture first, then ranked options with their consequences, then the section carrying the
-detail, as ADR-011 and ADR-013 did. Premise review 59 and test 59 run before the pull request.
-Nothing under `src/`, `tests/` or `configs/` changes with this document. It gains a
-planned-against-built table at the Phase 4 gate, as ADR-011 and ADR-012 did. Bracketed numbers
-point at the sources at the end; "T1" to "T6" are the tables of `tables59.md`, generated from
-the records by `tables59.py`, whose `--check` regenerates and compares them.
+Three decisions were taken by Alex on 2026-10-16 and are recorded below as given; the rest were
+put to Alex as a picture first, then ranked options with their consequences, then the section
+carrying the detail, as ADR-011 and ADR-013 did. The document gains a planned-against-built
+table at the Phase 4 gate, as ADR-011 and ADR-012 did. Bracketed numbers point at the sources
+at the end; "T1" to "T7" are the tables of `tables59.md`, generated from the records by
+`tables59.py`, whose `--check` regenerates and compares them.
 
 ## Decisions already taken (Alex, 2026-10-16), recorded as given
 
@@ -42,6 +45,19 @@ the records by `tables59.py`, whose `--check` regenerates and compares them.
 ## Decisions for Alex
 Each decision is a picture first, then the options ranked with their consequence, then the
 section that carries the detail. The ranking is the builder's, from the probes and the records.
+
+**Accepted (Alex, 2026-10-16).** Each decision's recommendation is taken as written, after the
+two rounds of prompt 59 (the proposal, and prompt 59b's answer to review 59): decision 1 the
+fingerprint cache and the warm start, 2 Courant 0.4 for the scenarios with Heun's method named
+for Phase 6, 3 BDF2, 4 SIMPLE outer iterations per step, 5 the velocity step below 1e-4 U, 6
+the two-way door exchange, 7 the `scenario` section with `base:`, 8 every sensor below
+threshold with the 100:1 time beside it, 9 one HDF5 run file, 10 VAL-008 on the wide front, 11
+interior clustering with the freestream lateral boundaries, 12 the plan's three modules and the
+build order of section G. Decision 11's recommendation leaves its thresholds OPEN, and they stay
+so until the tier-2 step (step 6) is prompted. One amendment of the same date: the equipment
+vents, airflow only (section J), built as step 0b, before the scenario schema, so the schema and
+the reference scenarios carry vents from the start; the heat a cooling discharge carries is a
+limit (section H).
 
 **1. What triggers a flow re-solve, and the warm start (section A).**
 *Picture.* Under tier 1 the flow is a sequence of steady states, one per distinct set of velocity
@@ -583,7 +599,23 @@ detection latency is for the other three scenarios.
 - `/steady_checkpoint/`: during a steady solve, every `checkpoint_interval` outer iterations,
   the faces, pressure and turbulence state, with the outer count: a capped solve (prompts 49
   and 52) is continued with `initial=` from here, which is the warm start of section A applied
-  to the same state.
+  to the same state. *Note (step 0, prompt 60, 2026-10-16):* the warm start cannot continue a
+  solve bitwise, since it rebuilds nu_t from k and eps (the under-relaxed nu_t the next outer
+  iteration reads is not that) and starts the rule's window empty (so it cannot stop before
+  100 more outer iterations, wherever the interrupted solve would have stopped). Step 0
+  therefore builds the continuation as its own keyword, `solve_steady(resume=checkpoint)`, with
+  a `SteadyCheckpoint` that carries the relaxed nu_t, the rule's window, the residual history,
+  the cap hits and the outer count, and keeps `initial=` as section A's warm start. The group
+  holds the checkpoint whole (`docs/reports/adr014_step0.md`, section 7).
+  *Note for step 3 (review 60, prompt 60b, 2026-10-16):* two things step 3 builds on top of
+  step 0's `write_steady_checkpoint` and `solve_steady(resume=)`. (1) The rewrite must be
+  crash-safe: step 0 deletes the old group and then writes the new one, so a process killed in
+  between leaves no checkpoint or a partial one, which is the loss the periodic rewrite is
+  there to prevent. Step 3 writes the new group under a temporary name and swaps it in, and
+  never deletes first. (2) A resume should refuse a changed `eddy_viscosity=` argument, as it
+  refuses a changed grid: the laminar solve's prescribed field is an input of the solve that no
+  checkpoint carries and no configuration hash covers, so a resume under another field is not a
+  continuation.
 
 **Restart.** `time_integration.run(config, restart=path)`: the configuration hash must match the
 file's, the flow states in the file are reused, the march resumes from the checkpoint's step
@@ -725,7 +757,17 @@ as `mu_eff` is), `mesh.py`'s the breakpoints.
 0. The housekeeping batch (section I) and the warm start: `solve_steady(initial=)`, `FlowState`;
    tests: a warm start from a converged state stops within the rule's window with the faces
    unchanged to rounding, a warm start from a wrong shape is refused; the steady checkpoint and
-   its bitwise continuation (section D).
+   its bitwise continuation (section D). *Note (step 0, 2026-10-16):* the faces move by the
+   iteration error the first solve's stop left, which the rule bounds by
+   `iteration_error_tol` times the velocity scale, so the test holds them to that bound, not to
+   rounding (`docs/reports/adr014_step0.md`, section 7); the continuation is `resume=`, not
+   `initial=` (section D's note).
+0b. The equipment vents (section J, the amendment of 2026-10-16): a boundary segment on an
+   obstacle face, as a `velocity_inlet` (a cooling discharge) or a `fixed_flow_outlet` (a
+   process exhaust), read by the velocity layer, the momentum and pressure steps, the wall
+   treatment and the concentration boundary; the configuration keys and their rejection paths
+   in `tests/test_config.py`; the tests section J lists. Before step 1, so the scenario schema
+   and the reference scenarios are written with vents from the start.
 1. The scenario schema and inheritance in `config.py`: `tests/test_config.py` gains the rejection
    paths listed in section B, one test per rule, and the four reference files load.
 2. `scenarios.py`: intervals, fingerprints, sources, conditions; `tests/test_scenarios.py`:
@@ -769,6 +811,14 @@ Phase 3's gate conditions, each with the scenarios it bears on, so Phase 4's out
 - *Of this design.* The steady extreme (section A) overstates short events; the door's exchange
   velocity and split are assumptions until a measurement sets them (section B); the cylinder's
   lateral boundary is the freestream condition unless option (4) is built (section F).
+- *The equipment vents carry air only (section J, 2026-10-16).* A cooling discharge leaves a
+  tool face at the temperature of the room in this model: the heat it carries, and the rising
+  plume that heat makes over a tool, wait for a temperature equation and a buoyancy term in a
+  later step. Where a discharge is warm in the room it models, the computed jet is the
+  isothermal one and the mixing above the tool is the forced jet's alone. The discharge carries
+  its configured concentration, not the mean of the air its intake drew in: the intake and the
+  discharge are two segments the transport does not link, as the supply is not linked to the
+  returns (ADR-011 decision 3, no recirculation).
 
 ## I. The efficiency batch (step 0's housekeeping)
 Listed as the first build step's housekeeping, each with its location:
@@ -799,6 +849,94 @@ Listed as the first build step's housekeeping, each with its location:
   (`git branch --merged main`, `git branch -r --merged main`); delete the merged ones, keeping
   the annotated tag `collocated-final` and the backup branch
   `backup/ecr-001-close-phase2-ecfa399`.
+
+## J. Equipment vents (the amendment of 2026-10-16, step 0b)
+**What the vents are.** Clean-room process tools carry vents of two kinds. Process exhaust is
+ducted from the tool's body to the facility's exhaust: air leaves the room through an opening
+on a tool face at a flow the facility's fan sets. Cooling discharge is room air drawn through
+the tool's electronics and blown back into the room: a jet from a tool face, with an intake
+elsewhere on the tool. Today a boundary segment can sit only on a domain edge, and every face
+between a SOLID and a non-SOLID cell is a no-slip, no-flux wall, so neither kind can be
+represented. Alex's decision of 2026-10-16: both, as airflow only (section H carries the heat
+they omit). This section is design text for step 0b's own prompt; nothing of it is built in
+step 0.
+
+**The segment.** An obstacle-face segment is a boundary segment in the `boundaries` section,
+so the event model (section B) replaces or sets it by name like any other (a tool's exhaust
+failing, a cooling fan stopping), with `location: obstacle` and two keys of its own:
+`obstacle`, the name of an obstacle in the `obstacles` list, and `face`, one of `top`,
+`bottom`, `left`, `right`, the obstacle's face it sits on. Its extent along that face is
+`x_start` and `x_end` for a top or bottom face and `y_start` and `y_end` for a side, as for a
+domain-edge segment. Two existing types, no new one:
+- `fixed_flow_outlet`, the process exhaust: the face's normal velocity is held outward from the
+  room into the obstacle at `velocity`, which is required (a vent's flow is the facility's,
+  stated, not a share of the remainder). It joins the stated outlets in ADR-012 decision 1's
+  remainder rule, so the domain-edge returns that state no velocity share what the supply
+  leaves after the hood and every exhaust vent, and the room stays balanced exactly on any mesh.
+- `velocity_inlet`, the cooling discharge: the face's normal velocity is held into the room at
+  `velocity`, normal to the face (`u_velocity` and `v_velocity` keep their domain-edge meaning
+  for an angled jet), with `turbulence_intensity` and `dissipation_length` required with the
+  turbulence section (ADR-012 C's inlet rule, as for the supply), and the concentration keys
+  allowed as on any inlet. Its intake, when the tool draws from the room, is a second segment,
+  a `fixed_flow_outlet` on another face of the same tool at the flow that balances it; a
+  discharge with no intake adds its flow to the room, and the returns take it by the remainder
+  rule.
+`pressure_outlet` and `wall` are refused on an obstacle face: the zero-gradient copy needs the
+face beyond the outlet, which is inside the obstacle, and the copy's weakness to entering air
+(#61) is why the room has no pressure outlet; an obstacle face is a wall already.
+
+**What each layer reads.**
+- *Velocity layer* (`boundary_registry.py`, `boundary_staggered.py`). The registry resolves
+  obstacle-face segments as it resolves edge segments, through the same coverage rule (first
+  match in configuration order, wall by default), on the obstacle's face coordinates.
+  `apply_normal_velocity` writes the prescribed normal velocity on the covered faces of the
+  SOLID cells' boundary, which are interior entries of the face arrays, as it writes the
+  domain's inlet faces, once before the loop; the inward-flux and the reference-flux sums
+  (`get_total_inlet_flux`, the corrector's `flux_scale`) include the discharges, and the
+  remainder rule's stated outflow includes the exhausts.
+- *Momentum and pressure* (`momentum.py`, `pressure.py`). A face bounding a SOLID cell is not an
+  unknown today and its value is read as zero (momentum.py's module notes, "Obstacles"). A
+  vent face stays not an unknown, with its prescribed value read where zero is read now: the
+  continuity of the fluid cell beside it (the corrector's right-hand side and
+  `mass_imbalance`), and the QUICK boundary form at the obstacle, whose wall node takes the
+  vent's normal velocity. The tangential component on a vent's span is the domain inlet's: the
+  prescribed tangential velocity (zero for a normal jet) with the molecular viscosity, not the
+  obstacle wall stencil. The p' equation keeps no coefficient across the face, as at a domain
+  inlet. Configurations without vents are bitwise unchanged (the hashes of record, REQ-S16).
+- *Wall treatment* (`turbulence.py`). `TurbulenceBoundary.wall_faces` drops the vent faces
+  (a vent is not a wall: no wall function, no held eps from it, no wall production); a
+  discharge's faces carry its inflow k and eps into the k and eps step, as a domain inlet's
+  do; an exhaust's faces take the cell's k and eps out (upwind), as a domain fixed-flow outlet's
+  do. A cell beside a vent and beside a wall elsewhere keeps the wall function on its wall
+  faces only.
+- *Concentration boundary* (`boundary_concentration.py`). A discharge's faces are inlet faces
+  (`inflow_u`, `inflow_v` carry `concentration[k]`, HEPA-reduced when `hepa_filtered`, zero
+  when absent); an exhaust's faces are outlet faces, with the outflow from the upwind cell and
+  the budget booking it as outflow. Neither deposits: `surface_u` and `surface_v` are
+  `SURFACE_NONE` on a vent's span, so the obstacle's deposition total counts its wall faces
+  only.
+
+**Validated at load (REQ-C02).** `obstacle` names an obstacle that exists; `face` is one of the
+four; the extent lies within the face's span and is not empty; the face does not lie on a domain
+edge (an obstacle standing on the floor has no bottom face to vent from) or against another
+obstacle; two vents on one face do not overlap; the type is `velocity_inlet` or
+`fixed_flow_outlet`, a fixed-flow vent states its `velocity` and an inlet vent its
+turbulence keys with the turbulence section; `obstacle` and `face` are refused on a segment
+whose `location` is a domain edge, and required when it is `obstacle`; bools are
+refused where numbers are expected and unknown keys refused, as for every other segment. On the
+mesh, the extent must cover at least one face of the obstacle's boundary.
+
+**The tests (step 0b).** In `tests/test_config.py`, one test per rejection path above. In the
+layers' test files: the normal velocity written on exactly the covered obstacle faces and read
+back from the corrected faces unchanged after a solve; the flux through a vent equals its
+velocity times its span exactly; a closed box whose only openings are a discharge and an
+exhaust of equal flow converges with the signed domain sum of the imbalance at rounding; the
+remainder rule's returns share the supply less the hood and the exhausts; `wall_faces` excludes
+the vent span and keeps the rest of the obstacle; a discharge carrying a concentration enters
+the budget's inflow at velocity times span times concentration; an exhaust's outflow is booked
+as outflow and no vent face deposits; and every configuration without vents bitwise unchanged
+(the hashes of record). One product-grid measurement: the product room with a process exhaust
+on a tool's side and a cooling discharge on a tool's top converges under the stopping rule.
 
 ## Probes (committed before the runs; results after)
 

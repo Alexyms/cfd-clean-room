@@ -254,12 +254,12 @@ same marches (its section 6.1), with the counts per pair under it.
 <!-- tables48 compare begin -->
 | Pair, source, class (um) | Hotspots in common (of 5) | In common | Largest: first | Largest: second | Same surface | Sensor order above the floor: first | Second | Orders equal |
 |---|---|---|---|---|---|---|---|---|
-| grids, standard, S1, 0.5 | 5 | floor | x 1.2; floor | x 1.4; server_rack west | y 0.0; server_rack west | y 0.2; server_rack west | y 0.4 | floor | x 1.2 | floor | x 1.2 | yes | near_door | near_door | yes |
-| grids, standard, S1, 5 | 5 | floor | x 1.2; floor | x 1.4; server_rack west | y 0.0; server_rack west | y 0.2; server_rack west | y 0.4 | floor | x 1.2 | floor | x 1.2 | yes | near_door | near_door | yes |
-| grids, standard, S2, 0.5 | 5 | litho_tool top | x 3.6; litho_tool top | x 3.4; litho_tool top | x 3.8; litho_tool top | x 3.2; floor | x 3.0 | litho_tool top | x 3.6 | litho_tool top | x 3.6 | yes | none | none | yes |
-| grids, standard, S2, 5 | 5 | litho_tool top | x 3.6; litho_tool top | x 3.4; litho_tool top | x 3.8; litho_tool top | x 3.2; floor | x 3.0 | litho_tool top | x 3.6 | litho_tool top | x 3.6 | yes | none | none | yes |
-| grids, standard, S3, 0.5 | 4 | floor | x 6.2; hood_bench west | y 0.0; hood_bench west | y 0.2; hood_bench west | y 0.4 | floor | x 6.2 | floor | x 6.2 | yes | none | none | yes |
-| grids, standard, S3, 5 | 5 | floor | x 6.2; floor | x 5.6; hood_bench west | y 0.0; hood_bench west | y 0.2; hood_bench west | y 0.4 | floor | x 6.2 | floor | x 6.2 | yes | none | none | yes |
+| grids, standard, S1, 0.5 | 5 | floor \| x 1.2; floor \| x 1.4; server_rack west \| y 0.0; server_rack west \| y 0.2; server_rack west \| y 0.4 | floor \| x 1.2 | floor \| x 1.2 | yes | near_door | near_door | yes |
+| grids, standard, S1, 5 | 5 | floor \| x 1.2; floor \| x 1.4; server_rack west \| y 0.0; server_rack west \| y 0.2; server_rack west \| y 0.4 | floor \| x 1.2 | floor \| x 1.2 | yes | near_door | near_door | yes |
+| grids, standard, S2, 0.5 | 5 | litho_tool top \| x 3.6; litho_tool top \| x 3.4; litho_tool top \| x 3.8; litho_tool top \| x 3.2; floor \| x 3.0 | litho_tool top \| x 3.6 | litho_tool top \| x 3.6 | yes | none | none | yes |
+| grids, standard, S2, 5 | 5 | litho_tool top \| x 3.6; litho_tool top \| x 3.4; litho_tool top \| x 3.8; litho_tool top \| x 3.2; floor \| x 3.0 | litho_tool top \| x 3.6 | litho_tool top \| x 3.6 | yes | none | none | yes |
+| grids, standard, S3, 0.5 | 4 | floor \| x 6.2; hood_bench west \| y 0.0; hood_bench west \| y 0.2; hood_bench west \| y 0.4 | floor \| x 6.2 | floor \| x 6.2 | yes | none | none | yes |
+| grids, standard, S3, 5 | 5 | floor \| x 6.2; floor \| x 5.6; hood_bench west \| y 0.0; hood_bench west \| y 0.2; hood_bench west \| y 0.4 | floor \| x 6.2 | floor \| x 6.2 | yes | none | none | yes |
 
 Per pair, over its sources and classes:
 | Pair | Rows (source, class) | Largest the same segment | At least four of five shared | Fewest shared | Sensor orders equal |

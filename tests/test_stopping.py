@@ -106,7 +106,7 @@ def test_a_stall_never_converges(kind: str) -> None:
 def test_continuity_decides_once_the_estimate_is_met(
     imbalance: float, expected: bool
 ) -> None:
-    """Defect caught: condition (b) dropped. The imbalance is asked for only under (a)."""
+    """Defect caught: (b) dropped. The imbalance is asked for only under (a)."""
     calls: list[float] = []
 
     def worst() -> ImbalanceSummary:
@@ -186,7 +186,7 @@ def test_iteration_state_has_its_seven_fields_in_order() -> None:
 
 @pytest.mark.unit
 def test_imbalance_summary_refuses_positional_readings() -> None:
-    """Defect caught: kw_only removed, which lets two readings swap silently (test 28 S2)."""
+    """Defect caught: kw_only removed; two readings could swap silently (test 28 S2)."""
     with pytest.raises(TypeError):
         ImbalanceSummary(5e-11, 2.5e-8, 1e-11)
 
@@ -197,7 +197,7 @@ def test_imbalance_summary_refuses_positional_readings() -> None:
 def test_a_scale_or_tolerance_not_positive_and_finite_is_rejected(
     position: int, bad: float
 ) -> None:
-    """Defect caught: the constructor's validation removed (zero, negative, NaN, inf, True)."""
+    """Defect caught: constructor checks removed (zero, negative, NaN, inf, True)."""
     args = [SCALE, FLUX, 1e-6, 1e-10]
     args[position] = bad
     with pytest.raises(ValueError, match="must be positive and finite"):
@@ -375,7 +375,7 @@ def test_one_cells_overshoot_leaves_the_stop_unchanged() -> None:
 
 @pytest.mark.unit
 def test_each_step_is_estimated_over_the_scale_passed_with_it() -> None:
-    """The scale of the step at hand, not the first one: the median moves with the iterate.
+    """The scale of the step at hand, not the first: the median moves with the iterate.
 
     The steps contract at 0.9 and the scale doubles at outer iteration 150;
     every estimate is the step's own over that step's scale. Defect caught:
@@ -423,7 +423,7 @@ def test_a_laminar_rule_refuses_a_viscosity_step_or_scale(
 @pytest.mark.unit
 @pytest.mark.parametrize("bad", [0.0, -1.0, math.inf, math.nan, True])
 def test_a_nu_scale_not_positive_and_finite_is_rejected(bad: float) -> None:
-    """Defect caught: the per-step scale's validation removed; the step recorded first."""
+    """Defect caught: per-step scale validation removed; the step recorded first."""
     rule = _rule_e()
     with pytest.raises(ValueError, match="nu_scale must be positive and finite"):
         rule.update(1e-3, lambda: _summary(), viscosity_step=1e-6, nu_scale=bad)
@@ -434,6 +434,88 @@ def test_a_nu_scale_not_positive_and_finite_is_rejected(bad: float) -> None:
 @pytest.mark.unit
 @pytest.mark.parametrize("bad", [1, "yes", None])
 def test_viscosity_condition_must_be_a_bool(bad: object) -> None:
-    """Defect caught: a truthy value turning (e) on, or a scale passed where the flag goes."""
+    """Defect caught: a truthy value turning (e) on, or a scale passed as the flag."""
     with pytest.raises(TypeError, match="viscosity_condition must be a bool"):
         ErrorEstimateRule(SCALE, FLUX, 1e-6, 1e-10, viscosity_condition=bad)  # type: ignore[arg-type]
+
+
+def _feed_both(
+    rule: ErrorEstimateRule, velocity: np.ndarray, nu: np.ndarray
+) -> list[bool]:
+    """Feed velocity and viscosity steps together at NU_SCALE, readings all zero."""
+    return [
+        rule.update(
+            float(s), lambda: _summary(), viscosity_step=float(e), nu_scale=NU_SCALE
+        )
+        for s, e in zip(velocity, nu, strict=True)
+    ]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("cut", [0, 37, RATE_WINDOW, RATE_WINDOW + 61])
+def test_a_restored_window_answers_as_the_rule_it_came_from(cut: int) -> None:
+    """A rule seeded with another's window gives its estimates and stops (ADR-014 D).
+
+    Defects caught: the window returned newest first; the restore dropping
+    the oldest steps; the viscosity window not restored; a restore that
+    leaves the rule one step behind.
+    """
+    velocity = _geometric(0.95, RATE_WINDOW + 150, 1e-9)
+    nu = _geometric(0.9, RATE_WINDOW + 150, 1e-12)
+    whole, first = _rule_e(), _rule_e()
+    whole_answers = _feed_both(whole, velocity, nu)
+    first_answers = _feed_both(first, velocity[:cut], nu[:cut])
+    steps, nu_steps = first.window()
+    kept = slice(max(0, cut - RATE_WINDOW), cut)
+    assert steps == tuple(float(s) for s in velocity[kept])
+    assert nu_steps == tuple(float(e) for e in nu[kept])
+    second = _rule_e()
+    second.restore(steps, nu_steps)
+    rest = _feed_both(second, velocity[cut:], nu[cut:])
+    assert first_answers + rest == whole_answers
+    assert True in whole_answers
+    assert second.estimate_history == whole.estimate_history[cut:]
+    assert second.viscosity_estimate_history == whole.viscosity_estimate_history[cut:]
+
+
+@pytest.mark.unit
+def test_a_laminar_window_has_no_viscosity_steps() -> None:
+    """Defect caught: the viscosity window filled, or demanded, with (e) off."""
+    rule = _rule()
+    _feed(rule, _geometric(0.9, 5, 1e-6))
+    steps, nu_steps = rule.window()
+    assert len(steps) == 5 and nu_steps == ()
+    fresh = _rule()
+    fresh.restore(steps)
+    assert fresh.window() == (steps, ())
+    with pytest.raises(ValueError, match="viscosity_steps must hold 0 steps"):
+        _rule().restore(steps, steps)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("steps", "nu_steps", "match"),
+    [
+        ((1e-6,) * (RATE_WINDOW + 1),) * 2 + ("more than RATE_WINDOW",),
+        ((1e-6, -1e-7), (1e-9, 1e-9), "finite and non-negative"),
+        ((1e-6, math.nan), (1e-9, 1e-9), "finite and non-negative"),
+        ((1e-6, True), (1e-9, 1e-9), "must hold floats"),
+        ((1e-6, 1e-7), (1e-9,), "viscosity_steps must hold 2 steps"),
+        ((1e-6,), (), "viscosity_steps must hold 1 steps"),
+    ],
+)
+def test_a_window_that_cannot_have_come_from_a_rule_is_refused(
+    steps: tuple, nu_steps: tuple, match: str
+) -> None:
+    """Defects caught: an overlong, negative, NaN, bool or mismatched window passes."""
+    with pytest.raises(ValueError, match=match):
+        _rule_e().restore(steps, nu_steps)
+
+
+@pytest.mark.unit
+def test_restore_refuses_a_rule_that_has_taken_steps() -> None:
+    """Defect caught: a restore appended after steps a solve already took."""
+    rule = _rule()
+    _feed(rule, _geometric(0.9, 3, 1e-6))
+    with pytest.raises(ValueError, match="restore seeds a new rule"):
+        rule.restore((1e-6,))

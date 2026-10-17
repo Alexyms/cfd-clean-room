@@ -507,7 +507,7 @@ What this implies is a question in section 7.
 Where one and ten sweeps both converge (the three uniform fields on 40x15, U2 and U3 through
 the reruns past the cap):
 
-| Field | Grid | Outer: one, ten | Wall (s): one, ten | max |du|, |dv| (m/s) | Largest speed difference, at | RMS, median | Largest / tolerance (4.5e-7 m/s) |
+| Field | Grid | Outer: one, ten | Wall (s): one, ten | max \|du\|, \|dv\| (m/s) | Largest speed difference, at | RMS, median | Largest / tolerance (4.5e-7 m/s) |
 |---|---|---|---|---|---|---|---|
 | U1 | 40x15 | 1,535, 333 | 25, 7 | 1.31e-07, 2.50e-07 | 2.51e-07, (1.3, 1.1) | 2.96e-08, 6.00e-13 | 0.557 |
 | U2 | 40x15 | 5,012, 334 | 83, 6 | 1.56e-07, 1.80e-07 | 1.81e-07, (1.3, 0.5) | 3.32e-08, 4.06e-11 | 0.403 |
@@ -527,7 +527,7 @@ other field converged on all three grids (Z2 converges on 40x15 and 80x30 only),
 measurement has one field. The points are section 2.3's; "far" excludes points within 0.2 m of an
 obstacle rectangle.
 
-| Field | Points | Coarse grid | Comp. | Points (far) | Largest |diff| (m/s), at | RMS | Largest, far from obstacles, at | RMS far | Scale: fine max |comp.| |
+| Field | Points | Coarse grid | Comp. | Points (far) | Largest \|diff\| (m/s), at | RMS | Largest, far from obstacles, at | RMS far | Scale: fine max \|comp.\| |
 |---|---|---|---|---|---|---|---|---|---|
 | U1 | sensors | 40x15 | u | 4 (4) | 0.205, (1.00, 1.50) | 0.169 | 0.205, (1.00, 1.50) | 0.169 | 0.405 |
 | U1 | sensors | 40x15 | v | 4 (4) | 0.527, (1.00, 1.50) | 0.3 | 0.527, (1.00, 1.50) | 0.3 | 1.25 |
@@ -594,7 +594,7 @@ U1 and U2 on 80x30 and 200x75 at ten sweeps, the count that converged U1 on both
 count converged U2 on either, so its rows compare the bounded behaviour. The corner-free
 predictor is `tail43.corner_free_class()`.
 
-| Run | Setting | Class: this, committed | Outer: this, committed (ratio) | velocity_step at: this, committed | CG mean, largest: this; committed | Wall (s): this, committed | Faces: max |du|, |dv| (m/s) | Cells: largest speed difference, at; RMS |
+| Run | Setting | Class: this, committed | Outer: this, committed (ratio) | velocity_step at: this, committed | CG mean, largest: this; committed | Wall (s): this, committed | Faces: max \|du\|, \|dv\| (m/s) | Cells: largest speed difference, at; RMS |
 |---|---|---|---|---|---|---|---|---|
 | L_80x30_s10_cf | corner-free | bounded neither, bounded neither | 5,000, 5,000 (1.000) | -, - | 365, 378; 360, 370 | 211, 208 | - | - |
 | U1_200x75_s10_cf | corner-free | converged, converged | 2,203, 2,329 (0.946) | 1,134, 1,155 | 745, 863; 735, 862 | 511, 524 | 7.17e-02, 1.05e-01 | 1.09e-01, (6.34, 0.82); 1.22e-02 |
@@ -636,7 +636,7 @@ corner rule's QUICK half decides U2 and nothing below it on this grid.
 
 U1 and U2 on 80x30 and 200x75 at ten sweeps, `pressure_rtol` 1e-4 and 1e-2 against 1e-8.
 
-| Run | pressure_rtol | Class: this, committed | Outer: this, committed (ratio) | velocity_step at: this, committed | CG mean, largest: this; committed | Wall (s): this, committed | Faces: max |du|, |dv| (m/s) | Cells: largest speed difference, at; RMS |
+| Run | pressure_rtol | Class: this, committed | Outer: this, committed (ratio) | velocity_step at: this, committed | CG mean, largest: this; committed | Wall (s): this, committed | Faces: max \|du\|, \|dv\| (m/s) | Cells: largest speed difference, at; RMS |
 |---|---|---|---|---|---|---|---|---|
 | U1_200x75_s10_r1e-2 | 1e-2 | converged, converged | 3,981, 2,329 (1.709) | 1,622, 1,155 | 83, 440; 735, 862 | 225, 524 | 2.87e-08, 3.04e-08 | 3.31e-08, (1.18, 0.14); 3.05e-09 |
 | U1_200x75_s10_r1e-4 | 1e-4 | converged, converged | 2,329, 2,329 (1.000) | 1,155, 1,155 | 445, 666; 735, 862 | 357, 524 | 3.07e-10, 3.20e-10 | 4.02e-10, (1.1, 0.58); 3.37e-11 |

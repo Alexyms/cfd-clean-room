@@ -116,31 +116,33 @@ Generated from the import statements in `src/` by `scripts/gen_system_map.py`. R
 
 <!-- BEGIN GENERATED: dsm -->
 ```
-                         boundary_concentration  boundary_registry  boundary_staggered  config  constants  mesh  momentum  multigrid  particles  pressure  scalar_scheme  solver_staggered  solver_transport  staggered  stopping  turbulence
-boundary_concentration             .                     X                  .             X         .       X       .          .          X         .            .               .                 .              X         .          .
-boundary_registry                  .                     .                  .             X         .       .       .          .          .         .            .               .                 .              .         .          .
-boundary_staggered                 .                     X                  .             X         .       X       .          .          .         .            .               .                 .              X         .          .
-config                             .                     .                  .             .         .       .       .          .          .         .            .               .                 .              .         .          .
-constants                          .                     .                  .             .         .       .       .          .          .         .            .               .                 .              .         .          .
-mesh                               .                     .                  .             X         .       .       .          .          .         .            .               .                 .              .         .          .
-momentum                           .                     .                  X             X         .       X       .          .          .         .            .               .                 .              X         .          .
-multigrid                          .                     .                  .             .         .       .       .          .          .         .            .               .                 .              .         .          .
-particles                          .                     .                  .             X         X       .       .          .          .         .            .               .                 .              .         .          .
-pressure                           .                     .                  X             X         .       X       X          X          .         .            .               .                 .              X         .          .
-scalar_scheme                      .                     .                  .             .         .       X       X          .          .         .            .               .                 .              .         .          .
-solver_staggered                   .                     .                  X             X         .       X       X          .          .         X            .               .                 .              X         X          X
-solver_transport                   X                     .                  .             X         .       X       .          .          X         .            X               .                 .              X         .          .
-staggered                          .                     .                  .             .         .       X       .          .          .         .            .               .                 .              .         .          .
-stopping                           .                     .                  .             .         .       .       .          .          .         .            .               .                 .              .         .          .
-turbulence                         .                     X                  X             X         .       X       .          .          .         .            X               .                 .              X         .          .
+                         boundary_concentration  boundary_registry  boundary_staggered  config  constants  io_manager  mesh  momentum  multigrid  particles  pressure  scalar_scheme  solver_staggered  solver_transport  staggered  stopping  turbulence
+boundary_concentration             .                     X                  .             X         .          .        X       .          .          X         .            .               .                 .              X         .          .
+boundary_registry                  .                     .                  .             X         .          .        .       .          .          .         .            .               .                 .              .         .          .
+boundary_staggered                 .                     X                  .             X         .          .        X       .          .          .         .            .               .                 .              X         .          .
+config                             .                     .                  .             .         .          .        .       .          .          .         .            .               .                 .              .         .          .
+constants                          .                     .                  .             .         .          .        .       .          .          .         .            .               .                 .              .         .          .
+io_manager                         .                     .                  .             .         .          .        .       .          .          .         .            .               X                 .              .         .          .
+mesh                               .                     .                  .             X         .          .        .       .          .          .         .            .               .                 .              .         .          .
+momentum                           .                     .                  X             X         .          .        X       .          .          .         .            .               .                 .              X         .          .
+multigrid                          .                     .                  .             .         .          .        .       .          .          .         .            .               .                 .              .         .          .
+particles                          .                     .                  .             X         X          .        .       .          .          .         .            .               .                 .              .         .          .
+pressure                           .                     .                  X             X         .          .        X       X          X          .         .            .               .                 .              X         .          .
+scalar_scheme                      .                     .                  .             .         .          .        X       X          .          .         .            .               .                 .              .         .          .
+solver_staggered                   .                     .                  X             X         .          .        X       X          .          .         X            .               .                 .              X         X          X
+solver_transport                   X                     .                  .             X         .          .        X       .          .          X         .            X               .                 .              X         .          .
+staggered                          .                     .                  .             .         .          .        X       .          .          .         .            .               .                 .              .         .          .
+stopping                           .                     .                  .             .         .          .        .       .          .          .         .            .               .                 .              .         .          .
+turbulence                         .                     X                  X             X         .          .        X       .          .          .         .            X               .                 .              X         .          .
 ```
 
-Rows import columns. Edges, 46 total:
+Rows import columns. Edges, 47 total:
 
 ```
 boundary_concentration -> boundary_registry, config, mesh, particles, staggered
 boundary_registry      -> config
 boundary_staggered     -> boundary_registry, config, mesh, staggered
+io_manager             -> solver_staggered
 mesh                   -> config
 momentum               -> boundary_staggered, config, mesh, staggered
 particles              -> config, constants
@@ -171,18 +173,19 @@ When a PR modifies a module, the reviewer verifies impact on downstream modules.
 | boundary_staggered.py | momentum, pressure, solver_staggered, turbulence | Normal imposition writes domain faces only. Tangential data shape [n+1], outlet data shape [n], wall_distance semantics and the inward flux sign unchanged. A fixed-flow outlet face is Dirichlet in both components (its resolved outward velocity, tangential zero), is not a pressure outlet and not inlet flux, and does not enter get_max_boundary_velocity; a domain whose only outlets are fixed-flow reports has_pressure_outlet False, which is what engages the corrector's pin (ECR-002 step 3). wall_faces (ECR-002 step 6) marks a wall where the normal velocity is zero and the face is not an outlet, per edge cell and per corner; turbulence's wall functions read it. |
 | boundary_concentration.py | solver_transport | ConcentrationFaces array names, shapes and dtypes (face-shaped, read-only; float64 inflow and deposition, int32 surface codes, bool settling_v), the surface codes SURFACE_NONE 0, SURFACE_FLOOR 1, SURFACE_CEILING 2, SURFACE_WALL 3 the budget books deposition to, the settling_v mask (there is no settling_u; settling acts in -y), and the derivation of each condition from the registry's velocity type with the segment keys concentration, hepa_filtered and deposition_surface unchanged (ADR-011 E). |
 | momentum.py | pressure, solver_staggered, scalar_scheme | MomentumPrediction shapes and the meaning of a_p_u and a_p_v (un-relaxed diagonal, positive exactly at the unknown faces) unchanged; boundary entries of u and v read as given and never written. predict's two optional arguments (ECR-002 step 4): with mu_eff and wall_mu None the coefficients are bitwise the scalar path's, and solver_staggered passes mu_eff only when given an eddy_viscosity; the obstacle wall stencil changes coefficients only beside SOLID cells, which no validated case has. scalar_scheme reads quick_face_values only, for the transport solver: its signature, the `left` index of the low-side node of each face, the `positive` flow mask, the far node one past the upstream node (or one past the downstream node where that does not exist) and the caller placing the boundary value at its physical location as the end node; a change to any of these changes the transport face value. |
-| turbulence.py | solver_staggered (the coupled solve, ECR-002 step 6); tests/test_turbulence.py, tests/test_decaying_turbulence.py, tests/test_wall_functions.py, tests/test_coupled_solve.py, tests/test_turbulent_channel.py | TurbulenceState's fields (k, eps and the kinematic nu_t, [ny, nx], read-only, SOLID zero) and the positivity promise: step raises PositivityError unless k and eps are positive and finite at every non-SOLID cell. TurbulenceConditions' fields, shapes and dtypes, built by the caller every step (step 6 builds them from the wall functions, the inlet keys and the staggered boundary layer's tangential values); a wall cell needs its eps held and its production given together, its eps following k, or k runs away beside a shear (prompt 35). step's two kinds of dt: None the per-cell pseudo-time step, capped, an error on a field at rest; a float one true-time step, refused above the stable step. VARIANTS' values are the sourced ones (results/builder35/constants.md); a change to one passes every test but tests/test_turbulence.py::TestConstants. TurbulenceBoundary (step 6): wall_viscosity returns wall_mu's layout, mu_w on wall_faces and the caller's values elsewhere; conditions builds a TurbulenceConditions from a state and corrected faces; initial_values and largest_inlet_eddy_viscosity are the solve's start and condition (e)'s inlet scale. KAPPA, E_WALL and Y_STAR_FLOOR are module constants that tests/couette_reference.py copies and tests/test_turbulent_channel.py checks. |
+| turbulence.py | solver_staggered (the coupled solve, ECR-002 step 6); tests/test_turbulence.py, tests/test_decaying_turbulence.py, tests/test_wall_functions.py, tests/test_coupled_solve.py, tests/test_turbulent_channel.py | TurbulenceState's fields (k, eps and the kinematic nu_t, [ny, nx], read-only, SOLID zero) and the positivity promise: step raises PositivityError unless k and eps are positive and finite at every non-SOLID cell. TurbulenceConditions' fields, shapes and dtypes, built by the caller every step (step 6 builds them from the wall functions, the inlet keys and the staggered boundary layer's tangential values); a wall cell needs its eps held and its production given together, its eps following k, or k runs away beside a shear (prompt 35). step's two kinds of dt: None the per-cell pseudo-time step, capped, an error on a field at rest; a float one true-time step, refused above the stable step. VARIANTS' values are the sourced ones (results/builder35/constants.md); a change to one passes every test but tests/test_turbulence.py::TestConstants. TurbulenceBoundary (step 6): wall_viscosity returns wall_mu's layout, mu_w on wall_faces and the caller's values elsewhere; conditions builds a TurbulenceConditions from a state and corrected faces; initial_values is the solve's start. KAPPA, E_WALL and Y_STAR_FLOOR are module constants that tests/couette_reference.py copies and tests/test_turbulent_channel.py checks. |
 | scalar_scheme.py | solver_transport, turbulence; tests/test_scalar_scheme.py and, through solver_transport, the transport gate tests (tests/test_advection.py and tests/test_smith_hutton.py plant their unlimited-face control on scalar_scheme.limited_face_values) | The transport gate's bits: implicit_step sums the diagonal west, east, south, north, then the sink, and the caller forms each face conductance before the call; a change of either order changes the gate's results without failing a test (prompt 35's hash control, results/builder35/). limited_face_values' clamp and its c_c guard on a zero downstream difference; advective_flux's boundary nodes (the inflow value where the flux enters, the adjacent cell otherwise) and its reading of a far node in a SOLID cell as the upstream value; implicit_step's non-negative result for non-negative input at any step, scalar or per cell, and its held mask (None the unheld path, bitwise; a held cell exactly its C*), which turbulence uses for the wall cells' eps. The method each caller names (prompt 51): the transport solver JACOBI, whose iterates keep a concentration's sign down to zero; turbulence CONJUGATE_GRADIENT, whose fallback to Jacobi from C* on the cap or a non-positive value keeps the result's sign; ImplicitResult's field names, which the model's last_iterations and last_fallbacks and the probes' traces read. |
 | pressure.py | solver_staggered; scripts/benchmark.py and tests/test_constancy.py (coefficients, mass_imbalance); tests/test_turbulence.py (mass_imbalance); scripts/stopping_probe.py and scripts/val001_order.py (PRESSURE_SOLVER_VERSION); scripts/benchmark.py, scripts/view_field.py and scripts/self_convergence.py (STAGGERED_METHOD) | PressureCorrection shapes, the right-hand side formed directly from face velocities with no compatibility correction, outlet faces corrected against p' = 0 with the nearest interior diagonal, closed-domain projection before the solve and pin at the first FLUID cell after it, the iteration count and reached_cap reported, flux_scale formed here and read by the solver. The stop: pressure_rtol on the relative residual, RESIDUAL_FLOOR times flux_scale, the true residual confirmed at exit, max_pressure_iter the cap. A change to the solve that moves saved fields beyond rounding raises PRESSURE_SOLVER_VERSION, which scripts/stopping_probe.py stores with every saved solve (each reader of a saved truth goes through solve_truth, which checks it) and scripts/val001_order.py puts in its reuse key, and which selects STAGGERED_METHOD from STAGGERED_METHODS, the method label (staggered-mgcg at version 3) the harness, the viewer and scripts/self_convergence.py import and carry in rows and file names, the harness also running a case under the diagonal as staggered-cg, which sets the preconditioner the label names; a version with no label of its own fails at import, so no saved field or row of one solver is reused as another's. |
 | multigrid.py | pressure (multigrid_preconditioner); tests/test_multigrid.py; docs/reports/probe53/ | Multigrid(coefficients, apply) and cycle(r) unchanged in shape; the coarse operators stay the exact Galerkin product of piecewise-constant 2x2 aggregation, so a closed domain's constant null space and SOLID rows reach every level; the cycle stays symmetric (the same weighted Jacobi sweep and count before and after) and positive on the range, as CG requires, and zero at cells with no equation. SMOOTHING_SWEEPS, SMOOTHER_FACTOR and COARSEST_CELLS change the iteration counts and times of every multigrid correction; a change to them repeats prompt 53's per-correction measurement and moves every laminar hash. Under the default key this runs in every pressure correction, so every field, the laminar hashes included, depends on it; under `jacobi` nothing here runs. |
-| solver_staggered.py | face_velocities is the transport solver's input, read by tests/test_constancy.py and tests/test_conservation.py (no import: solver_transport takes a FaceVelocities); time_integration (planned, Phase 4: the NS solver of section 2.1); scripts/benchmark.py, scripts/view_field.py, scripts/stopping_probe.py, scripts/val001_order.py, scripts/self_convergence.py | The public shape: cell-centered [ny, nx] float64 contiguous returns, the IterationState callback once per outer iteration with cell-centered fields and the corrector's iteration count, last_pressure_iterations, pressure_cap_hits and stage_seconds reset per solve, reference_velocity F_ref / (rho h). Under the default velocity_step rule the stop is the residual below convergence_tol, the definition every stored velocity-step row was taken under, so outer iteration counts compare with them, except that since 2026-10-06 an outer iteration whose correction reached max_pressure_iter cannot stop the solve (ADR-013 B); residual_history keeps that definition under both rules. The harness records pressure_cap_hits in every row. converged and stop_reason are set by every solve and reset at its start; the harness records them, with velocity_step_below_tol stored as residual_below_tol, the label every stored velocity-step row carries. face_velocities is None before the first solve and set at the end of every solve, converged or not (REQ-S13). |
-| stopping.py | solver_staggered, scripts/stopping_probe.py, scripts/val001_order.py, scripts/benchmark.py, scripts/self_convergence.py | IterationState's fields, which the solver hands its on_iteration callback and the harness reads, unchanged in position; the count field is pressure_iterations since 2026-10-06 (pressure_sweeps before), and pressure_products, added last the same day, both read by name in scripts/benchmark.py's WorkCounter, which counts the work in products. update(step, imbalance) answers converged only when the estimate, the worst imbalance, the absolute sum over flux_scale and the absolute signed sum are all below their tolerances; the imbalance callable, which returns an ImbalanceSummary read by name from one evaluation, is not called until the estimate is met; no estimate (inf) while the window is short, a step in it is zero or not finite, or rho_hat is outside (0, 1). RATE_WINDOW stays a module constant. Since ECR-002 step 6 the version is the rule's (ErrorEstimateRule.version: RULE_VERSION_WITHOUT_E 3, RULE_VERSION_WITH_E 4, with nu_scale given), read through the solver (StaggeredSolver.rule_version, solver_staggered.rule_version(config)) by stopping_probe and val001_order, which store it with their saved solves, so that they solve again, and by the harness, which records it in every error_estimate row, so that its summary keeps the versions apart. update's viscosity_step is given exactly when the rule has a nu_scale. |
+| solver_staggered.py | face_velocities is the transport solver's input, read by tests/test_constancy.py and tests/test_conservation.py (no import: solver_transport takes a FaceVelocities); time_integration (planned, Phase 4: the NS solver of section 2.1); scripts/benchmark.py, scripts/view_field.py, scripts/stopping_probe.py, scripts/val001_order.py, scripts/self_convergence.py | The public shape: cell-centered [ny, nx] float64 contiguous returns, the IterationState callback once per outer iteration with cell-centered fields and the corrector's iteration count, last_pressure_iterations, pressure_cap_hits and stage_seconds reset per solve, reference_velocity F_ref / (rho h). Under the default velocity_step rule the stop is the residual below convergence_tol, the definition every stored velocity-step row was taken under, so outer iteration counts compare with them, except that since 2026-10-06 an outer iteration whose correction reached max_pressure_iter cannot stop the solve (ADR-013 B); residual_history keeps that definition under both rules. The harness records pressure_cap_hits in every row. converged and stop_reason are set by every solve and reset at its start; the harness records them, with velocity_step_below_tol stored as residual_below_tol, the label every stored velocity-step row carries. face_velocities is None before the first solve and set at the end of every solve, converged or not (REQ-S13). Since ADR-014 step 0 (prompt 60): flow_state and steady_checkpoint are set beside it; initial=None and resume=None are the solve from rest, bitwise (the hashes of record, REQ-S16), a warm start rebuilds nu_t from k and eps and restarts the rule, and a resume continues the checkpoint's solve bitwise, so time_integration (planned) and io_manager depend on both meanings staying apart. |
+| stopping.py | solver_staggered, scripts/stopping_probe.py, scripts/val001_order.py, scripts/benchmark.py, scripts/self_convergence.py | IterationState's fields, which the solver hands its on_iteration callback and the harness reads, unchanged in position; the count field is pressure_iterations since 2026-10-06 (pressure_sweeps before), and pressure_products, added last the same day, both read by name in scripts/benchmark.py's WorkCounter, which counts the work in products. update(step, imbalance) answers converged only when the estimate, the worst imbalance, the absolute sum over flux_scale and the absolute signed sum are all below their tolerances; the imbalance callable, which returns an ImbalanceSummary read by name from one evaluation, is not called until the estimate is met; no estimate (inf) while the window is short, a step in it is zero or not finite, or rho_hat is outside (0, 1). RATE_WINDOW stays a module constant. Since ECR-002 step 6 the version is the rule's (ErrorEstimateRule.version: RULE_VERSION_WITHOUT_E 3, RULE_VERSION_WITH_E 5, with viscosity_condition on), read through the solver (StaggeredSolver.rule_version, solver_staggered.rule_version(config)) by stopping_probe and val001_order, which store it with their saved solves, so that they solve again, and by the harness, which records it in every error_estimate row, so that its summary keeps the versions apart. update's viscosity_step is given exactly when the rule has a nu_scale. window() and restore() (ADR-014 step 0) carry the rate fits' steps, oldest first, so a restored rule's estimates and stops are its source's; the steady checkpoint of solver_staggered and io_manager stores them. |
 | solver_transport.py | time_integration, monitor (planned, Phases 4 and 5); the Phase 7 animation (FieldHistory); tests/test_solver_transport.py, tests/test_diffusion.py, tests/test_advection.py, tests/test_constancy.py, tests/test_smith_hutton.py, tests/test_conservation.py, tests/test_sealed_box.py; validation/transport_cases.py hands it stand-ins | solve_timestep takes FaceVelocities, not cell means, a sources rate array and the keyword-only eddy_viscosity field (nu_t per cell, m^2/s, None the laminar path bitwise; the face value is the distance-weighted harmonic mean, so a caller that hands another face rule changes the contract), and returns a new [ny, nx] float64 contiguous field with SOLID cells zero; stable_dt's definition, the sum of the two directional rates, infinite at rest; v_ext a FaceVelocities-shaped per-class drift on the interior faces, None read as zero (REQ-T06); MassBudget field names (initial, inflow, outflow, source, deposited by floor, ceiling, wall, obstacle, current) and that only the solver writes them; FieldHistory's record signature and npz keys (steps, times, C_<k>). The solver reads settling_velocity and diffusion_coeff of physics and faces_for of boundary and nothing else of either, so the validation cases hand it ScalarPhysics and FixedConditions (validation/transport_cases.py); a change to what it reads changes that contract. |
 | particles.py | boundary_concentration, solver_transport | Settling velocity, diffusion coefficient and deposition velocity interface unchanged. Return types, units and signs unchanged (settling positive downward, deposition non-negative; the floor value includes settling, which the solver must not add again, ADR-011 D). |
-| scenarios.py | time_integration; the boundary layers (planned, Phase 4) | Source term and BC modification interfaces unchanged. Event timing semantics unchanged. |
+| scenarios.py | time_integration; the boundary layers (planned, Phase 4) | Planned (ADR-014 G): intervals(), flow_states(), sources_at(t), conditions_for(interval) and initial_fields() unchanged in signature and meaning; the fingerprint is computed from the velocity-layer keys only, so a transport-only event never adds a flow state; an event's start and end are interval boundaries. |
 | monitor.py | time_integration | Update and query interfaces unchanged. Alert output format unchanged. |
 | csolver/ | solver_staggered (REQ-N03's NumPy reference, ADR-010), solver_transport; both planned, Phase 6 | CUDA kernel signatures match pybind11 declarations. Memory layout assumptions (row-major, contiguous, double precision) unchanged. |
-| time_integration.py | io_manager | Timestep sequence and output trigger logic unchanged. |
+| time_integration.py | nothing in src/ (planned, Phase 4; ADR-014 G: nothing imports it) | Timestep sequence and output trigger logic unchanged: one step for every class, the interval to the next switch divided into equal steps, the concentration fields and the budget carried across a switch unchanged (ADR-014 A). |
+| io_manager.py | time_integration (planned, Phase 4); tests/test_io_manager.py | The run file's groups and dataset names (ADR-014 D) unchanged, so a run file written before a change still restarts after it; /steady_checkpoint/ (step 0) holds every field of SteadyCheckpoint as "<f8" so a resume from it is the uninterrupted solve bitwise. |
 
 ### 3.3 Cross-Cutting Concerns
 
@@ -206,19 +209,20 @@ Generated. The responsibility and serves columns are editorial and come from `do
 | `src/boundary_staggered.py` | 594 | Writes Dirichlet normal velocities exactly into the staggered domain-face entries and exposes the tangential wall values, wall distances, pressure outlets and wall faces as data for the momentum and pressure steps and the wall functions. | S12 |
 | `src/config.py` | 1353 | Loads the YAML configuration into typed dataclasses and rejects missing keys, wrong types and out-of-range values at load time. | A02, A03, C01, C02, S10 |
 | `src/constants.py` | 8 | Holds the physical constants shared by every module so that none of them defines its own copy. | C04 |
+| `src/io_manager.py` | 124 | Writes a steady solve's checkpoint into the run file's steady_checkpoint group and reads it back bitwise, so a solve stopped at its cap continues in another process; the rest of the run file is ADR-014 step 3's. | none |
 | `src/mesh.py` | 423 | Builds the structured grid, uniform or geometrically clustered at the walls, with the face, center, width and center-to-center arrays a face-based stencil needs, and classifies each cell as FLUID, SOLID or BOUNDARY. | S11 |
 | `src/momentum.py` | 1020 | Predicts u* and v* on the staggered grid with QUICK advection by deferred correction over an upwind implicit matrix, a configured number of under-relaxed Jacobi sweeps per call, an optional per-cell viscosity field with its face rule and stress source, and the domain edge's wall stencil at obstacle faces, and returns the diagonal coefficients the pressure correction needs. | S07, S09, S14 |
 | `src/multigrid.py` | 384 | Builds an additive-correction multigrid hierarchy from a five-point pressure system by 2x2 aggregation, its coarse operators the exact Galerkin sums with no probing, and applies one symmetric V-cycle with weighted Jacobi smoothing and a dense pseudo-inverse on the coarsest level as the preconditioner of the pressure correction's conjugate gradients. | S08 |
 | `src/particles.py` | 263 | Computes per-size-class transport properties: Cunningham correction, settling velocity, Brownian diffusion, deposition velocity and HEPA efficiency. | T03, T04, T09, T10 |
 | `src/pressure.py` | 856 | Assembles the staggered pressure correction equation from the momentum diagonals with the discrete divergence of u* as its right-hand side, solves it by conjugate gradients preconditioned with its diagonal or, under the pressure_preconditioner key, with one multigrid V-cycle per iteration, to a relative residual, a rounding floor or a reported iteration cap, corrects the face velocities and updates the pressure. | S04, S08 |
 | `src/scalar_scheme.py` | 548 | Holds the cell-centred scalar scheme the transport solver and the k-epsilon model share: QUICK's face value bounded by the UMIST limiter, the advective flux along one axis with the inflow value or the upwind cell at a domain face, and the backward Euler solve of diffusion with a non-negative cell sink by Jacobi or, for k and eps, by diagonal-preconditioned conjugate gradients that fall back to Jacobi on the cap or a non-positive value, on per-face conductances with one step or a step per cell, with an optional mask of cells held at their value. | S15, T12 |
-| `src/solver_staggered.py` | 547 | Runs steady SIMPLE on the staggered grid as one outer loop over the momentum predictor and the pressure correction, with the turbulence section one k and eps step and the relaxed eddy viscosity inside it, returning cell-centered fields through the harness's callback shape and exposing the final faces as FaceVelocities; stops by the velocity-step rule or, when configured, by the error-estimate rule. | S01, S02, S03, S04, S05, S07, S13, S14, S15 |
+| `src/solver_staggered.py` | 893 | Runs steady SIMPLE on the staggered grid as one outer loop over the momentum predictor and the pressure correction, with the turbulence section one k and eps step and the relaxed eddy viscosity inside it, returning cell-centered fields through the harness's callback shape and exposing the final faces as FaceVelocities; stops by the velocity-step rule or, when configured, by the error-estimate rule. | S01, S02, S03, S04, S05, S07, S13, S14, S15 |
 | `src/solver_transport.py` | 892 | Advances one particle class one explicit step on the staggered face velocities: QUICK's face value bounded by the UMIST limiter under forward Euler at a Courant number the configuration sets, implicit diffusion and deposition by Jacobi on per-face conductances, the Brownian coefficient plus nu_t / Sc_t on interior faces when handed an eddy viscosity field, the settling increment on interior faces, sources added and booked, SOLID cells zero; keeps one MassBudget per class and defines FieldHistory, the output contract for the animation. | N01, T01, T03, T04, T05, T06, T07, T08, T11, T12, T13 |
 | `src/staggered.py` | 324 | Defines the staggered (MAC) field layout: shapes and allocation of face-centered u and v and cell-centered p, the face-to-center averaging the solver applies before returning, and FaceVelocities, the read-only face pair the solver exposes and the transport solver advects with. | S07, S13 |
-| `src/stopping.py` | 351 | Decides when the steady outer iteration has converged, on four conditions: (a) the iteration error estimated from the step and its fitted geometric rate, over a physical velocity scale; (b) the worst per-cell mass imbalance against its own tolerance; (c) the summed imbalance over the through-flow, which shares the tolerance of (a); and (d) the signed imbalance summed over the domain, which shares the tolerance of (b); and with the turbulence model a fifth, (e), the same estimate on the eddy viscosity over the molecular viscosity plus the median eddy viscosity of the FLUID cells, which the solver passes each outer iteration. Also defines IterationState, the snapshot a solver hands its callback once per outer iteration. | S01, S04 |
-| `src/turbulence.py` | 1544 | Advances the k-epsilon model's k and eps one step on a prescribed face velocity field, standard or RNG with each variant's constants as module data: advection, explicit growth from the strain the faces give and implicit decay and diffusion through the shared scalar scheme, boundary values from a conditions object the caller builds each step, the kinematic eddy viscosity, and an assertion that k and eps are positive and finite after every step; and the scalable wall functions, which build those conditions, the wall viscosity of the momentum wall faces and the inlet values the coupled solve starts from. | S14, S15, S17 |
+| `src/stopping.py` | 408 | Decides when the steady outer iteration has converged, on four conditions: (a) the iteration error estimated from the step and its fitted geometric rate, over a physical velocity scale; (b) the worst per-cell mass imbalance against its own tolerance; (c) the summed imbalance over the through-flow, which shares the tolerance of (a); and (d) the signed imbalance summed over the domain, which shares the tolerance of (b); and with the turbulence model a fifth, (e), the same estimate on the eddy viscosity over the molecular viscosity plus the median eddy viscosity of the FLUID cells, which the solver passes each outer iteration. Also defines IterationState, the snapshot a solver hands its callback once per outer iteration. | S01, S04 |
+| `src/turbulence.py` | 1531 | Advances the k-epsilon model's k and eps one step on a prescribed face velocity field, standard or RNG with each variant's constants as module data: advection, explicit growth from the strain the faces give and implicit decay and diffusion through the shared scalar scheme, boundary values from a conditions object the caller builds each step, the kinematic eddy viscosity, and an assertion that k and eps are positive and finite after every step; and the scalable wall functions, which build those conditions, the wall viscosity of the momentum wall faces and the inlet values the coupled solve starts from. | S14, S15, S17 |
 
-Total 17 Python files, 9794 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
+Total 18 Python files, 10308 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
 
 `Declares it serves` is an EDITORIAL CLAIM read from `docs/system_map_annotations.toml`. It says which requirements a module is meant to satisfy, not that it does. Whether a requirement is met is answered by the tests named in the register's `Verified By` column.
 <!-- END GENERATED: components -->
@@ -242,8 +246,8 @@ Generated. Static import analysis cannot see a function bound into a registry by
 | Property | Value |
 |---|---|
 | Scope | `src/**/*.py` |
-| Files hashed | 17 |
-| Digest | `sha256:b29f84873294658e35460f9e68b7df4cf0597481b747afdd34ae87bcdab805ad` |
+| Files hashed | 18 |
+| Digest | `sha256:e5f05e05b2cad68af5e00ace6ed499008e1f76ce5af605140359a16bf852c749` |
 
 This is what lets the document answer whether it is current, which is the one question a stale table cannot be asked. `python scripts/gen_system_map.py --check` recomputes the whole set of generated regions, this digest included, and exits non-zero on any disagreement.
 
@@ -325,6 +329,13 @@ SimConfig:
     boundaries: dict[str, BoundarySpec]
     obstacles: list[ObstacleSpec]
     # scenarios: deferred to Phase 4, loaded via separate scenario YAML files
+    # Planned (ADR-014 B and G, accepted 2026-10-16; built at step 1):
+    #   scenario: ScenarioSpec | None   # the merged base, the events, the run keys
+    #   ScenarioSpec: base, events: tuple[EventSpec, ...], checkpoint_interval
+    #   EventSpec: name, start, duration, change: Replace | Set | Source | Initial
+    # Planned (ADR-014 J, the equipment vents, step 0b): BoundarySpec gains
+    #   location "obstacle" with keys obstacle (an obstacle's name) and face
+    #   (top, bottom, left, right); velocity_inlet and fixed_flow_outlet only
     sensors: list[SensorSpec]
     thresholds: dict[str, float]
 ```
@@ -536,6 +547,9 @@ MomentumPredictor:
         a_p, a_s_plus, a_s_minus, a_t_plus, a_t_minus, b_boundary, b_deferred,
         each in the component's own shape; s is the component's axis
     predict(u, v, p, mu_eff=None, wall_mu=None) -> MomentumPrediction
+        Planned (ADR-014 decision 3 and G, step 6): transient=None, either
+            (dt, u_old, v_old) for implicit Euler or (dt, (u_n, u_nm1),
+            (v_n, v_nm1)) for BDF2; None bitwise the steady path, as mu_eff
         mu_eff: dynamic effective viscosity per cell, Pa s, [ny, nx] float64,
             finite and positive in every non-SOLID cell, SOLID cells not read;
             None is the scalar path with air's mu, bitwise, and a uniform field
@@ -728,6 +742,16 @@ refuses the retired one by name. It does not define compute_residual() or
 solve_timestep(); the second is Phase 4's.
 
 ```
+FlowState(u, v, p, k=None, eps=None, nu_t=None, stop_reason=None, outer=0)
+    # frozen; read-only C-contiguous float64 copies, finite; u [ny, nx+1],
+    # v [ny+1, nx], p and k, eps, nu_t [ny, nx]; k, eps, nu_t all or none
+    # (turbulent); TypeError or ValueError at construction otherwise
+SteadyCheckpoint(state, residual_history, velocity_steps, viscosity_steps,
+                 rule_version, pressure_cap_hits)
+    # frozen; len(residual_history) == state.outer
+CAP_STOP = "max_simple_iter"   # the stop_reason of a solve that reached the cap
+rule_version(config) -> int | None   # StaggeredSolver.rule_version without building a solver
+
 StaggeredSolver:
     __init__(mesh: Mesh, config: SimConfig, boundary: StaggeredBoundary)
     solve_steady(on_iteration=None, *, eddy_viscosity=None) -> tuple[ndarray, ndarray, ndarray]
@@ -750,10 +774,42 @@ StaggeredSolver:
             admits air. Without the section every call is the laminar one
     turbulence_state: TurbulenceState | None   # k, eps, relaxed nu_t of the last
                                 # coupled solve, read-only; None otherwise
+    Built in ADR-014 step 0 (prompt 60):
+    solve_steady(..., initial: FlowState | None = None,
+                 resume: SteadyCheckpoint | None = None)
+        initial: the warm start (ADR-014 A). The faces and p copied from the
+            state, then apply_normal_velocity writes this boundary's normal
+            faces over them; with the turbulence section k and eps through
+            KEpsilonModel.state, so nu_t is C_mu k^2 / eps and the state's
+            nu_t is not read (the start docs/reports/probe59/warm59.py made by
+            patching the two allocations, bitwise); the rule starts fresh.
+            None is the start from rest, bitwise (a FlowState of rest and the
+            inlets' uniform k and eps gives the same bits)
+        resume: continues a solve (ADR-014 D): the faces, p, k, eps and the
+            relaxed nu_t as they stood, residual_history, the rule's window
+            (ErrorEstimateRule.restore) and pressure_cap_hits carried on, the
+            outer count continued so max_simple_iter is the total; the
+            uninterrupted solve with that cap, bitwise. Refused with initial,
+            for a checkpoint whose solve converged, and under another
+            rule_version
+        Both: TypeError if not a FlowState / SteadyCheckpoint; ValueError
+            before any iteration for another grid's shapes, k and eps given to
+            a laminar solve or absent from a coupled one, k or eps not positive
+            in a non-SOLID cell, or (resume) nu_t negative in one
+        A solve whose fields went non-finite does not raise: it returns them
+            as every solve did before this step and leaves flow_state and
+            steady_checkpoint None, since a diverged state is neither a warm
+            start nor a resume point (a warning names it)
+    flow_state: FlowState | None      # the last solve's faces (face_velocities'
+        # arrays), p, k, eps, the relaxed nu_t, stop_reason and outer count;
+        # None before a solve completes and after one whose fields are not
+        # finite, never an earlier solve's
+    steady_checkpoint: SteadyCheckpoint | None   # the last solve's flow_state with
+        # residual_history, the rule's window, rule_version and pressure_cap_hits;
+        # None as flow_state is
     rule_version: int | None    # read-only: 3, 5 with the turbulence section
                                 # (condition (e); 4 until 2026-10-11), None under
                                 # velocity_step
-rule_version(config) -> int | None   # the same, without building a solver
     on_iteration: Callable[[IterationState], None] | None
         once per outer iteration with to_cell_centers of the corrected
         faces, p, the residual, and the corrector's iteration and product counts
@@ -779,6 +835,9 @@ rule_version(config) -> int | None   # the same, without building a solver
                                 # to_cell_centers of them is the return bitwise, their
                                 # mass_imbalance is last_mass_imbalance bitwise; under
                                 # error_estimate that imbalance meets REQ-S04's clauses
+    Planned (ADR-014 G, step 6):
+        solve_transient(dt, t_end, *, initial, step_tol, step_cap, on_step=None)
+            -> FlowState            # tier 2
     Walls and inlets are written once by apply_normal_velocity and never
     again; outlet faces are extrapolated (zero gradient) before every
     prediction and corrected by the corrector. Residual: largest change of
@@ -861,6 +920,14 @@ ErrorEstimateRule:
     estimate_history: list[float]  # (a)'s left side per step; inf when none
     viscosity_estimate_history: list[float]  # (e)'s, likewise; empty with (e) off
     viscosity_scale_history: list[float]  # the nu_scale of each step; empty with (e) off
+    window() -> (tuple[float, ...], tuple[float, ...])   # ADR-014 step 0: the last
+        # RATE_WINDOW velocity and viscosity steps, oldest first; the second
+        # empty with (e) off. The steady checkpoint carries them
+    restore(steps, viscosity_steps=()) -> None   # seeds a rule that has taken no
+        # step, so its stops continue another's bitwise; ValueError on a rule
+        # that has stepped, a window longer than RATE_WINDOW, a step not a
+        # finite non-negative float (bool refused), or viscosity steps that do
+        # not match (e) and the velocity steps
 RATE_WINDOW = 100  # module constant, not configuration
 RULE_VERSION_WITHOUT_E = 3, RULE_VERSION_WITH_E = 5   # a rule's version (4 was (e) on
     # the inlet scale); RULE_VERSION was retired in ECR-002 step 6: scripts read the
@@ -1093,10 +1160,9 @@ TurbulenceBoundary:
         production (tau_w / rho) u_k / (kappa y_P) in every wall cell, a
         cell with several wall faces taking their mean
     initial_values() -> (k, eps)           # inflow-weighted means over the inlet faces
-    largest_inlet_eddy_viscosity() -> float   # condition (e)'s inlet scale until
-        # 2026-10-11; the solver no longer calls it (prompt 50 changed no
-        # turbulence code), its tests in tests/test_wall_functions.py stand
-        both raise ValueError when no velocity inlet admits air
+        raises ValueError when no velocity inlet admits air
+        (largest_inlet_eddy_viscosity, condition (e)'s inlet scale until
+        2026-10-11, removed 2026-10-16 with its tests, ADR-014 I)
 ```
 
 ### solver_transport.py --> time_integration, monitor (planned, Phases 4 and 5); the Phase 3 tests
@@ -1227,10 +1293,55 @@ AlertMonitor:
 
 ### scenarios.py --> time_integration; the boundary layers (planned, Phase 4)
 
+Planned (ADR-014 A, B and G, accepted 2026-10-16; built at step 2). The
+contract replaces the earlier draft's get_active_sources(t) and
+get_bc_modifications(t): a boundary modification is an interval's flow state,
+not a per-call mapping, and the sources at a time are one rate array per
+class.
+
 ```
-ScenarioManager:
-    get_active_sources(t: float) -> list[SourceTerm]
-    get_bc_modifications(t: float) -> dict
+ScenarioManager(config, mesh):
+    intervals() -> list[Interval]          # (t_start, t_end, flow_fingerprint, merged mapping)
+    flow_states() -> dict[str, dict]       # fingerprint -> the velocity-layer mapping
+    sources_at(t) -> dict[int, ndarray]    # class -> [ny, nx] rate, summed over active sources
+    conditions_for(interval) -> ConcentrationBoundary
+    initial_fields() -> dict[int, ndarray]
+```
+
+### time_integration.py --> nothing in src/ (planned, Phase 4)
+
+Planned (ADR-014 A, D and G; built at steps 4 and 6). Orchestrates both tiers
+and discretises nothing.
+
+```
+run(config, *, restart=None, on_step=None) -> RunRecord
+    tier 1: the intervals, the flow states (cached by fingerprint, warm-started
+            with solve_steady(initial=...)), the transport march at one step for
+            every class, stable_dt recomputed at each switch
+    tier 2: StaggeredSolver.solve_transient with the recorders of ADR-014 D
+```
+
+### io_manager.py --> time_integration (planned, Phase 4); tests/test_io_manager.py
+
+ADR-014 D. Step 0 (prompt 60) built the steady checkpoint's group alone;
+step 3 inherits the group's layout and the two functions and builds the rest
+of the run file around them (planned, below).
+
+```
+write_steady_checkpoint(path, checkpoint: SteadyCheckpoint) -> None
+    # h5py, mode "a": the file's other groups kept, /steady_checkpoint/ replaced;
+    # datasets u, v, p (and k, eps, nu_t when turbulent) and residual_history,
+    # velocity_steps, viscosity_steps, all "<f8"; attributes outer and
+    # pressure_cap_hits, and stop_reason and rule_version when not None;
+    # TypeError if not a SteadyCheckpoint
+read_steady_checkpoint(path) -> SteadyCheckpoint
+    # what was written, bitwise; KeyError naming the group when absent;
+    # ValueError when it holds some but not all of k, eps and nu_t
+STEADY_CHECKPOINT = "steady_checkpoint"   # the group's name
+Planned (ADR-014 G, step 3): RunFile(path).write_config / write_flow_state /
+    write_frames / checkpoint / read_checkpoint; /config, /flow/<fingerprint>/,
+    /transport/, /checkpoint/ beside /steady_checkpoint/; the configuration hash
+    a resume must match
 ```
 
 ### Retired modules
@@ -1309,7 +1420,7 @@ ADR-008, ADR-010, ADR-011, ADR-012, ADR-013 and ADR-014 are files in `docs/ADR/`
 | ADR-011 | Transport Solver Architecture: Face-Advected Cell-Centred Concentration (Accepted at merge, PR 30) | Concentration at cell centres, advected by the staggered face velocities the NS solver exposes (REQ-S13), so a uniform haze drifts only at the rate the stopping rule bounds (REQ-T11, VAL-012). QUICK's face value bounded by the UMIST limiter under forward Euler at Courant number at most 1/2, non-negative and bounded (REQ-T12, VAL-013); implicit diffusion and deposition. Settling as a face increment between fluid cells only, every solid-facing or domain horizontal face taking the deposition velocity whole (VAL-014). One mass budget, sources included, for every conservation claim. VAL-004 in two rows with measured thresholds. Clean supply by default, no recirculation. Ten decisions of 2026-10-03 listed at its top; Accepted (built) with planned against built since the Phase 3 gate (2026-10-15, prompt 58). |
 | ADR-012 | Turbulence Model: k-epsilon on the Staggered Solver (Accepted 2026-10-04, with ECR-002; Accepted (built) 2026-10-15, ECR-002 closed, with planned against built) | The product room runs at Re 89,500 on its height and the laminar solver does not converge on it (`docs/reports/product_case_reynolds.md`). k-epsilon, both variants built, RNG for the product and standard for the published comparisons; scalable wall functions on walls and obstacle faces; k and eps by the transport scheme in pseudo-time, positive by construction; the eddy viscosity in the momentum conductances by Patankar's face rule, with the stress terms constant viscosity let drop as an explicit source; a fifth stopping condition on the eddy viscosity; particle diffusivity Brownian plus nu_t / Sc_t. The outlets gain a condition for entering air and the hood a fixed-flow exhaust segment (REQ-S18). The pressure solve moves to ECR-003. Nine decisions of 2026-10-04 listed at its top, the ninth a probe of convergence before the build (ECR-002 step 0); gains planned against built when ECR-002 closes. |
 | ADR-013 | Pressure Correction Solver: Jacobi-Preconditioned Conjugate Gradients (Accepted 2026-10-06, with ECR-003; built, with planned against built, ECR-003 closed 2026-10-07) | Weighted Jacobi needs 28,000 to 378,000 sweeps per correction on the product mesh to reach a relative residual of 1e-3 to 3e-3, and a steady product solve would take 10 to 42 hours; Jacobi-preconditioned CG reaches 1e-8 in about 860 iterations, 0.16 s, keeps the per-cell update the GPU path wants with three reductions per iteration, needs no new dependency and converges on the closed cavity with b projected onto the range (`docs/reports/pressure_solver_ecr003.md`). The stop is the relative residual `pressure_rtol`, default 1e-8, with a rounding floor and the iteration cap reported. Supersedes ADR-010's weighted sweep. Its named successor, multigrid preconditioning of the same loop, built 2026-10-14 as an option, the default unchanged (prompt 53, `docs/reports/pressure_multigrid.md`). |
-| ADR-014 | Scenarios and Time Integration: Piecewise-Steady Flow, Time-Accurate Transport, and a Transient Solve for the Cylinder (Proposed 2026-10-16, prompt 59, before the Phase 4 build) | Two tiers (Alex, 2026-10-16): the room's flow is a sequence of steady states, one per distinct set of velocity boundaries, each solved once per run and warm-started, with the particles marched through time on it; the square cylinder (VAL-022, proposed) runs a true transient, an implicit step with SIMPLE outer iterations inside it. Short events as their steady extreme; a fourth reference scenario, the clean-out. The transport march, not the flow, sets a scenario's cost, and a warm start saves little of a re-solve because the stop is set by the slow mode's geometric decay (`docs/reports/probe59/tables59.md`). Twelve decisions put to Alex at its top: the re-solve trigger and cache, the scenarios' Courant number, BDF2 with SIMPLE per step and a velocity-step criterion, the door as a two-way exchange, the scenario schema with `base:` inheritance (REQ-C03), within spec as every sensor below threshold with the ISO 14644-3 100:1 time reported, one HDF5 run file with checkpoint and restart, VAL-008 on a smooth monotone front with the Courant number halved per refinement, the cylinder's clustered grid and OPEN thresholds, the plan's three modules with the solver changes in the modules that own the arithmetic. |
+| ADR-014 | Scenarios and Time Integration: Piecewise-Steady Flow, Time-Accurate Transport, and a Transient Solve for the Cylinder (Proposed 2026-10-16, prompt 59, before the Phase 4 build; Accepted 2026-10-16 by Alex, with the equipment vents of its section J as an amendment) | Two tiers (Alex, 2026-10-16): the room's flow is a sequence of steady states, one per distinct set of velocity boundaries, each solved once per run and warm-started, with the particles marched through time on it; the square cylinder (VAL-022, proposed) runs a true transient, an implicit step with SIMPLE outer iterations inside it. Short events as their steady extreme; a fourth reference scenario, the clean-out. The transport march, not the flow, sets a scenario's cost, and a warm start saves little of a re-solve because the stop is set by the slow mode's geometric decay (`docs/reports/probe59/tables59.md`). Twelve decisions put to Alex at its top: the re-solve trigger and cache, the scenarios' Courant number, BDF2 with SIMPLE per step and a velocity-step criterion, the door as a two-way exchange, the scenario schema with `base:` inheritance (REQ-C03), within spec as every sensor below threshold with the ISO 14644-3 100:1 time reported, one HDF5 run file with checkpoint and restart, VAL-008 on a smooth monotone front with the Courant number halved per refinement, the cylinder's clustered grid and OPEN thresholds, the plan's three modules with the solver changes in the modules that own the arithmetic. |
 
 ---
 
@@ -1373,3 +1484,5 @@ ADR-008, ADR-010, ADR-011, ADR-012, ADR-013 and ADR-014 are files in `docs/ADR/`
 | 2026-10-15 | ECR-002 closed at step 9 (prompt 58, branch phase3/gate-report). The status line states the build; ADR-012's row reads Accepted (built) with planned against built. No module, interface, requirement text or generated region changed. | Alex Moroz-Smietana |
 | 2026-10-15 | ADR-011's planned-against-built table added at the Phase 3 gate (prompt 58); its row reads Accepted (built). No module, interface, requirement text or generated region changed. | Alex Moroz-Smietana |
 | 2026-10-16 | ADR-014, the Phase 4 design, proposed (prompt 59, branch phase4/design): two tiers of time integration, short events as their steady extreme and the clean-out scenario recorded as Alex's decisions of 2026-10-16; twelve decisions put to Alex with probes under `docs/reports/probe59/` (the warm-started re-solve of the product room against rest, the cylinder's implicit step at six settings and a long march, the transport scheme's observed order for VAL-008, the room's scales and the transport march's cost). Section 6 gains the row. The planned contracts of section 4 (scenarios.py, monitor.py) are unchanged until built; ADR-014 G carries the draft contracts for scenarios.py, time_integration.py, io_manager.py and the solver changes (a warm start and a transient loop in solver_staggered.py, a transient term in momentum.py, interior clustering in mesh.py, the scenario schema in config.py). Section 5 gains the clean-out as the fourth scenario (prompt 59b, under the scope change process). No module, generated region or requirement text changed. | Claude (builder) |
+| 2026-10-16 | ADR-014 accepted by Alex (prompt 60, commit 0): the recommendation of each of its twelve decisions as written, decision 11's thresholds left OPEN as its recommendation states, and one amendment, the equipment vents as airflow only (ADR-014 J, step 0b; the limit in H). Section 4 gains ADR-014 G's contracts, marked planned: the scenario section of SimConfig and the obstacle-face segment, the transient argument of predict, FlowState, the warm start, flow_state and solve_transient on StaggeredSolver, and the scenarios.py contract replaced (intervals, flow_states, sources_at, conditions_for, initial_fields); headings for time_integration.py and io_manager.py. Section 3.2's scenarios.py and time_integration.py rows rewritten to the planned contracts and an io_manager.py row added. Section 6's ADR-014 row reads Accepted. No module, requirement text or generated region changed. | Claude (builder) |
+| 2026-10-16 | ADR-014 step 0 built (prompt 60, branch phase4/step0-warm-start). solver_staggered.py: `FlowState`, `SteadyCheckpoint`, `CAP_STOP`; `solve_steady` gains the keyword-only `initial` (the warm start of ADR-014 A, the start prompt 59's probe made by patching, bitwise) and `resume` (the continuation of ADR-014 D, bitwise the uninterrupted solve); `flow_state` and `steady_checkpoint` set by every solve. stopping.py: `ErrorEstimateRule.window` and `restore`. New module io_manager.py: the run file's `/steady_checkpoint/` group, written and read back bitwise (the rest of the file is step 3's). turbulence.py: `TurbulenceBoundary.largest_inlet_eddy_viscosity` removed (no caller in src/ since 2026-10-11; ADR-014 I). Section 4's solver_staggered, stopping, turbulence and io_manager contracts and section 3.2's rows for them updated; the generated regions regenerated with io_manager. Every hash of record (REQ-S16's three and the rest of `docs/reports/multigrid_default.md`'s table, ECR-002 step 8's L0, prompt 59's T1 rest arm) reproduces with neither keyword (`docs/reports/adr014_step0.md`, section 3). No requirement text changed. | Claude (builder) |
