@@ -224,7 +224,8 @@ def vent_runs(
     ------
     ValueError
         If a vent's extent covers no face of this mesh (ADR-014 J's load
-        rule that needs the mesh).
+        rule that needs the mesh), or a recirculating pair's flows differ on
+        the faces they cover.
     """
     vents = registry.vents()
     if not vents:
@@ -268,7 +269,31 @@ def vent_runs(
                 corner_cols=inputs.corner_cols[mine_corner],
             )
         )
+    _check_recirculated_flows(runs)
     return runs
+
+
+def _check_recirculated_flows(runs: list[VentRun]) -> None:
+    """Raise unless each recirculating pair's flows agree on the mesh's faces.
+
+    Load compared the configured extents; the faces may round the two
+    openings differently, and a discharge of more flow than its intake
+    creates particles at the intake's concentration (review 61 S6).
+    """
+    by_name = {run.name: run for run in runs}
+    for run in runs:
+        source = run.spec.recirculate_from
+        if not run.is_inlet or source is None:
+            continue
+        intake = by_name[source]
+        returned = abs(run.normal) * float(run.widths.sum())
+        drawn = abs(intake.normal) * float(intake.widths.sum())
+        if abs(returned - drawn) > MESH_BALANCE_TOLERANCE * max(returned, drawn):
+            raise ValueError(
+                f"boundaries.{run.name}: on this mesh's faces the discharge's flow "
+                f"{returned:.15g} m^2/s differs from its intake '{source}''s "
+                f"{drawn:.15g} m^2/s; place the vents' ends on cell faces"
+            )
 
 
 def vent_face_masks(mesh: Mesh, runs: list[VentRun]) -> VentFaces:

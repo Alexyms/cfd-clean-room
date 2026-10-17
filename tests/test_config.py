@@ -2549,3 +2549,19 @@ def test_the_vents_file_is_the_default_room_with_three_vents() -> None:
         intake.velocity * (intake.y_end - intake.y_start), rel=1e-12
     )
     assert config.boundaries["etch_exhaust"].face == "right"
+
+
+@pytest.mark.unit
+def test_a_recirculating_pair_of_unequal_flow_is_refused(tmp_path: Path) -> None:
+    """Review 61 S6: the discharge would create particles at the intake's mean."""
+    raw = TestVents()._raw(
+        tmp_path,
+        fan_out={**DISCHARGE, "recirculate_from": "fan_in"},
+        fan_in={**INTAKE, "velocity": 0.9},
+    )
+    with pytest.raises(
+        ValueError,
+        match=r"fan_out\.recirculate_from: the discharge's flow 0\.5 m\^2/s differs "
+        r"from its intake 'fan_in''s 0\.45 m\^2/s",
+    ):
+        SimConfig.from_dict(raw)

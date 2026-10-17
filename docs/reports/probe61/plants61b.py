@@ -3,11 +3,13 @@
 Usage:
     python plants61b.py review --tree TREE   # review 61 B1's plants, on the tests as they stand
     python plants61b.py all --tree TREE      # those and one per branch the 61b tests cover
+    python plants61b.py pair --tree TREE     # item 2: the two pair-balance refusals
 
 TREE is a worktree of the branch (results/builder61/P). The loop is plants61.py's
 ``run_plants``: a control run of the named tests on the unplanted file first, one
 exact replacement, the tests, the file restored from git. Records go to
-results/builder61b/plants_review.json and plants_all.json of the main checkout.
+results/builder61b/plants_review.json, plants_all.json and plants_pair.json of
+the main checkout.
 """
 
 import argparse
@@ -176,13 +178,35 @@ ALL += [
 ]
 
 
+# Item 2 (review 61 S6): a recirculating pair of unequal flow refused.
+PAIR: list[Plant] = [
+    (
+        "config: a pair of unequal flow accepted at load",
+        "src/config.py",
+        "        if abs(returned - drawn) > BALANCE_TOLERANCE * max(returned, drawn):",
+        "        if False:",
+        ["tests/test_config.py::test_a_recirculating_pair_of_unequal_flow_is_refused"],
+    ),
+    (
+        "velocity: a pair of unequal flow on the mesh accepted",
+        "src/boundary_staggered.py",
+        "    _check_recirculated_flows(runs)\n",
+        "",
+        [
+            "tests/test_boundary_staggered.py::TestVents::"
+            "test_a_recirculating_pair_must_balance_on_the_mesh_faces"
+        ],
+    ),
+]
+
+
 def main() -> None:
     """Run the chosen list."""
     parser = argparse.ArgumentParser()
-    parser.add_argument("which", choices=("review", "all"))
+    parser.add_argument("which", choices=("review", "all", "pair"))
     parser.add_argument("--tree", required=True)
     args = parser.parse_args()
-    plants = REVIEW if args.which == "review" else REVIEW + ALL
+    plants = {"review": REVIEW, "all": REVIEW + ALL, "pair": PAIR}[args.which]
     out = ROOT / "results" / "builder61b" / f"plants_{args.which}.json"
     run_plants(plants, Path(args.tree).resolve(), out)
 

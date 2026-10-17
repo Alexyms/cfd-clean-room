@@ -929,7 +929,11 @@ intake's faces, of the room cells each draws from, lagged one transport step: th
 from the field the step starts from, the field the explicit advection of that step reads.
 `hepa_filtered` applies to it as to any inlet (the mean times one less the class's efficiency).
 Refused at load: the named segment missing, not a fixed-flow vent, on another obstacle, or with
-`concentration` also given. The budget books the intake as outflow and the discharge as inflow,
+`concentration` also given. *Added 2026-10-16 (prompt 61b, review 61 S6):* a pair whose flows
+differ is refused too, at load on the configured extents (to `BALANCE_TOLERANCE`) and on the
+mesh on the faces each covers (to `MESH_BALANCE_TOLERANCE`), as the stated outlets' balance is: a
+discharge of more flow than its intake would carry the intake's concentration at the larger
+flow and create particles. The budget books the intake as outflow and the discharge as inflow,
 so the pair nets to zero when the two flows are equal and nothing is filtered: at every step,
 since both terms are formed from the same field, and so at steady state. Built in
 `boundary_concentration.py` (`Recirculation`, `ConcentrationFaces.recirculation`) and

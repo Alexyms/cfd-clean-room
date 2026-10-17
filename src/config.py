@@ -1165,6 +1165,18 @@ class SimConfig:
                 f"not on '{spec.obstacle}': a discharge returns what its own tool "
                 "draws in"
             )
+        # A discharge of more flow than its intake would carry the intake's
+        # concentration at the larger flow and create particles (review 61 S6).
+        lo, hi = self._segment_range(spec)
+        source_lo, source_hi = self._segment_range(source)
+        returned = (spec.velocity or 0.0) * (hi - lo)
+        drawn = (source.velocity or 0.0) * (source_hi - source_lo)
+        if abs(returned - drawn) > BALANCE_TOLERANCE * max(returned, drawn):
+            raise ValueError(
+                f"{ctx}: the discharge's flow {returned:.6g} m^2/s differs from "
+                f"its intake '{spec.recirculate_from}''s {drawn:.6g} m^2/s; a fan "
+                "returns what it draws, so state equal flows"
+            )
 
     @staticmethod
     def _face_span(obs: ObstacleSpec, face: str | None) -> tuple[float, float]:

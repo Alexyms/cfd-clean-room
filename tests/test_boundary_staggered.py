@@ -608,6 +608,25 @@ class TestVents:
         ):
             StaggeredBoundary(Mesh(config), config)
 
+    def test_a_recirculating_pair_must_balance_on_the_mesh_faces(self) -> None:
+        """Equal on the configured extents, 0.35 m of intake covers 0.375 m of faces.
+
+        The intake's centres 0.1875, 0.3125 and 0.4375 lie in y 0.1 to 0.45.
+        """
+        intake = {**INTAKE, "y_start": 0.1, "y_end": 0.45, "velocity": 0.125 / 0.35}
+        pair = {
+            "discharge": {**DISCHARGE, "recirculate_from": "intake"},
+            "intake": intake,
+        }
+        config = vent_config(pair)
+        with pytest.raises(
+            ValueError, match=r"discharge: on this mesh's faces the disch"
+        ):
+            StaggeredBoundary(Mesh(config), config)
+        balanced = {**pair, "intake": INTAKE}
+        config = vent_config(balanced)
+        StaggeredBoundary(Mesh(config), config)
+
     def test_the_first_vent_in_configuration_order_takes_a_shared_point(
         self,
     ) -> None:
