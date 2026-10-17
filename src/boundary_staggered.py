@@ -271,6 +271,38 @@ def vent_runs(
     return runs
 
 
+def vent_face_masks(mesh: Mesh, runs: list[VentRun]) -> VentFaces:
+    """The vent masks of a list of runs (``StaggeredBoundary.vent_faces``).
+
+    Parameters
+    ----------
+    mesh : Mesh
+        Fixes the shapes.
+    runs : list[VentRun]
+        From ``vent_runs``.
+
+    Returns
+    -------
+    VentFaces
+        Read-only masks; all False for an empty list.
+    """
+    ny, nxp1 = u_shape(mesh)
+    normal_u = np.zeros(u_shape(mesh), dtype=bool)
+    normal_v = np.zeros(v_shape(mesh), dtype=bool)
+    tangential_u = np.zeros((ny + 1, nxp1), dtype=bool)
+    tangential_v = np.zeros((ny + 1, nxp1), dtype=bool)
+    for run in runs:
+        if run.component == "v":
+            normal_v[run.rows, run.cols] = True
+            tangential_u[run.corner_rows, run.corner_cols] = True
+        else:
+            normal_u[run.rows, run.cols] = True
+            tangential_v[run.corner_rows, run.corner_cols] = True
+    for array in (normal_u, normal_v, tangential_u, tangential_v):
+        array.flags.writeable = False
+    return VentFaces(normal_u, normal_v, tangential_u, tangential_v)
+
+
 # eq=False because the default __eq__ compares the array fields elementwise
 # and raises on the ambiguous truth value (issue 51 D2); identity is the only
 # comparison that makes sense for data built once from the mesh.
@@ -388,7 +420,7 @@ class StaggeredBoundary:
         self._u_shape = u_shape(mesh)
         self._v_shape = v_shape(mesh)
         self._vents: list[VentRun] = vent_runs(mesh, config, self._registry)
-        self._vent_faces: VentFaces = self._build_vent_faces()
+        self._vent_faces: VentFaces = vent_face_masks(mesh, self._vents)
 
         # Coverage at the cell positions along each edge, from the shared
         # derivation so every query below and the scalar layer see one answer.
@@ -553,24 +585,6 @@ class StaggeredBoundary:
                 "m^2/s; place the openings' ends on cell faces, or leave the velocity "
                 "off a domain-edge outlet"
             )
-
-    def _build_vent_faces(self) -> VentFaces:
-        """The vent masks from the runs (``vent_faces``)."""
-        ny, nxp1 = self._u_shape
-        normal_u = np.zeros(self._u_shape, dtype=bool)
-        normal_v = np.zeros(self._v_shape, dtype=bool)
-        tangential_u = np.zeros((ny + 1, nxp1), dtype=bool)
-        tangential_v = np.zeros((ny + 1, nxp1), dtype=bool)
-        for run in self._vents:
-            if run.component == "v":
-                normal_v[run.rows, run.cols] = True
-                tangential_u[run.corner_rows, run.corner_cols] = True
-            else:
-                normal_u[run.rows, run.cols] = True
-                tangential_v[run.corner_rows, run.corner_cols] = True
-        for array in (normal_u, normal_v, tangential_u, tangential_v):
-            array.flags.writeable = False
-        return VentFaces(normal_u, normal_v, tangential_u, tangential_v)
 
     # ------------------------------------------------------------------
     # Construction of the data deliverables

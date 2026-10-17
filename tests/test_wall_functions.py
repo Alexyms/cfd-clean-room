@@ -36,6 +36,7 @@ from src.turbulence import (
     log_law_floor,
     wall_viscosity,
 )
+from tests.vent_cases import DISCHARGE, EXHAUST, INTAKE, vent_config
 from validation.transport_cases import AIR, PARTICLES, SOLVER_BLOCK
 
 NU = AIR["viscosity"] / AIR["density"]
@@ -813,3 +814,121 @@ class TestInflow:
         object.__setattr__(raw_config, "turbulence", None)
         with pytest.raises(ValueError, match="turbulence section"):
             TurbulenceBoundary(mesh, raw_config, StaggeredBoundary(mesh, raw_config))
+
+
+@pytest.mark.unit
+class TestVents:
+    """A vent is not a wall, and a discharge carries k and eps in (ADR-014 J)."""
+
+    def _walls(self, **vents: dict) -> tuple[Mesh, KEpsilonModel, TurbulenceBoundary]:
+        config = vent_config(vents, turbulence=True)
+        mesh = Mesh(config)
+        boundary = StaggeredBoundary(mesh, config)
+        return (
+            mesh,
+            KEpsilonModel(mesh, config),
+            TurbulenceBoundary(mesh, config, boundary),
+        )
+
+    def test_wall_faces_drop_the_vent_span_and_keep_the_rest_of_the_box(
+        self,
+    ) -> None:
+        _, _, plain = self._walls()
+        _, _, vented = self._walls(discharge=DISCHARGE, intake=INTAKE)
+        # The u stencil faces over the top at x 0.75 to 1.25 (columns 6 to 10):
+        # the vent takes 7, 8 and 9; the corners 6 and 10 stay walls.
+        assert plain.wall_faces["u"][4, 6:11].tolist() == [True] * 5
+        assert vented.wall_faces["u"][4, 6:11].tolist() == [
+            True,
+            False,
+            False,
+            False,
+            True,
+        ]
+        # The v stencil faces up the left side, y 0 to 0.5 (rows 0 to 4): the
+        # intake takes 1, 2 and 3.
+        assert plain.wall_faces["v"][1:4, 6].tolist() == [True] * 3
+        assert vented.wall_faces["v"][1:4, 6].tolist() == [False] * 3
+        # Nothing else of the walls moves.
+        changed_u = plain.wall_faces["u"] != vented.wall_faces["u"]
+        changed_v = plain.wall_faces["v"] != vented.wall_faces["v"]
+        assert np.argwhere(changed_u).tolist() == [[4, 7], [4, 8], [4, 9]]
+        assert np.argwhere(changed_v).tolist() == [[1, 6], [2, 6], [3, 6]]
+
+    def test_a_cell_whose_only_wall_was_a_vent_holds_no_eps(self) -> None:
+        _, _, plain = self._walls()
+        _, _, vented = self._walls(discharge=DISCHARGE)
+        assert plain.wall_cells[4, 7] and plain.wall_cells[4, 8]
+        assert not vented.wall_cells[4, 7] and not vented.wall_cells[4, 8]
+        assert vented.wall_cells[4, 6] and vented.wall_cells[4, 9]
+
+    def test_a_cell_beside_a_vent_and_a_wall_keeps_the_wall_function_on_the_wall(
+        self,
+    ) -> None:
+        """Cell (0, 5): the floor below, an intake over rows 0 and 1 to its east.
+
+        With 0.1 m/s on both of the cell's u faces and nothing along the
+        box's side, the production given there is the floor's alone at that
+        slip. In the room without the vent the side is a wall, the face on
+        it is read as zero (slip 0.05), and the cell takes the mean of the
+        floor's and the side's, which has no slip: a quarter.
+        """
+        intake = {**INTAKE, "y_start": 0.0, "y_end": 0.25}
+        mesh, model, vented = self._walls(intake=intake)
+        _, _, plain = self._walls()
+        u = np.zeros(u_shape(mesh))
+        v = np.zeros(v_shape(mesh))
+        u[0, :7] = 0.1
+        faces = FaceVelocities.copy_of(u, v)
+        state = model.initial(1.0e-3, 1.0e-4)
+        with_vent = vented.conditions(state, faces)
+        without = plain.conditions(state, faces)
+        c_mu = VARIANTS["standard"].c_mu
+        u_k = c_mu**0.25 * math.sqrt(1.0e-3)
+        y_p = 0.0625
+        y_star = u_k * y_p / (AIR["viscosity"] / AIR["density"])
+        floor = u_k**2 * 0.1 / (y_p * math.log(E_WALL * max(y_star, Y_STAR_FLOOR)))
+        assert with_vent.production[0, 5] == pytest.approx(floor, rel=1e-12)
+        assert without.production[0, 5] == pytest.approx(floor / 4.0, rel=1e-12)
+
+    def test_a_discharge_carries_its_inflow_k_and_eps(self) -> None:
+        mesh, model, vented = self._walls(discharge=DISCHARGE, exhaust=EXHAUST)
+        state = model.initial(2.0e-3, 3.0e-4)
+        u = np.zeros(u_shape(mesh))
+        v = np.zeros(v_shape(mesh))
+        faces = FaceVelocities.copy_of(u, v)
+        c = vented.conditions(state, faces)
+        k_in, eps_in = inflow_values(0.05, 0.5, 0.1)
+        assert c.inflow_k_v[4, 7] == c.inflow_k_v[4, 8] == k_in
+        assert c.inflow_eps_v[4, 7] == c.inflow_eps_v[4, 8] == eps_in
+        # The exhaust's faces carry the room cell's values; nothing enters there.
+        assert c.inflow_k_u[1, 10] == 2.0e-3 and c.inflow_eps_u[2, 10] == 3.0e-4
+
+    def test_the_initial_state_weights_the_discharge_as_an_inlet(self) -> None:
+        _, _, vented = self._walls(discharge=DISCHARGE)
+        k_supply, eps_supply = inflow_values(0.05, 0.2, 0.1)
+        k_vent, eps_vent = inflow_values(0.05, 0.5, 0.1)
+        supply, vent = 0.2 * 1.5, 0.5 * 0.25
+        k, eps = vented.initial_values()
+        assert k == pytest.approx((k_supply * supply + k_vent * vent) / (supply + vent))
+        assert eps == pytest.approx(
+            (eps_supply * supply + eps_vent * vent) / (supply + vent)
+        )
+
+    def test_the_model_reads_the_vent_velocity_in_the_rate(self) -> None:
+        """The cell above the discharge steps at the vent's 0.5 m/s over 0.125 m."""
+        mesh, model, _ = self._walls(discharge=DISCHARGE)
+        config = vent_config({}, turbulence=True)
+        plain = KEpsilonModel(Mesh(config), config)
+        u = np.zeros(u_shape(mesh))
+        v = np.zeros(v_shape(mesh))
+        v[4, 7:9] = 0.5
+        v[5, :] = 0.1
+        faces = FaceVelocities.copy_of(u, v)
+        cfl = 0.25
+        assert model.pseudo_time_step(faces)[4, 7] == pytest.approx(
+            cfl / (0.5 / 0.125), rel=1e-15
+        )
+        assert plain.pseudo_time_step(faces)[4, 7] == pytest.approx(
+            cfl / (0.1 / 0.125), rel=1e-15
+        )

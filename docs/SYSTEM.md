@@ -206,7 +206,7 @@ Generated. The responsibility and serves columns are editorial and come from `do
 |---|---|---|---|
 | `src/boundary_concentration.py` | 327 | Derives the per-face concentration conditions of each particle class from the registry's shared coverage and ParticlePhysics: the concentration an inlet carries, the deposition velocity and surface code at every wall and obstacle face, and the mask of faces that carry the settling increment, as read-only face-shaped data for the transport solver. | S12.1, T09, T10 |
 | `src/boundary_registry.py` | 453 | Interprets the configured boundary segments once, answering which segment covers each point along a domain edge and which condition and prescribed velocity hold there, SOLID cells read as walls, for both boundary imposition layers: the staggered velocity layer and the concentration layer. | S12.1 |
-| `src/boundary_staggered.py` | 881 | Writes Dirichlet normal velocities exactly into the staggered domain-face entries and exposes the tangential wall values, wall distances, pressure outlets and wall faces as data for the momentum and pressure steps and the wall functions. | S12 |
+| `src/boundary_staggered.py` | 895 | Writes Dirichlet normal velocities exactly into the staggered domain-face entries and exposes the tangential wall values, wall distances, pressure outlets and wall faces as data for the momentum and pressure steps and the wall functions. | S12 |
 | `src/config.py` | 1622 | Loads the YAML configuration into typed dataclasses and rejects missing keys, wrong types and out-of-range values at load time. | A02, A03, C01, C02, S10 |
 | `src/constants.py` | 8 | Holds the physical constants shared by every module so that none of them defines its own copy. | C04 |
 | `src/io_manager.py` | 124 | Writes a steady solve's checkpoint into the run file's steady_checkpoint group and reads it back bitwise, so a solve stopped at its cap continues in another process; the rest of the run file is ADR-014 step 3's. | none |
@@ -215,14 +215,14 @@ Generated. The responsibility and serves columns are editorial and come from `do
 | `src/multigrid.py` | 384 | Builds an additive-correction multigrid hierarchy from a five-point pressure system by 2x2 aggregation, its coarse operators the exact Galerkin sums with no probing, and applies one symmetric V-cycle with weighted Jacobi smoothing and a dense pseudo-inverse on the coarsest level as the preconditioner of the pressure correction's conjugate gradients. | S08 |
 | `src/particles.py` | 263 | Computes per-size-class transport properties: Cunningham correction, settling velocity, Brownian diffusion, deposition velocity and HEPA efficiency. | T03, T04, T09, T10 |
 | `src/pressure.py` | 858 | Assembles the staggered pressure correction equation from the momentum diagonals with the discrete divergence of u* as its right-hand side, solves it by conjugate gradients preconditioned with its diagonal or, under the pressure_preconditioner key, with one multigrid V-cycle per iteration, to a relative residual, a rounding floor or a reported iteration cap, corrects the face velocities and updates the pressure. | S04, S08 |
-| `src/scalar_scheme.py` | 548 | Holds the cell-centred scalar scheme the transport solver and the k-epsilon model share: QUICK's face value bounded by the UMIST limiter, the advective flux along one axis with the inflow value or the upwind cell at a domain face, and the backward Euler solve of diffusion with a non-negative cell sink by Jacobi or, for k and eps, by diagonal-preconditioned conjugate gradients that fall back to Jacobi on the cap or a non-positive value, on per-face conductances with one step or a step per cell, with an optional mask of cells held at their value. | S15, T12 |
+| `src/scalar_scheme.py` | 568 | Holds the cell-centred scalar scheme the transport solver and the k-epsilon model share: QUICK's face value bounded by the UMIST limiter, the advective flux along one axis with the inflow value or the upwind cell at a domain face, and the backward Euler solve of diffusion with a non-negative cell sink by Jacobi or, for k and eps, by diagonal-preconditioned conjugate gradients that fall back to Jacobi on the cap or a non-positive value, on per-face conductances with one step or a step per cell, with an optional mask of cells held at their value. | S15, T12 |
 | `src/solver_staggered.py` | 893 | Runs steady SIMPLE on the staggered grid as one outer loop over the momentum predictor and the pressure correction, with the turbulence section one k and eps step and the relaxed eddy viscosity inside it, returning cell-centered fields through the harness's callback shape and exposing the final faces as FaceVelocities; stops by the velocity-step rule or, when configured, by the error-estimate rule. | S01, S02, S03, S04, S05, S07, S13, S14, S15 |
 | `src/solver_transport.py` | 892 | Advances one particle class one explicit step on the staggered face velocities: QUICK's face value bounded by the UMIST limiter under forward Euler at a Courant number the configuration sets, implicit diffusion and deposition by Jacobi on per-face conductances, the Brownian coefficient plus nu_t / Sc_t on interior faces when handed an eddy viscosity field, the settling increment on interior faces, sources added and booked, SOLID cells zero; keeps one MassBudget per class and defines FieldHistory, the output contract for the animation. | N01, T01, T03, T04, T05, T06, T07, T08, T11, T12, T13 |
 | `src/staggered.py` | 454 | Defines the staggered (MAC) field layout: shapes and allocation of face-centered u and v and cell-centered p, the face-to-center averaging the solver applies before returning, and FaceVelocities, the read-only face pair the solver exposes and the transport solver advects with. | S07, S13 |
 | `src/stopping.py` | 408 | Decides when the steady outer iteration has converged, on four conditions: (a) the iteration error estimated from the step and its fitted geometric rate, over a physical velocity scale; (b) the worst per-cell mass imbalance against its own tolerance; (c) the summed imbalance over the through-flow, which shares the tolerance of (a); and (d) the signed imbalance summed over the domain, which shares the tolerance of (b); and with the turbulence model a fifth, (e), the same estimate on the eddy viscosity over the molecular viscosity plus the median eddy viscosity of the FLUID cells, which the solver passes each outer iteration. Also defines IterationState, the snapshot a solver hands its callback once per outer iteration. | S01, S04 |
-| `src/turbulence.py` | 1531 | Advances the k-epsilon model's k and eps one step on a prescribed face velocity field, standard or RNG with each variant's constants as module data: advection, explicit growth from the strain the faces give and implicit decay and diffusion through the shared scalar scheme, boundary values from a conditions object the caller builds each step, the kinematic eddy viscosity, and an assertion that k and eps are positive and finite after every step; and the scalable wall functions, which build those conditions, the wall viscosity of the momentum wall faces and the inlet values the coupled solve starts from. | S14, S15, S17 |
+| `src/turbulence.py` | 1626 | Advances the k-epsilon model's k and eps one step on a prescribed face velocity field, standard or RNG with each variant's constants as module data: advection, explicit growth from the strain the faces give and implicit decay and diffusion through the shared scalar scheme, boundary values from a conditions object the caller builds each step, the kinematic eddy viscosity, and an assertion that k and eps are positive and finite after every step; and the scalable wall functions, which build those conditions, the wall viscosity of the momentum wall faces and the inlet values the coupled solve starts from. | S14, S15, S17 |
 
-Total 18 Python files, 11148 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
+Total 18 Python files, 11277 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
 
 `Declares it serves` is an EDITORIAL CLAIM read from `docs/system_map_annotations.toml`. It says which requirements a module is meant to satisfy, not that it does. Whether a requirement is met is answered by the tests named in the register's `Verified By` column.
 <!-- END GENERATED: components -->
@@ -247,7 +247,7 @@ Generated. Static import analysis cannot see a function bound into a registry by
 |---|---|
 | Scope | `src/**/*.py` |
 | Files hashed | 18 |
-| Digest | `sha256:934d566205d51177d876e55fcce998cd2aeba365a7c5cd7e724e591a87b57e9b` |
+| Digest | `sha256:85599d330d25296aec7bb9cd930e1b27f26aeffbc57377fea5eafd5f1fa04a79` |
 
 This is what lets the document answer whether it is current, which is the one question a stale table cannot be asked. `python scripts/gen_system_map.py --check` recomputes the whole set of generated regions, this digest included, and exits non-zero on any disagreement.
 
@@ -1075,12 +1075,15 @@ limited_face_values(c_up, c_c, c_d, quick) -> ndarray
     c_c + psi(r) (c_d - c_c) / 2, psi = max(0, min(2r, (1 + 3r) / 4, psi_quick, 2)),
     r = (c_c - c_up) / (c_d - c_c), psi_quick = 2 (quick - c_c) / (c_d - c_c); c_c where
     c_d == c_c
-advective_flux(c, flux, inflow, axis, upwind) -> ndarray
+advective_flux(c, flux, inflow, axis, upwind, vents=None) -> ndarray
     c [nt, ns], flux and inflow [nt, ns+1]; flux times the face value: the inflow
     value at a domain face whose flux enters, the adjacent cell at one it leaves,
     the limited QUICK value (C_C with upwind) inside; a far node in a SOLID cell
     reads as the upstream value. The caller zeroes the flux of every face that
-    carries none.
+    carries none. vents (ADR-014 J), bool [nt, ns+1]: interior faces of a SOLID
+    cell that carry a flux; the inflow value where it enters the room from the
+    SOLID side, the room cell's value where it leaves, no stencil. None is the
+    arithmetic without the argument, bit for bit.
 JACOBI = "jacobi", CONJUGATE_GRADIENT = "cg", IMPLICIT_METHODS = (JACOBI, CONJUGATE_GRADIENT)
 SCALAR_BLAS_THREADS = 1    # the BLAS pool the CG loop runs in, as pressure.py's
 ImplicitResult:           # frozen
@@ -1211,6 +1214,13 @@ inflow_values(intensity, normal_speed, dissipation_length) -> (k, eps)
     k = 1.5 (I |u_n|)^2, eps = k^(3/2) / l_e (no C_mu^(3/4))
 TurbulenceBoundary:
     __init__(mesh, config, boundary: StaggeredBoundary)   # ValueError without the section
+    # ADR-014 J (step 0b): a vent is not a wall. wall_faces drops the stencil faces over a
+    # vent's span (StaggeredBoundary.vent_faces' tangential masks), wall_cells drops a vent
+    # face as a cell's wall side, a discharge's faces carry inflow_values in the conditions'
+    # inflow arrays and count as inlet faces for initial_values, and an exhaust's carry the
+    # room cell's values (nothing enters). KEpsilonModel reads the vents from
+    # boundary_staggered.vent_runs: their faces carry flux in the advection, the rate and
+    # the strain; no diffusion crosses them.
     wall_faces: dict["u" | "v", ndarray]   # bool [ny+1, nx+1], read-only: the faces
         that take a wall function, every wall (zero normal velocity, not an
         outlet) beside an unknown and every obstacle face

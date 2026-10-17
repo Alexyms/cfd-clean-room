@@ -33,6 +33,7 @@ from src.turbulence import (
     TurbulenceConditions,
     TurbulenceState,
 )
+from tests.vent_cases import DISCHARGE, EXHAUST, INTAKE, vent_raw
 from validation.transport_cases import AIR, PARTICLES, SOLVER_BLOCK
 
 ALPHA_TURBULENCE = 0.6
@@ -374,3 +375,33 @@ class TestRefusals:
         with pytest.raises(PositivityError, match="outer iteration 2: k is not") as err:
             solver.solve_steady()
         assert err.value.minimum == -1.0
+
+
+@pytest.mark.integration
+def test_the_coupled_solve_converges_with_a_discharge_an_intake_and_an_exhaust() -> (
+    None
+):
+    """ADR-014 J through the k-epsilon solve: the vents held, k and eps positive."""
+    raw = vent_raw(
+        {"discharge": DISCHARGE, "intake": INTAKE, "exhaust": EXHAUST},
+        turbulence=True,
+        solver={
+            "max_simple_iter": 3000,
+            "mass_imbalance_tol": 1.0e-10,
+            "momentum_sweeps": 10,
+            "alpha_velocity": 0.5,
+        },
+    )
+    config = SimConfig.from_dict(raw)
+    mesh = Mesh(config)
+    solver = StaggeredSolver(mesh, config, StaggeredBoundary(mesh, config))
+    solver.solve_steady()
+    assert solver.stop_reason == "error_estimate_and_continuity"
+    faces = solver.face_velocities
+    assert faces is not None
+    assert faces.v[4, 7] == faces.v[4, 8] == 0.5
+    assert faces.u[1, 6] == 0.5 and faces.u[2, 10] == -0.4
+    state = solver.turbulence_state
+    assert state is not None
+    live = mesh.cell_type != SOLID
+    assert (state.k[live] > 0.0).all() and (state.eps[live] > 0.0).all()

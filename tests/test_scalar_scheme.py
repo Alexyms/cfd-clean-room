@@ -899,3 +899,45 @@ class TestConjugateGradient:
         c = np.where(solid, 0.0, 1.0)
         solver.solve_timestep(c, uniform_face_field(mesh, 0.0, 0.0), 0, 5.0)
         assert methods == [JACOBI]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("upwind", [True, False], ids=["upwind", "umist"])
+def test_a_vent_face_carries_the_inflow_in_and_the_room_cell_out(upwind: bool) -> None:
+    """ADR-014 J: a face of a SOLID cell that the caller opens.
+
+    One row of six cells, cell 2 SOLID. Face 2 (between cells 1 and 2) and
+    face 3 (between cells 2 and 3) are vents. Into the room from the obstacle
+    the face carries the inflow value; out of the room, the room cell's
+    value, with no stencil whatever the scheme.
+    """
+    nodes = np.array([0.0, 0.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.0])
+    solid = np.zeros((1, 6), dtype=bool)
+    solid[0, 2] = True
+    axis = scalar_scheme.Axis(
+        nodes=nodes,
+        faces=np.arange(1.0, 6.0),
+        left=np.arange(1, 6),
+        solid_ext=np.pad(solid, ((0, 0), (1, 1))),
+    )
+    c = np.array([[1.0, 2.0, 0.0, 4.0, 5.0, 6.0]])
+    inflow = np.zeros((1, 7))
+    inflow[0, 2] = inflow[0, 3] = 7.0
+    vents = np.zeros((1, 7), dtype=bool)
+    vents[0, 2] = vents[0, 3] = True
+    # Face 2 flows -x out of the obstacle into cell 1; face 3 flows -x from
+    # cell 3 into the obstacle.
+    flux = np.zeros((1, 7))
+    flux[0, 2] = flux[0, 3] = -0.5
+    out = advective_flux(c, flux, inflow, axis, upwind, vents)
+    assert out[0, 2] == -0.5 * 7.0
+    assert out[0, 3] == -0.5 * 4.0
+    # +x: face 2 draws from cell 1 into the obstacle, face 3 discharges.
+    out = advective_flux(c, -flux, inflow, axis, upwind, vents)
+    assert out[0, 2] == 0.5 * 2.0
+    assert out[0, 3] == 0.5 * 7.0
+    # Without the argument the faces are what they always were.
+    assert np.array_equal(
+        advective_flux(c, flux, inflow, axis, upwind),
+        advective_flux(c, flux, inflow, axis, upwind, None),
+    )

@@ -21,7 +21,11 @@ inward, the face carries the caller's inflow value, placed at the face as
 Leonard's boundary node; outward, the upwind cell's value. A far-upstream
 node inside a SOLID cell is read as the upstream cell's value. Which faces
 carry a flux at all is the caller's: it passes zero flux on a wall face, a
-face beside a SOLID cell, or anything it holds shut.
+face beside a SOLID cell, or anything it holds shut. An equipment vent
+(ADR-014 J) is a face beside a SOLID cell that the caller opens and names in
+``vents``: the sign decides there too, inward from the obstacle the caller's
+inflow value, outward the room cell's value, with no stencil, as at a domain
+face.
 
 The implicit solve (ADR-011 C, ADR-012 C step 3). Backward Euler for
 diffusion and a non-negative cell sink together:
@@ -208,6 +212,7 @@ def advective_flux(
     inflow: np.ndarray,
     axis: Axis,
     upwind: bool,
+    vents: np.ndarray | None = None,
 ) -> np.ndarray:
     """Volume flux times face value on every face along the last axis.
 
@@ -220,11 +225,15 @@ def advective_flux(
         coordinate; zero on every face that carries nothing.
     inflow : np.ndarray
         The value carried in where the flux at a domain face points inward,
-        [nt, ns+1]; only the two end columns are read.
+        [nt, ns+1]; only the two end columns and the vent faces are read.
     axis : Axis
         The axis, from ``mesh_axes``.
     upwind : bool
         First-order upwind instead of the limited QUICK value.
+    vents : np.ndarray, optional
+        Bool [nt, ns+1]: interior faces between a SOLID and a non-SOLID cell
+        that carry a flux, the equipment vents of ADR-014 J. None is none,
+        and the arithmetic is the one without the argument, bit for bit.
 
     Returns
     -------
@@ -232,7 +241,9 @@ def advective_flux(
         ``flux`` times the face value, [nt, ns+1]. The two boundary nodes
         hold the inflow value where the flux enters and the adjacent cell
         value otherwise, so an inflow face reads the inlet value at the face
-        and every other boundary is zero gradient.
+        and every other boundary is zero gradient. A vent face takes the
+        inflow value where the flux enters the room from the SOLID side and
+        the room cell's value where it leaves.
     """
     ns = c.shape[1]
     low_in = flux[:, 0] > 0.0
@@ -261,6 +272,15 @@ def advective_flux(
             c_up = np.where(far_solid, c_c, c_up)
             quick = np.where(far_solid, c_c, quick)
             face[:, 1:-1] = limited_face_values(c_up, c_c, c_d, quick)
+        if vents is not None:
+            k = axis.left
+            interior = flux[:, 1:-1]
+            solid_low = axis.solid_ext[:, k]
+            solid_high = axis.solid_ext[:, k + 1]
+            entering = (solid_low & (interior > 0.0)) | (solid_high & (interior < 0.0))
+            room = np.where(solid_low, ext[:, k + 1], ext[:, k])
+            vent_value = np.where(entering, inflow[:, 1:-1], room)
+            face[:, 1:-1] = np.where(vents[:, 1:-1], vent_value, face[:, 1:-1])
     return flux * face
 
 
