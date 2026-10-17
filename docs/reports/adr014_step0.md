@@ -166,6 +166,19 @@ rerun against those tests, every plant caught.
 The full suite ran once at 1c34ca8, the last commit to change code or tests, after the plants
 had restored every file: `results/builder60/suite_full.txt`, every test passed.
 
+Review 60 and test 60 then found no Critical or Bug, and prompt 60b fixed their Suggestions:
+a solve whose fields went non-finite returns them and leaves `flow_state` and
+`steady_checkpoint` None; a checkpoint group holding some of k, eps and nu_t is refused on
+read; four refusals gained a test each (a negative nu_t on a resume, k or eps not positive on a
+resume, the rule version and cap-hit counts, the partial group) and the diverged solve one,
+22 collected tests in all. The 16 guards and defects those tests and the
+`tests/test_preflight.py` docstrings name were planted one at a time and each test failed
+(`results/builder60b/plants_item1.json`, `plants_item2.json`, `plants_item3.json`,
+`plants_item3d.json`); `plants_item3.json` also holds one survivor, a first plant of
+`scripts/preflight.py` that changed the system map step under both modes of `--fix` and so
+could not differ between them, replanted in `plants_item3d.json` as a defect that does. The suite ran once more at 3d2a71a, the last commit to change code or
+tests: `results/builder60b/suite_full.txt`, 1,653 passed (1,631 before, plus the 22).
+
 ## 6. What step 3 inherits
 
 - The `/steady_checkpoint/` group's layout and the two functions of `src/io_manager.py`, which
