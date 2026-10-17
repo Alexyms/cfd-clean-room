@@ -258,14 +258,12 @@ def run_tests(tree: Path, tests: list[str]) -> tuple[bool, str]:
     return result.returncode == 0, lines[-1] if lines else result.stderr[-300:]
 
 
-def main() -> None:
-    """Every plant, its control, its tests."""
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--tree", required=True)
-    args = parser.parse_args()
-    tree = Path(args.tree).resolve()
+def run_plants(
+    plants: list[tuple[str, str, str, str, list[str]]], tree: Path, out: Path
+) -> list[dict]:
+    """Each plant with its control and its tests in TREE; the records, also written to OUT."""
     records = []
-    for name, rel, old, new, tests in PLANTS:
+    for name, rel, old, new, tests in plants:
         path = tree / rel
         control_ok, control_line = run_tests(tree, tests)
         text = path.read_bytes().decode("utf-8")
@@ -300,9 +298,21 @@ def main() -> None:
             f"{'CAUGHT' if caught else 'SURVIVED'}: {name} -- {planted_line}",
             flush=True,
         )
-    out = ROOT / "results" / "builder61" / "plants.json"
     out.write_text(json.dumps(records, indent=1))
     print(f"{sum(r.get('caught', False) for r in records)} of {len(records)} caught")
+    return records
+
+
+def main() -> None:
+    """Every plant, its control, its tests."""
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--tree", required=True)
+    args = parser.parse_args()
+    run_plants(
+        PLANTS,
+        Path(args.tree).resolve(),
+        ROOT / "results" / "builder61" / "plants.json",
+    )
 
 
 if __name__ == "__main__":

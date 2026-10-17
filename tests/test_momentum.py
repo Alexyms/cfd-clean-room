@@ -24,7 +24,7 @@ from src.momentum import (
 from src.solver_staggered import StaggeredSolver
 from src.staggered import allocate_fields
 from tests.frozen34_reference import load_frozen_predictor
-from tests.vent_cases import DISCHARGE, EXHAUST, vent_config
+from tests.vent_cases import DISCHARGE, EXHAUST, SHELF_VENTS, vent_config
 from validation.cases import CONFIG_DIR
 
 STRETCHED = {"x": {"stretch_ratio": 1.15}, "y": {"stretch_ratio": 1.25}}
@@ -1649,3 +1649,20 @@ class TestVents:
         inside_v = np.zeros(prediction.v_star.shape, dtype=bool)
         inside_v[1:-1, :] = solid[:-1, :] & solid[1:, :]
         assert np.all(prediction.v_star[inside_v] == 0.0)
+
+
+@pytest.mark.unit
+def test_the_shelf_vents_keep_their_velocity_through_the_prediction() -> None:
+    """Every orientation of tests/vent_cases.py's shelf (prompt 61b)."""
+    config = vent_config(SHELF_VENTS, shelf=True)
+    mesh = Mesh(config)
+    boundary = StaggeredBoundary(mesh, config)
+    u, v, p = allocate_fields(mesh)
+    u[:, 1:-1] += 0.01
+    v[1:-1, :] -= 0.01
+    boundary.apply_normal_velocity(u, v)
+    prediction = MomentumPredictor(mesh, config, boundary).predict(u, v, p)
+    assert prediction.v_star[3, 11] == -0.2 and prediction.v_star[3, 13] == 0.2
+    assert prediction.u_star[4, 11] == -0.2 and prediction.u_star[4, 14] == 0.2
+    assert prediction.v_star[6, 12] == prediction.v_star[6, 13] == -0.2
+    assert prediction.v_star[3, 12] == 0.0 and prediction.u_star[3, 11] == 0.0

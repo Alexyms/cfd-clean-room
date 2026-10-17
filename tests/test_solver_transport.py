@@ -39,7 +39,14 @@ from src.solver_transport import (
     TransportSolver,
 )
 from src.staggered import FaceVelocities, allocate_fields, u_shape, v_shape
-from tests.vent_cases import DISCHARGE, EXHAUST, INTAKE, vent_config, vent_raw
+from tests.vent_cases import (
+    DISCHARGE,
+    EXHAUST,
+    INTAKE,
+    SHELF_VENTS,
+    vent_config,
+    vent_raw,
+)
 from validation.metrics import centroid
 from validation.transport_cases import (
     FixedConditions,
@@ -1930,3 +1937,109 @@ class TestVents:
         assert np.abs(c[live] - 1.0).max() <= bound + 1.0e-12
         clean, _ = march(DISCHARGE)
         assert np.abs(clean[live] - 1.0).max() > 0.1
+
+
+@pytest.mark.unit
+def test_the_budget_books_every_vent_orientation_in_and_out() -> None:
+    """Every term of the vent fluxes, from tests/vent_cases.py's shelf (prompt 61b).
+
+    One step on the faces the boundary writes, from a field that differs in
+    every cell. In: the three discharges, 0.2 m/s over 0.125 m each, carrying
+    300, 400 and 500. Out: the exhaust under the shelf from the cell below it,
+    the exhaust on top from the two cells above it, and the two returns from
+    the floor cells above them.
+    """
+    mesh, config, solver, _ = _vent_transport(SHELF_VENTS, shelf=True)
+    faces = _vent_faces_only(mesh, config)
+    live = mesh.cell_type != SOLID
+    index = np.arange(mesh.cell_type.size, dtype=np.float64).reshape(
+        mesh.cell_type.shape
+    )
+    c = np.where(live, 100.0 + index, 0.0)
+    dt = 0.5 * solver.stable_dt(faces, 0)
+    solver.solve_timestep(c, faces, 0, dt)
+    budget = solver.budget[0]
+    flux = 0.2 * 0.125
+    into = flux * (300.0 + 400.0 + 500.0)
+    vents_out = flux * (c[2, 13] + c[6, 12] + c[6, 13])
+    returning = faces.v[0, :] < 0.0
+    returns_out = float(np.sum(-faces.v[0, returning] * 0.125 * c[0, returning]))
+    assert budget.inflow == pytest.approx(into * dt, rel=1e-12)
+    assert budget.outflow == pytest.approx((vents_out + returns_out) * dt, rel=1e-12)
+
+
+def _stretched_pair() -> tuple[Mesh, SimConfig, FaceVelocities, np.ndarray]:
+    """A closed box whose only openings are a recirculating pair, on a stretched mesh.
+
+    The y axis is clustered at both walls (ratio 1.3), so the intake on the
+    box's left face spans rows of different heights and its faces carry
+    unequal fluxes at one velocity. The intake's ends sit on faces of the mesh
+    so its covered length is its configured one, and its velocity is set so
+    its flow is the discharge's: balanced on the extents and on the faces.
+    """
+    raw = vent_raw({}, supply=False, returns=False)
+    raw["mesh"] = {"y": {"stretch_ratio": 1.3}}
+    mesh = Mesh(SimConfig.from_dict({**raw, "boundaries": {"d": dict(DISCHARGE)}}))
+    rows = int(np.sum(mesh.yc <= 0.5))
+    top = float(mesh.y[rows - 1])
+    intake = {**INTAKE, "y_start": 0.0, "y_end": top, "velocity": 0.5 * 0.25 / top}
+    raw["boundaries"] = {
+        "discharge": {**DISCHARGE, "recirculate_from": "intake"},
+        "intake": intake,
+    }
+    raw["fluid"]["viscosity"] = 1.0e-3
+    raw["solver"].update(
+        stopping_rule="error_estimate",
+        max_simple_iter=3000,
+        iteration_error_tol=1.0e-6,
+        mass_imbalance_tol=1.0e-10,
+    )
+    config = SimConfig.from_dict(raw)
+    mesh = Mesh(config)
+    boundary = StaggeredBoundary(mesh, config)
+    solver = StaggeredSolver(mesh, config, boundary)
+    solver.solve_steady()
+    assert solver.converged
+    faces = solver.face_velocities
+    assert faces is not None
+    intake_faces = boundary.vent_faces().normal_u
+    return mesh, config, faces, intake_faces
+
+
+@pytest.mark.integration
+class TestStretchedRecirculation:
+    """The recirculated mean is flux-weighted (prompt 61b, review 61 B1 item d)."""
+
+    def test_the_pair_nets_to_zero_with_a_source_and_deposition_in_the_room(
+        self,
+    ) -> None:
+        """Inflow equals outflow and the budget closes, over thirty steps.
+
+        A source beside the intake makes the cells it draws from differ, and
+        the walls deposit. An unweighted mean of those cells would return
+        another amount than the intake's flux-weighted outflow.
+        """
+        mesh, config, faces, intake = _stretched_pair()
+        fluxes = (
+            np.abs(np.asarray(faces.u)[intake]) * mesh.dy_cell[np.nonzero(intake)[0]]
+        )
+        assert fluxes.max() > 1.1 * fluxes.min()
+        physics = ParticlePhysics(config)
+        boundary = ConcentrationBoundary(
+            mesh, config, physics, BoundaryRegistry(config)
+        )
+        solver = TransportSolver(mesh, config, physics, boundary)
+        assert boundary.faces_for(0).deposition_u.max() > 0.0
+        live = mesh.cell_type != SOLID
+        rate = np.zeros(mesh.cell_type.shape)
+        rate[1, 5] = 1.0e4
+        c = np.where(live, 10.0, 0.0)
+        dt = solver.stable_dt(faces, 0)
+        for _ in range(30):
+            c = solver.solve_timestep(c, faces, 0, dt, sources=rate)
+        drawn = c[np.nonzero(intake)[0], 5]
+        assert drawn.max() > 1.01 * drawn.min()
+        budget = solver.budget[0]
+        assert budget.outflow > 0.0
+        assert budget.inflow == pytest.approx(budget.outflow, rel=1e-12)
+        assert abs(budget.relative()) < 1e-12

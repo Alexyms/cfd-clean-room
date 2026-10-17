@@ -15,6 +15,24 @@ outlets leave. The vents:
 - ``EXHAUST``: the box's right side, y 0.125 to 0.375 (rows 1 and 2),
   0.4 m/s into the box, 0.1 m^2/s per metre.
 
+A second room for the other orientations (prompt 61b, review 61 B1): the same
+room with a shelf standing clear of the floor right of the box, over cells
+11 to 13 in x and 3 to 5 in y (x 1.375 to 1.75 m, y 0.375 to 0.75 m). Its
+bottom face is the v faces of row 3, columns 11 to 13, with the room below;
+its top the v faces of row 6; its left the u faces of column 11, rows 3 to 5;
+its right the u faces of column 14. ``SHELF_VENTS`` puts a vent of the other
+kind on every face the box's vents leave out, each at 0.2 m/s over one cell
+but the top's two:
+
+- ``under_discharge``: bottom, x 1.375 to 1.5 (column 11), down into the room;
+- ``under_exhaust``: bottom, x 1.625 to 1.75 (column 13), up into the shelf;
+- ``left_discharge``: left, y 0.5 to 0.625 (row 4), toward -x;
+- ``right_discharge``: right, y 0.5 to 0.625 (row 4), toward +x;
+- ``top_exhaust``: top, x 1.5 to 1.75 (columns 12 and 13), down into the shelf.
+
+The three discharges carry 300, 400 and 500 per cubic metre, so a budget can
+tell them apart.
+
 Each test file of a layer builds the configurations it needs from
 ``vent_raw``; the cases are data, not fixtures, so a test can change one key.
 """
@@ -74,6 +92,54 @@ EXHAUST = {
     "y_end": 0.375,
     "velocity": 0.4,
 }
+SHELF = {
+    "name": "shelf",
+    "x_start": 1.375,
+    "x_end": 1.75,
+    "y_start": 0.375,
+    "y_end": 0.75,
+}
+_ON_SHELF = {"location": "obstacle", "obstacle": "shelf", "velocity": 0.2}
+SHELF_VENTS = {
+    "under_discharge": {
+        **_ON_SHELF,
+        "type": "velocity_inlet",
+        "face": "bottom",
+        "x_start": 1.375,
+        "x_end": 1.5,
+        "concentration": [300.0],
+    },
+    "under_exhaust": {
+        **_ON_SHELF,
+        "type": "fixed_flow_outlet",
+        "face": "bottom",
+        "x_start": 1.625,
+        "x_end": 1.75,
+    },
+    "left_discharge": {
+        **_ON_SHELF,
+        "type": "velocity_inlet",
+        "face": "left",
+        "y_start": 0.5,
+        "y_end": 0.625,
+        "concentration": [400.0],
+    },
+    "right_discharge": {
+        **_ON_SHELF,
+        "type": "velocity_inlet",
+        "face": "right",
+        "y_start": 0.5,
+        "y_end": 0.625,
+        "concentration": [500.0],
+    },
+    "top_exhaust": {
+        **_ON_SHELF,
+        "type": "fixed_flow_outlet",
+        "face": "top",
+        "x_start": 1.5,
+        "x_end": 1.75,
+    },
+}
 INLET_TURBULENCE = {"turbulence_intensity": 0.05, "dissipation_length": 0.1}
 TURBULENCE = {
     "model": "k_epsilon",
@@ -100,6 +166,7 @@ def vent_raw(
     returns: bool = True,
     turbulence: bool = False,
     solver: dict | None = None,
+    shelf: bool = False,
 ) -> dict:
     """The room's configuration mapping with the given vents.
 
@@ -115,6 +182,9 @@ def vent_raw(
         inlet keys on every velocity inlet.
     solver : dict, optional
         Keys that replace the solver block's.
+    shelf : bool
+        Add the shelf to the obstacles (its vents are the caller's to give,
+        as ``SHELF_VENTS``).
 
     Returns
     -------
@@ -134,7 +204,7 @@ def vent_raw(
         "solver": {**SOLVER_BLOCK, **(solver or {})},
         "transport": dict(TRANSPORT),
         "boundaries": boundaries,
-        "obstacles": [dict(BOX)],
+        "obstacles": [dict(BOX)] + ([dict(SHELF)] if shelf else []),
         "sensors": [{"name": "centre", "x": 1.0, "y": 0.75}],
         "thresholds": {"5.0e-6": 100.0},
     }

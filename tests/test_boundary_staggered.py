@@ -20,6 +20,8 @@ from tests.vent_cases import (
     DISCHARGE,
     EXHAUST,
     INTAKE,
+    SHELF,
+    SHELF_VENTS,
     vent_config,
     vent_raw,
 )
@@ -620,3 +622,81 @@ class TestVents:
         assert runs["second"].cols.tolist() == [8]
         assert runs["first"].corner_cols.tolist() == [7, 8]
         assert runs["second"].corner_cols.tolist() == [9]
+
+
+@pytest.mark.unit
+class TestVentOrientations:
+    """The vent kinds on the faces the box leaves out (prompt 61b, review 61 B1).
+
+    tests/vent_cases.py's shelf stands clear of the floor over cells 11 to 13
+    by 3 to 5, with a discharge and an exhaust under it, a discharge on each
+    side and an exhaust on top.
+    """
+
+    def _boundary(self) -> tuple[Mesh, StaggeredBoundary]:
+        config = vent_config(SHELF_VENTS, shelf=True)
+        mesh = Mesh(config)
+        return mesh, StaggeredBoundary(mesh, config)
+
+    def test_a_floating_obstacles_bottom_face_borders_the_room_below(self) -> None:
+        config = vent_config(shelf=True)
+        mesh = Mesh(config)
+        bottom = obstacle_face_inputs(mesh, config.obstacles[1], "bottom")
+        assert config.obstacles[1].name == SHELF["name"]
+        assert bottom.component == "v"
+        assert bottom.rows.tolist() == [3, 3, 3]
+        assert bottom.cols.tolist() == [11, 12, 13]
+        assert bottom.corner_cols.tolist() == [12, 13]
+        right = obstacle_face_inputs(mesh, config.obstacles[1], "right")
+        assert right.cols.tolist() == [14, 14, 14] and right.rows.tolist() == [3, 4, 5]
+
+    def test_each_vent_writes_its_velocity_with_the_sign_its_face_gives(self) -> None:
+        mesh, boundary = self._boundary()
+        u, v, _ = allocate_fields(mesh)
+        boundary.apply_normal_velocity(u, v)
+        # Down out of the bottom, up into it; out of each side; down into the top.
+        assert v[3, 11] == -0.2
+        assert v[3, 13] == 0.2
+        assert u[4, 11] == -0.2
+        assert u[4, 14] == 0.2
+        assert v[6, 12] == v[6, 13] == -0.2
+        assert v[3, 12] == 0.0 and v[6, 11] == 0.0 and u[3, 11] == 0.0
+        # Each discharge brings 0.2 m/s over 0.125 m into the room.
+        for name in ("under_discharge", "left_discharge", "right_discharge"):
+            assert boundary.get_inlet_flux(name) == pytest.approx(0.025, rel=1e-15)
+        velocities = boundary.fixed_flow_velocities()
+        assert velocities["under_exhaust"] == velocities["top_exhaust"] == 0.2
+
+    def test_the_vent_masks_mark_every_orientation(self) -> None:
+        _, boundary = self._boundary()
+        faces = boundary.vent_faces()
+        assert np.argwhere(faces.normal_v).tolist() == [
+            [3, 11],
+            [3, 13],
+            [6, 12],
+            [6, 13],
+        ]
+        assert np.argwhere(faces.normal_u).tolist() == [[4, 11], [4, 14]]
+        assert np.argwhere(faces.tangential_u).tolist() == [
+            [3, 12],
+            [3, 13],
+            [6, 12],
+            [6, 13],
+        ]
+        assert np.argwhere(faces.tangential_v).tolist() == [
+            [4, 11],
+            [4, 14],
+            [5, 11],
+            [5, 14],
+        ]
+
+    def test_two_obstacles_with_vents_on_one_face_name_keep_their_own_faces(
+        self,
+    ) -> None:
+        """The box's top discharge and the shelf's top exhaust: rows 4 and 6."""
+        config = vent_config({"discharge": DISCHARGE, **SHELF_VENTS}, shelf=True)
+        runs = {r.name: r for r in StaggeredBoundary(Mesh(config), config).vent_runs()}
+        assert runs["discharge"].rows.tolist() == [4, 4]
+        assert runs["discharge"].cols.tolist() == [7, 8]
+        assert runs["top_exhaust"].rows.tolist() == [6, 6]
+        assert runs["top_exhaust"].cols.tolist() == [12, 13]

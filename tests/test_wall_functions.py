@@ -37,7 +37,7 @@ from src.turbulence import (
     log_law_floor,
     wall_viscosity,
 )
-from tests.vent_cases import DISCHARGE, EXHAUST, INTAKE, vent_config
+from tests.vent_cases import DISCHARGE, EXHAUST, INTAKE, SHELF_VENTS, vent_config
 from validation.transport_cases import AIR, PARTICLES, SOLVER_BLOCK
 
 NU = AIR["viscosity"] / AIR["density"]
@@ -959,3 +959,56 @@ def test_no_diffusion_crosses_a_vent_face_into_the_obstacle() -> None:
     assert step.k[2, 5] == pytest.approx(far, rel=1e-9)
     assert step.eps[4, 7] == pytest.approx(step.eps[6, 3], rel=1e-9)
     assert step.eps[1, 5] == pytest.approx(step.eps[6, 3], rel=1e-9)
+
+
+@pytest.mark.unit
+class TestVentOrientations:
+    """The wall treatment of the shelf's vents, every orientation (prompt 61b)."""
+
+    def _walls(self, vents: dict) -> tuple[Mesh, KEpsilonModel, TurbulenceBoundary]:
+        config = vent_config(vents, turbulence=True, shelf=True)
+        mesh = Mesh(config)
+        boundary = StaggeredBoundary(mesh, config)
+        return (
+            mesh,
+            KEpsilonModel(mesh, config),
+            TurbulenceBoundary(mesh, config, boundary),
+        )
+
+    def test_no_cell_holds_eps_from_a_vent_on_any_side(self) -> None:
+        """Below each bottom vent, beside each side vent, above the top vent."""
+        _, _, plain = self._walls({})
+        _, _, vented = self._walls(SHELF_VENTS)
+        beside = [(2, 11), (2, 13), (4, 10), (4, 14), (6, 12), (6, 13)]
+        for cell in beside:
+            assert plain.wall_cells[cell], cell
+            assert not vented.wall_cells[cell], cell
+        # Beside the shelf's wall faces the wall function stays.
+        for cell in [(2, 12), (3, 10), (6, 11), (5, 14)]:
+            assert vented.wall_cells[cell], cell
+
+    def test_wall_faces_drop_every_vents_span(self) -> None:
+        _, _, plain = self._walls({})
+        _, _, vented = self._walls(SHELF_VENTS)
+        changed_u = plain.wall_faces["u"] != vented.wall_faces["u"]
+        changed_v = plain.wall_faces["v"] != vented.wall_faces["v"]
+        assert np.argwhere(changed_u).tolist() == [[3, 12], [3, 13], [6, 12], [6, 13]]
+        assert np.argwhere(changed_v).tolist() == [[4, 11], [4, 14], [5, 11], [5, 14]]
+
+    def test_the_inflow_takes_each_discharge_and_each_exhausts_room_cell(self) -> None:
+        """An exhaust reads the cell its flux leaves: below the bottom, above the top."""
+        mesh, model, vented = self._walls(SHELF_VENTS)
+        live = mesh.cell_type != SOLID
+        index = np.arange(mesh.cell_type.size, dtype=np.float64).reshape(
+            mesh.cell_type.shape
+        )
+        k = np.where(live, 1.0e-3 * (1.0 + 0.01 * index), 0.0)
+        eps = np.where(live, 1.0e-4 * (1.0 + 0.02 * index), 0.0)
+        state = model.state(k, eps)
+        faces = FaceVelocities.copy_of(np.zeros(u_shape(mesh)), np.zeros(v_shape(mesh)))
+        c = vented.conditions(state, faces)
+        k_in, eps_in = inflow_values(0.05, 0.2, 0.1)
+        assert c.inflow_k_v[3, 11] == k_in and c.inflow_eps_v[3, 11] == eps_in
+        assert c.inflow_k_u[4, 11] == k_in and c.inflow_k_u[4, 14] == k_in
+        assert c.inflow_k_v[3, 13] == k[2, 13] and c.inflow_eps_v[3, 13] == eps[2, 13]
+        assert c.inflow_k_v[6, 12] == k[6, 12] and c.inflow_k_v[6, 13] == k[6, 13]

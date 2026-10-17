@@ -32,7 +32,7 @@ from src.config import SimConfig
 from src.mesh import SOLID, Mesh
 from src.particles import ParticlePhysics
 from src.staggered import allocate_fields
-from tests.vent_cases import DISCHARGE, EXHAUST, INTAKE, vent_config
+from tests.vent_cases import DISCHARGE, EXHAUST, INTAKE, SHELF_VENTS, vent_config
 from validation.cases import CONFIG_DIR, case_path, load_case
 
 SIZES = [0.1e-6, 0.3e-6, 0.5e-6, 1.0e-6, 5.0e-6]
@@ -729,3 +729,32 @@ class TestVents:
             discharge={**DISCHARGE, "recirculate_from": "intake"}, intake=INTAKE
         )
         assert unfiltered.recirculation[0].passed == 1.0
+
+
+@pytest.mark.unit
+def test_the_shelf_vents_scalar_conditions_in_every_orientation() -> None:
+    """Each discharge carries its own value; no vent face deposits (prompt 61b)."""
+    config = vent_config(SHELF_VENTS, shelf=True)
+    mesh = Mesh(config)
+    boundary = ConcentrationBoundary(
+        mesh, config, ParticlePhysics(config), BoundaryRegistry(config)
+    )
+    faces = boundary.faces_for(0)
+    assert faces.inflow_v[3, 11] == 300.0
+    assert faces.inflow_u[4, 11] == 400.0
+    assert faces.inflow_u[4, 14] == 500.0
+    assert faces.inflow_v[3, 13] == faces.inflow_v[6, 12] == 0.0
+    for component, row, col in [
+        ("v", 3, 11),
+        ("v", 3, 13),
+        ("v", 6, 12),
+        ("v", 6, 13),
+        ("u", 4, 11),
+        ("u", 4, 14),
+    ]:
+        surface = faces.surface_v if component == "v" else faces.surface_u
+        assert surface[row, col] == SURFACE_NONE, (component, row, col)
+    # The shelf's other faces: a ceiling under it, a floor on top, walls beside.
+    assert faces.surface_v[3, 12] == SURFACE_CEILING
+    assert faces.surface_v[6, 11] == SURFACE_FLOOR
+    assert faces.surface_u[3, 11] == faces.surface_u[5, 14] == SURFACE_WALL
