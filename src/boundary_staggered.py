@@ -53,6 +53,21 @@ Which edge faces are walls is data too (``wall_faces``, ECR-002 step 6): a
 face with zero normal velocity that is not an outlet, at rest or moving,
 which is where the wall functions of ADR-012 B apply. An inlet that admits
 air and either kind of outlet is not a wall.
+
+Equipment vents (ADR-014 J, step 0b). A segment on an obstacle face is a
+cooling discharge (``velocity_inlet``) or a process exhaust
+(``fixed_flow_outlet``). Its faces are interior entries of the face arrays,
+the faces between the obstacle's cells and the room that
+``staggered.obstacle_face_inputs`` finds and the registry's ``coverage_on``
+gives to the vent (``vent_runs``, the one derivation every vent layer
+reads). ``apply_normal_velocity`` writes their normal velocity once, as it
+writes an inlet's; the inflow sums count a discharge and the remainder rule
+counts an exhaust as a stated outlet, so the returns that state no velocity
+share what the supply leaves after the hood and every exhaust. A file whose
+outlets all state their velocities, with no pressure outlet, must balance on
+the mesh's faces as it balanced on the configured extents at load. Which
+faces are vents, normal and tangential, is data (``vent_faces``) for the
+momentum, turbulence and concentration layers.
 """
 
 from dataclasses import dataclass
@@ -62,6 +77,7 @@ import numpy as np
 from src.boundary_registry import (
     EDGES,
     FIXED_FLOW_OUTLET,
+    OBSTACLE,
     PRESSURE_OUTLET,
     VELOCITY_INLET,
     WALL,
@@ -70,9 +86,16 @@ from src.boundary_registry import (
     EdgeCoverage,
     fixed_flow_condition,
 )
-from src.config import SimConfig
+from src.config import BoundarySpec, SimConfig
 from src.mesh import Mesh
-from src.staggered import edge_cell_inputs, u_shape, v_shape
+from src.staggered import (
+    ROOM_EDGE_OF_FACE,
+    ObstacleFace,
+    edge_cell_inputs,
+    obstacle_face_inputs,
+    u_shape,
+    v_shape,
+)
 
 # Sign that turns the prescribed normal component into flow into the domain.
 _INWARD_SIGN: dict[str, float] = {
@@ -81,6 +104,171 @@ _INWARD_SIGN: dict[str, float] = {
     "left": 1.0,
     "right": -1.0,
 }
+
+
+# The relative difference between the inflow and the stated outflow on the
+# mesh's faces below which a room no outlet balances is read as balanced: the
+# rounding of two face sums, not a tolerance a case chooses.
+MESH_BALANCE_TOLERANCE = 1.0e-12
+
+
+@dataclass(frozen=True, eq=False)
+class VentRun:
+    """The mesh faces one vent segment covers (ADR-014 J).
+
+    Parameters
+    ----------
+    name : str
+        The segment's name.
+    spec : BoundarySpec
+        The segment.
+    edge : str
+        The domain edge the obstacle face plays to the room
+        (``staggered.ROOM_EDGE_OF_FACE``): "bottom" for a top face.
+    component : str
+        "v" on a top or bottom face, "u" on a side.
+    rows, cols : np.ndarray
+        int64, the vent's faces in its component's array, in order along
+        the face.
+    widths : np.ndarray
+        Each face's width, metres.
+    condition : EdgeCondition
+        The vent's condition on ``edge``: the normal component signed along
+        its axis, zero tangential.
+    corner_rows, corner_cols : np.ndarray
+        int64, the tangential wall-stencil faces over the vent's span, in
+        ``wall_mu``'s [ny+1, nx+1] layout (``staggered.ObstacleFace``).
+    """
+
+    name: str
+    spec: BoundarySpec
+    edge: str
+    component: str
+    rows: np.ndarray
+    cols: np.ndarray
+    widths: np.ndarray
+    condition: EdgeCondition
+    corner_rows: np.ndarray
+    corner_cols: np.ndarray
+
+    @property
+    def normal(self) -> float:
+        """The normal velocity stored on every face, m/s, signed along the axis."""
+        if self.component == "v":
+            return self.condition.v_prescribed
+        return self.condition.u_prescribed
+
+    @property
+    def is_inlet(self) -> bool:
+        """True for a cooling discharge, False for a process exhaust."""
+        return self.condition.bc_type == VELOCITY_INLET
+
+
+@dataclass(frozen=True, eq=False)
+class VentFaces:
+    """Which faces are vents, for the layers that treat them apart (ADR-014 J).
+
+    All arrays are boolean and read-only; every one is all False in a
+    configuration without vents.
+
+    Parameters
+    ----------
+    normal_u : np.ndarray
+        [ny, nx+1]: the u faces of a vent on an obstacle side.
+    normal_v : np.ndarray
+        [ny+1, nx]: the v faces of a vent on an obstacle top or bottom.
+    tangential_u : np.ndarray
+        [ny+1, nx+1], ``wall_mu``'s "u" layout: the horizontal faces of the
+        u wall stencil over a top or bottom vent's span.
+    tangential_v : np.ndarray
+        [ny+1, nx+1], ``wall_mu``'s "v" layout: the vertical faces of the v
+        wall stencil over a side vent's span.
+    """
+
+    normal_u: np.ndarray
+    normal_v: np.ndarray
+    tangential_u: np.ndarray
+    tangential_v: np.ndarray
+
+    @property
+    def any(self) -> bool:
+        """True when the configuration has a vent face."""
+        return bool(self.normal_u.any() or self.normal_v.any())
+
+
+def vent_runs(
+    mesh: Mesh, config: SimConfig, registry: BoundaryRegistry
+) -> list[VentRun]:
+    """The faces of every vent segment on the mesh, in configuration order (ADR-014 J).
+
+    The one derivation of a vent's faces: ``staggered.obstacle_face_inputs``
+    for the faces of each obstacle face a vent names, and the registry's
+    ``coverage_on`` for which vent covers each. The velocity, turbulence and
+    concentration layers all call it.
+
+    Parameters
+    ----------
+    mesh : Mesh
+        The computational mesh.
+    config : SimConfig
+        Supplies the obstacles.
+    registry : BoundaryRegistry
+        The configured segments.
+
+    Returns
+    -------
+    list[VentRun]
+        One per vent segment; empty without vents.
+
+    Raises
+    ------
+    ValueError
+        If a vent's extent covers no face of this mesh (ADR-014 J's load
+        rule that needs the mesh).
+    """
+    vents = registry.vents()
+    if not vents:
+        return []
+    obstacles = {obs.name: obs for obs in config.obstacles}
+    faces: dict[tuple[str, str], tuple[ObstacleFace, list, list]] = {}
+    runs: list[VentRun] = []
+    for name, spec in vents.items():
+        assert spec.obstacle is not None and spec.face is not None
+        key = (spec.obstacle, spec.face)
+        if key not in faces:
+            inputs = obstacle_face_inputs(mesh, obstacles[spec.obstacle], spec.face)
+            faces[key] = (
+                inputs,
+                registry.coverage_on(spec.obstacle, spec.face, inputs.coordinates),
+                registry.coverage_on(
+                    spec.obstacle, spec.face, inputs.corner_coordinates
+                ),
+            )
+        inputs, coverage, corners = faces[key]
+        mine = np.array([point.name == name for point in coverage], dtype=bool)
+        if not mine.any():
+            raise ValueError(
+                f"boundaries.{name}: the vent's extent covers no face of the "
+                f"{spec.face} face of '{spec.obstacle}' on this mesh; widen it to "
+                "hold at least one cell centre of the face"
+            )
+        mine_corner = np.array([point.name == name for point in corners], dtype=bool)
+        condition = coverage[int(np.argmax(mine))].condition
+        runs.append(
+            VentRun(
+                name=name,
+                spec=spec,
+                edge=ROOM_EDGE_OF_FACE[spec.face],
+                component=inputs.component,
+                rows=inputs.rows[mine],
+                cols=inputs.cols[mine],
+                widths=inputs.widths[mine],
+                condition=condition,
+                corner_rows=inputs.corner_rows[mine_corner],
+                corner_cols=inputs.corner_cols[mine_corner],
+            )
+        )
+    return runs
 
 
 # eq=False because the default __eq__ compares the array fields elementwise
@@ -188,7 +376,10 @@ class StaggeredBoundary:
     ------
     ValueError
         If the fixed-flow outlets that state no velocity cover no face, or
-        the inflow the stated ones leave for them is zero or negative.
+        the inflow the stated ones leave for them is zero or negative; if a
+        vent covers no face of the mesh; or if every outlet states its
+        velocity, none is a pressure outlet, and the stated outflow differs
+        from the inflow on the mesh's faces.
     """
 
     def __init__(self, mesh: Mesh, config: SimConfig) -> None:
@@ -196,6 +387,8 @@ class StaggeredBoundary:
         self._registry = BoundaryRegistry(config)
         self._u_shape = u_shape(mesh)
         self._v_shape = v_shape(mesh)
+        self._vents: list[VentRun] = vent_runs(mesh, config, self._registry)
+        self._vent_faces: VentFaces = self._build_vent_faces()
 
         # Coverage at the cell positions along each edge, from the shared
         # derivation so every query below and the scalar layer see one answer.
@@ -296,7 +489,11 @@ class StaggeredBoundary:
             if spec.type == FIXED_FLOW_OUTLET
         }
         lengths: dict[str, float] = {}
+        vent_widths = {run.name: float(run.widths.sum()) for run in self._vents}
         for name, spec in fixed.items():
+            if spec.location == OBSTACLE:
+                lengths[name] = vent_widths[name]
+                continue
             covered = np.array(
                 [p.name == name for p in self._cell_coverage[spec.location]],
                 dtype=bool,
@@ -309,6 +506,7 @@ class StaggeredBoundary:
         }
         shared = [name for name, spec in fixed.items() if spec.velocity is None]
         if not shared:
+            self._check_stated_balance(resolved, lengths)
             return resolved
         inflow = self.get_total_inlet_flux()
         stated_outflow = sum(resolved[name] * lengths[name] for name in resolved)
@@ -329,6 +527,50 @@ class StaggeredBoundary:
         for name in shared:
             resolved[name] = remainder / shared_length
         return {name: resolved[name] for name in fixed}
+
+    def _check_stated_balance(
+        self, resolved: dict[str, float], lengths: dict[str, float]
+    ) -> None:
+        """Raise unless stated outlets with no pressure outlet balance the inflow on the mesh.
+
+        Load accepted the file on the configured extents (config.py); here
+        the faces decide, since the mesh may round two openings differently.
+        With a pressure outlet, or with no fixed-flow outlet, nothing is
+        checked: the pressure outlet balances the room, and a room with no
+        outlet at all is a closed cavity.
+        """
+        if not resolved or any(
+            spec.type == PRESSURE_OUTLET for spec in self._registry.boundaries.values()
+        ):
+            return
+        inflow = self.get_total_inlet_flux()
+        outflow = sum(resolved[name] * lengths[name] for name in resolved)
+        if abs(inflow - outflow) > MESH_BALANCE_TOLERANCE * max(abs(inflow), outflow):
+            raise ValueError(
+                f"every fixed-flow outlet {sorted(resolved)} states its velocity and "
+                "nothing else balances the room, but on this mesh's faces the stated "
+                f"outflow {outflow:.15g} m^2/s differs from the inflow {inflow:.15g} "
+                "m^2/s; place the openings' ends on cell faces, or leave the velocity "
+                "off a domain-edge outlet"
+            )
+
+    def _build_vent_faces(self) -> VentFaces:
+        """The vent masks from the runs (``vent_faces``)."""
+        ny, nxp1 = self._u_shape
+        normal_u = np.zeros(self._u_shape, dtype=bool)
+        normal_v = np.zeros(self._v_shape, dtype=bool)
+        tangential_u = np.zeros((ny + 1, nxp1), dtype=bool)
+        tangential_v = np.zeros((ny + 1, nxp1), dtype=bool)
+        for run in self._vents:
+            if run.component == "v":
+                normal_v[run.rows, run.cols] = True
+                tangential_u[run.corner_rows, run.corner_cols] = True
+            else:
+                normal_u[run.rows, run.cols] = True
+                tangential_v[run.corner_rows, run.corner_cols] = True
+        for array in (normal_u, normal_v, tangential_u, tangential_v):
+            array.flags.writeable = False
+        return VentFaces(normal_u, normal_v, tangential_u, tangential_v)
 
     # ------------------------------------------------------------------
     # Construction of the data deliverables
@@ -418,17 +660,20 @@ class StaggeredBoundary:
         Wall faces get zero and inlet faces get the prescribed component,
         exactly. Pressure outlet faces are not written: their normal
         velocity is not a Dirichlet condition and is left to the momentum
-        and pressure steps, which read ``pressure_outlets``. No interior
-        entry and no tangential entry is touched.
+        and pressure steps, which read ``pressure_outlets``. The faces of
+        every vent (ADR-014 J), interior entries on obstacle faces, get the
+        vent's normal velocity. No other interior entry and no tangential
+        entry is touched.
 
         Parameters
         ----------
         u : np.ndarray
             x-velocity on vertical faces, shape [ny, nx+1], modified in-place
-            at columns 0 and nx only.
+            at columns 0 and nx and at the side vents' faces only.
         v : np.ndarray
             y-velocity on horizontal faces, shape [ny+1, nx], modified
-            in-place at rows 0 and ny only.
+            in-place at rows 0 and ny and at the top and bottom vents' faces
+            only.
 
         Raises
         ------
@@ -448,6 +693,9 @@ class StaggeredBoundary:
         u[mask, 0] = self._normal_value["left"][mask]
         mask = self._normal_dirichlet["right"]
         u[mask, -1] = self._normal_value["right"][mask]
+        for run in self._vents:
+            target = u if run.component == "u" else v
+            target[run.rows, run.cols] = run.normal
 
     # ------------------------------------------------------------------
     # Deliverable 2: the remaining conditions as data
@@ -496,6 +744,27 @@ class StaggeredBoundary:
         """
         return dict(self._fixed_flow)
 
+    def vent_runs(self) -> list[VentRun]:
+        """The faces of every vent segment, in configuration order (ADR-014 J).
+
+        Returns
+        -------
+        list[VentRun]
+            ``vent_runs(mesh, config, registry)`` as built once here; empty
+            without vents. A copy of the list.
+        """
+        return list(self._vents)
+
+    def vent_faces(self) -> VentFaces:
+        """Which faces are vents, normal and tangential (ADR-014 J).
+
+        Returns
+        -------
+        VentFaces
+            Read-only masks, all False without vents.
+        """
+        return self._vent_faces
+
     def has_pressure_outlet(self) -> bool:
         """Return True if any edge cell is a pressure outlet.
 
@@ -530,7 +799,9 @@ class StaggeredBoundary:
         float
             Volumetric flux in m^2/s (per unit depth), positive into the
             domain. Zero for a segment that is not a velocity inlet, and
-            zero for a purely tangential inlet such as a moving lid.
+            zero for a purely tangential inlet such as a moving lid. A
+            discharge vent's is its velocity times its faces' widths
+            (ADR-014 J).
 
         Raises
         ------
@@ -538,6 +809,8 @@ class StaggeredBoundary:
             If boundary_name is not found in the config.
         """
         spec = self._registry.spec(boundary_name)
+        if spec.location == OBSTACLE:
+            return self._vent_inlet_flux(boundary_name)
         edge = spec.location
         flux = 0.0
         widths = self._face_widths(edge)
@@ -553,6 +826,16 @@ class StaggeredBoundary:
             )
         return flux
 
+    def _vent_inlet_flux(self, name: str) -> float:
+        """Inflow through a discharge vent's faces; zero for an exhaust (ADR-014 J)."""
+        flux = 0.0
+        for run in self._vents:
+            if run.name != name or not run.is_inlet:
+                continue
+            for width in run.widths:
+                flux += _INWARD_SIGN[run.edge] * run.normal * float(width)
+        return flux
+
     def get_total_inlet_flux(self) -> float:
         """Volumetric flux into the domain summed over every velocity inlet.
 
@@ -560,7 +843,8 @@ class StaggeredBoundary:
         -------
         float
             Sum of get_inlet_flux(name) over all boundaries of type
-            velocity_inlet, in m^2/s (per unit depth).
+            velocity_inlet, discharge vents included, in m^2/s (per unit
+            depth).
         """
         total = 0.0
         for name, spec in self._registry.boundaries.items():
@@ -582,8 +866,8 @@ class StaggeredBoundary:
         -------
         float
             Maximum of |u_prescribed| and |v_prescribed| over the edge
-            cells that are not fixed-flow outlets; 0.0 when nothing is
-            prescribed.
+            cells that are not fixed-flow outlets and over the discharge
+            vents, inlets too (ADR-014 J); 0.0 when nothing is prescribed.
         """
         max_vel = 0.0
         for conditions in self._cell_conditions.values():
@@ -591,4 +875,7 @@ class StaggeredBoundary:
                 if c.bc_type == FIXED_FLOW_OUTLET:
                     continue
                 max_vel = max(max_vel, abs(c.u_prescribed), abs(c.v_prescribed))
+        for run in self._vents:
+            if run.is_inlet:
+                max_vel = max(max_vel, abs(run.normal))
         return max_vel
