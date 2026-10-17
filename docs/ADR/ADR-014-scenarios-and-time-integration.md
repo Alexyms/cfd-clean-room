@@ -6,18 +6,16 @@ written after rounds 1 and 2 of prompt 59, with one amendment of the same date, 
 vents (section J, built as step 0b of section G; its limit in section H). The dated note under
 "Decisions for Alex" records it. The build has begun with step 0 (prompt 60).
 
-Proposed. Written 2026-10-16 (prompt 59, branch `phase4/design`), before the Phase 4 build, from
-the solver as ADR-010 to ADR-013 record it, the Phase 3 gate report's stated limits
+Written 2026-10-16 (prompt 59, branch `phase4/design`), before the Phase 4 build, from the
+solver as ADR-010 to ADR-013 record it, the Phase 3 gate report's stated limits
 (`docs/reports/phase3_transport_report.md`) and the probes under `docs/reports/probe59/`, whose
 records are in `results/builder59/` and whose tables are `docs/reports/probe59/tables59.md`.
-Phase 3 opened with ADR-011 before any code; Phase 4 opens the same way. Three decisions were
-taken by Alex on 2026-10-16 and are recorded below as given; the rest are put to Alex as a
-picture first, then ranked options with their consequences, then the section carrying the
-detail, as ADR-011 and ADR-013 did. Premise review 59 and test 59 run before the pull request.
-Nothing under `src/`, `tests/` or `configs/` changes with this document. It gains a
-planned-against-built table at the Phase 4 gate, as ADR-011 and ADR-012 did. Bracketed numbers
-point at the sources at the end; "T1" to "T6" are the tables of `tables59.md`, generated from
-the records by `tables59.py`, whose `--check` regenerates and compares them.
+Three decisions were taken by Alex on 2026-10-16 and are recorded below as given; the rest were
+put to Alex as a picture first, then ranked options with their consequences, then the section
+carrying the detail, as ADR-011 and ADR-013 did. The document gains a planned-against-built
+table at the Phase 4 gate, as ADR-011 and ADR-012 did. Bracketed numbers point at the sources
+at the end; "T1" to "T7" are the tables of `tables59.md`, generated from the records by
+`tables59.py`, whose `--check` regenerates and compares them.
 
 ## Decisions already taken (Alex, 2026-10-16), recorded as given
 
