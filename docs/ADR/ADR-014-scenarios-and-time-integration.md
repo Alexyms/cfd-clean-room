@@ -767,7 +767,8 @@ as `mu_eff` is), `mesh.py`'s the breakpoints.
    process exhaust), read by the velocity layer, the momentum and pressure steps, the wall
    treatment and the concentration boundary; the configuration keys and their rejection paths
    in `tests/test_config.py`; the tests section J lists. Before step 1, so the scenario schema
-   and the reference scenarios are written with vents from the start.
+   and the reference scenarios are written with vents from the start. *Built 2026-10-16 (prompt 61),*
+   *with the departures section J lists at its end and the recirculated discharge of its amendment.*
 1. The scenario schema and inheritance in `config.py`: `tests/test_config.py` gains the rejection
    paths listed in section B, one test per rule, and the four reference files load.
 2. `scenarios.py`: intervals, fingerprints, sources, conditions; `tests/test_scenarios.py`:
@@ -957,6 +958,51 @@ the budget's inflow at velocity times span times concentration; an exhaust's out
 as outflow and no vent face deposits; and every configuration without vents bitwise unchanged
 (the hashes of record). One product-grid measurement: the product room with a process exhaust
 on a tool's side and a cooling discharge on a tool's top converges under the stopping rule.
+
+**As built (step 0b, prompt 61, 2026-10-16): the departures from this section.** The section
+was built as written except where these say otherwise, each with its reason; the build and its
+measurements are `docs/reports/adr014_step0b.md`.
+1. *No angled jet on a vent.* `u_velocity` and `v_velocity` are refused on a vent, where the
+   section kept their domain-edge meaning. Three layers read the tangential velocity on an
+   obstacle face as zero: the momentum wall stencil and its QUICK boundary form (the wall value
+   at the face), and the k-epsilon corner gradients (a face beside a SOLID cell reads zero at
+   the corner). Carrying a prescribed tangential value through each is a change to all three
+   that no test of this section and no product use needs. A vent is a normal jet or a normal
+   draw; an angled one is a later step's, with those three changes.
+2. *The tangential viscosity on a vent's span is the domain inlet's as built, not the molecular
+   one.* The section says the tangential component on a vent takes "the domain inlet's: the
+   prescribed tangential velocity with the molecular viscosity". A domain inlet's tangential
+   stencil takes the viscosity the stencil's face rule gives (`MomentumPredictor.
+   stencil_viscosity`: air's on the laminar path, `mu + rho nu_t` of the wall cell in the
+   coupled solve); only a wall face takes the wall function's. The vent takes exactly that: its
+   span leaves `TurbulenceBoundary.wall_faces`, so the stencil keeps its face-rule viscosity,
+   which is the molecular one on the laminar path. The section's first clause (the domain
+   inlet's) is what was built; its "molecular" holds on the laminar path only.
+3. *A closed box of stated flows loads.* The section's test names a closed box whose only
+   openings are a discharge and an exhaust of equal flow, which `config.py` refused: with no
+   pressure outlet it required a fixed-flow outlet that states no velocity. A file whose outlets
+   all state their velocities now loads when the stated outflow equals the configured inflow to
+   1e-9 relative, and `StaggeredBoundary` refuses it unless the faces balance to 1e-12 relative
+   (`MESH_BALANCE_TOLERANCE`), since the mesh may round two openings differently. Unbalanced,
+   both refusals stand as before.
+4. *Two refusals the section did not list.* A vent's extent key on the other axis (`y_start` on
+   a top vent) is refused, where a domain-edge segment ignores it: on a vent the slip would
+   silently move nothing. An `obstacle` that two obstacles share is refused: obstacle names were
+   never checked for uniqueness, and a vent must name one.
+5. *What the section left unsaid, decided here.* A discharge's velocity enters
+   `get_max_boundary_velocity`, the stopping rule's velocity scale, as an inlet's does (an
+   exhaust's does not), and its faces count as inlet faces in the k-epsilon solve's initial
+   state, weighted by their inflow. A vent face is first-order in the scalar scheme's
+   neighbourhood: the face itself carries the inflow value in and the room cell's value out, as
+   the section says, and the next face into the room reads its far-upstream node, inside the
+   obstacle, as the upstream value (the scheme's rule beside any obstacle, unchanged), where a
+   domain inlet's next face reads the inflow value as Leonard's boundary node.
+6. *Where the vents are found.* `Mesh.obstacle_mask` is the one rule that places an obstacle
+   (the classification reads it, cell for cell what it was), `staggered.obstacle_face_inputs`
+   finds an obstacle face's room faces from it, the registry's `coverage_on` gives them to the
+   vents and `boundary_staggered.vent_runs` is the derivation the velocity, turbulence and
+   concentration layers all read (REQ-S12.1). `boundary_concentration` now imports
+   `boundary_staggered` for it.
 
 ## Probes (committed before the runs; results after)
 
