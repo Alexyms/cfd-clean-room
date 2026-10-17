@@ -290,6 +290,18 @@ PLANTS.append(
 )
 
 
+# Prompt 62b (review 62 S6): an interval's vents on the mesh.
+PLANTS.append(
+    (
+        "vents (62b): interval vents not checked on the mesh",
+        SCENARIOS,
+        "                self._check_vents(interval_config, t0, t1, names)\n",
+        "",
+        [TESTS_SCENARIOS],
+    )
+)
+
+
 def replace_once(path: Path, old: str, new: str) -> None:
     """Replace ``old`` by ``new`` once, keeping the file's newlines."""
     text = path.read_text(encoding="utf-8", newline="")

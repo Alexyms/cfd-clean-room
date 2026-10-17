@@ -687,6 +687,46 @@ class TestVentFailures:
         with pytest.raises(ValueError, match=r"names 'rack_intake', which is not a"):
             SimConfig.from_dict(raw)
 
+    def test_a_vent_replacement_that_covers_no_face_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        """Review 62 S6: a 1 mm exhaust holds no face centre on 160x60 (5 cm cells)."""
+        narrow = {
+            "name": "exhaust_throttled",
+            "start": 30.0,
+            "duration": 10.0,
+            "replace": {
+                "segment": "etch_exhaust",
+                "with": [
+                    {
+                        "name": "etch_slot",
+                        "type": "fixed_flow_outlet",
+                        "location": "obstacle",
+                        "obstacle": "etch_chamber",
+                        "face": "right",
+                        "y_start": 1.200,
+                        "y_end": 1.201,
+                        "velocity": 0.25,
+                    }
+                ],
+            },
+        }
+        config = _scenario(
+            tmp_path, [narrow], base=CONFIG_DIR / "clean_room_vents.yaml"
+        )
+        with pytest.raises(
+            ValueError,
+            match=r"from 30\.0 s to 40\.0 s with \['exhaust_throttled'\] active: "
+            r"boundaries\.etch_slot: the vent's extent covers no face",
+        ):
+            _manager(config)
+        # One face wide, the same replacement is built.
+        narrow["replace"]["with"][0]["y_end"] = 1.25
+        config = _scenario(
+            tmp_path, [narrow], base=CONFIG_DIR / "clean_room_vents.yaml"
+        )
+        assert _manager(config).n_flow_states == 2
+
     def test_a_discharge_slowed_without_its_intake_fails_the_balance_check(
         self, tmp_path: Path
     ) -> None:

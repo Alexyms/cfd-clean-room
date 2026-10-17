@@ -41,6 +41,7 @@ import numpy as np
 
 from src.boundary_concentration import ConcentrationBoundary
 from src.boundary_registry import BoundaryRegistry
+from src.boundary_vents import vent_runs
 from src.config import (
     BoundarySpec,
     EventSpec,
@@ -198,8 +199,10 @@ class ScenarioManager:
     ------
     ValueError
         If ``config`` has no scenario, the mesh is not the configuration's
-        grid, or a source's box holds no non-SOLID cell centre on this mesh
-        (ADR-014 B's rule that needs the mesh).
+        grid, a source's box holds no non-SOLID cell centre on this mesh
+        (ADR-014 B's rule that needs the mesh), or an interval's vent covers
+        no face of this mesh or its recirculating pair's flows differ on the
+        faces (ADR-014 J's).
     """
 
     def __init__(self, config: SimConfig, mesh: Mesh) -> None:
@@ -227,6 +230,7 @@ class ScenarioManager:
             names = tuple(event.name for event in active)
             if names not in self._configs:
                 interval_config = SimConfig.from_dict(self._spec.mapping(active))
+                self._check_vents(interval_config, t0, t1, names)
                 self._configs[names] = (
                     interval_config,
                     flow_fingerprint(interval_config),
@@ -250,6 +254,25 @@ class ScenarioManager:
             len(self._spans),
             self.n_flow_states,
         )
+
+    def _check_vents(
+        self, config: SimConfig, t0: float, t1: float, names: tuple[str, ...]
+    ) -> None:
+        """Raise unless every vent of an interval covers a face of this mesh.
+
+        ADR-014 J's rule that needs the mesh (``boundary_vents.vent_runs``):
+        a vent's extent covers at least one face of its obstacle face, and a
+        recirculating pair's flows agree on the faces. Checked here for every
+        interval so a replacement vent that fails it is refused before a run,
+        as the base's vents are when its boundary is built (review 62 S6).
+        """
+        try:
+            vent_runs(self._mesh, config, BoundaryRegistry(config))
+        except ValueError as err:
+            raise ValueError(
+                f"scenario: the configuration from {t0} s to {t1} s with "
+                f"{list(names) if names else 'no events'} active: {err}"
+            ) from err
 
     def _source_rates(self, name: str, source: Source) -> np.ndarray:
         """A source's rate per class and cell, [n_classes, ny, nx], read-only."""
