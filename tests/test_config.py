@@ -1384,7 +1384,8 @@ class TestPressureKeys:
         The laminar cases carry 1e-8; the Annex 20 case (VAL-017, prompt 49),
         the backward-facing step (VAL-019, prompt 52), the impinging jet
         (VAL-020, prompt 55) and, since step 8 (prompt 56), the product file
-        and its two layouts (tests/test_layouts.py) carry the turbulent
+        and its two layouts (tests/test_layouts.py), and since step 0b of ADR-014
+        (prompt 61) the vented room, carry the turbulent
         product setting, 1e-4 (ADR-013 decision 3 as amended 2026-10-09;
         ECR-002 section 8, step 8).
         """
@@ -1392,6 +1393,7 @@ class TestPressureKeys:
             "clean_room_default.yaml": 1e-4,
             "clean_room_l1_return3_closed.yaml": 1e-4,
             "clean_room_l2_left_supply.yaml": 1e-4,
+            "clean_room_vents.yaml": 1e-4,
             "validation_annex20.yaml": 1e-4,
             "validation_backstep.yaml": 1e-4,
             "validation_impinging_jet.yaml": 1e-4,
