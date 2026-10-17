@@ -23,9 +23,11 @@ class BoundarySpec:
         Boundary condition type: "velocity_inlet", "pressure_outlet",
         "fixed_flow_outlet" or "wall".
     location : str
-        Domain edge: "top", "bottom", "left", or "right".
+        Domain edge: "top", "bottom", "left", or "right"; or "obstacle"
+        for an equipment vent on an obstacle face (ADR-014 J).
     x_start : float or None
-        Start of boundary segment along x axis (for top/bottom).
+        Start of boundary segment along x axis (for top/bottom, a domain
+        edge or an obstacle face).
     x_end : float or None
         End of boundary segment along x axis (for top/bottom).
     y_start : float or None
@@ -65,9 +67,21 @@ class BoundarySpec:
         Likewise: the length l_e in ``eps = k^(3/2) / l_e``, metres,
         positive, in ADR-012 C's convention, with no ``C_mu^(3/4)``. None
         otherwise.
+    obstacle : str or None
+        location "obstacle" only: the name of the obstacle the vent sits
+        on. None on a domain-edge segment.
+    face : str or None
+        location "obstacle" only: the obstacle's face, "top", "bottom",
+        "left" or "right". None on a domain-edge segment.
+    recirculate_from : str or None
+        A velocity_inlet vent only: the name of a fixed_flow_outlet vent on
+        the same obstacle whose intake the discharge returns to the room,
+        so the discharge carries the intake's concentration, lagged one
+        transport step (prompt 61's amendment to ADR-014 J). None means
+        the discharge carries ``concentration``, or nothing.
 
-    The three concentration keys and the two turbulence keys are
-    keyword-only. A velocity_inlet whose
+    The three concentration keys, the two turbulence keys and the three
+    vent keys are keyword-only. A velocity_inlet whose
     prescribed normal component is zero (a tangential lid) admits no air
     and is a wall to the scalar layer (ADR-011 E, amended 2026-10-03), so
     it may carry neither ``concentration`` nor ``hepa_filtered``.
@@ -87,6 +101,9 @@ class BoundarySpec:
     deposition_surface: str | None = field(default=None, kw_only=True)
     turbulence_intensity: float | None = field(default=None, kw_only=True)
     dissipation_length: float | None = field(default=None, kw_only=True)
+    obstacle: str | None = field(default=None, kw_only=True)
+    face: str | None = field(default=None, kw_only=True)
+    recirculate_from: str | None = field(default=None, kw_only=True)
 
 
 @dataclass(frozen=True)
@@ -256,6 +273,21 @@ _VALID_BOUNDARY_TYPES: set[str] = {
 }
 _VALID_BOUNDARY_LOCATIONS: set[str] = {"top", "bottom", "left", "right"}
 
+# Equipment vents (ADR-014 J, 2026-10-16): a segment on an obstacle face. Two
+# existing types only: a fixed-flow outlet is a process exhaust, a velocity
+# inlet a cooling discharge. A pressure outlet's zero-gradient copy would need
+# the face beyond it, inside the obstacle, and an obstacle face is a wall
+# already.
+OBSTACLE_LOCATION = "obstacle"
+OBSTACLE_FACES: tuple[str, ...] = ("top", "bottom", "left", "right")
+VENT_TYPES: tuple[str, ...] = ("velocity_inlet", "fixed_flow_outlet")
+_VENT_KEYS: tuple[str, ...] = ("obstacle", "face", "recirculate_from")
+# The relative difference between the configured inflow and the stated
+# outflow below which a room with no outlet to take a remainder is read as
+# balanced. Far above the rounding of a product of two configured numbers
+# and far below any imbalance a configuration means.
+BALANCE_TOLERANCE = 1.0e-9
+
 # Stopping rules the solver block may name (src/stopping.py). velocity_step is
 # the default, the rule every stored result was produced under.
 VELOCITY_STEP = "velocity_step"
@@ -372,6 +404,7 @@ _SEGMENT_KEYS: frozenset[str] = frozenset(
         "deposition_surface",
         "turbulence_intensity",
         "dissipation_length",
+        *_VENT_KEYS,
     }
 )
 
@@ -645,11 +678,20 @@ class SimConfig:
                     f"{sorted(_VALID_BOUNDARY_TYPES)}, got '{bc_type}'"
                 )
             bc_location = self._require_string(spec, "location", ctx)
-            if bc_location not in _VALID_BOUNDARY_LOCATIONS:
+            if (
+                bc_location not in _VALID_BOUNDARY_LOCATIONS
+                and bc_location != OBSTACLE_LOCATION
+            ):
                 raise ValueError(
                     f"{ctx}.location must be one of "
-                    f"{sorted(_VALID_BOUNDARY_LOCATIONS)}, got '{bc_location}'"
+                    f"{sorted(_VALID_BOUNDARY_LOCATIONS)} or '{OBSTACLE_LOCATION}', "
+                    f"got '{bc_location}'"
                 )
+            bc_obstacle, bc_face, bc_recirculate = self._vent_keys(
+                spec, ctx, bc_type, bc_location
+            )
+            # The axis the extent runs along: x on a top or bottom edge or face.
+            along_x = (bc_face or bc_location) in ("top", "bottom")
             bc_velocity = None
             bc_u_velocity = None
             bc_v_velocity = None
@@ -688,9 +730,7 @@ class SimConfig:
                 # A zero normal component (a tangential lid) admits no air: the
                 # scalar layer treats the segment as a wall, so the inlet
                 # concentration keys have nothing to describe.
-                normal = (
-                    bc_v_velocity if bc_location in ("top", "bottom") else bc_u_velocity
-                )
+                normal = bc_v_velocity if along_x else bc_u_velocity
                 admits_air = bool(normal) if has_components else True
                 if has_components and not normal:
                     for key in ("concentration", "hepa_filtered"):
@@ -747,7 +787,17 @@ class SimConfig:
             bc_x_end = None
             bc_y_start = None
             bc_y_end = None
-            if bc_location in ("top", "bottom"):
+            if bc_location == OBSTACLE_LOCATION:
+                # A vent's extent runs along its face; the other axis's keys
+                # would be ignored, so they are refused as a slip.
+                for key in ("y_start", "y_end") if along_x else ("x_start", "x_end"):
+                    if key in spec:
+                        raise ValueError(
+                            f"{ctx}.{key} is not valid on a vent on the obstacle's "
+                            f"{bc_face} face, whose extent is "
+                            f"{'x_start, x_end' if along_x else 'y_start, y_end'}"
+                        )
+            if along_x:
                 bc_x_start = self._require_float(spec, "x_start", ctx)
                 bc_x_end = self._require_float(spec, "x_end", ctx)
                 if bc_x_start >= bc_x_end:
@@ -841,6 +891,9 @@ class SimConfig:
                 deposition_surface=bc_deposition_surface,
                 turbulence_intensity=bc_intensity,
                 dissipation_length=bc_length,
+                obstacle=bc_obstacle,
+                face=bc_face,
+                recirculate_from=bc_recirculate,
             )
 
         self._reject_overlapping_segments()
@@ -885,6 +938,8 @@ class SimConfig:
                     y_end=y1,
                 )
             )
+
+        self._check_vents()
 
         # Sensors
         sensors_raw = self._require_section(raw, "sensors")
@@ -974,8 +1029,184 @@ class SimConfig:
         length = self._require_positive_float(spec, "dissipation_length", ctx)
         return intensity, length
 
+    def _vent_keys(
+        self, spec: dict, ctx: str, bc_type: str, location: str
+    ) -> tuple[str | None, str | None, str | None]:
+        """The vent keys of one segment, checked (ADR-014 J).
+
+        On a domain-edge segment none of them may appear. On a vent,
+        ``obstacle`` and ``face`` are required, the type is a velocity inlet
+        or a fixed-flow outlet, the velocity is stated and normal to the
+        face, and ``recirculate_from`` sits on an inlet without a
+        ``concentration``. What needs the obstacles is checked in
+        ``_check_vents`` once they are read.
+
+        Returns
+        -------
+        tuple[str | None, str | None, str | None]
+            ``obstacle``, ``face`` and ``recirculate_from``; all None on a
+            domain-edge segment.
+        """
+        if location != OBSTACLE_LOCATION:
+            for key in _VENT_KEYS:
+                if key in spec:
+                    raise ValueError(
+                        f"{ctx}.{key} is valid only on a vent (location "
+                        f"'{OBSTACLE_LOCATION}'), not on the {location} edge"
+                    )
+            return None, None, None
+        if bc_type not in VENT_TYPES:
+            raise ValueError(
+                f"{ctx}.type must be one of {list(VENT_TYPES)} on an obstacle face, "
+                f"got '{bc_type}': a pressure outlet's zero-gradient copy needs the "
+                "face beyond it, which is inside the obstacle, and an obstacle face "
+                "is a wall already"
+            )
+        obstacle = self._require_string(spec, "obstacle", ctx)
+        face = self._require_choice(spec, "face", ctx, OBSTACLE_FACES)
+        # A vent is a normal jet or a normal draw. The obstacle layers read the
+        # tangential velocity on an obstacle face as zero (the momentum wall
+        # stencil, the k-epsilon corner gradients, the QUICK boundary form), so
+        # an angled jet's tangential component would be dropped there.
+        for key in ("u_velocity", "v_velocity"):
+            if key in spec:
+                raise ValueError(
+                    f"{ctx}.{key} is not valid on a vent: its velocity is normal to "
+                    "the obstacle face, given as 'velocity'"
+                )
+        if "velocity" not in spec:
+            raise ValueError(
+                f"Missing required key: '{ctx}.velocity'. A vent states its flow: "
+                "a discharge's or an exhaust's velocity is the tool's, not a share "
+                "of the room's remainder"
+            )
+        recirculate = None
+        if "recirculate_from" in spec:
+            self._require_segment_type(
+                spec, "recirculate_from", ctx, bc_type, "velocity_inlet"
+            )
+            recirculate = self._require_string(spec, "recirculate_from", ctx)
+            if "concentration" in spec:
+                raise ValueError(
+                    f"{ctx}.concentration is not valid with recirculate_from: the "
+                    "discharge carries what its intake draws"
+                )
+        return obstacle, face, recirculate
+
+    def _check_vents(self) -> None:
+        """Raise unless every vent sits on a free face of a named obstacle (ADR-014 J).
+
+        The obstacle exists and is named once; the face is not on a domain
+        edge (an obstacle standing on the floor has no bottom face to vent
+        from); the extent lies within the face; no other obstacle stands
+        against the face along the extent; a ``recirculate_from`` names a
+        fixed-flow vent on the same obstacle. Overlapping vents on one face
+        are refused with the edge segments (``_reject_overlapping_segments``).
+        What needs the mesh, that the extent covers a face of it, is checked
+        when the boundary is built.
+        """
+        by_name: dict[str, list[ObstacleSpec]] = {}
+        for obs in self.obstacles:
+            by_name.setdefault(obs.name, []).append(obs)
+        for name, spec in self.boundaries.items():
+            if spec.location != OBSTACLE_LOCATION:
+                continue
+            ctx = f"boundaries.{name}"
+            found = by_name.get(spec.obstacle or "", [])
+            if len(found) != 1:
+                raise ValueError(
+                    f"{ctx}.obstacle names '{spec.obstacle}', which "
+                    + (
+                        "no obstacle in the obstacles list has"
+                        if not found
+                        else f"{len(found)} obstacles share"
+                    )
+                )
+            obs = found[0]
+            lo, hi = self._segment_range(spec)
+            face_lo, face_hi = self._face_span(obs, spec.face)
+            if lo < face_lo or hi > face_hi:
+                raise ValueError(
+                    f"{ctx}: the extent [{lo}, {hi}] does not lie within the "
+                    f"{spec.face} face of '{obs.name}', [{face_lo}, {face_hi}]"
+                )
+            if self._face_on_edge(obs, spec.face):
+                raise ValueError(
+                    f"{ctx}: the {spec.face} face of '{obs.name}' lies on the domain "
+                    "edge, so no air reaches it"
+                )
+            for other in self.obstacles:
+                if other is not obs and self._stands_against(obs, spec, other):
+                    raise ValueError(
+                        f"{ctx}: obstacle '{other.name}' stands against the "
+                        f"{spec.face} face of '{obs.name}' along the vent's extent "
+                        f"[{lo}, {hi}], so no air reaches it"
+                    )
+            if spec.recirculate_from is not None:
+                self._check_recirculation(name, spec)
+
+    def _check_recirculation(self, name: str, spec: BoundarySpec) -> None:
+        """Raise unless a discharge's recirculate_from names an exhaust vent on its obstacle."""
+        ctx = f"boundaries.{name}.recirculate_from"
+        source = self.boundaries.get(spec.recirculate_from or "")
+        if source is None:
+            raise ValueError(
+                f"{ctx} names '{spec.recirculate_from}', which is not a boundary segment"
+            )
+        if source.type != "fixed_flow_outlet" or source.location != OBSTACLE_LOCATION:
+            raise ValueError(
+                f"{ctx} names '{spec.recirculate_from}', which is not a "
+                "fixed_flow_outlet vent: a discharge returns what a vent on its own "
+                "tool draws in"
+            )
+        if source.obstacle != spec.obstacle:
+            raise ValueError(
+                f"{ctx} names '{spec.recirculate_from}', a vent on '{source.obstacle}', "
+                f"not on '{spec.obstacle}': a discharge returns what its own tool "
+                "draws in"
+            )
+
+    @staticmethod
+    def _face_span(obs: ObstacleSpec, face: str | None) -> tuple[float, float]:
+        """The span of an obstacle face along it: x for top and bottom, y for the sides."""
+        if face in ("top", "bottom"):
+            return obs.x_start, obs.x_end
+        return obs.y_start, obs.y_end
+
+    def _face_on_edge(self, obs: ObstacleSpec, face: str | None) -> bool:
+        """Whether an obstacle face lies on the domain edge it faces."""
+        if face == "top":
+            return obs.y_end >= self.room_height
+        if face == "bottom":
+            return obs.y_start <= 0.0
+        if face == "left":
+            return obs.x_start <= 0.0
+        return obs.x_end >= self.room_width
+
+    @classmethod
+    def _stands_against(
+        cls, obs: ObstacleSpec, spec: BoundarySpec, other: ObstacleSpec
+    ) -> bool:
+        """Whether ``other`` fills the space just outside the vent's face along its extent.
+
+        It does when it reaches across the face's plane on the room's side
+        and its span along the face meets the vent's extent in more than a
+        point.
+        """
+        lo, hi = cls._segment_range(spec)
+        if spec.face == "top":
+            across = other.y_start <= obs.y_end < other.y_end
+        elif spec.face == "bottom":
+            across = other.y_start < obs.y_start <= other.y_end
+        elif spec.face == "left":
+            across = other.x_start < obs.x_start <= other.x_end
+        else:
+            across = other.x_start <= obs.x_end < other.x_end
+        other_lo, other_hi = cls._face_span(other, spec.face)
+        return across and other_lo < hi and lo < other_hi
+
     def _reject_overlapping_segments(self) -> None:
-        """Raise if two segments on one edge overlap.
+        """Raise if two segments on one edge, or on one obstacle face, overlap.
 
         Where two ranges intersect in more than a point the file describes
         two conditions for one face; the registry would give the face to
@@ -989,14 +1220,19 @@ class SimConfig:
             a0, a1 = self._segment_range(a)
             for b_name in names[i + 1 :]:
                 b = self.boundaries[b_name]
-                if b.location != a.location:
+                if (b.location, b.obstacle, b.face) != (a.location, a.obstacle, a.face):
                     continue
                 b0, b1 = self._segment_range(b)
                 if a0 < b1 and b0 < a1:
+                    where = (
+                        f"the {a.face} face of '{a.obstacle}'"
+                        if a.location == OBSTACLE_LOCATION
+                        else f"the {a.location} edge"
+                    )
                     raise ValueError(
                         f"boundaries.{a_name} and boundaries.{b_name} overlap on "
-                        f"the {a.location} edge ([{a0}, {a1}] and [{b0}, {b1}]); "
-                        "segments on one edge must not overlap"
+                        f"{where} ([{a0}, {a1}] and [{b0}, {b1}]); "
+                        "segments on one edge or face must not overlap"
                     )
 
     def _check_fixed_flow_outlets(self) -> None:
@@ -1037,18 +1273,51 @@ class SimConfig:
                 "balances the flow; give each fixed_flow_outlet a velocity"
             )
         if not has_pressure_outlet and not unstated:
-            raise ValueError(
-                f"every fixed_flow_outlet {sorted(fixed)} states a velocity and the "
-                "configuration has no pressure_outlet, so nothing balances the "
-                "flow; leave the velocity off at least one of them"
+            # With every outlet stated, the stated flows must balance the inflow
+            # themselves: a closed box whose only openings are a discharge and
+            # an exhaust of equal flow (ADR-014 J's test). On the mesh the
+            # boundary checks the same balance on its faces.
+            inflow = sum(
+                self._configured_inflow(spec)
+                for spec in self.boundaries.values()
+                if spec.type == "velocity_inlet"
             )
+            outflow = sum(
+                spec.velocity * (hi - lo)
+                for spec in fixed.values()
+                for lo, hi in (self._segment_range(spec),)
+            )
+            if abs(inflow - outflow) > BALANCE_TOLERANCE * max(abs(inflow), outflow):
+                raise ValueError(
+                    f"every fixed_flow_outlet {sorted(fixed)} states a velocity and "
+                    "the configuration has no pressure_outlet, so nothing balances "
+                    f"the flow: the stated outflow {outflow:.6g} m^2/s differs from "
+                    f"the inflow {inflow:.6g} m^2/s; leave the velocity off at least "
+                    "one domain-edge outlet, or state flows that balance"
+                )
 
     @staticmethod
     def _segment_range(spec: BoundarySpec) -> tuple[float, float]:
-        """The segment's range along its edge."""
-        if spec.location in ("top", "bottom"):
+        """The segment's range along its edge or obstacle face."""
+        if (spec.face or spec.location) in ("top", "bottom"):
             return spec.x_start, spec.x_end
         return spec.y_start, spec.y_end
+
+    @classmethod
+    def _configured_inflow(cls, spec: BoundarySpec) -> float:
+        """A velocity inlet's inflow per metre of depth on the configured extent.
+
+        The normal component signed into the room times the extent's
+        length: ``velocity`` is inward by definition; explicit components
+        take the sign the edge gives them (a lid's normal component is zero).
+        """
+        lo, hi = cls._segment_range(spec)
+        if spec.u_velocity is None and spec.v_velocity is None:
+            return (spec.velocity or 0.0) * (hi - lo)
+        u = spec.u_velocity or 0.0
+        v = spec.v_velocity or 0.0
+        inward = {"bottom": v, "top": -v, "left": u, "right": -u}[spec.location]
+        return inward * (hi - lo)
 
     # -- Validation helpers --------------------------------------------------
 
