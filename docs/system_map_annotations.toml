@@ -31,6 +31,10 @@ serves = ["REQ-C01", "REQ-C02", "REQ-S10", "REQ-A02", "REQ-A03"]
 responsibility = "Holds the physical constants shared by every module so that none of them defines its own copy."
 serves = ["REQ-C04"]
 
+[modules."src/io_manager.py"]
+responsibility = "Writes a steady solve's checkpoint into the run file's steady_checkpoint group and reads it back bitwise, so a solve stopped at its cap continues in another process; the rest of the run file is ADR-014 step 3's."
+serves = []
+
 [modules."src/mesh.py"]
 responsibility = "Builds the structured grid, uniform or geometrically clustered at the walls, with the face, center, width and center-to-center arrays a face-based stencil needs, and classifies each cell as FLUID, SOLID or BOUNDARY."
 serves = ["REQ-S11"]

@@ -56,6 +56,19 @@ The faces of the last solve are kept as ``face_velocities`` (REQ-S13):
 the transport solver advects with them because the cell means the contract
 returns do not carry the continuity the stopping rule enforced on the faces.
 
+Two starts besides rest (ADR-014 step 0). ``solve_steady(initial=state)``
+is the warm start of ADR-014 A: a new solve from a FlowState's faces,
+pressure, k and eps, the eddy viscosity rebuilt from k and eps and the rule
+fresh, as the probe of ADR-014 T1 started its warm arm. A converged state
+warm-started under its own boundaries therefore stops when the rule's window
+first fills, not at once. ``solve_steady(resume=checkpoint)`` is not a start
+but a continuation (ADR-014 D): the relaxed nu_t, the rule's window, the
+residual history, the cap hits and the outer count are those the
+checkpoint's solve held, so a solve stopped at its cap and resumed under a
+larger one reaches what one solve with that cap reaches, bit for bit. Every
+solve leaves ``flow_state`` and ``steady_checkpoint``; src/io_manager.py
+writes the second to a run file and reads it back.
+
 ``stopping_rule`` picks the stop. ``velocity_step``, the default, is the
 collocated rule: the residual below ``convergence_tol``. ``error_estimate``
 (src/stopping.py) needs the estimated iteration error over the largest
@@ -81,6 +94,7 @@ that state on their own.
 
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass
 from functools import partial
 from time import perf_counter
 
@@ -91,7 +105,14 @@ from src.config import ERROR_ESTIMATE, VELOCITY_STEP, SimConfig
 from src.mesh import FLUID, SOLID, Mesh
 from src.momentum import MomentumPredictor
 from src.pressure import ZERO_SCALE, PressureCorrector
-from src.staggered import FaceVelocities, allocate_fields, p_shape, to_cell_centers
+from src.staggered import (
+    FaceVelocities,
+    allocate_fields,
+    p_shape,
+    to_cell_centers,
+    u_shape,
+    v_shape,
+)
 from src.stopping import (
     RULE_VERSION_WITH_E,
     RULE_VERSION_WITHOUT_E,
@@ -137,6 +158,173 @@ _STOP_REASONS = {
     VELOCITY_STEP: "velocity_step_below_tol",
     ERROR_ESTIMATE: "error_estimate_and_continuity",
 }
+CAP_STOP = "max_simple_iter"
+
+
+def _frozen_field(name: str, value: object, ndim: int = 2) -> np.ndarray:
+    """A read-only C-contiguous float64 copy of a finite array, or a refusal."""
+    if not isinstance(value, np.ndarray) or value.dtype != np.float64:
+        got = value.dtype if isinstance(value, np.ndarray) else type(value).__name__
+        raise TypeError(f"{name} must be a float64 ndarray, got {got}")
+    if value.ndim != ndim:
+        raise ValueError(f"{name} must have {ndim} dimensions, got {value.ndim}")
+    if not np.isfinite(value).all():
+        raise ValueError(f"{name} must be finite everywhere")
+    copy = np.array(value, dtype=np.float64, order="C")
+    copy.setflags(write=False)
+    return copy
+
+
+def _count(name: str, value: object) -> int:
+    """A non-negative int that is not a bool, or a refusal."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{name} must be an int, got {type(value).__name__}")
+    if value < 0:
+        raise ValueError(f"{name} must be non-negative, got {value}")
+    return value
+
+
+@dataclass(frozen=True, eq=False)
+class FlowState:
+    """A steady solve's fields and stop, as the warm start reads them (ADR-014 A).
+
+    The arrays are validated and stored as read-only C-contiguous copies,
+    so a state cannot change after it is built, whoever else holds the
+    arrays it was built from.
+
+    Parameters
+    ----------
+    u : np.ndarray
+        x-velocity on the vertical faces, m/s, [ny, nx+1], float64, finite.
+    v : np.ndarray
+        y-velocity on the horizontal faces, m/s, [ny+1, nx], likewise.
+    p : np.ndarray
+        Pressure at the cell centres, Pa, [ny, nx], likewise (the modified
+        pressure of ADR-012 D with the turbulence section).
+    k, eps, nu_t : np.ndarray or None
+        With the turbulence section: k (m^2/s^2), eps (m^2/s^3) and the
+        under-relaxed eddy viscosity (m^2/s) of the solve, [ny, nx],
+        float64, finite. All three or none.
+    stop_reason : str or None
+        The solve's ``stop_reason``; None for a state no solve finished.
+    outer : int
+        Outer iterations behind the state, non-negative.
+
+    Raises
+    ------
+    TypeError
+        If an array is not a float64 ndarray, ``stop_reason`` is not a str
+        or None, or ``outer`` is not an int (a bool is refused).
+    ValueError
+        If the shapes do not form one staggered grid, an array is not
+        finite, k, eps and nu_t are not all present or all absent, or
+        ``outer`` is negative.
+    """
+
+    u: np.ndarray
+    v: np.ndarray
+    p: np.ndarray
+    k: np.ndarray | None = None
+    eps: np.ndarray | None = None
+    nu_t: np.ndarray | None = None
+    stop_reason: str | None = None
+    outer: int = 0
+
+    def __post_init__(self) -> None:
+        for name in ("u", "v", "p"):
+            object.__setattr__(self, name, _frozen_field(name, getattr(self, name)))
+        ny, nx = self.p.shape
+        if self.u.shape != (ny, nx + 1) or self.v.shape != (ny + 1, nx):
+            raise ValueError(
+                f"u {self.u.shape} and v {self.v.shape} are not the faces of p "
+                f"{self.p.shape}: expected u {(ny, nx + 1)} and v {(ny + 1, nx)}"
+            )
+        present = [
+            name for name in ("k", "eps", "nu_t") if getattr(self, name) is not None
+        ]
+        if present and len(present) != 3:
+            raise ValueError(
+                f"k, eps and nu_t are given together or not at all, got {present}"
+            )
+        for name in present:
+            field_ = _frozen_field(name, getattr(self, name))
+            if field_.shape != self.p.shape:
+                raise ValueError(
+                    f"{name} must have p's shape {self.p.shape}, got {field_.shape}"
+                )
+            object.__setattr__(self, name, field_)
+        reason = self.stop_reason
+        if reason is not None and not isinstance(reason, str):
+            raise TypeError(
+                f"stop_reason must be a str or None, got {type(reason).__name__}"
+            )
+        _count("outer", self.outer)
+
+    @property
+    def turbulent(self) -> bool:
+        """Whether the state carries k, eps and nu_t."""
+        return self.k is not None
+
+
+@dataclass(frozen=True, eq=False)
+class SteadyCheckpoint:
+    """Everything a steady solve carries between outer iterations (ADR-014 D).
+
+    A solve resumed from it (``solve_steady(resume=...)``) continues the
+    iteration it was taken from: every later iterate, the residual history
+    and the stop are those of the solve that was never interrupted, bit for
+    bit. The warm start (``initial=``) is not that: it restarts the rule and
+    rebuilds the eddy viscosity from k and eps (``solve_steady``).
+
+    Parameters
+    ----------
+    state : FlowState
+        The fields after the last outer iteration, nu_t the under-relaxed
+        field the next iteration reads; ``state.outer`` the iterations taken.
+    residual_history : tuple[float, ...]
+        The solve's ``residual_history``, one entry per outer iteration, so
+        exactly ``state.outer`` entries.
+    velocity_steps, viscosity_steps : tuple[float, ...]
+        The error_estimate rule's window (``ErrorEstimateRule.window``),
+        both empty under velocity_step.
+    rule_version : int or None
+        The solver's ``rule_version``; a resume needs the same.
+    pressure_cap_hits : int
+        Corrections so far that stopped at max_pressure_iter.
+
+    Raises
+    ------
+    TypeError
+        If ``state`` is not a FlowState, or a count is not an int.
+    ValueError
+        If the residual history's length is not ``state.outer``, or a count
+        is negative.
+    """
+
+    state: FlowState
+    residual_history: tuple[float, ...]
+    velocity_steps: tuple[float, ...]
+    viscosity_steps: tuple[float, ...]
+    rule_version: int | None
+    pressure_cap_hits: int
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.state, FlowState):
+            raise TypeError(
+                f"state must be a FlowState, got {type(self.state).__name__}"
+            )
+        for name in ("residual_history", "velocity_steps", "viscosity_steps"):
+            object.__setattr__(
+                self, name, tuple(float(value) for value in getattr(self, name))
+            )
+        if len(self.residual_history) != self.state.outer:
+            raise ValueError(
+                f"residual_history holds {len(self.residual_history)} entries for "
+                f"{self.state.outer} outer iterations"
+            )
+        if self.rule_version is not None:
+            _count("rule_version", self.rule_version)
+        _count("pressure_cap_hits", self.pressure_cap_hits)
 
 
 class StaggeredSolver:
@@ -200,6 +388,16 @@ class StaggeredSolver:
         k, eps and the under-relaxed nu_t at the end of the last coupled
         solve, converged or not, read-only arrays; None without the
         turbulence section or before a solve completes.
+    flow_state : FlowState or None
+        The last solve's faces, pressure and, with the turbulence section,
+        k, eps and the under-relaxed nu_t, with its stop reason and outer
+        count, converged or not; None before a solve completes. What
+        ``solve_steady(initial=...)`` takes (ADR-014 A).
+    steady_checkpoint : SteadyCheckpoint or None
+        The last solve's state with its residual history, the rule's window
+        and its cap hits; None before a solve completes. A solve that
+        stopped at max_simple_iter continues from it with
+        ``solve_steady(resume=...)`` (ADR-014 D).
 
     Raises
     ------
@@ -235,6 +433,8 @@ class StaggeredSolver:
             # Raises here, before any solve, when no inlet sets the supply's k.
             self._initial_turbulence = self._walls.initial_values()
         self.turbulence_state: TurbulenceState | None = None
+        self.flow_state: FlowState | None = None
+        self.steady_checkpoint: SteadyCheckpoint | None = None
 
         self.reference_velocity: float = self._reference_velocity()
         self.residual_history: list[float] = []
@@ -355,6 +555,8 @@ class StaggeredSolver:
         on_iteration: Callable[[IterationState], None] | None = None,
         *,
         eddy_viscosity: np.ndarray | None = None,
+        initial: FlowState | None = None,
+        resume: SteadyCheckpoint | None = None,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Solve for steady-state velocity and pressure fields.
 
@@ -373,6 +575,26 @@ class StaggeredSolver:
             iteration (ADR-012 D). None is the laminar path, bitwise.
             Refused with the turbulence section, whose model is the solve's
             one source of nu_t.
+        initial : FlowState, optional
+            The warm start (ADR-014 A): the solve starts from the state's
+            faces and pressure, and with the turbulence section from
+            ``KEpsilonModel.state(k, eps)``, in place of rest and the inlets'
+            uniform k and eps. The eddy viscosity is rebuilt from k and eps
+            and the state's nu_t is not read, as the probe of ADR-014 T1 did,
+            and the rule starts fresh, so a converged state warm-started
+            under its own boundaries stops once the rule's window has filled.
+            The boundary's normal velocities are written over the state's, so
+            a state of other boundaries starts this solve. None is the start
+            from rest, bitwise.
+        resume : SteadyCheckpoint, optional
+            Continue the solve the checkpoint was taken from (ADR-014 D):
+            the faces, pressure, k, eps and the under-relaxed nu_t as they
+            stood, the residual history, the rule's window and the cap hits
+            carried on, and the outer iterations counted from the
+            checkpoint's, so ``max_simple_iter`` is the total. Under the
+            configuration the checkpoint's solve ran with, a larger cap
+            reaches what one solve with that cap reaches, bitwise. Refused
+            with ``initial``, and for a checkpoint whose solve converged.
 
         Returns
         -------
@@ -387,7 +609,15 @@ class StaggeredSolver:
         ValueError
             If ``eddy_viscosity`` has the wrong shape, or a non-finite or
             negative value in a non-SOLID cell, or is given with the
-            turbulence section present.
+            turbulence section present. If ``initial`` or ``resume`` holds
+            a state of another grid, carries k and eps for a laminar solve or
+            lacks them for a coupled one, or has k or eps not positive in a
+            non-SOLID cell; if both are given; if ``resume`` comes from a
+            solve that converged, under another rule version, or with a
+            negative nu_t in a non-SOLID cell.
+        TypeError
+            If ``initial`` is not a FlowState or ``resume`` not a
+            SteadyCheckpoint.
         PositivityError
             In the coupled solve, if k or eps is not positive and finite at a
             non-SOLID cell after an outer iteration's step; the message names
@@ -399,30 +629,44 @@ class StaggeredSolver:
                 "eddy_viscosity is refused with the turbulence section present: the "
                 "k-epsilon model is the solve's one source of nu_t"
             )
+        if initial is not None and resume is not None:
+            raise ValueError(
+                "initial and resume are exclusive: a warm start begins a solve, a "
+                "resume continues one"
+            )
         mu_eff = (
             None
             if eddy_viscosity is None
             else self._effective_viscosity(eddy_viscosity)
         )
+        start = 0
         state: TurbulenceState | None = None
-        if model is not None:
-            state = model.initial(*self._initial_turbulence)
+        if resume is not None:
+            u, v, p, state = self._resumed(resume)
+            start = resume.state.outer
+        elif initial is not None:
+            u, v, p, state = self._warm(initial)
+        else:
+            if model is not None:
+                state = model.initial(*self._initial_turbulence)
+            u, v, p = allocate_fields(self._mesh)
         self.turbulence_state = None
-        u, v, p = allocate_fields(self._mesh)
         self._boundary.apply_normal_velocity(u, v)
 
-        self.residual_history = []
+        self.residual_history = [] if resume is None else list(resume.residual_history)
         self.stage_seconds = self._zero_stage_seconds()
         # Reset with the timers: a solve that stops before its first
         # correction must not report the previous call's counts.
         self.last_pressure_iterations = 0
-        self.pressure_cap_hits = 0
+        self.pressure_cap_hits = 0 if resume is None else resume.pressure_cap_hits
         self.converged, self.stop_reason = False, None
         rule = self._new_rule()
+        if rule is not None and resume is not None:
+            rule.restore(resume.velocity_steps, resume.viscosity_steps)
         u_c, v_c = to_cell_centers(u, v)
         fluid = self._fluid
 
-        for iteration in range(self._max_simple_iter):
+        for iteration in range(start, self._max_simple_iter):
             t0 = perf_counter()
             self._extrapolate_outlets(u, v)
             # Without a field the call is the laminar one, so a predictor a
@@ -520,12 +764,95 @@ class StaggeredSolver:
                 break
 
         if not self.converged:
-            self.stop_reason = "max_simple_iter"
+            self.stop_reason = CAP_STOP
             logger.warning("Not converged: stopped at max_simple_iter")
         self.last_mass_imbalance = self._corrector.mass_imbalance(u, v)
         self.face_velocities = FaceVelocities.copy_of(u, v)
         self.turbulence_state = state
-        return u_c, v_c, np.ascontiguousarray(p)
+        p = np.ascontiguousarray(p)
+        self.flow_state = FlowState(
+            u=self.face_velocities.u,
+            v=self.face_velocities.v,
+            p=p,
+            k=None if state is None else state.k,
+            eps=None if state is None else state.eps,
+            nu_t=None if state is None else state.nu_t,
+            stop_reason=self.stop_reason,
+            outer=len(self.residual_history),
+        )
+        steps, viscosity_steps = ((), ()) if rule is None else rule.window()
+        self.steady_checkpoint = SteadyCheckpoint(
+            state=self.flow_state,
+            residual_history=tuple(self.residual_history),
+            velocity_steps=steps,
+            viscosity_steps=viscosity_steps,
+            rule_version=self._rule_version,
+            pressure_cap_hits=self.pressure_cap_hits,
+        )
+        return u_c, v_c, p
+
+    def _check_state(self, given: object, name: str, kind: type) -> FlowState:
+        """The FlowState in ``initial`` or ``resume``, refused unless it fits."""
+        if not isinstance(given, kind):
+            raise TypeError(
+                f"{name} must be a {kind.__name__}, got {type(given).__name__}"
+            )
+        flow = given if isinstance(given, FlowState) else given.state
+        mesh = self._mesh
+        expected = (u_shape(mesh), v_shape(mesh), p_shape(mesh))
+        if (flow.u.shape, flow.v.shape, flow.p.shape) != expected:
+            ny, nx = flow.p.shape
+            raise ValueError(
+                f"{name} is a state of a {nx}x{ny} grid and this mesh is "
+                f"{mesh.xc.shape[0]}x{mesh.yc.shape[0]}"
+            )
+        if self._model is None and flow.turbulent:
+            raise ValueError(
+                f"{name} carries k, eps and nu_t and this solve is laminar (no "
+                "turbulence section)"
+            )
+        if self._model is not None and not flow.turbulent:
+            raise ValueError(
+                f"{name} has no k and eps and this solve is coupled (the "
+                "turbulence section is present)"
+            )
+        return flow
+
+    def _warm(
+        self, initial: FlowState
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, TurbulenceState | None]:
+        """Writable copies of a state's fields, k and eps checked (ADR-014 A)."""
+        flow = self._check_state(initial, "initial", FlowState)
+        state = None
+        if self._model is not None:
+            assert flow.k is not None and flow.eps is not None
+            state = self._model.state(np.array(flow.k), np.array(flow.eps))
+        return np.array(flow.u), np.array(flow.v), np.array(flow.p), state
+
+    def _resumed(
+        self, resume: SteadyCheckpoint
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, TurbulenceState | None]:
+        """A checkpoint's fields as they stood, the relaxed nu_t kept (ADR-014 D)."""
+        flow = self._check_state(resume, "resume", SteadyCheckpoint)
+        if flow.stop_reason in _STOP_REASONS.values():
+            raise ValueError(
+                "resume continues a solve, and this checkpoint's stopped converged "
+                f"({flow.stop_reason}); warm-start from its state with initial="
+            )
+        if resume.rule_version != self._rule_version:
+            raise ValueError(
+                f"resume's rule version is {resume.rule_version} and this solve "
+                f"applies {self._rule_version}"
+            )
+        state = None
+        if self._model is not None:
+            assert flow.k is not None and flow.eps is not None
+            assert flow.nu_t is not None
+            checked = self._model.state(np.array(flow.k), np.array(flow.eps))
+            if np.any(flow.nu_t[self._live] < 0.0):
+                raise ValueError("resume's nu_t is negative in a non-SOLID cell")
+            state = TurbulenceState(k=checked.k, eps=checked.eps, nu_t=flow.nu_t)
+        return np.array(flow.u), np.array(flow.v), np.array(flow.p), state
 
     def _turbulence_step(
         self, state: TurbulenceState, u: np.ndarray, v: np.ndarray, iteration: int

@@ -271,6 +271,63 @@ class ErrorEstimateRule:
             return RULE_VERSION_WITH_E
         return RULE_VERSION_WITHOUT_E
 
+    def window(self) -> tuple[tuple[float, ...], tuple[float, ...]]:
+        """The steps the rate fits read, oldest first: velocity, then viscosity.
+
+        Returns
+        -------
+        tuple[tuple[float, ...], tuple[float, ...]]
+            The last RATE_WINDOW velocity steps (m/s) and, with (e) on, the
+            last RATE_WINDOW viscosity steps (m^2/s); the second is empty
+            with (e) off. With ``restore`` on a new rule they continue a
+            solve's stop decisions bitwise (ADR-014 D's steady checkpoint).
+        """
+        return tuple(self._steps), tuple(self._nu_steps)
+
+    def restore(
+        self, steps: tuple[float, ...], viscosity_steps: tuple[float, ...] = ()
+    ) -> None:
+        """Seed a rule that has taken no step with a window another rule kept.
+
+        Parameters
+        ----------
+        steps : tuple[float, ...]
+            Velocity steps, m/s, oldest first, at most RATE_WINDOW of them.
+        viscosity_steps : tuple[float, ...], optional
+            Viscosity steps, m^2/s, likewise; given exactly when (e) is on
+            and ``steps`` is not empty, and as many as ``steps``.
+
+        Raises
+        ------
+        ValueError
+            If the rule has already taken a step, a window is longer than
+            RATE_WINDOW, a step is not a finite non-negative number, or the
+            viscosity steps do not match the condition and the velocity steps.
+        """
+        if self._steps or self.estimate_history:
+            raise ValueError("restore seeds a new rule; this one has taken steps")
+        windows = (("steps", steps), ("viscosity_steps", viscosity_steps))
+        for name, values in windows:
+            if len(values) > RATE_WINDOW:
+                raise ValueError(
+                    f"{name} holds {len(values)} steps, more than RATE_WINDOW "
+                    f"({RATE_WINDOW})"
+                )
+            for value in values:
+                if isinstance(value, bool) or not isinstance(value, float):
+                    raise ValueError(f"{name} must hold floats, got {value!r}")
+                if not (math.isfinite(value) and value >= 0.0):
+                    raise ValueError(f"{name} must be finite and non-negative")
+        expected = len(steps) if self._viscosity_condition else 0
+        if len(viscosity_steps) != expected:
+            raise ValueError(
+                f"viscosity_steps must hold {expected} steps with condition (e) "
+                f"{'on' if self._viscosity_condition else 'off'}, got "
+                f"{len(viscosity_steps)}"
+            )
+        self._steps.extend(steps)
+        self._nu_steps.extend(viscosity_steps)
+
     @staticmethod
     def _estimate_of(steps: deque[float], scale: float) -> float:
         """The estimate of one history over its scale, or inf when there is none."""
