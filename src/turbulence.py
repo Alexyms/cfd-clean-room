@@ -73,6 +73,18 @@ not an outlet (``StaggeredBoundary.wall_faces``), at rest or moving, and
 every obstacle face; an inlet that admits air and an outlet are not walls.
 The constants are Launder and Spalding's, kappa 0.41 and E 9.793, and the
 floor of the scalable form is computed from them (``log_law_floor``).
+
+Equipment vents (ADR-014 J, step 0b). A vent face is an obstacle face that
+carries air, so the model reads it: its flux enters the advection, the rate
+and the strain as a domain face's does, a discharge's faces carry the
+discharge's inflow k and eps (``inflow_values`` from its intensity, velocity
+and length), and an exhaust's take the room cell's k and eps out, upwind.
+Diffusion still crosses no face of a SOLID cell. A vent is not a wall: its
+faces are not wall-function faces, the cell beside it holds no eps and takes
+no wall production from it, and a cell beside a vent and a wall elsewhere
+keeps the wall function on its wall faces only. The model and
+TurbulenceBoundary read the vents from ``boundary_staggered.vent_runs``, the
+derivation the velocity layer reads.
 """
 
 import logging
@@ -82,7 +94,12 @@ from dataclasses import dataclass
 import numpy as np
 
 from src.boundary_registry import VELOCITY_INLET, BoundaryRegistry
-from src.boundary_staggered import StaggeredBoundary
+from src.boundary_staggered import (
+    StaggeredBoundary,
+    VentRun,
+    vent_face_masks,
+    vent_runs,
+)
 from src.config import RNG, STANDARD, UPWIND, SimConfig
 from src.mesh import SOLID, Mesh
 from src.scalar_scheme import (
@@ -478,12 +495,22 @@ class KEpsilonModel:
         live_v[0, :] = ~solid[0, :]
         live_v[-1, :] = ~solid[-1, :]
         live_v[1:-1, :] = ~solid[:-1, :] & ~solid[1:, :]
-        self._live_u, self._live_v = live_u, live_v
         # Diffusion crosses interior faces between two non-SOLID cells only.
         self._inner_u = np.zeros(self._u_shape, dtype=bool)
         self._inner_u[:, 1:-1] = live_u[:, 1:-1]
         self._inner_v = np.zeros(self._v_shape, dtype=bool)
         self._inner_v[1:-1, :] = live_v[1:-1, :]
+        # The vents carry air through obstacle faces (ADR-014 J); None without
+        # them, so the advection runs the lines it always ran.
+        vents = vent_face_masks(mesh, vent_runs(mesh, config, BoundaryRegistry(config)))
+        self._vent_u: np.ndarray | None = None
+        self._vent_v: np.ndarray | None = None
+        if vents.any:
+            live_u = live_u | vents.normal_u
+            live_v = live_v | vents.normal_v
+            self._vent_u = vents.normal_u
+            self._vent_v = np.ascontiguousarray(vents.normal_v.T)
+        self._live_u, self._live_v = live_u, live_v
         self._area_u = np.broadcast_to(mesh.dy_cell[:, None], self._u_shape)
         self._area_v = np.broadcast_to(mesh.dx_cell[None, :], self._v_shape)
         # The far cell's share of each interior face's centre-to-centre
@@ -892,8 +919,12 @@ class KEpsilonModel:
         dt_cell: float | np.ndarray,
     ) -> np.ndarray:
         """Step 1: forward Euler with the configured face value, the step per cell."""
-        adv_u = advective_flux(q, flux_u, inflow_u, self._axis_x, self._upwind)
-        adv_v = advective_flux(q.T, flux_v.T, inflow_v.T, self._axis_y, self._upwind).T
+        adv_u = advective_flux(
+            q, flux_u, inflow_u, self._axis_x, self._upwind, self._vent_u
+        )
+        adv_v = advective_flux(
+            q.T, flux_v.T, inflow_v.T, self._axis_y, self._upwind, self._vent_v
+        ).T
         divergence = adv_u[:, 1:] - adv_u[:, :-1] + adv_v[1:, :] - adv_v[:-1, :]
         return q - dt_cell * divergence / self._volume
 
@@ -1037,6 +1068,17 @@ class KEpsilonModel:
             raise ValueError(
                 "conditions' inflow k and eps must be positive on the domain faces"
             )
+        if self._vent_u is not None and self._vent_v is not None:
+            vented = (
+                c.inflow_k_u[self._vent_u],
+                c.inflow_eps_u[self._vent_u],
+                c.inflow_k_v.T[self._vent_v],
+                c.inflow_eps_v.T[self._vent_v],
+            )
+            if not all((faces > 0.0).all() for faces in vented):
+                raise ValueError(
+                    "conditions' inflow k and eps must be positive on the vent faces"
+                )
         if not (c.eps_wall[c.eps_held] > 0.0).all():
             raise ValueError("conditions.eps_wall must be positive where eps is held")
         if not (c.production[c.production_given] >= 0.0).all():
@@ -1071,6 +1113,7 @@ def _velocity_walls(
     t_faces: np.ndarray,
     t_centers: np.ndarray,
     transpose: bool,
+    vent: np.ndarray | None = None,
 ) -> _VelocityWalls:
     """Locate one component's wall-function faces, in its own frame.
 
@@ -1080,6 +1123,8 @@ def _velocity_walls(
     edge corner, or where the neighbour face beyond it bounds a SOLID cell
     on either side: the momentum stencil's obstacle faces, its corner rule
     included. ``transpose`` maps the frame to ``wall_mu``'s layout for v.
+    ``vent`` [nt+1, ns+1], in the same frame, marks the stencil faces over a
+    vent's span (ADR-014 J), which are not walls.
     """
     nt, ns = solid.shape
     bounds_solid = np.zeros((nt, ns + 1), dtype=bool)
@@ -1092,6 +1137,9 @@ def _velocity_walls(
     south[1:, :] = bounds_solid[:-1, :]
     north[-1, :] = high
     north[:-1, :] = bounds_solid[1:, :]
+    if vent is not None:
+        south &= ~vent[:-1, :]
+        north &= ~vent[1:, :]
     t_s, s_s = np.nonzero(south & unknown)
     t_n, s_n = np.nonzero(north & unknown)
     face_t = np.concatenate((t_s, t_n + 1))
@@ -1148,7 +1196,8 @@ class TurbulenceBoundary:
         Keys "u" and "v", bool [ny+1, nx+1] in ``wall_mu``'s layout, read-only:
         the faces the wall function sets. Every domain-edge face of a wall
         (zero normal velocity, not an outlet) beside an unknown, and every
-        obstacle face. Not an inlet that admits air, not an outlet.
+        obstacle face but a vent's span (ADR-014 J). Not an inlet that admits
+        air, not an outlet, not a vent.
     wall_cells : np.ndarray
         Bool [ny, nx], read-only: the non-SOLID cells with at least one wall
         face, where eps is held and the production given.
@@ -1190,7 +1239,9 @@ class TurbulenceBoundary:
     the rule OpenFOAM's epsilonWallFunction applies through its corner
     weights, one over the number of wall faces of the cell.
 
-    The inflow (ADR-012 C): ``inflow_values`` per inlet face. An outlet face
+    The inflow (ADR-012 C): ``inflow_values`` per inlet face, a discharge
+    vent's faces included (ADR-014 J); an exhaust vent's faces, where nothing
+    enters, take the adjacent room cell's value. An outlet face
     the flux turns inward through takes the adjacent cell's value, and so
     does every other domain face, where no flux enters and nothing is read;
     beside a SOLID edge cell, where no flux crosses, the largest k or eps of
@@ -1199,7 +1250,8 @@ class TurbulenceBoundary:
 
     The initial state (ECR-002 step 6): k and eps uniform at their means over
     the inlet faces weighted by each face's inflow, the values the supply
-    carries in as a whole. Where the inlets agree, their common value.
+    carries in as a whole, a discharge vent's faces counted as an inlet's.
+    Where the inlets agree, their common value.
     """
 
     def __init__(
@@ -1216,14 +1268,18 @@ class TurbulenceBoundary:
         solid = mesh.cell_type == SOLID
         self._solid = solid
         self._live = ~solid
+        vents = boundary.vent_faces()
+        self._vents: list[VentRun] = boundary.vent_runs()
         self._live_u = np.ones(u_shape(mesh), dtype=bool)
         self._live_u[:, 0] = ~solid[:, 0]
         self._live_u[:, -1] = ~solid[:, -1]
         self._live_u[:, 1:-1] = ~solid[:, :-1] & ~solid[:, 1:]
+        self._live_u |= vents.normal_u
         self._live_v = np.ones(v_shape(mesh), dtype=bool)
         self._live_v[0, :] = ~solid[0, :]
         self._live_v[-1, :] = ~solid[-1, :]
         self._live_v[1:-1, :] = ~solid[:-1, :] & ~solid[1:, :]
+        self._live_v |= vents.normal_v
         walls = boundary.wall_faces()
         self._tangential = boundary.tangential_conditions()
 
@@ -1235,6 +1291,7 @@ class TurbulenceBoundary:
                 mesh.y,
                 mesh.yc,
                 transpose=False,
+                vent=vents.tangential_u,
             ),
             "v": _velocity_walls(
                 np.ascontiguousarray(solid.T),
@@ -1243,6 +1300,7 @@ class TurbulenceBoundary:
                 mesh.x,
                 mesh.xc,
                 transpose=True,
+                vent=np.ascontiguousarray(vents.tangential_v.T),
             ),
         }
         self.wall_faces: dict[str, np.ndarray] = {
@@ -1258,13 +1316,14 @@ class TurbulenceBoundary:
         west = np.zeros((ny, nx), dtype=bool)
         east = np.zeros((ny, nx), dtype=bool)
         south[0, :] = walls["bottom"].cells
-        south[1:, :] = solid[:-1, :]
         north[-1, :] = walls["top"].cells
-        north[:-1, :] = solid[1:, :]
         west[:, 0] = walls["left"].cells
-        west[:, 1:] = solid[:, :-1]
         east[:, -1] = walls["right"].cells
-        east[:, :-1] = solid[:, 1:]
+        # An obstacle face is a wall unless it is a vent (ADR-014 J).
+        south[1:, :] = solid[:-1, :] & ~vents.normal_v[1:-1, :]
+        north[:-1, :] = solid[1:, :] & ~vents.normal_v[1:-1, :]
+        west[:, 1:] = solid[:, :-1] & ~vents.normal_u[:, 1:-1]
+        east[:, :-1] = solid[:, 1:] & ~vents.normal_u[:, 1:-1]
         mean = {
             edge: 0.5 * (cond.value[:-1] + cond.value[1:])
             for edge, cond in self._tangential.items()
@@ -1442,6 +1501,21 @@ class TurbulenceBoundary:
         flow_v = np.zeros((ny + 1, nx))
         flow_u[:, 0], flow_u[:, -1] = values["left"], values["right"]
         flow_v[0, :], flow_v[-1, :] = values["bottom"], values["top"]
+        for run in self._vents:
+            target = flow_u if run.component == "u" else flow_v
+            if run.is_inlet:
+                target[run.rows, run.cols] = getattr(self._vent_inflow[run.name], name)
+                continue
+            # An exhaust's room cell: the cell its flux leaves, on the side
+            # opposite the obstacle.
+            rows, cols = run.rows, run.cols
+            if run.component == "u":
+                cells = np.where(self._solid[rows, cols], cols - 1, cols)
+                room = q[rows, cells]
+            else:
+                cells = np.where(self._solid[rows, cols], rows - 1, rows)
+                room = q[cells, cols]
+            target[rows, cols] = np.where(room > 0.0, room, stand_in)
         return flow_u, flow_v
 
     def _inlet_faces(self, mesh: Mesh, config: SimConfig) -> list[_InletFace]:
@@ -1480,6 +1554,27 @@ class TurbulenceBoundary:
                 by_index[index] = face
                 faces.append(face)
             self._inlet_by_edge[edge] = by_index
+        # A discharge vent admits air as an inlet does (ADR-014 J).
+        self._vent_inflow: dict[str, _InletFace] = {}
+        for run in self._vents:
+            if not run.is_inlet:
+                continue
+            spec = run.spec
+            if spec.turbulence_intensity is None or spec.dissipation_length is None:
+                raise ValueError(
+                    f"boundary '{run.name}' admits air but states no "
+                    "turbulence_intensity or dissipation_length"
+                )
+            k_in, eps_in = inflow_values(
+                spec.turbulence_intensity, run.normal, spec.dissipation_length
+            )
+            self._vent_inflow[run.name] = _InletFace(k=k_in, eps=eps_in, inflow=0.0)
+            for width in run.widths:
+                faces.append(
+                    _InletFace(
+                        k=k_in, eps=eps_in, inflow=abs(run.normal) * float(width)
+                    )
+                )
         return faces
 
     def _require_inlets(self) -> list[_InletFace]:

@@ -21,6 +21,14 @@ and the concentration layer its per-face conditions, so an inlet face in
 one layer is an inlet face in the other. Nothing here reads a mesh or a
 field: a layer reads the coordinates along an edge and the SOLID cells
 behind them from the mesh and hands both in.
+
+Equipment vents (ADR-014 J) are segments on obstacle faces. ``coverage_on``
+answers the same question on one obstacle face, with the same rules (the
+first covering segment in configuration order, a wall where none covers),
+on the face coordinates ``staggered.obstacle_face_inputs`` derives. A vent's
+condition is the one its segment would prescribe on the domain edge the face
+plays to the room (``staggered.ROOM_EDGE_OF_FACE``): the room lies above an
+obstacle's top face as it lies above the domain's bottom edge.
 """
 
 from collections.abc import Sequence
@@ -28,9 +36,11 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from src.config import BoundarySpec, SimConfig
+from src.config import OBSTACLE_LOCATION, BoundarySpec, SimConfig
+from src.staggered import ROOM_EDGE_OF_FACE
 
 EDGES: tuple[str, str, str, str] = ("bottom", "top", "left", "right")
+OBSTACLE: str = OBSTACLE_LOCATION
 
 WALL: str = "wall"
 VELOCITY_INLET: str = "velocity_inlet"
@@ -131,6 +141,37 @@ def covers(spec: BoundarySpec, edge: str, coordinate: float) -> bool:
         and spec.y_end is not None
         and spec.y_start <= coordinate <= spec.y_end
     )
+
+
+def covers_face(
+    spec: BoundarySpec, obstacle: str, face: str, coordinate: float
+) -> bool:
+    """Whether a boundary segment covers a point on an obstacle face (ADR-014 J).
+
+    Parameters
+    ----------
+    spec : BoundarySpec
+        The named segment.
+    obstacle : str
+        The obstacle's name.
+    face : str
+        One of "top", "bottom", "left", "right".
+    coordinate : float
+        Position along the face: x on a top or bottom face, y on a side.
+
+    Returns
+    -------
+    bool
+        True when the segment is a vent on that face of that obstacle and
+        its range contains ``coordinate``, inclusive at both ends.
+    """
+    if spec.location != OBSTACLE or spec.obstacle != obstacle or spec.face != face:
+        return False
+    if face in ("top", "bottom"):
+        lo, hi = spec.x_start, spec.x_end
+    else:
+        lo, hi = spec.y_start, spec.y_end
+    return lo is not None and hi is not None and lo <= coordinate <= hi
 
 
 def fixed_flow_condition(edge: str, speed: float) -> EdgeCondition:
@@ -352,6 +393,65 @@ class BoundaryRegistry:
                 out.append(BEHIND_SOLID)
                 continue
             found = self.segment_at(edge, float(coordinate))
+            if found is None:
+                out.append(UNCOVERED)
+            else:
+                name, spec = found
+                out.append(EdgeCoverage(name, spec, condition_of(spec, edge), False))
+        return out
+
+    def vents(self) -> dict[str, BoundarySpec]:
+        """The vent segments, in configuration order (ADR-014 J).
+
+        Returns
+        -------
+        dict[str, BoundarySpec]
+            Name to segment for every segment whose location is
+            "obstacle"; empty without vents. A new dict.
+        """
+        return {
+            name: spec
+            for name, spec in self._boundaries.items()
+            if spec.location == OBSTACLE
+        }
+
+    def coverage_on(
+        self,
+        obstacle: str,
+        face: str,
+        coordinates: np.ndarray | Sequence[float],
+    ) -> list[EdgeCoverage]:
+        """Coverage at each of a run of points along an obstacle face (ADR-014 J).
+
+        The vents' counterpart of ``coverage_along``. The points are faces
+        between the obstacle and the room, from
+        ``staggered.obstacle_face_inputs``, so none is behind a SOLID cell.
+
+        Parameters
+        ----------
+        obstacle : str
+            The obstacle's name.
+        face : str
+            One of "top", "bottom", "left", "right".
+        coordinates : np.ndarray or Sequence[float]
+            Positions along the face in storage order.
+
+        Returns
+        -------
+        list[EdgeCoverage]
+            One entry per point: UNCOVERED, a no-slip wall, where no vent
+            covers it; else the first covering vent in configuration order,
+            with ``condition_of`` that vent on the domain edge the face
+            plays to the room.
+        """
+        edge = ROOM_EDGE_OF_FACE[face]
+        out: list[EdgeCoverage] = []
+        for coordinate in coordinates:
+            found = None
+            for name, spec in self._boundaries.items():
+                if covers_face(spec, obstacle, face, float(coordinate)):
+                    found = (name, spec)
+                    break
             if found is None:
                 out.append(UNCOVERED)
             else:

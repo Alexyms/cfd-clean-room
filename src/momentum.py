@@ -69,6 +69,16 @@ the whole span, as for the diffusion. With the boundary form, a channel
 whose floor is a row of SOLID cells is the channel whose floor is the domain
 edge to rounding.
 
+Equipment vents (ADR-014 J, step 0b). A vent face bounds a SOLID cell and
+stays not an unknown, but its value is the vent's normal velocity, which
+StaggeredBoundary wrote before the loop, not zero: the sweep keeps it where it
+writes zero at every other such face. Everything that reads the stored value
+there then reads the vent's: the mass fluxes of the control volumes beside it
+and the QUICK boundary form's wall node. The tangential component over a vent
+is a normal jet's, zero at the face, so the obstacle wall stencil holds there
+as at a domain inlet; that it takes no wall function is the turbulence layer's
+(``TurbulenceBoundary.wall_faces``).
+
 A viscosity field (ADR-012 D, ECR-002 step 4). ``predict`` takes an optional
 dynamic viscosity per cell, ``mu_eff``; without it the scalar lines run
 unchanged. A component's streamwise faces lie at cell centres and take the
@@ -161,7 +171,8 @@ class MomentumPrediction:
     ----------
     u_star : np.ndarray
         Predicted x-velocity, shape [ny, nx+1]. Boundary columns are the
-        input values; faces of SOLID cells are zero.
+        input values; faces of SOLID cells are zero, except a vent's faces,
+        which keep the input values (ADR-014 J).
     v_star : np.ndarray
         Predicted y-velocity, shape [ny+1, nx], likewise.
     a_p_u : np.ndarray
@@ -355,6 +366,16 @@ class MomentumPredictor:
             raise ValueError("the momentum predictor needs at least 2 cells per axis")
         self._u_shape = u_shape(mesh)
         self._v_shape = v_shape(mesh)
+        # The vent faces each component's sweep keeps (ADR-014 J), in the
+        # component's own frame; None without vents, so the sweep runs the
+        # lines it always ran.
+        vents = boundary.vent_faces()
+        self._held: dict[str, np.ndarray | None] = {"u": None, "v": None}
+        if vents.any:
+            self._held = {
+                "u": vents.normal_u,
+                "v": np.ascontiguousarray(vents.normal_v.T),
+            }
         self._rho = config.rho
         self._mu = config.mu
         self._alpha = config.alpha_velocity
@@ -498,7 +519,9 @@ class MomentumPredictor:
             mu_cells=mu_cells,
             wall=None if walls is None else walls["u"],
         )
-        u_star = self._sweep_n(u, c_u, self._pressure_source(p, self._for_u))
+        u_star = self._sweep_n(
+            u, c_u, self._pressure_source(p, self._for_u), self._held["u"]
+        )
 
         c_vt = self._assemble(
             u=v.T,
@@ -507,7 +530,9 @@ class MomentumPredictor:
             mu_cells=None if mu_cells is None else np.ascontiguousarray(mu_cells.T),
             wall=None if walls is None else np.ascontiguousarray(walls["v"].T),
         )
-        v_star = self._sweep_n(v.T, c_vt, self._pressure_source(p.T, self._for_v)).T
+        v_star = self._sweep_n(
+            v.T, c_vt, self._pressure_source(p.T, self._for_v), self._held["v"]
+        ).T
         return MomentumPrediction(
             u_star=np.ascontiguousarray(u_star),
             v_star=np.ascontiguousarray(v_star),
@@ -939,9 +964,18 @@ class MomentumPredictor:
         return b
 
     def _sweep(
-        self, phi: np.ndarray, c: MomentumCoefficients, b_pressure: np.ndarray
+        self,
+        phi: np.ndarray,
+        c: MomentumCoefficients,
+        b_pressure: np.ndarray,
+        held: np.ndarray | None = None,
     ) -> np.ndarray:
-        """One under-relaxed Jacobi sweep; non-unknown faces keep their value or zero."""
+        """One under-relaxed Jacobi sweep.
+
+        Boundary columns keep their value; interior faces that are not
+        unknowns are zero, except where ``held`` marks a vent face, which
+        keeps its value.
+        """
         alpha = self._alpha
         unknown = c.a_p > 0.0
         a_p_ur = np.where(unknown, c.a_p / alpha, 1.0)
@@ -963,11 +997,16 @@ class MomentumPredictor:
         phi_new = phi.copy()
         interior = np.zeros_like(unknown)
         interior[:, 1:-1] = True
-        phi_new[interior] = np.where(unknown, numerator / a_p_ur, 0.0)[interior]
+        fill = 0.0 if held is None else np.where(held, phi, 0.0)
+        phi_new[interior] = np.where(unknown, numerator / a_p_ur, fill)[interior]
         return phi_new
 
     def _sweep_n(
-        self, phi: np.ndarray, c: MomentumCoefficients, b_pressure: np.ndarray
+        self,
+        phi: np.ndarray,
+        c: MomentumCoefficients,
+        b_pressure: np.ndarray,
+        held: np.ndarray | None = None,
     ) -> np.ndarray:
         """``momentum_sweeps`` Jacobi sweeps of the under-relaxed equations.
 
@@ -978,7 +1017,7 @@ class MomentumPredictor:
         linear system of this outer iteration.
         """
         if self._n_sweeps == 1:
-            return self._sweep(phi, c, b_pressure)
+            return self._sweep(phi, c, b_pressure, held)
         alpha = self._alpha
         unknown = c.a_p > 0.0
         a_p_ur = np.where(unknown, c.a_p / alpha, 1.0)
@@ -990,6 +1029,7 @@ class MomentumPredictor:
         )
         interior = np.zeros_like(unknown)
         interior[:, 1:-1] = True
+        fill = 0.0 if held is None else np.where(held, phi, 0.0)
         current = phi
         for _ in range(self._n_sweeps):
             padded = np.pad(current, ((1, 1), (1, 1)))
@@ -1001,7 +1041,7 @@ class MomentumPredictor:
                 + b
             )
             following = phi.copy()
-            following[interior] = np.where(unknown, numerator / a_p_ur, 0.0)[interior]
+            following[interior] = np.where(unknown, numerator / a_p_ur, fill)[interior]
             current = following
         return current
 

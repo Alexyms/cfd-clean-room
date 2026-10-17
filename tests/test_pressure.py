@@ -47,6 +47,7 @@ from src.pressure import (
 )
 from src.solver_staggered import StaggeredSolver
 from src.staggered import allocate_fields
+from tests.vent_cases import DISCHARGE, INTAKE, vent_config
 from validation.cases import case_path, load_case
 
 EPS = np.finfo(np.float64).eps
@@ -1410,3 +1411,33 @@ class TestConjugateGradient:
             with pytest.raises(RuntimeError, match="operator failed"):
                 conjugate_gradient(failing, jacobi_preconditioner(c), f, 1e-8, 0.0, 50)
             assert self._blas_threads() == before
+
+
+@pytest.mark.unit
+class TestVents:
+    """No p' coefficient crosses a vent face (ADR-014 J, step 0b)."""
+
+    def test_a_vent_face_has_no_coefficient_and_is_not_corrected(self) -> None:
+        config = vent_config({"discharge": DISCHARGE, "intake": INTAKE})
+        mesh = Mesh(config)
+        boundary = StaggeredBoundary(mesh, config)
+        u, v, p = allocate_fields(mesh)
+        boundary.apply_normal_velocity(u, v)
+        prediction = MomentumPredictor(mesh, config, boundary).predict(u, v, p)
+        corrector = PressureCorrector(mesh, config, boundary)
+        c = corrector.coefficients(prediction.a_p_u, prediction.a_p_v)
+        # The cells above the top vent and left of the intake: nothing toward
+        # the box, as nothing crosses a domain inlet face.
+        assert c.a_s[4, 7] == c.a_s[4, 8] == 0.0
+        assert c.a_e[1, 5] == c.a_e[2, 5] == 0.0
+        # Their other neighbours do carry a coefficient.
+        assert c.a_n[4, 7] > 0.0 and c.a_w[1, 5] > 0.0
+        corrected = corrector.correct(prediction, p)
+        assert corrected.v[4, 7] == corrected.v[4, 8] == 0.5
+        assert corrected.u[1, 6] == corrected.u[2, 6] == 0.5
+        # The vent's flux is in the cells' imbalance as stored.
+        b = corrector.mass_imbalance(u, v)
+        rho, dx, dy = config.rho, mesh.dx_cell, mesh.dy_cell
+        assert (
+            b[4, 7] == rho * (v[5, 7] - 0.5) * dx[7] + rho * (u[4, 8] - u[4, 7]) * dy[4]
+        )

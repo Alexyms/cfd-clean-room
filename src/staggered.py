@@ -25,6 +25,11 @@ defined here because this module owns the layout; every instance holds
 read-only float64 copies, so a reader cannot disturb the solver and the
 solver cannot disturb a reader.
 
+The equipment vents of ADR-014 J sit on obstacle faces, which are interior
+entries of the face arrays. ``obstacle_face_inputs`` finds them, as
+``edge_cell_inputs`` finds the domain edges' faces, so every layer that reads
+a vent reads the same faces.
+
 This module holds no discretization. It computes no flux, no gradient and
 no coefficient; ECR-001 steps 3 to 5 own those.
 """
@@ -33,6 +38,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from src.config import ObstacleSpec
 from src.mesh import SOLID, Mesh
 
 
@@ -187,6 +193,130 @@ def edge_cell_inputs(mesh: Mesh, edge: str) -> tuple[np.ndarray, np.ndarray]:
     solid = edge_cells(mesh.cell_type, edge) == SOLID
     coordinates = mesh.xc if edge in ("bottom", "top") else mesh.yc
     return coordinates, solid
+
+
+# The domain edge an obstacle face plays to the room: the room lies above an
+# obstacle's top face as it lies above the domain's bottom edge, so a velocity
+# into the room through the top face is the bottom edge's inward velocity.
+ROOM_EDGE_OF_FACE: dict[str, str] = {
+    "top": "bottom",
+    "bottom": "top",
+    "left": "right",
+    "right": "left",
+}
+
+
+@dataclass(frozen=True, eq=False)
+class ObstacleFace:
+    """The mesh faces on one face of one obstacle that border the room (ADR-014 J).
+
+    Parameters
+    ----------
+    component : str
+        "v" on a top or bottom face (horizontal faces), "u" on a side.
+    rows, cols : np.ndarray
+        int64, the index of each face in its component's array, in order
+        along the face. Faces between the obstacle's cells and a
+        non-SOLID cell on the named side only; never a domain-edge face.
+    coordinates : np.ndarray
+        The position of each face along the obstacle face: ``xc`` on a top
+        or bottom face, ``yc`` on a side.
+    widths : np.ndarray
+        Each face's width: ``dx_cell`` or ``dy_cell``.
+    corner_rows, corner_cols : np.ndarray
+        int64, in ``MomentumPredictor.predict``'s ``wall_mu`` layout
+        [ny+1, nx+1]: the faces of the tangential component's wall stencil
+        that lie over the obstacle face between two of these faces, the
+        horizontal faces through ``(x[i], y[j])`` on a top or bottom face,
+        the vertical ones on a side. The two ends of a run, at the
+        obstacle's corners, are walls over half their span and are not
+        listed (the momentum stencil's corner rule).
+    corner_coordinates : np.ndarray
+        The position of each such face along the obstacle face: ``x`` or
+        ``y``.
+    """
+
+    component: str
+    rows: np.ndarray
+    cols: np.ndarray
+    coordinates: np.ndarray
+    widths: np.ndarray
+    corner_rows: np.ndarray
+    corner_cols: np.ndarray
+    corner_coordinates: np.ndarray
+
+
+def obstacle_face_inputs(mesh: Mesh, obstacle: ObstacleSpec, face: str) -> ObstacleFace:
+    """The faces of one obstacle face that border the room, for the vent layers.
+
+    The obstacle-face counterpart of ``edge_cell_inputs``: every layer that
+    reads an equipment vent (ADR-014 J) derives its faces here and asks the
+    registry which segment covers each, so the velocity, turbulence and
+    concentration layers cannot disagree about a vent's faces (REQ-S12.1).
+
+    Parameters
+    ----------
+    mesh : Mesh
+        Supplies the coordinates, the widths, ``cell_type`` and the
+        obstacle's cells (``Mesh.obstacle_mask``).
+    obstacle : ObstacleSpec
+        The obstacle.
+    face : str
+        One of "top", "bottom", "left", "right".
+
+    Returns
+    -------
+    ObstacleFace
+        Empty arrays when no face of the obstacle on that side borders a
+        non-SOLID cell (the face is on the domain edge or covered).
+
+    Raises
+    ------
+    ValueError
+        On an unknown face name.
+    """
+    cells = mesh.obstacle_mask(obstacle)
+    open_cell = mesh.cell_type != SOLID
+    if face == "top":
+        rows, cols = np.nonzero(cells[:-1, :] & open_cell[1:, :])
+        rows = rows + 1
+    elif face == "bottom":
+        rows, cols = np.nonzero(cells[1:, :] & open_cell[:-1, :])
+        rows = rows + 1
+    elif face == "left":
+        rows, cols = np.nonzero(cells[:, 1:] & open_cell[:, :-1])
+        cols = cols + 1
+    elif face == "right":
+        rows, cols = np.nonzero(cells[:, :-1] & open_cell[:, 1:])
+        cols = cols + 1
+    else:
+        raise ValueError(f"unknown face '{face}'; use top, bottom, left or right")
+    horizontal = face in ("top", "bottom")
+    # Along the face: by column on a top or bottom face, by row on a side.
+    order = np.lexsort((cols, rows) if horizontal else (rows, cols))
+    rows, cols = rows[order].astype(np.int64), cols[order].astype(np.int64)
+    # Two neighbouring faces of the run bound one tangential stencil face
+    # between them, at the corner they share.
+    if horizontal:
+        shared = (rows[1:] == rows[:-1]) & (cols[1:] == cols[:-1] + 1)
+        corner_rows, corner_cols = rows[1:][shared], cols[1:][shared]
+        coordinates, widths = mesh.xc[cols], mesh.dx_cell[cols]
+        corner_coordinates = mesh.x[corner_cols]
+    else:
+        shared = (cols[1:] == cols[:-1]) & (rows[1:] == rows[:-1] + 1)
+        corner_rows, corner_cols = rows[1:][shared], cols[1:][shared]
+        coordinates, widths = mesh.yc[rows], mesh.dy_cell[rows]
+        corner_coordinates = mesh.y[corner_rows]
+    return ObstacleFace(
+        component="v" if horizontal else "u",
+        rows=rows,
+        cols=cols,
+        coordinates=np.array(coordinates, dtype=np.float64),
+        widths=np.array(widths, dtype=np.float64),
+        corner_rows=corner_rows,
+        corner_cols=corner_cols,
+        corner_coordinates=np.array(corner_coordinates, dtype=np.float64),
+    )
 
 
 def check_staggered_pair(u: np.ndarray, v: np.ndarray) -> None:

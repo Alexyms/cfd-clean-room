@@ -42,11 +42,30 @@ The conditions, per face, for particle class k:
   so never the domain's top or bottom faces and never a face that meets a
   SOLID cell. There is no ``settling_u``: settling acts in -y.
 
-The surface codes, the edge defaults and the dataclass are this module's;
+Equipment vents (ADR-014 J, step 0b), from the faces
+``boundary_staggered.vent_runs`` gives each, the derivation the velocity
+layer reads:
+
+- A discharge's faces are inlet faces: ``inflow_u``, ``inflow_v`` carry its
+  ``concentration[k]``, HEPA-reduced when ``hepa_filtered``, zero when absent.
+- An exhaust's faces are outlet faces: the outflow is the solver's, from the
+  room cell, and the budget books it as outflow.
+- Neither deposits: ``surface_u`` and ``surface_v`` are ``SURFACE_NONE`` on a
+  vent's faces, so an obstacle's deposition counts its wall faces only.
+- ``vent_u``, ``vent_v`` mark the vent faces, which carry a flux although
+  they bound a SOLID cell.
+- A discharge with ``recirculate_from`` (prompt 61's amendment to ADR-014 J)
+  carries what its intake draws: ``recirculation`` names the intake's faces,
+  the discharge's faces and the fraction the discharge passes for the class
+  (one less the HEPA efficiency when ``hepa_filtered``, else one); the
+  solver forms the intake's flux-weighted concentration each step, from the
+  field the step starts from.
+
+The surface codes, the edge defaults and the dataclasses are this module's;
 the surface names come from src/config.py, which validates the segment key.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -57,6 +76,7 @@ from src.boundary_registry import (
     BoundaryRegistry,
     EdgeCoverage,
 )
+from src.boundary_staggered import VentRun, vent_face_masks, vent_runs
 from src.config import (
     DEPOSITION_CEILING,
     DEPOSITION_FLOOR,
@@ -91,6 +111,29 @@ EDGE_SURFACES: dict[str, str] = {
 
 
 @dataclass(frozen=True, eq=False)
+class Recirculation:
+    """A discharge that returns what its intake draws, for one class (ADR-014 J).
+
+    Parameters
+    ----------
+    intake_u, intake_v : np.ndarray
+        bool, face-shaped: the intake vent's faces.
+    discharge_u, discharge_v : np.ndarray
+        bool, face-shaped: the discharge vent's faces.
+    passed : float
+        The fraction of the drawn concentration the discharge carries: one
+        less the class's HEPA efficiency when the discharge is
+        ``hepa_filtered``, else one.
+    """
+
+    intake_u: np.ndarray
+    intake_v: np.ndarray
+    discharge_u: np.ndarray
+    discharge_v: np.ndarray
+    passed: float
+
+
+@dataclass(frozen=True, eq=False)
 class ConcentrationFaces:
     """The scalar conditions of one particle class on every staggered face.
 
@@ -114,6 +157,13 @@ class ConcentrationFaces:
     settling_v : np.ndarray
         bool. True on the horizontal faces that carry the class's settling
         increment.
+    vent_u, vent_v : np.ndarray or None
+        bool, keyword-only. The vent faces (ADR-014 J): faces of a SOLID
+        cell that carry a flux, inward from a discharge, outward to an
+        exhaust. None, the default, means no vent.
+    recirculation : tuple[Recirculation, ...]
+        Keyword-only. The discharges that return their intake's air; empty
+        by default.
     """
 
     inflow_u: np.ndarray
@@ -123,6 +173,9 @@ class ConcentrationFaces:
     surface_u: np.ndarray
     surface_v: np.ndarray
     settling_v: np.ndarray
+    vent_u: np.ndarray | None = field(default=None, kw_only=True)
+    vent_v: np.ndarray | None = field(default=None, kw_only=True)
+    recirculation: tuple[Recirculation, ...] = field(default=(), kw_only=True)
 
 
 @dataclass(frozen=True)
@@ -201,6 +254,22 @@ class ConcentrationBoundary:
 
         settling_v = np.zeros(self._v_shape, dtype=bool)
         settling_v[1:-1, :] = ~south & ~north
+
+        # The vents (ADR-014 J): no deposition on their faces; a discharge's
+        # faces are an inlet run, an exhaust's an outflow the solver books.
+        self._vents: list[VentRun] = vent_runs(mesh, config, registry)
+        self._vent_u: np.ndarray | None = None
+        self._vent_v: np.ndarray | None = None
+        if self._vents:
+            masks = vent_face_masks(mesh, self._vents)
+            surface_u[masks.normal_u] = SURFACE_NONE
+            surface_v[masks.normal_v] = SURFACE_NONE
+            self._vent_u, self._vent_v = masks.normal_u, masks.normal_v
+        for run in self._vents:
+            if run.is_inlet and run.spec.recirculate_from is None:
+                self._inlets.append(
+                    _InletRun(run.component, run.rows, run.cols, run.spec)
+                )
 
         self._surface_u = _freeze(surface_u)
         self._surface_v = _freeze(surface_v)
@@ -324,4 +393,37 @@ class ConcentrationBoundary:
             surface_u=self._surface_u,
             surface_v=self._surface_v,
             settling_v=self._settling_v,
+            vent_u=self._vent_u,
+            vent_v=self._vent_v,
+            recirculation=self._recirculation(size_class),
         )
+
+    def _recirculation(self, size_class: int) -> tuple[Recirculation, ...]:
+        """The recirculating discharges for one class, in configuration order."""
+        runs = {run.name: run for run in self._vents}
+        out = []
+        for run in self._vents:
+            source = run.spec.recirculate_from
+            if not run.is_inlet or source is None:
+                continue
+            passed = 1.0
+            if run.spec.hepa_filtered:
+                passed -= self._physics.hepa_efficiency(size_class)
+            out.append(
+                Recirculation(
+                    intake_u=self._mask(runs[source], "u"),
+                    intake_v=self._mask(runs[source], "v"),
+                    discharge_u=self._mask(run, "u"),
+                    discharge_v=self._mask(run, "v"),
+                    passed=passed,
+                )
+            )
+        return tuple(out)
+
+    def _mask(self, run: VentRun, component: str) -> np.ndarray:
+        """A read-only face mask of one component holding a run's faces."""
+        shape = self._u_shape if component == "u" else self._v_shape
+        mask = np.zeros(shape, dtype=bool)
+        if run.component == component:
+            mask[run.rows, run.cols] = True
+        return _freeze(mask)

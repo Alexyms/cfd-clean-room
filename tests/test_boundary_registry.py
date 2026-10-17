@@ -20,11 +20,12 @@ from src.boundary_registry import (
     EdgeCoverage,
     condition_of,
     covers,
+    covers_face,
 )
 from src.config import BoundarySpec, SimConfig
 
 
-def _config(boundaries: dict) -> SimConfig:
+def _config(boundaries: dict, obstacles: list[dict] | None = None) -> SimConfig:
     raw = {
         "domain": {"width": 1.0, "height": 1.0, "nx": 10, "ny": 10},
         "fluid": {"density": 1.2, "viscosity": 1.81e-5, "temperature": 293.0},
@@ -47,7 +48,7 @@ def _config(boundaries: dict) -> SimConfig:
             "pressure_rtol": 1.0e-8,
         },
         "boundaries": boundaries,
-        "obstacles": [],
+        "obstacles": obstacles or [],
         "sensors": [{"name": "center", "x": 0.5, "y": 0.5}],
         "thresholds": {"0.1e-6": 100.0},
     }
@@ -312,3 +313,57 @@ class TestCoverageAlong:
         registry = BoundaryRegistry(_config(COVERAGE_SEGMENTS))
         with pytest.raises(ValueError, match="one SOLID flag per point"):
             registry.coverage_along("top", [0.1, 0.2], [False])
+
+
+# Two obstacles one above the other with a vent on the same face name over
+# the same x range (prompt 61b, review 61 B1 item e): only the obstacle's
+# name tells the two vents apart.
+TWO_OBSTACLES = [
+    {"name": "low", "x_start": 0.2, "x_end": 0.6, "y_start": 0.0, "y_end": 0.2},
+    {"name": "high", "x_start": 0.2, "x_end": 0.6, "y_start": 0.5, "y_end": 0.7},
+]
+LOW_VENT = {
+    "type": "velocity_inlet",
+    "location": "obstacle",
+    "obstacle": "low",
+    "face": "top",
+    "x_start": 0.3,
+    "x_end": 0.5,
+    "velocity": 0.3,
+}
+HIGH_VENT = {**LOW_VENT, "type": "fixed_flow_outlet", "obstacle": "high"}
+
+
+@pytest.mark.unit
+class TestObstacleFaces:
+    """covers_face and coverage_on, the vents' share of REQ-S12.1 (ADR-014 J)."""
+
+    def _registry(self) -> BoundaryRegistry:
+        config = _config({"low_vent": LOW_VENT, "high_vent": HIGH_VENT}, TWO_OBSTACLES)
+        return BoundaryRegistry(config)
+
+    def test_covers_face_needs_the_obstacle_the_face_and_the_range(self) -> None:
+        spec = self._registry().spec("low_vent")
+        assert covers_face(spec, "low", "top", 0.4)
+        assert covers_face(spec, "low", "top", 0.3) and covers_face(
+            spec, "low", "top", 0.5
+        )
+        assert not covers_face(spec, "high", "top", 0.4)
+        assert not covers_face(spec, "low", "bottom", 0.4)
+        assert not covers_face(spec, "low", "top", 0.55)
+        # A domain-edge segment covers no obstacle face, whatever its range.
+        assert not covers_face(TOP_INLET, "low", "top", 0.4)
+
+    def test_coverage_on_gives_each_obstacle_its_own_vent(self) -> None:
+        registry = self._registry()
+        points = [0.25, 0.35, 0.45, 0.55]
+        low = registry.coverage_on("low", "top", points)
+        high = registry.coverage_on("high", "top", points)
+        assert [p.name for p in low] == [None, "low_vent", "low_vent", None]
+        assert [p.name for p in high] == [None, "high_vent", "high_vent", None]
+        assert low[0] is UNCOVERED and high[3] is UNCOVERED
+        # Up out of the low top (a discharge), down into the high top (an exhaust).
+        assert low[1].condition == EdgeCondition("velocity_inlet", 0.0, 0.3)
+        assert high[1].condition == EdgeCondition("fixed_flow_outlet", 0.0, -0.3)
+        assert registry.coverage_on("low", "left", [0.1]) == [UNCOVERED]
+        assert list(registry.vents()) == ["low_vent", "high_vent"]

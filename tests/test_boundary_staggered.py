@@ -14,7 +14,17 @@ import pytest
 from src.boundary_staggered import StaggeredBoundary
 from src.config import SimConfig
 from src.mesh import SOLID, Mesh
-from src.staggered import allocate_fields
+from src.staggered import allocate_fields, obstacle_face_inputs
+from tests.vent_cases import (
+    BOX,
+    DISCHARGE,
+    EXHAUST,
+    INTAKE,
+    SHELF,
+    SHELF_VENTS,
+    vent_config,
+    vent_raw,
+)
 from validation.cases import load_case
 
 STRETCHED = {"x": {"stretch_ratio": 1.1}, "y": {"stretch_ratio": 1.2}}
@@ -463,3 +473,277 @@ class TestSeededCases:
         config = load_case("cavity", grid=(20, 20))
         mesh = Mesh(config)
         assert StaggeredBoundary(mesh, config).get_total_inlet_flux() == 0.0
+
+
+@pytest.mark.unit
+class TestVents:
+    """The velocity layer of the equipment vents (ADR-014 J, step 0b).
+
+    tests/vent_cases.py places the box over cells 6 to 9 by 0 to 3 of a 16
+    by 8 mesh of 0.125 m cells, so every face index below is read off by hand.
+    """
+
+    def _boundary(self, **vents: dict) -> tuple[Mesh, StaggeredBoundary]:
+        config = vent_config(vents)
+        mesh = Mesh(config)
+        return mesh, StaggeredBoundary(mesh, config)
+
+    def test_the_box_faces_are_the_faces_between_its_cells_and_the_room(
+        self,
+    ) -> None:
+        mesh = Mesh(vent_config())
+        box = vent_config().obstacles[0]
+        top = obstacle_face_inputs(mesh, box, "top")
+        assert top.component == "v"
+        assert top.rows.tolist() == [4] * 4 and top.cols.tolist() == [6, 7, 8, 9]
+        assert top.coordinates.tolist() == [0.8125, 0.9375, 1.0625, 1.1875]
+        # The tangential stencil faces strictly over the top, not its corners.
+        assert top.corner_rows.tolist() == [4] * 3
+        assert top.corner_cols.tolist() == [7, 8, 9]
+        left = obstacle_face_inputs(mesh, box, "left")
+        assert left.component == "u"
+        assert left.rows.tolist() == [0, 1, 2, 3] and left.cols.tolist() == [6] * 4
+        assert left.corner_rows.tolist() == [1, 2, 3]
+        right = obstacle_face_inputs(mesh, box, "right")
+        assert right.cols.tolist() == [10] * 4
+        # The box stands on the floor: its bottom borders no room.
+        assert obstacle_face_inputs(mesh, box, "bottom").rows.size == 0
+        assert BOX["y_start"] == 0.0
+
+    def test_the_normal_velocity_is_written_on_exactly_the_covered_faces(
+        self,
+    ) -> None:
+        mesh, plain = self._boundary()
+        # The discharge returns what the intake draws, so the returns' share,
+        # and every entry the plain room writes, is the same in both rooms.
+        _, vented = self._boundary(discharge=DISCHARGE, intake=INTAKE)
+        u0, v0, _ = allocate_fields(mesh)
+        u0[:] = np.nan
+        v0[:] = np.nan
+        u1, v1 = u0.copy(), v0.copy()
+        plain.apply_normal_velocity(u0, v0)
+        vented.apply_normal_velocity(u1, v1)
+        # Up out of the top, into the box through both sides.
+        assert v1[4, 7] == v1[4, 8] == 0.5
+        assert u1[1, 6] == u1[2, 6] == 0.5
+        written_u = ~np.isnan(u1) & np.isnan(u0)
+        written_v = ~np.isnan(v1) & np.isnan(v0)
+        assert np.argwhere(written_u).tolist() == [[1, 6], [2, 6]]
+        assert np.argwhere(written_v).tolist() == [[4, 7], [4, 8]]
+        # Every entry the plain room writes, the vented room writes alike.
+        same_u = ~np.isnan(u0)
+        same_v = ~np.isnan(v0)
+        assert np.array_equal(u0[same_u], u1[same_u])
+        assert np.array_equal(v0[same_v], v1[same_v])
+        # An exhaust on the right side draws into the box, toward -x.
+        _, exhausted = self._boundary(exhaust=EXHAUST)
+        u2, v2 = u0.copy(), v0.copy()
+        exhausted.apply_normal_velocity(u2, v2)
+        assert u2[1, 10] == u2[2, 10] == -0.4
+
+    def test_the_flux_through_a_vent_is_its_velocity_times_its_span(self) -> None:
+        _, boundary = self._boundary(discharge=DISCHARGE, exhaust=EXHAUST)
+        assert boundary.get_inlet_flux("discharge") == 0.5 * 0.25
+        assert boundary.get_inlet_flux("exhaust") == 0.0
+        assert boundary.get_total_inlet_flux() == pytest.approx(0.425, rel=1e-15)
+        run = {r.name: r for r in boundary.vent_runs()}
+        assert run["exhaust"].widths.sum() * 0.4 == 0.1
+        assert run["discharge"].is_inlet and not run["exhaust"].is_inlet
+
+    def test_the_returns_share_the_supply_less_the_stated_outlets(self) -> None:
+        """Inflow 0.3 + 0.125; stated 0.125 + 0.1; the 0.2 left over 1 m of returns."""
+        _, boundary = self._boundary(
+            discharge=DISCHARGE, intake=INTAKE, exhaust=EXHAUST
+        )
+        velocities = boundary.fixed_flow_velocities()
+        assert velocities["intake"] == 0.5
+        assert velocities["exhaust"] == 0.4
+        assert velocities["return_left"] == pytest.approx(0.2, rel=1e-15)
+        assert velocities["return_right"] == velocities["return_left"]
+        # Without the vents the returns take the whole supply.
+        _, plain = self._boundary()
+        assert plain.fixed_flow_velocities()["return_left"] == pytest.approx(0.3)
+
+    def test_a_discharge_sets_the_velocity_scale_and_an_exhaust_does_not(
+        self,
+    ) -> None:
+        _, boundary = self._boundary(discharge=DISCHARGE)
+        assert boundary.get_max_boundary_velocity() == 0.5
+        _, exhausted = self._boundary(exhaust={**EXHAUST, "velocity": 0.9})
+        assert exhausted.get_max_boundary_velocity() == 0.2
+
+    def test_the_vent_masks_mark_the_normal_and_tangential_faces(self) -> None:
+        _, boundary = self._boundary(discharge=DISCHARGE, intake=INTAKE)
+        faces = boundary.vent_faces()
+        assert faces.any
+        assert np.argwhere(faces.normal_v).tolist() == [[4, 7], [4, 8]]
+        assert np.argwhere(faces.normal_u).tolist() == [[1, 6], [2, 6]]
+        # The u stencil faces at x 0.875, 1.0 and 1.125 over the top vent, the
+        # v stencil faces at y 0.125, 0.25 and 0.375 beside the intake.
+        assert np.argwhere(faces.tangential_u).tolist() == [[4, 7], [4, 8], [4, 9]]
+        assert np.argwhere(faces.tangential_v).tolist() == [[1, 6], [2, 6], [3, 6]]
+        for array in (faces.normal_u, faces.tangential_v):
+            assert not array.flags.writeable
+        _, plain = self._boundary()
+        assert plain.vent_runs() == [] and not plain.vent_faces().any
+
+    def test_a_vent_that_covers_no_face_of_the_mesh_is_refused(self) -> None:
+        """x 0.76 to 0.8 holds no cell centre of the top (the first is 0.8125)."""
+        narrow = {**DISCHARGE, "x_start": 0.76, "x_end": 0.8}
+        config = vent_config({"discharge": narrow})
+        with pytest.raises(ValueError, match=r"discharge: the vent's extent covers no"):
+            StaggeredBoundary(Mesh(config), config)
+
+    def test_a_closed_box_must_balance_on_the_mesh_faces(self) -> None:
+        """Balanced on its extents, the 0.35 m intake covers 0.375 m of faces.
+
+        Its cell centres 0.1875, 0.3125 and 0.4375 lie in y 0.1 to 0.45.
+        """
+        closed = {"discharge": DISCHARGE, "intake": INTAKE}
+        config = vent_config(closed, supply=False, returns=False)
+        StaggeredBoundary(Mesh(config), config)
+        wide = {**INTAKE, "y_start": 0.1, "y_end": 0.45, "velocity": 0.125 / 0.35}
+        config = vent_config(
+            {"discharge": DISCHARGE, "intake": wide}, supply=False, returns=False
+        )
+        with pytest.raises(
+            ValueError, match=r"on this mesh's faces the stated outflow"
+        ):
+            StaggeredBoundary(Mesh(config), config)
+
+    def test_a_recirculating_pair_must_balance_on_the_mesh_faces(self) -> None:
+        """Equal on the extents, the 0.35 m intake covers 0.375 m of faces.
+
+        The intake's centres 0.1875, 0.3125 and 0.4375 lie in y 0.1 to 0.45.
+        """
+        intake = {**INTAKE, "y_start": 0.1, "y_end": 0.45, "velocity": 0.125 / 0.35}
+        pair = {
+            "discharge": {**DISCHARGE, "recirculate_from": "intake"},
+            "intake": intake,
+        }
+        config = vent_config(pair)
+        with pytest.raises(
+            ValueError, match=r"discharge: on this mesh's faces the disch"
+        ):
+            StaggeredBoundary(Mesh(config), config)
+        balanced = {**pair, "intake": INTAKE}
+        config = vent_config(balanced)
+        StaggeredBoundary(Mesh(config), config)
+
+    @pytest.mark.parametrize(
+        ("excess", "loads", "builds"),
+        [(1.0e-10, True, False), (1.0e-13, True, True)],
+        ids=["1e-10", "1e-13"],
+    )
+    def test_the_two_balance_tolerances(
+        self, excess: float, loads: bool, builds: bool
+    ) -> None:
+        """Review 61 S3: 1e-9 on the extents at load, 1e-12 on the faces.
+
+        A closed box of a discharge and an intake, the intake's velocity
+        raised by ``excess`` of itself: 1e-10 loads but the mesh refuses it,
+        1e-13 passes both.
+        """
+        intake = {**INTAKE, "velocity": 0.5 * (1.0 + excess)}
+        config = vent_config(
+            {"discharge": DISCHARGE, "intake": intake}, supply=False, returns=False
+        )
+        assert loads
+        if builds:
+            StaggeredBoundary(Mesh(config), config)
+        else:
+            with pytest.raises(ValueError, match=r"on this mesh's faces the stated"):
+                StaggeredBoundary(Mesh(config), config)
+
+    def test_the_first_vent_in_configuration_order_takes_a_shared_point(
+        self,
+    ) -> None:
+        """Two vents meeting at x 1.0, a stencil corner: the first vent takes it."""
+        first = {**DISCHARGE, "x_end": 1.0}
+        second = {**DISCHARGE, "x_start": 1.0, "velocity": 0.25}
+        raw = vent_raw({"first": first, "second": second})
+        config = vent_config({"first": first, "second": second})
+        assert list(raw["boundaries"])[-2:] == ["first", "second"]
+        runs = {r.name: r for r in StaggeredBoundary(Mesh(config), config).vent_runs()}
+        assert runs["first"].cols.tolist() == [7]
+        assert runs["second"].cols.tolist() == [8]
+        assert runs["first"].corner_cols.tolist() == [7, 8]
+        assert runs["second"].corner_cols.tolist() == [9]
+
+
+@pytest.mark.unit
+class TestVentOrientations:
+    """The vent kinds on the faces the box leaves out (prompt 61b, review 61 B1).
+
+    tests/vent_cases.py's shelf stands clear of the floor over cells 11 to 13
+    by 3 to 5, with a discharge and an exhaust under it, a discharge on each
+    side and an exhaust on top.
+    """
+
+    def _boundary(self) -> tuple[Mesh, StaggeredBoundary]:
+        config = vent_config(SHELF_VENTS, shelf=True)
+        mesh = Mesh(config)
+        return mesh, StaggeredBoundary(mesh, config)
+
+    def test_a_floating_obstacles_bottom_face_borders_the_room_below(self) -> None:
+        config = vent_config(shelf=True)
+        mesh = Mesh(config)
+        bottom = obstacle_face_inputs(mesh, config.obstacles[1], "bottom")
+        assert config.obstacles[1].name == SHELF["name"]
+        assert bottom.component == "v"
+        assert bottom.rows.tolist() == [3, 3, 3]
+        assert bottom.cols.tolist() == [11, 12, 13]
+        assert bottom.corner_cols.tolist() == [12, 13]
+        right = obstacle_face_inputs(mesh, config.obstacles[1], "right")
+        assert right.cols.tolist() == [14, 14, 14] and right.rows.tolist() == [3, 4, 5]
+
+    def test_each_vent_writes_its_velocity_with_the_sign_its_face_gives(self) -> None:
+        mesh, boundary = self._boundary()
+        u, v, _ = allocate_fields(mesh)
+        boundary.apply_normal_velocity(u, v)
+        # Down out of the bottom, up into it; out of each side; down into the top.
+        assert v[3, 11] == -0.2
+        assert v[3, 13] == 0.2
+        assert u[4, 11] == -0.2
+        assert u[4, 14] == 0.2
+        assert v[6, 12] == v[6, 13] == -0.2
+        assert v[3, 12] == 0.0 and v[6, 11] == 0.0 and u[3, 11] == 0.0
+        # Each discharge brings 0.2 m/s over 0.125 m into the room.
+        for name in ("under_discharge", "left_discharge", "right_discharge"):
+            assert boundary.get_inlet_flux(name) == pytest.approx(0.025, rel=1e-15)
+        velocities = boundary.fixed_flow_velocities()
+        assert velocities["under_exhaust"] == velocities["top_exhaust"] == 0.2
+
+    def test_the_vent_masks_mark_every_orientation(self) -> None:
+        _, boundary = self._boundary()
+        faces = boundary.vent_faces()
+        assert np.argwhere(faces.normal_v).tolist() == [
+            [3, 11],
+            [3, 13],
+            [6, 12],
+            [6, 13],
+        ]
+        assert np.argwhere(faces.normal_u).tolist() == [[4, 11], [4, 14]]
+        assert np.argwhere(faces.tangential_u).tolist() == [
+            [3, 12],
+            [3, 13],
+            [6, 12],
+            [6, 13],
+        ]
+        assert np.argwhere(faces.tangential_v).tolist() == [
+            [4, 11],
+            [4, 14],
+            [5, 11],
+            [5, 14],
+        ]
+
+    def test_two_obstacles_with_vents_on_one_face_name_keep_their_own_faces(
+        self,
+    ) -> None:
+        """The box's top discharge and the shelf's top exhaust: rows 4 and 6."""
+        config = vent_config({"discharge": DISCHARGE, **SHELF_VENTS}, shelf=True)
+        runs = {r.name: r for r in StaggeredBoundary(Mesh(config), config).vent_runs()}
+        assert runs["discharge"].rows.tolist() == [4, 4]
+        assert runs["discharge"].cols.tolist() == [7, 8]
+        assert runs["top_exhaust"].rows.tolist() == [6, 6]
+        assert runs["top_exhaust"].cols.tolist() == [12, 13]

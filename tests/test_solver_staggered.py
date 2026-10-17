@@ -24,6 +24,7 @@ from src.pressure import PressureCorrection, PressureCorrector
 from src.solver_staggered import StaggeredSolver
 from src.staggered import FaceVelocities, allocate_fields, to_cell_centers
 from src.stopping import ErrorEstimateRule, ImbalanceSummary, IterationState
+from tests.vent_cases import DISCHARGE, EXHAUST, INTAKE, vent_raw
 from validation.cases import (
     CASE_GRIDS,
     case_path,
@@ -873,3 +874,81 @@ class TestEddyViscosity:
         with pytest.raises(error, match=match):
             solver.solve_steady(on_iteration=seen.append, eddy_viscosity=field)  # type: ignore[arg-type]
         assert seen == []
+
+
+def _vented_solver(raw: dict) -> StaggeredSolver:
+    """The vent room under the error_estimate rule, its air 55 times as viscous.
+
+    At air's viscosity the 16 by 8 room runs at a Reynolds number near
+    30,000 on eight cells of height, which a test cannot ask the laminar
+    solve to converge; 1e-3 Pa s brings it near 600, where it stops by the
+    rule in a few hundred outer iterations.
+    """
+    raw["fluid"]["viscosity"] = 1.0e-3
+    raw["solver"].update(
+        stopping_rule="error_estimate",
+        max_simple_iter=3000,
+        iteration_error_tol=1.0e-6,
+        mass_imbalance_tol=1.0e-10,
+    )
+    config = SimConfig.from_dict(raw)
+    mesh = Mesh(config)
+    return StaggeredSolver(mesh, config, StaggeredBoundary(mesh, config))
+
+
+@pytest.mark.integration
+class TestVents:
+    """The vents through a solve (ADR-014 J, step 0b)."""
+
+    def test_the_vent_velocities_read_back_unchanged_from_the_corrected_faces(
+        self,
+    ) -> None:
+        solver = _vented_solver(
+            vent_raw({"discharge": DISCHARGE, "intake": INTAKE, "exhaust": EXHAUST})
+        )
+        solver.solve_steady()
+        assert solver.converged
+        faces = solver.face_velocities
+        assert faces is not None
+        assert faces.v[4, 7] == faces.v[4, 8] == 0.5
+        assert faces.u[1, 6] == faces.u[2, 6] == 0.5
+        assert faces.u[1, 10] == faces.u[2, 10] == -0.4
+        # The flux through each vent is its velocity times its span, exactly.
+        dx, dy = 0.125, 0.125
+        assert faces.v[4, 7] * dx + faces.v[4, 8] * dx == 0.5 * 0.25
+        assert -(faces.u[1, 10] * dy + faces.u[2, 10] * dy) == 0.4 * 0.25
+
+    def test_a_closed_box_of_a_discharge_and_an_exhaust_balances_from_the_start(
+        self,
+    ) -> None:
+        """The only openings are two vents of 0.125 m^2/s: the box closes on itself.
+
+        The signed domain sum of the corrected faces' imbalance is read at
+        every outer iteration through the corrector's output, and is at
+        rounding (the corrector's floor, 1e-13 of the flux scale) from the
+        first.
+        """
+        exhaust = {**EXHAUST, "velocity": 0.5}
+        solver = _vented_solver(
+            vent_raw(
+                {"discharge": DISCHARGE, "exhaust": exhaust},
+                supply=False,
+                returns=False,
+            )
+        )
+        corrector = solver._corrector
+        correct = corrector.correct
+        sums: list[float] = []
+
+        def spy(prediction: MomentumPrediction, p: np.ndarray) -> PressureCorrection:
+            result = correct(prediction, p)
+            sums.append(float(corrector.mass_imbalance(result.u, result.v).sum()))
+            return result
+
+        corrector.correct = spy  # type: ignore[method-assign]
+        solver.solve_steady()
+        assert solver.stop_reason == "error_estimate_and_continuity"
+        assert solver.flux_scale == pytest.approx(1.2 * 0.125, rel=1e-15)
+        assert len(sums) == len(solver.residual_history) > 1
+        assert max(abs(x) for x in sums) <= 1e-13 * solver.flux_scale
+        assert abs(float(solver.last_mass_imbalance.sum())) <= 1e-13 * solver.flux_scale

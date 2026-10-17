@@ -1384,7 +1384,8 @@ class TestPressureKeys:
         The laminar cases carry 1e-8; the Annex 20 case (VAL-017, prompt 49),
         the backward-facing step (VAL-019, prompt 52), the impinging jet
         (VAL-020, prompt 55) and, since step 8 (prompt 56), the product file
-        and its two layouts (tests/test_layouts.py) carry the turbulent
+        and its two layouts (tests/test_layouts.py), and since step 0b of ADR-014
+        (prompt 61) the vented room, carry the turbulent
         product setting, 1e-4 (ADR-013 decision 3 as amended 2026-10-09;
         ECR-002 section 8, step 8).
         """
@@ -1392,6 +1393,7 @@ class TestPressureKeys:
             "clean_room_default.yaml": 1e-4,
             "clean_room_l1_return3_closed.yaml": 1e-4,
             "clean_room_l2_left_supply.yaml": 1e-4,
+            "clean_room_vents.yaml": 1e-4,
             "validation_annex20.yaml": 1e-4,
             "validation_backstep.yaml": 1e-4,
             "validation_impinging_jet.yaml": 1e-4,
@@ -2173,3 +2175,393 @@ class TestFiniteNumbers:
             ValueError, match=rf"{'.'.join(section)}\.{key}\[1\] must be finite"
         ):
             SimConfig.from_dict(raw)
+
+
+# A room for the vent rules (ADR-014 J): a rack on the floor, a tool standing
+# clear of it with a free bottom face, the supply at the top and two returns
+# that share the remainder.
+VENT_OBSTACLES = [
+    {"name": "rack", "x_start": 1.0, "x_end": 2.0, "y_start": 0.0, "y_end": 1.0},
+    {"name": "tool", "x_start": 2.5, "x_end": 3.0, "y_start": 0.5, "y_end": 1.5},
+]
+VENT_RETURNS = {
+    "return_left": {
+        "type": "fixed_flow_outlet",
+        "location": "bottom",
+        "x_start": 0.25,
+        "x_end": 0.75,
+    },
+    "return_right": {
+        "type": "fixed_flow_outlet",
+        "location": "bottom",
+        "x_start": 3.25,
+        "x_end": 3.75,
+    },
+}
+DISCHARGE = {
+    "type": "velocity_inlet",
+    "location": "obstacle",
+    "obstacle": "rack",
+    "face": "top",
+    "x_start": 1.25,
+    "x_end": 1.75,
+    "velocity": 1.0,
+}
+INTAKE = {
+    "type": "fixed_flow_outlet",
+    "location": "obstacle",
+    "obstacle": "rack",
+    "face": "left",
+    "y_start": 0.25,
+    "y_end": 0.75,
+    "velocity": 1.0,
+}
+EXHAUST = {
+    "type": "fixed_flow_outlet",
+    "location": "obstacle",
+    "obstacle": "tool",
+    "face": "right",
+    "y_start": 0.75,
+    "y_end": 1.25,
+    "velocity": 0.5,
+}
+
+
+@pytest.mark.unit
+class TestVents:
+    """Equipment vents on obstacle faces (ADR-014 J): one test per rule at load."""
+
+    def _raw(self, tmp_path: Path, **vents: dict) -> dict:
+        with open(_write_config(tmp_path), encoding="utf-8") as handle:
+            raw = yaml.safe_load(handle)
+        raw["obstacles"] = [dict(o) for o in VENT_OBSTACLES]
+        raw["boundaries"] = {
+            "hepa_supply": dict(raw["boundaries"]["hepa_supply"]),
+            **{k: dict(v) for k, v in VENT_RETURNS.items()},
+            **{k: dict(v) for k, v in vents.items()},
+        }
+        return raw
+
+    def _refused(
+        self, raw: dict, match: str, error: type | tuple[type, ...] = ValueError
+    ) -> None:
+        with pytest.raises(error, match=match):
+            SimConfig.from_dict(raw)
+
+    def test_a_discharge_an_intake_and_an_exhaust_load(self, tmp_path: Path) -> None:
+        raw = self._raw(
+            tmp_path,
+            fan_out={**DISCHARGE, "recirculate_from": "fan_in", "hepa_filtered": True},
+            fan_in=INTAKE,
+            exhaust=EXHAUST,
+        )
+        config = SimConfig.from_dict(raw)
+        out = config.boundaries["fan_out"]
+        assert (out.location, out.obstacle, out.face) == ("obstacle", "rack", "top")
+        assert (out.x_start, out.x_end, out.y_start, out.y_end) == (
+            1.25,
+            1.75,
+            None,
+            None,
+        )
+        assert out.velocity == 1.0
+        assert out.recirculate_from == "fan_in"
+        assert out.hepa_filtered is True
+        exhaust = config.boundaries["exhaust"]
+        assert (exhaust.face, exhaust.y_start, exhaust.y_end) == ("right", 0.75, 1.25)
+        assert exhaust.recirculate_from is None
+        # A domain-edge segment carries none of the vent keys.
+        supply = config.boundaries["hepa_supply"]
+        assert (supply.obstacle, supply.face, supply.recirculate_from) == (None,) * 3
+
+    def test_a_vent_on_a_floating_obstacles_bottom_face_loads(
+        self, tmp_path: Path
+    ) -> None:
+        bottom = {k: v for k, v in EXHAUST.items() if k not in ("y_start", "y_end")} | {
+            "face": "bottom",
+            "x_start": 2.6,
+            "x_end": 2.9,
+        }
+        config = SimConfig.from_dict(self._raw(tmp_path, exhaust=bottom))
+        assert config.boundaries["exhaust"].face == "bottom"
+
+    def test_an_unknown_obstacle_is_refused(self, tmp_path: Path) -> None:
+        raw = self._raw(tmp_path, exhaust={**EXHAUST, "obstacle": "furnace"})
+        self._refused(raw, r"exhaust\.obstacle names 'furnace', which no obstacle")
+
+    def test_an_obstacle_name_two_obstacles_share_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        raw = self._raw(tmp_path, exhaust=EXHAUST)
+        raw["obstacles"][0]["name"] = "tool"
+        self._refused(raw, r"exhaust\.obstacle names 'tool', which 2 obstacles share")
+
+    @pytest.mark.parametrize("key", ["obstacle", "face"])
+    def test_obstacle_and_face_are_required_on_a_vent(
+        self, tmp_path: Path, key: str
+    ) -> None:
+        vent = {k: v for k, v in EXHAUST.items() if k != key}
+        self._refused(
+            self._raw(tmp_path, exhaust=vent),
+            rf"Missing required key: 'boundaries\.exhaust\.{key}'",
+        )
+
+    @pytest.mark.parametrize("key", ["obstacle", "face"])
+    def test_obstacle_and_face_must_be_strings(self, tmp_path: Path, key: str) -> None:
+        raw = self._raw(tmp_path, exhaust={**EXHAUST, key: 3})
+        self._refused(raw, rf"exhaust\.{key} must be a string", TypeError)
+
+    def test_a_face_that_is_not_one_of_the_four_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        raw = self._raw(tmp_path, exhaust={**EXHAUST, "face": "front"})
+        self._refused(raw, r"exhaust\.face must be one of \['top', 'bottom'")
+
+    @pytest.mark.parametrize(
+        ("y_start", "y_end"), [(0.25, 0.75), (1.25, 1.75), (0.4, 1.6)]
+    )
+    def test_an_extent_beyond_the_face_is_refused(
+        self, tmp_path: Path, y_start: float, y_end: float
+    ) -> None:
+        """The tool's right face spans y 0.5 to 1.5."""
+        raw = self._raw(
+            tmp_path, exhaust={**EXHAUST, "y_start": y_start, "y_end": y_end}
+        )
+        self._refused(raw, r"does not lie within the right face of 'tool', \[0\.5, 1")
+
+    @pytest.mark.parametrize(("y_start", "y_end"), [(1.0, 1.0), (1.2, 0.8)])
+    def test_an_empty_extent_is_refused(
+        self, tmp_path: Path, y_start: float, y_end: float
+    ) -> None:
+        raw = self._raw(
+            tmp_path, exhaust={**EXHAUST, "y_start": y_start, "y_end": y_end}
+        )
+        self._refused(raw, r"exhaust: y_start .* must be less than y_end")
+
+    def test_a_face_on_the_domain_edge_is_refused(self, tmp_path: Path) -> None:
+        """The rack stands on the floor: it has no bottom face to vent from."""
+        vent = {**DISCHARGE, "face": "bottom"}
+        self._refused(
+            self._raw(tmp_path, fan_out=vent),
+            r"fan_out: the bottom face of 'rack' lies on the domain edge",
+        )
+
+    def test_a_face_against_another_obstacle_is_refused(self, tmp_path: Path) -> None:
+        raw = self._raw(tmp_path, fan_out=DISCHARGE)
+        shelf = {
+            "name": "shelf",
+            "x_start": 1.5,
+            "x_end": 2.0,
+            "y_start": 1.0,
+            "y_end": 1.2,
+        }
+        raw["obstacles"].append(shelf)
+        self._refused(raw, r"obstacle 'shelf' stands against the top face of 'rack'")
+        # Beside the extent, the same shelf leaves the vent's faces free.
+        shelf["x_start"] = 1.75
+        SimConfig.from_dict(raw)
+
+    def test_two_vents_overlapping_on_one_face_are_refused(
+        self, tmp_path: Path
+    ) -> None:
+        second = {**EXHAUST, "y_start": 1.0, "y_end": 1.5}
+        raw = self._raw(tmp_path, exhaust=EXHAUST, second=second)
+        self._refused(
+            raw,
+            r"boundaries\.exhaust and boundaries\.second overlap on the right face "
+            r"of 'tool'",
+        )
+        # Meeting at a point, and the same extent on another face, are not overlaps.
+        touching = {**second, "y_start": 1.25}
+        SimConfig.from_dict(self._raw(tmp_path, exhaust=EXHAUST, second=touching))
+        other_face = {**EXHAUST, "face": "left"}
+        SimConfig.from_dict(self._raw(tmp_path, exhaust=EXHAUST, second=other_face))
+
+    @pytest.mark.parametrize("bc_type", ["wall", "pressure_outlet"])
+    def test_a_type_other_than_inlet_or_fixed_flow_is_refused(
+        self, tmp_path: Path, bc_type: str
+    ) -> None:
+        vent = {k: v for k, v in EXHAUST.items() if k != "velocity"} | {"type": bc_type}
+        self._refused(
+            self._raw(tmp_path, exhaust=vent),
+            r"exhaust\.type must be one of \['velocity_inlet', 'fixed_flow_outlet'\] "
+            "on an obstacle face",
+        )
+
+    @pytest.mark.parametrize("vent", [DISCHARGE, EXHAUST], ids=["inlet", "fixed_flow"])
+    def test_a_vent_without_a_velocity_is_refused(
+        self, tmp_path: Path, vent: dict
+    ) -> None:
+        stated = {k: v for k, v in vent.items() if k != "velocity"}
+        self._refused(
+            self._raw(tmp_path, vent=stated),
+            r"Missing required key: 'boundaries\.vent\.velocity'\. A vent states",
+        )
+
+    @pytest.mark.parametrize("key", ["u_velocity", "v_velocity"])
+    def test_velocity_components_on_a_vent_are_refused(
+        self, tmp_path: Path, key: str
+    ) -> None:
+        raw = self._raw(tmp_path, fan_out={**DISCHARGE, key: 0.3})
+        self._refused(raw, rf"fan_out\.{key} is not valid on a vent")
+
+    @pytest.mark.parametrize("velocity", [True, "1.0", float("nan")])
+    def test_a_velocity_that_is_not_a_finite_number_is_refused(
+        self, tmp_path: Path, velocity: object
+    ) -> None:
+        raw = self._raw(tmp_path, fan_out={**DISCHARGE, "velocity": velocity})
+        self._refused(raw, r"fan_out\.velocity must be", (TypeError, ValueError))
+
+    @pytest.mark.parametrize("vent", [DISCHARGE, EXHAUST], ids=["inlet", "fixed_flow"])
+    def test_a_velocity_that_is_not_positive_is_refused(
+        self, tmp_path: Path, vent: dict
+    ) -> None:
+        raw = self._raw(tmp_path, vent={**vent, "velocity": -0.5})
+        self._refused(raw, r"vent\.velocity must be positive")
+
+    def test_an_inlet_vent_states_its_turbulence_with_the_model_on(
+        self, tmp_path: Path
+    ) -> None:
+        raw = self._raw(tmp_path, fan_out=DISCHARGE)
+        raw["solver"]["stopping_rule"] = "error_estimate"
+        raw["turbulence"] = dict(TURBULENCE)
+        raw["boundaries"]["hepa_supply"].update(INLET_TURBULENCE)
+        self._refused(raw, r"fan_out\.turbulence_intensity'.*admits air")
+        raw["boundaries"]["fan_out"].update(INLET_TURBULENCE)
+        spec = SimConfig.from_dict(raw).boundaries["fan_out"]
+        assert spec.turbulence_intensity == 0.05
+
+    @pytest.mark.parametrize(
+        ("key", "value"),
+        [("obstacle", "rack"), ("face", "top"), ("recirculate_from", "fan_in")],
+    )
+    def test_vent_keys_on_a_domain_edge_segment_are_refused(
+        self, tmp_path: Path, key: str, value: str
+    ) -> None:
+        raw = self._raw(tmp_path)
+        raw["boundaries"]["hepa_supply"][key] = value
+        self._refused(
+            raw,
+            rf"hepa_supply\.{key} is valid only on a vent \(location 'obstacle'\), "
+            "not on the top edge",
+        )
+
+    def test_the_other_axis_extent_on_a_vent_is_refused(self, tmp_path: Path) -> None:
+        raw = self._raw(tmp_path, fan_out={**DISCHARGE, "y_start": 1.0})
+        self._refused(raw, r"fan_out\.y_start is not valid on a vent on the obstacle's")
+
+    def test_an_unknown_key_on_a_vent_is_refused(self, tmp_path: Path) -> None:
+        raw = self._raw(tmp_path, fan_out={**DISCHARGE, "recirculate": "fan_in"})
+        self._refused(raw, r"fan_out\.recirculate is not a recognised boundary key")
+
+    def test_a_location_that_is_neither_an_edge_nor_obstacle_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        raw = self._raw(tmp_path, fan_out={**DISCHARGE, "location": "rack"})
+        self._refused(raw, r"fan_out\.location must be one of .* or 'obstacle'")
+
+    def test_recirculate_from_naming_no_segment_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        raw = self._raw(tmp_path, fan_out={**DISCHARGE, "recirculate_from": "fan_in"})
+        self._refused(raw, r"recirculate_from names 'fan_in', which is not a boundary")
+
+    @pytest.mark.parametrize("source", ["return_left", "other_out"])
+    def test_recirculate_from_naming_no_fixed_flow_vent_is_refused(
+        self, tmp_path: Path, source: str
+    ) -> None:
+        """A domain-edge return is not a vent; a second discharge is not an intake."""
+        other_out = {
+            k: v for k, v in DISCHARGE.items() if k not in ("x_start", "x_end")
+        } | {"face": "right", "y_start": 0.25, "y_end": 0.75}
+        raw = self._raw(
+            tmp_path,
+            fan_out={**DISCHARGE, "recirculate_from": source},
+            other_out=other_out,
+        )
+        self._refused(raw, rf"names '{source}', which is not a fixed_flow_outlet vent")
+
+    def test_recirculate_from_another_obstacle_is_refused(self, tmp_path: Path) -> None:
+        raw = self._raw(
+            tmp_path,
+            fan_out={**DISCHARGE, "recirculate_from": "exhaust"},
+            exhaust=EXHAUST,
+        )
+        self._refused(raw, r"names 'exhaust', a vent on 'tool', not on 'rack'")
+
+    def test_recirculate_from_with_a_concentration_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        vent = {**DISCHARGE, "recirculate_from": "fan_in", "concentration": [1.0] * 5}
+        raw = self._raw(tmp_path, fan_out=vent, fan_in=INTAKE)
+        self._refused(raw, r"fan_out\.concentration is not valid with recirculate_from")
+
+    def test_recirculate_from_on_an_exhaust_is_refused(self, tmp_path: Path) -> None:
+        raw = self._raw(tmp_path, fan_in={**INTAKE, "recirculate_from": "exhaust"})
+        self._refused(
+            raw, r"fan_in\.recirculate_from is only valid on a velocity_inlet segment"
+        )
+
+    def test_recirculate_from_must_be_a_string(self, tmp_path: Path) -> None:
+        raw = self._raw(tmp_path, fan_out={**DISCHARGE, "recirculate_from": 1})
+        self._refused(raw, r"fan_out\.recirculate_from must be a string", TypeError)
+
+    def test_a_closed_box_of_equal_stated_flows_loads_and_an_unequal_one_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        """With no return to take a remainder the stated flows must balance."""
+        raw = self._raw(tmp_path)
+        raw["boundaries"] = {"fan_out": dict(DISCHARGE), "fan_in": dict(INTAKE)}
+        config = SimConfig.from_dict(raw)
+        assert list(config.boundaries) == ["fan_out", "fan_in"]
+        raw["boundaries"]["fan_in"]["velocity"] = 0.9
+        self._refused(
+            raw,
+            r"no pressure_outlet, so nothing balances the flow: the stated outflow "
+            r"0\.45 m\^2/s differs from the inflow 0\.5 m\^2/s",
+        )
+
+
+@pytest.mark.unit
+def test_the_vents_file_is_the_default_room_with_three_vents() -> None:
+    """configs/clean_room_vents.yaml (prompt 61): every other key the default file's."""
+    with open(CONFIG_DIR / "clean_room_default.yaml", encoding="utf-8") as handle:
+        default = yaml.safe_load(handle)
+    with open(CONFIG_DIR / "clean_room_vents.yaml", encoding="utf-8") as handle:
+        vented = yaml.safe_load(handle)
+    assert {k: v for k, v in vented.items() if k != "boundaries"} == {
+        k: v for k, v in default.items() if k != "boundaries"
+    }
+    added = {
+        k: v for k, v in vented["boundaries"].items() if k not in default["boundaries"]
+    }
+    assert {
+        k: v for k, v in vented["boundaries"].items() if k in default["boundaries"]
+    } == (default["boundaries"])
+    assert sorted(added) == ["etch_exhaust", "rack_discharge", "rack_intake"]
+    config = SimConfig(CONFIG_DIR / "clean_room_vents.yaml")
+    discharge = config.boundaries["rack_discharge"]
+    assert (discharge.obstacle, discharge.face) == ("server_rack", "top")
+    assert discharge.recirculate_from == "rack_intake"
+    # The rack's discharge returns what its intake draws: equal flows.
+    intake = config.boundaries["rack_intake"]
+    assert discharge.velocity * (discharge.x_end - discharge.x_start) == pytest.approx(
+        intake.velocity * (intake.y_end - intake.y_start), rel=1e-12
+    )
+    assert config.boundaries["etch_exhaust"].face == "right"
+
+
+@pytest.mark.unit
+def test_a_recirculating_pair_of_unequal_flow_is_refused(tmp_path: Path) -> None:
+    """Review 61 S6: the discharge would create particles at the intake's mean."""
+    raw = TestVents()._raw(
+        tmp_path,
+        fan_out={**DISCHARGE, "recirculate_from": "fan_in"},
+        fan_in={**INTAKE, "velocity": 0.9},
+    )
+    with pytest.raises(
+        ValueError,
+        match=r"fan_out\.recirculate_from: the discharge's flow 0\.5 m\^2/s differs "
+        r"from its intake 'fan_in''s 0\.45 m\^2/s",
+    ):
+        SimConfig.from_dict(raw)

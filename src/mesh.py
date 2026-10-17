@@ -325,19 +325,8 @@ class Mesh:
             C-contiguous.
         """
         cell_type = np.full((ny, nx), FLUID, dtype=np.int32)
-
-        # Mark obstacle cells (center inside obstacle bounding box, to within
-        # OBSTACLE_EDGE_TOLERANCE of a cell width on every edge)
-        tol_x = OBSTACLE_EDGE_TOLERANCE * self.dx_cell
-        tol_y = OBSTACLE_EDGE_TOLERANCE * self.dy_cell
         for obs in obstacles:
-            for j in range(ny):
-                for i in range(nx):
-                    if (
-                        obs.x_start - tol_x[i] <= self.xc[i] <= obs.x_end + tol_x[i]
-                        and obs.y_start - tol_y[j] <= self.yc[j] <= obs.y_end + tol_y[j]
-                    ):
-                        cell_type[j, i] = SOLID
+            cell_type[self.obstacle_mask(obs)] = SOLID
 
         # Mark boundary cells (domain edges that are not SOLID)
         for i in range(nx):
@@ -352,6 +341,36 @@ class Mesh:
                 cell_type[j, nx - 1] = BOUNDARY
 
         return np.ascontiguousarray(cell_type)
+
+    def obstacle_mask(self, obstacle: ObstacleSpec) -> np.ndarray:
+        """The cells one obstacle makes SOLID.
+
+        The one rule that places an obstacle on the mesh: a cell is the
+        obstacle's when its center lies inside the obstacle's bounding box,
+        to within OBSTACLE_EDGE_TOLERANCE of the cell's width on every
+        edge. ``cell_type`` marks these cells SOLID, and the equipment vents
+        of ADR-014 J find an obstacle's faces from the same cells
+        (``staggered.obstacle_face_inputs``).
+
+        Parameters
+        ----------
+        obstacle : ObstacleSpec
+            One obstacle from the configuration.
+
+        Returns
+        -------
+        np.ndarray
+            Boolean, shape (ny, nx).
+        """
+        tol_x = OBSTACLE_EDGE_TOLERANCE * self.dx_cell
+        tol_y = OBSTACLE_EDGE_TOLERANCE * self.dy_cell
+        in_x = (obstacle.x_start - tol_x <= self.xc) & (
+            self.xc <= obstacle.x_end + tol_x
+        )
+        in_y = (obstacle.y_start - tol_y <= self.yc) & (
+            self.yc <= obstacle.y_end + tol_y
+        )
+        return in_y[:, None] & in_x[None, :]
 
     def is_fluid(self, i: int, j: int) -> bool:
         """Check whether the cell at grid position (i, j) is a fluid cell.

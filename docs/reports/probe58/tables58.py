@@ -18,7 +18,11 @@ the returns and the hood. The records are results/builder56/transport_*.json
 (untracked), read where they are; the starred L2 rows are step 8's labelled
 supplement (tables56.SUPPLEMENT). The ranking and margin rule is step 8
 section 5.4's, with a neighbouring difference that does not exceed every
-applicable change reported as a tie.
+applicable change reported as a tie. M3 reads the gross outflow
+(``outflow_rate_over_source``), which is the removal only in a room whose
+inflow is clean: it is not for a room with equipment vents, where a
+recirculating intake books returned air as outflow (ADR-014 G, step 2's note;
+docs/reports/probe61/transport61.py reads the net figure).
 """
 
 import argparse

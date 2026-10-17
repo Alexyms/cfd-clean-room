@@ -16,6 +16,7 @@ from src.config import SimConfig
 from src.mesh import SOLID, Mesh
 from src.momentum import (
     MomentumCoefficients,
+    MomentumPrediction,
     MomentumPredictor,
     _Orientation,
     quick_face_values,
@@ -23,6 +24,7 @@ from src.momentum import (
 from src.solver_staggered import StaggeredSolver
 from src.staggered import allocate_fields
 from tests.frozen34_reference import load_frozen_predictor
+from tests.vent_cases import DISCHARGE, EXHAUST, SHELF_VENTS, vent_config
 from validation.cases import CONFIG_DIR
 
 STRETCHED = {"x": {"stretch_ratio": 1.15}, "y": {"stretch_ratio": 1.25}}
@@ -1613,3 +1615,54 @@ def test_an_obstacle_corner_face_adds_nothing_to_the_deferred_source(
     nudged = other.copy()
     nudged[j, i] += 0.37
     assert deferred(nudged)[j, i] != base[j, i]
+
+
+@pytest.mark.unit
+class TestVents:
+    """A vent face keeps its velocity through the prediction (ADR-014 J, step 0b)."""
+
+    def _predict(self, vents: dict) -> tuple[Mesh, MomentumPrediction]:
+        config = vent_config(vents)
+        mesh = Mesh(config)
+        boundary = StaggeredBoundary(mesh, config)
+        u, v, p = allocate_fields(mesh)
+        boundary.apply_normal_velocity(u, v)
+        # A nonzero interior field, so a face predicted as zero would show.
+        u[:, 1:-1] += 0.01
+        v[1:-1, :] -= 0.01
+        boundary.apply_normal_velocity(u, v)
+        return mesh, MomentumPredictor(mesh, config, boundary).predict(u, v, p)
+
+    def test_the_vent_faces_keep_their_velocity_and_are_not_unknowns(self) -> None:
+        _, prediction = self._predict({"discharge": DISCHARGE, "exhaust": EXHAUST})
+        assert prediction.v_star[4, 7] == prediction.v_star[4, 8] == 0.5
+        assert prediction.u_star[1, 10] == prediction.u_star[2, 10] == -0.4
+        assert prediction.a_p_v[4, 7] == prediction.a_p_v[4, 8] == 0.0
+        assert prediction.a_p_u[1, 10] == prediction.a_p_u[2, 10] == 0.0
+
+    def test_the_other_faces_of_the_box_are_predicted_as_zero(self) -> None:
+        mesh, prediction = self._predict({"discharge": DISCHARGE})
+        # The box's top beside the vent and its sides, and inside it.
+        assert prediction.v_star[4, 6] == prediction.v_star[4, 9] == 0.0
+        assert np.all(prediction.u_star[0:4, 6:11] == 0.0)
+        solid = mesh.cell_type == SOLID
+        inside_v = np.zeros(prediction.v_star.shape, dtype=bool)
+        inside_v[1:-1, :] = solid[:-1, :] & solid[1:, :]
+        assert np.all(prediction.v_star[inside_v] == 0.0)
+
+
+@pytest.mark.unit
+def test_the_shelf_vents_keep_their_velocity_through_the_prediction() -> None:
+    """Every orientation of tests/vent_cases.py's shelf (prompt 61b)."""
+    config = vent_config(SHELF_VENTS, shelf=True)
+    mesh = Mesh(config)
+    boundary = StaggeredBoundary(mesh, config)
+    u, v, p = allocate_fields(mesh)
+    u[:, 1:-1] += 0.01
+    v[1:-1, :] -= 0.01
+    boundary.apply_normal_velocity(u, v)
+    prediction = MomentumPredictor(mesh, config, boundary).predict(u, v, p)
+    assert prediction.v_star[3, 11] == -0.2 and prediction.v_star[3, 13] == 0.2
+    assert prediction.u_star[4, 11] == -0.2 and prediction.u_star[4, 14] == 0.2
+    assert prediction.v_star[6, 12] == prediction.v_star[6, 13] == -0.2
+    assert prediction.v_star[3, 12] == 0.0 and prediction.u_star[3, 11] == 0.0

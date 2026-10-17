@@ -767,12 +767,20 @@ as `mu_eff` is), `mesh.py`'s the breakpoints.
    process exhaust), read by the velocity layer, the momentum and pressure steps, the wall
    treatment and the concentration boundary; the configuration keys and their rejection paths
    in `tests/test_config.py`; the tests section J lists. Before step 1, so the scenario schema
-   and the reference scenarios are written with vents from the start.
+   and the reference scenarios are written with vents from the start. *Built 2026-10-16 (prompt 61),*
+   *with the departures section J lists at its end and the recirculated discharge of its amendment.*
 1. The scenario schema and inheritance in `config.py`: `tests/test_config.py` gains the rejection
    paths listed in section B, one test per rule, and the four reference files load.
 2. `scenarios.py`: intervals, fingerprints, sources, conditions; `tests/test_scenarios.py`:
    event activation at its start and expiration at its end, overlap refused, two openings give
-   two states not four, a source's rate sums to its emission over the box.
+   two states not four, a source's rate sums to its emission over the box. *Note (step 0b,
+   2026-10-16, review 61 S1 and S2):* in a room with a recirculating pair the removal is
+   `MassBudget.outflow - MassBudget.inflow`, since the budget books the intake as outflow and
+   the discharge as inflow; the HEPA capture of a filtered discharge is inside that difference
+   and `deposited` is not. The gross terms are what close `MassBudget.residual()`, so a step
+   that reads removal reads the difference, as `docs/reports/probe61/transport61.py` does.
+   `vent_runs` and `ROOM_EDGE_OF_FACE` move to a small module both boundary layers import,
+   with `ROOM_EDGE_OF_FACE` beside the registry, when this step next edits the dependency map.
 3. `io_manager.py`: the run file, the checkpoint, the restart; `tests/test_io_manager.py`: the
    bitwise restart for a march and for a steady solve, the configuration-hash mismatch refused.
 4. `time_integration.py`, tier 1: `tests/test_time_integration.py`: the hand-over (the
@@ -818,7 +826,9 @@ Phase 3's gate conditions, each with the scenarios it bears on, so Phase 4's out
   isothermal one and the mixing above the tool is the forced jet's alone. The discharge carries
   its configured concentration, not the mean of the air its intake drew in: the intake and the
   discharge are two segments the transport does not link, as the supply is not linked to the
-  returns (ADR-011 decision 3, no recirculation).
+  returns (ADR-011 decision 3, no recirculation). *Amended 2026-10-16 (prompt 61, section J's
+  amendment):* a discharge that names its intake in `recirculate_from` carries the intake's
+  concentration, lagged one transport step; the limit stands for a discharge that does not.
 
 ## I. The efficiency batch (step 0's housekeeping)
 Listed as the first build step's housekeeping, each with its location:
@@ -916,6 +926,28 @@ face beyond the outlet, which is inside the obstacle, and the copy's weakness to
   `SURFACE_NONE` on a vent's span, so the obstacle's deposition total counts its wall faces
   only.
 
+**Amendment of 2026-10-16 (prompt 61, the build date): recirculated discharge.** A cooling fan
+returns the room air its intake drew, contaminated as the room is; a zero default concentration
+makes every fan a clean-air source and would bias operator exposure (M2) and removal (M3) in the
+tool's favour, which is the comparison the product exists to make. A `velocity_inlet` vent takes
+an optional `recirculate_from: <segment name>`, naming a `fixed_flow_outlet` vent on the same
+obstacle. The discharge's concentration of each class is then the flux-weighted mean, over the
+intake's faces, of the room cells each draws from, lagged one transport step: the mean is formed
+from the field the step starts from, the field the explicit advection of that step reads.
+`hepa_filtered` applies to it as to any inlet (the mean times one less the class's efficiency).
+Refused at load: the named segment missing, not a fixed-flow vent, on another obstacle, or with
+`concentration` also given. *Added 2026-10-16 (prompt 61b, review 61 S6):* a pair whose flows
+differ is refused too, at load on the configured extents (to `BALANCE_TOLERANCE`) and on the
+mesh on the faces each covers (to `MESH_BALANCE_TOLERANCE`), as the stated outlets' balance is: a
+discharge of more flow than its intake would carry the intake's concentration at the larger
+flow and create particles. The budget books the intake as outflow and the discharge as inflow,
+so the pair nets to zero when the two flows are equal and nothing is filtered: at every step,
+since both terms are formed from the same field, and so at steady state. Built in
+`boundary_concentration.py` (`Recirculation`, `ConcentrationFaces.recirculation`) and
+`solver_transport.py`; tested in `tests/test_solver_transport.py` (the pair's inflow equals its
+outflow over forty steps of a non-uniform field, and a uniform field stays uniform under the pair
+with no other source while a clean discharge empties the cells above it).
+
 **Validated at load (REQ-C02).** `obstacle` names an obstacle that exists; `face` is one of the
 four; the extent lies within the face's span and is not empty; the face does not lie on a domain
 edge (an obstacle standing on the floor has no bottom face to vent from) or against another
@@ -937,6 +969,52 @@ the budget's inflow at velocity times span times concentration; an exhaust's out
 as outflow and no vent face deposits; and every configuration without vents bitwise unchanged
 (the hashes of record). One product-grid measurement: the product room with a process exhaust
 on a tool's side and a cooling discharge on a tool's top converges under the stopping rule.
+
+**As built (step 0b, prompt 61, 2026-10-16): the departures from this section.** The section
+was built as written except where these say otherwise, each with its reason; the build and its
+measurements are `docs/reports/adr014_step0b.md`. *Departures 1, 3 and 4 ratified (orchestrator
+and Alex, 2026-10-16, review 61 S4) as amendments of the accepted section.*
+1. *No angled jet on a vent.* `u_velocity` and `v_velocity` are refused on a vent, where the
+   section kept their domain-edge meaning. Three layers read the tangential velocity on an
+   obstacle face as zero: the momentum wall stencil and its QUICK boundary form (the wall value
+   at the face), and the k-epsilon corner gradients (a face beside a SOLID cell reads zero at
+   the corner). Carrying a prescribed tangential value through each is a change to all three
+   that no test of this section and no product use needs. A vent is a normal jet or a normal
+   draw; an angled one is a later step's, with those three changes.
+2. *The tangential viscosity on a vent's span is the domain inlet's as built, not the molecular
+   one.* The section says the tangential component on a vent takes "the domain inlet's: the
+   prescribed tangential velocity with the molecular viscosity". A domain inlet's tangential
+   stencil takes the viscosity the stencil's face rule gives (`MomentumPredictor.
+   stencil_viscosity`: air's on the laminar path, `mu + rho nu_t` of the wall cell in the
+   coupled solve); only a wall face takes the wall function's. The vent takes exactly that: its
+   span leaves `TurbulenceBoundary.wall_faces`, so the stencil keeps its face-rule viscosity,
+   which is the molecular one on the laminar path. The section's first clause (the domain
+   inlet's) is what was built; its "molecular" holds on the laminar path only.
+3. *A closed box of stated flows loads.* The section's test names a closed box whose only
+   openings are a discharge and an exhaust of equal flow, which `config.py` refused: with no
+   pressure outlet it required a fixed-flow outlet that states no velocity. A file whose outlets
+   all state their velocities now loads when the stated outflow equals the configured inflow to
+   1e-9 relative, and `StaggeredBoundary` refuses it unless the faces balance to 1e-12 relative
+   (`MESH_BALANCE_TOLERANCE`), since the mesh may round two openings differently. Unbalanced,
+   both refusals stand as before.
+4. *Two refusals the section did not list.* A vent's extent key on the other axis (`y_start` on
+   a top vent) is refused, where a domain-edge segment ignores it: on a vent the slip would
+   silently move nothing. An `obstacle` that two obstacles share is refused: obstacle names were
+   never checked for uniqueness, and a vent must name one.
+5. *What the section left unsaid, decided here.* A discharge's velocity enters
+   `get_max_boundary_velocity`, the stopping rule's velocity scale, as an inlet's does (an
+   exhaust's does not), and its faces count as inlet faces in the k-epsilon solve's initial
+   state, weighted by their inflow. A vent face is first-order in the scalar scheme's
+   neighbourhood: the face itself carries the inflow value in and the room cell's value out, as
+   the section says, and the next face into the room reads its far-upstream node, inside the
+   obstacle, as the upstream value (the scheme's rule beside any obstacle, unchanged), where a
+   domain inlet's next face reads the inflow value as Leonard's boundary node.
+6. *Where the vents are found.* `Mesh.obstacle_mask` is the one rule that places an obstacle
+   (the classification reads it, cell for cell what it was), `staggered.obstacle_face_inputs`
+   finds an obstacle face's room faces from it, the registry's `coverage_on` gives them to the
+   vents and `boundary_staggered.vent_runs` is the derivation the velocity, turbulence and
+   concentration layers all read (REQ-S12.1). `boundary_concentration` now imports
+   `boundary_staggered` for it.
 
 ## Probes (committed before the runs; results after)
 
