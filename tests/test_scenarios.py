@@ -133,6 +133,39 @@ def _another(value: object) -> object:
     return f"{value}_other"
 
 
+# The join's equality clause compares every flow key but the extents.
+JOIN_KEYS: tuple[str, ...] = tuple(
+    k for k in FLOW_KEYS if k not in ("x_start", "x_end", "y_start", "y_end")
+)
+# Values that keep a piece's extent on the x axis, so a changed piece still
+# meets its neighbour end to start.
+_JOIN_OTHER: dict[str, str] = {
+    "type": "fixed_flow_outlet",
+    "location": "bottom",
+    "obstacle": "tool",
+    "face": "bottom",
+}
+
+
+def _join_other(key: str, value: object) -> object:
+    """Another value of ``key`` that leaves the extent's axis unchanged."""
+    return _JOIN_OTHER.get(key, _another(value))
+
+
+def _vent(obstacle: str, face: str, x_start: float, x_end: float) -> BoundarySpec:
+    return BoundarySpec(
+        type="velocity_inlet",
+        location="obstacle",
+        obstacle=obstacle,
+        face=face,
+        x_start=x_start,
+        x_end=x_end,
+        velocity=0.5,
+        turbulence_intensity=0.1,
+        dissipation_length=0.06,
+    )
+
+
 def _supply(x_start: float, x_end: float, velocity: float = 0.45) -> BoundarySpec:
     return BoundarySpec(
         type="velocity_inlet",
@@ -346,6 +379,56 @@ class TestFlowStates:
     ) -> None:
         whole = [_supply(0.5, 7.5)] + [p for p in pieces if p.type == "wall"]
         assert _fingerprint_of(*pieces) != _fingerprint_of(*whole)
+
+    @pytest.mark.parametrize("key", JOIN_KEYS)
+    def test_pieces_that_differ_in_one_flow_key_stay_apart(self, key: str) -> None:
+        """Review and test 62 B1: each key of the join's equality clause, alone.
+
+        The two pieces meet end to start on one axis and differ in ``key`` only,
+        so that key's comparison is the one thing that keeps them apart.
+        """
+        first = dataclasses.replace(_all_keys_segment(), x_start=0.5, x_end=1.0)
+        second = dataclasses.replace(
+            first,
+            x_start=1.0,
+            x_end=1.5,
+            **{key: _join_other(key, getattr(first, key))},
+        )
+        joined = dataclasses.replace(first, x_end=1.5)
+        assert len(flow_segments(_stand_in(first, second))) == 2
+        assert _fingerprint_of(first, second) != _fingerprint_of(joined)
+        # Control: equal in that key too, the same two pieces join.
+        same = dataclasses.replace(second, **{key: getattr(first, key)})
+        assert _fingerprint_of(first, same) == _fingerprint_of(joined)
+
+    @pytest.mark.parametrize(
+        ("first", "second", "joined"),
+        [
+            pytest.param(
+                _supply(0.5, 3.5),
+                dataclasses.replace(_supply(3.5, 7.5), location="bottom"),
+                _supply(0.5, 7.5),
+                id="two-edges",
+            ),
+            pytest.param(
+                _vent("rack", "top", 1.0, 1.5),
+                _vent("rack", "bottom", 1.5, 2.0),
+                _vent("rack", "top", 1.0, 2.0),
+                id="one-obstacle-two-faces",
+            ),
+            pytest.param(
+                _vent("rack", "top", 1.0, 1.5),
+                _vent("tool", "top", 1.5, 2.0),
+                _vent("rack", "top", 1.0, 2.0),
+                id="one-face-two-obstacles",
+            ),
+        ],
+    )
+    def test_pieces_on_two_edges_or_faces_stay_apart(
+        self, first: BoundarySpec, second: BoundarySpec, joined: BoundarySpec
+    ) -> None:
+        assert len(flow_segments(_stand_in(first, second))) == 2
+        assert _fingerprint_of(first, second) != _fingerprint_of(joined)
 
     @pytest.mark.parametrize("name", sorted(REFERENCE_STATES))
     def test_each_reference_scenario_gives_its_stated_number_of_states(

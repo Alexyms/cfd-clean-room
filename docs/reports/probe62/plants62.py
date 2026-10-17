@@ -182,6 +182,53 @@ PLANTS: list[tuple[str, str, str, str, list[str]]] = [
 ]
 
 
+# Prompt 62b (review and test 62 B1): each key of the join's equality clause
+# dropped alone, the test report's E4 pair, and the review's velocity-only
+# clause.
+_SAME = "    same = all(previous[k] == keys[k] for k in FLOW_KEYS if k not in _EXTENT_KEYS)\n"
+JOIN_CLAUSE_KEYS: tuple[str, ...] = (
+    "type",
+    "location",
+    "velocity",
+    "u_velocity",
+    "v_velocity",
+    "obstacle",
+    "face",
+    "turbulence_intensity",
+    "dissipation_length",
+)
+for _key in JOIN_CLAUSE_KEYS:
+    PLANTS.append(
+        (
+            f"join (62b): {_key} not compared",
+            SCENARIOS,
+            _SAME,
+            _SAME.replace("_EXTENT_KEYS)", f'_EXTENT_KEYS and k != "{_key}")'),
+            [TESTS_SCENARIOS],
+        )
+    )
+PLANTS.append(
+    (
+        "join (62b): obstacle and face not compared",
+        SCENARIOS,
+        _SAME,
+        _SAME.replace(
+            "_EXTENT_KEYS)", '_EXTENT_KEYS and k not in ("obstacle", "face"))'
+        ),
+        [TESTS_SCENARIOS],
+    )
+)
+PLANTS.append(
+    (
+        "join (62b): velocity alone compared",
+        SCENARIOS,
+        _SAME,
+        '    same = previous["velocity"] == keys["velocity"]\n',
+        [TESTS_SCENARIOS],
+    )
+)
+
+
 def replace_once(path: Path, old: str, new: str) -> None:
     """Replace ``old`` by ``new`` once, keeping the file's newlines."""
     text = path.read_text(encoding="utf-8", newline="")
