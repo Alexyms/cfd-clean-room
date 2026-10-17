@@ -310,7 +310,11 @@ class TestFrames:
     def test_a_frame_out_of_order_or_of_other_classes_is_refused(
         self, tmp_path: Path
     ) -> None:
-        """Defects caught: a restart's frames appended after the crash's; a class lost."""
+        """A frame out of order, of other classes or shapes, or a bad step or time.
+
+        Defects caught: a restart's frames appended after the crash's; a class
+        lost; a frame of another grid appended; a bool time stored as 1.0.
+        """
         run = RunFile(tmp_path / "run.h5")
         self._write(run)
         with pytest.raises(ValueError, match="not above the last frame's"):
@@ -321,6 +325,15 @@ class TestFrames:
             run.write_frame(15, 0.375, _fields(4, 3), [_budget(k) for k in range(3)])
         with pytest.raises(TypeError, match="step must be an int"):
             run.write_frame(True, 0.375, _fields(4), [_budget(1), _budget(2)])
+        with pytest.raises(TypeError, match="t must be a real number"):
+            run.write_frame(15, True, _fields(4), [_budget(1), _budget(2)])
+        wider = {k: np.zeros((3, 5)) for k in (0, 1)}
+        with pytest.raises(ValueError, match=r"has shape \(3, 5\) and the file's"):
+            run.write_frame(15, 0.375, wider, [_budget(1), _budget(2)])
+        flat = {k: np.zeros(12) for k in (0, 1)}
+        with pytest.raises(ValueError, match="must be 2-D"):
+            run.write_frame(15, 0.375, flat, [_budget(1), _budget(2)])
+        assert run.read_frames().steps.tolist() == [0, 5, 10]
 
     def test_sensor_readings_are_appended_and_read_back(self, tmp_path: Path) -> None:
         """Two batches come back as one series, bitwise.
@@ -449,7 +462,9 @@ class TestCheckpoints:
         self, tmp_path: Path
     ) -> None:
         """Defects caught: an empty checkpoint returned when none was written; a
-        FlowState written as a checkpoint; a march checkpoint without its flow key."""
+        FlowState written as a checkpoint; a march checkpoint without its flow
+        key, with a bool or None time, a flat field or a budget that is not one
+        (each refused before the checkpoint file is touched)."""
         run = RunFile(tmp_path / "run.h5")
         with pytest.raises(KeyError, match="no checkpoint was written"):
             run.read_checkpoint()
@@ -458,8 +473,19 @@ class TestCheckpoints:
             run.read_checkpoint()
         with pytest.raises(TypeError, match="checkpoint must be a SteadyCheckpoint"):
             run.write_steady_checkpoint(_steady(False).state, FINGERPRINT)  # type: ignore[arg-type]
+        budgets = [_budget(1), _budget(2)]
         with pytest.raises(ValueError, match="64 lowercase hexadecimal digits"):
-            run.checkpoint(1, 0.1, _fields(1), [_budget(1), _budget(2)], "")
+            run.checkpoint(1, 0.1, _fields(1), budgets, "")
+        with pytest.raises(TypeError, match="t must be a real number"):
+            run.checkpoint(1, None, _fields(1), budgets, FINGERPRINT)
+        with pytest.raises(ValueError, match="must be 2-D"):
+            run.checkpoint(
+                1, 0.1, {k: np.zeros(12) for k in (0, 1)}, budgets, FINGERPRINT
+            )
+        with pytest.raises(TypeError, match="must be a MassBudget"):
+            run.checkpoint(1, 0.1, _fields(1), [budgets[0], {}], FINGERPRINT)
+        with pytest.raises(KeyError, match="holds no /checkpoint/ group"):
+            run.read_checkpoint()
 
 
 # ---------------------------------------------------------------------------

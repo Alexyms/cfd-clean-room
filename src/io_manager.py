@@ -530,19 +530,17 @@ class RunFile:
         Raises
         ------
         TypeError
-            If ``step`` is not an int (a bool is not one here) or a budget
-            is not a MassBudget.
+            If ``step`` is not an int (a bool is not one here), ``t`` is not
+            a real number, or a budget is not a MassBudget.
         ValueError
-            If the classes are not 0 to n - 1 with one budget each, a field
-            is not 2-D, the classes or shapes differ from the first frame's,
-            or ``step`` is not above the last frame's.
+            If ``step`` is negative, the classes are not 0 to n - 1 with one
+            budget each, a field is not 2-D, the classes or shapes differ
+            from the first frame's, or ``step`` is not above the last frame's.
         """
         step = _step(step)
-        classes = _classes(fields, budgets)
-        arrays = {k: np.asarray(fields[k], dtype="<f8") for k in classes}
-        for k, array in arrays.items():
-            if array.ndim != 2:
-                raise ValueError(f"class {k}'s field must be 2-D, got {array.ndim}-D")
+        t = _real("t", t)
+        arrays = _class_fields(fields, budgets)
+        classes = list(arrays)
         row = np.array([_budget_row(b) for b in budgets], dtype="<f8")
         with h5py.File(self.path, "a") as run_file:
             group = run_file.require_group(TRANSPORT)
@@ -558,6 +556,12 @@ class RunFile:
                 raise ValueError(
                     f"the frame carries classes {classes} and the file's {stored}"
                 )
+            for k, array in arrays.items():
+                if group[f"C_{k}"].shape[1:] != array.shape:
+                    raise ValueError(
+                        f"class {k}'s field has shape {array.shape} and the file's "
+                        f"frames {group[f'C_{k}'].shape[1:]}"
+                    )
             steps = group["steps"]
             if steps.shape[0] and step <= int(steps[-1]):
                 raise ValueError(
@@ -747,15 +751,17 @@ class RunFile:
         Raises
         ------
         TypeError
-            If ``step`` is not an int or a budget not a MassBudget.
+            If ``step`` is not an int, ``t`` not a real number, or a budget
+            not a MassBudget.
         ValueError
             If ``step`` is negative, the classes are not 0 to n - 1 with
-            one budget each, or the fingerprint is not a SHA-256.
+            one budget each, a field is not 2-D, or the fingerprint is not a
+            SHA-256.
         """
         step = _step(step)
-        classes = _classes(fields, budgets)
+        t = _real("t", t)
+        arrays = _class_fields(fields, budgets)
         _check_fingerprint(fingerprint)
-        arrays = {k: np.asarray(fields[k], dtype="<f8") for k in classes}
         rows = np.array([_budget_row(b) for b in budgets], dtype="<f8")
 
         def write(group: h5py.Group) -> None:
@@ -1012,10 +1018,14 @@ def _step(step: object) -> int:
     return int(step)
 
 
-def _classes(
+def _class_fields(
     fields: Mapping[int, np.ndarray], budgets: Sequence[MassBudget]
-) -> list[int]:
-    """The class indices 0 to n - 1, one field and one budget each, or a refusal."""
+) -> dict[int, np.ndarray]:
+    """Each class's field as 2-D float64, classes 0 to n - 1 with a budget each.
+
+    Raises TypeError for a budget that is not a MassBudget and ValueError for
+    other classes or a field that is not 2-D.
+    """
     classes = sorted(fields)
     if classes != list(range(len(budgets))):
         raise ValueError(
@@ -1027,7 +1037,11 @@ def _classes(
             raise TypeError(
                 f"budget {k} must be a MassBudget, got {type(budget).__name__}"
             )
-    return classes
+    arrays = {k: np.asarray(fields[k], dtype="<f8") for k in classes}
+    for k, array in arrays.items():
+        if array.ndim != 2:
+            raise ValueError(f"class {k}'s field must be 2-D, got {array.ndim}-D")
+    return arrays
 
 
 def _budget_row(budget: MassBudget) -> list[float]:
