@@ -60,8 +60,8 @@ from validation.cases import case_path
 FIELDS = ("u", "v", "p", "k", "eps", "nu_t")
 
 
-def _channel(cap: int = 5000, interval: int | None = None) -> SimConfig:
-    """VAL-001's channel on 40x20 under its own error_estimate rule.
+def _channel_raw(cap: int = 5000, interval: int | None = None) -> dict:
+    """VAL-001's channel on 40x20 under its own error_estimate rule, as a mapping.
 
     INTERVAL, when given, is ``solver.checkpoint_interval``.
     """
@@ -70,12 +70,24 @@ def _channel(cap: int = 5000, interval: int | None = None) -> SimConfig:
     raw["solver"]["max_simple_iter"] = cap
     if interval is not None:
         raw["solver"]["checkpoint_interval"] = interval
-    return SimConfig.from_dict(raw)
+    return raw
+
+
+def _channel(cap: int = 5000, interval: int | None = None) -> SimConfig:
+    """``_channel_raw`` loaded."""
+    return SimConfig.from_dict(_channel_raw(cap, interval))
 
 
 def _product(
     cap: int = 5000, inlet: float | None = None, interval: int | None = None
 ) -> SimConfig:
+    """``_product_raw`` loaded."""
+    return SimConfig.from_dict(_product_raw(cap, inlet, interval))
+
+
+def _product_raw(
+    cap: int = 5000, inlet: float | None = None, interval: int | None = None
+) -> dict:
     """The product file on 40x15, its imbalance tolerance by the file's formula."""
     raw = yaml.safe_load(case_path("product").read_text(encoding="utf-8"))
     raw["domain"]["nx"], raw["domain"]["ny"] = 40, 15
@@ -88,7 +100,7 @@ def _product(
         raw["boundaries"]["hepa_supply"]["velocity"] = inlet
     if interval is not None:
         raw["solver"]["checkpoint_interval"] = interval
-    return SimConfig.from_dict(raw)
+    return raw
 
 
 def _cavity(rule: str, cap: int = 8, interval: int | None = None) -> SimConfig:
@@ -103,6 +115,7 @@ def _cavity(rule: str, cap: int = 8, interval: int | None = None) -> SimConfig:
 
 
 FIXTURES = {"channel": _channel, "product": _product}
+RAW_FIXTURES = {"channel": _channel_raw, "product": _product_raw}
 
 
 def _solver(config: SimConfig) -> StaggeredSolver:
