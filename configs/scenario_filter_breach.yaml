@@ -1,0 +1,71 @@
+# Reference scenario: a HEPA filter breach (ADR-014 B, decision 7)
+#
+# The default room (configs/clean_room_default.yaml, the room without vents,
+# Alex's decision of 2026-10-17) with one panel of the ceiling supply losing
+# its filtration for 60 s. The supply is replaced by three segments with the
+# supply's velocity and turbulence keys: a clean part, the breached panel
+# and a clean part. The velocity layer is unchanged, so the event is
+# transport-only and the run has one flow state (ADR-014 A's fingerprint).
+#
+# Each value is an assumption:
+# - The panel: x 3.5 to 4.1 m, 0.6 m, the short side of a 0.6 x 1.2 m
+#   (2 x 4 ft) fan filter unit, over the litho tool (x 3.2 to 4.5 m). Its
+#   ends sit on multiples of 0.05 m, cell faces of both product grids.
+# - The air reaching the room through it is unfiltered (hepa_filtered
+#   false) and carries the thresholds times 100 per class, ADR-014 B's
+#   proposed reference value: the thresholds are ISO 14644-1 Class 5, and
+#   the standard states no Class 8 limit at 0.1 and 0.3 um, so a class of
+#   the upstream air would leave two classes undefined; the factor is the
+#   clean-out's.
+# - The breach: from 10 s for 60 s, within ADR-014 A's "a breach lasting
+#   minutes" at the scale a run of this length can show; the room clears
+#   over the last 50 s.
+#
+# The run keys of the scenario's own (ADR-014 B): t_end 120 s, the Courant
+# number 0.4 (ADR-014 decision 2), a frame every 100 steps (about 0.36 s on
+# the L0 faces, T6 of docs/reports/probe59/tables59.md).
+
+scenario:
+  base: clean_room_default.yaml
+  events:
+    - name: panel_breach
+      start: 10.0
+      duration: 60.0
+      replace:
+        segment: hepa_supply
+        with:
+          - name: supply_west
+            type: velocity_inlet
+            location: top
+            x_start: 0.5
+            x_end: 3.5
+            velocity: 0.45
+            hepa_filtered: true
+            turbulence_intensity: 0.05
+            dissipation_length: 0.1
+          - name: breached_panel
+            type: velocity_inlet
+            location: top
+            x_start: 3.5
+            x_end: 4.1
+            velocity: 0.45
+            hepa_filtered: false
+            concentration: [1.0e+7, 1.02e+6, 3.52e+5, 8.32e+4, 2.93e+3]
+            turbulence_intensity: 0.05
+            dissipation_length: 0.1
+          - name: supply_east
+            type: velocity_inlet
+            location: top
+            x_start: 4.1
+            x_end: 7.5
+            velocity: 0.45
+            hepa_filtered: true
+            turbulence_intensity: 0.05
+            dissipation_length: 0.1
+
+solver:
+  t_end: 120.0
+  output_interval: 100
+
+transport:
+  cfl_number: 0.4

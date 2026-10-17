@@ -1,0 +1,63 @@
+# Reference scenario: the door opens (ADR-014 B, decisions 6 and 7)
+#
+# The default room (configs/clean_room_default.yaml, the room without vents,
+# Alex's decision of 2026-10-17) with its door open for 5 s. Under tier 1 the
+# open door is its steady extreme for the opening's duration (ADR-014
+# decision 2): two flow states, closed and open.
+#
+# The open doorway is ADR-014 decision 6's two-way exchange, the values of
+# prompt 59's probe (docs/reports/probe59/warm59.py, door_open), each an
+# assumption until a measurement sets it:
+# - corridor air enters over the lower half of the doorway (y 0 to 1.05 m,
+#   warm59.py DOOR_SPLIT) at 0.25 m/s (EXCHANGE_VELOCITY), carrying the
+#   supply's turbulence keys (5%, 0.1 m), as the probe did;
+# - room air leaves over the upper half (y 1.05 to 2.1 m) at the same
+#   0.25 m/s, so the doorway's net flow is zero (the offset of decision 6 is
+#   zero in the configured room) and every return keeps its closed-door
+#   share. 0.25 m/s over 1.05 m is 0.26 m^2/s per metre each way, just under
+#   the 0.27 to 0.53 that a 1.2 to 2.4 m^3 exchange per opening (Kalliomaki
+#   et al. 2015, ADR-014 source [6]) gives over an assumed 5 s opening of a
+#   0.9 m wide door.
+# - The opening: at 10 s for 5 s, that assumed 5 s.
+# - The corridor air carries the thresholds times 100 per class, the factor
+#   ADR-014 B proposes for the breach and the clean-out. The thresholds are
+#   ISO 14644-1 Class 5, and the class formula puts Class 7 a factor 100
+#   above Class 5 at every size: an assumed corridor two classes below the
+#   room.
+#
+# The run keys of the scenario's own (ADR-014 B): t_end 60 s, the Courant
+# number 0.4 (ADR-014 decision 2; T7 of docs/reports/probe59/tables59.md
+# gives its time error), and a frame every 100 steps, about 0.36 s on the
+# L0 faces at 0.4 (T6's 0.0009058 s step at 0.1, times four).
+
+scenario:
+  base: clean_room_default.yaml
+  events:
+    - name: door_open
+      start: 10.0
+      duration: 5.0
+      replace:
+        segment: door
+        with:
+          - name: door_in
+            type: velocity_inlet
+            location: left
+            y_start: 0.0
+            y_end: 1.05
+            velocity: 0.25
+            turbulence_intensity: 0.05
+            dissipation_length: 0.1
+            concentration: [1.0e+7, 1.02e+6, 3.52e+5, 8.32e+4, 2.93e+3]
+          - name: door_out
+            type: fixed_flow_outlet
+            location: left
+            y_start: 1.05
+            y_end: 2.1
+            velocity: 0.25
+
+solver:
+  t_end: 60.0
+  output_interval: 100
+
+transport:
+  cfl_number: 0.4

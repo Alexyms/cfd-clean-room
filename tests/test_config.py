@@ -1394,6 +1394,10 @@ class TestPressureKeys:
             "clean_room_l1_return3_closed.yaml": 1e-4,
             "clean_room_l2_left_supply.yaml": 1e-4,
             "clean_room_vents.yaml": 1e-4,
+            "scenario_clean_out.yaml": 1e-4,
+            "scenario_door_leak.yaml": 1e-4,
+            "scenario_equipment_dust.yaml": 1e-4,
+            "scenario_filter_breach.yaml": 1e-4,
             "validation_annex20.yaml": 1e-4,
             "validation_backstep.yaml": 1e-4,
             "validation_impinging_jet.yaml": 1e-4,
@@ -2565,3 +2569,856 @@ def test_a_recirculating_pair_of_unequal_flow_is_refused(tmp_path: Path) -> None
         r"from its intake 'fan_in''s 0\.45 m\^2/s",
     ):
         SimConfig.from_dict(raw)
+
+
+# ---------------------------------------------------------------------------
+# The scenario section (ADR-014 B, decision 7; step 1)
+# ---------------------------------------------------------------------------
+
+# A small room for the scenario rules: a supply, a door on the left wall with
+# a side wall above it, two returns that take the remainder, and a threshold
+# for every class so threshold_factor resolves.
+SCENARIO_BOUNDARIES = {
+    "hepa_supply": {
+        "type": "velocity_inlet",
+        "location": "top",
+        "x_start": 0.5,
+        "x_end": 3.5,
+        "velocity": 0.45,
+        "hepa_filtered": True,
+    },
+    "door": {"type": "wall", "location": "left", "y_start": 0.0, "y_end": 2.1},
+    "side_wall": {"type": "wall", "location": "left", "y_start": 2.1, "y_end": 3.0},
+    "return_a": {
+        "type": "fixed_flow_outlet",
+        "location": "bottom",
+        "x_start": 0.25,
+        "x_end": 0.75,
+    },
+    "return_b": {
+        "type": "fixed_flow_outlet",
+        "location": "bottom",
+        "x_start": 3.25,
+        "x_end": 3.75,
+    },
+}
+SCENARIO_THRESHOLDS = {
+    "0.1e-6": 1.0e5,
+    "0.3e-6": 1.02e4,
+    "0.5e-6": 3.52e3,
+    "1.0e-6": 8.32e2,
+    "5.0e-6": 2.93e1,
+}
+SCENARIO_TRANSPORT = {
+    "cfl_number": 0.1,
+    "max_diffusion_iter": 200,
+    "diffusion_tol": 1e-8,
+}
+DOOR_IN = {
+    "name": "door_in",
+    "type": "velocity_inlet",
+    "location": "left",
+    "y_start": 0.0,
+    "y_end": 1.05,
+    "velocity": 0.25,
+    "concentration": [1.0] * 5,
+}
+DOOR_OUT = {
+    "name": "door_out",
+    "type": "fixed_flow_outlet",
+    "location": "left",
+    "y_start": 1.05,
+    "y_end": 2.1,
+    "velocity": 0.25,
+}
+
+
+def _door_open(start: float = 10.0, duration: float = 5.0, **extra: object) -> dict:
+    """The door replaced by the two-way exchange (ADR-014 B) as an event."""
+    return {
+        "name": "door_open",
+        "start": start,
+        "duration": duration,
+        "replace": {"segment": "door", "with": [dict(DOOR_IN), dict(DOOR_OUT)]},
+        **extra,
+    }
+
+
+def _scenario_base(tmp_path: Path) -> dict:
+    """The scenario tests' base room as a mapping."""
+    with open(_write_config(tmp_path), encoding="utf-8") as handle:
+        base = yaml.safe_load(handle)
+    base["boundaries"] = {k: dict(v) for k, v in SCENARIO_BOUNDARIES.items()}
+    base["transport"] = dict(SCENARIO_TRANSPORT)
+    base["thresholds"] = dict(SCENARIO_THRESHOLDS)
+    return base
+
+
+def _scenario_raw(tmp_path: Path, events: list, base: dict | None = None) -> dict:
+    """A scenario mapping whose base, base.yaml, is written into tmp_path."""
+    if base is None:
+        base = _scenario_base(tmp_path)
+    (tmp_path / "base.yaml").write_text(
+        yaml.safe_dump(base, sort_keys=False), encoding="utf-8"
+    )
+    return {
+        "scenario": {"base": "base.yaml", "events": events},
+        "solver": {"t_end": 60.0, "output_interval": 10},
+        "transport": {"cfl_number": 0.4},
+    }
+
+
+def _load_scenario(tmp_path: Path, raw: dict) -> SimConfig:
+    return SimConfig.from_dict(raw, base_dir=tmp_path)
+
+
+def _refused_scenario(
+    tmp_path: Path,
+    raw: dict,
+    match: str,
+    error: type | tuple[type, ...] = ValueError,
+) -> None:
+    with pytest.raises(error, match=match):
+        _load_scenario(tmp_path, raw)
+
+
+@pytest.mark.unit
+class TestScenarioInheritance:
+    """The scenario file over its base (decision 7, REQ-C03)."""
+
+    def test_the_files_sections_merge_over_the_base(self, tmp_path: Path) -> None:
+        raw = _scenario_raw(tmp_path, [_door_open()])
+        raw["solver"]["t_end"] = 30.0
+        raw["sensors"] = [{"name": "door_side", "x": 0.5, "y": 1.0}]
+        config = _load_scenario(tmp_path, raw)
+        # The file's keys win; the base's other keys in the same section stay.
+        assert config.t_end == 30.0
+        assert config.max_simple_iter == 500
+        assert config.transport is not None
+        assert config.transport.cfl_number == 0.4
+        assert config.transport.max_diffusion_iter == 200
+        # A list replaces the base's whole.
+        assert [s.name for s in config.sensors] == ["door_side"]
+        assert config.boundaries["door"].type == "wall"
+        spec = config.scenario
+        assert spec is not None
+        assert spec.base_path == (tmp_path / "base.yaml").resolve()
+        assert spec.t_end == 30.0
+        assert spec.base["solver"]["t_end"] == 30.0
+        assert "scenario" not in spec.base
+
+    def test_a_configuration_without_the_section_has_no_scenario(
+        self, tmp_path: Path
+    ) -> None:
+        assert SimConfig(_write_config(tmp_path)).scenario is None
+
+    def test_the_merged_base_is_read_only(self, tmp_path: Path) -> None:
+        raw = _scenario_raw(tmp_path, [_door_open()])
+        spec = _load_scenario(tmp_path, raw).scenario
+        with pytest.raises(TypeError):
+            spec.base["solver"]["t_end"] = 1.0  # type: ignore[index]
+        copy = spec.mapping(())
+        copy["solver"]["t_end"] = 1.0
+        assert spec.base["solver"]["t_end"] == 60.0
+
+    def test_a_relative_base_is_read_from_the_files_directory(
+        self, tmp_path: Path
+    ) -> None:
+        raw = _scenario_raw(tmp_path, [])
+        path = tmp_path / "scenario.yaml"
+        path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+        assert SimConfig(path).scenario.base_path == (tmp_path / "base.yaml").resolve()
+
+    def test_a_relative_base_with_no_directory_is_refused(self, tmp_path: Path) -> None:
+        raw = _scenario_raw(tmp_path, [])
+        with pytest.raises(
+            ValueError, match=r"scenario\.base 'base\.yaml' is relative"
+        ):
+            SimConfig.from_dict(raw)
+
+    def test_a_missing_base_is_refused(self, tmp_path: Path) -> None:
+        raw = _scenario_raw(tmp_path, [])
+        raw["scenario"]["base"] = "absent.yaml"
+        _refused_scenario(tmp_path, raw, r"not found", FileNotFoundError)
+
+    def test_a_base_that_is_a_scenario_is_refused(self, tmp_path: Path) -> None:
+        raw = _scenario_raw(tmp_path, [])
+        (tmp_path / "middle.yaml").write_text(
+            yaml.safe_dump(raw, sort_keys=False), encoding="utf-8"
+        )
+        raw["scenario"]["base"] = "middle.yaml"
+        _refused_scenario(tmp_path, raw, r"'middle\.yaml' is itself a scenario")
+
+    def test_the_section_must_be_a_mapping(self, tmp_path: Path) -> None:
+        raw = _scenario_raw(tmp_path, [])
+        raw["scenario"] = ["base.yaml"]
+        _refused_scenario(tmp_path, raw, r"scenario must be a mapping")
+
+    def test_an_unknown_scenario_key_is_refused(self, tmp_path: Path) -> None:
+        raw = _scenario_raw(tmp_path, [])
+        raw["scenario"]["event"] = []
+        _refused_scenario(tmp_path, raw, r"scenario\.event is not a recognised")
+
+    def test_the_base_must_be_a_string(self, tmp_path: Path) -> None:
+        raw = _scenario_raw(tmp_path, [])
+        raw["scenario"]["base"] = 3
+        _refused_scenario(tmp_path, raw, r"scenario\.base must be a string", TypeError)
+
+    def test_events_are_required_and_a_list(self, tmp_path: Path) -> None:
+        raw = _scenario_raw(tmp_path, [])
+        del raw["scenario"]["events"]
+        _refused_scenario(tmp_path, raw, r"Missing required key: 'scenario\.events'")
+        raw["scenario"]["events"] = {"door_open": _door_open()}
+        _refused_scenario(tmp_path, raw, r"scenario\.events must be a list", TypeError)
+
+    @pytest.mark.parametrize(
+        ("section", "key"),
+        [
+            ("solver", "t_end"),
+            ("solver", "output_interval"),
+            ("transport", "cfl_number"),
+        ],
+    )
+    def test_each_run_key_is_stated_in_the_scenario_itself(
+        self, tmp_path: Path, section: str, key: str
+    ) -> None:
+        """The base states every one; inheriting it is still refused."""
+        raw = _scenario_raw(tmp_path, [])
+        del raw[section][key]
+        _refused_scenario(
+            tmp_path, raw, rf"Missing required key: '{section}\.{key}' in the scenario"
+        )
+
+
+@pytest.mark.unit
+class TestScenarioEvents:
+    """Every event's name, times and change (ADR-014 B), one test per rule."""
+
+    def test_an_event_must_be_a_mapping(self, tmp_path: Path) -> None:
+        raw = _scenario_raw(tmp_path, ["door_open"])
+        _refused_scenario(tmp_path, raw, r"scenario\.events\[0\] must be a mapping")
+
+    def test_an_unknown_event_key_is_refused(self, tmp_path: Path) -> None:
+        raw = _scenario_raw(tmp_path, [_door_open(end=15.0)])
+        _refused_scenario(tmp_path, raw, r"events\[0\]\.end is not a recognised event")
+
+    def test_the_name_is_a_non_empty_string(self, tmp_path: Path) -> None:
+        event = _door_open()
+        del event["name"]
+        raw = _scenario_raw(tmp_path, [event])
+        _refused_scenario(
+            tmp_path, raw, r"Missing required key: 'scenario\.events\[0\]\.name'"
+        )
+        raw = _scenario_raw(tmp_path, [_door_open(name=7)])
+        _refused_scenario(
+            tmp_path, raw, r"events\[0\]\.name must be a string", TypeError
+        )
+        raw = _scenario_raw(tmp_path, [_door_open(name="  ")])
+        _refused_scenario(tmp_path, raw, r"events\[0\]\.name must not be empty")
+
+    def test_two_events_of_one_name_are_refused(self, tmp_path: Path) -> None:
+        raw = _scenario_raw(tmp_path, [_door_open(), _door_open(start=30.0)])
+        _refused_scenario(tmp_path, raw, r"two events are named 'door_open'")
+
+    @pytest.mark.parametrize(
+        ("start", "error", "match"),
+        [
+            (None, ValueError, r"Missing required key: .*\.start'"),
+            (True, TypeError, r"\.start must be a number, got bool"),
+            ("10", TypeError, r"\.start must be a number, got str"),
+            (float("nan"), ValueError, r"\.start must be finite"),
+            (float("inf"), ValueError, r"\.start must be finite"),
+            (-1.0, ValueError, r"\.start must be non-negative"),
+        ],
+    )
+    def test_the_start_is_a_finite_non_negative_number(
+        self, tmp_path: Path, start: object, error: type, match: str
+    ) -> None:
+        event = _door_open()
+        if start is None:
+            del event["start"]
+        else:
+            event["start"] = start
+        _refused_scenario(tmp_path, _scenario_raw(tmp_path, [event]), match, error)
+
+    @pytest.mark.parametrize(
+        ("duration", "error", "match"),
+        [
+            (None, ValueError, r"Missing required key: .*\.duration'"),
+            (True, TypeError, r"\.duration must be a number, got bool"),
+            (float("nan"), ValueError, r"\.duration must be finite"),
+            (0.0, ValueError, r"\.duration must be positive"),
+            (-5.0, ValueError, r"\.duration must be positive"),
+        ],
+    )
+    def test_the_duration_is_a_finite_positive_number(
+        self, tmp_path: Path, duration: object, error: type, match: str
+    ) -> None:
+        event = _door_open()
+        if duration is None:
+            del event["duration"]
+        else:
+            event["duration"] = duration
+        _refused_scenario(tmp_path, _scenario_raw(tmp_path, [event]), match, error)
+
+    def test_an_event_ends_by_t_end(self, tmp_path: Path) -> None:
+        raw = _scenario_raw(tmp_path, [_door_open(start=50.0, duration=10.5)])
+        _refused_scenario(
+            tmp_path, raw, r"ends at 60\.5 s, after solver\.t_end \(60\.0 s\)"
+        )
+        # Ending exactly at t_end loads.
+        _load_scenario(tmp_path, _scenario_raw(tmp_path, [_door_open(50.0, 10.0)]))
+
+    def test_an_event_states_exactly_one_change(self, tmp_path: Path) -> None:
+        event = _door_open()
+        del event["replace"]
+        raw = _scenario_raw(tmp_path, [event])
+        _refused_scenario(tmp_path, raw, r"must state exactly one of .*got none")
+        two = _door_open(set={"segment": "hepa_supply", "keys": {"velocity": 0.5}})
+        raw = _scenario_raw(tmp_path, [two])
+        _refused_scenario(tmp_path, raw, r"exactly one of .*\['replace', 'set'\]")
+
+    def test_the_change_is_a_mapping(self, tmp_path: Path) -> None:
+        event = _door_open()
+        event["replace"] = ["door"]
+        raw = _scenario_raw(tmp_path, [event])
+        _refused_scenario(tmp_path, raw, r"'door_open'\)\.replace must be a mapping")
+
+    def test_two_events_on_one_segment_must_not_overlap(self, tmp_path: Path) -> None:
+        leak = {
+            "name": "seal_leak",
+            "start": 12.0,
+            "duration": 10.0,
+            "set": {"segment": "door", "keys": {"deposition_surface": "none"}},
+        }
+        raw = _scenario_raw(tmp_path, [_door_open(), leak])
+        _refused_scenario(
+            tmp_path,
+            raw,
+            r"'door_open' \[10\.0, 15\.0\) and 'seal_leak' \[12\.0, 22\.0\) both change "
+            r"segment 'door' and overlap",
+        )
+        # Meeting at an instant is not an overlap: the first has expired.
+        leak["start"] = 15.0
+        _load_scenario(tmp_path, _scenario_raw(tmp_path, [_door_open(), leak]))
+        # Events on two segments may overlap.
+        supply = {
+            "name": "supply_change",
+            "start": 12.0,
+            "duration": 10.0,
+            "set": {"segment": "hepa_supply", "keys": {"hepa_filtered": False}},
+        }
+        _load_scenario(tmp_path, _scenario_raw(tmp_path, [_door_open(), supply]))
+
+
+@pytest.mark.unit
+class TestScenarioReplace:
+    """A replace: the named base segment and its replacements (ADR-014 B)."""
+
+    def test_the_replacements_take_the_segments_place(self, tmp_path: Path) -> None:
+        config = _load_scenario(tmp_path, _scenario_raw(tmp_path, [_door_open()]))
+        spec = config.scenario
+        change = spec.events[0].change
+        assert change.segment == "door"
+        assert [name for name, _ in change.segments] == ["door_in", "door_out"]
+        mapping = spec.mapping(spec.active(10.0))
+        assert list(mapping["boundaries"]) == [
+            "hepa_supply",
+            "door_in",
+            "door_out",
+            "side_wall",
+            "return_a",
+            "return_b",
+        ]
+        assert "name" not in mapping["boundaries"]["door_in"]
+        assert mapping["boundaries"]["door_in"]["concentration"] == [1.0] * 5
+
+    def test_an_empty_replacement_removes_the_segment(self, tmp_path: Path) -> None:
+        """The amendment of 2026-10-17: the coverage rule's wall takes its faces."""
+        event = _door_open()
+        event["replace"]["with"] = []
+        spec = _load_scenario(tmp_path, _scenario_raw(tmp_path, [event])).scenario
+        assert spec.events[0].change.segments == ()
+        assert "door" not in spec.mapping(spec.active(10.0))["boundaries"]
+        assert "door" in spec.mapping(spec.active(15.0))["boundaries"]
+
+    def test_an_unknown_replace_key_is_refused(self, tmp_path: Path) -> None:
+        event = _door_open()
+        event["replace"]["by"] = []
+        raw = _scenario_raw(tmp_path, [event])
+        _refused_scenario(tmp_path, raw, r"replace\.by is not a recognised key")
+
+    def test_the_segment_names_a_segment_of_the_base(self, tmp_path: Path) -> None:
+        event = _door_open()
+        event["replace"]["segment"] = "window"
+        raw = _scenario_raw(tmp_path, [event])
+        _refused_scenario(
+            tmp_path, raw, r"segment names 'window', which is not a segment"
+        )
+        del event["replace"]["segment"]
+        _refused_scenario(tmp_path, raw, r"Missing required key: .*replace\.segment'")
+
+    def test_with_is_required_and_a_list(self, tmp_path: Path) -> None:
+        event = _door_open()
+        del event["replace"]["with"]
+        raw = _scenario_raw(tmp_path, [event])
+        _refused_scenario(tmp_path, raw, r"Missing required key: .*replace\.with'")
+        event["replace"]["with"] = dict(DOOR_IN)
+        _refused_scenario(tmp_path, raw, r"replace\.with must be a list", TypeError)
+
+    def test_each_replacement_is_a_named_mapping(self, tmp_path: Path) -> None:
+        event = _door_open()
+        event["replace"]["with"] = ["door_in"]
+        raw = _scenario_raw(tmp_path, [event])
+        _refused_scenario(tmp_path, raw, r"with\[0\] must be a mapping")
+        event["replace"]["with"] = [{k: v for k, v in DOOR_IN.items() if k != "name"}]
+        _refused_scenario(tmp_path, raw, r"Missing required key: .*with\[0\]\.name'")
+        event["replace"]["with"] = [{**DOOR_IN, "name": ""}]
+        _refused_scenario(tmp_path, raw, r"with\[0\]\.name must not be empty")
+
+    def test_a_replacement_may_not_take_another_segments_name(
+        self, tmp_path: Path
+    ) -> None:
+        event = _door_open()
+        event["replace"]["with"][0]["name"] = "side_wall"
+        raw = _scenario_raw(tmp_path, [event])
+        _refused_scenario(tmp_path, raw, r"'side_wall' is the name of another segment")
+        event["replace"]["with"][0]["name"] = "door_out"
+        _refused_scenario(tmp_path, raw, r"with\[1\]\.name 'door_out' is given twice")
+        # The replaced segment's own name may be reused.
+        event["replace"]["with"][0]["name"] = "door"
+        _load_scenario(tmp_path, raw)
+
+    def test_concurrent_replacements_of_one_name_are_refused(
+        self, tmp_path: Path
+    ) -> None:
+        moved = {
+            "name": "return_moved",
+            "start": 12.0,
+            "duration": 5.0,
+            "replace": {
+                "segment": "return_a",
+                "with": [
+                    {
+                        "name": "door_in",
+                        "type": "fixed_flow_outlet",
+                        "location": "bottom",
+                        "x_start": 0.25,
+                        "x_end": 0.75,
+                    }
+                ],
+            },
+        }
+        raw = _scenario_raw(tmp_path, [_door_open(), moved])
+        _refused_scenario(
+            tmp_path,
+            raw,
+            r"from 12\.0 s to 15\.0 s with \['door_open', 'return_moved'\] active does "
+            r"not load: .*'return_moved' names a segment 'door_in'",
+        )
+
+
+@pytest.mark.unit
+class TestScenarioSet:
+    """A set: keys of a named base segment changed in place (ADR-014 B)."""
+
+    def _breach(self, **keys: object) -> dict:
+        return {
+            "name": "breach",
+            "start": 5.0,
+            "duration": 20.0,
+            "set": {"segment": "hepa_supply", "keys": keys},
+        }
+
+    def test_the_keys_merge_over_the_segments(self, tmp_path: Path) -> None:
+        event = self._breach(hepa_filtered=False, concentration=[2.0] * 5)
+        spec = _load_scenario(tmp_path, _scenario_raw(tmp_path, [event])).scenario
+        supply = spec.mapping(spec.active(5.0))["boundaries"]["hepa_supply"]
+        assert supply["hepa_filtered"] is False
+        assert supply["concentration"] == [2.0] * 5
+        assert supply["velocity"] == 0.45
+        assert (
+            spec.mapping(spec.active(25.0))["boundaries"]["hepa_supply"]
+            == (SCENARIO_BOUNDARIES["hepa_supply"])
+        )
+
+    def test_an_unknown_set_key_is_refused(self, tmp_path: Path) -> None:
+        event = self._breach(hepa_filtered=False)
+        event["set"]["values"] = {}
+        raw = _scenario_raw(tmp_path, [event])
+        _refused_scenario(tmp_path, raw, r"set\.values is not a recognised key")
+
+    def test_the_segment_names_a_segment_of_the_base(self, tmp_path: Path) -> None:
+        event = self._breach(hepa_filtered=False)
+        event["set"]["segment"] = "supply"
+        raw = _scenario_raw(tmp_path, [event])
+        _refused_scenario(tmp_path, raw, r"segment names 'supply', which is not")
+
+    @pytest.mark.parametrize("keys", [None, {}, ["hepa_filtered"]])
+    def test_the_keys_are_a_non_empty_mapping(
+        self, tmp_path: Path, keys: object
+    ) -> None:
+        event = self._breach()
+        if keys is None:
+            del event["set"]["keys"]
+            match = r"Missing required key: .*set\.keys'"
+        else:
+            event["set"]["keys"] = keys
+            match = r"set\.keys must be a non-empty mapping"
+        _refused_scenario(tmp_path, _scenario_raw(tmp_path, [event]), match)
+
+    def test_an_unknown_segment_key_is_refused(self, tmp_path: Path) -> None:
+        raw = _scenario_raw(tmp_path, [self._breach(filtered=False)])
+        _refused_scenario(
+            tmp_path, raw, r"set\.keys\.filtered is not a recognised boundary"
+        )
+
+
+@pytest.mark.unit
+class TestScenarioSource:
+    """A source: a box and a rate or an emission per class (ADR-014 B)."""
+
+    def _dust(self, **body: object) -> dict:
+        source = {
+            "x_start": 2.5,
+            "x_end": 2.6,
+            "y_start": 1.0,
+            "y_end": 1.1,
+            "emission": [1.0e4] * 5,
+        }
+        source.update(body)
+        return {"name": "dust", "start": 10.0, "duration": 30.0, "source": source}
+
+    def test_a_source_loads(self, tmp_path: Path) -> None:
+        raw = _scenario_raw(tmp_path, [self._dust()])
+        spec = _load_scenario(tmp_path, raw).scenario
+        source = spec.events[0].change
+        assert (source.x_start, source.x_end, source.y_start, source.y_end) == (
+            2.5,
+            2.6,
+            1.0,
+            1.1,
+        )
+        assert source.emission == (1.0e4,) * 5
+        assert source.rate is None
+        # A source changes no boundary.
+        assert spec.mapping(spec.active(10.0)) == spec.mapping(())
+
+    def test_an_unknown_source_key_is_refused(self, tmp_path: Path) -> None:
+        raw = _scenario_raw(tmp_path, [self._dust(strength=1.0)])
+        _refused_scenario(tmp_path, raw, r"source\.strength is not a recognised key")
+
+    @pytest.mark.parametrize("key", ["x_start", "x_end", "y_start", "y_end"])
+    def test_each_box_key_is_a_finite_number(self, tmp_path: Path, key: str) -> None:
+        event = self._dust()
+        del event["source"][key]
+        raw = _scenario_raw(tmp_path, [event])
+        _refused_scenario(tmp_path, raw, rf"Missing required key: .*source\.{key}'")
+        event["source"][key] = True
+        _refused_scenario(tmp_path, raw, rf"source\.{key} must be a number", TypeError)
+        event["source"][key] = float("nan")
+        _refused_scenario(tmp_path, raw, rf"source\.{key} must be finite")
+
+    @pytest.mark.parametrize(
+        "box", [(2.6, 2.5, 1.0, 1.1), (2.5, 2.6, 1.1, 1.1)], ids=["x", "y"]
+    )
+    def test_an_empty_box_is_refused(
+        self, tmp_path: Path, box: tuple[float, ...]
+    ) -> None:
+        body = dict(zip(("x_start", "x_end", "y_start", "y_end"), box, strict=True))
+        raw = _scenario_raw(tmp_path, [self._dust(**body)])
+        _refused_scenario(tmp_path, raw, r"the box .* is empty")
+
+    @pytest.mark.parametrize(
+        "body", [{"x_start": -0.1}, {"x_end": 4.1}, {"y_start": -0.1}, {"y_end": 3.1}]
+    )
+    def test_a_box_outside_the_domain_is_refused(
+        self, tmp_path: Path, body: dict
+    ) -> None:
+        raw = _scenario_raw(tmp_path, [self._dust(**body)])
+        _refused_scenario(
+            tmp_path, raw, r"is outside the domain \[0, 4\.0\] x \[0, 3\.0\]"
+        )
+
+    def test_exactly_one_of_rate_and_emission(self, tmp_path: Path) -> None:
+        raw = _scenario_raw(tmp_path, [self._dust(rate=[1.0] * 5)])
+        _refused_scenario(
+            tmp_path, raw, r"exactly one of rate .*\['rate', 'emission'\]"
+        )
+        event = self._dust()
+        del event["source"]["emission"]
+        raw = _scenario_raw(tmp_path, [event])
+        _refused_scenario(tmp_path, raw, r"exactly one of rate .*got none")
+        event["source"]["rate"] = [3.0] * 5
+        rate = _load_scenario(tmp_path, raw).scenario.events[0].change.rate
+        assert rate == (3.0,) * 5
+
+    @pytest.mark.parametrize("key", ["rate", "emission"])
+    @pytest.mark.parametrize(
+        ("values", "error", "match"),
+        [
+            (1.0, TypeError, r" must be a list"),
+            ([1.0] * 4, ValueError, r" must have one value per particle class \(5\)"),
+            ([1.0] * 4 + [-1.0], ValueError, r"\[4\] must be non-negative"),
+            ([1.0] * 4 + [True], TypeError, r"\[4\] must be a number, got bool"),
+            ([1.0] * 4 + [float("nan")], ValueError, r"\[4\] must be finite"),
+        ],
+    )
+    def test_the_per_class_array(
+        self,
+        tmp_path: Path,
+        key: str,
+        values: object,
+        error: type,
+        match: str,
+    ) -> None:
+        event = self._dust()
+        del event["source"]["emission"]
+        event["source"][key] = values
+        raw = _scenario_raw(tmp_path, [event])
+        _refused_scenario(tmp_path, raw, rf"source\.{key}{match}", error)
+
+
+@pytest.mark.unit
+class TestScenarioInitial:
+    """An initial: the field at t = 0, uniform per class (ADR-014 B)."""
+
+    def _initial(self, **body: object) -> dict:
+        return {"name": "start_dirty", "start": 0.0, "initial": body}
+
+    def test_the_thresholds_times_a_factor(self, tmp_path: Path) -> None:
+        raw = _scenario_raw(tmp_path, [self._initial(threshold_factor=100.0)])
+        initial = _load_scenario(tmp_path, raw).scenario.events[0].change
+        assert initial.values == tuple(100.0 * v for v in SCENARIO_THRESHOLDS.values())
+        assert initial.threshold_factor == 100.0
+
+    def test_a_concentration_per_class(self, tmp_path: Path) -> None:
+        raw = _scenario_raw(tmp_path, [self._initial(concentration=[5.0] * 5)])
+        initial = _load_scenario(tmp_path, raw).scenario.events[0].change
+        assert initial.values == (5.0,) * 5
+        assert initial.threshold_factor is None
+
+    def test_an_initial_is_never_active(self, tmp_path: Path) -> None:
+        raw = _scenario_raw(tmp_path, [self._initial(threshold_factor=100.0)])
+        spec = _load_scenario(tmp_path, raw).scenario
+        assert spec.times() == (0.0, 60.0)
+        assert spec.active(0.0) == ()
+
+    def test_exactly_one_of_concentration_and_factor(self, tmp_path: Path) -> None:
+        raw = _scenario_raw(
+            tmp_path, [self._initial(concentration=[1.0] * 5, threshold_factor=2.0)]
+        )
+        _refused_scenario(tmp_path, raw, r"exactly one of concentration and threshold")
+        raw = _scenario_raw(tmp_path, [self._initial()])
+        _refused_scenario(tmp_path, raw, r"exactly one of concentration .*got none")
+
+    def test_an_unknown_initial_key_is_refused(self, tmp_path: Path) -> None:
+        raw = _scenario_raw(tmp_path, [self._initial(factor=100.0)])
+        _refused_scenario(tmp_path, raw, r"initial\.factor is not a recognised key")
+
+    @pytest.mark.parametrize(
+        ("factor", "error", "match"),
+        [
+            (0.0, ValueError, r"must be positive"),
+            (-1.0, ValueError, r"must be positive"),
+            (True, TypeError, r"must be a number, got bool"),
+            (float("inf"), ValueError, r"must be finite"),
+        ],
+    )
+    def test_the_factor_is_a_finite_positive_number(
+        self, tmp_path: Path, factor: object, error: type, match: str
+    ) -> None:
+        raw = _scenario_raw(tmp_path, [self._initial(threshold_factor=factor)])
+        _refused_scenario(tmp_path, raw, rf"threshold_factor {match}", error)
+
+    def test_the_factor_needs_a_threshold_for_every_class(self, tmp_path: Path) -> None:
+        base = _scenario_base(tmp_path)
+        del base["thresholds"]["0.3e-6"]
+        raw = _scenario_raw(tmp_path, [self._initial(threshold_factor=100.0)], base)
+        _refused_scenario(
+            tmp_path, raw, r"the class of diameter 3e-07 m has no threshold keys"
+        )
+
+    def test_the_concentration_per_class(self, tmp_path: Path) -> None:
+        raw = _scenario_raw(tmp_path, [self._initial(concentration=[1.0] * 6)])
+        _refused_scenario(
+            tmp_path, raw, r"concentration must have one value per particle"
+        )
+        raw = _scenario_raw(tmp_path, [self._initial(concentration=[1.0] * 4 + [-2.0])])
+        _refused_scenario(tmp_path, raw, r"concentration\[4\] must be non-negative")
+
+    def test_an_initial_starts_at_zero_with_no_duration(self, tmp_path: Path) -> None:
+        event = self._initial(threshold_factor=100.0)
+        event["start"] = 1.0
+        raw = _scenario_raw(tmp_path, [event])
+        _refused_scenario(tmp_path, raw, r"start must be 0 on an initial event")
+        event = self._initial(threshold_factor=100.0)
+        event["duration"] = 5.0
+        raw = _scenario_raw(tmp_path, [event])
+        _refused_scenario(tmp_path, raw, r"duration is not valid on an initial event")
+
+    def test_two_initials_are_refused(self, tmp_path: Path) -> None:
+        second = {**self._initial(concentration=[1.0] * 5), "name": "start_dusty"}
+        raw = _scenario_raw(tmp_path, [self._initial(threshold_factor=100.0), second])
+        _refused_scenario(tmp_path, raw, r"\['start_dirty', 'start_dusty'\] each set")
+
+
+@pytest.mark.unit
+class TestScenarioIntervalsLoad:
+    """Every interval's merged mapping loads as a file (ADR-014 B, REQ-C02)."""
+
+    def test_a_replacement_that_overlaps_a_neighbour_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        event = _door_open()
+        event["replace"]["with"][1]["y_end"] = 2.5
+        raw = _scenario_raw(tmp_path, [event])
+        _refused_scenario(
+            tmp_path,
+            raw,
+            r"from 10\.0 s to 15\.0 s with \['door_open'\] active does not load: "
+            r"boundaries\.door_out and boundaries\.side_wall overlap on the left edge",
+        )
+
+    def test_a_replacement_that_omits_a_required_key_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        event = _door_open()
+        del event["replace"]["with"][0]["velocity"]
+        raw = _scenario_raw(tmp_path, [event])
+        _refused_scenario(
+            tmp_path,
+            raw,
+            r"does not load: boundaries\.door_in: velocity_inlet requires",
+        )
+
+    def test_the_loaders_error_type_is_kept(self, tmp_path: Path) -> None:
+        event = _door_open()
+        event["replace"]["with"][0]["velocity"] = "fast"
+        raw = _scenario_raw(tmp_path, [event])
+        _refused_scenario(
+            tmp_path, raw, r"door_in\.velocity must be a number, got str", TypeError
+        )
+
+    def test_a_set_that_breaks_a_segment_rule_is_refused(self, tmp_path: Path) -> None:
+        event = {
+            "name": "dusty_door",
+            "start": 0.0,
+            "duration": 5.0,
+            "set": {"segment": "door", "keys": {"concentration": [1.0] * 5}},
+        }
+        raw = _scenario_raw(tmp_path, [event])
+        _refused_scenario(
+            tmp_path,
+            raw,
+            r"from 0\.0 s to 5\.0 s .*\.door\.concentration is only valid on a "
+            "velocity_inlet",
+        )
+
+    def test_a_fans_intake_and_discharge_stop_together(self, tmp_path: Path) -> None:
+        """A removed discharge leaves its intake an exhaust that no rule of a
+        file refuses; the scenario layer refuses the half-stopped fan."""
+        base = TestVents()._raw(
+            tmp_path,
+            fan_out={**DISCHARGE, "recirculate_from": "fan_in"},
+            fan_in=INTAKE,
+        )
+        base["transport"] = dict(SCENARIO_TRANSPORT)
+
+        def stop(segment: str, start: float = 10.0) -> dict:
+            return {
+                "name": f"{segment}_stops",
+                "start": start,
+                "duration": 5.0,
+                "replace": {"segment": segment, "with": []},
+            }
+
+        raw = _scenario_raw(tmp_path, [stop("fan_out")], base)
+        _refused_scenario(
+            tmp_path,
+            raw,
+            r"with \['fan_out_stops'\] active: the intake 'fan_in' still draws while "
+            r"no discharge returns it",
+        )
+        raw = _scenario_raw(tmp_path, [stop("fan_in")], base)
+        _refused_scenario(
+            tmp_path, raw, r"recirculate_from names 'fan_in', which is not a boundary"
+        )
+        raw = _scenario_raw(tmp_path, [stop("fan_out"), stop("fan_in")], base)
+        _load_scenario(tmp_path, raw)
+        # One a moment late leaves the half-stopped fan in an interval of its own.
+        raw = _scenario_raw(tmp_path, [stop("fan_out"), stop("fan_in", 10.5)], base)
+        _refused_scenario(tmp_path, raw, r"from 10\.0 s to 10\.5 s")
+
+
+REFERENCE_SCENARIOS = {
+    "scenario_door_leak.yaml": ("door_open", "replace"),
+    "scenario_filter_breach.yaml": ("panel_breach", "replace"),
+    "scenario_equipment_dust.yaml": ("litho_dust", "source"),
+    "scenario_clean_out.yaml": ("contaminated_start", "initial"),
+}
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("name", sorted(REFERENCE_SCENARIOS))
+def test_the_reference_scenarios_extend_the_default_room(name: str) -> None:
+    """ADR-014 B and Alex's decision of 2026-10-17: the room without vents,
+    unchanged; a scenario's own sections are its run keys."""
+    path = CONFIG_DIR / name
+    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert raw["scenario"]["base"] == "clean_room_default.yaml"
+    assert set(raw) == {"scenario", "solver", "transport"}
+    assert set(raw["solver"]) == {"t_end", "output_interval"}
+    assert raw["transport"] == {"cfl_number": 0.4}
+    config = SimConfig(path)
+    spec = config.scenario
+    assert spec.base_path == (CONFIG_DIR / "clean_room_default.yaml").resolve()
+    event_name, kind = REFERENCE_SCENARIOS[name]
+    assert [e.name for e in spec.events] == [event_name]
+    assert type(spec.events[0].change).__name__.lower() == kind
+    default = SimConfig(CONFIG_DIR / "clean_room_default.yaml")
+    assert (config.nx, config.ny) == (default.nx, default.ny)
+    assert config.boundaries == default.boundaries
+    assert config.transport.cfl_number == 0.4
+
+
+@pytest.mark.unit
+def test_the_reference_scenarios_state_their_sources_values() -> None:
+    """The door's values are warm59.py's; the dust source is ECR-002 step 8's S2."""
+    door = SimConfig(CONFIG_DIR / "scenario_door_leak.yaml").scenario
+    door_in, door_out = (dict(s) for _, s in door.events[0].change.segments)
+    assert (door_in["y_start"], door_in["y_end"], door_in["velocity"]) == (
+        0.0,
+        1.05,
+        0.25,
+    )
+    assert (door_out["y_start"], door_out["y_end"], door_out["velocity"]) == (
+        1.05,
+        2.1,
+        0.25,
+    )
+    assert (door_in["turbulence_intensity"], door_in["dissipation_length"]) == (
+        0.05,
+        0.1,
+    )
+    dust = SimConfig(CONFIG_DIR / "scenario_equipment_dust.yaml").scenario
+    source = dust.events[0].change
+    assert (source.x_start, source.x_end, source.y_start, source.y_end) == (
+        3.80,
+        3.90,
+        2.00,
+        2.10,
+    )
+    assert source.emission == (1.0e4,) * 5
+    clean = SimConfig(CONFIG_DIR / "scenario_clean_out.yaml")
+    hundredfold = tuple(100.0 * t for t in clean.class_thresholds())
+    assert clean.scenario.events[0].change.values == hundredfold
+    assert door_in["concentration"] == hundredfold
+    breach = SimConfig(CONFIG_DIR / "scenario_filter_breach.yaml").scenario
+    panel = dict(breach.events[0].change.segments[1][1])
+    assert (panel["x_start"], panel["x_end"], panel["hepa_filtered"]) == (
+        3.5,
+        4.1,
+        False,
+    )
+    assert panel["concentration"] == hundredfold
