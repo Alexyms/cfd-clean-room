@@ -74,15 +74,15 @@ PLANTS: list[tuple[str, str, str, str, list[str]]] = [
     (
         "overlap: check removed",
         CONFIG,
-        "                if a.start < b.end and b.start < a.end:\n",
+        "                if overlap > EVENT_TIME_RTOL * self.t_end:\n",
         "                if False:\n",
         [TESTS_CONFIG, TESTS_SCENARIOS],
     ),
     (
         "overlap: touching events refused",
         CONFIG,
-        "                if a.start < b.end and b.start < a.end:\n",
-        "                if a.start <= b.end and b.start <= a.end:\n",
+        "                if overlap > EVENT_TIME_RTOL * self.t_end:\n",
+        "                if overlap >= 0.0:\n",
         [TESTS_CONFIG],
     ),
     (
@@ -123,8 +123,8 @@ PLANTS: list[tuple[str, str, str, str, list[str]]] = [
     (
         "activation: active after the start and at the end",
         CONFIG,
-        "            if event.end is not None and event.start <= t < event.end\n",
-        "            if event.end is not None and event.start < t <= event.end\n",
+        "        return event.start - tolerance <= t < event.end - tolerance\n",
+        "        return event.start - tolerance < t <= event.end - tolerance\n",
         [TESTS_CONFIG, TESTS_SCENARIOS],
     ),
     (
@@ -147,8 +147,8 @@ PLANTS: list[tuple[str, str, str, str, list[str]]] = [
     (
         "t_end: an event ending at t_end refused",
         CONFIG,
-        "            if start + duration > self.t_end:\n",
-        "            if start + duration >= self.t_end:\n",
+        "            if start + duration - self.t_end > EVENT_TIME_RTOL * self.t_end:\n",
+        "            if start + duration - self.t_end >= 0.0:\n",
         [TESTS_CONFIG],
     ),
     (
