@@ -216,13 +216,13 @@ Generated. The responsibility and serves columns are editorial and come from `do
 | `src/particles.py` | 263 | Computes per-size-class transport properties: Cunningham correction, settling velocity, Brownian diffusion, deposition velocity and HEPA efficiency. | T03, T04, T09, T10 |
 | `src/pressure.py` | 856 | Assembles the staggered pressure correction equation from the momentum diagonals with the discrete divergence of u* as its right-hand side, solves it by conjugate gradients preconditioned with its diagonal or, under the pressure_preconditioner key, with one multigrid V-cycle per iteration, to a relative residual, a rounding floor or a reported iteration cap, corrects the face velocities and updates the pressure. | S04, S08 |
 | `src/scalar_scheme.py` | 548 | Holds the cell-centred scalar scheme the transport solver and the k-epsilon model share: QUICK's face value bounded by the UMIST limiter, the advective flux along one axis with the inflow value or the upwind cell at a domain face, and the backward Euler solve of diffusion with a non-negative cell sink by Jacobi or, for k and eps, by diagonal-preconditioned conjugate gradients that fall back to Jacobi on the cap or a non-positive value, on per-face conductances with one step or a step per cell, with an optional mask of cells held at their value. | S15, T12 |
-| `src/solver_staggered.py` | 874 | Runs steady SIMPLE on the staggered grid as one outer loop over the momentum predictor and the pressure correction, with the turbulence section one k and eps step and the relaxed eddy viscosity inside it, returning cell-centered fields through the harness's callback shape and exposing the final faces as FaceVelocities; stops by the velocity-step rule or, when configured, by the error-estimate rule. | S01, S02, S03, S04, S05, S07, S13, S14, S15 |
+| `src/solver_staggered.py` | 893 | Runs steady SIMPLE on the staggered grid as one outer loop over the momentum predictor and the pressure correction, with the turbulence section one k and eps step and the relaxed eddy viscosity inside it, returning cell-centered fields through the harness's callback shape and exposing the final faces as FaceVelocities; stops by the velocity-step rule or, when configured, by the error-estimate rule. | S01, S02, S03, S04, S05, S07, S13, S14, S15 |
 | `src/solver_transport.py` | 892 | Advances one particle class one explicit step on the staggered face velocities: QUICK's face value bounded by the UMIST limiter under forward Euler at a Courant number the configuration sets, implicit diffusion and deposition by Jacobi on per-face conductances, the Brownian coefficient plus nu_t / Sc_t on interior faces when handed an eddy viscosity field, the settling increment on interior faces, sources added and booked, SOLID cells zero; keeps one MassBudget per class and defines FieldHistory, the output contract for the animation. | N01, T01, T03, T04, T05, T06, T07, T08, T11, T12, T13 |
 | `src/staggered.py` | 324 | Defines the staggered (MAC) field layout: shapes and allocation of face-centered u and v and cell-centered p, the face-to-center averaging the solver applies before returning, and FaceVelocities, the read-only face pair the solver exposes and the transport solver advects with. | S07, S13 |
 | `src/stopping.py` | 408 | Decides when the steady outer iteration has converged, on four conditions: (a) the iteration error estimated from the step and its fitted geometric rate, over a physical velocity scale; (b) the worst per-cell mass imbalance against its own tolerance; (c) the summed imbalance over the through-flow, which shares the tolerance of (a); and (d) the signed imbalance summed over the domain, which shares the tolerance of (b); and with the turbulence model a fifth, (e), the same estimate on the eddy viscosity over the molecular viscosity plus the median eddy viscosity of the FLUID cells, which the solver passes each outer iteration. Also defines IterationState, the snapshot a solver hands its callback once per outer iteration. | S01, S04 |
 | `src/turbulence.py` | 1531 | Advances the k-epsilon model's k and eps one step on a prescribed face velocity field, standard or RNG with each variant's constants as module data: advection, explicit growth from the strain the faces give and implicit decay and diffusion through the shared scalar scheme, boundary values from a conditions object the caller builds each step, the kinematic eddy viscosity, and an assertion that k and eps are positive and finite after every step; and the scalable wall functions, which build those conditions, the wall viscosity of the momentum wall faces and the inlet values the coupled solve starts from. | S14, S15, S17 |
 
-Total 18 Python files, 10285 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
+Total 18 Python files, 10304 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
 
 `Declares it serves` is an EDITORIAL CLAIM read from `docs/system_map_annotations.toml`. It says which requirements a module is meant to satisfy, not that it does. Whether a requirement is met is answered by the tests named in the register's `Verified By` column.
 <!-- END GENERATED: components -->
@@ -247,7 +247,7 @@ Generated. Static import analysis cannot see a function bound into a registry by
 |---|---|
 | Scope | `src/**/*.py` |
 | Files hashed | 18 |
-| Digest | `sha256:8af322e0c2edd4d8e92fc5f7c4305f588d30deb03b7a2c2350fcc1d459c8908b` |
+| Digest | `sha256:75d7fdd0a5a4b6021b0fb84078f31032c992d8469be8bd671b2638324622d4bb` |
 
 This is what lets the document answer whether it is current, which is the one question a stale table cannot be asked. `python scripts/gen_system_map.py --check` recomputes the whole set of generated regions, this digest included, and exits non-zero on any disagreement.
 
@@ -786,11 +786,17 @@ StaggeredSolver:
             before any iteration for another grid's shapes, k and eps given to
             a laminar solve or absent from a coupled one, k or eps not positive
             in a non-SOLID cell, or (resume) nu_t negative in one
+        A solve whose fields went non-finite does not raise: it returns them
+            as every solve did before this step and leaves flow_state and
+            steady_checkpoint None, since a diverged state is neither a warm
+            start nor a resume point (a warning names it)
     flow_state: FlowState | None      # the last solve's faces (face_velocities'
         # arrays), p, k, eps, the relaxed nu_t, stop_reason and outer count;
-        # None before a solve completes
+        # None before a solve completes and after one whose fields are not
+        # finite, never an earlier solve's
     steady_checkpoint: SteadyCheckpoint | None   # the last solve's flow_state with
-        # residual_history, the rule's window, rule_version and pressure_cap_hits
+        # residual_history, the rule's window, rule_version and pressure_cap_hits;
+        # None as flow_state is
 FlowState(u, v, p, k=None, eps=None, nu_t=None, stop_reason=None, outer=0)
     # frozen; read-only C-contiguous float64 copies, finite; u [ny, nx+1],
     # v [ny+1, nx], p and k, eps, nu_t [ny, nx]; k, eps, nu_t all or none

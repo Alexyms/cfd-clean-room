@@ -66,8 +66,10 @@ but a continuation (ADR-014 D): the relaxed nu_t, the rule's window, the
 residual history, the cap hits and the outer count are those the
 checkpoint's solve held, so a solve stopped at its cap and resumed under a
 larger one reaches what one solve with that cap reaches, bit for bit. Every
-solve leaves ``flow_state`` and ``steady_checkpoint``; src/io_manager.py
-writes the second to a run file and reads it back.
+solve leaves ``flow_state`` and ``steady_checkpoint``, except one whose fields
+went non-finite: that solve returns them as it always did and leaves both
+None, since a diverged state is neither a warm start nor a resume point.
+src/io_manager.py writes the second to a run file and reads it back.
 
 ``stopping_rule`` picks the stop. ``velocity_step``, the default, is the
 collocated rule: the residual below ``convergence_tol``. ``error_estimate``
@@ -391,13 +393,14 @@ class StaggeredSolver:
     flow_state : FlowState or None
         The last solve's faces, pressure and, with the turbulence section,
         k, eps and the under-relaxed nu_t, with its stop reason and outer
-        count, converged or not; None before a solve completes. What
+        count, converged or not; None before a solve completes and after one
+        whose fields are not finite (never a stale earlier state). What
         ``solve_steady(initial=...)`` takes (ADR-014 A).
     steady_checkpoint : SteadyCheckpoint or None
         The last solve's state with its residual history, the rule's window
-        and its cap hits; None before a solve completes. A solve that
-        stopped at max_simple_iter continues from it with
-        ``solve_steady(resume=...)`` (ADR-014 D).
+        and its cap hits; None before a solve completes and after one whose
+        fields are not finite. A solve that stopped at max_simple_iter
+        continues from it with ``solve_steady(resume=...)`` (ADR-014 D).
 
     Raises
     ------
@@ -600,7 +603,9 @@ class StaggeredSolver:
         -------
         tuple[np.ndarray, np.ndarray, np.ndarray]
             (u, v, p) at cell centers, each shape [ny, nx], dtype float64,
-            C-contiguous.
+            C-contiguous. A solve whose fields went non-finite returns them
+            too, as before, and leaves ``flow_state`` and ``steady_checkpoint``
+            None.
 
         Raises
         ------
@@ -770,6 +775,20 @@ class StaggeredSolver:
         self.face_velocities = FaceVelocities.copy_of(u, v)
         self.turbulence_state = state
         p = np.ascontiguousarray(p)
+        # A diverged solve returns its fields as it always did, for the probe
+        # runners that classify a run by what comes back; FlowState refuses
+        # non-finite input, and a diverged state is no warm start or resume.
+        self.flow_state = self.steady_checkpoint = None
+        final = (
+            [u, v, p] if state is None else [u, v, p, state.k, state.eps, state.nu_t]
+        )
+        if not all(np.isfinite(field).all() for field in final):
+            logger.warning(
+                "Fields are not finite after %d outer iterations: no flow_state "
+                "or steady_checkpoint is kept",
+                len(self.residual_history),
+            )
+            return u_c, v_c, p
         self.flow_state = FlowState(
             u=self.face_velocities.u,
             v=self.face_velocities.v,

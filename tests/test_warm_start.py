@@ -23,7 +23,11 @@ docstring:
   against the solve, is refused before any iteration.
 - A solve cut at a cap and resumed reaches, bitwise, the uninterrupted
   solve: every field, the residual history, the stop and its iteration.
+- A solve whose fields went non-finite returns them and keeps no state: its
+  flow_state and steady_checkpoint are None, not the previous solve's.
 """
+
+from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -31,8 +35,10 @@ import yaml
 
 import src.solver_staggered as solver_module
 from src.boundary_staggered import StaggeredBoundary
-from src.config import SimConfig
+from src.config import ERROR_ESTIMATE, VELOCITY_STEP, SimConfig
 from src.mesh import Mesh
+from src.momentum import MomentumPrediction
+from src.pressure import PressureCorrection
 from src.solver_staggered import (
     CAP_STOP,
     FlowState,
@@ -65,6 +71,15 @@ def _product(cap: int = 5000, inlet: float | None = None) -> SimConfig:
     raw["solver"]["max_simple_iter"] = cap
     if inlet is not None:
         raw["boundaries"]["hepa_supply"]["velocity"] = inlet
+    return SimConfig.from_dict(raw)
+
+
+def _cavity(rule: str, cap: int = 8) -> SimConfig:
+    """VAL-002's cavity on 6x6 under either stopping rule, a few outer iterations."""
+    raw = yaml.safe_load(case_path("cavity").read_text(encoding="utf-8"))
+    raw["domain"]["nx"], raw["domain"]["ny"] = 6, 6
+    raw["solver"]["max_simple_iter"] = cap
+    raw["solver"]["stopping_rule"] = rule
     return SimConfig.from_dict(raw)
 
 
@@ -171,6 +186,52 @@ class TestFlowState:
                         == getattr(turbulence, name).tobytes()
                     )
         assert _solver(_channel()).flow_state is None
+
+
+@pytest.mark.integration
+class TestTheSolveState:
+    @pytest.mark.parametrize("rule", [ERROR_ESTIMATE, VELOCITY_STEP])
+    @pytest.mark.parametrize("poisoned", ["u", "v", "p"])
+    def test_a_solve_whose_fields_went_non_finite_keeps_no_state(
+        self, rule: str, poisoned: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A diverged solve returns its fields and leaves no flow state or checkpoint.
+
+        The corrector returns NaN in one field on the last outer iteration, as
+        a run does that diverged before its cap. A finite solve ran first, so
+        None afterwards is not an earlier solve's state, and a finite solve
+        after it leaves both again. Defects caught: the finiteness guard
+        removed (FlowState raises after the loop and the earlier state stays
+        beside the new faces); p missing from the fields the guard reads.
+        """
+        config = _cavity(rule)
+        solver = _solver(config)
+        solver.solve_steady()
+        assert solver.flow_state is not None and solver.steady_checkpoint is not None
+
+        correct = solver._corrector.correct
+        calls: list[int] = []
+
+        def corrected_to_nan(
+            prediction: MomentumPrediction, p: np.ndarray
+        ) -> PressureCorrection:
+            out = correct(prediction, p)
+            calls.append(1)
+            if len(calls) < config.max_simple_iter:
+                return out
+            return replace(
+                out, **{poisoned: np.full_like(getattr(out, poisoned), np.nan)}
+            )
+
+        monkeypatch.setattr(solver._corrector, "correct", corrected_to_nan)
+        u, v, p = solver.solve_steady()
+        assert np.isnan(dict(u=u, v=v, p=p)[poisoned]).all()
+        assert len(solver.residual_history) == config.max_simple_iter
+        assert solver.flow_state is None and solver.steady_checkpoint is None
+
+        monkeypatch.undo()
+        solver.solve_steady()
+        assert solver.flow_state is not None and solver.steady_checkpoint is not None
 
 
 @pytest.mark.integration
