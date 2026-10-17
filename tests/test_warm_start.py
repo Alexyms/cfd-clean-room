@@ -180,28 +180,6 @@ class TestFlowState:
         with pytest.raises(error, match=match):
             FlowState(**(self._arrays() | change))
 
-    def test_a_solve_leaves_its_state(self, converged: dict) -> None:
-        """flow_state is the faces, pressure and k, eps, nu_t the solver exposes.
-
-        Defects caught: the flow state built from the pre-correction faces;
-        the inlet-uniform k in place of the solve's; the outer count off by one.
-        """
-        for solver in converged.values():
-            state = solver.flow_state
-            assert state.u.tobytes() == solver.face_velocities.u.tobytes()
-            assert state.v.tobytes() == solver.face_velocities.v.tobytes()
-            assert state.stop_reason == solver.stop_reason
-            assert state.outer == len(solver.residual_history)
-            turbulence = solver.turbulence_state
-            assert state.turbulent == (turbulence is not None)
-            if turbulence is not None:
-                for name in ("k", "eps", "nu_t"):
-                    assert (
-                        getattr(state, name).tobytes()
-                        == getattr(turbulence, name).tobytes()
-                    )
-        assert _solver(_channel()).flow_state is None
-
 
 @pytest.mark.unit
 class TestSteadyCheckpoint:
@@ -257,6 +235,28 @@ class TestSteadyCheckpoint:
 
 @pytest.mark.integration
 class TestTheSolveState:
+    def test_a_solve_leaves_its_state(self, converged: dict) -> None:
+        """flow_state is the faces, pressure and k, eps, nu_t the solver exposes.
+
+        Defects caught: the flow state built from the pre-correction faces;
+        the inlet-uniform k in place of the solve's; the outer count off by one.
+        """
+        for solver in converged.values():
+            state = solver.flow_state
+            assert state.u.tobytes() == solver.face_velocities.u.tobytes()
+            assert state.v.tobytes() == solver.face_velocities.v.tobytes()
+            assert state.stop_reason == solver.stop_reason
+            assert state.outer == len(solver.residual_history)
+            turbulence = solver.turbulence_state
+            assert state.turbulent == (turbulence is not None)
+            if turbulence is not None:
+                for name in ("k", "eps", "nu_t"):
+                    assert (
+                        getattr(state, name).tobytes()
+                        == getattr(turbulence, name).tobytes()
+                    )
+        assert _solver(_channel()).flow_state is None
+
     @pytest.mark.parametrize("rule", [ERROR_ESTIMATE, VELOCITY_STEP])
     @pytest.mark.parametrize("poisoned", ["u", "v", "p"])
     def test_a_solve_whose_fields_went_non_finite_keeps_no_state(
