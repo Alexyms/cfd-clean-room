@@ -32,6 +32,7 @@ from src.turbulence import (
     Y_STAR_FLOOR,
     KEpsilonModel,
     TurbulenceBoundary,
+    TurbulenceConditions,
     inflow_values,
     log_law_floor,
     wall_viscosity,
@@ -932,3 +933,25 @@ class TestVents:
         assert plain.pseudo_time_step(faces)[4, 7] == pytest.approx(
             cfl / (0.1 / 0.125), rel=1e-15
         )
+
+
+@pytest.mark.unit
+def test_no_diffusion_crosses_a_vent_face_into_the_obstacle() -> None:
+    """ADR-014 J: the vent carries air, not k; the SOLID cell's zero is not a neighbour.
+
+    k and eps uniform, the air still, nothing held, one true-time step of
+    one second: every cell only decays, by the same factor, so the cell above
+    the discharge ends where a cell far from the box ends. A conductance
+    across the vent face would drain it toward the SOLID cell's zero.
+    """
+    config = vent_config({"discharge": DISCHARGE}, turbulence=True)
+    mesh = Mesh(config)
+    model = KEpsilonModel(mesh, config)
+    state = model.initial(1.0e-3, 1.0e-4)
+    faces = FaceVelocities.copy_of(np.zeros(u_shape(mesh)), np.zeros(v_shape(mesh)))
+    conditions = TurbulenceConditions.uniform(mesh, 1.0e-3, 1.0e-4)
+    step = model.step(state, faces, conditions, 1.0)
+    far = step.k[6, 3]
+    assert step.k[4, 7] == pytest.approx(far, rel=1e-9)
+    assert step.k[4, 8] == pytest.approx(far, rel=1e-9)
+    assert step.eps[4, 7] == pytest.approx(step.eps[6, 3], rel=1e-9)
