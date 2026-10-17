@@ -607,6 +607,15 @@ detection latency is for the other three scenarios.
   a `SteadyCheckpoint` that carries the relaxed nu_t, the rule's window, the residual history,
   the cap hits and the outer count, and keeps `initial=` as section A's warm start. The group
   holds the checkpoint whole (`docs/reports/adr014_step0.md`, section 7).
+  *Note for step 3 (review 60, prompt 60b, 2026-10-16):* two things step 3 builds on top of
+  step 0's `write_steady_checkpoint` and `solve_steady(resume=)`. (1) The rewrite must be
+  crash-safe: step 0 deletes the old group and then writes the new one, so a process killed in
+  between leaves no checkpoint or a partial one, which is the loss the periodic rewrite is
+  there to prevent. Step 3 writes the new group under a temporary name and swaps it in, and
+  never deletes first. (2) A resume should refuse a changed `eddy_viscosity=` argument, as it
+  refuses a changed grid: the laminar solve's prescribed field is an input of the solve that no
+  checkpoint carries and no configuration hash covers, so a resume under another field is not a
+  continuation.
 
 **Restart.** `time_integration.run(config, restart=path)`: the configuration hash must match the
 file's, the flow states in the file are reused, the march resumes from the checkpoint's step
