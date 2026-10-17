@@ -996,7 +996,7 @@ class TestVentOrientations:
         assert np.argwhere(changed_v).tolist() == [[4, 11], [4, 14], [5, 11], [5, 14]]
 
     def test_the_inflow_takes_each_discharge_and_each_exhausts_room_cell(self) -> None:
-        """An exhaust reads the cell its flux leaves: below the bottom, above the top."""
+        """An exhaust reads the cell its flux leaves: below a bottom, above a top."""
         mesh, model, vented = self._walls(SHELF_VENTS)
         live = mesh.cell_type != SOLID
         index = np.arange(mesh.cell_type.size, dtype=np.float64).reshape(

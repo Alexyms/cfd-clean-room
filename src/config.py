@@ -284,9 +284,15 @@ VENT_TYPES: tuple[str, ...] = ("velocity_inlet", "fixed_flow_outlet")
 _VENT_KEYS: tuple[str, ...] = ("obstacle", "face", "recirculate_from")
 # The relative difference between the configured inflow and the stated
 # outflow below which a room with no outlet to take a remainder is read as
-# balanced. Far above the rounding of a product of two configured numbers
-# and far below any imbalance a configuration means.
+# balanced, and a recirculating pair's two flows as equal. Far above the
+# rounding of a product of two configured numbers and far below any imbalance
+# a configuration means.
 BALANCE_TOLERANCE = 1.0e-9
+# The same rule on the mesh's faces (boundary_staggered.py), which the solver
+# runs: the rounding of two face sums, not a tolerance a case chooses. It is
+# the stricter of the two, so the configured one never admits a room the
+# solver would run unbalanced (review 61 S3 co-located them).
+MESH_BALANCE_TOLERANCE = 1.0e-12
 
 # Stopping rules the solver block may name (src/stopping.py). velocity_step is
 # the default, the rule every stored result was produced under.
@@ -1146,12 +1152,17 @@ class SimConfig:
                 self._check_recirculation(name, spec)
 
     def _check_recirculation(self, name: str, spec: BoundarySpec) -> None:
-        """Raise unless a discharge's recirculate_from names an exhaust vent on its obstacle."""
+        """Raise unless recirculate_from names its own tool's balanced exhaust.
+
+        The named segment is a fixed-flow vent on the discharge's obstacle,
+        and its configured flow is the discharge's.
+        """
         ctx = f"boundaries.{name}.recirculate_from"
         source = self.boundaries.get(spec.recirculate_from or "")
         if source is None:
             raise ValueError(
-                f"{ctx} names '{spec.recirculate_from}', which is not a boundary segment"
+                f"{ctx} names '{spec.recirculate_from}', which is not a boundary "
+                "segment"
             )
         if source.type != "fixed_flow_outlet" or source.location != OBSTACLE_LOCATION:
             raise ValueError(
@@ -1161,9 +1172,9 @@ class SimConfig:
             )
         if source.obstacle != spec.obstacle:
             raise ValueError(
-                f"{ctx} names '{spec.recirculate_from}', a vent on '{source.obstacle}', "
-                f"not on '{spec.obstacle}': a discharge returns what its own tool "
-                "draws in"
+                f"{ctx} names '{spec.recirculate_from}', a vent on "
+                f"'{source.obstacle}', not on '{spec.obstacle}': a discharge returns "
+                "what its own tool draws in"
             )
         # A discharge of more flow than its intake would carry the intake's
         # concentration at the larger flow and create particles (review 61 S6).
@@ -1180,7 +1191,7 @@ class SimConfig:
 
     @staticmethod
     def _face_span(obs: ObstacleSpec, face: str | None) -> tuple[float, float]:
-        """The span of an obstacle face along it: x for top and bottom, y for the sides."""
+        """An obstacle face's span along it: x on the top or bottom, y on a side."""
         if face in ("top", "bottom"):
             return obs.x_start, obs.x_end
         return obs.y_start, obs.y_end
@@ -1199,7 +1210,7 @@ class SimConfig:
     def _stands_against(
         cls, obs: ObstacleSpec, spec: BoundarySpec, other: ObstacleSpec
     ) -> bool:
-        """Whether ``other`` fills the space just outside the vent's face along its extent.
+        """Whether ``other`` fills the space just outside the vent's face on its extent.
 
         It does when it reaches across the face's plane on the room's side
         and its span along the face meets the vent's extent in more than a

@@ -28,9 +28,10 @@
 # Every vent end sits on a multiple of 0.05 m, so on the 320x120 grid (and on
 # 160x60) each vent covers whole cell faces and the rack's discharge and
 # intake balance on the mesh exactly. The returns that state no velocity
-# share what the supply and the discharge leave after the hood and the three
-# vent outlets: 3.15 + 0.30 - 0.45 - 0.30 - 0.10 = 2.60 m^2/s per metre,
-# against 2.70 in the default room.
+# share what the supply and the discharge bring in less the hood and the two
+# vent outlets (the rack's intake and the etch exhaust):
+# 3.15 + 0.30 - 0.45 - 0.30 - 0.10 = 2.60 m^2/s per metre, against 2.70 in
+# the default room.
 
 domain:
   width: 8.0        # room width, meters

@@ -86,7 +86,7 @@ from src.boundary_registry import (
     EdgeCoverage,
     fixed_flow_condition,
 )
-from src.config import BoundarySpec, SimConfig
+from src.config import MESH_BALANCE_TOLERANCE, BoundarySpec, SimConfig
 from src.mesh import Mesh
 from src.staggered import (
     ROOM_EDGE_OF_FACE,
@@ -106,12 +106,6 @@ _INWARD_SIGN: dict[str, float] = {
 }
 
 
-# The relative difference between the inflow and the stated outflow on the
-# mesh's faces below which a room no outlet balances is read as balanced: the
-# rounding of two face sums, not a tolerance a case chooses.
-MESH_BALANCE_TOLERANCE = 1.0e-12
-
-
 @dataclass(frozen=True, eq=False)
 class VentRun:
     """The mesh faces one vent segment covers (ADR-014 J).
@@ -129,7 +123,8 @@ class VentRun:
         "v" on a top or bottom face, "u" on a side.
     rows, cols : np.ndarray
         int64, the vent's faces in its component's array, in order along
-        the face.
+        the face. Read-only, as every array here: the velocity, turbulence
+        and concentration layers share one run.
     widths : np.ndarray
         Each face's width, metres.
     condition : EdgeCondition
@@ -255,18 +250,23 @@ def vent_runs(
             )
         mine_corner = np.array([point.name == name for point in corners], dtype=bool)
         condition = coverage[int(np.argmax(mine))].condition
+        arrays = {
+            "rows": inputs.rows[mine],
+            "cols": inputs.cols[mine],
+            "widths": inputs.widths[mine],
+            "corner_rows": inputs.corner_rows[mine_corner],
+            "corner_cols": inputs.corner_cols[mine_corner],
+        }
+        for array in arrays.values():
+            array.flags.writeable = False
         runs.append(
             VentRun(
                 name=name,
                 spec=spec,
                 edge=ROOM_EDGE_OF_FACE[spec.face],
                 component=inputs.component,
-                rows=inputs.rows[mine],
-                cols=inputs.cols[mine],
-                widths=inputs.widths[mine],
                 condition=condition,
-                corner_rows=inputs.corner_rows[mine_corner],
-                corner_cols=inputs.corner_cols[mine_corner],
+                **arrays,
             )
         )
     _check_recirculated_flows(runs)
@@ -588,7 +588,7 @@ class StaggeredBoundary:
     def _check_stated_balance(
         self, resolved: dict[str, float], lengths: dict[str, float]
     ) -> None:
-        """Raise unless stated outlets with no pressure outlet balance the inflow on the mesh.
+        """Raise unless stated outlets, with no pressure outlet, balance on the mesh.
 
         Load accepted the file on the configured extents (config.py); here
         the faces decide, since the mesh may round two openings differently.
@@ -790,7 +790,8 @@ class StaggeredBoundary:
         -------
         list[VentRun]
             ``vent_runs(mesh, config, registry)`` as built once here; empty
-            without vents. A copy of the list.
+            without vents. A copy of the list; the runs' arrays are
+            read-only, so every caller shares them safely.
         """
         return list(self._vents)
 

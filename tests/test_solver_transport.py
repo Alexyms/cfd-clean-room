@@ -1787,7 +1787,7 @@ def _vent_faces_only(mesh: Mesh, config: SimConfig) -> FaceVelocities:
 def _closed_box_faces(
     vents: dict,
 ) -> tuple[Mesh, SimConfig, FaceVelocities, np.ndarray]:
-    """The converged faces of a box whose only openings are the vents, and their imbalance.
+    """The converged faces of a box the vents alone open, and their imbalance.
 
     Air 55 times as viscous, as tests/test_solver_staggered.py's vent solves.
     """
@@ -1813,9 +1813,13 @@ def _closed_box_faces(
     return mesh, config, faces, imbalance
 
 
-@pytest.mark.unit
+@pytest.mark.integration
 class TestVents:
-    """The vents in the transport step and its budget (ADR-014 J, step 0b)."""
+    """The vents in the transport step and its budget (ADR-014 J, step 0b).
+
+    Integration: the recirculation tests feed a converged StaggeredSolver's
+    faces to the transport solver (review 61 S7).
+    """
 
     def test_a_discharge_enters_the_inflow_at_velocity_span_and_concentration(
         self,
@@ -1908,7 +1912,7 @@ class TestVents:
         physics = ParticlePhysics(config)
         live = mesh.cell_type != SOLID
 
-        def march(discharge: dict) -> np.ndarray:
+        def march(discharge: dict) -> tuple[np.ndarray, float]:
             cfg = vent_config(
                 {"discharge": discharge, "intake": INTAKE}, supply=False, returns=False
             )
@@ -1969,7 +1973,7 @@ def test_the_budget_books_every_vent_orientation_in_and_out() -> None:
 
 
 def _stretched_pair() -> tuple[Mesh, SimConfig, FaceVelocities, np.ndarray]:
-    """A closed box whose only openings are a recirculating pair, on a stretched mesh.
+    """A box a recirculating pair alone opens, on a stretched mesh.
 
     The y axis is clustered at both walls (ratio 1.3), so the intake on the
     box's left face spans rows of different heights and its faces carry

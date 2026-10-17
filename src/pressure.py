@@ -28,10 +28,11 @@ Where the boundary conditions go. A face is correctable when the momentum
 predictor gave it a diagonal (``a_p > 0``): the interior faces of FLUID
 cells. Walls, velocity inlets and faces of SOLID cells carry a fixed
 velocity, so they contribute no coefficient and their u* flux simply
-stays in b. An equipment vent's face (ADR-014 J) is a face of a SOLID cell
-holding the vent's velocity: no coefficient crosses it, as at a domain
-inlet, and its flux enters b and ``mass_imbalance`` as stored. That absence is the homogeneous Neumann condition; no wall
-pressure condition is written. A pressure outlet fixes ``p' = 0`` at the
+stays in b. That absence is the homogeneous Neumann condition; no wall
+pressure condition is written. An equipment vent's face (ADR-014 J) is a
+face of a SOLID cell holding the vent's velocity: no coefficient crosses
+it, as at a domain inlet, and its flux enters b and ``mass_imbalance`` as
+stored. A pressure outlet fixes ``p' = 0`` at the
 outlet face: the adjacent cell gets a coefficient toward the face, with
 no neighbour value, and the outlet face velocity is corrected against
 ``p' = 0`` so the outlet cell also closes. The outlet face has no momentum

@@ -401,7 +401,14 @@ class BoundaryRegistry:
         return out
 
     def vents(self) -> dict[str, BoundarySpec]:
-        """The vent segments (location "obstacle"), in configuration order."""
+        """The vent segments, in configuration order (ADR-014 J).
+
+        Returns
+        -------
+        dict[str, BoundarySpec]
+            Name to segment for every segment whose location is
+            "obstacle"; empty without vents. A new dict.
+        """
         return {
             name: spec
             for name, spec in self._boundaries.items()

@@ -248,7 +248,9 @@ section H's limit on the discharge's concentration is amended to match.
 Beyond the predictions, the metric table shows the vents more than double M1 in both classes.
 The per-source terms (`results/builder61/transport_*.json`, `by_surface`) put all of it on the
 litho tool's top under S2, as in step 8. The rack's discharge, left of the litho tool, changes
-the air over that top, and S2 sits just above it. M2 rises with the near-door reading. M3 barely
+the air over that top, and S2 sits just above it. M2's rise is carried by both of its sensors,
+the hood-entry term under S3 a little more than the near-door term under S1 (the per-source
+sensor readings of `results/builder61/transport_*.json`). M3 barely
 moves once it is read net: in the removal table the vented room's gross outflow under S1 exceeds
 the emission by what the intake draws, and the discharge returns that.
 

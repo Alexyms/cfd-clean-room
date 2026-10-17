@@ -595,7 +595,10 @@ class TestVents:
             StaggeredBoundary(Mesh(config), config)
 
     def test_a_closed_box_must_balance_on_the_mesh_faces(self) -> None:
-        """Balanced on the configured extents, 0.35 m of intake covers 0.25 m of faces."""
+        """Balanced on its extents, the 0.35 m intake covers 0.375 m of faces.
+
+        Its cell centres 0.1875, 0.3125 and 0.4375 lie in y 0.1 to 0.45.
+        """
         closed = {"discharge": DISCHARGE, "intake": INTAKE}
         config = vent_config(closed, supply=False, returns=False)
         StaggeredBoundary(Mesh(config), config)
@@ -609,7 +612,7 @@ class TestVents:
             StaggeredBoundary(Mesh(config), config)
 
     def test_a_recirculating_pair_must_balance_on_the_mesh_faces(self) -> None:
-        """Equal on the configured extents, 0.35 m of intake covers 0.375 m of faces.
+        """Equal on the extents, the 0.35 m intake covers 0.375 m of faces.
 
         The intake's centres 0.1875, 0.3125 and 0.4375 lie in y 0.1 to 0.45.
         """
@@ -627,10 +630,35 @@ class TestVents:
         config = vent_config(balanced)
         StaggeredBoundary(Mesh(config), config)
 
+    @pytest.mark.parametrize(
+        ("excess", "loads", "builds"),
+        [(1.0e-10, True, False), (1.0e-13, True, True)],
+        ids=["1e-10", "1e-13"],
+    )
+    def test_the_two_balance_tolerances(
+        self, excess: float, loads: bool, builds: bool
+    ) -> None:
+        """Review 61 S3: 1e-9 on the extents at load, 1e-12 on the faces.
+
+        A closed box of a discharge and an intake, the intake's velocity
+        raised by ``excess`` of itself: 1e-10 loads but the mesh refuses it,
+        1e-13 passes both.
+        """
+        intake = {**INTAKE, "velocity": 0.5 * (1.0 + excess)}
+        config = vent_config(
+            {"discharge": DISCHARGE, "intake": intake}, supply=False, returns=False
+        )
+        assert loads
+        if builds:
+            StaggeredBoundary(Mesh(config), config)
+        else:
+            with pytest.raises(ValueError, match=r"on this mesh's faces the stated"):
+                StaggeredBoundary(Mesh(config), config)
+
     def test_the_first_vent_in_configuration_order_takes_a_shared_point(
         self,
     ) -> None:
-        """Two vents meeting at x 1.0: the face at 1.0 is a stencil corner, the first's."""
+        """Two vents meeting at x 1.0, a stencil corner: the first vent takes it."""
         first = {**DISCHARGE, "x_end": 1.0}
         second = {**DISCHARGE, "x_start": 1.0, "velocity": 0.25}
         raw = vent_raw({"first": first, "second": second})
