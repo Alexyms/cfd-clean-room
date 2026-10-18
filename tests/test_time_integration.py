@@ -247,6 +247,19 @@ class TestPlan:
         plan = plan_interval(0, _interval(0.0, 0.07), 0.007)
         assert plan.steps == 11 and plan.dt <= 0.007
 
+    def test_the_last_step_is_the_end_where_n_dt_misses_it(self) -> None:
+        """10 + 167 (50 / 167) is 59.99999999999999; the last step is at 60 exactly.
+
+        The door's intervals happen to give t0 + n dt == t1, so this case
+        carries the pin. Defect caught: the last step's time computed as
+        t0 + n dt, so the switch misses the boundary by an ulp.
+        """
+        plan = plan_interval(0, _interval(10.0, 60.0), 0.3)
+        assert plan.steps == 167
+        assert 10.0 + 167 * plan.dt != 60.0
+        assert plan.time(167) == 60.0
+        assert plan.time(166) == 10.0 + 166 * plan.dt
+
     def test_nothing_moving_is_one_step_and_a_start_moves_the_plan(self) -> None:
         """Defects caught: zero steps for an infinite stable_dt; t_start ignored."""
         assert plan_interval(0, _interval(0.0, 2.0), math.inf).steps == 1
