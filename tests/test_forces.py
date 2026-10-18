@@ -407,3 +407,30 @@ class TestStrouhal:
             args["velocity"] = -1.0
         with pytest.raises(ValueError):
             strouhal(**args)
+
+
+@pytest.mark.unit
+class TestStrouhalEdges:
+    """The two edges a finely sampled ten-period sine cannot reach (prompt 68's plants)."""
+
+    def test_a_coarsely_sampled_sine_still_reads_its_number(self) -> None:
+        """Fourteen samples a period: the crossings must be interpolated.
+
+        At dt 0.5 the sample before each crossing lies up to 0.5 s early, by
+        an amount that changes from crossing to crossing, so the period read
+        from the samples alone is off by up to 0.7%; interpolated, within
+        1e-4. Catches: the zero crossings not interpolated.
+        """
+        t, lift = _sine(0.146, 30.0, dt=0.5)
+        assert strouhal(t, lift, 1.0, 1.0).strouhal == pytest.approx(0.146, rel=1e-4)
+
+    def test_ten_crossings_are_nine_periods_and_refused(self) -> None:
+        """A lift rising through zero just after the start, 9.9 periods long.
+
+        Catches: ten crossings taken as ten periods.
+        """
+        t, lift = _sine(0.146, 9.9, phase=-0.2)
+        up = np.nonzero((lift[:-1] < 0.0) & (lift[1:] >= 0.0))[0]
+        assert up.size == STROUHAL_PERIODS
+        with pytest.raises(ValueError, match="holds 9 whole periods"):
+            strouhal(t, lift, 1.0, 1.0)
