@@ -36,7 +36,7 @@ responsibility = "Holds the physical constants shared by every module so that no
 serves = ["REQ-C04"]
 
 [modules."src/io_manager.py"]
-responsibility = "Writes a run's HDF5 run file by appending (the merged configuration with its restart hash, the flow states, the transport frames, budgets and sensor readings) and its checkpoint file by atomic replacement (the march's checkpoint and the steady solve's), reads each back bitwise, and refuses a restart under a changed configuration, so a killed or capped run continues to what the uninterrupted run reaches."
+responsibility = "Writes a run's HDF5 run file by appending (the merged configuration with its restart hash, the flow states, the transport frames, budgets and sensor readings, and a clean-out's recovery outputs) and its checkpoint file by atomic replacement (the march's checkpoint and the steady solve's), reads each back bitwise, and refuses a restart under a changed configuration, so a killed or capped run continues to what the uninterrupted run reaches."
 serves = []
 
 [modules."src/mesh.py"]

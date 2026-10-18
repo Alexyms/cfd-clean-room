@@ -215,7 +215,7 @@ Generated. The responsibility and serves columns are editorial and come from `do
 | `src/boundary_vents.py` | 250 | Derives the mesh faces each equipment vent covers on its obstacle face, from the staggered layout's obstacle-face inputs and the registry's first-match coverage, with the face masks the velocity, turbulence and concentration layers read, and refuses a vent that covers no face or a recirculating pair whose flows differ on the faces. | S12.1 |
 | `src/config.py` | 2470 | Loads the YAML configuration into typed dataclasses and rejects missing keys, wrong types and out-of-range values at load time. | A02, A03, C01, C02, C03, S10 |
 | `src/constants.py` | 8 | Holds the physical constants shared by every module so that none of them defines its own copy. | C04 |
-| `src/io_manager.py` | 1093 | Writes a run's HDF5 run file by appending (the merged configuration with its restart hash, the flow states, the transport frames, budgets and sensor readings) and its checkpoint file by atomic replacement (the march's checkpoint and the steady solve's), reads each back bitwise, and refuses a restart under a changed configuration, so a killed or capped run continues to what the uninterrupted run reaches. | none |
+| `src/io_manager.py` | 1354 | Writes a run's HDF5 run file by appending (the merged configuration with its restart hash, the flow states, the transport frames, budgets and sensor readings, and a clean-out's recovery outputs) and its checkpoint file by atomic replacement (the march's checkpoint and the steady solve's), reads each back bitwise, and refuses a restart under a changed configuration, so a killed or capped run continues to what the uninterrupted run reaches. | none |
 | `src/mesh.py` | 442 | Builds the structured grid, uniform or geometrically clustered at the walls, with the face, center, width and center-to-center arrays a face-based stencil needs, and classifies each cell as FLUID, SOLID or BOUNDARY. | S11 |
 | `src/momentum.py` | 1060 | Predicts u* and v* on the staggered grid with QUICK advection by deferred correction over an upwind implicit matrix, a configured number of under-relaxed Jacobi sweeps per call, an optional per-cell viscosity field with its face rule and stress source, and the domain edge's wall stencil at obstacle faces, and returns the diagonal coefficients the pressure correction needs. | S07, S09, S14 |
 | `src/multigrid.py` | 384 | Builds an additive-correction multigrid hierarchy from a five-point pressure system by 2x2 aggregation, its coarse operators the exact Galerkin sums with no probing, and applies one symmetric V-cycle with weighted Jacobi smoothing and a dense pseudo-inverse on the coarsest level as the preconditioner of the pressure correction's conjugate gradients. | S08 |
@@ -229,7 +229,7 @@ Generated. The responsibility and serves columns are editorial and come from `do
 | `src/stopping.py` | 408 | Decides when the steady outer iteration has converged, on four conditions: (a) the iteration error estimated from the step and its fitted geometric rate, over a physical velocity scale; (b) the worst per-cell mass imbalance against its own tolerance; (c) the summed imbalance over the through-flow, which shares the tolerance of (a); and (d) the signed imbalance summed over the domain, which shares the tolerance of (b); and with the turbulence model a fifth, (e), the same estimate on the eddy viscosity over the molecular viscosity plus the median eddy viscosity of the FLUID cells, which the solver passes each outer iteration. Also defines IterationState, the snapshot a solver hands its callback once per outer iteration. | S01, S04 |
 | `src/turbulence.py` | 1622 | Advances the k-epsilon model's k and eps one step on a prescribed face velocity field, standard or RNG with each variant's constants as module data: advection, explicit growth from the strain the faces give and implicit decay and diffusion through the shared scalar scheme, boundary values from a conditions object the caller builds each step, the kinematic eddy viscosity, and an assertion that k and eps are positive and finite after every step; and the scalable wall functions, which build those conditions, the wall viscosity of the momentum wall faces and the inlet values the coupled solve starts from. | S14, S15, S17 |
 
-Total 20 Python files, 13922 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
+Total 20 Python files, 14183 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
 
 `Declares it serves` is an EDITORIAL CLAIM read from `docs/system_map_annotations.toml`. It says which requirements a module is meant to satisfy, not that it does. Whether a requirement is met is answered by the tests named in the register's `Verified By` column.
 <!-- END GENERATED: components -->
@@ -254,7 +254,7 @@ Generated. Static import analysis cannot see a function bound into a registry by
 |---|---|
 | Scope | `src/**/*.py` |
 | Files hashed | 20 |
-| Digest | `sha256:83b404de4debad48e4921723368ca2667c18ad03e1fd782728b78030cf5da62e` |
+| Digest | `sha256:c6864c0ea331836403a5901ffdcd12eadc07e73174ad1a3829502e346358569d` |
 
 This is what lets the document answer whether it is current, which is the one question a stale table cannot be asked. `python scripts/gen_system_map.py --check` recomputes the whole set of generated regions, this digest included, and exits non-zero on any disagreement.
 
@@ -1515,7 +1515,10 @@ RunFile(path)
     check_restart(mapping) -> None  # ValueError "restart refused: <dotted key>
                                     # differs ..." naming the first key, in the
                                     # file's order, changed, added or removed,
-                                    # unless only RESTART_EXCLUDED_KEYS differ
+                                    # unless only RESTART_EXCLUDED_KEYS differ;
+                                    # the file's side is hashed from its stored
+                                    # text under the set in force now (review 63
+                                    # S2, prompt 64); TypeError for a non-mapping
     write_flow_state(fingerprint, state: FlowState, *, wall_seconds,
                      stage_seconds, rule_readings) -> None
         # /flow/<fingerprint>/: u_faces, v_faces, p (+ k, eps, nu_t); attributes
@@ -1539,11 +1542,23 @@ RunFile(path)
     read_sensor_readings() -> SensorReadings
     discard_after(step) -> None     # drops the frames and readings after step,
                                     # which a restarted march writes again
-    checkpoint(step, t, fields, budgets, fingerprint) -> None
+    discard_march() -> None         # drops /transport/ whole: a restart with no
+                                    # march checkpoint marches again from step 0
+    write_recovery(record: RecoveryRecord) -> None   # /recovery/, replacing any:
+        # a clean-out's outputs (ADR-014 C), written at the end of the run;
+        # datasets thresholds, initial, recovery_time, sensor_time, mean_time,
+        # ratio, local_recovery, local_recovery_max ("<f8") and defined (int8);
+        # attributes sensor_names, held, t_final, air_change_rate,
+        # well_mixed_time, room_recovery_time and hold_time when not None.
+        # Neither discard touches it (review 63 S3)
+    read_recovery() -> RecoveryRecord   # KeyError without one
+    checkpoint(step, t, fields, budgets, fingerprint, recovery=None) -> None
         # /checkpoint/ of the checkpoint file: attributes step, t, fingerprint;
-        # C_<k> and budgets as in /transport/
+        # C_<k> and budgets as in /transport/; recovery, named arrays the march
+        # carries besides (the recovery tracker's), in its /recovery/ child
     read_checkpoint() -> MarchCheckpoint   # step, t, fields, budgets,
-                                    # fingerprint; KeyError without one
+                                    # fingerprint, recovery ({} without);
+                                    # KeyError without one
     write_steady_checkpoint(checkpoint: SteadyCheckpoint, fingerprint) -> None
         # /steady_checkpoint/ of the checkpoint file: step 0's layout (u, v, p,
         # k, eps, nu_t, the three series; outer, pressure_cap_hits, stop_reason
@@ -1565,7 +1580,12 @@ RESTART_EXCLUDED_KEYS = (("solver", "max_simple_iter"), ("solver", "t_end"),
 BUDGET_TERMS = ("initial", "inflow", "outflow", "source", "deposited_floor",
                 "deposited_ceiling", "deposited_wall", "deposited_obstacle",
                 "current")
-CONFIG, FLOW, TRANSPORT, SENSORS, CHECKPOINT, STEADY_CHECKPOINT   # group names
+CONFIG, FLOW, TRANSPORT, SENSORS, CHECKPOINT, STEADY_CHECKPOINT, RECOVERY   # group names
+RecoveryRecord: sensor_names, thresholds, initial, hold_time, held, t_final,
+    air_change_rate, well_mixed_time, room_recovery_time, recovery_time, defined,
+    sensor_time, mean_time, ratio, local_recovery, local_recovery_max
+    # times in seconds, NaN where not defined or not reached; the shapes are
+    # checked against the classes and sensors when it is built
 ```
 
 ### Retired modules

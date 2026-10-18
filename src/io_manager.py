@@ -17,12 +17,16 @@ written before. Its groups:
   per class (``FieldHistory``'s keys), ``budgets`` [n, classes, terms] with
   the term names ``BUDGET_TERMS`` as its attribute, and ``/transport/sensors/``
   with ``steps``, ``times``, ``readings`` [n, classes, sensors] and the
-  sensor names as an attribute.
+  sensor names as an attribute;
+- ``/recovery/``: a clean-out's recovery outputs (ADR-014 C), written once
+  at the end of the run (``RecoveryRecord``); ``discard_after`` does not
+  touch it, and a restart that runs to a new end replaces it.
 
 The checkpoint file, ``<run>.checkpoint.h5`` beside it (the run file's path
 less its suffix), holds what a restart continues from: ``/checkpoint/``, the
 march's step, simulated time, class fields, budgets and the fingerprint of
-the flow state it was marching on, and ``/steady_checkpoint/``, a steady
+the flow state it was marching on, with any named arrays the march carries
+besides (the recovery tracker's, ``recovery``), and ``/steady_checkpoint/``, a steady
 solve's SteadyCheckpoint (step 0's layout: ``u``, ``v``, ``p`` and ``k``,
 ``eps``, ``nu_t``, the three series, ``outer``, ``pressure_cap_hits``,
 ``stop_reason`` and ``rule_version`` when not None) with the fingerprint of
@@ -46,7 +50,7 @@ field the step starts from, so it needs nothing more.
 import hashlib
 import os
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import h5py
@@ -62,6 +66,7 @@ TRANSPORT = "transport"
 SENSORS = "sensors"
 CHECKPOINT = "checkpoint"
 STEADY_CHECKPOINT = "steady_checkpoint"
+RECOVERY = "recovery"
 CHECKPOINT_SUFFIX = ".checkpoint.h5"
 TEMPORARY_SUFFIX = ".tmp"
 # The keys a continuation exists to change (prompt 63, decision 2): a capped
@@ -90,6 +95,24 @@ _TURBULENCE = ("k", "eps", "nu_t")
 _SERIES = ("residual_history", "velocity_steps", "viscosity_steps")
 _SHA256_DIGITS = 64
 _HEX_DIGITS = "0123456789abcdef"
+# RecoveryRecord's float64 arrays, stored as datasets of /recovery/ beside its
+# defined array; its scalars are the group's attributes.
+_RECOVERY_ARRAYS = (
+    "thresholds",
+    "initial",
+    "recovery_time",
+    "sensor_time",
+    "mean_time",
+    "ratio",
+    "local_recovery",
+    "local_recovery_max",
+)
+_RECOVERY_SCALARS = (
+    "t_final",
+    "air_change_rate",
+    "well_mixed_time",
+    "room_recovery_time",
+)
 
 
 @dataclass(frozen=True)
@@ -202,6 +225,9 @@ class MarchCheckpoint:
         One per class, in class order.
     fingerprint : str
         The flow state the march was stepping on (``/flow/<fingerprint>/``).
+    recovery : dict[str, np.ndarray]
+        The named float64 arrays the march carried besides (the recovery
+        tracker's state, ADR-014 C); empty when it carried none.
     """
 
     step: int
@@ -209,6 +235,127 @@ class MarchCheckpoint:
     fields: dict[int, np.ndarray]
     budgets: tuple[MassBudget, ...]
     fingerprint: str
+    recovery: dict[str, np.ndarray] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, eq=False)
+class RecoveryRecord:
+    """A clean-out's recovery outputs (ADR-014 C), as ``/recovery/`` holds them.
+
+    Times are seconds of simulated time, NaN where an output is not defined
+    or not reached. The arrays are stored as float64, ``defined`` as bool,
+    when the record is built.
+
+    Parameters
+    ----------
+    sensor_names : tuple[str, ...]
+        The sensors, in the order of the last axis of ``sensor_time``.
+    thresholds, initial : np.ndarray
+        [classes]: each class's threshold and its initial level C0,
+        particles per cubic metre.
+    hold_time : float or None
+        ``scenario.hold_time``; None when the run went to t_end.
+    held : bool
+        Whether the run stopped because the room held within spec.
+    t_final : float
+        The run's last step time.
+    air_change_rate : float
+        N, the inflow through the domain's edges over the free area, 1/s.
+    well_mixed_time : float
+        ln(100) / N, the well-mixed slice's 100:1 time.
+    room_recovery_time : float
+        When every sensor of every class fell below its threshold and
+        stayed below (ADR-014 C).
+    recovery_time : np.ndarray
+        [classes], the same per class.
+    defined : np.ndarray
+        [classes] bool: C0 at least 100 times the threshold, where the
+        100:1 times are defined.
+    sensor_time : np.ndarray
+        [classes, sensors], the 100:1 time at each sensor.
+    mean_time : np.ndarray
+        [classes], the 100:1 time of the free-area mean.
+    ratio : np.ndarray
+        [classes], ``mean_time / well_mixed_time``.
+    local_recovery : np.ndarray
+        [classes, ny, nx], the last step time each cell was at or above its
+        threshold: zero for a cell never so, inf for one still so at the
+        end, NaN in SOLID cells.
+    local_recovery_max : np.ndarray
+        [classes], the largest over the non-SOLID cells.
+
+    Raises
+    ------
+    TypeError
+        If a scalar time is not a real number, ``held`` is not a bool, or a
+        sensor name is not a str.
+    ValueError
+        If the arrays' shapes do not agree on the classes and the sensors,
+        or ``local_recovery`` is not [classes, ny, nx].
+    """
+
+    sensor_names: tuple[str, ...]
+    thresholds: np.ndarray
+    initial: np.ndarray
+    hold_time: float | None
+    held: bool
+    t_final: float
+    air_change_rate: float
+    well_mixed_time: float
+    room_recovery_time: float
+    recovery_time: np.ndarray
+    defined: np.ndarray
+    sensor_time: np.ndarray
+    mean_time: np.ndarray
+    ratio: np.ndarray
+    local_recovery: np.ndarray
+    local_recovery_max: np.ndarray
+
+    def __post_init__(self) -> None:
+        names = tuple(self.sensor_names)
+        for name in names:
+            if not isinstance(name, str):
+                raise TypeError(
+                    f"a sensor name must be a str, got {type(name).__name__}"
+                )
+        object.__setattr__(self, "sensor_names", names)
+        if not isinstance(self.held, bool):
+            raise TypeError(f"held must be a bool, got {type(self.held).__name__}")
+        scalars = list(_RECOVERY_SCALARS)
+        if self.hold_time is not None:
+            scalars.append("hold_time")
+        for name in scalars:
+            object.__setattr__(self, name, _real(name, getattr(self, name)))
+        for name in _RECOVERY_ARRAYS:
+            array = np.asarray(getattr(self, name), dtype="<f8")
+            object.__setattr__(self, name, array)
+        object.__setattr__(self, "defined", np.asarray(self.defined, dtype=bool))
+        classes = self.thresholds.shape
+        if len(classes) != 1:
+            raise ValueError(f"thresholds must be [classes], got shape {classes}")
+        for name in (
+            "initial",
+            "recovery_time",
+            "defined",
+            "mean_time",
+            "ratio",
+            "local_recovery_max",
+        ):
+            if getattr(self, name).shape != classes:
+                raise ValueError(
+                    f"{name} has shape {getattr(self, name).shape} for "
+                    f"{classes[0]} classes"
+                )
+        if self.sensor_time.shape != (classes[0], len(names)):
+            raise ValueError(
+                f"sensor_time has shape {self.sensor_time.shape} for {classes[0]} "
+                f"classes and {len(names)} sensors"
+            )
+        local = self.local_recovery.shape
+        if len(local) != 3 or local[0] != classes[0]:
+            raise ValueError(
+                f"local_recovery has shape {local}; expected [{classes[0]}, ny, nx]"
+            )
 
 
 def config_text(mapping: Mapping[str, object]) -> str:
@@ -375,13 +522,26 @@ class RunFile:
         ------
         KeyError
             If the file holds no ``/config``.
+        TypeError
+            If ``mapping`` is not a mapping.
         ValueError
             If the restart hash differs from the file's: the message names
             the first key, in the file's order, that differs, was added or
             was removed. The keys in RESTART_EXCLUDED_KEYS may differ.
+
+        Notes
+        -----
+        The file's side is recomputed from its stored text under the
+        RESTART_EXCLUDED_KEYS in force now, not read from ``restart_sha256``,
+        which holds the set in force when the file was written, so a key
+        added to the set widens what an existing file's restart accepts
+        (review 63 S2, prompt 64's decision 3). ``restart_sha256`` stays as
+        the record of what the run was hashed under.
         """
+        if not isinstance(mapping, Mapping):
+            raise TypeError(f"mapping must be a mapping, got {type(mapping).__name__}")
         stored = self.read_config()
-        if restart_hash(mapping) == stored.restart_sha256:
+        if restart_hash(mapping) == restart_hash(stored.mapping):
             return
         first = _first_difference(
             _without_excluded(_plain(stored.mapping)),
@@ -721,6 +881,86 @@ class RunFile:
                     if isinstance(dataset, h5py.Dataset):
                         dataset.resize(keep, axis=0)
 
+    def discard_march(self) -> None:
+        """Drop every frame and sensor reading: the whole ``/transport/`` group.
+
+        A restart that finds no march checkpoint (none written yet, or no
+        ``checkpoint_interval``) marches again from step 0, so what an
+        interrupted march wrote is written again. ``/config``, ``/flow/``
+        and ``/recovery/`` are kept.
+        """
+        if not self.path.exists():
+            return
+        with h5py.File(self.path, "a") as run_file:
+            if TRANSPORT in run_file:
+                del run_file[TRANSPORT]
+
+    # ------------------------------------------------------------------
+    # /recovery/
+    # ------------------------------------------------------------------
+
+    def write_recovery(self, record: RecoveryRecord) -> None:
+        """Write a clean-out's recovery outputs, replacing any the file holds.
+
+        Parameters
+        ----------
+        record : RecoveryRecord
+            The outputs at the end of the run. A restart that runs on to a
+            later end writes its own over the earlier run's.
+
+        Raises
+        ------
+        TypeError
+            If ``record`` is not a RecoveryRecord.
+        """
+        if not isinstance(record, RecoveryRecord):
+            raise TypeError(
+                f"record must be a RecoveryRecord, got {type(record).__name__}"
+            )
+        with h5py.File(self.path, "a") as run_file:
+            if RECOVERY in run_file:
+                del run_file[RECOVERY]
+            group = run_file.create_group(RECOVERY)
+            for name in _RECOVERY_ARRAYS:
+                group.create_dataset(name, data=getattr(record, name), dtype="<f8")
+            group.create_dataset("defined", data=record.defined.astype(np.int8))
+            group.attrs["sensor_names"] = list(record.sensor_names)
+            group.attrs["held"] = record.held
+            for name in _RECOVERY_SCALARS:
+                group.attrs[name] = np.float64(getattr(record, name))
+            if record.hold_time is not None:
+                group.attrs["hold_time"] = np.float64(record.hold_time)
+
+    def read_recovery(self) -> RecoveryRecord:
+        """Read back the recovery outputs ``write_recovery`` wrote.
+
+        Returns
+        -------
+        RecoveryRecord
+            As written, its arrays bitwise.
+
+        Raises
+        ------
+        KeyError
+            If the file holds no ``/recovery/``.
+        """
+        with h5py.File(self.path, "r") as run_file:
+            if RECOVERY not in run_file:
+                raise KeyError(f"{self.path} holds no /{RECOVERY}/")
+            group = run_file[RECOVERY]
+            arrays = {name: group[name][()] for name in _RECOVERY_ARRAYS}
+            defined = group["defined"][()].astype(bool)
+            attrs = dict(group.attrs)
+        hold = attrs.get("hold_time")
+        return RecoveryRecord(
+            sensor_names=tuple(str(x) for x in attrs["sensor_names"]),
+            hold_time=None if hold is None else float(hold),
+            held=bool(attrs["held"]),
+            defined=defined,
+            **{name: float(attrs[name]) for name in _RECOVERY_SCALARS},
+            **arrays,
+        )
+
     # ------------------------------------------------------------------
     # The checkpoint file
     # ------------------------------------------------------------------
@@ -732,6 +972,7 @@ class RunFile:
         fields: Mapping[int, np.ndarray],
         budgets: Sequence[MassBudget],
         fingerprint: str,
+        recovery: Mapping[str, np.ndarray] | None = None,
     ) -> None:
         """Replace the march's checkpoint, atomically, keeping the steady one.
 
@@ -747,12 +988,15 @@ class RunFile:
             The transport solver's ``budget``, one per class.
         fingerprint : str
             The flow state the march steps on.
+        recovery : Mapping[str, np.ndarray], optional
+            Named arrays the march carries besides, stored as float64 and
+            read back bitwise (the recovery tracker's state, ADR-014 C).
 
         Raises
         ------
         TypeError
-            If ``step`` is not an int, ``t`` not a real number, or a budget
-            not a MassBudget.
+            If ``step`` is not an int, ``t`` not a real number, a budget not
+            a MassBudget, or a recovery name not a str.
         ValueError
             If ``step`` is negative, the classes are not 0 to n - 1 with
             one budget each, a field is not 2-D, or the fingerprint is not a
@@ -763,6 +1007,13 @@ class RunFile:
         arrays = _class_fields(fields, budgets)
         _check_fingerprint(fingerprint)
         rows = np.array([_budget_row(b) for b in budgets], dtype="<f8")
+        carried = {}
+        for name, array in (recovery or {}).items():
+            if not isinstance(name, str):
+                raise TypeError(
+                    f"a recovery name must be a str, got {type(name).__name__}"
+                )
+            carried[name] = np.asarray(array, dtype="<f8")
 
         def write(group: h5py.Group) -> None:
             group.attrs["step"] = step
@@ -772,6 +1023,10 @@ class RunFile:
                 group.create_dataset(f"C_{k}", data=array, dtype="<f8")
             budgets_set = group.create_dataset("budgets", data=rows, dtype="<f8")
             budgets_set.attrs["terms"] = list(BUDGET_TERMS)
+            if carried:
+                held = group.create_group(RECOVERY)
+                for name, array in carried.items():
+                    held.create_dataset(name, data=array, dtype="<f8")
 
         self._replace_group(CHECKPOINT, write)
 
@@ -791,12 +1046,18 @@ class RunFile:
                 if name.startswith("C_")
             }
             rows = group["budgets"][()]
+            carried = (
+                {name: data[()] for name, data in group[RECOVERY].items()}
+                if RECOVERY in group
+                else {}
+            )
         return MarchCheckpoint(
             step=int(attrs["step"]),
             t=float(attrs["t"]),
             fields=dict(sorted(fields.items())),
             budgets=tuple(_budget_of(row) for row in rows),
             fingerprint=str(attrs["fingerprint"]),
+            recovery=carried,
         )
 
     def write_steady_checkpoint(
