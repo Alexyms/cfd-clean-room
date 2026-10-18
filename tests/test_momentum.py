@@ -7,8 +7,6 @@ rounding, so a reproduced quadratic or an advected constant differs from the
 exact value by a few ulps of the values involved.
 """
 
-import ast
-
 import numpy as np
 import pytest
 import yaml
@@ -25,6 +23,7 @@ from src.momentum import (
 )
 from src.solver_staggered import StaggeredSolver
 from src.staggered import allocate_fields
+from tests.cylinder59_reference import load_implicit_euler_predictor
 from tests.frozen34_reference import load_frozen_predictor
 from tests.vent_cases import DISCHARGE, EXHAUST, SHELF_VENTS, vent_config
 from validation.cases import CONFIG_DIR
@@ -1674,34 +1673,7 @@ def test_the_shelf_vents_keep_their_velocity_through_the_prediction() -> None:
 # The transient term (ADR-014 decision 3, step 6a)
 # ---------------------------------------------------------------------------
 
-PROBE59 = CONFIG_DIR.parent / "docs" / "reports" / "probe59" / "cylinder59.py"
 DT = 0.05
-
-
-def _probe_implicit_euler() -> type:
-    """cylinder59.py's ImplicitEulerPredictor, executed against the committed module.
-
-    The class is taken from the committed probe by AST, as
-    tests/frozen34_reference.py takes the step 0 probe's, so the test compares
-    the built term with the probe as committed, not with a copy.
-    """
-    source = PROBE59.read_text(encoding="utf-8")
-    node = next(
-        n
-        for n in ast.parse(source).body
-        if isinstance(n, ast.ClassDef) and n.name == "ImplicitEulerPredictor"
-    )
-    namespace = {
-        "np": np,
-        "Mesh": Mesh,
-        "SimConfig": SimConfig,
-        "StaggeredBoundary": StaggeredBoundary,
-        "MomentumPredictor": MomentumPredictor,
-        "MomentumCoefficients": MomentumCoefficients,
-        "_Orientation": _Orientation,
-    }
-    exec(ast.get_source_segment(source, node), namespace)
-    return namespace["ImplicitEulerPredictor"]
 
 
 def _transient_room(sweeps: int | None = None) -> SimConfig:
@@ -1833,7 +1805,7 @@ class TestTransientTerm:
         self, sweeps: int
     ) -> None:
         """cylinder59.py's ImplicitEulerPredictor on three random states."""
-        probe_class = _probe_implicit_euler()
+        probe_class = load_implicit_euler_predictor()
         config = _transient_room(sweeps)
         mesh, bc, mp = _build(config)
         probe = probe_class(mesh, config, bc, DT)

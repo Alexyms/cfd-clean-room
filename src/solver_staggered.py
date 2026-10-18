@@ -98,10 +98,27 @@ froze the 80x30 probe room with 47% of the supply unaccounted and the
 velocity-step rule called it converged (docs/reports/pressure_solver_ecr003.md,
 section 8.2; ADR-013 B). Under error_estimate the continuity conditions refuse
 that state on their own.
+
+The time-accurate solve (ADR-014 tier 2, decisions 3 to 5; step 6a).
+``solve_transient`` marches a FlowState through time steps of ``dt``. Each
+step is BDF2 (the predictor's transient term, ADR-014 decision 3) after an
+implicit Euler first step, or implicit Euler throughout as the control. Within
+a step the outer iteration is the steady one (extrapolate the outlets,
+predict, correct) until the largest change of the cell-centred velocity over
+an outer iteration is below ``step_tol`` times the velocity scale, the largest
+prescribed boundary velocity (the error_estimate rule's scale, U on the
+cylinder), and not on an outer iteration whose correction reached its cap. The
+scale is not ``reference_velocity``, the inflow over one cell spacing: on the
+cylinder's 0.1 d grid that is 200 U, and decision 5's criterion is a fraction
+of U. A step that reaches ``step_cap`` outer iterations, or whose fields go
+non-finite, raises TransientStepError with the step and every step's record,
+so a stalled step fails the run. The solve is laminar: tier 2 has no eddy
+viscosity (ADR-014 decision 1). ``solve_steady`` is untouched by it.
 """
 
 import hashlib
 import logging
+import math
 from collections.abc import Callable
 from dataclasses import dataclass
 from functools import partial
@@ -168,6 +185,15 @@ _STOP_REASONS = {
     ERROR_ESTIMATE: "error_estimate_and_continuity",
 }
 CAP_STOP = "max_simple_iter"
+# The stop of a transient solve that reached t_end, every step within its
+# criterion.
+TRANSIENT_STOP = "transient_t_end"
+BDF2 = "bdf2"
+IMPLICIT_EULER = "implicit_euler"
+TRANSIENT_SCHEMES = (BDF2, IMPLICIT_EULER)
+# How far t_end / dt may sit from a whole number of steps, relative: rounding
+# in the division, not a shortened last step, which BDF2 does not take.
+_STEP_COUNT_ROUNDING = 1e-9
 # A SHA-256 written as hexadecimal: 64 of these digits.
 _SHA256_DIGITS = 64
 _HEX_DIGITS = "0123456789abcdef"
@@ -193,6 +219,15 @@ def _count(name: str, value: object) -> int:
         raise TypeError(f"{name} must be an int, got {type(value).__name__}")
     if value < 0:
         raise ValueError(f"{name} must be non-negative, got {value}")
+    return value
+
+
+def _positive_float(name: str, value: object) -> float:
+    """A finite positive float that is not a bool, or a refusal."""
+    if isinstance(value, bool) or not isinstance(value, float):
+        raise TypeError(f"{name} must be a float, got {type(value).__name__}")
+    if not math.isfinite(value) or value <= 0.0:
+        raise ValueError(f"{name} must be finite and positive, got {value}")
     return value
 
 
@@ -357,6 +392,60 @@ class SteadyCheckpoint:
                 )
 
 
+@dataclass(frozen=True)
+class TransientStep:
+    """One time step of ``solve_transient`` as it ended (ADR-014 decision 5).
+
+    Parameters
+    ----------
+    step : int
+        The step's number, 1 for the first.
+    t : float
+        The time the step reached, ``step * dt``, in s.
+    scheme : str
+        "implicit_euler" or "bdf2": the time derivative the step took.
+    outer : int
+        Outer iterations the step took.
+    residual_history : tuple[float, ...]
+        The largest change of the cell-centred u and v over FLUID cells per
+        outer iteration, over the velocity scale, one entry per outer.
+    worst_imbalance : float
+        The largest absolute per-cell mass imbalance of the step's last
+        faces over non-SOLID cells, kg/s per unit depth.
+    pressure_cap_hits : int
+        The step's corrections that stopped at max_pressure_iter.
+    """
+
+    step: int
+    t: float
+    scheme: str
+    outer: int
+    residual_history: tuple[float, ...]
+    worst_imbalance: float
+    pressure_cap_hits: int
+
+
+class TransientStepError(RuntimeError):
+    """A time step that did not meet its criterion: the run fails here.
+
+    Parameters
+    ----------
+    message : str
+        Names the step, its time and why it failed.
+    step : TransientStep
+        The failing step's record, its residual history included.
+    steps : tuple[TransientStep, ...]
+        Every step's record up to and including the failing one.
+    """
+
+    def __init__(
+        self, message: str, step: TransientStep, steps: tuple[TransientStep, ...]
+    ) -> None:
+        super().__init__(message)
+        self.step = step
+        self.steps = steps
+
+
 def _digest(field: np.ndarray) -> str:
     """SHA-256 of a prescribed eddy viscosity's bytes, little-endian float64."""
     data = np.ascontiguousarray(field, dtype="<f8").tobytes()
@@ -382,7 +471,9 @@ class StaggeredSolver:
     reference_velocity : float
         The velocity the residual divides the largest change by.
     residual_history : list[float]
-        Scaled residual after each outer iteration of the last solve.
+        Scaled residual after each outer iteration of the last steady solve;
+        empty after a transient one, whose residuals are in
+        ``transient_steps``.
     converged : bool
         Whether the last solve met its stopping rule rather than the cap.
     stop_reason : str or None
@@ -435,6 +526,10 @@ class StaggeredSolver:
         and its cap hits; None before a solve completes and after one whose
         fields are not finite. A solve that stopped at max_simple_iter
         continues from it with ``solve_steady(resume=...)`` (ADR-014 D).
+        None after a transient solve, which is no steady solve to continue.
+    transient_steps : list[TransientStep]
+        One record per time step of the last ``solve_transient``, failed
+        step included; empty until one runs and reset by each.
 
     Raises
     ------
@@ -473,6 +568,7 @@ class StaggeredSolver:
         self.turbulence_state: TurbulenceState | None = None
         self.flow_state: FlowState | None = None
         self.steady_checkpoint: SteadyCheckpoint | None = None
+        self.transient_steps: list[TransientStep] = []
 
         self.reference_velocity: float = self._reference_velocity()
         self.residual_history: list[float] = []
@@ -850,6 +946,214 @@ class StaggeredSolver:
         )
         self.flow_state = self.steady_checkpoint.state
         return u_c, v_c, p
+
+    def solve_transient(
+        self,
+        dt: float,
+        t_end: float,
+        *,
+        initial: FlowState,
+        step_tol: float,
+        step_cap: int,
+        on_step: Callable[[TransientStep, FlowState], None] | None = None,
+        scheme: str = BDF2,
+    ) -> FlowState:
+        """March a flow state through time steps of dt to t_end (ADR-014 tier 2).
+
+        Parameters
+        ----------
+        dt : float
+            The time step, s, finite and positive.
+        t_end : float
+            The time the march ends at, s, a whole number of steps of ``dt``
+            to rounding (a relative ``1e-9``); the march starts at 0.
+        initial : FlowState
+            The time level 0: faces and pressure of this grid, laminar. The
+            boundary's normal velocities are written over its faces, as the
+            warm start does, and the result is the first old level.
+        step_tol : float
+            The per-step criterion (ADR-014 decision 5): a step's outer
+            iterations stop when the largest change of the cell-centred u
+            and v over FLUID cells in one outer iteration is below
+            ``step_tol`` times the velocity scale, the largest prescribed
+            boundary velocity; finite and positive.
+        step_cap : int
+            The most outer iterations a step may take, at least 1. A step
+            that reaches it fails the run (TransientStepError).
+        on_step : Callable[[TransientStep, FlowState], None], optional
+            Called after every step that met its criterion with the step's
+            record and the state it reached (``stop_reason`` None, ``outer``
+            the run's outer iterations so far). It reads; the march is the
+            same with or without it.
+        scheme : str
+            "bdf2" (ADR-014 decision 3): BDF2 from the second step, the
+            first implicit Euler, which needs one old level. Or
+            "implicit_euler" every step, the first-order control.
+
+        Returns
+        -------
+        FlowState
+            The faces and pressure at ``t_end``, ``stop_reason``
+            "transient_t_end", ``outer`` the run's outer iterations. The same
+            state is ``flow_state``, and its faces ``face_velocities``.
+
+        Raises
+        ------
+        TypeError
+            If ``dt``, ``t_end`` or ``step_tol`` is not a float, ``step_cap``
+            not an int (a bool is refused for each), ``scheme`` not a str, or
+            ``initial`` not a FlowState.
+        ValueError
+            With the turbulence section; if ``dt``, ``t_end`` or ``step_tol``
+            is not finite and positive, ``step_cap`` is below 1, ``scheme`` is
+            neither name, ``t_end`` is not a whole number of steps, no
+            boundary prescribes a velocity to scale the criterion by, or
+            ``initial`` is a state of another grid or carries k and eps.
+        TransientStepError
+            When a step reaches ``step_cap`` outer iterations, or its residual
+            is not finite, before meeting its criterion. It carries the
+            failing step's record and every record before it; the solver's
+            ``flow_state`` is then None.
+
+        Notes
+        -----
+        Steps n >= 2 under "bdf2" take ``(3/2 phi - 2 phi_n + 1/2 phi_(n-1))
+        / dt``; step 1, and every step under "implicit_euler", ``(phi -
+        phi_n) / dt``. A step's iterations start from the last step's faces
+        and pressure. Inside a step the stop is the velocity step's, with
+        the same refusal of an outer iteration whose correction reached
+        ``max_pressure_iter`` (ADR-013 B); ``convergence_tol``,
+        ``max_simple_iter`` and ``stopping_rule`` are the steady solve's
+        and are not read. ``residual_history`` is left empty: the per-outer
+        residuals, over the velocity scale, are each step's record in
+        ``transient_steps``.
+        """
+        if self._model is not None:
+            raise ValueError(
+                "solve_transient is laminar (ADR-014 decision 1): the configuration "
+                "has a turbulence section"
+            )
+        dt = _positive_float("dt", dt)
+        t_end = _positive_float("t_end", t_end)
+        step_tol = _positive_float("step_tol", step_tol)
+        if _count("step_cap", step_cap) < 1:
+            raise ValueError(f"step_cap must be at least 1, got {step_cap}")
+        if not isinstance(scheme, str):
+            raise TypeError(f"scheme must be a str, got {type(scheme).__name__}")
+        if scheme not in TRANSIENT_SCHEMES:
+            raise ValueError(
+                f"scheme must be one of {TRANSIENT_SCHEMES}, got {scheme!r}"
+            )
+        n_steps = round(t_end / dt)
+        if n_steps < 1 or abs(n_steps * dt - t_end) > _STEP_COUNT_ROUNDING * t_end:
+            raise ValueError(f"t_end {t_end} is not a whole number of steps of dt {dt}")
+        scale = self._boundary.get_max_boundary_velocity()
+        if scale <= 0.0:
+            raise ValueError(
+                "solve_transient scales step_tol by the largest prescribed boundary "
+                "velocity, and no boundary prescribes one"
+            )
+        flow = self._check_state(initial, "initial", FlowState)
+        u, v, p = np.array(flow.u), np.array(flow.v), np.array(flow.p)
+        self._boundary.apply_normal_velocity(u, v)
+
+        self.transient_steps = []
+        self.residual_history = []
+        self.stage_seconds = self._zero_stage_seconds()
+        self.last_pressure_iterations = 0
+        self.pressure_cap_hits = 0
+        self.converged, self.stop_reason = False, None
+        self.flow_state = self.steady_checkpoint = None
+        self.face_velocities = None
+        self.turbulence_state = None
+        fluid = self._fluid
+        # The old levels, latest first; one until the first step ends.
+        old_u: tuple[np.ndarray, ...] = (u.copy(),)
+        old_v: tuple[np.ndarray, ...] = (v.copy(),)
+        total_outer = 0
+
+        for n in range(1, n_steps + 1):
+            bdf2 = scheme == BDF2 and n > 1
+            # Two old levels from the second step under BDF2, else the latest.
+            transient = (dt, old_u, old_v) if bdf2 else (dt, old_u[0], old_v[0])
+            history: list[float] = []
+            cap_hits = 0
+            met = False
+            u_c, v_c = to_cell_centers(u, v)
+            for _ in range(step_cap):
+                t0 = perf_counter()
+                self._extrapolate_outlets(u, v)
+                prediction = self._predictor.predict(u, v, p, transient=transient)
+                t1 = perf_counter()
+                self.stage_seconds["momentum"] += t1 - t0
+                corrected = self._corrector.correct(prediction, p)
+                u, v, p = corrected.u, corrected.v, corrected.p
+                self.last_pressure_iterations = corrected.iterations
+                if corrected.reached_cap:
+                    cap_hits += 1
+                    self.pressure_cap_hits += 1
+                t2 = perf_counter()
+                self.stage_seconds["pressure"] += t2 - t1
+                u_prev, v_prev = u_c, v_c
+                u_c, v_c = to_cell_centers(u, v)
+                du = float(np.max(np.abs(u_c[fluid] - u_prev[fluid])))
+                dv = float(np.max(np.abs(v_c[fluid] - v_prev[fluid])))
+                residual = max(du, dv) / scale
+                history.append(residual)
+                self.stage_seconds["correct"] += perf_counter() - t2
+                if not math.isfinite(residual):
+                    break
+                if residual < step_tol and not corrected.reached_cap:
+                    met = True
+                    break
+            total_outer += len(history)
+            imbalance = self._corrector.mass_imbalance(u, v)
+            record = TransientStep(
+                step=n,
+                t=n * dt,
+                scheme=BDF2 if bdf2 else IMPLICIT_EULER,
+                outer=len(history),
+                residual_history=tuple(history),
+                worst_imbalance=float(np.max(np.abs(imbalance[self._live]))),
+                pressure_cap_hits=cap_hits,
+            )
+            self.transient_steps.append(record)
+            if not met:
+                why = (
+                    f"its residual is {history[-1]} (not finite)"
+                    if not math.isfinite(history[-1])
+                    else f"it reached step_cap ({step_cap} outer iterations) with "
+                    f"the velocity step at {history[-1]:.3e} of the scale against "
+                    f"step_tol {step_tol:g}"
+                )
+                raise TransientStepError(
+                    f"time step {n} (t = {n * dt:g} s) failed: {why}",
+                    record,
+                    tuple(self.transient_steps),
+                )
+            logger.debug("time step %d: %d outer", n, record.outer)
+            old_u = (u.copy(), old_u[0])
+            old_v = (v.copy(), old_v[0])
+            if on_step is not None:
+                on_step(record, FlowState(u=u, v=v, p=p, outer=total_outer))
+
+        self.converged, self.stop_reason = True, TRANSIENT_STOP
+        self.last_mass_imbalance = self._corrector.mass_imbalance(u, v)
+        self.face_velocities = FaceVelocities.copy_of(u, v)
+        self.flow_state = FlowState(
+            u=u,
+            v=v,
+            p=np.ascontiguousarray(p),
+            stop_reason=TRANSIENT_STOP,
+            outer=total_outer,
+        )
+        logger.info(
+            "Transient solve: %d steps of %g s, %d outer iterations",
+            n_steps,
+            dt,
+            total_outer,
+        )
+        return self.flow_state
 
     @staticmethod
     def _finite(

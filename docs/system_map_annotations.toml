@@ -72,7 +72,7 @@ responsibility = "Turns a loaded scenario into its intervals between event bound
 serves = []
 
 [modules."src/solver_staggered.py"]
-responsibility = "Runs steady SIMPLE on the staggered grid as one outer loop over the momentum predictor and the pressure correction, with the turbulence section one k and eps step and the relaxed eddy viscosity inside it, returning cell-centered fields through the harness's callback shape and exposing the final faces as FaceVelocities; stops by the velocity-step rule or, when configured, by the error-estimate rule."
+responsibility = "Runs steady SIMPLE on the staggered grid as one outer loop over the momentum predictor and the pressure correction, with the turbulence section one k and eps step and the relaxed eddy viscosity inside it, returning cell-centered fields through the harness's callback shape and exposing the final faces as FaceVelocities; stops by the velocity-step rule or, when configured, by the error-estimate rule; and marches a laminar flow state through implicit time steps, BDF2 after an implicit Euler first step, each to a velocity-step criterion with a cap that fails the run."
 serves = ["REQ-S01", "REQ-S02", "REQ-S03", "REQ-S04", "REQ-S05", "REQ-S07", "REQ-S13", "REQ-S14", "REQ-S15"]
 
 [modules."src/solver_transport.py"]
