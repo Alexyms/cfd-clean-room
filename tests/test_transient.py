@@ -261,6 +261,30 @@ class TestSteps:
         assert err.step.residual_history[-1] >= 1e-14
         assert solver.flow_state is None and not solver.converged
 
+    def test_a_failed_march_leaves_its_own_imbalance(self) -> None:
+        """After a steady solve, a march that fails at its cap replaces the imbalance.
+
+        last_mass_imbalance is the failing step's last faces', whose worst
+        non-SOLID value is the step's record, not the steady solve's array;
+        face_velocities and stop_reason are cleared (review 67 S6).
+        """
+        config = _cavity()
+        solver = staggered_solver(config)
+        solver.solve_steady()
+        steady = solver.last_mass_imbalance
+        with pytest.raises(TransientStepError) as caught:
+            solver.solve_transient(
+                DT, DT, initial=_rest(solver), step_tol=1e-14, step_cap=2
+            )
+        imbalance = solver.last_mass_imbalance
+        live = Mesh(config).cell_type != SOLID
+        assert imbalance is not steady and imbalance.shape == steady.shape
+        assert (
+            float(np.max(np.abs(imbalance[live]))) == caught.value.step.worst_imbalance
+        )
+        assert not np.array_equal(imbalance, steady)
+        assert solver.face_velocities is None and solver.stop_reason is None
+
     def test_a_capped_correction_cannot_end_a_step(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

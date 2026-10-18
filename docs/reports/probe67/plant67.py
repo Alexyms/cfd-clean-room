@@ -154,6 +154,12 @@ PLANTS: list[tuple[str, str, list[tuple[str, str, str]], list[tuple[str, str]]]]
         [T_TR, T_ORD],
     ),
     (
+        "S8",
+        "a failed march leaving an earlier solve's imbalance",
+        [(SS, "                self.last_mass_imbalance = imbalance\n", "")],
+        [T_TR],
+    ),
+    (
         "B1a",
         "the march's normal velocities not written at its start",
         [

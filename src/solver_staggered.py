@@ -233,7 +233,11 @@ def _positive_float(name: str, value: object) -> float:
 
 @dataclass(frozen=True, eq=False)
 class FlowState:
-    """A steady solve's fields and stop, as the warm start reads them (ADR-014 A).
+    """A solve's fields and stop, as the warm start reads them (ADR-014 A).
+
+    A steady solve leaves one, and so does a transient march at its end
+    (``solve_transient``, stop "transient_t_end") and after each step it
+    takes (stop None).
 
     The arrays are validated and stored as read-only C-contiguous copies,
     so a state cannot change after it is built, whoever else holds the
@@ -453,7 +457,11 @@ def _digest(field: np.ndarray) -> str:
 
 
 class StaggeredSolver:
-    """SIMPLE solver for steady incompressible flow on the staggered grid.
+    """SIMPLE solver for incompressible flow on the staggered grid, steady or marched.
+
+    ``solve_steady`` solves for the steady state; ``solve_transient`` marches a
+    laminar state through implicit time steps with SIMPLE outer iterations in
+    each (ADR-014 tier 2).
 
     Parameters
     ----------
@@ -478,7 +486,9 @@ class StaggeredSolver:
         Whether the last solve met its stopping rule rather than the cap.
     stop_reason : str or None
         "velocity_step_below_tol", "error_estimate_and_continuity" or
-        "max_simple_iter"; None until a solve completes. Both reset per solve.
+        "max_simple_iter" after a steady solve, "transient_t_end" after a
+        transient march that reached its end; None until a solve completes and
+        after a march that failed. Both reset per solve.
     last_pressure_iterations : int
         Conjugate gradient iterations of the most recent pressure correction.
     pressure_cap_hits : int
@@ -493,7 +503,9 @@ class StaggeredSolver:
         the face velocities inside the correction. Observability only.
     last_mass_imbalance : np.ndarray
         Per-cell mass imbalance of the returned face velocities, shape
-        [ny, nx]. Observability only; the solver never reads it.
+        [ny, nx]; after a transient march that failed, of the failing step's
+        last faces, whose worst value over non-SOLID cells is that step's
+        ``worst_imbalance``. Observability only; the solver never reads it.
     face_velocities : FaceVelocities or None
         The final faces of the last solve, converged or not, as read-only
         copies (REQ-S13, ADR-011 A); None until a solve completes. Their
@@ -1013,7 +1025,8 @@ class StaggeredSolver:
             When a step reaches ``step_cap`` outer iterations, or its residual
             is not finite, before meeting its criterion. It carries the
             failing step's record and every record before it; the solver's
-            ``flow_state`` is then None.
+            ``flow_state`` and ``face_velocities`` are then None and its
+            ``last_mass_imbalance`` is the failing step's last faces'.
 
         Notes
         -----
@@ -1119,6 +1132,9 @@ class StaggeredSolver:
             )
             self.transient_steps.append(record)
             if not met:
+                # The run fails here; the attribute must describe this march's
+                # last faces, not an earlier solve's.
+                self.last_mass_imbalance = imbalance
                 why = (
                     f"its residual is {history[-1]} (not finite)"
                     if not math.isfinite(history[-1])
