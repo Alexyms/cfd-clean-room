@@ -777,6 +777,70 @@ coarser grid has at least 10 cells across the front's width; the pulse and the s
 rows reported" (section G's step 5). REQ-N02's text stands; its
 rationale's "second-order scheme should reduce error by 4x" applies to the front row.
 
+**As built (prompt 65, 2026-10-17, branch phase4/step5-val008).** `tests/test_grid_convergence.py`
+carries the three rows and the control. The records below are the lines the file prints under
+`pytest tests/test_grid_convergence.py -s`, except the two four-grid rows, which are the same
+functions called on levels 0 to 3 (`halved_run` and `error_of`, grids 0.04 to 0.005 m). The file
+takes about a minute in all (55 s and 69 s in two runs, nothing else running).
+
+| Row | Scheme | Grids (dx, m) | Courant numbers | Relative L2 per grid | Observed orders | T5's orders | Asserted |
+|---|---|---|---|---|---|---|---|
+| front, the criterion row | umist | 0.02, 0.01 | 0.05, 0.025 | 3.0971e-03, 8.6993e-04 | 1.83 | 1.83 | within 0.2 of 2 |
+| front, the control | upwind | 0.02, 0.01 | 0.05, 0.025 | 4.3922e-02, 2.4268e-02 | 0.86 | 0.86 | within 0.2 of 1 |
+| front, four grids (not in the suite) | umist | 0.04, 0.02, 0.01, 0.005 | 0.1, 0.05, 0.025, 0.0125 | 9.6745e-03, 3.0971e-03, 8.6993e-04, 2.3316e-04 | 1.64, 1.83, 1.90 | 1.64, 1.83, 1.90 | none |
+| front, four grids (not in the suite) | upwind | 0.04, 0.02, 0.01, 0.005 | 0.1, 0.05, 0.025, 0.0125 | 7.4355e-02, 4.3922e-02, 2.4268e-02, 1.2838e-02 | 0.76, 0.86, 0.92 | 0.76, 0.86, 0.92 | none |
+| Gaussian pulse, reported | umist | 0.04, 0.02, 0.01 | 0.1, 0.05, 0.025 | 1.3492e-01, 6.0082e-02, 2.7121e-02 | 1.17, 1.15 | 1.17, 1.15 | none |
+| front on the stretched mesh, reported | umist | 0.04, 0.02, 0.01 | 0.1, 0.05, 0.025 | 1.0417e-02, 3.5004e-03, 1.0747e-03 | 1.57, 1.70 | not in T5 | none |
+
+Every error and order T5 states for the grids run reproduces to the digits it states.
+The four-grid rows are reproduced by calling the test module from the repository root:
+`from tests import test_grid_convergence as t`, then `t.halved_run(t.FRONT_CASE, k, scheme)` for
+k in 0 to 3 and `t.orders_of` over `t.error_of` of each run (about 95 s for UMIST).
+
+Decisions taken in the build. Each is the builder's and open to reversal.
+
+1. *The criterion row's grids are 0.02 and 0.01 m.* Section E names these as the least and says
+   "or finer". They give one pair, whose coarser grid holds the 10 cells across the width the rule
+   asks, and the pair at the rule's limit is the one nearest the bound. The row takes about 10 s and the
+   control under 5 s, so the row stays in the suite, with no slow marker and no harness entry. The pair
+   from 0.01 to 0.005 m, the finest in T5, is in the four-grid rows above and is not asserted: the
+   0.005 m grid alone takes 82 s, and the three-grid UMIST row 93 s. Gating it needs a slow
+   mechanism the repository lacks. `pyproject.toml` registers no slow marker, and the harness
+   (`scripts/benchmark.py`) records steady solves (outer iterations, solver parameters, a trajectory
+   in each row), not marches, so a transport row needs a record family of its own there.
+2. *The control's band is 0.2 about 1,* the criterion's own width. Section E says near order 1 and
+   gives no number.
+3. *The stretched row.* T5 has no front on a stretched mesh: its stretched rows are the oblique pulse
+   with y clustered at a fixed ratio of 1.05. A front uniform in y is blind to y clustering, so the
+   row clusters x, the axis it travels along, with `min_wall_spacing` at half the grid's uniform
+   spacing: cell widths run from dx / 2 at the inlet and the outlet to about 1.75 dx at the centre,
+   where the front travels. The ratio of adjacent widths then falls under refinement, as on a mesh
+   mapped smoothly from a uniform one. A fixed per-cell ratio would not: the centre cells would stop
+   shrinking and the end cells would collapse (ratio 1.05 on 200 cells puts the end cell at
+   0.38 mm). The row asserts that the mesh is stretched, so a mesh that came back uniform cannot
+   stand in for it.
+4. *Planted defects.* Each was applied to a copy of the tree and the file run against it (the
+   pulse row left out, for time). The first three are the build's checks and are kept as tests
+   in the file, with the order each reads there.
+
+| Defect planted | Site | Tests that fail | Order read |
+|---|---|---|---|
+| limiter returns the upstream cell | `limited_face_values` | the criterion row; the control holds | 0.86 |
+| Courant number held at its coarse value | `courant_at` | the criterion row, the Courant unit test | 0.99 |
+| exact front one cell off | `error_of` | the criterion row | 1.01 |
+| solver reads every scheme as upwind | `TransportSolver.__init__` | the criterion row; the control holds | |
+| limiter's psi capped at 1 in place of 2 | `limited_face_values` | the criterion row | |
+| order by natural log | `observed_order` | the criterion row, the control, the order unit tests, the limiter plant | |
+| front 1.5 widths from the inlet | `FRONT_START` | the criterion row, the tail unit test | |
+| criterion on the 5-cell pair | `CRITERION_LEVELS` | the criterion row, the control, the 10-cell unit test, the limiter plant | |
+| control runs UMIST | the control test | the control | |
+| each kept plant's defect removed | the three plant tests | that plant test | |
+| exact averages by point values | `front_cell_averages` | the quadrature unit test only | |
+| stretched row on a uniform mesh | `advance` | the stretched row's guard | |
+
+The point-value plant leaves the row's order where it was, since the profile enters the initial and
+the exact field alike; the quadrature test is what pins the closed form.
+
 ## F. The square cylinder (decision 11)
 
 **The case.** A unit square cylinder in a channel of height 20 (5% solid blockage), the inlet 10
