@@ -1104,6 +1104,23 @@ class TestRecovery:
                 6, 0.6, _fields(6), budgets, FINGERPRINT, recovery={1: np.zeros(1)}
             )
 
+    def test_the_plan_start_is_carried(self, tmp_path: Path) -> None:
+        """The start of the plan the march stepped, bitwise, or None without one.
+
+        Defects caught: the start dropped on write or read, so a second
+        restart of an extended run cannot find its checkpoint on the plan
+        (review 64 S4.1); a bool taken as a time.
+        """
+        run = RunFile(tmp_path / "run.h5")
+        budgets = [_budget(1), _budget(2)]
+        start = 0.1 + 0.2
+        run.checkpoint(4, 0.4, _fields(4), budgets, FINGERPRINT, plan_start=start)
+        assert run.read_checkpoint().plan_start == start
+        run.checkpoint(5, 0.5, _fields(5), budgets, FINGERPRINT)
+        assert run.read_checkpoint().plan_start is None
+        with pytest.raises(TypeError, match="plan_start must be a real number"):
+            run.checkpoint(6, 0.6, _fields(6), budgets, FINGERPRINT, plan_start=True)
+
 
 # ---------------------------------------------------------------------------
 # Crash safety

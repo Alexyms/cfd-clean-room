@@ -36,9 +36,11 @@ restart leaves no gap whatever the two intervals are. With
 steps and at the last, after that step's frame, and a steady solve hands its
 own checkpoint at the same cadence. A restart checks the configuration,
 reuses the flow states, resumes a capped steady solve, and continues the
-march from its checkpoint, bitwise the uninterrupted run; with a later
-``t_end`` the interval the checkpoint lies in is divided again from the
-checkpoint's time.
+march from its checkpoint on the plan the checkpoint was written on (the
+checkpoint records the plan's start), bitwise the uninterrupted run; with a
+later ``t_end`` the interval the checkpoint lies in is divided again from the
+checkpoint's time, and a restart under a ``t_end`` at or before it is
+refused.
 
 The clean-out (ADR-014 C, a scenario with an initial event). A sensor reads
 the cell containing it, the one below or to the left of it when it sits on
@@ -973,6 +975,7 @@ class _Run:
                         solver.budget,
                         plan.fingerprint,
                         recovery=None if self.tracker is None else self.tracker.state(),
+                        plan_start=plan.t_start,
                     )
                 if self.on_step is not None:
                     self.on_step(
@@ -998,21 +1001,34 @@ class _Run:
         pending.clear()
 
     def resume_point(
-        self, plans: list[IntervalPlan], step: int, t: float
+        self,
+        plans: list[IntervalPlan],
+        t: float,
+        plan_start: float | None,
     ) -> tuple[list[IntervalPlan], tuple[int, int], IntervalPlan | None]:
-        """Where a march checkpointed at (step, t) continues.
+        """Where a march checkpointed at time t continues.
 
-        The interval holding t, at the step whose time t is; or, when t is
-        not on that interval's plan (a later t_end moved the last interval's
-        end), the rest of the interval divided again from t.
+        The interval holding t, at the step whose time t is, on the plan the
+        checkpoint was written on: the interval's own, or, when the
+        checkpoint's ``plan_start`` is later than the interval's start, the
+        interval divided again from there by the restart that wrote it.
+        When t is on neither (a later t_end moved the last interval's end),
+        the rest of the interval is divided again from t.
         """
         for p, plan in enumerate(plans):
             if not plan.t_start <= t < plan.t_end:
                 continue
-            i = round((t - plan.t_start) / plan.dt)
-            if 0 <= i < plan.steps and plan.time(i) == t:
-                return plans, (p, i), None
             interval = self.intervals[plan.index]
+            written = plan
+            if plan_start is not None and plan.t_start < plan_start <= t:
+                written = plan_interval(
+                    plan.index, interval, plan.stable_dt, t_start=plan_start
+                )
+            i = round((t - written.t_start) / written.dt)
+            if 0 <= i < written.steps and written.time(i) == t:
+                if written is plan:
+                    return plans, (p, i), None
+                return [*plans[:p], written, *plans[p + 1 :]], (p, i), written
             again = plan_interval(plan.index, interval, plan.stable_dt, t_start=t)
             logger.info(
                 "restart: interval %d divided again from %r s into %d steps",
@@ -1021,7 +1037,8 @@ class _Run:
                 again.steps,
             )
             return [*plans[:p], again, *plans[p + 1 :]], (p, 0), again
-        return plans, (len(plans), 0), None
+        # run refuses a checkpoint at or past t_end, so t lies in some interval.
+        raise AssertionError(f"the checkpoint's t = {t!r} s lies in no interval")
 
 
 def run(
@@ -1067,8 +1084,9 @@ def run(
         ``restart``; when a new run's files exist; with ``flows_from`` on a
         restart, or a ``flows_from`` file whose flow inputs differ (the
         message names the first key); for a restart under another
-        configuration (``RunFile.check_restart``); for a sensor in a SOLID
-        cell, or a clean-out without sensors or thresholds.
+        configuration (``RunFile.check_restart``), or under a ``t_end`` at
+        or before the checkpoint's time (the message names both); for a
+        sensor in a SOLID cell, or a clean-out without sensors or thresholds.
     FlowNotConvergedError
         When a flow state stops at its cap or goes non-finite.
     """
@@ -1086,9 +1104,20 @@ def run(
         )
     started = perf_counter()
     mapping = config.merged_mapping()
+    checkpoint = None
     if restart is not None:
         run_path = RunFile(restart)
         run_path.check_restart(mapping)
+        try:
+            checkpoint = run_path.read_checkpoint()
+        except KeyError:
+            checkpoint = None
+        if checkpoint is not None and checkpoint.t >= config.t_end:
+            raise ValueError(
+                f"restart refused: the checkpoint is at t = {checkpoint.t!r} s (step "
+                f"{checkpoint.step}), at or past solver.t_end ({config.t_end!r} s); a "
+                "restart continues a run to a later t_end"
+            )
     else:
         assert run_file is not None
         run_path = RunFile(run_file)
@@ -1130,12 +1159,6 @@ def run(
 
     restarted_from = None
     resumed_plan = None
-    checkpoint = None
-    if restart is not None:
-        try:
-            checkpoint = run_path.read_checkpoint()
-        except KeyError:
-            checkpoint = None
     if checkpoint is not None:
         restarted_from = checkpoint.step
         run_path.discard_after(checkpoint.step)
@@ -1146,7 +1169,7 @@ def run(
         if state.tracker is not None:
             state.tracker.restore(checkpoint.recovery)
         steps, start, resumed_plan = state.resume_point(
-            plans, checkpoint.step, checkpoint.t
+            plans, checkpoint.t, checkpoint.plan_start
         )
         step, t = checkpoint.step, checkpoint.t
     else:

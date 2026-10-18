@@ -3443,6 +3443,28 @@ class TestScenarioHoldTime:
         raw["scenario"]["hold_time"] = 5.0
         _refused_scenario(tmp_path, raw, r"hold_time needs an initial event")
 
+    def test_the_hold_needs_a_start_above_the_thresholds(self, tmp_path: Path) -> None:
+        """A start below every threshold is within spec at t = 0: refused.
+
+        One class at its threshold is not within spec ("within" is below),
+        so it is accepted. Defects caught: the start not compared (the hold
+        ends the run at hold_time, review 64 S5); any class below taken for
+        every class; a class exactly at its threshold taken as within spec.
+        """
+        raw = self._raw(tmp_path, hold_time=5.5)
+        raw["scenario"]["events"][0]["initial"] = {"threshold_factor": 0.5}
+        _refused_scenario(
+            tmp_path, raw, r"'start_dirty' starts every class below its threshold"
+        )
+        below = [0.5 * t for t in SCENARIO_THRESHOLDS.values()]
+        raw["scenario"]["events"][0]["initial"] = {"concentration": below}
+        _refused_scenario(tmp_path, raw, r"the hold would end the run at 5.5 s")
+        for level in (SCENARIO_THRESHOLDS["5.0e-6"], 2.0 * 2.93e1):
+            raw["scenario"]["events"][0]["initial"] = {
+                "concentration": [*below[:4], level]
+            }
+            assert _load_scenario(tmp_path, raw).scenario.hold_time == 5.5
+
     def test_the_reference_clean_out_runs_to_its_end(self) -> None:
         """No hold, to 240 s: past the coarse mean's 100:1 time, three well-mixed times.
 
@@ -3460,6 +3482,36 @@ class TestScenarioHoldTime:
         flow = supply.velocity * (supply.x_end - supply.x_start)
         assert config.t_end == 240.0
         assert config.t_end > 3.0 * math.log(100.0) * free / flow
+
+
+@pytest.mark.unit
+class TestScenarioSchmidtNumber:
+    """A turbulent scenario states its Schmidt number at load (review 64 S3)."""
+
+    def test_a_turbulent_scenario_without_one_is_refused(self, tmp_path: Path) -> None:
+        """The default room less its Schmidt number, under the reference clean-out.
+
+        The base alone loads, since it is never marched; the scenario is
+        refused at load, before any flow is solved; the base with the number
+        restored gives a scenario that loads. Defect caught: the refusal
+        left to the first transport step, after the flow solve.
+        """
+        base = yaml.safe_load(
+            (CONFIG_DIR / "clean_room_default.yaml").read_text(encoding="utf-8")
+        )
+        schmidt = base["transport"].pop("turbulent_schmidt")
+        assert "turbulence" in base
+        path = tmp_path / "base.yaml"
+        path.write_text(yaml.safe_dump(base, sort_keys=False), encoding="utf-8")
+        assert SimConfig(path).transport.turbulent_schmidt is None
+        raw = yaml.safe_load(
+            (CONFIG_DIR / "scenario_clean_out.yaml").read_text(encoding="utf-8")
+        )
+        raw["scenario"]["base"] = "base.yaml"
+        _refused_scenario(tmp_path, raw, r"needs transport\.turbulent_schmidt")
+        base["transport"]["turbulent_schmidt"] = schmidt
+        path.write_text(yaml.safe_dump(base, sort_keys=False), encoding="utf-8")
+        assert _load_scenario(tmp_path, raw).transport.turbulent_schmidt == schmidt
 
 
 @pytest.mark.unit

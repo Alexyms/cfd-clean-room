@@ -1069,6 +1069,20 @@ def _door_clean_out(cadence: int | None) -> SimConfig:
     return SimConfig.from_dict(raw)
 
 
+def _with_t_end(config: SimConfig, t_end: float) -> SimConfig:
+    """CONFIG with solver.t_end replaced, a key a restart may change."""
+    raw = config.merged_mapping()
+    raw["solver"]["t_end"] = t_end
+    return SimConfig.from_dict(raw)
+
+
+def _copy_run(source: Path, target: Path) -> None:
+    """A run file and its checkpoint file copied byte for byte."""
+    target.write_bytes(source.read_bytes())
+    copy = RunFile(target).checkpoint_path
+    copy.write_bytes(RunFile(source).checkpoint_path.read_bytes())
+
+
 @pytest.mark.integration
 class TestRestart:
     def test_after_a_switch_the_restart_is_the_uninterrupted_run(
@@ -1157,9 +1171,7 @@ class TestRestart:
             flows_from=door.record.path,
             provenance=PROVENANCE,
         )
-        raw = config.merged_mapping()
-        raw["solver"]["t_end"] = 4.5
-        later = SimConfig.from_dict(raw)
+        later = _with_t_end(config, 4.5)
         steps, on_step = recorder()
         again = run(later, restart=tmp_path / "run.h5", on_step=on_step)
         assert again.restarted_from == first.steps
@@ -1173,6 +1185,69 @@ class TestRestart:
         frames = RunFile(tmp_path / "run.h5").read_frames()
         assert frames.steps[-1] == again.steps
         assert np.all(np.diff(frames.steps) > 0)
+
+    def test_a_second_restart_continues_on_the_extensions_plan(
+        self, tmp_path: Path, door: SimpleNamespace
+    ) -> None:
+        """An extended run killed after a checkpoint, restarted again, finished.
+
+        A run to 4 s is extended to 4.5 s twice from copies of its files:
+        once uninterrupted, once killed three steps after the first
+        checkpoint of the extension (every 10 steps) and restarted under the
+        same 4.5 s. The checkpoint lies on the plan the extension divided
+        again from 4 s, not on the plan
+        from the interval's start, and the second restart continues on it:
+        frames, budgets, readings and recovery outputs bitwise. Defects
+        caught: the plan's start not written with the checkpoint, or not
+        read by the restart, so the rest is divided again from the
+        checkpoint's time with another step (review 64 S4.1).
+        """
+        config = _door_clean_out(10)
+        first = run(
+            config,
+            tmp_path / "whole.h5",
+            flows_from=door.record.path,
+            provenance=PROVENANCE,
+        )
+        _copy_run(tmp_path / "whole.h5", tmp_path / "cut.h5")
+        later = _with_t_end(config, 4.5)
+        whole = run(later, restart=tmp_path / "whole.h5")
+        assert whole.resumed_plan is not None
+        assert whole.resumed_plan.t_start == first.t_final
+        checkpoint = 10 * (first.steps // 10 + 1)
+        assert first.steps < checkpoint < checkpoint + 3 < whole.steps
+        with pytest.raises(_KilledError):
+            run(later, restart=tmp_path / "cut.h5", on_step=killer(checkpoint + 3))
+        again = run(later, restart=tmp_path / "cut.h5")
+        assert again.restarted_from == checkpoint
+        assert again.resumed_plan == whole.resumed_plan
+        assert (again.steps, again.t_final) == (whole.steps, 4.5)
+        same_frames(RunFile(tmp_path / "cut.h5"), RunFile(whole.path))
+        _same_budgets(again.budgets, whole.budgets)
+        _same_recovery(again.recovery, whole.recovery)
+
+    @pytest.mark.parametrize("t_end", [4.0, 3.5])
+    def test_a_t_end_at_or_before_the_checkpoint_is_refused(
+        self, tmp_path: Path, door: SimpleNamespace, t_end: float
+    ) -> None:
+        """A finished run at 4 s restarted under 4 s or 3.5 s: refused, naming both.
+
+        The run file is left as it was. Defects caught: the restart accepted
+        and the run reported past its t_end (review 64 S4.2); the refusal
+        strict, so a restart under the checkpoint's own time is accepted.
+        """
+        config = _door_clean_out(30)
+        path = tmp_path / "run.h5"
+        first = run(config, path, flows_from=door.record.path, provenance=PROVENANCE)
+        assert first.t_final == 4.0
+        before = RunFile(path).read_frames().steps.tolist()
+        message = (
+            rf"restart refused: the checkpoint is at t = 4\.0 s \(step "
+            rf"{first.steps}\), at or past solver\.t_end \({t_end!r} s\)"
+        )
+        with pytest.raises(ValueError, match=message):
+            run(_with_t_end(config, t_end), restart=path)
+        assert RunFile(path).read_frames().steps.tolist() == before
 
     def test_a_diverged_flow_state_stops_the_run(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1288,6 +1363,41 @@ class TestRunScenario:
             sum("free-area mean 100:1: not reached by 6.0000 s" in x for x in lines)
             == 5
         )
+
+    def test_a_class_nothing_supplied_is_not_defined_in_the_summary(
+        self,
+        tmp_path: Path,
+        clean_out: SimpleNamespace,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """A release of one class: the other four classes' closure is not defined.
+
+        The supply is clean and there is no initial event, so classes 0, 1,
+        3 and 4 are never supplied and their relative closure has nothing to
+        divide by. Defect caught: the summary calls MassBudget.relative()
+        for them and the finished run ends in a traceback with exit 1
+        (review 64 S2).
+        """
+        raw = rescheduled(
+            coarse_raw("scenario_equipment_dust.yaml"),
+            2.0,
+            {"litho_dust": (0.5, 1.0)},
+        )
+        raw["scenario"]["events"][0]["source"]["emission"] = [0, 0, 1.0e4, 0, 0]
+        scenario = _scenario_file(tmp_path, raw)
+        argv = [str(scenario), "--out", str(tmp_path / "run.h5"), "--quiet"]
+        argv += ["--flows-from", str(clean_out.record.path)]
+        assert run_scenario.main(argv) == run_scenario.EXIT_DONE
+        lines = capsys.readouterr().out.splitlines()
+        start = lines.index(
+            "budget closure (residual, relative to the particles supplied):"
+        )
+        closure = lines[start + 1 : start + 6]
+        for k, line in enumerate(closure):
+            assert line.startswith(f"  class {k} (")
+            supplied = "relative not defined (nothing supplied)" in line
+            assert supplied == (k != 2), line
+        assert "relative " in closure[2]
 
     def test_the_exit_codes_of_a_refusal_and_a_capped_solve(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]

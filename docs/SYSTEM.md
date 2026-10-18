@@ -215,9 +215,9 @@ Generated. The responsibility and serves columns are editorial and come from `do
 | `src/boundary_registry.py` | 469 | Interprets the configured boundary segments once, answering which segment covers each point along a domain edge and which condition and prescribed velocity hold there, SOLID cells read as walls, for both boundary imposition layers: the staggered velocity layer and the concentration layer. | S12.1 |
 | `src/boundary_staggered.py` | 693 | Writes Dirichlet normal velocities exactly into the staggered domain-face entries and exposes the tangential wall values, wall distances, pressure outlets and wall faces as data for the momentum and pressure steps and the wall functions. | S12 |
 | `src/boundary_vents.py` | 250 | Derives the mesh faces each equipment vent covers on its obstacle face, from the staggered layout's obstacle-face inputs and the registry's first-match coverage, with the face masks the velocity, turbulence and concentration layers read, and refuses a vent that covers no face or a recirculating pair whose flows differ on the faces. | S12.1 |
-| `src/config.py` | 2470 | Loads the YAML configuration into typed dataclasses and rejects missing keys, wrong types and out-of-range values at load time. | A02, A03, C01, C02, C03, S10 |
+| `src/config.py` | 2495 | Loads the YAML configuration into typed dataclasses and rejects missing keys, wrong types and out-of-range values at load time. | A02, A03, C01, C02, C03, S10 |
 | `src/constants.py` | 8 | Holds the physical constants shared by every module so that none of them defines its own copy. | C04 |
-| `src/io_manager.py` | 1354 | Writes a run's HDF5 run file by appending (the merged configuration with its restart hash, the flow states, the transport frames, budgets and sensor readings, and a clean-out's recovery outputs) and its checkpoint file by atomic replacement (the march's checkpoint and the steady solve's), reads each back bitwise, and refuses a restart under a changed configuration, so a killed or capped run continues to what the uninterrupted run reaches. | none |
+| `src/io_manager.py` | 1368 | Writes a run's HDF5 run file by appending (the merged configuration with its restart hash, the flow states, the transport frames, budgets and sensor readings, and a clean-out's recovery outputs) and its checkpoint file by atomic replacement (the march's checkpoint and the steady solve's), reads each back bitwise, and refuses a restart under a changed configuration, so a killed or capped run continues to what the uninterrupted run reaches. | none |
 | `src/mesh.py` | 442 | Builds the structured grid, uniform or geometrically clustered at the walls, with the face, center, width and center-to-center arrays a face-based stencil needs, and classifies each cell as FLUID, SOLID or BOUNDARY. | S11 |
 | `src/momentum.py` | 1060 | Predicts u* and v* on the staggered grid with QUICK advection by deferred correction over an upwind implicit matrix, a configured number of under-relaxed Jacobi sweeps per call, an optional per-cell viscosity field with its face rule and stress source, and the domain edge's wall stencil at obstacle faces, and returns the diagonal coefficients the pressure correction needs. | S07, S09, S14 |
 | `src/multigrid.py` | 384 | Builds an additive-correction multigrid hierarchy from a five-point pressure system by 2x2 aggregation, its coarse operators the exact Galerkin sums with no probing, and applies one symmetric V-cycle with weighted Jacobi smoothing and a dense pseudo-inverse on the coarsest level as the preconditioner of the pressure correction's conjugate gradients. | S08 |
@@ -229,10 +229,10 @@ Generated. The responsibility and serves columns are editorial and come from `do
 | `src/solver_transport.py` | 1075 | Advances one particle class one explicit step on the staggered face velocities: QUICK's face value bounded by the UMIST limiter under forward Euler at a Courant number the configuration sets, implicit diffusion and deposition by Jacobi on per-face conductances, the Brownian coefficient plus nu_t / Sc_t on interior faces when handed an eddy viscosity field, the settling increment on interior faces, sources added and booked, SOLID cells zero; keeps one MassBudget per class and defines FieldHistory, the output contract for the animation. | N01, T01, T03, T04, T05, T06, T07, T08, T11, T12, T13 |
 | `src/staggered.py` | 443 | Defines the staggered (MAC) field layout: shapes and allocation of face-centered u and v and cell-centered p, the face-to-center averaging the solver applies before returning, and FaceVelocities, the read-only face pair the solver exposes and the transport solver advects with. | S07, S13 |
 | `src/stopping.py` | 408 | Decides when the steady outer iteration has converged, on four conditions: (a) the iteration error estimated from the step and its fitted geometric rate, over a physical velocity scale; (b) the worst per-cell mass imbalance against its own tolerance; (c) the summed imbalance over the through-flow, which shares the tolerance of (a); and (d) the signed imbalance summed over the domain, which shares the tolerance of (b); and with the turbulence model a fifth, (e), the same estimate on the eddy viscosity over the molecular viscosity plus the median eddy viscosity of the FLUID cells, which the solver passes each outer iteration. Also defines IterationState, the snapshot a solver hands its callback once per outer iteration. | S01, S04 |
-| `src/time_integration.py` | 1189 | Runs a scenario under tier 1: solves each distinct flow state once, warm-started from the state before it, or reuses one a run file holds, then marches every particle class at one step through the intervals, dividing each into equal steps under the stable step and carrying the fields and budgets across each switch, writing frames, budgets, sensor readings and checkpoints through the run file, continuing a run from its checkpoint, and for a clean-out tracking the recovery outputs every step; it discretises nothing. | N01 |
+| `src/time_integration.py` | 1212 | Runs a scenario under tier 1: solves each distinct flow state once, warm-started from the state before it, or reuses one a run file holds, then marches every particle class at one step through the intervals, dividing each into equal steps under the stable step and carrying the fields and budgets across each switch, writing frames, budgets, sensor readings and checkpoints through the run file, continuing a run from its checkpoint, and for a clean-out tracking the recovery outputs every step; it discretises nothing. | N01 |
 | `src/turbulence.py` | 1622 | Advances the k-epsilon model's k and eps one step on a prescribed face velocity field, standard or RNG with each variant's constants as module data: advection, explicit growth from the strain the faces give and implicit decay and diffusion through the shared scalar scheme, boundary values from a conditions object the caller builds each step, the kinematic eddy viscosity, and an assertion that k and eps are positive and finite after every step; and the scalable wall functions, which build those conditions, the wall viscosity of the momentum wall faces and the inlet values the coupled solve starts from. | S14, S15, S17 |
 
-Total 21 Python files, 15372 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
+Total 21 Python files, 15434 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
 
 `Declares it serves` is an EDITORIAL CLAIM read from `docs/system_map_annotations.toml`. It says which requirements a module is meant to satisfy, not that it does. Whether a requirement is met is answered by the tests named in the register's `Verified By` column.
 <!-- END GENERATED: components -->
@@ -257,7 +257,7 @@ Generated. Static import analysis cannot see a function bound into a registry by
 |---|---|
 | Scope | `src/**/*.py` |
 | Files hashed | 21 |
-| Digest | `sha256:363ec3892c70b45bd6c2fb001cffa938d9677dd4cc8a39697d9f82c33c106f19` |
+| Digest | `sha256:1cb068d17db96c1fff0f1f2b6c4c895dfae92f933c49a2e31baa7a26a68bd085` |
 
 This is what lets the document answer whether it is current, which is the one question a stale table cannot be asked. `python scripts/gen_system_map.py --check` recomputes the whole set of generated regions, this digest included, and exits non-zero on any disagreement.
 
@@ -1512,11 +1512,15 @@ run(config, run_file=None, *, restart=None, flows_from=None, on_step=None,
     # output_interval steps and the last; sensor readings from step 0, every
     # step, appended at each frame and before each checkpoint; the march
     # checkpoint every checkpoint_interval steps and at the last, after that
-    # step's frame, with the recovery tracker's state. A restart reads the
-    # checkpoint, discard_after(its step), and continues bitwise, the interval
-    # it lies in divided again from its time when that time is not on the
-    # interval's plan (a later t_end); with no checkpoint, discard_march and
-    # march from step 0. A scenario with an initial event is a clean-out: its
+    # step's frame, with the recovery tracker's state and the start of the
+    # plan it stepped. A restart reads the checkpoint before any flow solve,
+    # refuses a t_end at or before its time (naming both), discard_after(its
+    # step), and continues bitwise on the plan the checkpoint was written on
+    # (its interval's, or the one an earlier restart divided again from
+    # plan_start), the interval it lies in divided again from its time when
+    # that time is on neither (a later t_end); with no checkpoint,
+    # discard_march and march from step 0. A scenario with an initial event
+    # is a clean-out: its
     # RecoveryTracker is updated every step, the run stops on hold_time, and
     # /recovery/ is written at the end.
 smallest_stable_dt(solver, faces, n_classes) -> float   # min over the classes
@@ -1608,12 +1612,16 @@ RunFile(path)
         # well_mixed_time, room_recovery_time and hold_time when not None.
         # Neither discard touches it (review 63 S3)
     read_recovery() -> RecoveryRecord   # KeyError without one
-    checkpoint(step, t, fields, budgets, fingerprint, recovery=None) -> None
-        # /checkpoint/ of the checkpoint file: attributes step, t, fingerprint;
-        # C_<k> and budgets as in /transport/; recovery, named arrays the march
-        # carries besides (the recovery tracker's), in its /recovery/ child
+    checkpoint(step, t, fields, budgets, fingerprint, recovery=None,
+               plan_start=None) -> None
+        # /checkpoint/ of the checkpoint file: attributes step, t, fingerprint,
+        # plan_start when given (the start of the plan the march stepped,
+        # prompt 66); C_<k> and budgets as in /transport/; recovery, named
+        # arrays the march carries besides (the recovery tracker's), in its
+        # /recovery/ child
     read_checkpoint() -> MarchCheckpoint   # step, t, fields, budgets,
-                                    # fingerprint, recovery ({} without);
+                                    # fingerprint, recovery ({} without),
+                                    # plan_start (None without);
                                     # KeyError without one
     write_steady_checkpoint(checkpoint: SteadyCheckpoint, fingerprint) -> None
         # /steady_checkpoint/ of the checkpoint file: step 0's layout (u, v, p,
