@@ -1098,6 +1098,11 @@ as `mu_eff` is), `mesh.py`'s the breakpoints.
    *recovery field included, is the uninterrupted run bitwise on its first run. Every hash of*
    *record unchanged.*
 5. VAL-008 (`tests/test_grid_convergence.py`, section E) and the plan's row amended.
+   *Built 2026-10-17 (prompt 65, merged as PR 92), with section E's as-built table and two*
+   *departures: the criterion pair is 0.02 and 0.01 m, not the two finest grids, for runtime*
+   *(the finest pair is reported in the four-grid rows, not asserted); and the stretched row is*
+   *a front on a smoothly stretched mesh, which T5 did not have (its stretched rows are the*
+   *oblique pulse at a fixed ratio). Its relative L2 is an unweighted cell norm (test 65 S1).*
 6. Tier 2: the transient term in `momentum.py` (bitwise the steady path when None), BDF2 and
    the step loop in `solver_staggered.py`, interior clustering in `mesh.py`, the lift and drag
    instrument, `configs/validation_cylinder.yaml`; VAL-022's three rows in
