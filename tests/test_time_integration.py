@@ -25,13 +25,14 @@ planted defect it was shown to catch:
 The coarse fixtures extend the reference scenario files with the grid
 overridden to 80x30 and the error_estimate per-cell tolerance set by
 ADR-011 G's formula at the base's t_end, the product row of record on that
-grid (hash 6f27f27f, 1021 outer iterations, docs/reports/probe62/hash62.py).
+grid (1021 outer iterations). A face hash of record belongs to one machine's
+arithmetic, so no test here asserts one: the faces are compared with a solve
+made in the same process, and the hashes of record are the harness's.
 The event times of the transport-only and door fixtures are scaled down so
 the suite marches seconds, not minutes; their segments, sources and initial
 fields are the reference files'.
 """
 
-import hashlib
 import math
 import sys
 from collections.abc import Callable
@@ -51,11 +52,13 @@ from src.boundary_concentration import (
     ConcentrationBoundary,
 )
 from src.boundary_registry import BoundaryRegistry
+from src.boundary_staggered import StaggeredBoundary
 from src.config import SimConfig
 from src.io_manager import RunFile
 from src.mesh import SOLID, Mesh
 from src.particles import ParticlePhysics
 from src.scenarios import Interval, ScenarioManager
+from src.solver_staggered import FlowState, StaggeredSolver
 from src.solver_transport import TransportSolver
 from src.staggered import FaceVelocities
 from src.time_integration import (
@@ -87,11 +90,9 @@ COARSE_GRID = {"nx": 80, "ny": 30}
 # ADR-011 G's per-cell bound, 1e-4 rho V_min / t_end, on 80x30 at the base's
 # t_end of 60 s, as the product row of record on this grid ran it.
 COARSE_MASS_IMBALANCE_TOL = 1.0e-4 * 1.2 * (0.1 * 0.1) / 60.0
-COARSE_FACE_HASH = "6f27f27f3e89963a3bee283be46599381cce35d4ae5370db79de71f990dd6e3e"
 COARSE_OUTER = 1021
 # The open door's state warm-started from the closed one on 80x30, as prompt
-# 64 first solved it (results/builder64/door.h5): the warm start's record.
-OPEN_FACE_HASH = "17fa707443858ce6e41c3a89547858f4ebad00cdca4fc25d75113eee065ad617"
+# 64 first solved it.
 OPEN_OUTER = 928
 # REQ-T05: particle mass conserved to 0.01%. The march closes to about 1e-7
 # here, set by the implicit diffusion's diffusion_tol of 1e-8 per step.
@@ -131,12 +132,23 @@ def door_events(raw: dict, second: tuple[float, float]) -> list:
     return [opening, again]
 
 
-def face_hash(u: np.ndarray, v: np.ndarray) -> str:
-    """SHA-256 over u's bytes then v's, as the hashes of record are taken."""
-    return hashlib.sha256(
-        np.ascontiguousarray(u, dtype="<f8").tobytes()
-        + np.ascontiguousarray(v, dtype="<f8").tobytes()
-    ).hexdigest()
+def direct_solve(
+    interval: Interval, mesh: Mesh, initial: FlowState | None = None
+) -> FlowState:
+    """An interval's flow state solved on its own, in this process, as the run solves it."""
+    config = interval.config
+    solver = StaggeredSolver(mesh, config, StaggeredBoundary(mesh, config))
+    solver.solve_steady(initial=initial)
+    assert solver.converged and solver.flow_state is not None
+    return solver.flow_state
+
+
+def same_faces(a: FlowState, b: FlowState) -> None:
+    """Two states' face velocities, bitwise."""
+    for name in ("u", "v"):
+        mine = np.ascontiguousarray(getattr(a, name))
+        theirs = np.ascontiguousarray(getattr(b, name))
+        assert mine.shape == theirs.shape and mine.tobytes() == theirs.tobytes(), name
 
 
 def recorder() -> tuple[list[MarchStep], Callable[[MarchStep], None]]:
@@ -587,10 +599,12 @@ class TestCleanOut:
     def test_the_state_is_the_coarse_product_row_of_record(
         self, clean_out: SimpleNamespace
     ) -> None:
-        """One state solved from rest, the 80x30 product row's faces bitwise.
+        """One state solved from rest, the faces a direct solve's bitwise.
 
-        Defects caught: the first state warm-started from something; the run
-        file holding a state other than the solve's.
+        The reference is a solve_steady of the same configuration made here,
+        not a hash recorded elsewhere. Defects caught: the first state
+        warm-started from something; the run file holding a state other
+        than the solve's.
         """
         record = clean_out.record
         assert [f.origin for f in record.flows] == [REST]
@@ -600,7 +614,11 @@ class TestCleanOut:
             "error_estimate_and_continuity",
         )
         state = clean_out.run.read_flow_state(flow.fingerprint).state
-        assert face_hash(state.u, state.v) == COARSE_FACE_HASH
+        mesh = Mesh(clean_out.config)
+        first = ScenarioManager(clean_out.config, mesh).intervals()[0]
+        direct = direct_solve(first, mesh)
+        assert direct.outer == COARSE_OUTER
+        same_faces(state, direct)
         assert clean_out.run.flow_fingerprints() == (flow.fingerprint,)
         assert air_change_rate(state, Mesh(clean_out.config)) == pytest.approx(
             3.15 / 17.52, rel=1e-12
@@ -884,11 +902,12 @@ class TestDoor:
     ) -> None:
         """Closed from rest, open warm from closed, the second opening solved by nobody.
 
-        The open state is the warm start of record, faces and outer count.
-        Defects caught: the second opening solved again; the open state
-        started from rest (its faces and count are the rest solve's, though
-        the label says warm); a state warm-started from a state other than
-        the one before it.
+        The references are solves made here: the closed state from rest and
+        the open one warm-started from it, the run's faces bitwise and its
+        outer counts equal. Defects caught: the second opening solved again;
+        the open state started from rest (its faces and count are the rest
+        solve's, though the label says warm); a state warm-started from a
+        state other than the one before it.
         """
         record = door.record
         closed, opened = (f.fingerprint for f in record.flows)
@@ -907,11 +926,13 @@ class TestDoor:
             f.stop_reason == "error_estimate_and_continuity" for f in record.flows
         )
         assert [f.outer for f in record.flows] == [COARSE_OUTER, OPEN_OUTER]
-        states = [door.run.read_flow_state(key).state for key in (closed, opened)]
-        assert [face_hash(x.u, x.v) for x in states] == [
-            COARSE_FACE_HASH,
-            OPEN_FACE_HASH,
-        ]
+        mesh = Mesh(door.config)
+        intervals = ScenarioManager(door.config, mesh).intervals()
+        direct_closed = direct_solve(intervals[0], mesh)
+        direct_open = direct_solve(intervals[1], mesh, initial=direct_closed)
+        assert (direct_closed.outer, direct_open.outer) == (COARSE_OUTER, OPEN_OUTER)
+        same_faces(door.run.read_flow_state(closed).state, direct_closed)
+        same_faces(door.run.read_flow_state(opened).state, direct_open)
         assert sorted(door.run.flow_fingerprints()) == sorted([closed, opened])
         assert [p.events for p in record.intervals] == [
             (),
@@ -1190,8 +1211,8 @@ class TestRestart:
         again = run(SimConfig.from_dict(raw), restart=path)
         assert [(f.origin, f.outer) for f in again.flows] == [(RESUMED, COARSE_OUTER)]
         state = RunFile(path).read_flow_state(key).state
-        assert face_hash(state.u, state.v) == COARSE_FACE_HASH
         theirs = clean_out.run.read_flow_state(key).state
+        same_faces(state, theirs)
         for field in ("p", "k", "eps", "nu_t"):
             assert getattr(state, field).tobytes() == getattr(theirs, field).tobytes()
 
