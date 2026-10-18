@@ -1,4 +1,4 @@
-"""The observed order in time of the transient solve (ADR-014 step 6a).
+"""VAL-023: the observed order in time of the transient solve (ADR-014 step 6a).
 
 The case is VAL-002's lid-driven cavity at Re 100 on a fixed uniform 20x20
 grid, spun up from rest to T = 1 s. No exact unsteady solution fits this
@@ -8,7 +8,13 @@ successive differences of every u and v face at T in the largest absolute
 value. The grid is fixed, so the differences hold the time error only. The
 cylinder cannot show the order: its error mixes grid, boundaries and time.
 
-The order is read from the two finest differences, the asymptotic pair;
+The order is read from the two finest differences, the asymptotic pair. The
+coarser pair reads 2.20 for BDF2 in the recorded run, just outside the band,
+because at dt 0.1 s the ladder has not reached the asymptotic range: the
+ratio falls toward 2 as dt halves (2.20, then 2.05), and each test prints
+every pair's order. An integrated scalar such as the kinetic energy does
+not show the order on this grid, because its BDF2 error changes sign along
+the ladder (test 67, section 8), so the test reads a field.
 docs/reports/probe67/tables67.md gives every difference and order of the
 recorded run (results/builder67/order67.json). The per-step criterion is
 1e-10 of the lid speed with the pressure solve at its floor of 1e-10, and the
@@ -75,30 +81,42 @@ def ladder() -> dict[str, list[FlowState]]:
 
 
 def _differences(states: list[FlowState]) -> list[float]:
+    """The difference between each run and the next, coarsest first."""
     return [_difference(a, b) for a, b in pairwise(states)]
 
 
-def _finest_order(states: list[FlowState]) -> float:
-    """log2 of the ratio of the two finest successive differences."""
+def _finest_order(states: list[FlowState], scheme: str) -> float:
+    """log2 of the ratio of the two finest successive differences.
+
+    Every pair's order is printed (pytest shows it with -s or on a failure),
+    so the reading of the coarser pairs is visible beside the asserted one.
+    """
     diffs = _differences(states)
-    return float(np.log2(diffs[-2] / diffs[-1]))
+    orders = [float(np.log2(d0 / d1)) for d0, d1 in pairwise(diffs)]
+    print(f"{scheme}: differences {diffs}, orders by pair {orders}")
+    return orders[-1]
 
 
 @pytest.mark.validation
 class TestOrderInTime:
-    """BDF2 within 0.2 of 2, implicit Euler, the control, within 0.2 of 1."""
+    """VAL-023: BDF2 within 0.2 of 2, implicit Euler, the control, within 0.2 of 1.
+
+    On the finest pair of the step ladder, with the iteration error at least
+    two orders below the smallest time difference.
+    """
 
     def test_bdf2_is_second_order(self, ladder: dict[str, list[FlowState]]) -> None:
         """Catches: the BDF2 weights perturbed, the old levels swapped, the first
         step left BDF2 with a zero old level, BDF2 falling back to implicit Euler.
         """
-        order = _finest_order(ladder[BDF2])
+        order = _finest_order(ladder[BDF2], BDF2)
         assert abs(order - 2.0) <= ORDER_TOLERANCE, order
 
     def test_implicit_euler_is_first_order(
         self, ladder: dict[str, list[FlowState]]
     ) -> None:
-        order = _finest_order(ladder[IMPLICIT_EULER])
+        """The control. Catches: the scheme argument ignored, every step BDF2."""
+        order = _finest_order(ladder[IMPLICIT_EULER], IMPLICIT_EULER)
         assert abs(order - 1.0) <= ORDER_TOLERANCE, order
 
     def test_the_iteration_error_is_far_below_the_smallest_difference(

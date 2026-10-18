@@ -57,7 +57,7 @@ def _load() -> dict[str, object]:
     return namespace
 
 
-def load_implicit_euler_predictor() -> type:
+def load_implicit_euler_predictor() -> type[MomentumPredictor]:
     """The probe's ImplicitEulerPredictor, subclassing the committed MomentumPredictor.
 
     Returns

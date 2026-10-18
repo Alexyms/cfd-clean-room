@@ -176,7 +176,8 @@ def hash_table() -> list[str]:
         old64 = load(HASHES / f"hash_{case}_64.json")
         old62 = load(HASHES / f"hash_{case}.json")
 
-        def same(old: dict | None, new: dict = new) -> str:
+        def same(old: dict[str, object] | None, new: dict[str, object] = new) -> str:
+            """Whether a record's face hash is this step's, or that it has none."""
             return (
                 "no record"
                 if old is None
@@ -204,6 +205,7 @@ def render() -> str:
 
 
 def main() -> int:
+    """Write the tables, or with --check compare them with the committed file."""
     parser = argparse.ArgumentParser(description="ADR-014 step 6a's tables")
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()

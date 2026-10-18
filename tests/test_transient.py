@@ -165,6 +165,7 @@ class TestArguments:
     def test_a_bad_argument_is_refused(
         self, key: str, value: object, error: type
     ) -> None:
+        """Each of dt, t_end, step_tol, step_cap and scheme, alone, refused by name."""
         solver = staggered_solver(_cavity())
         kwargs = {**GOOD_ARGUMENTS, key: value}
         dt, t_end = kwargs.pop("dt"), kwargs.pop("t_end")
@@ -299,6 +300,7 @@ class TestSteps:
         done: list[int] = []
 
         def capped_from_step_3(*args: object, **kwargs: object) -> object:
+            """The correction, reported as capped once two steps have ended."""
             corrected = correct(*args, **kwargs)
             return replace(corrected, reached_cap=True) if len(done) >= 2 else corrected
 
@@ -327,6 +329,7 @@ class TestSteps:
         predict = solver._predictor.predict
 
         def poisoned(*args: object, **kwargs: object) -> object:
+            """The prediction with one u face made NaN."""
             prediction = predict(*args, **kwargs)
             u_star = prediction.u_star.copy()
             u_star[3, 3] = np.nan
@@ -478,7 +481,7 @@ class TestBoundaries:
         assert np.max(np.abs(ends[-1].u[:, 1:-1])) > 0.5 * inlet
 
 
-def _converged(raw: dict) -> StaggeredSolver:
+def _converged(raw: dict[str, object]) -> StaggeredSolver:
     """A steady solve to the velocity step 1e-12, the pressure to 1e-10."""
     raw["solver"].update(
         stopping_rule="velocity_step",
@@ -492,13 +495,15 @@ def _converged(raw: dict) -> StaggeredSolver:
     return solver
 
 
-def _cavity_raw() -> dict:
+def _cavity_raw() -> dict[str, object]:
+    """VAL-002's cavity on 16x16, as a mapping."""
     raw = yaml.safe_load(case_path("cavity").read_text(encoding="utf-8"))
     raw["domain"]["nx"] = raw["domain"]["ny"] = 16
     return raw
 
 
-def _channel_raw() -> dict:
+def _channel_raw() -> dict[str, object]:
+    """VAL-001's channel on 20x10, as a mapping."""
     raw = channel_raw()
     raw["domain"]["nx"], raw["domain"]["ny"] = 20, 10
     return raw

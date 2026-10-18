@@ -154,6 +154,12 @@ PLANTS: list[tuple[str, str, list[tuple[str, str, str]], list[tuple[str, str]]]]
         [T_TR, T_ORD],
     ),
     (
+        "S9",
+        "the scheme argument ignored, every step after the first BDF2",
+        [(SS, "bdf2 = scheme == BDF2 and n > 1", "bdf2 = n > 1")],
+        [T_ORD],
+    ),
+    (
         "S8",
         "a failed march leaving an earlier solve's imbalance",
         [(SS, "                self.last_mass_imbalance = imbalance\n", "")],

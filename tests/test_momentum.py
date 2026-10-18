@@ -1694,7 +1694,9 @@ def _levels(
     return u, v, p, old
 
 
-def _bdf2(old: list[tuple[np.ndarray, np.ndarray]]) -> tuple:
+def _bdf2(
+    old: list[tuple[np.ndarray, np.ndarray]],
+) -> tuple[tuple[np.ndarray, np.ndarray], tuple[np.ndarray, np.ndarray]]:
     """The BDF2 argument's levels: (u_n, u_nm1), (v_n, v_nm1)."""
     return (old[0][0], old[1][0]), (old[0][1], old[1][1])
 

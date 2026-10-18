@@ -88,7 +88,8 @@ def probe59() -> object:
     return module
 
 
-def build(raw: dict) -> tuple[Mesh, StaggeredSolver]:
+def build(raw: dict[str, object]) -> tuple[Mesh, StaggeredSolver]:
+    """The mesh and a solver of the configuration mapping."""
     config = SimConfig.from_dict(raw)
     mesh = Mesh(config)
     return mesh, StaggeredSolver(mesh, config, StaggeredBoundary(mesh, config))
@@ -128,7 +129,9 @@ def startup(cyl: object) -> tuple[FlowState, dict]:
     }
 
 
-def march(cyl: object, arm: str, start: FlowState, steps: int, concurrent: int) -> dict:
+def march(
+    cyl: object, arm: str, start: FlowState, steps: int, concurrent: int
+) -> dict[str, object]:
     """STEPS steps of one arm from the start-up field."""
     scheme, dt = ARMS[arm]
     raw = cyl.cylinder_raw(DX, STEP_CAP, 1e-12, PRESSURE_RTOL)
@@ -138,6 +141,7 @@ def march(cyl: object, arm: str, start: FlowState, steps: int, concurrent: int) 
     clock = [perf_counter()]
 
     def on_step(record: TransientStep, state: FlowState) -> None:
+        """Record the step's count, imbalance, wake velocity and wall time."""
         now = perf_counter()
         _u_c, v_c = to_cell_centers(np.array(state.u), np.array(state.v))
         rows.append(
@@ -193,7 +197,7 @@ def march(cyl: object, arm: str, start: FlowState, steps: int, concurrent: int) 
     }
 
 
-def against_probe(arm: dict) -> dict:
+def against_probe(arm: dict[str, object]) -> dict[str, object]:
     """A_ie's steps against the probe's arm A, over the steps both took."""
     probe = json.loads((PROBE_RECORDS / "cylinder_A.json").read_text(encoding="utf-8"))
     pairs = list(zip(arm["rows"], probe["rows"], strict=False))
@@ -209,6 +213,7 @@ def against_probe(arm: dict) -> dict:
 
 
 def main() -> None:
+    """Solve the start-up, march every arm and write the record."""
     parser = argparse.ArgumentParser(description="Prompt 67, the cylinder smoke run")
     parser.add_argument("--steps", type=int, default=40)
     parser.add_argument("--arms", default=",".join(ARMS))

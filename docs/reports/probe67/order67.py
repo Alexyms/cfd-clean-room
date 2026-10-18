@@ -71,7 +71,7 @@ def commit() -> str:
     ).stdout.strip()
 
 
-def cavity_raw(grid: int) -> dict:
+def cavity_raw(grid: int) -> dict[str, object]:
     """VAL-002's cavity on grid x grid, the pressure solve at its floor."""
     raw = yaml.safe_load(case_path("cavity").read_text(encoding="utf-8"))
     raw["domain"]["nx"] = raw["domain"]["ny"] = grid
@@ -81,8 +81,8 @@ def cavity_raw(grid: int) -> dict:
 
 
 def spin_up(
-    raw: dict, dt: float, t_end: float, scheme: str, step_tol: float
-) -> tuple[FlowState, dict]:
+    raw: dict[str, object], dt: float, t_end: float, scheme: str, step_tol: float
+) -> tuple[FlowState, dict[str, object]]:
     """The cavity from rest to t_end; the end state and the run's counts."""
     config = SimConfig.from_dict(raw)
     mesh = Mesh(config)
@@ -116,6 +116,7 @@ def difference(a: FlowState, b: FlowState) -> float:
 
 
 def main() -> None:
+    """Run the ladder for both schemes and write the record."""
     parser = argparse.ArgumentParser(description="Prompt 67, the order in time")
     parser.add_argument("--grid", type=int, default=20)
     parser.add_argument("--t-end", type=float, default=1.0)
