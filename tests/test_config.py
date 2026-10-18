@@ -23,9 +23,11 @@ from src.config import (
     PRESSURE_RTOL_BOUNDS,
     RETIRED_PRESSURE_TOL_KEY,
     SOLVER_KEYS,
+    Breakpoint,
     SimConfig,
     TransportSpec,
     TurbulenceSpec,
+    breakpoint_faces,
 )
 from validation.cases import CONFIG_DIR, load_case
 from validation.transport_cases import SOLVER_BLOCK
@@ -1166,6 +1168,168 @@ class TestMeshStretching:
             SimConfig.from_dict(self._raw(tmp_path, {"z": {"stretch_ratio": 1.1}}))
         with pytest.raises(ValueError, match="not recognised"):
             SimConfig.from_dict(self._raw(tmp_path, {"x": {"ratio": 1.1}}))
+
+
+# A body face at 2 m on the 4 m axis: 0.2 m at the walls, 0.05 m there.
+AXIS = [
+    {"at": 0.0, "spacing": 0.2},
+    {"at": 2.0, "spacing": 0.05},
+    {"at": 4.0, "spacing": 0.2},
+]
+AXIS_CELLS = 38
+
+
+@pytest.mark.unit
+class TestMeshBreakpoints:
+    """mesh.<axis>.breakpoints (ADR-014 decision 11): interior clustering, refused at load."""
+
+    def _raw(self, tmp_path, breakpoints: object, nx: int = AXIS_CELLS) -> dict:
+        with open(_write_config(tmp_path), encoding="utf-8") as handle:
+            raw = yaml.safe_load(handle)
+        raw["domain"]["nx"] = nx
+        raw["mesh"] = {"x": {"breakpoints": breakpoints}}
+        return raw
+
+    def test_the_breakpoints_and_their_faces_are_read(self, tmp_path) -> None:
+        config = SimConfig.from_dict(self._raw(tmp_path, AXIS))
+        spec = config.stretch_x
+        assert spec.breakpoints == (
+            Breakpoint(0.0, 0.2),
+            Breakpoint(2.0, 0.05),
+            Breakpoint(4.0, 0.2),
+        )
+        assert len(spec.faces) == AXIS_CELLS + 1
+        assert spec.faces == breakpoint_faces(spec.breakpoints)
+        assert config.stretch_y.breakpoints == () and config.stretch_y.faces == ()
+
+    def test_a_count_other_than_the_breakpoints_give_is_refused_with_theirs(
+        self, tmp_path
+    ) -> None:
+        with pytest.raises(
+            ValueError, match=f"give {AXIS_CELLS} cells and the domain states 80"
+        ):
+            SimConfig.from_dict(self._raw(tmp_path, AXIS, nx=80))
+
+    def test_a_jump_above_the_cap_is_refused(self, tmp_path) -> None:
+        steep = [
+            {"at": 0.0, "spacing": 1.0},
+            {"at": 2.0, "spacing": 0.01},
+            {"at": 4.0, "spacing": 1.0},
+        ]
+        n = (
+            len(breakpoint_faces([Breakpoint(p["at"], p["spacing"]) for p in steep]))
+            - 1
+        )
+        with pytest.raises(ValueError, match="above MAX_GROWTH_RATIO"):
+            SimConfig.from_dict(self._raw(tmp_path, steep, nx=n))
+
+    def test_with_wall_clustering_it_is_refused(self, tmp_path) -> None:
+        raw = self._raw(tmp_path, AXIS)
+        raw["mesh"]["x"]["stretch_ratio"] = 1.1
+        with pytest.raises(ValueError, match="on their own"):
+            SimConfig.from_dict(raw)
+
+    @pytest.mark.parametrize(
+        ("label", "breakpoints", "error", "match"),
+        [
+            (
+                "not a list",
+                {"at": 0.0, "spacing": 0.1},
+                ValueError,
+                "list of at least two",
+            ),
+            ("one point", AXIS[:1], ValueError, "list of at least two"),
+            ("not a mapping", [AXIS[0], 2.0, AXIS[2]], ValueError, "mapping"),
+            (
+                "a key missing",
+                [AXIS[0], {"at": 2.0}, AXIS[2]],
+                ValueError,
+                "exactly the keys",
+            ),
+            (
+                "a key extra",
+                [AXIS[0], {**AXIS[1], "ratio": 1.1}, AXIS[2]],
+                ValueError,
+                "exactly the keys",
+            ),
+            (
+                "at a bool",
+                [AXIS[0], {"at": True, "spacing": 0.05}, AXIS[2]],
+                TypeError,
+                "at must be a number",
+            ),
+            (
+                "at a string",
+                [AXIS[0], {"at": "2", "spacing": 0.05}, AXIS[2]],
+                TypeError,
+                "at must be a number",
+            ),
+            (
+                "at not finite",
+                [AXIS[0], {"at": float("nan"), "spacing": 0.05}, AXIS[2]],
+                ValueError,
+                "finite",
+            ),
+            (
+                "spacing zero",
+                [AXIS[0], {"at": 2.0, "spacing": 0.0}, AXIS[2]],
+                ValueError,
+                "positive",
+            ),
+            (
+                "spacing negative",
+                [AXIS[0], {"at": 2.0, "spacing": -0.05}, AXIS[2]],
+                ValueError,
+                "positive",
+            ),
+            (
+                "spacing a bool",
+                [AXIS[0], {"at": 2.0, "spacing": True}, AXIS[2]],
+                TypeError,
+                "number",
+            ),
+            (
+                "first not at 0",
+                [{"at": 0.5, "spacing": 0.2}, *AXIS[1:]],
+                ValueError,
+                "from 0 to the axis length",
+            ),
+            (
+                "last not at the length",
+                [*AXIS[:2], {"at": 3.5, "spacing": 0.2}],
+                ValueError,
+                "from 0 to the axis length",
+            ),
+            (
+                "out of order",
+                [
+                    AXIS[0],
+                    {"at": 3.0, "spacing": 0.05},
+                    {"at": 2.0, "spacing": 0.1},
+                    AXIS[2],
+                ],
+                ValueError,
+                "strictly increasing",
+            ),
+            (
+                "a repeated point",
+                [AXIS[0], AXIS[1], AXIS[1], AXIS[2]],
+                ValueError,
+                "strictly increasing",
+            ),
+            (
+                "a spacing as long as its segment",
+                [AXIS[0], {"at": 2.0, "spacing": 2.0}, AXIS[2]],
+                ValueError,
+                "not below",
+            ),
+        ],
+    )
+    def test_a_malformed_list_is_refused(
+        self, tmp_path, label: str, breakpoints: object, error: type, match: str
+    ) -> None:
+        with pytest.raises(error, match=match):
+            SimConfig.from_dict(self._raw(tmp_path, breakpoints))
 
 
 @pytest.mark.unit

@@ -6,7 +6,7 @@ load time, and provides typed attribute access. Satisfies REQ-C01
 """
 
 import math
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from itertools import pairwise
 from os import PathLike
@@ -170,12 +170,30 @@ class HepaReference:
 
 
 @dataclass(frozen=True)
-class StretchSpec:
-    """Geometric wall clustering for one mesh axis.
+class Breakpoint:
+    """One point of an axis's interior clustering (ADR-014 decision 11).
 
-    Exactly one of the two quantities is specified; the mesh derives the
+    Parameters
+    ----------
+    at : float
+        The coordinate, m; a face of the mesh.
+    spacing : float
+        The cell width wanted there, m, positive.
+    """
+
+    at: float
+    spacing: float
+
+
+@dataclass(frozen=True)
+class StretchSpec:
+    """Geometric clustering for one mesh axis: at the walls, or between breakpoints.
+
+    Wall clustering gives one of two quantities and the mesh derives the
     other because the cell count fixes their relationship (see
-    src/mesh.py). The default is a uniform axis.
+    src/mesh.py). Interior clustering gives ``breakpoints`` instead, and the
+    loader derives the faces from them (``breakpoint_faces``). The default is
+    a uniform axis.
 
     Parameters
     ----------
@@ -185,10 +203,106 @@ class StretchSpec:
     min_spacing : float or None
         Width of the wall-adjacent cell in meters. When given, the ratio
         is derived from it and ``ratio`` is ignored.
+    breakpoints : tuple[Breakpoint, ...]
+        Interior clustering: from the first breakpoint, at 0, to the last,
+        at the axis length, each with the spacing wanted there; empty for
+        wall clustering or a uniform axis.
+    faces : tuple[float, ...]
+        The faces ``breakpoint_faces`` derived from ``breakpoints``, which
+        the mesh takes as they are; empty without breakpoints.
     """
 
     ratio: float = 1.0
     min_spacing: float | None = None
+    breakpoints: tuple[Breakpoint, ...] = ()
+    faces: tuple[float, ...] = ()
+
+
+# The largest ratio between two adjacent cell widths an axis with breakpoints
+# may have. Each stencil's truncation error grows with the jump in width
+# between neighbours, and 1.2 is the common ceiling for second-order
+# finite-volume grids (Ferziger and Peric, ch. 3); the wall-clustered presets
+# stay below it too.
+MAX_GROWTH_RATIO = 1.2
+# Relative tolerance of the bisection for a segment's growth ratio, as the wall
+# clustering's in src/mesh.py.
+_GROWTH_TOLERANCE = 1e-14
+# A count within this of a whole number is that number, not the next: a length
+# of 7 at a spacing of 0.35 is 20 cells, though 7 / 0.35 rounds above 20.
+_COUNT_ROUNDING = 1e-9
+
+
+def _segment_widths(length: float, start: float, end: float) -> list[float]:
+    """Cell widths over one segment, growing geometrically from its finer end.
+
+    The finer end's spacing is kept exactly; the count is the smallest whole
+    number at least that of the geometric series growing from it to the
+    coarser end's spacing, and the ratio is then the one whose widths sum to
+    the length. A count at or above the series' makes the ratio at or below
+    the series', so no width exceeds the coarser end's spacing. Equal
+    spacings give equal widths, the fewest no wider than the spacing.
+    """
+    fine, coarse = min(start, end), max(start, end)
+    if fine == coarse:
+        n = max(1, math.ceil(length / fine - _COUNT_ROUNDING))
+        return [length / n] * n
+    ideal_ratio = (length - fine) / (length - coarse)
+    ideal = 1.0 + math.log(coarse / fine) / math.log(ideal_ratio)
+    n = max(2, math.ceil(ideal - _COUNT_ROUNDING))
+    while n > 1 and n * fine >= length:
+        n -= 1
+    if n == 1:
+        return [length]
+
+    def span(ratio: float) -> float:
+        return fine * (ratio**n - 1.0) / (ratio - 1.0)
+
+    lo, hi = 1.0, 2.0
+    while span(hi) < length:
+        hi *= 2.0
+    while hi - lo > _GROWTH_TOLERANCE * hi:
+        mid = 0.5 * (lo + hi)
+        if span(mid) < length:
+            lo = mid
+        else:
+            hi = mid
+    ratio = 0.5 * (lo + hi)
+    widths = [fine * ratio**k for k in range(n)]
+    return widths if start <= end else widths[::-1]
+
+
+def breakpoint_faces(breakpoints: Sequence[Breakpoint]) -> tuple[float, ...]:
+    """The faces of an axis clustered between breakpoints (ADR-014 decision 11).
+
+    Parameters
+    ----------
+    breakpoints : Sequence[Breakpoint]
+        At least two, in increasing ``at``, the first at the axis's start
+        and the last at its end, each spacing positive and below the length
+        of the segments beside it (the loader checks all of it).
+
+    Returns
+    -------
+    tuple[float, ...]
+        Every face, increasing, with each breakpoint a face exactly, so an
+        obstacle edge placed on a breakpoint lies on a face.
+
+    Notes
+    -----
+    Between two breakpoints the widths grow geometrically from the finer
+    end's spacing, which is kept exactly; the count is fixed by the series
+    that would reach the coarser end's spacing, and the ratio is then solved
+    for so that the widths fill the segment (``_segment_widths``).
+    """
+    faces = [breakpoints[0].at]
+    for left, right in pairwise(breakpoints):
+        widths = _segment_widths(right.at - left.at, left.spacing, right.spacing)
+        x = left.at
+        for width in widths[:-1]:
+            x += width
+            faces.append(x)
+        faces.append(right.at)
+    return tuple(faces)
 
 
 @dataclass(frozen=True)
@@ -2201,18 +2315,28 @@ class SimConfig:
         """Parse one axis of the mesh section into a StretchSpec.
 
         Accepts ``stretch_ratio`` (>= 1) or ``min_wall_spacing`` (in
-        (0, length / n]) but not both. An absent or empty axis is uniform.
+        (0, length / n]) or ``breakpoints`` (``_parse_breakpoints``), one of
+        the three. An absent or empty axis is uniform.
         """
         if section is None:
             return StretchSpec()
         if not isinstance(section, dict):
             raise ValueError(f"{context} must be a mapping")
         for key in section:
-            if key not in ("stretch_ratio", "min_wall_spacing"):
+            if key not in ("stretch_ratio", "min_wall_spacing", "breakpoints"):
                 raise ValueError(
-                    f"{context}.{key} is not recognised; use stretch_ratio or "
-                    "min_wall_spacing"
+                    f"{context}.{key} is not recognised; use stretch_ratio, "
+                    "min_wall_spacing or breakpoints"
                 )
+        if "breakpoints" in section:
+            if len(section) > 1:
+                raise ValueError(
+                    f"{context}: breakpoints cluster the axis on their own; give "
+                    "neither stretch_ratio nor min_wall_spacing with them"
+                )
+            return cls._parse_breakpoints(
+                section["breakpoints"], f"{context}.breakpoints", length, n
+            )
         has_ratio = "stretch_ratio" in section
         has_spacing = "min_wall_spacing" in section
         if has_ratio and has_spacing:
@@ -2237,6 +2361,68 @@ class SimConfig:
                 )
             return StretchSpec(ratio=ratio, min_spacing=None)
         return StretchSpec()
+
+    @classmethod
+    def _parse_breakpoints(
+        cls, entries: object, context: str, length: float, n: int
+    ) -> StretchSpec:
+        """Parse an axis's interior clustering and derive its faces (ADR-014 decision 11).
+
+        A list of at least two mappings with keys ``at`` and ``spacing``,
+        real numbers (a bool is refused): the first at 0 and the last at the
+        axis length, strictly increasing, every spacing positive and below
+        the length of each segment beside it. The faces must give exactly
+        the domain's cell count, and no two adjacent widths may differ by a
+        ratio above MAX_GROWTH_RATIO; either refusal names what the
+        breakpoints give, so the file can be corrected.
+        """
+        if not isinstance(entries, list) or len(entries) < 2:
+            raise ValueError(f"{context} must be a list of at least two breakpoints")
+        points = []
+        for index, entry in enumerate(entries):
+            where = f"{context}[{index}]"
+            if not isinstance(entry, dict):
+                raise ValueError(f"{where} must be a mapping with at and spacing")
+            if set(entry) != {"at", "spacing"}:
+                raise ValueError(
+                    f"{where} must have exactly the keys at and spacing, got "
+                    f"{sorted(entry)}"
+                )
+            at = cls._finite_number(entry["at"], f"{where}.at")
+            spacing = cls._require_positive_float(entry, "spacing", where)
+            points.append(Breakpoint(at=at, spacing=spacing))
+        if points[0].at != 0.0 or points[-1].at != length:
+            raise ValueError(
+                f"{context} must run from 0 to the axis length {length}: the first "
+                f"is at {points[0].at} and the last at {points[-1].at}"
+            )
+        for left, right in pairwise(points):
+            if right.at <= left.at:
+                raise ValueError(
+                    f"{context} must be strictly increasing: {right.at} follows "
+                    f"{left.at}"
+                )
+            segment = right.at - left.at
+            if max(left.spacing, right.spacing) >= segment:
+                raise ValueError(
+                    f"{context}: the spacing at {left.at} or {right.at} is not below "
+                    f"the {segment} between them"
+                )
+        faces = breakpoint_faces(points)
+        if len(faces) - 1 != n:
+            raise ValueError(
+                f"{context} give {len(faces) - 1} cells and the domain states {n}; "
+                f"set the domain's count to {len(faces) - 1}"
+            )
+        widths = [b - a for a, b in pairwise(faces)]
+        worst = max(max(a / b, b / a) for a, b in pairwise(widths)) if n > 1 else 1.0
+        if worst > MAX_GROWTH_RATIO:
+            raise ValueError(
+                f"{context}: two adjacent cells differ by a ratio of {worst:.4f}, "
+                f"above MAX_GROWTH_RATIO {MAX_GROWTH_RATIO}; move the breakpoints "
+                "apart or bring their spacings closer"
+            )
+        return StretchSpec(breakpoints=tuple(points), faces=faces)
 
     @classmethod
     def _parse_transport(cls, section: object) -> TransportSpec:

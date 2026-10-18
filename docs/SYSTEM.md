@@ -215,10 +215,10 @@ Generated. The responsibility and serves columns are editorial and come from `do
 | `src/boundary_registry.py` | 469 | Interprets the configured boundary segments once, answering which segment covers each point along a domain edge and which condition and prescribed velocity hold there, SOLID cells read as walls, for both boundary imposition layers: the staggered velocity layer and the concentration layer. | S12.1 |
 | `src/boundary_staggered.py` | 693 | Writes Dirichlet normal velocities exactly into the staggered domain-face entries and exposes the tangential wall values, wall distances, pressure outlets and wall faces as data for the momentum and pressure steps and the wall functions. | S12 |
 | `src/boundary_vents.py` | 250 | Derives the mesh faces each equipment vent covers on its obstacle face, from the staggered layout's obstacle-face inputs and the registry's first-match coverage, with the face masks the velocity, turbulence and concentration layers read, and refuses a vent that covers no face or a recirculating pair whose flows differ on the faces. | S12.1 |
-| `src/config.py` | 2495 | Loads the YAML configuration into typed dataclasses and rejects missing keys, wrong types and out-of-range values at load time. | A02, A03, C01, C02, C03, S10 |
+| `src/config.py` | 2681 | Loads the YAML configuration into typed dataclasses and rejects missing keys, wrong types and out-of-range values at load time. | A02, A03, C01, C02, C03, S10 |
 | `src/constants.py` | 8 | Holds the physical constants shared by every module so that none of them defines its own copy. | C04 |
 | `src/io_manager.py` | 1368 | Writes a run's HDF5 run file by appending (the merged configuration with its restart hash, the flow states, the transport frames, budgets and sensor readings, and a clean-out's recovery outputs) and its checkpoint file by atomic replacement (the march's checkpoint and the steady solve's), reads each back bitwise, and refuses a restart under a changed configuration, so a killed or capped run continues to what the uninterrupted run reaches. | none |
-| `src/mesh.py` | 442 | Builds the structured grid, uniform or geometrically clustered at the walls, with the face, center, width and center-to-center arrays a face-based stencil needs, and classifies each cell as FLUID, SOLID or BOUNDARY. | S11 |
+| `src/mesh.py` | 465 | Builds the structured grid, uniform, geometrically clustered at the walls or between interior breakpoints the loader derives, with the face, center, width and center-to-center arrays a face-based stencil needs, and classifies each cell as FLUID, SOLID or BOUNDARY. | S11 |
 | `src/momentum.py` | 1191 | Predicts u* and v* on the staggered grid with QUICK advection by deferred correction over an upwind implicit matrix, a configured number of under-relaxed Jacobi sweeps per call, an optional per-cell viscosity field with its face rule and stress source, the domain edge's wall stencil at obstacle faces, and an optional implicit Euler or BDF2 time derivative at the unknown faces, and returns the diagonal coefficients the pressure correction needs. | S07, S09, S14 |
 | `src/multigrid.py` | 384 | Builds an additive-correction multigrid hierarchy from a five-point pressure system by 2x2 aggregation, its coarse operators the exact Galerkin sums with no probing, and applies one symmetric V-cycle with weighted Jacobi smoothing and a dense pseudo-inverse on the coarsest level as the preconditioner of the pressure correction's conjugate gradients. | S08 |
 | `src/particles.py` | 263 | Computes per-size-class transport properties: Cunningham correction, settling velocity, Brownian diffusion, deposition velocity and HEPA efficiency. | T03, T04, T09, T10 |
@@ -232,7 +232,7 @@ Generated. The responsibility and serves columns are editorial and come from `do
 | `src/time_integration.py` | 1253 | Runs a scenario under tier 1: solves each distinct flow state once, warm-started from the state before it, or reuses one a run file holds, then marches every particle class at one step through the intervals, dividing each into equal steps under the stable step and carrying the fields and budgets across each switch, writing frames, budgets, sensor readings and checkpoints through the run file, continuing a run from its checkpoint, and for a clean-out tracking the recovery outputs every step; it discretises nothing. | N01 |
 | `src/turbulence.py` | 1622 | Advances the k-epsilon model's k and eps one step on a prescribed face velocity field, standard or RNG with each variant's constants as module data: advection, explicit growth from the strain the faces give and implicit decay and diffusion through the shared scalar scheme, boundary values from a conditions object the caller builds each step, the kinematic eddy viscosity, and an assertion that k and eps are positive and finite after every step; and the scalable wall functions, which build those conditions, the wall viscosity of the momentum wall faces and the inlet values the coupled solve starts from. | S14, S15, S17 |
 
-Total 21 Python files, 15926 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
+Total 21 Python files, 16135 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
 
 `Declares it serves` is an EDITORIAL CLAIM read from `docs/system_map_annotations.toml`. It says which requirements a module is meant to satisfy, not that it does. Whether a requirement is met is answered by the tests named in the register's `Verified By` column.
 <!-- END GENERATED: components -->
@@ -257,7 +257,7 @@ Generated. Static import analysis cannot see a function bound into a registry by
 |---|---|
 | Scope | `src/**/*.py` |
 | Files hashed | 21 |
-| Digest | `sha256:5a45da83d71fc581d0e8a02936f797d21abde122ddc147e6429a18570679ec74` |
+| Digest | `sha256:38cabc27e44176a1753411c0d8e92c5f0209e3967c59968243fb64ed0d84fde9` |
 
 This is what lets the document answer whether it is current, which is the one question a stale table cannot be asked. `python scripts/gen_system_map.py --check` recomputes the whole set of generated regions, this digest included, and exits non-zero on any disagreement.
 
@@ -282,7 +282,15 @@ SimConfig:
                                     # what a run's /config records (prompt 64, ADR-014 step 4)
     room_width, room_height: float (meters)
     nx, ny: int
-    stretch_x, stretch_y: StretchSpec (ratio >= 1, or min_spacing; one axis each)
+    stretch_x, stretch_y: StretchSpec (ratio >= 1, or min_spacing, or breakpoints;
+        one axis each)
+        breakpoints: tuple[Breakpoint(at, spacing), ...] from 0 to the axis
+        length, strictly increasing, each spacing positive and below the
+        segments beside it; faces: breakpoint_faces(breakpoints), geometric
+        from each segment's finer end, every breakpoint a face, no width
+        above its segment's coarser spacing; refused at load unless the
+        faces give domain.nx (ny) cells and no neighbour ratio exceeds
+        MAX_GROWTH_RATIO (1.2) (ADR-014 decision 11, step 6b)
     rho, mu: float (SI)
     temperature: float (K)
     particle_sizes: list[float] (meters)
@@ -475,9 +483,12 @@ Mesh:
     dx_cell, dy_cell: ndarray (cell widths, shapes [nx] and [ny])
     dx_face, dy_face: ndarray (center-to-center distance at each face, shapes
         [nx+1] and [ny+1]; wall-to-first-center at the two boundary faces)
-    stretch_ratio_x, stretch_ratio_y: float (effective ratio, 1.0 uniform)
-    min_spacing_x, min_spacing_y: float (effective wall-adjacent width)
-    is_uniform: bool
+    stretch_ratio_x, stretch_ratio_y: float (effective ratio, 1.0 uniform; with
+        breakpoints the largest neighbour ratio)
+    min_spacing_x, min_spacing_y: float (effective wall-adjacent width; with
+        breakpoints the smallest width)
+    is_uniform: bool (False on an axis with breakpoints, whose centres are the
+        midpoints of the loader's faces; ADR-014 decision 11, step 6b)
     cell_type: ndarray[ny, nx] (FLUID=0, SOLID=1, BOUNDARY=2)
         # a cell is SOLID when its center lies in an obstacle's bounds, to within
         # OBSTACLE_EDGE_TOLERANCE (1e-9) of the cell's width on each edge, so an edge

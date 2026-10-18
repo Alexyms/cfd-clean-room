@@ -43,6 +43,17 @@ way the faces are built from both walls toward the middle so that
 A ratio of exactly 1 takes the uniform code path, which reproduces the
 arrays the uniform mesh has always produced bit for bit.
 
+Interior clustering (ADR-014 decision 11)
+-----------------------------------------
+An axis may instead give breakpoints, each a coordinate with the cell width
+wanted there, the first at 0 and the last at L; between two breakpoints the
+widths grow geometrically from the finer end. The loader derives the faces
+(``config.breakpoint_faces``), checks that they give the domain's cell count
+and that no two neighbours differ by more than ``config.MAX_GROWTH_RATIO``,
+and the mesh takes them as they are, each breakpoint a face exactly, so a
+body whose edges are breakpoints lies on faces. Such an axis never takes
+the uniform path: its centres are the midpoints of its faces.
+
 Cell classification
 -------------------
 ``cell_type`` marks the outermost ring of cells BOUNDARY and any cell whose
@@ -203,6 +214,14 @@ def _axis(length: float, n: int, spec: StretchSpec) -> tuple[np.ndarray, float, 
     The uniform path is the original linspace construction so that a
     ratio of 1 reproduces the historical arrays bit for bit.
     """
+    if spec.faces:
+        # Interior clustering: the loader derived the faces from the
+        # breakpoints. The ratio reported is the largest between neighbours.
+        faces = np.array(spec.faces, dtype=np.float64)
+        widths = np.diff(faces)
+        growth = np.maximum(widths[1:] / widths[:-1], widths[:-1] / widths[1:])
+        largest = float(growth.max()) if growth.size else 1.0
+        return faces, largest, float(widths.min())
     ratio = spec.ratio
     if spec.min_spacing is not None:
         ratio = ratio_for_wall_spacing(length, n, spec.min_spacing)
@@ -240,11 +259,13 @@ class Mesh:
         Center-to-center distances at faces, shapes (nx+1,) and (ny+1,),
         wall-to-first-center at the two boundary faces.
     stretch_ratio_x, stretch_ratio_y : float
-        Effective geometric ratio on each axis; 1.0 when uniform.
+        Effective geometric ratio on each axis; 1.0 when uniform; with
+        breakpoints, the largest ratio between two neighbouring widths.
     min_spacing_x, min_spacing_y : float
-        Effective wall-adjacent cell width on each axis.
+        Effective wall-adjacent cell width on each axis; with breakpoints,
+        the smallest width.
     is_uniform : bool
-        True when both axes have ratio 1.0.
+        True when both axes have ratio 1.0 and neither has breakpoints.
     cell_type : np.ndarray
         Cell classification, shape (ny, nx), dtype int32.
     """
@@ -265,17 +286,19 @@ class Mesh:
         self.y, self.stretch_ratio_y, self.min_spacing_y = _axis(
             height, ny, config.stretch_y
         )
-        self.is_uniform: bool = self.stretch_ratio_x == 1.0 and (
-            self.stretch_ratio_y == 1.0
-        )
+        # An axis with breakpoints is never the uniform path, even when its
+        # widths happen to be equal: its faces are not linspace's.
+        uniform_x = self.stretch_ratio_x == 1.0 and not config.stretch_x.faces
+        uniform_y = self.stretch_ratio_y == 1.0 and not config.stretch_y.faces
+        self.is_uniform: bool = uniform_x and uniform_y
 
         # Cell center coordinates. The uniform expressions are the historical
         # ones and are kept so the uniform arrays do not change by an ulp.
-        if self.stretch_ratio_x == 1.0:
+        if uniform_x:
             self.xc: np.ndarray = self.x[:-1] + self.dx / 2.0
         else:
             self.xc = 0.5 * (self.x[:-1] + self.x[1:])
-        if self.stretch_ratio_y == 1.0:
+        if uniform_y:
             self.yc: np.ndarray = self.y[:-1] + self.dy / 2.0
         else:
             self.yc = 0.5 * (self.y[:-1] + self.y[1:])

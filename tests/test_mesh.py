@@ -5,11 +5,13 @@ and obstacle handling. Integration tests verify that the mesh loads
 correctly from the default clean room configuration.
 """
 
+from itertools import pairwise
+
 import numpy as np
 import pytest
 import yaml
 
-from src.config import SimConfig
+from src.config import MAX_GROWTH_RATIO, Breakpoint, SimConfig, breakpoint_faces
 from src.mesh import (
     BOUNDARY,
     FLUID,
@@ -706,3 +708,113 @@ class TestGeometricClustering:
         mesh = _stretched(tmp_path, 10, 5, {"x": {"stretch_ratio": 1.3}})
         assert mesh.dx == 0.1 and mesh.dy == 0.2
         assert mesh.dx_cell.mean() == pytest.approx(mesh.dx)
+
+
+# ---------------------------------------------------------------------------
+# Unit tests -- Interior clustering between breakpoints (ADR-014 decision 11)
+# ---------------------------------------------------------------------------
+
+# A body face at 0.4 and 0.6 on a unit axis: fine there, coarse at the walls,
+# a coarser band inside the body.
+BREAKS = [(0.0, 0.05), (0.4, 0.01), (0.5, 0.02), (0.6, 0.01), (1.0, 0.05)]
+
+
+def _points(pairs: list[tuple[float, float]]) -> list[Breakpoint]:
+    return [Breakpoint(at=a, spacing=s) for a, s in pairs]
+
+
+def _clustered(tmp_path, x: list | None, y: list | None, **domain: object) -> Mesh:
+    """A unit-square mesh with breakpoints on the axes given, counts derived."""
+    nx = len(breakpoint_faces(_points(x))) - 1 if x else 10
+    ny = len(breakpoint_faces(_points(y))) - 1 if y else 10
+    mesh: dict = {}
+    if x:
+        mesh["x"] = {"breakpoints": [{"at": a, "spacing": s} for a, s in x]}
+    if y:
+        mesh["y"] = {"breakpoints": [{"at": a, "spacing": s} for a, s in y]}
+    overrides = {
+        "domain": {"width": 1.0, "height": 1.0, "nx": nx, "ny": ny},
+        "mesh": mesh,
+        **domain,
+    }
+    return Mesh(_make_config(tmp_path, overrides=overrides))
+
+
+@pytest.mark.unit
+class TestInteriorClustering:
+    """Breakpoints with a spacing at each and geometric growth between."""
+
+    def test_every_breakpoint_is_a_face_exactly(self, tmp_path) -> None:
+        mesh = _clustered(tmp_path, BREAKS, BREAKS)
+        for faces in (mesh.x, mesh.y):
+            for at, _spacing in BREAKS:
+                assert at in faces.tolist()
+            assert faces[0] == 0.0 and faces[-1] == 1.0
+            assert np.all(np.diff(faces) > 0.0)
+
+    def test_the_finer_end_keeps_its_spacing_and_none_exceeds_the_coarser(
+        self, tmp_path
+    ) -> None:
+        """Per segment: the finer end's width is its spacing to rounding, every
+        width at most the coarser end's spacing, the widths geometric."""
+        mesh = _clustered(tmp_path, BREAKS, None)
+        faces = mesh.x
+        for (a, h_a), (b, h_b) in pairwise(BREAKS):
+            inside = (faces >= a) & (faces <= b)
+            widths = np.diff(faces[inside])
+            fine = widths[0] if h_a <= h_b else widths[-1]
+            assert fine == pytest.approx(min(h_a, h_b), rel=1e-12)
+            assert np.all(widths <= max(h_a, h_b) * (1.0 + 1e-12))
+            ratios = widths[1:] / widths[:-1]
+            assert np.allclose(ratios, ratios[0], rtol=1e-9)
+
+    def test_adjacent_widths_stay_under_the_cap(self, tmp_path) -> None:
+        mesh = _clustered(tmp_path, BREAKS, BREAKS)
+        widths = mesh.dx_cell
+        jumps = np.maximum(widths[1:] / widths[:-1], widths[:-1] / widths[1:])
+        assert jumps.max() <= MAX_GROWTH_RATIO
+        assert mesh.stretch_ratio_x == pytest.approx(jumps.max(), rel=1e-15)
+        assert mesh.min_spacing_x == pytest.approx(0.01, rel=1e-12)
+
+    def test_centres_are_midpoints_and_the_stencil_lengths_follow(
+        self, tmp_path
+    ) -> None:
+        mesh = _clustered(tmp_path, BREAKS, None)
+        assert not mesh.is_uniform
+        assert np.array_equal(mesh.xc, 0.5 * (mesh.x[:-1] + mesh.x[1:]))
+        assert np.array_equal(mesh.dx_cell, np.diff(mesh.x))
+        assert mesh.dx_face[0] == mesh.xc[0] and mesh.dx_face[-1] == 1.0 - mesh.xc[-1]
+        assert np.array_equal(mesh.dx_face[1:-1], np.diff(mesh.xc))
+
+    def test_equal_spacings_give_equal_widths_off_the_uniform_path(
+        self, tmp_path
+    ) -> None:
+        """No wider than the spacing: 1 / 0.3 needs 4 cells of 0.25."""
+        mesh = _clustered(tmp_path, [(0.0, 0.3), (1.0, 0.3)], None)
+        assert mesh.dx_cell.tolist() == [0.25] * 4
+        assert not mesh.is_uniform
+        assert np.array_equal(mesh.xc, 0.5 * (mesh.x[:-1] + mesh.x[1:]))
+
+    def test_an_obstacle_on_breakpoints_takes_exactly_its_cells(self, tmp_path) -> None:
+        block = {
+            "name": "body",
+            "x_start": 0.4,
+            "x_end": 0.6,
+            "y_start": 0.4,
+            "y_end": 0.6,
+        }
+        mesh = _clustered(
+            tmp_path,
+            BREAKS,
+            BREAKS,
+            obstacles=[block],
+            sensors=[{"name": "corner", "x": 0.2, "y": 0.2}],
+        )
+        solid = mesh.cell_type == SOLID
+        inside_x = (mesh.xc > 0.4) & (mesh.xc < 0.6)
+        inside_y = (mesh.yc > 0.4) & (mesh.yc < 0.6)
+        assert np.array_equal(solid, inside_y[:, None] & inside_x[None, :])
+
+    def test_the_config_holds_the_faces_the_mesh_takes(self, tmp_path) -> None:
+        mesh = _clustered(tmp_path, BREAKS, None)
+        assert np.array_equal(mesh.x, np.array(breakpoint_faces(_points(BREAKS))))

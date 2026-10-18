@@ -40,7 +40,7 @@ responsibility = "Writes a run's HDF5 run file by appending (the merged configur
 serves = []
 
 [modules."src/mesh.py"]
-responsibility = "Builds the structured grid, uniform or geometrically clustered at the walls, with the face, center, width and center-to-center arrays a face-based stencil needs, and classifies each cell as FLUID, SOLID or BOUNDARY."
+responsibility = "Builds the structured grid, uniform, geometrically clustered at the walls or between interior breakpoints the loader derives, with the face, center, width and center-to-center arrays a face-based stencil needs, and classifies each cell as FLUID, SOLID or BOUNDARY."
 serves = ["REQ-S11"]
 
 [modules."src/particles.py"]
