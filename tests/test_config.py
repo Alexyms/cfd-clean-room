@@ -6,6 +6,7 @@ time (REQ-C02).
 """
 
 import dataclasses
+import math
 from itertools import pairwise
 from pathlib import Path
 
@@ -3442,15 +3443,23 @@ class TestScenarioHoldTime:
         raw["scenario"]["hold_time"] = 5.0
         _refused_scenario(tmp_path, raw, r"hold_time needs an initial event")
 
-    def test_the_clean_out_holds_one_air_change(self) -> None:
-        """1/N of T6: the free area 17.52 m^2 over the supply 3.15 m^2/s."""
+    def test_the_reference_clean_out_runs_to_its_end(self) -> None:
+        """No hold, to 240 s: past the coarse mean's 100:1 time, three well-mixed times.
+
+        The well-mixed time ln(100) / N is from T6: the free area 17.52 m^2
+        over the supply 3.15 m^2/s. Defect caught: the hold restored, which
+        stops the run on the sensors before the ratio and the local field
+        are defined (prompt 66).
+        """
         config = SimConfig(CONFIG_DIR / "scenario_clean_out.yaml")
+        assert config.scenario.hold_time is None
         free = config.room_width * config.room_height - sum(
             (o.x_end - o.x_start) * (o.y_end - o.y_start) for o in config.obstacles
         )
         supply = config.boundaries["hepa_supply"]
         flow = supply.velocity * (supply.x_end - supply.x_start)
-        assert config.scenario.hold_time == pytest.approx(free / flow, abs=5e-4)
+        assert config.t_end == 240.0
+        assert config.t_end > 3.0 * math.log(100.0) * free / flow
 
 
 @pytest.mark.unit

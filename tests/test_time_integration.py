@@ -94,6 +94,10 @@ COARSE_OUTER = 1021
 # The open door's state warm-started from the closed one on 80x30, as prompt
 # 64 first solved it.
 OPEN_OUTER = 928
+# One air change of the slice, 1/N = 17.52 / 3.15 s (T6), and the t_end the
+# held clean-out ran to under prompt 64.
+ONE_AIR_CHANGE = 5.562
+HELD_T_END = 120.0
 # REQ-T05: particle mass conserved to 0.01%. The march closes to about 1e-7
 # here, set by the implicit diffusion's diffusion_tol of 1e-8 per step.
 REQ_T05 = 1.0e-4
@@ -189,11 +193,24 @@ def same_frames(a: RunFile, b: RunFile) -> None:
 # ---------------------------------------------------------------------------
 
 
+def held_clean_out(**solver: object) -> dict:
+    """The clean-out as prompt 64 ran it: to 120 s, held for one air change.
+
+    The reference file runs to its t_end with no hold (prompt 66); the
+    hold is a feature the suite pins on this run, which stops at about 31 s
+    on 80x30.
+    """
+    raw = coarse_raw("scenario_clean_out.yaml", **solver)
+    raw["solver"]["t_end"] = HELD_T_END
+    raw["scenario"]["hold_time"] = ONE_AIR_CHANGE
+    return raw
+
+
 @pytest.fixture(scope="module")
 def clean_out(tmp_path_factory: pytest.TempPathFactory) -> SimpleNamespace:
     """The coarse clean-out from rest to its hold: the kept base state for the rest."""
     folder = tmp_path_factory.mktemp("clean_out")
-    config = SimConfig.from_dict(coarse_raw("scenario_clean_out.yaml"))
+    config = SimConfig.from_dict(held_clean_out())
     record = run(config, folder / "run.h5", provenance=PROVENANCE)
     return SimpleNamespace(config=config, record=record, run=RunFile(record.path))
 
@@ -379,7 +396,7 @@ class TestSensorsAndInputs:
         left = set(mapping["solver"]) - set(inputs["solver"])
         assert left == {"dt", "t_end", "output_interval", "max_simple_iter"}
         assert inputs["solver"]["mass_imbalance_tol"] == COARSE_MASS_IMBALANCE_TOL
-        assert mapping["solver"]["t_end"] == 120.0
+        assert mapping["solver"]["t_end"] == 240.0
 
 
 # ---------------------------------------------------------------------------
@@ -1040,12 +1057,8 @@ def _transport(interval: Interval, mesh: Mesh) -> TransportSolver:
 
 
 def _door_clean_out(cadence: int | None) -> SimConfig:
-    """The clean-out with the door open from 1 s to 2 s, to 4 s: a switch and a tracker.
-
-    The hold of one air change is longer than the run, so it is left out.
-    """
+    """The clean-out with the door open from 1 s to 2 s, to 4 s: a switch and a tracker."""
     raw = coarse_raw("scenario_clean_out.yaml")
-    del raw["scenario"]["hold_time"]
     door_raw = coarse_raw("scenario_door_leak.yaml")
     opening = door_raw["scenario"]["events"][0]
     opening["start"], opening["duration"] = 1.0, 1.0

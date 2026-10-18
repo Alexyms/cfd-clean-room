@@ -719,6 +719,17 @@ sensors clear long before the room's air does. Whether the hold of decision 2 sh
 clean-out on the sensors alone, or the run should continue until the ratio and the field are
 defined, is a question for the orchestrator; the build follows decision 2 as written.
 
+*Amendment (prompt 66, 2026-10-17; review 64 S1, the orchestrator's decision 2 of prompt 64
+withdrawn).* **The reference clean-out runs to its end.** `scenario_clean_out.yaml` has no
+`hold_time` and runs to `t_end` 240 s. The sensors clearing is not the room clearing: on 80x30
+the hold of one air change stopped the run at 31 s, when the free-area mean had not reached its
+100:1 level and 18% of the free cells were still above threshold, so the ratio and the local field,
+two of the clean-out's three outputs, were not defined by the reference run. Without the hold the
+coarse mean reached its level at about 78 s, three times the well-mixed 25.6 s, and 2% of the
+cells were still above threshold at 120 s. 240 s is about 1.5 hours on the product grid at T6's
+cost scaled to Courant 0.4. `scenario.hold_time` stays as a feature; the suite pins it on the held
+run prompt 64 made (to 120 s, held one air change).
+
 ## D. Output, checkpointing and restart (decision 9)
 
 **The run file.** One HDF5 file per run, written by `io_manager.py` (h5py, already required):
