@@ -1712,7 +1712,7 @@ class TestTransientTerm:
     """``predict(..., transient=)``: the time derivative at the unknown faces.
 
     The planted defects each test was shown to catch are named in its
-    docstring (results/builder67/plant67.py).
+    docstring (docs/reports/probe67/plant67.py).
     """
 
     @pytest.mark.parametrize("scheme", ["implicit_euler", "bdf2"])

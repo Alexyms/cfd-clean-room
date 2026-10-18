@@ -21,7 +21,7 @@ what this file pins is the loop around it, on VAL-002's cavity at a few cells:
 
 The order in time is tests/test_time_order.py's. The planted defects each
 test was shown to catch are named in its docstring
-(results/builder67/plant67.py).
+(docs/reports/probe67/plant67.py).
 """
 
 import math
@@ -51,6 +51,8 @@ from validation.cases import case_path
 
 DT = 0.05
 STEP_TOL = 1e-6
+# The channel's step: a twentieth of the 1 m channel's through-flow time at 0.1 m/s.
+CHANNEL_DT = 0.5
 GOOD_ARGUMENTS = {"dt": DT, "t_end": 2 * DT, "step_tol": STEP_TOL, "step_cap": 50}
 
 
@@ -88,7 +90,42 @@ def _march(
 
 
 def _same_state(a: FlowState, b: FlowState) -> bool:
+    """Whether two states hold the same faces and pressure, to the byte."""
     return all(np.array_equal(getattr(a, n), getattr(b, n)) for n in ("u", "v", "p"))
+
+
+def _same_as_the_probe(
+    config: SimConfig,
+    dt: float,
+    seen: list[tuple[TransientStep, FlowState]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Assert an implicit Euler march from rest is cylinder59.py's loop, step by step.
+
+    The probe solved each step with solve_steady from the last step's faces
+    (its allocate_fields patched to hand them over), the steady loop writing
+    the boundary's normal velocities at the start and extrapolating the
+    outlets before every prediction, with convergence_tol the step
+    criterion on reference_velocity's scale. Every step's faces, pressure
+    and outer count must agree.
+    """
+    probe = staggered_solver(config)
+    predictor = load_implicit_euler_predictor()(
+        probe._mesh, config, probe._boundary, dt
+    )
+    probe._predictor = predictor
+    fields_of = load_fields_of()
+    rest = _rest(probe)
+    u, v, p = np.array(rest.u), np.array(rest.v), np.array(rest.p)
+    for record, state in seen:
+        predictor.u_old, predictor.v_old = u.copy(), v.copy()
+        monkeypatch.setattr(solver_module, "allocate_fields", fields_of(u, v, p))
+        _uc, _vc, p = probe.solve_steady()
+        u, v = np.array(probe.face_velocities.u), np.array(probe.face_velocities.v)
+        assert probe.converged
+        assert len(probe.residual_history) == record.outer
+        assert np.array_equal(u, state.u) and np.array_equal(v, state.v)
+        assert np.array_equal(p, state.p)
 
 
 @pytest.mark.unit
@@ -206,23 +243,7 @@ class TestSteps:
         config = _cavity(8, convergence_tol=STEP_TOL, max_simple_iter=200)
         solver, seen = _march(config, 4, scheme=IMPLICIT_EULER)
         assert solver.reference_velocity == 1.0
-        probe = staggered_solver(config)
-        predictor = load_implicit_euler_predictor()(
-            probe._mesh, config, probe._boundary, DT
-        )
-        probe._predictor = predictor
-        fields_of = load_fields_of()
-        rest = _rest(probe)
-        u, v, p = np.array(rest.u), np.array(rest.v), np.array(rest.p)
-        for record, state in seen:
-            predictor.u_old, predictor.v_old = u.copy(), v.copy()
-            monkeypatch.setattr(solver_module, "allocate_fields", fields_of(u, v, p))
-            _uc, _vc, p = probe.solve_steady()
-            u, v = np.array(probe.face_velocities.u), np.array(probe.face_velocities.v)
-            assert probe.converged
-            assert len(probe.residual_history) == record.outer
-            assert np.array_equal(u, state.u) and np.array_equal(v, state.v)
-            assert np.array_equal(p, state.p)
+        _same_as_the_probe(config, DT, seen, monkeypatch)
 
     def test_a_step_at_its_cap_fails_the_run(self) -> None:
         """The error names the step and carries its record and those before it.
@@ -345,6 +366,92 @@ class TestSteps:
                 getattr(fresh.face_velocities, name),
             )
         assert np.array_equal(marched.flow_state.p, fresh.flow_state.p)
+
+
+def _channel_from_rest(**solver: object) -> SimConfig:
+    """VAL-001's channel on 20x10: a velocity inlet left, a pressure outlet right."""
+    raw = channel_raw()
+    raw["domain"]["nx"], raw["domain"]["ny"] = 20, 10
+    raw["solver"]["stopping_rule"] = "velocity_step"
+    raw["solver"].update(solver)
+    return SimConfig.from_dict(raw)
+
+
+@pytest.mark.integration
+class TestBoundaries:
+    """The march's own boundary lines, from rest on a channel (review 67 B1).
+
+    A march from a converged state already holds the inlet's normal velocity
+    and the outlet's extrapolation, and the cavity has neither, so only a
+    march from rest through an inlet and an outlet tells whether
+    solve_transient writes the one and applies the other.
+    """
+
+    def test_implicit_euler_from_rest_is_the_probes_march_on_a_channel(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Every step's faces, pressure and count, to the byte, as on the cavity.
+
+        The channel's reference_velocity is not its inlet velocity, so the
+        probe's convergence_tol is the step criterion times U over
+        reference_velocity. Catches: the normal velocities not written at
+        the start, the outlets not extrapolated before each prediction.
+        """
+        solver = staggered_solver(_channel_from_rest())
+        scale = solver._boundary.get_max_boundary_velocity()
+        tol = STEP_TOL * scale / solver.reference_velocity
+        config = _channel_from_rest(convergence_tol=tol, max_simple_iter=500)
+        _marched, seen = _march(config, 4, scheme=IMPLICIT_EULER, dt=CHANNEL_DT)
+        _same_as_the_probe(config, CHANNEL_DT, seen, monkeypatch)
+
+    def test_the_predictor_sees_the_inlet_and_the_extrapolated_outlet(self) -> None:
+        """BDF2 from rest, every prediction's input faces and every step's end.
+
+        At every prediction the inlet faces hold the prescribed velocity and
+        each outlet face its interior neighbour's value, exactly; at every
+        step's end the inlet faces still hold it. Catches: the normal
+        velocities not written at the start, the outlets not extrapolated
+        before each prediction.
+        """
+        config = _channel_from_rest()
+        solver = staggered_solver(config)
+        inlet = channel_raw()["boundaries"]["inlet"]["velocity"]
+        outlet = solver._outlets["right"].is_outlet
+        assert outlet.all()
+        predict = solver._predictor.predict
+        calls: list[tuple[bool, bool]] = []
+
+        def watched(
+            u: np.ndarray, v: np.ndarray, p: np.ndarray, **kwargs: object
+        ) -> object:
+            """The predictor, after noting what its input faces hold."""
+            calls.append(
+                (
+                    bool(np.all(u[:, 0] == inlet)),
+                    bool(np.array_equal(u[outlet, -1], u[outlet, -2])),
+                )
+            )
+            return predict(u, v, p, **kwargs)
+
+        solver._predictor.predict = watched  # type: ignore[method-assign]
+        ends: list[FlowState] = []
+        solver.solve_transient(
+            CHANNEL_DT,
+            4 * CHANNEL_DT,
+            initial=_rest(solver),
+            step_tol=STEP_TOL,
+            step_cap=500,
+            on_step=lambda _record, state: ends.append(state),
+        )
+        assert [r.scheme for r in solver.transient_steps] == [IMPLICIT_EULER] + [
+            BDF2
+        ] * 3
+        assert len(calls) == sum(r.outer for r in solver.transient_steps)
+        assert all(at_inlet for at_inlet, _at_outlet in calls)
+        assert all(at_outlet for _at_inlet, at_outlet in calls)
+        assert all(np.all(state.u[:, 0] == inlet) for state in ends)
+        # The flow developed from rest: the interior moves at the inlet's scale.
+        assert np.max(np.abs(ends[-1].u[:, 1:-1])) > 0.5 * inlet
 
 
 def _converged(raw: dict) -> StaggeredSolver:

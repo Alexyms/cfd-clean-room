@@ -17,7 +17,7 @@ difference. A BDF2 that quietly fell back to implicit Euler fails the first
 test and passes the other two.
 
 The planted defects each test was shown to catch are named in its docstring
-(results/builder67/plant67.py).
+(docs/reports/probe67/plant67.py).
 """
 
 from itertools import pairwise
