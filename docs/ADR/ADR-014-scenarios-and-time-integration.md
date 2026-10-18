@@ -626,8 +626,8 @@ it except where these say otherwise, each with its reason.
    premise of prompt 62 that it would was wrong.
 6. *`threshold_factor` needs a threshold for every class*, matched by diameter
    (`SimConfig.class_thresholds`).
-7. *`checkpoint_interval`* (section G's `ScenarioSpec`) is the run file's and arrives with it at
-   step 3.
+7. *`checkpoint_interval`* is a `solver` key, `SimConfig.checkpoint_interval`, not a field of
+   section G's `ScenarioSpec`; it arrived with the run file at step 3 (review 64 S7).
 8. *Event times are read to one tolerance* (prompt 62b, review 62 S5). Two events written to meet
    (one ends as the other starts) were refused as overlapping when the rounding of
    `start + duration` put the end above the start (0.1 + 0.2 against 0.3), and on two segments
@@ -718,6 +718,17 @@ at about three times the well-mixed time and cells above threshold still remain 
 sensors clear long before the room's air does. Whether the hold of decision 2 should end a
 clean-out on the sensors alone, or the run should continue until the ratio and the field are
 defined, is a question for the orchestrator; the build follows decision 2 as written.
+
+*Amendment (prompt 66, 2026-10-17; review 64 S1, the orchestrator's decision 2 of prompt 64
+withdrawn).* **The reference clean-out runs to its end.** `scenario_clean_out.yaml` has no
+`hold_time` and runs to `t_end` 240 s. The sensors clearing is not the room clearing: on 80x30
+the hold of one air change stopped the run at 31 s, when the free-area mean had not reached its
+100:1 level and 18% of the free cells were still above threshold, so the ratio and the local field,
+two of the clean-out's three outputs, were not defined by the reference run. Without the hold the
+coarse mean reached its level at about 78 s, three times the well-mixed 25.6 s, and 2% of the
+cells were still above threshold at 120 s. 240 s is about 1.5 hours on the product grid at T6's
+cost scaled to Courant 0.4. `scenario.hold_time` stays as a feature; the suite pins it on the held
+run prompt 64 made (to 120 s, held one air change).
 
 ## D. Output, checkpointing and restart (decision 9)
 
@@ -892,7 +903,12 @@ takes about a minute in all (55 s and 69 s in two runs, nothing else running).
 | front, four grids (not in the suite) | umist | 0.04, 0.02, 0.01, 0.005 | 0.1, 0.05, 0.025, 0.0125 | 9.6745e-03, 3.0971e-03, 8.6993e-04, 2.3316e-04 | 1.64, 1.83, 1.90 | 1.64, 1.83, 1.90 | none |
 | front, four grids (not in the suite) | upwind | 0.04, 0.02, 0.01, 0.005 | 0.1, 0.05, 0.025, 0.0125 | 7.4355e-02, 4.3922e-02, 2.4268e-02, 1.2838e-02 | 0.76, 0.86, 0.92 | 0.76, 0.86, 0.92 | none |
 | Gaussian pulse, reported | umist | 0.04, 0.02, 0.01 | 0.1, 0.05, 0.025 | 1.3492e-01, 6.0082e-02, 2.7121e-02 | 1.17, 1.15 | 1.17, 1.15 | none |
-| front on the stretched mesh, reported | umist | 0.04, 0.02, 0.01 | 0.1, 0.05, 0.025 | 1.0417e-02, 3.5004e-03, 1.0747e-03 | 1.57, 1.70 | not in T5 | none |
+| front on the stretched mesh, reported | umist | 0.04, 0.02, 0.01 | 0.1, 0.05, 0.025 | 1.0417e-02, 3.5004e-03, 1.0747e-03 (unweighted cell norm) | 1.57, 1.70 | not in T5 | none |
+
+The relative L2 is `validation.metrics.relative_l2`, a norm over the cells with no area weight.
+On the uniform rows that is the area-weighted norm scaled; on the stretched row, whose end cells are
+0.50 dx wide against about 1.75 dx at the centre, it is not (test 65 S1). Nothing is asserted on
+that row.
 
 Every error and order T5 states for the grids run reproduces to the digits it states.
 The four-grid rows are reproduced by calling the test module from the repository root:
@@ -990,7 +1006,8 @@ planned, when this ADR is accepted, and as built at the Phase 4 gate.
 ```
 config.py
     SimConfig.scenario: ScenarioSpec | None    # the merged base, the events, the run keys
-    ScenarioSpec: base, events: tuple[EventSpec, ...], checkpoint_interval
+    ScenarioSpec: base, events: tuple[EventSpec, ...], hold_time
+    SimConfig.checkpoint_interval: int | None  # a solver key (review 64 S7)
     EventSpec: name, start, duration, change: Replace | Set | Source | Initial
 
 scenarios.py
@@ -1081,6 +1098,11 @@ as `mu_eff` is), `mesh.py`'s the breakpoints.
    *recovery field included, is the uninterrupted run bitwise on its first run. Every hash of*
    *record unchanged.*
 5. VAL-008 (`tests/test_grid_convergence.py`, section E) and the plan's row amended.
+   *Built 2026-10-17 (prompt 65, merged as PR 92), with section E's as-built table and two*
+   *departures: the criterion pair is 0.02 and 0.01 m, not the two finest grids, for runtime*
+   *(the finest pair is reported in the four-grid rows, not asserted); and the stretched row is*
+   *a front on a smoothly stretched mesh, which T5 did not have (its stretched rows are the*
+   *oblique pulse at a fixed ratio). Its relative L2 is an unweighted cell norm (test 65 S1).*
 6. Tier 2: the transient term in `momentum.py` (bitwise the steady path when None), BDF2 and
    the step loop in `solver_staggered.py`, interior clustering in `mesh.py`, the lift and drag
    instrument, `configs/validation_cylinder.yaml`; VAL-022's three rows in

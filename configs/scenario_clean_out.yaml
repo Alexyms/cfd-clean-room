@@ -9,25 +9,27 @@
 # the 100:1 recovery time is the time each reading falls to its threshold
 # (ADR-014 C). No boundary changes: one flow state.
 #
-# The run keys of the scenario's own (ADR-014 B): t_end 120 s, the Courant
+# The run keys of the scenario's own (ADR-014 B): t_end 240 s, the Courant
 # number 0.4 (ADR-014 decision 2), a frame every 100 steps (about 0.36 s on
-# the L0 faces, T6 of docs/reports/probe59/tables59.md). 120 s is an
-# assumption with headroom: T7 of tables59.md has the last sensor (near_door)
-# below 1e-2 of its initial value at 29 s on 160x60, and the well-mixed 100:1
-# time is 25.6 s (T6). The march stops when the room is within spec or at
-# t_end (section C, step 4).
+# the L0 faces, T6 of docs/reports/probe59/tables59.md).
 #
-# The hold (prompt 64's decision 2): the run stops once every sensor of every
-# class has stayed below its threshold for one air change of the slice, 1/N,
-# and the room's recovery time is the start of that hold. N is the supply
-# flow over the free area per metre of depth (T6): the supply is 0.45 m/s
-# over 7.0 m, 3.15 m^2/s; the free area is the room's 24.0 m^2 less the four
-# obstacles' 1.6 + 2.6 + 1.2 + 1.08 = 6.48 m^2, 17.52 m^2; so 1/N is
-# 17.52 / 3.15 = 5.562 s (and ln(100) / N is 25.6 s, T6's well-mixed time).
+# No hold: the run goes to t_end (ADR-014 C, the amendment of prompt 66). N is
+# the supply flow over the free area per metre of depth (T6): the supply is
+# 0.45 m/s over 7.0 m, 3.15 m^2/s; the free area is the room's 24.0 m^2 less
+# the four obstacles' 1.6 + 2.6 + 1.2 + 1.08 = 6.48 m^2, 17.52 m^2; so 1/N is
+# 5.562 s and the well-mixed 100:1 time ln(100) / N is 25.6 s. The sensors
+# clear well before the room does. On 80x30 a hold of one air change stopped
+# the run at 31 s with the free-area mean above its 100:1 level and 18% of the
+# free cells above threshold, so section C's ratio and local field were not
+# defined. Run without it, the coarse mean reached 100:1 at about 78 s, three
+# times the well-mixed time, and 2% of the cells were still above threshold
+# at 120 s. 240 s leaves room for both; at T6's cost scaled to this Courant
+# number (92.67 / 4, about 23 wall seconds per simulated second) it is about
+# 1.5 hours on the product grid. scenario.hold_time remains for a scenario
+# that wants the sensors' stop.
 
 scenario:
   base: clean_room_default.yaml
-  hold_time: 5.562
   events:
     - name: contaminated_start
       start: 0.0
@@ -35,7 +37,7 @@ scenario:
         threshold_factor: 100.0
 
 solver:
-  t_end: 120.0
+  t_end: 240.0
   output_interval: 100
 
 transport:

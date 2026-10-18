@@ -56,14 +56,16 @@ from src.scenarios import flow_fingerprint
 from src.solver_staggered import FlowState, StaggeredSolver, SteadyCheckpoint
 from src.solver_transport import DEPOSIT_SURFACES, MassBudget, TransportSolver
 from src.staggered import FaceVelocities
-from tests.test_warm_start import (
-    FIELDS,
-    FIXTURES,
-    RAW_FIXTURES,
-    _channel,
-    _same_bits,
-    _solved,
-    _solver,
+from tests.helpers import (
+    FLOW_FIELDS,
+    RAW_SOLVE_FIXTURES,
+    SOLVE_FIXTURES,
+    channel_config,
+    same_budgets,
+    same_recovery,
+    same_solves,
+    solved_solver,
+    staggered_solver,
 )
 from tests.vent_cases import DISCHARGE, INTAKE, vent_raw
 
@@ -83,7 +85,7 @@ class _KilledError(RuntimeError):
 
 def _same_checkpoint(a: SteadyCheckpoint, b: SteadyCheckpoint) -> None:
     """Every array, series, count and digest of two checkpoints, bit for bit."""
-    for name in FIELDS:
+    for name in FLOW_FIELDS:
         x, y = getattr(a.state, name), getattr(b.state, name)
         assert (x is None) == (y is None), name
         if x is not None:
@@ -97,23 +99,6 @@ def _same_checkpoint(a: SteadyCheckpoint, b: SteadyCheckpoint) -> None:
         b.pressure_cap_hits,
         b.eddy_viscosity_sha256,
     )
-
-
-def _same_budgets(a: tuple[MassBudget, ...], b: tuple[MassBudget, ...]) -> None:
-    """Two sequences of budgets, every term bit for bit, None as None."""
-    assert len(a) == len(b)
-    for x, y in zip(a, b, strict=True):
-        for name in ("initial", "inflow", "outflow", "source", "current"):
-            p, q = getattr(x, name), getattr(y, name)
-            assert (p is None) == (q is None), name
-            if p is not None:
-                assert np.float64(p).tobytes() == np.float64(q).tobytes(), name
-        assert list(x.deposited) == list(y.deposited) == list(DEPOSIT_SURFACES)
-        for surface in DEPOSIT_SURFACES:
-            assert (
-                np.float64(x.deposited[surface]).tobytes()
-                == np.float64(y.deposited[surface]).tobytes()
-            ), surface
 
 
 def _budget(seed: int, *, fresh: bool = False) -> MassBudget:
@@ -245,7 +230,7 @@ class TestFlowState:
             rule_readings=readings,
         )
         record = run.read_flow_state(FINGERPRINT)
-        for name in FIELDS:
+        for name in FLOW_FIELDS:
             x, y = getattr(record.state, name), getattr(state, name)
             assert (x is None) == (y is None), name
             if x is not None:
@@ -306,7 +291,7 @@ class TestFrames:
             stacked = np.stack([frame[2][k] for frame in frames])
             assert read.fields[k].tobytes() == stacked.tobytes()
         for got, frame in zip(read.budgets, frames, strict=True):
-            _same_budgets(got, tuple(frame[3]))
+            same_budgets(got, tuple(frame[3]))
         with h5py.File(run.path, "r") as handle:
             assert list(handle["transport/budgets"].attrs["terms"]) == list(
                 BUDGET_TERMS
@@ -405,7 +390,7 @@ class TestCheckpoints:
         assert sorted(read.fields) == [0, 1]
         for k in (0, 1):
             assert read.fields[k].tobytes() == fields[k].tobytes()
-        _same_budgets(read.budgets, tuple(budgets))
+        same_budgets(read.budgets, tuple(budgets))
         assert run.checkpoint_path == tmp_path / "run.checkpoint.h5"
         assert not run.path.exists()
 
@@ -501,12 +486,12 @@ class TestCheckpoints:
 @pytest.fixture(scope="module")
 def uninterrupted() -> dict:
     """Each warm-start fixture solved from rest to its rule's stop."""
-    return {name: _solved(make()) for name, make in FIXTURES.items()}
+    return {name: solved_solver(make()) for name, make in SOLVE_FIXTURES.items()}
 
 
 @pytest.mark.integration
 class TestSteadyRestart:
-    @pytest.mark.parametrize("name", list(FIXTURES))
+    @pytest.mark.parametrize("name", list(SOLVE_FIXTURES))
     def test_a_killed_solve_resumes_from_the_file_to_the_uninterrupted_solve(
         self, name: str, tmp_path: Path, uninterrupted: dict
     ) -> None:
@@ -521,7 +506,7 @@ class TestSteadyRestart:
         not written; the checkpoint not rewritten periodically (the file
         holds the first one); the cap in the restart hash.
         """
-        make_raw = RAW_FIXTURES[name]
+        make_raw = RAW_SOLVE_FIXTURES[name]
         whole = uninterrupted[name]
         stop = len(whole.residual_history)
         kill = (stop // 50) * 50 - 10
@@ -536,7 +521,7 @@ class TestSteadyRestart:
                 raise _KilledError
 
         with pytest.raises(_KilledError):
-            _solver(config).solve_steady(
+            staggered_solver(config).solve_steady(
                 killed_at,
                 on_checkpoint=partial(run.write_steady_checkpoint, fingerprint=key),
             )
@@ -547,8 +532,8 @@ class TestSteadyRestart:
         fingerprint, checkpoint = restart.read_steady_checkpoint()
         assert fingerprint == key
         assert checkpoint.state.outer == (kill // 50) * 50
-        resumed = _solved(SimConfig.from_dict(resumed_raw), resume=checkpoint)
-        _same_bits(resumed, whole)
+        resumed = solved_solver(SimConfig.from_dict(resumed_raw), resume=checkpoint)
+        same_solves(resumed, whole)
         assert resumed.converged
 
     def test_a_resume_under_another_eddy_viscosity_is_refused(
@@ -559,20 +544,26 @@ class TestSteadyRestart:
         Defects caught: the digest not written (read back as None, so a
         resume under no field runs); the solver's comparison removed.
         """
-        mesh = Mesh(_channel())
+        mesh = Mesh(channel_config())
         field = np.full(mesh.cell_type.shape, 2.0e-5)
         run = RunFile(tmp_path / "run.h5")
-        checkpoint = _solved(_channel(cap=20), eddy_viscosity=field).steady_checkpoint
+        checkpoint = solved_solver(
+            channel_config(cap=20), eddy_viscosity=field
+        ).steady_checkpoint
         run.write_steady_checkpoint(checkpoint, FINGERPRINT)
         _, read = run.read_steady_checkpoint()
         assert read.eddy_viscosity_sha256 == checkpoint.eddy_viscosity_sha256
         for given in (1.5 * field, None):
-            solver = _solver(_channel(cap=40))
+            solver = staggered_solver(channel_config(cap=40))
             with pytest.raises(ValueError, match="under the eddy_viscosity it ran"):
                 solver.solve_steady(eddy_viscosity=given, resume=read)
             assert solver.residual_history == []
-        resumed = _solved(_channel(cap=40), eddy_viscosity=field, resume=read)
-        _same_bits(resumed, _solved(_channel(cap=40), eddy_viscosity=field))
+        resumed = solved_solver(
+            channel_config(cap=40), eddy_viscosity=field, resume=read
+        )
+        same_solves(
+            resumed, solved_solver(channel_config(cap=40), eddy_viscosity=field)
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -781,14 +772,14 @@ class TestMarchRestart:
         assert np.float64(r_t).tobytes() == np.float64(t).tobytes()
         for k in fields:
             assert r_fields[k].tobytes() == fields[k].tobytes(), k
-        _same_budgets(tuple(r_solver.budget), tuple(solver.budget))
+        same_budgets(tuple(r_solver.budget), tuple(solver.budget))
         a, b = restart.read_frames(), whole.read_frames()
         assert a.steps.tolist() == b.steps.tolist() == list(range(0, STEPS + 1, 5))
         assert a.times.tobytes() == b.times.tobytes()
         for k in b.fields:
             assert a.fields[k].tobytes() == b.fields[k].tobytes(), k
         for x, y in zip(a.budgets, b.budgets, strict=True):
-            _same_budgets(x, y)
+            same_budgets(x, y)
         ra, rb = restart.read_sensor_readings(), whole.read_sensor_readings()
         assert ra.steps.tolist() == rb.steps.tolist() == list(range(1, STEPS + 1))
         assert ra.readings.tobytes() == rb.readings.tobytes()
@@ -953,37 +944,6 @@ def _recovery(**changed: object) -> RecoveryRecord:
     return RecoveryRecord(**values)
 
 
-def _same_recovery(a: RecoveryRecord, b: RecoveryRecord) -> None:
-    """Every field of two records, arrays bit for bit."""
-    assert a.sensor_names == b.sensor_names
-    assert (a.hold_time, a.held) == (b.hold_time, b.held)
-    for name in (
-        "t_final",
-        "air_change_rate",
-        "well_mixed_time",
-        "room_recovery_time",
-    ):
-        assert (
-            np.float64(getattr(a, name)).tobytes()
-            == np.float64(getattr(b, name)).tobytes()
-        ), name
-    for name in (
-        "thresholds",
-        "initial",
-        "recovery_time",
-        "sensor_time",
-        "mean_time",
-        "ratio",
-        "local_recovery",
-        "local_recovery_max",
-    ):
-        x, y = getattr(a, name), getattr(b, name)
-        assert x.dtype == y.dtype == np.float64, name
-        assert x.shape == y.shape and x.tobytes() == y.tobytes(), name
-    assert a.defined.dtype == b.defined.dtype == np.bool_
-    assert a.defined.tolist() == b.defined.tolist()
-
-
 @pytest.mark.unit
 class TestRecovery:
     @pytest.mark.parametrize("hold", [5.562, None])
@@ -998,7 +958,7 @@ class TestRecovery:
         run = RunFile(tmp_path / "run.h5")
         record = _recovery(hold_time=hold, held=hold is not None)
         run.write_recovery(record)
-        _same_recovery(run.read_recovery(), record)
+        same_recovery(run.read_recovery(), record)
 
     def test_a_second_write_replaces_the_first(self, tmp_path: Path) -> None:
         """A restart that runs on to a later end writes its own outputs.
@@ -1009,7 +969,7 @@ class TestRecovery:
         run.write_recovery(_recovery())
         later = _recovery(hold_time=None, held=False, t_final=40.0)
         run.write_recovery(later)
-        _same_recovery(run.read_recovery(), later)
+        same_recovery(run.read_recovery(), later)
 
     def test_discards_leave_it_alone(self, tmp_path: Path) -> None:
         """discard_after and discard_march touch /transport/ only (review 63 S3).
@@ -1030,11 +990,11 @@ class TestRecovery:
             run.write_frame(step, step * 0.1, _fields(step), [_budget(1), _budget(2)])
         run.write_recovery(_recovery())
         run.discard_after(5)
-        _same_recovery(run.read_recovery(), _recovery())
+        same_recovery(run.read_recovery(), _recovery())
         run.discard_march()
         with pytest.raises(KeyError, match="holds no /transport/ frames"):
             run.read_frames()
-        _same_recovery(run.read_recovery(), _recovery())
+        same_recovery(run.read_recovery(), _recovery())
         assert run.flow_fingerprints() == (FINGERPRINT,)
         assert run.read_config().mapping == yaml_copy(_room_raw())
         run.write_frame(0, 0.0, _fields(0), [_budget(1), _budget(2)])
@@ -1104,6 +1064,23 @@ class TestRecovery:
                 6, 0.6, _fields(6), budgets, FINGERPRINT, recovery={1: np.zeros(1)}
             )
 
+    def test_the_plan_start_is_carried(self, tmp_path: Path) -> None:
+        """The start of the plan the march stepped, bitwise, or None without one.
+
+        Defects caught: the start dropped on write or read, so a second
+        restart of an extended run cannot find its checkpoint on the plan
+        (review 64 S4.1); a bool taken as a time.
+        """
+        run = RunFile(tmp_path / "run.h5")
+        budgets = [_budget(1), _budget(2)]
+        start = 0.1 + 0.2
+        run.checkpoint(4, 0.4, _fields(4), budgets, FINGERPRINT, plan_start=start)
+        assert run.read_checkpoint().plan_start == start
+        run.checkpoint(5, 0.5, _fields(5), budgets, FINGERPRINT)
+        assert run.read_checkpoint().plan_start is None
+        with pytest.raises(TypeError, match="plan_start must be a real number"):
+            run.checkpoint(6, 0.6, _fields(6), budgets, FINGERPRINT, plan_start=True)
+
 
 # ---------------------------------------------------------------------------
 # Crash safety
@@ -1154,7 +1131,7 @@ class TestCrashSafety:
         march = run.read_checkpoint()
         assert march.step == 10
         assert march.fields[1].tobytes() == _fields(2)[1].tobytes()
-        _same_budgets(march.budgets, (_budget(3), _budget(4)))
+        same_budgets(march.budgets, (_budget(3), _budget(4)))
         fingerprint, steady = run.read_steady_checkpoint()
         assert fingerprint == FINGERPRINT
         _same_checkpoint(steady, _steady(True))

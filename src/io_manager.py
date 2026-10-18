@@ -228,6 +228,10 @@ class MarchCheckpoint:
     recovery : dict[str, np.ndarray]
         The named float64 arrays the march carried besides (the recovery
         tracker's state, ADR-014 C); empty when it carried none.
+    plan_start : float or None
+        The start of the plan the march was stepping when it wrote the
+        checkpoint: the interval's start, or the time a restart divided the
+        interval again from. None in a file written without it.
     """
 
     step: int
@@ -236,6 +240,7 @@ class MarchCheckpoint:
     budgets: tuple[MassBudget, ...]
     fingerprint: str
     recovery: dict[str, np.ndarray] = field(default_factory=dict)
+    plan_start: float | None = None
 
 
 @dataclass(frozen=True, eq=False)
@@ -973,6 +978,7 @@ class RunFile:
         budgets: Sequence[MassBudget],
         fingerprint: str,
         recovery: Mapping[str, np.ndarray] | None = None,
+        plan_start: float | None = None,
     ) -> None:
         """Replace the march's checkpoint, atomically, keeping the steady one.
 
@@ -991,12 +997,15 @@ class RunFile:
         recovery : Mapping[str, np.ndarray], optional
             Named arrays the march carries besides, stored as float64 and
             read back bitwise (the recovery tracker's state, ADR-014 C).
+        plan_start : float, optional
+            The start of the plan the march steps, so a restart can find the
+            checkpoint on a plan a restart before it divided again.
 
         Raises
         ------
         TypeError
-            If ``step`` is not an int, ``t`` not a real number, a budget not
-            a MassBudget, or a recovery name not a str.
+            If ``step`` is not an int, ``t`` or ``plan_start`` not a real
+            number, a budget not a MassBudget, or a recovery name not a str.
         ValueError
             If ``step`` is negative, the classes are not 0 to n - 1 with
             one budget each, a field is not 2-D, or the fingerprint is not a
@@ -1006,6 +1015,8 @@ class RunFile:
         t = _real("t", t)
         arrays = _class_fields(fields, budgets)
         _check_fingerprint(fingerprint)
+        if plan_start is not None:
+            plan_start = _real("plan_start", plan_start)
         rows = np.array([_budget_row(b) for b in budgets], dtype="<f8")
         carried = {}
         for name, array in (recovery or {}).items():
@@ -1019,6 +1030,8 @@ class RunFile:
             group.attrs["step"] = step
             group.attrs["t"] = np.float64(t)
             group.attrs["fingerprint"] = fingerprint
+            if plan_start is not None:
+                group.attrs["plan_start"] = np.float64(plan_start)
             for k, array in arrays.items():
                 group.create_dataset(f"C_{k}", data=array, dtype="<f8")
             budgets_set = group.create_dataset("budgets", data=rows, dtype="<f8")
@@ -1058,6 +1071,7 @@ class RunFile:
             budgets=tuple(_budget_of(row) for row in rows),
             fingerprint=str(attrs["fingerprint"]),
             recovery=carried,
+            plan_start=float(attrs["plan_start"]) if "plan_start" in attrs else None,
         )
 
     def write_steady_checkpoint(

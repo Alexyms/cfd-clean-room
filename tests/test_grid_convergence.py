@@ -572,7 +572,11 @@ def test_front_on_the_stretched_mesh_is_reported_val008() -> None:
     Issue 53 D6: the limiter's clamp is applied to the quadratic QUICK value
     with its other three terms in their uniform-mesh form. T5 has no front on
     a stretched mesh, so the figures are new. Asserted: the mesh is stretched,
-    and the errors are finite and positive.
+    and the errors are finite and positive. The error is
+    ``validation.metrics.relative_l2``, an unweighted norm over the cells
+    (test 65 S1): on this mesh the end cells are 0.50 dx wide and the
+    centre's about 1.75 dx, so it is not the area-weighted norm, and the
+    row's figures are not comparable with an area-weighted one.
     """
     runs, errors = row(STRETCHED_FRONT_CASE, UMIST, REPORTED_LEVELS)
     for run in runs:

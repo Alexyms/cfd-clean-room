@@ -18,8 +18,10 @@ the same scenario file but for the keys a continuation may change
 
 The exit status is 0 when the run finished, 1 when a flow state did not
 converge (a capped one leaves its steady checkpoint, so a restart under a
-larger cap continues it), and 2 when the scenario or the run file was
-refused before anything was solved.
+larger cap continues it), and 2 when the scenario, the run file or the
+restart was refused. The loader and ``time_integration.run`` check what they
+can before any flow is solved; a ValueError raised later in the run is
+reported the same way.
 """
 
 import argparse
@@ -34,9 +36,9 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.config import SimConfig  # noqa: E402
-from src.io_manager import RecoveryRecord  # noqa: E402
-from src.time_integration import (  # noqa: E402
+from src.config import SimConfig  # noqa: E402 -- follows sys.path.insert
+from src.io_manager import RecoveryRecord  # noqa: E402 -- follows sys.path.insert
+from src.time_integration import (  # noqa: E402 -- follows sys.path.insert
     FlowNotConvergedError,
     Provenance,
     RunRecord,
@@ -196,9 +198,15 @@ def summary(record: RunRecord, config: SimConfig, scenario: Path) -> list[str]:
         if budget.current is None:
             lines.append(f"  class {k} ({size * 1e6:g} um): no step taken")
             continue
+        try:
+            relative = f"relative {budget.relative():.3e}"
+        except ValueError:
+            # A class no event and no inlet supplied has nothing to close
+            # against (a single-size release leaves the others at zero).
+            relative = "relative not defined (nothing supplied)"
         lines.append(
             f"  class {k} ({size * 1e6:g} um): residual {budget.residual():.6g}, "
-            f"relative {budget.relative():.3e}"
+            f"{relative}"
         )
     if record.recovery is not None:
         lines.extend(recovery_lines(record.recovery, config.particle_sizes))

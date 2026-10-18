@@ -1889,6 +1889,31 @@ class SimConfig:
                     f"{SCENARIO_KEY}.hold_time ({hold_time} s) must be below "
                     f"solver.t_end ({self.t_end} s)"
                 )
+            # Within spec is every class below its threshold at every sensor,
+            # and an initial field is uniform, so a start below the thresholds
+            # in every class is within spec at t = 0 and the hold would end
+            # the run at hold_time, before any later event (review 64 S5).
+            start = next(e for e in events if isinstance(e.change, Initial))
+            assert isinstance(start.change, Initial)
+            thresholds = self.class_thresholds(f"{SCENARIO_KEY}.hold_time")
+            if all(c < t for c, t in zip(start.change.values, thresholds, strict=True)):
+                raise ValueError(
+                    f"{SCENARIO_KEY}.hold_time needs an initial event at or above "
+                    f"the thresholds in some class: '{start.name}' starts every class "
+                    "below its threshold, so the room is within spec from t = 0 and "
+                    f"the hold would end the run at {hold_time} s (ADR-014 C)"
+                )
+        # A turbulent flow state carries an eddy viscosity, and the transport
+        # step refuses one without a Schmidt number. A scenario is marched, so
+        # the refusal belongs here rather than after the flow solves (review
+        # 64 S3).
+        assert self.transport is not None
+        if self.turbulence is not None and self.transport.turbulent_schmidt is None:
+            raise ValueError(
+                "a scenario on a configuration with the turbulence section needs "
+                "transport.turbulent_schmidt: the march reads the flow state's eddy "
+                "viscosity, which the transport step turns into a diffusivity by it"
+            )
         spec = ScenarioSpec(
             base_path=base_path,
             base=_freeze(merged),
