@@ -1145,7 +1145,13 @@ as `mu_eff` is), `mesh.py`'s the breakpoints.
    The per-step criterion is 1e-10 U with the pressure at its floor of 1e-10, and the iteration
    error it leaves is measured by repeating runs at 1e-12 U. The numbers are tables O1 and O2
    of `docs/reports/probe67/tables67.md`, copied under the probes below, with the smoke run
-   (S1, S2) and the hashes of record (H1). Every hash of record unchanged.
+   (S1, S2) and the hashes of record (H1). Every hash of record unchanged. The order check is
+   VAL-023 (added 2026-10-18, prompt 67b, review 67 S3). *Fix pass (prompt 67b, 2026-10-18):*
+   the march's two boundary lines (the normal velocities written at its start, the outlets
+   extrapolated before each prediction) are pinned from rest on the 20x10 channel, where the
+   implicit Euler march equals the probe's loop to the byte; a failed march leaves its own
+   faces' imbalance in `last_mass_imbalance`. The plant runner is
+   `docs/reports/probe67/plant67.py`.
 7. The four reference scenarios run on the product grid with their records in the run files,
    the recovery outputs, and the Phase 4 gate report with this document's planned-against-built
    table.
@@ -1693,8 +1699,15 @@ hash62.py's solves from rest through the committed solver of the worktree named 
 
 **Findings (step 6a).**
 - *Prediction (a) holds.* O1's last rows: BDF2's order from the two finest differences is
-  within 0.2 of 2 and implicit Euler's within 0.2 of 1. BDF2's coarser pair reads just above
-  2.2, the pre-asymptotic end of the ladder, which is why the test reads the finest pair. O2:
+  within 0.2 of 2 and implicit Euler's within 0.2 of 1. BDF2's coarser pair reads 2.20, just
+  outside the band. The ratio falls toward 2 as the step halves, so the coarser pair is not yet
+  in the asymptotic range, where an order is defined: at dt 0.1 s the terms beyond the leading
+  dt^2 error still contribute. The finest pair is therefore the one asserted (VAL-023,
+  `tests/test_time_order.py`, which prints every pair's order). The order is a statement about
+  a field, here every face in the largest absolute value. An integrated scalar need not show it:
+  on this 20x20 grid the total kinetic energy's BDF2 differences are non-monotone along the
+  ladder, because the energy's time error changes sign between steps (test 67, section 8; on
+  12x12 the same scalar reads 2.03), so the test reads the field. O2:
   the iteration error the per-step criterion leaves is more than four orders of magnitude
   below the smallest time difference, at both ends of the ladder and for both schemes, so the
   differences hold the time error. The order case was tried once in scratch
