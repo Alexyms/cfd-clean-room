@@ -169,6 +169,63 @@ class HepaReference:
     efficiencies: list[float] = field(default_factory=list)
 
 
+# The time schemes of a transient run (ADR-014 decision 3): BDF2 after an
+# implicit Euler first step, or implicit Euler throughout as the control.
+BDF2 = "bdf2"
+IMPLICIT_EULER = "implicit_euler"
+TRANSIENT_SCHEMES = (BDF2, IMPLICIT_EULER)
+# How far solver.t_end / solver.dt may sit from a whole number of steps,
+# relative: rounding in the division, not a shortened last step, which BDF2
+# does not take.
+STEP_COUNT_ROUNDING = 1e-9
+TRANSIENT_KEY = "transient"
+_TRANSIENT_KEYS = frozenset({"scheme", "step_tol", "step_cap", "forces"})
+_FORCE_KEYS = frozenset({"obstacle", "reference_velocity"})
+
+
+@dataclass(frozen=True)
+class ForceSpec:
+    """The obstacle a transient run's lift and drag are read on (ADR-014 F).
+
+    Parameters
+    ----------
+    obstacle : str
+        The name of one of the configuration's obstacles.
+    reference_velocity : float
+        U of the coefficients, m/s, positive.
+    """
+
+    obstacle: str
+    reference_velocity: float
+
+
+@dataclass(frozen=True)
+class TransientSpec:
+    """A tier-2 run: the flow marched through time (ADR-014 decisions 3 to 5).
+
+    The step and the end are ``solver.dt`` and ``solver.t_end``, the output
+    and checkpoint cadences ``solver.output_interval`` and
+    ``solver.checkpoint_interval``, in steps.
+
+    Parameters
+    ----------
+    scheme : str
+        "bdf2" or "implicit_euler" (``TRANSIENT_SCHEMES``).
+    step_tol : float
+        The per-step criterion over the largest prescribed boundary
+        velocity, positive.
+    step_cap : int
+        The most outer iterations a step may take, positive.
+    forces : ForceSpec or None
+        The obstacle whose lift and drag the run records; None for none.
+    """
+
+    scheme: str
+    step_tol: float
+    step_cap: int
+    forces: ForceSpec | None = None
+
+
 @dataclass(frozen=True)
 class Breakpoint:
     """One point of an axis's interior clustering (ADR-014 decision 11).
@@ -1027,6 +1084,11 @@ class SimConfig:
         if SCENARIO_KEY in raw:
             merged, base_path = self._merged_base(raw, base_dir)
             self._validate_and_load(merged)
+            if self.transient is not None or TRANSIENT_KEY in raw:
+                raise ValueError(
+                    "a scenario runs under tier 1 and a transient section selects "
+                    "tier 2 (ADR-014 A); give one, not both"
+                )
             self.scenario = self._parse_scenario(raw, merged, base_path)
             return
 
@@ -1498,6 +1560,12 @@ class SimConfig:
             )
 
         self._check_vents()
+
+        # A tier-2 run (ADR-014 G, step 6b). Laminar, a whole number of steps,
+        # and the forces on an obstacle that exists.
+        self.transient: TransientSpec | None = None
+        if TRANSIENT_KEY in raw:
+            self.transient = self._parse_transient(raw[TRANSIENT_KEY])
 
         # Sensors
         sensors_raw = self._require_section(raw, "sensors")
@@ -2361,6 +2429,74 @@ class SimConfig:
                 )
             return StretchSpec(ratio=ratio, min_spacing=None)
         return StretchSpec()
+
+    def _parse_transient(self, section: object) -> TransientSpec:
+        """Parse the transient section (ADR-014 G, step 6b).
+
+        ``scheme`` one of TRANSIENT_SCHEMES (default "bdf2"), ``step_tol`` a
+        positive number, ``step_cap`` a positive int, ``forces`` optional
+        with ``obstacle`` (a configured obstacle's name) and
+        ``reference_velocity`` (positive). Refused with the turbulence
+        section (tier 2 is laminar, ADR-014 decision 1) and unless
+        solver.t_end is a whole number of steps of solver.dt to a relative
+        STEP_COUNT_ROUNDING. Unknown keys raise.
+        """
+        context = TRANSIENT_KEY
+        if not isinstance(section, dict):
+            raise ValueError(f"{context} must be a mapping")
+        for key in section:
+            if key not in _TRANSIENT_KEYS:
+                raise ValueError(
+                    f"{context}.{key} is not recognised; known: {sorted(_TRANSIENT_KEYS)}"
+                )
+        if self.turbulence is not None:
+            raise ValueError(
+                f"{context}: a transient run is laminar (ADR-014 decision 1) and the "
+                "turbulence section is present"
+            )
+        scheme = section.get("scheme", BDF2)
+        if not isinstance(scheme, str) or scheme not in TRANSIENT_SCHEMES:
+            raise ValueError(
+                f"{context}.scheme must be one of {list(TRANSIENT_SCHEMES)}, got {scheme!r}"
+            )
+        step_tol = self._require_positive_float(section, "step_tol", context)
+        step_cap = self._require_positive_int(section, "step_cap", context)
+        steps = round(self.t_end / self.dt)
+        if (
+            steps < 1
+            or abs(steps * self.dt - self.t_end) > STEP_COUNT_ROUNDING * self.t_end
+        ):
+            raise ValueError(
+                f"{context}: solver.t_end {self.t_end} is not a whole number of steps "
+                f"of solver.dt {self.dt}"
+            )
+        forces = None
+        if "forces" in section:
+            given = section["forces"]
+            where = f"{context}.forces"
+            if not isinstance(given, dict):
+                raise ValueError(f"{where} must be a mapping")
+            if set(given) != _FORCE_KEYS:
+                raise ValueError(
+                    f"{where} must have exactly the keys {sorted(_FORCE_KEYS)}, got "
+                    f"{sorted(given)}"
+                )
+            name = self._require_string(given, "obstacle", where)
+            names = [o.name for o in self.obstacles]
+            if name not in names:
+                raise ValueError(
+                    f"{where}.obstacle {name!r} is not an obstacle of this "
+                    f"configuration; it has {names}"
+                )
+            forces = ForceSpec(
+                obstacle=name,
+                reference_velocity=self._require_positive_float(
+                    given, "reference_velocity", where
+                ),
+            )
+        return TransientSpec(
+            scheme=scheme, step_tol=step_tol, step_cap=step_cap, forces=forces
+        )
 
     @classmethod
     def _parse_breakpoints(

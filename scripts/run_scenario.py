@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Run a scenario file under tier 1 and summarise the run (ADR-014 G, step 4).
+"""Run a scenario file under tier 1, or a transient file under tier 2, and summarise it.
 
 Run from the repository root with the project's interpreter:
 
@@ -10,7 +10,11 @@ Run from the repository root with the project's interpreter:
 A scenario file in; a run file (and its checkpoint file beside it) and a
 short text summary out: the intervals, the flow states solved and reused,
 the steps, the wall time, each class's budget closure, and for a clean-out
-the recovery outputs of ADR-014 C. ``--flows-from`` names another run file
+the recovery outputs of ADR-014 C. A file with a transient section runs
+under tier 2 (ADR-014 G, step 6b) from rest, and its summary is the steps,
+the mean and largest outer count per step, the Strouhal number of the last
+ten periods with the spectrum's cross-check, or why there is none, and the
+drag coefficient. ``--flows-from`` names another run file
 whose flow states this run may reuse (``time_integration.run``'s
 ``flows_from``); ``--restart`` continues the run a run file records, under
 the same scenario file but for the keys a continuation may change
@@ -18,7 +22,7 @@ the same scenario file but for the keys a continuation may change
 
 The exit status is 0 when the run finished, 1 when a flow state did not
 converge (a capped one leaves its steady checkpoint, so a restart under a
-larger cap continues it), and 2 when the scenario, the run file or the
+larger cap continues it) or a tier-2 step reached its cap, and 2 when the scenario, the run file or the
 restart was refused. The loader and ``time_integration.run`` check what they
 can before any flow is solved; a ValueError raised later in the run is
 reported the same way.
@@ -38,10 +42,14 @@ if str(ROOT) not in sys.path:
 
 from src.config import SimConfig  # noqa: E402 -- follows sys.path.insert
 from src.io_manager import RecoveryRecord  # noqa: E402 -- follows sys.path.insert
+from src.solver_staggered import (  # noqa: E402 -- follows sys.path.insert
+    TransientStepError,
+)
 from src.time_integration import (  # noqa: E402 -- follows sys.path.insert
     FlowNotConvergedError,
     Provenance,
     RunRecord,
+    TransientRunRecord,
     run,
 )
 
@@ -213,6 +221,46 @@ def summary(record: RunRecord, config: SimConfig, scenario: Path) -> list[str]:
     return lines
 
 
+def transient_summary(record: TransientRunRecord, scenario: Path) -> list[str]:
+    """A tier-2 run's summary lines (ADR-014 G, step 6b).
+
+    Parameters
+    ----------
+    record : TransientRunRecord
+        What ``time_integration.run`` returned for a transient file.
+    scenario : Path
+        The file.
+
+    Returns
+    -------
+    list[str]
+        The lines, without newlines: the steps, the outer counts, St with
+        its cross-check or the reason there is none, and C_D.
+    """
+    lines = [f"transient: {scenario}", f"run file: {record.path}"]
+    if record.restarted_from is not None:
+        lines.append(f"restarted from step {record.restarted_from}")
+    lines.append(f"steps: {record.steps} to t = {record.t_final:.6g} s")
+    lines.append(
+        f"outer per step: mean {record.outer_mean:.2f}, largest {record.outer_max}"
+    )
+    reading = record.strouhal
+    if reading is None:
+        lines.append(f"St: not defined ({record.strouhal_refusal})")
+    else:
+        verdict = "agrees" if reading.agrees else "DISAGREES"
+        lines.append(
+            f"St: {reading.strouhal:.5f} over the last ten periods (period "
+            f"{reading.period:.5f} s); spectrum {reading.spectral_strouhal:.5f} "
+            f"+/- {reading.resolution:.5f}, {verdict}"
+        )
+    if record.drag_coefficient is not None:
+        window = "over the St window" if reading is not None else "at the last step"
+        lines.append(f"C_D: {record.drag_coefficient:.5f} ({window})")
+    lines.append(f"wall time: {record.wall_seconds:.1f} s")
+    return lines
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the scenario, print the summary, return the exit status.
 
@@ -253,13 +301,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             flows_from=args.flows_from,
             provenance=Provenance.here(commit(), args.concurrent),
         )
-    except FlowNotConvergedError as err:
+    except (FlowNotConvergedError, TransientStepError) as err:
         print(f"error: {err}", file=sys.stderr)
         return EXIT_NOT_CONVERGED
     except (ValueError, KeyError, FileNotFoundError, TypeError) as err:
         print(f"error: {err}", file=sys.stderr)
         return EXIT_REFUSED
-    print("\n".join(summary(record, config, args.scenario)))
+    if isinstance(record, TransientRunRecord):
+        print("\n".join(transient_summary(record, args.scenario)))
+    else:
+        print("\n".join(summary(record, config, args.scenario)))
     return EXIT_DONE
 
 

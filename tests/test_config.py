@@ -5,6 +5,7 @@ and rejects invalid configurations with clear error messages at load
 time (REQ-C02).
 """
 
+import copy
 import dataclasses
 import math
 from itertools import pairwise
@@ -14,6 +15,7 @@ import pytest
 import yaml
 
 from src.config import (
+    BDF2,
     CFL_NUMBER_BOUND,
     DEFAULT_PRESSURE_PRECONDITIONER,
     EVENT_TIME_RTOL,
@@ -24,7 +26,9 @@ from src.config import (
     RETIRED_PRESSURE_TOL_KEY,
     SOLVER_KEYS,
     Breakpoint,
+    ForceSpec,
     SimConfig,
+    TransientSpec,
     TransportSpec,
     TurbulenceSpec,
     breakpoint_faces,
@@ -3880,3 +3884,111 @@ def test_the_reference_scenarios_state_their_sources_values() -> None:
         False,
     )
     assert panel["concentration"] == hundredfold
+
+
+TRANSIENT = {
+    "scheme": "bdf2",
+    "step_tol": 1.0e-4,
+    "step_cap": 500,
+    "forces": {"obstacle": "equipment", "reference_velocity": 0.45},
+}
+
+
+@pytest.mark.unit
+class TestTransientSection:
+    """The transient section (ADR-014 G, step 6b): tier 2's keys, refused at load."""
+
+    def _raw(self, tmp_path, **change: object) -> dict:
+        with open(_write_config(tmp_path), encoding="utf-8") as handle:
+            raw = yaml.safe_load(handle)
+        raw["transient"] = copy.deepcopy(TRANSIENT)
+        for key, value in change.items():
+            if value is None:
+                raw["transient"].pop(key, None)
+            else:
+                raw["transient"][key] = value
+        return raw
+
+    def test_the_section_is_read(self, tmp_path) -> None:
+        config = SimConfig.from_dict(self._raw(tmp_path))
+        assert config.transient == TransientSpec(
+            scheme="bdf2",
+            step_tol=1e-4,
+            step_cap=500,
+            forces=ForceSpec(obstacle="equipment", reference_velocity=0.45),
+        )
+        assert config.scenario is None
+
+    def test_absent_is_none_and_the_scheme_defaults_to_bdf2(self, tmp_path) -> None:
+        assert SimConfig(_write_config(tmp_path)).transient is None
+        config = SimConfig.from_dict(self._raw(tmp_path, scheme=None, forces=None))
+        assert config.transient.scheme == BDF2 and config.transient.forces is None
+
+    def test_a_scenario_with_it_is_refused(self, tmp_path) -> None:
+        base = _scenario_base(tmp_path)
+        base["transient"] = copy.deepcopy(TRANSIENT)
+        with pytest.raises(ValueError, match="give one, not both"):
+            _load_scenario(tmp_path, _scenario_raw(tmp_path, [_door_open()], base))
+        raw = _scenario_raw(tmp_path, [_door_open()])
+        raw["transient"] = copy.deepcopy(TRANSIENT)
+        with pytest.raises(ValueError, match="give one, not both"):
+            _load_scenario(tmp_path, raw)
+
+    def test_the_turbulence_section_with_it_is_refused(self, tmp_path) -> None:
+        raw = self._raw(tmp_path)
+        raw["turbulence"] = {"model": "standard"}
+        raw["solver"]["stopping_rule"] = "error_estimate"
+        with pytest.raises(ValueError):
+            SimConfig.from_dict(raw)
+
+    @pytest.mark.parametrize(
+        ("change", "error", "match"),
+        [
+            ({"scheme": "crank_nicolson"}, ValueError, "scheme must be one of"),
+            ({"scheme": 2}, ValueError, "scheme must be one of"),
+            ({"step_tol": None}, ValueError, "step_tol"),
+            ({"step_tol": 0.0}, ValueError, "step_tol"),
+            ({"step_tol": True}, TypeError, "step_tol"),
+            ({"step_cap": None}, ValueError, "step_cap"),
+            ({"step_cap": 0}, ValueError, "step_cap"),
+            ({"step_cap": True}, TypeError, "step_cap"),
+            ({"step_cap": 5.5}, TypeError, "step_cap"),
+            ({"forces": "equipment"}, ValueError, "must be a mapping"),
+            ({"forces": {"obstacle": "equipment"}}, ValueError, "exactly the keys"),
+            (
+                {"forces": {"obstacle": "door", "reference_velocity": 0.45}},
+                ValueError,
+                "not an obstacle",
+            ),
+            (
+                {"forces": {"obstacle": "equipment", "reference_velocity": 0.0}},
+                ValueError,
+                "reference_velocity",
+            ),
+            (
+                {"forces": {"obstacle": 3, "reference_velocity": 0.45}},
+                TypeError,
+                "obstacle",
+            ),
+            ({"sweeps": 10}, ValueError, "not recognised"),
+        ],
+    )
+    def test_a_bad_key_is_refused(
+        self, tmp_path, change: dict, error: type, match: str
+    ) -> None:
+        with pytest.raises(error, match=match):
+            SimConfig.from_dict(self._raw(tmp_path, **change))
+
+    def test_a_t_end_that_is_not_a_whole_number_of_steps_is_refused(
+        self, tmp_path
+    ) -> None:
+        raw = self._raw(tmp_path)
+        raw["solver"]["t_end"] = 60.005
+        with pytest.raises(ValueError, match="whole number of steps"):
+            SimConfig.from_dict(raw)
+
+    def test_not_a_mapping_is_refused(self, tmp_path) -> None:
+        raw = self._raw(tmp_path)
+        raw["transient"] = ["bdf2"]
+        with pytest.raises(ValueError, match="must be a mapping"):
+            SimConfig.from_dict(raw)
