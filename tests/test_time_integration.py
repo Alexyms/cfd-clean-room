@@ -353,7 +353,7 @@ class TestSensorsAndInputs:
 # (not defined). Each row: the class 0 field, the class 1 field, the means.
 LIVE = np.array([[True, True, False, True]])
 HISTORY = [
-    ([1000.0, 1000.0, 0.0, 1000.0], [50.0, 50.0, 0.0, 50.0], [1000.0, 50.0]),
+    ([1000.0, 1000.0, 0.0, 1000.0], [50.0, 50.0, 0.0, 0.5], [1000.0, 50.0]),
     ([50.0, 20.0, 0.0, 9.0], [0.5, 0.5, 0.0, 0.5], [30.0, 0.6]),
     ([9.0, 12.0, 0.0, 8.0], [0.4, 0.2, 0.0, 0.3], [9.5, 0.3]),
     ([11.0, 5.0, 0.0, 7.0], [0.3, 0.2, 0.0, 0.2], [11.0, 0.25]),
@@ -390,8 +390,10 @@ class TestRecoveryTracker:
         class 0 first reads at most 10 at t = 1, sensor 0 at t = 2, the mean
         at t = 2 (9.5; the 10 at t = 4 is later). Class 1's 100:1 times are
         not defined though its readings fall to 0.5. The local field: class
-        0's cells last at or above 10 at 4, 2, never; class 1's middle cell
-        is at its threshold at the end, so not recovered. Defects caught (one
+        0's cells last at or above 10 at 4, 2 and 0 (the initial field
+        only); class 1's east cell starts below its threshold and is never
+        above it, so zero, and its middle cell is at its threshold at the
+        end, so not recovered. Defects caught (one
         per plant): the within test at or below rather than below; a stretch
         not reset when a sensor goes back over; the room within when any
         class is; a 100:1 time overwritten by a later crossing; the times
