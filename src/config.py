@@ -411,8 +411,9 @@ class ScenarioSpec:
 
     Notes
     -----
-    ADR-014 G lists ``checkpoint_interval`` here; it is the run file's
-    (ADR-014 D, step 3) and arrives with it.
+    ADR-014 G lists ``checkpoint_interval`` here; it is the solver block's
+    key, ``SimConfig.checkpoint_interval`` (ADR-014 D, step 3), the cadence
+    of a steady solve's checkpoint as well as a march's.
     """
 
     base_path: Path
@@ -666,7 +667,7 @@ PRESSURE_JACOBI = "jacobi"
 MULTIGRID = "multigrid"
 PRESSURE_PRECONDITIONERS: tuple[str, ...] = (PRESSURE_JACOBI, MULTIGRID)
 DEFAULT_PRESSURE_PRECONDITIONER = MULTIGRID
-# Every key the solver block accepts, nine required and five optional, in the
+# Every key the solver block accepts, nine required and six optional, in the
 # order the harness records them: it reads this tuple, so a key added here is
 # in every harness row (GitHub issue 38). With optional keys a misspelt one
 # would otherwise fall back to its default.
@@ -685,6 +686,7 @@ SOLVER_KEYS: tuple[str, ...] = (
     "iteration_error_tol",
     "mass_imbalance_tol",
     "pressure_preconditioner",
+    "checkpoint_interval",
 )
 
 # Transport section (ADR-011 I), optional: the velocity-only validation cases
@@ -1026,6 +1028,14 @@ class SimConfig:
         if "pressure_preconditioner" in solver:
             self.pressure_preconditioner = self._require_choice(
                 solver, "pressure_preconditioner", "solver", PRESSURE_PRECONDITIONERS
+            )
+        # The run file's checkpoint cadence (ADR-014 D): outer iterations of a
+        # steady solve, steps of the transport march. Absent writes no periodic
+        # checkpoint, so every run before step 3 reads as it did.
+        self.checkpoint_interval: int | None = None
+        if "checkpoint_interval" in solver:
+            self.checkpoint_interval = self._require_positive_int(
+                solver, "checkpoint_interval", "solver"
             )
 
         # Transport (optional). Unknown keys raise as they do in the solver

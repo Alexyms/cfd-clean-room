@@ -123,7 +123,7 @@ boundary_staggered                 .                     X                  .   
 boundary_vents                     .                     X                  .                 .           X         .          .        X       .          .          .         .            .            .             .                 .              X         .          .
 config                             .                     .                  .                 .           .         .          .        .       .          .          .         .            .            .             .                 .              .         .          .
 constants                          .                     .                  .                 .           .         .          .        .       .          .          .         .            .            .             .                 .              .         .          .
-io_manager                         .                     .                  .                 .           .         .          .        .       .          .          .         .            .            .             X                 .              .         .          .
+io_manager                         .                     .                  .                 .           .         .          .        .       .          .          .         .            .            .             X                 X              .         .          .
 mesh                               .                     .                  .                 .           X         .          .        .       .          .          .         .            .            .             .                 .              .         .          .
 momentum                           .                     .                  X                 .           X         .          .        X       .          .          .         .            .            .             .                 .              X         .          .
 multigrid                          .                     .                  .                 .           .         .          .        .       .          .          .         .            .            .             .                 .              .         .          .
@@ -138,14 +138,14 @@ stopping                           .                     .                  .   
 turbulence                         .                     X                  X                 X           X         .          .        X       .          .          .         .            X            .             .                 .              X         .          .
 ```
 
-Rows import columns. Edges, 61 total:
+Rows import columns. Edges, 62 total:
 
 ```
 boundary_concentration -> boundary_registry, boundary_vents, config, mesh, particles, staggered
 boundary_registry      -> config
 boundary_staggered     -> boundary_registry, boundary_vents, config, mesh, staggered
 boundary_vents         -> boundary_registry, config, mesh, staggered
-io_manager             -> solver_staggered
+io_manager             -> solver_staggered, solver_transport
 mesh                   -> config
 momentum               -> boundary_staggered, config, mesh, staggered
 particles              -> config, constants
@@ -169,7 +169,7 @@ When a PR modifies a module, the reviewer verifies impact on downstream modules.
 
 | Modified Module | Check These Downstream Modules | What to Check |
 |-----------------|-------------------------------|---------------|
-| config.py | boundary_concentration, boundary_registry, boundary_staggered, boundary_vents, mesh, momentum, particles, pressure, scenarios, solver_staggered, solver_transport, staggered, turbulence; monitor, time_integration (planned) | New/changed/removed config fields are handled by all consumers. No module accesses a field that no longer exists. No module ignores a new field it should use. The optional transport block (SimConfig.transport, a TransportSpec of cfl_number, advection_scheme, max_diffusion_iter, diffusion_tol and the optional turbulent_schmidt, None when absent) is read by solver_transport, which refuses a configuration without it, and refuses an eddy viscosity field when turbulent_schmidt is absent; the optional turbulence block (SimConfig.turbulence, a TurbulenceSpec, None when absent) by turbulence, which refuses a configuration without it and advects k and eps with its advection_scheme (upwind when absent, prompt 48; the transport block's key of the same name and its umist default are separate), and by solver_staggered, which runs the coupled solve with it (ECR-002 step 6); the segment keys (concentration, hepa_filtered, deposition_surface, each allowed on one segment type) by boundary_concentration (ADR-011 E and I); output_interval becomes FieldHistory's interval. pressure_rtol, max_pressure_iter and the optional pressure_preconditioner (multigrid when absent since prompt 54, jacobi on request) are read by pressure (ECR-003 step 1); momentum_sweeps by momentum (ECR-002 step 4); pressure_tol is refused at load, so no module can read it. SOLVER_KEYS is the one ordered list of solver keys and scripts/benchmark.py records every row's params from it, so a key added here is in every row (GitHub issue 38). CFL_NUMBER_BOUND, PRESSURE_RTOL_BOUNDS, PRESSURE_PRECONDITIONERS (PRESSURE_JACOBI, MULTIGRID), the scheme names and the deposition surface names are this module's constants and consumers import them. The boundary type `fixed_flow_outlet` (ECR-002 step 3, ADR-012 D as amended 2026-10-08) is read by boundary_registry (`condition_of`, `fixed_flow_condition`) and boundary_staggered (the resolved velocities); a configuration with no pressure_outlet needs at least one fixed-flow outlet that states no velocity or stated flows that balance the inflow (ADR-014 J's closed box), and one with a pressure_outlet needs every fixed-flow outlet to state its velocity, both refused at load, as is a fixed-flow outlet in a file with no velocity_inlet, a `velocity` on a pressure_outlet and a blank `velocity` on a fixed_flow_outlet. The scenario section (ADR-014 B, step 1): SimConfig.scenario, a ScenarioSpec or None, read by scenarios; its times(), active(t) and mapping(events) are the one derivation of an interval's configuration, so the loader's validation of every interval and the manager's intervals cannot disagree; an empty replacement removes a segment; merge_mappings is decision 7's rule (mappings merge, lists replace whole). |
+| config.py | boundary_concentration, boundary_registry, boundary_staggered, boundary_vents, mesh, momentum, particles, pressure, scenarios, solver_staggered, solver_transport, staggered, turbulence; monitor, time_integration (planned) | New/changed/removed config fields are handled by all consumers. No module accesses a field that no longer exists. No module ignores a new field it should use. The optional transport block (SimConfig.transport, a TransportSpec of cfl_number, advection_scheme, max_diffusion_iter, diffusion_tol and the optional turbulent_schmidt, None when absent) is read by solver_transport, which refuses a configuration without it, and refuses an eddy viscosity field when turbulent_schmidt is absent; the optional turbulence block (SimConfig.turbulence, a TurbulenceSpec, None when absent) by turbulence, which refuses a configuration without it and advects k and eps with its advection_scheme (upwind when absent, prompt 48; the transport block's key of the same name and its umist default are separate), and by solver_staggered, which runs the coupled solve with it (ECR-002 step 6); the segment keys (concentration, hepa_filtered, deposition_surface, each allowed on one segment type) by boundary_concentration (ADR-011 E and I); output_interval becomes FieldHistory's interval. pressure_rtol, max_pressure_iter and the optional pressure_preconditioner (multigrid when absent since prompt 54, jacobi on request) are read by pressure (ECR-003 step 1); momentum_sweeps by momentum (ECR-002 step 4); checkpoint_interval by solver_staggered (the periodic steady checkpoint) and by the march's loop (ADR-014 D, step 3; time_integration when built); pressure_tol is refused at load, so no module can read it. SOLVER_KEYS is the one ordered list of solver keys and scripts/benchmark.py records every row's params from it, so a key added here is in every row (GitHub issue 38). CFL_NUMBER_BOUND, PRESSURE_RTOL_BOUNDS, PRESSURE_PRECONDITIONERS (PRESSURE_JACOBI, MULTIGRID), the scheme names and the deposition surface names are this module's constants and consumers import them. The boundary type `fixed_flow_outlet` (ECR-002 step 3, ADR-012 D as amended 2026-10-08) is read by boundary_registry (`condition_of`, `fixed_flow_condition`) and boundary_staggered (the resolved velocities); a configuration with no pressure_outlet needs at least one fixed-flow outlet that states no velocity or stated flows that balance the inflow (ADR-014 J's closed box), and one with a pressure_outlet needs every fixed-flow outlet to state its velocity, both refused at load, as is a fixed-flow outlet in a file with no velocity_inlet, a `velocity` on a pressure_outlet and a blank `velocity` on a fixed_flow_outlet. The scenario section (ADR-014 B, step 1): SimConfig.scenario, a ScenarioSpec or None, read by scenarios; its times(), active(t) and mapping(events) are the one derivation of an interval's configuration, so the loader's validation of every interval and the manager's intervals cannot disagree; an empty replacement removes a segment; merge_mappings is decision 7's rule (mappings merge, lists replace whole). |
 | constants.py | particles | Constant names and SI values unchanged; no module defines its own copy (REQ-C04). |
 | mesh.py | boundary_staggered, momentum, pressure, scalar_scheme, scenarios, solver_staggered, staggered, solver_transport, turbulence; monitor (planned) | Grid dimensions, cell arrays, and coordinate arrays are consumed correctly. Shape assumptions still hold. Centers stay face midpoints; staggered averaging depends on it. solver_transport and turbulence read dx_face and dy_face for the diffusive flux on a stretched mesh and cell_type for which cells hold a scalar; scalar_scheme reads the node and face coordinates for its axes; turbulence reads the face coordinates for the corner derivatives. obstacle_mask is the one rule that puts an obstacle on the mesh: cell_type reads it, and the vents' faces (staggered.obstacle_face_inputs) are the faces of the cells it returns, so a change to the rule moves both together (ADR-014 J). |
 | staggered.py | solver_staggered, boundary_staggered, boundary_concentration, boundary_vents, momentum, pressure, solver_transport, turbulence; tests/test_constancy.py, tests/test_conservation.py | Face array shapes and the face-to-center averaging contract unchanged. FaceVelocities (ADR-011 A, REQ-S13) is the transport solver's and the k-epsilon model's input type, so its field names, shapes and read-only owning float64 copies are part of that contract and the layout module is no longer internal to the velocity solver alone. edge_cells and edge_cell_inputs are where both boundary layers read which cells sit behind an edge's faces and which are SOLID; a change there moves both layers together, which the agreement test cannot see, so tests/test_staggered.py::TestEdgeCells checks them directly. obstacle_face_inputs is the same for the equipment vents (ADR-014 J): every vent layer reads a vent's faces through it, by way of boundary_vents.vent_runs, so its index order and its corner rule move the velocity, turbulence and concentration layers together. |
@@ -184,13 +184,13 @@ When a PR modifies a module, the reviewer verifies impact on downstream modules.
 | multigrid.py | pressure (multigrid_preconditioner); tests/test_multigrid.py; docs/reports/probe53/ | Multigrid(coefficients, apply) and cycle(r) unchanged in shape; the coarse operators stay the exact Galerkin product of piecewise-constant 2x2 aggregation, so a closed domain's constant null space and SOLID rows reach every level; the cycle stays symmetric (the same weighted Jacobi sweep and count before and after) and positive on the range, as CG requires, and zero at cells with no equation. SMOOTHING_SWEEPS, SMOOTHER_FACTOR and COARSEST_CELLS change the iteration counts and times of every multigrid correction; a change to them repeats prompt 53's per-correction measurement and moves every laminar hash. Under the default key this runs in every pressure correction, so every field, the laminar hashes included, depends on it; under `jacobi` nothing here runs. |
 | solver_staggered.py | face_velocities is the transport solver's input, read by tests/test_constancy.py and tests/test_conservation.py (no import: solver_transport takes a FaceVelocities); time_integration (planned, Phase 4: the NS solver of section 2.1); scripts/benchmark.py, scripts/view_field.py, scripts/stopping_probe.py, scripts/val001_order.py, scripts/self_convergence.py | The public shape: cell-centered [ny, nx] float64 contiguous returns, the IterationState callback once per outer iteration with cell-centered fields and the corrector's iteration count, last_pressure_iterations, pressure_cap_hits and stage_seconds reset per solve, reference_velocity F_ref / (rho h). Under the default velocity_step rule the stop is the residual below convergence_tol, the definition every stored velocity-step row was taken under, so outer iteration counts compare with them, except that since 2026-10-06 an outer iteration whose correction reached max_pressure_iter cannot stop the solve (ADR-013 B); residual_history keeps that definition under both rules. The harness records pressure_cap_hits in every row. converged and stop_reason are set by every solve and reset at its start; the harness records them, with velocity_step_below_tol stored as residual_below_tol, the label every stored velocity-step row carries. face_velocities is None before the first solve and set at the end of every solve, converged or not (REQ-S13). Since ADR-014 step 0 (prompt 60): flow_state and steady_checkpoint are set beside it; initial=None and resume=None are the solve from rest, bitwise (the hashes of record, REQ-S16), a warm start rebuilds nu_t from k and eps and restarts the rule, and a resume continues the checkpoint's solve bitwise, so time_integration (planned) and io_manager depend on both meanings staying apart. |
 | stopping.py | solver_staggered, scripts/stopping_probe.py, scripts/val001_order.py, scripts/benchmark.py, scripts/self_convergence.py | IterationState's fields, which the solver hands its on_iteration callback and the harness reads, unchanged in position; the count field is pressure_iterations since 2026-10-06 (pressure_sweeps before), and pressure_products, added last the same day, both read by name in scripts/benchmark.py's WorkCounter, which counts the work in products. update(step, imbalance) answers converged only when the estimate, the worst imbalance, the absolute sum over flux_scale and the absolute signed sum are all below their tolerances; the imbalance callable, which returns an ImbalanceSummary read by name from one evaluation, is not called until the estimate is met; no estimate (inf) while the window is short, a step in it is zero or not finite, or rho_hat is outside (0, 1). RATE_WINDOW stays a module constant. Since ECR-002 step 6 the version is the rule's (ErrorEstimateRule.version: RULE_VERSION_WITHOUT_E 3, RULE_VERSION_WITH_E 5, with viscosity_condition on), read through the solver (StaggeredSolver.rule_version, solver_staggered.rule_version(config)) by stopping_probe and val001_order, which store it with their saved solves, so that they solve again, and by the harness, which records it in every error_estimate row, so that its summary keeps the versions apart. update's viscosity_step is given exactly when the rule has a nu_scale. window() and restore() (ADR-014 step 0) carry the rate fits' steps, oldest first, so a restored rule's estimates and stops are its source's; the steady checkpoint of solver_staggered and io_manager stores them. |
-| solver_transport.py | time_integration, monitor (planned, Phases 4 and 5); the Phase 7 animation (FieldHistory); tests/test_solver_transport.py, tests/test_diffusion.py, tests/test_advection.py, tests/test_constancy.py, tests/test_smith_hutton.py, tests/test_conservation.py, tests/test_sealed_box.py; validation/transport_cases.py hands it stand-ins | solve_timestep takes FaceVelocities, not cell means, a sources rate array and the keyword-only eddy_viscosity field (nu_t per cell, m^2/s, None the laminar path bitwise; the face value is the distance-weighted harmonic mean, so a caller that hands another face rule changes the contract), and returns a new [ny, nx] float64 contiguous field with SOLID cells zero; stable_dt's definition, the sum of the two directional rates, infinite at rest; v_ext a FaceVelocities-shaped per-class drift on the interior faces, None read as zero (REQ-T06); MassBudget field names (initial, inflow, outflow, source, deposited by floor, ceiling, wall, obstacle, current) and that only the solver writes them; FieldHistory's record signature and npz keys (steps, times, C_<k>). The solver reads settling_velocity and diffusion_coeff of physics and faces_for of boundary and nothing else of either, so the validation cases hand it ScalarPhysics and FixedConditions (validation/transport_cases.py); a change to what it reads changes that contract. The vents (ADR-014 J, step 0b): ConcentrationFaces' vent_u and vent_v open faces of SOLID cells to the advection and the budget, and a recirculating discharge carries the flux-weighted mean of its intake's room cells in the field the step starts from, times its passed fraction; a configuration without vents runs the earlier lines bit for bit. |
+| solver_transport.py | io_manager (MassBudget, DEPOSIT_SURFACES); time_integration, monitor (planned, Phases 4 and 5); the Phase 7 animation (FieldHistory); tests/test_solver_transport.py, tests/test_diffusion.py, tests/test_advection.py, tests/test_constancy.py, tests/test_smith_hutton.py, tests/test_conservation.py, tests/test_sealed_box.py; validation/transport_cases.py hands it stand-ins | solve_timestep takes FaceVelocities, not cell means, a sources rate array and the keyword-only eddy_viscosity field (nu_t per cell, m^2/s, None the laminar path bitwise; the face value is the distance-weighted harmonic mean, so a caller that hands another face rule changes the contract), and returns a new [ny, nx] float64 contiguous field with SOLID cells zero; stable_dt's definition, the sum of the two directional rates, infinite at rest; v_ext a FaceVelocities-shaped per-class drift on the interior faces, None read as zero (REQ-T06); MassBudget field names (initial, inflow, outflow, source, deposited by floor, ceiling, wall, obstacle, current) and that only the solver writes them, solve_timestep step by step and restore_budgets whole from a checkpoint (ADR-014 step 3, which io_manager's run file round-trips); FieldHistory's record signature and npz keys (steps, times, C_<k>). The solver reads settling_velocity and diffusion_coeff of physics and faces_for of boundary and nothing else of either, so the validation cases hand it ScalarPhysics and FixedConditions (validation/transport_cases.py); a change to what it reads changes that contract. The vents (ADR-014 J, step 0b): ConcentrationFaces' vent_u and vent_v open faces of SOLID cells to the advection and the budget, and a recirculating discharge carries the flux-weighted mean of its intake's room cells in the field the step starts from, times its passed fraction; a configuration without vents runs the earlier lines bit for bit. |
 | particles.py | boundary_concentration, scenarios, solver_transport | Settling velocity, diffusion coefficient and deposition velocity interface unchanged. Return types, units and signs unchanged (settling positive downward, deposition non-negative; the floor value includes settling, which the solver must not add again, ADR-011 D). |
 | scenarios.py | time_integration (planned, Phase 4); tests/test_scenarios.py | Built at ADR-014 step 2. intervals(), flow_states(), sources_at(t), conditions_for(interval), initial_fields() and n_flow_states unchanged in signature and meaning; an event's start and end are interval boundaries, active from its start and expired at its end. The fingerprint reads FLOW_KEYS only, over the segments in configuration order with contiguous pieces of one segment joined, so a transport-only event (TRANSPORT_KEYS) never adds a flow state; every BoundarySpec field is in exactly one of the two tuples, which tests/test_scenarios.py checks, so a new segment key must be classified before it loads. A state joined from pieces is the split state to the rounding of the inflow sums, not bitwise. sources_at returns solve_timestep's sources, one [ny, nx] rate per class, zero in SOLID cells. |
 | monitor.py | time_integration | Update and query interfaces unchanged. Alert output format unchanged. |
 | csolver/ | solver_staggered (REQ-N03's NumPy reference, ADR-010), solver_transport; both planned, Phase 6 | CUDA kernel signatures match pybind11 declarations. Memory layout assumptions (row-major, contiguous, double precision) unchanged. |
 | time_integration.py | nothing in src/ (planned, Phase 4; ADR-014 G: nothing imports it) | Timestep sequence and output trigger logic unchanged: one step for every class, the interval to the next switch divided into equal steps, the concentration fields and the budget carried across a switch unchanged (ADR-014 A). |
-| io_manager.py | time_integration (planned, Phase 4); tests/test_io_manager.py | The run file's groups and dataset names (ADR-014 D) unchanged, so a run file written before a change still restarts after it; /steady_checkpoint/ (step 0) holds every field of SteadyCheckpoint as "<f8" so a resume from it is the uninterrupted solve bitwise. |
+| io_manager.py | time_integration (planned, Phase 4); tests/test_io_manager.py | The run file's groups and dataset names (ADR-014 D) unchanged, so a run file written before a change still restarts after it; /transport/ keeps FieldHistory's keys (steps, times, C_<k>), so Phase 7 reads one format; the checkpoint file's /steady_checkpoint/ holds every field of SteadyCheckpoint and /checkpoint/ the march's step, time, class fields and budgets, all as "<f8", so a restart from them is the uninterrupted run bitwise; the checkpoint file is replaced whole by os.replace and never written in place; RESTART_EXCLUDED_KEYS is the one list of keys a restart may change, and a key added to it widens what a restart accepts. It reads MassBudget's fields by name (BUDGET_TERMS) and SteadyCheckpoint's, so a field added to either is added here. |
 
 ### 3.3 Cross-Cutting Concerns
 
@@ -213,9 +213,9 @@ Generated. The responsibility and serves columns are editorial and come from `do
 | `src/boundary_registry.py` | 469 | Interprets the configured boundary segments once, answering which segment covers each point along a domain edge and which condition and prescribed velocity hold there, SOLID cells read as walls, for both boundary imposition layers: the staggered velocity layer and the concentration layer. | S12.1 |
 | `src/boundary_staggered.py` | 693 | Writes Dirichlet normal velocities exactly into the staggered domain-face entries and exposes the tangential wall values, wall distances, pressure outlets and wall faces as data for the momentum and pressure steps and the wall functions. | S12 |
 | `src/boundary_vents.py` | 250 | Derives the mesh faces each equipment vent covers on its obstacle face, from the staggered layout's obstacle-face inputs and the registry's first-match coverage, with the face masks the velocity, turbulence and concentration layers read, and refuses a vent that covers no face or a recirculating pair whose flows differ on the faces. | S12.1 |
-| `src/config.py` | 2402 | Loads the YAML configuration into typed dataclasses and rejects missing keys, wrong types and out-of-range values at load time. | A02, A03, C01, C02, C03, S10 |
+| `src/config.py` | 2412 | Loads the YAML configuration into typed dataclasses and rejects missing keys, wrong types and out-of-range values at load time. | A02, A03, C01, C02, C03, S10 |
 | `src/constants.py` | 8 | Holds the physical constants shared by every module so that none of them defines its own copy. | C04 |
-| `src/io_manager.py` | 124 | Writes a steady solve's checkpoint into the run file's steady_checkpoint group and reads it back bitwise, so a solve stopped at its cap continues in another process; the rest of the run file is ADR-014 step 3's. | none |
+| `src/io_manager.py` | 1093 | Writes a run's HDF5 run file by appending (the merged configuration with its restart hash, the flow states, the transport frames, budgets and sensor readings) and its checkpoint file by atomic replacement (the march's checkpoint and the steady solve's), reads each back bitwise, and refuses a restart under a changed configuration, so a killed or capped run continues to what the uninterrupted run reaches. | none |
 | `src/mesh.py` | 442 | Builds the structured grid, uniform or geometrically clustered at the walls, with the face, center, width and center-to-center arrays a face-based stencil needs, and classifies each cell as FLUID, SOLID or BOUNDARY. | S11 |
 | `src/momentum.py` | 1060 | Predicts u* and v* on the staggered grid with QUICK advection by deferred correction over an upwind implicit matrix, a configured number of under-relaxed Jacobi sweeps per call, an optional per-cell viscosity field with its face rule and stress source, and the domain edge's wall stencil at obstacle faces, and returns the diagonal coefficients the pressure correction needs. | S07, S09, S14 |
 | `src/multigrid.py` | 384 | Builds an additive-correction multigrid hierarchy from a five-point pressure system by 2x2 aggregation, its coarse operators the exact Galerkin sums with no probing, and applies one symmetric V-cycle with weighted Jacobi smoothing and a dense pseudo-inverse on the coarsest level as the preconditioner of the pressure correction's conjugate gradients. | S08 |
@@ -223,13 +223,13 @@ Generated. The responsibility and serves columns are editorial and come from `do
 | `src/pressure.py` | 859 | Assembles the staggered pressure correction equation from the momentum diagonals with the discrete divergence of u* as its right-hand side, solves it by conjugate gradients preconditioned with its diagonal or, under the pressure_preconditioner key, with one multigrid V-cycle per iteration, to a relative residual, a rounding floor or a reported iteration cap, corrects the face velocities and updates the pressure. | S04, S08 |
 | `src/scalar_scheme.py` | 568 | Holds the cell-centred scalar scheme the transport solver and the k-epsilon model share: QUICK's face value bounded by the UMIST limiter, the advective flux along one axis with the inflow value or the upwind cell at a domain face, and the backward Euler solve of diffusion with a non-negative cell sink by Jacobi or, for k and eps, by diagonal-preconditioned conjugate gradients that fall back to Jacobi on the cap or a non-positive value, on per-face conductances with one step or a step per cell, with an optional mask of cells held at their value. | S15, T12 |
 | `src/scenarios.py` | 404 | Turns a loaded scenario into its intervals between event boundaries, keys each interval's flow state by a fingerprint of the segment keys the velocity layer reads so transport-only events add no state, and gives the source rate of every class at a time, an interval's concentration boundary and the initial fields on the mesh; it solves and marches nothing. | none |
-| `src/solver_staggered.py` | 893 | Runs steady SIMPLE on the staggered grid as one outer loop over the momentum predictor and the pressure correction, with the turbulence section one k and eps step and the relaxed eddy viscosity inside it, returning cell-centered fields through the harness's callback shape and exposing the final faces as FaceVelocities; stops by the velocity-step rule or, when configured, by the error-estimate rule. | S01, S02, S03, S04, S05, S07, S13, S14, S15 |
-| `src/solver_transport.py` | 1031 | Advances one particle class one explicit step on the staggered face velocities: QUICK's face value bounded by the UMIST limiter under forward Euler at a Courant number the configuration sets, implicit diffusion and deposition by Jacobi on per-face conductances, the Brownian coefficient plus nu_t / Sc_t on interior faces when handed an eddy viscosity field, the settling increment on interior faces, sources added and booked, SOLID cells zero; keeps one MassBudget per class and defines FieldHistory, the output contract for the animation. | N01, T01, T03, T04, T05, T06, T07, T08, T11, T12, T13 |
+| `src/solver_staggered.py` | 982 | Runs steady SIMPLE on the staggered grid as one outer loop over the momentum predictor and the pressure correction, with the turbulence section one k and eps step and the relaxed eddy viscosity inside it, returning cell-centered fields through the harness's callback shape and exposing the final faces as FaceVelocities; stops by the velocity-step rule or, when configured, by the error-estimate rule. | S01, S02, S03, S04, S05, S07, S13, S14, S15 |
+| `src/solver_transport.py` | 1075 | Advances one particle class one explicit step on the staggered face velocities: QUICK's face value bounded by the UMIST limiter under forward Euler at a Courant number the configuration sets, implicit diffusion and deposition by Jacobi on per-face conductances, the Brownian coefficient plus nu_t / Sc_t on interior faces when handed an eddy viscosity field, the settling increment on interior faces, sources added and booked, SOLID cells zero; keeps one MassBudget per class and defines FieldHistory, the output contract for the animation. | N01, T01, T03, T04, T05, T06, T07, T08, T11, T12, T13 |
 | `src/staggered.py` | 443 | Defines the staggered (MAC) field layout: shapes and allocation of face-centered u and v and cell-centered p, the face-to-center averaging the solver applies before returning, and FaceVelocities, the read-only face pair the solver exposes and the transport solver advects with. | S07, S13 |
 | `src/stopping.py` | 408 | Decides when the steady outer iteration has converged, on four conditions: (a) the iteration error estimated from the step and its fitted geometric rate, over a physical velocity scale; (b) the worst per-cell mass imbalance against its own tolerance; (c) the summed imbalance over the through-flow, which shares the tolerance of (a); and (d) the signed imbalance summed over the domain, which shares the tolerance of (b); and with the turbulence model a fifth, (e), the same estimate on the eddy viscosity over the molecular viscosity plus the median eddy viscosity of the FLUID cells, which the solver passes each outer iteration. Also defines IterationState, the snapshot a solver hands its callback once per outer iteration. | S01, S04 |
 | `src/turbulence.py` | 1622 | Advances the k-epsilon model's k and eps one step on a prescribed face velocity field, standard or RNG with each variant's constants as module data: advection, explicit growth from the strain the faces give and implicit decay and diffusion through the shared scalar scheme, boundary values from a conditions object the caller builds each step, the kinematic eddy viscosity, and an assertion that k and eps are positive and finite after every step; and the scalable wall functions, which build those conditions, the wall viscosity of the momentum wall faces and the inlet values the coupled solve starts from. | S14, S15, S17 |
 
-Total 20 Python files, 12752 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
+Total 20 Python files, 13864 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
 
 `Declares it serves` is an EDITORIAL CLAIM read from `docs/system_map_annotations.toml`. It says which requirements a module is meant to satisfy, not that it does. Whether a requirement is met is answered by the tests named in the register's `Verified By` column.
 <!-- END GENERATED: components -->
@@ -254,7 +254,7 @@ Generated. Static import analysis cannot see a function bound into a registry by
 |---|---|
 | Scope | `src/**/*.py` |
 | Files hashed | 20 |
-| Digest | `sha256:15aaf96967860c4f030ae2a1ec79b33a23f94aaf39e4902e46fb06c232dc61e7` |
+| Digest | `sha256:0a11139b5f1c48c44e97101b3134fa5299bf1082631faf3f486ca70e71174e33` |
 
 This is what lets the document answer whether it is current, which is the one question a stale table cannot be asked. `python scripts/gen_system_map.py --check` recomputes the whole set of generated regions, this digest included, and exits non-zero on any disagreement.
 
@@ -303,7 +303,11 @@ SimConfig:
                                 # PRESSURE_PRECONDITIONERS lists both and
                                 # DEFAULT_PRESSURE_PRECONDITIONER names the default;
                                 # anything else raises
-    # SOLVER_KEYS is the one ordered tuple of the fourteen keys above; the harness
+    checkpoint_interval: int | None  # optional, positive, None when absent (no
+                                # periodic checkpoint): outer iterations between a
+                                # steady solve's checkpoints and steps between a
+                                # march's (ADR-014 D, step 3)
+    # SOLVER_KEYS is the one ordered tuple of the fifteen keys above; the harness
     # records every row's params from it. solver.pressure_tol, the retired Jacobi
     # stop (RETIRED_PRESSURE_TOL_KEY), raises ValueError naming pressure_rtol;
     # any other key in the solver block raises ValueError at load
@@ -916,6 +920,19 @@ StaggeredSolver:
     steady_checkpoint: SteadyCheckpoint | None   # the last solve's flow_state with
         # residual_history, the rule's window, rule_version and pressure_cap_hits;
         # None as flow_state is
+    Built in ADR-014 step 3 (prompt 63):
+    solve_steady(..., on_checkpoint: Callable[[SteadyCheckpoint], None] | None = None)
+        called every config.checkpoint_interval outer iterations, counted from
+            the solve's start (a resumed solve's from the checkpoint's outer),
+            with the SteadyCheckpoint a solve capped there leaves, stop_reason
+            None; not on the converging iteration, not when a field is not
+            finite, never without the key; the solve is bitwise the same with
+            or without it. io_manager.RunFile.write_steady_checkpoint is the
+            writer step 4 hands it
+    SteadyCheckpoint.eddy_viscosity_sha256: str | None = None
+        # SHA-256 of the prescribed eddy_viscosity field's "<f8" bytes, None
+        # without one; resume refuses (ValueError) a solve whose field's digest
+        # differs, None against a digest included (ADR-014 D's second note)
     rule_version: int | None    # read-only: 3, 5 with the turbulence section
                                 # (condition (e); 4 until 2026-10-11), None under
                                 # velocity_step
@@ -1293,7 +1310,7 @@ TurbulenceBoundary:
         2026-10-11, removed 2026-10-16 with its tests, ADR-014 I)
 ```
 
-### solver_transport.py --> time_integration, monitor (planned, Phases 4 and 5); the Phase 3 tests
+### solver_transport.py --> io_manager; time_integration, monitor (planned, Phases 4 and 5); the Phase 3 tests
 
 Built (PR 32) from ADR-011 B, C, D and F. Finite volume on the cell-centred
 field, advected by the face velocities of REQ-S13: the flux through a face
@@ -1377,6 +1394,12 @@ TransportSolver:
         returns the new field, [ny, nx], float64, contiguous, SOLID cells zero;
         updates budget[size_class] from the fluxes and sources applied
     budget: list[MassBudget]        # one per class, written here only
+    restore_budgets(budgets: Sequence[MassBudget]) -> None   # ADR-014 step 3:
+                                    # sets budget whole to copies of a
+                                    # checkpoint's, one per class; TypeError for
+                                    # a non-MassBudget, ValueError for the wrong
+                                    # count or deposited keys other than the four
+                                    # surfaces; solve_timestep books onto them
     last_diffusion_sweeps: int      # Jacobi sweeps of the last implicit solve
     diffusion_converged: bool       # whether it met diffusion_tol within the cap
                                     # (a warning naming the cap is logged when it
@@ -1464,25 +1487,80 @@ run(config, *, restart=None, on_step=None) -> RunRecord
 
 ### io_manager.py --> time_integration (planned, Phase 4); tests/test_io_manager.py
 
-ADR-014 D. Step 0 (prompt 60) built the steady checkpoint's group alone;
-step 3 inherits the group's layout and the two functions and builds the rest
-of the run file around them (planned, below).
+ADR-014 D. Step 0 (prompt 60) built the steady checkpoint's group alone, as
+two module functions writing into the run file in place; step 3 (prompt 63)
+replaced them with RunFile, kept the group's layout, and moved it with the
+march's checkpoint into a checkpoint file beside the run file (ADR-014 D's
+amendment of 2026-10-17). Every method opens its file, writes or reads, and
+closes it; nothing holds a handle between calls. Arrays are stored as "<f8"
+and read back bitwise.
 
 ```
-write_steady_checkpoint(path, checkpoint: SteadyCheckpoint) -> None
-    # h5py, mode "a": the file's other groups kept, /steady_checkpoint/ replaced;
-    # datasets u, v, p (and k, eps, nu_t when turbulent) and residual_history,
-    # velocity_steps, viscosity_steps, all "<f8"; attributes outer and
-    # pressure_cap_hits, and stop_reason and rule_version when not None;
-    # TypeError if not a SteadyCheckpoint
-read_steady_checkpoint(path) -> SteadyCheckpoint
-    # what was written, bitwise; KeyError naming the group when absent;
-    # ValueError when it holds some but not all of k, eps and nu_t
-STEADY_CHECKPOINT = "steady_checkpoint"   # the group's name
-Planned (ADR-014 G, step 3): RunFile(path).write_config / write_flow_state /
-    write_frames / checkpoint / read_checkpoint; /config, /flow/<fingerprint>/,
-    /transport/, /checkpoint/ beside /steady_checkpoint/; the configuration hash
-    a resume must match
+RunFile(path)
+    path: Path                      # the run file, appended at each output
+    checkpoint_path: Path           # <run>.checkpoint.h5 (path.with_suffix)
+    temporary_path: Path            # <run>.checkpoint.h5.tmp
+    write_config(mapping, *, commit: str, started: str, machine: str,
+                 concurrent: int) -> None
+        # /config: dataset yaml (config_text(mapping)), attributes sha256 of the
+        # text, restart_sha256 (restart_hash(mapping)), and the provenance;
+        # ValueError when /config exists, TypeError/ValueError on bad provenance
+    read_config() -> RunConfig      # mapping, sha256, restart_sha256, commit,
+                                    # started, machine, concurrent; KeyError if absent
+    check_restart(mapping) -> None  # ValueError "restart refused: <dotted key>
+                                    # differs ..." naming the first key, in the
+                                    # file's order, changed, added or removed,
+                                    # unless only RESTART_EXCLUDED_KEYS differ
+    write_flow_state(fingerprint, state: FlowState, *, wall_seconds,
+                     stage_seconds, rule_readings) -> None
+        # /flow/<fingerprint>/: u_faces, v_faces, p (+ k, eps, nu_t); attributes
+        # outer, stop_reason (when not None), wall_seconds; child groups
+        # stage_seconds and rule_readings holding those mappings as attributes;
+        # ValueError for a fingerprint that is not 64 lowercase hex digits or is
+        # already in the file (a flow state is solved once and reused)
+    flow_fingerprints() -> tuple[str, ...]   # sorted; () without a file
+    read_flow_state(fingerprint) -> FlowRecord   # state, wall_seconds,
+                                    # stage_seconds, rule_readings; KeyError if absent
+    write_frame(step, t, fields: Mapping[int, ndarray], budgets) -> None
+        # appends to /transport/: steps int64, times, C_<k> [n, ny, nx] (the
+        # FieldHistory keys), budgets [n, classes, len(BUDGET_TERMS)] with the
+        # terms as its attribute, initial and current None stored as NaN;
+        # ValueError unless classes are 0..n-1 with one budget each, shapes and
+        # classes match the first frame, and step is above the last frame's
+    read_frames() -> TransportFrames   # steps, times, fields, budgets per frame
+    write_sensor_readings(steps, times, readings [n, classes, sensors],
+                          names) -> None   # appends to /transport/sensors/;
+                                    # the names fixed by the first write
+    read_sensor_readings() -> SensorReadings
+    discard_after(step) -> None     # drops the frames and readings after step,
+                                    # which a restarted march writes again
+    checkpoint(step, t, fields, budgets, fingerprint) -> None
+        # /checkpoint/ of the checkpoint file: attributes step, t, fingerprint;
+        # C_<k> and budgets as in /transport/
+    read_checkpoint() -> MarchCheckpoint   # step, t, fields, budgets,
+                                    # fingerprint; KeyError without one
+    write_steady_checkpoint(checkpoint: SteadyCheckpoint, fingerprint) -> None
+        # /steady_checkpoint/ of the checkpoint file: step 0's layout (u, v, p,
+        # k, eps, nu_t, the three series; outer, pressure_cap_hits, stop_reason
+        # and rule_version when not None) plus attributes fingerprint and
+        # eddy_viscosity_sha256 when not None; the writer solve_steady's
+        # on_checkpoint is handed, with the fingerprint bound
+    read_steady_checkpoint() -> tuple[str, SteadyCheckpoint]
+        # ValueError when the group holds some but not all of k, eps and nu_t
+    # Every checkpoint write builds the whole checkpoint file under
+    # temporary_path (mode "w", so a stale one is truncated, never read), copies
+    # the group it does not replace across, closes both files and os.replace's
+    # it over checkpoint_path: a kill at any point leaves the previous
+    # checkpoint file whole
+config_text(mapping) -> str     # yaml.safe_dump, keys in their order, ASCII
+restart_hash(mapping) -> str    # SHA-256 of config_text of the mapping less
+                                # RESTART_EXCLUDED_KEYS
+RESTART_EXCLUDED_KEYS = (("solver", "max_simple_iter"), ("solver", "t_end"),
+                         ("solver", "checkpoint_interval"))
+BUDGET_TERMS = ("initial", "inflow", "outflow", "source", "deposited_floor",
+                "deposited_ceiling", "deposited_wall", "deposited_obstacle",
+                "current")
+CONFIG, FLOW, TRANSPORT, SENSORS, CHECKPOINT, STEADY_CHECKPOINT   # group names
 ```
 
 ### Retired modules
@@ -1631,3 +1709,4 @@ ADR-008, ADR-010, ADR-011, ADR-012, ADR-013 and ADR-014 are files in `docs/ADR/`
 | 2026-10-16 | Prompt 61b, review 61's fix pass on phase4/step0b-vents. config.py: `MESH_BALANCE_TOLERANCE` moves here from boundary_staggered.py, beside `BALANCE_TOLERANCE`; a `recirculate_from` pair whose flows differ is refused at load, and `boundary_staggered.vent_runs` refuses one whose flows differ on the covered faces. `VentRun`'s arrays are read-only; `BoundaryRegistry.vents` documents its return. REQ-S16's row gains step 0b's transport check. No requirement's text changed. | Claude (builder) |
 | 2026-10-17 | ADR-014 steps 1 and 2 built (prompt 62, branch phase4/step1-scenarios). config.py: the `scenario` section (ScenarioSpec, EventSpec, Replace, Set, Source, Initial, merge_mappings, class_thresholds; from_dict gains base_dir), every rule of ADR-014 B at load and every interval's merged mapping validated through from_dict; an empty replacement removes a segment (ADR-014 B, amendment of 2026-10-17). scenarios.py built: ScenarioManager with section G's contract, FLOW_KEYS and TRANSPORT_KEYS (ADR-014 A, amendment of the same date), flow_fingerprint. boundary_vents.py: VentRun, VentFaces, vent_runs and vent_face_masks moved from boundary_staggered.py, unchanged; ROOM_EDGE_OF_FACE moved from staggered.py to boundary_registry.py, which drops the registry's import of staggered; boundary_concentration no longer imports boundary_staggered. Section 3.2 gains the boundary_vents.py row and the scenarios.py row as built; section 4's config.py and scenarios.py contracts are built, boundary_vents.py's added. REQ-C03's verification names its tests; config.py's annotation serves it. Four reference scenario files under configs/. Every hash of record unchanged. | Claude (builder) |
 | 2026-10-17 | Prompt 62b, the fix pass of review and test 62 on phase4/step1-scenarios. config.py: `EVENT_TIME_RTOL` (1e-9 of t_end), one instant for the overlap check, `times()`, the new `ScenarioSpec.is_active` and the end-by-t_end check (review 62 S5); `ScenarioSpec.path`, the scenario file (S4). scenarios.py: the manager runs `boundary_vents.vent_runs` on every interval (S6), so it imports boundary_vents; `sources_at` reads `is_active`. The join rule and the fan rule ratified (ADR-014 A and B, S8). Section 3.2's config.py row names boundary_vents and staggered (S2); three references to `boundary_staggered.vent_runs` now name `boundary_vents.vent_runs` (S1). | Claude (builder) |
+| 2026-10-17 | ADR-014 step 3 built (prompt 63, branch phase4/step3-run-file). io_manager.py: `RunFile` replaces step 0's two functions: the run file, opened, appended and closed at each output (/config with the merged mapping's YAML text, its SHA-256 and the restart hash; /flow/<fingerprint>/; /transport/ frames under FieldHistory's keys, the budgets per class per frame and the sensor readings), and the checkpoint file `<run>.checkpoint.h5` with /checkpoint/ (the march) and /steady_checkpoint/ (step 0's layout plus the fingerprint and the eddy viscosity digest), each write building the file whole under a temporary name and swapping it in with os.replace; `check_restart` refuses a changed key other than RESTART_EXCLUDED_KEYS (the cap, t_end, the checkpoint cadence), naming it; `discard_after` drops the frames after a restart's checkpoint. config.py: the optional `solver.checkpoint_interval` (SOLVER_KEYS gains it last). solver_staggered.py: `solve_steady(on_checkpoint=...)` and `SteadyCheckpoint.eddy_viscosity_sha256`, a resume under another prescribed field refused. solver_transport.py: `TransportSolver.restore_budgets`. Section 4's config, solver_staggered, solver_transport and io_manager contracts and section 3.2's rows updated; the generated regions regenerated (io_manager now imports solver_transport). ADR-014 D amended with the orchestrator's three decisions of 2026-10-17. No requirement text changed. | Claude (builder) |

@@ -1208,6 +1208,55 @@ class TestMomentumSweepsKey:
 
 
 @pytest.mark.unit
+class TestCheckpointIntervalKey:
+    """solver.checkpoint_interval (ADR-014 D, step 3): optional, a positive int."""
+
+    def _raw(self, tmp_path: Path, **keys: object) -> dict:
+        with open(_write_config(tmp_path), encoding="utf-8") as handle:
+            raw = yaml.safe_load(handle)
+        raw["solver"].update(keys)
+        return raw
+
+    def test_absent_gives_none_and_a_given_interval_is_read(
+        self, tmp_path: Path
+    ) -> None:
+        """No key writes no periodic checkpoint; 25 is read as 25.
+
+        Defect caught: a default interval in code, which would write
+        checkpoints in every run that never asked for them.
+        """
+        assert SimConfig(_write_config(tmp_path)).checkpoint_interval is None
+        given = SimConfig.from_dict(self._raw(tmp_path, checkpoint_interval=25))
+        assert given.checkpoint_interval == 25
+
+    def test_it_is_the_last_solver_key(self) -> None:
+        """The harness records it from SOLVER_KEYS, after the earlier optional keys."""
+        assert SOLVER_KEYS[-1] == "checkpoint_interval"
+
+    @pytest.mark.parametrize(
+        ("bad", "error"),
+        [
+            (0, ValueError),
+            (-5, ValueError),
+            (True, TypeError),
+            (10.0, TypeError),
+            ("10", TypeError),
+            (None, TypeError),
+        ],
+    )
+    def test_bad_values_are_refused(
+        self, tmp_path: Path, bad: object, error: type[Exception]
+    ) -> None:
+        """Not positive, a bool, a float, a string or null is refused, naming the key.
+
+        Defect caught: the key read with ``_optional_positive_int``'s
+        default path for null, or without the bool guard.
+        """
+        with pytest.raises(error, match=r"solver\.checkpoint_interval"):
+            SimConfig.from_dict(self._raw(tmp_path, checkpoint_interval=bad))
+
+
+@pytest.mark.unit
 class TestStoppingRuleKeys:
     """The optional stopping keys default and validate; unknown solver keys are refused."""
 
@@ -1331,15 +1380,16 @@ class TestPressureKeys:
         assert RETIRED_PRESSURE_TOL_KEY == "pressure_tol"
 
     def test_solver_keys_is_the_one_ordered_list(self) -> None:
-        """Fourteen keys, nine required then five optional, pressure_rtol among them."""
+        """Fifteen keys, nine required then six optional, pressure_rtol among them."""
         assert isinstance(SOLVER_KEYS, tuple)
-        assert len(SOLVER_KEYS) == len(set(SOLVER_KEYS)) == 14
+        assert len(SOLVER_KEYS) == len(set(SOLVER_KEYS)) == 15
         assert "pressure_rtol" in SOLVER_KEYS
-        assert SOLVER_KEYS[-4:] == (
+        assert SOLVER_KEYS[-5:] == (
             "stopping_rule",
             "iteration_error_tol",
             "mass_imbalance_tol",
             "pressure_preconditioner",
+            "checkpoint_interval",
         )
 
     def test_pressure_preconditioner_defaults_to_multigrid_and_reads_either_choice(

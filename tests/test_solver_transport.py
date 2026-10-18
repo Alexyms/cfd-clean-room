@@ -961,6 +961,68 @@ class TestMassBudget:
 
 
 @pytest.mark.unit
+class TestRestoreBudgets:
+    """``restore_budgets`` (ADR-014 D, step 3): a checkpoint's totals, copied."""
+
+    def _solver(self) -> TransportSolver:
+        """A closed box at rest, one class, whose floor takes the settling."""
+        config = transport_config(1.0, 0.5, 10, 5)
+        mesh = Mesh(config)
+        physics = ParticlePhysics(config)
+        boundary = ConcentrationBoundary(
+            mesh, config, physics, BoundaryRegistry(config)
+        )
+        self.still = FaceVelocities.copy_of(*allocate_fields(mesh)[:2])
+        return TransportSolver(mesh, config, physics, boundary)
+
+    def test_the_budgets_are_copied_in_and_the_next_step_books_onto_them(
+        self,
+    ) -> None:
+        """A restored budget is the given one, unshared, and a step adds to it.
+
+        Defects caught: the list or the deposited dict shared with the
+        argument, so the caller's checkpoint changes as the march steps on;
+        the restore ignored, so the step books onto zero.
+        """
+        solver = self._solver()
+        given = MassBudget(
+            initial=7.0, inflow=1.0, outflow=0.5, source=0.0, current=7.5
+        )
+        given.deposited["floor"] = 0.25
+        solver.restore_budgets([given])
+        assert solver.budget[0] == given and solver.budget[0] is not given
+        assert solver.budget[0].deposited is not given.deposited
+        c = np.full((5, 10), 3.0)
+        solver.solve_timestep(c, self.still, 0, 1.0)
+        assert given.deposited["floor"] == 0.25 and given.current == 7.5
+        budget = solver.budget[0]
+        assert budget.initial == 7.0 and budget.deposited["floor"] > 0.25
+
+    @pytest.mark.parametrize(
+        ("budgets", "error", "match"),
+        [
+            ([], ValueError, "one budget per class"),
+            ([MassBudget(), MassBudget()], ValueError, "one budget per class"),
+            ([{"inflow": 0.0}], TypeError, "must be a MassBudget"),
+            (
+                [MassBudget(deposited={"floor": 0.0})],
+                ValueError,
+                "books deposition to",
+            ),
+        ],
+    )
+    def test_what_is_not_one_budget_per_class_is_refused(
+        self, budgets: list, error: type, match: str
+    ) -> None:
+        """Defects caught: each check removed, so a march restarted from a damaged
+        checkpoint books onto a budget that cannot close its residual."""
+        solver = self._solver()
+        with pytest.raises(error, match=match):
+            solver.restore_budgets(budgets)
+        assert solver.budget == [MassBudget()]
+
+
+@pytest.mark.unit
 class TestFieldHistory:
     def test_every_must_be_a_positive_int(self) -> None:
         for bad in (True, 1.0, "2"):

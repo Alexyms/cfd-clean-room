@@ -36,7 +36,7 @@ responsibility = "Holds the physical constants shared by every module so that no
 serves = ["REQ-C04"]
 
 [modules."src/io_manager.py"]
-responsibility = "Writes a steady solve's checkpoint into the run file's steady_checkpoint group and reads it back bitwise, so a solve stopped at its cap continues in another process; the rest of the run file is ADR-014 step 3's."
+responsibility = "Writes a run's HDF5 run file by appending (the merged configuration with its restart hash, the flow states, the transport frames, budgets and sensor readings) and its checkpoint file by atomic replacement (the march's checkpoint and the steady solve's), reads each back bitwise, and refuses a restart under a changed configuration, so a killed or capped run continues to what the uninterrupted run reaches."
 serves = []
 
 [modules."src/mesh.py"]

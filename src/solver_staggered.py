@@ -69,7 +69,13 @@ larger one reaches what one solve with that cap reaches, bit for bit. Every
 solve leaves ``flow_state`` and ``steady_checkpoint``, except one whose fields
 went non-finite: that solve returns them as it always did and leaves both
 None, since a diverged state is neither a warm start nor a resume point.
-src/io_manager.py writes the second to a run file and reads it back.
+With ``solver.checkpoint_interval`` set, ``solve_steady(on_checkpoint=...)``
+also hands the caller the checkpoint every that many outer iterations, so a
+crash loses at most that many (ADR-014 D, step 3). A checkpoint of a solve
+under a prescribed ``eddy_viscosity`` carries the field's SHA-256, and a
+resume under another field, or under none, is refused: the field is an input
+of the solve that no configuration hash covers. src/io_manager.py writes the
+checkpoints to the run's checkpoint file and reads them back.
 
 ``stopping_rule`` picks the stop. ``velocity_step``, the default, is the
 collocated rule: the residual below ``convergence_tol``. ``error_estimate``
@@ -94,6 +100,7 @@ section 8.2; ADR-013 B). Under error_estimate the continuity conditions refuse
 that state on their own.
 """
 
+import hashlib
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -161,6 +168,9 @@ _STOP_REASONS = {
     ERROR_ESTIMATE: "error_estimate_and_continuity",
 }
 CAP_STOP = "max_simple_iter"
+# A SHA-256 written as hexadecimal: 64 of these digits.
+_SHA256_DIGITS = 64
+_HEX_DIGITS = "0123456789abcdef"
 
 
 def _frozen_field(name: str, value: object, ndim: int = 2) -> np.ndarray:
@@ -293,14 +303,19 @@ class SteadyCheckpoint:
         The solver's ``rule_version``; a resume needs the same.
     pressure_cap_hits : int
         Corrections so far that stopped at max_pressure_iter.
+    eddy_viscosity_sha256 : str or None
+        SHA-256, hexadecimal, of the bytes of the prescribed
+        ``eddy_viscosity`` field the solve ran under; None for a solve
+        without one. A resume needs the same (ADR-014 D, step 3).
 
     Raises
     ------
     TypeError
-        If ``state`` is not a FlowState, or a count is not an int.
+        If ``state`` is not a FlowState, a count is not an int, or the
+        digest is neither None nor a str.
     ValueError
-        If the residual history's length is not ``state.outer``, or a count
-        is negative.
+        If the residual history's length is not ``state.outer``, a count is
+        negative, or the digest is not 64 lowercase hexadecimal digits.
     """
 
     state: FlowState
@@ -309,6 +324,7 @@ class SteadyCheckpoint:
     viscosity_steps: tuple[float, ...]
     rule_version: int | None
     pressure_cap_hits: int
+    eddy_viscosity_sha256: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.state, FlowState):
@@ -327,6 +343,24 @@ class SteadyCheckpoint:
         if self.rule_version is not None:
             _count("rule_version", self.rule_version)
         _count("pressure_cap_hits", self.pressure_cap_hits)
+        digest = self.eddy_viscosity_sha256
+        if digest is not None:
+            if not isinstance(digest, str):
+                raise TypeError(
+                    "eddy_viscosity_sha256 must be a str or None, got "
+                    f"{type(digest).__name__}"
+                )
+            if len(digest) != _SHA256_DIGITS or digest.strip(_HEX_DIGITS):
+                raise ValueError(
+                    "eddy_viscosity_sha256 must be 64 lowercase hexadecimal digits, "
+                    f"got {digest!r}"
+                )
+
+
+def _digest(field: np.ndarray) -> str:
+    """SHA-256 of a prescribed eddy viscosity's bytes, little-endian float64."""
+    data = np.ascontiguousarray(field, dtype="<f8").tobytes()
+    return hashlib.sha256(data).hexdigest()
 
 
 class StaggeredSolver:
@@ -423,6 +457,7 @@ class StaggeredSolver:
         self._live = mesh.cell_type != SOLID
         self._convergence_tol = config.convergence_tol
         self._max_simple_iter = config.max_simple_iter
+        self._checkpoint_interval = config.checkpoint_interval
         self._stopping_rule = config.stopping_rule
         self._rule_tols = (config.iteration_error_tol, config.mass_imbalance_tol)
         self._fluid = mesh.cell_type == FLUID
@@ -560,6 +595,7 @@ class StaggeredSolver:
         eddy_viscosity: np.ndarray | None = None,
         initial: FlowState | None = None,
         resume: SteadyCheckpoint | None = None,
+        on_checkpoint: Callable[[SteadyCheckpoint], None] | None = None,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Solve for steady-state velocity and pressure fields.
 
@@ -597,7 +633,19 @@ class StaggeredSolver:
             checkpoint's, so ``max_simple_iter`` is the total. Under the
             configuration the checkpoint's solve ran with, a larger cap
             reaches what one solve with that cap reaches, bitwise. Refused
-            with ``initial``, and for a checkpoint whose solve converged.
+            with ``initial``, for a checkpoint whose solve converged, and
+            under an ``eddy_viscosity`` other than the one the checkpoint's
+            solve ran under (none included).
+        on_checkpoint : Callable[[SteadyCheckpoint], None], optional
+            Called every ``solver.checkpoint_interval`` outer iterations,
+            counted from the solve's start (a resumed solve's from the
+            checkpoint's), with the SteadyCheckpoint a solve stopped there
+            would leave, its stop reason None: a resume from it reaches what
+            the uninterrupted solve reaches, bitwise (ADR-014 D, step 3).
+            Not called on the iteration the solve converges at, when a field
+            is not finite, or without the key. It reads the iterates and
+            changes none of them, so the solve is the same with or without
+            it. The writer is the caller's (``io_manager.RunFile``).
 
         Returns
         -------
@@ -618,8 +666,9 @@ class StaggeredSolver:
             a state of another grid, carries k and eps for a laminar solve or
             lacks them for a coupled one, or has k or eps not positive in a
             non-SOLID cell; if both are given; if ``resume`` comes from a
-            solve that converged, under another rule version, or with a
-            negative nu_t in a non-SOLID cell.
+            solve that converged, under another rule version, under another
+            ``eddy_viscosity`` (none where it had one, or one where it had
+            none), or with a negative nu_t in a non-SOLID cell.
         TypeError
             If ``initial`` is not a FlowState or ``resume`` not a
             SteadyCheckpoint.
@@ -644,10 +693,11 @@ class StaggeredSolver:
             if eddy_viscosity is None
             else self._effective_viscosity(eddy_viscosity)
         )
+        digest = None if eddy_viscosity is None else _digest(eddy_viscosity)
         start = 0
         state: TurbulenceState | None = None
         if resume is not None:
-            u, v, p, state = self._resumed(resume)
+            u, v, p, state = self._resumed(resume, digest)
             start = resume.state.outer
         elif initial is not None:
             u, v, p, state = self._warm(initial)
@@ -768,6 +818,15 @@ class StaggeredSolver:
                 logger.info("Converged at iteration %d", iteration)
                 break
 
+            interval = self._checkpoint_interval
+            if (
+                on_checkpoint is not None
+                and interval is not None
+                and (iteration + 1) % interval == 0
+                and self._finite(u, v, p, state)
+            ):
+                on_checkpoint(self._checkpoint(u, v, p, state, rule, digest, None))
+
         if not self.converged:
             self.stop_reason = CAP_STOP
             logger.warning("Not converged: stopped at max_simple_iter")
@@ -779,36 +838,60 @@ class StaggeredSolver:
         # runners that classify a run by what comes back; FlowState refuses
         # non-finite input, and a diverged state is no warm start or resume.
         self.flow_state = self.steady_checkpoint = None
-        final = (
-            [u, v, p] if state is None else [u, v, p, state.k, state.eps, state.nu_t]
-        )
-        if not all(np.isfinite(field).all() for field in final):
+        if not self._finite(u, v, p, state):
             logger.warning(
                 "Fields are not finite after %d outer iterations: no flow_state "
                 "or steady_checkpoint is kept",
                 len(self.residual_history),
             )
             return u_c, v_c, p
-        self.flow_state = FlowState(
-            u=self.face_velocities.u,
-            v=self.face_velocities.v,
+        self.steady_checkpoint = self._checkpoint(
+            u, v, p, state, rule, digest, self.stop_reason
+        )
+        self.flow_state = self.steady_checkpoint.state
+        return u_c, v_c, p
+
+    @staticmethod
+    def _finite(
+        u: np.ndarray, v: np.ndarray, p: np.ndarray, state: TurbulenceState | None
+    ) -> bool:
+        """Whether every field a FlowState would hold is finite."""
+        fields = [u, v, p]
+        if state is not None:
+            fields += [state.k, state.eps, state.nu_t]
+        return all(np.isfinite(field).all() for field in fields)
+
+    def _checkpoint(
+        self,
+        u: np.ndarray,
+        v: np.ndarray,
+        p: np.ndarray,
+        state: TurbulenceState | None,
+        rule: ErrorEstimateRule | None,
+        digest: str | None,
+        stop_reason: str | None,
+    ) -> SteadyCheckpoint:
+        """The solve as it stands after its last outer iteration, copied."""
+        flow = FlowState(
+            u=u,
+            v=v,
             p=p,
             k=None if state is None else state.k,
             eps=None if state is None else state.eps,
             nu_t=None if state is None else state.nu_t,
-            stop_reason=self.stop_reason,
+            stop_reason=stop_reason,
             outer=len(self.residual_history),
         )
         steps, viscosity_steps = ((), ()) if rule is None else rule.window()
-        self.steady_checkpoint = SteadyCheckpoint(
-            state=self.flow_state,
+        return SteadyCheckpoint(
+            state=flow,
             residual_history=tuple(self.residual_history),
             velocity_steps=steps,
             viscosity_steps=viscosity_steps,
             rule_version=self._rule_version,
             pressure_cap_hits=self.pressure_cap_hits,
+            eddy_viscosity_sha256=digest,
         )
-        return u_c, v_c, p
 
     def _check_state(self, given: object, name: str, kind: type) -> FlowState:
         """The FlowState in ``initial`` or ``resume``, refused unless it fits."""
@@ -849,10 +932,16 @@ class StaggeredSolver:
         return np.array(flow.u), np.array(flow.v), np.array(flow.p), state
 
     def _resumed(
-        self, resume: SteadyCheckpoint
+        self, resume: SteadyCheckpoint, digest: str | None
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, TurbulenceState | None]:
         """A checkpoint's fields as they stood, the relaxed nu_t kept (ADR-014 D)."""
         flow = self._check_state(resume, "resume", SteadyCheckpoint)
+        if resume.eddy_viscosity_sha256 != digest:
+            raise ValueError(
+                "resume continues a solve under the eddy_viscosity it ran under: "
+                f"the checkpoint's field has SHA-256 {resume.eddy_viscosity_sha256} "
+                f"and this solve's {digest} (None is no field)"
+            )
         if flow.stop_reason in _STOP_REASONS.values():
             raise ValueError(
                 "resume continues a solve, and this checkpoint's stopped converged "
