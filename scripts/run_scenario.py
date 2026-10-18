@@ -178,8 +178,8 @@ def summary(record: RunRecord, config: SimConfig, scenario: Path) -> list[str]:
     repeated = len(record.intervals) - len({p.fingerprint for p in record.intervals})
     lines.append(
         f"flow states: {len(record.flows)} distinct, {len(solved)} solved, "
-        f"{len(read)} read from a run file, {repeated} intervals reusing a state "
-        "already held"
+        f"{len(read)} read from a run file; intervals on a state already held: "
+        f"{repeated}"
     )
     for flow in record.flows:
         warm = f" from {flow.warm_from[:12]}" if flow.warm_from else ""

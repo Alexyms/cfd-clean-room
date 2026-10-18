@@ -1081,8 +1081,8 @@ class TestRecovery:
     def test_the_march_carries_named_arrays(self, tmp_path: Path) -> None:
         """The recovery tracker's state rides in the march checkpoint, bitwise.
 
-        Defects caught: the arrays dropped, or stored as float32; a checkpoint
-        without them read back with someone else's; a name that is not a str.
+        Defects caught: the arrays dropped, or stored as float32; a name that
+        is not a str.
         """
         run = RunFile(tmp_path / "run.h5")
         budgets = [_budget(1), _budget(2)]

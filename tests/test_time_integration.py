@@ -46,6 +46,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 import run_scenario
 
+from src import time_integration
 from src.boundary_concentration import (
     ConcentrationBoundary,
 )
@@ -87,6 +88,10 @@ COARSE_GRID = {"nx": 80, "ny": 30}
 COARSE_MASS_IMBALANCE_TOL = 1.0e-4 * 1.2 * (0.1 * 0.1) / 60.0
 COARSE_FACE_HASH = "6f27f27f3e89963a3bee283be46599381cce35d4ae5370db79de71f990dd6e3e"
 COARSE_OUTER = 1021
+# The open door's state warm-started from the closed one on 80x30, as prompt
+# 64 first solved it (results/builder64/door.h5): the warm start's record.
+OPEN_FACE_HASH = "17fa707443858ce6e41c3a89547858f4ebad00cdca4fc25d75113eee065ad617"
+OPEN_OUTER = 928
 # REQ-T05: particle mass conserved to 0.01%. The march closes to about 1e-7
 # here, set by the implicit diffusion's diffusion_tol of 1e-8 per step.
 REQ_T05 = 1.0e-4
@@ -287,6 +292,26 @@ class TestSensorsAndInputs:
         )
         assert sensor_cells(fine, mesh) == nearest
         assert nearest[-1] == (15, 6)
+
+    def test_a_face_that_rounds_below_its_sensor_is_still_the_sensors_face(
+        self,
+    ) -> None:
+        """On a stretched mesh a face can round just below the decimal it is written as.
+
+        Face 3 of 80 cells stretched at 1.05 is 0.10438761230370124 and a
+        sensor written to twelve places, 0.104387612304, lies above it by
+        rounding. Defect caught: the tolerance dropped, so the sensor reads
+        the cell to the right of its face.
+        """
+        raw = coarse_raw("scenario_clean_out.yaml")
+        raw["mesh"] = {"x": {"stretch_ratio": 1.05}, "y": {"stretch_ratio": 1.0}}
+        config = SimConfig.from_dict(raw)
+        face = Mesh(config).x[3]
+        written = round(float(face), 12)
+        assert face < written
+        raw["sensors"] = [{"name": "on_face", "x": written, "y": 1.5}]
+        config = SimConfig.from_dict(raw)
+        assert sensor_cells(config, Mesh(config)) == ((14, 2),)
 
     def test_a_sensor_in_a_solid_cell_is_refused(self) -> None:
         """Defect caught: a sensor reading a SOLID cell's zero as clean air."""
@@ -655,6 +680,58 @@ class TestCleanOut:
         _same_budgets(frames.budgets[-1], record.budgets)
         assert all((c >= 0.0).all() for c in frames.fields.values())
 
+    def test_the_tracker_reads_each_steps_fields_and_free_area_means(
+        self,
+        tmp_path: Path,
+        clean_out: SimpleNamespace,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """What the march hands the tracker, step by step, against on_step.
+
+        The free-area mean of the coarse clean-out falls to its 100:1 level
+        only after about 74 s (the coarse no-hold run, results/builder64/
+        coarse), beyond any run the suite can afford, so its arithmetic is
+        checked where it is handed over: each update's time, fields and means
+        are the step's, the means the budget's content over the non-SOLID
+        area. Defects caught: the content handed over undivided, or the
+        field's sum unweighted by the cell areas; the fields of the step
+        before.
+        """
+        handed: list[tuple[float, dict, np.ndarray]] = []
+        update = RecoveryTracker.update
+
+        def spy(self: RecoveryTracker, t: float, fields: dict, means: object) -> None:
+            handed.append((t, dict(fields), np.array(means)))
+            update(self, t, fields, means)
+
+        monkeypatch.setattr(RecoveryTracker, "update", spy)
+        raw = rescheduled(coarse_raw("scenario_clean_out.yaml"), 6.0, {})
+        steps, on_step = recorder()
+        run(
+            SimConfig.from_dict(raw),
+            tmp_path / "run.h5",
+            flows_from=clean_out.record.path,
+            on_step=on_step,
+            provenance=PROVENANCE,
+        )
+        mesh = Mesh(clean_out.config)
+        live = mesh.cell_type != SOLID
+        area = np.outer(mesh.dy_cell, mesh.dx_cell)
+        free = float(area[live].sum())
+        assert len(handed) == len(steps) + 1
+        t0, fields0, means0 = handed[0]
+        assert t0 == 0.0
+        for k, c in fields0.items():
+            assert means0[k] == float(np.sum((c * area)[live])) / free
+        for (t, fields, means), info in zip(handed[1:], steps, strict=True):
+            assert t == info.t
+            for k, c in info.fields.items():
+                assert fields[k].tobytes() == c.tobytes()
+                assert means[k] == info.budgets[k].current / free
+                assert means[k] == pytest.approx(
+                    float(np.sum(c * area * live)) / free, rel=1e-12
+                )
+
 
 # ---------------------------------------------------------------------------
 # The three transport-only scenarios on a kept state
@@ -779,9 +856,11 @@ class TestDoor:
     ) -> None:
         """Closed from rest, open warm from closed, the second opening solved by nobody.
 
+        The open state is the warm start of record, faces and outer count.
         Defects caught: the second opening solved again; the open state
-        started from rest; a state warm-started from a state other than the
-        one before it.
+        started from rest (its faces and count are the rest solve's, though
+        the label says warm); a state warm-started from a state other than
+        the one before it.
         """
         record = door.record
         closed, opened = (f.fingerprint for f in record.flows)
@@ -799,7 +878,12 @@ class TestDoor:
         assert all(
             f.stop_reason == "error_estimate_and_continuity" for f in record.flows
         )
-        assert record.flows[0].outer == COARSE_OUTER
+        assert [f.outer for f in record.flows] == [COARSE_OUTER, OPEN_OUTER]
+        states = [door.run.read_flow_state(key).state for key in (closed, opened)]
+        assert [face_hash(x.u, x.v) for x in states] == [
+            COARSE_FACE_HASH,
+            OPEN_FACE_HASH,
+        ]
         assert sorted(door.run.flow_fingerprints()) == sorted([closed, opened])
         assert [p.events for p in record.intervals] == [
             (),
@@ -932,11 +1016,13 @@ class TestRestart:
 
         The fields, frames, budgets, sensor readings and recovery outputs,
         the local field included, are the uninterrupted run's bitwise.
-        Checkpoints every 30 steps, frames every 100. Defects caught: the
-        readings held for the next frame not flushed before a checkpoint
-        (a gap at the restart); the tracker's state not carried; the
-        restart resuming in the first interval's plan; the frames after the
-        checkpoint kept; the budgets not restored.
+        Checkpoints every 30 steps, frames every 100: the kill comes after
+        frame 100, written after checkpoint 90, which follows the switch.
+        Defects caught: the readings held for the next frame not flushed
+        before a checkpoint (a gap at the restart); the tracker's state not
+        carried; the restart resuming in the first interval's plan; the
+        frame and readings written after the checkpoint kept (frame 100 is
+        refused on the way back); the budgets not restored.
         """
         config = _door_clean_out(30)
         kept = door.record.path
@@ -944,18 +1030,19 @@ class TestRestart:
             config, tmp_path / "whole.h5", flows_from=kept, provenance=PROVENANCE
         )
         switch = whole.intervals[0].steps
-        checkpoint = (switch // 30 + 1) * 30
-        assert checkpoint % 100 != 0 and checkpoint < whole.intervals[1].steps + switch
+        frame, checkpoint = 100, 90
+        assert switch < checkpoint < frame < whole.steps
         cut = tmp_path / "cut.h5"
         with pytest.raises(_KilledError):
             run(
                 config,
                 cut,
                 flows_from=kept,
-                on_step=killer(checkpoint + 17),
+                on_step=killer(frame + 7),
                 provenance=PROVENANCE,
             )
         assert RunFile(cut).read_checkpoint().step == checkpoint
+        assert RunFile(cut).read_frames().steps.tolist() == [0, frame]
         again = run(config, restart=cut)
         assert again.restarted_from == checkpoint
         assert [f.origin for f in again.flows] == [RUN_FILE, RUN_FILE]
@@ -1019,6 +1106,31 @@ class TestRestart:
         frames = RunFile(tmp_path / "run.h5").read_frames()
         assert frames.steps[-1] == again.steps
         assert np.all(np.diff(frames.steps) > 0)
+
+    def test_a_diverged_flow_state_stops_the_run(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A solve that leaves no flow_state (non-finite fields) raises, writing nothing.
+
+        The solver is replaced by one that drops its flow state after five
+        outer iterations, as a diverged solve leaves it. Defect caught: a
+        missing state passed on, failing later with no flow state named.
+        """
+
+        class Diverged(time_integration.StaggeredSolver):
+            def solve_steady(self, *args: object, **kwargs: object) -> object:
+                out = super().solve_steady(*args, **kwargs)
+                self.flow_state = self.steady_checkpoint = None
+                return out
+
+        monkeypatch.setattr(time_integration, "StaggeredSolver", Diverged)
+        raw = coarse_raw("scenario_clean_out.yaml", max_simple_iter=5)
+        raw = rescheduled(raw, 6.0, {})
+        path = tmp_path / "run.h5"
+        with pytest.raises(FlowNotConvergedError, match="after 5 outer"):
+            run(SimConfig.from_dict(raw), path, provenance=PROVENANCE)
+        assert RunFile(path).flow_fingerprints() == ()
+        assert not RunFile(path).checkpoint_path.exists()
 
     def test_a_capped_flow_solve_continues_under_a_larger_cap(
         self, tmp_path: Path, clean_out: SimpleNamespace
@@ -1088,8 +1200,8 @@ class TestRunScenario:
         assert lines[2] == "intervals: 1"
         assert lines[3].startswith("  [0, 6) s: state ")
         assert lines[4] == (
-            "flow states: 1 distinct, 0 solved, 1 read from a run file, 0 intervals "
-            "reusing a state already held"
+            "flow states: 1 distinct, 0 solved, 1 read from a run file; intervals on "
+            "a state already held: 0"
         )
         assert lines[5].endswith(
             f"kept, {COARSE_OUTER} outer, error_estimate_and_continuity, "
