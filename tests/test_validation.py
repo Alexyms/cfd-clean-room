@@ -102,8 +102,12 @@ class TestLoadCase:
 
 
 def _without(config: SimConfig, name: str) -> dict:
-    """Every attribute of a configuration but one."""
-    return {k: v for k, v in vars(config).items() if k != name}
+    """Every attribute of a configuration but one, and the mapping it loaded.
+
+    The kept mapping (prompt 64) is the mapping each configuration loaded,
+    so two loads that differ in one key differ there too.
+    """
+    return {k: v for k, v in vars(config).items() if k not in (name, "_mapping")}
 
 
 @pytest.mark.unit

@@ -476,6 +476,30 @@ interval's merged mapping, which the march reads through `faces_for`; the veloci
 untouched, so no re-solve. An event that starts or ends inside a step does not exist: the
 loader's intervals are the events' own boundaries.
 
+*As built (step 4, prompt 64, 2026-10-17).* `time_integration.run` builds the hand-over as
+stated, with these readings of it. The transport solver reads its concentration boundary when it
+is built, so each interval gets a solver of its own on `conditions_for(interval)`, and the
+budgets enter it through `restore_budgets`: the same numbers, so the current mass is carried
+unchanged, as the step's own first update shows (`tests/test_time_integration.py` steps the first
+step after each switch by hand from the step before it and gets the run's step bitwise). Step i
+of an interval from t0 is at t0 + i dt and its last step is at the interval's end exactly, so no
+time is accumulated and a switch is a step boundary whatever the rounding of n dt. `stable_dt`
+reads the faces and the settling velocities only: the eddy viscosity enters the implicit
+diffusion, which has no step bound, so "on the new faces and the new eddy viscosity" reads the
+faces. The division takes one more step when span / ceil(span / stable_dt) rounds above the
+bound, which `solve_timestep` would refuse. The sources are `sources_at` at the interval's start,
+constant over it since an event starts and ends on an interval boundary, and a class with no
+active source is passed None, the step without one, bitwise. The first state of a run is solved
+from rest unless a run file holds it: the restart's own, or, for a new run, another run's file
+named by `flows_from` whose configuration agrees on everything the flow solve reads
+(`time_integration.flow_inputs`: every section but the scenario, the boundaries, which the
+fingerprint compares, the transport, the particles, the sensors and the thresholds, and every
+solver key but `dt`, `t_end`, `output_interval`, `checkpoint_interval` and `max_simple_iter`).
+Decision 1's "one solve when the closed state is already held in a run file" is this argument.
+A state that stops at its cap leaves its steady checkpoint and stops the run
+(`FlowNotConvergedError`), so a restart under a larger cap resumes it; it is not written to
+`/flow/`, which holds converged states only.
+
 **Decision 2's consequence, stated as a limit.** The flow's own adjustment to a boundary change
 takes some turnovers (T6: the turnover is about 5.6 s, the length over the supply speed about
 18 s), and the steady extreme replaces that adjustment by the end state at once. For an event
@@ -649,6 +673,52 @@ of REQ-A04's detection latency; the local recovery field gives the clearing time
 have reported at any position, which is REQ-A05's placement question for the clean-out as the
 detection latency is for the other three scenarios.
 
+*Amendment (step 4, prompt 64, 2026-10-17; the orchestrator's decisions 1 and 2 of that date
+and the departures the build made).*
+1. **The local recovery field is updated every step, not from the frames.** Read from the frames
+   its time resolution would be `output_interval` steps, which the output cadence should not set.
+   Per class and per non-SOLID cell, the last step time the cell was at or above its threshold is
+   kept as an array during the march and carried in the march's checkpoint, with the other running
+   readings: each sensor's and the free-area mean's first time at the 100:1 level, and the start of
+   the current within-spec stretch per class and for the room (`time_integration.RecoveryTracker`).
+   A restart therefore continues them bitwise.
+2. **The hold time.** `scenario.hold_time`, seconds, optional. With it the run stops once the room
+   has been within spec for that long and the recovery time is the start of the hold; without it
+   the run goes to `t_end` and the recovery time is the start of the last within-spec stretch that
+   reaches `t_end`. The loader refuses a hold without an initial event (a room that starts clean is
+   within spec from t = 0 and the hold would end the run before any event) and one not below
+   `t_end`. `scenario_clean_out.yaml` holds one air change of the slice, 1/N = 17.52 / 3.15 =
+   5.562 s, the arithmetic in its comment.
+
+The departures, each with its reason:
+- *A sensor reads the cell containing it, the one below it or to its left when it sits on a face*
+  (to `SENSOR_FACE_RTOL`, 1e-9 of the room's extent). The room's sensors sit on faces on every grid
+  that puts its positions on faces, so "the cell containing the sensor" needs a rule there. T7's
+  probe took the nearest centre, which on a face is decided by rounding: on 80x30 it puts
+  above_gap_1 to the right of its face and the other three sensors to the left. The rule reads the
+  cells T7 read on 160x60, and on 320x120.
+- *"Above" is "not below".* Within spec is a reading below the threshold, so the local field
+  counts a cell exactly at its threshold as not recovered.
+- *A class's recovery time* is the room's rule applied to that class's sensors; the room's is the
+  latest of the classes', since the room's within-spec stretch that reaches the end starts when the
+  last class's does.
+- *N is the inflow through the domain's edges of the first interval's flow state, over the free
+  area* (`time_integration.air_change_rate`). A vent's discharge is the room's own air and is not
+  counted.
+- *The outputs a run cannot reach are NaN*, and the summary gives the ratio's lower bound, the run's
+  end over ln(100) / N, when the free-area mean was still above its level at the end.
+
+What the coarse runs found (80x30, `results/builder64/coarse/`, the summaries
+`clean_out.txt` and `clean_out_nohold.txt`): every sensor of every class is below its threshold
+within about one well-mixed 100:1 time, so the hold of one air change stops the run a few seconds
+later; at that stop the free-area mean has not fallen to its 100:1 level and cells at or above
+their thresholds remain in every class, so section C's ratio is not defined by the held run and the
+local field's maximum is not recovered. Run without the hold to `t_end`, the mean reaches its level
+at about three times the well-mixed time and cells above threshold still remain at 120 s. The four
+sensors clear long before the room's air does. Whether the hold of decision 2 should end a
+clean-out on the sensors alone, or the run should continue until the ratio and the field are
+defined, is a question for the orchestrator; the build follows decision 2 as written.
+
 ## D. Output, checkpointing and restart (decision 9)
 
 **The run file.** One HDF5 file per run, written by `io_manager.py` (h5py, already required):
@@ -735,6 +805,38 @@ recovery outputs are step 4's to compute and write. The march's checkpoint holds
 fields, the budgets, the step and the time and nothing of the vents: a recirculating discharge
 reads its intake from the field the step starts from, which `tests/test_io_manager.py`'s march
 restart shows on a vented room with a recirculating pair.
+
+*Amendment (step 4, prompt 64, 2026-10-17; the orchestrator's decision 3 of that date, review 63
+S1 to S3 and the builder's note, and the departures the build made).*
+1. **The sensor readings held for the next frame are appended before each checkpoint is written**,
+   and a step's frame is written before its checkpoint, so a restart leaves no gap and re-emits no
+   frame whatever the two intervals are (review 63 S1). The readings are written from step 0, the
+   initial field's, and the frames at step 0, every `output_interval` steps and the last step; the
+   march's checkpoint every `checkpoint_interval` steps and at the last.
+2. **Section C's outputs are a top-level `/recovery/` group**, not part of `/transport/` as the
+   list above put them, so `discard_after` does not touch them (review 63 S3); written once at the
+   end of the run (`io_manager.RecoveryRecord`) and replaced by a restart that runs to a new end.
+3. **The restart check recomputes the file's hash from its stored `/config` text** under the
+   excluded-key set in force now (review 63 S2), so a key added to `RESTART_EXCLUDED_KEYS` widens
+   what an existing file's restart accepts, as SYSTEM.md says; `restart_sha256` stays as the record.
+4. **`SimConfig.merged_mapping()`** is the mapping a configuration loaded, which `write_config`
+   stores: a file as read, a scenario as its merged base followed by its scenario section as the
+   file states it, so the events and the hold are in the restart hash.
+
+The departures, each needed by the run as built:
+- `run(config, run_file, *, restart, flows_from, on_step, provenance)`: section G's contract had
+  no place for a new run's path, and none for the provenance `write_config` requires; a new run
+  refuses an existing run file or checkpoint file.
+- A restart that finds no march checkpoint (none written yet, or no `checkpoint_interval`) drops
+  `/transport/` (`RunFile.discard_march`) and marches again from step 0 on the run file's states.
+- A restart under a later `t_end` whose checkpoint lies inside the last interval of the earlier
+  plan divides the rest of that interval again from the checkpoint's time; a restart under the same
+  configuration finds its checkpoint on the plan and is the uninterrupted run bitwise.
+- The march's checkpoint carries the recovery tracker's arrays as named float64 arrays
+  (`RunFile.checkpoint(..., recovery=...)`), so io_manager knows nothing of the tracker.
+- The stopping rule's own readings are not exposed by the solver; the readings recorded with a flow
+  state are those it shows: the last residual, the worst and the signed imbalance over the
+  non-SOLID cells, and the pressure cap hits.
 
 **Tier 2.** The transient run's file holds the faces and pressure every `output_interval` steps
 with their times, the per-step counts and imbalances, and the lift and drag on the obstacle
@@ -973,6 +1075,11 @@ as `mu_eff` is), `mesh.py`'s the breakpoints.
    step divides every interval, the sources enter the budget's source slot, the three
    transport-only scenarios run on a kept flow state end to end on a coarse grid; the clean-out
    with section C's outputs.
+   *Built 2026-10-17 (prompt 64), with the amendments of sections A, C and D of that date:*
+   *`src/time_integration.py`, `scripts/run_scenario.py`, `scenario.hold_time`,*
+   *`SimConfig.merged_mapping()`, the `/recovery/` group. The restart after a switch, the*
+   *recovery field included, is the uninterrupted run bitwise on its first run. Every hash of*
+   *record unchanged.*
 5. VAL-008 (`tests/test_grid_convergence.py`, section E) and the plan's row amended.
 6. Tier 2: the transient term in `momentum.py` (bitwise the steady path when None), BDF2 and
    the step loop in `solver_staggered.py`, interior clustering in `mesh.py`, the lift and drag

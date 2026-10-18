@@ -317,6 +317,8 @@ Use `pytest`. All test files in `tests/`. Test file naming: `test_<module>.py`.
 
 Tests are organized into three tiers. All three tiers must pass before a PR is merge-ready.
 
+A test never asserts a hash or bitwise value recorded on another machine (BLAS and the platform change the last bits); a bitwise claim compares two computations made in the same process, and the hashes of record are checked by the harness.
+
 ### Tier 1: Unit Tests
 
 Every module gets unit tests that verify individual functions and classes in isolation. These test correctness of logic, error handling, edge cases, and interface compliance. They do not require a running simulation or interaction between modules.

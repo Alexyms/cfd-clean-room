@@ -20,6 +20,10 @@ docstring:
 - Crash safety: a failure after the temporary checkpoint file is written and
   before the replace leaves the previous checkpoints and the run file's frames
   readable; a temporary file an earlier crash left is overwritten, not read.
+- Prompt 64: the restart check reads the file under the excluded keys in
+  force now; a clean-out's recovery outputs round-trip through /recovery/,
+  which neither discard touches; the march checkpoint carries named arrays
+  (the recovery tracker's state); discard_march drops /transport/ alone.
 """
 
 import re
@@ -41,6 +45,7 @@ from src.io_manager import (
     CHECKPOINT,
     RESTART_EXCLUDED_KEYS,
     STEADY_CHECKPOINT,
+    RecoveryRecord,
     RunFile,
     config_text,
     restart_hash,
@@ -882,6 +887,222 @@ class TestRestartRefusals:
         run.write_frame(0, 0.0, _fields(1), [_budget(1), _budget(2)])
         with pytest.raises(KeyError, match="holds no /config"):
             run.check_restart(_room_raw())
+
+    def test_the_file_is_read_under_the_excluded_keys_in_force_now(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A key added to the set widens an existing file's restart; one removed narrows it.
+
+        Review 63 S2, prompt 64's decision 3. Defect caught: the stored
+        restart_sha256 compared, which holds the set of the day the file
+        was written, so the widened restart is refused with a message that
+        names no key.
+        """
+        run = RunFile(tmp_path / "run.h5")
+        raw = _room_raw()
+        run.write_config(raw, **PROVENANCE)
+        later = _changed(raw, ("solver", "output_interval"), 7)
+        with pytest.raises(ValueError, match=r"solver\.output_interval differs"):
+            run.check_restart(later)
+        widened = (*RESTART_EXCLUDED_KEYS, ("solver", "output_interval"))
+        monkeypatch.setattr("src.io_manager.RESTART_EXCLUDED_KEYS", widened)
+        run.check_restart(later)
+        narrowed = tuple(k for k in RESTART_EXCLUDED_KEYS if k[1] != "t_end")
+        monkeypatch.setattr("src.io_manager.RESTART_EXCLUDED_KEYS", narrowed)
+        with pytest.raises(ValueError, match=r"restart refused: solver\.t_end differs"):
+            run.check_restart(_changed(raw, ("solver", "t_end"), 2.0))
+
+    def test_a_mapping_that_is_not_one_is_refused(self, tmp_path: Path) -> None:
+        """Review 63 S4. Defect caught: a list hashed and refused as a differing key."""
+        run = RunFile(tmp_path / "run.h5")
+        run.write_config(_room_raw(), **PROVENANCE)
+        with pytest.raises(TypeError, match="mapping must be a mapping, got list"):
+            run.check_restart([])  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# The recovery outputs and the march's carried arrays (prompt 64)
+# ---------------------------------------------------------------------------
+
+
+def _recovery(**changed: object) -> RecoveryRecord:
+    """A record of 2 classes, 3 sensors and a 3 by 4 grid, every value distinct."""
+    rng = np.random.default_rng(64)
+    local = rng.random((2, 3, 4))
+    local[0, 0, 0] = np.nan
+    local[1, 2, 3] = np.inf
+    values = {
+        "sensor_names": ("a", "b", "c"),
+        "thresholds": np.array([1.0e5, 29.3]),
+        "initial": np.array([1.0e7, 2930.0]),
+        "hold_time": 5.562,
+        "held": True,
+        "t_final": 31.25,
+        "air_change_rate": 0.18,
+        "well_mixed_time": 25.6,
+        "room_recovery_time": 25.6875,
+        "recovery_time": np.array([20.5, np.nan]),
+        "defined": np.array([True, False]),
+        "sensor_time": rng.random((2, 3)),
+        "mean_time": np.array([27.0, np.nan]),
+        "ratio": np.array([27.0 / 25.6, np.nan]),
+        "local_recovery": local,
+        "local_recovery_max": np.array([0.9, np.inf]),
+    }
+    values.update(changed)
+    return RecoveryRecord(**values)
+
+
+def _same_recovery(a: RecoveryRecord, b: RecoveryRecord) -> None:
+    """Every field of two records, arrays bit for bit."""
+    assert a.sensor_names == b.sensor_names
+    assert (a.hold_time, a.held) == (b.hold_time, b.held)
+    for name in (
+        "t_final",
+        "air_change_rate",
+        "well_mixed_time",
+        "room_recovery_time",
+    ):
+        assert (
+            np.float64(getattr(a, name)).tobytes()
+            == np.float64(getattr(b, name)).tobytes()
+        ), name
+    for name in (
+        "thresholds",
+        "initial",
+        "recovery_time",
+        "sensor_time",
+        "mean_time",
+        "ratio",
+        "local_recovery",
+        "local_recovery_max",
+    ):
+        x, y = getattr(a, name), getattr(b, name)
+        assert x.dtype == y.dtype == np.float64, name
+        assert x.shape == y.shape and x.tobytes() == y.tobytes(), name
+    assert a.defined.dtype == b.defined.dtype == np.bool_
+    assert a.defined.tolist() == b.defined.tolist()
+
+
+@pytest.mark.unit
+class TestRecovery:
+    @pytest.mark.parametrize("hold", [5.562, None])
+    def test_what_is_written_is_what_is_read(
+        self, tmp_path: Path, hold: float | None
+    ) -> None:
+        """NaN, inf and a None hold survive the round trip, bitwise.
+
+        Defects caught: the hold stored as NaN or 0 when None; defined read
+        back as int8; an array stored as float32.
+        """
+        run = RunFile(tmp_path / "run.h5")
+        record = _recovery(hold_time=hold, held=hold is not None)
+        run.write_recovery(record)
+        _same_recovery(run.read_recovery(), record)
+
+    def test_a_second_write_replaces_the_first(self, tmp_path: Path) -> None:
+        """A restart that runs on to a later end writes its own outputs.
+
+        Defect caught: the group kept and the second write refused, or merged.
+        """
+        run = RunFile(tmp_path / "run.h5")
+        run.write_recovery(_recovery())
+        later = _recovery(hold_time=None, held=False, t_final=40.0)
+        run.write_recovery(later)
+        _same_recovery(run.read_recovery(), later)
+
+    def test_discards_leave_it_alone(self, tmp_path: Path) -> None:
+        """discard_after and discard_march touch /transport/ only (review 63 S3).
+
+        Defects caught: discard_march deleting the configuration, the flow
+        states or the recovery outputs; discard_after resizing them.
+        """
+        run = RunFile(tmp_path / "run.h5")
+        run.write_config(_room_raw(), **PROVENANCE)
+        run.write_flow_state(
+            FINGERPRINT,
+            _steady(False).state,
+            wall_seconds=1.0,
+            stage_seconds={},
+            rule_readings={},
+        )
+        for step in (0, 5, 10):
+            run.write_frame(step, step * 0.1, _fields(step), [_budget(1), _budget(2)])
+        run.write_recovery(_recovery())
+        run.discard_after(5)
+        _same_recovery(run.read_recovery(), _recovery())
+        run.discard_march()
+        with pytest.raises(KeyError, match="holds no /transport/ frames"):
+            run.read_frames()
+        _same_recovery(run.read_recovery(), _recovery())
+        assert run.flow_fingerprints() == (FINGERPRINT,)
+        assert run.read_config().mapping == yaml_copy(_room_raw())
+        run.write_frame(0, 0.0, _fields(0), [_budget(1), _budget(2)])
+        assert run.read_frames().steps.tolist() == [0]
+        RunFile(tmp_path / "none.h5").discard_march()
+        assert not (tmp_path / "none.h5").exists()
+
+    def test_no_record_or_a_bad_one_is_refused(self, tmp_path: Path) -> None:
+        """Defects caught: an empty record returned when none was written; a
+        mapping written as a record."""
+        run = RunFile(tmp_path / "run.h5")
+        run.write_frame(0, 0.0, _fields(1), [_budget(1), _budget(2)])
+        with pytest.raises(KeyError, match="holds no /recovery/"):
+            run.read_recovery()
+        with pytest.raises(TypeError, match="record must be a RecoveryRecord"):
+            run.write_recovery({})  # type: ignore[arg-type]
+
+    @pytest.mark.parametrize(
+        ("changed", "error", "match"),
+        [
+            ({"sensor_names": ("a", 2, "c")}, TypeError, "a sensor name must be a str"),
+            ({"held": 1}, TypeError, "held must be a bool"),
+            ({"t_final": None}, TypeError, "t_final must be a real number"),
+            ({"hold_time": "5"}, TypeError, "hold_time must be a real number"),
+            ({"thresholds": np.ones((2, 1))}, ValueError, r"thresholds must be"),
+            ({"initial": np.ones(3)}, ValueError, r"initial has shape \(3,\)"),
+            ({"recovery_time": np.ones(1)}, ValueError, "recovery_time has shape"),
+            ({"defined": np.ones(3, bool)}, ValueError, "defined has shape"),
+            ({"mean_time": np.ones(3)}, ValueError, "mean_time has shape"),
+            ({"ratio": np.ones(3)}, ValueError, "ratio has shape"),
+            ({"local_recovery_max": np.ones(1)}, ValueError, "local_recovery_max has"),
+            ({"sensor_time": np.ones((2, 2))}, ValueError, "sensor_time has shape"),
+            ({"local_recovery": np.ones((2, 12))}, ValueError, "local_recovery has"),
+            ({"local_recovery": np.ones((3, 3, 4))}, ValueError, "local_recovery has"),
+        ],
+    )
+    def test_a_record_whose_parts_disagree_is_refused(
+        self, changed: dict, error: type, match: str
+    ) -> None:
+        """Each shape and type guard of RecoveryRecord, one at a time."""
+        with pytest.raises(error, match=match):
+            _recovery(**changed)
+
+    def test_the_march_carries_named_arrays(self, tmp_path: Path) -> None:
+        """The recovery tracker's state rides in the march checkpoint, bitwise.
+
+        Defects caught: the arrays dropped, or stored as float32; a name that
+        is not a str.
+        """
+        run = RunFile(tmp_path / "run.h5")
+        budgets = [_budget(1), _budget(2)]
+        carried = {
+            "last_above": np.array([[[np.nan, 0.5], [1.0 / 3.0, np.inf]]]),
+            "room_since": np.array(0.1 + 0.2),
+        }
+        run.checkpoint(4, 0.4, _fields(4), budgets, FINGERPRINT, recovery=carried)
+        read = run.read_checkpoint().recovery
+        assert sorted(read) == sorted(carried)
+        for name, array in carried.items():
+            assert read[name].dtype == np.float64
+            assert read[name].shape == array.shape
+            assert read[name].tobytes() == array.tobytes(), name
+        run.checkpoint(5, 0.5, _fields(5), budgets, FINGERPRINT)
+        assert run.read_checkpoint().recovery == {}
+        with pytest.raises(TypeError, match="a recovery name must be a str"):
+            run.checkpoint(
+                6, 0.6, _fields(6), budgets, FINGERPRINT, recovery={1: np.zeros(1)}
+            )
 
 
 # ---------------------------------------------------------------------------

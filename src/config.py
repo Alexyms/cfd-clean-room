@@ -405,6 +405,11 @@ class ScenarioSpec:
         The events, in file order.
     t_end : float
         ``solver.t_end`` of the merged base, seconds.
+    hold_time : float or None
+        ``scenario.hold_time``, seconds, positive and below ``t_end``: a
+        clean-out stops once the room has been within spec for this long
+        (ADR-014 C, prompt 64's decision 2). None runs to ``t_end``. Given
+        only with an initial event.
     path : Path or None
         The scenario file, resolved, when the configuration was loaded from
         one; None from ``SimConfig.from_dict``.
@@ -420,6 +425,7 @@ class ScenarioSpec:
     base: Mapping[str, object]
     events: tuple[EventSpec, ...]
     t_end: float
+    hold_time: float | None = None
     path: Path | None = None
 
     @property
@@ -773,7 +779,7 @@ DEPOSITION_SURFACES: tuple[str, ...] = (
 # file its base names: the file's own sections merge over the base's, and
 # the events change the merged boundaries, the sources and the initial field.
 SCENARIO_KEY = "scenario"
-_SCENARIO_KEYS: frozenset[str] = frozenset({"base", "events"})
+_SCENARIO_KEYS: frozenset[str] = frozenset({"base", "events", "hold_time"})
 # The four changes; an event states exactly one.
 REPLACE = "replace"
 SET = "set"
@@ -821,7 +827,9 @@ class SimConfig:
 
     def __init__(self, yaml_path: str | PathLike[str]) -> None:
         path = Path(yaml_path)
-        self._validate_and_load(_read_mapping(path), path.resolve().parent)
+        raw = _read_mapping(path)
+        self._validate_and_load(raw, path.resolve().parent)
+        self._keep_mapping(raw)
         if self.scenario is not None:
             self.scenario = replace(self.scenario, path=path.resolve())
 
@@ -860,7 +868,42 @@ class SimConfig:
         config._validate_and_load(
             raw, None if base_dir is None else Path(base_dir).resolve()
         )
+        config._keep_mapping(raw)
         return config
+
+    def _keep_mapping(self, raw: dict) -> None:
+        """Keep the merged mapping this configuration loaded, read-only.
+
+        A file without a scenario section is kept as read. A scenario is
+        kept as its merged base with the scenario section appended as the
+        file states it (``base``, ``events`` and ``hold_time``), so the
+        mapping names every event and loads again from the scenario file's
+        directory to the same configuration: the base's sections merged
+        under the merged base are the merged base.
+        """
+        if self.scenario is None:
+            self._mapping = _freeze(raw)
+        else:
+            self._mapping = _freeze(
+                {**_thaw(self.scenario.base), SCENARIO_KEY: _thaw(raw[SCENARIO_KEY])}
+            )
+
+    def merged_mapping(self) -> dict:
+        """The merged mapping this configuration was built from (ADR-014 D).
+
+        What a run records in its run file's ``/config`` and what a restart
+        is checked against (prompt 64's decision 3).
+
+        Returns
+        -------
+        dict
+            A new editable copy with the structure of a configuration file:
+            the file as read, or for a scenario the merged base followed by
+            the scenario section as the file states it. A copy made and
+            changed after loading (``validation.cases.with_velocity_step``)
+            keeps the mapping it was copied from.
+        """
+        return _thaw(self._mapping)
 
     def _validate_and_load(self, raw: dict, base_dir: Path | None = None) -> None:
         """Validate all parameters and store as typed attributes."""
@@ -1832,11 +1875,26 @@ class SimConfig:
                         f"'{b.name}' [{b.start}, {b.end}) both change segment "
                         f"'{a.segment}' and overlap in time"
                     )
+        hold_time = None
+        if "hold_time" in section:
+            hold_time = self._require_positive_float(section, "hold_time", SCENARIO_KEY)
+            if not initials:
+                raise ValueError(
+                    f"{SCENARIO_KEY}.hold_time needs an initial event: the hold ends a "
+                    "clean-out once the room is within spec, and a room that starts "
+                    "clean is within spec from t = 0 (ADR-014 C)"
+                )
+            if hold_time >= self.t_end:
+                raise ValueError(
+                    f"{SCENARIO_KEY}.hold_time ({hold_time} s) must be below "
+                    f"solver.t_end ({self.t_end} s)"
+                )
         spec = ScenarioSpec(
             base_path=base_path,
             base=_freeze(merged),
             events=tuple(events),
             t_end=self.t_end,
+            hold_time=hold_time,
         )
         self._check_intervals(spec)
         return spec
