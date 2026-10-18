@@ -74,6 +74,7 @@ from src.time_integration import (
     plan_interval,
     run,
     sensor_cells,
+    smallest_stable_dt,
 )
 from tests.test_io_manager import (
     _same_budgets,
@@ -246,6 +247,18 @@ class TestPlan:
         assert 0.07 / math.ceil(0.07 / 0.007) > 0.007
         plan = plan_interval(0, _interval(0.0, 0.07), 0.007)
         assert plan.steps == 11 and plan.dt <= 0.007
+
+    def test_the_step_is_the_smallest_over_the_classes(self) -> None:
+        """A stand-in whose classes' stable steps differ: the smallest is taken.
+
+        On the coarse room every class's stable_dt is the same (the
+        settling velocities do not move the worst cell's rate), so the run's
+        plans cannot tell the smallest from the largest. Defects caught: the
+        largest taken; the first class's alone.
+        """
+        steps = {0: 3.0, 1: 1.0, 2: 2.0}
+        solver = SimpleNamespace(stable_dt=lambda faces, k: steps[k])
+        assert smallest_stable_dt(solver, None, 3) == 1.0  # type: ignore[arg-type]
 
     def test_the_last_step_is_the_end_where_n_dt_misses_it(self) -> None:
         """10 + 167 (50 / 167) is 59.99999999999999; the last step is at 60 exactly.

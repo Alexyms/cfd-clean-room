@@ -642,6 +642,30 @@ class RecoveryTracker:
         )
 
 
+def smallest_stable_dt(
+    solver: TransportSolver, faces: FaceVelocities, n_classes: int
+) -> float:
+    """The smallest ``stable_dt`` over the classes, the one step every class takes.
+
+    Parameters
+    ----------
+    solver : TransportSolver
+        Answers ``stable_dt(faces, k)``.
+    faces : FaceVelocities
+        The interval's faces.
+    n_classes : int
+        The configured classes.
+
+    Returns
+    -------
+    float
+        Seconds; inf when nothing moves. The classes differ by their
+        settling velocities, so the largest would step a faster-settling
+        class past its bound.
+    """
+    return min(solver.stable_dt(faces, k) for k in range(n_classes))
+
+
 def plan_interval(
     index: int,
     interval: Interval,
@@ -870,9 +894,7 @@ class _Run:
             if key not in stable:
                 solver = self.transport(interval)
                 faces = self.faces(key)
-                stable[key] = min(
-                    solver.stable_dt(faces, k) for k in range(self.n_classes)
-                )
+                stable[key] = smallest_stable_dt(solver, faces, self.n_classes)
             out.append(plan_interval(index, interval, stable[key]))
         return out
 
