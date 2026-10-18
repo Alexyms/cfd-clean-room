@@ -414,14 +414,18 @@ class TestStrouhalEdges:
     """The two edges a finely sampled ten-period sine cannot reach (prompt 68's plants)."""
 
     def test_a_coarsely_sampled_sine_still_reads_its_number(self) -> None:
-        """Fourteen samples a period: the crossings must be interpolated.
+        """Seventeen samples a period: the crossings must be interpolated.
 
-        At dt 0.5 the sample before each crossing lies up to 0.5 s early, by
+        At dt 0.4 the sample before each crossing lies up to 0.4 s early, by
         an amount that changes from crossing to crossing, so the period read
-        from the samples alone is off by up to 0.7%; interpolated, within
-        1e-4. Catches: the zero crossings not interpolated.
+        from the samples alone is off by more than 1e-3 (asserted, so the
+        test can tell); interpolated, it is within 1e-4. Catches: the zero
+        crossings not interpolated.
         """
-        t, lift = _sine(0.146, 30.0, dt=0.5)
+        t, lift = _sine(0.146, 30.0, dt=0.4)
+        up = np.nonzero((lift[:-1] < 0.0) & (lift[1:] >= 0.0))[0][-11:]
+        sampled = STROUHAL_PERIODS / (t[up[-1]] - t[up[0]])
+        assert abs(sampled / 0.146 - 1.0) > 1e-3
         assert strouhal(t, lift, 1.0, 1.0).strouhal == pytest.approx(0.146, rel=1e-4)
 
     def test_ten_crossings_are_nine_periods_and_refused(self) -> None:
