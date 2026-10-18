@@ -36,9 +36,9 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.config import SimConfig  # noqa: E402
-from src.io_manager import RecoveryRecord  # noqa: E402
-from src.time_integration import (  # noqa: E402
+from src.config import SimConfig  # noqa: E402 -- follows sys.path.insert
+from src.io_manager import RecoveryRecord  # noqa: E402 -- follows sys.path.insert
+from src.time_integration import (  # noqa: E402 -- follows sys.path.insert
     FlowNotConvergedError,
     Provenance,
     RunRecord,

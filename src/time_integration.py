@@ -260,7 +260,20 @@ class IntervalPlan:
     stable_dt: float
 
     def time(self, i: int) -> float:
-        """The time of step i of this interval, its end exactly at i = steps."""
+        """The time of step i of this interval, its end exactly at i = steps.
+
+        Parameters
+        ----------
+        i : int
+            The step within the interval, 0 to ``steps``.
+
+        Returns
+        -------
+        float
+            ``t_start + i dt``, and ``t_end`` itself at ``i = steps``, so a
+            switch lands on the interval's end whatever the rounding of the
+            product.
+        """
         if i == self.steps:
             return self.t_end
         return self.t_start + i * self.dt
@@ -416,7 +429,7 @@ def air_change_rate(state: FlowState, mesh: Mesh) -> float:
     return float(inflow) / free
 
 
-def flow_inputs(mapping: Mapping[str, object]) -> dict:
+def flow_inputs(mapping: Mapping[str, object]) -> dict[str, object]:
     """The parts of a configuration mapping a steady flow solve reads, but its boundaries.
 
     Parameters
@@ -426,7 +439,7 @@ def flow_inputs(mapping: Mapping[str, object]) -> dict:
 
     Returns
     -------
-    dict
+    dict[str, object]
         A copy without ``FLOW_FREE_SECTIONS`` and the solver's
         ``FLOW_FREE_SOLVER_KEYS``. Two runs whose flow inputs are equal
         solve the same state for the same fingerprint.
@@ -440,7 +453,9 @@ def flow_inputs(mapping: Mapping[str, object]) -> dict:
     return out
 
 
-def _first_flow_difference(kept: dict, ours: dict) -> str | None:
+def _first_flow_difference(
+    kept: dict[str, object], ours: dict[str, object]
+) -> str | None:
     """The first section or section.key where two flow inputs differ, in KEPT's order."""
     for section in list(kept) + [s for s in ours if s not in kept]:
         a, b = kept.get(section), ours.get(section)
@@ -553,13 +568,27 @@ class RecoveryTracker:
         self.t = np.full((), t)
 
     def held(self) -> bool:
-        """Whether the room has been within spec for the hold time (False without one)."""
+        """Whether the room has been within spec for the hold time.
+
+        Returns
+        -------
+        bool
+            True once the room's current within-spec stretch has lasted
+            ``hold_time``; False without a hold.
+        """
         if self._hold is None or np.isnan(self.room_since):
             return False
         return bool(self.t - self.room_since >= self._hold)
 
     def state(self) -> dict[str, np.ndarray]:
-        """The tracker's arrays, for the march's checkpoint."""
+        """The tracker's arrays, for the march's checkpoint.
+
+        Returns
+        -------
+        dict[str, np.ndarray]
+            Name to array, the arrays themselves (``RunFile.checkpoint``
+            copies them as it writes).
+        """
         return {
             "last_above": self.last_above,
             "sensor_time": self.sensor_time,
@@ -571,6 +600,11 @@ class RecoveryTracker:
 
     def restore(self, state: Mapping[str, np.ndarray]) -> None:
         """Continue from ``state()`` as a checkpoint carried it.
+
+        Parameters
+        ----------
+        state : Mapping[str, np.ndarray]
+            The checkpoint's carried arrays, by ``state()``'s names; copied.
 
         Raises
         ------
@@ -1076,6 +1110,11 @@ def run(
     Returns
     -------
     RunRecord
+        The intervals as planned, the flow states and how each was had,
+        the steps and time at the end, whether the hold stopped it, the
+        budgets, a clean-out's recovery outputs, and for a restart the
+        checkpoint step it continued from and any interval it divided
+        again.
 
     Raises
     ------
@@ -1168,7 +1207,7 @@ def run(
         budgets: Sequence[MassBudget] = checkpoint.budgets
         if state.tracker is not None:
             state.tracker.restore(checkpoint.recovery)
-        steps, start, resumed_plan = state.resume_point(
+        march_plans, start, resumed_plan = state.resume_point(
             plans, checkpoint.t, checkpoint.plan_start
         )
         step, t = checkpoint.step, checkpoint.t
@@ -1188,9 +1227,11 @@ def run(
             )
         if state.tracker is not None:
             state.tracker.update(0.0, fields, state.means(fields))
-        steps, start, step, t = plans, (0, 0), 0, 0.0
+        march_plans, start, step, t = plans, (0, 0), 0, 0.0
 
-    fields, budgets, step, t, held = state.march(steps, start, fields, budgets, step, t)
+    fields, budgets, step, t, held = state.march(
+        march_plans, start, fields, budgets, step, t
+    )
 
     recovery = None
     if state.tracker is not None:

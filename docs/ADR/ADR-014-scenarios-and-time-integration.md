@@ -626,8 +626,8 @@ it except where these say otherwise, each with its reason.
    premise of prompt 62 that it would was wrong.
 6. *`threshold_factor` needs a threshold for every class*, matched by diameter
    (`SimConfig.class_thresholds`).
-7. *`checkpoint_interval`* (section G's `ScenarioSpec`) is the run file's and arrives with it at
-   step 3.
+7. *`checkpoint_interval`* is a `solver` key, `SimConfig.checkpoint_interval`, not a field of
+   section G's `ScenarioSpec`; it arrived with the run file at step 3 (review 64 S7).
 8. *Event times are read to one tolerance* (prompt 62b, review 62 S5). Two events written to meet
    (one ends as the other starts) were refused as overlapping when the rounding of
    `start + duration` put the end above the start (0.1 + 0.2 against 0.3), and on two segments
@@ -903,7 +903,12 @@ takes about a minute in all (55 s and 69 s in two runs, nothing else running).
 | front, four grids (not in the suite) | umist | 0.04, 0.02, 0.01, 0.005 | 0.1, 0.05, 0.025, 0.0125 | 9.6745e-03, 3.0971e-03, 8.6993e-04, 2.3316e-04 | 1.64, 1.83, 1.90 | 1.64, 1.83, 1.90 | none |
 | front, four grids (not in the suite) | upwind | 0.04, 0.02, 0.01, 0.005 | 0.1, 0.05, 0.025, 0.0125 | 7.4355e-02, 4.3922e-02, 2.4268e-02, 1.2838e-02 | 0.76, 0.86, 0.92 | 0.76, 0.86, 0.92 | none |
 | Gaussian pulse, reported | umist | 0.04, 0.02, 0.01 | 0.1, 0.05, 0.025 | 1.3492e-01, 6.0082e-02, 2.7121e-02 | 1.17, 1.15 | 1.17, 1.15 | none |
-| front on the stretched mesh, reported | umist | 0.04, 0.02, 0.01 | 0.1, 0.05, 0.025 | 1.0417e-02, 3.5004e-03, 1.0747e-03 | 1.57, 1.70 | not in T5 | none |
+| front on the stretched mesh, reported | umist | 0.04, 0.02, 0.01 | 0.1, 0.05, 0.025 | 1.0417e-02, 3.5004e-03, 1.0747e-03 (unweighted cell norm) | 1.57, 1.70 | not in T5 | none |
+
+The relative L2 is `validation.metrics.relative_l2`, a norm over the cells with no area weight.
+On the uniform rows that is the area-weighted norm scaled; on the stretched row, whose end cells are
+0.50 dx wide against about 1.75 dx at the centre, it is not (test 65 S1). Nothing is asserted on
+that row.
 
 Every error and order T5 states for the grids run reproduces to the digits it states.
 The four-grid rows are reproduced by calling the test module from the repository root:
@@ -1001,7 +1006,8 @@ planned, when this ADR is accepted, and as built at the Phase 4 gate.
 ```
 config.py
     SimConfig.scenario: ScenarioSpec | None    # the merged base, the events, the run keys
-    ScenarioSpec: base, events: tuple[EventSpec, ...], checkpoint_interval
+    ScenarioSpec: base, events: tuple[EventSpec, ...], hold_time
+    SimConfig.checkpoint_interval: int | None  # a solver key (review 64 S7)
     EventSpec: name, start, duration, change: Replace | Set | Source | Initial
 
 scenarios.py
