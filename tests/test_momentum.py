@@ -23,6 +23,7 @@ from src.momentum import (
 )
 from src.solver_staggered import StaggeredSolver
 from src.staggered import allocate_fields
+from tests.cylinder59_reference import load_implicit_euler_predictor
 from tests.frozen34_reference import load_frozen_predictor
 from tests.vent_cases import DISCHARGE, EXHAUST, SHELF_VENTS, vent_config
 from validation.cases import CONFIG_DIR
@@ -1666,3 +1667,206 @@ def test_the_shelf_vents_keep_their_velocity_through_the_prediction() -> None:
     assert prediction.u_star[4, 11] == -0.2 and prediction.u_star[4, 14] == 0.2
     assert prediction.v_star[6, 12] == prediction.v_star[6, 13] == -0.2
     assert prediction.v_star[3, 12] == 0.0 and prediction.u_star[3, 11] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# The transient term (ADR-014 decision 3, step 6a)
+# ---------------------------------------------------------------------------
+
+DT = 0.05
+
+
+def _transient_room(sweeps: int | None = None) -> SimConfig:
+    """The channel on a stretched mesh with a floor block: SOLID, outlet and inlet faces."""
+    return _config(CHANNEL, obstacles=[FLOOR_BLOCK], mesh=STRETCHED, sweeps=sweeps)
+
+
+def _levels(
+    mesh: Mesh, bc: StaggeredBoundary, seed: int
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[tuple[np.ndarray, np.ndarray]]]:
+    """A random state and two random old levels, latest first."""
+    rng = np.random.default_rng(seed)
+    u, v, p = _random_state(mesh, bc, rng)
+    old = []
+    for _level in range(2):
+        u_o, v_o, _p = _random_state(mesh, bc, rng)
+        old.append((u_o, v_o))
+    return u, v, p, old
+
+
+def _bdf2(
+    old: list[tuple[np.ndarray, np.ndarray]],
+) -> tuple[tuple[np.ndarray, np.ndarray], tuple[np.ndarray, np.ndarray]]:
+    """The BDF2 argument's levels: (u_n, u_nm1), (v_n, v_nm1)."""
+    return (old[0][0], old[1][0]), (old[0][1], old[1][1])
+
+
+def _volumes(mesh: Mesh) -> tuple[np.ndarray, np.ndarray]:
+    """Each face's control volume by hand: centre-to-centre width times cell height."""
+    return (
+        mesh.dy_cell[:, None] * mesh.dx_face[None, :],
+        mesh.dy_face[:, None] * mesh.dx_cell[None, :],
+    )
+
+
+@pytest.mark.unit
+class TestTransientTerm:
+    """``predict(..., transient=)``: the time derivative at the unknown faces.
+
+    The planted defects each test was shown to catch are named in its
+    docstring (docs/reports/probe67/plant67.py).
+    """
+
+    @pytest.mark.parametrize("scheme", ["implicit_euler", "bdf2"])
+    def test_the_diagonal_gains_w0_rho_v_over_dt_at_the_unknowns(
+        self, scheme: str
+    ) -> None:
+        """Both components, against the volumes by hand.
+
+        Catches: the BDF2 weights perturbed, the term on the source only.
+        """
+        config = _transient_room()
+        mesh, bc, mp = _build(config)
+        u, v, p, old = _levels(mesh, bc, 671)
+        if scheme == "implicit_euler":
+            transient, w0 = (DT, *old[0]), 1.0
+        else:
+            transient, w0 = (DT, *_bdf2(old)), 1.5
+        steady = mp.predict(u, v, p)
+        timed = mp.predict(u, v, p, transient=transient)
+        for name, volume in zip(("a_p_u", "a_p_v"), _volumes(mesh), strict=True):
+            unknown = getattr(steady, name) > 0.0
+            added = getattr(timed, name) - getattr(steady, name)
+            expected = np.where(unknown, w0 * config.rho * volume / DT, 0.0)
+            assert added == pytest.approx(expected, rel=ROUNDING, abs=0.0), name
+
+    @pytest.mark.parametrize("scheme", ["implicit_euler", "bdf2"])
+    def test_a_vanishing_step_returns_the_old_levels_combination(
+        self, scheme: str
+    ) -> None:
+        """As dt goes to zero the term dominates: u* = alpha h + (1 - alpha) u.
+
+        h is the old levels' combination over w_0: u_old for implicit Euler,
+        4/3 u_n - 1/3 u_nm1 for BDF2, at every unknown face. With dt 1e-12 s
+        the rest of the equation is about 1e-11 of the term (7e-12 m/s at
+        most, measured); the tolerance is 1e-9 m/s on velocities of order 1.
+        Catches: the BDF2 weights perturbed, the old levels swapped, the term
+        on the source only.
+        """
+        config = _transient_room()
+        mesh, bc, mp = _build(config)
+        u, v, p, old = _levels(mesh, bc, 672)
+        dt = 1e-12
+        if scheme == "implicit_euler":
+            transient, h = (dt, *old[0]), old[0]
+        else:
+            transient = (dt, *_bdf2(old))
+            h = tuple(
+                4.0 / 3.0 * n - 1.0 / 3.0 * nm1
+                for n, nm1 in zip(old[0], old[1], strict=True)
+            )
+        timed = mp.predict(u, v, p, transient=transient)
+        alpha = config.alpha_velocity
+        for star, phi, combination, a_p in (
+            (timed.u_star, u, h[0], timed.a_p_u),
+            (timed.v_star, v, h[1], timed.a_p_v),
+        ):
+            unknown = a_p > 0.0
+            expected = alpha * combination + (1.0 - alpha) * phi
+            assert star[unknown] == pytest.approx(expected[unknown], rel=0.0, abs=1e-9)
+
+    def test_faces_that_are_not_unknowns_are_untouched(self) -> None:
+        """Boundary, SOLID and vent faces predict as without the term, to the byte."""
+        config = vent_config({"discharge": DISCHARGE, "exhaust": EXHAUST})
+        mesh, bc, mp = _build(config)
+        u, v, p, old = _levels(mesh, bc, 673)
+        steady = mp.predict(u, v, p)
+        timed = mp.predict(u, v, p, transient=(DT, *_bdf2(old)))
+        for star, a_p in (("u_star", "a_p_u"), ("v_star", "a_p_v")):
+            fixed = getattr(steady, a_p) == 0.0
+            assert np.array_equal(
+                getattr(timed, star)[fixed], getattr(steady, star)[fixed]
+            )
+            assert np.all(getattr(timed, a_p)[fixed] == 0.0)
+        assert timed.v_star[4, 7] == timed.v_star[4, 8] == 0.5
+
+    def test_none_is_the_call_without_the_argument_to_the_byte(self) -> None:
+        """The steady path, with and without a viscosity field."""
+        config = _transient_room()
+        mesh, bc, mp = _build(config)
+        u, v, p, _old = _levels(mesh, bc, 674)
+        mu_eff = _random_field(mesh, np.random.default_rng(675), config.mu)
+        for kwargs in ({}, {"mu_eff": mu_eff}):
+            plain = mp.predict(u, v, p, **kwargs)
+            given = mp.predict(u, v, p, transient=None, **kwargs)
+            for name in ("u_star", "v_star", "a_p_u", "a_p_v"):
+                assert np.array_equal(getattr(plain, name), getattr(given, name))
+
+    @pytest.mark.parametrize("sweeps", [1, 10])
+    def test_implicit_euler_is_the_probes_predictor_to_the_byte(
+        self, sweeps: int
+    ) -> None:
+        """cylinder59.py's ImplicitEulerPredictor on three random states."""
+        probe_class = load_implicit_euler_predictor()
+        config = _transient_room(sweeps)
+        mesh, bc, mp = _build(config)
+        probe = probe_class(mesh, config, bc, DT)
+        for seed in (676, 677, 678):
+            u, v, p, old = _levels(mesh, bc, seed)
+            probe.u_old, probe.v_old = old[0]
+            ours = mp.predict(u, v, p, transient=(DT, *old[0]))
+            theirs = probe.predict(u, v, p)
+            for name in ("u_star", "v_star", "a_p_u", "a_p_v"):
+                assert np.array_equal(getattr(ours, name), getattr(theirs, name)), name
+
+    @pytest.mark.parametrize(
+        ("label", "error"),
+        [
+            ("two entries", TypeError),
+            ("a list", TypeError),
+            ("dt a bool", TypeError),
+            ("dt an int", TypeError),
+            ("dt zero", ValueError),
+            ("dt negative", ValueError),
+            ("dt nan", ValueError),
+            ("dt inf", ValueError),
+            ("a float32 level", TypeError),
+            ("a list level", TypeError),
+            ("a level of the wrong shape", ValueError),
+            ("u and v exchanged", ValueError),
+            ("a non-finite level", ValueError),
+            ("u a pair and v one level", TypeError),
+            ("a pair of one", TypeError),
+            ("a pair of three", TypeError),
+            ("a pair with a wrong shape", ValueError),
+            ("a pair with a non-finite level", ValueError),
+        ],
+    )
+    def test_a_malformed_argument_is_refused(self, label: str, error: type) -> None:
+        config = _transient_room()
+        mesh, bc, mp = _build(config)
+        u, v, p, old = _levels(mesh, bc, 679)
+        u_o, v_o = old[0]
+        bad = np.where(u_o > 0.0, np.nan, u_o)
+        transient = {
+            "two entries": (DT, u_o),
+            "a list": [DT, u_o, v_o],
+            "dt a bool": (True, u_o, v_o),
+            "dt an int": (1, u_o, v_o),
+            "dt zero": (0.0, u_o, v_o),
+            "dt negative": (-DT, u_o, v_o),
+            "dt nan": (float("nan"), u_o, v_o),
+            "dt inf": (float("inf"), u_o, v_o),
+            "a float32 level": (DT, u_o.astype(np.float32), v_o),
+            "a list level": (DT, u_o.tolist(), v_o),
+            "a level of the wrong shape": (DT, u_o[:, :-1], v_o),
+            "u and v exchanged": (DT, v_o, u_o),
+            "a non-finite level": (DT, bad, v_o),
+            "u a pair and v one level": (DT, (u_o, u_o), v_o),
+            "a pair of one": (DT, (u_o,), (v_o,)),
+            "a pair of three": (DT, (u_o, u_o, u_o), (v_o, v_o, v_o)),
+            "a pair with a wrong shape": (DT, (u_o, u_o[:, :-1]), (v_o, v_o)),
+            "a pair with a non-finite level": (DT, (u_o, bad), (v_o, v_o)),
+        }[label]
+        with pytest.raises(error):
+            mp.predict(u, v, p, transient=transient)  # type: ignore[arg-type]

@@ -114,9 +114,22 @@ Momentum sweeps. ``solver.momentum_sweeps`` Jacobi sweeps of the
 under-relaxed equations run per call, on the coefficients and sources of the
 current field, with the relaxation term held at the outer iterate. One
 sweep is the committed sweep.
+
+The transient term (ADR-014 decision 3, step 6a). ``predict`` takes an
+optional ``transient``: the step and the old time levels of both components.
+The time derivative at an unknown face is a backward difference, ``(w_0 phi +
+w_1 phi_n + w_2 phi_(n-1)) / dt``, with weights (1, -1) for implicit Euler and
+(3/2, -2, 1/2) for BDF2. Times ``rho V``, V the face's control volume (the
+centre-to-centre width times the cell height), ``w_0 rho V / dt`` joins the
+diagonal and ``-(w_1 phi_n + w_2 phi_(n-1)) rho V / dt`` the source, at every
+unknown face and nowhere else. The diagonal the prediction returns carries
+the term, so the pressure correction's ``d = A / a_P`` carries it too. This
+is the probe's ``ImplicitEulerPredictor`` (docs/reports/probe59/cylinder59.py)
+with the second level added. Without it every line runs as before.
 """
 
-from dataclasses import dataclass
+import math
+from dataclasses import dataclass, replace
 
 import numpy as np
 
@@ -124,6 +137,17 @@ from src.boundary_staggered import StaggeredBoundary, TangentialCondition
 from src.config import SimConfig
 from src.mesh import SOLID, Mesh
 from src.staggered import u_shape, v_shape
+
+# Backward-difference weights of the time derivative, the new level first:
+# d phi / dt ~ (w_0 phi + w_1 phi_n + w_2 phi_(n-1)) / dt.
+IMPLICIT_EULER_WEIGHTS = (1.0, -1.0)
+BDF2_WEIGHTS = (1.5, -2.0, 0.5)
+
+# The transient argument: the step, then each component's old level(s).
+Transient = (
+    tuple[float, np.ndarray, np.ndarray]
+    | tuple[float, tuple[np.ndarray, np.ndarray], tuple[np.ndarray, np.ndarray]]
+)
 
 
 @dataclass(frozen=True)
@@ -147,7 +171,9 @@ class MomentumCoefficients:
     a_s_plus, a_s_minus, a_t_plus, a_t_minus : np.ndarray
         Neighbour coefficients, all non-negative.
     b_boundary : np.ndarray
-        Known Dirichlet contributions from the transverse domain edges.
+        Known Dirichlet contributions from the transverse domain edges, and
+        in a transient prediction the old time levels' part of the time
+        derivative (whose new-level part is in ``a_p``).
     b_deferred : np.ndarray
         The QUICK minus upwind advective flux of the current field, moved
         to the right-hand side, plus form b's stress source when a viscosity
@@ -452,6 +478,7 @@ class MomentumPredictor:
         p: np.ndarray,
         mu_eff: np.ndarray | None = None,
         wall_mu: dict[str, np.ndarray] | None = None,
+        transient: Transient | None = None,
     ) -> MomentumPrediction:
         """Under-relaxed Jacobi sweeps of both momentum equations.
 
@@ -480,20 +507,34 @@ class MomentumPredictor:
             unknown and a neighbour face bounding a SOLID cell, each beside
             an unknown; there it must be finite and positive, and elsewhere
             it is not read. None uses air's viscosity or the field's.
+        transient : tuple, optional
+            The time derivative of one implicit step (ADR-014 decision 3):
+            ``(dt, u_old, v_old)`` for implicit Euler, or ``(dt, (u_n,
+            u_nm1), (v_n, v_nm1))`` for BDF2, the latest level first. ``dt``
+            is the step in s, a finite positive float; each level is a
+            float64 array of its component's staggered shape, finite. Read
+            only at the unknown faces. None is the steady path, bitwise the
+            path without the argument.
 
         Returns
         -------
         MomentumPrediction
-            u*, v* and the un-relaxed diagonals; see that class.
+            u*, v* and the un-relaxed diagonals, the transient term included;
+            see that class.
 
         Raises
         ------
         TypeError
             If ``mu_eff`` or a ``wall_mu`` entry is not a float64 ndarray, or
-            ``wall_mu`` is not a dict.
+            ``wall_mu`` is not a dict; if ``transient`` is not a tuple of the
+            step and two levels or two pairs of levels, ``dt`` is not a float
+            (a bool or an int is refused), or a level is not a float64
+            ndarray.
         ValueError
             On a wrong shape, a non-finite or non-positive value where one is
-            read, or ``wall_mu`` keys other than "u" and "v".
+            read, or ``wall_mu`` keys other than "u" and "v"; if ``dt`` is not
+            finite and positive, or a level has the wrong shape or a
+            non-finite value.
 
         Notes
         -----
@@ -512,6 +553,7 @@ class MomentumPredictor:
             )
         mu_cells = None if mu_eff is None else self._check_mu_eff(mu_eff)
         walls = None if wall_mu is None else self._check_wall_mu(wall_mu)
+        steps = None if transient is None else self._check_transient(transient)
         c_u = self._assemble(
             u,
             v,
@@ -519,6 +561,9 @@ class MomentumPredictor:
             mu_cells=mu_cells,
             wall=None if walls is None else walls["u"],
         )
+        if steps is not None:
+            dt, weights, old_u, old_v = steps
+            c_u = self._with_transient(c_u, self._for_u, dt, weights, old_u)
         u_star = self._sweep_n(
             u, c_u, self._pressure_source(p, self._for_u), self._held["u"]
         )
@@ -530,6 +575,9 @@ class MomentumPredictor:
             mu_cells=None if mu_cells is None else np.ascontiguousarray(mu_cells.T),
             wall=None if walls is None else np.ascontiguousarray(walls["v"].T),
         )
+        if steps is not None:
+            old_vt = tuple(np.ascontiguousarray(level.T) for level in old_v)
+            c_vt = self._with_transient(c_vt, self._for_v, dt, weights, old_vt)
         v_star = self._sweep_n(
             v.T, c_vt, self._pressure_source(p.T, self._for_v), self._held["v"]
         ).T
@@ -644,6 +692,89 @@ class MomentumPredictor:
                     f"wall_mu['{key}'] must be positive at every wall face"
                 )
         return wall_mu
+
+    def _check_transient(
+        self, transient: object
+    ) -> tuple[
+        float, tuple[float, ...], tuple[np.ndarray, ...], tuple[np.ndarray, ...]
+    ]:
+        """Check the transient argument; refuse a malformed one before any arithmetic.
+
+        Returns the step, the backward-difference weights and each
+        component's old levels, latest first, as given.
+        """
+        if not isinstance(transient, tuple) or len(transient) != 3:
+            raise TypeError(
+                "transient must be a tuple (dt, u_old, v_old) or "
+                "(dt, (u_n, u_nm1), (v_n, v_nm1))"
+            )
+        dt, old_u, old_v = transient
+        if isinstance(dt, bool) or not isinstance(dt, float):
+            raise TypeError(f"transient dt must be a float, got {type(dt).__name__}")
+        if not math.isfinite(dt) or dt <= 0.0:
+            raise ValueError(f"transient dt must be finite and positive, got {dt}")
+        levels: list[tuple[np.ndarray, ...]] = []
+        for name, old in (("u", old_u), ("v", old_v)):
+            if isinstance(old, np.ndarray):
+                levels.append((old,))
+            elif isinstance(old, tuple) and len(old) == 2:
+                levels.append(old)
+            else:
+                raise TypeError(
+                    f"transient's {name} levels must be one array (implicit Euler) "
+                    f"or a pair of arrays (BDF2), got {type(old).__name__}"
+                )
+        if len(levels[0]) != len(levels[1]):
+            raise TypeError(
+                "transient's u and v must carry the same number of old levels"
+            )
+        for name, shape, given in (
+            ("u", self._u_shape, levels[0]),
+            ("v", self._v_shape, levels[1]),
+        ):
+            for level in given:
+                if not isinstance(level, np.ndarray) or level.dtype != np.float64:
+                    got = (
+                        level.dtype
+                        if isinstance(level, np.ndarray)
+                        else type(level).__name__
+                    )
+                    raise TypeError(
+                        f"transient's {name} levels must be float64 ndarrays, got {got}"
+                    )
+                if level.shape != shape:
+                    raise ValueError(
+                        f"expected transient's {name} levels of shape {shape}, "
+                        f"got {level.shape}"
+                    )
+                if not np.isfinite(level).all():
+                    raise ValueError(f"transient's {name} levels must be finite")
+        weights = BDF2_WEIGHTS if len(levels[0]) == 2 else IMPLICIT_EULER_WEIGHTS
+        return dt, weights, levels[0], levels[1]
+
+    def _with_transient(
+        self,
+        c: MomentumCoefficients,
+        o: _Orientation,
+        dt: float,
+        weights: tuple[float, ...],
+        old: tuple[np.ndarray, ...],
+    ) -> MomentumCoefficients:
+        """The coefficients with the time derivative added at the unknown faces.
+
+        In the component's own frame. ``w_0 rho V / dt`` joins ``a_p`` and
+        ``-(w_1 phi_n + w_2 phi_(n-1)) rho V / dt`` joins ``b_boundary``, V
+        the face's control volume; faces that are not unknowns get nothing.
+        """
+        unknown = c.a_p > 0.0
+        volume = o.ds_face[None, :] * o.dt_cell[:, None]
+        rate = np.where(unknown, self._rho * volume / dt, 0.0)
+        history = sum(-w * level for w, level in zip(weights[1:], old, strict=True))
+        return replace(
+            c,
+            a_p=c.a_p + weights[0] * rate,
+            b_boundary=c.b_boundary + rate * history,
+        )
 
     @staticmethod
     def _wall_faces(o: _Orientation) -> np.ndarray:

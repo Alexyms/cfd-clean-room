@@ -519,6 +519,18 @@ to `pressure_rtol` as in the steady solve. The transient loop is a method of `St
 (`solve_transient`, with the step, the end time, the per-step criterion and cap, and a callback
 per step), and `time_integration.py` calls it for a tier-2 configuration as it calls
 `solve_steady` for tier 1's states.
+*As built (step 6a, prompt 67, 2026-10-17).* The criterion is the largest change of the
+cell-centred velocity over one outer iteration below `step_tol` times the largest prescribed
+boundary velocity (`get_max_boundary_velocity`, the error_estimate rule's scale), which is U on
+the cylinder. It is not the solver's `reference_velocity`, the inflow over one cell spacing:
+on the probe's 0.1 d grid that is 200 U, and the probe converted its tolerance by that factor
+to measure T2 at 1e-4 U. An outer iteration whose correction reached `max_pressure_iter` cannot
+end a step, as under the steady velocity-step rule (ADR-013 B). A step that reaches
+`step_cap`, or whose residual is not finite, raises `TransientStepError` carrying its record
+and every record before it. `scheme="implicit_euler"` runs the first-order control the order
+test needs; `"bdf2"` is the default. `t_end` must be a whole number of steps, since BDF2 takes
+no shortened last step. The solve is laminar and refuses the turbulence section (decision 1 of
+the decisions already taken). `time_integration.py`'s call is step 6b's.
 
 **The cost.** T2 gives the outer iterations per step at three criteria, two steps and two pressure
 tolerances from one developing field; T3 the cost along a long march from a perturbed start,
@@ -986,6 +998,9 @@ stated; Re 60's St and the drag coefficients reported. The paper's Re 100 values
 cases are 0.145 to 0.150 (St), 1.45 to 1.49 (C_D) (Tables II and IV [1]). Whether 5% is the
 number is Alex's; the probe's uniform grid is not expected to meet it, which is why the clustered
 grid is the row's grid and the uniform one the ladder's coarse rung.
+*Decided (Alex, 2026-10-17):* at Re 100 the Strouhal number within 5% of 0.146 (0.139 to
+0.153); the onset bracket as stated (steady at Re 40, shedding at Re 60); the drag coefficient
+reported, not scored. Step 6b builds the row.
 
 **The grid.** Decision 11: interior clustering in `mesh.py`, a list of breakpoints per axis with
 the spacing at each and geometric growth between, validated like the existing stretch keys; the
@@ -1021,7 +1036,9 @@ scenarios.py
 solver_staggered.py
     FlowState(u, v, p, k, eps, nu_t, stop)     # frozen, read-only arrays
     solve_steady(on_iteration=None, *, eddy_viscosity=None, initial: FlowState | None = None)
-    solve_transient(dt, t_end, *, initial, step_tol, step_cap, on_step=None) -> FlowState
+    solve_transient(dt, t_end, *, initial, step_tol, step_cap, on_step=None,
+                    scheme="bdf2") -> FlowState  # built, step 6a; on_step(TransientStep, FlowState)
+    TransientStep, TransientStepError, transient_steps   # built, step 6a
     flow_state -> FlowState                    # the last solve's, converged or not
 
 momentum.py
@@ -1107,6 +1124,34 @@ as `mu_eff` is), `mesh.py`'s the breakpoints.
    the step loop in `solver_staggered.py`, interior clustering in `mesh.py`, the lift and drag
    instrument, `configs/validation_cylinder.yaml`; VAL-022's three rows in
    `tests/test_cylinder.py`, the Re 100 row marked slow and run by the harness as VAL-017 is.
+   *Split into two passes (Alex, 2026-10-17).* **6a** builds the time-accurate solve and proves
+   its order in time on its own: the transient term of `predict`, `solve_transient` with the
+   per-step criterion, record and cap, BDF2 after an implicit Euler first step; the observed
+   order under step halving on a fixed grid (BDF2 within 0.2 of 2, implicit Euler, the control,
+   within 0.2 of 1); a smoke run of `cylinder59.py`'s configuration. The cylinder cannot show the
+   order: its error mixes grid, boundaries and time. **6b** builds the interior clustering, the
+   lift and drag, the tier-2 route through `time_integration.py` with its run file and restart,
+   and VAL-022 with section F's thresholds as decided on 2026-10-17.
+   *6a built 2026-10-17 (prompt 67).* `predict(..., transient=)` in `momentum.py`, bitwise the
+   steady path when None and, for implicit Euler, bitwise the probe's `ImplicitEulerPredictor`;
+   `solve_transient` in `solver_staggered.py` with `TransientStep` and `TransientStepError`, as
+   section A's as-built note gives it. The order case is VAL-002's cavity at Re 100 spun up
+   from rest on a fixed 20x20 grid to t = 1 s, at dt 0.1, 0.05, 0.025 and 0.0125 s: no exact
+   unsteady solution fits these boundaries (the Taylor-Green vortex needs periodic edges, the
+   impulsively started plate a periodic channel), the cavity is a validated case of this
+   solver, closed (no outlet in the time error), and its spin-up is a smooth transient of the
+   fixed-grid equations. The field is every u and v face at t = 1 s, the largest absolute
+   difference; the order is read from the two finest differences (`tests/test_time_order.py`).
+   The per-step criterion is 1e-10 U with the pressure at its floor of 1e-10, and the iteration
+   error it leaves is measured by repeating runs at 1e-12 U. The numbers are tables O1 and O2
+   of `docs/reports/probe67/tables67.md`, copied under the probes below, with the smoke run
+   (S1, S2) and the hashes of record (H1). Every hash of record unchanged. The order check is
+   VAL-023 (added 2026-10-18, prompt 67b, review 67 S3). *Fix pass (prompt 67b, 2026-10-18):*
+   the march's two boundary lines (the normal velocities written at its start, the outlets
+   extrapolated before each prediction) are pinned from rest on the 20x10 channel, where the
+   implicit Euler march equals the probe's loop to the byte; a failed march leaves its own
+   faces' imbalance in `last_mass_imbalance`. The plant runner is
+   `docs/reports/probe67/plant67.py`.
 7. The four reference scenarios run on the product grid with their records in the run files,
    the recovery outputs, and the Phase 4 gate report with this document's planned-against-built
    table.
@@ -1356,6 +1401,11 @@ committed before it ran).**
 - (d) Holds: the supply short-circuits to the returns through the gaps, so the mean falls faster
   than well-mixed at first and slower later.
 
+**Predictions (orchestrator, 2026-10-17, step 6a; committed before the recorded runs).**
+- (a) BDF2's observed order is 2.0 +/- 0.2 and implicit Euler's 1.0 +/- 0.2 on the order case.
+- (b) The smoke run's steps take 3 to 5 outer iterations each at 1e-4 U, as T2 measured from
+  the start-up field.
+
 **Method.** `warm59.py` (T1), `cylinder59.py` (T2 to T4), `order59.py` (T5), `scales59.py` (T6),
 `cleanout59.py` (T7, prompt 59b); each script's docstring states its arms and what it writes. Wall times were taken with three to
 five processes sharing the machine and are stated with their process counts; counts are not
@@ -1579,6 +1629,100 @@ Largest relative difference of a sensor's recovery time, 0.4 against 0.1: 3.63% 
   mean's own 100:1 time is not reached by the time every sensor is below 1e-3. The clean-out on
   this room is a sensor-placement question, which section C's recovery field is there to
   answer.
+
+### Step 6a (prompt 67, 2026-10-17): the order in time, the smoke run, the hashes
+
+Generated by `docs/reports/probe67/tables67.py` (`--check` regenerates and compares) from
+`order67.py`'s and `smoke67.py`'s records and `hash62.py`'s; copied here.
+
+### O1. The observed order in time: the cavity spun up from rest
+
+VAL-002's cavity at Re 100 on a fixed uniform 20x20 grid, from rest to t = 1 s; the field is every u and v face at t_end, largest absolute difference. Per-step criterion 1e-10 of the lid speed, pressure_rtol 1e-10. Commit fc07acd. The order on a row is log2 of the ratio of the difference on the row above to the difference on the row; the asserted order is the last row's (tests/test_time_order.py).
+
+| Scheme | dt (s) | Steps | Outer per step: mean, max | Worst imbalance (kg/s per m) | Wall (s) | Difference to dt/2 (m/s) | Observed order |
+|---|---|---|---|---|---|---|---|
+| bdf2 | 0.1 | 10 | 73.5, 83 | 2.3e-14 | 6.0 | 1.679e-03 | - |
+| bdf2 | 0.05 | 20 | 51.0, 56 | 1.9e-14 | 10.2 | 3.648e-04 | 2.202 |
+| bdf2 | 0.025 | 40 | 38.5, 42 | 2.0e-14 | 15.2 | 8.807e-05 | 2.050 |
+| bdf2 | 0.0125 | 80 | 31.8, 35 | 2.1e-14 | 25.2 | - | - |
+| implicit_euler | 0.1 | 10 | 88.6, 91 | 2.1e-14 | 8.7 | 7.074e-03 | - |
+| implicit_euler | 0.05 | 20 | 60.0, 61 | 2.0e-14 | 12.4 | 3.500e-03 | 1.015 |
+| implicit_euler | 0.025 | 40 | 43.5, 44 | 2.3e-14 | 18.3 | 1.789e-03 | 0.968 |
+| implicit_euler | 0.0125 | 80 | 34.3, 35 | 2.1e-14 | 27.7 | - | - |
+
+### O2. The iteration error the ladder's states carry
+
+Each scheme's coarsest and finest runs repeated at a per-step criterion of 1e-12; the iteration error is the largest face difference between the run and its repeat. The smallest time difference is the smallest entry of O1's difference column.
+
+| Scheme | dt (s) | Iteration error (m/s) | Smallest time difference (m/s) | Ratio | Repeat's outer per step | Repeat's wall (s) |
+|---|---|---|---|---|---|---|
+| bdf2 | 0.1 | 2.54e-09 | 8.81e-05 | 2.9e-05 | 91.5 | 8.9 |
+| bdf2 | 0.0125 | 5.56e-09 | 8.81e-05 | 6.3e-05 | 39.9 | 31.4 |
+| implicit_euler | 0.1 | 2.54e-09 | 8.81e-05 | 2.9e-05 | 110.9 | 9.6 |
+| implicit_euler | 0.0125 | 4.68e-09 | 8.81e-05 | 5.3e-05 | 43.4 | 31.6 |
+
+### S1. The cylinder smoke run: outer iterations per step
+
+cylinder59.py's configuration on its uniform 0.1 d grid (370x200), Re 100, from the start-up field (200 steady outer iterations from rest; equal face for face to the probe's kept field: True, largest difference 0.0e+00). Per-step criterion 0.0001 U, pressure_rtol 0.0001. Commit fc07acd. T2's rows are prompt 59's arms from the same field.
+
+| Arm | Scheme | dt | Courant | Steps | Outer per step: mean, median, min, max | Steps by count | Cap hits | Worst imbalance, last step | s per step | Processes |
+|---|---|---|---|---|---|---|---|---|---|---|
+| A_ie | implicit_euler | 0.025 | 0.25 | 40 | 3.00, 3, 3, 3 | 3: 40 | 0 | 5.2e-10 | 0.80 | 13 |
+| A_bdf2 | bdf2 | 0.025 | 0.25 | 40 | 3.00, 3, 3, 3 | 3: 40 | 0 | 4.9e-10 | 0.76 | 13 |
+| B_bdf2 | bdf2 | 0.05 | 0.50 | 40 | 4.00, 4, 4, 4 | 4: 40 | 0 | 2.4e-10 | 1.04 | 13 |
+| T2 A | implicit_euler | 0.025 | 0.25 | 20 | 3.00, 3, 3, 3 | | 0 | 9.5e-10 | 0.73 | 5 |
+| T2 B | implicit_euler | 0.05 | 0.50 | 20 | 4.00, 4, 4, 4 | | 0 | 5.0e-10 | 1.03 | 5 |
+
+### S2. The implicit Euler arm against the probe's arm A
+
+| Probe commit | Steps compared | Outer equal | Wake v equal | Largest wake v difference |
+|---|---|---|---|---|
+| 809d1c6 | 20 | 20 | 20 | 0.0e+00 |
+
+### H1. The hashes of record at the step 6a source
+
+hash62.py's solves from rest through the committed solver of the worktree named by the commit column: the face hash at this step's source (_67) against prompt 64's (_64) and prompt 62's (no suffix) records of the same case.
+
+| Case | Commit | Stop | Outer | Hash (first 16) | Equal to _64 | Equal to prompt 62's | Wall (s) | Processes |
+|---|---|---|---|---|---|---|---|---|
+| val001_80x40 | fc07acd | error_estimate_and_continuity | 1,559 | f2e5b888cb269112 | True | True | 29 | 11 |
+| val001_80x40_stretched | fc07acd | error_estimate_and_continuity | 1,124 | 4c79ffb9def55fbb | True | True | 23 | 11 |
+| val002_20x20 | fc07acd | error_estimate_and_continuity | 970 | 1ecbedb180303c8f | True | True | 10 | 11 |
+| val002_40x40 | fc07acd | error_estimate_and_continuity | 3,435 | 7a881aaa88b1946d | True | True | 52 | 11 |
+| val002_80x80 | fc07acd | error_estimate_and_continuity | 12,814 | 95efc0123aaabc55 | True | True | 371 | 11 |
+| val017_216x72 | fc07acd | error_estimate_and_continuity | 11,443 | d59c4a1a644f67aa | True | True | 1108 | 11 |
+| val019_656x60 | fc07acd | max_simple_iter | 20,000 | 2c8a57b634e018ab | True | True | 3037 | 11 |
+| product_80x30 | fc07acd | error_estimate_and_continuity | 1,021 | 6f27f27f3e89963a | True | True | 28 | 11 |
+| product_160x60 | fc07acd | error_estimate_and_continuity | 1,953 | d295ccb1a4c8f9e1 | True | True | 126 | 11 |
+| L0_320x120 | fc07acd | error_estimate_and_continuity | 4,389 | cd0701fd8aab916d | True | True | 829 | 11 |
+| t1_rest | fc07acd | error_estimate_and_continuity | 4,579 | 22364c66d2777fa8 | True | True | 858 | 11 |
+
+**Findings (step 6a).**
+- *Prediction (a) holds.* O1's last rows: BDF2's order from the two finest differences is
+  within 0.2 of 2 and implicit Euler's within 0.2 of 1. BDF2's coarser pair reads 2.20, just
+  outside the band. The ratio falls toward 2 as the step halves, so the coarser pair is not yet
+  in the asymptotic range, where an order is defined: at dt 0.1 s the terms beyond the leading
+  dt^2 error still contribute. The finest pair is therefore the one asserted (VAL-023,
+  `tests/test_time_order.py`, which prints every pair's order). The order is a statement about
+  a field, here every face in the largest absolute value. An integrated scalar need not show it:
+  on this 20x20 grid the total kinetic energy's BDF2 differences are non-monotone along the
+  ladder, because the energy's time error changes sign between steps (test 67, section 8; on
+  12x12 the same scalar reads 2.03), so the test reads the field. O2:
+  the iteration error the per-step criterion leaves is more than four orders of magnitude
+  below the smallest time difference, at both ends of the ladder and for both schemes, so the
+  differences hold the time error. The order case was tried once in scratch
+  (`results/builder67/order_proto.py`) before the predictions were committed, to choose the
+  grid, the ladder and the criterion; the recorded run is `order67.py`'s, after that commit.
+- *Prediction (b) holds.* S1: every step of both BDF2 arms took a single count of outer
+  iterations, the same counts T2's implicit Euler arms took at the same steps, inside 3 to 5.
+  BDF2's larger transient coefficient (3/2 of implicit Euler's) did not change the count over
+  these 40 steps from the start-up field; T3's long march, where the count rose as shedding
+  developed, is not repeated here.
+- *The implicit Euler march is the probe's.* S2: the start-up field solved again at this
+  commit is the probe's kept field face for face, and the implicit Euler arm reproduces T2's
+  arm A, every step's count and wake velocity, bit for bit; `tests/test_transient.py` pins the
+  same equality on the cavity.
+- *H1.* Every hash of record is unchanged at the step 6a source.
 
 ## Consequences
 - The transport march, not the flow, sets a scenario's cost (T6); decision 2 and Phase 6's GPU

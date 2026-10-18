@@ -60,7 +60,7 @@ responsibility = "Builds an additive-correction multigrid hierarchy from a five-
 serves = ["REQ-S08"]
 
 [modules."src/momentum.py"]
-responsibility = "Predicts u* and v* on the staggered grid with QUICK advection by deferred correction over an upwind implicit matrix, a configured number of under-relaxed Jacobi sweeps per call, an optional per-cell viscosity field with its face rule and stress source, and the domain edge's wall stencil at obstacle faces, and returns the diagonal coefficients the pressure correction needs."
+responsibility = "Predicts u* and v* on the staggered grid with QUICK advection by deferred correction over an upwind implicit matrix, a configured number of under-relaxed Jacobi sweeps per call, an optional per-cell viscosity field with its face rule and stress source, the domain edge's wall stencil at obstacle faces, and an optional implicit Euler or BDF2 time derivative at the unknown faces, and returns the diagonal coefficients the pressure correction needs."
 serves = ["REQ-S07", "REQ-S09", "REQ-S14"]
 
 [modules."src/scalar_scheme.py"]
@@ -72,7 +72,7 @@ responsibility = "Turns a loaded scenario into its intervals between event bound
 serves = []
 
 [modules."src/solver_staggered.py"]
-responsibility = "Runs steady SIMPLE on the staggered grid as one outer loop over the momentum predictor and the pressure correction, with the turbulence section one k and eps step and the relaxed eddy viscosity inside it, returning cell-centered fields through the harness's callback shape and exposing the final faces as FaceVelocities; stops by the velocity-step rule or, when configured, by the error-estimate rule."
+responsibility = "Runs steady SIMPLE on the staggered grid as one outer loop over the momentum predictor and the pressure correction, with the turbulence section one k and eps step and the relaxed eddy viscosity inside it, returning cell-centered fields through the harness's callback shape and exposing the final faces as FaceVelocities; stops by the velocity-step rule or, when configured, by the error-estimate rule; and marches a laminar flow state through implicit time steps, BDF2 after an implicit Euler first step, each to a velocity-step criterion with a cap that fails the run."
 serves = ["REQ-S01", "REQ-S02", "REQ-S03", "REQ-S04", "REQ-S05", "REQ-S07", "REQ-S13", "REQ-S14", "REQ-S15"]
 
 [modules."src/solver_transport.py"]
