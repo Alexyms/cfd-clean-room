@@ -33,7 +33,7 @@ import yaml
 
 import src.solver_staggered as solver_module
 from src.config import SimConfig
-from src.mesh import SOLID, Mesh
+from src.mesh import FLUID, SOLID, Mesh
 from src.pressure import PressureCorrector
 from src.solver_staggered import (
     BDF2,
@@ -44,7 +44,7 @@ from src.solver_staggered import (
     TransientStep,
     TransientStepError,
 )
-from src.staggered import allocate_fields
+from src.staggered import allocate_fields, to_cell_centers
 from tests.cylinder59_reference import load_fields_of, load_implicit_euler_predictor
 from tests.helpers import channel_raw, product_config, staggered_solver
 from validation.cases import case_path
@@ -406,3 +406,42 @@ class TestFixedPoint:
         assert [r.outer for r in solver.transient_steps] == [1] * 5
         drift = max(np.max(np.abs(end.u - start.u)), np.max(np.abs(end.v - start.v)))
         assert drift < step_tol * scale
+
+    def test_the_criterion_is_a_fraction_of_the_prescribed_velocity(
+        self, steady: dict[str, StaggeredSolver]
+    ) -> None:
+        """A step's residual is its cell-centred change over U, not reference_velocity.
+
+        On the channel the reference velocity is the inflow over one cell
+        spacing, ten times the inlet's, so the two scales tell apart. Each
+        one-outer step's recorded residual is computed from the two states
+        on either side of it. Catches: step_tol scaled by reference_velocity.
+        """
+        solver = steady["channel"]
+        scale = solver._boundary.get_max_boundary_velocity()
+        assert solver.reference_velocity > 5.0 * scale
+        states = [solver.flow_state]
+        solver.solve_transient(
+            0.1,
+            0.3,
+            initial=states[0],
+            step_tol=1e-10,
+            step_cap=50,
+            on_step=lambda _record, state: states.append(state),
+        )
+        fluid = solver._mesh.cell_type == FLUID
+        for record, before, after in zip(
+            solver.transient_steps, states[:-1], states[1:], strict=True
+        ):
+            assert record.outer == 1
+            change = [
+                np.max(np.abs(a[fluid] - b[fluid]))
+                for a, b in zip(
+                    to_cell_centers(after.u, after.v),
+                    to_cell_centers(before.u, before.v),
+                    strict=True,
+                )
+            ]
+            assert record.residual_history[0] == pytest.approx(
+                max(change) / scale, rel=1e-12
+            )
