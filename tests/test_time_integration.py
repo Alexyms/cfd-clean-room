@@ -79,10 +79,7 @@ from src.time_integration import (
     sensor_cells,
     smallest_stable_dt,
 )
-from tests.test_io_manager import (
-    _same_budgets,
-    _same_recovery,
-)
+from tests.helpers import same_budgets, same_recovery
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIGS = ROOT / "configs"
@@ -180,7 +177,7 @@ def same_frames(a: RunFile, b: RunFile) -> None:
     for k in fb.fields:
         assert fa.fields[k].tobytes() == fb.fields[k].tobytes(), k
     for x, y in zip(fa.budgets, fb.budgets, strict=True):
-        _same_budgets(x, y)
+        same_budgets(x, y)
     ra, rb = a.read_sensor_readings(), b.read_sensor_readings()
     assert ra.names == rb.names
     assert ra.steps.tolist() == rb.steps.tolist()
@@ -208,9 +205,13 @@ def held_clean_out(**solver: object) -> dict:
 
 @pytest.fixture(scope="module")
 def clean_out(tmp_path_factory: pytest.TempPathFactory) -> SimpleNamespace:
-    """The coarse clean-out from rest to its hold: the kept base state for the rest."""
+    """The coarse clean-out from rest to its hold: the kept base state for the rest.
+
+    Checkpoints every 500 steps, which the hold's step (about 1770) is not
+    a multiple of, so the hold's own checkpoint is pinned.
+    """
     folder = tmp_path_factory.mktemp("clean_out")
-    config = SimConfig.from_dict(held_clean_out())
+    config = SimConfig.from_dict(held_clean_out(checkpoint_interval=500))
     record = run(config, folder / "run.h5", provenance=PROVENANCE)
     return SimpleNamespace(config=config, record=record, run=RunFile(record.path))
 
@@ -347,6 +348,29 @@ class TestSensorsAndInputs:
         )
         assert sensor_cells(fine, mesh) == nearest
         assert nearest[-1] == (15, 6)
+
+    def test_on_the_product_grid_the_rule_reads_the_160x60_cells_faces(self) -> None:
+        """On 320x120 each sensor's face is the 160x60 face, two cells finer.
+
+        A face that is face i + 1 on 160x60 is face 2 (i + 1) on 320x120,
+        so the cell below or left of it is 2 i + 1: the cell T7 read on
+        160x60, halved. The nearest centre is a rounding tie on every
+        sensor there. Defect caught: the rule claimed for 320x120 in
+        ADR-014 C and not checked (review 64 S6).
+        """
+        cells = {}
+        for grid in ((160, 60), (320, 120)):
+            raw = coarse_raw("scenario_clean_out.yaml")
+            raw["domain"] = {"nx": grid[0], "ny": grid[1]}
+            config = SimConfig.from_dict(raw)
+            mesh = Mesh(config)
+            cells[grid] = sensor_cells(config, mesh)
+            for (j, i), sensor in zip(cells[grid], config.sensors, strict=True):
+                assert sensor.x == pytest.approx(mesh.x[i + 1], abs=1e-12)
+                assert sensor.y == pytest.approx(mesh.y[j + 1], abs=1e-12)
+        assert cells[(320, 120)] == tuple(
+            (2 * j + 1, 2 * i + 1) for j, i in cells[(160, 60)]
+        )
 
     def test_a_face_that_rounds_below_its_sensor_is_still_the_sensors_face(
         self,
@@ -530,7 +554,7 @@ class TestRecoveryTracker:
         later = _tracker(1.0)
         later.restore({k: np.array(v) for k, v in first.state().items()})
         assert _feed(later, list(enumerate(HISTORY))[4:]) == [False, False, True]
-        _same_recovery(
+        same_recovery(
             later.record(["w", "e"], RATE, True), whole.record(["w", "e"], RATE, True)
         )
 
@@ -549,6 +573,41 @@ class TestRecoveryTracker:
         del state["last_above"]
         with pytest.raises(KeyError):
             tracker.restore(state)
+
+
+@pytest.mark.unit
+class TestRecoveryLines:
+    """run_scenario.recovery_lines on records the prescribed history makes."""
+
+    def test_the_held_not_defined_and_ratio_lines(self) -> None:
+        """Held after a hold of 1 s; class 1 not defined; class 0's ratio 0.5.
+
+        The record is TestRecoveryTracker's history, whose every output is
+        checked by hand there. Defects caught: the held line, the not-defined
+        line or the ratio line dropped or fed another field (the mean's time
+        for the ratio, a sensor's time for the mean), or the classes' lines
+        transposed (review 64 S9).
+        """
+        tracker = _tracker(1.0)
+        assert _feed(tracker, list(enumerate(HISTORY)))[-1]
+        record = tracker.record(["west", "east"], RATE, held=True)
+        lines = run_scenario.recovery_lines(record, [1.0e-6, 5.0e-6])
+        assert lines == [
+            "recovery (ADR-014 C):",
+            f"  air change rate N = {RATE:.6g} 1/s, well-mixed 100:1 time "
+            "ln(100)/N = 4.0000 s",
+            "  stopped by the hold of 1.0 s",
+            "  room recovery time: 5.0000 s",
+            "  class 0 (1 um):",
+            "    recovery time: 5.0000 s",
+            "    free-area mean 100:1: 2.0000 s, ratio to well-mixed 0.5000",
+            "    sensor 100:1: west 2.0000 s, east 1.0000 s",
+            "    local recovery field maximum: 4.0000 s",
+            "  class 1 (5 um):",
+            "    recovery time: 1.0000 s",
+            "    100:1 times: not defined (initial below 100 thresholds)",
+            "    local recovery field maximum: not recovered (a cell still above)",
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -578,6 +637,11 @@ class TestRunGuards:
             with pytest.raises(ValueError, match="exists; a new run writes new files"):
                 run(config, tmp_path / name)
         assert not (tmp_path / "a.h5").exists()
+
+
+@pytest.mark.integration
+class TestRunGuardsOnAKeptFile:
+    """The guard on flows_from, which needs a kept file: the clean-out's solve."""
 
     @pytest.mark.parametrize(
         ("section", "key", "value", "named"),
@@ -660,7 +724,7 @@ class TestCleanOut:
         plan = record.intervals[0]
         assert record.t_final - plan.dt - recovery.room_recovery_time < hold
         assert recovery.room_recovery_time == np.max(recovery.recovery_time)
-        _same_recovery(clean_out.run.read_recovery(), recovery)
+        same_recovery(clean_out.run.read_recovery(), recovery)
 
     def test_the_recovery_times_are_the_run_files_readings(
         self, clean_out: SimpleNamespace
@@ -727,6 +791,40 @@ class TestCleanOut:
                     recovery.well_mixed_time
                 )
 
+    def test_the_hold_writes_its_checkpoint_and_a_restart_returns_held(
+        self, tmp_path: Path, clean_out: SimpleNamespace
+    ) -> None:
+        """The hold's step is a frame and a checkpoint; restarted, the run is held.
+
+        A copy of the held run's files restarted under the same
+        configuration continues from the hold's checkpoint, takes no step and
+        is held, its frames, readings and recovery outputs unchanged.
+        Defects caught: the hold's step not treated as the last (no
+        checkpoint there, so the restart marches on from step 1500); the
+        restored hold not checked before the march (the restart steps past
+        the hold); the hold's recovery rewritten as not held (review 64
+        S4.3).
+        """
+        record = clean_out.record
+        cadence = clean_out.config.checkpoint_interval
+        assert record.held and record.steps % cadence != 0
+        checkpoint = clean_out.run.read_checkpoint()
+        assert (checkpoint.step, checkpoint.t) == (record.steps, record.t_final)
+        path = tmp_path / "run.h5"
+        _copy_run(record.path, path)
+        steps, on_step = recorder()
+        again = run(clean_out.config, restart=path, on_step=on_step)
+        assert steps == []
+        assert again.restarted_from == record.steps
+        assert (again.steps, again.t_final, again.held) == (
+            record.steps,
+            record.t_final,
+            True,
+        )
+        same_frames(RunFile(path), clean_out.run)
+        same_recovery(again.recovery, record.recovery)
+        same_recovery(RunFile(path).read_recovery(), record.recovery)
+
     def test_frames_and_budgets(self, clean_out: SimpleNamespace) -> None:
         """Frames at 0, every output_interval and the last step; budgets close.
 
@@ -740,7 +838,7 @@ class TestCleanOut:
         assert frames.steps.tolist() == sorted(set(expected))
         for budget in record.budgets:
             assert abs(budget.relative()) < REQ_T05
-        _same_budgets(frames.budgets[-1], record.budgets)
+        same_budgets(frames.budgets[-1], record.budgets)
         assert all((c >= 0.0).all() for c in frames.fields.values())
 
     def test_the_tracker_reads_each_steps_fields_and_free_area_means(
@@ -1036,7 +1134,7 @@ class TestDoor:
                     c, faces, k, plan.dt, eddy_viscosity=state.nu_t
                 )
                 assert stepped.tobytes() == after.fields[k].tobytes(), (plan.index, k)
-            _same_budgets(tuple(transport.budget), after.budgets)
+            same_budgets(tuple(transport.budget), after.budgets)
             for x, y in zip(before.budgets, after.budgets, strict=True):
                 assert x.initial == y.initial
         opened = door.steps[door.record.intervals[0].steps]
@@ -1129,9 +1227,9 @@ class TestRestart:
             assert [f.origin for f in again.flows] == [RUN_FILE, RUN_FILE]
             assert (again.steps, again.t_final) == (whole.steps, whole.t_final)
             same_frames(RunFile(cut), RunFile(whole.path))
-            _same_budgets(again.budgets, whole.budgets)
-            _same_recovery(again.recovery, whole.recovery)
-            _same_recovery(RunFile(cut).read_recovery(), whole.recovery)
+            same_budgets(again.budgets, whole.budgets)
+            same_recovery(again.recovery, whole.recovery)
+            same_recovery(RunFile(cut).read_recovery(), whole.recovery)
 
     def test_without_a_checkpoint_the_march_runs_again(
         self, tmp_path: Path, door: SimpleNamespace
@@ -1153,7 +1251,7 @@ class TestRestart:
         again = run(config, restart=cut)
         assert again.restarted_from == 0
         same_frames(RunFile(cut), RunFile(whole.path))
-        _same_recovery(again.recovery, whole.recovery)
+        same_recovery(again.recovery, whole.recovery)
 
     def test_a_later_t_end_divides_the_last_interval_again(
         self, tmp_path: Path, door: SimpleNamespace
@@ -1223,8 +1321,8 @@ class TestRestart:
         assert again.resumed_plan == whole.resumed_plan
         assert (again.steps, again.t_final) == (whole.steps, 4.5)
         same_frames(RunFile(tmp_path / "cut.h5"), RunFile(whole.path))
-        _same_budgets(again.budgets, whole.budgets)
-        _same_recovery(again.recovery, whole.recovery)
+        same_budgets(again.budgets, whole.budgets)
+        same_recovery(again.recovery, whole.recovery)
 
     @pytest.mark.parametrize("t_end", [4.0, 3.5])
     def test_a_t_end_at_or_before_the_checkpoint_is_refused(
@@ -1248,6 +1346,46 @@ class TestRestart:
         with pytest.raises(ValueError, match=message):
             run(_with_t_end(config, t_end), restart=path)
         assert RunFile(path).read_frames().steps.tolist() == before
+
+    def test_a_checkpoint_on_an_intervals_last_step(
+        self, tmp_path: Path, door: SimpleNamespace
+    ) -> None:
+        """The cadence is the first interval's step count: a checkpoint at its end.
+
+        The checkpoint's time is the interval's end exactly, which is the
+        next interval's start, so the restart continues at the next plan's
+        step 0. Killed two steps after it and restarted: the uninterrupted
+        run bitwise. Defect caught: the checkpoint taken as the end of its
+        own interval, which the plan has no step after (review 64 S4.4).
+        """
+        kept = door.record.path
+        whole = run(
+            _door_clean_out(None),
+            tmp_path / "whole.h5",
+            flows_from=kept,
+            provenance=PROVENANCE,
+        )
+        first = whole.intervals[0]
+        config = _door_clean_out(first.steps)
+        cut = tmp_path / "cut.h5"
+        with pytest.raises(_KilledError):
+            run(
+                config,
+                cut,
+                flows_from=kept,
+                on_step=killer(first.steps + 2),
+                provenance=PROVENANCE,
+            )
+        checkpoint = RunFile(cut).read_checkpoint()
+        assert (checkpoint.step, checkpoint.t) == (first.steps, first.t_end)
+        assert checkpoint.fingerprint == first.fingerprint
+        again = run(config, restart=cut)
+        assert again.restarted_from == first.steps
+        assert again.resumed_plan is None
+        assert (again.steps, again.t_final) == (whole.steps, whole.t_final)
+        same_frames(RunFile(cut), RunFile(whole.path))
+        same_budgets(again.budgets, whole.budgets)
+        same_recovery(again.recovery, whole.recovery)
 
     def test_a_diverged_flow_state_stops_the_run(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1398,6 +1536,33 @@ class TestRunScenario:
             supplied = "relative not defined (nothing supplied)" in line
             assert supplied == (k != 2), line
         assert "relative " in closure[2]
+
+    def test_the_restart_flag_continues_a_run_file(
+        self,
+        tmp_path: Path,
+        clean_out: SimpleNamespace,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """--restart on a copy of the held clean-out: the restart and hold lines.
+
+        Defects caught: the flag not passed to run (the script refuses or
+        starts a new run); the restart line or the hold's stop line dropped
+        (test 64 S1).
+        """
+        raw = held_clean_out(checkpoint_interval=500)
+        scenario = _scenario_file(tmp_path, raw)
+        path = tmp_path / "run.h5"
+        _copy_run(clean_out.record.path, path)
+        argv = [str(scenario), "--restart", str(path), "--quiet"]
+        assert run_scenario.main(argv) == run_scenario.EXIT_DONE
+        lines = capsys.readouterr().out.splitlines()
+        record = clean_out.record
+        assert lines[2] == f"restarted from step {record.steps}"
+        assert (
+            f"steps: {record.steps} to t = {record.t_final:.6g} s (the hold)" in lines
+        )
+        assert f"  stopped by the hold of {ONE_AIR_CHANGE} s" in lines
+        assert lines[4].startswith("  [0, 120) s: state ")
 
     def test_the_exit_codes_of_a_refusal_and_a_capped_solve(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]

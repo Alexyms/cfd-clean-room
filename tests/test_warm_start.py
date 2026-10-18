@@ -55,52 +55,16 @@ from src.solver_staggered import (
 )
 from src.stopping import RATE_WINDOW
 from src.turbulence import TurbulenceState
+from tests.helpers import (
+    FLOW_FIELDS,
+    SOLVE_FIXTURES,
+    channel_config,
+    product_config,
+    same_solves,
+    solved_solver,
+    staggered_solver,
+)
 from validation.cases import case_path
-
-FIELDS = ("u", "v", "p", "k", "eps", "nu_t")
-
-
-def _channel_raw(cap: int = 5000, interval: int | None = None) -> dict:
-    """VAL-001's channel on 40x20 under its own error_estimate rule, as a mapping.
-
-    INTERVAL, when given, is ``solver.checkpoint_interval``.
-    """
-    raw = yaml.safe_load(case_path("poiseuille").read_text(encoding="utf-8"))
-    raw["domain"]["nx"], raw["domain"]["ny"] = 40, 20
-    raw["solver"]["max_simple_iter"] = cap
-    if interval is not None:
-        raw["solver"]["checkpoint_interval"] = interval
-    return raw
-
-
-def _channel(cap: int = 5000, interval: int | None = None) -> SimConfig:
-    """``_channel_raw`` loaded."""
-    return SimConfig.from_dict(_channel_raw(cap, interval))
-
-
-def _product(
-    cap: int = 5000, inlet: float | None = None, interval: int | None = None
-) -> SimConfig:
-    """``_product_raw`` loaded."""
-    return SimConfig.from_dict(_product_raw(cap, inlet, interval))
-
-
-def _product_raw(
-    cap: int = 5000, inlet: float | None = None, interval: int | None = None
-) -> dict:
-    """The product file on 40x15, its imbalance tolerance by the file's formula."""
-    raw = yaml.safe_load(case_path("product").read_text(encoding="utf-8"))
-    raw["domain"]["nx"], raw["domain"]["ny"] = 40, 15
-    cell = (raw["domain"]["width"] / 40) * (raw["domain"]["height"] / 15)
-    raw["solver"]["mass_imbalance_tol"] = (
-        1e-4 * raw["fluid"]["density"] * cell / raw["solver"]["t_end"]
-    )
-    raw["solver"]["max_simple_iter"] = cap
-    if inlet is not None:
-        raw["boundaries"]["hepa_supply"]["velocity"] = inlet
-    if interval is not None:
-        raw["solver"]["checkpoint_interval"] = interval
-    return raw
 
 
 def _cavity(rule: str, cap: int = 8, interval: int | None = None) -> SimConfig:
@@ -114,50 +78,21 @@ def _cavity(rule: str, cap: int = 8, interval: int | None = None) -> SimConfig:
     return SimConfig.from_dict(raw)
 
 
-FIXTURES = {"channel": _channel, "product": _product}
-RAW_FIXTURES = {"channel": _channel_raw, "product": _product_raw}
-
-
-def _solver(config: SimConfig) -> StaggeredSolver:
-    mesh = Mesh(config)
-    return StaggeredSolver(mesh, config, StaggeredBoundary(mesh, config))
-
-
-def _solved(config: SimConfig, **kwargs: object) -> StaggeredSolver:
-    solver = _solver(config)
-    solver.solve_steady(**kwargs)
-    return solver
-
-
-def _same_bits(a: StaggeredSolver, b: StaggeredSolver) -> None:
-    """Every field, the history and the stop of two solves, bit for bit."""
-    assert a.flow_state is not None and b.flow_state is not None
-    for name in FIELDS:
-        x, y = getattr(a.flow_state, name), getattr(b.flow_state, name)
-        assert (x is None) == (y is None), name
-        if x is not None:
-            assert x.tobytes() == y.tobytes(), name
-    assert a.residual_history == b.residual_history
-    assert (a.stop_reason, a.converged) == (b.stop_reason, b.converged)
-    assert a.flow_state.outer == b.flow_state.outer == len(b.residual_history)
-    assert a.pressure_cap_hits == b.pressure_cap_hits
-
-
 @pytest.fixture(scope="module")
 def converged() -> dict[str, StaggeredSolver]:
     """Each fixture solved from rest to its rule's stop."""
-    return {name: _solved(make()) for name, make in FIXTURES.items()}
+    return {name: solved_solver(make()) for name, make in SOLVE_FIXTURES.items()}
 
 
 @pytest.fixture(scope="module")
 def capped_checkpoint() -> SteadyCheckpoint:
     """The product fixture cut at 5 outer iterations, for edits into bad ones."""
-    return _solved(_product(cap=5)).steady_checkpoint
+    return solved_solver(product_config(cap=5)).steady_checkpoint
 
 
 def _live_cell() -> tuple[int, int]:
     """The first non-SOLID cell of the product fixture's mesh, as an index."""
-    live = np.argwhere(Mesh(_product()).cell_type != SOLID)[0]
+    live = np.argwhere(Mesh(product_config()).cell_type != SOLID)[0]
     return int(live[0]), int(live[1])
 
 
@@ -178,7 +113,7 @@ class TestFlowState:
         )
         arrays["u"][0, 0] = 5.0
         assert state.u[0, 0] == 0.0
-        for name in FIELDS:
+        for name in FLOW_FIELDS:
             assert not getattr(state, name).flags.writeable
         assert state.turbulent and not FlowState(**self._arrays()).turbulent
 
@@ -309,7 +244,7 @@ class TestTheSolveState:
                         getattr(state, name).tobytes()
                         == getattr(turbulence, name).tobytes()
                     )
-        assert _solver(_channel()).flow_state is None
+        assert staggered_solver(channel_config()).flow_state is None
 
     @pytest.mark.parametrize("rule", [ERROR_ESTIMATE, VELOCITY_STEP])
     @pytest.mark.parametrize("poisoned", ["u", "v", "p"])
@@ -326,7 +261,7 @@ class TestTheSolveState:
         beside the new faces); p missing from the fields the guard reads.
         """
         config = _cavity(rule)
-        solver = _solver(config)
+        solver = staggered_solver(config)
         solver.solve_steady()
         assert solver.flow_state is not None and solver.steady_checkpoint is not None
 
@@ -357,7 +292,7 @@ class TestTheSolveState:
 
 @pytest.mark.integration
 class TestWarmStart:
-    @pytest.mark.parametrize("name", list(FIXTURES))
+    @pytest.mark.parametrize("name", list(SOLVE_FIXTURES))
     def test_the_start_from_rest_is_a_warm_start_from_rest(
         self, name: str, converged: dict
     ) -> None:
@@ -367,7 +302,7 @@ class TestWarmStart:
         warm path skipping apply_normal_velocity; the warm k and eps taken
         through anything but KEpsilonModel.state; the faces or p not copied.
         """
-        solver = _solver(FIXTURES[name]())
+        solver = staggered_solver(SOLVE_FIXTURES[name]())
         u, v, p = solver_module.allocate_fields(solver._mesh)
         turbulence = {}
         if solver._model is not None:
@@ -376,7 +311,7 @@ class TestWarmStart:
                 key: np.array(getattr(start, key)) for key in ("k", "eps", "nu_t")
             }
         solver.solve_steady(initial=FlowState(u, v, p, **turbulence))
-        _same_bits(solver, converged[name])
+        same_solves(solver, converged[name])
 
     def test_the_argument_is_the_probes_patched_start(
         self, converged: dict, monkeypatch: pytest.MonkeyPatch
@@ -390,9 +325,9 @@ class TestWarmStart:
         boundary's faces not written over the state's.
         """
         kept = converged["product"].flow_state
-        argument = _solved(_product(cap=40, inlet=0.4), initial=kept)
+        argument = solved_solver(product_config(cap=40, inlet=0.4), initial=kept)
 
-        patched = _solver(_product(cap=40, inlet=0.4))
+        patched = staggered_solver(product_config(cap=40, inlet=0.4))
         model = patched._model
 
         def fields(_mesh: Mesh) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -404,10 +339,10 @@ class TestWarmStart:
         monkeypatch.setattr(solver_module, "allocate_fields", fields)
         monkeypatch.setattr(model, "initial", turbulence)
         patched.solve_steady()
-        _same_bits(argument, patched)
+        same_solves(argument, patched)
         assert argument.flow_state.u.tobytes() != kept.u.tobytes()
 
-    @pytest.mark.parametrize("name", list(FIXTURES))
+    @pytest.mark.parametrize("name", list(SOLVE_FIXTURES))
     def test_a_converged_state_stops_when_the_window_fills(
         self, name: str, converged: dict
     ) -> None:
@@ -420,9 +355,9 @@ class TestWarmStart:
         the velocity scale. Defects caught: the rule carried over from the
         state (a stop at once); the warm start ignored (a solve from rest).
         """
-        config = FIXTURES[name]()
+        config = SOLVE_FIXTURES[name]()
         before = converged[name]
-        after = _solved(config, initial=before.flow_state)
+        after = solved_solver(config, initial=before.flow_state)
         assert after.converged
         assert len(after.residual_history) == RATE_WINDOW
         scale = StaggeredBoundary(Mesh(config), config).get_max_boundary_velocity()
@@ -437,7 +372,7 @@ class TestWarmStart:
         """Defect caught: the shape check removed, leaving the failure to later code."""
         raw = yaml.safe_load(case_path("poiseuille").read_text(encoding="utf-8"))
         raw["domain"]["nx"], raw["domain"]["ny"] = 20, 10
-        solver = _solver(SimConfig.from_dict(raw))
+        solver = staggered_solver(SimConfig.from_dict(raw))
         with pytest.raises(ValueError, match="initial is a state of a 40x20 grid"):
             solver.solve_steady(initial=converged["channel"].flow_state)
         assert solver.flow_state is None and solver.residual_history == []
@@ -451,7 +386,7 @@ class TestWarmStart:
         with pytest.raises(
             ValueError, match="has no k and eps and this solve is coupled"
         ):
-            _solver(_product()).solve_steady(
+            staggered_solver(product_config()).solve_steady(
                 initial=FlowState(coupled.u, coupled.v, coupled.p)
             )
         bare = FlowState(
@@ -460,7 +395,7 @@ class TestWarmStart:
         with pytest.raises(
             ValueError, match="carries k, eps and nu_t and this solve is laminar"
         ):
-            _solver(_channel()).solve_steady(initial=bare)
+            staggered_solver(channel_config()).solve_steady(initial=bare)
 
     def test_a_state_with_k_not_positive_is_refused(self, converged: dict) -> None:
         """Defect caught: the warm k unchecked, so a bad start fails mid-solve."""
@@ -470,21 +405,23 @@ class TestWarmStart:
         k[tuple(live)] = 0.0
         bad = FlowState(state.u, state.v, state.p, k, state.eps, state.nu_t)
         with pytest.raises(ValueError, match="positive"):
-            _solver(_product()).solve_steady(initial=bad)
+            staggered_solver(product_config()).solve_steady(initial=bad)
 
     def test_what_is_not_a_state_is_refused(self, converged: dict) -> None:
         """Defects caught: a checkpoint, or a bare tuple, read as a warm start."""
         with pytest.raises(TypeError, match="initial must be a FlowState"):
-            _solver(_channel()).solve_steady(
+            staggered_solver(channel_config()).solve_steady(
                 initial=converged["channel"].steady_checkpoint
             )
         with pytest.raises(TypeError, match="resume must be a SteadyCheckpoint"):
-            _solver(_channel()).solve_steady(resume=converged["channel"].flow_state)
+            staggered_solver(channel_config()).solve_steady(
+                resume=converged["channel"].flow_state
+            )
 
 
 @pytest.mark.integration
 class TestResume:
-    @pytest.mark.parametrize("name", list(FIXTURES))
+    @pytest.mark.parametrize("name", list(SOLVE_FIXTURES))
     @pytest.mark.parametrize("cut", [1, 57, 150, -30])
     def test_a_capped_solve_resumed_is_the_uninterrupted_solve(
         self, name: str, cut: int, converged: dict
@@ -501,15 +438,15 @@ class TestResume:
         nothing older than its window); the residual history restarted; the
         outer count restarted, so the cap is not the total.
         """
-        make = FIXTURES[name]
+        make = SOLVE_FIXTURES[name]
         if cut < 0:
             cut += len(converged[name].residual_history)
-        cut_solve = _solved(make(cap=cut))
+        cut_solve = solved_solver(make(cap=cut))
         assert cut_solve.stop_reason == CAP_STOP
         checkpoint = cut_solve.steady_checkpoint
         assert checkpoint.state.outer == cut
-        resumed = _solved(make(), resume=checkpoint)
-        _same_bits(resumed, converged[name])
+        resumed = solved_solver(make(), resume=checkpoint)
+        same_solves(resumed, converged[name])
         assert resumed.converged
 
     def test_a_resume_carries_the_cap_hits(self) -> None:
@@ -522,22 +459,24 @@ class TestResume:
         """
 
         def capped(cap: int) -> SimConfig:
-            config = _channel(cap)
+            config = channel_config(cap)
             object.__setattr__(config, "max_pressure_iter", 2)
             return config
 
-        whole = _solved(capped(40))
+        whole = solved_solver(capped(40))
         assert whole.pressure_cap_hits == 40
-        resumed = _solved(capped(40), resume=_solved(capped(25)).steady_checkpoint)
-        _same_bits(resumed, whole)
+        resumed = solved_solver(
+            capped(40), resume=solved_solver(capped(25)).steady_checkpoint
+        )
+        same_solves(resumed, whole)
 
     def test_a_resume_past_the_cap_takes_no_iteration(self, converged: dict) -> None:
         """A checkpoint at the cap resumed under the same cap stops there, unchanged.
 
         Defect caught: the loop counted from zero, so a resume ran another cap's worth.
         """
-        checkpoint = _solved(_channel(cap=30)).steady_checkpoint
-        again = _solved(_channel(cap=30), resume=checkpoint)
+        checkpoint = solved_solver(channel_config(cap=30)).steady_checkpoint
+        again = solved_solver(channel_config(cap=30), resume=checkpoint)
         assert again.stop_reason == CAP_STOP
         assert again.flow_state.u.tobytes() == checkpoint.state.u.tobytes()
         assert again.residual_history == list(checkpoint.residual_history)
@@ -545,7 +484,7 @@ class TestResume:
     def test_a_converged_checkpoint_is_refused(self, converged: dict) -> None:
         """Defect caught: a resume of a finished solve, which iterates past its stop."""
         with pytest.raises(ValueError, match="stopped converged"):
-            _solver(_channel()).solve_steady(
+            staggered_solver(channel_config()).solve_steady(
                 resume=converged["channel"].steady_checkpoint
             )
 
@@ -555,12 +494,12 @@ class TestResume:
         raw["domain"]["nx"], raw["domain"]["ny"] = 40, 20
         raw["solver"]["stopping_rule"] = "velocity_step"
         raw["solver"]["max_simple_iter"] = 20
-        checkpoint = _solved(SimConfig.from_dict(raw)).steady_checkpoint
+        checkpoint = solved_solver(SimConfig.from_dict(raw)).steady_checkpoint
         assert checkpoint.rule_version is None
         with pytest.raises(
             ValueError, match="rule version is None and this solve applies 3"
         ):
-            _solver(_channel()).solve_steady(resume=checkpoint)
+            staggered_solver(channel_config()).solve_steady(resume=checkpoint)
 
     def test_another_eddy_viscosity_is_refused(self) -> None:
         """A resume runs under the prescribed field its checkpoint's solve ran under.
@@ -571,25 +510,31 @@ class TestResume:
         Defect caught: the digest comparison removed, so every one of the three
         resumes runs and continues a solve that was not this one.
         """
-        mesh = Mesh(_channel())
+        mesh = Mesh(channel_config())
         field = np.full(mesh.cell_type.shape, 2.0e-5)
-        under = _solved(_channel(cap=20), eddy_viscosity=field).steady_checkpoint
-        plain = _solved(_channel(cap=20)).steady_checkpoint
+        under = solved_solver(
+            channel_config(cap=20), eddy_viscosity=field
+        ).steady_checkpoint
+        plain = solved_solver(channel_config(cap=20)).steady_checkpoint
         assert plain.eddy_viscosity_sha256 is None
         assert under.eddy_viscosity_sha256 is not None
-        resumed = _solved(_channel(cap=40), eddy_viscosity=field.copy(), resume=under)
-        _same_bits(resumed, _solved(_channel(cap=40), eddy_viscosity=field))
+        resumed = solved_solver(
+            channel_config(cap=40), eddy_viscosity=field.copy(), resume=under
+        )
+        same_solves(
+            resumed, solved_solver(channel_config(cap=40), eddy_viscosity=field)
+        )
         for checkpoint, given in [(under, 1.5 * field), (under, None), (plain, field)]:
-            solver = _solver(_channel(cap=40))
+            solver = staggered_solver(channel_config(cap=40))
             with pytest.raises(ValueError, match="under the eddy_viscosity it ran"):
                 solver.solve_steady(eddy_viscosity=given, resume=checkpoint)
             assert solver.residual_history == []
 
     def test_initial_and_resume_together_are_refused(self, converged: dict) -> None:
         """Defect caught: one of the two silently preferred."""
-        checkpoint = _solved(_channel(cap=5)).steady_checkpoint
+        checkpoint = solved_solver(channel_config(cap=5)).steady_checkpoint
         with pytest.raises(ValueError, match="initial and resume are exclusive"):
-            _solver(_channel()).solve_steady(
+            staggered_solver(channel_config()).solve_steady(
                 initial=checkpoint.state, resume=checkpoint
             )
 
@@ -597,7 +542,7 @@ class TestResume:
         self, converged: dict
     ) -> None:
         """Defects caught: a history cut short; a checkpoint with no FlowState."""
-        checkpoint = _solved(_channel(cap=5)).steady_checkpoint
+        checkpoint = solved_solver(channel_config(cap=5)).steady_checkpoint
         with pytest.raises(ValueError, match="4 entries for 5 outer iterations"):
             SteadyCheckpoint(
                 checkpoint.state,
@@ -624,7 +569,7 @@ class TestResume:
         bad = replace(
             capped_checkpoint, state=replace(capped_checkpoint.state, nu_t=nu_t)
         )
-        solver = _solver(_product())
+        solver = staggered_solver(product_config())
         with pytest.raises(ValueError, match="resume's nu_t is negative"):
             solver.solve_steady(resume=bad)
         assert solver.residual_history == [] and solver.flow_state is None
@@ -645,7 +590,7 @@ class TestResume:
         bad = replace(
             capped_checkpoint, state=replace(capped_checkpoint.state, **{name: field})
         )
-        solver = _solver(_product())
+        solver = staggered_solver(product_config())
         with pytest.raises(ValueError, match="positive"):
             solver.solve_steady(resume=bad)
         assert solver.residual_history == []
@@ -657,7 +602,7 @@ def _same_state(handed: SteadyCheckpoint, capped: SteadyCheckpoint) -> None:
     Everything bitwise but the stop reason: the periodic one's is None, the
     capped one's CAP_STOP.
     """
-    for name in FIELDS:
+    for name in FLOW_FIELDS:
         x, y = getattr(handed.state, name), getattr(capped.state, name)
         assert (x is None) == (y is None), name
         if x is not None:
@@ -677,7 +622,7 @@ def _same_state(handed: SteadyCheckpoint, capped: SteadyCheckpoint) -> None:
 class TestPeriodicCheckpoint:
     """``solve_steady(on_checkpoint=...)`` every checkpoint_interval outer (step 3)."""
 
-    @pytest.mark.parametrize("name", list(FIXTURES))
+    @pytest.mark.parametrize("name", list(SOLVE_FIXTURES))
     def test_each_call_holds_what_a_solve_capped_there_leaves(self, name: str) -> None:
         """Called at outer 10, 20 and 30 of a solve capped at 30, each the capped state.
 
@@ -687,14 +632,16 @@ class TestPeriodicCheckpoint:
         turbulence step or with the rule's window of the iteration before; a
         writer that changes the iterates.
         """
-        make = FIXTURES[name]
+        make = SOLVE_FIXTURES[name]
         handed: list[SteadyCheckpoint] = []
-        with_writer = _solved(make(cap=30, interval=10), on_checkpoint=handed.append)
+        with_writer = solved_solver(
+            make(cap=30, interval=10), on_checkpoint=handed.append
+        )
         assert [c.state.outer for c in handed] == [10, 20, 30]
         for checkpoint in handed:
-            capped = _solved(make(cap=checkpoint.state.outer)).steady_checkpoint
+            capped = solved_solver(make(cap=checkpoint.state.outer)).steady_checkpoint
             _same_state(checkpoint, capped)
-        _same_bits(with_writer, _solved(make(cap=30)))
+        same_solves(with_writer, solved_solver(make(cap=30)))
 
     def test_no_call_at_the_converged_stop_or_without_the_key(
         self, converged: dict
@@ -707,9 +654,9 @@ class TestPeriodicCheckpoint:
         """
         stop = len(converged["channel"].residual_history)
         handed: list[SteadyCheckpoint] = []
-        _solved(_channel(interval=stop), on_checkpoint=handed.append)
+        solved_solver(channel_config(interval=stop), on_checkpoint=handed.append)
         assert handed == []
-        _solved(_channel(cap=30), on_checkpoint=handed.append)
+        solved_solver(channel_config(cap=30), on_checkpoint=handed.append)
         assert handed == []
 
     def test_a_resumed_solve_counts_from_the_checkpoints_outer(self) -> None:
@@ -720,9 +667,9 @@ class TestPeriodicCheckpoint:
         interval lost.
         """
         handed: list[SteadyCheckpoint] = []
-        checkpoint = _solved(_channel(cap=25)).steady_checkpoint
-        _solved(
-            _channel(cap=40, interval=10),
+        checkpoint = solved_solver(channel_config(cap=25)).steady_checkpoint
+        solved_solver(
+            channel_config(cap=40, interval=10),
             resume=checkpoint,
             on_checkpoint=handed.append,
         )
@@ -740,7 +687,7 @@ class TestPeriodicCheckpoint:
         probe runners classify, never come back.
         """
         config = _cavity(VELOCITY_STEP, cap=8, interval=1)
-        solver = _solver(config)
+        solver = staggered_solver(config)
         correct = solver._corrector.correct
         calls: list[int] = []
 
