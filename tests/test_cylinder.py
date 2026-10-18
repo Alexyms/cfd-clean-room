@@ -226,3 +226,33 @@ class TestHarnessReading:
         row = benchmark.cylinder_accuracy("val022_re100", t, c_l, _record(None, 1.4))
         assert math.isnan(row["value"]) and row["passed"] is False
         assert row["strouhal_refusal"].startswith("the lift holds")
+
+
+@pytest.mark.integration
+def test_the_start_up_is_the_probes_on_a_small_channel() -> None:
+    """Two hundred steady outer iterations with the lower boundary at 0.9 U.
+
+    On the channel of tests/test_forces.py (freestream laterals, a block): the
+    start-up equals, to the byte, a steady solve of the same mapping with the
+    lower segment's velocity scaled by hand and the cap set to 200. Catches:
+    the perturbation dropped, the cap not the probe's.
+    """
+    from src.boundary_staggered import StaggeredBoundary
+    from src.config import SimConfig
+    from src.solver_staggered import StaggeredSolver
+    from tests.test_forces import _raw
+
+    raw = _raw(60, 20, freestream=True)
+    config = SimConfig.from_dict(raw)
+    state, outer = cylinder.perturbed_startup(config)
+    by_hand = _raw(60, 20, freestream=True)
+    by_hand["boundaries"]["bottom"]["u_velocity"] = 0.9
+    by_hand["solver"].update(max_simple_iter=200, convergence_tol=1e-12)
+    hand = SimConfig.from_dict(by_hand)
+    mesh = Mesh(hand)
+    solver = StaggeredSolver(mesh, hand, StaggeredBoundary(mesh, hand))
+    solver.solve_steady()
+    assert outer == 200 == len(solver.residual_history)
+    assert np.array_equal(state.u, solver.flow_state.u)
+    assert np.array_equal(state.v, solver.flow_state.v)
+    assert np.array_equal(state.p, solver.flow_state.p)
