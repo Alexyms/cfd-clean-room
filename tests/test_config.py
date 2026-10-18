@@ -1714,6 +1714,10 @@ class TestTurbulenceSection:
         without = vars(SimConfig.from_dict(raw))
         assert with_section.pop("turbulence") is not None
         assert without.pop("turbulence") is None
+        # The kept mapping is the mapping each loaded (prompt 64), so it
+        # differs by the section and the supply's two keys by construction.
+        assert "turbulence" in with_section.pop("_mapping")
+        assert "turbulence" not in without.pop("_mapping")
         supply = with_section["boundaries"]["hepa_supply"]
         assert (supply.turbulence_intensity, supply.dissipation_length) == (0.05, 0.1)
         with_section["boundaries"] = {
@@ -3392,6 +3396,104 @@ class TestScenarioInitial:
         second = {**self._initial(concentration=[1.0] * 5), "name": "start_dusty"}
         raw = _scenario_raw(tmp_path, [self._initial(threshold_factor=100.0), second])
         _refused_scenario(tmp_path, raw, r"\['start_dirty', 'start_dusty'\] each set")
+
+
+@pytest.mark.unit
+class TestScenarioHoldTime:
+    """scenario.hold_time, the clean-out's stated hold (prompt 64's decision 2)."""
+
+    def _raw(self, tmp_path: Path, **section: object) -> dict:
+        initial = {"name": "start_dirty", "start": 0.0, "initial": {}}
+        initial["initial"]["threshold_factor"] = 100.0
+        raw = _scenario_raw(tmp_path, [initial])
+        raw["scenario"].update(section)
+        return raw
+
+    def test_absent_is_none_and_present_is_read(self, tmp_path: Path) -> None:
+        assert _load_scenario(tmp_path, self._raw(tmp_path)).scenario.hold_time is None
+        spec = _load_scenario(tmp_path, self._raw(tmp_path, hold_time=5.5)).scenario
+        assert spec.hold_time == 5.5
+
+    @pytest.mark.parametrize(
+        ("value", "error", "match"),
+        [
+            (0.0, ValueError, r"must be positive"),
+            (-1.0, ValueError, r"must be positive"),
+            (True, TypeError, r"must be a number, got bool"),
+            ("5", TypeError, r"must be a number, got str"),
+            (None, TypeError, r"must be a number, got NoneType"),
+            (float("nan"), ValueError, r"must be finite"),
+        ],
+    )
+    def test_the_hold_is_a_finite_positive_number(
+        self, tmp_path: Path, value: object, error: type, match: str
+    ) -> None:
+        raw = self._raw(tmp_path, hold_time=value)
+        _refused_scenario(tmp_path, raw, rf"scenario\.hold_time {match}", error)
+
+    def test_the_hold_is_below_t_end(self, tmp_path: Path) -> None:
+        assert _load_scenario(tmp_path, self._raw(tmp_path, hold_time=59.9))
+        for value in (60.0, 61.0):
+            raw = self._raw(tmp_path, hold_time=value)
+            _refused_scenario(tmp_path, raw, r"hold_time \(.* s\) must be below")
+
+    def test_the_hold_needs_an_initial_event(self, tmp_path: Path) -> None:
+        raw = _scenario_raw(tmp_path, [_door_open()])
+        raw["scenario"]["hold_time"] = 5.0
+        _refused_scenario(tmp_path, raw, r"hold_time needs an initial event")
+
+    def test_the_clean_out_holds_one_air_change(self) -> None:
+        """1/N of T6: the free area 17.52 m^2 over the supply 3.15 m^2/s."""
+        config = SimConfig(CONFIG_DIR / "scenario_clean_out.yaml")
+        free = config.room_width * config.room_height - sum(
+            (o.x_end - o.x_start) * (o.y_end - o.y_start) for o in config.obstacles
+        )
+        supply = config.boundaries["hepa_supply"]
+        flow = supply.velocity * (supply.x_end - supply.x_start)
+        assert config.scenario.hold_time == pytest.approx(free / flow, abs=5e-4)
+
+
+@pytest.mark.unit
+class TestMergedMapping:
+    """SimConfig keeps the merged mapping it loaded (prompt 64's decision 3)."""
+
+    def test_a_plain_file_is_kept_as_read(self, tmp_path: Path) -> None:
+        path = _write_config(tmp_path)
+        with open(path, encoding="utf-8") as handle:
+            raw = yaml.safe_load(handle)
+        config = SimConfig(path)
+        assert config.merged_mapping() == raw
+        assert SimConfig.from_dict(raw).merged_mapping() == raw
+
+    def test_a_copy_is_returned_and_the_argument_is_not_kept(
+        self, tmp_path: Path
+    ) -> None:
+        with open(_write_config(tmp_path), encoding="utf-8") as handle:
+            raw = yaml.safe_load(handle)
+        config = SimConfig.from_dict(raw)
+        raw["domain"]["nx"] = 7
+        copy = config.merged_mapping()
+        assert copy["domain"]["nx"] == 80
+        copy["domain"]["nx"] = 9
+        assert config.merged_mapping()["domain"]["nx"] == 80
+
+    def test_a_scenario_is_its_merged_base_and_its_section(
+        self, tmp_path: Path
+    ) -> None:
+        raw = _scenario_raw(tmp_path, [_door_open()])
+        raw["solver"]["t_end"] = 30.0
+        config = _load_scenario(tmp_path, raw)
+        mapping = config.merged_mapping()
+        assert list(mapping)[-1] == "scenario"
+        assert mapping["scenario"] == raw["scenario"]
+        assert {k: v for k, v in mapping.items() if k != "scenario"} == dict(
+            config.scenario.mapping(())
+        )
+        assert mapping["solver"]["t_end"] == 30.0
+        again = _load_scenario(tmp_path, mapping)
+        assert again.merged_mapping() == mapping
+        assert again.boundaries == config.boundaries
+        assert again.scenario.events == config.scenario.events
 
 
 @pytest.mark.unit

@@ -16,9 +16,18 @@
 # below 1e-2 of its initial value at 29 s on 160x60, and the well-mixed 100:1
 # time is 25.6 s (T6). The march stops when the room is within spec or at
 # t_end (section C, step 4).
+#
+# The hold (prompt 64's decision 2): the run stops once every sensor of every
+# class has stayed below its threshold for one air change of the slice, 1/N,
+# and the room's recovery time is the start of that hold. N is the supply
+# flow over the free area per metre of depth (T6): the supply is 0.45 m/s
+# over 7.0 m, 3.15 m^2/s; the free area is the room's 24.0 m^2 less the four
+# obstacles' 1.6 + 2.6 + 1.2 + 1.08 = 6.48 m^2, 17.52 m^2; so 1/N is
+# 17.52 / 3.15 = 5.562 s (and ln(100) / N is 25.6 s, T6's well-mixed time).
 
 scenario:
   base: clean_room_default.yaml
+  hold_time: 5.562
   events:
     - name: contaminated_start
       start: 0.0
