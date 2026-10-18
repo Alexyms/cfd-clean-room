@@ -986,6 +986,9 @@ stated; Re 60's St and the drag coefficients reported. The paper's Re 100 values
 cases are 0.145 to 0.150 (St), 1.45 to 1.49 (C_D) (Tables II and IV [1]). Whether 5% is the
 number is Alex's; the probe's uniform grid is not expected to meet it, which is why the clustered
 grid is the row's grid and the uniform one the ladder's coarse rung.
+*Decided (Alex, 2026-10-17):* at Re 100 the Strouhal number within 5% of 0.146 (0.139 to
+0.153); the onset bracket as stated (steady at Re 40, shedding at Re 60); the drag coefficient
+reported, not scored. Step 6b builds the row.
 
 **The grid.** Decision 11: interior clustering in `mesh.py`, a list of breakpoints per axis with
 the spacing at each and geometric growth between, validated like the existing stretch keys; the
@@ -1107,6 +1110,14 @@ as `mu_eff` is), `mesh.py`'s the breakpoints.
    the step loop in `solver_staggered.py`, interior clustering in `mesh.py`, the lift and drag
    instrument, `configs/validation_cylinder.yaml`; VAL-022's three rows in
    `tests/test_cylinder.py`, the Re 100 row marked slow and run by the harness as VAL-017 is.
+   *Split into two passes (Alex, 2026-10-17).* **6a** builds the time-accurate solve and proves
+   its order in time on its own: the transient term of `predict`, `solve_transient` with the
+   per-step criterion, record and cap, BDF2 after an implicit Euler first step; the observed
+   order under step halving on a fixed grid (BDF2 within 0.2 of 2, implicit Euler, the control,
+   within 0.2 of 1); a smoke run of `cylinder59.py`'s configuration. The cylinder cannot show the
+   order: its error mixes grid, boundaries and time. **6b** builds the interior clustering, the
+   lift and drag, the tier-2 route through `time_integration.py` with its run file and restart,
+   and VAL-022 with section F's thresholds as decided on 2026-10-17.
 7. The four reference scenarios run on the product grid with their records in the run files,
    the recovery outputs, and the Phase 4 gate report with this document's planned-against-built
    table.
@@ -1355,6 +1366,11 @@ committed before it ran).**
   gradients and the tail of a decay is where a small absolute error is a large relative one.
 - (d) Holds: the supply short-circuits to the returns through the gaps, so the mean falls faster
   than well-mixed at first and slower later.
+
+**Predictions (orchestrator, 2026-10-17, step 6a; committed before the recorded runs).**
+- (a) BDF2's observed order is 2.0 +/- 0.2 and implicit Euler's 1.0 +/- 0.2 on the order case.
+- (b) The smoke run's steps take 3 to 5 outer iterations each at 1e-4 U, as T2 measured from
+  the start-up field.
 
 **Method.** `warm59.py` (T1), `cylinder59.py` (T2 to T4), `order59.py` (T5), `scales59.py` (T6),
 `cleanout59.py` (T7, prompt 59b); each script's docstring states its arms and what it writes. Wall times were taken with three to
