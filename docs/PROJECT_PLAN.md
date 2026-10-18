@@ -277,13 +277,13 @@ step 5's dependency is met.
 | tests/test_scenarios.py | BUILT (ADR-014 step 2, prompt 62) | Event timing, activation and expiration; two openings give two states; the fingerprint's key set; a source's rate sums to its emission; the vented fixture's fan stop and exhaust failure |
 | tests/test_io_manager.py | BUILT (ADR-014 step 3, prompt 63) | Round trips of every group; the bitwise steady and march restarts; the restart refusals; crash safety |
 | tests/test_time_integration.py | BUILT (ADR-014 step 4, prompt 64) | The plan and the switch on a step; the hand-over stepped by hand; the sources in the budget's source slot; the three transport-only scenarios on a kept state and the door's two states; the clean-out's outputs against the run file and on a prescribed history; the restarts; scripts/run_scenario.py |
-| tests/test_grid_convergence.py | NOT STARTED | VAL-008 |
+| tests/test_grid_convergence.py | BUILT (ADR-014 step 5, prompt 65) | VAL-008: the front (criterion row) with its upwind control, the Gaussian pulse and the front on a stretched mesh reported, three planted defects kept as tests, the instrument's unit checks; the file takes about a minute; the orders are in ADR-014 E's as-built note |
 
 ### Validation Gate
 
 | Test ID | Description | Criterion | Status |
 |---------|-------------|-----------|--------|
-| VAL-008 | Grid convergence | Observed order within 0.2 of theoretical (to be amended at step 5 as ADR-014 E states: the smooth monotone front, Courant number halved per refinement, within 0.2 of 2 between grid pairs whose coarser grid has at least 10 cells across the front's width) | NOT RUN |
+| VAL-008 | Grid convergence | Observed order of the limited transport scheme on a smooth monotone front (width 0.2 m, 3 widths of travel, 4.5 widths from the inlet at the start), Courant number halved per refinement, within 0.2 of 2 between grid pairs whose coarser grid has at least 10 cells across the front's width; the pulse and the stretched-mesh rows reported (ADR-014 E, amended at step 5; REQ-N02's text stands) | PASS (prompt 65, 2026-10-17; review and test 65 before the pull request): 1.83 between 0.02 and 0.01 m, the pair whose coarser grid holds 10 cells; upwind control 0.86; the pair 0.01 to 0.005 m reads 1.90 and runs outside the suite. The pulse and the front on a stretched mesh are reported in ADR-014 E's as-built note (tests/test_grid_convergence.py) |
 | VAL-022 | The square cylinder at Re 40, 60 and 100 (ADR-014 F, three rows) | OPEN (proposed: St at Re 100 within 5% of 0.146 on the clustered grid; Re 40 steady and Re 60 shedding, bracketing Re_cr 51.2 +/- 1) | NOT RUN |
 
 Note (issue 53 D6, 2026-10-07): on a stretched mesh the transport limiter's clamp is applied to the quadratic `quick_face_values` returns, with the other three limiter terms in their uniform-mesh form (ADR-011 B). The stretched case is tested for diffusion against a dense solve and not for advection accuracy, which VAL-008 measures here.
