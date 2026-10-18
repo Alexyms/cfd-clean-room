@@ -116,36 +116,38 @@ Generated from the import statements in `src/` by `scripts/gen_system_map.py`. R
 
 <!-- BEGIN GENERATED: dsm -->
 ```
-                         boundary_concentration  boundary_registry  boundary_staggered  boundary_vents  config  constants  io_manager  mesh  momentum  multigrid  particles  pressure  scalar_scheme  scenarios  solver_staggered  solver_transport  staggered  stopping  time_integration  turbulence
-boundary_concentration             .                     X                  .                 X           X         .          .        X       .          .          X         .            .            .             .                 .              X         .             .              .
-boundary_registry                  .                     .                  .                 .           X         .          .        .       .          .          .         .            .            .             .                 .              .         .             .              .
-boundary_staggered                 .                     X                  .                 X           X         .          .        X       .          .          .         .            .            .             .                 .              X         .             .              .
-boundary_vents                     .                     X                  .                 .           X         .          .        X       .          .          .         .            .            .             .                 .              X         .             .              .
-config                             .                     .                  .                 .           .         .          .        .       .          .          .         .            .            .             .                 .              .         .             .              .
-constants                          .                     .                  .                 .           .         .          .        .       .          .          .         .            .            .             .                 .              .         .             .              .
-io_manager                         .                     .                  .                 .           .         .          .        .       .          .          .         .            .            .             X                 X              .         .             .              .
-mesh                               .                     .                  .                 .           X         .          .        .       .          .          .         .            .            .             .                 .              .         .             .              .
-momentum                           .                     .                  X                 .           X         .          .        X       .          .          .         .            .            .             .                 .              X         .             .              .
-multigrid                          .                     .                  .                 .           .         .          .        .       .          .          .         .            .            .             .                 .              .         .             .              .
-particles                          .                     .                  .                 .           X         X          .        .       .          .          .         .            .            .             .                 .              .         .             .              .
-pressure                           .                     .                  X                 .           X         .          .        X       X          X          .         .            .            .             .                 .              X         .             .              .
-scalar_scheme                      .                     .                  .                 .           .         .          .        X       X          .          .         .            .            .             .                 .              .         .             .              .
-scenarios                          X                     X                  .                 X           X         .          .        X       .          .          X         .            .            .             .                 .              .         .             .              .
-solver_staggered                   .                     .                  X                 .           X         .          .        X       X          .          .         X            .            .             .                 .              X         X             .              X
-solver_transport                   X                     .                  .                 .           X         .          .        X       .          .          X         .            X            .             .                 .              X         .             .              .
-staggered                          .                     .                  .                 .           X         .          .        X       .          .          .         .            .            .             .                 .              .         .             .              .
-stopping                           .                     .                  .                 .           .         .          .        .       .          .          .         .            .            .             .                 .              .         .             .              .
-time_integration                   .                     .                  X                 .           X         .          X        X       .          .          X         .            .            X             X                 X              X         .             .              .
-turbulence                         .                     X                  X                 X           X         .          .        X       .          .          .         .            X            .             .                 .              X         .             .              .
+                         boundary_concentration  boundary_registry  boundary_staggered  boundary_vents  config  constants  forces  io_manager  mesh  momentum  multigrid  particles  pressure  scalar_scheme  scenarios  solver_staggered  solver_transport  staggered  stopping  time_integration  turbulence
+boundary_concentration             .                     X                  .                 X           X         .        .         .        X       .          .          X         .            .            .             .                 .              X         .             .              .
+boundary_registry                  .                     .                  .                 .           X         .        .         .        .       .          .          .         .            .            .             .                 .              .         .             .              .
+boundary_staggered                 .                     X                  .                 X           X         .        .         .        X       .          .          .         .            .            .             .                 .              X         .             .              .
+boundary_vents                     .                     X                  .                 .           X         .        .         .        X       .          .          .         .            .            .             .                 .              X         .             .              .
+config                             .                     .                  .                 .           .         .        .         .        .       .          .          .         .            .            .             .                 .              .         .             .              .
+constants                          .                     .                  .                 .           .         .        .         .        .       .          .          .         .            .            .             .                 .              .         .             .              .
+forces                             .                     .                  .                 .           X         .        .         .        X       .          .          .         .            .            .             .                 .              .         .             .              .
+io_manager                         .                     .                  .                 .           .         .        .         .        .       .          .          .         .            .            .             X                 X              .         .             .              .
+mesh                               .                     .                  .                 .           X         .        .         .        .       .          .          .         .            .            .             .                 .              .         .             .              .
+momentum                           .                     .                  X                 .           X         .        .         .        X       .          .          .         .            .            .             .                 .              X         .             .              .
+multigrid                          .                     .                  .                 .           .         .        .         .        .       .          .          .         .            .            .             .                 .              .         .             .              .
+particles                          .                     .                  .                 .           X         X        .         .        .       .          .          .         .            .            .             .                 .              .         .             .              .
+pressure                           .                     .                  X                 .           X         .        .         .        X       X          X          .         .            .            .             .                 .              X         .             .              .
+scalar_scheme                      .                     .                  .                 .           .         .        .         .        X       X          .          .         .            .            .             .                 .              .         .             .              .
+scenarios                          X                     X                  .                 X           X         .        .         .        X       .          .          X         .            .            .             .                 .              .         .             .              .
+solver_staggered                   .                     .                  X                 .           X         .        .         .        X       X          .          .         X            .            .             .                 .              X         X             .              X
+solver_transport                   X                     .                  .                 .           X         .        .         .        X       .          .          X         .            X            .             .                 .              X         .             .              .
+staggered                          .                     .                  .                 .           X         .        .         .        X       .          .          .         .            .            .             .                 .              .         .             .              .
+stopping                           .                     .                  .                 .           .         .        .         .        .       .          .          .         .            .            .             .                 .              .         .             .              .
+time_integration                   .                     .                  X                 .           X         .        .         X        X       .          .          X         .            .            X             X                 X              X         .             .              .
+turbulence                         .                     X                  X                 X           X         .        .         .        X       .          .          .         .            X            .             .                 .              X         .             .              .
 ```
 
-Rows import columns. Edges, 71 total:
+Rows import columns. Edges, 73 total:
 
 ```
 boundary_concentration -> boundary_registry, boundary_vents, config, mesh, particles, staggered
 boundary_registry      -> config
 boundary_staggered     -> boundary_registry, boundary_vents, config, mesh, staggered
 boundary_vents         -> boundary_registry, config, mesh, staggered
+forces                 -> config, mesh
 io_manager             -> solver_staggered, solver_transport
 mesh                   -> config
 momentum               -> boundary_staggered, config, mesh, staggered
@@ -217,6 +219,7 @@ Generated. The responsibility and serves columns are editorial and come from `do
 | `src/boundary_vents.py` | 250 | Derives the mesh faces each equipment vent covers on its obstacle face, from the staggered layout's obstacle-face inputs and the registry's first-match coverage, with the face masks the velocity, turbulence and concentration layers read, and refuses a vent that covers no face or a recirculating pair whose flows differ on the faces. | S12.1 |
 | `src/config.py` | 2681 | Loads the YAML configuration into typed dataclasses and rejects missing keys, wrong types and out-of-range values at load time. | A02, A03, C01, C02, C03, S10 |
 | `src/constants.py` | 8 | Holds the physical constants shared by every module so that none of them defines its own copy. | C04 |
+| `src/forces.py` | 346 | Integrates the pressure and shear the staggered fields put on a named obstacle's faces, read where the momentum predictor's stencils put them, into its drag and lift and their coefficients, and reads the Strouhal number of a lift signal from its last ten periods' interpolated zero crossings with the spectrum's peak as the cross-check, refusing fewer than ten. | none |
 | `src/io_manager.py` | 1368 | Writes a run's HDF5 run file by appending (the merged configuration with its restart hash, the flow states, the transport frames, budgets and sensor readings, and a clean-out's recovery outputs) and its checkpoint file by atomic replacement (the march's checkpoint and the steady solve's), reads each back bitwise, and refuses a restart under a changed configuration, so a killed or capped run continues to what the uninterrupted run reaches. | none |
 | `src/mesh.py` | 465 | Builds the structured grid, uniform, geometrically clustered at the walls or between interior breakpoints the loader derives, with the face, center, width and center-to-center arrays a face-based stencil needs, and classifies each cell as FLUID, SOLID or BOUNDARY. | S11 |
 | `src/momentum.py` | 1191 | Predicts u* and v* on the staggered grid with QUICK advection by deferred correction over an upwind implicit matrix, a configured number of under-relaxed Jacobi sweeps per call, an optional per-cell viscosity field with its face rule and stress source, the domain edge's wall stencil at obstacle faces, and an optional implicit Euler or BDF2 time derivative at the unknown faces, and returns the diagonal coefficients the pressure correction needs. | S07, S09, S14 |
@@ -232,7 +235,7 @@ Generated. The responsibility and serves columns are editorial and come from `do
 | `src/time_integration.py` | 1253 | Runs a scenario under tier 1: solves each distinct flow state once, warm-started from the state before it, or reuses one a run file holds, then marches every particle class at one step through the intervals, dividing each into equal steps under the stable step and carrying the fields and budgets across each switch, writing frames, budgets, sensor readings and checkpoints through the run file, continuing a run from its checkpoint, and for a clean-out tracking the recovery outputs every step; it discretises nothing. | N01 |
 | `src/turbulence.py` | 1622 | Advances the k-epsilon model's k and eps one step on a prescribed face velocity field, standard or RNG with each variant's constants as module data: advection, explicit growth from the strain the faces give and implicit decay and diffusion through the shared scalar scheme, boundary values from a conditions object the caller builds each step, the kinematic eddy viscosity, and an assertion that k and eps are positive and finite after every step; and the scalable wall functions, which build those conditions, the wall viscosity of the momentum wall faces and the inlet values the coupled solve starts from. | S14, S15, S17 |
 
-Total 21 Python files, 16135 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
+Total 22 Python files, 16481 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
 
 `Declares it serves` is an EDITORIAL CLAIM read from `docs/system_map_annotations.toml`. It says which requirements a module is meant to satisfy, not that it does. Whether a requirement is met is answered by the tests named in the register's `Verified By` column.
 <!-- END GENERATED: components -->
@@ -256,8 +259,8 @@ Generated. Static import analysis cannot see a function bound into a registry by
 | Property | Value |
 |---|---|
 | Scope | `src/**/*.py` |
-| Files hashed | 21 |
-| Digest | `sha256:38cabc27e44176a1753411c0d8e92c5f0209e3967c59968243fb64ed0d84fde9` |
+| Files hashed | 22 |
+| Digest | `sha256:2bc5dd7b5503dbb4ee62360825901f8c3ede7928e811981d37daf00252f48634` |
 
 This is what lets the document answer whether it is current, which is the one question a stale table cannot be asked. `python scripts/gen_system_map.py --check` recomputes the whole set of generated regions, this digest included, and exits non-zero on any disagreement.
 
@@ -1698,6 +1701,39 @@ RecoveryRecord: sensor_names, thresholds, initial, hold_time, held, t_final,
     sensor_time, mean_time, ratio, local_recovery, local_recovery_max
     # times in seconds, NaN where not defined or not reached; the shapes are
     # checked against the classes and sensors when it is built
+```
+
+### forces.py --> tests/test_forces.py (time_integration's tier 2 and the VAL-022 harness rows follow in step 6b)
+
+The force on a named obstacle and the Strouhal number of its lift (ADR-014 F,
+step 6b). Pressure: each face takes the pressure of the non-SOLID cell beside
+it times the face's length. Shear: the u unknowns above and below the body and
+the v unknowns beside it, by the momentum predictor's obstacle wall stencil,
+``mu phi_P / (half the unknown's cell)`` over the control volume's width, a
+corner face a wall over its whole span. Both are first order at the body's
+faces, as the predictor's stencils are; on a square body's corners the drag
+meets a control-volume momentum balance at about half order
+(tests/test_forces.py).
+
+```
+ObstacleForces(fx_pressure, fx_viscous, fy_pressure, fy_viscous)  # N/m, frozen
+    drag, lift: float           # x- and y-force, N/m, +x downstream, +y up
+ForceGauge(mesh: Mesh, config: SimConfig, obstacle: str, reference_velocity: float)
+    # ValueError for an unknown name, an obstacle covering no cell, or a
+    # reference velocity not finite and positive; TypeError for one not a
+    # real number (bool refused)
+    height: float               # D, the obstacle's extent in y, m
+    forces(u, v, p) -> ObstacleForces   # faces [ny, nx+1], [ny+1, nx]; p [ny, nx]
+    coefficients(forces) -> (C_D, C_L)  # over 0.5 rho U^2 D
+STROUHAL_PERIODS = 10
+strouhal(t, lift, height, velocity) -> StrouhalReading
+    # t 1-D, strictly increasing and evenly spaced; lift finite, same shape;
+    # the period is the mean spacing of the last eleven upward zero crossings,
+    # each linearly interpolated; ValueError for fewer than ten periods or
+    # malformed input
+StrouhalReading(strouhal, period, crossings, spectral_strouhal, resolution, agrees)
+    # spectral_strouhal: the rfft peak over the same window less its mean;
+    # agrees: within one resolution D / (U T) of the zero-crossing reading
 ```
 
 ### Retired modules
