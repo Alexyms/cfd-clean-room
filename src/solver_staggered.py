@@ -420,6 +420,9 @@ class TransientStep:
         faces over non-SOLID cells, kg/s per unit depth.
     pressure_cap_hits : int
         The step's corrections that stopped at max_pressure_iter.
+    pressure_products : int
+        The operator products of the step's pressure corrections, summed,
+        the work count the harness records (step 6b).
     """
 
     step: int
@@ -429,6 +432,7 @@ class TransientStep:
     residual_history: tuple[float, ...]
     worst_imbalance: float
     pressure_cap_hits: int
+    pressure_products: int
 
 
 class TransientStepError(RuntimeError):
@@ -1180,6 +1184,7 @@ class StaggeredSolver:
             transient = (dt, old_u, old_v) if bdf2 else (dt, old_u[0], old_v[0])
             history: list[float] = []
             cap_hits = 0
+            products = 0
             met = False
             u_c, v_c = to_cell_centers(u, v)
             for _ in range(step_cap):
@@ -1191,6 +1196,7 @@ class StaggeredSolver:
                 corrected = self._corrector.correct(prediction, p)
                 u, v, p = corrected.u, corrected.v, corrected.p
                 self.last_pressure_iterations = corrected.iterations
+                products += corrected.products
                 if corrected.reached_cap:
                     cap_hits += 1
                     self.pressure_cap_hits += 1
@@ -1218,6 +1224,7 @@ class StaggeredSolver:
                 residual_history=tuple(history),
                 worst_imbalance=float(np.max(np.abs(imbalance[self._live]))),
                 pressure_cap_hits=cap_hits,
+                pressure_products=products,
             )
             self.transient_steps.append(record)
             if not met:

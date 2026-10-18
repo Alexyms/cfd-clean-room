@@ -13,7 +13,9 @@ that must reproduce a field saved under it; and the backward-facing step's
 y clustering, which load_backstep derives so that a face falls on the step
 height on any grid (ADR-012 G (ii)); and the impinging jet's y clustering,
 which load_impinging_jet derives as a fixed fraction of the uniform spacing
-toward the plate and the nozzle's plane (ADR-012 G (vi)). A named preset is loaded by
+toward the plate and the nozzle's plane (ADR-012 G (vi)); and the square
+cylinder's Reynolds number, end time and, for the uniform rung, mesh, which
+load_cylinder sets for the four VAL-022 presets (ADR-014 F, step 6b). A named preset is loaded by
 load_preset, which picks the loader, so no consumer repeats that choice.
 """
 
@@ -38,6 +40,8 @@ CASE_FILES: dict[str, str] = {
     # The product room (VAL-018, ECR-002 step 8): the default file is the
     # product configuration since prompt 56, so the harness runs it as a case.
     "product": "clean_room_default.yaml",
+    # The square cylinder (VAL-022, ADR-014 F): a tier-2 case.
+    "cylinder": "validation_cylinder.yaml",
 }
 
 # Named grid presets: identifier -> (case, nx, ny). The tuple does not say
@@ -59,7 +63,26 @@ CASE_GRIDS: dict[str, tuple[str, int, int]] = {
     "val020_272x90": ("impinging_jet", 272, 90),
     "val020_408x135": ("impinging_jet", 408, 135),
     "val018_320x120": ("product", 320, 120),
+    "val022_re40": ("cylinder", 280, 150),
+    "val022_re60": ("cylinder", 280, 150),
+    "val022_re100": ("cylinder", 280, 150),
+    "val022_re100_uniform": ("cylinder", 370, 200),
 }
+
+# The VAL-022 presets (ADR-014 F; Alex, 2026-10-17): preset -> (Reynolds
+# number, t_end in d / U, uniform mesh). The case file is the Re 100 row on
+# the clustered grid; the others change what their name says. Re 40 settles
+# from the perturbed start-up and needs no more than the Re 100 run's 200
+# units to show its decay; Re 60 sheds near the onset (51.2), where the
+# instability grows slowly, so it runs 300.
+CYLINDER_PRESETS: dict[str, tuple[float, float, bool]] = {
+    "val022_re40": (40.0, 200.0, False),
+    "val022_re60": (60.0, 300.0, False),
+    "val022_re100": (100.0, 200.0, False),
+    "val022_re100_uniform": (100.0, 200.0, True),
+}
+# The uniform rung's spacing, in d: the probe's grid (cylinder59.py).
+CYLINDER_UNIFORM_SPACING = 0.1
 
 # Presets loaded by load_wall_clustered; every other preset takes its whole
 # mesh from the case file.
@@ -488,6 +511,8 @@ def load_preset(case_id: str) -> SimConfig:
         raise KeyError(
             f"unknown grid preset {case_id!r}; known: {sorted(CASE_GRIDS)}"
         ) from None
+    if case_id in CYLINDER_PRESETS:
+        return load_cylinder(case_id)
     if case_id in WALL_CLUSTERED_GRIDS:
         loader = load_wall_clustered
     elif case_id in ANNEX20_GRIDS:
@@ -499,6 +524,46 @@ def load_preset(case_id: str) -> SimConfig:
     else:
         loader = load_case
     return loader(kind, grid=(nx, ny))
+
+
+def load_cylinder(case_id: str) -> SimConfig:
+    """Load a VAL-022 preset: the cylinder at its Reynolds number, end and mesh.
+
+    Parameters
+    ----------
+    case_id : str
+        One of the keys of CYLINDER_PRESETS.
+
+    Returns
+    -------
+    SimConfig
+        The case file with the viscosity ``rho U d / Re`` (U the inlet's
+        velocity, d the obstacle's height), ``solver.t_end`` and, for the
+        uniform rung, both axes uniform at CYLINDER_UNIFORM_SPACING with the
+        counts that spacing gives. Every other parameter is the file's.
+
+    Raises
+    ------
+    KeyError
+        If the preset is not a VAL-022 one.
+    """
+    try:
+        reynolds, t_end, uniform = CYLINDER_PRESETS[case_id]
+    except KeyError:
+        raise KeyError(
+            f"{case_id!r} is not a VAL-022 preset; known: {sorted(CYLINDER_PRESETS)}"
+        ) from None
+    raw = _raw_case("cylinder", None)
+    body = raw["obstacles"][0]
+    height = body["y_end"] - body["y_start"]
+    velocity = raw["boundaries"]["inlet"]["velocity"]
+    raw["fluid"]["viscosity"] = raw["fluid"]["density"] * velocity * height / reynolds
+    raw["solver"]["t_end"] = t_end
+    if uniform:
+        raw["mesh"] = {"x": {"stretch_ratio": 1.0}, "y": {"stretch_ratio": 1.0}}
+        raw["domain"]["nx"] = round(raw["domain"]["width"] / CYLINDER_UNIFORM_SPACING)
+        raw["domain"]["ny"] = round(raw["domain"]["height"] / CYLINDER_UNIFORM_SPACING)
+    return SimConfig.from_dict(raw)
 
 
 def with_velocity_step(config: SimConfig) -> SimConfig:

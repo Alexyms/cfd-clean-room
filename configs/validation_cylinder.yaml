@@ -1,0 +1,142 @@
+# VAL-022: the square cylinder at Re 100 (ADR-014 F, step 6b).
+#
+# Sohankar, Norberg and Davidson (1998): a unit square cylinder in a channel of
+# height 20 (5% blockage), its front face 10 units downstream of the inlet at
+# U = 1, the outlet 26 units behind its back face (the paper's Neumann-outlet
+# extent; this solver's pressure outlet is the zero-gradient copy), freestream
+# lateral boundaries (U = 1, V = 0) in place of the paper's symmetry condition,
+# rho = 1 and mu = 0.01, so Re = U d / nu = 100. docs/reports/probe59/
+# cylinder59.py's cylinder_raw, the configuration of tables T2 to T4, on the
+# clustered grid below in place of its uniform 0.1 d one. The Re 40 and Re 60
+# rows and the uniform rung change the viscosity, t_end and the mesh in memory
+# (validation.cases.load_cylinder); everything else is this file.
+#
+# The grid (ADR-014 decision 11, option 1). Breakpoints put 0.025 d at the
+# body's four faces (a quarter of the uniform rung's 0.1 d; 26 cells across the
+# body, against the rung's 10), 0.06 d across the body's middle, 0.1 d in the near wake to x = 20 and
+# over the band y = 8 to 12 the vortex street occupies, and at most 0.3 d in the
+# far field, the paper's far-field cell Reynolds number of 30 at Re 100. No two
+# neighbouring cells differ by more than 1.074 (the loader's cap is 1.2). 280 by
+# 150 cells, 42,000, against the uniform rung's 74,000: the run costs about
+# 0.9 s per step at dt 0.05 with four processes sharing the machine, the rung
+# about 1.7 s (results/builder68/estimate68.py, 300 steps of each).
+#
+# The march (ADR-014 decisions 3 to 5): BDF2 at dt 0.05 (137 steps a period at
+# St 0.146; decision 3 proposes the larger step), each step's outer iterations
+# to a velocity step of 1e-4 U with a cap of 500. pressure_rtol 1e-4 is T2's:
+# its arm C at 1e-8 took the same outer counts at 1.7 times the time per step.
+# t_end 200 holds about 29 periods; the Strouhal number is read from the last
+# ten. Frames every 200 steps (10 units), a checkpoint every 500.
+
+domain:
+  width: 37.0
+  height: 20.0
+  nx: 280
+  ny: 150
+
+mesh:
+  x:
+    breakpoints:
+      - {at: 0.0, spacing: 0.3}
+      - {at: 6.0, spacing: 0.3}
+      - {at: 10.0, spacing: 0.025}
+      - {at: 10.5, spacing: 0.06}
+      - {at: 11.0, spacing: 0.025}
+      - {at: 12.0, spacing: 0.06}
+      - {at: 20.0, spacing: 0.1}
+      - {at: 26.0, spacing: 0.3}
+      - {at: 37.0, spacing: 0.3}
+  y:
+    breakpoints:
+      - {at: 0.0, spacing: 0.3}
+      - {at: 5.0, spacing: 0.3}
+      - {at: 8.0, spacing: 0.1}
+      - {at: 9.5, spacing: 0.025}
+      - {at: 10.0, spacing: 0.06}
+      - {at: 10.5, spacing: 0.025}
+      - {at: 12.0, spacing: 0.1}
+      - {at: 15.0, spacing: 0.3}
+      - {at: 20.0, spacing: 0.3}
+
+fluid:
+  density: 1.0
+  viscosity: 0.01
+  temperature: 293.0
+
+particles:
+  density: 1000.0
+  sizes: [0.1e-6]
+  mean_free_path: 67.0e-9
+  boundary_layer_thickness: 1.0e-3
+  hepa_reference:
+    diameters: [0.1e-6]
+    efficiencies: [0.99999]
+
+solver:
+  dt: 0.05
+  t_end: 200.0
+  output_interval: 200
+  checkpoint_interval: 500
+  # The steady keys below are the probe's; a tier-2 run reads none of
+  # convergence_tol, max_simple_iter and stopping_rule. The perturbed start-up
+  # (validation.cylinder.perturbed_startup) runs max_simple_iter steady outer
+  # iterations from rest.
+  convergence_tol: 1.0e-12
+  max_simple_iter: 200
+  momentum_sweeps: 10
+  alpha_velocity: 0.7
+  alpha_pressure: 0.3
+  max_pressure_iter: 5000
+  pressure_rtol: 1.0e-4
+  pressure_preconditioner: multigrid
+  stopping_rule: velocity_step
+
+transient:
+  scheme: bdf2
+  step_tol: 1.0e-4
+  step_cap: 500
+  forces:
+    obstacle: cylinder
+    reference_velocity: 1.0
+
+boundaries:
+  inlet:
+    type: velocity_inlet
+    location: left
+    y_start: 0.0
+    y_end: 20.0
+    velocity: 1.0
+  outlet:
+    type: pressure_outlet
+    location: right
+    y_start: 0.0
+    y_end: 20.0
+  top:
+    type: velocity_inlet
+    location: top
+    x_start: 0.0
+    x_end: 37.0
+    u_velocity: 1.0
+    v_velocity: 0.0
+  bottom:
+    type: velocity_inlet
+    location: bottom
+    x_start: 0.0
+    x_end: 37.0
+    u_velocity: 1.0
+    v_velocity: 0.0
+
+obstacles:
+  - name: cylinder
+    x_start: 10.0
+    x_end: 11.0
+    y_start: 9.5
+    y_end: 10.5
+
+sensors:
+  - name: wake
+    x: 12.0
+    y: 10.0
+
+thresholds:
+  "0.1e-6": 100.0
