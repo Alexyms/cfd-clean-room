@@ -1406,6 +1406,12 @@ committed before it ran).**
 - (b) The smoke run's steps take 3 to 5 outer iterations each at 1e-4 U, as T2 measured from
   the start-up field.
 
+**Predictions (orchestrator, 2026-10-18, step 6b; committed before the VAL-022 runs).**
+- (a) Re 100 on the clustered grid: St inside 0.139 to 0.153.
+- (b) The uniform 0.1 d rung reads St below 0.139 (the probe's long march had about 0.13).
+- (c) Re 40 settles steady and Re 60 sheds.
+- (d) C_D at Re 100 within 10% of 1.46.
+
 **Method.** `warm59.py` (T1), `cylinder59.py` (T2 to T4), `order59.py` (T5), `scales59.py` (T6),
 `cleanout59.py` (T7, prompt 59b); each script's docstring states its arms and what it writes. Wall times were taken with three to
 five processes sharing the machine and are stated with their process counts; counts are not
