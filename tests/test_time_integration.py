@@ -1044,13 +1044,17 @@ class TestRestart:
 
         The fields, frames, budgets, sensor readings and recovery outputs,
         the local field included, are the uninterrupted run's bitwise.
-        Checkpoints every 30 steps, frames every 100: the kill comes after
-        frame 100, written after checkpoint 90, which follows the switch.
+        Checkpoints every 30 steps, frames every 100; checkpoint 90 follows
+        the switch. Killed at 95, before frame 100: the readings since frame
+        0 are in the file only because they were appended before the
+        checkpoint. Killed at 107, after frame 100: frame 100 and its
+        readings must be dropped before the march writes them again.
         Defects caught: the readings held for the next frame not flushed
-        before a checkpoint (a gap at the restart); the tracker's state not
-        carried; the restart resuming in the first interval's plan; the
-        frame and readings written after the checkpoint kept (frame 100 is
-        refused on the way back); the budgets not restored.
+        before a checkpoint (a gap of 90 steps, the kill at 95); the frame
+        and readings written after the checkpoint kept (frame 100 refused
+        on the way back, the kill at 107); the tracker's state not carried;
+        the restart resuming in the first interval's plan; the budgets not
+        restored.
         """
         config = _door_clean_out(30)
         kept = door.record.path
@@ -1060,25 +1064,26 @@ class TestRestart:
         switch = whole.intervals[0].steps
         frame, checkpoint = 100, 90
         assert switch < checkpoint < frame < whole.steps
-        cut = tmp_path / "cut.h5"
-        with pytest.raises(_KilledError):
-            run(
-                config,
-                cut,
-                flows_from=kept,
-                on_step=killer(frame + 7),
-                provenance=PROVENANCE,
-            )
-        assert RunFile(cut).read_checkpoint().step == checkpoint
-        assert RunFile(cut).read_frames().steps.tolist() == [0, frame]
-        again = run(config, restart=cut)
-        assert again.restarted_from == checkpoint
-        assert [f.origin for f in again.flows] == [RUN_FILE, RUN_FILE]
-        assert (again.steps, again.t_final) == (whole.steps, whole.t_final)
-        same_frames(RunFile(cut), RunFile(whole.path))
-        _same_budgets(again.budgets, whole.budgets)
-        _same_recovery(again.recovery, whole.recovery)
-        _same_recovery(RunFile(cut).read_recovery(), whole.recovery)
+        for kill, frames in ((95, [0]), (frame + 7, [0, frame])):
+            cut = tmp_path / f"cut_{kill}.h5"
+            with pytest.raises(_KilledError):
+                run(
+                    config,
+                    cut,
+                    flows_from=kept,
+                    on_step=killer(kill),
+                    provenance=PROVENANCE,
+                )
+            assert RunFile(cut).read_checkpoint().step == checkpoint
+            assert RunFile(cut).read_frames().steps.tolist() == frames
+            again = run(config, restart=cut)
+            assert again.restarted_from == checkpoint
+            assert [f.origin for f in again.flows] == [RUN_FILE, RUN_FILE]
+            assert (again.steps, again.t_final) == (whole.steps, whole.t_final)
+            same_frames(RunFile(cut), RunFile(whole.path))
+            _same_budgets(again.budgets, whole.budgets)
+            _same_recovery(again.recovery, whole.recovery)
+            _same_recovery(RunFile(cut).read_recovery(), whole.recovery)
 
     def test_without_a_checkpoint_the_march_runs_again(
         self, tmp_path: Path, door: SimpleNamespace
