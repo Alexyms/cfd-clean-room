@@ -40,7 +40,11 @@ vents; the scenario schema and manager; the run file; tier 1 time integration wi
 runner `scripts/run_scenario.py`; and VAL-008, whose criterion row passes (ADR-014 E as built).
 Step 4's follow-ups (prompt 66) run the reference clean-out to its end, so section C's ratio and
 local field are defined, and close review 64's and test 64's suggestions. Step 6, the cylinder's
-transient solve, is next; the four reference scenarios on the product grid are step 7. Phases 5
+transient solve, is split in two (Alex, 2026-10-17): 6a, the time-accurate solve and its order
+in time, is built (prompt 67, `docs/reports/probe67/tables67.md`; review and test before the
+pull request); 6b, the clustered grid, lift and drag, the tier-2 route and VAL-022 at the
+thresholds Alex set the same day, is next. The four reference scenarios on the product grid are
+step 7. Phases 5
 through 7 have not begun.
 
 The product room itself has never been solved, and on 2026-10-04 it was found that the laminar
