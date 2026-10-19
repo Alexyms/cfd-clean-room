@@ -101,6 +101,39 @@ Over each 50 units of the run: the largest |C_L|, the mean C_D and the mean oute
 | val022_re100_uniform | 100 to 150 | 3.600e-01 | 1.58329 | 8.50 |
 | val022_re100_uniform | 150 to 200 | 3.600e-01 | 1.58331 | 8.50 |
 
+### V7. Re 40: the lift period by period
+
+Each whole period between upward zero crossings of C_L over the whole run: its length, half the range of C_L over it, and the mean outer iterations per step inside it (one when every step's first outer iteration already moves the field by less than the criterion).
+
+| Period from t | to t | Length | Amplitude | Mean outer per step |
+|---|---|---|---|---|
+| 1.30 | 11.65 | 10.35 | 4.548e-03 | 5.79 |
+| 11.65 | 20.85 | 9.20 | 2.555e-03 | 6.00 |
+| 20.85 | 30.10 | 9.25 | 1.748e-03 | 6.33 |
+| 30.10 | 41.40 | 11.30 | 1.844e-03 | 4.49 |
+| 41.40 | 52.65 | 11.25 | 1.594e-03 | 3.00 |
+| 52.65 | 63.70 | 11.05 | 1.373e-03 | 3.00 |
+| 63.70 | 75.15 | 11.45 | 9.027e-04 | 2.94 |
+| 75.15 | 87.70 | 12.55 | 5.421e-04 | 2.50 |
+| 87.70 | 101.30 | 13.60 | 2.582e-04 | 2.00 |
+| 101.30 | 118.90 | 17.60 | 1.204e-04 | 1.25 |
+| 118.90 | 139.50 | 20.60 | 9.764e-05 | 1.00 |
+| 139.50 | 162.75 | 23.25 | 1.176e-04 | 1.00 |
+| 162.75 | 187.00 | 24.25 | 1.009e-04 | 1.00 |
+
+Steps after t = 100 taking one outer iteration: 0.943 of 2000; the run ended at t = 200 after 4000 steps.
+
+### V8. Re 100 clustered: the Strouhal number at pressure_rtol 1e-8 and 1e-4
+
+Both arms continue the row's final checkpoint (step 4000, t = 200) by docs/reports/val022/rtol68.py, the case file with only pressure_rtol changed, side by side; the Strouhal number of the last ten periods of each. The amendment of ADR-013 decision 3 stands if 1e-8 and 1e-4 agree within 0.5%.
+
+| pressure_rtol | Steps | To t | St | Spectrum St | C_D | C_L amplitude | Outer per step: mean, max | Worst imbalance | s per step |
+|---|---|---|---|---|---|---|---|---|---|
+| 1e-08 | 1640 | 282 | 0.14634 | 0.14885 | 1.4866 | 0.2829 | 9.00, 9 | 2.9e-12 | 2.49 |
+| 0.0001 | 1640 | 282 | 0.14634 | 0.14885 | 1.4866 | 0.2829 | 9.00, 9 | 3.6e-08 | 1.45 |
+
+Relative difference, 1e-8 against the 1e-4 arm: +1.42e-08; against the row's St (0.14634): +6.33e-06.
+
 ### V5. The cost estimate behind the budget
 
 300 steps of Re 100 from the perturbed start-up, four processes sharing the machine (results/builder68/estimate68.py).

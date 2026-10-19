@@ -23,8 +23,10 @@
 #
 # The march (ADR-014 decisions 3 to 5): BDF2 at dt 0.05 (137 steps a period at
 # St 0.146; decision 3 proposes the larger step), each step's outer iterations
-# to a velocity step of 1e-4 U with a cap of 500. pressure_rtol 1e-4 is T2's:
-# its arm C at 1e-8 took the same outer counts at 1.7 times the time per step.
+# to a velocity step of 1e-4 U with a cap of 500. pressure_rtol 1e-4 is T2's,
+# for tier-2 cases by ADR-013 decision 3 as amended 2026-10-18 (Alex): twelve
+# periods at 1e-8 and 1e-4 from the Re 100 row's end give Strouhal numbers that
+# differ by 1.4e-8 relative (docs/reports/val022/tables68.md, V8).
 # t_end 200 holds about 29 periods; the Strouhal number is read from the last
 # ten. Frames every 200 steps (10 units), a checkpoint every 500.
 

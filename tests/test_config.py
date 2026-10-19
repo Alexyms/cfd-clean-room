@@ -1608,7 +1608,10 @@ class TestPressureKeys:
         and its two layouts (tests/test_layouts.py), and since step 0b of ADR-014
         (prompt 61) the vented room, carry the turbulent
         product setting, 1e-4 (ADR-013 decision 3 as amended 2026-10-09;
-        ECR-002 section 8, step 8).
+        ECR-002 section 8, step 8). The cylinder (VAL-022, a tier-2 case)
+        carries 1e-4 by the amendment of 2026-10-18 (Alex, prompt 68): its
+        Strouhal number at 1e-8 and 1e-4 differs by 1.4e-8 relative
+        (docs/reports/val022/tables68.md, V8).
         """
         turbulent = {
             "clean_room_default.yaml": 1e-4,
@@ -1621,6 +1624,7 @@ class TestPressureKeys:
             "scenario_filter_breach.yaml": 1e-4,
             "validation_annex20.yaml": 1e-4,
             "validation_backstep.yaml": 1e-4,
+            "validation_cylinder.yaml": 1e-4,
             "validation_impinging_jet.yaml": 1e-4,
         }
         for path in sorted(CONFIG_DIR.glob("*.yaml")):

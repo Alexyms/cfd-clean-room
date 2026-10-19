@@ -227,6 +227,80 @@ def window_table() -> list[str]:
     return [*lines, ""]
 
 
+def decay_table() -> list[str]:
+    """V7: Re 40's lift period by period: its length, amplitude and outer count."""
+    lines = [
+        "### V7. Re 40: the lift period by period",
+        "",
+        "Each whole period between upward zero crossings of C_L over the whole run: "
+        "its length, half the range of C_L over it, and the mean outer iterations "
+        "per step inside it (one when every step's first outer iteration already "
+        "moves the field by less than the criterion).",
+        "",
+        "| Period from t | to t | Length | Amplitude | Mean outer per step |",
+        "|---|---|---|---|---|",
+    ]
+    rec = load(HERE / "val022_re40.json")
+    if rec is None:
+        return [*lines, "not run", ""]
+    t = np.array(rec["series"]["t"])
+    c_l = np.array(rec["series"]["c_l"])
+    outer = np.array(rec["series"]["outer"])
+    up = np.nonzero((c_l[:-1] < 0.0) & (c_l[1:] >= 0.0))[0]
+    for a, b in pairwise(up):
+        span = c_l[a + 1 : b + 1]
+        lines.append(
+            f"| {t[a]:.2f} | {t[b]:.2f} | {t[b] - t[a]:.2f} | "
+            f"{0.5 * (span.max() - span.min()):.3e} | {outer[a + 1 : b + 1].mean():.2f} |"
+        )
+    late = t > 100.0
+    lines += [
+        "",
+        f"Steps after t = 100 taking one outer iteration: {np.mean(outer[late] == 1):.3f} "
+        f"of {int(late.sum())}; the run ended at t = {t[-1]:g} after {t.size} steps.",
+    ]
+    return [*lines, ""]
+
+
+def rtol_table() -> list[str]:
+    """V8: the pressure_rtol probe (Alex, 2026-10-18): St at 1e-8 against 1e-4."""
+    lines = [
+        "### V8. Re 100 clustered: the Strouhal number at pressure_rtol 1e-8 and 1e-4",
+        "",
+        "Both arms continue the row's final checkpoint (step 4000, t = 200) by "
+        "docs/reports/val022/rtol68.py, the case file with only pressure_rtol changed, "
+        "side by side; the Strouhal number of the last ten periods of each. The "
+        "amendment of ADR-013 decision 3 stands if 1e-8 and 1e-4 agree within 0.5%.",
+        "",
+        "| pressure_rtol | Steps | To t | St | Spectrum St | C_D | C_L amplitude | Outer per step: mean, max | Worst imbalance | s per step |",
+        "|---|---|---|---|---|---|---|---|---|---|",
+    ]
+    found = {}
+    for rtol in ("1e-08", "0.0001"):
+        rec = load(ESTIMATES / f"rtol68_{rtol}.json")
+        if rec is None:
+            lines.append(f"| {rtol} | not run | | | | | | | | |")
+            continue
+        found[rtol] = rec
+        lines.append(
+            f"| {rec['pressure_rtol']:g} | {rec['steps']} | {rec['t_end']:g} | "
+            f"{rec['strouhal']:.5f} | {rec['spectral_strouhal']:.5f} | "
+            f"{rec['drag_coefficient']:.4f} | {rec['lift_amplitude']:.4f} | "
+            f"{rec['outer_mean']:.2f}, {rec['outer_max']} | "
+            f"{rec['worst_imbalance_max']:.1e} | {rec['seconds_per_step']:.2f} |"
+        )
+    row = load(HERE / "val022_re100.json")
+    if len(found) == 2 and row is not None:
+        tight, loose = found["1e-08"]["strouhal"], found["0.0001"]["strouhal"]
+        lines += [
+            "",
+            f"Relative difference, 1e-8 against the 1e-4 arm: {(tight - loose) / loose:+.2e}; "
+            f"against the row's St ({row['row']['accuracy']['strouhal']:.5f}): "
+            f"{(tight - row['row']['accuracy']['strouhal']) / row['row']['accuracy']['strouhal']:+.2e}.",
+        ]
+    return [*lines, ""]
+
+
 def cost_table() -> list[str]:
     """V5: the cost estimate from 300 steps of each grid (prompt 68's budget rule)."""
     lines = [
@@ -298,6 +372,8 @@ def render() -> str:
         + amplitude_table()
         + history_table()
         + window_table()
+        + decay_table()
+        + rtol_table()
         + cost_table()
         + hash_table()
     )

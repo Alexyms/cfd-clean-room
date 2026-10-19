@@ -45,7 +45,8 @@ in time, is built and merged (prompt 67, PR 95); 6b, the clustered grid, lift an
 route and VAL-022 at the thresholds Alex set the same day, is built (prompt 68; review and test
 before the pull request). VAL-022 is `docs/reports/val022/val022.md`: Re 100 on the clustered
 grid and Re 60 pass, Re 40 fails the lift measure stated before its run while its drag shows it
-steady, and that measure is open for the orchestrator. The four reference scenarios on the
+steady; the orchestrator decides on Re 40. ADR-013 decision 3 now allows `pressure_rtol` 1e-4
+for tier-2 cases (Alex, 2026-10-18), on the measurement in that report. The four reference scenarios on the
 product grid are step 7. Phases 5
 through 7 have not begun.
 

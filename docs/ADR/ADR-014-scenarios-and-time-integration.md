@@ -1027,7 +1027,9 @@ more than 1.2 (`config.MAX_GROWTH_RATIO`). `configs/validation_cylinder.yaml` pu
 the body's four faces, 0.06 d across its middle, 0.1 d over the near wake to x = 20 and the band
 y = 8 to 12, and at most 0.3 d beyond: 280 by 150 cells, 42,000, against the uniform rung's
 74,000, the largest neighbour ratio 1.07. The time step is decision 3's larger one, 0.05, the
-per-step criterion 1e-4 U and `pressure_rtol` 1e-4, T2's. Lift and drag are `forces.ForceGauge`'s
+per-step criterion 1e-4 U and `pressure_rtol` 1e-4, T2's, which ADR-013 decision 3 allows
+tier-2 cases since 2026-10-18 (Alex) on the measurement of `docs/reports/val022/tables68.md`, V8.
+Lift and drag are `forces.ForceGauge`'s
 (the pressure of the live cell beside each face, the shear by the predictor's obstacle wall
 stencil, first order at the faces as the stencils are), the Strouhal number `forces.strouhal`'s
 (the last ten periods' interpolated upward zero crossings, the spectrum's peak beside it,
@@ -1808,7 +1810,12 @@ H1 hold the period history, each row by time window, the cost estimate and the h
   Re 40's lift falls by about forty times and then sits at about 1e-4, its drag steady to five
   figures, with every late step taking one outer iteration: the march no longer iterates below
   the per-step criterion of 1e-4 U, and the quiet threshold of 1e-6 stated before the run took
-  rounding, not the criterion, as the floor. The measure is the orchestrator's to restate.
+  rounding, not the criterion, as the floor. The run was not short of time: the decay stopped
+  about 80 units before its end, as the steps stopped iterating (the report's V7). The
+  orchestrator decides on Re 40.
+- *The pressure solve's tolerance.* The rows ran at 1e-4 against ADR-013 decision 3's 1e-8 for
+  laminar validation cases; the report's V8 measured the difference on the Re 100 row's shedding
+  at 1.4e-8 relative in the Strouhal number, and Alex amended the decision for tier-2 cases.
 - *Prediction (d) holds.* V2.
 - *The budget.* The estimate from 300 steps per grid, about 5.2 hours summed and 2 of wall
   clock, let the runs go ahead; they took about 3.2 hours of wall clock and 9.1 summed over the
