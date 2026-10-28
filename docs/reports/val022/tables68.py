@@ -4,7 +4,8 @@
     python tables68.py --check    # regenerates and compares with the committed file
 
 Reads docs/reports/val022/<preset>.json (scripts/benchmark.py's VAL-022 rows,
-each with every step's lift and drag), results/builder68/estimate_*.json
+each with every step's lift and drag), the probes' records beside them
+(rtol68_*.json, floor68.json), results/builder68/estimate_*.json
 (the cost estimate) and the hash records results/builder62/hash_*_68.json
 (hash62.py at this step's source) against prompt 67's (_67). A record that is
 missing prints as "not run". The report, val022.md, copies the tables and
@@ -41,6 +42,7 @@ HASH_CASES = (
 )
 HISTORY_PERIODS = 20
 WINDOW = 50.0
+FLOOR_WINDOW = 5.0
 
 
 def load(path: Path) -> dict | None:
@@ -277,7 +279,7 @@ def rtol_table() -> list[str]:
     ]
     found = {}
     for rtol in ("1e-08", "0.0001"):
-        rec = load(ESTIMATES / f"rtol68_{rtol}.json")
+        rec = load(HERE / f"rtol68_{rtol}.json")
         if rec is None:
             lines.append(f"| {rtol} | not run | | | | | | | | |")
             continue
@@ -298,6 +300,60 @@ def rtol_table() -> list[str]:
             f"against the row's St ({row['row']['accuracy']['strouhal']:.5f}): "
             f"{(tight - row['row']['accuracy']['strouhal']) / row['row']['accuracy']['strouhal']:+.2e}.",
         ]
+    return [*lines, ""]
+
+
+def floor_table() -> list[str]:
+    """V9: the Re 40 floor probe (prompt 68b): the continuation at a step tolerance of 1e-6 U."""
+    lines = [
+        "### V9. Re 40 continued at a step tolerance of 1e-6 U",
+        "",
+        "From the row's final checkpoint (t = 200), docs/reports/val022/floor68.py; "
+        "per window of the continuation, the largest |C_L|, the mean outer iterations "
+        "per step and the mean C_D. Below: the envelope's rates (slope of ln(peak) "
+        "in time; the original over the row's peaks from t = 63.70 to 101.30, the "
+        "probe's from ten units in), predictions (e) and (f), and the row's measure "
+        "on the continuation.",
+        "",
+        "| Window | Largest abs C_L | Mean outer per step | Mean C_D |",
+        "|---|---|---|---|",
+    ]
+    rec = load(HERE / "floor68.json")
+    if rec is None:
+        return [*lines, "not run", ""]
+    t = np.array(rec["series"]["t"])
+    c_l = np.array(rec["series"]["c_l"])
+    c_d = np.array(rec["series"]["c_d"])
+    outer = np.array(rec["series"]["outer"])
+    start = rec["from_t"]
+    while start < t[-1] - 1e-9:
+        inside = (t > start) & (t <= start + FLOOR_WINDOW + 1e-9)
+        lines.append(
+            f"| {start:g} to {start + FLOOR_WINDOW:g} | {np.max(np.abs(c_l[inside])):.3e} | "
+            f"{np.mean(outer[inside]):.2f} | {np.mean(c_d[inside]):.6f} |"
+        )
+        start += FLOOR_WINDOW
+    measure = rec["measure_on_continuation"]
+    reading = (
+        f"largest |C_L| over the last tenth {measure['largest_lift']:.3e}"
+        if measure["measure"] == "quiet"
+        else "ratios " + ", ".join(f"{r:.4f}" for r in measure["ratios"])
+    )
+    lines += [
+        "",
+        "| Reading | Value |",
+        "|---|---|",
+        f"| Steps, to t | {rec['steps']}, {rec['t_end']:g} (wall limit reached: {rec['stopped_by_wall']}) |",
+        f"| Wall time (s) | {rec['wall_seconds']:.0f} |",
+        f"| Original rate (per unit time) | {fmt(rec['original_rate'], '.4e')} |",
+        f"| Probe rate (per unit time) | {fmt(rec['probe_rate'], '.4e')} |",
+        f"| Ratio | {fmt(rec['rate_ratio'], '.3f')} |",
+        f"| Last peak | {fmt(rec['last_peak'], '.3e')} |",
+        f"| (e): ratio in [0.7, 1.3] and last peak below 1e-5 | {rec['prediction_e']} |",
+        f"| Mean C_D, last ten units: probe, row | {rec['probe_drag']:.6f}, {rec['row_drag']:.6f} |",
+        f"| (f): equal to four figures | {rec['prediction_f']} |",
+        f"| The row's measure on the continuation ({measure['measure']}) | {reading}; passed {measure['passed']} |",
+    ]
     return [*lines, ""]
 
 
@@ -374,6 +430,7 @@ def render() -> str:
         + window_table()
         + decay_table()
         + rtol_table()
+        + floor_table()
         + cost_table()
         + hash_table()
     )

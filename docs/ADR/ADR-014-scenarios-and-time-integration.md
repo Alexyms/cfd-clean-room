@@ -1824,8 +1824,13 @@ H1 hold the period history, each row by time window, the cost estimate and the h
   figures, with every late step taking one outer iteration: the march no longer iterates below
   the per-step criterion of 1e-4 U, and the quiet threshold of 1e-6 stated before the run took
   rounding, not the criterion, as the floor. The run was not short of time: the decay stopped
-  about 80 units before its end, as the steps stopped iterating (the report's V7). The
-  orchestrator decides on Re 40.
+  about 80 units before its end, as the steps stopped iterating (the report's V7).
+- *Predictions (e) and (f), the Re 40 floor probe (prompt 68b).* The report's V9: continued at
+  1e-6 U, the steps iterate again and the lift's envelope decays again, at about 0.3 of the
+  rate of the row's last iterating periods, its last peak about five times 1e-5; (e) fails and
+  (f) holds, the drag unchanged. By the rule fixed before the probe, Re 40 stays FAIL and the
+  onset bracket is not shown; section F's protocol is unchanged, and the orchestrator takes
+  Re 40 to Alex.
 - *The pressure solve's tolerance.* The rows ran at 1e-4 against ADR-013 decision 3's 1e-8 for
   laminar validation cases; the report's V8 measured the difference on the Re 100 row's shedding
   at 1.4e-8 relative in the Strouhal number, and Alex amended the decision for tier-2 cases.

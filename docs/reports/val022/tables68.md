@@ -134,6 +134,34 @@ Both arms continue the row's final checkpoint (step 4000, t = 200) by docs/repor
 
 Relative difference, 1e-8 against the 1e-4 arm: +1.42e-08; against the row's St (0.14634): +6.33e-06.
 
+### V9. Re 40 continued at a step tolerance of 1e-6 U
+
+From the row's final checkpoint (t = 200), docs/reports/val022/floor68.py; per window of the continuation, the largest |C_L|, the mean outer iterations per step and the mean C_D. Below: the envelope's rates (slope of ln(peak) in time; the original over the row's peaks from t = 63.70 to 101.30, the probe's from ten units in), predictions (e) and (f), and the row's measure on the continuation.
+
+| Window | Largest abs C_L | Mean outer per step | Mean C_D |
+|---|---|---|---|
+| 200 to 205 | 8.077e-05 | 5.00 | 1.750334 |
+| 205 to 210 | 8.168e-05 | 5.00 | 1.750334 |
+| 210 to 215 | 7.974e-05 | 5.17 | 1.750334 |
+| 215 to 220 | 7.501e-05 | 5.16 | 1.750334 |
+| 220 to 225 | 6.843e-05 | 5.14 | 1.750334 |
+| 225 to 230 | 6.502e-05 | 5.22 | 1.750334 |
+| 230 to 235 | 6.032e-05 | 5.15 | 1.750334 |
+| 235 to 240 | 5.433e-05 | 5.00 | 1.750334 |
+
+| Reading | Value |
+|---|---|
+| Steps, to t | 800, 240 (wall limit reached: False) |
+| Wall time (s) | 542 |
+| Original rate (per unit time) | -5.0479e-02 |
+| Probe rate (per unit time) | -1.5392e-02 |
+| Ratio | 0.305 |
+| Last peak | 5.433e-05 |
+| (e): ratio in [0.7, 1.3] and last peak below 1e-5 | False |
+| Mean C_D, last ten units: probe, row | 1.750334, 1.750334 |
+| (f): equal to four figures | True |
+| The row's measure on the continuation (quiet) | largest |C_L| over the last tenth 7.501e-05; passed False |
+
 ### V5. The cost estimate behind the budget
 
 300 steps of Re 100 from the perturbed start-up, four processes sharing the machine (results/builder68/estimate68.py).
