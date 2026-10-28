@@ -333,7 +333,7 @@ class TestRefusals:
             run(_config(), path, provenance=PROVENANCE)
 
     def test_the_transient_section_refuses_what_it_cannot_run(self) -> None:
-        """Turbulence, a fraction of a step, an unknown obstacle, unknown keys."""
+        """A fraction of a step, an unknown obstacle, unknown keys, an unknown scheme."""
         cases = []
         raw = _raw()
         raw["solver"]["t_end"] = 12.5 * DT

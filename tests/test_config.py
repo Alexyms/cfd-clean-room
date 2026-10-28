@@ -3939,10 +3939,29 @@ class TestTransientSection:
             _load_scenario(tmp_path, raw)
 
     def test_the_turbulence_section_with_it_is_refused(self, tmp_path) -> None:
+        """A complete turbulence section reaches the transient check.
+
+        The body is the default configuration's, which the section's own loader
+        accepts, so only the transient section's refusal stops it. Catches
+        (S1): that refusal removed.
+        """
         raw = self._raw(tmp_path)
-        raw["turbulence"] = {"model": "standard"}
+        raw["turbulence"] = {
+            "model": "k_epsilon",
+            "variant": "standard",
+            "wall_treatment": "scalable_wall_functions",
+            "cfl_number": 0.25,
+            "advection_scheme": "upwind",
+            "alpha_turbulence": 0.7,
+            "max_iter": 500,
+            "tol": 1.0e-10,
+        }
         raw["solver"]["stopping_rule"] = "error_estimate"
-        with pytest.raises(ValueError):
+        for segment in raw["boundaries"].values():
+            if segment["type"] == "velocity_inlet":
+                segment["turbulence_intensity"] = 0.05
+                segment["dissipation_length"] = 0.1
+        with pytest.raises(ValueError, match="a transient run is laminar"):
             SimConfig.from_dict(raw)
 
     @pytest.mark.parametrize(
