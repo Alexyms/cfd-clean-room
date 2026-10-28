@@ -44,6 +44,7 @@ HISTORY_PERIODS = 20
 WINDOW = 50.0
 FLOOR_WINDOW = 5.0
 RUNOUT_WINDOW = 20.0
+SPAN = 100.0
 
 
 def load(path: Path) -> dict | None:
@@ -431,6 +432,46 @@ def runout_table() -> list[str]:
         f"| The measure on the whole series, t = 0 to {rec['t_end']:g} (1e-4 U, then 1e-6 U) | {measure_text(rec['measure_whole_series'])} |",
         f"| The measure on the single-stage row, t = 0 to 200 (1e-4 U) | {measure_text(rec['measure_row_alone'])} |",
     ]
+    peak_t = np.array(rec["peaks"]["t"])
+    peak_v = np.array(rec["peaks"]["peak"])
+    lines += [
+        "",
+        "Descriptive, not scored: the envelope by spans of 100 units. The rate is the "
+        "slope of ln(peak) in time over the peaks inside the span, the period twice "
+        "the mean spacing of those peaks.",
+        "",
+        "| Span | Peaks | Rate (per unit time) | Period | Mean outer per step |",
+        "|---|---|---|---|---|",
+    ]
+    span = SPAN
+    start = rec["from_t"]
+    while start < t[-1] - 1e-9:
+        inside = (peak_t >= start) & (peak_t < start + span)
+        steps = (t > start) & (t <= start + span)
+        if inside.sum() >= 3:
+            slope = np.polyfit(peak_t[inside], np.log(peak_v[inside]), 1)[0]
+            period = 2.0 * np.mean(np.diff(peak_t[inside]))
+            lines.append(
+                f"| {start:g} to {start + span:g} | {int(inside.sum())} | {slope:.4e} | "
+                f"{period:.2f} | {np.mean(outer[steps]):.2f} |"
+            )
+        else:
+            lines.append(
+                f"| {start:g} to {start + span:g} | {int(inside.sum())} | | | "
+                f"{np.mean(outer[steps]):.2f} |"
+            )
+        start += span
+    lines += [
+        "",
+        "The peaks of |C_L| between successive sign changes (floor68.peaks): the time, "
+        "the value, and its ratio to the peak before.",
+        "",
+        "| Peak at t | Peak | Ratio to the previous peak |",
+        "|---|---|---|",
+    ]
+    for k, (when, value) in enumerate(zip(peak_t, peak_v, strict=True)):
+        ratio = "" if k == 0 else f"{value / peak_v[k - 1]:.3f}"
+        lines.append(f"| {when:.1f} | {value:.3e} | {ratio} |")
     return [*lines, ""]
 
 

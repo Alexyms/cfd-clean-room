@@ -168,13 +168,131 @@ From the row's final checkpoint (t = 200), docs/reports/val022/runout68.py, the 
 
 | Window | Largest abs C_L | Mean outer per step | Mean C_D |
 |---|---|---|---|
-not run
+| 200 to 220 | 8.168e-05 | 5.08 | 1.750334 |
+| 220 to 240 | 6.843e-05 | 5.13 | 1.750334 |
+| 240 to 260 | 5.051e-05 | 4.89 | 1.750334 |
+| 260 to 280 | 3.532e-05 | 4.02 | 1.750334 |
+| 280 to 300 | 2.671e-05 | 3.10 | 1.750334 |
+| 300 to 320 | 1.672e-05 | 2.89 | 1.750334 |
+| 320 to 340 | 9.578e-06 | 2.43 | 1.750334 |
+| 340 to 360 | 4.227e-06 | 1.89 | 1.750334 |
+| 360 to 380 | 6.257e-07 | 1.19 | 1.750334 |
+| 380 to 400 | 1.346e-06 | 1.00 | 1.750334 |
+| 400 to 420 | 1.458e-06 | 1.00 | 1.750334 |
+| 420 to 440 | 1.408e-06 | 1.00 | 1.750334 |
+| 440 to 460 | 1.168e-06 | 1.00 | 1.750334 |
+| 460 to 480 | 1.043e-06 | 1.00 | 1.750334 |
+| 480 to 500 | 8.241e-07 | 1.00 | 1.750334 |
+| 500 to 520 | 6.618e-07 | 1.00 | 1.750334 |
+| 520 to 540 | 5.999e-07 | 1.00 | 1.750334 |
+| 540 to 560 | 5.001e-07 | 1.00 | 1.750334 |
+| 560 to 580 | 4.580e-07 | 1.00 | 1.750334 |
+| 580 to 600 | 3.845e-07 | 1.00 | 1.750334 |
+
+| Reading | Value |
+|---|---|
+| Steps, to t | 8000, 600 (stopped by the budget: False) |
+| Wall time (s); of which to t = 240 | 2256; 561 |
+| Estimate at t = 260 for the whole march (s) | 5382 |
+| First 800 steps equal to floor68.json's bit for bit (t True, outer True, c_l True, c_d True) | True |
+| Probe rate, t = 210 to 240 (per unit time) | -1.5392e-02 |
+| Run-out rate, peaks from t = 250 to the first below 1e-6 (per unit time) | -2.8855e-02 |
+| Ratio of the run-out rate to the probe rate | 1.875 |
+| Time of the first peak below 1e-6 | 361.30 |
+| Last peak | 3.845e-07 |
+| (g) rate within 30% of the probe's | False |
+| (g) first peak below 1e-6 inside 450 to 550 | False |
+| (g) the measure passes on the series to 600 | True |
+| (g), all three | False |
+| The measure on the whole series, t = 0 to 600 (1e-4 U, then 1e-6 U) | amplitudes: last amplitudes 1.106e-06, 8.760e-07, 6.987e-07, 5.734e-07, 4.791e-07, 4.021e-07; ratios 0.7919, 0.7977, 0.8206, 0.8355, 0.8394; passed True |
+| The measure on the single-stage row, t = 0 to 200 (1e-4 U) | quiet: largest |C_L| over the last tenth 9.461e-05; passed False |
+
+Descriptive, not scored: the envelope by spans of 100 units. The rate is the slope of ln(peak) in time over the peaks inside the span, the period twice the mean spacing of those peaks.
+
+| Span | Peaks | Rate (per unit time) | Period | Mean outer per step |
+|---|---|---|---|---|
+| 200 to 300 | 19 | -1.6054e-02 | 10.08 | 4.44 |
+| 300 to 400 | 14 | -4.2669e-02 | 14.72 | 1.88 |
+| 400 to 500 | 8 | -8.1760e-03 | 24.99 | 1.00 |
+| 500 to 600 | 7 | -7.0193e-03 | 25.65 | 1.00 |
+
+The peaks of |C_L| between successive sign changes (floor68.peaks): the time, the value, and its ratio to the peak before.
+
+| Peak at t | Peak | Ratio to the previous peak |
+|---|---|---|
+| 206.7 | 8.168e-05 |  |
+| 211.7 | 7.974e-05 | 0.976 |
+| 216.6 | 7.501e-05 | 0.941 |
+| 221.4 | 6.843e-05 | 0.912 |
+| 226.2 | 6.502e-05 | 0.950 |
+| 231.2 | 6.032e-05 | 0.928 |
+| 236.1 | 5.433e-05 | 0.901 |
+| 240.9 | 5.051e-05 | 0.930 |
+| 245.7 | 4.656e-05 | 0.922 |
+| 250.5 | 4.255e-05 | 0.914 |
+| 255.4 | 3.923e-05 | 0.922 |
+| 260.3 | 3.532e-05 | 0.900 |
+| 265.2 | 3.317e-05 | 0.939 |
+| 270.3 | 3.116e-05 | 0.940 |
+| 275.4 | 2.893e-05 | 0.928 |
+| 280.7 | 2.671e-05 | 0.923 |
+| 286.1 | 2.488e-05 | 0.932 |
+| 291.8 | 2.220e-05 | 0.892 |
+| 297.4 | 1.950e-05 | 0.879 |
+| 303.0 | 1.672e-05 | 0.857 |
+| 308.7 | 1.406e-05 | 0.841 |
+| 314.5 | 1.172e-05 | 0.833 |
+| 320.5 | 9.578e-06 | 0.817 |
+| 326.6 | 7.733e-06 | 0.807 |
+| 333.0 | 6.117e-06 | 0.791 |
+| 340.0 | 4.228e-06 | 0.691 |
+| 347.0 | 2.722e-06 | 0.644 |
+| 353.9 | 1.407e-06 | 0.517 |
+| 361.3 | 6.257e-07 | 0.445 |
+| 367.3 | 7.902e-08 | 0.126 |
+| 376.5 | 3.578e-07 | 4.528 |
+| 387.1 | 9.758e-07 | 2.727 |
+| 398.7 | 1.346e-06 | 1.380 |
+| 410.6 | 1.458e-06 | 1.083 |
+| 422.7 | 1.408e-06 | 0.966 |
+| 434.9 | 1.295e-06 | 0.920 |
+| 447.3 | 1.168e-06 | 0.902 |
+| 459.9 | 1.044e-06 | 0.894 |
+| 472.5 | 9.278e-07 | 0.889 |
+| 485.2 | 8.241e-07 | 0.888 |
+| 498.1 | 7.356e-07 | 0.893 |
+| 510.9 | 6.618e-07 | 0.900 |
+| 523.8 | 5.999e-07 | 0.906 |
+| 536.6 | 5.468e-07 | 0.911 |
+| 549.5 | 5.001e-07 | 0.915 |
+| 562.2 | 4.580e-07 | 0.916 |
+| 575.1 | 4.197e-07 | 0.916 |
+| 587.9 | 3.845e-07 | 0.916 |
 
 ### V11. An estimate of the onset of shedding from two growth rates
 
 Reported, not scored, except prediction (h). docs/reports/val022/onset68.py: the rate at Re 40 is the probe's late decay (V9), at Re 60 the envelope's growth between 1% and 10% of its saturated amplitude, where the Landau amplitude equation puts the rate within 1% of the linear one. The line through (40, rate) and (60, rate) crosses zero at the estimate.
 
-not run
+| Re | Rate source | Window | Values | Rate per unit time | Largest residual of ln(amplitude) | Period |
+|---|---|---|---|---|---|---|
+| 40 | floor68.json probe_rate | peaks from t = 210 to 240 | | -1.5392e-02 | | 9.76 |
+| 40 | runout68.json run_rate | peaks from t = 250 to the first below 1e-6 | | -2.8855e-02 | | |
+| 60 | primary | t = 13.7 to 55.0, 1.319e-03 to 1.189e-02 | 10 | 5.0890e-02 | 0.122 | 9.11 |
+| 60 | ceiling 0.05 | t = 13.7 to 41.1, 1.319e-03 to 5.929e-03 | 7 | 5.4362e-02 | 0.088 | 9.07 |
+| 60 | ceiling 0.2 | t = 13.7 to 68.5, 1.319e-03 to 2.376e-02 | 13 | 5.0644e-02 | 0.125 | 9.07 |
+| 60 | floor 0.03 | t = 31.5 to 55.0, 4.054e-03 to 1.189e-02 | 6 | 4.5687e-02 | 0.031 | 9.43 |
+
+Saturated amplitude at Re 60 (median over the last 50 units): 0.1215. The Re 60 rate by the sign-change peaks of V9's definition over the primary window: 4.9347e-02.
+
+| Reading | Estimate of Re_cr |
+|---|---|
+| primary (Re 40 rate from the probe) | 44.6 |
+| ceiling 0.05 (Re 40 rate from the probe) | 44.4 |
+| ceiling 0.2 (Re 40 rate from the probe) | 44.7 |
+| floor 0.03 (Re 40 rate from the probe) | 45.0 |
+| primary window with the run-out's Re 40 rate | 47.2 |
+| Sohankar, Norberg and Davidson (Table V) | 51.2 +/- 1 |
+| (h): the primary estimate inside 45 to 57 | False |
 
 ### V5. The cost estimate behind the budget
 
