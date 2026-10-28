@@ -1450,6 +1450,19 @@ committed before it ran).**
 - (c) Re 40 settles steady and Re 60 sheds.
 - (d) C_D at Re 100 within 10% of 1.46.
 
+**Predictions (orchestrator, 2026-10-28, step 6b's Re 40 floor probe; committed before it ran).**
+From the Re 40 row's final state, marched on at a step tolerance of 1e-6 U (cap 500, the row's dt)
+for 40 time units or two hours (`docs/reports/val022/floor68.py`, whose docstring fixes the
+readings: peaks of |C_L| per half period, the envelope's rate as the slope of ln(peak) in time,
+the original's over the row's last three whole periods before t = 101):
+- (e) The lift's envelope decays again, at a rate within 30% of the original run's over its last
+  iterating periods, and falls below 1e-5 within the probe.
+- (f) The drag is unchanged to four figures.
+Decided before the run: if (e) holds, the stall was the instrument, the Re 40 row is scored by
+its original measure on the continuation, and section F's protocol for the row becomes two stages
+(1e-4 U to t = 200, then 1e-6 U), the original stage's FAIL recorded beside; if (e) fails, Re 40
+stays FAIL and the onset bracket is not shown.
+
 **Method.** `warm59.py` (T1), `cylinder59.py` (T2 to T4), `order59.py` (T5), `scales59.py` (T6),
 `cleanout59.py` (T7, prompt 59b); each script's docstring states its arms and what it writes. Wall times were taken with three to
 five processes sharing the machine and are stated with their process counts; counts are not
