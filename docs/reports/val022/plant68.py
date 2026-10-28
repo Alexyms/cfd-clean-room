@@ -31,6 +31,7 @@ ME = "src/mesh.py"
 FO = "src/forces.py"
 TI = "src/time_integration.py"
 CY = "validation/cylinder.py"
+BM = "scripts/benchmark.py"
 T_MESH = ("tests/test_mesh.py", "InteriorClustering")
 T_CONF = ("tests/test_config.py", "Breakpoints")
 T_HAND = ("tests/test_forces.py", "ByHand")
@@ -38,6 +39,8 @@ T_STEADY = ("tests/test_forces.py", "SteadyFlows")
 T_ST = ("tests/test_forces.py", "Strouhal")
 T_RUN = ("tests/test_transient_run.py", "")
 T_CYL = ("tests/test_cylinder.py", "")
+T_TRANSIENT = ("tests/test_config.py", "TransientSection")
+T_GAUGE = ("tests/test_forces.py", "ByHand")
 
 # (id, what, [(file, old, new), ...], [(test file, -k expression), ...])
 PLANTS: list[tuple[str, str, list[tuple[str, str, str]], list[tuple[str, str]]]] = [
@@ -286,6 +289,153 @@ PLANTS: list[tuple[str, str, list[tuple[str, str, str]], list[tuple[str, str]]]]
         [(CY, "*= STARTUP_BOTTOM_FACTOR", "*= 1.0")],
         [T_CYL],
     ),
+    # Prompt 68c: the window clauses of the Re 40 and Re 60 measures (test 68's
+    # B1, plants T5, T6, T18), the harness's reading (B2, plant T7) and the
+    # suggestions' tests.
+    (
+        "Y6",
+        "the decay's window the whole run, not its second half",
+        [(CY, "    late = t >= 0.5 * t[-1]\n", "    late = t >= 0.0\n")],
+        [T_CYL],
+    ),
+    (
+        "Y7",
+        "the quiet reading's window the second half, not the last tenth",
+        [
+            (
+                CY,
+                "    tail = t >= (1.0 - QUIET_FRACTION) * t[-1]\n",
+                "    tail = t >= 0.5 * t[-1]\n",
+            )
+        ],
+        [T_CYL],
+    ),
+    (
+        "Y8",
+        "the sustain reads the oldest five ratios, not the last",
+        [
+            (
+                CY,
+                "    last = every[-(AMPLITUDE_PERIODS + 1) :]\n",
+                "    last = every[: AMPLITUDE_PERIODS + 1]\n",
+            )
+        ],
+        [T_CYL],
+    ),
+    (
+        "Y9",
+        "the decay reads the first six amplitudes of its window, not the last",
+        [
+            (
+                CY,
+                "        last = recent[-(AMPLITUDE_PERIODS + 1) :]\n",
+                "        last = recent[: AMPLITUDE_PERIODS + 1]\n",
+            )
+        ],
+        [T_CYL],
+    ),
+    (
+        "Z1",
+        "the harness reports the spectrum's number as the row's value",
+        [
+            (
+                BM,
+                '    st = float("nan") if reading is None else reading.strouhal\n',
+                '    st = float("nan") if reading is None else reading.spectral_strouhal\n',
+            )
+        ],
+        [T_CYL],
+    ),
+    (
+        "Z2",
+        "the harness scores the band on the spectrum's number",
+        [
+            (
+                BM,
+                "cylinder.strouhal_in_band(None if reading is None else reading.strouhal)",
+                "cylinder.strouhal_in_band(\n"
+                "            None if reading is None else reading.spectral_strouhal\n"
+                "        )",
+            )
+        ],
+        [T_CYL],
+    ),
+    (
+        "Z3",
+        "the harness reports the spectrum's number as the crossing reading",
+        [
+            (
+                BM,
+                '        "strouhal": None if reading is None else reading.strouhal,\n',
+                '        "strouhal": None if reading is None else reading.spectral_strouhal,\n',
+            )
+        ],
+        [T_CYL],
+    ),
+    (
+        "S1",
+        "the transient section's refusal of the turbulence section removed",
+        [
+            (
+                CF,
+                "        if self.turbulence is not None:\n"
+                "            raise ValueError(\n"
+                '                f"{context}: a transient run is laminar',
+                "        if False:\n"
+                "            raise ValueError(\n"
+                '                f"{context}: a transient run is laminar',
+            )
+        ],
+        [T_TRANSIENT],
+    ),
+    (
+        "S2a",
+        "strouhal's finiteness check dropped",
+        [
+            (
+                FO,
+                "        if not math.isfinite(value) or value <= 0.0:\n",
+                "        if value <= 0.0:\n",
+            )
+        ],
+        [T_ST],
+    ),
+    (
+        "S2b",
+        "strouhal's bool check dropped",
+        [
+            (
+                FO,
+                "        if isinstance(value, bool) or not isinstance(value, (int, float)):\n",
+                "        if not isinstance(value, (int, float)):\n",
+            )
+        ],
+        [T_ST],
+    ),
+    (
+        "F8",
+        "D taken from the obstacle's x extent",
+        [
+            (
+                FO,
+                "self.height: float = spec.y_end - spec.y_start",
+                "self.height: float = spec.x_end - spec.x_start",
+            )
+        ],
+        [T_GAUGE],
+    ),
+    (
+        "F9",
+        "the spectrum's cross-check always agreeing",
+        [
+            (
+                FO,
+                "        agrees=abs(spectral - st) <= resolution,\n",
+                "        agrees=True,\n",
+            )
+        ],
+        [T_ST],
+    ),
 ]
 
 
@@ -353,7 +503,7 @@ def main() -> None:
                     outcome = f"BROKEN ({code})"
                 elif code == 1 and outcome == "SURVIVED":
                     outcome = "CAUGHT"
-        git(root, "checkout", "--", "src", "validation")
+        git(root, "checkout", "--", "src", "validation", "scripts")
         if git(root, "status", "--porcelain").strip():
             raise SystemExit(f"{pid}: the worktree is not clean after restoring")
         seconds = time.perf_counter() - started
