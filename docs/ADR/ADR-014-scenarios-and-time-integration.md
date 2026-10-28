@@ -1865,7 +1865,7 @@ H1 hold the period history, each row by time window, the cost estimate and the h
   laminar validation cases; the report's V8 measured the difference on the Re 100 row's shedding
   at 1.4e-8 relative in the Strouhal number, and Alex amended the decision for tier-2 cases.
 - *Prediction (d) holds.* V2.
-- *The budget.* The estimate from 300 steps per grid, about 5.2 hours summed and 2 of wall
+- *The budget.* The estimate from 300 steps per grid, about 5.5 hours summed (V5) and 2 of wall
   clock, let the runs go ahead; they took about 3.2 hours of wall clock and 9.1 summed over the
   processes, the steps taking 8 to 9 outer iterations once shedding developed, against 5 from
   the start-up, with fifteen processes sharing the machine.

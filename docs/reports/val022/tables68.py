@@ -5,7 +5,7 @@
 
 Reads docs/reports/val022/<preset>.json (scripts/benchmark.py's VAL-022 rows,
 each with every step's lift and drag), the probes' records beside them
-(rtol68_*.json, floor68.json), results/builder68/estimate_*.json
+(rtol68_*.json, floor68.json, runout68.json, onset68.json), results/builder68/estimate_*.json
 (the cost estimate) and the hash records results/builder62/hash_*_68.json
 (hash62.py at this step's source) against prompt 67's (_67). A record that is
 missing prints as "not run". The report, val022.md, copies the tables and
@@ -43,6 +43,7 @@ HASH_CASES = (
 HISTORY_PERIODS = 20
 WINDOW = 50.0
 FLOOR_WINDOW = 5.0
+RUNOUT_WINDOW = 20.0
 
 
 def load(path: Path) -> dict | None:
@@ -112,7 +113,10 @@ def strouhal_table() -> list[str]:
         "St from the last ten periods' interpolated zero crossings, beside the "
         "spectrum's peak over the same window and its resolution; C_D the mean "
         "over that window; the lift amplitude half the range of C_L over it. "
-        "Sohankar et al.: St 0.146, C_D 1.45 to 1.49; the band 0.139 to 0.153.",
+        "Sohankar et al.: St 0.146, C_D 1.45 to 1.49; the band 0.139 to 0.153. "
+        "The spectrum's resolution is one bin, about 9% to 10% of St here and wider "
+        "than the band's 5%, so its agreement is a consistency check, not a "
+        "discriminator: only the zero-crossing reading is scored.",
         "",
         "| Preset | Grid | St | Spectrum St | Resolution | Agree | C_D | C_L amplitude | In band |",
         "|---|---|---|---|---|---|---|---|---|",
@@ -357,6 +361,135 @@ def floor_table() -> list[str]:
     return [*lines, ""]
 
 
+def runout_table() -> list[str]:
+    """V10: the Re 40 run-out (prompt 68c): the march to t = 600 at 1e-6 U and its measure."""
+    lines = [
+        "### V10. Re 40 run out to t = 600 at a step tolerance of 1e-6 U",
+        "",
+        "From the row's final checkpoint (t = 200), docs/reports/val022/runout68.py, "
+        "the probe's settings (V9) to t = 600; per window of the run-out, the largest "
+        "|C_L| (the envelope), the mean outer iterations per step and the mean C_D. "
+        "Below: the rates, prediction (g) with its three parts, and the row's measure "
+        "(`validation.cylinder.decays`, unchanged) on the whole series from t = 0, "
+        "with the single-stage row's own reading beside it.",
+        "",
+        "| Window | Largest abs C_L | Mean outer per step | Mean C_D |",
+        "|---|---|---|---|",
+    ]
+    rec = load(HERE / "runout68.json")
+    if rec is None:
+        return [*lines, "not run", ""]
+    t = np.array(rec["series"]["t"])
+    c_l = np.array(rec["series"]["c_l"])
+    c_d = np.array(rec["series"]["c_d"])
+    outer = np.array(rec["series"]["outer"])
+    start = rec["from_t"]
+    while start < t[-1] - 1e-9:
+        inside = (t > start) & (t <= start + RUNOUT_WINDOW + 1e-9)
+        lines.append(
+            f"| {start:g} to {start + RUNOUT_WINDOW:g} | {np.max(np.abs(c_l[inside])):.3e} | "
+            f"{np.mean(outer[inside]):.2f} | {np.mean(c_d[inside]):.6f} |"
+        )
+        start += RUNOUT_WINDOW
+
+    def measure_text(measure: dict) -> str:
+        if measure["measure"] == "quiet":
+            reading = f"largest |C_L| over the last tenth {measure['largest_lift']:.3e}"
+        else:
+            reading = (
+                "last amplitudes "
+                + ", ".join(f"{a:.3e}" for a in measure["amplitudes"])
+                + "; ratios "
+                + ", ".join(f"{r:.4f}" for r in measure["ratios"])
+            )
+        return f"{measure['measure']}: {reading}; passed {measure['passed']}"
+
+    same = rec["same_as_probe"]
+    control = (
+        "not compared"
+        if same is None
+        else ", ".join(f"{k} {same[k]}" for k in ("t", "outer", "c_l", "c_d"))
+    )
+    lines += [
+        "",
+        "| Reading | Value |",
+        "|---|---|",
+        f"| Steps, to t | {rec['steps']}, {rec['t_end']:g} (stopped by the budget: {rec['stopped_by_budget']}) |",
+        f"| Wall time (s); of which to t = 240 | {rec['wall_seconds']:.0f}; {fmt(rec['probe_end_seconds'], '.0f')} |",
+        f"| Estimate at t = 260 for the whole march (s) | {fmt(rec['estimate_total_seconds'], '.0f')} |",
+        f"| First {same['steps'] if same else 0} steps equal to floor68.json's bit for bit ({control}) | "
+        f"{all(same[k] for k in ('t', 'outer', 'c_l', 'c_d')) if same else 'not compared'} |",
+        f"| Probe rate, t = 210 to 240 (per unit time) | {fmt(rec['probe_rate'], '.4e')} |",
+        f"| Run-out rate, peaks from t = {rec['rate_from']:g} to the first below 1e-6 (per unit time) | {fmt(rec['run_rate'], '.4e')} |",
+        f"| Ratio of the run-out rate to the probe rate | {fmt(rec['rate_ratio'], '.3f')} |",
+        f"| Time of the first peak below 1e-6 | {fmt(rec['quiet_time'], '.2f')} |",
+        f"| Last peak | {fmt(rec['last_peak'], '.3e')} |",
+        f"| (g) rate within 30% of the probe's | {rec['prediction_g_rate']} |",
+        f"| (g) first peak below 1e-6 inside {rec['quiet_time_window'][0]:g} to {rec['quiet_time_window'][1]:g} | {rec['prediction_g_quiet_time']} |",
+        f"| (g) the measure passes on the series to {rec['t_end']:g} | {rec['prediction_g_measure']} |",
+        f"| (g), all three | {rec['prediction_g']} |",
+        f"| The measure on the whole series, t = 0 to {rec['t_end']:g} (1e-4 U, then 1e-6 U) | {measure_text(rec['measure_whole_series'])} |",
+        f"| The measure on the single-stage row, t = 0 to 200 (1e-4 U) | {measure_text(rec['measure_row_alone'])} |",
+    ]
+    return [*lines, ""]
+
+
+def onset_table() -> list[str]:
+    """V11: the onset estimate (prompt 68c): the line through the Re 40 and Re 60 rates."""
+    lines = [
+        "### V11. An estimate of the onset of shedding from two growth rates",
+        "",
+        "Reported, not scored, except prediction (h). docs/reports/val022/onset68.py: "
+        "the rate at Re 40 is the probe's late decay (V9), at Re 60 the envelope's "
+        "growth between 1% and 10% of its saturated amplitude, where the Landau "
+        "amplitude equation puts the rate within 1% of the linear one. The line "
+        "through (40, rate) and (60, rate) crosses zero at the estimate.",
+        "",
+    ]
+    rec = load(HERE / "onset68.json")
+    if rec is None:
+        return [*lines, "not run", ""]
+    lines += [
+        "| Re | Rate source | Window | Values | Rate per unit time | Largest residual of ln(amplitude) | Period |",
+        "|---|---|---|---|---|---|---|",
+        f"| 40 | floor68.json probe_rate | peaks from t = 210 to 240 | | {rec['rate_40']:.4e} | | {rec['period_40']:.2f} |",
+    ]
+    if rec["runout_rate_40"] is not None:
+        lines.append(
+            f"| 40 | runout68.json run_rate | peaks from t = 250 to the first below 1e-6 | | {rec['runout_rate_40']:.4e} | | |"
+        )
+    for name, reading in rec["re60_readings"].items():
+        if reading["rate"] is None:
+            lines.append(f"| 60 | {name} | not readable | {reading['values']} | | | |")
+            continue
+        lines.append(
+            f"| 60 | {name} | t = {reading['from_t']:.1f} to {reading['to_t']:.1f}, "
+            f"{reading['from_amplitude']:.3e} to {reading['to_amplitude']:.3e} | "
+            f"{reading['values']} | {reading['rate']:.4e} | {reading['largest_residual']:.3f} | "
+            f"{reading['period']:.2f} |"
+        )
+    lines += [
+        "",
+        f"Saturated amplitude at Re 60 (median over the last 50 units): {rec['saturated']:.4f}. "
+        f"The Re 60 rate by the sign-change peaks of V9's definition over the primary window: "
+        f"{fmt(rec['re60_sign_change_rate'], '.4e')}.",
+        "",
+        "| Reading | Estimate of Re_cr |",
+        "|---|---|",
+    ]
+    for name, value in rec["estimate_sensitivity"].items():
+        lines.append(f"| {name} (Re 40 rate from the probe) | {value:.1f} |")
+    if rec["estimate_with_runout_rate"] is not None:
+        lines.append(
+            f"| primary window with the run-out's Re 40 rate | {rec['estimate_with_runout_rate']:.1f} |"
+        )
+    lines += [
+        f"| Sohankar, Norberg and Davidson (Table V) | {rec['sohankar'][0]:g} +/- {rec['sohankar'][1]:g} |",
+        f"| (h): the primary estimate inside {rec['predicted_band'][0]:g} to {rec['predicted_band'][1]:g} | {rec['prediction_h']} |",
+    ]
+    return [*lines, ""]
+
+
 def cost_table() -> list[str]:
     """V5: the cost estimate from 300 steps of each grid (prompt 68's budget rule)."""
     lines = [
@@ -383,6 +516,19 @@ def cost_table() -> list[str]:
             f"{rec['startup_s']:.0f} | {rec['outer_mean']:.2f}, {rec['outer_max']} | "
             f"{rec['s_per_step_last100']:.2f} |"
         )
+    clustered = load(ESTIMATES / "estimate_clustered_0.05_0.0001_100.json")
+    uniform = load(ESTIMATES / "estimate_uniform_0.05_0.0001_100.json")
+    rows = {preset: load(HERE / f"{preset}.json") for preset in PRESETS}
+    if clustered is not None and uniform is not None and None not in rows.values():
+        total = 0.0
+        for preset, row in rows.items():
+            cost = uniform if preset.endswith("uniform") else clustered
+            total += row["steps"] * cost["s_per_step_last100"] + cost["startup_s"]
+        lines += [
+            "",
+            "The four rows' steps (V1) at the cost of their grid in the 0.05, 0.0001 "
+            f"lines above, each with its start-up: {total:,.0f} s, {total / 3600:.1f} hours.",
+        ]
     return [*lines, ""]
 
 
@@ -431,6 +577,8 @@ def render() -> str:
         + decay_table()
         + rtol_table()
         + floor_table()
+        + runout_table()
+        + onset_table()
         + cost_table()
         + hash_table()
     )
