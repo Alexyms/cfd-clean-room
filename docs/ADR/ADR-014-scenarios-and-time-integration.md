@@ -1037,6 +1037,17 @@ fewer than ten refused). The rows, their measures and their results are
 `docs/reports/val022/val022.md`; the Re 40 row fails the lift measure stated before the run
 while its drag and outer counts show it steady (that report, and the step 6b findings below).
 
+*Re 40's protocol (Alex, 2026-10-28, prompt 68c).* The Re 40 row is run in two stages and scored
+by `validation.cylinder.decays`, unchanged, on the whole series from t = 0: the row's 4000 steps
+at a per-step tolerance of 1e-4 U to t = 200, then the continuation at 1e-6 U to t = 600
+(`docs/reports/val022/runout68.py`). The first stage's own FAIL (quiet reading 9.46e-5 against
+1e-6, table V3) stays on record beside the result. The reason: a test of whether an oscillation
+dies out needs a step tolerance below the amplitude it judges. A step whose first outer
+iteration already moves the field by less than the tolerance takes no further iteration, so the
+march does not correct what is smaller than that, and the decay stalls at about the tolerance's
+level; at 1e-4 U the lift stopped falling at about 1e-4 (table V7), and at 1e-6 U the decay
+resumed (table V9).
+
 ## G. Modules, interfaces and the build order (decision 12)
 
 **Contracts (draft).** They replace SYSTEM.md section 4's planned `ScenarioManager`:
@@ -1462,6 +1473,25 @@ Decided before the run: if (e) holds, the stall was the instrument, the Re 40 ro
 its original measure on the continuation, and section F's protocol for the row becomes two stages
 (1e-4 U to t = 200, then 1e-6 U), the original stage's FAIL recorded beside; if (e) fails, Re 40
 stays FAIL and the onset bracket is not shown.
+
+**Predictions (orchestrator, 2026-10-28, step 6b's Re 40 run-out and onset estimate; committed
+before they ran).** (e) failed, and Alex decided to keep the Re 40 measure unchanged and run the
+march long enough to judge it. From the probe's end state (t = 240; the probe saved no
+checkpoint, so `docs/reports/val022/runout68.py` marches 200 to 240 again and compares the
+series with `floor68.json` to the bit before going on) at a step tolerance of 1e-6 U, cap 500,
+the row's dt, to t = 600, keeping both time levels. The script's docstring fixes the readings
+(the envelope's rate over the peaks from t = 250 before the first below 1e-6, the time of that
+peak, `validation.cylinder.decays` on the whole series from t = 0). Budget 2 hours; the march
+stops and reports if the estimate from its first 20 units past t = 240 is over.
+- (g) The envelope keeps decaying at -0.0154 per unit time within 30% (the probe's rate,
+  `floor68.json`), its peaks fall below 1e-6 near t = 500 (read as 450 to 550), and the measure
+  passes on the series to 600.
+- (h) The onset estimate lies between 45 and 57. It is the zero of the straight line through the
+  growth rate at Re 40 (the probe's late decay rate) and at Re 60 (the envelope's growth in its
+  small-amplitude phase, before saturation), reported beside Sohankar's 51.2 +/- 1 with the
+  caveat that 40 and 60 are each about 10 from onset, where a linear relation is approximate.
+  `docs/reports/val022/onset68.py` fixes the window and the envelope before the Re 60 series is
+  read.
 
 **Method.** `warm59.py` (T1), `cylinder59.py` (T2 to T4), `order59.py` (T5), `scales59.py` (T6),
 `cleanout59.py` (T7, prompt 59b); each script's docstring states its arms and what it writes. Wall times were taken with three to
