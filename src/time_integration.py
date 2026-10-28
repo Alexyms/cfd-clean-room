@@ -1,4 +1,4 @@
-"""Tier 1 time integration: piecewise-steady flow, time-accurate transport (ADR-014 A).
+"""Time integration: tier 1's scenarios and tier 2's transient flow (ADR-014 A).
 
 A scenario's run (ADR-014 G, step 4). The scenario manager turns the events
 into intervals, each with one steady flow state keyed by its fingerprint.
@@ -52,6 +52,22 @@ first fell to a hundredth of the initial level, and the start of the current
 within-spec stretch per class and for the room. With ``scenario.hold_time``
 the run stops once the room has held within spec that long (decision 2). At
 the end the recovery outputs are written to ``/recovery/``.
+
+Tier 2 (ADR-014 G, step 6b). A configuration with a ``transient`` section
+runs the flow itself through time: ``StaggeredSolver.solve_transient`` from
+the initial state given (the state at rest when none) to ``solver.t_end`` in
+steps of ``solver.dt``, laminar, no particles. The run file holds the faces
+and pressure at step 0, every ``output_interval`` steps and at the last, and
+one row per step (``io_manager.StepSeries``): the outer count, the worst
+imbalance, the capped corrections and, with ``transient.forces``, the drag
+and lift on the obstacle and their coefficients (``forces.ForceGauge``). With
+``checkpoint_interval`` the checkpoint holds the step's faces and pressure
+and the step before's, every that many steps and at the last, after that
+step's rows; a restart resumes from it (``TransientResume``), bitwise the
+uninterrupted march, or marches again from the run file's step-0 frame when
+there is none. At the end the Strouhal number is read from the lift
+coefficient's last ten periods (``forces.strouhal``) where there are ten, and
+the drag coefficient is its mean over the same window, or the last step's.
 """
 
 import logging
@@ -69,13 +85,21 @@ import numpy as np
 
 from src.boundary_staggered import StaggeredBoundary
 from src.config import Initial, SimConfig
-from src.io_manager import RecoveryRecord, RunFile
+from src.forces import ForceGauge, StrouhalReading, strouhal
+from src.io_manager import RecoveryRecord, RunFile, StepSeries
 from src.mesh import SOLID, Mesh
 from src.particles import ParticlePhysics
 from src.scenarios import Interval, ScenarioManager
-from src.solver_staggered import FlowState, StaggeredSolver, SteadyCheckpoint
+from src.solver_staggered import (
+    FlowState,
+    StaggeredSolver,
+    SteadyCheckpoint,
+    TransientResume,
+    TransientStep,
+    TransientStepError,
+)
 from src.solver_transport import MassBudget, TransportSolver
-from src.staggered import FaceVelocities
+from src.staggered import FaceVelocities, allocate_fields
 
 logger = logging.getLogger(__name__)
 
@@ -351,6 +375,69 @@ class RunRecord:
     recovery: RecoveryRecord | None
     restarted_from: int | None = None
     resumed_plan: IntervalPlan | None = None
+
+
+@dataclass(frozen=True, eq=False)
+class TransientMarchStep:
+    """What a tier-2 run's ``on_step`` is handed after each step's writes.
+
+    Parameters
+    ----------
+    record : TransientStep
+        The solver's record of the step.
+    state : FlowState
+        The faces and pressure the step reached.
+    c_d, c_l : float
+        The drag and lift coefficients on the configured obstacle; NaN
+        without ``transient.forces``.
+    """
+
+    record: TransientStep
+    state: FlowState
+    c_d: float
+    c_l: float
+
+
+@dataclass(frozen=True, eq=False)
+class TransientRunRecord:
+    """What a tier-2 run did, as ``scripts/run_scenario.py`` summarises it.
+
+    Parameters
+    ----------
+    path : Path
+        The run file.
+    steps : int
+        Steps taken by the end, the run's count.
+    t_final : float
+        Simulated time at the end, s.
+    wall_seconds : float
+        Wall time of this call.
+    outer_mean, outer_max : float, int
+        The outer iterations per step over every step the run file holds.
+    strouhal : StrouhalReading or None
+        From the lift coefficient's last ten periods; None without forces or
+        with fewer than ten periods.
+    strouhal_refusal : str or None
+        Why ``strouhal`` is None: no forces configured, or the instrument's
+        refusal.
+    drag_coefficient : float or None
+        The mean C_D over the Strouhal window, or the last step's when there
+        is no reading; None without forces.
+    restarted_from : int or None
+        The checkpoint step a restart continued from, 0 for one that found
+        none and marched again; None for a new run.
+    """
+
+    path: Path
+    steps: int
+    t_final: float
+    wall_seconds: float
+    outer_mean: float
+    outer_max: int
+    strouhal: StrouhalReading | None
+    strouhal_refusal: str | None
+    drag_coefficient: float | None
+    restarted_from: int | None = None
 
 
 def _cell_holding(faces: np.ndarray, position: float) -> int:
@@ -1081,15 +1168,19 @@ def run(
     *,
     restart: str | os.PathLike[str] | None = None,
     flows_from: str | os.PathLike[str] | None = None,
-    on_step: Callable[[MarchStep], None] | None = None,
+    on_step: Callable[[MarchStep], None]
+    | Callable[[TransientMarchStep], None]
+    | None = None,
     provenance: Provenance | None = None,
-) -> RunRecord:
-    """Run a scenario under tier 1 (ADR-014 A), writing its run file (ADR-014 D).
+    initial: FlowState | None = None,
+) -> RunRecord | TransientRunRecord:
+    """Run a scenario under tier 1 or a transient flow under tier 2 (ADR-014 A, D).
 
     Parameters
     ----------
     config : SimConfig
-        A configuration with a scenario section and a transport section.
+        A configuration with a scenario section and a transport section
+        (tier 1), or with a transient section (tier 2, ``_run_transient``).
     run_file : str or Path, optional
         A new run's file; neither it nor its checkpoint file may exist.
     restart : str or Path, optional
@@ -1102,14 +1193,22 @@ def run(
         reads (``flow_inputs``). A state it holds under an interval's
         fingerprint is copied in and not solved.
     on_step : Callable[[MarchStep], None], optional
-        Called after every step's writes. It must not change what it is
+        Called after every step's writes, with a MarchStep under tier 1 and
+        a TransientMarchStep under tier 2. It must not change what it is
         handed; an exception it raises ends the run there, as a crash would.
     provenance : Provenance, optional
         Written to a new run's ``/config``; ``Provenance.here()`` when None.
+    initial : FlowState, optional
+        Tier 2 only: a new run's state at t = 0 (the state at rest when
+        None), stored as its step-0 frame. Refused under tier 1 and on a
+        restart, which reads the run file's.
 
     Returns
     -------
-    RunRecord
+    RunRecord or TransientRunRecord
+        Tier 1's record, or tier 2's (see that class).
+
+    Tier 1 returns RunRecord
         The intervals as planned, the flow states and how each was had,
         the steps and time at the end, whether the hold stopped it, the
         budgets, a clean-out's recovery outputs, and for a restart the
@@ -1128,14 +1227,27 @@ def run(
         sensor in a SOLID cell, or a clean-out without sensors or thresholds.
     FlowNotConvergedError
         When a flow state stops at its cap or goes non-finite.
+    TransientStepError
+        Under tier 2, when a step reaches ``transient.step_cap`` or goes
+        non-finite; the rows of the steps before it are written first.
     """
-    if config.scenario is None:
-        raise ValueError(
-            "time_integration.run runs a scenario under tier 1 (ADR-014 A); the "
-            "configuration has no scenario section, and tier 2 arrives with step 6"
-        )
     if (run_file is None) == (restart is None):
         raise ValueError("give exactly one of run_file (a new run) and restart")
+    if config.transient is not None:
+        if flows_from is not None:
+            raise ValueError("flows_from is tier 1's; a transient run solves its flow")
+        if initial is not None and restart is not None:
+            raise ValueError(
+                "initial is a new run's state at t = 0; a restart reads its run file's"
+            )
+        return _run_transient(config, run_file, restart, on_step, provenance, initial)
+    if initial is not None:
+        raise ValueError("initial is tier 2's; a scenario's flow states are solved")
+    if config.scenario is None:
+        raise ValueError(
+            "time_integration.run runs a scenario (tier 1) or a transient flow (tier "
+            "2); the configuration has no scenario section and no transient section"
+        )
     if restart is not None and flows_from is not None:
         raise ValueError(
             "flows_from is for a new run; a restart reuses the flow states its run "
@@ -1250,4 +1362,178 @@ def run(
         recovery=recovery,
         restarted_from=restarted_from,
         resumed_plan=resumed_plan,
+    )
+
+
+def _transient_rows(
+    rows: list[tuple[TransientStep, float, float, float, float]],
+) -> StepSeries:
+    """The held step rows as a StepSeries."""
+    return StepSeries(
+        step=np.array([r[0].step for r in rows], dtype=np.int64),
+        outer=np.array([r[0].outer for r in rows], dtype=np.int64),
+        pressure_cap_hits=np.array(
+            [r[0].pressure_cap_hits for r in rows], dtype=np.int64
+        ),
+        t=np.array([r[0].t for r in rows], dtype=np.float64),
+        worst_imbalance=np.array(
+            [r[0].worst_imbalance for r in rows], dtype=np.float64
+        ),
+        drag=np.array([r[1] for r in rows], dtype=np.float64),
+        lift=np.array([r[2] for r in rows], dtype=np.float64),
+        c_d=np.array([r[3] for r in rows], dtype=np.float64),
+        c_l=np.array([r[4] for r in rows], dtype=np.float64),
+    )
+
+
+def _run_transient(
+    config: SimConfig,
+    run_file: str | os.PathLike[str] | None,
+    restart: str | os.PathLike[str] | None,
+    on_step: Callable[[TransientMarchStep], None] | None,
+    provenance: Provenance | None,
+    initial: FlowState | None,
+) -> TransientRunRecord:
+    """Run a transient flow under tier 2 (ADR-014 G, step 6b); see ``run``."""
+    started = perf_counter()
+    spec = config.transient
+    assert spec is not None
+    mapping = config.merged_mapping()
+    mesh = Mesh(config)
+    boundary = StaggeredBoundary(mesh, config)
+    solver = StaggeredSolver(mesh, config, boundary)
+    gauge = None
+    if spec.forces is not None:
+        gauge = ForceGauge(
+            mesh, config, spec.forces.obstacle, spec.forces.reference_velocity
+        )
+    n_steps = round(config.t_end / config.dt)
+    output, cadence = config.output_interval, config.checkpoint_interval
+
+    resume: TransientResume | None = None
+    restarted_from = None
+    if restart is not None:
+        run_path = RunFile(restart)
+        run_path.check_restart(mapping)
+        try:
+            t_checkpoint, resume = run_path.read_transient_checkpoint()
+        except KeyError:
+            resume = None
+        if resume is not None:
+            if resume.step >= n_steps:
+                raise ValueError(
+                    f"restart refused: the checkpoint is at t = {t_checkpoint!r} s (step "
+                    f"{resume.step}), at or past solver.t_end ({config.t_end!r} s); a "
+                    "restart continues a run to a later t_end"
+                )
+            restarted_from = resume.step
+            run_path.discard_after(resume.step)
+            start = None
+        else:
+            restarted_from = 0
+            frames = run_path.read_transient_frames()
+            run_path.discard_after(0)
+            start = FlowState(u=frames.u[0], v=frames.v[0], p=frames.p[0])
+    else:
+        assert run_file is not None
+        run_path = RunFile(run_file)
+        for path in (run_path.path, run_path.checkpoint_path):
+            if path.exists():
+                raise ValueError(
+                    f"{path} exists; a new run writes new files (pass restart= to "
+                    "continue a run)"
+                )
+        given = provenance if provenance is not None else Provenance.here()
+        run_path.write_config(
+            mapping,
+            commit=given.commit,
+            started=given.started,
+            machine=given.machine,
+            concurrent=given.concurrent,
+        )
+        if initial is None:
+            u, v, p = allocate_fields(mesh)
+        else:
+            u, v, p = np.array(initial.u), np.array(initial.v), np.array(initial.p)
+        # The boundary's normal velocities written as the march will write
+        # them, so the stored step 0 is the level the first step reads.
+        boundary.apply_normal_velocity(u, v)
+        start = FlowState(u=u, v=v, p=p)
+        run_path.write_transient_frame(0, 0.0, start.u, start.v, start.p)
+
+    pending: list[tuple[TransientStep, float, float, float, float]] = []
+    held = {"previous": start if resume is None else resume.state}
+
+    def flush() -> None:
+        if pending:
+            run_path.write_step_series(_transient_rows(pending))
+            pending.clear()
+
+    def handle(record: TransientStep, state: FlowState) -> None:
+        nan = float("nan")
+        drag = lift = c_d = c_l = nan
+        if gauge is not None:
+            forces = gauge.forces(state.u, state.v, state.p)
+            drag, lift = forces.drag, forces.lift
+            c_d, c_l = gauge.coefficients(forces)
+        pending.append((record, drag, lift, c_d, c_l))
+        last = record.step == n_steps
+        if record.step % output == 0 or last:
+            run_path.write_transient_frame(
+                record.step, record.t, state.u, state.v, state.p
+            )
+            flush()
+        if cadence is not None and (record.step % cadence == 0 or last):
+            flush()
+            run_path.write_transient_checkpoint(
+                record.step, record.t, state, held["previous"]
+            )
+        held["previous"] = state
+        if on_step is not None:
+            on_step(TransientMarchStep(record, state, c_d, c_l))
+
+    try:
+        solver.solve_transient(
+            config.dt,
+            config.t_end,
+            initial=start,
+            resume=resume,
+            step_tol=spec.step_tol,
+            step_cap=spec.step_cap,
+            scheme=spec.scheme,
+            on_step=handle,
+        )
+    except TransientStepError:
+        flush()
+        raise
+    flush()
+
+    series = run_path.read_step_series()
+    reading, refusal, c_d_mean = None, None, None
+    if gauge is None:
+        refusal = "no transient.forces configured"
+    else:
+        try:
+            assert spec.forces is not None
+            reading = strouhal(
+                series.t, series.c_l, gauge.height, spec.forces.reference_velocity
+            )
+        except ValueError as err:
+            refusal = str(err)
+        if reading is not None:
+            window = series.t >= reading.crossings[0]
+            c_d_mean = float(np.mean(series.c_d[window]))
+        else:
+            c_d_mean = float(series.c_d[-1])
+    return TransientRunRecord(
+        path=run_path.path,
+        steps=int(series.step[-1]),
+        t_final=float(series.t[-1]),
+        wall_seconds=perf_counter() - started,
+        outer_mean=float(np.mean(series.outer)),
+        outer_max=int(np.max(series.outer)),
+        strouhal=reading,
+        strouhal_refusal=refusal,
+        drag_coefficient=c_d_mean,
+        restarted_from=restarted_from,
     )

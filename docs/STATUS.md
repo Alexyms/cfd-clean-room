@@ -41,10 +41,16 @@ runner `scripts/run_scenario.py`; and VAL-008, whose criterion row passes (ADR-0
 Step 4's follow-ups (prompt 66) run the reference clean-out to its end, so section C's ratio and
 local field are defined, and close review 64's and test 64's suggestions. Step 6, the cylinder's
 transient solve, is split in two (Alex, 2026-10-17): 6a, the time-accurate solve and its order
-in time, is built (prompt 67, `docs/reports/probe67/tables67.md`; review and test before the
-pull request); 6b, the clustered grid, lift and drag, the tier-2 route and VAL-022 at the
-thresholds Alex set the same day, is next. The four reference scenarios on the product grid are
-step 7. Phases 5
+in time, is built and merged (prompt 67, PR 95); 6b, the clustered grid, lift and drag, the tier-2
+route and VAL-022 at the thresholds Alex set the same day, is built (prompt 68; review and test
+before the pull request). VAL-022 is `docs/reports/val022/val022.md`: Re 100 on the clustered
+grid and Re 60 pass, Re 40 fails the lift measure stated before its run in one stage while its
+drag shows it steady; run on at a step tolerance of 1e-6 U to t = 600 (prompts 68b and 68c, Alex's
+two-stage protocol) it passes the measure on the whole series, at amplitudes near 1e-6 where
+every step takes one outer iteration. The onset estimate from the Re 40 and Re 60 growth rates is
+44.6 against 51.2 +/- 1 (prediction (h) fails narrowly). ADR-013 decision 3 now allows `pressure_rtol` 1e-4
+for tier-2 cases (Alex, 2026-10-18), on the measurement in that report. The four reference scenarios on the
+product grid are step 7. Phases 5
 through 7 have not begun.
 
 The product room itself has never been solved, and on 2026-10-04 it was found that the laminar

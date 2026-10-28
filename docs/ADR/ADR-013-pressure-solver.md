@@ -55,6 +55,14 @@ that carries the detail. The ranking is the builder's, from the measurements.
    Applied 2026-10-15 (prompt 56, ECR-002 step 8): the product file carries `pressure_rtol` 1e-4
    with the rest of the product configuration; the laminar validation cases keep 1e-8, and the
    1e-8 check row stays prompt 46's (`docs/reports/ecr002_step6_product_coupled.md`).
+   Amended 2026-10-18 (Alex, prompt 68), for tier-2 cases (ADR-014 tier 2): `pressure_rtol` 1e-4,
+   the setting of ADR-014's table T2, on a measurement. From the VAL-022 Re 100 row's final
+   checkpoint, twelve more periods marched at 1e-8 and at 1e-4 side by side give Strouhal numbers
+   over the last ten periods that differ by 1.4e-8 relative, against the 0.5% the amendment was
+   to stand within, with the same drag coefficient, lift amplitude and outer counts; the 1e-8 arm
+   costs 1.7 times the time per step (`docs/reports/val022/tables68.md`, table V8, by
+   `docs/reports/val022/rtol68.py`). Applied to `configs/validation_cylinder.yaml`; the steady
+   laminar validation cases keep 1e-8.
 4. The keys: `pressure_rtol` in [1e-10, 1); `pressure_tol` refused at load with a message;
    `max_pressure_iter` the CG cap, 5,000 in committed files; the weighted sweep and `JACOBI_WEIGHT`
    removed with their tests.

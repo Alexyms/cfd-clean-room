@@ -41,6 +41,7 @@ from src.solver_staggered import (
     TRANSIENT_STOP,
     FlowState,
     StaggeredSolver,
+    TransientResume,
     TransientStep,
     TransientStepError,
 )
@@ -479,6 +480,100 @@ class TestBoundaries:
         assert all(np.all(state.u[:, 0] == inlet) for state in ends)
         # The flow developed from rest: the interior moves at the inlet's scale.
         assert np.max(np.abs(ends[-1].u[:, 1:-1])) > 0.5 * inlet
+
+
+@pytest.mark.integration
+class TestResume:
+    """A march continued from a step's two levels is the uninterrupted march (step 6b)."""
+
+    @pytest.mark.parametrize("scheme", [BDF2, IMPLICIT_EULER])
+    def test_a_resumed_march_is_the_uninterrupted_one_to_the_byte(
+        self, scheme: str
+    ) -> None:
+        """From rest on the channel: six steps, against three and three resumed.
+
+        Catches: the previous level not carried (BDF2 restarted with implicit
+        Euler), the levels swapped, the step count restarted at 1.
+        """
+        config = _channel_from_rest()
+        whole, seen = _march(config, 6, scheme=scheme, dt=CHANNEL_DT)
+        state_2, state_3 = seen[1][1], seen[2][1]
+        resumed = staggered_solver(config)
+        later: list[tuple[TransientStep, FlowState]] = []
+        end = resumed.solve_transient(
+            CHANNEL_DT,
+            6 * CHANNEL_DT,
+            resume=TransientResume(state=state_3, previous=state_2, step=3),
+            step_tol=STEP_TOL,
+            step_cap=200,
+            on_step=lambda record, state: later.append((record, state)),
+            scheme=scheme,
+        )
+        assert [r.step for r, _s in later] == [4, 5, 6]
+        for (mine, state), (theirs, kept) in zip(later, seen[3:], strict=True):
+            assert mine == theirs
+            assert _same_state(state, kept) and state.outer == kept.outer
+        assert _same_state(end, whole.flow_state)
+
+    def test_what_cannot_be_resumed_is_refused(self) -> None:
+        config = _channel_from_rest()
+        _whole, seen = _march(config, 2, dt=CHANNEL_DT)
+        solver = staggered_solver(config)
+        rest = _rest(solver)
+        cases = [
+            (
+                {"initial": rest, "resume": TransientResume(seen[1][1], seen[0][1], 2)},
+                ValueError,
+                "exactly one",
+            ),
+            ({}, ValueError, "exactly one"),
+            (
+                {"resume": TransientResume(seen[1][1], seen[0][1], 4)},
+                ValueError,
+                "later t_end",
+            ),
+            (
+                {"resume": TransientResume(seen[1][1], None, 2)},
+                ValueError,
+                "previous level",
+            ),
+            ({"resume": (seen[1][1], seen[0][1], 2)}, TypeError, "TransientResume"),
+        ]
+        for kwargs, error, match in cases:
+            with pytest.raises(error, match=match):
+                solver.solve_transient(
+                    CHANNEL_DT,
+                    4 * CHANNEL_DT,
+                    step_tol=STEP_TOL,
+                    step_cap=200,
+                    **kwargs,
+                )
+
+    @pytest.mark.parametrize(
+        ("state", "previous", "step", "error"),
+        [
+            ("rest", "rest", -1, ValueError),
+            ("rest", "rest", True, TypeError),
+            ("rest", "rest", 1.0, TypeError),
+            ((), "rest", 1, TypeError),
+            ("rest", (), 1, TypeError),
+            ("rest", "other", 1, ValueError),
+        ],
+    )
+    def test_a_resume_point_that_is_not_one_is_refused(
+        self, state: object, previous: object, step: object, error: type
+    ) -> None:
+        here = _rest(staggered_solver(_channel_from_rest()))
+        other = _rest(staggered_solver(_cavity(6)))
+        given = {"rest": here, "other": other}
+        with pytest.raises(error):
+            TransientResume(
+                state=given.get(state, state) if isinstance(state, str) else state,  # type: ignore[arg-type]
+                previous=given.get(previous, previous)
+                if isinstance(previous, str)
+                else previous,  # type: ignore[arg-type]
+                step=step,  # type: ignore[arg-type]
+            )
 
 
 def _converged(raw: dict[str, object]) -> StaggeredSolver:

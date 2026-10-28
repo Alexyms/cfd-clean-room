@@ -610,7 +610,7 @@ class TestTheRealDocumentMatchesTheRealTree:
             + [f"REQ-C{n:02d}" for n in range(1, 5)]
             + [f"REQ-A{n:02d}" for n in range(1, 7)]
             + [f"REQ-V{n:02d}" for n in range(1, 4)]
-            + [f"REQ-N{n:02d}" for n in range(1, 4)]
+            + [f"REQ-N{n:02d}" for n in range(1, 5)]
         )
         assert ids == expected
 

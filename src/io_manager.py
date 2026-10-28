@@ -20,7 +20,13 @@ written before. Its groups:
   sensor names as an attribute;
 - ``/recovery/``: a clean-out's recovery outputs (ADR-014 C), written once
   at the end of the run (``RecoveryRecord``); ``discard_after`` does not
-  touch it, and a restart that runs to a new end replaces it.
+  touch it, and a restart that runs to a new end replaces it;
+- ``/transient/``, a tier-2 run's (ADR-014 D, tier 2; step 6b): ``steps``
+  (int64), ``times`` and the frames ``u`` [n, ny, nx+1], ``v`` [n, ny+1, nx]
+  and ``p`` [n, ny, nx], and ``/transient/series/``, one row per step:
+  ``step`` and ``outer`` and ``pressure_cap_hits`` (int64), ``t``,
+  ``worst_imbalance``, ``drag``, ``lift``, ``c_d`` and ``c_l`` (float64,
+  NaN for a run without forces).
 
 The checkpoint file, ``<run>.checkpoint.h5`` beside it (the run file's path
 less its suffix), holds what a restart continues from: ``/checkpoint/``, the
@@ -30,7 +36,10 @@ besides (the recovery tracker's, ``recovery``), and ``/steady_checkpoint/``, a s
 solve's SteadyCheckpoint (step 0's layout: ``u``, ``v``, ``p`` and ``k``,
 ``eps``, ``nu_t``, the three series, ``outer``, ``pressure_cap_hits``,
 ``stop_reason`` and ``rule_version`` when not None) with the fingerprint of
-the flow state being solved and the eddy viscosity digest when not None.
+the flow state being solved and the eddy viscosity digest when not None,
+and ``/transient_checkpoint/``, a tier-2 march's step, time and two levels:
+``u``, ``v``, ``p`` and ``outer`` of its last step and, when it has one, the
+``previous_u``, ``previous_v`` and ``previous_p`` of the step before.
 HDF5 keeps no journal, and a process killed while a file is open for writing
 can leave the whole file unreadable, so the checkpoint file is never written
 in place: each checkpoint writes a new file whole under
@@ -57,7 +66,7 @@ import h5py
 import numpy as np
 import yaml
 
-from src.solver_staggered import FlowState, SteadyCheckpoint
+from src.solver_staggered import FlowState, SteadyCheckpoint, TransientResume
 from src.solver_transport import DEPOSIT_SURFACES, MassBudget
 
 CONFIG = "config"
@@ -67,6 +76,19 @@ SENSORS = "sensors"
 CHECKPOINT = "checkpoint"
 STEADY_CHECKPOINT = "steady_checkpoint"
 RECOVERY = "recovery"
+TRANSIENT = "transient"
+SERIES = "series"
+TRANSIENT_CHECKPOINT = "transient_checkpoint"
+# The per-step columns of /transient/series/, the integer ones first.
+STEP_SERIES_INTEGERS: tuple[str, ...] = ("step", "outer", "pressure_cap_hits")
+STEP_SERIES_REALS: tuple[str, ...] = (
+    "t",
+    "worst_imbalance",
+    "drag",
+    "lift",
+    "c_d",
+    "c_l",
+)
 CHECKPOINT_SUFFIX = ".checkpoint.h5"
 TEMPORARY_SUFFIX = ".tmp"
 # The keys a continuation exists to change (prompt 63, decision 2): a capped
@@ -241,6 +263,72 @@ class MarchCheckpoint:
     fingerprint: str
     recovery: dict[str, np.ndarray] = field(default_factory=dict)
     plan_start: float | None = None
+
+
+@dataclass(frozen=True, eq=False)
+class TransientFrames:
+    """A tier-2 run's frames, as ``/transient/`` holds them.
+
+    Parameters
+    ----------
+    steps : np.ndarray
+        [n] int64.
+    times : np.ndarray
+        [n] float64, seconds.
+    u, v, p : np.ndarray
+        [n, ny, nx+1], [n, ny+1, nx] and [n, ny, nx] float64.
+    """
+
+    steps: np.ndarray
+    times: np.ndarray
+    u: np.ndarray
+    v: np.ndarray
+    p: np.ndarray
+
+
+@dataclass(frozen=True, eq=False)
+class StepSeries:
+    """One row per step of a tier-2 march (ADR-014 D, tier 2).
+
+    Parameters
+    ----------
+    step, outer, pressure_cap_hits : np.ndarray
+        [n] int64: the step, its outer iterations and its capped corrections.
+    t, worst_imbalance : np.ndarray
+        [n] float64: the time reached, s, and the step's largest per-cell
+        mass imbalance over non-SOLID cells, kg/s per m.
+    drag, lift : np.ndarray
+        [n] float64, N/m, on the configured obstacle; NaN without one.
+    c_d, c_l : np.ndarray
+        [n] float64, their coefficients; NaN without an obstacle.
+
+    Raises
+    ------
+    ValueError
+        If the columns are not 1-D of one length.
+    """
+
+    step: np.ndarray
+    outer: np.ndarray
+    pressure_cap_hits: np.ndarray
+    t: np.ndarray
+    worst_imbalance: np.ndarray
+    drag: np.ndarray
+    lift: np.ndarray
+    c_d: np.ndarray
+    c_l: np.ndarray
+
+    def __post_init__(self) -> None:
+        columns = STEP_SERIES_INTEGERS + STEP_SERIES_REALS
+        lengths = {np.asarray(getattr(self, name)).shape for name in columns}
+        if len(lengths) != 1 or len(next(iter(lengths))) != 1:
+            raise ValueError(
+                f"the step series' columns must be 1-D of one length, got {lengths}"
+            )
+        for name in STEP_SERIES_INTEGERS:
+            object.__setattr__(self, name, np.asarray(getattr(self, name), dtype="<i8"))
+        for name in STEP_SERIES_REALS:
+            object.__setattr__(self, name, np.asarray(getattr(self, name), dtype="<f8"))
 
 
 @dataclass(frozen=True, eq=False)
@@ -853,7 +941,7 @@ class RunFile:
             )
 
     def discard_after(self, step: int) -> None:
-        """Drop the frames and sensor readings after ``step``.
+        """Drop the frames, sensor readings and step rows after ``step``.
 
         A march restarted from its checkpoint at ``step`` writes them again;
         those a crash left after the checkpoint would otherwise be written
@@ -875,13 +963,20 @@ class RunFile:
         if not self.path.exists():
             return
         with h5py.File(self.path, "a") as run_file:
-            group = run_file.get(TRANSPORT)
-            if group is None:
-                return
-            for holder in (group, group.get(SENSORS)):
-                if holder is None or "steps" not in holder:
-                    continue
-                keep = int(np.searchsorted(holder["steps"][()], step, side="right"))
+            holders = []
+            for name, child, key in (
+                (TRANSPORT, None, "steps"),
+                (TRANSPORT, SENSORS, "steps"),
+                (TRANSIENT, None, "steps"),
+                (TRANSIENT, SERIES, "step"),
+            ):
+                group = run_file.get(name)
+                if group is not None and child is not None:
+                    group = group.get(child)
+                if group is not None and key in group:
+                    holders.append((group, key))
+            for holder, key in holders:
+                keep = int(np.searchsorted(holder[key][()], step, side="right"))
                 for dataset in holder.values():
                     if isinstance(dataset, h5py.Dataset):
                         dataset.resize(keep, axis=0)
@@ -899,6 +994,211 @@ class RunFile:
         with h5py.File(self.path, "a") as run_file:
             if TRANSPORT in run_file:
                 del run_file[TRANSPORT]
+
+    # ------------------------------------------------------------------
+    # /transient/ (tier 2)
+    # ------------------------------------------------------------------
+
+    def write_transient_frame(
+        self, step: int, t: float, u: np.ndarray, v: np.ndarray, p: np.ndarray
+    ) -> None:
+        """Append one frame of a tier-2 run: the faces and the pressure.
+
+        Parameters
+        ----------
+        step : int
+            The step, zero at the initial state; above the last frame's.
+        t : float
+            Simulated time, seconds.
+        u, v, p : np.ndarray
+            The faces [ny, nx+1], [ny+1, nx] and the pressure [ny, nx].
+
+        Raises
+        ------
+        TypeError
+            If ``step`` is not an int (a bool is not one here) or ``t`` not
+            a real number.
+        ValueError
+            If ``step`` is negative or not above the last frame's, or a
+            field's shape differs from the first frame's.
+        """
+        step = _step(step)
+        t = _real("t", t)
+        arrays = {
+            name: np.asarray(array, dtype="<f8")
+            for name, array in (("u", u), ("v", v), ("p", p))
+        }
+        with h5py.File(self.path, "a") as run_file:
+            group = run_file.require_group(TRANSIENT)
+            if "steps" not in group:
+                _new_series(group, "steps", (), "<i8")
+                _new_series(group, "times", (), "<f8")
+                for name, array in arrays.items():
+                    _new_series(group, name, array.shape, "<f8")
+            for name, array in arrays.items():
+                if group[name].shape[1:] != array.shape:
+                    raise ValueError(
+                        f"{name} has shape {array.shape} and the file's frames "
+                        f"{group[name].shape[1:]}"
+                    )
+            steps = group["steps"]
+            if steps.shape[0] and step <= int(steps[-1]):
+                raise ValueError(
+                    f"step {step} is not above the last frame's ({int(steps[-1])}); "
+                    "a restart discards the frames after its checkpoint first"
+                )
+            _append(group["steps"], np.int64(step))
+            _append(group["times"], np.float64(t))
+            for name, array in arrays.items():
+                _append(group[name], array)
+
+    def read_transient_frames(self) -> TransientFrames:
+        """Read back the frames ``write_transient_frame`` appended.
+
+        Raises
+        ------
+        KeyError
+            If the file holds no tier-2 frames.
+        """
+        with h5py.File(self.path, "r") as run_file:
+            group = run_file.get(TRANSIENT)
+            if group is None or "steps" not in group:
+                raise KeyError(f"{self.path} holds no /{TRANSIENT}/ frames")
+            return TransientFrames(
+                **{name: group[name][()] for name in ("steps", "times", "u", "v", "p")}
+            )
+
+    def write_step_series(self, rows: StepSeries) -> None:
+        """Append rows of a tier-2 march's per-step series.
+
+        Parameters
+        ----------
+        rows : StepSeries
+            The rows, steps above the last stored; an empty series writes
+            nothing.
+
+        Raises
+        ------
+        TypeError
+            If ``rows`` is not a StepSeries.
+        ValueError
+            If the first step is not above the last stored.
+        """
+        if not isinstance(rows, StepSeries):
+            raise TypeError(f"rows must be a StepSeries, got {type(rows).__name__}")
+        if rows.step.size == 0:
+            return
+        with h5py.File(self.path, "a") as run_file:
+            group = run_file.require_group(TRANSIENT).require_group(SERIES)
+            if "step" not in group:
+                for name in STEP_SERIES_INTEGERS:
+                    _new_series(group, name, (), "<i8")
+                for name in STEP_SERIES_REALS:
+                    _new_series(group, name, (), "<f8")
+            stored = group["step"]
+            if stored.shape[0] and int(rows.step[0]) <= int(stored[-1]):
+                raise ValueError(
+                    f"step {int(rows.step[0])} is not above the last stored "
+                    f"({int(stored[-1])}); a restart discards the rows after its "
+                    "checkpoint first"
+                )
+            for name in STEP_SERIES_INTEGERS + STEP_SERIES_REALS:
+                _append(group[name], getattr(rows, name), many=True)
+
+    def read_step_series(self) -> StepSeries:
+        """Read back the per-step series, every row written.
+
+        Raises
+        ------
+        KeyError
+            If the file holds no step series.
+        """
+        with h5py.File(self.path, "r") as run_file:
+            group = run_file.get(TRANSIENT)
+            group = None if group is None else group.get(SERIES)
+            if group is None or "step" not in group:
+                raise KeyError(f"{self.path} holds no /{TRANSIENT}/{SERIES}/ rows")
+            return StepSeries(
+                **{
+                    name: group[name][()]
+                    for name in STEP_SERIES_INTEGERS + STEP_SERIES_REALS
+                }
+            )
+
+    def write_transient_checkpoint(
+        self, step: int, t: float, state: FlowState, previous: FlowState | None
+    ) -> None:
+        """Replace the tier-2 march's checkpoint, atomically, keeping the others.
+
+        Parameters
+        ----------
+        step : int
+            Steps taken, non-negative.
+        t : float
+            Simulated time, seconds.
+        state : FlowState
+            The faces and pressure after ``step``, ``outer`` the run's count.
+        previous : FlowState or None
+            The state after ``step - 1``, which BDF2 reads; None for none.
+
+        Raises
+        ------
+        TypeError
+            If ``step`` is not an int, ``t`` not a real number, or a state
+            not a FlowState.
+        """
+        step = _step(step)
+        t = _real("t", t)
+        for name, given in (("state", state), ("previous", previous)):
+            if given is not None and not isinstance(given, FlowState):
+                raise TypeError(
+                    f"{name} must be a FlowState, got {type(given).__name__}"
+                )
+
+        def write(group: h5py.Group) -> None:
+            group.attrs["step"] = step
+            group.attrs["t"] = np.float64(t)
+            group.attrs["outer"] = state.outer
+            for name in _FIELDS:
+                group.create_dataset(name, data=getattr(state, name), dtype="<f8")
+            if previous is not None:
+                group.attrs["previous_outer"] = previous.outer
+                for name in _FIELDS:
+                    group.create_dataset(
+                        f"previous_{name}", data=getattr(previous, name), dtype="<f8"
+                    )
+
+        self._replace_group(TRANSIENT_CHECKPOINT, write)
+
+    def read_transient_checkpoint(self) -> tuple[float, TransientResume]:
+        """Read back the tier-2 checkpoint: its time and where the march resumes.
+
+        Returns
+        -------
+        tuple[float, TransientResume]
+            The time, s, and the step, the state and the previous level, the
+            arrays bitwise as written.
+
+        Raises
+        ------
+        KeyError
+            If there is no checkpoint file or it holds no
+            ``/transient_checkpoint/``.
+        """
+        with self._open_checkpoint_file(TRANSIENT_CHECKPOINT) as group:
+            attrs = dict(group.attrs)
+            state = FlowState(
+                **{name: group[name][()] for name in _FIELDS}, outer=int(attrs["outer"])
+            )
+            previous = None
+            if "previous_u" in group:
+                previous = FlowState(
+                    **{name: group[f"previous_{name}"][()] for name in _FIELDS},
+                    outer=int(attrs["previous_outer"]),
+                )
+        return float(attrs["t"]), TransientResume(
+            state=state, previous=previous, step=int(attrs["step"])
+        )
 
     # ------------------------------------------------------------------
     # /recovery/

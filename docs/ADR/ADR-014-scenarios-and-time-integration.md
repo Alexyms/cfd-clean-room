@@ -864,6 +864,17 @@ The departures, each needed by the run as built:
 **Tier 2.** The transient run's file holds the faces and pressure every `output_interval` steps
 with their times, the per-step counts and imbalances, and the lift and drag on the obstacle
 (section F), and checkpoints the two old levels for BDF2.
+*As built (step 6b, prompt 68, 2026-10-18).* A `transient` section selects tier 2 (scheme,
+`step_tol`, `step_cap`, and `forces` naming the obstacle and the reference velocity), refused
+with a scenario, with the turbulence section, or for a `t_end` that is not a whole number of
+steps. The run file's `/transient/` holds the step-0 frame (the initial state given, or rest,
+with the boundary's normal velocities written), the frames every `output_interval` steps and at
+the last, and `/transient/series/`, one row per step (the outer count, the worst imbalance, the
+capped corrections, the drag, the lift and their coefficients). The checkpoint file's
+`/transient_checkpoint/` holds the step's faces and pressure and the step before's; a restart
+resumes from it (`solve_transient(resume=TransientResume(...))`), bitwise the uninterrupted run,
+and without one marches again from the stored step-0 frame. `run(..., initial=)` takes the
+state at t = 0, which the VAL-022 rows use for the probe's perturbed start-up.
 
 ## E. VAL-008, grid convergence (decision 10)
 
@@ -1008,6 +1019,35 @@ cylinder's file states fine spacing at its four faces and coarsening to the far 
 paper's hyperbolic tangent did [1, section 2]. The far-field cell is at most 0.3 d, the paper's
 recommended cell Reynolds number of 30 at Re 100 [1, section 4.3; its Neumann case runs 0.3 d,
 Table IV case 2].
+*As built (step 6b, prompt 68, 2026-10-18).* Between two breakpoints the widths grow
+geometrically from the finer end's spacing, kept exactly, with the smallest count no wider than
+the coarser end's, so no cell exceeds a breakpoint's spacing; each breakpoint is a face; the
+loader refuses a list that gives another count than the domain's or has neighbours differing by
+more than 1.2 (`config.MAX_GROWTH_RATIO`). `configs/validation_cylinder.yaml` puts 0.025 d at
+the body's four faces, 0.06 d across its middle, 0.1 d over the near wake to x = 20 and the band
+y = 8 to 12, and at most 0.3 d beyond: 280 by 150 cells, 42,000, against the uniform rung's
+74,000, the largest neighbour ratio 1.07. The time step is decision 3's larger one, 0.05, the
+per-step criterion 1e-4 U and `pressure_rtol` 1e-4, T2's, which ADR-013 decision 3 allows
+tier-2 cases since 2026-10-18 (Alex) on the measurement of `docs/reports/val022/tables68.md`, V8.
+Lift and drag are `forces.ForceGauge`'s
+(the pressure of the live cell beside each face, the shear by the predictor's obstacle wall
+stencil, first order at the faces as the stencils are), the Strouhal number `forces.strouhal`'s
+(the last ten periods' interpolated upward zero crossings, the spectrum's peak beside it,
+fewer than ten refused). The rows, their measures and their results are
+`docs/reports/val022/val022.md`; the Re 40 row fails the lift measure stated before the run
+while its drag and outer counts show it steady, and passes it under the two-stage protocol
+above (that report, and the step 6b findings below).
+
+*Re 40's protocol (Alex, 2026-10-28, prompt 68c).* The Re 40 row is run in two stages and scored
+by `validation.cylinder.decays`, unchanged, on the whole series from t = 0: the row's 4000 steps
+at a per-step tolerance of 1e-4 U to t = 200, then the continuation at 1e-6 U to t = 600
+(`docs/reports/val022/runout68.py`). The first stage's own FAIL (quiet reading 9.46e-5 against
+1e-6, table V3) stays on record beside the result. The reason: a test of whether an oscillation
+dies out needs a step tolerance below the amplitude it judges. A step whose first outer
+iteration already moves the field by less than the tolerance takes no further iteration, so the
+march does not correct what is smaller than that, and the decay stalls at about the tolerance's
+level; at 1e-4 U the lift stopped falling at about 1e-4 (table V7), and at 1e-6 U the decay
+resumed (table V9).
 
 ## G. Modules, interfaces and the build order (decision 12)
 
@@ -1152,6 +1192,17 @@ as `mu_eff` is), `mesh.py`'s the breakpoints.
    implicit Euler march equals the probe's loop to the byte; a failed march leaves its own
    faces' imbalance in `last_mass_imbalance`. The plant runner is
    `docs/reports/probe67/plant67.py`.
+   *6b built 2026-10-18 (prompt 68).* Interior clustering (`mesh.<axis>.breakpoints`,
+   `config.breakpoint_faces`); `src/forces.py` (the force gauge and the Strouhal instrument);
+   the tier-2 route through `time_integration.run` with its run file, step series, two-level
+   checkpoint and bitwise restart (section D's as-built note), `run(..., initial=)` and
+   `scripts/run_scenario.py`'s tier-2 summary; `solve_transient(resume=)`;
+   `configs/validation_cylinder.yaml` (section F's as-built note); the VAL-022 presets
+   (`validation.cases.load_cylinder`), the probe's perturbed start-up and the rows' measures
+   (`validation/cylinder.py`) and the harness's cylinder family. VAL-022 run as four harness rows,
+   reported in `docs/reports/val022/val022.md`: Re 100 on the clustered grid and Re 60 pass; Re 40
+   fails its stated lift measure in one stage and passes it under the two-stage protocol (prompt
+   68c); the uniform rung is reported. Every hash of record unchanged.
 7. The four reference scenarios run on the product grid with their records in the run files,
    the recovery outputs, and the Phase 4 gate report with this document's planned-against-built
    table.
@@ -1405,6 +1456,44 @@ committed before it ran).**
 - (a) BDF2's observed order is 2.0 +/- 0.2 and implicit Euler's 1.0 +/- 0.2 on the order case.
 - (b) The smoke run's steps take 3 to 5 outer iterations each at 1e-4 U, as T2 measured from
   the start-up field.
+
+**Predictions (orchestrator, 2026-10-18, step 6b; committed before the VAL-022 runs).**
+- (a) Re 100 on the clustered grid: St inside 0.139 to 0.153.
+- (b) The uniform 0.1 d rung reads St below 0.139 (the probe's long march had about 0.13).
+- (c) Re 40 settles steady and Re 60 sheds.
+- (d) C_D at Re 100 within 10% of 1.46.
+
+**Predictions (orchestrator, 2026-10-28, step 6b's Re 40 floor probe; committed before it ran).**
+From the Re 40 row's final state, marched on at a step tolerance of 1e-6 U (cap 500, the row's dt)
+for 40 time units or two hours (`docs/reports/val022/floor68.py`, whose docstring fixes the
+readings: peaks of |C_L| per half period, the envelope's rate as the slope of ln(peak) in time,
+the original's over the row's last three whole periods before t = 101):
+- (e) The lift's envelope decays again, at a rate within 30% of the original run's over its last
+  iterating periods, and falls below 1e-5 within the probe.
+- (f) The drag is unchanged to four figures.
+Decided before the run: if (e) holds, the stall was the instrument, the Re 40 row is scored by
+its original measure on the continuation, and section F's protocol for the row becomes two stages
+(1e-4 U to t = 200, then 1e-6 U), the original stage's FAIL recorded beside; if (e) fails, Re 40
+stays FAIL and the onset bracket is not shown.
+
+**Predictions (orchestrator, 2026-10-28, step 6b's Re 40 run-out and onset estimate; committed
+before they ran).** (e) failed, and Alex decided to keep the Re 40 measure unchanged and run the
+march long enough to judge it. From the probe's end state (t = 240; the probe saved no
+checkpoint, so `docs/reports/val022/runout68.py` marches 200 to 240 again and compares the
+series with `floor68.json` to the bit before going on) at a step tolerance of 1e-6 U, cap 500,
+the row's dt, to t = 600, keeping both time levels. The script's docstring fixes the readings
+(the envelope's rate over the peaks from t = 250 before the first below 1e-6, the time of that
+peak, `validation.cylinder.decays` on the whole series from t = 0). Budget 2 hours; the march
+stops and reports if the estimate from its first 20 units past t = 240 is over.
+- (g) The envelope keeps decaying at -0.0154 per unit time within 30% (the probe's rate,
+  `floor68.json`), its peaks fall below 1e-6 near t = 500 (read as 450 to 550), and the measure
+  passes on the series to 600.
+- (h) The onset estimate lies between 45 and 57. It is the zero of the straight line through the
+  growth rate at Re 40 (the probe's late decay rate) and at Re 60 (the envelope's growth in its
+  small-amplitude phase, before saturation), reported beside Sohankar's 51.2 +/- 1 with the
+  caveat that 40 and 60 are each about 10 from onset, where a linear relation is approximate.
+  `docs/reports/val022/onset68.py` fixes the window and the envelope before the Re 60 series is
+  read.
 
 **Method.** `warm59.py` (T1), `cylinder59.py` (T2 to T4), `order59.py` (T5), `scales59.py` (T6),
 `cleanout59.py` (T7, prompt 59b); each script's docstring states its arms and what it writes. Wall times were taken with three to
@@ -1723,6 +1812,79 @@ hash62.py's solves from rest through the committed solver of the worktree named 
   arm A, every step's count and wake velocity, bit for bit; `tests/test_transient.py` pins the
   same equality on the cavity.
 - *H1.* Every hash of record is unchanged at the step 6a source.
+
+### Step 6b (prompt 68, 2026-10-18): VAL-022
+
+Generated by `docs/reports/val022/tables68.py` (`--check` regenerates and compares) from the
+harness rows' records in `docs/reports/val022/`; copied here.
+
+### V1. The rows against their criteria
+
+| Preset | Re | Grid | Steps | Outer per step: mean, max | Cap hits | Criterion | Reading | Passed | Wall (s) | Processes | Commit |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| val022_re40 | 40 | 280x150 | 4000 | 2.49, 11 | 0 | lift_amplitude_decay | 0.00009 | False | 2038 | 15 | 6fe887b |
+| val022_re60 | 60 | 280x150 | 6000 | 8.15, 26 | 0 | lift_amplitude_sustain | 0.99993 | True | 11398 | 15 | 6fe887b |
+| val022_re100 | 100 | 280x150 | 4000 | 8.29, 128 | 0 | strouhal_last_ten_periods | 0.14634 | True | 9081 | 15 | 6fe887b |
+| val022_re100_uniform | 100 | 370x200 | 4000 | 8.26, 47 | 0 | strouhal_last_ten_periods | 0.13986 | None | 10154 | 15 | 6fe887b |
+
+### V2. Re 100: the Strouhal number, the drag coefficient, the lift
+
+St from the last ten periods' interpolated zero crossings, beside the spectrum's peak over the same window and its resolution; C_D the mean over that window; the lift amplitude half the range of C_L over it. Sohankar et al.: St 0.146, C_D 1.45 to 1.49; the band 0.139 to 0.153.
+
+| Preset | Grid | St | Spectrum St | Resolution | Agree | C_D | C_L amplitude | In band |
+|---|---|---|---|---|---|---|---|---|
+| val022_re100 | 280x150 | 0.14634 | 0.14885 | 0.01353 | True | 1.4866 | 0.2829 | True |
+| val022_re100_uniform | 370x200 | 0.13986 | 0.13774 | 0.01377 | True | 1.5832 | 0.3600 | True |
+
+### V3. Re 40 and Re 60: the lift's last amplitudes
+
+Half the range of C_L over each whole period between upward zero crossings, the last six; Re 40 passes when each is below the one before, Re 60 when each is at least 0.99 of the one before.
+
+| Preset | Measure | Amplitudes, oldest first | Ratios | Passed |
+|---|---|---|---|---|
+| val022_re40 | quiet | largest |C_L| over the last tenth 9.461e-05 |  | False |
+| val022_re60 | amplitudes | 1.215e-01, 1.215e-01, 1.215e-01, 1.215e-01, 1.215e-01, 1.215e-01 | 0.9999, 1.0000, 1.0001, 0.9999, 1.0000 | True |
+
+**Findings (step 6b).** The report is `docs/reports/val022/val022.md`; its tables V4 to V6 and
+H1 hold the period history, each row by time window, the cost estimate and the hashes.
+- *Prediction (a) holds.* V2: the clustered grid's Strouhal number at Re 100 is inside the band,
+  and its drag coefficient inside the paper's range.
+- *Prediction (b) fails, narrowly.* V2: the uniform rung's Strouhal number is inside the band
+  too, just above its lower end, about 4% below the clustered grid's.
+- *Prediction (c) holds for Re 60 and not, as measured, for Re 40.* V3: Re 60's lift saturates.
+  Re 40's lift falls by about forty times and then sits at about 1e-4, its drag steady to five
+  figures, with every late step taking one outer iteration: the march no longer iterates below
+  the per-step criterion of 1e-4 U, and the quiet threshold of 1e-6 stated before the run took
+  rounding, not the criterion, as the floor. The run was not short of time: the decay stopped
+  about 80 units before its end, as the steps stopped iterating (the report's V7).
+- *Predictions (e) and (f), the Re 40 floor probe (prompt 68b).* The report's V9: continued at
+  1e-6 U, the steps iterate again and the lift's envelope decays again, at about 0.3 of the
+  rate of the row's last iterating periods, its last peak about five times 1e-5; (e) fails and
+  (f) holds, the drag unchanged. By the rule fixed before the probe, Re 40 stays FAIL and the
+  onset bracket is not shown; section F's protocol is unchanged, and the orchestrator takes
+  Re 40 to Alex. Alex's decision of 2026-10-28 followed (the next two bullets).
+- *Predictions (g) and (h), the Re 40 run-out and the onset estimate (prompt 68c).* The
+  report's V10 and V11. Re 40 was run on at 1e-6 U to t = 600 (2,256 s) and scored by `decays`
+  on the whole series from t = 0, the two-stage protocol of section F: it passes (the last six
+  amplitudes each fall), the single-stage reading's FAIL recorded beside. (g) fails on the
+  readings fixed before the run: the envelope's rate over t = 250 to the first peak below 1e-6
+  is -0.0289, 1.87 times the probe's, because that window runs into a node of the envelope near
+  t = 367 where the shedding-period oscillation (about 10) hands over to a slower one (about
+  25), and that first peak is at t = 361, not near 500; the measure part holds. The slower
+  oscillation decays at about -0.007 to t = 600, with every step at one outer iteration from
+  t = 364, so the pass is read at amplitudes of 4e-7 to 1.1e-6, at the 1e-6 U criterion's own
+  level. (h) fails narrowly: the line through the Re 40 and Re 60 growth rates crosses zero at
+  Re 44.6 (47.2 with the run-out's Re 40 rate), against 51.2 +/- 1 and the band 45 to 57. The
+  Re 40 rate is not one number (its local rate runs from -0.016 to -0.043), so the estimate
+  is an indication only.
+- *The pressure solve's tolerance.* The rows ran at 1e-4 against ADR-013 decision 3's 1e-8 for
+  laminar validation cases; the report's V8 measured the difference on the Re 100 row's shedding
+  at 1.4e-8 relative in the Strouhal number, and Alex amended the decision for tier-2 cases.
+- *Prediction (d) holds.* V2.
+- *The budget.* The estimate from 300 steps per grid, about 5.5 hours summed (V5) and 2 of wall
+  clock, let the runs go ahead; they took about 3.2 hours of wall clock and 9.1 summed over the
+  processes, the steps taking 8 to 9 outer iterations once shedding developed, against 5 from
+  the start-up, with fifteen processes sharing the machine.
 
 ## Consequences
 - The transport march, not the flow, sets a scenario's cost (T6); decision 2 and Phase 6's GPU

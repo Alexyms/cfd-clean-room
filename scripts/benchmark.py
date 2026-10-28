@@ -21,7 +21,7 @@ records the rule's version in its params, read from the solver
 condition (e) 4 until 2026-10-11 and 5 since (its scale, ADR-012 E). A row
 with the turbulence section records the section in its params as well.
 
-Six case families. Poiseuille and the cavity are scored from the
+Seven case families. Poiseuille and the cavity are scored from the
 cell-centred field, every trajectory sample and the row alike. The Annex 20
 room (VAL-017, ``val017_216x72``) is scored from the final face velocities
 by the allowance of ADR-012 decision 6 (``validation.annex20.score_lines``):
@@ -47,6 +47,16 @@ count over the cap as its value, ``passed`` whether the solve stopped by
 the rule within the cap (criterion 10's convergence clause), and the
 readings the step 8 report compares its runs by (the worst cell imbalance,
 the core eddy viscosity); the comparative clause is judged in that report.
+The square cylinder (VAL-022, ``val022_*``, ADR-014 F) is a tier-2 run: the
+probe's perturbed start-up (``validation.cylinder.perturbed_startup``), then
+``time_integration.run`` marching it to the preset's end, the run file under
+results/val022/. Each row carries its criterion's reading: Re 40 the decay of
+the lift's amplitudes, Re 60 their sustain, Re 100 the Strouhal number of the
+last ten periods against 0.139 to 0.153 with the drag coefficient beside it,
+and the uniform rung's Strouhal number, reported with ``passed`` None. Its
+value is the Strouhal number (Re 100 and the rung) or the extreme amplitude
+ratio (the largest for Re 40, the smallest for Re 60), and every step's lift,
+drag and outer count go to docs/reports/val022/<preset>.json beside the row.
 
 The method label names the pressure solve as well as the grid: staggered-cg
 since ECR-003 step 1 (2026-10-06), when conjugate gradients replaced the
@@ -96,6 +106,7 @@ from src.config import (  # noqa: E402 -- follows sys.path.insert
     VELOCITY_STEP,
     SimConfig,
 )
+from src.io_manager import RunFile  # noqa: E402 -- follows sys.path.insert
 from src.mesh import FLUID, SOLID, Mesh  # noqa: E402 -- follows sys.path.insert
 from src.momentum import MomentumPredictor  # noqa: E402 -- follows sys.path.insert
 from src.pressure import (  # noqa: E402 -- follows sys.path.insert
@@ -114,13 +125,21 @@ from src.staggered import (  # noqa: E402 -- follows sys.path.insert
 from src.stopping import (  # noqa: E402 -- follows sys.path.insert
     IterationState,
 )
+from src.time_integration import (  # noqa: E402 -- follows sys.path.insert
+    Provenance,
+    TransientMarchStep,
+    TransientRunRecord,
+    run,
+)
 from validation import (  # noqa: E402 -- follows sys.path.insert
     annex20,
     backstep,
+    cylinder,
     impinging_jet,
 )
 from validation.cases import (  # noqa: E402 -- follows sys.path.insert
     CASE_GRIDS,
+    CYLINDER_PRESETS,
     load_preset,
     with_pressure_preconditioner,
 )
@@ -203,6 +222,15 @@ PRODUCT_REFERENCE = (
     "within max_simple_iter is the pass, the comparative clause is "
     "docs/reports/ecr002_step8_product.md"
 )
+
+# The square cylinder (VAL-022): tier-2 runs, their records beside the row.
+CYLINDER_FAMILY = "cylinder"
+CYLINDER_REFERENCE = (
+    "sohankar_norberg_davidson_1998 St 0.146 (Table IV), C_D 1.45 to 1.49; "
+    "thresholds Alex 2026-10-17 (ADR-014 F)"
+)
+VAL022_RECORDS = REPO_ROOT / "docs" / "reports" / "val022"
+VAL022_RUNS = REPO_ROOT / "results" / "val022"
 
 # The families whose row needs the finished solve (the final faces, k, or
 # the stop), which the per-iteration callback lacks: their trajectory
@@ -748,6 +776,8 @@ def run_case(case_id: str, method: str, sample_every: int, concurrent: int) -> d
     if method not in METHOD_PRECONDITIONERS:
         raise ValueError(f"unknown method {method!r}; known: {list(METHODS)}")
     kind, nx, ny = CASES[case_id]
+    if kind == CYLINDER_FAMILY:
+        return run_cylinder_case(case_id, method, concurrent)
     config = with_pressure_preconditioner(
         load_preset(case_id), METHOD_PRECONDITIONERS[method]
     )
@@ -867,6 +897,197 @@ def run_case(case_id: str, method: str, sample_every: int, concurrent: int) -> d
         "time": {"wall_seconds": wall, "stages": dict(solver.stage_seconds)},
         "trajectory": trajectory,
     }
+
+
+def cylinder_accuracy(
+    case_id: str, t: np.ndarray, c_l: np.ndarray, record: TransientRunRecord
+) -> dict:
+    """A VAL-022 row's reading and verdict by the preset's criterion.
+
+    Parameters
+    ----------
+    case_id : str
+        One of CYLINDER_PRESETS.
+    t, c_l : np.ndarray
+        The run's per-step times and lift coefficients.
+    record : TransientRunRecord
+        What ``time_integration.run`` returned.
+
+    Returns
+    -------
+    dict
+        ``metric``, ``reference``, ``value``, ``passed`` and the readings:
+        the Strouhal number with its cross-check or refusal, the drag
+        coefficient, and the amplitude measure.
+    """
+    reynolds = CYLINDER_PRESETS[case_id][0]
+    criterion = cylinder.ROW_CRITERIA[case_id]
+    reading = record.strouhal
+    common = {
+        "reference": CYLINDER_REFERENCE,
+        "reynolds": reynolds,
+        "strouhal": None if reading is None else reading.strouhal,
+        "spectral_strouhal": None if reading is None else reading.spectral_strouhal,
+        "spectral_resolution": None if reading is None else reading.resolution,
+        "spectra_agree": None if reading is None else reading.agrees,
+        "strouhal_refusal": record.strouhal_refusal,
+        "drag_coefficient": record.drag_coefficient,
+        "strouhal_band": list(cylinder.STROUHAL_BAND),
+        "sohankar_drag": list(cylinder.SOHANKAR_DRAG),
+    }
+    if criterion == cylinder.DECAY:
+        verdict = cylinder.decays(t, c_l)
+        ratios = verdict.get("ratios")
+        value = max(ratios) if ratios else verdict.get("largest_lift", float("nan"))
+        return {
+            **common,
+            "metric": "lift_amplitude_decay",
+            "value": value,
+            "passed": verdict["passed"],
+            "amplitude_measure": verdict,
+        }
+    if criterion == cylinder.SUSTAIN:
+        verdict = cylinder.sustains(t, c_l)
+        ratios = verdict.get("ratios")
+        value = min(ratios) if ratios else float("nan")
+        return {
+            **common,
+            "metric": "lift_amplitude_sustain",
+            "value": value,
+            "passed": verdict["passed"],
+            "amplitude_measure": verdict,
+        }
+    st = float("nan") if reading is None else reading.strouhal
+    return {
+        **common,
+        "metric": "strouhal_last_ten_periods",
+        "value": st,
+        "passed": None
+        if criterion == cylinder.REPORT
+        else cylinder.strouhal_in_band(None if reading is None else reading.strouhal),
+    }
+
+
+def run_cylinder_case(case_id: str, method: str, concurrent: int) -> dict:
+    """Run one VAL-022 preset through tier 2 and return its row (ADR-014 F).
+
+    The probe's perturbed start-up, then ``time_integration.run`` to the
+    preset's end; the run file goes to results/val022/ and the per-step
+    series to docs/reports/val022/<preset>.json with the row's reading.
+    """
+    config = with_pressure_preconditioner(
+        load_preset(case_id), METHOD_PRECONDITIONERS[method]
+    )
+    mesh = Mesh(config)
+    momentum_updates, pressure_cells = staggered_updates(mesh, config)
+    counter = WorkCounter(pressure_cells, momentum_updates)
+    t_start = time.perf_counter()
+    initial, startup_outer = cylinder.perturbed_startup(config, counter.record)
+    startup_seconds = time.perf_counter() - t_start
+    commit, dirty = git_state()
+    run_id = uuid.uuid4().hex
+    VAL022_RUNS.mkdir(parents=True, exist_ok=True)
+    path = VAL022_RUNS / f"{case_id}_{run_id[:8]}.h5"
+    march = {"outer": 0, "products": 0}
+
+    def count(step: TransientMarchStep) -> None:
+        march["outer"] += step.record.outer
+        march["products"] += step.record.pressure_products
+        if step.record.step % 500 == 0:
+            print(
+                f"{case_id} step {step.record.step}: {step.record.outer} outer, "
+                f"C_L {step.c_l:+.4f}, C_D {step.c_d:.4f}",
+                flush=True,
+            )
+
+    record = run(
+        config,
+        path,
+        on_step=count,
+        provenance=Provenance.here(commit, concurrent),
+        initial=initial,
+    )
+    wall = time.perf_counter() - t_start
+    series = RunFile(path).read_step_series()
+    accuracy = cylinder_accuracy(case_id, series.t, series.c_l, record)
+    work = dict(counter.work)
+    work["outer_iterations"] = startup_outer + march["outer"]
+    work["inner_products"] += march["products"]
+    work["cell_updates"] += (
+        momentum_updates * march["outer"] + pressure_cells * march["products"]
+    )
+    row = {
+        "schema_version": SCHEMA_VERSION,
+        "run_id": run_id,
+        "recorded_at": dt.datetime.now(dt.UTC).isoformat(timespec="seconds"),
+        "git_commit": commit,
+        "git_dirty": dirty,
+        "method": method,
+        "case": case_id,
+        "grid": {"nx": config.nx, "ny": config.ny, **axis_clustering(mesh)},
+        "params": {
+            **solver_parameters(config),
+            "transient": dataclasses.asdict(config.transient),
+            "startup": {
+                "outer": startup_outer,
+                "bottom_factor": cylinder.STARTUP_BOTTOM_FACTOR,
+            },
+        },
+        "environment": {
+            "cpu": cpu_name(),
+            "cpu_count": os.cpu_count(),
+            "os": platform.platform(),
+            "python": platform.python_version(),
+            "numpy": np.__version__,
+            "concurrent_processes": concurrent,
+        },
+        "outcome": {
+            "converged": True,
+            "stop_reason": "transient_t_end",
+            "pressure_cap_hits": int(series.pressure_cap_hits.sum()),
+        },
+        "accuracy": accuracy,
+        "work": {**work, "cell_update_definition": CELL_UPDATE_DEFINITIONS[method]},
+        "time": {
+            "wall_seconds": wall,
+            "stages": {"startup": startup_seconds, "march": record.wall_seconds},
+        },
+        "trajectory": [],
+    }
+    VAL022_RECORDS.mkdir(parents=True, exist_ok=True)
+    detail = {
+        "row": {
+            k: row[k]
+            for k in (
+                "run_id",
+                "git_commit",
+                "git_dirty",
+                "case",
+                "grid",
+                "accuracy",
+                "time",
+                "work",
+            )
+        },
+        "run_file": str(path.relative_to(REPO_ROOT)),
+        "steps": record.steps,
+        "t_final": record.t_final,
+        "outer_mean": record.outer_mean,
+        "outer_max": record.outer_max,
+        "concurrent_processes": concurrent,
+        "series": {
+            "step": series.step.tolist(),
+            "t": series.t.tolist(),
+            "outer": series.outer.tolist(),
+            "worst_imbalance": series.worst_imbalance.tolist(),
+            "c_d": series.c_d.tolist(),
+            "c_l": series.c_l.tolist(),
+        },
+    }
+    (VAL022_RECORDS / f"{case_id}.json").write_text(
+        json.dumps(detail, indent=1), encoding="utf-8"
+    )
+    return row
 
 
 def print_summary(path: Path) -> None:

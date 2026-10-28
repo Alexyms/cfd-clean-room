@@ -5,6 +5,7 @@ and rejects invalid configurations with clear error messages at load
 time (REQ-C02).
 """
 
+import copy
 import dataclasses
 import math
 from itertools import pairwise
@@ -14,6 +15,7 @@ import pytest
 import yaml
 
 from src.config import (
+    BDF2,
     CFL_NUMBER_BOUND,
     DEFAULT_PRESSURE_PRECONDITIONER,
     EVENT_TIME_RTOL,
@@ -23,9 +25,13 @@ from src.config import (
     PRESSURE_RTOL_BOUNDS,
     RETIRED_PRESSURE_TOL_KEY,
     SOLVER_KEYS,
+    Breakpoint,
+    ForceSpec,
     SimConfig,
+    TransientSpec,
     TransportSpec,
     TurbulenceSpec,
+    breakpoint_faces,
 )
 from validation.cases import CONFIG_DIR, load_case
 from validation.transport_cases import SOLVER_BLOCK
@@ -1168,6 +1174,168 @@ class TestMeshStretching:
             SimConfig.from_dict(self._raw(tmp_path, {"x": {"ratio": 1.1}}))
 
 
+# A body face at 2 m on the 4 m axis: 0.2 m at the walls, 0.05 m there.
+AXIS = [
+    {"at": 0.0, "spacing": 0.2},
+    {"at": 2.0, "spacing": 0.05},
+    {"at": 4.0, "spacing": 0.2},
+]
+AXIS_CELLS = 38
+
+
+@pytest.mark.unit
+class TestMeshBreakpoints:
+    """mesh.<axis>.breakpoints (ADR-014 decision 11): interior clustering, refused at load."""
+
+    def _raw(self, tmp_path, breakpoints: object, nx: int = AXIS_CELLS) -> dict:
+        with open(_write_config(tmp_path), encoding="utf-8") as handle:
+            raw = yaml.safe_load(handle)
+        raw["domain"]["nx"] = nx
+        raw["mesh"] = {"x": {"breakpoints": breakpoints}}
+        return raw
+
+    def test_the_breakpoints_and_their_faces_are_read(self, tmp_path) -> None:
+        config = SimConfig.from_dict(self._raw(tmp_path, AXIS))
+        spec = config.stretch_x
+        assert spec.breakpoints == (
+            Breakpoint(0.0, 0.2),
+            Breakpoint(2.0, 0.05),
+            Breakpoint(4.0, 0.2),
+        )
+        assert len(spec.faces) == AXIS_CELLS + 1
+        assert spec.faces == breakpoint_faces(spec.breakpoints)
+        assert config.stretch_y.breakpoints == () and config.stretch_y.faces == ()
+
+    def test_a_count_other_than_the_breakpoints_give_is_refused_with_theirs(
+        self, tmp_path
+    ) -> None:
+        with pytest.raises(
+            ValueError, match=f"give {AXIS_CELLS} cells and the domain states 80"
+        ):
+            SimConfig.from_dict(self._raw(tmp_path, AXIS, nx=80))
+
+    def test_a_jump_above_the_cap_is_refused(self, tmp_path) -> None:
+        steep = [
+            {"at": 0.0, "spacing": 1.0},
+            {"at": 2.0, "spacing": 0.01},
+            {"at": 4.0, "spacing": 1.0},
+        ]
+        n = (
+            len(breakpoint_faces([Breakpoint(p["at"], p["spacing"]) for p in steep]))
+            - 1
+        )
+        with pytest.raises(ValueError, match="above MAX_GROWTH_RATIO"):
+            SimConfig.from_dict(self._raw(tmp_path, steep, nx=n))
+
+    def test_with_wall_clustering_it_is_refused(self, tmp_path) -> None:
+        raw = self._raw(tmp_path, AXIS)
+        raw["mesh"]["x"]["stretch_ratio"] = 1.1
+        with pytest.raises(ValueError, match="on their own"):
+            SimConfig.from_dict(raw)
+
+    @pytest.mark.parametrize(
+        ("label", "breakpoints", "error", "match"),
+        [
+            (
+                "not a list",
+                {"at": 0.0, "spacing": 0.1},
+                ValueError,
+                "list of at least two",
+            ),
+            ("one point", AXIS[:1], ValueError, "list of at least two"),
+            ("not a mapping", [AXIS[0], 2.0, AXIS[2]], ValueError, "mapping"),
+            (
+                "a key missing",
+                [AXIS[0], {"at": 2.0}, AXIS[2]],
+                ValueError,
+                "exactly the keys",
+            ),
+            (
+                "a key extra",
+                [AXIS[0], {**AXIS[1], "ratio": 1.1}, AXIS[2]],
+                ValueError,
+                "exactly the keys",
+            ),
+            (
+                "at a bool",
+                [AXIS[0], {"at": True, "spacing": 0.05}, AXIS[2]],
+                TypeError,
+                "at must be a number",
+            ),
+            (
+                "at a string",
+                [AXIS[0], {"at": "2", "spacing": 0.05}, AXIS[2]],
+                TypeError,
+                "at must be a number",
+            ),
+            (
+                "at not finite",
+                [AXIS[0], {"at": float("nan"), "spacing": 0.05}, AXIS[2]],
+                ValueError,
+                "finite",
+            ),
+            (
+                "spacing zero",
+                [AXIS[0], {"at": 2.0, "spacing": 0.0}, AXIS[2]],
+                ValueError,
+                "positive",
+            ),
+            (
+                "spacing negative",
+                [AXIS[0], {"at": 2.0, "spacing": -0.05}, AXIS[2]],
+                ValueError,
+                "positive",
+            ),
+            (
+                "spacing a bool",
+                [AXIS[0], {"at": 2.0, "spacing": True}, AXIS[2]],
+                TypeError,
+                "number",
+            ),
+            (
+                "first not at 0",
+                [{"at": 0.5, "spacing": 0.2}, *AXIS[1:]],
+                ValueError,
+                "from 0 to the axis length",
+            ),
+            (
+                "last not at the length",
+                [*AXIS[:2], {"at": 3.5, "spacing": 0.2}],
+                ValueError,
+                "from 0 to the axis length",
+            ),
+            (
+                "out of order",
+                [
+                    AXIS[0],
+                    {"at": 3.0, "spacing": 0.05},
+                    {"at": 2.0, "spacing": 0.1},
+                    AXIS[2],
+                ],
+                ValueError,
+                "strictly increasing",
+            ),
+            (
+                "a repeated point",
+                [AXIS[0], AXIS[1], AXIS[1], AXIS[2]],
+                ValueError,
+                "strictly increasing",
+            ),
+            (
+                "a spacing as long as its segment",
+                [AXIS[0], {"at": 2.0, "spacing": 2.0}, AXIS[2]],
+                ValueError,
+                "not below",
+            ),
+        ],
+    )
+    def test_a_malformed_list_is_refused(
+        self, tmp_path, label: str, breakpoints: object, error: type, match: str
+    ) -> None:
+        with pytest.raises(error, match=match):
+            SimConfig.from_dict(self._raw(tmp_path, breakpoints))
+
+
 @pytest.mark.unit
 class TestMomentumSweepsKey:
     """solver.momentum_sweeps (ECR-002 step 4): optional, a positive int, default 1."""
@@ -1440,7 +1608,10 @@ class TestPressureKeys:
         and its two layouts (tests/test_layouts.py), and since step 0b of ADR-014
         (prompt 61) the vented room, carry the turbulent
         product setting, 1e-4 (ADR-013 decision 3 as amended 2026-10-09;
-        ECR-002 section 8, step 8).
+        ECR-002 section 8, step 8). The cylinder (VAL-022, a tier-2 case)
+        carries 1e-4 by the amendment of 2026-10-18 (Alex, prompt 68): its
+        Strouhal number at 1e-8 and 1e-4 differs by 1.4e-8 relative
+        (docs/reports/val022/tables68.md, V8).
         """
         turbulent = {
             "clean_room_default.yaml": 1e-4,
@@ -1453,6 +1624,7 @@ class TestPressureKeys:
             "scenario_filter_breach.yaml": 1e-4,
             "validation_annex20.yaml": 1e-4,
             "validation_backstep.yaml": 1e-4,
+            "validation_cylinder.yaml": 1e-4,
             "validation_impinging_jet.yaml": 1e-4,
         }
         for path in sorted(CONFIG_DIR.glob("*.yaml")):
@@ -3716,3 +3888,130 @@ def test_the_reference_scenarios_state_their_sources_values() -> None:
         False,
     )
     assert panel["concentration"] == hundredfold
+
+
+TRANSIENT = {
+    "scheme": "bdf2",
+    "step_tol": 1.0e-4,
+    "step_cap": 500,
+    "forces": {"obstacle": "equipment", "reference_velocity": 0.45},
+}
+
+
+@pytest.mark.unit
+class TestTransientSection:
+    """The transient section (ADR-014 G, step 6b): tier 2's keys, refused at load."""
+
+    def _raw(self, tmp_path, **change: object) -> dict:
+        with open(_write_config(tmp_path), encoding="utf-8") as handle:
+            raw = yaml.safe_load(handle)
+        raw["transient"] = copy.deepcopy(TRANSIENT)
+        for key, value in change.items():
+            if value is None:
+                raw["transient"].pop(key, None)
+            else:
+                raw["transient"][key] = value
+        return raw
+
+    def test_the_section_is_read(self, tmp_path) -> None:
+        config = SimConfig.from_dict(self._raw(tmp_path))
+        assert config.transient == TransientSpec(
+            scheme="bdf2",
+            step_tol=1e-4,
+            step_cap=500,
+            forces=ForceSpec(obstacle="equipment", reference_velocity=0.45),
+        )
+        assert config.scenario is None
+
+    def test_absent_is_none_and_the_scheme_defaults_to_bdf2(self, tmp_path) -> None:
+        assert SimConfig(_write_config(tmp_path)).transient is None
+        config = SimConfig.from_dict(self._raw(tmp_path, scheme=None, forces=None))
+        assert config.transient.scheme == BDF2 and config.transient.forces is None
+
+    def test_a_scenario_with_it_is_refused(self, tmp_path) -> None:
+        base = _scenario_base(tmp_path)
+        base["transient"] = copy.deepcopy(TRANSIENT)
+        with pytest.raises(ValueError, match="give one, not both"):
+            _load_scenario(tmp_path, _scenario_raw(tmp_path, [_door_open()], base))
+        raw = _scenario_raw(tmp_path, [_door_open()])
+        raw["transient"] = copy.deepcopy(TRANSIENT)
+        with pytest.raises(ValueError, match="give one, not both"):
+            _load_scenario(tmp_path, raw)
+
+    def test_the_turbulence_section_with_it_is_refused(self, tmp_path) -> None:
+        """A complete turbulence section reaches the transient check.
+
+        The body is the default configuration's, which the section's own loader
+        accepts, so only the transient section's refusal stops it. Catches
+        (S1): that refusal removed.
+        """
+        raw = self._raw(tmp_path)
+        raw["turbulence"] = {
+            "model": "k_epsilon",
+            "variant": "standard",
+            "wall_treatment": "scalable_wall_functions",
+            "cfl_number": 0.25,
+            "advection_scheme": "upwind",
+            "alpha_turbulence": 0.7,
+            "max_iter": 500,
+            "tol": 1.0e-10,
+        }
+        raw["solver"]["stopping_rule"] = "error_estimate"
+        for segment in raw["boundaries"].values():
+            if segment["type"] == "velocity_inlet":
+                segment["turbulence_intensity"] = 0.05
+                segment["dissipation_length"] = 0.1
+        with pytest.raises(ValueError, match="a transient run is laminar"):
+            SimConfig.from_dict(raw)
+
+    @pytest.mark.parametrize(
+        ("change", "error", "match"),
+        [
+            ({"scheme": "crank_nicolson"}, ValueError, "scheme must be one of"),
+            ({"scheme": 2}, ValueError, "scheme must be one of"),
+            ({"step_tol": None}, ValueError, "step_tol"),
+            ({"step_tol": 0.0}, ValueError, "step_tol"),
+            ({"step_tol": True}, TypeError, "step_tol"),
+            ({"step_cap": None}, ValueError, "step_cap"),
+            ({"step_cap": 0}, ValueError, "step_cap"),
+            ({"step_cap": True}, TypeError, "step_cap"),
+            ({"step_cap": 5.5}, TypeError, "step_cap"),
+            ({"forces": "equipment"}, ValueError, "must be a mapping"),
+            ({"forces": {"obstacle": "equipment"}}, ValueError, "exactly the keys"),
+            (
+                {"forces": {"obstacle": "door", "reference_velocity": 0.45}},
+                ValueError,
+                "not an obstacle",
+            ),
+            (
+                {"forces": {"obstacle": "equipment", "reference_velocity": 0.0}},
+                ValueError,
+                "reference_velocity",
+            ),
+            (
+                {"forces": {"obstacle": 3, "reference_velocity": 0.45}},
+                TypeError,
+                "obstacle",
+            ),
+            ({"sweeps": 10}, ValueError, "not recognised"),
+        ],
+    )
+    def test_a_bad_key_is_refused(
+        self, tmp_path, change: dict, error: type, match: str
+    ) -> None:
+        with pytest.raises(error, match=match):
+            SimConfig.from_dict(self._raw(tmp_path, **change))
+
+    def test_a_t_end_that_is_not_a_whole_number_of_steps_is_refused(
+        self, tmp_path
+    ) -> None:
+        raw = self._raw(tmp_path)
+        raw["solver"]["t_end"] = 60.005
+        with pytest.raises(ValueError, match="whole number of steps"):
+            SimConfig.from_dict(raw)
+
+    def test_not_a_mapping_is_refused(self, tmp_path) -> None:
+        raw = self._raw(tmp_path)
+        raw["transient"] = ["bdf2"]
+        with pytest.raises(ValueError, match="must be a mapping"):
+            SimConfig.from_dict(raw)

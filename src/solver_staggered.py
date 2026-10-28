@@ -127,7 +127,15 @@ from time import perf_counter
 import numpy as np
 
 from src.boundary_staggered import StaggeredBoundary
-from src.config import ERROR_ESTIMATE, VELOCITY_STEP, SimConfig
+from src.config import (
+    BDF2,
+    ERROR_ESTIMATE,
+    IMPLICIT_EULER,
+    STEP_COUNT_ROUNDING,
+    TRANSIENT_SCHEMES,
+    VELOCITY_STEP,
+    SimConfig,
+)
 from src.mesh import FLUID, SOLID, Mesh
 from src.momentum import MomentumPredictor
 from src.pressure import ZERO_SCALE, PressureCorrector
@@ -188,12 +196,6 @@ CAP_STOP = "max_simple_iter"
 # The stop of a transient solve that reached t_end, every step within its
 # criterion.
 TRANSIENT_STOP = "transient_t_end"
-BDF2 = "bdf2"
-IMPLICIT_EULER = "implicit_euler"
-TRANSIENT_SCHEMES = (BDF2, IMPLICIT_EULER)
-# How far t_end / dt may sit from a whole number of steps, relative: rounding
-# in the division, not a shortened last step, which BDF2 does not take.
-_STEP_COUNT_ROUNDING = 1e-9
 # A SHA-256 written as hexadecimal: 64 of these digits.
 _SHA256_DIGITS = 64
 _HEX_DIGITS = "0123456789abcdef"
@@ -418,6 +420,9 @@ class TransientStep:
         faces over non-SOLID cells, kg/s per unit depth.
     pressure_cap_hits : int
         The step's corrections that stopped at max_pressure_iter.
+    pressure_products : int
+        The operator products of the step's pressure corrections, summed,
+        the work count the harness records (step 6b).
     """
 
     step: int
@@ -427,6 +432,7 @@ class TransientStep:
     residual_history: tuple[float, ...]
     worst_imbalance: float
     pressure_cap_hits: int
+    pressure_products: int
 
 
 class TransientStepError(RuntimeError):
@@ -448,6 +454,56 @@ class TransientStepError(RuntimeError):
         super().__init__(message)
         self.step = step
         self.steps = steps
+
+
+@dataclass(frozen=True, eq=False)
+class TransientResume:
+    """Where a transient march continues from (ADR-014 D, tier 2; step 6b).
+
+    A march resumed from it takes, bit for bit, the steps the uninterrupted
+    march would have taken after ``step``: the step's faces and pressure are
+    the next step's start and its latest old level, and ``previous`` the one
+    before it, which BDF2 needs.
+
+    Parameters
+    ----------
+    state : FlowState
+        The faces and pressure after step ``step``, ``outer`` the march's
+        outer iterations to it.
+    previous : FlowState or None
+        The faces after step ``step - 1`` (its pressure is not read); None
+        only at step 0 or for an implicit Euler march.
+    step : int
+        Steps taken, non-negative.
+
+    Raises
+    ------
+    TypeError
+        If ``state`` or ``previous`` is not a FlowState, or ``step`` is not
+        an int (a bool is refused).
+    ValueError
+        If ``step`` is negative, or ``previous`` is of another grid.
+    """
+
+    state: FlowState
+    previous: FlowState | None
+    step: int
+
+    def __post_init__(self) -> None:
+        for name in ("state", "previous"):
+            value = getattr(self, name)
+            if value is None and name == "previous":
+                continue
+            if not isinstance(value, FlowState):
+                raise TypeError(
+                    f"{name} must be a FlowState, got {type(value).__name__}"
+                )
+        _count("step", self.step)
+        if self.previous is not None and self.previous.p.shape != self.state.p.shape:
+            raise ValueError(
+                f"previous is of a {self.previous.p.shape} grid and state of "
+                f"{self.state.p.shape}"
+            )
 
 
 def _digest(field: np.ndarray) -> str:
@@ -964,11 +1020,12 @@ class StaggeredSolver:
         dt: float,
         t_end: float,
         *,
-        initial: FlowState,
+        initial: FlowState | None = None,
         step_tol: float,
         step_cap: int,
         on_step: Callable[[TransientStep, FlowState], None] | None = None,
         scheme: str = BDF2,
+        resume: TransientResume | None = None,
     ) -> FlowState:
         """March a flow state through time steps of dt to t_end (ADR-014 tier 2).
 
@@ -979,10 +1036,11 @@ class StaggeredSolver:
         t_end : float
             The time the march ends at, s, a whole number of steps of ``dt``
             to rounding (a relative ``1e-9``); the march starts at 0.
-        initial : FlowState
+        initial : FlowState, optional
             The time level 0: faces and pressure of this grid, laminar. The
             boundary's normal velocities are written over its faces, as the
-            warm start does, and the result is the first old level.
+            warm start does, and the result is the first old level. Exactly
+            one of ``initial`` and ``resume``.
         step_tol : float
             The per-step criterion (ADR-014 decision 5): a step's outer
             iterations stop when the largest change of the cell-centred u
@@ -1001,6 +1059,12 @@ class StaggeredSolver:
             "bdf2" (ADR-014 decision 3): BDF2 from the second step, the
             first implicit Euler, which needs one old level. Or
             "implicit_euler" every step, the first-order control.
+        resume : TransientResume, optional
+            Continue a march from its step ``resume.step`` (ADR-014 D, tier
+            2): the steps after it are those the uninterrupted march takes,
+            bitwise, numbered and timed on from it, with ``on_step``'s outer
+            counts carried on from ``resume.state.outer``. Under "bdf2" a
+            resume past step 0 needs ``resume.previous``.
 
         Returns
         -------
@@ -1014,13 +1078,16 @@ class StaggeredSolver:
         TypeError
             If ``dt``, ``t_end`` or ``step_tol`` is not a float, ``step_cap``
             not an int (a bool is refused for each), ``scheme`` not a str, or
-            ``initial`` not a FlowState.
+            ``initial`` not a FlowState, or ``resume`` not a TransientResume.
         ValueError
             With the turbulence section; if ``dt``, ``t_end`` or ``step_tol``
             is not finite and positive, ``step_cap`` is below 1, ``scheme`` is
             neither name, ``t_end`` is not a whole number of steps, no
             boundary prescribes a velocity to scale the criterion by, or
-            ``initial`` is a state of another grid or carries k and eps.
+            ``initial`` is a state of another grid or carries k and eps; if
+            both or neither of ``initial`` and ``resume`` are given, the
+            resume's step is at or past t_end's, or a BDF2 resume past step 0
+            lacks its previous level.
         TransientStepError
             When a step reaches ``step_cap`` outer iterations, or its residual
             is not finite, before meeting its criterion. It carries the
@@ -1058,7 +1125,7 @@ class StaggeredSolver:
                 f"scheme must be one of {TRANSIENT_SCHEMES}, got {scheme!r}"
             )
         n_steps = round(t_end / dt)
-        if n_steps < 1 or abs(n_steps * dt - t_end) > _STEP_COUNT_ROUNDING * t_end:
+        if n_steps < 1 or abs(n_steps * dt - t_end) > STEP_COUNT_ROUNDING * t_end:
             raise ValueError(f"t_end {t_end} is not a whole number of steps of dt {dt}")
         scale = self._boundary.get_max_boundary_velocity()
         if scale <= 0.0:
@@ -1066,7 +1133,28 @@ class StaggeredSolver:
                 "solve_transient scales step_tol by the largest prescribed boundary "
                 "velocity, and no boundary prescribes one"
             )
-        flow = self._check_state(initial, "initial", FlowState)
+        if (initial is None) == (resume is None):
+            raise ValueError("give exactly one of initial (a new march) and resume")
+        first = 1
+        if resume is not None:
+            if not isinstance(resume, TransientResume):
+                raise TypeError(
+                    f"resume must be a TransientResume, got {type(resume).__name__}"
+                )
+            flow = self._check_state(resume.state, "resume", FlowState)
+            first = resume.step + 1
+            if resume.step >= n_steps:
+                raise ValueError(
+                    f"the resume is at step {resume.step} and t_end {t_end} is step "
+                    f"{n_steps}; a resume continues to a later t_end"
+                )
+            if scheme == BDF2 and resume.step > 0 and resume.previous is None:
+                raise ValueError(
+                    "a BDF2 march resumed past step 0 needs the previous level "
+                    "(resume.previous)"
+                )
+        else:
+            flow = self._check_state(initial, "initial", FlowState)
         u, v, p = np.array(flow.u), np.array(flow.v), np.array(flow.p)
         self._boundary.apply_normal_velocity(u, v)
 
@@ -1084,13 +1172,19 @@ class StaggeredSolver:
         old_u: tuple[np.ndarray, ...] = (u.copy(),)
         old_v: tuple[np.ndarray, ...] = (v.copy(),)
         total_outer = 0
+        if resume is not None:
+            total_outer = resume.state.outer
+            if resume.previous is not None:
+                old_u = (u.copy(), np.array(resume.previous.u))
+                old_v = (v.copy(), np.array(resume.previous.v))
 
-        for n in range(1, n_steps + 1):
+        for n in range(first, n_steps + 1):
             bdf2 = scheme == BDF2 and n > 1
             # Two old levels from the second step under BDF2, else the latest.
             transient = (dt, old_u, old_v) if bdf2 else (dt, old_u[0], old_v[0])
             history: list[float] = []
             cap_hits = 0
+            products = 0
             met = False
             u_c, v_c = to_cell_centers(u, v)
             for _ in range(step_cap):
@@ -1102,6 +1196,7 @@ class StaggeredSolver:
                 corrected = self._corrector.correct(prediction, p)
                 u, v, p = corrected.u, corrected.v, corrected.p
                 self.last_pressure_iterations = corrected.iterations
+                products += corrected.products
                 if corrected.reached_cap:
                     cap_hits += 1
                     self.pressure_cap_hits += 1
@@ -1129,6 +1224,7 @@ class StaggeredSolver:
                 residual_history=tuple(history),
                 worst_imbalance=float(np.max(np.abs(imbalance[self._live]))),
                 pressure_cap_hits=cap_hits,
+                pressure_products=products,
             )
             self.transient_steps.append(record)
             if not met:
