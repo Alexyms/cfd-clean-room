@@ -1035,7 +1035,8 @@ stencil, first order at the faces as the stencils are), the Strouhal number `for
 (the last ten periods' interpolated upward zero crossings, the spectrum's peak beside it,
 fewer than ten refused). The rows, their measures and their results are
 `docs/reports/val022/val022.md`; the Re 40 row fails the lift measure stated before the run
-while its drag and outer counts show it steady (that report, and the step 6b findings below).
+while its drag and outer counts show it steady, and passes it under the two-stage protocol
+above (that report, and the step 6b findings below).
 
 *Re 40's protocol (Alex, 2026-10-28, prompt 68c).* The Re 40 row is run in two stages and scored
 by `validation.cylinder.decays`, unchanged, on the whole series from t = 0: the row's 4000 steps
@@ -1200,7 +1201,8 @@ as `mu_eff` is), `mesh.py`'s the breakpoints.
    (`validation.cases.load_cylinder`), the probe's perturbed start-up and the rows' measures
    (`validation/cylinder.py`) and the harness's cylinder family. VAL-022 run as four harness rows,
    reported in `docs/reports/val022/val022.md`: Re 100 on the clustered grid and Re 60 pass; Re 40
-   fails its stated lift measure; the uniform rung is reported. Every hash of record unchanged.
+   fails its stated lift measure in one stage and passes it under the two-stage protocol (prompt
+   68c); the uniform rung is reported. Every hash of record unchanged.
 7. The four reference scenarios run on the product grid with their records in the run files,
    the recovery outputs, and the Phase 4 gate report with this document's planned-against-built
    table.
@@ -1860,7 +1862,21 @@ H1 hold the period history, each row by time window, the cost estimate and the h
   rate of the row's last iterating periods, its last peak about five times 1e-5; (e) fails and
   (f) holds, the drag unchanged. By the rule fixed before the probe, Re 40 stays FAIL and the
   onset bracket is not shown; section F's protocol is unchanged, and the orchestrator takes
-  Re 40 to Alex.
+  Re 40 to Alex. Alex's decision of 2026-10-28 followed (the next two bullets).
+- *Predictions (g) and (h), the Re 40 run-out and the onset estimate (prompt 68c).* The
+  report's V10 and V11. Re 40 was run on at 1e-6 U to t = 600 (2,256 s) and scored by `decays`
+  on the whole series from t = 0, the two-stage protocol of section F: it passes (the last six
+  amplitudes each fall), the single-stage reading's FAIL recorded beside. (g) fails on the
+  readings fixed before the run: the envelope's rate over t = 250 to the first peak below 1e-6
+  is -0.0289, 1.87 times the probe's, because that window runs into a node of the envelope near
+  t = 367 where the shedding-period oscillation (about 10) hands over to a slower one (about
+  25), and that first peak is at t = 361, not near 500; the measure part holds. The slower
+  oscillation decays at about -0.007 to t = 600, with every step at one outer iteration from
+  t = 364, so the pass is read at amplitudes of 4e-7 to 1.1e-6, at the 1e-6 U criterion's own
+  level. (h) fails narrowly: the line through the Re 40 and Re 60 growth rates crosses zero at
+  Re 44.6 (47.2 with the run-out's Re 40 rate), against 51.2 +/- 1 and the band 45 to 57. The
+  Re 40 rate is not one number (its local rate runs from -0.016 to -0.043), so the estimate
+  is an indication only.
 - *The pressure solve's tolerance.* The rows ran at 1e-4 against ADR-013 decision 3's 1e-8 for
   laminar validation cases; the report's V8 measured the difference on the Re 100 row's shedding
   at 1.4e-8 relative in the Strouhal number, and Alex amended the decision for tier-2 cases.
