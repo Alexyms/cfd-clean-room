@@ -234,6 +234,19 @@ class TestByHand:
         assert c_d == pytest.approx(0.4 / (0.5 * 1.0 * 4.0 * 0.2), rel=1e-15)
         assert c_l == pytest.approx(-0.04 / (0.5 * 1.0 * 4.0 * 0.2), rel=1e-15)
 
+    def test_the_height_is_the_y_extent_of_a_block_wider_than_it_is_tall(
+        self,
+    ) -> None:
+        """Catches (F8): D taken from the obstacle's x extent."""
+        raw = _stretched_raw()
+        raw["obstacles"][0]["x_end"] = 1.4
+        mesh, config, _unused = _gauge(raw)
+        gauge = ForceGauge(mesh, config, "block", 2.0)
+        c_d, c_l = gauge.coefficients(ObstacleForces(0.3, 0.1, -0.05, 0.01))
+        assert gauge.height == pytest.approx(0.2, rel=1e-15)
+        assert c_d == pytest.approx(0.4 / (0.5 * 1.0 * 4.0 * 0.2), rel=1e-15)
+        assert c_l == pytest.approx(-0.04 / (0.5 * 1.0 * 4.0 * 0.2), rel=1e-15)
+
     @pytest.mark.parametrize(
         ("name", "velocity", "error"),
         [
@@ -407,6 +420,45 @@ class TestStrouhal:
             args["velocity"] = -1.0
         with pytest.raises(ValueError):
             strouhal(**args)
+
+    @pytest.mark.parametrize("name", ["height", "velocity"])
+    @pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf])
+    def test_a_non_finite_height_or_velocity_is_refused(
+        self, name: str, value: float
+    ) -> None:
+        """Catches (S2a): the finiteness check dropped, as a NaN passes ``<= 0``."""
+        t, lift = _sine(0.146, 30.0)
+        args = {"t": t, "lift": lift, "height": 1.0, "velocity": 1.0, name: value}
+        with pytest.raises(ValueError, match=f"{name} must be finite and positive"):
+            strouhal(**args)
+
+    @pytest.mark.parametrize("name", ["height", "velocity"])
+    @pytest.mark.parametrize("value", [True, "1.0", None])
+    def test_a_height_or_velocity_that_is_not_a_real_number_is_refused(
+        self, name: str, value: object
+    ) -> None:
+        """Catches (S2b): the bool check dropped, which reads True as 1.0."""
+        t, lift = _sine(0.146, 30.0)
+        args = {"t": t, "lift": lift, "height": 1.0, "velocity": 1.0, name: value}
+        with pytest.raises(TypeError, match=f"{name} must be a real number"):
+            strouhal(**args)
+
+    def test_the_cross_check_disagrees_where_the_spectrum_peaks_off_the_period(
+        self,
+    ) -> None:
+        """Two tones: the crossings follow their sum, the spectrum its larger bin.
+
+        The crossings give 0.18 and the spectrum's peak 0.29, 0.11 apart
+        against a resolution of 0.017, so the reading says they disagree.
+        Catches (F9): ``agrees`` always True.
+        """
+        t = np.arange(0.0, 120.0, 0.05)
+        lift = 0.6 * np.sin(2.0 * math.pi * 0.146 * t) + 0.5 * np.sin(
+            2.0 * math.pi * 0.29 * t + 0.4
+        )
+        reading = strouhal(t, lift, 1.0, 1.0)
+        assert abs(reading.spectral_strouhal - reading.strouhal) > reading.resolution
+        assert reading.agrees is False
 
 
 @pytest.mark.unit

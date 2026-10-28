@@ -221,7 +221,7 @@ Generated. The responsibility and serves columns are editorial and come from `do
 | `src/boundary_vents.py` | 250 | Derives the mesh faces each equipment vent covers on its obstacle face, from the staggered layout's obstacle-face inputs and the registry's first-match coverage, with the face masks the velocity, turbulence and concentration layers read, and refuses a vent that covers no face or a recirculating pair whose flows differ on the faces. | S12.1 |
 | `src/config.py` | 2817 | Loads the YAML configuration into typed dataclasses and rejects missing keys, wrong types and out-of-range values at load time. | A02, A03, C01, C02, C03, S10 |
 | `src/constants.py` | 8 | Holds the physical constants shared by every module so that none of them defines its own copy. | C04 |
-| `src/forces.py` | 346 | Integrates the pressure and shear the staggered fields put on a named obstacle's faces, read where the momentum predictor's stencils put them, into its drag and lift and their coefficients, and reads the Strouhal number of a lift signal from its last ten periods' interpolated zero crossings with the spectrum's peak as the cross-check, refusing fewer than ten. | none |
+| `src/forces.py` | 350 | Integrates the pressure and shear the staggered fields put on a named obstacle's faces, read where the momentum predictor's stencils put them, into its drag and lift and their coefficients, and reads the Strouhal number of a lift signal from its last ten periods' interpolated zero crossings with the spectrum's peak as the cross-check, refusing fewer than ten. | none |
 | `src/io_manager.py` | 1668 | Writes a run's HDF5 run file by appending (the merged configuration with its restart hash, the flow states, the transport frames, budgets and sensor readings, and a clean-out's recovery outputs) and its checkpoint file by atomic replacement (the march's checkpoint and the steady solve's), reads each back bitwise, and refuses a restart under a changed configuration, so a killed or capped run continues to what the uninterrupted run reaches. | none |
 | `src/mesh.py` | 465 | Builds the structured grid, uniform, geometrically clustered at the walls or between interior breakpoints the loader derives, with the face, center, width and center-to-center arrays a face-based stencil needs, and classifies each cell as FLUID, SOLID or BOUNDARY. | S11 |
 | `src/momentum.py` | 1191 | Predicts u* and v* on the staggered grid with QUICK advection by deferred correction over an upwind implicit matrix, a configured number of under-relaxed Jacobi sweeps per call, an optional per-cell viscosity field with its face rule and stress source, the domain edge's wall stencil at obstacle faces, and an optional implicit Euler or BDF2 time derivative at the unknown faces, and returns the diagonal coefficients the pressure correction needs. | S07, S09, S14 |
@@ -237,7 +237,7 @@ Generated. The responsibility and serves columns are editorial and come from `do
 | `src/time_integration.py` | 1539 | Runs a scenario under tier 1: solves each distinct flow state once, warm-started from the state before it, or reuses one a run file holds, then marches every particle class at one step through the intervals, dividing each into equal steps under the stable step and carrying the fields and budgets across each switch, writing frames, budgets, sensor readings and checkpoints through the run file, continuing a run from its checkpoint, and for a clean-out tracking the recovery outputs every step; under tier 2 marches the flow itself through solve_transient, writing its frames, per-step counts, lift and drag and two-level checkpoints, restarting bitwise, and reading the Strouhal number and drag coefficient at the end; it discretises nothing. | N01 |
 | `src/turbulence.py` | 1622 | Advances the k-epsilon model's k and eps one step on a prescribed face velocity field, standard or RNG with each variant's constants as module data: advection, explicit growth from the strain the faces give and implicit decay and diffusion through the shared scalar scheme, boundary values from a conditions object the caller builds each step, the kinematic eddy viscosity, and an assertion that k and eps are positive and finite after every step; and the scalable wall functions, which build those conditions, the wall viscosity of the momentum wall faces and the inlet values the coupled solve starts from. | S14, S15, S17 |
 
-Total 22 Python files, 17299 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
+Total 22 Python files, 17303 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
 
 `Declares it serves` is an EDITORIAL CLAIM read from `docs/system_map_annotations.toml`. It says which requirements a module is meant to satisfy, not that it does. Whether a requirement is met is answered by the tests named in the register's `Verified By` column.
 <!-- END GENERATED: components -->
@@ -262,7 +262,7 @@ Generated. Static import analysis cannot see a function bound into a registry by
 |---|---|
 | Scope | `src/**/*.py` |
 | Files hashed | 22 |
-| Digest | `sha256:93b924c129046d8b89882f14140b8bee4af8c6884f7e7c4ae6825bbc8207e321` |
+| Digest | `sha256:446e3ca7a7b19c908d966f41bf5a84181aabf79c49e310f598b05c15458479d3` |
 
 This is what lets the document answer whether it is current, which is the one question a stale table cannot be asked. `python scripts/gen_system_map.py --check` recomputes the whole set of generated regions, this digest included, and exits non-zero on any disagreement.
 
@@ -1780,7 +1780,8 @@ strouhal(t, lift, height, velocity) -> StrouhalReading
     # t 1-D, strictly increasing and evenly spaced; lift finite, same shape;
     # the period is the mean spacing of the last eleven upward zero crossings,
     # each linearly interpolated; ValueError for fewer than ten periods or
-    # malformed input
+    # malformed input (height and velocity finite and positive), TypeError for
+    # a bool or non-real height or velocity
 StrouhalReading(strouhal, period, crossings, spectral_strouhal, resolution, agrees)
     # spectral_strouhal: the rfft peak over the same window less its mean;
     # agrees: within one resolution D / (U T) of the zero-crossing reading

@@ -275,9 +275,9 @@ def strouhal(
     lift : np.ndarray
         The lift (or its coefficient) at those times, finite.
     height : float
-        D, m, positive.
+        D, m, finite and positive.
     velocity : float
-        U, m/s, positive.
+        U, m/s, finite and positive.
 
     Returns
     -------
@@ -286,10 +286,13 @@ def strouhal(
 
     Raises
     ------
+    TypeError
+        If ``height`` or ``velocity`` is not a real number (a bool is refused).
     ValueError
         If the arrays differ in shape, are not 1-D, not finite, the times are
-        not strictly increasing and evenly spaced, D or U is not positive, or
-        the signal holds fewer than ten periods (eleven upward crossings).
+        not strictly increasing and evenly spaced, D or U is not finite and
+        positive, or the signal holds fewer than ten periods (eleven upward
+        crossings).
 
     Notes
     -----
@@ -307,10 +310,11 @@ def strouhal(
         )
     if not (np.isfinite(t).all() and np.isfinite(lift).all()):
         raise ValueError("t and lift must be finite")
-    if height <= 0.0 or velocity <= 0.0:
-        raise ValueError(
-            f"height and velocity must be positive, got {height}, {velocity}"
-        )
+    for name, value in (("height", height), ("velocity", velocity)):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise TypeError(f"{name} must be a real number, got {type(value).__name__}")
+        if not math.isfinite(value) or value <= 0.0:
+            raise ValueError(f"{name} must be finite and positive, got {value}")
     steps = np.diff(t)
     if (
         steps.size == 0
