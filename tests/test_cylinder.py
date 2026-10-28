@@ -146,6 +146,75 @@ class TestMeasures:
         loud = cylinder.decays(t, np.full_like(t, 1e-3))
         assert loud["measure"] == "quiet" and not loud["passed"]
 
+    def test_the_decay_reads_the_second_half_of_the_run(self) -> None:
+        """Eight growing periods early, none in the second half: the quiet reading.
+
+        The first third oscillates with a growing amplitude; the second half
+        holds no upward crossing, so the measure takes the quiet reading and
+        the lift passes. Catches (Y6): the window the whole run, which reads
+        the early growth as the last periods and fails.
+        """
+        t = np.arange(0.0, 200.0, 0.05)
+        early = 0.01 * np.exp(0.02 * t) * np.sin(2.0 * math.pi * t / 6.85)
+        c_l = np.where(t < 60.0, early, 1e-8 * np.exp(-(t - 60.0)))
+        verdict = cylinder.decays(t, c_l)
+        assert verdict["measure"] == "quiet" and verdict["passed"]
+
+    def test_the_quiet_reading_is_the_last_tenth_of_the_run(self) -> None:
+        """Loud until t = 175 and quiet over the last tenth passes; loud in it does not.
+
+        Catches (Y7): the reading's window the second half, which sees the
+        loud stretch before t = 175 and fails the first lift.
+        """
+        t = np.arange(0.0, 200.0, 0.05)
+        settled = np.where((t >= 100.0) & (t < 175.0), 1e-3, 0.0)
+        verdict = cylinder.decays(t, settled)
+        assert verdict["measure"] == "quiet" and verdict["passed"]
+        assert verdict["largest_lift"] == 0.0
+        loud_at_the_end = np.where(t >= 190.0, 1e-3, 0.0)
+        assert not cylinder.decays(t, loud_at_the_end)["passed"]
+
+    def test_the_decay_reads_the_last_six_amplitudes(self) -> None:
+        """Rising to t = 190 then falling decays; falling then rising does not.
+
+        Both have twenty periods in the second half. Catches (Y9): the first
+        six amplitudes of the second half read in place of the last.
+        """
+        t, c_l = _lift(
+            lambda t: np.where(
+                t < 190.0, 0.1 + 0.001 * t, 0.29 * np.exp(-0.02 * (t - 190.0))
+            ),
+            periods=40,
+        )
+        assert cylinder.decays(t, c_l)["passed"]
+        t, c_l = _lift(
+            lambda t: np.where(
+                t < 190.0,
+                0.3 * np.exp(-0.01 * t),
+                0.3 * math.exp(-1.9) * np.exp(0.02 * (t - 190.0)),
+            ),
+            periods=40,
+        )
+        assert not cylinder.decays(t, c_l)["passed"]
+
+    def test_the_sustain_reads_the_last_five_periods(self) -> None:
+        """A lift that fell and then held sustains; one that held and then fell does not.
+
+        Catches (Y8): the oldest amplitudes read in place of the last.
+        """
+        t, c_l = _lift(
+            lambda t: np.where(
+                t < 150.0, 0.3 * np.exp(-0.02 * t), 0.3 * math.exp(-3.0)
+            ),
+            periods=40,
+        )
+        assert cylinder.sustains(t, c_l)["passed"]
+        t, c_l = _lift(
+            lambda t: np.where(t < 150.0, 0.3, 0.3 * np.exp(-0.03 * (t - 150.0))),
+            periods=40,
+        )
+        assert not cylinder.sustains(t, c_l)["passed"]
+
     def test_fewer_than_six_periods_cannot_sustain(self) -> None:
         t, c_l = _lift(lambda t: 0.3 + 0.0 * t, periods=5)
         verdict = cylinder.sustains(t, c_l)
@@ -167,10 +236,14 @@ class TestMeasures:
 
 
 def _record(st: float | None, c_d: float) -> TransientRunRecord:
+    # The spectrum's peak is 10% above the crossing reading, on the other side
+    # of the band for the readings the tests use (0.145 inside, 0.131 outside),
+    # so a harness that scores or reports it in place of the crossing reading
+    # fails them.
     reading = (
         None
         if st is None
-        else StrouhalReading(st, 1.0 / st, np.zeros(11), st, 0.001, True)
+        else StrouhalReading(st, 1.0 / st, np.zeros(11), 1.1 * st, 0.001, False)
     )
     return TransientRunRecord(
         path=Path("run.h5"),
@@ -198,6 +271,9 @@ class TestHarnessReading:
             "val022_re100", t, c_l, _record(0.131, 1.47)
         )
         assert inside["passed"] is True and inside["value"] == 0.145
+        assert inside["strouhal"] == 0.145
+        assert inside["spectral_strouhal"] == pytest.approx(1.1 * 0.145)
+        assert inside["spectra_agree"] is False
         assert inside["drag_coefficient"] == 1.47
         assert outside["passed"] is False
 
