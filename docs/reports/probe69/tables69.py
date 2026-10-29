@@ -28,8 +28,12 @@ import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from matplotlib.axes import Axes
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
@@ -87,14 +91,29 @@ MARKERS = (
     "march",
     "budgets",
     "accrual",
+    "continuity",
     "sensors",
     "door",
     "recovery",
     "lingering",
+    "corners",
     "t7",
     "grid",
     "predictions",
+    "coverage",
 )
+# Each phase's coverage.py JSON, from the one full-suite run its gate report cites.
+COVERAGE_RUNS = (
+    ("Phase 4 (5aabe1d)", RESULTS / "coverage.json"),
+    ("Phase 3 (2252926)", ROOT / "results" / "builder58" / "coverage.json"),
+)
+# The colour of the cells the clean-out never recovered in the recovery maps, named in
+# the map's title so the legend and the drawing cannot disagree.
+NOT_RECOVERED_COLOUR = "red"
+# The upper corners of the clean-out, for the cells that clear after the mean does:
+# within this distance of a side wall and of the ceiling, in metres.
+CORNER_WIDTH = 1.0
+CORNER_HEIGHT = 0.5
 
 # Prompt 69's predictions (the orchestrator, 2026-10-28, committed before the runs).
 PREDICTION_BUDGET = 1.0e-6
@@ -220,15 +239,18 @@ def pct(value: float) -> str:
     return f"{100.0 * value:+.2f}%"
 
 
-def t7_errors() -> tuple[dict[str, float], float]:
-    """T7's time error at Courant 0.4 against 0.1, per sensor and for the free-area mean.
+def t7_errors() -> tuple[dict[str, float], float, int]:
+    """T7's time error at Courant 0.4 against 0.1, per sensor, and the free-area mean's difference.
 
     Returns
     -------
-    tuple[dict[str, float], float]
+    tuple[dict[str, float], float, int]
         Per sensor the signed relative difference of largest magnitude over
-        T7's classes and levels, and the largest relative difference of the
-        free-area mean's columns over T7's rows after t = 0.
+        T7's classes and levels; the largest relative difference of the
+        free-area mean's concentration between the two Courant numbers over
+        T7's air-change rows after t = 0 (a difference in concentration, not
+        in a crossing time: T7's mean never reached 100:1); and the last of
+        those air-change rows.
     """
     text = T7.read_text(encoding="utf-8")
     start = text.index("### T7.")
@@ -239,9 +261,10 @@ def t7_errors() -> tuple[dict[str, float], float]:
         r"^\| (?:0\.5|5) \| (\S+) \| (?:0\.01|0\.001) \| .* \| (-?[\d.]+)% \|$"
     )
     mean_row = re.compile(
-        r"^\| \d+ \| [\d.]+ \| [\d.e+-]+ \| ([\d.e+-]+) \| ([\d.e+-]+) \| ([\d.e+-]+) \| ([\d.e+-]+) \|$"
+        r"^\| (\d+) \| [\d.]+ \| [\d.e+-]+ \| ([\d.e+-]+) \| ([\d.e+-]+) \| ([\d.e+-]+) \| ([\d.e+-]+) \|$"
     )
     mean_worst = 0.0
+    last_air_change = 0
     for line in section.splitlines():
         found = row.match(line)
         if found:
@@ -251,11 +274,12 @@ def t7_errors() -> tuple[dict[str, float], float]:
             continue
         found = mean_row.match(line)
         if found:
-            a1, a4, b1, b4 = (float(found.group(i)) for i in range(1, 5))
+            a1, a4, b1, b4 = (float(found.group(i)) for i in range(2, 6))
             mean_worst = max(mean_worst, abs(a4 / a1 - 1.0), abs(b4 / b1 - 1.0))
+            last_air_change = max(last_air_change, int(found.group(1)))
     if not worst:
         raise ValueError(f"no T7 sensor rows found in {T7}")
-    return worst, mean_worst
+    return worst, mean_worst, last_air_change
 
 
 def t7_text(errors: dict[str, float], sensor: str) -> str:
@@ -429,28 +453,88 @@ def march_table(runs: dict[str, Run | None]) -> list[str]:
     return lines
 
 
+def frame_relatives(run: Run, k: int) -> tuple[np.ndarray, np.ndarray]:
+    """Frame times and a class's relative budget residual at every stored frame.
+
+    Parameters
+    ----------
+    run : Run
+        The scenario's records.
+    k : int
+        Particle size class index.
+
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray]
+        The frame times and the residual over the particles supplied, shape
+        [n_frames]. NaN where the ratio is undefined: before the first step,
+        and while nothing has been supplied (an event scenario's clean lead-in).
+    """
+    times = np.asarray(run.frames.times, dtype=float)
+    relative = np.full(len(times), math.nan)
+    for i, budgets in enumerate(run.frames.budgets):
+        budget = budgets[k]
+        if budget.initial is None or budget.current is None:
+            continue
+        if budget.initial + budget.inflow + budget.source == 0.0:
+            continue
+        relative[i] = budget.relative()
+    return times, relative
+
+
+def worst_frame(run: Run, k: int) -> tuple[float, float]:
+    """A class's relative residual of largest magnitude over the stored frames, and its time."""
+    times, relative = frame_relatives(run, k)
+    i = int(np.nanargmax(np.abs(relative)))
+    return float(relative[i]), float(times[i])
+
+
+def store_interval(run: Run) -> int:
+    """The steps between stored frames (the last step is stored as well)."""
+    return int(np.median(np.diff(run.frames.steps)))
+
+
 def budget_table(runs: dict[str, Run | None]) -> list[str]:
-    """B1: each class's budget closure at the last frame."""
+    """B1: each class's budget closure at the last frame and at the worst stored frame.
+
+    REQ-T05 reads "across all timesteps", so the prediction's and the
+    requirement's bounds are applied to every stored frame, not the last
+    alone. Frames are stored every ``store_interval`` steps; what lies
+    between them is not measured.
+    """
     lines = [
-        "### B1. Budget closure at the end of each run (residual relative to the particles supplied)",
+        "### B1. Budget closure (residual relative to the particles supplied): at the end of each run and at the worst stored frame",
         "",
-        "| Run | Class (um) | Supplied (initial + inflow + source) | Current | Outflow | Deposited | Residual | Relative | Below 1e-6 (prediction (a)) | Below REQ-T05's 1e-4 |",
-        "|---|---|---|---|---|---|---|---|---|---|",
+        "| Run | Class (um) | Supplied (initial + inflow + source) | Current | Outflow | Deposited | Residual | Relative at the end | Worst relative over the stored frames | at t (s) | Below 1e-6 at every frame (prediction (a)) | Below REQ-T05's 1e-4 at every frame |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
+    notes = []
     for name, run in runs.items():
         if run is None:
-            lines.append(f"| {name} | not run | | | | | | | | |")
+            lines.append(f"| {name} | not run | | | | | | | | | | |")
             continue
         for k, budget in enumerate(run.frames.budgets[-1]):
             supplied = (budget.initial or 0.0) + budget.inflow + budget.source
             deposited = sum(budget.deposited.values())
-            relative = budget.relative()
+            worst, when = worst_frame(run, k)
             lines.append(
                 f"| {name} | {run.sizes_um[k]:g} | {supplied:.6e} | {budget.current:.6e} | "
                 f"{budget.outflow:.6e} | {deposited:.6e} | {budget.residual():.6e} | "
-                f"{relative:.3e} | {'yes' if abs(relative) < PREDICTION_BUDGET else 'NO'} | "
-                f"{'yes' if abs(relative) < REQ_T05_RELATIVE else 'NO'} |"
+                f"{budget.relative():.3e} | {worst:.3e} | {when:.2f} | "
+                f"{'yes' if abs(worst) < PREDICTION_BUDGET else 'NO'} | "
+                f"{'yes' if abs(worst) < REQ_T05_RELATIVE else 'NO'} |"
             )
+        scored = int(np.isfinite(frame_relatives(run, 0)[1]).sum())
+        notes.append(
+            f"{name}: every {store_interval(run)} steps, {scored} of {len(run.frames.steps)} frames scored"
+        )
+    lines.append("")
+    lines.append(
+        "Frames are stored at the interval listed for each run and at the last step, so the "
+        "worst residual between two stored frames is not measured. A frame is scored when the particles "
+        "supplied are above zero (the ratio is undefined before that, in the clean lead-in "
+        "of an event scenario and before the first step). " + "; ".join(notes) + "."
+    )
     return lines
 
 
@@ -473,17 +557,31 @@ def nearest(times: np.ndarray, values: np.ndarray, t: float) -> float:
     return float(values[int(np.argmin(np.abs(times - t)))])
 
 
+def zero_crossings(times: np.ndarray, residual: np.ndarray) -> str:
+    """The frame intervals in which the residual changes sign, or "none".
+
+    Frames whose residual is exactly zero (nothing in the room yet) are skipped,
+    so a run that starts at zero and moves to one sign has no crossing.
+    """
+    ok = np.isfinite(residual) & (residual != 0.0)
+    t, r = times[ok], residual[ok]
+    flips = np.flatnonzero(np.diff(np.sign(r)) != 0)
+    if not flips.size:
+        return "none"
+    return "; ".join(f"{t[i]:.2f} to {t[i + 1]:.2f}" for i in flips)
+
+
 def accrual_table(runs: dict[str, Run | None]) -> list[str]:
     """B2: when the 0.1 um residual accrued, against the particles present (the records only)."""
     lines = [
         "### B2. The 0.1 um budget residual as it accrued (frames nearest each interval's end), against the particles present",
         "",
-        "| Run | Residual at t = 10 s | Residual at the event's end (t, s) | Residual at the end | Largest content (particles per m depth) | Content's time integral (particle s) | Residual over the integral (1/s) |",
-        "|---|---|---|---|---|---|---|",
+        "| Run | Residual at t = 10 s | Residual at the event's end (t, s) | Residual at the end | Largest content (particles per m depth) | Content's time integral (particle s) | Residual over the integral (1/s) | Sign changes of the residual (between frames at t, s) |",
+        "|---|---|---|---|---|---|---|---|",
     ]
     for name, run in runs.items():
         if run is None:
-            lines.append(f"| {name} | not run | | | | | |")
+            lines.append(f"| {name} | not run | | | | | | |")
             continue
         times, residual, content = residual_history(run, 0)
         ok = np.isfinite(residual)
@@ -500,7 +598,46 @@ def accrual_table(runs: dict[str, Run | None]) -> list[str]:
         )
         lines.append(
             f"| {name} | {nearest(times, residual, 10.0):.4e} | {event_end} | {residual[ok][-1]:.4e} | "
-            f"{np.nanmax(content):.4e} | {integral:.4e} | {residual[ok][-1] / integral:.3e} |"
+            f"{np.nanmax(content):.4e} | {integral:.4e} | {residual[ok][-1] / integral:.3e} | "
+            f"{zero_crossings(times, residual)} |"
+        )
+    return lines
+
+
+def continuity_table(runs: dict[str, Run | None]) -> list[str]:
+    """B3: the continuity hypothesis against the 0.1 um residual's rate.
+
+    The hypothesis is that a flow field whose cells do not conserve mass
+    exactly (the stop is at ``pressure_rtol`` 1e-4) makes the march gain or
+    lose the concentration times the field's divergence. The stop's worst
+    per-cell mass imbalance, over the density and the smallest free cell's
+    area, bounds that divergence; a scheme gaining C times it cannot gain
+    more than the bound per second of its content. The residual's rate is B2's
+    last column. This is an upper bound from the records, not a measurement of
+    the field's summed imbalance against the residual.
+    """
+    lines = [
+        "### B3. The continuity hypothesis against the 0.1 um residual's rate (an upper bound from the records)",
+        "",
+        "| Run | Worst per-cell imbalance at the stop, largest over the run's states (kg/s per m) | Density (kg/m^3) | Smallest free cell (m^2) | Largest divergence it allows (1/s) | Residual over the content's time integral, magnitude (1/s) | That rate over the divergence |",
+        "|---|---|---|---|---|---|---|",
+    ]
+    for name, run in runs.items():
+        if run is None:
+            lines.append(f"| {name} | not run | | | | | |")
+            continue
+        worst = max(
+            run.file.read_flow_state(fingerprint).rule_readings["worst_imbalance"]
+            for fingerprint in run.file.flow_fingerprints()
+        )
+        area = float(np.outer(run.mesh.dy_cell, run.mesh.dx_cell)[run.live].min())
+        divergence = worst / (run.config.rho * area)
+        times, residual, content = residual_history(run, 0)
+        ok = np.isfinite(residual)
+        rate = abs(residual[ok][-1]) / float(np.trapezoid(content[ok], times[ok]))
+        lines.append(
+            f"| {name} | {worst:.2e} | {run.config.rho:g} | {area:.3e} | {divergence:.2e} | "
+            f"{rate:.2e} | {rate / divergence:,.0f} |"
         )
     return lines
 
@@ -559,6 +696,8 @@ def sensor_table(runs: dict[str, Run | None], errors: dict[str, float]) -> list[
         "| Run | Class (um) | Sensor | Threshold | Peak (per m^3) | Peak over threshold | Peak time (s) | First time at or above (s) | Latency from event start (s) | Time above (s) | T7 time error at Courant 0.4 |",
         "|---|---|---|---|---|---|---|---|---|---|---|",
     ]
+    closest: tuple[float, str] | None = None
+    crossed: list[str] = []
     for name, run in runs.items():
         if run is None:
             lines.append(f"| {name} | not run | | | | | | | | | |")
@@ -586,6 +725,20 @@ def sensor_table(runs: dict[str, Run | None], errors: dict[str, float]) -> list[
                     f"{times[peak]:.4f} | {fmt(first_t) if first.size else 'never'} | "
                     f"{latency} | {time_above:.4f} | {t7_text(errors, sensor)} |"
                 )
+                if start is not None:
+                    ratio = float(series[peak] / threshold)
+                    if first.size:
+                        crossed.append(f"{name}, {run.sizes_um[k]:g} um, {sensor}")
+                    if closest is None or ratio > closest[0]:
+                        label = f"{name}, {run.sizes_um[k]:g} um, {sensor}"
+                        closest = (ratio, label)
+    if closest is not None:
+        lines.append("")
+        lines.append(
+            f"In the scenarios with a timed event, {len(crossed)} sensor and class pairs "
+            f"reach their threshold; the largest peak over threshold is {closest[0]:.3e} "
+            f"({closest[1]}). A detection latency exists only where a pair reaches it."
+        )
     return lines
 
 
@@ -634,7 +787,10 @@ def door_table(runs: dict[str, Run | None]) -> list[str]:
 
 
 def recovery_table(
-    runs: dict[str, Run | None], errors: dict[str, float], mean_error: float
+    runs: dict[str, Run | None],
+    errors: dict[str, float],
+    mean_error: float,
+    mean_air_changes: int,
 ) -> list[str]:
     """C1: the clean-out's outputs of ADR-014 C per class, T7's time error beside."""
     lines = [
@@ -651,7 +807,9 @@ def recovery_table(
         f"well-mixed 100:1 time ln(100)/N = {record.well_mixed_time:.4f} s; the run went to "
         f"t = {record.t_final:.4f} s. T7's time error at Courant 0.4 against 0.1 (160x60): "
         + ", ".join(f"{s} {pct(e)}" for s, e in errors.items())
-        + f"; free-area mean within {100.0 * mean_error:.2f}% at every tabulated air change."
+        + "; the free-area mean has no time error, since T7's mean never reached 100:1 "
+        f"(its concentration differs by at most {100.0 * mean_error:.2f}% at the "
+        f"tabulated air changes, up to {mean_air_changes})."
     )
     lines.append("")
     lines.append(
@@ -760,7 +918,53 @@ def lingering_table(runs: dict[str, Run | None]) -> list[str]:
     return lines
 
 
-def t7_table(errors: dict[str, float], mean_error: float) -> list[str]:
+def latest_cell(field: np.ndarray, region: np.ndarray, mesh: Mesh) -> str:
+    """The cell of ``region`` with the largest local recovery time, and that time.
+
+    Parameters
+    ----------
+    field : np.ndarray
+        The class's local recovery field, shape [ny, nx]; inf where not recovered.
+    region : np.ndarray
+        Boolean mask of the cells to search, shape [ny, nx].
+    mesh : Mesh
+        The mesh, for the cell centres.
+    """
+    if not region.any():
+        return "no free cell"
+    j, i = np.unravel_index(
+        int(np.argmax(np.where(region, field, -np.inf))), field.shape
+    )
+    return f"({mesh.xc[i]:.3f}, {mesh.yc[j]:.3f}) at {fmt(float(field[j, i]))}"
+
+
+def corners_table(runs: dict[str, Run | None]) -> list[str]:
+    """L2: the local recovery time in the clean-out's two upper corners, per class."""
+    lines = [
+        f"### L2. The clean-out: the upper corners (within {CORNER_WIDTH:g} m of a side wall and {CORNER_HEIGHT:g} m of the ceiling), the latest local recovery time",
+        "",
+        "| Class (um) | Upper left: latest cell (x, y, m) and its time, s | Upper right: latest cell (x, y, m) and its time, s |",
+        "|---|---|---|",
+    ]
+    run = runs.get("clean_out")
+    if run is None or run.recovery is None:
+        lines.append("| not run | | |")
+        return lines
+    mesh = run.mesh
+    near_ceiling = (mesh.yc >= mesh.y[-1] - CORNER_HEIGHT)[:, None]
+    left = near_ceiling & (mesh.xc <= mesh.x[0] + CORNER_WIDTH)[None, :] & run.live
+    right = near_ceiling & (mesh.xc >= mesh.x[-1] - CORNER_WIDTH)[None, :] & run.live
+    for k, size in enumerate(run.sizes_um):
+        field = run.recovery.local_recovery[k]
+        lines.append(
+            f"| {size:g} | {latest_cell(field, left, mesh)} | {latest_cell(field, right, mesh)} |"
+        )
+    return lines
+
+
+def t7_table(
+    errors: dict[str, float], mean_error: float, mean_air_changes: int
+) -> list[str]:
     """E1: T7's time error at Courant 0.4, the column the tables above carry."""
     lines = [
         "### E1. The time error at Courant 0.4 against 0.1 (T7 of tables59.md, 160x60, read here)",
@@ -771,7 +975,8 @@ def t7_table(errors: dict[str, float], mean_error: float) -> list[str]:
     for sensor, value in errors.items():
         lines.append(f"| {sensor} | {pct(value)} |")
     lines.append(
-        f"| free-area mean (at the tabulated air changes) | within {100.0 * mean_error:.2f}% |"
+        f"| free-area mean: no time error (its 100:1 crossing was not reached); concentration "
+        f"at air changes 1 to {mean_air_changes} | within {100.0 * mean_error:.2f}% |"
     )
     return lines
 
@@ -784,22 +989,30 @@ def predictions_table(runs: dict[str, Run | None]) -> list[str]:
         "| Prediction | Measured | Verdict |",
         "|---|---|---|",
     ]
-    worst = -math.inf
+    worst = (0.0, "", 0.0)
+    at_end = 0.0
     missing = False
-    for run in runs.values():
+    for name, run in runs.items():
         if run is None:
             missing = True
             continue
-        worst = max(worst, max(abs(b.relative()) for b in run.frames.budgets[-1]))
+        for k in range(len(run.sizes_um)):
+            value, when = worst_frame(run, k)
+            if abs(value) > abs(worst[0]):
+                worst = (value, f"{name}, {run.sizes_um[k]:g} um", when)
+            at_end = max(at_end, abs(run.frames.budgets[-1][k].relative()))
     if missing:
         lines.append(
             "| (a) every budget closes below 1e-6 relative | not every run finished | not scored |"
         )
     else:
+        magnitude = abs(worst[0])
         lines.append(
-            f"| (a) every budget closes below 1e-6 relative | largest magnitude {worst:.3e}, "
-            f"inside REQ-T05's {REQ_T05_RELATIVE:.0e} by {REQ_T05_RELATIVE / worst:.0f} times | "
-            f"{'holds' if worst < PREDICTION_BUDGET else 'fails'} |"
+            f"| (a) every budget closes below 1e-6 relative | largest magnitude over every stored "
+            f"frame {magnitude:.3e} ({worst[1]}, t = {worst[2]:.2f} s), inside REQ-T05's "
+            f"{REQ_T05_RELATIVE:.0e} by {REQ_T05_RELATIVE / magnitude:.0f} times; at the end of the "
+            f"runs the largest is {at_end:.3e} | "
+            f"{'holds' if magnitude < PREDICTION_BUDGET else 'fails'} |"
         )
     clean = runs.get("clean_out")
     if clean is None or clean.recovery is None:
@@ -852,6 +1065,142 @@ def predictions_table(runs: dict[str, Run | None]) -> list[str]:
     return lines
 
 
+def read_coverage(path: Path) -> dict | None:
+    """A coverage.py JSON report, or None when this machine does not hold it."""
+    if not path.exists():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def line_ranges(lines: list[int]) -> str:
+    """Line numbers as a list with runs of consecutive lines joined: 1960-1963."""
+    out: list[str] = []
+    start = prev = None
+    for n in sorted(lines):
+        if start is None:
+            start = prev = n
+        elif n == prev + 1:
+            prev = n
+        else:
+            out.append(str(start) if start == prev else f"{start}-{prev}")
+            start = prev = n
+    if start is not None:
+        out.append(str(start) if start == prev else f"{start}-{prev}")
+    return ", ".join(out)
+
+
+def coverage_tables() -> list[str]:
+    """Cv1 and Cv2: statement and branch coverage of both phases, and Phase 4's uncovered lines.
+
+    Statements and branches are reported apart. coverage.py's headline
+    ``percent_covered`` with branch measurement on is (covered statements +
+    covered branches) over (statements + branches), a third figure that
+    belongs to neither; it is shown last and named. The uncovered statements
+    are classified by reading the source line the coverage file names (``src/``
+    is unchanged since the run's commit): a ``raise`` is a refusal, anything
+    else is listed by line.
+    """
+    lines = [
+        "### Cv1. Coverage, statements and branches apart, Phase 4 against Phase 3",
+        "",
+    ]
+    reports = [(label, read_coverage(path)) for label, path in COVERAGE_RUNS]
+    if any(report is None for _, report in reports):
+        lines.append("not run (a coverage.json is missing on this machine)")
+        return lines
+    (label4, new), (label3, old) = reports
+    assert new is not None and old is not None
+    lines.extend(
+        [
+            f"| Measure | {label4} | {label3} | Covered count, change | Percentage, change (points) |",
+            "|---|---|---|---|---|",
+        ]
+    )
+    for measure, covered_key, total_key in (
+        ("Statements covered", "covered_lines", "num_statements"),
+        ("Branches covered", "covered_branches", "num_branches"),
+    ):
+        cells = []
+        percent = []
+        for report in (new, old):
+            covered, total = report["totals"][covered_key], report["totals"][total_key]
+            cells.append(f"{covered:,} of {total:,} ({100.0 * covered / total:.2f}%)")
+            percent.append(100.0 * covered / total)
+        gained = new["totals"][covered_key] - old["totals"][covered_key]
+        growth = 100.0 * gained / old["totals"][covered_key]
+        lines.append(
+            f"| {measure} | {cells[0]} | {cells[1]} | {gained:+,} ({growth:+.1f}%) | "
+            f"{percent[0] - percent[1]:+.2f} |"
+        )
+    now, before = new["totals"]["percent_covered"], old["totals"]["percent_covered"]
+    lines.append(
+        f"| Statements and branches together (coverage.py's `percent_covered`) | {now:.2f}% | "
+        f"{before:.2f}% | | {now - before:+.2f} |"
+    )
+    lines.extend(
+        [
+            "",
+            f"### Cv2. {label4}: the uncovered statements by file, from the coverage file",
+            "",
+            "| File | Statements | Uncovered | Of which `raise` | Other uncovered lines | Statements covered | Uncovered branch arms | Of which into a `raise` |",
+            "|---|---|---|---|---|---|---|---|",
+        ]
+    )
+    rows = []
+    for name, entry in new["files"].items():
+        summary = entry["summary"]
+        if not summary["missing_lines"] and not summary["missing_branches"]:
+            continue
+        path = Path(name.replace("\\", "/"))
+        source = (ROOT / path).read_text(encoding="utf-8").splitlines()
+        refusals = [
+            n
+            for n in entry["missing_lines"]
+            if source[n - 1].lstrip().startswith("raise ")
+        ]
+        other = [n for n in entry["missing_lines"] if n not in refusals]
+        into_raise = sum(
+            1
+            for _, destination in entry["missing_branches"]
+            if destination > 0 and source[destination - 1].lstrip().startswith("raise ")
+        )
+        rows.append(
+            (
+                summary["missing_lines"],
+                path.as_posix(),
+                summary,
+                refusals,
+                other,
+                into_raise,
+            )
+        )
+    totals = [0, 0, 0, 0, 0, 0]
+    for uncovered, name, summary, refusals, other, into_raise in sorted(
+        rows, key=lambda r: (-r[0], r[1])
+    ):
+        lines.append(
+            f"| {name} | {summary['num_statements']:,} | {uncovered} | {len(refusals)} | "
+            f"{line_ranges(other) or 'none'} | {summary['percent_statements_covered']:.2f}% | "
+            f"{summary['missing_branches']} | {into_raise} |"
+        )
+        for i, value in enumerate(
+            (
+                summary["num_statements"],
+                uncovered,
+                len(refusals),
+                len(other),
+                summary["missing_branches"],
+                into_raise,
+            )
+        ):
+            totals[i] += value
+    lines.append(
+        f"| all of `src/` | {new['totals']['num_statements']:,} | {totals[1]} | {totals[2]} | {totals[3]} lines | "
+        f"{new['totals']['percent_statements_covered']:.2f}% | {totals[4]} | {totals[5]} |"
+    )
+    return lines
+
+
 def load_runs(root: Path, stems: dict[str, str]) -> dict[str, Run | None]:
     """The runs that have a run file and a summary; None for one that has not finished.
 
@@ -877,7 +1226,7 @@ def render(
     runs: dict[str, Run | None], coarse: dict[str, Run | None] | None
 ) -> tuple[str, dict[str, str]]:
     """The tables file's text and each table's text keyed by its marker name."""
-    errors, mean_error = t7_errors()
+    errors, mean_error, mean_air_changes = t7_errors()
     tables = {
         "reload": reload_table(runs),
         "flows": flows_table(runs),
@@ -886,13 +1235,16 @@ def render(
         "march": march_table(runs),
         "budgets": budget_table(runs),
         "accrual": accrual_table(runs),
+        "continuity": continuity_table(runs),
         "sensors": sensor_table(runs, errors),
         "door": door_table(runs),
-        "recovery": recovery_table(runs, errors, mean_error),
+        "recovery": recovery_table(runs, errors, mean_error, mean_air_changes),
         "lingering": lingering_table(runs),
-        "t7": t7_table(errors, mean_error),
+        "corners": corners_table(runs),
+        "t7": t7_table(errors, mean_error, mean_air_changes),
         "grid": grid_table(runs, coarse),
         "predictions": predictions_table(runs),
+        "coverage": coverage_tables(),
     }
     head = [
         "# Step 7's tables: the four reference scenarios on the product grid",
@@ -942,7 +1294,7 @@ def nearest_frame(run: Run, t: float) -> int:
     return int(np.argmin(np.abs(run.frames.times - t)))
 
 
-def draw_room(ax: object, run: Run) -> None:
+def draw_room(ax: "Axes", run: Run) -> None:
     """Obstacles and sensors on an axes."""
     import matplotlib.patches as patches
     import matplotlib.patheffects as patheffects
@@ -992,7 +1344,7 @@ def figures(runs: dict[str, Run | None], out: Path) -> list[Path]:
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    from matplotlib.colors import LogNorm
+    from matplotlib.colors import ListedColormap, LogNorm
 
     written: list[Path] = []
     clean = runs.get("clean_out")
@@ -1013,11 +1365,13 @@ def figures(runs: dict[str, Run | None], out: Path) -> list[Path]:
                 vmin=0.0,
             )
             if not_recovered.any():
+                # A one-colour map in red: the colour scale beside it ends in yellow,
+                # which a pocket drawn in any warm map from that end would repeat.
                 ax.pcolormesh(
                     mesh.x,
                     mesh.y,
                     np.ma.masked_where(~not_recovered, np.ones_like(field)),
-                    cmap="autumn",
+                    cmap=ListedColormap([NOT_RECOVERED_COLOUR]),
                     shading="flat",
                     vmin=0,
                     vmax=1,
@@ -1027,7 +1381,9 @@ def figures(runs: dict[str, Run | None], out: Path) -> list[Path]:
             size = clean.sizes_um[k]
             title = f"Clean-out, {size:g} um: local recovery time (ADR-014 C)"
             if not_recovered.any():
-                title += f"; orange: not recovered by {record.t_final:.0f} s"
+                title += (
+                    f"; {NOT_RECOVERED_COLOUR}: not recovered by {record.t_final:.0f} s"
+                )
             ax.set_title(title, fontsize=10)
             path = out / f"phase4_cleanout_recovery_{size:g}um.png"
             fig.tight_layout()

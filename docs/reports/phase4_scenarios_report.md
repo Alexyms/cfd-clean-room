@@ -1,6 +1,8 @@
 # Phase 4 Completion Report: Scenarios and Time Integration
 
-**Date:** 2026-10-28 (the machine's local date)
+**Date:** 2026-10-28 (the machine's local date); revised 2026-10-29 after review 69 and test 69
+(prompt 69b: coverage by statements and branches apart, REQ-T05 read at every stored frame, the
+residual's mechanism stated as unknown, the stop condition and the predictions recorded)
 **Phase Gate Verdict:** PROPOSED CONDITIONAL PASS (the builder's case is the section "The proposed
 verdict" below; Alex decides, as for the Phase 3 gate)
 **Branches Merged:** ten pull requests, #87 to #96, and this one (`phase4/step7-gate`):
@@ -61,9 +63,13 @@ equipment vents (section J, step 0b).
 
 ### Deferred
 - **Phase 5's reading of the records**: the per-sensor recovery time as the alert's clearing time
-  and the local recovery field as the placement question (ADR-014 C, "What Phase 5 reads"); the
-  detection latencies of the three event scenarios, which table S1 gives and the monitor will
-  compute.
+  and the local recovery field as the placement question (ADR-014 C, "What Phase 5 reads").
+- **The three event scenarios give Phase 5 no detection latency on this layout.** No sensor
+  reaches its threshold in the door leak, the filter breach or the equipment dust release
+  (table S1, "never" in every latency), so the monitor has no crossing to time in any of them.
+  A Phase 5 detection-latency measure needs either sensor positions that meet an event's plume
+  or a scenario whose release reaches the four sensors; the clean-out's recovery times are the
+  only sensor timings the records hold.
 - **A tier-2 step that reaches its cap cannot be continued under a larger cap** (review 68 S9,
   the plan's deferred table).
 - **Heun's method** for the transport step (ADR-014 decision 2) and the GPU port: Phase 6.
@@ -116,24 +122,52 @@ hash.
 
 ### Coverage
 
-From `results/builder69/coverage.json` (the same run), against the Phase 3 report's figures.
+From `results/builder69/coverage.json` (the same run) and, for Phase 3,
+`results/builder58/coverage.json` (the run its report cites), both generated into the tables
+below. Statements and branches are reported apart. The third row of table Cv1 is coverage.py's
+own headline figure with branch measurement on, the covered statements and branches together
+over both totals; it is neither measure and is shown only because it is the number the first
+version of this report labelled "statements".
 
-| Measure | Phase 4 (5aabe1d) | Phase 3 (2252926) |
-|---|---|---|
-| Statements covered | 5739 of 5805 (98.18%) | 3040 of 3063 (99.25%) |
-| Branches covered | 1928 of 2004 (96.21%) | 880 of 906 (97.13%) |
+<!-- tables69 coverage begin -->
+### Cv1. Coverage, statements and branches apart, Phase 4 against Phase 3
 
-The covered counts grew by about nine tenths on both measures with the four new modules, and
-the percentages fell by about one point each. The 66 uncovered statements are, by file: 25 in
-`config.py` (the "must be a mapping" refusals of a malformed section, two helper branches of
-the stretching and a vent's inward flow for a face with no velocity), 22 in `io_manager.py`
-(the refusals of a wrong argument type, a missing group or a non-increasing step series, and
-two early returns), 5 in `solver_transport.py`, 4 in `turbulence.py`, 3 each in `mesh.py` and
-`time_integration.py`, and one each in `forces.py`, `particles.py`, `solver_staggered.py` and
-`staggered.py` (`results/builder69/coverage.json`). The uncovered branches are the same
-refusals' partial arms. None is a computing path; each is a rejection the Phase 4 modules added
-without a test of its own, which the review policy classes as debt. The two largest files,
-`config.py` and `io_manager.py`, stand at 97% and 94% of statements.
+| Measure | Phase 4 (5aabe1d) | Phase 3 (2252926) | Covered count, change | Percentage, change (points) |
+|---|---|---|---|---|
+| Statements covered | 5,739 of 5,805 (98.86%) | 3,040 of 3,063 (99.25%) | +2,699 (+88.8%) | -0.39 |
+| Branches covered | 1,928 of 2,004 (96.21%) | 880 of 906 (97.13%) | +1,048 (+119.1%) | -0.92 |
+| Statements and branches together (coverage.py's `percent_covered`) | 98.18% | 98.77% | | -0.58 |
+
+### Cv2. Phase 4 (5aabe1d): the uncovered statements by file, from the coverage file
+
+| File | Statements | Uncovered | Of which `raise` | Other uncovered lines | Statements covered | Uncovered branch arms | Of which into a `raise` |
+|---|---|---|---|---|---|---|---|
+| src/config.py | 1,147 | 25 | 14 | 310, 312, 319, 1109, 1960-1963, 2302-2303, 2431 | 97.82% | 20 | 14 |
+| src/io_manager.py | 614 | 22 | 17 | 964, 1090, 1527, 1551, 1555 | 96.42% | 27 | 17 |
+| src/solver_transport.py | 333 | 5 | 5 | none | 98.50% | 6 | 5 |
+| src/turbulence.py | 530 | 4 | 4 | none | 99.25% | 5 | 4 |
+| src/mesh.py | 130 | 3 | 2 | 118 | 97.69% | 3 | 2 |
+| src/time_integration.py | 556 | 3 | 2 | 555 | 99.46% | 7 | 2 |
+| src/forces.py | 123 | 1 | 1 | none | 99.19% | 1 | 1 |
+| src/particles.py | 66 | 1 | 1 | none | 98.48% | 1 | 1 |
+| src/solver_staggered.py | 498 | 1 | 0 | 185 | 99.80% | 2 | 0 |
+| src/staggered.py | 108 | 1 | 1 | none | 99.07% | 1 | 1 |
+| src/pressure.py | 259 | 0 | 0 | none | 100.00% | 2 | 0 |
+| src/scalar_scheme.py | 157 | 0 | 0 | none | 100.00% | 1 | 0 |
+| all of `src/` | 5,805 | 66 | 47 | 19 lines | 98.86% | 76 | 47 |
+<!-- tables69 coverage end -->
+
+Both percentages fell from Phase 3's, statements and branches, while the covered counts grew
+with the four new modules (the third column of Cv1). Of the 66 uncovered statements, 47 are
+`raise` statements (the refusals of a malformed section, a wrong argument type, a missing group
+or a non-increasing step series) and 19 are other lines, listed by line in Cv2: the stretching
+helper's fallbacks, the default of an absent section, a non-numeric threshold key skipped, the
+configured inflow of a velocity inlet given by components (`config.py` 1960 to 1963, a
+computing line no test reaches), early returns and a plain `return None` in `io_manager.py`,
+`mesh.py`, `solver_staggered.py` and `time_integration.py`. Most of the uncovered branch arms
+lead into those `raise` lines (Cv2's last column), the rest are fallback and skipped-option
+arms. Each is a rejection or a fallback the Phase 4
+modules added without a test of its own, which the review policy classes as debt.
 
 ## The reference scenarios on the product grid (ADR-014 step 7)
 
@@ -141,8 +175,9 @@ The four files under `configs/` as they are on `main`, each loaded from a copy t
 checkpoint every 1000 steps (a restart key, not a physics or grid key;
 `docs/reports/probe69/configs69.py`), run concurrently through `scripts/run_scenario.py` by
 `docs/reports/probe69/run69.sh`, each from rest, with one BLAS thread each and the process count
-recorded in each run file (table R1). The predictions of prompt 69 were committed before the
-runs finished (5aabe1d) and are scored in table P1.
+recorded in each run file (table R1). The orchestrator's predictions were set in prompt 69
+before the runs and are copied below, with their source, in "The predictions"; table P1
+scores them.
 
 ### The run files reloaded, the flow states and the hashes of record
 
@@ -219,85 +254,125 @@ siblings), so they are upper bounds on a run alone.
 <!-- tables69 march end -->
 
 <!-- tables69 budgets begin -->
-### B1. Budget closure at the end of each run (residual relative to the particles supplied)
+### B1. Budget closure (residual relative to the particles supplied): at the end of each run and at the worst stored frame
 
-| Run | Class (um) | Supplied (initial + inflow + source) | Current | Outflow | Deposited | Residual | Relative | Below 1e-6 (prediction (a)) | Below REQ-T05's 1e-4 |
-|---|---|---|---|---|---|---|---|---|---|
-| door_leak | 0.1 | 1.312500e+07 | 1.989727e+03 | 1.312288e+07 | 1.323498e+02 | 9.190842e-01 | 7.003e-08 | yes | yes |
-| door_leak | 0.3 | 1.338750e+06 | 2.029790e+02 | 1.338520e+06 | 2.702332e+01 | 9.374683e-02 | 7.003e-08 | yes | yes |
-| door_leak | 0.5 | 4.620000e+05 | 7.001865e+01 | 4.619089e+05 | 2.104602e+01 | 3.234947e-02 | 7.002e-08 | yes | yes |
-| door_leak | 1 | 1.092000e+05 | 1.651758e+01 | 1.091663e+05 | 1.717605e+01 | 7.643667e-03 | 7.000e-08 | yes | yes |
-| door_leak | 5 | 3.845625e+03 | 5.486463e-01 | 3.831808e+03 | 1.326778e+01 | 2.665007e-04 | 6.930e-08 | yes | yes |
-| filter_breach | 0.1 | 1.620000e+08 | 1.563739e+04 | 1.619819e+08 | 2.443041e+03 | -1.334968e+01 | -8.241e-08 | yes | yes |
-| filter_breach | 0.3 | 1.652400e+07 | 1.595138e+03 | 1.652199e+07 | 4.169693e+02 | -1.361523e+00 | -8.240e-08 | yes | yes |
-| filter_breach | 0.5 | 5.702400e+06 | 5.504246e+02 | 5.701530e+06 | 3.198747e+02 | -4.700912e-01 | -8.244e-08 | yes | yes |
-| filter_breach | 1 | 1.347840e+06 | 1.300373e+02 | 1.347450e+06 | 2.600831e+02 | -1.111886e-01 | -8.249e-08 | yes | yes |
-| filter_breach | 5 | 4.746600e+04 | 4.513167e+00 | 4.725977e+04 | 2.017249e+02 | -4.017612e-03 | -8.464e-08 | yes | yes |
-| equipment_dust | 0.1 | 3.000000e+05 | 1.914692e+00 | 2.999792e+05 | 2.022326e+01 | -1.308055e+00 | -4.360e-06 | NO | yes |
-| equipment_dust | 0.3 | 3.000000e+05 | 1.914787e+00 | 2.999510e+05 | 4.835655e+01 | -1.307924e+00 | -4.360e-06 | NO | yes |
-| equipment_dust | 0.5 | 3.000000e+05 | 1.914217e+00 | 2.998889e+05 | 1.104870e+02 | -1.307704e+00 | -4.359e-06 | NO | yes |
-| equipment_dust | 1 | 3.000000e+05 | 1.911572e+00 | 2.996167e+05 | 3.826507e+02 | -1.306755e+00 | -4.356e-06 | NO | yes |
-| equipment_dust | 5 | 3.000000e+05 | 1.833931e+00 | 2.916258e+05 | 8.373678e+03 | -1.273648e+00 | -4.245e-06 | NO | yes |
-| clean_out | 0.1 | 1.752000e+08 | 7.319095e+05 | 1.744638e+08 | 4.594858e+03 | -2.628269e+02 | -1.500e-06 | NO | yes |
-| clean_out | 0.3 | 1.787040e+07 | 7.466331e+04 | 1.779527e+07 | 4.896570e+02 | -2.677316e+01 | -1.498e-06 | NO | yes |
-| clean_out | 0.5 | 6.167040e+06 | 2.574120e+04 | 6.140953e+06 | 3.545565e+02 | -9.236969e+00 | -1.498e-06 | NO | yes |
-| clean_out | 1 | 1.457664e+06 | 6.057063e+03 | 1.451326e+06 | 2.835342e+02 | -2.182035e+00 | -1.497e-06 | NO | yes |
-| clean_out | 5 | 5.133360e+04 | 1.866581e+02 | 5.093479e+04 | 2.122276e+02 | -7.643607e-02 | -1.489e-06 | NO | yes |
+| Run | Class (um) | Supplied (initial + inflow + source) | Current | Outflow | Deposited | Residual | Relative at the end | Worst relative over the stored frames | at t (s) | Below 1e-6 at every frame (prediction (a)) | Below REQ-T05's 1e-4 at every frame |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| door_leak | 0.1 | 1.312500e+07 | 1.989727e+03 | 1.312288e+07 | 1.323498e+02 | 9.190842e-01 | 7.003e-08 | 7.003e-08 | 60.00 | yes | yes |
+| door_leak | 0.3 | 1.338750e+06 | 2.029790e+02 | 1.338520e+06 | 2.702332e+01 | 9.374683e-02 | 7.003e-08 | 7.003e-08 | 60.00 | yes | yes |
+| door_leak | 0.5 | 4.620000e+05 | 7.001865e+01 | 4.619089e+05 | 2.104602e+01 | 3.234947e-02 | 7.002e-08 | 7.002e-08 | 60.00 | yes | yes |
+| door_leak | 1 | 1.092000e+05 | 1.651758e+01 | 1.091663e+05 | 1.717605e+01 | 7.643667e-03 | 7.000e-08 | 7.000e-08 | 60.00 | yes | yes |
+| door_leak | 5 | 3.845625e+03 | 5.486463e-01 | 3.831808e+03 | 1.326778e+01 | 2.665007e-04 | 6.930e-08 | 6.930e-08 | 60.00 | yes | yes |
+| filter_breach | 0.1 | 1.620000e+08 | 1.563739e+04 | 1.619819e+08 | 2.443041e+03 | -1.334968e+01 | -8.241e-08 | 3.927e-07 | 27.90 | yes | yes |
+| filter_breach | 0.3 | 1.652400e+07 | 1.595138e+03 | 1.652199e+07 | 4.169693e+02 | -1.361523e+00 | -8.240e-08 | 3.927e-07 | 27.90 | yes | yes |
+| filter_breach | 0.5 | 5.702400e+06 | 5.504246e+02 | 5.701530e+06 | 3.198747e+02 | -4.700912e-01 | -8.244e-08 | 3.927e-07 | 27.90 | yes | yes |
+| filter_breach | 1 | 1.347840e+06 | 1.300373e+02 | 1.347450e+06 | 2.600831e+02 | -1.111886e-01 | -8.249e-08 | 3.927e-07 | 27.90 | yes | yes |
+| filter_breach | 5 | 4.746600e+04 | 4.513167e+00 | 4.725977e+04 | 2.017249e+02 | -4.017612e-03 | -8.464e-08 | 3.921e-07 | 27.90 | yes | yes |
+| equipment_dust | 0.1 | 3.000000e+05 | 1.914692e+00 | 2.999792e+05 | 2.022326e+01 | -1.308055e+00 | -4.360e-06 | 6.201e-06 | 14.49 | NO | yes |
+| equipment_dust | 0.3 | 3.000000e+05 | 1.914787e+00 | 2.999510e+05 | 4.835655e+01 | -1.307924e+00 | -4.360e-06 | 6.201e-06 | 14.49 | NO | yes |
+| equipment_dust | 0.5 | 3.000000e+05 | 1.914217e+00 | 2.998889e+05 | 1.104870e+02 | -1.307704e+00 | -4.359e-06 | 6.200e-06 | 14.49 | NO | yes |
+| equipment_dust | 1 | 3.000000e+05 | 1.911572e+00 | 2.996167e+05 | 3.826507e+02 | -1.306755e+00 | -4.356e-06 | 6.195e-06 | 14.49 | NO | yes |
+| equipment_dust | 5 | 3.000000e+05 | 1.833931e+00 | 2.916258e+05 | 8.373678e+03 | -1.273648e+00 | -4.245e-06 | 6.204e-06 | 14.49 | NO | yes |
+| clean_out | 0.1 | 1.752000e+08 | 7.319095e+05 | 1.744638e+08 | 4.594858e+03 | -2.628269e+02 | -1.500e-06 | -1.504e-06 | 222.11 | NO | yes |
+| clean_out | 0.3 | 1.787040e+07 | 7.466331e+04 | 1.779527e+07 | 4.896570e+02 | -2.677316e+01 | -1.498e-06 | -1.502e-06 | 222.11 | NO | yes |
+| clean_out | 0.5 | 6.167040e+06 | 2.574120e+04 | 6.140953e+06 | 3.545565e+02 | -9.236969e+00 | -1.498e-06 | -1.501e-06 | 222.11 | NO | yes |
+| clean_out | 1 | 1.457664e+06 | 6.057063e+03 | 1.451326e+06 | 2.835342e+02 | -2.182035e+00 | -1.497e-06 | -1.500e-06 | 222.11 | NO | yes |
+| clean_out | 5 | 5.133360e+04 | 1.866581e+02 | 5.093479e+04 | 2.122276e+02 | -7.643607e-02 | -1.489e-06 | -1.491e-06 | 226.46 | NO | yes |
+
+Frames are stored at the interval listed for each run and at the last step, so the worst residual between two stored frames is not measured. A frame is scored when the particles supplied are above zero (the ratio is undefined before that, in the clean lead-in of an event scenario and before the first step). door_leak: every 100 steps, 139 of 167 frames scored; filter_breach: every 100 steps, 305 of 333 frames scored; equipment_dust: every 100 steps, 305 of 333 frames scored; clean_out: every 100 steps, 663 of 664 frames scored.
 <!-- tables69 budgets end -->
 
 <!-- tables69 accrual begin -->
 ### B2. The 0.1 um budget residual as it accrued (frames nearest each interval's end), against the particles present
 
-| Run | Residual at t = 10 s | Residual at the event's end (t, s) | Residual at the end | Largest content (particles per m depth) | Content's time integral (particle s) | Residual over the integral (1/s) |
-|---|---|---|---|---|---|---|
-| door_leak | 2.3883e-03 | 5.5039e-01 (15) | 9.1908e-01 | 4.1392e+06 | 2.7061e+07 | 3.396e-08 |
-| filter_breach | 9.4025e-04 | 7.2893e+00 (70) | -1.3350e+01 | 1.9446e+07 | 1.1671e+09 | -1.144e-08 |
-| equipment_dust | -1.7344e-06 | -1.0416e+00 (40) | -1.3081e+00 | 8.0217e+04 | 2.4471e+06 | -5.345e-07 |
-| clean_out | -1.7526e+01 | no timed event | -2.6283e+02 | 1.6379e+08 | 1.2745e+09 | -2.062e-07 |
+| Run | Residual at t = 10 s | Residual at the event's end (t, s) | Residual at the end | Largest content (particles per m depth) | Content's time integral (particle s) | Residual over the integral (1/s) | Sign changes of the residual (between frames at t, s) |
+|---|---|---|---|---|---|---|---|
+| door_leak | 2.3883e-03 | 5.5039e-01 (15) | 9.1908e-01 | 4.1392e+06 | 2.7061e+07 | 3.396e-08 | none |
+| filter_breach | 9.4025e-04 | 7.2893e+00 (70) | -1.3350e+01 | 1.9446e+07 | 1.1671e+09 | -1.144e-08 | 80.43 to 80.80 |
+| equipment_dust | -1.7344e-06 | -1.0416e+00 (40) | -1.3081e+00 | 8.0217e+04 | 2.4471e+06 | -5.345e-07 | 10.51 to 10.87; 25.00 to 25.36 |
+| clean_out | -1.7526e+01 | no timed event | -2.6283e+02 | 1.6379e+08 | 1.2745e+09 | -2.062e-07 | none |
 <!-- tables69 accrual end -->
 
-Table B1 closes every class's budget at the end of each run. Within a run the relative
-residual is one number across the five classes (the 5 um class a few percent off by its
-deposition); between runs its sign and size differ. Two runs are inside the 1e-6 line the
-orchestrator set for prediction (a) and two outside, the dust release farthest; all twenty are
-inside REQ-T05's 1e-4, the worst by 23 times (table P1). The requirement holds and the
-prediction fails: its line was a guess, not a bound anything rests on.
+Table B1 closes every class's budget at the end of each run and at every stored frame, and
+table P1 takes its margins from the frames. Within a run the relative residual is nearly one
+number across the five classes (the 5 um class's is within 3% of the 0.1 um class's at the
+end of each run); between runs its sign and size differ. Two runs (the door leak and the
+filter breach) are inside the 1e-6 line the orchestrator set for prediction (a) at every
+stored frame and two (the dust release and the clean-out) are outside, the dust release
+farthest. The outcome of (a) by run is the same read at the end or at every frame. All twenty
+class budgets are inside REQ-T05's 1e-4 at every stored frame, the worst by 16 times: the dust
+release at t = 14.5 s (tables B1 and P1). The requirement holds at the stored frames and the
+prediction fails; its line was the orchestrator's guess, not a bound anything rests on.
+Frames are stored every 100 steps and at the last step, so the true worst between two stored
+frames is not measured, and the margin of 16 is the margin at the frames.
 
-What the records show about the residual, with no probe (the prompt forbids one in this pass):
+**The stop condition fired.** Prompt 69's "Stop and report" list names "a budget's relative
+residual above 1e-6". Ten rows of table B1 are above it, at the end of the runs and at their
+worst frames alike: the dust release's five classes (4.2e-6 to 4.4e-6 at the end, 6.2e-6 at
+the worst frame) and the clean-out's five (1.5e-6). The orchestrator and Alex decided on
+2026-10-29 to continue the gate pass, because the 1e-6 line was the orchestrator's guess and
+REQ-T05's limit is 1e-4. The instruction to run no probe in this pass was in the orchestrator's
+message continuing it; prompt 69 itself does not contain one.
 
-- It accrues for as long as particles are in the room, during an event and after it. Table B2
-  follows the 0.1 um class: the dust release's residual is of order 1e-6 at the end of the
-  clean lead-in, four fifths of its final value at the end of the release, and still moving
-  80 s later; the clean-out's grows through the whole decay.
-- Its absolute size follows the particles present, not the particles supplied, so a scenario
-  that supplies few and holds them long (the dust release) has the largest ratio to its supply
-  and the clean-out the largest absolute residual. The ratio to the content's time integral is
-  not one number either (B2's last column spans 1e-8 to 5e-7 with both signs), so neither
-  normalisation collapses the four runs.
-- Between grids (table G1) the ratio rises on 320x120 for the clean-out and the dust release,
-  falls for the door and is unchanged for the breach. It is not monotone in the grid across
-  the scenarios.
-- No implicit diffusion solve reached its sweep cap in any run (the four logs carry no cap
+**The residual's mechanism is unknown.** No probe was run, so what follows is what the records
+show and one candidate they argue against.
+
+- **Across the classes of a run the relative residual is nearly one number** (B1: the five
+  classes within 3% of each other at the end of every run), while its absolute value differs
+  by the particles each class supplies.
+- **The absolute value follows the particles present in the room**, not the particles
+  supplied. A scenario that supplies few and holds them long (the dust release) has the largest
+  ratio to its supply and the clean-out, with the most particles in the room, the largest
+  absolute residual. The ratio to the content's time integral is not one number either
+  (B2's last column spans 1e-8 to 5e-7 with both signs), so neither normalisation collapses the
+  four runs.
+- **It grows with the grid on two of the four scenarios** (table G1): the relative residual
+  rises on 320x120 for the clean-out and the dust release and falls for the door leak and,
+  by under 10%, the filter breach. It is not monotone in the grid across the scenarios.
+- **The dust release's residual changes sign twice** (0.1 um class, B2's last column, between
+  the frames at 10.5 and 10.9 s and at 25.0 and 25.4 s), the filter breach's once (80.4 to
+  80.8 s, after its event), and the door leak's and the clean-out's not at all. The dust
+  release's is therefore not a steady accrual: it turns positive within the first second of
+  the release, peaks in relative size at 14.5 s, turns negative while the release is still
+  running (it runs to t = 40 s) and keeps growing in magnitude after the release stops.
+- **No implicit diffusion solve reached its sweep cap in any run** (the four logs carry no cap
   warning), and the source is booked exactly (B1's supplied column for the dust release is
   the release's product of rate and duration).
 
-The orchestrator's hypothesis, unconfirmed here, is the flow field's continuity: the product
-room is solved at `pressure_rtol` 1e-4, so a cell's face fluxes need not sum to zero to the
-transport scheme's precision, and a divergence-free scheme marched on a field with a residual
-divergence gains or loses that divergence times the concentration each step, which would make
-the residual follow the particles present as B2 shows and differ between grids with the
-converged field's imbalance. Table D1's worst per-cell imbalance at the stop (the stopping
-rule's own measure of the field the march reads, of order 1e-13 kg/s per metre) is the record the
-hypothesis has to be reconciled with, and nothing here compared the field's summed imbalance
-against the residual's rate. Finding the mechanism is proposed below as a gate condition, to be
-done before Phase 6's finer grids, where a residual that rises with the grid on two of four
-scenarios is the one to know about.
+One candidate is the flow field's continuity: the product room is solved at `pressure_rtol`
+1e-4, so a cell's face fluxes need not sum to zero, and a scheme gaining the concentration
+times the field's divergence would make the residual follow the particles present. This
+report's own numbers make it unlikely. Table B3 bounds the divergence from table D1's worst
+per-cell imbalance at the stop, the density and the smallest cell, and compares it with the
+residual's rate over the content's time integral: the residual's rate is 130 to 6,100 times
+larger than the largest rate the field's imbalance could account for, in every run. The bound is
+an estimate from the records, not a measurement of the field's summed imbalance against the
+residual's rate, and it leaves the mechanism open, not settled.
+
+Finding the mechanism is kept below as a gate condition, to be done before Phase 6's finer
+grids, where a residual that rises with the grid on two of four scenarios is the one to know
+about.
+
+<!-- tables69 continuity begin -->
+### B3. The continuity hypothesis against the 0.1 um residual's rate (an upper bound from the records)
+
+| Run | Worst per-cell imbalance at the stop, largest over the run's states (kg/s per m) | Density (kg/m^3) | Smallest free cell (m^2) | Largest divergence it allows (1/s) | Residual over the content's time integral, magnitude (1/s) | That rate over the divergence |
+|---|---|---|---|---|---|---|
+| door_leak | 1.21e-13 | 1.2 | 6.250e-04 | 1.61e-10 | 3.40e-08 | 211 |
+| filter_breach | 6.52e-14 | 1.2 | 6.250e-04 | 8.70e-11 | 1.14e-08 | 132 |
+| equipment_dust | 6.52e-14 | 1.2 | 6.250e-04 | 8.70e-11 | 5.35e-07 | 6,145 |
+| clean_out | 6.52e-14 | 1.2 | 6.250e-04 | 8.70e-11 | 2.06e-07 | 2,371 |
+<!-- tables69 continuity end -->
+
 
 ### The sensors, and the time error beside every time
 
 ADR-014 decision 2 asks for T7's time error at Courant 0.4 to be stated beside every recovery
 and detection time. T7 (160x60, L0's flow) is the only measurement of that error; table E1 reads
-it, and tables S1 and C1 carry it as a column: a few percent, at the early crossings.
+it, and tables S1 and C1 carry it as a column for the four sensors: a few percent, at the
+early crossings. T7 never reached 100:1 on the free-area mean, so it gives no time error for
+the mean's crossing; E1's last row is a difference in concentration at the tabulated air
+changes, a different quantity.
 
 <!-- tables69 t7 begin -->
 ### E1. The time error at Courant 0.4 against 0.1 (T7 of tables59.md, 160x60, read here)
@@ -308,7 +383,7 @@ it, and tables S1 and C1 carry it as a column: a few percent, at the early cross
 | above_gap_1 | -3.63% |
 | above_gap_2 | -3.49% |
 | hood_entry | -3.00% |
-| free-area mean (at the tabulated air changes) | within 0.16% |
+| free-area mean: no time error (its 100:1 crossing was not reached); concentration at air changes 1 to 8 | within 0.16% |
 <!-- tables69 t7 end -->
 
 <!-- tables69 grid begin -->
@@ -411,22 +486,27 @@ it, and tables S1 and C1 carry it as a column: a few percent, at the early cross
 | clean_out | 5 | above_gap_1 | 29.3 | 2.9300e+03 | 1.000e+02 | 0.0000 | 0.0000 | none | 1.3914 | -3.63% |
 | clean_out | 5 | above_gap_2 | 29.3 | 2.9300e+03 | 1.000e+02 | 0.0254 | 0.0000 | none | 1.4493 | -3.49% |
 | clean_out | 5 | hood_entry | 29.3 | 2.9300e+03 | 1.000e+02 | 0.0000 | 0.0000 | none | 3.2828 | -3.00% |
+
+In the scenarios with a timed event, 0 sensor and class pairs reach their threshold; the largest peak over threshold is 1.744e-19 (door_leak, 0.1 um, near_door). A detection latency exists only where a pair reaches it.
 <!-- tables69 sensors end -->
 
 Table S1 gives every sensor's peak, its time, the first time at or above the class threshold,
 the latency from the event's start and the time above. In the three event scenarios no sensor
-reads within sixteen orders of its threshold (the peak-over-threshold column), so every latency
-is "never": the door's air stays in the lower-left corner below the near-door sensor (the door
+reaches its threshold, and the closest any comes is the largest peak over threshold in the
+line under table S1, so every latency is "never": the door's air stays in the lower-left corner below the near-door sensor (the door
 snapshot), the breach's plume falls from the ceiling between the two racks with above_gap_1 at
 its left edge and above_gap_2 at its right, both outside the threshold contour (the breach
 snapshot), and the dust rises a few tenths of a metre above the litho tool's top, turns down
 the tool's left face and reaches the floor without passing a sensor (the dust snapshot). These
-four positions, chosen for Phase 5's placement question, see none of the three events; that is
-the placement reading ADR-014 C says Phase 5 takes from the records, and the monitor computes
-the latencies from the same readings. In the clean-out every sensor starts at 100 times its
+four positions see none of the three events as configured. The records do not say why the
+sensor file has these positions and this report does not claim they were chosen for Phase 5's
+placement question. What they support is narrower and is an input to Phase 5: the three event
+scenarios give no detection latency on this layout, so the monitor has no crossing to time in
+them (the Deferred list and the proposed verdict). In the clean-out every sensor starts at 100 times its
 threshold and crosses on the way down, so its time above is its 100:1 time: three sensors
 within 3.3 s of the start, the near-door sensor at the room recovery time. T7's column beside
-each time is a few percent at the sensors that cross early and 0.03% at near_door.
+each time is a few percent at the sensors that cross early and 0.03% at near_door; T7 gives no
+time error for the free-area mean's crossing, since its mean never reached 100:1 (table E1).
 
 ### The door leak: two flow states
 
@@ -456,7 +536,7 @@ intervals; the summary reports one interval on a state already held).
 <!-- tables69 recovery begin -->
 ### C1. The clean-out: recovery (ADR-014 C), T7's time error at Courant 0.4 beside each time
 
-Air change rate N = 0.179795 1/s (1/N = 5.5619 s); well-mixed 100:1 time ln(100)/N = 25.6135 s; the run went to t = 240.0000 s. T7's time error at Courant 0.4 against 0.1 (160x60): near_door -0.03%, above_gap_1 -3.63%, above_gap_2 -3.49%, hood_entry -3.00%; free-area mean within 0.16% at every tabulated air change.
+Air change rate N = 0.179795 1/s (1/N = 5.5619 s); well-mixed 100:1 time ln(100)/N = 25.6135 s; the run went to t = 240.0000 s. T7's time error at Courant 0.4 against 0.1 (160x60): near_door -0.03%, above_gap_1 -3.63%, above_gap_2 -3.49%, hood_entry -3.00%; the free-area mean has no time error, since T7's mean never reached 100:1 (its concentration differs by at most 0.16% at the tabulated air changes, up to 8).
 
 | Class (um) | Recovery time (every sensor below and staying below), s | Free-area mean 100:1, s | Ratio to ln(100)/N (prediction (c): 2 to 4) | near_door 100:1, s (T7 -0.03%) | above_gap_1 100:1, s (T7 -3.63%) | above_gap_2 100:1, s (T7 -3.49%) | hood_entry 100:1, s (T7 -3.00%) | Local recovery field maximum, s |
 |---|---|---|---|---|---|---|---|---|
@@ -481,6 +561,18 @@ Room recovery time (every sensor of every class within spec and staying so): 27.
 | 5 | 28,032 | 579 | 2.07% | x 7.613 to 7.988, y 0.013 to 0.912 (579) | (7.913, 0.912) at 229.1372 among the recovered | 5,673 | 20.24% |
 <!-- tables69 lingering end -->
 
+<!-- tables69 corners begin -->
+### L2. The clean-out: the upper corners (within 1 m of a side wall and 0.5 m of the ceiling), the latest local recovery time
+
+| Class (um) | Upper left: latest cell (x, y, m) and its time, s | Upper right: latest cell (x, y, m) and its time, s |
+|---|---|---|
+| 0.1 | (0.013, 2.938) at 158.7028 | (7.988, 2.913) at 176.6421 |
+| 0.3 | (0.013, 2.938) at 158.6956 | (7.988, 2.913) at 176.6348 |
+| 0.5 | (0.013, 2.938) at 158.6485 | (7.988, 2.913) at 176.5877 |
+| 1 | (0.013, 2.938) at 158.4383 | (7.988, 2.913) at 176.3776 |
+| 5 | (0.013, 2.913) at 152.6736 | (7.988, 2.913) at 170.1816 |
+<!-- tables69 corners end -->
+
 Table C1 gives section C's outputs. The air change rate from the first state's inflow over the
 free area puts the slice's well-mixed 100:1 time at 25.6 s. Three sensors clear within 3.3 s of
 the start, under the supply's downflow; the near-door sensor clears at 27.9 s and sets the room
@@ -490,17 +582,21 @@ times the well-mixed time, outside prediction (c)'s band of 2 to 4. On 80x30 the
 sensor-based time is close on both grids and the mean's is not, which the carried limits state
 and the second gate condition takes up.
 
-The sensor histories (the third figure) show why the two differ: every sensor decays faster
-than the well-mixed line, the free-area mean slower, its tail set by the regions the recovery
-maps show clearing last. Those are the two upper corners beside the side walls, at about 150 s,
-and the pocket between the bench at the right (x 6.4 to 7.6 m, below y 0.9 m) and the right
-wall, which reaches 100:1 in no class by 240 s (table L1: one cluster of 581 cells, 2.1% of the
-free area), with the last recovered cell beside it at about 238 s. About a fifth of the free
+The sensor histories (the third figure) show why the two differ. Three sensors clear before
+the well-mixed time, within 3.3 s of the start. The near-door sensor, which sets the room
+recovery time, clears after it (27.94 s against 25.61 s, table C1) and its curve runs above the
+well-mixed line late in the decay. The free-area mean is slower still, its tail set by the
+regions the recovery maps show clearing last. Those are the two upper corners beside the side
+walls, whose latest cells clear at 159 s (upper left) and 177 s (upper right) in the 0.1 um
+class (table L2), and the pocket between the bench at the right (x 6.4 to 7.6 m, below y 0.9 m)
+and the right wall, which reaches 100:1 in no class by 240 s (table L1: one cluster of 581
+cells, 2.1% of the free area), with the last recovered cell beside it at about 238 s. About a fifth of the free
 cells clear after the room recovery time (L1's last column), so a sensor set that calls the
 room clean at 28 s leaves a fifth of the free area above 100:1, the placement reading section C
 names. The classes differ little; the 5 um class clears a few seconds earlier everywhere by its
-settling. T7's time error beside each time is under 0.1% on the room recovery time and the
-free-area mean, and under 4% at the three fast sensors.
+settling. T7's time error beside each time is 0.03% on the room recovery time (a real T7
+crossing time at near_door) and under 4% at the three fast sensors; T7 gives none for the
+free-area mean's 100:1 time, which it never reached (table E1).
 
 ![The clean-out's local recovery time, 0.1 um](phase4_cleanout_recovery_0.1um.png)
 
@@ -525,20 +621,37 @@ breach, the dust release at the end of the release, and the clean-out at the fre
 
 ### The predictions
 
+As set by the orchestrator in prompt 69 (`docs/prompts/cc-prompt-69-step7-gate.md`, the section
+"Predictions", dated 2026-10-28), before the runs, copied verbatim:
+
+> - (a) Every scenario's budget closes to a relative residual below 1e-6 for every class.
+> - (b) The clean-out's room recovery time (every sensor within spec and staying so) is 25 to 35 s
+>   (80x30 read 25.6 s; T7 on 160x60 had the near-door sensor last, at 29 s).
+> - (c) The clean-out's free-area mean reaches 100:1 at 2 to 4 times the well-mixed 25.6 s (80x30:
+>   2.9 to 3.0).
+> - (d) The door's open state, warm-started, takes 0.8 to 1.0 of the closed state's outer
+>   iterations from rest (T1: about 0.85).
+
+The prompt is under the gitignored `docs/prompts/` and no commit on this branch holds the
+predictions. `5aabe1d` holds the launch scripts only. The first committed copy of the bounds is
+`PREDICTION_*` in `tables69.py`, added in `b1427f4` after the runs, with the same numbers as the
+prompt's; table P1 is scored against those.
+
 <!-- tables69 predictions begin -->
 ### P1. Prompt 69's predictions against the measurements
 
 | Prediction | Measured | Verdict |
 |---|---|---|
-| (a) every budget closes below 1e-6 relative | largest magnitude 4.360e-06, inside REQ-T05's 1e-04 by 23 times | fails |
+| (a) every budget closes below 1e-6 relative | largest magnitude over every stored frame 6.204e-06 (equipment_dust, 5 um, t = 14.49 s), inside REQ-T05's 1e-04 by 16 times; at the end of the runs the largest is 4.360e-06 | fails |
 | (b) room recovery time 25 to 35 s | 27.9433 s | holds |
 | (c) free-area mean 100:1 at 2 to 4 times ln(100)/N | 4.5377 to 4.7729 over the classes | fails |
 | (d) open state warm-started at 0.8 to 1.0 of the closed state's outer count | 3,872 over 4,389 = 0.882 | holds |
 <!-- tables69 predictions end -->
 
 Two of the four predictions hold and two fail (table P1). (a) fails on two runs at a 1e-6 line
-set without a basis; REQ-T05's 1e-4 holds on every budget by at least 23 times, and the
-residual's records are stated above with the orchestrator's hypothesis named as unconfirmed.
+set without a basis; REQ-T05's 1e-4 holds on every budget at every stored frame by at least 16
+times, and the residual's records are stated above with its mechanism unknown and the
+continuity hypothesis named as one candidate the report's numbers make unlikely.
 (b) holds: the room recovery time is set by the near-door sensor, inside the band. (c) fails at
 4.8 against 2 to 4; the coarse run's 3.0 is inside the band and the product grid's ratio is not,
 so the quantity is not grid-converged. (d) holds at 0.88, T1's warm arm again.
@@ -551,12 +664,13 @@ so the quantity is not grid-converged. (d) holds at 0.88, T1's warm arm again.
    at 5aabe1d (`results/builder69/full_suite.txt`, `results.xml`).
 3. **No ruff errors.** Holds: `ruff format --check .` reports every file formatted and
    `ruff check .` passes, at bc5850b.
-4. **Coverage does not decrease.** Does not hold as a percentage and holds as a count: statements covered rose from 3040 to
-   5739 and branches from 880 to 1928, while the statement percentage fell from 99.25% to 98.18%
-   and the branch percentage from 97.13% to 96.21% (the coverage table). The uncovered lines are
-   the Phase 4 modules' refusal paths without tests, listed above; the proposed verdict treats
-   the fall as debt to be paid in the fix pass of review 69 or in Phase 5's first pull request,
-   not as a condition.
+4. **Coverage does not decrease.** Does not hold as a percentage and holds as a count. Coverage
+   fell slightly as a percentage on both measures, statements by 0.39 point and branches by
+   0.92 point, while the covered counts rose with the four new modules (table Cv1). The
+   uncovered lines are mostly `raise` statements, the Phase 4 modules' refusals without tests,
+   and 19 other lines, all listed in Cv2 from the coverage file. The proposed verdict treats
+   the fall as debt to be paid in Phase 5's first pull request, not as a condition; the gate
+   text says "does not decrease", so Alex decides whether a fall of this size passes it.
 5. **SYSTEM.md is current.** Holds on the generated regions (`scripts/gen_system_map.py --check`
    at bc5850b: the map matches the source tree) and on the hand-authored ones: the
    contracts of `scenarios.py`, `time_integration.py`, `io_manager.py` and `forces.py` were
@@ -577,9 +691,12 @@ The plan's additional gate criteria for Phase 4 [2]:
    sensor readings, the clean-out's recovery group), and every scenario table of this report is
    computed from those reads, not from the summaries alone. Each run also wrote and replaced
    its checkpoint file every 1000 steps.
-- **All previous validation tests still pass.** Holds: every validation test in the suite passed in the run above, and the harness rows
-  of record reproduce at the gate's commit by their face hashes (table H2, the laminar rows and
-  the coarse product row; H1 ties the scenarios' closed state to the product row's L0).
+- **All previous validation tests still pass.** Holds: every validation test in the suite passed in the run above, and six
+  harness rows of record reproduce at the gate's commit by their face hashes (table H2: four
+  laminar rows, the stretched row and the coarse product row; H1 ties the scenarios' closed
+  state to the product row's L0). The turbulent harness rows stand on prompt 68's check of
+  every hash of record at 6fe887b, with no change to `src/` since but `src/forces.py`'s
+  refusals (prompt 68c), not on a solve at this commit.
 
 ## The carried limits (ADR-014 H) against the scenario results
 
@@ -598,7 +715,7 @@ Phase 3's gate conditions, each against the scenario results it bears on, then P
   beside the door wall and the clean-out's lingering zones behind the equipment are
   recirculations the model shortens. A bubble the model shortens clears sooner than a longer one would, so the pocket beside
   the bench that table L1 reports as not recovered by 240 s is not made recovered by this
-  limit, and the corners' 150 s are read as the model's, not the room's.
+  limit, and the corners' 159 and 177 s (table L2) are read as the model's, not the room's.
 - **Turbulent spreading unvalidated against measurement (VAL-021).** Every scenario's plume.
   The scenarios run at Sc_t 0.7 (`transport.turbulent_schmidt` of the base file); VAL-018's
   range 0.2 to 1.3 is the stated spread, and no scenario was rerun across it here.
@@ -614,10 +731,12 @@ Phase 3's gate conditions, each against the scenario results it bears on, then P
 - **The vents are airflow only and not in the reference scenarios** (ADR-014 J; Alex,
   2026-10-17). A cooling discharge carries no heat and makes no plume; the reference runs
   carry no vent at all, so nothing here measures one.
-- **T7's time error.** Every time in tables S1 and C1 carries the column: a few percent, early,
-  at the fast crossings under the supply, and under 0.1% at the last sensor and on the free-area
-  mean. The error was measured on 160x60 with L0's flow (T7), not on 320x120, and in one
-  direction (every 0.4 time earlier than its 0.1 time).
+- **T7's time error.** Every sensor time in tables S1 and C1 carries the column: a few percent,
+  early, at the fast crossings under the supply, and 0.03% at the last sensor. The free-area
+  mean's 100:1 time has none: T7's mean never reached 100:1 in its window, and the 0.16% of
+  table E1 is a difference in the mean's concentration at the tabulated air changes, not a time.
+  The error was measured on 160x60 with L0's flow (T7), not on 320x120, and in one direction
+  (every 0.4 time earlier than its 0.1 time).
 
 ## Implementation Decisions
 
@@ -689,24 +808,32 @@ The builder's proposal is CONDITIONAL PASS, with two conditions of Phase 4's own
 Phase 3's carried limits. The case, for Alex to decide:
 
 **Why not FAIL.** Every planned validation row passes (VAL-008, VAL-022 under the two-stage
-protocol, VAL-023), the full suite passes, lint and the system map pass, coverage did not fall,
-SYSTEM.md is current, the four scenarios ran to completion with loadable records, the earlier
-phases' rows stand on the suite and the hashes of record, and ADR-014 was built to its design
-with every departure recorded. Nothing found at step 7 is a wrong computed result against a
-stated contract: the budgets close inside REQ-T05 on every class, and no flow state, boundary
-or instrument contradicts its record.
+protocol, VAL-023), the full suite passes, lint and the system map pass, SYSTEM.md is current,
+the four scenarios ran to completion with loadable records, the earlier phases' rows stand on
+the suite and the hashes of record, and ADR-014 was built to its design with every departure
+recorded. Nothing found at step 7 is a wrong computed result against a stated contract: the
+budgets close inside REQ-T05 on every class at every stored frame, and no flow state, boundary
+or instrument contradicts its record. One gate criterion is not met as written: criterion 4,
+coverage does not decrease. Coverage fell slightly as a percentage, statements by 0.39 point
+(99.25% to 98.86%) and branches by 0.92 point (97.13% to 96.21%), while the covered counts rose
+with four new modules; the uncovered lines are 47 `raise` statements and 19 other lines of
+fallbacks and early returns, listed in Cv2 from the coverage file. The case treats the fall as
+debt for Phase 5's first pull request, not as a reason to fail the phase, and says so for Alex
+to decide.
 
 **Why not an unconditional PASS.** Two findings of step 7 are measured and not resolved in
 this phase, and each bears on what later phases will quote:
 
-1. **The budget residual's mechanism.** The closure residual is inside REQ-T05 by 23 times at
-   worst, but it rises with the grid on two of the four scenarios (table G1), accrues with the
-   particles present (B2), and has no confirmed mechanism; the orchestrator's hypothesis is the
-   flow field's continuity at `pressure_rtol` 1e-4, which table D1's per-cell imbalance at the
-   stop does not obviously support. Condition: find the mechanism (a probe prompt of its own,
-   with the per-step residual against the field's summed imbalance, the pressure tolerance and
-   the grid as its arms) before Phase 6's finer grids, where a residual that rises with the
-   grid would be found at the wrong time.
+1. **The budget residual's mechanism.** The closure residual is inside REQ-T05 by 16 times at
+   worst over the stored frames, but its mechanism is unknown. The records show it rises with
+   the grid on two of the four scenarios (table G1), follows the particles present and not the
+   particles supplied (B1, B2), is one relative number across a run's classes, and changes
+   sign during the dust release (B2). The flow field's continuity at `pressure_rtol` 1e-4 is
+   one candidate, and table B3 makes it unlikely: the residual's rate is 130 to 6,100 times
+   what the field's imbalance could account for. Condition: find the mechanism (a probe prompt
+   of its own, designed from the records listed above and not from the continuity hypothesis
+   alone) before Phase 6's finer grids, where a residual that rises with the grid would be
+   found at the wrong time.
 2. **The clean-out mean's grid convergence.** The room recovery time is close on 80x30 and
    320x120 (25.6 and 27.9 s) and the free-area mean's 100:1 time is not (3.0 and 4.8 times the
    well-mixed time; G1). Condition: a third grid of the clean-out (160x60, where T7 ran, or
@@ -716,8 +843,11 @@ this phase, and each bears on what later phases will quote:
 
 The carried limits of Phase 3 stay as stated above and are not conditions of this gate; the
 door's exchange values stay assumptions, and the vents stay airflow only outside the reference
-scenarios. The two failed predictions are recorded as failed in table P1 and in ADR-014's
-planned-against-built table, with the margin of (a) against REQ-T05 beside it.
+scenarios. One finding is an input to Phase 5 and not a condition: no sensor reaches its
+threshold in the three event scenarios (table S1), so they give no detection latency on this
+layout and the clean-out's recovery times are the only sensor timings the records hold. The two
+failed predictions are recorded as failed in table P1 and in ADR-014's planned-against-built
+table.
 
 ## Sources
 
@@ -727,7 +857,9 @@ planned-against-built table, with the margin of (a) against REQ-T05 beside it.
    criteria; the change log.
 3. `docs/reports/probe69/tables69.md`, generated by `tables69.py` from `results/builder69/`
    (untracked, this machine), `results/builder56/L0_320x120.json`, `results/builder59/`
-   (T1's arms) and `results/builder62/hash_*_6[89].json`; `run69.sh` and `configs69.py`.
+   (T1's arms), `results/builder62/hash_*_6[89].json` and the two coverage files
+   (`results/builder69/coverage.json`, `results/builder58/coverage.json`); `run69.sh` and
+   `configs69.py`.
 4. `docs/reports/probe59/tables59.md` (T1, T6, T7), `docs/reports/adr014_step0.md`,
    `docs/reports/adr014_step0b.md`, `docs/reports/probe67/tables67.md`,
    `docs/reports/val022/val022.md` and `tables68.md`.
