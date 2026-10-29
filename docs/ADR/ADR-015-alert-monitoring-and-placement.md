@@ -32,68 +32,41 @@ Each decision is a picture first, then the options ranked with their consequence
 section that carries the detail. The ranking is the builder's, from the records and the probes.
 
 **A. The spreading validation row, VAL-024 (section A).**
-*Picture.* The plane jet is the free shear flow whose spreading the standard k-epsilon model
-is known to get right: measured half-width growth rates dy_1/2/dx of 0.100 to 0.110 [1, 2, 3],
-the model's 0.103 to 0.117 depending on how it is marched and which production term it carries
-[1, 3], against the round jet it overpredicts by 30% [3]. The row therefore cannot show the
-model spreading a plume too little in general; what it can show is whether this solver, with
-its deferred-correction QUICK momentum, its upwind k and eps, its wall functions and its
-fixed-flow outlets, reproduces what the model is known to give, and what its scalar does
-beside its velocity at Sc_t 0.7. The probe (T1) ran the jet on coarse grids: a 0.1 m slot at
-10 m/s into a coflow between walls, the whole far edge a fixed-flow outlet stating no
-velocity, so no face can draw air in (#61). The spreading rate is the slope of the half-width
-over 15 to 45 slot widths, the velocity's on the excess over the local coflow, the scalar's on
-a passive class the jet carries. The first version (30 slot widths high, a 0.05 U_j coflow)
-was a confined jet: a plane jet's volume flux grows as the square root of distance and by the
-outlet the jet carried more than the coflow supplied, so the walls carried a return flow, the
-eddy viscosity filled the channel and the scalar homogenised to the flux-weighted mean (T1's
-first rows; the velocity's slope still read 0.115 on 120x60). The second version is 50 slot
-widths high with a 0.1 U_j coflow, which supplies about twice what the jet entrains by the
-fit range's end. On it the solver converges by the rule on both grids and reads K1 0.093 on
-120x100 and 0.086 on 240x200, 14% and 20% under the model's 0.108: prediction (a) holds on
-the coarse grid and fails on the row grid as run. A third arm, 0.05 U_j in a 100 slot-width
-domain on the coarse resolution (120x200), reads 0.106, 2% under 0.108 and inside the
-measured range, so on that resolution the coflow carries most of the gap (the DNS read its
-0.09 coflow the same way [2]); a fourth arm, k and eps by UMIST in place of upwind, reads
-0.097 at the iteration cap, 4% above upwind, so the scheme's share is about a fifth of the
-gap and the grid's the rest.
-The scalar spreads 1.22 to 1.29 times faster than the velocity on every converged arm, inside
-the measured 1.15 to 1.52 and near the 1.23 a constant eddy viscosity at Sc_t 0.7 gives.
+*Revised 2026-10-29 (prompt 70b).* Alex's decision of 2026-10-29, on review 70 B2: VAL-024 is
+the classic experiment of the breach's own mechanism, a line source in uniform decaying grid
+turbulence, not a plane jet. Recorded as given; the picture and the options below are the
+builder's reading of what that case tests.
+*Picture.* The breach plume falls in air moving at its own speed, so nothing shears its edges;
+what spreads it is the supply's own turbulence, decaying as it falls. A heated wire across a
+wind tunnel downstream of a grid is that flow in a laboratory: Warhaft (1984) measured the
+plume's mean temperature profile at stations downstream of a source at 52 mesh lengths in a
+2.54 cm grid's turbulence at 7 m/s, intensity 2.2% at the source [11, 13]. The one case tests
+two things: how the model's k and eps decay with no production (standard k-epsilon's exponent
+1.087 against the measured 1.16 to 1.4 [14, 13]), and how wide its gradient-diffusion plume is
+against the measured one, in the near field, where a real plume grows as sigma_v t and
+gradient diffusion is known to overstate it, and in the far field, where both grow as a
+diffusion. The breach plume reaches the gap sensors at half a Lagrangian time scale of the
+supply's turbulence, the near field, and the floor returns at about three, so the row's
+near-field stations are the ones the sensors depend on. The plane jet the first version
+proposed tests shear-made turbulence instead, and review 70 B2 found its closed domain's outer
+stream decelerating by a third or more across the fit range, so its records are kept as the
+reason and the jet is the alternative not taken (section A's last paragraph).
 *Options, ranked.*
-(1) A plane jet in a weak coflow that supplies its entrainment, as the probe's second version
-ran it: the coflow fills the domain so the air the jet entrains comes from the inflow, not
-from a recirculation along the walls, and every boundary is one the solver has validated or
-runs the product on (velocity inlets, walls, a fixed-flow outlet). The coflow lowers the
-growth rate a little (the DNS at a velocity ratio of 11 read about 10% under the still-air
-measurements and put part of that on its coflow [2]), and the probe measured it: 0.1 U_j over
-50 slot widths reads 0.093 and 0.05 U_j over 100 reads 0.106 on the same resolution (T1). The
-row is therefore the 0.05 U_j case in the 100 slot-width domain, whose coflow supplies 4.95
-slot flows against the 2.5 entrained (section A's arithmetic). The literature value is
-Bradbury's coflowing jet beside the still-air ones [1, section 3; 3].
-(2) A jet into still air in a closed box (walls all round but the inlet and the far outlet):
-the entrained air returns along the walls as a recirculation, a confined jet, and the
-half-width in the fit range feels the return flow; the literature's value is for an unconfined
-jet.
-(3) A jet with the lateral boundaries open as pressure outlets, the textbook free jet: air
-enters through them, which is the treatment issue 61 found cannot close an outlet cell under
-this solver and the reason the product has no pressure outlet.
-*Recommendation.* (1), at 0.05 U_j in the 100 slot-width domain. The row is `val024_240x400`
-in the harness (2.5 cm cells, four across the slot, 96,000 cells; not yet run, step 0's first
-task, under an hour on an unloaded core by the 240x200 solve's 6,000 outer iterations in 19
-minutes), with `val024_120x200` (the probe's third arm, run) reported beside it as the grid
-sensitivity, a case file `configs/validation_plane_jet.yaml`, a loader
-`validation.cases.load_plane_jet` and readers in `validation/plane_jet.py` (the half-width
-and the fit, pinned by `tests/test_plane_jet.py` on a profile of known half-width). Threshold
-proposed, OPEN for Alex: the velocity's K1 within 15% of 0.108, the standard model's value
-from the steady similarity solution [1] (0.092 to 0.124, a band that holds the measured range
-and the full-production value 0.117 [3]); the scalar's K1 over the velocity's reported against
-the measured 1.15 to 1.52 [2, table 7] and not scored until Alex decides whether the scalar's
-spreading is a criterion. What the probe leaves open for the row: at 0.1 U_j the slope fell
-from 0.093 to 0.086 under refinement, so the 240x400 run may read under the coarse 0.106 by a
-similar share, and the band's lower edge (0.092) is where that would be decided; if the fine
-row fails the band, the finding is the solver's and the sweep (B) carries it as the stated
-spreading uncertainty rather than the row being loosened. The probe's results are in the
-probe section below.
+(1) Warhaft's single line source at 52 M, as section A sets it: uniform inflow carrying the
+source station's k and eps, walls 25 cm from a plume under 3 cm wide, a fixed-flow outlet, no
+pressure outlet; the width read as the second moment of the profile; the reference the Anand
+and Pope curve with Warhaft's parameters that Viswanathan and Pope plot [13] and the Wilson and
+Sawford review says fits the data in the far field [15], the primary points digitised at step 0.
+(2) Stapountzis et al. (1986) [12], the companion experiment with a fuller description of the
+temperature field's structure: its parameters were not readable in this pass, so it is the
+cross-check once the paper is fetched.
+(3) The plane jet: not taken, for the reasons above.
+*Recommendation.* (1). The row is `val024_560x100` with `val024_280x50` (the probe's grid)
+reported beside it; threshold proposed and OPEN: the far-field ratio at 50 and 100 M within
+20% of one and the solver's decay exponent within 0.1 of the model's 1.087, the near-field
+ratio reported with the cell's source size beside it. The width clause verifies no requirement
+as written; REQ-T14 is proposed for it (section G). The probe's results against predictions
+(c) and (d) are in the probe section.
 
 **B. The sensitivity sweep (section B).**
 *Picture.* Two inputs set how wide a plume the model makes, and both are assumptions. The
@@ -262,90 +235,129 @@ replaces.
 
 ## A. The spreading validation row, VAL-024
 
-**The case.** A plane turbulent jet in a weak coflow. The literature [1, 2, 3], from the
-sources fetched for this pass (section "Sources"), fixes the quantity and its values:
+*Revised 2026-10-29 (prompt 70b; Alex's decision of the same date on review 70 B2).* The
+first version of this section proposed a plane jet; its probes and review 70's reading of
+them are kept at the end of this section as the reason the case changed.
 
-- The half-width y_1/2(x) is the distance from the centreline to where the mean streamwise
-  velocity excess over the coflow is half the centreline excess; in the self-similar region it
-  grows linearly, y_1/2 = K1 (x - x0), and K1 is the spreading rate. Measured values for plane
-  jets into still air: 0.100 (Gutmark and Wygnanski 1976, Re 30,000), 0.104 (Browne et al.
-  1983, Re 7,620), 0.110 (Thomas and Chu 1989; Thomas and Prakash 1991; Ramaprian and
-  Chandrasekhara 1985), a range of 0.100 to 0.110 [1, table 1; 2, table 2]. Bradbury's jet in
-  a coflow of 0.16 U_j is self-preserving beyond about thirty slot widths [3, section 3; 1
-  cites 0.109 for it through its review]. Chen and Kim quote the experimental plane jet value
-  as 0.11 [3].
-- The standard k-epsilon model: 0.108 from the steady similarity solution tabulated by Wilcox,
-  0.103 from an unsteady RANS computation (Magi et al.), both as Premnath and Abraham's table
-  1 collects them [1]; Chen and Kim's parabolic march gives 0.110 with the boundary-layer
-  production term mu_t (dU/dy)^2 and 0.117 with the full production term mu_t S^2 [3, section
-  2 of the results]. This solver carries the full term (ADR-012 A: P_k = mu_t S^2, S^2 = 2 S_ij
-  S_ij), so 0.108 to 0.117 is the model's expected range here, and the measured 0.100 to 0.110
-  lies inside the 15% band about 0.108.
-- The scalar's spreading beside the velocity's: the sources give it for the temperature in
-  moderately heated plane jets. Stanley and Sarkar's table 7 [2] lists the measured velocity-to-
-  scalar growth ratios K1u / K1s of 0.66 (Ramaprian and Chandrasekhara 1985), 0.81 (Browne et
-  al. 1983), 0.71 (Jenkins and Goldschmidt 1973) and 0.87 (Davies et al. 1975), so the scalar
-  half-width grows 1.15 to 1.52 times faster than the velocity's; their DNS gives 0.66 (1.51)
-  and reads it as consistent with Sc_t about 0.7. Under a constant eddy viscosity across the
-  jet the scalar profile is the velocity profile to the power Sc_t, which at 0.7 puts the
-  scalar's half-width 1.23 times the velocity's (the sech^2 profile's half points at 1.08 and
-  0.88 of its width scale); the model's ratio is expected near that, inside the measured range.
+**The mechanism the row has to test.** The breach plume falls in air moving at its own speed:
+the supply is uniform across the panel and its neighbours, so there is no shear at the plume's
+edges and nothing makes new turbulence there. What spreads the plume between the ceiling and
+the equipment is the turbulence the HEPA supply carries down with it, decaying as it falls.
+That is the classic experiment of a line source (a point in this 2D section) in decaying grid
+turbulence: a heated wire across a wind tunnel downstream of a grid, the mean temperature
+profile measured at stations downstream, its width against distance or flight time. A plane
+jet tests shear-made turbulence instead, and in a closed domain its outer stream decays (review
+70 B2), so it answers a different question.
 
-**The boundaries this solver can run it with.** A free jet entrains: the air it draws in must
-come from somewhere, and the textbook free jet takes it through open lateral boundaries, the
-pressure outlets whose inflow issue 61 found this solver's zero-gradient copy cannot close.
-The design avoids it as the probe's second and third versions did
-(`docs/reports/probe70/jet70.py`): the left edge is three velocity inlets, the slot at U_j
-between two coflow inlets, the top and bottom are no-slip walls under the wall functions, and
-the whole right edge is a fixed-flow outlet that states no velocity, so it
-takes the inflow's remainder at one face velocity and the domain has no pressure outlet
-(ADR-014 J's closed-box rule, refused at load otherwise). The coflow has to feed the
-entrainment, and the probe's first version showed what happens when it cannot. From the
-self-similar constants of [2] (the centreline excess decaying as 2.28 U_j sqrt(b / x), the
-half-width growing at 0.1 x, the excess profile integrating to 2.16 half-widths), the jet's
-excess volume flux is about 0.49 U_j b sqrt(x / b): 2.3 slot flows entrained by 45 slot
-widths and 2.5 by the outlet at 60. The first version's coflow, 0.05 U_j over 29 slot widths,
-supplied 1.45 slot flows, so the walls carried the difference back toward the inlet: reverse
-flow of about 1 m/s at the walls beyond 20 slot widths, an eddy viscosity of 0.1 m^2/s across
-the whole channel and the scalar at the flux-weighted mean 0.41 everywhere past 20 slot
-widths (`results/builder70/jet_120x60.npz`), while the flow cycled to the iteration cap. The
-second version's coflow, 0.1 U_j over 49 slot widths, supplies 4.9 slot flows, twice the
-entrainment, and the solve converges by the rule; the third version's, 0.05 U_j over 99 slot
-widths (walls 50 slot widths from the centreline), supplies 4.95 and converges too, and is
-the row's domain since the coflow's own effect on the slope is the larger of the two (T1,
-decision A). The outlet's uniform exit profile is 15 slot widths beyond the fit range's end,
-where the half-width is about five slot widths; its reach upstream is visible in
-`docs/reports/probe70/jet70.png` from about 50 slot widths, outside the fit range.
+**The sources.** Warhaft (1984, JFM 144) [11] and Stapountzis, Sawford, Hunt and Britter (1986,
+JFM 165) [12] are the primary measurements; neither page was readable in this pass (Cambridge
+Core gives the abstracts only, and Warhaft's abstract carries no number but a wire-spacing
+range). Viswanathan and Pope (2008, Phys. Fluids 20) [13], open access, models Warhaft's single
+line source and consolidates his parameters in its table I, read here from its text: grid mesh
+M = 2.54 cm; mean speed U = 7 m/s (Re_M = U M / nu about 11,800 in air); the wire at
+x_o / M = 20, 52 and 60 from the grid, source sizes 1.27e-4 and 2.5e-5 m; the velocity standard
+deviations at one mesh length sigma_u 2.44 m/s and sigma_v = sigma_w 2.27 m/s, decaying as
+(x / M)^(-m / 2) with m = 1.4 (Sawford's refit of Warhaft's transverse variance, the paper
+says; the measured grid-turbulence exponents in the literature run from about 1.16 to 1.37
+[14]); molecular diffusivity 2.1e-5 m^2/s. For the plume's width the paper plots (its figure 4,
+source at 52 M) Anand and Pope's analytic displacement variance for the Langevin model with
+C_0 = 2.1 in that decaying turbulence, its equations 11 to 15: sigma_p^2 = sigma_o^2 + 2 kappa t
++ Delta_o^2(t), Delta_o^2 = 2 sigma_v^2(t_o) t_o^2 [(1 + t / t_o)^(r - s) / (r (r - s)) +
+(1 + t / t_o)^(-s) / (r s) - 1 / (s (r - s))], r = (m / 2)(3 C_0 / 2 - 1) + 1, s = (m / 2)(3 C_0 / 2
++ 1) - 1, t_o = x_o / U the flight time from the grid to the source; the review of Wilson and
+Sawford (1996) [15] states that this theory agrees with Warhaft's and Stapountzis's plume
+widths in the far field with C_0 = 2.1. The row's reference curve is therefore that theory with
+Warhaft's parameters, labelled as such; the primary data points of Warhaft's figures are to be
+digitised at step 0 from the JFM paper, which this machine could not fetch, and the reference
+curve checked against them before the threshold is scored. At the source station the formula
+gives sigma_v = 0.143 m/s and sigma_u = 0.154 m/s (an intensity of 2.2%), k_o = 0.0322 m^2/s^2,
+eps_o = m k_o U / x_o = 0.239 m^2/s^3, k / eps = 0.135 s, and the Lagrangian time scale
+T_L = (4 / (3 C_0)) k / eps = 0.086 s; the reference width grows from 4.7 mm (0.19 M) at
+10 M downstream (t = 0.42 T_L, where sigma is still nearly sigma_v t) to 25 mm (0.98 M) at
+100 M (t = 4.2 T_L, where sigma^2 grows as t^(2 - m)).
 
-**The readings** (jet70.py's docstring): the velocity's excess over the local coflow (the
-column's mean outside 1.0 m of the centreline, the four wall cells excluded), the half-width
-from the two half-excess points by linear interpolation, the least-squares line over 15 to 45
-slot widths; the scalar's half-width the same way on the passive class marched to a steady
-field on the converged faces and nu_t, the jet carrying C = 1 and the coflow clean.
+**What the model is tested on, two things in one case.** First, the decay of k and eps in a
+uniform stream with no production: standard k-epsilon's solution is k = k_o (1 + t / t_v)^(-n)
+with n = 1 / (C_e2 - 1) = 1.087 and t_v = k_o / ((C_e2 - 1) eps_o), against the measured grid
+exponent (1.4 in the refit the reference curve uses; 1.16 to 1.37 in the grid-turbulence
+literature [14]). The model's turbulence therefore decays more slowly than the tunnel's, which
+is one known reason for a far-field width that reads high. Second, the plume's width against
+the reference: gradient diffusion (D_t = nu_t / Sc_t, REQ-T13) grows sigma^2 as 2 D_t t from
+the start, while a real plume grows as sigma_v t until t is of order T_L and only then as a
+diffusion; so the model is expected wider than measured in the near field (t under T_L) and
+right, or close, in the far field. Where the breach plume sits on that axis: the supply's k / eps
+at the file's 5% and 0.1 m is 3.6 s, T_L about 2.3 s by the same formula, and the plume's
+flight to the gap sensors' height (0.5 m at 0.45 m/s) is 1.1 s, t / T_L about 0.5, the near
+field; its fall to the floor returns is about 7 s, t / T_L about 3, the transition. The row's
+near-field stations (5 and 10 M, t / T_L 0.2 and 0.4) are the ones that bear on the sensors,
+and the far-field ones (50 and 100 M) on the plume at the returns.
 
-**The grids.** 240x400 (2.5 cm cells, four across the slot; the row, to be run at step 0) and
-120x200 (two across; the sensitivity, the probe's third arm). The slot's resolution sets the
-virtual origin, not the self-similar slope [2, section 4.2 on the virtual origins' scatter],
-so the row scores the slope; but T1's 0.1 U_j pair shows the slope itself falling 7% from
-two to four cells across the slot, so the row's grid pair is reported together and the
-threshold is read on the finer.
+**The case** (`docs/reports/probe70/line70.py`): a domain 2.8 m long (110 M) and 0.5 m high,
+uniform inflow at U over the whole left edge carrying the source station's k and eps (the
+inlet's `turbulence_intensity` sqrt(k_o / 1.5) / U = 0.0209 and `dissipation_length`
+k_o^(3/2) / eps_o = 0.0242 m), no-slip walls top and bottom 25 cm from the centreline, so far
+from a plume under 3 cm wide that their shear layers (a few centimetres thick by the end) do
+not reach it and the stream the plume sits in stays uniform, and a fixed-flow outlet over the
+whole right edge stating no velocity, so the domain has no pressure outlet. The source is a
+unit rate in one cell on the centreline two cells from the inlet; the plume's width is the
+second moment of each column's profile about its own mean (a Gaussian's standard deviation,
+the experiments' fit). The cell imposes a source size of dx / sqrt(12), 2.9 mm on the coarse
+grid, which is the near field's floor on that grid (the reference's own near-field width is set
+by molecular diffusion, 3.9 mm at 100 M); the cell is not the wire. The class is 0.1 um, whose
+Brownian diffusivity is negligible, so the model's plume spreads by nu_t / Sc_t alone.
 
-**The row.** `configs/validation_plane_jet.yaml` carries the probe's case with the product's
-model and solver keys (ADR-012 D's note of 2026-10-09: the standard variant, upwind k and
-eps, ten momentum sweeps, `pressure_rtol` 1e-4, the error-estimate stop with
-`mass_imbalance_tol` for the grid's smallest cell). `validation/plane_jet.py` holds
-`half_widths(mesh, field, background)` and `spreading_rate(xc, widths, fit_range)` and the
-constants (the slot width, the fit range, the literature values with their sources);
-`validation.cases.load_plane_jet` refuses a grid that puts a slot edge off a face.
-`tests/test_plane_jet.py` pins the readers on a profile of known half-width (a sech^2 whose
-half point is exact) and the loader's refusal; the harness rows `val024_240x120` and
-`val024_120x60` run the case, march the scalar and report K1 for both fields, the virtual
-origin and the fit's residual, scored by the threshold Alex sets. The row's cost is T1's.
+**The grids and the cost.** The probe's coarse grid is 280x50 (1 cm cells, 14,000 cells); the
+row's is 560x100 (5 mm, 56,000 cells, about five cells across sigma at 10 M and ten at 100 M).
+The cost is estimated from the coarse probe's measured outer count and per-iteration time
+scaled by the cell count (the probe section), not from the plane jet's walls, which were taken
+during a slowdown (S6).
 
-**Threshold, OPEN.** Proposed: K1 of the velocity within 15% of 0.108 on 240x400; the scalar's
-ratio reported against 1.15 to 1.52. An alternative, stricter: within 10% of the measured
-0.110 (0.099 to 0.121). The probe's values are in the probe section; the threshold is proposed
-before them as the predictions were.
+**The harness rows.** `val024_280x50` and `val024_560x100`, one name per grid; a case file
+`configs/validation_line_source.yaml`; `validation/line_source.py` with the reference curve,
+`plume_widths` and `decay_exponent`, pinned by `tests/test_line_source.py` on a planted Gaussian
+field and on the analytic decay; `validation.cases.load_line_source`. The rows report n, sigma
+at the five stations against the reference and the ratio, scored by the threshold Alex sets.
+
+**Threshold, OPEN.** Proposed: the far-field ratio sigma / sigma_ref at 50 and 100 M within
+20% of one, and the decay exponent n within 0.1 of the model's own 1.087 (a check of the
+solver, not of the model, since the model's exponent is known to sit below the measured
+range); the near-field ratio at 5 and 10 M reported, not scored, with the cell's source size
+beside it. An alternative: score against the digitised data directly once they are in.
+
+**Trace.** The decay clause verifies REQ-S14 (the k-epsilon model as ADR-012 A names it; the
+row joins VAL-015's decaying-turbulence test under its Verified By). The width clause verifies
+no requirement as written: REQ-T13 states the diffusivity's formula, which the solver meets by
+construction, and nothing requires the formula to spread a scalar as a measurement does.
+Proposed, for Alex (section G gains the row): REQ-T14, "With the turbulence model on, the
+transport solver's spreading of a passive scalar released from a line source in decaying grid
+turbulence shall match the measured plume width in the far field within a stated allowance,
+the near-field width reported beside it", verified by VAL-024.
+
+**The alternative not taken: the plane jet.** The first version of this row was a plane jet in
+a weak coflow, probed on 2026-10-29 (T1; `jet70.py`; `jet70.png`). Its measured spreading rate
+0.100 to 0.110 for five still-air studies and 0.118 for a sixth [2, table 2], and standard
+k-epsilon's 0.108 from the steady similarity solution [1] (0.103 unsteady; 0.110 and 0.117 with
+the boundary-layer and the full production term [3]), are for a jet in still air or a constant
+outer stream. In this solver the jet needs a closed domain with a coflow to feed the
+entrainment (a pressure outlet draws air in, #61), and review 70 B2 read the records: on the
+revised domains the outer stream beside the jet falls from 85% to 57% of its inlet value across
+15 to 45 slot widths at 0.1 U_j on 120x100 and from 65% to 28% at 0.05 U_j on 120x200, with an
+adverse pressure rise of about 0.26 Pa over the fit range, so the "weak coflow" was a
+decelerating confined stream and the half-width's background was a choice (the inlet coflow as
+background moves K1 from 0.0932 to 0.0798, 0.0862 to 0.0763 and 0.1057 to 0.0961, 9% to 14%).
+The measured shifts, each on the arm where it was measured and not summed: 0.0932 on 120x100
+and 0.0862 on 240x200 at 0.1 U_j (14% and 20% under 0.108); 0.1057 at 0.05 U_j on 120x200;
+0.0973 with k and eps by UMIST at the iteration cap on 120x100. The jet's scalar spread 1.21 to
+1.29 times faster than its velocity on every converged arm, against the measured 1.15 to 1.52
+[2, table 7] and the constant-eddy-viscosity ratio 1.224 at Sc_t 0.7. The entrainment the
+first, 30 slot-width domain could not supply: the jet's excess flux is about 0.49 U_j b
+sqrt(x / b) from [2]'s constants (the centreline excess decaying as 2.28 U_j sqrt(b / x), the
+half-width growing at 0.1 x, the profile integrating to 2.16 half-widths), 3.3 slot flows at
+45 slot widths (2.3 entrained) and 3.8 at the outlet at 60 (2.8 entrained), against 1.45
+supplied. The jet is a shear-flow test, and the line source is the breach's mechanism; the jet
+stays in the records and could return as a second row if a free-shear check is wanted later,
+with the outer stream's deceleration sized and the background defined as the local outer
+velocity.
 
 ## B. The sensitivity sweep
 
@@ -617,6 +629,24 @@ pull request with the reason, not excluded from measurement.
 - (b) On 160x60, the filter breach at the top of the supply-intensity range still leaves every
   sensor below its threshold, with the plume's width at sensor height grown by under a factor
   of two.
+
+**Predictions (orchestrator, 2026-10-29, prompt 70b; on the line-source row of the revised
+section A, committed before its probe ran).**
+- (c) The model's k decays with an exponent between 1.0 and 1.3.
+- (d) The model's plume is wider than measured in the near field and within 20% of the
+  measured width in the far field.
+
+**Builder (2026-10-29, prompt 70b, before the line-source probe, scored apart).**
+- (c) Holds: the model's own solution has n = 1 / (C_e2 - 1) = 1.087, and in a uniform stream
+  with no production the solver has only the source terms to integrate, so the read exponent
+  is expected within 0.02 of it; the walls' shear layers stay far from the centreline.
+- (d) Holds in the near field (the cell's source size of 2.9 mm on the coarse grid alone makes
+  the plume wider than the reference's 4.7 mm at 10 M by more than the model's gradient
+  diffusion does); fails narrowly in the far field: with nu_t nearly constant along the stream
+  (k^2 / eps decays as t^(1 - n)), the model's sigma at 100 M is about sqrt(2 D_t t) with D_t
+  = 0.129 k^2 / eps / 0.7 at the source, about 20 mm against the reference's 25 mm, a ratio
+  near 0.8, at the band's edge; the direction (narrower) is the sign of the model's smaller
+  far-field diffusivity against the Langevin reference's (4 / (3 C_0)) k / eps time scale.
 
 **Builder (2026-10-29, before the runs, scored apart).**
 - (a) Holds, read against 0.108: the model with the full production term is tabulated at 0.117
