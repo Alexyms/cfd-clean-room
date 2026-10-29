@@ -66,12 +66,14 @@ code as ADR-014 was for Phase 4: Alex's three decisions of that date (a design p
 spreading condition checked both ways, a plane-jet validation row and a sensitivity sweep of the
 scenarios to the supply's turbulence and the Schmidt number; placement by arrival maps kept
 during the march), eight decisions put to Alex, and probes under `docs/reports/probe70/`. The
-probes found the solver's plane jet spreading under the model's literature value on the fine
-grid at a 0.1 coflow and close to it at 0.05 on the coarse grid, the row's domain therefore
-the weaker coflow with its threshold OPEN; and the filter breach on 160x60 leaving every sensor
-far below threshold across the whole supply-turbulence range, with the arrival maps showing the
-sensors stand outside the plume. The ADR is Proposed; its review and test come before the pull
-request. Phases 6 and 7 have not begun.
+first probes ran a plane jet; review 70 found its closed domain confining the jet, and Alex
+decided the same day that VAL-024 is a line source in decaying grid turbulence, the breach's
+own mechanism (prompt 70b). That probe found the solver's turbulence decaying with the model's
+own exponent and its plume wider than the reference in the near field and a fifth narrower at
+a hundred mesh lengths, the same on both grids; the filter breach on 160x60 leaves every sensor
+outside the plume's threshold contour across the whole supply-turbulence range, on both grids,
+with the arrival maps showing where a sensor would have read it. The ADR is Proposed with its
+threshold OPEN; its review runs again before the pull request. Phases 6 and 7 have not begun.
 
 The product room itself has never been solved, and on 2026-10-04 it was found that the laminar
 flow solver does not solve it. Its Reynolds number on the room height is

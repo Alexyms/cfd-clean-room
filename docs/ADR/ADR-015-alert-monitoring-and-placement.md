@@ -1,7 +1,10 @@
 # ADR-015: Alert Monitoring and Sensor Placement: Spreading Checked Both Ways, a Read-Only Monitor, Arrival Maps
 
 ## Status
-Proposed. Written 2026-10-29 (prompt 70, branch `phase5/design`), before the Phase 5 build,
+Proposed. Written 2026-10-29 (prompt 70, branch `phase5/design`) and revised the same day
+on review 70 (prompt 70b: section A rewritten to a line source in grid turbulence by Alex's
+decision, section B read on the plume's edge, the review's other findings applied in
+place), before the Phase 5 build,
 from the solver and the scenario machinery as ADR-010 to ADR-014 record them, the Phase 4 gate
 report (`docs/reports/phase4_scenarios_report.md`, its decision of 2026-10-29 and its tables
 S1, B1 to B3 and G1), ADR-014 sections C and H, SYSTEM.md's REQ-A01 to A06, and the probes
@@ -66,8 +69,18 @@ cross-check once the paper is fetched.
 reported beside it; threshold proposed and OPEN: the far-field ratio at 50 and 100 M within
 20% of one and the solver's decay exponent within 0.1 of the model's 1.087, the near-field
 ratio reported with the cell's source size beside it. The width clause verifies no requirement
-as written; REQ-T14 is proposed for it (section G). The probe's results against predictions
-(c) and (d) are in the probe section.
+as written; REQ-T14 is proposed for it (section G). The probe (T7, `line70.png`), the same
+on 280x50 and 560x100 to three figures: the solver's decay exponent is 1.077 (the model's
+own 1.087); the plume is 1.77 and 1.34 times the reference width at 5 and 10 M, 1.06 at
+20 M, 0.84 at 50 M and 0.77 at 100 M. Prediction (c) holds; (d) holds in the near field
+and at 50 M and fails at 100 M, where the proposed 20% band would fail too. For the
+scenarios this says the model overstates the breach plume's width at the sensors' height
+(the near field, by a factor near 1.3 at the sensors' t / T_L of 0.5) and understates it
+by about a fifth at the returns, so the sensors' distances to the contour (section B) are
+bounds from the inside: the real plume is narrower there. What Alex decides on the
+threshold: the band on the digitised data once they are in (recommended, since the
+reference curve is a theory the review [15] says agrees with the data in the far field,
+whose own scatter is not known here), or 20% at 50 M with 100 M reported, or 25% at both.
 
 **B. The sensitivity sweep (section B).**
 *Picture.* Two inputs set how wide a plume the model makes, and both are assumptions. The
@@ -584,7 +597,7 @@ turbulence over the tops, the spreading limit now bounded by A and B rather than
 
 | Condition | When | What it costs | What it could change |
 |---|---|---|---|
-| 3: the spreading check (A and B) | Steps 0 and 1 of H, before any detection result | A: T1's two solves and marches on a workstation core each (the probe section gives the walls); B: 15 coarse runs concurrent five and two fine runs (section B) | Whether the plumes' widths and the sensors' distances to the contour move with the assumed inputs: if the contour reaches a sensor's cell at an arm on 160x60, that arm is rerun on 320x120 and the report states the detection result as a range over the arms on the fine grid; if none does on either grid, the "never" is geometric and the maps carry the placement question |
+| 3: the spreading check (A and B) | Steps 0 and 1 of H, before any detection result | A: measured (T7): the row grid 560x100 solves in 2,609 outer iterations, 512 s, and marches its scalar to steady in 110 s; the coarse grid in 89 and 27 s; two processes on an unloaded machine. B: 15 coarse runs concurrent five (each about 2 minutes of flow and 11 minutes of march on 160x60, T2 and the probe section) and the two fine arms per scenario at the gate's 66 minutes each | Whether the plumes' widths and the sensors' distances to the contour move with the assumed inputs: if the contour reaches a sensor's cell at an arm on 160x60, that arm is rerun on 320x120 and the report states the detection result as a range over the arms on the fine grid; if none does on either grid, the "never" is geometric and the maps carry the placement question |
 | 2: a third clean-out grid | Step 1, beside the sweep (a run, no code) | One 160x60 clean-out, 240 s at Courant 0.4: about an eighth of the product grid's 2.6 hours (table M1), under an hour with its flow solve | Whether the mean's 100:1 ratio and the local recovery field can be quoted as numbers of the room: a 160x60 value between 80x30's 3.0 and 320x120's 4.8 shows a series not yet converged and the numbers stay comparative; the room recovery time (25.6 and 27.9 s) is unaffected either way |
 | 1: the budget residual's mechanism | Before Phase 6's finer grids, after the Phase 5 gate, a prompt of its own | One session: a sealed-box march (VAL-014's) with a source and an interval switch at a known time on 40x15, the budget read every step, the residual's accrual against the content and its sign at the switches (the records put the sign changes near 10.5 and 25 s in the dust release and 80.4 s in the breach, and B3 rules the flow's continuity out by two orders) | The budget instrument (REQ-T05's verification) if the residual is bookkeeping between the content and the running sums or the source's integral at a switch; the scheme's inlet booking if the limited face value at an inlet face differs from the inflow the budget books. Neither moves a Phase 5 latency: the residual is 1e-6 of the supply against thresholds at 1e-2 of the inlet value |
 
@@ -712,7 +725,9 @@ section A, committed before its probe ran).**
   the panel and in the gaps.
 
 **Method.** `jet70.py` (T1; its docstring fixes the readings), `configs70.py` and `run70.sh`
-(T2 to T5; the arms, the readings in `tables70.py`'s docstring). Wall times were taken with
+(T2 to T6; the arms, the readings in `tables70.py`'s docstring), `line70.py` (T7, prompt
+70b; its docstring fixes the case, the reference curve and the readings; run on 280x50 and
+560x100 with two processes on the machine, after the slowdown). Wall times were taken with
 six processes sharing the machine (two jet solves and four breach arms), one BLAS thread each;
 the revised jet solves ran three at a time with the first fine-grid solve and the Schmidt arm.
 *The slowdown (review 70 S6).* Between about 11:20 and 14:10 on 2026-10-29 the machine ran
@@ -782,6 +797,30 @@ the coarse distances bound the fine ones from below. Every flow state stopped by
 in 1,953 to 3,067 outer iterations (T2); a march of about 15,000 steps took 610 to 700 s
 wall with five processes sharing the machine, before the slowdown named under Method.
 
+*Prediction (c): HOLDS.* The solver's k along the centreline decays with an exponent of
+1.0775 on 280x50 and 1.0767 on 560x100 against ln(t_v + x / U), the model's own 1.087
+within 0.01, inside the orchestrator's 1.0 to 1.3; both flow solves stopped by the rule
+(1,381 and 2,609 outer iterations, T7). The model's turbulence therefore decays as the
+model says it should, and more slowly than the tunnel's (1.4 in the refit, 1.16 to 1.37
+in the literature [14]).
+
+*Prediction (d): HOLDS in the near field and at 50 M, FAILS at 100 M.* The plume's width
+over the reference curve, the same on both grids to three figures: 1.75 and 1.77 at 5 M,
+1.36 and 1.34 at 10 M, 1.06 at 20 M, 0.84 at 50 M, 0.77 at 100 M (T7, `line70.png`). Wider
+than the reference in the near field, as predicted, and by the same factor on a cell half
+the size with a source size a half of the coarse grid's (2.9 and 1.4 mm against the
+reference's 2.6 mm at 5 M), so the near-field excess is gradient diffusion's, not the
+cell's: sigma^2 = 2 D_t t from the start against the reference's sigma_v^2 t^2. Within 20%
+at 50 M (t / T_L 2.1) and 23% under at 100 M (4.2), the model's far-field diffusivity
+smaller than the Langevin reference's, with the slower decay of its turbulence working the
+other way; the crossing is near 25 M. The scalar marches reached a steady field in 1.5 and
+1.3 simulated seconds (27 and 110 s wall).
+
+*The builder's (c) and (d).* (c) held as written (within 0.02). (d) held in the direction
+and the size it expected (a far-field ratio near 0.8, 0.77 measured), but for a reason it
+stated only in part: it put the near-field excess on the cell's source size, and the two
+grids show it is the model's.
+
 *The builder's (a) and (b).* (a) was wrong on the row grid in the direction it did not expect
 (the slope under the band, not the virtual origin moved); its ratio expectation of about 1.2
 held. (b) held in every part, including the geometry: the arrival maps (T5, `arrival70.png`)
@@ -792,13 +831,16 @@ upper bound by up to one frame spacing of 0.79 to 0.81 s and not a measured late
 litho tool's top and in both gaps to the floor returns, and the file's four sensors outside
 the reached set at every arm.
 
-*What the results change in the design.* Decision A's row moves to the 0.05 U_j domain
-(240x400, step 0), the threshold stays proposed and OPEN with the refinement trend named;
-decision B's reading stands, with the width's change over the whole range (0.95 to 1.20 m
-on the sensors' row) as the number the sweep will state beside every latency; decision D's
-maps are the instrument the sweep already needed.
+*What the results change in the design.* Decision A's row is the line source (Alex,
+prompt 70b), probed on both of its grids and grid-converged in its readings, the threshold
+proposed and OPEN with the 100 M station's failure named; decision B's reading is the
+plume's edge, with the width's change over the whole range (0.95 to 1.20 m on the sensors'
+row) and the sensors' distances to the contour (5.7 cells at the least on 160x60, 15.6 on
+320x120) as the numbers the sweep will state beside every latency, and the row's near-field
+factor saying the model's plume at the sensors is the wider one; decision D's maps are the
+instrument the sweep already needed.
 
-**Tables** (copied from `docs/reports/probe70/tables70.md` at the end of the pass; the generated file is the record and `tables70.py --check` compares it with the records).
+**Tables** (copied from `docs/reports/probe70/tables70.md` at the end of prompt 70b; the generated file is the record and `tables70.py --check` compares it with the records).
 
 #### T1. The plane jet's spreading rate (probe A, jet70.py), standard k-epsilon on the product's model and solver keys
 
@@ -818,122 +860,143 @@ maps are the instrument the sweep already needed.
 | Standard k-epsilon, unsteady RANS (Magi et al., same table) | 0.103 | - |
 | Standard k-epsilon, parabolic march, simplified / full production term (Chen and Kim 1987) | 0.110 / 0.117 | - |
 | Measured scalar (temperature) to velocity, K1_scalar / K1_u (Stanley and Sarkar 1999, table 7: Ramaprian and Chandrasekhara, Browne et al., Jenkins and Goldschmidt, Davies et al.) | - | 1.15 to 1.52 |
-| DNS, Re_h 3,000, scalar to velocity (Stanley and Sarkar 1999) | 0.093 (velocity) | 1.51 |
+| DNS, Re_h 3,000, scalar case, scalar to velocity (Stanley and Sarkar 1999, table 7: K1u 0.105, K1s 0.158) | 0.105 (velocity, the scalar case; 0.093 in the main case) | 1.51 |
 
-#### T2. The breach arms on 160x60 (probe B, run70.sh): inputs and the flow solve
+#### T2. The breach arms on 160x60 (probe B, run70.sh) and the gate's 320x120 breach (prompt 69): inputs and the flow solve
 
-| Arm | Intensity I | Dissipation length l_e (m) | Sc_t | Supply nu_t = C_mu sqrt(k) l_e (m^2/s) | nu_t / nu | Outer iterations | Stop | Flow wall (s) |
-|---|---|---|---|---|---|---|---|---|
-| i05 | 0.05 | 0.10 | 0.7 | 2.48e-04 | 16 | 1953 | error_estimate_and_continuity | 109 |
-| i10 | 0.10 | 0.10 | 0.7 | 4.96e-04 | 33 | 2024 | error_estimate_and_continuity | 114 |
-| i10_l30 | 0.10 | 0.30 | 0.7 | 1.49e-03 | 99 | 3067 | error_estimate_and_continuity | 156 |
-| i02_l05 | 0.02 | 0.05 | 0.7 | 4.96e-05 | 3 | 2282 | error_estimate_and_continuity | 122 |
-| sc02 | 0.05 | 0.10 | 0.2 | 2.48e-04 | 16 | 1953 | error_estimate_and_continuity | 109 |
+| Arm | Grid | Intensity I | Dissipation length l_e (m) | Sc_t | Supply nu_t = C_mu sqrt(k) l_e (m^2/s) | nu_t / nu | Outer iterations | Stop | Flow wall (s) |
+|---|---|---|---|---|---|---|---|---|---|
+| i05 | 160x60 | 0.05 | 0.10 | 0.7 | 2.48e-04 | 16 | 1953 | error_estimate_and_continuity | 109 |
+| i10 | 160x60 | 0.10 | 0.10 | 0.7 | 4.96e-04 | 33 | 2024 | error_estimate_and_continuity | 114 |
+| i10_l30 | 160x60 | 0.10 | 0.30 | 0.7 | 1.49e-03 | 99 | 3067 | error_estimate_and_continuity | 156 |
+| i02_l05 | 160x60 | 0.02 | 0.05 | 0.7 | 4.96e-05 | 3 | 2282 | error_estimate_and_continuity | 122 |
+| sc02 | 160x60 | 0.05 | 0.10 | 0.2 | 2.48e-04 | 16 | reused from i05: 1953 | error_estimate_and_continuity | 109 |
+| gate_320x120 | 320x120 | 0.05 | 0.10 | 0.7 | 2.48e-04 | 16 | 4389 | error_estimate_and_continuity | 827 |
 
-#### T3. The sensors: peak reading over threshold and first time at or above, per arm and class
+#### T3. The sensors: peak reading over threshold and first time at or above, per arm and class; a peak below 0.01 of threshold is the front's numerical tail and is reported as below the resolved plume
 
 | Arm | Class (um) | Sensor | Peak over threshold | First time at or above (s) |
 |---|---|---|---|---|
-| i05 | 0.1 | near_door | 5.042e-21 | never |
-| i05 | 0.1 | above_gap_1 | 2.107e-13 | never |
-| i05 | 0.1 | above_gap_2 | 7.167e-19 | never |
-| i05 | 0.1 | hood_entry | 5.549e-24 | never |
-| i05 | 0.3 | near_door | 5.039e-21 | never |
-| i05 | 0.3 | above_gap_1 | 2.107e-13 | never |
-| i05 | 0.3 | above_gap_2 | 7.166e-19 | never |
-| i05 | 0.3 | hood_entry | 5.546e-24 | never |
-| i05 | 0.5 | near_door | 5.036e-21 | never |
-| i05 | 0.5 | above_gap_1 | 2.105e-13 | never |
-| i05 | 0.5 | above_gap_2 | 7.165e-19 | never |
-| i05 | 0.5 | hood_entry | 5.543e-24 | never |
-| i05 | 1 | near_door | 5.019e-21 | never |
-| i05 | 1 | above_gap_1 | 2.100e-13 | never |
-| i05 | 1 | above_gap_2 | 7.158e-19 | never |
-| i05 | 1 | hood_entry | 5.527e-24 | never |
-| i05 | 5 | near_door | 4.545e-21 | never |
-| i05 | 5 | above_gap_1 | 1.960e-13 | never |
-| i05 | 5 | above_gap_2 | 6.964e-19 | never |
-| i05 | 5 | hood_entry | 5.072e-24 | never |
-| i10 | 0.1 | near_door | 5.989e-18 | never |
-| i10 | 0.1 | above_gap_1 | 1.192e-11 | never |
-| i10 | 0.1 | above_gap_2 | 6.927e-15 | never |
-| i10 | 0.1 | hood_entry | 1.490e-20 | never |
-| i10 | 0.3 | near_door | 5.987e-18 | never |
-| i10 | 0.3 | above_gap_1 | 1.191e-11 | never |
-| i10 | 0.3 | above_gap_2 | 6.926e-15 | never |
-| i10 | 0.3 | hood_entry | 1.489e-20 | never |
-| i10 | 0.5 | near_door | 5.982e-18 | never |
-| i10 | 0.5 | above_gap_1 | 1.191e-11 | never |
-| i10 | 0.5 | above_gap_2 | 6.924e-15 | never |
-| i10 | 0.5 | hood_entry | 1.488e-20 | never |
-| i10 | 1 | near_door | 5.963e-18 | never |
-| i10 | 1 | above_gap_1 | 1.188e-11 | never |
-| i10 | 1 | above_gap_2 | 6.918e-15 | never |
-| i10 | 1 | hood_entry | 1.483e-20 | never |
-| i10 | 5 | near_door | 5.430e-18 | never |
-| i10 | 5 | above_gap_1 | 1.117e-11 | never |
-| i10 | 5 | above_gap_2 | 6.731e-15 | never |
-| i10 | 5 | hood_entry | 1.351e-20 | never |
-| i10_l30 | 0.1 | near_door | 1.144e-09 | never |
-| i10_l30 | 0.1 | above_gap_1 | 7.146e-07 | never |
-| i10_l30 | 0.1 | above_gap_2 | 2.285e-08 | never |
-| i10_l30 | 0.1 | hood_entry | 9.204e-12 | never |
-| i10_l30 | 0.3 | near_door | 1.144e-09 | never |
-| i10_l30 | 0.3 | above_gap_1 | 7.145e-07 | never |
-| i10_l30 | 0.3 | above_gap_2 | 2.285e-08 | never |
-| i10_l30 | 0.3 | hood_entry | 9.201e-12 | never |
-| i10_l30 | 0.5 | near_door | 1.143e-09 | never |
-| i10_l30 | 0.5 | above_gap_1 | 7.143e-07 | never |
-| i10_l30 | 0.5 | above_gap_2 | 2.285e-08 | never |
-| i10_l30 | 0.5 | hood_entry | 9.196e-12 | never |
-| i10_l30 | 1 | near_door | 1.140e-09 | never |
-| i10_l30 | 1 | above_gap_1 | 7.132e-07 | never |
-| i10_l30 | 1 | above_gap_2 | 2.282e-08 | never |
-| i10_l30 | 1 | hood_entry | 9.175e-12 | never |
-| i10_l30 | 5 | near_door | 1.057e-09 | never |
-| i10_l30 | 5 | above_gap_1 | 6.836e-07 | never |
-| i10_l30 | 5 | above_gap_2 | 2.215e-08 | never |
-| i10_l30 | 5 | hood_entry | 8.557e-12 | never |
-| i02_l05 | 0.1 | near_door | 2.309e-22 | never |
-| i02_l05 | 0.1 | above_gap_1 | 5.174e-16 | never |
-| i02_l05 | 0.1 | above_gap_2 | 6.007e-27 | never |
-| i02_l05 | 0.1 | hood_entry | 2.976e-31 | never |
-| i02_l05 | 0.3 | near_door | 2.289e-22 | never |
-| i02_l05 | 0.3 | above_gap_1 | 5.172e-16 | never |
-| i02_l05 | 0.3 | above_gap_2 | 6.005e-27 | never |
-| i02_l05 | 0.3 | hood_entry | 2.974e-31 | never |
-| i02_l05 | 0.5 | near_door | 2.253e-22 | never |
-| i02_l05 | 0.5 | above_gap_1 | 5.169e-16 | never |
-| i02_l05 | 0.5 | above_gap_2 | 6.002e-27 | never |
-| i02_l05 | 0.5 | hood_entry | 2.972e-31 | never |
-| i02_l05 | 1 | near_door | 2.125e-22 | never |
-| i02_l05 | 1 | above_gap_1 | 5.155e-16 | never |
-| i02_l05 | 1 | above_gap_2 | 5.989e-27 | never |
-| i02_l05 | 1 | hood_entry | 2.961e-31 | never |
-| i02_l05 | 5 | near_door | 3.443e-23 | never |
-| i02_l05 | 5 | above_gap_1 | 4.748e-16 | never |
-| i02_l05 | 5 | above_gap_2 | 5.614e-27 | never |
-| i02_l05 | 5 | hood_entry | 2.673e-31 | never |
-| sc02 | 0.1 | near_door | 1.327e-13 | never |
-| sc02 | 0.1 | above_gap_1 | 2.469e-09 | never |
-| sc02 | 0.1 | above_gap_2 | 1.759e-11 | never |
-| sc02 | 0.1 | hood_entry | 1.421e-15 | never |
-| sc02 | 0.3 | near_door | 1.326e-13 | never |
-| sc02 | 0.3 | above_gap_1 | 2.468e-09 | never |
-| sc02 | 0.3 | above_gap_2 | 1.759e-11 | never |
-| sc02 | 0.3 | hood_entry | 1.421e-15 | never |
-| sc02 | 0.5 | near_door | 1.326e-13 | never |
-| sc02 | 0.5 | above_gap_1 | 2.467e-09 | never |
-| sc02 | 0.5 | above_gap_2 | 1.759e-11 | never |
-| sc02 | 0.5 | hood_entry | 1.420e-15 | never |
-| sc02 | 1 | near_door | 1.322e-13 | never |
-| sc02 | 1 | above_gap_1 | 2.463e-09 | never |
-| sc02 | 1 | above_gap_2 | 1.757e-11 | never |
-| sc02 | 1 | hood_entry | 1.416e-15 | never |
-| sc02 | 5 | near_door | 1.219e-13 | never |
-| sc02 | 5 | above_gap_1 | 2.337e-09 | never |
-| sc02 | 5 | above_gap_2 | 1.710e-11 | never |
-| sc02 | 5 | hood_entry | 1.316e-15 | never |
+| i05 | 0.1 | near_door | below the resolved plume (< 0.01) | never |
+| i05 | 0.1 | above_gap_1 | below the resolved plume (< 0.01) | never |
+| i05 | 0.1 | above_gap_2 | below the resolved plume (< 0.01) | never |
+| i05 | 0.1 | hood_entry | below the resolved plume (< 0.01) | never |
+| i05 | 0.3 | near_door | below the resolved plume (< 0.01) | never |
+| i05 | 0.3 | above_gap_1 | below the resolved plume (< 0.01) | never |
+| i05 | 0.3 | above_gap_2 | below the resolved plume (< 0.01) | never |
+| i05 | 0.3 | hood_entry | below the resolved plume (< 0.01) | never |
+| i05 | 0.5 | near_door | below the resolved plume (< 0.01) | never |
+| i05 | 0.5 | above_gap_1 | below the resolved plume (< 0.01) | never |
+| i05 | 0.5 | above_gap_2 | below the resolved plume (< 0.01) | never |
+| i05 | 0.5 | hood_entry | below the resolved plume (< 0.01) | never |
+| i05 | 1 | near_door | below the resolved plume (< 0.01) | never |
+| i05 | 1 | above_gap_1 | below the resolved plume (< 0.01) | never |
+| i05 | 1 | above_gap_2 | below the resolved plume (< 0.01) | never |
+| i05 | 1 | hood_entry | below the resolved plume (< 0.01) | never |
+| i05 | 5 | near_door | below the resolved plume (< 0.01) | never |
+| i05 | 5 | above_gap_1 | below the resolved plume (< 0.01) | never |
+| i05 | 5 | above_gap_2 | below the resolved plume (< 0.01) | never |
+| i05 | 5 | hood_entry | below the resolved plume (< 0.01) | never |
+| i10 | 0.1 | near_door | below the resolved plume (< 0.01) | never |
+| i10 | 0.1 | above_gap_1 | below the resolved plume (< 0.01) | never |
+| i10 | 0.1 | above_gap_2 | below the resolved plume (< 0.01) | never |
+| i10 | 0.1 | hood_entry | below the resolved plume (< 0.01) | never |
+| i10 | 0.3 | near_door | below the resolved plume (< 0.01) | never |
+| i10 | 0.3 | above_gap_1 | below the resolved plume (< 0.01) | never |
+| i10 | 0.3 | above_gap_2 | below the resolved plume (< 0.01) | never |
+| i10 | 0.3 | hood_entry | below the resolved plume (< 0.01) | never |
+| i10 | 0.5 | near_door | below the resolved plume (< 0.01) | never |
+| i10 | 0.5 | above_gap_1 | below the resolved plume (< 0.01) | never |
+| i10 | 0.5 | above_gap_2 | below the resolved plume (< 0.01) | never |
+| i10 | 0.5 | hood_entry | below the resolved plume (< 0.01) | never |
+| i10 | 1 | near_door | below the resolved plume (< 0.01) | never |
+| i10 | 1 | above_gap_1 | below the resolved plume (< 0.01) | never |
+| i10 | 1 | above_gap_2 | below the resolved plume (< 0.01) | never |
+| i10 | 1 | hood_entry | below the resolved plume (< 0.01) | never |
+| i10 | 5 | near_door | below the resolved plume (< 0.01) | never |
+| i10 | 5 | above_gap_1 | below the resolved plume (< 0.01) | never |
+| i10 | 5 | above_gap_2 | below the resolved plume (< 0.01) | never |
+| i10 | 5 | hood_entry | below the resolved plume (< 0.01) | never |
+| i10_l30 | 0.1 | near_door | below the resolved plume (< 0.01) | never |
+| i10_l30 | 0.1 | above_gap_1 | below the resolved plume (< 0.01) | never |
+| i10_l30 | 0.1 | above_gap_2 | below the resolved plume (< 0.01) | never |
+| i10_l30 | 0.1 | hood_entry | below the resolved plume (< 0.01) | never |
+| i10_l30 | 0.3 | near_door | below the resolved plume (< 0.01) | never |
+| i10_l30 | 0.3 | above_gap_1 | below the resolved plume (< 0.01) | never |
+| i10_l30 | 0.3 | above_gap_2 | below the resolved plume (< 0.01) | never |
+| i10_l30 | 0.3 | hood_entry | below the resolved plume (< 0.01) | never |
+| i10_l30 | 0.5 | near_door | below the resolved plume (< 0.01) | never |
+| i10_l30 | 0.5 | above_gap_1 | below the resolved plume (< 0.01) | never |
+| i10_l30 | 0.5 | above_gap_2 | below the resolved plume (< 0.01) | never |
+| i10_l30 | 0.5 | hood_entry | below the resolved plume (< 0.01) | never |
+| i10_l30 | 1 | near_door | below the resolved plume (< 0.01) | never |
+| i10_l30 | 1 | above_gap_1 | below the resolved plume (< 0.01) | never |
+| i10_l30 | 1 | above_gap_2 | below the resolved plume (< 0.01) | never |
+| i10_l30 | 1 | hood_entry | below the resolved plume (< 0.01) | never |
+| i10_l30 | 5 | near_door | below the resolved plume (< 0.01) | never |
+| i10_l30 | 5 | above_gap_1 | below the resolved plume (< 0.01) | never |
+| i10_l30 | 5 | above_gap_2 | below the resolved plume (< 0.01) | never |
+| i10_l30 | 5 | hood_entry | below the resolved plume (< 0.01) | never |
+| i02_l05 | 0.1 | near_door | below the resolved plume (< 0.01) | never |
+| i02_l05 | 0.1 | above_gap_1 | below the resolved plume (< 0.01) | never |
+| i02_l05 | 0.1 | above_gap_2 | below the resolved plume (< 0.01) | never |
+| i02_l05 | 0.1 | hood_entry | below the resolved plume (< 0.01) | never |
+| i02_l05 | 0.3 | near_door | below the resolved plume (< 0.01) | never |
+| i02_l05 | 0.3 | above_gap_1 | below the resolved plume (< 0.01) | never |
+| i02_l05 | 0.3 | above_gap_2 | below the resolved plume (< 0.01) | never |
+| i02_l05 | 0.3 | hood_entry | below the resolved plume (< 0.01) | never |
+| i02_l05 | 0.5 | near_door | below the resolved plume (< 0.01) | never |
+| i02_l05 | 0.5 | above_gap_1 | below the resolved plume (< 0.01) | never |
+| i02_l05 | 0.5 | above_gap_2 | below the resolved plume (< 0.01) | never |
+| i02_l05 | 0.5 | hood_entry | below the resolved plume (< 0.01) | never |
+| i02_l05 | 1 | near_door | below the resolved plume (< 0.01) | never |
+| i02_l05 | 1 | above_gap_1 | below the resolved plume (< 0.01) | never |
+| i02_l05 | 1 | above_gap_2 | below the resolved plume (< 0.01) | never |
+| i02_l05 | 1 | hood_entry | below the resolved plume (< 0.01) | never |
+| i02_l05 | 5 | near_door | below the resolved plume (< 0.01) | never |
+| i02_l05 | 5 | above_gap_1 | below the resolved plume (< 0.01) | never |
+| i02_l05 | 5 | above_gap_2 | below the resolved plume (< 0.01) | never |
+| i02_l05 | 5 | hood_entry | below the resolved plume (< 0.01) | never |
+| sc02 | 0.1 | near_door | below the resolved plume (< 0.01) | never |
+| sc02 | 0.1 | above_gap_1 | below the resolved plume (< 0.01) | never |
+| sc02 | 0.1 | above_gap_2 | below the resolved plume (< 0.01) | never |
+| sc02 | 0.1 | hood_entry | below the resolved plume (< 0.01) | never |
+| sc02 | 0.3 | near_door | below the resolved plume (< 0.01) | never |
+| sc02 | 0.3 | above_gap_1 | below the resolved plume (< 0.01) | never |
+| sc02 | 0.3 | above_gap_2 | below the resolved plume (< 0.01) | never |
+| sc02 | 0.3 | hood_entry | below the resolved plume (< 0.01) | never |
+| sc02 | 0.5 | near_door | below the resolved plume (< 0.01) | never |
+| sc02 | 0.5 | above_gap_1 | below the resolved plume (< 0.01) | never |
+| sc02 | 0.5 | above_gap_2 | below the resolved plume (< 0.01) | never |
+| sc02 | 0.5 | hood_entry | below the resolved plume (< 0.01) | never |
+| sc02 | 1 | near_door | below the resolved plume (< 0.01) | never |
+| sc02 | 1 | above_gap_1 | below the resolved plume (< 0.01) | never |
+| sc02 | 1 | above_gap_2 | below the resolved plume (< 0.01) | never |
+| sc02 | 1 | hood_entry | below the resolved plume (< 0.01) | never |
+| sc02 | 5 | near_door | below the resolved plume (< 0.01) | never |
+| sc02 | 5 | above_gap_1 | below the resolved plume (< 0.01) | never |
+| sc02 | 5 | above_gap_2 | below the resolved plume (< 0.01) | never |
+| sc02 | 5 | hood_entry | below the resolved plume (< 0.01) | never |
+| gate_320x120 | 0.1 | near_door | below the resolved plume (< 0.01) | never |
+| gate_320x120 | 0.1 | above_gap_1 | below the resolved plume (< 0.01) | never |
+| gate_320x120 | 0.1 | above_gap_2 | below the resolved plume (< 0.01) | never |
+| gate_320x120 | 0.1 | hood_entry | below the resolved plume (< 0.01) | never |
+| gate_320x120 | 0.3 | near_door | below the resolved plume (< 0.01) | never |
+| gate_320x120 | 0.3 | above_gap_1 | below the resolved plume (< 0.01) | never |
+| gate_320x120 | 0.3 | above_gap_2 | below the resolved plume (< 0.01) | never |
+| gate_320x120 | 0.3 | hood_entry | below the resolved plume (< 0.01) | never |
+| gate_320x120 | 0.5 | near_door | below the resolved plume (< 0.01) | never |
+| gate_320x120 | 0.5 | above_gap_1 | below the resolved plume (< 0.01) | never |
+| gate_320x120 | 0.5 | above_gap_2 | below the resolved plume (< 0.01) | never |
+| gate_320x120 | 0.5 | hood_entry | below the resolved plume (< 0.01) | never |
+| gate_320x120 | 1 | near_door | below the resolved plume (< 0.01) | never |
+| gate_320x120 | 1 | above_gap_1 | below the resolved plume (< 0.01) | never |
+| gate_320x120 | 1 | above_gap_2 | below the resolved plume (< 0.01) | never |
+| gate_320x120 | 1 | hood_entry | below the resolved plume (< 0.01) | never |
+| gate_320x120 | 5 | near_door | below the resolved plume (< 0.01) | never |
+| gate_320x120 | 5 | above_gap_1 | below the resolved plume (< 0.01) | never |
+| gate_320x120 | 5 | above_gap_2 | below the resolved plume (< 0.01) | never |
+| gate_320x120 | 5 | hood_entry | below the resolved plume (< 0.01) | never |
 
 #### T4. The plume's width on the sensor rows: cells at or above the threshold (1% of the panel's air) and ten times it, times dx; at the frame nearest 70 s and the largest over the frames
 
@@ -1039,37 +1102,193 @@ maps are the instrument the sweep already needed.
 | sc02 | 5 | 2.05 | 2.00 | 2.00 | 1.80 | 1.80 | 2.70 to 4.70 |
 | sc02 | 5 | 1.50 | 1.00 | 1.00 | 0.85 | 0.85 | 2.55 to 4.85 |
 | sc02 | 5 | 1.20 | 1.05 | 1.05 | 0.90 | 0.90 | 2.50 to 4.85 |
+| gate_320x120 | 0.1 | 2.50 | 0.98 | 0.98 | 0.88 | 0.88 | 3.23 to 4.20 |
+| gate_320x120 | 0.1 | 2.05 | 1.83 | 1.83 | 1.70 | 1.70 | 2.80 to 4.63 |
+| gate_320x120 | 0.1 | 1.50 | 0.88 | 0.88 | 0.78 | 0.78 | 2.60 to 4.78 |
+| gate_320x120 | 0.1 | 1.20 | 0.90 | 0.90 | 0.83 | 0.83 | 2.58 to 4.78 |
+| gate_320x120 | 0.3 | 2.50 | 0.98 | 0.98 | 0.88 | 0.88 | 3.23 to 4.20 |
+| gate_320x120 | 0.3 | 2.05 | 1.83 | 1.83 | 1.70 | 1.70 | 2.80 to 4.63 |
+| gate_320x120 | 0.3 | 1.50 | 0.88 | 0.88 | 0.78 | 0.78 | 2.60 to 4.78 |
+| gate_320x120 | 0.3 | 1.20 | 0.90 | 0.90 | 0.83 | 0.83 | 2.58 to 4.78 |
+| gate_320x120 | 0.5 | 2.50 | 0.98 | 0.98 | 0.88 | 0.88 | 3.23 to 4.20 |
+| gate_320x120 | 0.5 | 2.05 | 1.83 | 1.83 | 1.70 | 1.70 | 2.80 to 4.63 |
+| gate_320x120 | 0.5 | 1.50 | 0.88 | 0.88 | 0.78 | 0.78 | 2.60 to 4.78 |
+| gate_320x120 | 0.5 | 1.20 | 0.90 | 0.90 | 0.83 | 0.83 | 2.58 to 4.78 |
+| gate_320x120 | 1 | 2.50 | 0.98 | 0.98 | 0.88 | 0.88 | 3.23 to 4.20 |
+| gate_320x120 | 1 | 2.05 | 1.83 | 1.83 | 1.70 | 1.70 | 2.80 to 4.63 |
+| gate_320x120 | 1 | 1.50 | 0.88 | 0.88 | 0.78 | 0.78 | 2.60 to 4.78 |
+| gate_320x120 | 1 | 1.20 | 0.90 | 0.90 | 0.83 | 0.83 | 2.58 to 4.78 |
+| gate_320x120 | 5 | 2.50 | 0.98 | 0.98 | 0.88 | 0.88 | 3.23 to 4.20 |
+| gate_320x120 | 5 | 2.05 | 1.83 | 1.83 | 1.70 | 1.70 | 2.80 to 4.63 |
+| gate_320x120 | 5 | 1.50 | 0.88 | 0.88 | 0.78 | 0.78 | 2.60 to 4.78 |
+| gate_320x120 | 5 | 1.20 | 0.90 | 0.90 | 0.83 | 0.83 | 2.58 to 4.78 |
 
-#### T5. The arrival map at frame resolution (every 100 steps): cells reached, the earliest arrival, and the map at the file's sensors
+#### T5. The arrival map at frame resolution: cells reached, the earliest arrival, and the map at the file's sensors. A frame is stored every 100 steps, so every time here is the first stored frame at or after the crossing, an upper bound by up to one frame spacing (the spacing is in the column); section D's in-march maps remove that bound
 
-| Arm | Class (um) | Non-SOLID cells reached by the end | Earliest arrival: cell centre (x, y) m, time (s), latency from 10 s | Map at near_door, above_gap_1, above_gap_2, hood_entry (s) |
+| Arm | Class (um) | Non-SOLID cells reached by the end | Earliest arrival: cell centre (x, y) m, first frame at or above (s), its bound on the latency from 10 s; frame spacing (s) | Map at near_door, above_gap_1, above_gap_2, hood_entry (s, first frame) |
 |---|---|---|---|---|
-| i05 | 0.1 | 17.17% | (3.475, 2.825), 10.28, 0.28 | never, never, never, never |
-| i05 | 0.3 | 17.15% | (3.475, 2.825), 10.28, 0.28 | never, never, never, never |
-| i05 | 0.5 | 17.15% | (3.475, 2.825), 10.28, 0.28 | never, never, never, never |
-| i05 | 1 | 17.15% | (3.475, 2.825), 10.28, 0.28 | never, never, never, never |
-| i05 | 5 | 17.15% | (3.475, 2.825), 10.28, 0.28 | never, never, never, never |
-| i10 | 0.1 | 17.49% | (3.525, 2.775), 10.31, 0.31 | never, never, never, never |
-| i10 | 0.3 | 17.49% | (3.525, 2.775), 10.31, 0.31 | never, never, never, never |
-| i10 | 0.5 | 17.49% | (3.525, 2.775), 10.31, 0.31 | never, never, never, never |
-| i10 | 1 | 17.49% | (3.525, 2.775), 10.31, 0.31 | never, never, never, never |
-| i10 | 5 | 17.44% | (3.475, 2.775), 10.31, 0.31 | never, never, never, never |
-| i10_l30 | 0.1 | 20.09% | (3.475, 2.675), 10.47, 0.47 | never, never, never, never |
-| i10_l30 | 0.3 | 20.09% | (3.475, 2.675), 10.47, 0.47 | never, never, never, never |
-| i10_l30 | 0.5 | 20.09% | (3.475, 2.675), 10.47, 0.47 | never, never, never, never |
-| i10_l30 | 1 | 20.09% | (3.475, 2.675), 10.47, 0.47 | never, never, never, never |
-| i10_l30 | 5 | 20.03% | (3.475, 2.675), 10.47, 0.47 | never, never, never, never |
-| i02_l05 | 0.1 | 16.58% | (3.525, 2.825), 10.24, 0.24 | never, never, never, never |
-| i02_l05 | 0.3 | 16.58% | (3.525, 2.825), 10.24, 0.24 | never, never, never, never |
-| i02_l05 | 0.5 | 16.58% | (3.525, 2.825), 10.24, 0.24 | never, never, never, never |
-| i02_l05 | 1 | 16.58% | (3.525, 2.825), 10.24, 0.24 | never, never, never, never |
-| i02_l05 | 5 | 16.58% | (3.525, 2.825), 10.24, 0.24 | never, never, never, never |
-| sc02 | 0.1 | 18.69% | (3.525, 2.775), 10.28, 0.28 | never, never, never, never |
-| sc02 | 0.3 | 18.69% | (3.525, 2.775), 10.28, 0.28 | never, never, never, never |
-| sc02 | 0.5 | 18.69% | (3.525, 2.775), 10.28, 0.28 | never, never, never, never |
-| sc02 | 1 | 18.69% | (3.525, 2.775), 10.28, 0.28 | never, never, never, never |
-| sc02 | 5 | 18.69% | (3.525, 2.775), 10.28, 0.28 | never, never, never, never |
+| i05 | 0.1 | 17.17% | (3.475, 2.825), 10.28, at most 0.28; 0.791 | never, never, never, never |
+| i05 | 0.3 | 17.15% | (3.475, 2.825), 10.28, at most 0.28; 0.791 | never, never, never, never |
+| i05 | 0.5 | 17.15% | (3.475, 2.825), 10.28, at most 0.28; 0.791 | never, never, never, never |
+| i05 | 1 | 17.15% | (3.475, 2.825), 10.28, at most 0.28; 0.791 | never, never, never, never |
+| i05 | 5 | 17.15% | (3.475, 2.825), 10.28, at most 0.28; 0.791 | never, never, never, never |
+| i10 | 0.1 | 17.49% | (3.525, 2.775), 10.31, at most 0.31; 0.793 | never, never, never, never |
+| i10 | 0.3 | 17.49% | (3.525, 2.775), 10.31, at most 0.31; 0.793 | never, never, never, never |
+| i10 | 0.5 | 17.49% | (3.525, 2.775), 10.31, at most 0.31; 0.793 | never, never, never, never |
+| i10 | 1 | 17.49% | (3.525, 2.775), 10.31, at most 0.31; 0.793 | never, never, never, never |
+| i10 | 5 | 17.44% | (3.475, 2.775), 10.31, at most 0.31; 0.793 | never, never, never, never |
+| i10_l30 | 0.1 | 20.09% | (3.475, 2.675), 10.47, at most 0.47; 0.805 | never, never, never, never |
+| i10_l30 | 0.3 | 20.09% | (3.475, 2.675), 10.47, at most 0.47; 0.805 | never, never, never, never |
+| i10_l30 | 0.5 | 20.09% | (3.475, 2.675), 10.47, at most 0.47; 0.805 | never, never, never, never |
+| i10_l30 | 1 | 20.09% | (3.475, 2.675), 10.47, at most 0.47; 0.805 | never, never, never, never |
+| i10_l30 | 5 | 20.03% | (3.475, 2.675), 10.47, at most 0.47; 0.805 | never, never, never, never |
+| i02_l05 | 0.1 | 16.58% | (3.525, 2.825), 10.24, at most 0.24; 0.788 | never, never, never, never |
+| i02_l05 | 0.3 | 16.58% | (3.525, 2.825), 10.24, at most 0.24; 0.788 | never, never, never, never |
+| i02_l05 | 0.5 | 16.58% | (3.525, 2.825), 10.24, at most 0.24; 0.788 | never, never, never, never |
+| i02_l05 | 1 | 16.58% | (3.525, 2.825), 10.24, at most 0.24; 0.788 | never, never, never, never |
+| i02_l05 | 5 | 16.58% | (3.525, 2.825), 10.24, at most 0.24; 0.788 | never, never, never, never |
+| sc02 | 0.1 | 18.69% | (3.525, 2.775), 10.28, at most 0.28; 0.791 | never, never, never, never |
+| sc02 | 0.3 | 18.69% | (3.525, 2.775), 10.28, at most 0.28; 0.791 | never, never, never, never |
+| sc02 | 0.5 | 18.69% | (3.525, 2.775), 10.28, at most 0.28; 0.791 | never, never, never, never |
+| sc02 | 1 | 18.69% | (3.525, 2.775), 10.28, at most 0.28; 0.791 | never, never, never, never |
+| sc02 | 5 | 18.69% | (3.525, 2.775), 10.28, at most 0.28; 0.791 | never, never, never, never |
+| gate_320x120 | 0.1 | 16.05% | (3.513, 2.888), 10.14, at most 0.14; 0.362 | never, never, never, never |
+| gate_320x120 | 0.3 | 16.05% | (3.513, 2.888), 10.14, at most 0.14; 0.362 | never, never, never, never |
+| gate_320x120 | 0.5 | 16.05% | (3.513, 2.888), 10.14, at most 0.14; 0.362 | never, never, never, never |
+| gate_320x120 | 1 | 16.05% | (3.513, 2.888), 10.14, at most 0.14; 0.362 | never, never, never, never |
+| gate_320x120 | 5 | 16.04% | (3.513, 2.888), 10.14, at most 0.14; 0.362 | never, never, never, never |
 
+#### T6. The plume's edge against the sensors: the distance from each sensor's cell to the nearest non-SOLID cell ever at or above the threshold (centre to centre), in metres and in cells, per arm and class
+
+| Arm | Grid | Class (um) | Sensor | Distance to the threshold contour (m) | In cells | Sensor cell reached |
+|---|---|---|---|---|---|---|
+| i05 | 160x60 | 0.1 | near_door | 1.589 | 31.8 | no |
+| i05 | 160x60 | 0.1 | above_gap_1 | 0.354 | 7.1 | no |
+| i05 | 160x60 | 0.1 | above_gap_2 | 0.447 | 8.9 | no |
+| i05 | 160x60 | 0.1 | hood_entry | 1.400 | 28.0 | no |
+| i05 | 160x60 | 0.3 | near_door | 1.589 | 31.8 | no |
+| i05 | 160x60 | 0.3 | above_gap_1 | 0.354 | 7.1 | no |
+| i05 | 160x60 | 0.3 | above_gap_2 | 0.447 | 8.9 | no |
+| i05 | 160x60 | 0.3 | hood_entry | 1.400 | 28.0 | no |
+| i05 | 160x60 | 0.5 | near_door | 1.589 | 31.8 | no |
+| i05 | 160x60 | 0.5 | above_gap_1 | 0.354 | 7.1 | no |
+| i05 | 160x60 | 0.5 | above_gap_2 | 0.447 | 8.9 | no |
+| i05 | 160x60 | 0.5 | hood_entry | 1.400 | 28.0 | no |
+| i05 | 160x60 | 1 | near_door | 1.589 | 31.8 | no |
+| i05 | 160x60 | 1 | above_gap_1 | 0.354 | 7.1 | no |
+| i05 | 160x60 | 1 | above_gap_2 | 0.447 | 8.9 | no |
+| i05 | 160x60 | 1 | hood_entry | 1.400 | 28.0 | no |
+| i05 | 160x60 | 5 | near_door | 1.589 | 31.8 | no |
+| i05 | 160x60 | 5 | above_gap_1 | 0.354 | 7.1 | no |
+| i05 | 160x60 | 5 | above_gap_2 | 0.447 | 8.9 | no |
+| i05 | 160x60 | 5 | hood_entry | 1.400 | 28.0 | no |
+| i10 | 160x60 | 0.1 | near_door | 1.563 | 31.3 | no |
+| i10 | 160x60 | 0.1 | above_gap_1 | 0.354 | 7.1 | no |
+| i10 | 160x60 | 0.1 | above_gap_2 | 0.430 | 8.6 | no |
+| i10 | 160x60 | 0.1 | hood_entry | 1.400 | 28.0 | no |
+| i10 | 160x60 | 0.3 | near_door | 1.563 | 31.3 | no |
+| i10 | 160x60 | 0.3 | above_gap_1 | 0.354 | 7.1 | no |
+| i10 | 160x60 | 0.3 | above_gap_2 | 0.430 | 8.6 | no |
+| i10 | 160x60 | 0.3 | hood_entry | 1.400 | 28.0 | no |
+| i10 | 160x60 | 0.5 | near_door | 1.563 | 31.3 | no |
+| i10 | 160x60 | 0.5 | above_gap_1 | 0.354 | 7.1 | no |
+| i10 | 160x60 | 0.5 | above_gap_2 | 0.430 | 8.6 | no |
+| i10 | 160x60 | 0.5 | hood_entry | 1.400 | 28.0 | no |
+| i10 | 160x60 | 1 | near_door | 1.563 | 31.3 | no |
+| i10 | 160x60 | 1 | above_gap_1 | 0.354 | 7.1 | no |
+| i10 | 160x60 | 1 | above_gap_2 | 0.430 | 8.6 | no |
+| i10 | 160x60 | 1 | hood_entry | 1.400 | 28.0 | no |
+| i10 | 160x60 | 5 | near_door | 1.563 | 31.3 | no |
+| i10 | 160x60 | 5 | above_gap_1 | 0.354 | 7.1 | no |
+| i10 | 160x60 | 5 | above_gap_2 | 0.430 | 8.6 | no |
+| i10 | 160x60 | 5 | hood_entry | 1.400 | 28.0 | no |
+| i10_l30 | 160x60 | 0.1 | near_door | 1.501 | 30.0 | no |
+| i10_l30 | 160x60 | 0.1 | above_gap_1 | 0.283 | 5.7 | no |
+| i10_l30 | 160x60 | 0.1 | above_gap_2 | 0.354 | 7.1 | no |
+| i10_l30 | 160x60 | 0.1 | hood_entry | 1.309 | 26.2 | no |
+| i10_l30 | 160x60 | 0.3 | near_door | 1.501 | 30.0 | no |
+| i10_l30 | 160x60 | 0.3 | above_gap_1 | 0.283 | 5.7 | no |
+| i10_l30 | 160x60 | 0.3 | above_gap_2 | 0.354 | 7.1 | no |
+| i10_l30 | 160x60 | 0.3 | hood_entry | 1.309 | 26.2 | no |
+| i10_l30 | 160x60 | 0.5 | near_door | 1.501 | 30.0 | no |
+| i10_l30 | 160x60 | 0.5 | above_gap_1 | 0.283 | 5.7 | no |
+| i10_l30 | 160x60 | 0.5 | above_gap_2 | 0.354 | 7.1 | no |
+| i10_l30 | 160x60 | 0.5 | hood_entry | 1.309 | 26.2 | no |
+| i10_l30 | 160x60 | 1 | near_door | 1.501 | 30.0 | no |
+| i10_l30 | 160x60 | 1 | above_gap_1 | 0.283 | 5.7 | no |
+| i10_l30 | 160x60 | 1 | above_gap_2 | 0.354 | 7.1 | no |
+| i10_l30 | 160x60 | 1 | hood_entry | 1.309 | 26.2 | no |
+| i10_l30 | 160x60 | 5 | near_door | 1.501 | 30.0 | no |
+| i10_l30 | 160x60 | 5 | above_gap_1 | 0.283 | 5.7 | no |
+| i10_l30 | 160x60 | 5 | above_gap_2 | 0.354 | 7.1 | no |
+| i10_l30 | 160x60 | 5 | hood_entry | 1.309 | 26.2 | no |
+| i02_l05 | 160x60 | 0.1 | near_door | 1.600 | 32.0 | no |
+| i02_l05 | 160x60 | 0.1 | above_gap_1 | 0.354 | 7.1 | no |
+| i02_l05 | 160x60 | 0.1 | above_gap_2 | 0.447 | 8.9 | no |
+| i02_l05 | 160x60 | 0.1 | hood_entry | 1.400 | 28.0 | no |
+| i02_l05 | 160x60 | 0.3 | near_door | 1.600 | 32.0 | no |
+| i02_l05 | 160x60 | 0.3 | above_gap_1 | 0.354 | 7.1 | no |
+| i02_l05 | 160x60 | 0.3 | above_gap_2 | 0.447 | 8.9 | no |
+| i02_l05 | 160x60 | 0.3 | hood_entry | 1.400 | 28.0 | no |
+| i02_l05 | 160x60 | 0.5 | near_door | 1.600 | 32.0 | no |
+| i02_l05 | 160x60 | 0.5 | above_gap_1 | 0.354 | 7.1 | no |
+| i02_l05 | 160x60 | 0.5 | above_gap_2 | 0.447 | 8.9 | no |
+| i02_l05 | 160x60 | 0.5 | hood_entry | 1.400 | 28.0 | no |
+| i02_l05 | 160x60 | 1 | near_door | 1.600 | 32.0 | no |
+| i02_l05 | 160x60 | 1 | above_gap_1 | 0.354 | 7.1 | no |
+| i02_l05 | 160x60 | 1 | above_gap_2 | 0.447 | 8.9 | no |
+| i02_l05 | 160x60 | 1 | hood_entry | 1.400 | 28.0 | no |
+| i02_l05 | 160x60 | 5 | near_door | 1.600 | 32.0 | no |
+| i02_l05 | 160x60 | 5 | above_gap_1 | 0.354 | 7.1 | no |
+| i02_l05 | 160x60 | 5 | above_gap_2 | 0.447 | 8.9 | no |
+| i02_l05 | 160x60 | 5 | hood_entry | 1.400 | 28.0 | no |
+| sc02 | 160x60 | 0.1 | near_door | 1.550 | 31.0 | no |
+| sc02 | 160x60 | 0.1 | above_gap_1 | 0.320 | 6.4 | no |
+| sc02 | 160x60 | 0.1 | above_gap_2 | 0.391 | 7.8 | no |
+| sc02 | 160x60 | 0.1 | hood_entry | 1.350 | 27.0 | no |
+| sc02 | 160x60 | 0.3 | near_door | 1.550 | 31.0 | no |
+| sc02 | 160x60 | 0.3 | above_gap_1 | 0.320 | 6.4 | no |
+| sc02 | 160x60 | 0.3 | above_gap_2 | 0.391 | 7.8 | no |
+| sc02 | 160x60 | 0.3 | hood_entry | 1.350 | 27.0 | no |
+| sc02 | 160x60 | 0.5 | near_door | 1.550 | 31.0 | no |
+| sc02 | 160x60 | 0.5 | above_gap_1 | 0.320 | 6.4 | no |
+| sc02 | 160x60 | 0.5 | above_gap_2 | 0.391 | 7.8 | no |
+| sc02 | 160x60 | 0.5 | hood_entry | 1.350 | 27.0 | no |
+| sc02 | 160x60 | 1 | near_door | 1.550 | 31.0 | no |
+| sc02 | 160x60 | 1 | above_gap_1 | 0.320 | 6.4 | no |
+| sc02 | 160x60 | 1 | above_gap_2 | 0.391 | 7.8 | no |
+| sc02 | 160x60 | 1 | hood_entry | 1.350 | 27.0 | no |
+| sc02 | 160x60 | 5 | near_door | 1.550 | 31.0 | no |
+| sc02 | 160x60 | 5 | above_gap_1 | 0.320 | 6.4 | no |
+| sc02 | 160x60 | 5 | above_gap_2 | 0.391 | 7.8 | no |
+| sc02 | 160x60 | 5 | hood_entry | 1.350 | 27.0 | no |
+| gate_320x120 | 320x120 | 0.1 | near_door | 1.602 | 64.1 | no |
+| gate_320x120 | 320x120 | 0.1 | above_gap_1 | 0.389 | 15.6 | no |
+| gate_320x120 | 320x120 | 0.1 | above_gap_2 | 0.470 | 18.8 | no |
+| gate_320x120 | 320x120 | 0.1 | hood_entry | 1.425 | 57.0 | no |
+| gate_320x120 | 320x120 | 0.3 | near_door | 1.602 | 64.1 | no |
+| gate_320x120 | 320x120 | 0.3 | above_gap_1 | 0.389 | 15.6 | no |
+| gate_320x120 | 320x120 | 0.3 | above_gap_2 | 0.470 | 18.8 | no |
+| gate_320x120 | 320x120 | 0.3 | hood_entry | 1.425 | 57.0 | no |
+| gate_320x120 | 320x120 | 0.5 | near_door | 1.602 | 64.1 | no |
+| gate_320x120 | 320x120 | 0.5 | above_gap_1 | 0.389 | 15.6 | no |
+| gate_320x120 | 320x120 | 0.5 | above_gap_2 | 0.470 | 18.8 | no |
+| gate_320x120 | 320x120 | 0.5 | hood_entry | 1.425 | 57.0 | no |
+| gate_320x120 | 320x120 | 1 | near_door | 1.602 | 64.1 | no |
+| gate_320x120 | 320x120 | 1 | above_gap_1 | 0.389 | 15.6 | no |
+| gate_320x120 | 320x120 | 1 | above_gap_2 | 0.470 | 18.8 | no |
+| gate_320x120 | 320x120 | 1 | hood_entry | 1.425 | 57.0 | no |
+| gate_320x120 | 320x120 | 5 | near_door | 1.602 | 64.1 | no |
+| gate_320x120 | 320x120 | 5 | above_gap_1 | 0.389 | 15.6 | no |
+| gate_320x120 | 320x120 | 5 | above_gap_2 | 0.470 | 18.8 | no |
+| gate_320x120 | 320x120 | 5 | hood_entry | 1.425 | 57.0 | no |
+
+#### T7. The line source in decaying grid turbulence (prompt 70b, line70.py): the model's decay exponent and the plume's width against the reference curve (Anand and Pope's displacement variance with Warhaft's parameters, Viswanathan and Pope 2008 equations 11 to 15) at five stations downstream of the source
+
+| Grid | Cell (mm) | Cell's second moment (mm) | Outer iterations | Stop | Flow wall (s) | n (model's own 1.087) | Scalar march: steps, stop, wall (s) | sigma / sigma_ref at 5 M (t / T_L 0.2) | 10 M (0.4) | 20 M (0.9) | 50 M (2.1) | 100 M (4.2) | sigma model, ref at 100 M (mm) |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 280x50 | 10 | 2.9 | 1381 | error_estimate_and_continuity | 89 | 1.0775 | 3063, steady, 27 | 1.754 | 1.355 | 1.059 | 0.843 | 0.768 | 19.2, 25.0 |
+| 560x100 | 5 | 1.4 | 2609 | error_estimate_and_continuity | 512 | 1.0767 | 5079, steady, 110 | 1.767 | 1.339 | 1.056 | 0.842 | 0.768 | 19.2, 25.0 |
 
 ## Consequences
 
