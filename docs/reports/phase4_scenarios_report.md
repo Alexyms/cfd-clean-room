@@ -3,8 +3,8 @@
 **Date:** 2026-10-28 (the machine's local date); revised 2026-10-29 after review 69 and test 69
 (prompt 69b: coverage by statements and branches apart, REQ-T05 read at every stored frame, the
 residual's mechanism stated as unknown, the stop condition and the predictions recorded)
-**Phase Gate Verdict:** PROPOSED CONDITIONAL PASS (the builder's case is the section "The proposed
-verdict" below; Alex decides, as for the Phase 3 gate)
+**Phase Gate Verdict:** CONDITIONAL PASS (Alex, 2026-10-29; three conditions, in the section "The
+decision" below, which follows the builder's proposed case)
 **Branches Merged:** ten pull requests, #87 to #96, and this one (`phase4/step7-gate`):
 - The design: #87 (ADR-014, Proposed, accepted by Alex the same day).
 - ADR-014's build order, section G: #88 (step 0, the housekeeping batch, the warm start and the
@@ -848,6 +848,23 @@ threshold in the three event scenarios (table S1), so they give no detection lat
 layout and the clean-out's recovery times are the only sensor timings the records hold. The two
 failed predictions are recorded as failed in table P1 and in ADR-014's planned-against-built
 table.
+
+## The decision (Alex, 2026-10-29)
+
+CONDITIONAL PASS, with the two conditions proposed above and a third:
+
+1. **The budget residual's mechanism** is found before Phase 6's finer grids.
+2. **A third grid of the clean-out** is run before the free-area mean's ratio or the local
+   recovery field is quoted as a number of the room.
+3. **A turbulent-spreading sensitivity check** is made before Phase 5 reports any detection
+   result. The event scenarios' plumes keep sharp edges (`phase4_filter_breach_snapshot.png`,
+   `phase4_door_leak_snapshot.png`: the threshold contour lies a few cells from the plume's
+   core), and no sensor reads any of the three near its threshold (table S1). Whether that is
+   the room's unidirectional downflow or turbulent spreading the model underpredicts is Phase 3's
+   carried limit, turbulent spreading unvalidated, and this is where that limit bears most.
+
+The coverage fall is debt for Phase 5's first pull request, as the case proposed. Phase 4 is
+complete under these conditions.
 
 ## Sources
 

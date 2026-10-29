@@ -56,8 +56,10 @@ every flow state converged and the closed room's state is the product row's by i
 the clean-out's recovery outputs are defined; no sensor of the four reads an event scenario
 near its threshold; two of the prompt's four predictions failed, the budget residual's 1e-6
 line (every budget inside REQ-T05's 1e-4 at every stored frame, the mechanism unknown) and the free-area mean's
-100:1 time (not grid-converged between 80x30 and 320x120). The builder proposes CONDITIONAL
-PASS with those two as conditions; Phase 4 is at GATE REVIEW until Alex sets the verdict.
+100:1 time (not grid-converged between 80x30 and 320x120). The builder proposed CONDITIONAL
+PASS with those two as conditions; Alex set the verdict on 2026-10-29: CONDITIONAL PASS with
+those two and a third, a turbulent-spreading sensitivity check before Phase 5 reports any
+detection result (the report's section "The decision"). Phase 4 is COMPLETE under those conditions.
 Phases 5 through 7 have not begun.
 
 The product room itself has never been solved, and on 2026-10-04 it was found that the laminar
