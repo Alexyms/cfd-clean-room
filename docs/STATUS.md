@@ -55,7 +55,7 @@ report, `docs/reports/phase4_scenarios_report.md`, with ADR-014's planned-agains
 every flow state converged and the closed room's state is the product row's by its face hash;
 the clean-out's recovery outputs are defined; no sensor of the four reads an event scenario
 near its threshold; two of the prompt's four predictions failed, the budget residual's 1e-6
-line (every budget inside REQ-T05's 1e-4, the mechanism unconfirmed) and the free-area mean's
+line (every budget inside REQ-T05's 1e-4 at every stored frame, the mechanism unknown) and the free-area mean's
 100:1 time (not grid-converged between 80x30 and 320x120). The builder proposes CONDITIONAL
 PASS with those two as conditions; Phase 4 is at GATE REVIEW until Alex sets the verdict.
 Phases 5 through 7 have not begun.

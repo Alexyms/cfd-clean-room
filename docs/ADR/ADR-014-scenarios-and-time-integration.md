@@ -1216,9 +1216,9 @@ as `mu_eff` is), `mesh.py`'s the breakpoints.
    figures and the gate report `docs/reports/phase4_scenarios_report.md`, with the table below
    section J. Every flow state converged, and the closed room's state equals L0's record by its
    face hash. Predictions (b) and (d) hold. (a) fails at a 1e-6 line the orchestrator set
-   without a basis, every budget inside REQ-T05's 1e-4 by at least 23 times; the residual's
-   records are the report's tables B1, B2 and G1, its mechanism unconfirmed and proposed as a
-   gate condition. (c) fails at 4.8 against 2 to 4: the free-area mean's 100:1 time is not
+   without a basis, every budget inside REQ-T05's 1e-4 at every stored frame (the report's
+   tables B1 and P1, which carry the margin); the residual's records are the report's tables
+   B1, B2, B3 and G1, its mechanism unknown and proposed as a gate condition. (c) fails at 4.8 against 2 to 4: the free-area mean's 100:1 time is not
    grid-converged (3.0 on 80x30), the second proposed condition. Nothing under `src/` changed.
 
 ## H. The carried limits
@@ -1905,15 +1905,16 @@ H1 hold the period history, each row by time window, the cost estimate and the h
 Written 2026-10-28 at step 7 (prompt 69), the Phase 4 gate. Each row is a decision or section of
 this design, or the step that planned it, against what was built and where it was measured. The
 dated notes inside the sections carry the detail; this table points at them and at the reports,
-and restates no measured number.
+and restates no measured number; the settings it names (a step tolerance, a Courant number, a
+grid) are the decisions themselves.
 
 | ADR-014 planned | Built | Why, and where measured |
 |---|---|---|
-| Decision 1, step 0: each distinct flow state solved once per run, keyed by a fingerprint of the velocity-layer keys, warm-started from the state before it | As planned: `solve_steady(initial=)` and `FlowState` (step 0), the fingerprint over `scenarios.FLOW_KEYS` with contiguous pieces of one segment joined (step 2, ratified), the cache through the run file and `flows_from` (step 4). The warm start saves about 15% of a solve, not two thirds: T1's prediction (a) failed, and the saving is the cache's | Section A and its as-built notes; T1; `docs/reports/adr014_step0.md`; the door's two states at step 7 (`docs/reports/phase4_scenarios_report.md`, table D1) |
-| Decision 2: short events as their steady extreme, the transport at Courant 0.4, Heun's method named for Phase 6 | As planned; the four reference files state `transport.cfl_number` 0.4. T7's time error at 0.4 against 0.1 (prompt 59b's prediction (c) failed narrowly: 3.6% at the fast sensors, 0.03% at the last one) is stated beside every recovery and detection time of step 7 | Section A's limit; T7; the step 7 tables' time-error column |
+| Decision 1, step 0: each distinct flow state solved once per run, keyed by a fingerprint of the velocity-layer keys, warm-started from the state before it | As planned: `solve_steady(initial=)` and `FlowState` (step 0), the fingerprint over `scenarios.FLOW_KEYS` with contiguous pieces of one segment joined (step 2, ratified), the cache through the run file and `flows_from` (step 4). The warm start saves a small part of a solve, not the two thirds predicted: T1's prediction (a) failed, and the saving is the cache's | Section A and its as-built notes; T1; `docs/reports/adr014_step0.md`; the door's two states at step 7 (`docs/reports/phase4_scenarios_report.md`, table D1) |
+| Decision 2: short events as their steady extreme, the transport at Courant 0.4, Heun's method named for Phase 6 | As planned; the four reference files state `transport.cfl_number` 0.4. T7's time error at 0.4 against 0.1 (prompt 59b's prediction (c) failed narrowly) is stated beside every sensor recovery and detection time of step 7; the free-area mean's 100:1 time has none, since T7's mean never reached 100:1 | Section A's limit; T7; the step 7 tables' time-error column |
 | Decision 3, step 6a: BDF2 after an implicit Euler first step | As planned; the observed order in time is VAL-023 | Section A, tier 2's as-built note; `docs/reports/probe67/tables67.md` O1 |
 | Decision 4, step 6a: SIMPLE outer iterations inside each step | As planned | Section A, tier 2; tables O1, S1 |
-| Decision 5, step 6a: the per-step criterion, the velocity step below 1e-4 U | As planned for the rows; Re 40 needed a second stage at 1e-6 U to show its decay, since a step whose first outer iteration moves the field by less than the tolerance takes no further iteration | Section F's protocol note of 2026-10-28; `docs/reports/val022/val022.md`, tables V7, V9, V10 |
+| Decision 5, step 6a: the per-step criterion, the velocity step below 1e-4 U | As planned for the rows; Re 40 needed a second stage at a tighter step tolerance to show its decay, since a step whose first outer iteration moves the field by less than the tolerance takes no further iteration | Section F's protocol note of 2026-10-28; `docs/reports/val022/val022.md`, tables V7, V9, V10 |
 | Decision 6: the open door as a two-way exchange, `door_in` and `door_out` on the left edge, offset zero | As planned, every value a key of `configs/scenario_door_leak.yaml` and an assumption until a measurement sets it; run at step 7 | Section B; the step 7 report's door tables; section H |
 | Decision 7, step 1: the `scenario` section with `base:` inheritance, validated at load | As planned, with section B's as-built departures: the run keys in the file's own sections, the event syntax, the fan rule, one time tolerance, the reference scenarios extending the room without vents (Alex, 2026-10-17) | Section B's as-built note; `tests/test_config.py`; `tests/test_scenarios.py` |
 | Decision 8, step 4: within spec when every sensor is below threshold and stays so, the 100:1 time beside it, the local recovery field | As planned, with section C's amendments: the field updated every step and carried in the checkpoint, `scenario.hold_time`, then the reference clean-out run to its end so the ratio and the field are defined (prompt 66) | Section C's amendments; the step 7 report's recovery tables C1 and L1 |
