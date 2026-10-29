@@ -16,8 +16,8 @@ This document tracks development progress by phase. Code review reads this docum
 | 1 | Foundation | COMPLETE | PASS | phase1_foundation_report.md |
 | 2 | Navier-Stokes Solver | COMPLETE | PASS | phase2_navier_stokes_report.md |
 | 3 | Transport Solver | COMPLETE | CONDITIONAL PASS | phase3_transport_report.md |
-| 4 | Scenarios & Time Integration | GATE REVIEW | proposed CONDITIONAL PASS (Alex decides) | phase4_scenarios_report.md |
-| 5 | Alert Monitoring System | NOT STARTED | -- | -- |
+| 4 | Scenarios & Time Integration | COMPLETE | CONDITIONAL PASS (Alex, 2026-10-29; three conditions, the report's "The decision") | phase4_scenarios_report.md |
+| 5 | Alert Monitoring System | DESIGN PROPOSED (ADR-015, prompt 70, 2026-10-29) | -- | -- |
 | 6 | CUDA Acceleration | NOT STARTED | -- | -- |
 | 7 | Visualization & Portfolio | NOT STARTED | -- | -- |
 
@@ -324,7 +324,9 @@ Laminar flow past a square cylinder in a channel is Phase 4's validation and sho
 
 | Deliverable | Status | Notes |
 |-------------|--------|-------|
-| src/monitor.py | NOT STARTED | Sensor probes, threshold comparison, latency measurement |
+| docs/ADR/ADR-015-alert-monitoring-and-placement.md | PROPOSED (prompt 70, 2026-10-29; review and test 70 before the pull request) | The Phase 5 design, before any code, as ADR-014 was for Phase 4: Alex's three decisions of 2026-10-29 (a design pass first; the Phase 4 gate's spreading condition checked both ways, a plane-jet validation row VAL-024 and a sensitivity sweep of the scenarios to the supply's turbulence intensity, dissipation length and Schmidt number, before any detection result; placement by arrival maps kept during the march) recorded as given; eight decisions for Alex at its top (A to H), each with a picture, ranked options and the section carrying it; the probes and their tables under `docs/reports/probe70/`. The build order is its section H, six steps, the coverage debt and VAL-024 first |
+| src/placement.py | NOT STARTED (ADR-015 D and H, step 4) | Latency from the arrival maps, layout scoring by stated rules, the candidate positions and the search (exact for the worst-case rule; NumPy only) |
+| src/monitor.py | NOT STARTED (ADR-015 C and H, step 2) | Sensor probes, threshold comparison, latency measurement; the arrival tracker at step 3 |
 | tests/test_monitor.py | NOT STARTED | Unit tests: threshold detection, false positive/negative |
 | tests/test_alert_latency.py | NOT STARTED | VAL-009 |
 | tests/test_sensor_evaluation.py | NOT STARTED | Integration: multi-scenario sensor comparison |
@@ -334,7 +336,8 @@ Laminar flow past a square cylinder in a channel is Phase 4's validation and sho
 
 | Test ID | Description | Criterion | Status |
 |---------|-------------|-----------|--------|
-| VAL-009 | Alert latency | Detection delay = 0 or 1 timestep | NOT RUN |
+| VAL-009 | Alert latency | Detection delay = 0 or 1 timestep (holds by construction when the monitor reads every step; ADR-015 C proposes what it tests: the alert's step equals the first step at or above threshold, exact, with REQ-A01 reworded) | NOT RUN |
+| VAL-024 | Plane jet spreading (ADR-015 A, proposed) | The velocity half-width's growth rate within 15% of 0.108, the standard k-epsilon value from the literature, on 240x400 at a 0.05 U_j coflow in a 100 slot-width domain; the scalar's rate over the velocity's reported against the measured 1.15 to 1.52; threshold OPEN (Alex) | PROBED (prompt 70, 2026-10-29): 0.0932 and 0.0862 on 120x100 and 240x200 at a 0.1 U_j coflow (prediction (a) fails on the finer), 0.1057 on 120x200 at 0.05 U_j; the row grid not yet run (`docs/reports/probe70/tables70.md`, T1) |
 
 ### Additional Gate Criteria
 
@@ -501,3 +504,4 @@ Phase 3 completion is the minimum viable portfolio artifact. A working, validate
 | 2026-10-28 | Prompt 68c on step 6b: the Re 40 run-out to t = 600 at 1e-6 U (`docs/reports/val022/runout68.py`), Alex's two-stage protocol written into ADR-014 F, the onset estimate (`onset68.py`), test 68's two Bugs fixed (the measures' window clauses, the harness fixture) and its Suggestions, review 68 S1, S2, S4, S7 and S9. VAL-022 PASS under the protocol. |
 | 2026-10-18 | ADR-014 step 6b built (prompt 68, branch phase4/step6b-cylinder): interior clustering, the force gauge and the Strouhal instrument, tier 2 through `time_integration.run` with its records and restart, the cylinder's case file and VAL-022 run as four harness rows (`docs/reports/val022/val022.md`). REQ-N04 added for VAL-023 (the orchestrator, 2026-10-18). Every hash of record unchanged. |
 | 2026-10-28 | ADR-014 step 7 and the Phase 4 gate (prompt 69, branch phase4/step7-gate): the four reference scenarios run on the product grid through `scripts/run_scenario.py`, concurrently, from rest, and reported with tables generated from the run files (`docs/reports/probe69/`); the gate report `docs/reports/phase4_scenarios_report.md` in the Phase 3 report's structure, with the full suite and branch coverage from one run, the validation gate rows, ADR-014's planned-against-built table and the carried limits against the scenario results. Predictions (b) and (d) hold; (a) fails at a 1e-6 line (every budget inside REQ-T05's 1e-4) and (c) fails (the clean-out mean's 100:1 time not grid-converged). ADR-014 Accepted (built). Phase 4 at GATE REVIEW, the builder proposing CONDITIONAL PASS with those two findings as conditions; the verdict is Alex's. Nothing under `src/` changed. | Claude (builder) |
+| 2026-10-29 | ADR-015, the Phase 5 design, proposed (prompt 70, branch phase5/design): the status table's Phase 4 row carries Alex's recorded verdict (CONDITIONAL PASS, 2026-10-29, three conditions) and the Phase 5 row reads DESIGN PROPOSED; the Phase 5 deliverables gain the ADR's row and `src/placement.py`; the validation gate gains VAL-024 (the plane jet's spreading rate, proposed, threshold OPEN) with the probe's values, and VAL-009's criterion names what the test checks. The probes (`docs/reports/probe70/`): prediction (a) fails on the row grid at a 0.1 U_j coflow and holds on the coarse grid, with the coflow carrying most of the gap; prediction (b) holds. Nothing under src/, tests/ or configs/ changed. |

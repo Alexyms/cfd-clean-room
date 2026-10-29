@@ -60,7 +60,18 @@ line (every budget inside REQ-T05's 1e-4 at every stored frame, the mechanism un
 PASS with those two as conditions; Alex set the verdict on 2026-10-29: CONDITIONAL PASS with
 those two and a third, a turbulent-spreading sensitivity check before Phase 5 reports any
 detection result (the report's section "The decision"). Phase 4 is COMPLETE under those conditions.
-Phases 5 through 7 have not begun.
+Phase 5 opened on 2026-10-29 with its design pass, ADR-015
+(`docs/ADR/ADR-015-alert-monitoring-and-placement.md`, prompt 70), written before any Phase 5
+code as ADR-014 was for Phase 4: Alex's three decisions of that date (a design pass first; the
+spreading condition checked both ways, a plane-jet validation row and a sensitivity sweep of the
+scenarios to the supply's turbulence and the Schmidt number; placement by arrival maps kept
+during the march), eight decisions put to Alex, and probes under `docs/reports/probe70/`. The
+probes found the solver's plane jet spreading under the model's literature value on the fine
+grid at a 0.1 coflow and close to it at 0.05 on the coarse grid, the row's domain therefore
+the weaker coflow with its threshold OPEN; and the filter breach on 160x60 leaving every sensor
+far below threshold across the whole supply-turbulence range, with the arrival maps showing the
+sensors stand outside the plume. The ADR is Proposed; its review and test come before the pull
+request. Phases 6 and 7 have not begun.
 
 The product room itself has never been solved, and on 2026-10-04 it was found that the laminar
 flow solver does not solve it. Its Reynolds number on the room height is
