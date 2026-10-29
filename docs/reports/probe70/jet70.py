@@ -13,11 +13,11 @@ coflow clean, to a steady field.
 
 The first version ran a 30 b high domain with a 0.05 U_j coflow
 (jet_240x120.json, jet_120x60.json): the plane jet's volume flux grows as
-sqrt(x) and by 50 b it carries about 4.4 times the slot's flow, more than the
+sqrt(x) and by 50 b it carries about 3.5 times the slot's flow, more than the
 coflow supplied, so the walls carried a return flow, the eddy viscosity
 filled the channel and the scalar homogenised. The second version (the
 defaults) runs 50 b high with a 0.1 U_j coflow, which supplies about 4.9
-slot flows against the 3.2 the jet entrains by the fit range's end; its
+slot flows against the 2.3 the jet entrains by the fit range's end (2.8 by the outlet); its
 records are jet_<nx>x<ny>_h<H>_c<U>.json.
 
 What it writes (results/builder70/): the .json (the half-width series, the

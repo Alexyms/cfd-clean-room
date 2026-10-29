@@ -134,10 +134,54 @@ def draw_jet() -> Path | None:
     return out
 
 
+LINE_TAGS = ("560x100", "280x50")
+
+
+def draw_line() -> Path | None:
+    """line70.png: the plume's width against distance, model and reference, both grids."""
+    records = [(tag, RESULTS / f"line_{tag}.json") for tag in LINE_TAGS]
+    records = [(tag, p) for tag, p in records if p.exists()]
+    if not records:
+        return None
+    fig, ax = plt.subplots(figsize=(8, 5))
+    for tag, path in records:
+        r = json.loads(path.read_text(encoding="utf-8"))
+        big_m = r["experiment"]["M_m"]
+        x_s = r["source"]["x_m"]
+        xm = (np.asarray(r["xc"]) - x_s) / big_m
+        sel = xm > 0
+        ax.plot(
+            xm[sel],
+            np.asarray(r["sigma"])[sel] / big_m,
+            ".",
+            markersize=3,
+            label=f"model, {tag}",
+        )
+        if tag == records[0][0]:
+            ax.plot(
+                xm[sel],
+                np.asarray(r["sigma_ref"])[sel] / big_m,
+                "k-",
+                label="reference: Anand and Pope's curve with Warhaft's parameters",
+            )
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.set_xlabel("(x - x_s) / M")
+    ax.set_ylabel("sigma / M")
+    ax.set_title("Line source in decaying grid turbulence: plume width")
+    ax.legend(fontsize=8)
+    fig.tight_layout()
+    out = HERE / "line70.png"
+    fig.savefig(out, dpi=110)
+    return out
+
+
 def main() -> int:
     print(f"wrote {draw_arrivals()}")
     jet = draw_jet()
     print(f"wrote {jet}" if jet else "no revised jet record yet")
+    line = draw_line()
+    print(f"wrote {line}" if line else "no line-source record yet")
     return 0
 
 
