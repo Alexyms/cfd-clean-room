@@ -55,8 +55,9 @@ reason and the jet is the alternative not taken (section A's last paragraph).
 (1) Warhaft's single line source at 52 M, as section A sets it: uniform inflow carrying the
 source station's k and eps, walls 25 cm from a plume under 3 cm wide, a fixed-flow outlet, no
 pressure outlet; the width read as the second moment of the profile; the reference the Anand
-and Pope curve with Warhaft's parameters that Viswanathan and Pope plot [13] and the Wilson and
-Sawford review says fits the data in the far field [15], the primary points digitised at step 0.
+and Pope (1983) curve with Warhaft's parameters that Viswanathan and Pope plot [13] and the
+Wilson and Sawford review says agrees with the data in the far field [15], the primary points
+digitised at step 0.
 (2) Stapountzis et al. (1986) [12], the companion experiment with a fuller description of the
 temperature field's structure: its parameters were not readable in this pass, so it is the
 cross-check once the paper is fetched.
@@ -89,17 +90,34 @@ flow re-solve; a change of Sc_t changes the transport only and reuses the state
 (`--flows-from`). The probe (T2 to T5) ran the filter breach on 160x60 at five arms: the file's
 values, 10% at 0.1 m (the top of the intensity range, prediction (b)), the corner of largest
 nu_t (10%, 0.3 m), the corner of smallest (2%, 0.05 m), and Sc_t 0.2 on the control's state.
+*Revised 2026-10-29 (prompt 70b; review 70 B3).* What the sweep reads is geometric. A sensor
+reading many orders below its threshold is the numerical tail of a sharp front, set by the
+grid more than by any input: at the file's inputs the gate's 320x120 breach reads every
+sensor 11 to 16 decades lower than the 160x60 control does (T3 of the gate report against
+the probe's records), while the whole input range moves a sensor by 9 decades on one grid.
+The observable is therefore the distance from each sensor's cell to the plume's threshold
+contour, in metres and in cells, on both grids, with the contour's own grid dependence
+(T6): on 160x60 the two gap sensors stand 0.28 to 0.35 m (5.7 to 7.1 cells) and 0.35 to
+0.45 m (7.1 to 8.9 cells) outside the contour across the five arms, the door and hood
+sensors 1.3 to 1.6 m; on 320x120 at the file's inputs 0.39 m (15.6 cells), 0.47 m (18.8
+cells), 1.60 and 1.43 m. The coarse grid's contour lies about one coarse cell farther out
+than the fine grid's (the width on the 2.5 m row 1.05 m against 0.98 m), so a coarse-grid
+distance is a one-sided bound: a sensor outside the contour on 160x60 is farther outside it
+on 320x120. A reading far below threshold is reported as "below the resolved plume", never
+as a number.
 *Options, ranked.*
 (1) The sweep on 160x60 for every arm and every event scenario (the breach, the door, the dust
-release), reading per sensor and class the peak over threshold and the first time at or above,
-and per sensor row the plume's width at the threshold level and at ten times it (T4's
-readings), with the two extreme arms repeated on 320x120 for the breach to show the change of
-width between arms is the same on both grids to within the coarse grid's cell. The reason for
-160x60: the question is comparative (does the width change between arms, and does any sensor
-come within reach of its threshold), the room as it is stops by the rule on 160x60 (ECR-002
-step 8), every sensor and opening sits on faces of both grids, and a run costs a fraction of
-the fine grid's (T2's flow wall and the march's wall, section B). The cost of the five arms on
-the breach is the probe's; three scenarios at five arms is 15 runs, concurrent five at a time.
+release), reading per sensor and arm the distance from the sensor's cell to the plume's
+threshold contour in metres and in cells (T6's reading), per sensor row the plume's width at
+the threshold level and at ten times it (T4's), and the contour's grid dependence from the
+two extreme arms repeated on 320x120 for every scenario. The reason for 160x60: the question
+is geometric and comparative (how far each sensor stands outside the contour, and how far the
+contour moves between arms), the coarse contour bounds the fine one from outside (the
+picture), the room as it is stops by the rule on 160x60 (ECR-002 step 8), every sensor and
+opening sits on faces of both grids, and a run costs a fraction of the fine grid's (T2 and
+the march walls, section B). Any sensor the contour reaches on 160x60 at any arm is rerun on
+320x120 at that arm before a detection result is stated. The cost of the five arms on the
+breach is the probe's; three scenarios at five arms is 15 runs, concurrent five at a time.
 (2) The sweep on 320x120 throughout: the plume's edge is resolved as the gate's snapshots
 resolve it, at about eight times the cost per run (the gate's breach run took 66 minutes on
 the product grid, table M1 of the gate report).
@@ -265,8 +283,9 @@ C_0 = 2.1 in that decaying turbulence, its equations 11 to 15: sigma_p^2 = sigma
 + Delta_o^2(t), Delta_o^2 = 2 sigma_v^2(t_o) t_o^2 [(1 + t / t_o)^(r - s) / (r (r - s)) +
 (1 + t / t_o)^(-s) / (r s) - 1 / (s (r - s))], r = (m / 2)(3 C_0 / 2 - 1) + 1, s = (m / 2)(3 C_0 / 2
 + 1) - 1, t_o = x_o / U the flight time from the grid to the source; the review of Wilson and
-Sawford (1996) [15] states that this theory agrees with Warhaft's and Stapountzis's plume
-widths in the far field with C_0 = 2.1. The row's reference curve is therefore that theory with
+Sawford (1996) [15] states (its page 196, quoted under source 15) that Anand and Pope
+(1983) find this theory in good agreement with Warhaft's and Stapountzis's data in the far
+field with C_0 = 2.1. The row's reference curve is therefore that theory with
 Warhaft's parameters, labelled as such; the primary data points of Warhaft's figures are to be
 digitised at step 0 from the JFM paper, which this machine could not fetch, and the reference
 curve checked against them before the threshold is scored. At the source station the formula
@@ -374,12 +393,20 @@ The supply's inlet nu_t at the corners (T2): 5e-5 m^2/s (2%, 0.05 m) to 1.5e-3 m
 tops nothing produces turbulence, so the plume's diffusivity in the sensors' zone is the
 supply's nu_t decaying, over Sc_t.
 
-**What is read.** Per arm, per scenario, per class: each sensor's peak over threshold and its
-first time at or above (T3's readings); on each sensor's row, the plume's width at the
-threshold level and at ten times it, at the end of the event and the largest over the frames,
-and the extent of the threshold cells (T4's); the arrival map's fraction of cells reached and
-its earliest arrival (T5's). The plume's width is the quantity the inputs move; the peak over
-threshold is the margin a sensor keeps; the map says whether any position would have read it.
+**What is read** (revised 2026-10-29, prompt 70b, review 70 B3). Per arm, per scenario, per
+class: the distance from each sensor's cell to the nearest non-SOLID cell ever at or above
+the threshold, centre to centre, in metres and in cells (T6's reading), on both grids for
+the extreme arms; on each sensor's row, the plume's width at the threshold level and at ten
+times it, at the end of the event and the largest over the frames, and the extent of the
+threshold cells (T4's); the arrival map's fraction of cells reached (T5's). A sensor's peak
+reading is stated as a number only when it is within a hundredth of its threshold (the
+resolved range of the front on either grid); below that it is "below the resolved plume",
+because the tail's value is the grid's (11 to 16 decades between 160x60 and 320x120 at the
+same inputs, T3 of the gate report against T3 here) and not the inputs'. The plume's width
+and the sensors' distances are the quantities the inputs move; the map says whether any
+position would have read it. The arrival times read from stored frames are bounded by the
+frame spacing (T5's caption) and are not latencies; section D's in-march maps remove that
+bound.
 
 **The grid.** 160x60, with the reason given under decision B, and the two extreme arms of the
 breach repeated on 320x120. The width's resolution on 160x60 is a 5 cm cell, so a width that
@@ -465,7 +492,9 @@ reached, NaN in SOLID cells, as `local_recovery` is written). Updated every step
 the recovery tracker keeps the last time, this one the first), carried in the march
 checkpoint's `recovery` dict of named arrays under `first_above` (no format change:
 `MarchCheckpoint.recovery` is a dict of float64 arrays by name), restored by shape as the
-recovery tracker's are, so a restart continues it bitwise. Written at the end of the run and at
+recovery tracker's are, so a restart continues it bitwise. Today the march passes
+`recovery=None` when there is no clean-out tracker (`_Run.march`); with the arrival tracker
+every tier-1 run carries the dict, the clean-out's with both trackers' arrays in it. Written at the end of the run and at
 each checkpoint flush as `/arrival/` (`ArrivalRecord`: thresholds, onsets with their event
 names, `first_above` [classes, ny, nx], t_final; `write_arrival` and `read_arrival` on
 `RunFile`). The clean-out gets the map too; its arrival is t = 0 everywhere above threshold,
@@ -476,13 +505,19 @@ and returns the map at the output cadence's resolution, flagged as such. The Pha
 and probe B's are read this way (T5), and section F's sweep can be read before step 3 is
 built.
 
-**Latency.** The onset of an event that carries contamination is its `start` (a `replace`
-with a concentration key, a `source`, or the initial condition at t = 0). For each such event
-e, the latency at a cell is `first_above` minus `start_e` where `first_above` lies in
-[start_e, start of the next such event or t_end); a cell whose first arrival is before the
-event belongs to the earlier one. With one such event per reference scenario the rule reduces
-to arrival minus 10 s (the door, the breach, the dust) and zero for the clean-out. A cell never
-reached has infinite latency and the report says "never" with the run's end beside it.
+**Latency** (revised 2026-10-29, prompt 70b, review 70 S7). The onset of an event that
+carries contamination is its `start` (a `replace` with a concentration key, a `source`, or
+the initial condition at t = 0). The tracker keeps one map per such event: at each onset
+the map for that event starts, and records per class and cell the first step time at or
+after the onset at which the cell is at or above threshold, so a cell already at or above
+it at the onset reads the onset itself. The latency for event e at a cell is that time minus
+`start_e`; infinite if the cell is not reached before t_end, and the report says "never"
+with the run's end beside it. The monitor's `latencies(onsets)` is defined the same way on
+the sensors' cells: for each onset, the time of the first reading at or above threshold at
+or after it, an alert open at the onset counting as the onset, so the two instruments
+agree at a sensor's cell by construction and a test pins that they do. Each reference
+scenario has one such event, so its latency is arrival minus 10 s (the door, the breach,
+the dust) and zero for the clean-out; a scenario with several is reported per event.
 
 **Scoring a layout.** A layout is a set S of cells. Per scenario s and class k,
 L(s, k, S) = min over c in S of latency(s, k, c). Over the scenario-class pairs P (three
@@ -506,11 +541,17 @@ the mountable one, as the bound.
 - count 1: the argmin over candidates (exact);
 - count 2: exhaustive over candidate pairs (on 320x120 with a two-cell standoff about 1,800
   mountable cells, 1.6 million pairs, fifteen pairs each: seconds in NumPy);
-- the worst-case rule at any count: exact by a threshold sweep. For each distinct latency T in
-  increasing order, the pairs a cell covers within T is a fifteen-bit mask; the layouts of the
-  count whose masks OR to all ones exist or not, which is settled over the distinct masks (a
-  few hundred) rather than the cells, and the smallest T with a cover is the optimum, the cover
-  its layout (ties broken by the mean);
+- the worst-case rule at any count: exact by a threshold sweep over a set cover (revised
+  2026-10-29, review 70 S8). Pairs reached by no candidate are removed first and reported
+  as uncovered, so the worst case is over the coverable pairs. For each distinct latency T
+  in increasing order, the pairs a cell covers within T form a mask of at most fifteen bits;
+  the question whether `count` masks OR to all ones is settled by dynamic programming over
+  the 2^15 subsets (the fewest masks covering each subset, built mask by mask over the
+  distinct masks, whose number is measured and reported, not assumed), and the smallest T
+  with a cover of the count is the optimum. The covers attaining it are enumerated by a
+  depth-first search over the distinct masks bounded by the count, which is small, and the
+  tie among them is broken by the mean. When no pair is coverable the ranking falls to the
+  mean rule, and the report says so;
 - the mean rule above two: greedy (add the cell that lowers the score most) followed by
   one-sensor exchanges until none improves, checked against the exhaustive answer at count 2.
 NumPy only (ADR-013 decision 2: no new dependency).
@@ -543,7 +584,7 @@ turbulence over the tops, the spreading limit now bounded by A and B rather than
 
 | Condition | When | What it costs | What it could change |
 |---|---|---|---|
-| 3: the spreading check (A and B) | Steps 0 and 1 of H, before any detection result | A: T1's two solves and marches on a workstation core each (the probe section gives the walls); B: 15 coarse runs concurrent five and two fine runs (section B) | Whether the plumes' widths and the sensors' margins move with the assumed inputs: if a sensor comes within reach of its threshold at an arm, the report states detection results as a range over the arms; if none does, the "never" is geometric and the maps carry the placement question |
+| 3: the spreading check (A and B) | Steps 0 and 1 of H, before any detection result | A: T1's two solves and marches on a workstation core each (the probe section gives the walls); B: 15 coarse runs concurrent five and two fine runs (section B) | Whether the plumes' widths and the sensors' distances to the contour move with the assumed inputs: if the contour reaches a sensor's cell at an arm on 160x60, that arm is rerun on 320x120 and the report states the detection result as a range over the arms on the fine grid; if none does on either grid, the "never" is geometric and the maps carry the placement question |
 | 2: a third clean-out grid | Step 1, beside the sweep (a run, no code) | One 160x60 clean-out, 240 s at Courant 0.4: about an eighth of the product grid's 2.6 hours (table M1), under an hour with its flow solve | Whether the mean's 100:1 ratio and the local recovery field can be quoted as numbers of the room: a 160x60 value between 80x30's 3.0 and 320x120's 4.8 shows a series not yet converged and the numbers stay comparative; the room recovery time (25.6 and 27.9 s) is unaffected either way |
 | 1: the budget residual's mechanism | Before Phase 6's finer grids, after the Phase 5 gate, a prompt of its own | One session: a sealed-box march (VAL-014's) with a source and an interval switch at a known time on 40x15, the budget read every step, the residual's accrual against the content and its sign at the switches (the records put the sign changes near 10.5 and 25 s in the dust release and 80.4 s in the breach, and B3 rules the flow's continuity out by two orders) | The budget instrument (REQ-T05's verification) if the residual is bookkeeping between the content and the running sums or the source's integral at a switch; the scheme's inlet booking if the limited face value at an inlet face differs from the inflow the budget books. Neither moves a Phase 5 latency: the residual is 1e-6 of the supply against thresholds at 1e-2 of the inlet value |
 
@@ -555,8 +596,9 @@ turbulence over the tops, the spreading limit now bounded by A and B rather than
 | REQ-A02 sensor locations configurable in YAML | The sensors section | Yes (unit: a sensor added or moved in the mapping changes the cell read; a SOLID cell refused; the face rule) | Add the reading rule: "a sensor reads the cell containing it, the one below or to the left of a position on a face (ADR-014 C)" |
 | REQ-A03 thresholds per class following ISO 14644-1 | The thresholds mapping | Partly: configurable per class is testable; "following ISO 14644-1" is not without the formula | "Contamination thresholds shall be configurable per particle size class, either as a mapping by size or as an ISO 14644-1 class number from which the loader computes the limits by the standard's formula rounded to three significant figures; the product file's Class 5 values are the test" |
 | REQ-A04 latency per sensor per scenario from event onset | The report's core number | Yes once onset is defined (integration test on a coarse run) | Append: "the onset is the start of the event that carries the contamination (a replacement with a concentration, a source, or the initial condition at t = 0); a sensor never at or above threshold within the run reports no latency and the run's end" |
-| REQ-A05 multiple configurations across scenarios to identify optimal placement | The placement question | No: "optimal" names no rule | "The monitor's placement module shall score any set of sensor layouts over a set of scenario run files by stated rules (worst case, mean, coverage within a stated time), rank them, and search the stated candidate positions for the layout of a stated count that is best under a rule, exact for one and two sensors and for the worst-case rule at any count, reproducible from the run files alone" |
+| REQ-A05 multiple configurations across scenarios to identify optimal placement | The placement question | No: "optimal" names no rule | "The monitor's placement module shall score any set of sensor layouts over a set of scenario run files by stated rules (worst case, mean, coverage within a stated time), rank them, and search the stated candidate positions for the layout of a stated count that is best under a rule, exact for one and two sensors and for the worst-case rule at any count over the pairs some candidate reaches, reproducible from the run files alone" |
 | REQ-A06 reads but never modifies | Separation of concerns | Yes, and by test as well as review: the fields' bytes before and after `update`, the writeable flag False | Append: "verified by test: the fields are bitwise unchanged across every monitor call" |
+| REQ-T14, proposed (prompt 70b, review 70 S9) | VAL-024's width clause verifies no requirement as written: REQ-T13 states the diffusivity's formula, met by construction | A new requirement, for Alex | "With the turbulence model on, the transport solver's spreading of a passive scalar released from a line source in decaying grid turbulence shall match the measured plume width in the far field within a stated allowance, the near-field width reported beside it." Verified by VAL-024; the decay clause of VAL-024 joins REQ-S14's Verified By |
 
 ## H. Modules, contracts, the build order and the coverage debt
 
@@ -607,7 +649,7 @@ at step 2.
 
 | Step | Prompt | Builds | Tests | Validation row |
 |---|---|---|---|---|
-| 0 | 71 | The coverage debt: tests for the 66 uncovered statements of table Cv2 of the gate report (47 `raise` lines, 19 fallbacks and early returns), each exercised by its own test or recorded as unreachable with the reason; VAL-024's case file, loader, readers and harness rows | `tests/test_plane_jet.py`; the new rejection-path tests across `test_config.py`, `test_io_manager.py`, `test_solver_transport.py`, `test_turbulence.py`, `test_mesh.py`, `test_time_integration.py`, `test_forces.py`, `test_particles.py`, `test_staggered.py`, `test_solver_staggered.py` | VAL-024, scored by Alex's threshold |
+| 0 | 71 | The coverage debt: tests for the 66 uncovered statements of table Cv2 of the gate report (47 `raise` lines, 19 fallbacks and early returns), each exercised by its own test or recorded as unreachable with the reason; VAL-024's case file, loader, readers and harness rows, and Warhaft's plume widths digitised from the JFM paper | `tests/test_line_source.py`; the new rejection-path tests across `test_config.py`, `test_io_manager.py`, `test_solver_transport.py`, `test_turbulence.py`, `test_mesh.py`, `test_time_integration.py`, `test_forces.py`, `test_particles.py`, `test_staggered.py`, `test_solver_staggered.py` | VAL-024, scored by Alex's threshold |
 | 1 | 72 | The sensitivity sweep (section B) as a report with its generator and tables; the clean-out's third grid (condition 2) as a run and a row in the same report | none in `src/`; the report's check mode | the sweep's tables; no row |
 | 2 | 73 | `monitor.py` (AlertMonitor, Alert, sensor_cells moved), the march hook, `/transport/alerts/`, the runner's summary | `tests/test_monitor.py` (unit: thresholds by size and by class, the cell rule, open and close, the iso_class form, REQ-A06's bytes), `tests/test_alert_latency.py` | VAL-009 |
 | 3 | 74 | `ArrivalTracker`, `/arrival/`, the checkpoint arrays and restart, `latencies(onsets)` and REQ-A04's per-sensor latency in `RunRecord` and the summary; `placement.arrival_from_frames` | `tests/test_monitor.py` (the tracker on planted series, restart bitwise), `tests/test_time_integration.py` (the map against the frames' map on a coarse run) | none; REQ-A04's integration test |
@@ -621,7 +663,14 @@ coverage at or above Phase 3's two figures, measured by the same command (`pytes
 Phase 4's figures with the debt already cleared. A line found unreachable is listed in the
 pull request with the reason, not excluded from measurement.
 
-## Probes (committed before the runs; results after)
+## Probes (the predictions fixed in the prompt before the runs; results after)
+
+*On the order of commits (review 70 S1).* The orchestrator's predictions (a) and (b) were
+fixed in the prompt's text before any run. The ADR's copy of them, with the builder's,
+was first committed in e77fd65 at 14:12 on 2026-10-29, after the first probe records
+started at 10:41, so the builder's "before the runs" has no committed record that shows
+it. Predictions (c) and (d) of prompt 70b were committed in 7109c8b before their probe
+ran. Future design passes commit the probe section before running.
 
 **Predictions (orchestrator, 2026-10-29).**
 - (a) The code's standard k-epsilon plane-jet spreading rate falls within 15% of the
@@ -666,10 +715,16 @@ section A, committed before its probe ran).**
 (T2 to T5; the arms, the readings in `tables70.py`'s docstring). Wall times were taken with
 six processes sharing the machine (two jet solves and four breach arms), one BLAS thread each;
 the revised jet solves ran three at a time with the first fine-grid solve and the Schmidt arm.
+*The slowdown (review 70 S6).* Between about 11:20 and 14:10 on 2026-10-29 the machine ran
+the solver processes at a small fraction of a core (the 240x120 scalar march took 0.24 s per
+step against 240x200's 0.025 s on more cells; the UMIST arm 0.67 s per outer iteration
+against upwind's 0.064 s on the same grid). T1's last two flow walls (9,684 and 10,119 s)
+and the 240x120 march's 9,789 s fell in that window and are not costs of the cases; the
+outer counts are. The line-source probe ran after it.
 
 *Note (2026-10-29, after the first jet version ran, before the second).* The first version's
 domain (30 slot widths high, a 0.05 U_j coflow) confined the jet (section A: the coflow
-supplied 1.45 slot flows against 2.5 entrained), so the domain was revised to 50 slot widths
+supplied 1.45 slot flows against 2.8 entrained by the outlet), so the domain was revised to 50 slot widths
 and 0.1 U_j and rerun on 120x100 and 240x200. The confined records stay in T1 as labelled
 rows. The predictions above were written before any run and stand unchanged against the
 revised runs; the builder's (a) was written for the confined grids and is scored on the
@@ -689,38 +744,53 @@ on 240x200 (20.2% under, outside it), both solves stopped by the rule (2,496 and
 iterations), both fits linear to a residual of 0.01 and 0.001 slot widths over 15 to 45. The
 coflow carries most of the shortfall on the coarse resolution: 0.05 U_j in the 100 slot-width
 domain reads 0.1057 (2.1% under 0.108, inside the measured 0.100 to 0.110), 4,662 outer
-iterations by the rule. The scheme's share is smaller: k and eps advected by UMIST in place
-of upwind on the 0.1 U_j arm reads 0.0973, 4% above the upwind arm's 0.0932, at the
-iteration cap rather than by the rule (the limited scheme on k and eps cycles, as ADR-012 C
-found on the room). So of the 20% on the row grid, the coflow accounts for about two thirds
-on the coarse resolution, the k and eps scheme for about a fifth, and the remainder is the
-grid's (the 7% fall from two to four cells across the slot). The confined first version
+iterations by the rule. k and eps advected by UMIST in place of upwind on the 0.1 U_j arm
+reads 0.0973, 4% above the upwind arm's 0.0932, at the iteration cap rather than by the rule
+(the limited scheme on k and eps cycles, as ADR-012 C found on the room). The three shifts
+are each measured on one arm against the 120x100 upwind arm and are not a decomposition of
+the row grid's gap (review 70 S2): the coflow's 0.0125, the scheme's 0.0041 and the grid's
+0.0070 (two to four cells across the slot) sum to more than the gap of 0.0218, and review 70
+B2 found the outer stream decelerating by a third or more across the fit range on every
+revised domain, so the arms are confined jets at two confinements, not a weak coflow at two
+ratios (section A, the alternative not taken). The confined first version
 read 0.115 (two cells across the slot) and 0.125 (four) at the iteration cap, both with the
 return flow, and its scalar never settled; those rows are evidence for the domain, not
 measurements of the model.
 
 *The scalar beside the velocity.* 1.224, 1.243 and 1.288 on the three converged arms (the
 scalar's K1 0.114, 0.107 and 0.136), inside the measured 1.15 to 1.52 and within 5% of the
-constant-eddy-viscosity estimate 1.23; the scalar marches reached a steady field in 6 to 15
-simulated seconds.
+constant-eddy-viscosity ratio 1.224 at Sc_t 0.7 (arcsech(0.5^(1 / 1.4)) over
+arcsech(0.5^(1 / 2)), 1.079 / 0.881); the scalar marches reached a steady field in 6 to 15
+simulated seconds. The scalar's background read near zero in both domains, so B2's
+background sensitivity does not move the scalar's K1.
 
-*Prediction (b): HOLDS.* On 160x60 the breach at 10% intensity (0.1 m) leaves every sensor
-below its threshold in every class, the nearest reading 1.2e-11 of threshold at above_gap_1
-(T3), and the plume's width on the sensors' row at 2.5 m is 1.10 m against 1.05 m at the
-file's 5% (T4), a factor 1.05. The widest arm of the range, 10% at 0.3 m (supply nu_t 99 nu,
-six times the file's), reads 1.20 m (a factor 1.14) and brings above_gap_1 to 7.1e-7 of
-threshold; the narrowest, 2% at 0.05 m, reads 0.95 m; Sc_t 0.2 on the file's flow reads
-1.10 m and 2.5e-9 of threshold. The width at ten times the threshold moves by one cell or
-none. Every flow state stopped by the rule in 1,953 to 3,067 outer iterations (T2); a march
-of about 15,000 steps took 610 to 700 s wall with five processes sharing the machine.
+*Prediction (b): HOLDS, rescored on the plume's edge (prompt 70b, review 70 B3).* On 160x60
+the breach at 10% intensity (0.1 m) leaves every sensor below its threshold in every class,
+every reading below the resolved plume (T3), and the plume's width on the sensors' row at
+2.5 m is 1.10 m against 1.05 m at the file's 5% (T4), a factor 1.05. The edge reading (T6):
+at the file's values above_gap_1 stands 0.354 m (7.1 cells) outside the threshold contour
+and above_gap_2 0.447 m (8.9 cells); at 10% and 0.1 m the same 0.354 m and 0.430 m (8.6
+cells); at the widest arm of the range, 10% at 0.3 m (supply nu_t 99 nu, six times the
+file's), 0.283 m (5.7 cells) and 0.354 m (7.1 cells), the width on the row 1.20 m (a factor
+1.14); at the narrowest, 2% at 0.05 m, 0.354 and 0.447 m, the width 0.95 m; at Sc_t 0.2 on
+the file's flow 0.320 and 0.391 m. The door and hood sensors stand 1.3 to 1.6 m outside at
+every arm. The width at ten times the threshold moves by one cell or none. The contour's
+grid dependence, from the gate's 320x120 breach at the file's inputs read the same way:
+above_gap_1 0.389 m (15.6 cells), above_gap_2 0.470 m (18.8 cells), the width on the 2.5 m
+row 0.98 m against 1.05 m, so the coarse contour lies about one coarse cell farther out and
+the coarse distances bound the fine ones from below. Every flow state stopped by the rule
+in 1,953 to 3,067 outer iterations (T2); a march of about 15,000 steps took 610 to 700 s
+wall with five processes sharing the machine, before the slowdown named under Method.
 
 *The builder's (a) and (b).* (a) was wrong on the row grid in the direction it did not expect
 (the slope under the band, not the virtual origin moved); its ratio expectation of about 1.2
 held. (b) held in every part, including the geometry: the arrival maps (T5, `arrival70.png`)
-put the earliest arrival 0.24 to 0.47 s after the breach's start in the cell under the panel's
-edge at 2.8 m height, the reached cells (17% to 20% of the room's free cells) under the panel,
-on the litho tool's top and in both gaps to the floor returns, and the file's four sensors
-outside the reached set at every arm.
+put the earliest reached cell under the panel's edge at 2.8 m height, by the first stored
+frame after the onset (0.24 to 0.47 s after it, each the thirteenth frame of its arm, so an
+upper bound by up to one frame spacing of 0.79 to 0.81 s and not a measured latency; review
+70 S5), the reached cells (17% to 20% of the room's free cells) under the panel, on the
+litho tool's top and in both gaps to the floor returns, and the file's four sensors outside
+the reached set at every arm.
 
 *What the results change in the design.* Decision A's row moves to the 0.05 U_j domain
 (240x400, step 0), the threshold stays proposed and OPEN with the refinement trend named;
@@ -1012,8 +1082,8 @@ maps are the instrument the sweep already needed.
   a rerun.
 - REQ-A01, A03 and A05 are reworded to testable forms if Alex accepts G; VAL-009's criterion
   becomes the step identity.
-- The plane jet becomes the solver's first free-shear validation row and the spreading
-  limit is bounded rather than open; VAL-021 stays closed.
+- The line source becomes the solver's first scalar-spreading validation row, the breach's
+  own mechanism, and the spreading limit is bounded rather than open; VAL-021 stays closed.
 
 ## Alternatives considered
 
@@ -1021,8 +1091,8 @@ maps are the instrument the sweep already needed.
   and 3): deferred, the sample time to be stated beside the latency.
 - The map from the frames only (D's option 2) and the search by rerunning (D's option 3):
   rejected for the output cadence's resolution and the cost.
-- A still-air jet in a closed box or with open lateral boundaries (A's options 2 and 3):
-  rejected for the confinement and for issue 61.
+- The plane jet (A's option 3, the first version's row): not taken, a shear-flow test whose
+  closed domain confines the jet (review 70 B2); its records stay in section A.
 - Condition 1 first (F's option 2): rejected, it bears on no Phase 5 number.
 
 ## Sources
@@ -1036,17 +1106,19 @@ maps are the instrument the sweep already needed.
    https://arxiv.org/pdf/physics/0503208, SHA-256 63d9d028...7595e6, 26 pages.
 2. Stanley, S. A. and Sarkar, S. (1999), "A study of the flowfield evolution and mixing in a
    planar turbulent jet using direct numerical simulation", LBNL-43005 preprint (J. Fluid Mech.
-   450, 2002, with Mellado); tables 2 and 7 (velocity growth rates 0.093 DNS, 0.100 to 0.118
-   measured; scalar growth 0.158 DNS, 0.115 to 0.167 measured; K1u / K1s 0.66 to 0.87
-   measured), section 4.2 (the half-width's definition on the excess over the local coflow,
+   450, 2002, with Mellado); tables 2 and 7 (velocity growth rates 0.093 for the main DNS
+   case and 0.105 for its scalar case, 0.100 to 0.110 for five measured jets and 0.118 for
+   Hussain and Clark 1977; scalar growth 0.158 DNS, 0.115 to 0.167 measured; K1u / K1s 0.66
+   for the DNS scalar case and 0.66 to 0.87 measured), section 4.2 (the half-width's definition on the excess over the local coflow,
    the entrainment 0.035, the coflow's effect). Fetched 2026-10-29,
    https://escholarship.org/content/qt191048kj/qt191048kj_noSplash_821a0fa2720a5ce7c1642fed646d7ad9.pdf,
    SHA-256 773cec2b...47552fd, 49 pages (scanned, OCR text).
 3. Chen, Y.-S. and Kim, S.-W. (1987), "Computation of turbulent flows using an extended
    k-epsilon turbulence closure model", NASA CR-179204; the introduction (the plane jet
-   predicted correctly, the round jet 30% over), the submerged jets (experimental 0.11 and
-   0.098; standard k-epsilon 0.11 with the simplified production term and 0.117 with the
-   full one; the extended model 0.111 and 0.108) and the coflowing plane jet of Bradbury
+   predicted correctly, the round jet 30% over), the submerged jets (experimental 0.11 for
+   the plane jet and 0.098 for the round; standard k-epsilon 0.11 with the simplified
+   production term and 0.117 with the full one for the plane jet; the extended model 0.111
+   plane and 0.108 round) and the coflowing plane jet of Bradbury
    (1965), J. Fluid Mech. 23, 31-64. Fetched 2026-10-29,
    https://ntrs.nasa.gov/api/citations/19880002587/downloads/19880002587.pdf, SHA-256
    a6703ecb...8231aa2, 30 pages (scanned, OCR text).
@@ -1075,4 +1147,36 @@ maps are the instrument the sweep already needed.
    figures, and the single-sample volume and time; cited from the standard as the product
    file's thresholds already are (not fetched in this pass).
 10. GitHub issue 61 (closed): the pressure outlet's standing imbalance under entering air, the
-    reason the product and the jet case have no pressure outlet.
+    reason the product and the validation cases have no pressure outlet.
+11. Warhaft, Z. (1984), "The interference of thermal fields from line sources in grid
+    turbulence", J. Fluid Mech. 144, 363-387 (DOI 10.1017/S0022112084001646). The primary
+    measurement; Cambridge Core gave the abstract only (read 2026-10-29), whose one number is
+    a wire-spacing range; the paper's parameters are taken from [13] and its figures are to
+    be digitised at step 0.
+12. Stapountzis, H., Sawford, B. L., Hunt, J. C. R. and Britter, R. E. (1986), "Structure of
+    the temperature field downwind of a line source in grid turbulence", J. Fluid Mech. 165,
+    401-424. The companion measurement; not readable in this pass (the ADS and Cambridge
+    pages refused the fetch), named as the cross-check.
+13. Viswanathan, S. and Pope, S. B. (2008), "Turbulent dispersion from line sources in grid
+    turbulence", Phys. Fluids 20, 101514; table I (Warhaft's parameters: sigma_o 1.27e-4 and
+    2.5e-5 m, M 2.54e-2 m, x_o / M 20, 52 and 60, U 7 m/s, sigma_u 2.44 and sigma_v, sigma_w
+    2.27 m/s at one mesh length, m 1.4, kappa 2.1e-5 m^2/s), equations 3 to 5 (the decay
+    law), 10 (the Langevin model, C_0 2.1), 11 to 15 (the plume width), figure 4 and its
+    text (the theoretical width against the model's). Fetched 2026-10-29,
+    https://tcg.mae.cornell.edu/pubs/Viswanathan_P_PF_08.pdf, SHA-256 e294a5a0...0eb862,
+    25 pages.
+14. Mohamed, M. S. and LaRue, J. C. (1990), "The decay power law in grid-generated
+    turbulence", J. Fluid Mech. 219, 195-214: the measured exponents 1.16 to 1.37 across the
+    studies it reviews and 1.24 to 1.33 in its own analysis, as the search of 2026-10-29
+    reported them (the paper itself was not fetched); the standard model's 1 / (C_e2 - 1) =
+    1.087 with C_e2 1.92 sits below that range.
+15. Wilson, J. D. and Sawford, B. L. (1996), "Review of Lagrangian stochastic models for
+    trajectories in the turbulent atmosphere", Boundary-Layer Meteorology 78, 191-210,
+    https://www.eas.ualberta.ca/jdwilson/jdw_bls_blm96.pdf: the statement that Anand and
+    Pope's (1983) model agrees with the Warhaft and Stapountzis data in the far field with
+    C_0 = 2.1. Fetched 2026-10-29, SHA-256 57efe94d...4954eaaeb, 20 pages (scanned, OCR
+    text); its page 196: "For the data of Warhaft (1984) and Stapountzis et al. (1986), Anand
+    and Pope find good agreement in the far field using Co = 2.1, while for the data of
+    Sawford and Tivendale (1992), Sawford and Borgas (1994) find Co = 3 gives the best fit."
+    Anand and Pope (1983), "Diffusion behind a line source in grid turbulence", Turbulent
+    Shear Flows 4, Springer, 46-52, is the theory's source.
