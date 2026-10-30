@@ -422,6 +422,92 @@ class TestMassImbalance:
 
 
 @pytest.mark.unit
+class TestPinCell:
+    """The cell that fixes the level of a closed domain's pressure (needs_pin)."""
+
+    def test_a_closed_cavity_pins_its_first_fluid_cell(self) -> None:
+        """The pin is the first FLUID cell in row-major order, the first interior cell."""
+        config = load_case("cavity", grid=(6, 6))
+        mesh = Mesh(config)
+        corrector = PressureCorrector(mesh, config, StaggeredBoundary(mesh, config))
+        assert corrector.needs_pin
+        assert corrector.pin_cell == (1, 1)
+        assert mesh.cell_type[1, 1] == FLUID and mesh.cell_type[0, :].min() > FLUID
+
+    def test_a_closed_grid_with_no_fluid_cell_keeps_the_default_pin(self) -> None:
+        """A 2 x 2 cavity is all BOUNDARY cells: there is no FLUID cell to pick.
+
+        The corrector still builds, pinned at the corner cell, which is an
+        ordinary solution cell on the staggered grid. Defect caught: the
+        first FLUID cell read from an empty list (an IndexError at load).
+        """
+        config = load_case("cavity", grid=(2, 2))
+        mesh = Mesh(config)
+        assert not (mesh.cell_type == FLUID).any()
+        corrector = PressureCorrector(mesh, config, StaggeredBoundary(mesh, config))
+        assert corrector.needs_pin and corrector.pin_cell == (0, 0)
+
+    def test_an_open_domain_needs_no_pin(self) -> None:
+        _mesh, _bc, _mp, corrector = _build(
+            _config(
+                {
+                    "inlet": _inlet("left", 0.3, 0.0),
+                    "outlet": {
+                        "type": "pressure_outlet",
+                        "location": "right",
+                        "y_start": 0.0,
+                        "y_end": 1.0,
+                    },
+                }
+            )
+        )
+        assert not corrector.needs_pin and corrector.pin_cell == (0, 0)
+
+
+@pytest.mark.unit
+class TestOutletRowsOnAOneCellAxis:
+    """An outlet face borrows the diagonal of the interior face beside it.
+
+    A grid one cell across has no interior face on that axis, so an outlet on
+    the edges that close it borrows nothing and the other axis is unchanged.
+    """
+
+    def test_one_column_has_rows_only_at_its_top_outlet(self) -> None:
+        boundaries = {
+            "inlet": _inlet("bottom", 0.0, 0.3),
+            "outlet": {
+                "type": "pressure_outlet",
+                "location": "top",
+                "x_start": 0.0,
+                "x_end": 2.0,
+            },
+        }
+        config = _config(boundaries, nx=1, ny=6)
+        mesh = Mesh(config)
+        corrector = PressureCorrector(mesh, config, StaggeredBoundary(mesh, config))
+        rows = corrector._outlet_rows(mesh.cell_type != SOLID)
+        assert rows.shape == (6, 1)
+        assert rows[:, 0].tolist() == [False] * 5 + [True]
+
+    def test_one_row_has_rows_only_at_its_right_outlet(self) -> None:
+        boundaries = {
+            "inlet": _inlet("left", 0.3, 0.0),
+            "outlet": {
+                "type": "pressure_outlet",
+                "location": "right",
+                "y_start": 0.0,
+                "y_end": 1.0,
+            },
+        }
+        config = _config(boundaries, nx=8, ny=1)
+        mesh = Mesh(config)
+        corrector = PressureCorrector(mesh, config, StaggeredBoundary(mesh, config))
+        rows = corrector._outlet_rows(mesh.cell_type != SOLID)
+        assert rows.shape == (1, 8)
+        assert rows[0].tolist() == [False] * 7 + [True]
+
+
+@pytest.mark.unit
 class TestCoefficients:
     """a_nb = rho d_face A_face with the mesh's own face lengths."""
 
