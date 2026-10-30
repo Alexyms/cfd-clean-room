@@ -710,6 +710,28 @@ class TestGeometricClustering:
         assert mesh.dx_cell.mean() == pytest.approx(mesh.dx)
 
 
+@pytest.mark.unit
+class TestWallSpacingRefusals:
+    """The wall-spacing helpers' ratio-1 shortcut and their refusals."""
+
+    @pytest.mark.parametrize("length, n", [(1.0, 10), (2.5, 8), (3.0, 3)])
+    def test_unit_ratio_is_the_uniform_cell(self, length: float, n: int) -> None:
+        """A ratio of exactly 1 returns L / n without the closed form's 0 / 0."""
+        assert wall_spacing_for_ratio(length, n, 1.0) == length / n
+
+    @pytest.mark.parametrize("spacing", [0.0, -0.01, 0.2])
+    def test_spacing_outside_zero_to_uniform_is_refused(self, spacing: float) -> None:
+        """A wall cell wider than the uniform one, or not positive, has no ratio."""
+        with pytest.raises(ValueError, match=r"wall spacing must lie in \(0, 0\.1\]"):
+            ratio_for_wall_spacing(1.0, 10, spacing)
+
+    @pytest.mark.parametrize("n", [1, 2])
+    def test_clustering_needs_three_cells(self, n: int) -> None:
+        """Two halves of one cell each cannot cluster toward both walls."""
+        with pytest.raises(ValueError, match="at least 3 cells per axis"):
+            ratio_for_wall_spacing(1.0, n, 0.25 / n)
+
+
 # ---------------------------------------------------------------------------
 # Unit tests -- Interior clustering between breakpoints (ADR-014 decision 11)
 # ---------------------------------------------------------------------------

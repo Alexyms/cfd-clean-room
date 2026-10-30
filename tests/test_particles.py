@@ -269,6 +269,28 @@ class TestParticlePhysicsUnit:
         pp = ParticlePhysics(config)
         assert pp.hepa_efficiency(0) == 0.99999
 
+    def test_hepa_efficiency_refuses_a_diameter_that_orders_against_nothing(
+        self, tmp_path
+    ) -> None:
+        """A NaN diameter raises instead of returning None from a float method.
+
+        No finite diameter between the reference's ends can miss every
+        interval (a list that starts below it and ends above it has a step
+        across it), and the loader rejects a NaN size, so the only way to
+        reach the guard is to corrupt the stored size. The comparisons with
+        the reference are all false for NaN, which is what the guard is for.
+        """
+        config = _make_config(
+            tmp_path,
+            overrides={
+                "particles": {**_STANDARD_CONFIG["particles"], "sizes": [0.2e-6]}
+            },
+        )
+        pp = ParticlePhysics(config)
+        pp._particle_sizes[0] = float("nan")
+        with pytest.raises(RuntimeError, match="failed to find enclosing interval"):
+            pp.hepa_efficiency(0)
+
 
 # ---------------------------------------------------------------------------
 # Validation tests

@@ -265,6 +265,21 @@ class TestByHand:
         with pytest.raises(error):
             ForceGauge(Mesh(config), config, name, velocity)  # type: ignore[arg-type]
 
+    def test_an_obstacle_between_cell_centres_is_refused(self) -> None:
+        """A body thinner than a cell that holds no centre makes no SOLID cell.
+
+        The gauge would otherwise read the pressure beside faces that do not
+        exist and report a zero force as if the body were present. The block
+        is moved to 0.01 m wide between the centres of a 0.1 m grid.
+        """
+        raw = _raw(30, 10, freestream=True)
+        raw["obstacles"][0].update(x_start=1.01, x_end=1.02)
+        config = SimConfig.from_dict(raw)
+        mesh = Mesh(config)
+        assert not mesh.obstacle_mask(config.obstacles[0]).any()
+        with pytest.raises(ValueError, match="obstacle 'block' covers no cell"):
+            ForceGauge(mesh, config, "block", 1.0)
+
 
 def _steady(raw: dict) -> tuple[Mesh, SimConfig, StaggeredSolver]:
     config = SimConfig.from_dict(raw)

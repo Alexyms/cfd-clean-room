@@ -15,6 +15,7 @@ from src.staggered import (
     check_staggered_pair,
     edge_cell_inputs,
     edge_cells,
+    obstacle_face_inputs,
     p_shape,
     to_cell_centers,
     u_face_coordinates,
@@ -302,3 +303,26 @@ class TestEdgeCells:
             centers = mesh.xc if edge in ("bottom", "top") else mesh.yc
             assert np.array_equal(coordinates, centers)
             assert mask.shape == coordinates.shape
+
+
+@pytest.mark.unit
+class TestObstacleFaceInputs:
+    """The refusal of ``obstacle_face_inputs`` for a face it does not know."""
+
+    @pytest.mark.parametrize("face", ["front", "Top", "", "north"])
+    def test_an_unknown_face_name_is_refused(self, face: str) -> None:
+        """Only top, bottom, left and right name a side; anything else raises.
+
+        The name picks which neighbour of the obstacle's cells is read, so a
+        misspelt face must stop here and not fall through to a side.
+        """
+        floor = {
+            "name": "floor",
+            "x_start": 0.62,
+            "x_end": 1.08,
+            "y_start": 0.0,
+            "y_end": 0.28,
+        }
+        config = _config(20, 10, obstacles=[floor])
+        with pytest.raises(ValueError, match=f"unknown face '{face}'; use top, bottom"):
+            obstacle_face_inputs(Mesh(config), config.obstacles[0], face)
