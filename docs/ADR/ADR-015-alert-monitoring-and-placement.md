@@ -4,7 +4,12 @@
 Proposed. Written 2026-10-29 (prompt 70, branch `phase5/design`) and revised the same day
 on review 70 (prompt 70b: section A rewritten to a line source in grid turbulence by Alex's
 decision, section B read on the plume's edge, the review's other findings applied in
-place), before the Phase 5 build,
+place), and again on 2026-10-30 on review 70 round 2 (prompt 70c: the two primary papers
+digitised and prediction (d) rescored against them; the spill off the equipment tops, where
+the gap sensors' nearest contour cells are set, stated as outside what the row tests, with
+VAL-020's carried limit as its basis, by Alex's decision of 2026-10-30; the threshold's
+stations moved to the spill's and the returns' flight times; the arrival map given an
+events axis), before the Phase 5 build,
 from the solver and the scenario machinery as ADR-010 to ADR-014 record them, the Phase 4 gate
 report (`docs/reports/phase4_scenarios_report.md`, its decision of 2026-10-29 and its tables
 S1, B1 to B3 and G1), ADR-014 sections C and H, SYSTEM.md's REQ-A01 to A06, and the probes
@@ -43,14 +48,18 @@ builder's reading of what that case tests.
 what spreads it is the supply's own turbulence, decaying as it falls. A heated wire across a
 wind tunnel downstream of a grid is that flow in a laboratory: Warhaft (1984) measured the
 plume's mean temperature profile at stations downstream of a source at 52 mesh lengths in a
-2.54 cm grid's turbulence at 7 m/s, intensity 2.2% at the source [11, 13]. The one case tests
+2.5 cm grid's turbulence at 7 m/s, intensity 2.2% at the source [11, 13]. The one case tests
 two things: how the model's k and eps decay with no production (standard k-epsilon's exponent
 1.087 against the measured 1.16 to 1.4 [14, 13]), and how wide its gradient-diffusion plume is
 against the measured one, in the near field, where a real plume grows as sigma_v t and
 gradient diffusion is known to overstate it, and in the far field, where both grow as a
-diffusion. The breach plume reaches the gap sensors at half a Lagrangian time scale of the
-supply's turbulence, the near field, and the floor returns at about three, so the row's
-near-field stations are the ones the sensors depend on. The plane jet the first version
+diffusion. The breach plume's free fall from the ceiling to the gap sensors' height takes
+half a Lagrangian time scale of the supply's turbulence, the near field, but the free-falling
+column passes between the gap sensors without reaching them; the contour cells nearest them
+are set in the spill off the litho tool's top at 0.6 to 3 Lagrangian times (section A's
+table; review 70 round 2 B1), and the floor returns are reached at about three, so the row's
+stations from 20 to 80 M bear on the sensors and the returns, and 5 and 10 M on the free fall
+alone. The plane jet the first version
 proposed tests shear-made turbulence instead, and review 70 B2 found its closed domain's outer
 stream decelerating by a third or more across the fit range, so its records are kept as the
 reason and the jet is the alternative not taken (section A's last paragraph).
@@ -70,21 +79,37 @@ it stands as the cross-check and could become a second row at a second intensity
 wanted.
 (3) The plane jet: not taken, for the reasons above.
 *Recommendation.* (1). The row is `val024_560x100` with `val024_280x50` (the probe's grid)
-reported beside it; threshold proposed and OPEN: the far-field ratio at 50 and 100 M within
-20% of one and the solver's decay exponent within 0.1 of the model's 1.087, the near-field
-ratio reported with the source column's width beside it. The width clause verifies no requirement
-as written; REQ-T14 is proposed for it (section G). The probe (T7, `line70.png`), the same
-on 280x50 and 560x100 within 0.02: the solver's decay exponent is 1.077 (the model's
-own 1.087); the plume is 1.77 and 1.34 times the reference width at 5 and 10 M, 1.06 at
-20 M, 0.84 at 50 M and 0.77 at 100 M. Prediction (c) holds; (d) holds in the near field
-and at 50 M and fails at 100 M, where the proposed 20% band would fail too. For the
-scenarios this says the model overstates the breach plume's width at the sensors' height
-(the near field, by a factor near 1.3 at the sensors' t / T_L of 0.5) and understates it
-by about a fifth at the returns, so the sensors' distances to the contour (section B) are
-bounds from the inside: the real plume is narrower there. What Alex decides on the
-threshold: the band on the digitised data once they are in (recommended, since the
-reference curve is a theory the review [15] says agrees with the data in the far field,
-whose own scatter is not known here), or 20% at 50 M with 100 M reported, or 25% at both.
+reported beside it; the reference is the digitised data of T8, the curve interpolating
+between their stations. Threshold proposed and OPEN (revised 2026-10-30, prompt 70c, review
+70 round 2 B1 and S3: one recommendation, the rest options). Recommended: the solver's decay
+exponent within 0.1 of the model's 1.087, and the model's width over the measured at 20, 50
+and 80 M within 20% of one. Those stations' flight times (t / T_L 0.85, 2.1 and 3.4) span
+the spill off the tool top, where the gap sensors' nearest contour cells are set (0.6 to
+3 T_L over the sweep's arms, 0.7 to 1.95 at the file's inputs, section A's table), and the
+floor returns (about 3); 5 and 10 M are reported, not
+scored, as the near-field statement (the free fall, which never reaches the sensors), and
+100 M is reported against T9's two estimates, since the 52 M data end at 80 M. On the probe
+this passes at 20 and 50 M (1.05 and 0.87) and sits on the band's edge at 80 M (0.80 on
+both grids, the digitising good to about 2%), so whether a fifth under at the returns is
+acceptable is the decision. Options: (a) 20% at 20 and 50 M with 80 and 100 M reported
+(passes with margin, leaves the returns unscored); (b) 25% at 20, 50 and 80 M (passes; a
+wider band); (c) the earlier proposal, 20% at 50 and 100 M against the curve (fails at
+100 M by three points and rests there on a theory the data do not reach); (d) 25% at 10 to
+80 M (fails at 10 M, 1.32, the near-field excess every gradient-diffusion model carries).
+The width clause verifies no requirement as written; REQ-T14 is proposed for it (section G).
+The probe (T7, T9, `line70.png`), the same on 280x50 and 560x100 within 0.02: the solver's
+decay exponent is 1.077 (the model's own 1.087); the plume is 1.68 times the measured width
+at 5 M, 1.32 at 10 M, 1.05 at 20 M, 0.87 at 50 M, 0.80 at 80 M and 0.76 to 0.85 at 100 M
+(against the curve 1.77, 1.34, 1.06, 0.84, 0.78 and 0.77). Prediction (c) holds; (d) holds
+in the near field and at 50 M and fails at 100 M, against the data as against the curve.
+For the scenarios: in the free fall (the first 0.5 T_L, under 12 M on the row's axis) the
+model's plume is 1.3 to 1.7 times the measured width, and at the flight times of the spill,
+where the gap sensors' contour cells form, it is within 5% to 15% of the measured, under
+rather than over beyond 20 M. The free fall's factor does not transfer to the spill, which
+the row does not test (section A), so the sensors' distances to the contour (section B) are
+read as what they are on the model, the spill's basis being VAL-020's excess turbulence over
+the tops, an inference and not a measurement; prompt 70b's reading of those distances as
+bounds from the inside is withdrawn.
 
 **B. The sensitivity sweep (section B).**
 *Picture.* Two inputs set how wide a plume the model makes, and both are assumptions. The
@@ -357,12 +382,54 @@ is one known reason for a far-field width that reads high. Second, the plume's w
 the reference: gradient diffusion (D_t = nu_t / Sc_t, REQ-T13) grows sigma^2 as 2 D_t t from
 the start, while a real plume grows as sigma_v t until t is of order T_L and only then as a
 diffusion; so the model is expected wider than measured in the near field (t under T_L) and
-right, or close, in the far field. Where the breach plume sits on that axis: the supply's k / eps
-at the file's 5% and 0.1 m is 3.6 s, T_L about 2.3 s by the same formula, and the plume's
-flight to the gap sensors' height (0.5 m at 0.45 m/s) is 1.1 s, t / T_L about 0.5, the near
-field; its fall to the floor returns is about 7 s, t / T_L about 3, the transition. The row's
-near-field stations (5 and 10 M, t / T_L 0.2 and 0.4) are the ones that bear on the sensors,
-and the far-field ones (50 and 100 M) on the plume at the returns.
+right, or close, in the far field.
+
+**Where the breach plume sits on that axis** (revised 2026-10-30, prompt 70c; review 70
+round 2 B1 and Alex's decision of 2026-10-30). The supply's k / eps at the file's 5% and
+0.1 m is 3.6 s and T_L about 2.3 s by the same formula. The plume's path has three legs. The
+free fall from the ceiling to the gap sensors' height (0.5 m at 0.45 m/s) takes 1.1 s,
+t / T_L about 0.5, the row's 5 and 10 M stations; but the free-falling column passes between
+the gap sensors without reaching them (T4: the 2.5 m row's threshold cells span x 3.15 to
+4.20 m, the sensors stand at 2.7 and 4.8 m). It lands on the litho tool's top (x 3.2 to
+4.5 m, y 2.0 m) and spills over both edges into the gaps, and the contour cells nearest each
+gap sensor, the ones T6's distances are measured to, are set in that spill: 0.03 to 0.33 m
+beyond the tool's edges and 0.06 to 0.28 m above its top, 1.6 to 4.5 s after onset, t / T_L
+0.6 to 3.0 at each arm's own T_L (the table below, read from the arms' run files by
+`docs/reports/probe70/spill70c.py`: for each arm the reached cell nearest each sensor, the
+first stored frame at or above threshold there, a bound one frame spacing wide, 0.79 s on
+160x60 and 0.36 s on 320x120). On the row's axis that is 14 to 71 M, which the 20, 50 and
+80 M stations span (at the file's inputs 16 to 46 M, between 20 and 50 M). The fall to the
+floor returns takes about 7 s, t / T_L about 3, the 80 M station. The spill is a turning, sheared flow over an obstacle top, which the line source
+does not test. Alex's decision: the line source covers the free fall; the spill rests on
+ADR-014 H's carried limit from VAL-020, the turbulence over the equipment tops about 30% high
+in the model, which would widen the model's spill against the real one. That is an inference
+from VAL-020's reading of k over the impinging jet's wall, not a measurement of a scalar
+spreading there; measuring it would take a second case, a plume landing on a top and spilling
+off its edge with its concentration measured, which this design does not build. The door and
+hood sensors' nearest contour cells lie in the gaps below the tool tops, 1.3 to 1.6 m from
+them, at 1.2 to 3.4 T_L.
+
+| Arm (grid; T_L at its supply) | Sensor (cell centre, m) | Nearest contour cell (m) | Beyond the tool's edge, above its top (m) | First frame at or above (s) | After onset (s) | t / T_L | Row station (M) |
+|---|---|---|---|---|---|---|---|
+| i05 (160x60; 2.30 s) | above_gap_1 (2.675, 2.475) | (2.925, 2.225) | 0.28, 0.23 | 12.66 | 1.87 to 2.66 | 0.81 to 1.16 | 19 to 27 |
+| i05 | above_gap_2 (4.775, 2.475) | (4.575, 2.075) | 0.08, 0.08 | 13.45 | 2.66 to 3.45 | 1.16 to 1.50 | 27 to 35 |
+| gate (320x120; 2.30 s) | above_gap_1 (2.688, 2.488) | (2.963, 2.213) | 0.24, 0.21 | 11.96 | 1.60 to 1.96 | 0.70 to 0.85 | 16 to 20 |
+| gate | above_gap_2 (4.788, 2.488) | (4.588, 2.063) | 0.09, 0.06 | 14.49 | 4.13 to 4.49 | 1.80 to 1.95 | 42 to 46 |
+| i10 (160x60; 1.15 s) | above_gap_1 (2.675, 2.475) | (2.925, 2.225) | 0.28, 0.23 | 12.69 | 1.90 to 2.69 | 1.65 to 2.33 | 39 to 55 |
+| i10 | above_gap_2 (4.775, 2.475) | (4.525, 2.125) | 0.03, 0.13 | 13.48 | 2.69 to 3.48 | 2.33 to 3.02 | 55 to 71 |
+| i10_l30 (160x60; 3.46 s) | above_gap_1 (2.675, 2.475) | (2.875, 2.275) | 0.33, 0.28 | 12.88 | 2.08 to 2.88 | 0.60 to 0.83 | 14 to 20 |
+| i10_l30 | above_gap_2 (4.775, 2.475) | (4.525, 2.225) | 0.03, 0.23 | 12.88 | 2.08 to 2.88 | 0.60 to 0.83 | 14 to 20 |
+| i02_l05 (160x60; 2.88 s) | above_gap_1 (2.675, 2.475) | (2.925, 2.225) | 0.28, 0.23 | 12.60 | 1.81 to 2.60 | 0.63 to 0.90 | 15 to 21 |
+| i02_l05 | above_gap_2 (4.775, 2.475) | (4.575, 2.075) | 0.08, 0.08 | 14.18 | 3.39 to 4.18 | 1.18 to 1.45 | 28 to 34 |
+| sc02 (160x60; 2.30 s, i05's flow) | above_gap_1 (2.675, 2.475) | (2.875, 2.225) | 0.33, 0.23 | 12.66 | 1.87 to 2.66 | 0.81 to 1.16 | 19 to 27 |
+| sc02 | above_gap_2 (4.775, 2.475) | (4.525, 2.175) | 0.03, 0.18 | 13.45 | 2.66 to 3.45 | 1.16 to 1.50 | 27 to 35 |
+
+The row station is t / T_L times the row's T_L U / M, 23.6 M per Lagrangian time; each arm
+is read at its own supply's T_L, which is why the 10% at 0.1 m arm, with half the file's T_L,
+sits farthest along the row's axis. What
+follows for the threshold: the stations that bear on the sensors' contour and on the returns
+are 20, 50 and 80 M, and 5 and 10 M bear on the free fall alone (decision A and the
+threshold below).
 
 **The case** (`docs/reports/probe70/line70.py`): a domain 2.8 m long (110 M) and 0.5 m high,
 uniform inflow at U over the whole left edge carrying the source station's k and eps (the
@@ -395,13 +462,16 @@ during a slowdown (S6).
 `configs/validation_line_source.yaml`; `validation/line_source.py` with the reference curve,
 `plume_widths` and `decay_exponent`, pinned by `tests/test_line_source.py` on a planted Gaussian
 field and on the analytic decay; `validation.cases.load_line_source`. The rows report n, sigma
-at the five stations against the reference and the ratio, scored by the threshold Alex sets.
+at the stations 5, 10, 20, 50, 80 and 100 M against the digitised data (T8, the curve
+interpolating) and the ratio, scored by the threshold Alex sets.
 
-**Threshold, OPEN.** Proposed: the far-field ratio sigma / sigma_ref at 50 and 100 M within
-20% of one, and the decay exponent n within 0.1 of the model's own 1.087 (a check of the
-solver, not of the model, since the model's exponent is known to sit below the measured
-range); the near-field ratio at 5 and 10 M reported, not scored, with the source column's
-width beside it. An alternative: score against the digitised data directly once they are in.
+**Threshold, OPEN** (revised 2026-10-30, prompt 70c, review 70 round 2 S3). Recommended,
+with the options listed under decision A: the model's width over the measured (T8, the curve
+interpolating between the data's stations) at 20, 50 and 80 M within 20% of one, and the
+decay exponent n within 0.1 of the model's own 1.087 (a check of the solver, not of the
+model, since the model's exponent is known to sit below the measured range); the ratio at 5
+and 10 M reported, not scored, with the source column's width beside it; 100 M reported
+against T9's two estimates.
 
 **Trace.** The decay clause verifies REQ-S14 (the k-epsilon model as ADR-012 A names it; the
 row joins VAL-015's decaying-turbulence test under its Verified By). The width clause verifies
@@ -464,7 +534,13 @@ resolved range of the front on either grid); below that it is "below the resolve
 because the tail's value is the grid's (11 to 16 decades between 160x60 and 320x120 at the
 same inputs, T3 of the gate report against T3 here) and not the inputs'. The plume's width
 and the sensors' distances are the quantities the inputs move; the map says whether any
-position would have read it. The arrival times read from stored frames are bounded by the
+position would have read it. The distances are not bounds from VAL-024 in either direction
+(prompt 70c, review 70 round 2 B1): the contour cells nearest the gap sensors are set in the
+spill off the litho tool's top (section A's table), which the line source does not test; the
+model's spill rests on VAL-020's carried limit, the turbulence over the tool tops about 30%
+high (ADR-014 H), which would widen the model's spill against the real one, an inference
+from that case's reading of k and not a measurement of a scalar there. The arrival times
+read from stored frames are bounded by the
 frame spacing (T5's caption) and are not latencies; section D's in-march maps remove that
 bound.
 
@@ -719,7 +795,7 @@ at step 2.
 
 | Step | Prompt | Builds | Tests | Validation row |
 |---|---|---|---|---|
-| 0 | 71 | The coverage debt: tests for the 66 uncovered statements of table Cv2 of the gate report (47 `raise` lines, 19 fallbacks and early returns), each exercised by its own test or recorded as unreachable with the reason; VAL-024's case file, loader, readers and harness rows, and Warhaft's plume widths digitised from the JFM paper | `tests/test_line_source.py`; the new rejection-path tests across `test_config.py`, `test_io_manager.py`, `test_solver_transport.py`, `test_turbulence.py`, `test_mesh.py`, `test_time_integration.py`, `test_forces.py`, `test_particles.py`, `test_staggered.py`, `test_solver_staggered.py` | VAL-024, scored by Alex's threshold |
+| 0 | 71 | The coverage debt: tests for the 66 uncovered statements of table Cv2 of the gate report (47 `raise` lines, 19 fallbacks and early returns), each exercised by its own test or recorded as unreachable with the reason; VAL-024's case file, loader, readers and harness rows, with the digitised widths of T8 (`digitised70c.md`) as the row's reference data and the Anand and Pope curve as the interpolant between their stations | `tests/test_line_source.py`; the new rejection-path tests across `test_config.py`, `test_io_manager.py`, `test_solver_transport.py`, `test_turbulence.py`, `test_mesh.py`, `test_time_integration.py`, `test_forces.py`, `test_particles.py`, `test_staggered.py`, `test_solver_staggered.py` | VAL-024, scored by Alex's threshold |
 | 1 | 72 | The sensitivity sweep (section B) as a report with its generator and tables; the clean-out's third grid (condition 2) as a run and a row in the same report | none in `src/`; the report's check mode | the sweep's tables; no row |
 | 2 | 73 | `monitor.py` (AlertMonitor, Alert, sensor_cells moved), the march hook, `/transport/alerts/`, the runner's summary | `tests/test_monitor.py` (unit: thresholds by size and by class, the cell rule, open and close, the iso_class form, REQ-A06's bytes), `tests/test_alert_latency.py` | VAL-009 |
 | 3 | 74 | `ArrivalTracker`, `/arrival/`, the checkpoint arrays and restart, `latencies(onsets)` and REQ-A04's per-sensor latency in `RunRecord` and the summary; `placement.arrival_from_frames` | `tests/test_monitor.py` (the tracker on planted series, restart bitwise), `tests/test_time_integration.py` (the map against the frames' map on a coarse run) | none; REQ-A04's integration test |
@@ -901,9 +977,11 @@ prompt 70b), probed on both of its grids and grid-converged in its readings, the
 proposed and OPEN with the 100 M station's failure named; decision B's reading is the
 plume's edge, with the width's change over the whole range (0.95 to 1.20 m on the sensors'
 row) and the sensors' distances to the contour (5.7 cells at the least on 160x60, 15.6 on
-320x120) as the numbers the sweep will state beside every latency, and the row's near-field
-factor saying the model's plume at the sensors is the wider one; decision D's maps are the
-instrument the sweep already needed.
+320x120) as the numbers the sweep will state beside every latency, and the row's factors at
+the spill's flight times saying the model's plume where the sensors' contour cells form is
+within 15% of the measured and under it beyond 20 M, so those distances are read on the
+model as they stand, the spill's own basis being VAL-020's (section A, prompt 70c);
+decision D's maps are the instrument the sweep already needed.
 
 **Tables** (copied from `docs/reports/probe70/tables70.md` at the end of prompt 70b, T7's third column relabelled in prompt 70c from the cell's second moment to the plume's measured width at the source column, review 70 round 2 S1; the generated file is the record and `tables70.py --check` compares it with the records).
 
@@ -1423,7 +1501,9 @@ instrument the sweep already needed.
 - REQ-A01, A03 and A05 are reworded to testable forms if Alex accepts G; VAL-009's criterion
   becomes the step identity.
 - The line source becomes the solver's first scalar-spreading validation row, the breach's
-  own mechanism, and the spreading limit is bounded rather than open; VAL-021 stays closed.
+  own mechanism, and the spreading limit is bounded against measurement in the free fall
+  and at the returns; the spill over the equipment tops stays on VAL-020's basis (ADR-014 H,
+  an inference from k); VAL-021 stays closed.
 
 ## Alternatives considered
 
