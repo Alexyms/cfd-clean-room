@@ -9,7 +9,9 @@ digitised and prediction (d) rescored against them; the spill off the equipment 
 the gap sensors' nearest contour cells are set, stated as outside what the row tests, with
 VAL-020's carried limit as its basis, by Alex's decision of 2026-10-30; the threshold's
 stations moved to the spill's and the returns' flight times; the arrival map given an
-events axis), before the Phase 5 build,
+events axis), and a third time on 2026-10-30 on review 70 round 3 (prompt 70d: the model
+rerun at Warhaft's own mesh length and prediction (d) rescored on it, the threshold set by
+Alex, the spill table generated from the records), before the Phase 5 build,
 from the solver and the scenario machinery as ADR-010 to ADR-014 record them, the Phase 4 gate
 report (`docs/reports/phase4_scenarios_report.md`, its decision of 2026-10-29 and its tables
 S1, B1 to B3 and G1), ADR-014 sections C and H, SYSTEM.md's REQ-A01 to A06, and the probes
@@ -57,9 +59,10 @@ diffusion. The breach plume's free fall from the ceiling to the gap sensors' hei
 half a Lagrangian time scale of the supply's turbulence, the near field, but the free-falling
 column passes between the gap sensors without reaching them; the contour cells nearest them
 are set in the spill off the litho tool's top at 0.6 to 3 Lagrangian times (section A's
-table; review 70 round 2 B1), and the floor returns are reached at about three, so the row's
-stations from 20 to 80 M bear on the sensors and the returns, and 5 and 10 M on the free fall
-alone. The plane jet the first version
+table; review 70 round 2 B1), and the floor returns are reached at about three at the file's
+supply (six at the arm with the shortest time scale), so the row's stations 20 and 50 M bear
+on the sensors, 80 M on the returns, and 5 and 10 M on the free fall alone. The plane jet the
+first version
 proposed tests shear-made turbulence instead, and review 70 B2 found its closed domain's outer
 stream decelerating by a third or more across the fit range, so its records are kept as the
 reason and the jet is the alternative not taken (section A's last paragraph).
@@ -69,7 +72,7 @@ source station's k and eps, walls 25 cm from a plume under 3 cm wide, a fixed-fl
 pressure outlet; the width read as the second moment of the profile; the reference the
 primary measurements, Warhaft's figures 4 and 5 digitised in prompt 70c (T8: 25 half-widths
 for sources at 20, 52 and 60 M), with the Anand and Pope (1983) curve in the form
-Viswanathan and Pope plot [13], which the 52 M data confirm within 5% from 8 to 80 M, as
+Viswanathan and Pope plot [13], which the 52 M data confirm within 5% from 30 to 80 M, as
 the interpolant between the data's stations and the only estimate at 100 M (section A, the
 data against the curve).
 (2) Stapountzis et al. (1986) [12], the companion experiment at a higher intensity (4.7% at
@@ -79,29 +82,35 @@ it stands as the cross-check and could become a second row at a second intensity
 wanted.
 (3) The plane jet: not taken, for the reasons above.
 *Recommendation.* (1). The row is `val024_560x100` with `val024_280x50` (the probe's grid)
-reported beside it; the reference is the digitised data of T8, the curve interpolating
-between their stations. Threshold proposed and OPEN (revised 2026-10-30, prompt 70c, review
-70 round 2 B1 and S3: one recommendation, the rest options). Recommended: the solver's decay
-exponent within 0.1 of the model's 1.087, and the model's width over the measured at 20, 50
-and 80 M within 20% of one. Those stations' flight times (t / T_L 0.85, 2.1 and 3.4) span
-the spill off the tool top, where the gap sensors' nearest contour cells are set (0.6 to
-3 T_L over the sweep's arms, 0.7 to 1.95 at the file's inputs, section A's table), and the
-floor returns (about 3); 5 and 10 M are reported, not
-scored, as the near-field statement (the free fall, which never reaches the sensors), and
-100 M is reported against T9's two estimates, since the 52 M data end at 80 M. On the probe
-this passes at 20 and 50 M (1.05 and 0.87) and sits on the band's edge at 80 M (0.80 on
-both grids, the digitising good to about 2%), so whether a fifth under at the returns is
-acceptable is the decision. Options: (a) 20% at 20 and 50 M with 80 and 100 M reported
-(passes with margin, leaves the returns unscored); (b) 25% at 20, 50 and 80 M (passes; a
-wider band); (c) the earlier proposal, 20% at 50 and 100 M against the curve (fails at
-100 M by three points and rests there on a theory the data do not reach); (d) 25% at 10 to
-80 M (fails at 10 M, 1.32, the near-field excess every gradient-diffusion model carries).
+reported beside it, both at Warhaft's own mesh length of 2.5 cm; the reference is the
+digitised data of T8, the 52 M source's points interpolated log-log between their stations
+(T9). The threshold is Alex's, below.
+*Threshold: Alex's decision of 2026-10-30* (prompt 70d, on review 70 round 3 B1). The solver's
+decay exponent within 0.1 of the model's own 1.087, and the model's plume width within 20% of
+the measured at 20 and 50 M, the stations inside the range that bears on the sensors (14 to
+71 M on the row's axis, section A's table). 5 and 10 M are reported, not scored (the free
+fall, which never reaches the sensors). 80 M is reported, not scored, and is recorded as a
+carried limit: the model's plume is about a fifth narrower than measured far downstream, near
+the returns (0.784 and 0.783 of the measured at 80 M on 280x50 and 560x100; 0.75 to 0.84 at
+100 M by T9's two estimates, where the 52 M data end). On the probe the scored stations pass,
+1.033 and 1.030 at 20 M and 0.853 and 0.852 at 50 M, and T12 reads 1.16 at 14 M falling to
+0.805 at 71 M across the range itself.
+*Options not taken.* (a) The builder's recommendation of prompt 70c, 20% at 20, 50 and 80 M:
+it fails at 80 M on both grids (0.784 and 0.783), by more than the digitising can account for
+(0.3% to 0.5% of the half-width there, the two figures' readings of that point 1.4% apart),
+so it would score the carried limit and fail it. (b) 25% at 20, 50 and 80 M: passes at 80 M by
+3 points, a wider band that scores the far field as acceptable. (c) The earlier proposal, 20%
+at 50 and 100 M against the curve: fails at 100 M by three points (0.768 and 0.767) and rests
+there on a theory the data do not reach. (d) 25% at 10 to 80 M: fails at 10 M, 1.30, the
+near-field excess every gradient-diffusion model carries.
 The width clause verifies no requirement as written; REQ-T14 is proposed for it (section G).
-The probe (T7, T9, `line70.png`), the same on 280x50 and 560x100 within 0.02: the solver's
-decay exponent is 1.077 (the model's own 1.087); the plume is 1.68 times the measured width
-at 5 M, 1.32 at 10 M, 1.05 at 20 M, 0.87 at 50 M, 0.80 at 80 M and 0.76 to 0.85 at 100 M
-(against the curve 1.77, 1.34, 1.06, 0.84, 0.78 and 0.77). Prediction (c) holds; (d) holds
-in the near field and at 50 M and fails at 100 M, against the data as against the curve.
+The probe (T7 for the first run at 2.54 cm, T9 for the rerun at 2.5 cm, `line70.png`), the
+same on 280x50 and 560x100 within 0.02: the solver's decay exponent is 1.077 (the model's own
+1.087); the plume is 1.65 to 1.66 times the measured width at 5 M, 1.30 at 10 M, 1.03 at
+20 M, 0.853 at 50 M, 0.784 and 0.783 at 80 M and 0.75 to 0.84 at 100 M (against the curve,
+T9's last column: 1.77 and 1.75, 1.35 and 1.34, 1.06, 0.84, 0.785 and 0.784, and 0.77 at
+100 M). Prediction (c) holds; (d) holds in the near field and at 20 and 50 M and fails at
+80 and 100 M, against the data as against the curve.
 For the scenarios: in the free fall (the first 0.5 T_L, under 12 M on the row's axis) the
 model's plume is 1.3 to 1.7 times the measured width, and at the flight times of the spill,
 where the gap sensors' contour cells form, it is within 5% to 15% of the measured, under
@@ -325,8 +334,10 @@ and he reports their half-width at half the centreline value, sigma = 0.849 time
 (T8, by `digitise70c.py`, whose docstring states the method and its precision). Viswanathan
 and Pope (2008, Phys. Fluids 20) [13], open access, models Warhaft's single line source and
 consolidates his parameters in its table I, which is Sawford's refit of the same data: grid
-mesh M = 2.54 cm (the paper's 2.5 cm, a 1.6% difference that enters the row through the
-flight time alone; the probe keeps 2.54 cm and distances are compared in mesh lengths); mean
+mesh M = 2.54 cm (Warhaft's own grid is 2.5 cm, a 1.6% difference; the first probe ran at
+2.54 cm and compared its widths in metres with the data converted at 2.5 cm, which handed
+the model the ratio of the two meshes, review 70 round 3 B1, so the rerun of prompt 70d puts
+model, data and curve on 2.5 cm and the row runs there); mean
 speed U = 7 m/s (Re_M = U M / nu about 11,800 in air); the wire at
 x_o / M = 20, 52 and 60 from the grid, source sizes 1.27e-4 and 2.5e-5 m; the velocity standard
 deviations at one mesh length sigma_u 2.44 m/s and sigma_v = sigma_w 2.27 m/s, decaying as
@@ -348,24 +359,29 @@ gives sigma_v = 0.143 m/s and sigma_u = 0.154 m/s (an intensity of 2.2%), k_o = 
 eps_o = m k_o U / x_o = 0.239 m^2/s^3, k / eps = 0.135 s, and the Lagrangian time scale
 T_L = (4 / (3 C_0)) k / eps = 0.086 s; the reference width grows from 4.74 mm (0.186 M) at
 exactly 10 M downstream (t = 0.42 T_L, where sigma is still nearly sigma_v t) to 25.0 mm
-(0.98 M) at 100 M (t = 4.2 T_L, where sigma^2 grows as t^(2 - m)); the probe reads the
-curve at its cell centres, within 0.2 M of the stations, so its tabulated reference values
-differ from these in the last figure.
+(0.98 M) at 100 M (t = 4.2 T_L, where sigma^2 grows as t^(2 - m)); these are at 2.54 cm. At
+Warhaft's 2.5 cm the same curve in mesh lengths is the same (4.66 mm, 0.187 M, at 10 M;
+24.6 mm, 0.983 M, at 100 M) and k_o is unchanged, while eps_o = m k_o U / x_o is 0.243
+m^2/s^3, k / eps 0.133 s and T_L 0.084 s, so the row's time scale in mesh lengths, T_L U / M
+= 23.6 M, is the same at both. The first probe read the curve at its cell centres, within 0.2
+M of the stations, so its tabulated reference values (T7) differ from these in the last
+figure; T9 reads the model and the data at the stations.
 
-**The data against the curve** (prompt 70c; T8 and T10). For the 52 M source the digitised
-points lie on the Anand and Pope curve within 5% from 8 to 80 M (data over curve 1.03 at
-30 M, 0.96 and 0.97 at 60 M, 0.98 and 0.99 at 80 M); at 8 M the two wires differ by 20%
-(the 0.025 mm wire 1.11 to 1.14 of the curve, the 0.127 mm wire 0.92 and 0.93) with the
-curve between them; within 1 M of the source the fine wire's points scatter from 0.9 to 1.2
-of it. The data and the curve differ where the curve's parameters are not the 52 M
-station's: for the 20 M source the curve is wide by 19% at 7.7 M and 9% at 33 M (its refit
-v' at 20 M is 4.5% above table 1's, and the 0.127 mm wire's near-field width is the smaller
-one at 52 M too) and narrow by 16% at 133 M (x' / x_o 6.6), where the data's growth is
-steeper than the curve's t^(0.3); for the 60 M source it is within 3% at 23 and 33 M and
-12% wide at 73 M. The 52 M data end at 80 M, so the 100 M station has no measurement
-behind it: the 60 to 80 M slope (0.69) extrapolated gives 25.3 mm, the 20 M source read at
-the same x' / x_o through figure 10's collapse (half-width over the source station's
-integral scale) gives 22.5 mm, and the curve 25.0 mm. Stapountzis et al.'s eight sigma_m
+**The data against the curve** (prompt 70c; T8 and T10; the curve at Warhaft's 2.5 cm since
+prompt 70d, which raised the data over the curve by 1.6% from prompt 70c's values). For the
+52 M source the digitised points lie on the Anand and Pope curve within 5% from 30 to 80 M
+(data over curve 1.05 at 30 M, 0.97 and 0.98 at 60 M, 1.01 and 0.99 at 80 M); at 8 M the two
+wires differ by 20% (the 0.025 mm wire 1.12 and 1.16 of the curve, the 0.127 mm wire 0.93 to
+1.07 over its three readings) with the curve between them; within 1 M of the source the fine
+wire's points scatter from 0.9 to 1.2 of it. The data and the curve differ where the curve's
+parameters are not the 52 M station's: for the 20 M source the curve is wide by 18% at 7.7 M
+and 8% at 33 M (its refit v' at 20 M is 4.5% above table 1's, and the 0.127 mm wire's
+near-field width is the smaller one at 52 M too) and narrow by 18% at 133 M (x' / x_o 6.6),
+where the data's growth is steeper than the curve's t^(0.3); for the 60 M source it is within
+2% at 23 and 33 M and 11% wide at 73 M. The 52 M data end at 80 M, so the 100 M station has
+no measurement behind it: the 60 to 80 M slope (0.69) extrapolated gives 25.3 mm, the 20 M
+source read at the same x' / x_o through figure 10's collapse (half-width over the source
+station's integral scale) gives 22.5 mm, and the curve 24.6 mm. Stapountzis et al.'s eight sigma_m
 points (figure 7: a source at 19.3 M, U 4.35 m/s, intensity 4.7% at the source, M 2.54 cm)
 lie within 10% of the same Langevin curve with that paper's own parameters at seven of the
 eight stations and at 0.83 at the eighth (9.4 M), across 0.04 to 15 M (T10); the paper plots
@@ -431,10 +447,12 @@ follows for the threshold: the stations that bear on the sensors' contour and on
 are 20, 50 and 80 M, and 5 and 10 M bear on the free fall alone (decision A and the
 threshold below).
 
-**The case** (`docs/reports/probe70/line70.py`): a domain 2.8 m long (110 M) and 0.5 m high,
+**The case** (`docs/reports/probe70/line70.py`): a domain 2.8 m long (110 M at the first
+probe's 2.54 cm, 112 M at the rerun's 2.5 cm) and 0.5 m high,
 uniform inflow at U over the whole left edge carrying the source station's k and eps (the
 inlet's `turbulence_intensity` sqrt(k_o / 1.5) / U = 0.0209 and `dissipation_length`
-k_o^(3/2) / eps_o = 0.0242 m), no-slip walls top and bottom 25 cm from the centreline, so far
+k_o^(3/2) / eps_o = 0.0242 m at 2.54 cm, 0.0238 m at 2.5 cm, where the row runs), no-slip
+walls top and bottom 25 cm from the centreline, so far
 from a plume under 3 cm wide that their shear layers (a few centimetres thick by the end) do
 not reach it and the stream the plume sits in stays uniform, and a fixed-flow outlet over the
 whole right edge stating no velocity, so the domain has no pressure outlet. The source is a
@@ -463,15 +481,25 @@ during a slowdown (S6).
 `plume_widths` and `decay_exponent`, pinned by `tests/test_line_source.py` on a planted Gaussian
 field and on the analytic decay; `validation.cases.load_line_source`. The rows report n, sigma
 at the stations 5, 10, 20, 50, 80 and 100 M against the digitised data (T8, the curve
-interpolating) and the ratio, scored by the threshold Alex sets.
+interpolating) and the ratio, scored by Alex's threshold (below).
 
-**Threshold, OPEN** (revised 2026-10-30, prompt 70c, review 70 round 2 S3). Recommended,
-with the options listed under decision A: the model's width over the measured (T8, the curve
-interpolating between the data's stations) at 20, 50 and 80 M within 20% of one, and the
-decay exponent n within 0.1 of the model's own 1.087 (a check of the solver, not of the
-model, since the model's exponent is known to sit below the measured range); the ratio at 5
-and 10 M reported, not scored, with the source column's width beside it; 100 M reported
-against T9's two estimates.
+**Threshold: Alex's decision of 2026-10-30** (prompt 70d, review 70 round 3 B1; the options
+not taken are listed under decision A). The decay exponent n within 0.1 of the model's own
+1.087 (a check of the solver, not of the model, since the model's exponent is known to sit
+below the measured range); the model's width over the measured (T8, the curve interpolating
+between the data's stations) within 20% of one at 20 and 50 M, the stations inside the range
+that bears on the sensors, 14 to 71 M on the row's axis (the table above); the ratio at 5 and
+10 M reported, not scored, with the source column's width beside it (the free fall, which
+never reaches the sensors); 80 M reported, not scored; 100 M reported against T9's two
+estimates. *The carried limit.* Far downstream, near the floor returns, the model's plume is
+about a fifth narrower than measured: 0.784 and 0.783 of the measured width at 80 M on the
+two grids (the last station the 52 M source was measured at), 0.75 to 0.84 at 100 M, and it
+is recorded as a carried limit, not scored. It begins inside the spill's upper range (T12:
+0.836 at 60 M, 0.805 at 71 M). It bears on the readings that depend on the plume's far
+field, the hood sensor's contour cells at 34 to 104 M on the row's axis (T11) and the
+returns, where a narrower plume reaches a sensor off its axis later or not at all, so a
+"never" or a latency read there on the model is not conservative by that much (an inference
+from the width, not a measured detection). It is stated beside any such result.
 
 **Trace.** The decay clause verifies REQ-S14 (the k-epsilon model as ADR-012 A names it; the
 row joins VAL-015's decaying-turbulence test under its Verified By). The width clause verifies
@@ -860,7 +888,10 @@ section A, committed before its probe ran).**
 **Method.** `jet70.py` (T1; its docstring fixes the readings), `configs70.py` and `run70.sh`
 (T2 to T6; the arms, the readings in `tables70.py`'s docstring), `line70.py` (T7, prompt
 70b; its docstring fixes the case, the reference curve and the readings; run on 280x50 and
-560x100 with two processes on the machine, after the slowdown). Wall times were taken with
+560x100 with two processes on the machine, after the slowdown; rerun on both grids at
+Warhaft's 2.5 cm in prompt 70d, `--mesh 0.025`, commit ba79020, two processes, flow solves
+of 1,381 and 2,607 outer iterations by the rule in 94 and 530 s, scalar marches steady in 30
+and 125 s, decay exponents 1.0776 and 1.0768, records `line_<grid>_m25.json`). Wall times were taken with
 six processes sharing the machine (two jet solves and four breach arms), one BLAS thread each;
 the revised jet solves ran three at a time with the first fine-grid solve and the Schmidt arm.
 *The slowdown (review 70 S6).* Between about 11:20 and 14:10 on 2026-10-29 the machine ran
@@ -939,23 +970,31 @@ within 0.01, inside the orchestrator's 1.0 to 1.3; both flow solves stopped by t
 model says it should, and more slowly than the tunnel's (1.4 in the refit, 1.16 to 1.37
 in the literature [14]).
 
-*Prediction (d): HOLDS in the near field and at 50 M, FAILS at 100 M; scored in prompt 70b
-against the reference curve, provisionally, and rescored in prompt 70c against the digitised
-data with the same verdict (T9).* Against the data the plume is 1.68 times the measured
-width at 5 M, 1.32 at 10 M, 1.05 at 20 M, 0.87 at 50 M, 0.80 at 80 M (the last station the
-52 M source was measured at) and 0.76 or 0.85 at 100 M by the two estimates of T9, the same
-on both grids to two figures; within 20% at 50 M, at the band's edge at 80 M, and 15% to 24%
-under at 100 M, where no 52 M datum exists. Against the curve, the same on both grids within
-0.02 (to two figures at 5 and 10 M, three at 20, 50 and 100 M): 1.75 and 1.77 at 5 M, 1.36
-and 1.34 at 10 M, 1.06 at 20 M, 0.84 at 50 M, 0.77 at 100 M (T7, `line70.png`). Wider
-than the reference in the near field, as predicted, and by the same factor on a cell half
-the size (the plume's width at the source column 1.0 and 0.7 mm against the reference's
-2.6 mm at 5 M), so the near-field excess is gradient diffusion's, not the cell's: sigma^2 =
-2 D_t t from the start against the reference's sigma_v^2 t^2. Within 20%
-at 50 M (t / T_L 2.1) and 23% under at 100 M (4.2), the model's far-field diffusivity
-smaller than the Langevin reference's, with the slower decay of its turbulence working the
-other way; the crossing is near 25 M. The scalar marches reached a steady field in 1.5 and
-1.3 simulated seconds (27 and 110 s wall).
+*Prediction (d): HOLDS in the near field and at 20 and 50 M, FAILS at 80 and 100 M; scored
+in prompt 70b against the reference curve, provisionally, rescored in prompt 70c against the
+digitised data, and in prompt 70d with the model and the data on one mesh length (T9).*
+Against the data the plume is 1.65 to 1.66 times the measured width at 5 M, 1.30 at 10 M,
+1.03 at 20 M, 0.853 at 50 M, 0.784 and 0.783 at 80 M (the last station the 52 M source was
+measured at; 280x50 and 560x100) and 0.75 or 0.84 at 100 M by the two estimates of T9, the
+same on both grids within 0.02; within 20% at 20 and 50 M, 1.6 points outside it at 80 M, and
+16% to 25% under at 100 M, where no 52 M datum exists. *Correction (review 70 round 3 B1).*
+Prompt 70c's T9 read 0.80 at 80 M, "on the band's edge", because it compared the first
+probe's widths in metres, run at 2.54 cm, with the data converted at 2.5 cm, which handed the
+model the ratio of the two meshes (1.6%); its 20 and 50 M ratios, 1.05 and 0.87, were 1.6%
+high for the same reason. The rerun at 2.5 cm and the first probe's widths in mesh lengths
+agree to 0.07% (T9a), so a rescale would have given the same ratios. Against the curve, the
+same on both grids within 0.02 (to two figures at 5 and 10 M, three at 20, 50 and 100 M):
+1.75 and 1.77 at 5 M, 1.36 and 1.34 at 10 M, 1.06 at 20 M, 0.84 at 50 M, 0.77 at 100 M (T7,
+the first probe, `line70.png`; T9's last column, the rerun, is the same within 0.02).
+Wider than the reference in the near field, as predicted, and by the same factor on a cell
+half the size (the plume's width at the source column 1.0 and 0.7 mm against the
+reference's 2.6 mm at 5 M), so the near-field excess is gradient diffusion's, not the cell's:
+sigma^2 = 2 D_t t from the start against the reference's sigma_v^2 t^2. Within 20%
+at 50 M (t / T_L 2.1), 22% under at 80 M (3.4) and 23% under at 100 M (4.2), the model's
+far-field diffusivity smaller than the Langevin reference's, with the slower decay of its
+turbulence working the other way; the crossing is near 25 M. The scalar marches reached a
+steady field in 1.5 and 1.3 simulated seconds (27 and 110 s wall; 30 and 125 s in the
+rerun).
 
 *The builder's (c) and (d).* (c) held as written (within 0.02). (d) held in the direction
 and the size it expected (a far-field ratio near 0.8, 0.77 measured), but for a reason it
@@ -974,7 +1013,8 @@ the reached set at every arm.
 
 *What the results change in the design.* Decision A's row is the line source (Alex,
 prompt 70b), probed on both of its grids and grid-converged in its readings, the threshold
-proposed and OPEN with the 100 M station's failure named; decision B's reading is the
+Alex's (20% at 20 and 50 M, prompt 70d) with the far field's shortfall, 0.784 at 80 M and
+under at 100 M, recorded as a carried limit and not scored; decision B's reading is the
 plume's edge, with the width's change over the whole range (0.95 to 1.20 m on the sensors'
 row) and the sensors' distances to the contour (5.7 cells at the least on 160x60, 15.6 on
 320x120) as the numbers the sweep will state beside every latency, and the row's factors at
@@ -983,7 +1023,7 @@ within 15% of the measured and under it beyond 20 M, so those distances are read
 model as they stand, the spill's own basis being VAL-020's (section A, prompt 70c);
 decision D's maps are the instrument the sweep already needed.
 
-**Tables** (copied from `docs/reports/probe70/tables70.md` at the end of prompt 70b, T7's third column relabelled in prompt 70c from the cell's second moment to the plume's measured width at the source column, review 70 round 2 S1; the generated file is the record and `tables70.py --check` compares it with the records).
+**Tables** (copied from `docs/reports/probe70/tables70.md` at the end of prompt 70b, T7's third column relabelled in prompt 70c from the cell's second moment to the plume's measured width at the source column, review 70 round 2 S1, and its caption in prompt 70d as the first probe at 2.54 cm; the generated file is the record and `tables70.py --check` compares it with the records).
 
 #### T1. The plane jet's spreading rate (probe A, jet70.py), standard k-epsilon on the product's model and solver keys
 
@@ -1426,55 +1466,68 @@ decision D's maps are the instrument the sweep already needed.
 | gate_320x120 | 320x120 | 5 | above_gap_2 | 0.470 | 18.8 | no |
 | gate_320x120 | 320x120 | 5 | hood_entry | 1.425 | 57.0 | no |
 
-#### T7. The line source in decaying grid turbulence (prompt 70b, line70.py): the model's decay exponent and the plume's width against the reference curve (Anand and Pope's displacement variance with Warhaft's parameters, Viswanathan and Pope 2008 equations 11 to 15) at five stations downstream of the source
+#### T7. The line source in decaying grid turbulence (prompt 70b, line70.py, the first probe at M = 2.54 cm as Viswanathan and Pope tabulate it; the rerun at Warhaft's 2.5 cm is T9's): the model's decay exponent and the plume's width against the reference curve (Anand and Pope's displacement variance with Warhaft's parameters, Viswanathan and Pope 2008 equations 11 to 15) at five stations downstream of the source
 
 | Grid | Cell (mm) | Plume width at the source column (mm) | Outer iterations | Stop | Flow wall (s) | n (model's own 1.087) | Scalar march: steps, stop, wall (s) | sigma / sigma_ref at 5 M (t / T_L 0.2) | 10 M (0.4) | 20 M (0.9) | 50 M (2.1) | 100 M (4.2) | sigma model, ref at 100 M (mm) |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | 280x50 | 10 | 1.02 | 1381 | error_estimate_and_continuity | 89 | 1.0775 | 3063, steady, 27 | 1.754 | 1.355 | 1.059 | 0.843 | 0.768 | 19.2, 25.0 |
 | 560x100 | 5 | 0.73 | 2609 | error_estimate_and_continuity | 512 | 1.0767 | 5079, steady, 110 | 1.767 | 1.339 | 1.056 | 0.842 | 0.768 | 19.2, 25.0 |
 
-**Digitised data** (prompt 70c; copied from `docs/reports/probe70/digitised70c.md`, generated by `digitise70c.py` from the marker centres it records; the generated file is the record).
+**Digitised data** (prompt 70c, rerun against it in prompt 70d; copied from `docs/reports/probe70/digitised70c.md`, generated by `digitise70c.py` from the marker centres it records and the probe records; `--check` compares it with them; the generated file is the record).
 
-#### T8. Warhaft (1984): the mean temperature profile's half-width behind a single heated wire at x_o / M = 20, 52 and 60, grid M = 0.025 m, U = 7 m/s, from the figures named; sigma = 0.849 x half-width; the reference curve at the same x' / M with the source station's sigma_v and t_o (the probe's constants); t / T_L with the 52 M station's T_L
+#### T8. Warhaft (1984): the mean temperature profile's half-width behind a single heated wire at x_o / M = 20, 52 and 60, grid M = 0.025 m, U = 7 m/s, from the figures named; sigma = 0.849 x half-width; the reference curve at the same x' / M with the source station's sigma_v and t_o (the probe's constants, at M = 0.025 m); t / T_L with the 52 M station's T_L
 
 | Source x_o / M | Wire | Figure, marker | x' / M | Half-width / M | sigma (mm) | sigma / M | t / T_L | Reference sigma (mm) | Data / reference |
 |---|---|---|---|---|---|---|---|---|---|
-| 20 | 0.127 mm | Warhaft figure 5, filled circle | 7.71 | 0.2402 | 5.10 | 0.2040 | - | 6.28 | 0.81 |
-| 20 | 0.127 mm | Warhaft figure 5, filled circle | 32.93 | 0.7314 | 15.52 | 0.6210 | - | 17.10 | 0.91 |
-| 20 | 0.127 mm | Warhaft figure 5, filled circle | 91.93 | 1.3401 | 28.44 | 1.1378 | - | 28.90 | 0.98 |
-| 20 | 0.127 mm | Warhaft figure 5, filled circle | 132.58 | 1.8514 | 39.30 | 1.5719 | - | 33.93 | 1.16 |
-| 52 | 0.025 mm | Warhaft figure 4(a), filled circle | 0.22 | 0.0123 | 0.26 | 0.0104 | 0.01 | 0.22 | 1.20 |
-| 52 | 0.025 mm | Warhaft figure 4(a), filled circle | 0.55 | 0.0173 | 0.37 | 0.0147 | 0.02 | 0.40 | 0.91 |
-| 52 | 0.025 mm | Warhaft figure 4(a), filled circle | 0.89 | 0.0279 | 0.59 | 0.0237 | 0.04 | 0.59 | 1.01 |
-| 52 | 0.025 mm | Warhaft figure 4(b), filled circle | 3.59 | 0.0883 | 1.87 | 0.0750 | 0.15 | 1.92 | 0.98 |
-| 52 | 0.025 mm | Warhaft figure 4(a), filled circle | 3.67 | 0.0840 | 1.78 | 0.0713 | 0.16 | 1.96 | 0.91 |
-| 52 | 0.025 mm | Warhaft figure 4(b), filled circle | 5.20 | 0.1413 | 3.00 | 0.1199 | 0.22 | 2.67 | 1.12 |
-| 52 | 0.025 mm | Warhaft figure 4(a), filled circle | 5.69 | 0.1416 | 3.01 | 0.1203 | 0.24 | 2.89 | 1.04 |
-| 52 | 0.127 mm | Warhaft figure 4(a), cross | 7.97 | 0.1703 | 3.62 | 0.1446 | 0.34 | 3.89 | 0.93 |
-| 52 | 0.025 mm | Warhaft figure 4(a), filled circle | 7.99 | 0.2098 | 4.45 | 0.1781 | 0.34 | 3.90 | 1.14 |
-| 52 | 0.127 mm | Warhaft figure 5, open circle | 8.09 | 0.1955 | 4.15 | 0.1660 | 0.34 | 3.94 | 1.05 |
-| 52 | 0.025 mm | Warhaft figure 4(b), filled circle | 8.13 | 0.2064 | 4.38 | 0.1752 | 0.34 | 3.96 | 1.11 |
-| 52 | 0.127 mm | Warhaft figure 4(b), cross | 8.31 | 0.1749 | 3.71 | 0.1485 | 0.35 | 4.03 | 0.92 |
-| 52 | 0.127 mm | Warhaft figure 5, open circle | 29.90 | 0.5558 | 11.80 | 0.4719 | 1.27 | 11.45 | 1.03 |
-| 52 | 0.127 mm | Warhaft figure 4(b), cross | 30.16 | 0.5610 | 11.91 | 0.4763 | 1.28 | 11.52 | 1.03 |
-| 52 | 0.127 mm | Warhaft figure 5, open circle | 59.99 | 0.8306 | 17.63 | 0.7051 | 2.54 | 18.45 | 0.96 |
-| 52 | 0.127 mm | Warhaft figure 4(b), cross | 60.24 | 0.8448 | 17.93 | 0.7172 | 2.55 | 18.49 | 0.97 |
-| 52 | 0.127 mm | Warhaft figure 4(b), cross | 80.04 | 1.0301 | 21.86 | 0.8746 | 3.39 | 21.99 | 0.99 |
-| 52 | 0.127 mm | Warhaft figure 5, open circle | 80.45 | 1.0161 | 21.57 | 0.8627 | 3.41 | 22.05 | 0.98 |
-| 60 | 0.127 mm | Warhaft figure 5, cross | 22.89 | 0.3998 | 8.48 | 0.3394 | - | 8.74 | 0.97 |
-| 60 | 0.127 mm | Warhaft figure 5, cross | 32.64 | 0.5369 | 11.40 | 0.4558 | - | 11.48 | 0.99 |
-| 60 | 0.127 mm | Warhaft figure 5, cross | 72.72 | 0.8211 | 17.43 | 0.6971 | - | 19.88 | 0.88 |
+| 20 | 0.127 mm | Warhaft figure 5, filled circle | 7.71 | 0.2402 | 5.10 | 0.2040 | - | 6.19 | 0.82 |
+| 20 | 0.127 mm | Warhaft figure 5, filled circle | 32.93 | 0.7314 | 15.52 | 0.6210 | - | 16.83 | 0.92 |
+| 20 | 0.127 mm | Warhaft figure 5, filled circle | 91.93 | 1.3401 | 28.44 | 1.1378 | - | 28.45 | 1.00 |
+| 20 | 0.127 mm | Warhaft figure 5, filled circle | 132.58 | 1.8514 | 39.30 | 1.5719 | - | 33.40 | 1.18 |
+| 52 | 0.025 mm | Warhaft figure 4(a), filled circle | 0.22 | 0.0123 | 0.26 | 0.0104 | 0.01 | 0.21 | 1.22 |
+| 52 | 0.025 mm | Warhaft figure 4(a), filled circle | 0.55 | 0.0173 | 0.37 | 0.0147 | 0.02 | 0.40 | 0.92 |
+| 52 | 0.025 mm | Warhaft figure 4(a), filled circle | 0.89 | 0.0279 | 0.59 | 0.0237 | 0.04 | 0.58 | 1.03 |
+| 52 | 0.025 mm | Warhaft figure 4(b), filled circle | 3.59 | 0.0883 | 1.87 | 0.0750 | 0.15 | 1.89 | 0.99 |
+| 52 | 0.025 mm | Warhaft figure 4(a), filled circle | 3.67 | 0.0840 | 1.78 | 0.0713 | 0.16 | 1.93 | 0.92 |
+| 52 | 0.025 mm | Warhaft figure 4(b), filled circle | 5.20 | 0.1413 | 3.00 | 0.1199 | 0.22 | 2.63 | 1.14 |
+| 52 | 0.025 mm | Warhaft figure 4(a), filled circle | 5.69 | 0.1416 | 3.01 | 0.1203 | 0.24 | 2.85 | 1.05 |
+| 52 | 0.127 mm | Warhaft figure 4(a), cross | 7.97 | 0.1703 | 3.62 | 0.1446 | 0.34 | 3.83 | 0.94 |
+| 52 | 0.025 mm | Warhaft figure 4(a), filled circle | 7.99 | 0.2098 | 4.45 | 0.1781 | 0.34 | 3.84 | 1.16 |
+| 52 | 0.127 mm | Warhaft figure 5, open circle | 8.09 | 0.1955 | 4.15 | 0.1660 | 0.34 | 3.88 | 1.07 |
+| 52 | 0.025 mm | Warhaft figure 4(b), filled circle | 8.13 | 0.2064 | 4.38 | 0.1752 | 0.34 | 3.90 | 1.12 |
+| 52 | 0.127 mm | Warhaft figure 4(b), cross | 8.31 | 0.1749 | 3.71 | 0.1485 | 0.35 | 3.97 | 0.93 |
+| 52 | 0.127 mm | Warhaft figure 5, open circle | 29.90 | 0.5558 | 11.80 | 0.4719 | 1.27 | 11.27 | 1.05 |
+| 52 | 0.127 mm | Warhaft figure 4(b), cross | 30.16 | 0.5610 | 11.91 | 0.4763 | 1.28 | 11.35 | 1.05 |
+| 52 | 0.127 mm | Warhaft figure 5, open circle | 59.99 | 0.8306 | 17.63 | 0.7051 | 2.54 | 18.16 | 0.97 |
+| 52 | 0.127 mm | Warhaft figure 4(b), cross | 60.24 | 0.8448 | 17.93 | 0.7172 | 2.55 | 18.21 | 0.98 |
+| 52 | 0.127 mm | Warhaft figure 4(b), cross | 80.04 | 1.0301 | 21.86 | 0.8746 | 3.39 | 21.64 | 1.01 |
+| 52 | 0.127 mm | Warhaft figure 5, open circle | 80.45 | 1.0161 | 21.57 | 0.8627 | 3.41 | 21.71 | 0.99 |
+| 60 | 0.127 mm | Warhaft figure 5, cross | 22.89 | 0.3998 | 8.48 | 0.3394 | - | 8.60 | 0.99 |
+| 60 | 0.127 mm | Warhaft figure 5, cross | 32.64 | 0.5369 | 11.40 | 0.4558 | - | 11.31 | 1.01 |
+| 60 | 0.127 mm | Warhaft figure 5, cross | 72.72 | 0.8211 | 17.43 | 0.6971 | - | 19.57 | 0.89 |
 
-#### T9. Prediction (d) rescored against the data: the probe's width over Warhaft's at the stations, the 52 M source's points interpolated in log-log (the fine wire to 8 M, the thick wire from 8 M, both averaged at 8 M, repeated stations averaged). The 52 M data end at 80 M; the 100 M row gives two estimates, the 60 to 80 M slope extrapolated and the 20 M source read at the same x' / x_o through figure 10's collapse (half-width over the source station's integral scale l, table 1: 1.02 and 1.35 cm), and the model's ratio against each
+#### T9. Prediction (d) rescored against the data: the model's width over Warhaft's at the stations. The model is the probe rerun at his mesh length (`line70.py --mesh 0.025`, records `line_<grid>_m25.json`, 280x50 and 560x100), so the model, the data and the reference curve share M = 0.025 m and widths compare in metres. The data at a station are the 52 M source's points interpolated in log-log between their stations (the fine wire to 8 M, the thick wire from 8 M, both averaged at 8 M, repeated stations averaged); that interpolation is the row's reference, and the Anand and Pope curve is shown beside it, not used as the interpolant. The nearest datum column gives the 52 M station nearest in distance and the factor in distance to it. The 52 M data end at 80 M; the 100 M row gives two estimates, the 60 to 80 M slope extrapolated and the 20 M source read at the same x' / x_o through figure 10's collapse (half-width over the source station's integral scale l, table 1: 1.02 and 1.35 cm), and the model's ratio against each
 
-| Station x' / M | t / T_L | Data sigma (mm) | Reference sigma (mm) | Data / reference | Model sigma 280x50, 560x100 (mm) | Model / data | Model / reference (T7) |
-|---|---|---|---|---|---|---|---|
-| 5 | 0.21 | 2.7 | 2.6 | 1.05 | 4.6, 4.5 | 1.69 and 1.67 | 1.77, 1.76 |
-| 10 | 0.42 | 4.8 | 4.7 | 1.02 | 6.4, 6.3 | 1.32 and 1.32 | 1.35, 1.34 |
-| 20 | 0.85 | 8.5 | 8.4 | 1.01 | 8.9, 8.9 | 1.05 and 1.05 | 1.06, 1.06 |
-| 50 | 2.12 | 16.0 | 16.4 | 0.97 | 13.8, 13.8 | 0.87 and 0.87 | 0.84, 0.84 |
-| 80 | 3.39 | 21.7 | 22.0 | 0.99 | 17.3, 17.2 | 0.80 and 0.80 | 0.78, 0.78 |
-| 100 | 4.24 | 25.3, 22.5 (extrapolated at slope 0.69; by the collapse) | 25.0 | 1.01, 0.90 | 19.2, 19.2 | 0.76 and 0.76, 0.85 and 0.85 | 0.77, 0.77 |
+| Station x' / M | t / T_L | Nearest 52 M datum (M) | Data sigma (mm) | Reference sigma (mm) | Data / reference | Model sigma 280x50, 560x100 (mm) | Model / data | Model / reference |
+|---|---|---|---|---|---|---|---|---|
+| 5 | 0.21 | 5.4 (x1.1) | 2.7 | 2.5 | 1.06 | 4.50, 4.46 | 1.662 and 1.647 | 1.770, 1.754 |
+| 10 | 0.42 | 8.1 (x1.2) | 4.8 | 4.7 | 1.03 | 6.28, 6.25 | 1.301 and 1.295 | 1.346, 1.340 |
+| 20 | 0.85 | 30.0 (x1.5) | 8.5 | 8.3 | 1.03 | 8.78, 8.76 | 1.033 and 1.030 | 1.060, 1.057 |
+| 50 | 2.12 | 60.1 (x1.2) | 16.0 | 16.1 | 0.99 | 13.61, 13.60 | 0.853 and 0.852 | 0.843, 0.842 |
+| 80 | 3.39 | 80.2 (x1.0) | 21.7 | 21.6 | 1.00 | 16.98, 16.97 | 0.784 and 0.783 | 0.785, 0.784 |
+| 100 | 4.24 | none, extrapolated | 25.3, 22.5 (extrapolated at slope 0.69; by the collapse) | 24.6 | 1.03, 0.92 | 18.86, 18.85 | 0.746 and 0.745, 0.838 and 0.837 | 0.768, 0.767 |
+
+Digitising precision: a centroid is good to about 2 px, which is 0.3% (figure 4(b)) to 0.5% (figure 5) of the 80 M half-width; the two figures' readings of the 80 M point differ by 1.4%.
+
+#### T9a. What a rescale of the first probe would have given: the model's width in mesh lengths, sigma / M, at the stations, for the first probe (M = 2.54 cm, records `line_<grid>.json`) and the rerun (M = 2.5 cm), and the ratio of the rerun to the first probe; the model is self-similar in x / M apart from the molecular terms and the cell size, which do not scale with M
+
+| Station x' / M | First probe 280x50, 560x100 | Rerun 280x50, 560x100 | Rerun / first probe |
+|---|---|---|---|
+| 5 | 0.1798, 0.1782 | 0.1799, 0.1783 | 1.0003, 1.0002 |
+| 10 | 0.2511, 0.2499 | 0.2511, 0.2500 | 1.0002, 1.0001 |
+| 20 | 0.3512, 0.3502 | 0.3512, 0.3503 | 1.0001, 1.0001 |
+| 50 | 0.5445, 0.5438 | 0.5446, 0.5439 | 1.0001, 1.0001 |
+| 80 | 0.6792, 0.6785 | 0.6793, 0.6787 | 1.0002, 1.0002 |
+| 100 | 0.7551, 0.7544 | 0.7546, 0.7540 | 0.9993, 0.9993 |
 
 #### T10. Stapountzis et al. (1986) figure 7: sigma_m of the mean temperature profile behind the wire at x_o / M = 19.3, M = 2.54 cm, U = 4.35 m/s, sigma_w / U = 4.65% at the source (equation 2.2), against the same Langevin curve with that paper's parameters (m = 1.43, sigma_o = 0.92 d_w = 0.14 mm, kappa 2.2e-5 m^2/s, C_0 = 2.1); t_L(0) = L_w / sigma_w = 0.0355 s from equations 2.2 and 2.3
 
@@ -1489,6 +1542,19 @@ decision D's maps are the instrument the sweep already needed.
 | 9.407 | 1.553 | 7.095 | 0.2793 | 8.516 | 0.83 |
 | 15.104 | 2.493 | 12.976 | 0.5109 | 11.993 | 1.08 |
 
+#### T12. The model's width over the measured across the stations the spill puts the gap sensors' nearest contour cells at (T11, 14 to 71 M on the row's axis): the 52 M source's points interpolated in log-log as in T9, the rerun's widths on both grids
+
+| Station x' / M | t / T_L | Nearest 52 M datum (M) | Data sigma (mm) | Model sigma 280x50, 560x100 (mm) | Model / data 280x50, 560x100 |
+|---|---|---|---|---|---|
+| 14 | 0.59 | 8.1 (x1.7) | 6.4 | 7.39, 7.36 | 1.163, 1.159 |
+| 16 | 0.68 | 30.0 (x1.9) | 7.1 | 7.88, 7.86 | 1.113, 1.109 |
+| 20 | 0.85 | 30.0 (x1.5) | 8.5 | 8.78, 8.76 | 1.033, 1.030 |
+| 30 | 1.27 | 30.0 (x1.0) | 11.8 | 10.67, 10.65 | 0.901, 0.900 |
+| 40 | 1.70 | 30.0 (x1.3) | 14.0 | 12.24, 12.23 | 0.874, 0.873 |
+| 50 | 2.12 | 60.1 (x1.2) | 16.0 | 13.61, 13.60 | 0.853, 0.852 |
+| 60 | 2.54 | 60.1 (x1.0) | 17.8 | 14.84, 14.82 | 0.836, 0.835 |
+| 71 | 3.01 | 80.2 (x1.1) | 20.0 | 16.06, 16.04 | 0.805, 0.804 |
+
 ## Consequences
 
 - Phase 5 reports no detection result before VAL-024 and the sweep are in (decision 2), so
@@ -1502,8 +1568,10 @@ decision D's maps are the instrument the sweep already needed.
   becomes the step identity.
 - The line source becomes the solver's first scalar-spreading validation row, the breach's
   own mechanism, and the spreading limit is bounded against measurement in the free fall
-  and at the returns; the spill over the equipment tops stays on VAL-020's basis (ADR-014 H,
-  an inference from k); VAL-021 stays closed.
+  and between 20 and 50 M; the far field near the returns reads a fifth narrow (0.784 at
+  80 M) and is carried as a limit, not scored (Alex, 2026-10-30); the spill over the
+  equipment tops stays on VAL-020's basis (ADR-014 H, an inference from k); VAL-021 stays
+  closed.
 
 ## Alternatives considered
 

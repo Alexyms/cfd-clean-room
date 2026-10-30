@@ -69,14 +69,16 @@ during the march), eight decisions put to Alex, and probes under `docs/reports/p
 first probes ran a plane jet; review 70 found its closed domain confining the jet, and Alex
 decided the same day that VAL-024 is a line source in decaying grid turbulence, the breach's
 own mechanism (prompt 70b). That probe found the solver's turbulence decaying with the model's
-own exponent and its plume wider than the reference in the near field and a fifth narrower at
-a hundred mesh lengths, the same on both grids; the primary measurements, digitised on
+own exponent and its plume wider than the reference in the near field and a fifth narrower
+from 80 mesh lengths on, the same on both grids; the primary measurements, digitised on
 2026-10-30 (prompt 70c, `docs/reports/probe70/digitised70c.md`), lie on that reference within
-5% over the range they cover and give the same verdict; the filter breach on 160x60 leaves every sensor
+5% from 30 to 80 mesh lengths and give the same verdict (on the model rerun at Warhaft's mesh
+length, prompt 70d); the filter breach on 160x60 leaves every sensor
 outside the plume's threshold contour across the whole supply-turbulence range, and the gate's
 320x120 breach at the file's inputs leaves them farther outside it, with the arrival maps
-showing where a sensor would have read it. The ADR is Proposed with its
-threshold OPEN; its review runs again before the pull request. Phases 6 and 7 have not begun.
+showing where a sensor would have read it. The ADR is Proposed; Alex set VAL-024's
+threshold on 2026-10-30 (the width within 20% at 20 and 50 M, 80 M reported and carried as a
+limit); its review runs again before the pull request. Phases 6 and 7 have not begun.
 
 The product room itself has never been solved, and on 2026-10-04 it was found that the laminar
 flow solver does not solve it. Its Reynolds number on the room height is
