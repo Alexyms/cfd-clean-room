@@ -498,32 +498,40 @@ is the step. REQ-A01 reworded as section G proposes.
 
 ## D. The arrival maps and the placement search
 
-**The map.** Per class k and non-SOLID cell, `first_above[k, j, i]`, the first step time at
-which C_k is at or above threshold_k; NaN until then (inf in the record for a cell never
-reached, NaN in SOLID cells, as `local_recovery` is written). Updated every step by
-`monitor.ArrivalTracker(thresholds, live)` beside the recovery tracker (the same `above` mask,
-the recovery tracker keeps the last time, this one the first), carried in the march
-checkpoint's `recovery` dict of named arrays under `first_above` (no format change:
-`MarchCheckpoint.recovery` is a dict of float64 arrays by name), restored by shape as the
-recovery tracker's are, so a restart continues it bitwise. Today the march passes
-`recovery=None` when there is no clean-out tracker (`_Run.march`); with the arrival tracker
-every tier-1 run carries the dict, the clean-out's with both trackers' arrays in it. Written at the end of the run and at
-each checkpoint flush as `/arrival/` (`ArrivalRecord`: thresholds, onsets with their event
-names, `first_above` [classes, ny, nx], t_final; `write_arrival` and `read_arrival` on
-`RunFile`). The clean-out gets the map too; its arrival is t = 0 everywhere above threshold,
-which is what the clearing-time companion needs to say nothing new.
+**The map** (revised 2026-10-30, prompt 70c, review 70 round 2 S2: the events axis). Per
+contaminating event e, class k and non-SOLID cell, `first_above[e, k, j, i]`, the first step
+time at or after the event's onset at which C_k is at or above threshold_k; NaN until then
+(inf in the record for a cell never reached, NaN in SOLID cells, as `local_recovery` is
+written). The events are the plan's contaminating events (the latency paragraph below: a
+`replace` with a concentration key, a `source`, or the initial condition), and the tracker
+is constructed with their onsets, `monitor.ArrivalTracker(thresholds, live, onsets)`, so it
+can start an event's map at its onset; a run with no such event (the clean-out) has one
+event at t = 0. Updated every step beside the recovery tracker (the same `above` mask, the
+recovery tracker keeps the last time, this one the first for each event whose onset has
+passed), carried in the march checkpoint's `recovery` dict of named arrays under
+`first_above` (no format change: `MarchCheckpoint.recovery` is a dict of float64 arrays by
+name), restored by shape as the recovery tracker's are, so a restart continues it bitwise.
+Today the march passes `recovery=None` when there is no clean-out tracker (`_Run.march`);
+with the arrival tracker every tier-1 run carries the dict, the clean-out's with both
+trackers' arrays in it. Written at the end of the run and at each checkpoint flush as
+`/arrival/` (`ArrivalRecord`: thresholds, the events' names and onsets, `first_above`
+[events, classes, ny, nx], t_final; `write_arrival` and `read_arrival` on `RunFile`). The
+clean-out gets the map too; its arrival is t = 0 everywhere above threshold, which is what
+the clearing-time companion needs to say nothing new.
 
 **Run files without it.** `placement.arrival_from_frames(run_file)` reads the stored frames
-and returns the map at the output cadence's resolution, flagged as such. The Phase 4 run files
+and the plan's onsets from the file's merged configuration and returns the map with the same
+events axis at the output cadence's resolution, flagged as such. The Phase 4 run files
 and probe B's are read this way (T5), and section F's sweep can be read before step 3 is
 built.
 
 **Latency** (revised 2026-10-29, prompt 70b, review 70 S7). The onset of an event that
 carries contamination is its `start` (a `replace` with a concentration key, a `source`, or
-the initial condition at t = 0). The tracker keeps one map per such event: at each onset
-the map for that event starts, and records per class and cell the first step time at or
-after the onset at which the cell is at or above threshold, so a cell already at or above
-it at the onset reads the onset itself. The latency for event e at a cell is that time minus
+the initial condition at t = 0). The tracker keeps one map per such event (the events axis
+of `first_above`, the onsets handed to it at construction): at each onset the map for that
+event starts, and records per class and cell the first step time at or after the onset at
+which the cell is at or above threshold, so a cell already at or above it at the onset
+reads the onset itself. The latency for event e at a cell is that time minus
 `start_e`; infinite if the cell is not reached before t_end, and the report says "never"
 with the run's end beside it. The monitor's `latencies(onsets)` is defined the same way on
 the sensors' cells: for each onset, the time of the first reading at or above threshold at
@@ -620,16 +628,17 @@ turbulence over the tops, the spreading limit now bounded by A and B rather than
 ```
 monitor.py --> time_integration, placement; scripts/run_scenario.py; tests
     (section C's block)
-    ArrivalTracker(thresholds, live)
-        update(t, fields) -> None               # first_above where NaN and at or above
-        first_above -> np.ndarray               # [classes, ny, nx], NaN until reached
+    ArrivalTracker(thresholds, live, onsets)   # onsets: the plan's contaminating events, in order
+        update(t, fields) -> None               # for each event with onset <= t: first_above
+                                                # where NaN and at or above
+        first_above -> np.ndarray               # [events, classes, ny, nx], NaN until reached
         state() / restore(state)
-        record(onsets, t_final) -> ArrivalRecord
+        record(event_names, t_final) -> ArrivalRecord
 
 placement.py --> scripts/latency_report.py (step 5); tests
     arrival_from_run(run_file) -> (maps, onsets, resolution)    # /arrival/, else from the frames, flagged
-    arrival_from_frames(frames, thresholds, live) -> np.ndarray
-    latency(maps, onsets) -> np.ndarray         # [events, classes, ny, nx], inf never
+    arrival_from_frames(frames, thresholds, live, onsets) -> np.ndarray   # [events, classes, ny, nx]
+    latency(maps, onsets) -> np.ndarray         # [events, classes, ny, nx], arrival minus onset, inf never
     score(latencies, cells, rule, *, within=None) -> Score     # worst, mean, undetected, coverage
     candidates(mesh, config, mount, standoff) -> np.ndarray     # [n, 2] cells
     search(latencies, candidates, count, rule) -> Layout        # cells, score, method, exact (bool)
@@ -638,10 +647,11 @@ placement.py --> scripts/latency_report.py (step 5); tests
 io_manager.py
     RunFile.write_alerts(rows) / read_alerts()  # /transport/alerts/, replaced whole
     RunFile.write_arrival(record) / read_arrival()   # /arrival/
-    ArrivalRecord: thresholds, event_names, onsets, first_above, t_final
+    ArrivalRecord: thresholds, event_names, onsets, first_above [events, classes, ny, nx], t_final
 
 time_integration.py
-    _Run.monitor: AlertMonitor; _Run.arrival: ArrivalTracker (every tier-1 run)
+    _Run.monitor: AlertMonitor; _Run.arrival: ArrivalTracker (every tier-1 run, built with
+        the plan's contaminating onsets; one event at t = 0 when the plan has none)
     march: update both after each step; alerts flushed with the readings; both states in the
     checkpoint's named arrays; /arrival/ written at the end
     RunRecord gains alerts (tuple[Alert, ...]) and arrival (ArrivalRecord)
