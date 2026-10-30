@@ -71,8 +71,9 @@ decided the same day that VAL-024 is a line source in decaying grid turbulence, 
 own mechanism (prompt 70b). That probe found the solver's turbulence decaying with the model's
 own exponent and its plume wider than the reference in the near field and a fifth narrower at
 a hundred mesh lengths, the same on both grids; the filter breach on 160x60 leaves every sensor
-outside the plume's threshold contour across the whole supply-turbulence range, on both grids,
-with the arrival maps showing where a sensor would have read it. The ADR is Proposed with its
+outside the plume's threshold contour across the whole supply-turbulence range, and the gate's
+320x120 breach at the file's inputs leaves them farther outside it, with the arrival maps
+showing where a sensor would have read it. The ADR is Proposed with its
 threshold OPEN; its review runs again before the pull request. Phases 6 and 7 have not begun.
 
 The product room itself has never been solved, and on 2026-10-04 it was found that the laminar
