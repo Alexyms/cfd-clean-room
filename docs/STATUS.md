@@ -60,7 +60,25 @@ line (every budget inside REQ-T05's 1e-4 at every stored frame, the mechanism un
 PASS with those two as conditions; Alex set the verdict on 2026-10-29: CONDITIONAL PASS with
 those two and a third, a turbulent-spreading sensitivity check before Phase 5 reports any
 detection result (the report's section "The decision"). Phase 4 is COMPLETE under those conditions.
-Phases 5 through 7 have not begun.
+Phase 5 opened on 2026-10-29 with its design pass, ADR-015
+(`docs/ADR/ADR-015-alert-monitoring-and-placement.md`, prompt 70), written before any Phase 5
+code as ADR-014 was for Phase 4: Alex's three decisions of that date (a design pass first; the
+spreading condition checked both ways, a plane-jet validation row and a sensitivity sweep of the
+scenarios to the supply's turbulence and the Schmidt number; placement by arrival maps kept
+during the march), eight decisions put to Alex, and probes under `docs/reports/probe70/`. The
+first probes ran a plane jet; review 70 found its closed domain confining the jet, and Alex
+decided the same day that VAL-024 is a line source in decaying grid turbulence, the breach's
+own mechanism (prompt 70b). That probe found the solver's turbulence decaying with the model's
+own exponent and its plume wider than the reference in the near field and a fifth narrower
+from 80 mesh lengths on, the same on both grids; the primary measurements, digitised on
+2026-10-30 (prompt 70c, `docs/reports/probe70/digitised70c.md`), lie on that reference within
+5% from 30 to 80 mesh lengths and give the same verdict (on the model rerun at Warhaft's mesh
+length, prompt 70d); the filter breach on 160x60 leaves every sensor
+outside the plume's threshold contour across the whole supply-turbulence range, and the gate's
+320x120 breach at the file's inputs leaves them farther outside it, with the arrival maps
+showing where a sensor would have read it. The ADR is Proposed; Alex set VAL-024's
+threshold on 2026-10-30 (the width within 20% at 20 and 50 M, 80 M reported and carried as a
+limit); its review runs again before the pull request. Phases 6 and 7 have not begun.
 
 The product room itself has never been solved, and on 2026-10-04 it was found that the laminar
 flow solver does not solve it. Its Reynolds number on the room height is
