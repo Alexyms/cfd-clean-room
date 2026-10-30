@@ -352,7 +352,8 @@ LINE_GRIDS = ("280x50", "560x100")
 def line_table() -> list[str]:
     """T7: the line source in grid turbulence (line70.py), both grids."""
     lines = [
-        "### T7. The line source in decaying grid turbulence (prompt 70b, line70.py): the "
+        "### T7. The line source in decaying grid turbulence (prompt 70b, line70.py, the first probe at "
+        "M = 2.54 cm as Viswanathan and Pope tabulate it; the rerun at Warhaft's 2.5 cm is T9's): the "
         "model's decay exponent and the plume's width against the reference curve "
         "(Anand and Pope's displacement variance with Warhaft's parameters, Viswanathan and "
         "Pope 2008 equations 11 to 15) at five stations downstream of the source",
