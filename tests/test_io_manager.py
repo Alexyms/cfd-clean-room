@@ -26,6 +26,7 @@ docstring:
   (the recovery tracker's state); discard_march drops /transport/ alone.
 """
 
+import hashlib
 import re
 from functools import partial
 from pathlib import Path
@@ -47,6 +48,9 @@ from src.io_manager import (
     STEADY_CHECKPOINT,
     RecoveryRecord,
     RunFile,
+    StepSeries,
+    _GroupReader,
+    _without_excluded,
     config_text,
     restart_hash,
 )
@@ -206,6 +210,17 @@ class TestConfig:
                 _room_raw(), **(PROVENANCE | change)
             )
 
+    @pytest.mark.parametrize("bad", [[], "domain: {}", None])
+    def test_a_configuration_that_is_not_a_mapping_is_refused(
+        self, tmp_path: Path, bad: object
+    ) -> None:
+        """Defects caught: a list or YAML text written as the configuration; the
+        refusal coming after the file was created, leaving an empty run file."""
+        run = RunFile(tmp_path / "run.h5")
+        with pytest.raises(TypeError, match="mapping must be a mapping, got"):
+            run.write_config(bad, **PROVENANCE)  # type: ignore[arg-type]
+        assert not run.path.exists()
+
 
 @pytest.mark.unit
 class TestFlowState:
@@ -260,6 +275,83 @@ class TestFlowState:
                 OTHER_FINGERPRINT, state, **(keys | {"wall_seconds": True})
             )
         assert RunFile(tmp_path / "none.h5").flow_fingerprints() == ()
+
+    @pytest.mark.parametrize("bad", [{}, np.zeros((3, 5)), _steady(False)])
+    def test_a_state_that_is_not_a_flow_state_is_refused(
+        self, tmp_path: Path, bad: object
+    ) -> None:
+        """Defects caught: a mapping, an array or a whole checkpoint written as a
+        flow state (the checkpoint has a `state` of its own, so the attribute
+        reads would not fail early); the file created before the refusal."""
+        run = RunFile(tmp_path / "run.h5")
+        with pytest.raises(TypeError, match="state must be a FlowState, got"):
+            run.write_flow_state(
+                FINGERPRINT,
+                bad,  # type: ignore[arg-type]
+                wall_seconds=1.0,
+                stage_seconds={},
+                rule_readings={},
+            )
+        assert run.flow_fingerprints() == () and not run.path.exists()
+
+    @pytest.mark.parametrize("bad", [123, b"0123456789abcdef" * 4, None])
+    def test_a_fingerprint_that_is_not_a_string_is_refused(
+        self, tmp_path: Path, bad: object
+    ) -> None:
+        """Defect caught: a non-str key reaching the HDF5 layer, which would
+        accept bytes as a group name and store the state under it."""
+        run = RunFile(tmp_path / "run.h5")
+        with pytest.raises(TypeError, match="fingerprint must be a str, got"):
+            run.write_flow_state(
+                bad,  # type: ignore[arg-type]
+                _steady(False).state,
+                wall_seconds=1.0,
+                stage_seconds={},
+                rule_readings={},
+            )
+        assert not run.path.exists()
+
+    def test_an_unknown_fingerprint_is_refused(self, tmp_path: Path) -> None:
+        """A key the file does not hold, with and without a /flow/ group.
+
+        Defects caught: a state of another key returned; a file with frames
+        and no flow states answering with an empty record.
+        """
+        run = RunFile(tmp_path / "run.h5")
+        run.write_frame(0, 0.0, _fields(1), [_budget(1), _budget(2)])
+        assert run.flow_fingerprints() == ()
+        with pytest.raises(KeyError, match=f"holds no flow state {FINGERPRINT}"):
+            run.read_flow_state(FINGERPRINT)
+        run.write_flow_state(
+            FINGERPRINT,
+            _steady(False).state,
+            wall_seconds=1.0,
+            stage_seconds={},
+            rule_readings={},
+        )
+        with pytest.raises(KeyError, match=f"holds no flow state {OTHER_FINGERPRINT}"):
+            run.read_flow_state(OTHER_FINGERPRINT)
+        assert run.read_flow_state(FINGERPRINT).state.outer == 2
+
+    def test_a_state_no_solve_finished_reads_back_with_no_stop(
+        self, tmp_path: Path
+    ) -> None:
+        """A stop of None is not written, and reads back as None.
+
+        Defects caught: None stored as the text "None"; the attribute written
+        unconditionally, which h5py refuses for None.
+        """
+        run = RunFile(tmp_path / "run.h5")
+        run.write_flow_state(
+            FINGERPRINT,
+            _steady(False, reason=None).state,
+            wall_seconds=1.0,
+            stage_seconds={},
+            rule_readings={},
+        )
+        with h5py.File(run.path, "r") as handle:
+            assert "stop_reason" not in handle[f"flow/{FINGERPRINT}"].attrs
+        assert run.read_flow_state(FINGERPRINT).state.stop_reason is None
 
 
 @pytest.mark.unit
@@ -370,6 +462,452 @@ class TestFrames:
         run.write_frame(*frames[2])
         assert run.read_frames().steps.tolist() == [0, 5, 10]
 
+    @pytest.mark.parametrize(
+        ("steps", "times", "readings", "names", "match"),
+        [
+            (
+                np.full((2, 1), 10),
+                np.ones((2, 1)),
+                np.ones((2, 2, 1)),
+                ["a"],
+                "must be",
+            ),
+            (np.arange(10, 12), np.ones(3), np.ones((2, 2, 1)), ["a"], "must be"),
+            (np.arange(10, 12), np.ones(2), np.ones((2, 2)), ["a"], "must be"),
+            (np.arange(10, 12), np.ones(2), np.ones((3, 2, 1)), ["a"], "2 steps and 1"),
+            (np.arange(10, 12), np.ones(2), np.ones((2, 2, 2)), ["a"], "2 steps and 1"),
+            (np.array([13, 13]), np.ones(2), np.ones((2, 2, 1)), ["a"], "increasing"),
+            (np.array([14, 12]), np.ones(2), np.ones((2, 2, 1)), ["a"], "increasing"),
+        ],
+    )
+    def test_sensor_readings_of_inconsistent_shape_or_order_are_refused(
+        self,
+        tmp_path: Path,
+        steps: np.ndarray,
+        times: np.ndarray,
+        readings: np.ndarray,
+        names: list[str],
+        match: str,
+    ) -> None:
+        """Each shape and order guard of write_sensor_readings, one at a time.
+
+        The file holds one batch already, each refusal leaves it as it was,
+        and every batch starts above the stored steps, so only the guard under
+        test can refuse it. Defects caught: steps and times of different
+        lengths stored; readings for another count of steps or of sensors than
+        the names give; equal or falling steps stored, which a searchsorted on
+        the stored steps (discard_after) then misreads.
+        """
+        run = RunFile(tmp_path / "run.h5")
+        run.write_sensor_readings(
+            np.arange(1, 4), np.arange(1, 4) * 0.1, np.ones((3, 2, 1)), ["a"]
+        )
+        with pytest.raises(ValueError, match=match):
+            run.write_sensor_readings(steps, times, readings, names)
+        read = run.read_sensor_readings()
+        assert read.steps.tolist() == [1, 2, 3] and read.readings.shape == (3, 2, 1)
+
+    def test_readings_of_another_class_count_are_refused(self, tmp_path: Path) -> None:
+        """The classes and sensors per step are the first write's for the file.
+
+        Defect caught: a batch of three classes appended to a file of two, so
+        the series holds rows of two shapes, or h5py's own error escapes
+        unnamed.
+        """
+        run = RunFile(tmp_path / "run.h5")
+        run.write_sensor_readings(
+            np.arange(1, 3), np.arange(1, 3) * 0.1, np.ones((2, 2, 2)), ["a", "b"]
+        )
+        with pytest.raises(ValueError, match=r"readings of \(3, 2\) per step"):
+            run.write_sensor_readings(
+                np.arange(3, 5), np.arange(3, 5) * 0.1, np.ones((2, 3, 2)), ["a", "b"]
+            )
+        assert run.read_sensor_readings().readings.shape == (2, 2, 2)
+
+    def test_no_sensor_readings_is_refused(self, tmp_path: Path) -> None:
+        """A file with no /transport/ and one with frames and no sensors group.
+
+        Defect caught: an empty series returned for a run that was never
+        sampled, which a latency read from it would report as never detected.
+        """
+        run = RunFile(tmp_path / "run.h5")
+        run.write_config(_room_raw(), **PROVENANCE)
+        with pytest.raises(KeyError, match="holds no /transport/sensors/"):
+            run.read_sensor_readings()
+        run.write_frame(0, 0.0, _fields(1), [_budget(1), _budget(2)])
+        with pytest.raises(KeyError, match="holds no /transport/sensors/"):
+            run.read_sensor_readings()
+
+    def test_discard_after_a_file_that_does_not_exist_does_nothing(
+        self, tmp_path: Path
+    ) -> None:
+        """A restart discards before the first output has made the file.
+
+        Defects caught: the file created empty by opening it for append; a
+        FileNotFoundError from the open.
+        """
+        run = RunFile(tmp_path / "run.h5")
+        run.discard_after(7)
+        assert not run.path.exists()
+
+    def test_discard_march_without_a_march_keeps_the_file_as_it_is(
+        self, tmp_path: Path
+    ) -> None:
+        """No file, and a file holding a configuration and no /transport/.
+
+        Defects caught: the file created empty by opening it for append; the
+        group deleted unconditionally, which raises for a restart of a run
+        that stopped before its first frame and drops nothing else.
+        """
+        run = RunFile(tmp_path / "run.h5")
+        run.discard_march()
+        assert not run.path.exists()
+        run.write_config(_room_raw(), **PROVENANCE)
+        run.discard_march()
+        assert run.read_config().mapping == _room_raw()
+
+    @pytest.mark.parametrize("exists", [True, False])
+    def test_discard_after_a_negative_step_is_refused(
+        self, tmp_path: Path, exists: bool
+    ) -> None:
+        """The step is checked before the file is looked at.
+
+        Defects caught: a negative step searched into the stored steps, which
+        resizes every series to zero; the check placed after the early return,
+        so a missing file accepts what an existing one refuses.
+        """
+        run = RunFile(tmp_path / "run.h5")
+        if exists:
+            run.write_frame(0, 0.0, _fields(1), [_budget(1), _budget(2)])
+        with pytest.raises(ValueError, match="step must be non-negative, got -1"):
+            run.discard_after(-1)
+        assert run.path.exists() is exists
+        if exists:
+            assert run.read_frames().steps.tolist() == [0]
+
+
+# ---------------------------------------------------------------------------
+# Tier 2: /transient/ frames, the step series and the transient checkpoint
+# ---------------------------------------------------------------------------
+
+
+def _faces(seed: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """u, v and p of a 4 by 3 grid that differ in every cell."""
+    rng = np.random.default_rng(seed)
+    return rng.normal(size=(3, 5)), rng.normal(size=(4, 4)), rng.normal(size=(3, 4))
+
+
+def _flow_state(seed: int, outer: int) -> FlowState:
+    """A FlowState on the faces of _faces, with ``outer`` outer iterations."""
+    u, v, p = _faces(seed)
+    return FlowState(u=u, v=v, p=p, outer=outer)
+
+
+def _rows(first: int, count: int) -> StepSeries:
+    """COUNT step rows from step FIRST, every column distinct and every row too."""
+    rng = np.random.default_rng(first)
+    steps = np.arange(first, first + count)
+    return StepSeries(
+        step=steps,
+        outer=rng.integers(1, 9, count),
+        pressure_cap_hits=rng.integers(0, 3, count),
+        t=steps * 0.25,
+        worst_imbalance=rng.random(count),
+        drag=rng.random(count),
+        lift=rng.random(count),
+        c_d=rng.random(count),
+        c_l=rng.random(count),
+    )
+
+
+def _same_rows(a: StepSeries, b: StepSeries) -> None:
+    """Every column of two step series, bit for bit, with its dtype."""
+    for name in ("step", "outer", "pressure_cap_hits", "t", "worst_imbalance"):
+        x, y = getattr(a, name), getattr(b, name)
+        assert x.dtype == y.dtype and x.tobytes() == y.tobytes(), name
+    for name in ("drag", "lift", "c_d", "c_l"):
+        assert getattr(a, name).tobytes() == getattr(b, name).tobytes(), name
+
+
+@pytest.mark.unit
+class TestTransientFrames:
+    def _write(self, run: RunFile) -> list[tuple]:
+        frames = [(0, 0.0, *_faces(1)), (5, 0.125, *_faces(2)), (10, 0.25, *_faces(3))]
+        for frame in frames:
+            run.write_transient_frame(*frame)
+        return frames
+
+    def test_what_is_written_is_what_is_read(self, tmp_path: Path) -> None:
+        """Steps, times and the three fields of every frame, bitwise.
+
+        Defects caught: a field written as float32; the faces and the
+        pressure read back in another order; a frame appended over the last.
+        """
+        run = RunFile(tmp_path / "run.h5")
+        frames = self._write(run)
+        read = run.read_transient_frames()
+        assert read.steps.dtype == np.int64 and read.steps.tolist() == [0, 5, 10]
+        assert read.times.tobytes() == np.array([0.0, 0.125, 0.25]).tobytes()
+        for column, name in enumerate(("u", "v", "p"), start=2):
+            stacked = np.stack([frame[column] for frame in frames])
+            assert getattr(read, name).tobytes() == stacked.tobytes(), name
+
+    def test_a_frame_of_another_shape_is_refused(self, tmp_path: Path) -> None:
+        """A field whose shape differs from the first frame's, whichever it is.
+
+        Defects caught: a frame of another grid appended, so the series holds
+        rows of two shapes; the refusal naming the wrong field; a refused
+        frame leaving its step or time behind in the file.
+        """
+        run = RunFile(tmp_path / "run.h5")
+        self._write(run)
+        u, v, p = _faces(4)
+        for name, bad in (
+            ("u", (np.zeros((3, 6)), v, p)),
+            ("v", (u, np.zeros((5, 4)), p)),
+            ("p", (u, v, np.zeros((3, 5)))),
+        ):
+            with pytest.raises(ValueError, match=rf"{name} has shape \(\d, \d\) and"):
+                run.write_transient_frame(15, 0.375, *bad)
+        read = run.read_transient_frames()
+        assert read.steps.tolist() == [0, 5, 10] and read.times.shape == (3,)
+
+    @pytest.mark.parametrize("step", [10, 7])
+    def test_a_frame_not_above_the_last_is_refused(
+        self, tmp_path: Path, step: int
+    ) -> None:
+        """A step equal to the last frame's or below it.
+
+        Defects caught: a restart's frames appended after the crash's, so a
+        step is stored twice; the comparison strict the wrong way, which
+        refuses the next frame instead.
+        """
+        run = RunFile(tmp_path / "run.h5")
+        self._write(run)
+        with pytest.raises(ValueError, match=r"not above the last frame's \(10\)"):
+            run.write_transient_frame(step, 0.3, *_faces(5))
+        run.write_transient_frame(11, 0.3, *_faces(5))
+        assert run.read_transient_frames().steps.tolist() == [0, 5, 10, 11]
+
+    def test_a_negative_step_or_a_bad_time_is_refused(self, tmp_path: Path) -> None:
+        """Defects caught: a negative step stored; a bool time stored as 1.0."""
+        run = RunFile(tmp_path / "run.h5")
+        with pytest.raises(ValueError, match="step must be non-negative, got -1"):
+            run.write_transient_frame(-1, 0.0, *_faces(1))
+        with pytest.raises(TypeError, match="t must be a real number"):
+            run.write_transient_frame(0, True, *_faces(1))
+        assert not run.path.exists()
+
+    def test_no_frames_is_refused(self, tmp_path: Path) -> None:
+        """A file with no /transient/ and one whose /transient/ holds a series only.
+
+        Defect caught: the second case read as frames, since the group exists:
+        the missing steps dataset surfaces as an unnamed h5py KeyError.
+        """
+        run = RunFile(tmp_path / "run.h5")
+        run.write_config(_room_raw(), **PROVENANCE)
+        with pytest.raises(KeyError, match="holds no /transient/ frames"):
+            run.read_transient_frames()
+        run.write_step_series(_rows(1, 2))
+        with pytest.raises(KeyError, match="holds no /transient/ frames"):
+            run.read_transient_frames()
+
+
+@pytest.mark.unit
+class TestStepSeries:
+    def test_what_is_written_is_what_is_read(self, tmp_path: Path) -> None:
+        """Two batches come back as one series, every column bitwise.
+
+        Defects caught: a batch written over the last; an integer column
+        stored as float; the columns read back in another order.
+        """
+        run = RunFile(tmp_path / "run.h5")
+        first, second = _rows(1, 3), _rows(4, 2)
+        run.write_step_series(first)
+        run.write_step_series(second)
+        read = run.read_step_series()
+        assert read.step.tolist() == [1, 2, 3, 4, 5]
+        joined = StepSeries(
+            **{
+                name: np.concatenate([getattr(first, name), getattr(second, name)])
+                for name in vars(first)
+            }
+        )
+        _same_rows(read, joined)
+
+    def test_an_empty_series_writes_nothing(self, tmp_path: Path) -> None:
+        """No file is made for it, and a file with rows keeps exactly them.
+
+        Defects caught: the groups created for zero rows, so a march that has
+        taken no step leaves a series that reads back empty and not absent;
+        an empty batch refused by the order check against the last row.
+        """
+        run = RunFile(tmp_path / "run.h5")
+        run.write_step_series(_rows(1, 0))
+        assert not run.path.exists()
+        run.write_step_series(_rows(1, 3))
+        run.write_step_series(_rows(1, 0))
+        _same_rows(run.read_step_series(), _rows(1, 3))
+
+    @pytest.mark.parametrize("bad", [{}, [1, 2, 3], None])
+    def test_rows_that_are_not_a_step_series_are_refused(
+        self, tmp_path: Path, bad: object
+    ) -> None:
+        """Defects caught: a mapping or list written as rows; the file created
+        before the refusal."""
+        run = RunFile(tmp_path / "run.h5")
+        with pytest.raises(TypeError, match="rows must be a StepSeries, got"):
+            run.write_step_series(bad)  # type: ignore[arg-type]
+        assert not run.path.exists()
+
+    @pytest.mark.parametrize("first", [3, 1])
+    def test_rows_not_above_the_last_are_refused(
+        self, tmp_path: Path, first: int
+    ) -> None:
+        """A batch starting at the last stored step, or below it.
+
+        Defects caught: a restart's rows appended after the crash's, so a step
+        has two rows; a refused batch half written (some columns appended).
+        """
+        run = RunFile(tmp_path / "run.h5")
+        run.write_step_series(_rows(1, 3))
+        with pytest.raises(ValueError, match=r"not above the last stored \(3\)"):
+            run.write_step_series(_rows(first, 2))
+        _same_rows(run.read_step_series(), _rows(1, 3))
+
+    @pytest.mark.parametrize(
+        "columns",
+        [
+            {"t": np.ones(3)},
+            {name: np.ones((2, 2)) for name in vars(_rows(1, 1))},
+            {name: np.float64(1.0) for name in vars(_rows(1, 1))},
+        ],
+        ids=["ragged", "two-dimensional", "scalar"],
+    )
+    def test_columns_that_are_not_one_vector_are_refused(
+        self, columns: dict[str, np.ndarray]
+    ) -> None:
+        """One column of another length, or every column 2-D or a scalar.
+
+        Defects caught: ragged columns stored, so the series' rows no longer
+        line up; the check comparing lengths only, which accepts the 2-D
+        columns of one shape.
+        """
+        good = vars(_rows(1, 2))
+        with pytest.raises(ValueError, match="1-D of one length"):
+            StepSeries(**(good | columns))
+
+    def test_no_series_is_refused(self, tmp_path: Path) -> None:
+        """Defect caught: an empty series returned for a run that took no step."""
+        run = RunFile(tmp_path / "run.h5")
+        run.write_config(_room_raw(), **PROVENANCE)
+        with pytest.raises(KeyError, match="holds no /transient/series/ rows"):
+            run.read_step_series()
+
+    def test_discard_after_trims_the_frames_and_the_rows_alike(
+        self, tmp_path: Path
+    ) -> None:
+        """A restart at step 5 keeps the frames and rows up to it and appends on.
+
+        The rows live in a subgroup of the group that holds the frames, which
+        the frames' trim must step over. Defects caught: the rows left
+        untrimmed, so the restart's first row is refused; the trim resizing
+        the subgroup as if it were a dataset.
+        """
+        run = RunFile(tmp_path / "run.h5")
+        for step in (0, 5, 10):
+            run.write_transient_frame(step, step * 0.25, *_faces(step + 1))
+        rows = _rows(1, 12)
+        run.write_step_series(rows)
+        run.discard_after(5)
+        assert run.read_transient_frames().steps.tolist() == [0, 5]
+        kept = StepSeries(**{name: getattr(rows, name)[:5] for name in vars(rows)})
+        _same_rows(run.read_step_series(), kept)
+        run.write_transient_frame(10, 2.5, *_faces(11))
+        run.write_step_series(_rows(6, 2))
+        assert run.read_transient_frames().steps.tolist() == [0, 5, 10]
+        assert run.read_step_series().step.tolist() == [1, 2, 3, 4, 5, 6, 7]
+
+
+@pytest.mark.unit
+class TestTransientCheckpoint:
+    def test_what_is_written_is_what_is_read(self, tmp_path: Path) -> None:
+        """The step, time, both states and their counts, the arrays bitwise.
+
+        Defects caught: the previous level dropped or read back as the
+        current one (BDF2 then restarts first order); a field written as
+        float32; the previous state's count taken from the current one's.
+        """
+        run = RunFile(tmp_path / "run.h5")
+        state, previous = _flow_state(1, 7), _flow_state(2, 5)
+        run.write_transient_checkpoint(12, 0.75, state, previous)
+        t, resume = run.read_transient_checkpoint()
+        assert t == 0.75 and resume.step == 12
+        for got, want in ((resume.state, state), (resume.previous, previous)):
+            assert got is not None and got.outer == want.outer
+            for name in ("u", "v", "p"):
+                assert getattr(got, name).tobytes() == getattr(want, name).tobytes()
+
+    def test_a_checkpoint_without_a_previous_level_reads_back_without_one(
+        self, tmp_path: Path
+    ) -> None:
+        """Step 0 and an implicit Euler march have none, and a rewrite drops it.
+
+        Defects caught: a previous level of None written as an empty group
+        that reads back as a state; the previous datasets of an earlier
+        checkpoint kept when a later one has none, so a march at step 0 would
+        resume with a stale level.
+        """
+        run = RunFile(tmp_path / "run.h5")
+        run.write_transient_checkpoint(0, 0.0, _flow_state(1, 3), None)
+        t, resume = run.read_transient_checkpoint()
+        assert (t, resume.step, resume.previous) == (0.0, 0, None)
+        assert resume.state.outer == 3
+        run.write_transient_checkpoint(4, 1.0, _flow_state(2, 4), _flow_state(3, 2))
+        assert run.read_transient_checkpoint()[1].previous is not None
+        run.write_transient_checkpoint(8, 2.0, _flow_state(4, 8), None)
+        t, resume = run.read_transient_checkpoint()
+        assert (t, resume.step, resume.previous) == (2.0, 8, None)
+        with h5py.File(run.checkpoint_path, "r") as handle:
+            assert not [
+                name for name in handle["transient_checkpoint"] if "previous" in name
+            ]
+
+    @pytest.mark.parametrize(
+        ("state", "previous", "named"),
+        [
+            ({}, None, "state"),
+            (np.zeros((3, 5)), None, "state"),
+            (None, None, "state"),
+            (_flow_state(1, 1), {}, "previous"),
+            (_flow_state(1, 1), np.zeros((3, 5)), "previous"),
+        ],
+    )
+    def test_a_state_that_is_not_a_flow_state_is_refused(
+        self, tmp_path: Path, state: object, previous: object, named: str
+    ) -> None:
+        """Each of the two states, named, before the checkpoint file is touched.
+
+        Defects caught: a mapping, an array or None written as a state (None
+        passed the check and failed in the write, leaving the temporary file); the
+        previous level unchecked, so it fails later in the write with an
+        attribute error and the temporary file is left behind.
+        """
+        run = RunFile(tmp_path / "run.h5")
+        with pytest.raises(TypeError, match=f"{named} must be a FlowState, got"):
+            run.write_transient_checkpoint(1, 0.1, state, previous)  # type: ignore[arg-type]
+        assert not run.checkpoint_path.exists()
+        assert not run.temporary_path.exists()
+
+    def test_a_negative_step_or_a_bad_time_is_refused(self, tmp_path: Path) -> None:
+        """Defects caught: a negative step stored; a bool time stored as 1.0."""
+        run = RunFile(tmp_path / "run.h5")
+        with pytest.raises(ValueError, match="step must be non-negative, got -1"):
+            run.write_transient_checkpoint(-1, 0.0, _flow_state(1, 1), None)
+        with pytest.raises(TypeError, match="t must be a real number"):
+            run.write_transient_checkpoint(1, True, _flow_state(1, 1), None)
+        assert not run.checkpoint_path.exists()
+
 
 @pytest.mark.unit
 class TestCheckpoints:
@@ -476,6 +1014,28 @@ class TestCheckpoints:
             run.checkpoint(1, 0.1, _fields(1), [budgets[0], {}], FINGERPRINT)
         with pytest.raises(KeyError, match="holds no /checkpoint/ group"):
             run.read_checkpoint()
+
+    def test_the_group_reader_closes_the_file_it_opened(self, tmp_path: Path) -> None:
+        """The file is open inside the block and closed after it; a reader that
+        never opened one exits quietly.
+
+        Defects caught: the file left open on exit, which blocks the replace
+        that the next checkpoint write makes on Windows; an exit without an
+        enter raising an attribute error on None, as a reader whose enter
+        failed before it opened the file would.
+        """
+        run = RunFile(tmp_path / "run.h5")
+        run.write_steady_checkpoint(_steady(False), FINGERPRINT)
+        reader = _GroupReader(run.checkpoint_path, STEADY_CHECKPOINT)
+        assert reader.__exit__(None, None, None) is None
+        with reader as group:
+            handle = group.file
+            assert bool(handle)
+        assert not bool(handle)
+        absent = _GroupReader(tmp_path / "none.checkpoint.h5", STEADY_CHECKPOINT)
+        with pytest.raises(KeyError, match="does not exist"):
+            absent.__enter__()
+        assert absent.__exit__(None, None, None) is None
 
 
 # ---------------------------------------------------------------------------
@@ -909,6 +1469,103 @@ class TestRestartRefusals:
         run.write_config(_room_raw(), **PROVENANCE)
         with pytest.raises(TypeError, match="mapping must be a mapping, got list"):
             run.check_restart([])  # type: ignore[arg-type]
+
+    def test_an_added_list_item_is_refused_naming_the_list(
+        self, tmp_path: Path
+    ) -> None:
+        """A list of another length is named by its own key, not an item of it.
+
+        Defects caught: the lengths not compared, so an obstacle added in the
+        restart's mapping is accepted when the leading items match; the
+        message naming "obstacles[0]" or an empty name.
+        """
+        run = RunFile(tmp_path / "run.h5")
+        raw = _room_raw()
+        run.write_config(raw, **PROVENANCE)
+        longer = yaml_copy(raw)
+        longer["obstacles"].append(dict(longer["obstacles"][0]))
+        with pytest.raises(ValueError, match=r"restart refused: obstacles differs"):
+            run.check_restart(longer)
+        shorter = yaml_copy(raw)
+        shorter["obstacles"] = []
+        with pytest.raises(ValueError, match=r"restart refused: obstacles differs"):
+            run.check_restart(shorter)
+
+    @pytest.mark.parametrize(
+        ("section", "named"),
+        [(None, "the top level"), ("boundaries", "boundaries")],
+    )
+    def test_the_same_keys_in_another_order_are_refused(
+        self, tmp_path: Path, section: str | None, named: str
+    ) -> None:
+        """Key order is part of the restart hash, and the message says so.
+
+        Defects caught: the order dropped from the comparison, so a boundary
+        segment moved in the order (which changes what the file means) is
+        accepted; the refusal naming a key that did not change, or none.
+        """
+        run = RunFile(tmp_path / "run.h5")
+        raw = _room_raw()
+        run.write_config(raw, **PROVENANCE)
+        edited = yaml_copy(raw)
+        holder = edited if section is None else edited[section]
+        assert len(holder) > 1
+        reordered = dict(reversed(list(holder.items())))
+        if section is None:
+            edited = reordered
+        else:
+            edited[section] = reordered
+        assert restart_hash(edited) != restart_hash(raw)
+        with pytest.raises(
+            ValueError,
+            match=re.escape(f"restart refused: the order of the keys under {named}"),
+        ):
+            run.check_restart(edited)
+
+
+@pytest.mark.unit
+class TestRestartHash:
+    @pytest.mark.parametrize(
+        "mapping",
+        [
+            {"fluid": {"density": 1.2}},
+            {"fluid": {"density": 1.2}, "solver": None},
+            {"fluid": {"density": 1.2}, "solver": [1, 2]},
+        ],
+        ids=["no solver", "solver none", "solver list"],
+    )
+    def test_a_mapping_without_a_solver_mapping_is_hashed_whole(
+        self, mapping: dict
+    ) -> None:
+        """The excluded keys are removed where their section is a mapping only.
+
+        Defects caught: the exclusion indexing into a missing or non-mapping
+        section, which fails a restart check on a file that has none; the
+        hash of such a mapping differing from the hash of its own text.
+        """
+        assert (
+            restart_hash(mapping)
+            == hashlib.sha256(config_text(mapping).encode("ascii")).hexdigest()
+        )
+
+    def test_the_excluded_keys_are_removed_from_a_copy(self) -> None:
+        """Defect caught: the key popped from the caller's mapping, so the
+        configuration the run goes on to load has lost its cap."""
+        mapping = {"solver": {"max_simple_iter": 5, "t_end": 1.0, "dt": 0.1}}
+        kept = _without_excluded(mapping)
+        assert kept == {"solver": {"dt": 0.1}}
+        assert mapping["solver"] == {"max_simple_iter": 5, "t_end": 1.0, "dt": 0.1}
+
+    @pytest.mark.parametrize("value", [[1, 2], "text", 3.5, None])
+    def test_a_value_that_is_not_a_mapping_is_returned_as_it_is(
+        self, value: object
+    ) -> None:
+        """The helper takes any plain value (its argument is typed ``object``).
+
+        Defect caught: a list or scalar indexed as a mapping, which raises an
+        attribute error where the caller would otherwise hash it unchanged.
+        """
+        assert _without_excluded(value) is value
 
 
 # ---------------------------------------------------------------------------
