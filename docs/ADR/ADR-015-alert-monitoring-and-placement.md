@@ -72,9 +72,9 @@ source station's k and eps, walls 25 cm from a plume under 3 cm wide, a fixed-fl
 pressure outlet; the width read as the second moment of the profile; the reference the
 primary measurements, Warhaft's figures 4 and 5 digitised in prompt 70c (T8: 25 half-widths
 for sources at 20, 52 and 60 M), with the Anand and Pope (1983) curve in the form
-Viswanathan and Pope plot [13], which the 52 M data confirm within 5% from 30 to 80 M, as
-the interpolant between the data's stations and the only estimate at 100 M (section A, the
-data against the curve).
+Viswanathan and Pope plot [13], which the 52 M data confirm within 5% from 30 to 80 M, as a
+check on the data and one of three estimates at 100 M (section A, the data against the
+curve; the reference at a station is the data interpolated log-log, T9).
 (2) Stapountzis et al. (1986) [12], the companion experiment at a higher intensity (4.7% at
 a source 19.3 M from the grid, U 4.35 m/s), digitised too (T10): its eight points lie within
 10% of the same curve with that paper's parameters at seven stations and at 0.83 at one, so
@@ -84,7 +84,8 @@ wanted.
 *Recommendation.* (1). The row is `val024_560x100` with `val024_280x50` (the probe's grid)
 reported beside it, both at Warhaft's own mesh length of 2.5 cm; the reference is the
 digitised data of T8, the 52 M source's points interpolated log-log between their stations
-(T9). The threshold is Alex's, below.
+(T9). The scored 20 and 50 M are interpolated across gaps in those points, the nearest data
+at 30 M and 60 M (section A, the reference at a station). The threshold is Alex's, below.
 *Threshold: Alex's decision of 2026-10-30* (prompt 70d, on review 70 round 3 B1). The solver's
 decay exponent within 0.1 of the model's own 1.087, and the model's plume width within 20% of
 the measured at 20 and 50 M, the stations inside the range that bears on the sensors (14 to
@@ -353,9 +354,10 @@ C_0 = 2.1 in that decaying turbulence, its equations 11 to 15: sigma_p^2 = sigma
 + 1) - 1, t_o = x_o / U the flight time from the grid to the source; the review of Wilson and
 Sawford (1996) [15] states (its page 196, quoted under source 15) that Anand and Pope
 (1983) find this theory in good agreement with Warhaft's and Stapountzis's data in the far
-field with C_0 = 2.1. The row's reference is the digitised data (T8); the curve, named below
-as the theory it is wherever it is used, interpolates between the data's stations and is
-checked against them in the next paragraph (review 70 round 2 S4). At the source station the formula
+field with C_0 = 2.1. The row's reference is the digitised data (T8) interpolated log-log
+(the paragraph on the reference at a station, below); the curve, named as the theory it is
+wherever it is used, is checked against the data in the next paragraph (review 70 round 2
+S4) and is not the interpolant. At the source station the formula
 gives sigma_v = 0.143 m/s and sigma_u = 0.154 m/s (an intensity of 2.2%), k_o = 0.0322 m^2/s^2,
 eps_o = m k_o U / x_o = 0.239 m^2/s^3, k / eps = 0.135 s, and the Lagrangian time scale
 T_L = (4 / (3 C_0)) k / eps = 0.086 s; the reference width grows from 4.74 mm (0.186 M) at
@@ -388,7 +390,21 @@ lie within 10% of the same Langevin curve with that paper's own parameters at se
 eight stations and at 0.83 at the eighth (9.4 M), across 0.04 to 15 M (T10); the paper plots
 its own random-walk model, not Anand and Pope's. So the review's statement [15] holds, and
 in the near field as well as the far for the 52 M source; the model is scored against the
-data, and the curve stands in only between their stations and at 100 M.
+data, and the curve stands in only at 100 M, as one of three estimates.
+
+**The reference at a station** (review 70 round 3 S2). The row's reference value at a station
+is the digitised data interpolated log-log between the 52 M source's points, as T9 computes
+it (`digitise70c.py`: `composite_52`, the fine wire to 8 M and the thick wire from 8 M with
+both averaged at 8 M and repeated stations averaged, then `loglog_interp`), the same in T9,
+T12 and the threshold. The Anand and Pope curve is not the interpolant; it checks the data.
+The two differ at a station by the data's scatter about the curve: at 50 M the interpolation
+gives 16.0 mm and the curve 16.1 mm, so the model reads 0.853 of the one and 0.843 of the
+other. The 52 M source has no point between 8.1 and 30 M or between 30 and 60 M, so the
+scored stations are interpolated across wide gaps: 20 M between 8.1 and 30 M (a factor 3.7
+in distance; the nearest datum is 30 M, a factor 1.5 from it) and 50 M between 30 and 60 M (a
+factor 2; the nearest is 60 M, a factor 1.2 from it). A datum within a factor 1.2 lies near
+only 5, 10, 50 and 80 M in T9 and 30, 60 and 71 M in T12 (their "nearest datum" columns);
+14, 16, 20 and 40 M are 1.7, 1.9, 1.5 and 1.3 from theirs, and 100 M has none.
 
 **What the model is tested on, two things in one case.** First, the decay of k and eps in a
 uniform stream with no production: standard k-epsilon's solution is k = k_o (1 + t / t_v)^(-n)
@@ -473,14 +489,14 @@ during a slowdown (S6).
 `configs/validation_line_source.yaml`; `validation/line_source.py` with the reference curve,
 `plume_widths` and `decay_exponent`, pinned by `tests/test_line_source.py` on a planted Gaussian
 field and on the analytic decay; `validation.cases.load_line_source`. The rows report n, sigma
-at the stations 5, 10, 20, 50, 80 and 100 M against the digitised data (T8, the curve
-interpolating) and the ratio, scored by Alex's threshold (below).
+at the stations 5, 10, 20, 50, 80 and 100 M against the digitised data (T8, interpolated
+log-log as in T9) and the ratio, scored by Alex's threshold (below).
 
 **Threshold: Alex's decision of 2026-10-30** (prompt 70d, review 70 round 3 B1; the options
 not taken are listed under decision A). The decay exponent n within 0.1 of the model's own
 1.087 (a check of the solver, not of the model, since the model's exponent is known to sit
-below the measured range); the model's width over the measured (T8, the curve interpolating
-between the data's stations) within 20% of one at 20 and 50 M, the stations inside the range
+below the measured range); the model's width over the measured (T8, interpolated log-log
+between the 52 M source's points as in T9) within 20% of one at 20 and 50 M, the stations inside the range
 that bears on the sensors, 14 to 71 M on the row's axis (T11); the ratio at 5 and
 10 M reported, not scored, with the source column's width beside it (the free fall, which
 never reaches the sensors); 80 M reported, not scored; 100 M reported against T9's two
@@ -816,7 +832,7 @@ at step 2.
 
 | Step | Prompt | Builds | Tests | Validation row |
 |---|---|---|---|---|
-| 0 | 71 | The coverage debt: tests for the 66 uncovered statements of table Cv2 of the gate report (47 `raise` lines, 19 fallbacks and early returns), each exercised by its own test or recorded as unreachable with the reason; VAL-024's case file, loader, readers and harness rows, with the digitised widths of T8 (`digitised70c.md`) as the row's reference data and the Anand and Pope curve as the interpolant between their stations | `tests/test_line_source.py`; the new rejection-path tests across `test_config.py`, `test_io_manager.py`, `test_solver_transport.py`, `test_turbulence.py`, `test_mesh.py`, `test_time_integration.py`, `test_forces.py`, `test_particles.py`, `test_staggered.py`, `test_solver_staggered.py` | VAL-024, scored by Alex's threshold |
+| 0 | 71 | The coverage debt: tests for the 66 uncovered statements of table Cv2 of the gate report (47 `raise` lines, 19 fallbacks and early returns), each exercised by its own test or recorded as unreachable with the reason; VAL-024's case file, loader, readers and harness rows, with the digitised widths of T8 (`digitised70c.md`) as the row's reference data interpolated log-log between the 52 M source's points as `digitise70c.py` does, the Anand and Pope curve a check on them | `tests/test_line_source.py`; the new rejection-path tests across `test_config.py`, `test_io_manager.py`, `test_solver_transport.py`, `test_turbulence.py`, `test_mesh.py`, `test_time_integration.py`, `test_forces.py`, `test_particles.py`, `test_staggered.py`, `test_solver_staggered.py` | VAL-024, scored by Alex's threshold |
 | 1 | 72 | The sensitivity sweep (section B) as a report with its generator and tables; the clean-out's third grid (condition 2) as a run and a row in the same report | none in `src/`; the report's check mode | the sweep's tables; no row |
 | 2 | 73 | `monitor.py` (AlertMonitor, Alert, sensor_cells moved), the march hook, `/transport/alerts/`, the runner's summary | `tests/test_monitor.py` (unit: thresholds by size and by class, the cell rule, open and close, the iso_class form, REQ-A06's bytes), `tests/test_alert_latency.py` | VAL-009 |
 | 3 | 74 | `ArrivalTracker`, `/arrival/`, the checkpoint arrays and restart, `latencies(onsets)` and REQ-A04's per-sensor latency in `RunRecord` and the summary; `placement.arrival_from_frames` | `tests/test_monitor.py` (the tracker on planted series, restart bitwise), `tests/test_time_integration.py` (the map against the frames' map on a coarse run) | none; REQ-A04's integration test |
