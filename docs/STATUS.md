@@ -81,8 +81,12 @@ width within 20% at 20 and 50 M, 80 M reported and carried as a limit) and accep
 the same day: A in the rounds of prompt 70, B to H as recommended, the counter's sample time
 OPEN until a counter is specified. REQ-A01, A03 and A05 are reworded to testable forms and
 REQ-T14 added for the width clause (`docs/SYSTEM.md` section 2). The Phase 5 build is under way
-in the order of the ADR's section H; step 0 (prompt 71) pays the Phase 4 coverage debt and
-builds VAL-024. Phases 6 and 7 have not begun.
+in the order of the ADR's section H. Step 0 (prompt 71) is built on branch
+phase5/step0-val024: the Phase 4 coverage debt is paid by tests for each refusal and
+fallback the gate report listed, and VAL-024, the line source in decaying grid turbulence,
+passes its criterion (`tests/test_line_source.py` on 280x50; the harness rows `val024_280x50`
+and `val024_560x100`). Review and test 71 run before its pull request. Phases 6 and 7 have
+not begun.
 
 The product room itself has never been solved, and on 2026-10-04 it was found that the laminar
 flow solver does not solve it. Its Reynolds number on the room height is
