@@ -1927,12 +1927,13 @@ class TestVents:
         assert budget.deposited["obstacle"] > 0.0
 
     def test_a_recirculation_whose_intake_draws_nothing_returns_nothing(self) -> None:
-        """At rest the intake draws no air, so the discharge carries no concentration.
+        """The discharge blows, the intake draws no air: nothing is carried back.
 
-        The carried mean is a flux-weighted average over the intake, a
-        quotient with the drawn flux in the denominator. With no flux drawn
-        it must be zero, not 0 / 0, which would put NaN into every cell above
-        the discharge on the first step.
+        The carried concentration is a flux-weighted average over the intake,
+        a quotient with the drawn flux in the denominator. With no flux drawn
+        it must be zero, not 0 / 0: the discharge's flux is nonzero, so a NaN
+        concentration would enter the room above it on the first step.
+        Defect caught: the guard on the drawn flux removed.
         """
         vents = {
             "discharge": {**DISCHARGE, "recirculate_from": "intake"},
@@ -1946,8 +1947,14 @@ class TestVents:
         )
         solver = TransportSolver(mesh, config, physics, boundary)
         u, v, _p = allocate_fields(mesh)
+        StaggeredBoundary(mesh, config).apply_normal_velocity(u, v)
+        # The intake is the box's left side, u faces of column 6, rows 1 and 2;
+        # the discharge on its top keeps the 0.5 m/s the boundary wrote.
+        assert u[1:3, 6].tolist() == [0.5, 0.5] and v[4, 7:9].tolist() == [0.5, 0.5]
+        u[1:3, 6] = 0.0
+        faces = FaceVelocities.copy_of(u, v)
         c = np.where(mesh.cell_type != SOLID, 50.0, 0.0)
-        out = solver.solve_timestep(c, FaceVelocities.copy_of(u, v), 0, 0.1)
+        out = solver.solve_timestep(c, faces, 0, 0.5 * solver.stable_dt(faces, 0))
         assert np.isfinite(out).all()
         assert solver.budget[0].inflow == 0.0
         assert solver.budget[0].outflow == 0.0
