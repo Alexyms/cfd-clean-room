@@ -57,13 +57,17 @@ reason and the jet is the alternative not taken (section A's last paragraph).
 *Options, ranked.*
 (1) Warhaft's single line source at 52 M, as section A sets it: uniform inflow carrying the
 source station's k and eps, walls 25 cm from a plume under 3 cm wide, a fixed-flow outlet, no
-pressure outlet; the width read as the second moment of the profile; the reference the Anand
-and Pope (1983) curve with Warhaft's parameters that Viswanathan and Pope plot [13] and the
-Wilson and Sawford review says agrees with the data in the far field [15], the primary points
-digitised at step 0.
-(2) Stapountzis et al. (1986) [12], the companion experiment with a fuller description of the
-temperature field's structure: its parameters were not readable in this pass, so it is the
-cross-check once the paper is fetched.
+pressure outlet; the width read as the second moment of the profile; the reference the
+primary measurements, Warhaft's figures 4 and 5 digitised in prompt 70c (T8: 25 half-widths
+for sources at 20, 52 and 60 M), with the Anand and Pope (1983) curve in the form
+Viswanathan and Pope plot [13], which the 52 M data confirm within 5% from 8 to 80 M, as
+the interpolant between the data's stations and the only estimate at 100 M (section A, the
+data against the curve).
+(2) Stapountzis et al. (1986) [12], the companion experiment at a higher intensity (4.7% at
+a source 19.3 M from the grid, U 4.35 m/s), digitised too (T10): its eight points lie within
+10% of the same curve with that paper's parameters at seven stations and at 0.83 at one, so
+it stands as the cross-check and could become a second row at a second intensity if one is
+wanted.
 (3) The plane jet: not taken, for the reasons above.
 *Recommendation.* (1). The row is `val024_560x100` with `val024_280x50` (the probe's grid)
 reported beside it; threshold proposed and OPEN: the far-field ratio at 50 and 100 M within
@@ -280,17 +284,31 @@ profile measured at stations downstream, its width against distance or flight ti
 jet tests shear-made turbulence instead, and in a closed domain its outer stream decays (review
 70 B2), so it answers a different question.
 
-**The sources.** Warhaft (1984, JFM 144) [11] and Stapountzis, Sawford, Hunt and Britter (1986,
-JFM 165) [12] are the primary measurements; neither page was readable in this pass (Cambridge
-Core gives the abstracts only, and Warhaft's abstract carries no number but a wire-spacing
-range). Viswanathan and Pope (2008, Phys. Fluids 20) [13], open access, models Warhaft's single
-line source and consolidates his parameters in its table I, read here from its text: grid mesh
-M = 2.54 cm; mean speed U = 7 m/s (Re_M = U M / nu about 11,800 in air); the wire at
+**The sources** (revised 2026-10-30, prompt 70c: both papers read). Warhaft (1984, JFM 144)
+[11] and Stapountzis, Sawford, Hunt and Britter (1986, JFM 165) [12] are the primary
+measurements, read on 2026-10-30 from Alex's library copies under `results/papers/`
+(gitignored); in prompt 70b neither was readable and the parameters came from [13]. Warhaft's
+section 2 and table 1: a biplane grid of mesh M = 0.025 m (bars 0.476 cm, solidity 0.34) in a
+test section 170 M long and 16 M square, U = 7 m/s for every run, Re_M 1.09e4; the heated
+wires 0.127 mm (and 0.207 mm) in diameter, 0.025 mm within 8 M of the source; the measured
+decay laws u'^2 / U^2 = 0.121 (x / M)^(-1.4) and v'^2 / U^2 = 0.076 (x / M)^(-1.32) (his
+equations 3 and 4); at the 52 M station u' 0.153 and v' 0.142 m/s, eps 0.265 m^2/s^3, the
+integral scale u'^3 / eps 1.35e-2 m and 3 u'^2 / eps 0.265 s. The mean profiles are Gaussian
+and he reports their half-width at half the centreline value, sigma = 0.849 times it (section
+3.2); figures 4(a), 4(b) and 5 carry the half-widths behind a single wire at x_o / M = 52 (to
+80 M downstream), 20 and 60, and are digitised in `docs/reports/probe70/digitised70c.md`
+(T8, by `digitise70c.py`, whose docstring states the method and its precision). Viswanathan
+and Pope (2008, Phys. Fluids 20) [13], open access, models Warhaft's single line source and
+consolidates his parameters in its table I, which is Sawford's refit of the same data: grid
+mesh M = 2.54 cm (the paper's 2.5 cm, a 1.6% difference that enters the row through the
+flight time alone; the probe keeps 2.54 cm and distances are compared in mesh lengths); mean
+speed U = 7 m/s (Re_M = U M / nu about 11,800 in air); the wire at
 x_o / M = 20, 52 and 60 from the grid, source sizes 1.27e-4 and 2.5e-5 m; the velocity standard
 deviations at one mesh length sigma_u 2.44 m/s and sigma_v = sigma_w 2.27 m/s, decaying as
 (x / M)^(-m / 2) with m = 1.4 (Sawford's refit of Warhaft's transverse variance, the paper
-says; the measured grid-turbulence exponents in the literature run from about 1.16 to 1.37
-[14]); molecular diffusivity 2.1e-5 m^2/s. For the plume's width the paper plots (its figure 4,
+says; the refit reproduces table 1's u' and v' at 20, 52, 60 and 100 M within 1% at 52 M
+and 5% at 20 M, and the measured grid-turbulence exponents in the literature run from about
+1.16 to 1.37 [14]); molecular diffusivity 2.1e-5 m^2/s. For the plume's width the paper plots (its figure 4,
 source at 52 M) Anand and Pope's analytic displacement variance for the Langevin model with
 C_0 = 2.1 in that decaying turbulence, its equations 11 to 15: sigma_p^2 = sigma_o^2 + 2 kappa t
 + Delta_o^2(t), Delta_o^2 = 2 sigma_v^2(t_o) t_o^2 [(1 + t / t_o)^(r - s) / (r (r - s)) +
@@ -298,10 +316,9 @@ C_0 = 2.1 in that decaying turbulence, its equations 11 to 15: sigma_p^2 = sigma
 + 1) - 1, t_o = x_o / U the flight time from the grid to the source; the review of Wilson and
 Sawford (1996) [15] states (its page 196, quoted under source 15) that Anand and Pope
 (1983) find this theory in good agreement with Warhaft's and Stapountzis's data in the far
-field with C_0 = 2.1. The row's reference curve is therefore that theory with
-Warhaft's parameters, labelled as such; the primary data points of Warhaft's figures are to be
-digitised at step 0 from the JFM paper, which this machine could not fetch, and the reference
-curve checked against them before the threshold is scored. At the source station the formula
+field with C_0 = 2.1. The row's reference is the digitised data (T8); the curve, named below
+as the theory it is wherever it is used, interpolates between the data's stations and is
+checked against them in the next paragraph (review 70 round 2 S4). At the source station the formula
 gives sigma_v = 0.143 m/s and sigma_u = 0.154 m/s (an intensity of 2.2%), k_o = 0.0322 m^2/s^2,
 eps_o = m k_o U / x_o = 0.239 m^2/s^3, k / eps = 0.135 s, and the Lagrangian time scale
 T_L = (4 / (3 C_0)) k / eps = 0.086 s; the reference width grows from 4.74 mm (0.186 M) at
@@ -309,6 +326,27 @@ exactly 10 M downstream (t = 0.42 T_L, where sigma is still nearly sigma_v t) to
 (0.98 M) at 100 M (t = 4.2 T_L, where sigma^2 grows as t^(2 - m)); the probe reads the
 curve at its cell centres, within 0.2 M of the stations, so its tabulated reference values
 differ from these in the last figure.
+
+**The data against the curve** (prompt 70c; T8 and T10). For the 52 M source the digitised
+points lie on the Anand and Pope curve within 5% from 8 to 80 M (data over curve 1.03 at
+30 M, 0.96 and 0.97 at 60 M, 0.98 and 0.99 at 80 M); at 8 M the two wires differ by 20%
+(the 0.025 mm wire 1.11 to 1.14 of the curve, the 0.127 mm wire 0.92 and 0.93) with the
+curve between them; within 1 M of the source the fine wire's points scatter from 0.9 to 1.2
+of it. The data and the curve differ where the curve's parameters are not the 52 M
+station's: for the 20 M source the curve is wide by 19% at 7.7 M and 9% at 33 M (its refit
+v' at 20 M is 4.5% above table 1's, and the 0.127 mm wire's near-field width is the smaller
+one at 52 M too) and narrow by 16% at 133 M (x' / x_o 6.6), where the data's growth is
+steeper than the curve's t^(0.3); for the 60 M source it is within 3% at 23 and 33 M and
+12% wide at 73 M. The 52 M data end at 80 M, so the 100 M station has no measurement
+behind it: the 60 to 80 M slope (0.69) extrapolated gives 25.3 mm, the 20 M source read at
+the same x' / x_o through figure 10's collapse (half-width over the source station's
+integral scale) gives 22.5 mm, and the curve 25.0 mm. Stapountzis et al.'s eight sigma_m
+points (figure 7: a source at 19.3 M, U 4.35 m/s, intensity 4.7% at the source, M 2.54 cm)
+lie within 10% of the same Langevin curve with that paper's own parameters at seven of the
+eight stations and at 0.83 at the eighth (9.4 M), across 0.04 to 15 M (T10); the paper plots
+its own random-walk model, not Anand and Pope's. So the review's statement [15] holds, and
+in the near field as well as the far for the 52 M source; the model is scored against the
+data, and the curve stands in only between their stations and at 100 M.
 
 **What the model is tested on, two things in one case.** First, the decay of k and eps in a
 uniform stream with no production: standard k-epsilon's solution is k = k_o (1 + t / t_v)^(-n)
@@ -825,10 +863,15 @@ within 0.01, inside the orchestrator's 1.0 to 1.3; both flow solves stopped by t
 model says it should, and more slowly than the tunnel's (1.4 in the refit, 1.16 to 1.37
 in the literature [14]).
 
-*Prediction (d): HOLDS in the near field and at 50 M, FAILS at 100 M.* The plume's width
-over the reference curve, the same on both grids within 0.02 (to two figures at 5 and 10 M,
-three at 20, 50 and 100 M): 1.75 and 1.77 at 5 M, 1.36 and 1.34 at 10 M, 1.06 at 20 M,
-0.84 at 50 M, 0.77 at 100 M (T7, `line70.png`). Wider
+*Prediction (d): HOLDS in the near field and at 50 M, FAILS at 100 M; scored in prompt 70b
+against the reference curve, provisionally, and rescored in prompt 70c against the digitised
+data with the same verdict (T9).* Against the data the plume is 1.68 times the measured
+width at 5 M, 1.32 at 10 M, 1.05 at 20 M, 0.87 at 50 M, 0.80 at 80 M (the last station the
+52 M source was measured at) and 0.76 or 0.85 at 100 M by the two estimates of T9, the same
+on both grids to two figures; within 20% at 50 M, at the band's edge at 80 M, and 15% to 24%
+under at 100 M, where no 52 M datum exists. Against the curve, the same on both grids within
+0.02 (to two figures at 5 and 10 M, three at 20, 50 and 100 M): 1.75 and 1.77 at 5 M, 1.36
+and 1.34 at 10 M, 1.06 at 20 M, 0.84 at 50 M, 0.77 at 100 M (T7, `line70.png`). Wider
 than the reference in the near field, as predicted, and by the same factor on a cell half
 the size (the plume's width at the source column 1.0 and 0.7 mm against the reference's
 2.6 mm at 5 M), so the near-field excess is gradient diffusion's, not the cell's: sigma^2 =
@@ -1312,6 +1355,62 @@ instrument the sweep already needed.
 | 280x50 | 10 | 1.02 | 1381 | error_estimate_and_continuity | 89 | 1.0775 | 3063, steady, 27 | 1.754 | 1.355 | 1.059 | 0.843 | 0.768 | 19.2, 25.0 |
 | 560x100 | 5 | 0.73 | 2609 | error_estimate_and_continuity | 512 | 1.0767 | 5079, steady, 110 | 1.767 | 1.339 | 1.056 | 0.842 | 0.768 | 19.2, 25.0 |
 
+**Digitised data** (prompt 70c; copied from `docs/reports/probe70/digitised70c.md`, generated by `digitise70c.py` from the marker centres it records; the generated file is the record).
+
+#### T8. Warhaft (1984): the mean temperature profile's half-width behind a single heated wire at x_o / M = 20, 52 and 60, grid M = 0.025 m, U = 7 m/s, from the figures named; sigma = 0.849 x half-width; the reference curve at the same x' / M with the source station's sigma_v and t_o (the probe's constants); t / T_L with the 52 M station's T_L
+
+| Source x_o / M | Wire | Figure, marker | x' / M | Half-width / M | sigma (mm) | sigma / M | t / T_L | Reference sigma (mm) | Data / reference |
+|---|---|---|---|---|---|---|---|---|---|
+| 20 | 0.127 mm | Warhaft figure 5, filled circle | 7.71 | 0.2402 | 5.10 | 0.2040 | - | 6.28 | 0.81 |
+| 20 | 0.127 mm | Warhaft figure 5, filled circle | 32.93 | 0.7314 | 15.52 | 0.6210 | - | 17.10 | 0.91 |
+| 20 | 0.127 mm | Warhaft figure 5, filled circle | 91.93 | 1.3401 | 28.44 | 1.1378 | - | 28.90 | 0.98 |
+| 20 | 0.127 mm | Warhaft figure 5, filled circle | 132.58 | 1.8514 | 39.30 | 1.5719 | - | 33.93 | 1.16 |
+| 52 | 0.025 mm | Warhaft figure 4(a), filled circle | 0.22 | 0.0123 | 0.26 | 0.0104 | 0.01 | 0.22 | 1.20 |
+| 52 | 0.025 mm | Warhaft figure 4(a), filled circle | 0.55 | 0.0173 | 0.37 | 0.0147 | 0.02 | 0.40 | 0.91 |
+| 52 | 0.025 mm | Warhaft figure 4(a), filled circle | 0.89 | 0.0279 | 0.59 | 0.0237 | 0.04 | 0.59 | 1.01 |
+| 52 | 0.025 mm | Warhaft figure 4(b), filled circle | 3.59 | 0.0883 | 1.87 | 0.0750 | 0.15 | 1.92 | 0.98 |
+| 52 | 0.025 mm | Warhaft figure 4(a), filled circle | 3.67 | 0.0840 | 1.78 | 0.0713 | 0.16 | 1.96 | 0.91 |
+| 52 | 0.025 mm | Warhaft figure 4(b), filled circle | 5.20 | 0.1413 | 3.00 | 0.1199 | 0.22 | 2.67 | 1.12 |
+| 52 | 0.025 mm | Warhaft figure 4(a), filled circle | 5.69 | 0.1416 | 3.01 | 0.1203 | 0.24 | 2.89 | 1.04 |
+| 52 | 0.127 mm | Warhaft figure 4(a), cross | 7.97 | 0.1703 | 3.62 | 0.1446 | 0.34 | 3.89 | 0.93 |
+| 52 | 0.025 mm | Warhaft figure 4(a), filled circle | 7.99 | 0.2098 | 4.45 | 0.1781 | 0.34 | 3.90 | 1.14 |
+| 52 | 0.127 mm | Warhaft figure 5, open circle | 8.09 | 0.1955 | 4.15 | 0.1660 | 0.34 | 3.94 | 1.05 |
+| 52 | 0.025 mm | Warhaft figure 4(b), filled circle | 8.13 | 0.2064 | 4.38 | 0.1752 | 0.34 | 3.96 | 1.11 |
+| 52 | 0.127 mm | Warhaft figure 4(b), cross | 8.31 | 0.1749 | 3.71 | 0.1485 | 0.35 | 4.03 | 0.92 |
+| 52 | 0.127 mm | Warhaft figure 5, open circle | 29.90 | 0.5558 | 11.80 | 0.4719 | 1.27 | 11.45 | 1.03 |
+| 52 | 0.127 mm | Warhaft figure 4(b), cross | 30.16 | 0.5610 | 11.91 | 0.4763 | 1.28 | 11.52 | 1.03 |
+| 52 | 0.127 mm | Warhaft figure 5, open circle | 59.99 | 0.8306 | 17.63 | 0.7051 | 2.54 | 18.45 | 0.96 |
+| 52 | 0.127 mm | Warhaft figure 4(b), cross | 60.24 | 0.8448 | 17.93 | 0.7172 | 2.55 | 18.49 | 0.97 |
+| 52 | 0.127 mm | Warhaft figure 4(b), cross | 80.04 | 1.0301 | 21.86 | 0.8746 | 3.39 | 21.99 | 0.99 |
+| 52 | 0.127 mm | Warhaft figure 5, open circle | 80.45 | 1.0161 | 21.57 | 0.8627 | 3.41 | 22.05 | 0.98 |
+| 60 | 0.127 mm | Warhaft figure 5, cross | 22.89 | 0.3998 | 8.48 | 0.3394 | - | 8.74 | 0.97 |
+| 60 | 0.127 mm | Warhaft figure 5, cross | 32.64 | 0.5369 | 11.40 | 0.4558 | - | 11.48 | 0.99 |
+| 60 | 0.127 mm | Warhaft figure 5, cross | 72.72 | 0.8211 | 17.43 | 0.6971 | - | 19.88 | 0.88 |
+
+#### T9. Prediction (d) rescored against the data: the probe's width over Warhaft's at the stations, the 52 M source's points interpolated in log-log (the fine wire to 8 M, the thick wire from 8 M, both averaged at 8 M, repeated stations averaged). The 52 M data end at 80 M; the 100 M row gives two estimates, the 60 to 80 M slope extrapolated and the 20 M source read at the same x' / x_o through figure 10's collapse (half-width over the source station's integral scale l, table 1: 1.02 and 1.35 cm), and the model's ratio against each
+
+| Station x' / M | t / T_L | Data sigma (mm) | Reference sigma (mm) | Data / reference | Model sigma 280x50, 560x100 (mm) | Model / data | Model / reference (T7) |
+|---|---|---|---|---|---|---|---|
+| 5 | 0.21 | 2.7 | 2.6 | 1.05 | 4.6, 4.5 | 1.69 and 1.67 | 1.77, 1.76 |
+| 10 | 0.42 | 4.8 | 4.7 | 1.02 | 6.4, 6.3 | 1.32 and 1.32 | 1.35, 1.34 |
+| 20 | 0.85 | 8.5 | 8.4 | 1.01 | 8.9, 8.9 | 1.05 and 1.05 | 1.06, 1.06 |
+| 50 | 2.12 | 16.0 | 16.4 | 0.97 | 13.8, 13.8 | 0.87 and 0.87 | 0.84, 0.84 |
+| 80 | 3.39 | 21.7 | 22.0 | 0.99 | 17.3, 17.2 | 0.80 and 0.80 | 0.78, 0.78 |
+| 100 | 4.24 | 25.3, 22.5 (extrapolated at slope 0.69; by the collapse) | 25.0 | 1.01, 0.90 | 19.2, 19.2 | 0.76 and 0.76, 0.85 and 0.85 | 0.77, 0.77 |
+
+#### T10. Stapountzis et al. (1986) figure 7: sigma_m of the mean temperature profile behind the wire at x_o / M = 19.3, M = 2.54 cm, U = 4.35 m/s, sigma_w / U = 4.65% at the source (equation 2.2), against the same Langevin curve with that paper's parameters (m = 1.43, sigma_o = 0.92 d_w = 0.14 mm, kappa 2.2e-5 m^2/s, C_0 = 2.1); t_L(0) = L_w / sigma_w = 0.0355 s from equations 2.2 and 2.3
+
+| x_w / M | t / t_L(0) | sigma_m (mm) | sigma_m / M | Curve sigma (mm) | Data / curve |
+|---|---|---|---|---|---|
+| 0.039 | 0.006 | 0.215 | 0.0085 | 0.178 | 1.21 |
+| 0.115 | 0.019 | 0.248 | 0.0098 | 0.260 | 0.95 |
+| 0.192 | 0.032 | 0.372 | 0.0147 | 0.347 | 1.07 |
+| 0.308 | 0.051 | 0.510 | 0.0201 | 0.478 | 1.07 |
+| 1.919 | 0.317 | 2.419 | 0.0952 | 2.240 | 1.08 |
+| 3.834 | 0.633 | 4.367 | 0.1719 | 4.106 | 1.06 |
+| 9.407 | 1.553 | 7.095 | 0.2793 | 8.516 | 0.83 |
+| 15.104 | 2.493 | 12.976 | 0.5109 | 11.993 | 1.08 |
+
 ## Consequences
 
 - Phase 5 reports no detection result before VAL-024 and the sweep are in (decision 2), so
@@ -1391,13 +1490,22 @@ instrument the sweep already needed.
     reason the product and the validation cases have no pressure outlet.
 11. Warhaft, Z. (1984), "The interference of thermal fields from line sources in grid
     turbulence", J. Fluid Mech. 144, 363-387 (DOI 10.1017/S0022112084001646). The primary
-    measurement; Cambridge Core gave the abstract only (read 2026-10-29), whose one number is
-    a wire-spacing range; the paper's parameters are taken from [13] and its figures are to
-    be digitised at step 0.
+    measurement. On 2026-10-29 Cambridge Core gave the abstract only; read in full on
+    2026-10-30 from Alex's library copy (`results/papers/`, gitignored, 25 pages, SHA-256
+    21f4e7ea...): section 2 (the grid, M = 0.025 m, U = 7 m/s, the wires), equations 3 and
+    4 (the decay laws), table 1 (u', v', eps, the integral scale at 20, 52, 60 and 100 M),
+    section 3.2 (Gaussian mean profiles, sigma = 0.849 times the half-width), figures 4(a),
+    4(b) and 5 (the half-widths, digitised in `docs/reports/probe70/digitised70c.md`, T8)
+    and figure 10 (the collapse on the source station's integral scale, with Anand and
+    Pope's prediction and Stapountzis's points).
 12. Stapountzis, H., Sawford, B. L., Hunt, J. C. R. and Britter, R. E. (1986), "Structure of
     the temperature field downwind of a line source in grid turbulence", J. Fluid Mech. 165,
-    401-424. The companion measurement; not readable in this pass (the ADS and Cambridge
-    pages refused the fetch), named as the cross-check.
+    401-424 (DOI 10.1017/S0022112086003154). The companion measurement; read on 2026-10-30
+    from Alex's library copy (24 pages, SHA-256 01b25714...): section 2.1 (M = 2.54 cm,
+    U = 4.35 m/s, the wire at 19.3 M, 0.152 mm), equations 2.1 to 2.5 (the decay laws,
+    the transverse integral scale, the dissipation), section 4.1 (the effective source size
+    0.92 d_w) and figure 7 (sigma_m, digitised as T10). Its model is the Durbin random walk
+    of Sawford and Hunt, not Anand and Pope's.
 13. Viswanathan, S. and Pope, S. B. (2008), "Turbulent dispersion from line sources in grid
     turbulence", Phys. Fluids 20, 101514; table I (Warhaft's parameters: sigma_o 1.27e-4 and
     2.5e-5 m, M 2.54e-2 m, x_o / M 20, 52 and 60, U 7 m/s, sigma_u 2.44 and sigma_v, sigma_w
