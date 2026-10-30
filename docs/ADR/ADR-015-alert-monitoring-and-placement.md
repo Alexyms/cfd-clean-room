@@ -679,11 +679,13 @@ trackers' arrays in it. Written at the end of the run and at each checkpoint flu
 clean-out gets the map too; its arrival is t = 0 everywhere above threshold, which is what
 the clearing-time companion needs to say nothing new.
 
-**Run files without it.** `placement.arrival_from_frames(run_file)` reads the stored frames
-and the plan's onsets from the file's merged configuration and returns the map with the same
-events axis at the output cadence's resolution, flagged as such. The Phase 4 run files
-and probe B's are read this way (T5), and section F's sweep can be read before step 3 is
-built.
+**Run files without it.** `placement.arrival_from_run(run_file)` (section H) returns the
+file's `/arrival/` map when it has one. When it has none it reads the stored frames and the
+plan's onsets from the file's merged configuration and calls
+`arrival_from_frames(frames, thresholds, live, onsets)`, which returns the map with the same
+events axis at the output cadence's resolution, and `arrival_from_run` flags the result as
+frame-resolved. The Phase 4 run files and probe B's are read this way (T5), and section F's
+sweep can be read before step 3 is built.
 
 **Latency** (revised 2026-10-29, prompt 70b, review 70 S7). The onset of an event that
 carries contamination is its `start` (a `replace` with a concentration key, a `source`, or
