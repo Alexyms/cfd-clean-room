@@ -3,9 +3,10 @@
 The two primary papers sit under results/papers/ (gitignored). This script holds
 the digitised points and regenerates digitised70c.md from them; it does not need
 the papers to run. With --detect it re-reads the figures from the PDFs (PyMuPDF
-and SciPy needed) and prints the marker centres it finds, for comparison with
-the DETECTIONS recorded below. With --check it regenerates the table and
-compares it with digitised70c.md.
+and SciPy needed) with the three detectors below and matches their candidates
+to every centre recorded in DETECTIONS; the one centre no detector re-finds is
+listed in HAND_PLACED with the reason. With --check it regenerates the table
+and compares it with digitised70c.md.
 
 Method. Each figure page was rendered at 400 dpi and the plot cropped. The axis
 frame and its tick marks were found as long dark runs; the calibration below maps
@@ -16,7 +17,9 @@ blobs surviving an erosion of radius 6 px (filled circles), of enclosed white
 regions of 40 to 900 px with a near-square bounding box (open circles), and of
 regions where the dark-pixel density in a 13 px window exceeds 0.5 (crosses,
 where two strokes meet). Every centre was checked on an overlay by eye; the
-curves' own crossings and the legend's symbols were dropped. A centroid is good
+curves' own crossings and the legend's symbols were dropped. --detect runs all
+three detectors, so the filled and open circles and the crosses are each
+re-found (32 of the 33 recorded centres to within 1 px). A centroid is good
 to about 2 px, so a width is good to about 0.003 M on figure 4(b) (0.3% of the
 80 M half-width, 1.03 M), 0.005 M on figure 5 (0.5% of it), 0.0005 M on
 figure 4(a), and 1% on figure 7's logarithmic axes; the calibration adds about
@@ -141,6 +144,16 @@ DETECTIONS = [
     ("s_fig7", 19.3, "0.152 mm", "open circle", (968.6, 374.1)),
     ("s_fig7", 19.3, "0.152 mm", "open circle", (1045.3, 276.3)),
 ]
+# --detect: a recorded centre counts as re-found when a candidate of its marker type
+# lies within the method's claimed centroid precision. The one centre no detector
+# finds is placed by eye, with the reason (crop pixels, as in DETECTIONS).
+DETECT_TOL = 2.0  # px
+HAND_PLACED = {
+    ("w_fig4b", 174.0, 760.6): (
+        "a cross against the fine wire's filled circle at (171.2, 735.5); the density "
+        "detector merges the two, so the centre is where its strokes meet, read on the overlay"
+    ),
+}
 STATIONS = (5.0, 10.0, 20.0, 50.0, 80.0, 100.0)
 # The row stations the spill puts the gap sensors' nearest contour cells at (spill70c.py).
 SPILL_STATIONS = (14.0, 16.0, 20.0, 30.0, 40.0, 50.0, 60.0, 71.0)
@@ -176,6 +189,7 @@ def warhaft_points() -> list[dict]:
 
 
 def stapountzis_points() -> list[dict]:
+    """Every Stapountzis point in data units: x_w / M and sigma_m in metres."""
     rows = []
     for fig, xo, wire, marker, (px, py) in DETECTIONS:
         if fig != "s_fig7":
@@ -509,29 +523,109 @@ def main() -> int:
     return 0
 
 
-def detect() -> int:
-    """Re-read the figures: frame, ticks and marker candidates per crop."""
-    import fitz  # PyMuPDF
+def _centroids(mask: np.ndarray) -> np.ndarray:
+    """Centroids (x, y) in pixels of the connected regions of a boolean mask, [n, 2]."""
     from scipy import ndimage as ndi
 
+    labels, count = ndi.label(mask)
+    if count == 0:
+        return np.zeros((0, 2))
+    centres = ndi.center_of_mass(mask, labels, range(1, count + 1))
+    return np.array([(cx, cy) for cy, cx in centres])
+
+
+def marker_candidates(dark: np.ndarray) -> dict[str, np.ndarray]:
+    """Marker-centre candidates of each type in a crop's dark-pixel mask.
+
+    The three detectors are the ones the module docstring describes. They also
+    return curve crossings, text and the legend's symbols, which the recorded
+    centres leave out, so the candidates are matched against the record and not
+    read off as it.
+
+    Parameters
+    ----------
+    dark : np.ndarray
+        Boolean mask of the crop's dark pixels, shape [rows, columns].
+
+    Returns
+    -------
+    dict[str, np.ndarray]
+        Centroids (x, y) in crop pixels, shape [n, 2], keyed by the marker names
+        of DETECTIONS.
+    """
+    from scipy import ndimage as ndi
+
+    eroded = ndi.binary_erosion(dark, structure=np.ones((13, 13), bool))
+    labels, _count = ndi.label(~dark)
+    open_centres = []
+    for k, box in enumerate(ndi.find_objects(labels), start=1):
+        height = box[0].stop - box[0].start
+        width = box[1].stop - box[1].start
+        region = labels[box] == k
+        if 40 <= region.sum() <= 900 and 0.7 <= height / width <= 1.4:
+            cy, cx = ndi.center_of_mass(region)
+            open_centres.append((cx + box[1].start, cy + box[0].start))
+    density = ndi.uniform_filter(dark.astype(float), size=13)
+    return {
+        "filled circle": _centroids(eroded),
+        "open circle": np.array(open_centres),
+        "cross": _centroids(density > 0.5),
+    }
+
+
+def detect() -> int:
+    """Re-read the figures and match the detectors' candidates to the recorded centres.
+
+    For each centre in DETECTIONS the nearest candidate of its marker type is
+    printed with its distance in pixels. A centre not re-found within DETECT_TOL
+    is listed; those in HAND_PLACED are expected, any other is a failure.
+
+    Returns
+    -------
+    int
+        0 if every recorded centre outside HAND_PLACED is re-found, else 1.
+    """
+    try:
+        import pymupdf as fitz
+    except ImportError:
+        import fitz  # PyMuPDF before 1.24.3
+
+    missed = 0
+    found = 0
     for tag, (pdf, page, x0, y0) in CROPS.items():
         path = PAPERS / pdf
         if not path.exists():
             print(f"{tag}: {path} missing")
-            continue
+            return 1
         pix = fitz.open(path)[page - 1].get_pixmap(dpi=400)
         arr = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
             pix.height, pix.width, pix.n
         )
-        gray = arr[y0:, x0:, :3].mean(axis=2)
-        dark = gray < 110
-        er = ndi.binary_erosion(dark, structure=np.ones((13, 13), bool))
-        lab, _ = ndi.label(er)
-        centres = ndi.center_of_mass(er, lab, range(1, lab.max() + 1))
-        print(f"{tag}: {len(centres)} filled blobs after erosion; first ten (x, y):")
-        for cy, cx in centres[:10]:
-            print(f"  ({cx:.1f}, {cy:.1f})")
-    return 0
+        candidates = marker_candidates(arr[y0:, x0:, :3].mean(axis=2) < 110)
+        print(f"{tag}: " + ", ".join(f"{len(v)} {k}" for k, v in candidates.items()))
+        for fig, _xo, _wire, marker, (px, py) in DETECTIONS:
+            if fig != tag:
+                continue
+            near = candidates[marker]
+            dist = np.hypot(near[:, 0] - px, near[:, 1] - py)
+            k = int(np.argmin(dist))
+            ok = dist[k] <= DETECT_TOL
+            note = ""
+            if (fig, px, py) in HAND_PLACED:
+                note = f"  hand-placed: {HAND_PLACED[(fig, px, py)]}"
+            elif not ok:
+                note = "  NOT RE-FOUND"
+            found += int(ok)
+            missed += int(not ok and (fig, px, py) not in HAND_PLACED)
+            print(
+                f"  {marker:13s} recorded ({px:7.1f}, {py:7.1f}) nearest "
+                f"({near[k, 0]:7.1f}, {near[k, 1]:7.1f}) {dist[k]:5.1f} px{note}"
+            )
+    print(
+        f"{found} of {len(DETECTIONS)} recorded centres re-found within {DETECT_TOL:g} px; "
+        f"{len(HAND_PLACED)} hand-placed, {missed} unexplained misses"
+    )
+    return int(missed > 0)
 
 
 if __name__ == "__main__":

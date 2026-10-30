@@ -333,7 +333,9 @@ integral scale u'^3 / eps 1.35e-2 m and 3 u'^2 / eps 0.265 s. The mean profiles 
 and he reports their half-width at half the centreline value, sigma = 0.849 times it (section
 3.2); figures 4(a), 4(b) and 5 carry the half-widths behind a single wire at x_o / M = 52 (to
 80 M downstream), 20 and 60, and are digitised in `docs/reports/probe70/digitised70c.md`
-(T8, by `digitise70c.py`, whose docstring states the method and its precision). Viswanathan
+(T8, by `digitise70c.py`, whose docstring states the method and its precision, and whose `--detect`
+re-reads the figures from the PDFs and re-finds 32 of the 33 recorded marker centres within 0.6 px;
+the 33rd, a cross on figure 4(b) at 8 M, is placed by eye and listed with its reason). Viswanathan
 and Pope (2008, Phys. Fluids 20) [13], open access, models Warhaft's single line source and
 consolidates his parameters in its table I, which is Sawford's refit of the same data: grid
 mesh M = 2.54 cm (Warhaft's own grid is 2.5 cm, a 1.6% difference; the first probe ran at
