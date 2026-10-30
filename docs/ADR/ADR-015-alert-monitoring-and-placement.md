@@ -68,9 +68,9 @@ cross-check once the paper is fetched.
 *Recommendation.* (1). The row is `val024_560x100` with `val024_280x50` (the probe's grid)
 reported beside it; threshold proposed and OPEN: the far-field ratio at 50 and 100 M within
 20% of one and the solver's decay exponent within 0.1 of the model's 1.087, the near-field
-ratio reported with the cell's source size beside it. The width clause verifies no requirement
+ratio reported with the source column's width beside it. The width clause verifies no requirement
 as written; REQ-T14 is proposed for it (section G). The probe (T7, `line70.png`), the same
-on 280x50 and 560x100 to three figures: the solver's decay exponent is 1.077 (the model's
+on 280x50 and 560x100 within 0.02: the solver's decay exponent is 1.077 (the model's
 own 1.087); the plume is 1.77 and 1.34 times the reference width at 5 and 10 M, 1.06 at
 20 M, 0.84 at 50 M and 0.77 at 100 M. Prediction (c) holds; (d) holds in the near field
 and at 50 M and fails at 100 M, where the proposed 20% band would fail too. For the
@@ -304,9 +304,11 @@ digitised at step 0 from the JFM paper, which this machine could not fetch, and 
 curve checked against them before the threshold is scored. At the source station the formula
 gives sigma_v = 0.143 m/s and sigma_u = 0.154 m/s (an intensity of 2.2%), k_o = 0.0322 m^2/s^2,
 eps_o = m k_o U / x_o = 0.239 m^2/s^3, k / eps = 0.135 s, and the Lagrangian time scale
-T_L = (4 / (3 C_0)) k / eps = 0.086 s; the reference width grows from 4.7 mm (0.19 M) at
-10 M downstream (t = 0.42 T_L, where sigma is still nearly sigma_v t) to 25 mm (0.98 M) at
-100 M (t = 4.2 T_L, where sigma^2 grows as t^(2 - m)).
+T_L = (4 / (3 C_0)) k / eps = 0.086 s; the reference width grows from 4.74 mm (0.186 M) at
+exactly 10 M downstream (t = 0.42 T_L, where sigma is still nearly sigma_v t) to 25.0 mm
+(0.98 M) at 100 M (t = 4.2 T_L, where sigma^2 grows as t^(2 - m)); the probe reads the
+curve at its cell centres, within 0.2 M of the stations, so its tabulated reference values
+differ from these in the last figure.
 
 **What the model is tested on, two things in one case.** First, the decay of k and eps in a
 uniform stream with no production: standard k-epsilon's solution is k = k_o (1 + t / t_v)^(-n)
@@ -333,10 +335,17 @@ not reach it and the stream the plume sits in stays uniform, and a fixed-flow ou
 whole right edge stating no velocity, so the domain has no pressure outlet. The source is a
 unit rate in one cell on the centreline two cells from the inlet; the plume's width is the
 second moment of each column's profile about its own mean (a Gaussian's standard deviation,
-the experiments' fit). The cell imposes a source size of dx / sqrt(12), 2.9 mm on the coarse
-grid, which is the near field's floor on that grid (the reference's own near-field width is set
-by molecular diffusion, 3.9 mm at 100 M); the cell is not the wire. The class is 0.1 um, whose
-Brownian diffusivity is negligible, so the model's plume spreads by nu_t / Sc_t alone.
+the experiments' fit). The source cell is not the wire, but it does not set the near-field
+width either (revised 2026-10-30, prompt 70c, review 70 round 2 S1): the records put the
+plume's width at the source column at 1.0 mm on the coarse grid and 0.7 mm on the fine
+(`sigma` at the source column in `line_*.json`; the second moment of a one-cell profile
+about its own mean is zero, so this is the scheme's spread in one step, not dx / sqrt(12)),
+and the excess over the reference at 5 and 10 M is the same on both grids (the probe
+section), so it is the model's: gradient diffusion grows sigma^2 as 2 D_t t from the start,
+the reference as sigma_v^2 t^2. Molecular diffusion is a small part of the reference's
+near-field width (0.9 mm of the 2.6 mm at 5 M is sqrt(2 kappa t); the 3.9 mm it reaches at
+100 M is a sixth of the width there). The class is 0.1 um, whose Brownian diffusivity is
+negligible, so the model's plume spreads by nu_t / Sc_t alone.
 
 **The grids and the cost.** The probe's coarse grid is 280x50 (1 cm cells, 14,000 cells); the
 row's is 560x100 (5 mm, 56,000 cells, about five cells across sigma at 10 M and ten at 100 M).
@@ -353,8 +362,8 @@ at the five stations against the reference and the ratio, scored by the threshol
 **Threshold, OPEN.** Proposed: the far-field ratio sigma / sigma_ref at 50 and 100 M within
 20% of one, and the decay exponent n within 0.1 of the model's own 1.087 (a check of the
 solver, not of the model, since the model's exponent is known to sit below the measured
-range); the near-field ratio at 5 and 10 M reported, not scored, with the cell's source size
-beside it. An alternative: score against the digitised data directly once they are in.
+range); the near-field ratio at 5 and 10 M reported, not scored, with the source column's
+width beside it. An alternative: score against the digitised data directly once they are in.
 
 **Trace.** The decay clause verifies REQ-S14 (the k-epsilon model as ADR-012 A names it; the
 row joins VAL-015's decaying-turbulence test under its Verified By). The width clause verifies
@@ -799,7 +808,9 @@ cells); at the widest arm of the range, 10% at 0.3 m (supply nu_t 99 nu, six tim
 file's), 0.283 m (5.7 cells) and 0.354 m (7.1 cells), the width on the row 1.20 m (a factor
 1.14); at the narrowest, 2% at 0.05 m, 0.354 and 0.447 m, the width 0.95 m; at Sc_t 0.2 on
 the file's flow 0.320 and 0.391 m. The door and hood sensors stand 1.3 to 1.6 m outside at
-every arm. The width at ten times the threshold moves by one cell or none. The contour's
+every arm. The width at ten times the threshold moves by two cells at most (T4: 0.90 m at
+the file's inputs against 1.00 m at the widest arm and at Sc_t 0.2 on the 2.5 m row, 1.80
+against 1.90 m on the 2.05 m row). The contour's
 grid dependence, from the gate's 320x120 breach at the file's inputs read the same way:
 above_gap_1 0.389 m (15.6 cells), above_gap_2 0.470 m (18.8 cells), the width on the 2.5 m
 row 0.98 m against 1.05 m, so the coarse contour lies about one coarse cell farther out and
@@ -815,12 +826,13 @@ model says it should, and more slowly than the tunnel's (1.4 in the refit, 1.16 
 in the literature [14]).
 
 *Prediction (d): HOLDS in the near field and at 50 M, FAILS at 100 M.* The plume's width
-over the reference curve, the same on both grids to three figures: 1.75 and 1.77 at 5 M,
-1.36 and 1.34 at 10 M, 1.06 at 20 M, 0.84 at 50 M, 0.77 at 100 M (T7, `line70.png`). Wider
+over the reference curve, the same on both grids within 0.02 (to two figures at 5 and 10 M,
+three at 20, 50 and 100 M): 1.75 and 1.77 at 5 M, 1.36 and 1.34 at 10 M, 1.06 at 20 M,
+0.84 at 50 M, 0.77 at 100 M (T7, `line70.png`). Wider
 than the reference in the near field, as predicted, and by the same factor on a cell half
-the size with a source size a half of the coarse grid's (2.9 and 1.4 mm against the
-reference's 2.6 mm at 5 M), so the near-field excess is gradient diffusion's, not the
-cell's: sigma^2 = 2 D_t t from the start against the reference's sigma_v^2 t^2. Within 20%
+the size (the plume's width at the source column 1.0 and 0.7 mm against the reference's
+2.6 mm at 5 M), so the near-field excess is gradient diffusion's, not the cell's: sigma^2 =
+2 D_t t from the start against the reference's sigma_v^2 t^2. Within 20%
 at 50 M (t / T_L 2.1) and 23% under at 100 M (4.2), the model's far-field diffusivity
 smaller than the Langevin reference's, with the slower decay of its turbulence working the
 other way; the crossing is near 25 M. The scalar marches reached a steady field in 1.5 and
@@ -850,7 +862,7 @@ row) and the sensors' distances to the contour (5.7 cells at the least on 160x60
 factor saying the model's plume at the sensors is the wider one; decision D's maps are the
 instrument the sweep already needed.
 
-**Tables** (copied from `docs/reports/probe70/tables70.md` at the end of prompt 70b; the generated file is the record and `tables70.py --check` compares it with the records).
+**Tables** (copied from `docs/reports/probe70/tables70.md` at the end of prompt 70b, T7's third column relabelled in prompt 70c from the cell's second moment to the plume's measured width at the source column, review 70 round 2 S1; the generated file is the record and `tables70.py --check` compares it with the records).
 
 #### T1. The plane jet's spreading rate (probe A, jet70.py), standard k-epsilon on the product's model and solver keys
 
@@ -1295,10 +1307,10 @@ instrument the sweep already needed.
 
 #### T7. The line source in decaying grid turbulence (prompt 70b, line70.py): the model's decay exponent and the plume's width against the reference curve (Anand and Pope's displacement variance with Warhaft's parameters, Viswanathan and Pope 2008 equations 11 to 15) at five stations downstream of the source
 
-| Grid | Cell (mm) | Cell's second moment (mm) | Outer iterations | Stop | Flow wall (s) | n (model's own 1.087) | Scalar march: steps, stop, wall (s) | sigma / sigma_ref at 5 M (t / T_L 0.2) | 10 M (0.4) | 20 M (0.9) | 50 M (2.1) | 100 M (4.2) | sigma model, ref at 100 M (mm) |
+| Grid | Cell (mm) | Plume width at the source column (mm) | Outer iterations | Stop | Flow wall (s) | n (model's own 1.087) | Scalar march: steps, stop, wall (s) | sigma / sigma_ref at 5 M (t / T_L 0.2) | 10 M (0.4) | 20 M (0.9) | 50 M (2.1) | 100 M (4.2) | sigma model, ref at 100 M (mm) |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 280x50 | 10 | 2.9 | 1381 | error_estimate_and_continuity | 89 | 1.0775 | 3063, steady, 27 | 1.754 | 1.355 | 1.059 | 0.843 | 0.768 | 19.2, 25.0 |
-| 560x100 | 5 | 1.4 | 2609 | error_estimate_and_continuity | 512 | 1.0767 | 5079, steady, 110 | 1.767 | 1.339 | 1.056 | 0.842 | 0.768 | 19.2, 25.0 |
+| 280x50 | 10 | 1.02 | 1381 | error_estimate_and_continuity | 89 | 1.0775 | 3063, steady, 27 | 1.754 | 1.355 | 1.059 | 0.843 | 0.768 | 19.2, 25.0 |
+| 560x100 | 5 | 0.73 | 2609 | error_estimate_and_continuity | 512 | 1.0767 | 5079, steady, 110 | 1.767 | 1.339 | 1.056 | 0.842 | 0.768 | 19.2, 25.0 |
 
 ## Consequences
 

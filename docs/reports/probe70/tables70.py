@@ -357,7 +357,7 @@ def line_table() -> list[str]:
         "(Anand and Pope's displacement variance with Warhaft's parameters, Viswanathan and "
         "Pope 2008 equations 11 to 15) at five stations downstream of the source",
         "",
-        "| Grid | Cell (mm) | Cell's second moment (mm) | Outer iterations | Stop | Flow wall "
+        "| Grid | Cell (mm) | Plume width at the source column (mm) | Outer iterations | Stop | Flow wall "
         "(s) | n (model's own 1.087) | Scalar march: steps, stop, wall (s) | sigma / sigma_ref "
         "at 5 M (t / T_L 0.2) | 10 M (0.4) | 20 M (0.9) | 50 M (2.1) | 100 M (4.2) | sigma "
         "model, ref at 100 M (mm) |",
@@ -374,7 +374,7 @@ def line_table() -> list[str]:
             f"{st[k]['ratio']:.3f}" for k in ("5", "10", "20", "50", "100")
         )
         lines.append(
-            f"| {grid} | {r['dx_m'] * 1e3:.0f} | {r['cell_second_moment_m'] * 1e3:.1f} | "
+            f"| {grid} | {r['dx_m'] * 1e3:.0f} | {r['sigma'][r['source']['column']] * 1e3:.2f} | "
             f"{r['flow']['outer_iterations']} | {r['flow']['stop_reason']} | "
             f"{r['flow']['wall_seconds']:.0f} | {r['decay']['n_model']:.4f} | {m['steps']}, "
             f"{m['stopped_by']}, {m['wall_seconds']:.0f} | {ratios} | "
