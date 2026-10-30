@@ -1,8 +1,8 @@
 # Project Plan
 
 **Project:** CFD Clean Room Simulation
-**Last Updated:** 2026-10-28
-**Current Phase:** Phase 4 (Scenarios & Time Integration), GATE REVIEW: the gate report `docs/reports/phase4_scenarios_report.md` (2026-10-28, prompt 69) awaits Alex's verdict, the builder proposing CONDITIONAL PASS with two conditions; Phase 3 COMPLETE (CONDITIONAL PASS, Alex, 2026-10-16); ECR-002 closed 2026-10-15 and ECR-003 2026-10-07
+**Last Updated:** 2026-10-30
+**Current Phase:** Phase 5 (Alert Monitoring System), IN PROGRESS: ADR-015 accepted by Alex on 2026-10-30, step 0 (the coverage debt and VAL-024, prompt 71) under way; Phase 4 COMPLETE (CONDITIONAL PASS, Alex, 2026-10-29, three conditions in `docs/reports/phase4_scenarios_report.md`); Phase 3 COMPLETE (CONDITIONAL PASS, Alex, 2026-10-16); ECR-002 closed 2026-10-15 and ECR-003 2026-10-07
 
 This document tracks development progress by phase. Code review reads this document to determine the current phase and verify that PRs are in scope; the policy is `docs/REVIEW_POLICY.md`. Update this document as work progresses.
 
@@ -17,7 +17,7 @@ This document tracks development progress by phase. Code review reads this docum
 | 2 | Navier-Stokes Solver | COMPLETE | PASS | phase2_navier_stokes_report.md |
 | 3 | Transport Solver | COMPLETE | CONDITIONAL PASS | phase3_transport_report.md |
 | 4 | Scenarios & Time Integration | COMPLETE | CONDITIONAL PASS (Alex, 2026-10-29; three conditions, the report's "The decision") | phase4_scenarios_report.md |
-| 5 | Alert Monitoring System | DESIGN PROPOSED (ADR-015, prompt 70, 2026-10-29) | -- | -- |
+| 5 | Alert Monitoring System | IN PROGRESS (ADR-015 accepted, Alex, 2026-10-30; step 0, prompt 71) | -- | -- |
 | 6 | CUDA Acceleration | NOT STARTED | -- | -- |
 | 7 | Visualization & Portfolio | NOT STARTED | -- | -- |
 
@@ -324,7 +324,9 @@ Laminar flow past a square cylinder in a channel is Phase 4's validation and sho
 
 | Deliverable | Status | Notes |
 |-------------|--------|-------|
-| docs/ADR/ADR-015-alert-monitoring-and-placement.md | PROPOSED (prompt 70, 2026-10-29; review and test 70 before the pull request) | The Phase 5 design, before any code, as ADR-014 was for Phase 4: Alex's three decisions of 2026-10-29 (a design pass first; the Phase 4 gate's spreading condition checked both ways, a plane-jet validation row VAL-024 and a sensitivity sweep of the scenarios to the supply's turbulence intensity, dissipation length and Schmidt number, before any detection result; placement by arrival maps kept during the march) recorded as given; eight decisions for Alex at its top (A to H), each with a picture, ranked options and the section carrying it; the probes and their tables under `docs/reports/probe70/`. The build order is its section H, six steps, the coverage debt and VAL-024 first |
+| docs/ADR/ADR-015-alert-monitoring-and-placement.md | ACCEPTED (Alex, 2026-10-30; written in prompt 70 and its rounds b to d, merged as PR 98; the counter's sample time OPEN until a counter is specified) | The Phase 5 design, before any code, as ADR-014 was for Phase 4: Alex's three decisions of 2026-10-29 (a design pass first; the Phase 4 gate's spreading condition checked both ways, a plane-jet validation row VAL-024 and a sensitivity sweep of the scenarios to the supply's turbulence intensity, dissipation length and Schmidt number, before any detection result; placement by arrival maps kept during the march) recorded as given; eight decisions for Alex at its top (A to H), each with a picture, ranked options and the section carrying it; the probes and their tables under `docs/reports/probe70/`. The build order is its section H, six steps, the coverage debt and VAL-024 first |
+| Phase 4 coverage debt (the 66 uncovered statements of the gate report's table Cv2) | IN PROGRESS (ADR-015 H step 0, prompt 71) | A test for each statement a test can reach, asserting the refusal or branch; the rest listed with the reason or removed if dead. Target: statement and branch coverage at or above Phase 3's 99.25% and 97.13%, measured by the same command |
+| validation/line_source.py, tests/test_line_source.py | IN PROGRESS (ADR-015 A and H step 0, prompt 71) | VAL-024's case builder at Warhaft's 0.025 m mesh, the digitised widths of `digitised70c.md` T8 as the reference, the decay exponent and plume width readers, the harness rows `val024_280x50` and `val024_560x100` |
 | src/placement.py | NOT STARTED (ADR-015 D and H, step 4) | Latency from the arrival maps, layout scoring by stated rules, the candidate positions and the search (exact for the worst-case rule; NumPy only) |
 | src/monitor.py | NOT STARTED (ADR-015 C and H, step 2) | Sensor probes, threshold comparison, latency measurement; the arrival tracker at step 3 |
 | tests/test_monitor.py | NOT STARTED | Unit tests: threshold detection, false positive/negative |
@@ -508,3 +510,4 @@ Phase 3 completion is the minimum viable portfolio artifact. A working, validate
 | 2026-10-29 | Prompt 70b, review 70 on ADR-015 (branch phase5/design): VAL-024 becomes a line source in decaying grid turbulence (Alex, 2026-10-29, review B2), probed on two grids with the predictions committed first; the sweep read on the plume's edge (B3); the review's other findings applied (B1, S1 to S10); REQ-T14 proposed in the ADR's section G. The validation gate's VAL-024 row rewritten. Nothing under src/, tests/ or configs/ changed. |
 | 2026-10-30 | Prompt 70c, review 70 round 2 on ADR-015 (branch phase5/design): the primary papers digitised (`docs/reports/probe70/digitised70c.md`), VAL-024's reference becomes the measured widths with the Anand and Pope curve as the interpolant, prediction (d) rescored against the data with the same verdict; the spill region's basis stated (Alex, review B1) and the threshold's stations moved to 20, 50 and 80 M (recommended, OPEN); the arrival map gains an events axis. The validation gate's VAL-024 row rewritten. Nothing under src/, tests/ or configs/ changed. |
 | 2026-10-30 | Prompt 70d, review 70 round 3 on ADR-015 (branch phase5/design): the line-source probe rerun at Warhaft's 2.5 cm so that model, data and curve share one mesh length (the first probe's 2.54 cm and prompt 70c's T9 gave 0.80 at 80 M where the records give 0.784), prediction (d) rescored on it (fails at 80 M); VAL-024's threshold set by Alex: 20% at 20 and 50 M, 80 M reported and carried as a limit (the model's plume about a fifth narrow far downstream); the reference's interpolant named (the data log-log, not the curve), with the stations that have no nearby datum. The validation gate's VAL-024 row rewritten. Nothing under src/, tests/ or configs/ changed. |
+| 2026-10-30 | ADR-015 accepted by Alex (prompt 71, branch phase5/step0-val024, commit 0): A in the rounds of prompt 70, B to H as recommended, the counter's sample time OPEN. The status table's Phase 5 row reads IN PROGRESS and the header names the phase; the ADR's deliverable row reads ACCEPTED; two rows added for step 0 (the Phase 4 coverage debt; VAL-024's case builder and test). No code changed in this commit. |

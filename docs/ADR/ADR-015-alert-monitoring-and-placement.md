@@ -1,7 +1,8 @@
 # ADR-015: Alert Monitoring and Sensor Placement: Spreading Checked Both Ways, a Read-Only Monitor, Arrival Maps
 
 ## Status
-Proposed. Written 2026-10-29 (prompt 70, branch `phase5/design`) and revised the same day
+Accepted, 2026-10-30 (Alex; prompt 71, commit 0; the note after this paragraph). Written
+2026-10-29 (prompt 70, branch `phase5/design`) and revised the same day
 on review 70 (prompt 70b: section A rewritten to a line source in grid turbulence by Alex's
 decision, section B read on the plume's edge, the review's other findings applied in
 place), and again on 2026-10-30 on review 70 round 2 (prompt 70c: the two primary papers
@@ -23,6 +24,16 @@ then ranked options with their consequences, then the section carrying the detai
 ADR-011 and ADR-014 did. The document gains a planned-against-built table at the Phase 5
 gate. Bracketed numbers point at the sources at the end; "T1" to "T5" are the tables of
 `tables70.md`. Nothing under `src/`, `tests/` or `configs/` changes in this pass.
+
+*Acceptance (Alex, 2026-10-30; prompt 71, commit 0).* Alex decided A, the line source with
+its spill basis and its threshold, in the rounds of prompt 70 (the threshold on 2026-10-30,
+prompt 70d), and accepted B to H as recommended on 2026-10-30. One item stays OPEN: the
+counter's sample time (decision C and section E), which is stated as an instrument delay
+beside the latency until a counter is specified. SYSTEM.md carries REQ-A01, REQ-A03 and
+REQ-A05 in the forms of section G and REQ-T14 as a new requirement, and its section 4 carries
+section C's monitor contract in place of the planned block, marked planned. The build starts
+at step 0 of section H (prompt 71): the coverage debt and VAL-024. The text below is the
+design as accepted; the planned-against-built table is added at the Phase 5 gate.
 
 ## Decisions already taken (Alex, 2026-10-29), recorded as given
 
