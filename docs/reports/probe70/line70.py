@@ -9,6 +9,15 @@ kappa = 2.1e-5 m^2/s, source size 2.5e-5 m. The reference plume width is
 their equations 11 to 13, Anand and Pope's displacement variance for the
 Langevin model (C_0 = 2.1) in that decaying turbulence, plus 2 kappa t.
 
+The mesh length is a run option because the two sources differ: Viswanathan and
+Pope tabulate 2.54 cm, Warhaft's own grid is 2.5 cm (his section 2). The first
+probe (prompt 70b) ran at 2.54 cm, the default, and wrote line_<grid>.*; the
+rerun at Warhaft's 2.5 cm (--mesh 0.025, prompt 70d) writes line_<grid>_m25.*
+and is the model that digitised70c.py compares with his data, so that the
+model, the data and the reference curve share one mesh length. The velocity
+standard deviations at one mesh length are the same at both, so k at the
+source's station is unchanged and eps_o = m k_o U / x_o rises 1.6% at 2.5 cm.
+
 The case here: a uniform inflow at U over the whole left edge carrying k and
 eps of the source's station (k_o = (sigma_u^2 + 2 sigma_v^2) / 2 at 52 M,
 eps_o = m k_o U / x_o, the exact decay rate of that power law), walls top and
@@ -19,7 +28,7 @@ one passive class is then marched on the converged faces with a unit source
 in one cell on the centreline two cells from the inlet until the field is
 steady.
 
-    python docs/reports/probe70/line70.py [--grid NX NY] [--concurrent N]
+    python docs/reports/probe70/line70.py [--grid NX NY] [--mesh M] [--concurrent N]
 
 Writes results/builder70/line_<nx>x<ny>.json and .npz. The readings, fixed
 before the run:
@@ -69,7 +78,8 @@ from src.solver_transport import TransportSolver  # noqa: E402
 
 OUT = ROOT / "results" / "builder70"
 # Warhaft (1984) as tabulated by Viswanathan and Pope (2008), table I.
-M = 0.0254  # grid mesh, m
+M = 0.0254  # grid mesh, m: Viswanathan and Pope's table I, the first probe's
+M_WARHAFT = 0.025  # grid mesh, m: Warhaft (1984) section 2, the rerun's and the data's
 U = 7.0  # m/s
 X_O_OVER_M = 52.0  # the source's station
 SIGMA_U_AT_M = 2.44  # m/s, at one mesh length from the grid
@@ -100,12 +110,18 @@ def commit() -> str:
     ).stdout.strip()
 
 
-def source_turbulence() -> dict:
-    """k, eps, the intensity and dissipation length at the source's station, and t_o."""
+def source_turbulence(mesh: float = M) -> dict:
+    """k, eps, the intensity and dissipation length at the source's station, and t_o.
+
+    Parameters
+    ----------
+    mesh : float
+        Grid mesh length in metres; sets the source's flight time t_o = x_o / U.
+    """
     decay = X_O_OVER_M ** (-M_EXP / 2)
     sigma_u, sigma_v = SIGMA_U_AT_M * decay, SIGMA_V_AT_M * decay
     k_o = 0.5 * (sigma_u**2 + 2.0 * sigma_v**2)
-    t_o = X_O_OVER_M * M / U
+    t_o = X_O_OVER_M * mesh / U
     eps_o = M_EXP * k_o / t_o
     return {
         "sigma_u": sigma_u,
@@ -223,10 +239,14 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--grid", type=int, nargs=2, default=(280, 50))
     parser.add_argument("--concurrent", type=int, default=0)
+    parser.add_argument("--mesh", type=float, default=M, help="grid mesh length, m")
     args = parser.parse_args()
     nx, ny = args.grid
-    tag = f"{nx}x{ny}"
-    turb = source_turbulence()
+    mesh_m = args.mesh
+    # The default keeps the first probe's file names; any other mesh length is suffixed.
+    suffix = "" if mesh_m == M else f"_m{mesh_m * 1e3:g}"
+    tag = f"{nx}x{ny}{suffix}"
+    turb = source_turbulence(mesh_m)
     cfg = SimConfig.from_dict(case_raw(nx, ny, turb))
     mesh = Mesh(cfg)
     xc, yc = np.asarray(mesh.xc), np.asarray(mesh.yc)
@@ -299,7 +319,7 @@ def main() -> int:
     )
     stations = {}
     for station in STATIONS_M:
-        i = int(np.argmin(np.abs(xc - (x_s + station * M))))
+        i = int(np.argmin(np.abs(xc - (x_s + station * mesh_m))))
         stations[f"{station:g}"] = {
             "x_m": float(xc[i]),
             "flight_time_s": float(flight[i]),
@@ -307,8 +327,8 @@ def main() -> int:
             "sigma_model_m": float(sigma[i]),
             "sigma_ref_m": float(sigma_ref[i]),
             "ratio": float(sigma[i] / sigma_ref[i]),
-            "sigma_model_over_M": float(sigma[i] / M),
-            "sigma_ref_over_M": float(sigma_ref[i] / M),
+            "sigma_model_over_M": float(sigma[i] / mesh_m),
+            "sigma_ref_over_M": float(sigma_ref[i] / mesh_m),
         }
     OUT.mkdir(parents=True, exist_ok=True)
     np.savez(
@@ -332,14 +352,14 @@ def main() -> int:
         "domain_m": [LENGTH, HEIGHT],
         "source": {"column": SOURCE_COLUMN, "x_m": x_s, "row": j_mid},
         "experiment": {
-            "M_m": M,
+            "M_m": mesh_m,
             "U_m_per_s": U,
             "x_o_over_M": X_O_OVER_M,
             "m": M_EXP,
             "C_0": C_0,
             "kappa_m2_per_s": KAPPA,
             "sigma_o_m": SIGMA_O,
-            "Re_M": U * M / (1.81e-5 / 1.2),
+            "Re_M": U * mesh_m / (1.81e-5 / 1.2),
         },
         "source_turbulence": turb,
         "T_L_s": 4.0 / (3.0 * C_0) * turb["k_over_eps"],
