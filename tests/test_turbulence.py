@@ -55,6 +55,7 @@ from src.turbulence import (
     TurbulenceConditions,
     TurbulenceState,
 )
+from tests.vent_cases import DISCHARGE, INTAKE, vent_config
 from validation.cases import case_path
 from validation.transport_cases import (
     AIR,
@@ -413,6 +414,36 @@ class TestChecks:
         for changes, match in cases:
             with pytest.raises(ValueError, match=match):
                 model.step(state, faces, dataclasses.replace(base, **changes), 1.0)
+
+    @pytest.mark.parametrize(
+        ("name", "index"),
+        [
+            ("inflow_k_v", (4, 7)),
+            ("inflow_eps_v", (4, 8)),
+            ("inflow_k_u", (1, 6)),
+            ("inflow_eps_u", (2, 6)),
+        ],
+    )
+    def test_conditions_with_no_inflow_on_a_vent_face_are_refused(
+        self, name: str, index: tuple[int, int]
+    ) -> None:
+        """A vent face carries air in, so its k and eps must be positive like an inlet's.
+
+        The discharge on the box's top is the v faces of row 4, columns 7 and
+        8, and the intake on its left side the u faces of column 6, rows 1
+        and 2 (tests/vent_cases.py). The domain-face check does not see these
+        faces, and a zero there would put a zero eps in a division.
+        """
+        config = vent_config(
+            {"discharge": DISCHARGE, "intake": INTAKE}, turbulence=True
+        )
+        mesh, model = _model(config)
+        base = TurbulenceConditions.uniform(mesh, 1.0e-3, 1.0e-4)
+        state, faces = model.initial(1.0e-3, 1.0e-4), _at_rest(mesh)
+        broken = getattr(base, name).copy()
+        broken[index] = 0.0
+        with pytest.raises(ValueError, match="positive on the vent faces"):
+            model.step(state, faces, dataclasses.replace(base, **{name: broken}), 1.0)
 
     @pytest.mark.parametrize(
         ("field", "defect", "match"),
