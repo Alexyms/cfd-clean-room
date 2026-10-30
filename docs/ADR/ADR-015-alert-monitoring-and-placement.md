@@ -58,8 +58,8 @@ gradient diffusion is known to overstate it, and in the far field, where both gr
 diffusion. The breach plume's free fall from the ceiling to the gap sensors' height takes
 half a Lagrangian time scale of the supply's turbulence, the near field, but the free-falling
 column passes between the gap sensors without reaching them; the contour cells nearest them
-are set in the spill off the litho tool's top at 0.6 to 3 Lagrangian times (section A's
-table; review 70 round 2 B1), and the floor returns are reached at about three at the file's
+are set in the spill off the litho tool's top at 0.6 to 3 Lagrangian times (T11; review 70
+round 2 B1), and the floor returns are reached at about three at the file's
 supply (six at the arm with the shortest time scale), so the row's stations 20 and 50 M bear
 on the sensors, 80 M on the returns, and 5 and 10 M on the free fall alone. The plane jet the
 first version
@@ -88,7 +88,7 @@ digitised data of T8, the 52 M source's points interpolated log-log between thei
 *Threshold: Alex's decision of 2026-10-30* (prompt 70d, on review 70 round 3 B1). The solver's
 decay exponent within 0.1 of the model's own 1.087, and the model's plume width within 20% of
 the measured at 20 and 50 M, the stations inside the range that bears on the sensors (14 to
-71 M on the row's axis, section A's table). 5 and 10 M are reported, not scored (the free
+71 M on the row's axis, T11). 5 and 10 M are reported, not scored (the free
 fall, which never reaches the sensors). 80 M is reported, not scored, and is recorded as a
 carried limit: the model's plume is about a fifth narrower than measured far downstream, near
 the returns (0.784 and 0.783 of the measured at 80 M on 280x50 and 560x100; 0.75 to 0.84 at
@@ -113,8 +113,9 @@ T9's last column: 1.77 and 1.75, 1.35 and 1.34, 1.06, 0.84, 0.785 and 0.784, and
 80 and 100 M, against the data as against the curve.
 For the scenarios: in the free fall (the first 0.5 T_L, under 12 M on the row's axis) the
 model's plume is 1.3 to 1.7 times the measured width, and at the flight times of the spill,
-where the gap sensors' contour cells form, it is within 5% to 15% of the measured, under
-rather than over beyond 20 M. The free fall's factor does not transfer to the spill, which
+where the gap sensors' contour cells form (14 to 71 M), it is within 20% of the measured,
+1.16 at 14 M, over until about 22 M and under from there, 0.805 at 71 M (T12). The free
+fall's factor does not transfer to the spill, which
 the row does not test (section A), so the sensors' distances to the contour (section B) are
 read as what they are on the model, the spill's basis being VAL-020's excess turbulence over
 the tops, an inference and not a measurement; prompt 70b's reading of those distances as
@@ -409,43 +410,35 @@ the gap sensors without reaching them (T4: the 2.5 m row's threshold cells span 
 4.20 m, the sensors stand at 2.7 and 4.8 m). It lands on the litho tool's top (x 3.2 to
 4.5 m, y 2.0 m) and spills over both edges into the gaps, and the contour cells nearest each
 gap sensor, the ones T6's distances are measured to, are set in that spill: 0.03 to 0.33 m
-beyond the tool's edges and 0.06 to 0.28 m above its top, 1.6 to 4.5 s after onset, t / T_L
-0.6 to 3.0 at each arm's own T_L (the table below, read from the arms' run files by
+beyond the tool's edges and 0.06 to 0.27 m above its top, 1.6 to 4.5 s after onset, t / T_L
+0.6 to 3.0 at each arm's own T_L (T11, read from the arms' run files by
 `docs/reports/probe70/spill70c.py`: for each arm the reached cell nearest each sensor, the
 first stored frame at or above threshold there, a bound one frame spacing wide, 0.79 s on
-160x60 and 0.36 s on 320x120). On the row's axis that is 14 to 71 M, which the 20, 50 and
-80 M stations span (at the file's inputs 16 to 46 M, between 20 and 50 M). The fall to the
-floor returns takes about 7 s, t / T_L about 3, the 80 M station. The spill is a turning, sheared flow over an obstacle top, which the line source
-does not test. Alex's decision: the line source covers the free fall; the spill rests on
+160x60 and 0.36 s on 320x120). On the row's axis that is 14 to 71 M (16 to 46 M at the
+file's inputs). The scored stations, 20 and 50 M, lie inside that range. The part from 14 to
+20 M lies between the reported 10 M and the scored 20 M: it holds the contour cells nearest
+above_gap_1 on the product grid at the file's inputs (16 to 20 M) and both gap sensors on
+the arm with the longest time scale (14 to 20 M). The part from 50 to 71 M lies between the
+scored 50 M and the reported 80 M. T12 reads the model over the measured across all of it:
+1.16 at 14 M, 1.03 at 20 M, 0.85 at 50 M and 0.805 at 71 M. The fall to the floor returns
+takes about 7 s: t / T_L 3.0 at the file's 2.3 s (72 M on the row's axis, near the reported
+80 M station), 6.1 at the 1.15 s arm (143 M, past the data's end) and 2.0 to 2.4 at the two
+arms with longer time scales (T11). The spill is a turning, sheared flow over an obstacle
+top, which the line source does not test. Alex's decision: the line source covers the free fall; the spill rests on
 ADR-014 H's carried limit from VAL-020, the turbulence over the equipment tops about 30% high
 in the model, which would widen the model's spill against the real one. That is an inference
 from VAL-020's reading of k over the impinging jet's wall, not a measurement of a scalar
 spreading there; measuring it would take a second case, a plume landing on a top and spilling
 off its edge with its concentration measured, which this design does not build. The door and
-hood sensors' nearest contour cells lie in the gaps below the tool tops, 1.3 to 1.6 m from
-them, at 1.2 to 3.4 T_L.
+hood sensors' nearest contour cells lie in the gaps between the equipment, 0.5 to 1.0 m below
+the tops of the nearest piece, 1.3 to 1.6 m from the sensors, at 0.83 to 4.40 T_L (T11:
+20 to 104 M on the row's axis).
 
-| Arm (grid; T_L at its supply) | Sensor (cell centre, m) | Nearest contour cell (m) | Beyond the tool's edge, above its top (m) | First frame at or above (s) | After onset (s) | t / T_L | Row station (M) |
-|---|---|---|---|---|---|---|---|
-| i05 (160x60; 2.30 s) | above_gap_1 (2.675, 2.475) | (2.925, 2.225) | 0.28, 0.23 | 12.66 | 1.87 to 2.66 | 0.81 to 1.16 | 19 to 27 |
-| i05 | above_gap_2 (4.775, 2.475) | (4.575, 2.075) | 0.08, 0.08 | 13.45 | 2.66 to 3.45 | 1.16 to 1.50 | 27 to 35 |
-| gate (320x120; 2.30 s) | above_gap_1 (2.688, 2.488) | (2.963, 2.213) | 0.24, 0.21 | 11.96 | 1.60 to 1.96 | 0.70 to 0.85 | 16 to 20 |
-| gate | above_gap_2 (4.788, 2.488) | (4.588, 2.063) | 0.09, 0.06 | 14.49 | 4.13 to 4.49 | 1.80 to 1.95 | 42 to 46 |
-| i10 (160x60; 1.15 s) | above_gap_1 (2.675, 2.475) | (2.925, 2.225) | 0.28, 0.23 | 12.69 | 1.90 to 2.69 | 1.65 to 2.33 | 39 to 55 |
-| i10 | above_gap_2 (4.775, 2.475) | (4.525, 2.125) | 0.03, 0.13 | 13.48 | 2.69 to 3.48 | 2.33 to 3.02 | 55 to 71 |
-| i10_l30 (160x60; 3.46 s) | above_gap_1 (2.675, 2.475) | (2.875, 2.275) | 0.33, 0.28 | 12.88 | 2.08 to 2.88 | 0.60 to 0.83 | 14 to 20 |
-| i10_l30 | above_gap_2 (4.775, 2.475) | (4.525, 2.225) | 0.03, 0.23 | 12.88 | 2.08 to 2.88 | 0.60 to 0.83 | 14 to 20 |
-| i02_l05 (160x60; 2.88 s) | above_gap_1 (2.675, 2.475) | (2.925, 2.225) | 0.28, 0.23 | 12.60 | 1.81 to 2.60 | 0.63 to 0.90 | 15 to 21 |
-| i02_l05 | above_gap_2 (4.775, 2.475) | (4.575, 2.075) | 0.08, 0.08 | 14.18 | 3.39 to 4.18 | 1.18 to 1.45 | 28 to 34 |
-| sc02 (160x60; 2.30 s, i05's flow) | above_gap_1 (2.675, 2.475) | (2.875, 2.225) | 0.33, 0.23 | 12.66 | 1.87 to 2.66 | 0.81 to 1.16 | 19 to 27 |
-| sc02 | above_gap_2 (4.775, 2.475) | (4.525, 2.175) | 0.03, 0.18 | 13.45 | 2.66 to 3.45 | 1.16 to 1.50 | 27 to 35 |
-
-The row station is t / T_L times the row's T_L U / M, 23.6 M per Lagrangian time; each arm
-is read at its own supply's T_L, which is why the 10% at 0.1 m arm, with half the file's T_L,
-sits farthest along the row's axis. What
-follows for the threshold: the stations that bear on the sensors' contour and on the returns
-are 20, 50 and 80 M, and 5 and 10 M bear on the free fall alone (decision A and the
-threshold below).
+T11's row station is t / T_L times the row's T_L U / M, 23.6 M per Lagrangian time; each
+arm is read at its own supply's T_L, which is why the 10% at 0.1 m arm, with half the file's
+T_L, sits farthest along the row's axis. What follows for the threshold: the stations that
+bear on the sensors' contour are 20 and 50 M, 80 M bears on the returns, and 5 and 10 M bear
+on the free fall alone (decision A and the threshold below).
 
 **The case** (`docs/reports/probe70/line70.py`): a domain 2.8 m long (110 M at the first
 probe's 2.54 cm, 112 M at the rerun's 2.5 cm) and 0.5 m high,
@@ -488,7 +481,7 @@ not taken are listed under decision A). The decay exponent n within 0.1 of the m
 1.087 (a check of the solver, not of the model, since the model's exponent is known to sit
 below the measured range); the model's width over the measured (T8, the curve interpolating
 between the data's stations) within 20% of one at 20 and 50 M, the stations inside the range
-that bears on the sensors, 14 to 71 M on the row's axis (the table above); the ratio at 5 and
+that bears on the sensors, 14 to 71 M on the row's axis (T11); the ratio at 5 and
 10 M reported, not scored, with the source column's width beside it (the free fall, which
 never reaches the sensors); 80 M reported, not scored; 100 M reported against T9's two
 estimates. *The carried limit.* Far downstream, near the floor returns, the model's plume is
@@ -564,7 +557,7 @@ same inputs, T3 of the gate report against T3 here) and not the inputs'. The plu
 and the sensors' distances are the quantities the inputs move; the map says whether any
 position would have read it. The distances are not bounds from VAL-024 in either direction
 (prompt 70c, review 70 round 2 B1): the contour cells nearest the gap sensors are set in the
-spill off the litho tool's top (section A's table), which the line source does not test; the
+spill off the litho tool's top (T11), which the line source does not test; the
 model's spill rests on VAL-020's carried limit, the turbulence over the tool tops about 30%
 high (ADR-014 H), which would widen the model's spill against the real one, an inference
 from that case's reading of k and not a measurement of a scalar there. The arrival times
@@ -1019,7 +1012,7 @@ plume's edge, with the width's change over the whole range (0.95 to 1.20 m on th
 row) and the sensors' distances to the contour (5.7 cells at the least on 160x60, 15.6 on
 320x120) as the numbers the sweep will state beside every latency, and the row's factors at
 the spill's flight times saying the model's plume where the sensors' contour cells form is
-within 15% of the measured and under it beyond 20 M, so those distances are read on the
+within 20% of the measured (1.16 to 0.805, T12) and under it beyond about 22 M, so those distances are read on the
 model as they stand, the spill's own basis being VAL-020's (section A, prompt 70c);
 decision D's maps are the instrument the sweep already needed.
 
@@ -1541,6 +1534,55 @@ Digitising precision: a centroid is good to about 2 px, which is 0.3% (figure 4(
 | 3.834 | 0.633 | 4.367 | 0.1719 | 4.106 | 1.06 |
 | 9.407 | 1.553 | 7.095 | 0.2793 | 8.516 | 0.83 |
 | 15.104 | 2.493 | 12.976 | 0.5109 | 11.993 | 1.08 |
+
+**The spill** (prompt 70d, review 70 round 3 S4; copied from `docs/reports/probe70/spill70c.md`, generated by `spill70c.py` from the breach arms' run files; `--check` compares it with them).
+
+#### T11. For each breach arm and sensor, class 0.1 um: the cell nearest the sensor that is ever at or above threshold (the cell T6's distance is measured to), its offset from the nearest obstacle, the first stored frame at or above threshold there, the bound that frame puts on the time after the 10 s onset (one frame spacing wide), that bound over the arm's supply T_L, and the row station with the same t / T_L (T_L U / M = 23.6 M per Lagrangian time)
+
+| Arm (grid; T_L at its supply) | Sensor (cell centre, m) | Nearest contour cell (m) | Distance (m) | Beyond the nearest obstacle's edge, above its top (m) | First frame at or above (s) | After onset (s) | t / T_L | Row station (M) |
+|---|---|---|---|---|---|---|---|---|
+| i05 (160x60; 2.30 s) | near_door (0.975, 1.475) | (2.525, 1.125) | 1.589 | 0.23, -0.88 (server_rack) | 13.45 | 2.66 to 3.45 | 1.15 to 1.50 | 27 to 35 |
+| i05 (160x60; 2.30 s) | above_gap_1 (2.675, 2.475) | (2.925, 2.225) | 0.354 | 0.27, 0.23 (litho_tool) | 12.66 | 1.87 to 2.66 | 0.81 to 1.15 | 19 to 27 |
+| i05 (160x60; 2.30 s) | above_gap_2 (4.775, 2.475) | (4.575, 2.075) | 0.447 | 0.08, 0.08 (litho_tool) | 13.45 | 2.66 to 3.45 | 1.15 to 1.50 | 27 to 35 |
+| i05 (160x60; 2.30 s) | hood_entry (6.175, 1.175) | (4.775, 1.175) | 1.400 | 0.22, -0.82 (etch_chamber) | 15.03 | 4.24 to 5.03 | 1.84 to 2.18 | 43 to 52 |
+| i10 (160x60; 1.15 s) | near_door (0.975, 1.475) | (2.525, 1.275) | 1.563 | 0.23, -0.73 (server_rack) | 13.48 | 2.69 to 3.48 | 2.33 to 3.02 | 55 to 71 |
+| i10 (160x60; 1.15 s) | above_gap_1 (2.675, 2.475) | (2.925, 2.225) | 0.354 | 0.27, 0.23 (litho_tool) | 12.69 | 1.90 to 2.69 | 1.65 to 2.33 | 39 to 55 |
+| i10 (160x60; 1.15 s) | above_gap_2 (4.775, 2.475) | (4.525, 2.125) | 0.430 | 0.03, 0.12 (litho_tool) | 13.48 | 2.69 to 3.48 | 2.33 to 3.02 | 55 to 71 |
+| i10 (160x60; 1.15 s) | hood_entry (6.175, 1.175) | (4.775, 1.175) | 1.400 | 0.22, -0.82 (etch_chamber) | 15.07 | 4.28 to 5.07 | 3.71 to 4.40 | 88 to 104 |
+| i10_l30 (160x60; 3.46 s) | near_door (0.975, 1.475) | (2.475, 1.425) | 1.501 | 0.18, -0.57 (server_rack) | 13.69 | 2.88 to 3.69 | 0.83 to 1.07 | 20 to 25 |
+| i10_l30 (160x60; 3.46 s) | above_gap_1 (2.675, 2.475) | (2.875, 2.275) | 0.283 | 0.33, 0.27 (litho_tool) | 12.88 | 2.08 to 2.88 | 0.60 to 0.83 | 14 to 20 |
+| i10_l30 (160x60; 3.46 s) | above_gap_2 (4.775, 2.475) | (4.525, 2.225) | 0.354 | 0.03, 0.23 (litho_tool) | 12.88 | 2.08 to 2.88 | 0.60 to 0.83 | 14 to 20 |
+| i10_l30 (160x60; 3.46 s) | hood_entry (6.175, 1.175) | (4.875, 1.025) | 1.309 | 0.12, -0.98 (etch_chamber) | 17.71 | 6.91 to 7.71 | 2.00 to 2.23 | 47 to 53 |
+| i02_l05 (160x60; 2.88 s) | near_door (0.975, 1.475) | (2.575, 1.475) | 1.600 | 0.28, -0.52 (server_rack) | 13.39 | 2.60 to 3.39 | 0.90 to 1.18 | 21 to 28 |
+| i02_l05 (160x60; 2.88 s) | above_gap_1 (2.675, 2.475) | (2.925, 2.225) | 0.354 | 0.27, 0.23 (litho_tool) | 12.60 | 1.81 to 2.60 | 0.63 to 0.90 | 15 to 21 |
+| i02_l05 (160x60; 2.88 s) | above_gap_2 (4.775, 2.475) | (4.575, 2.075) | 0.447 | 0.08, 0.08 (litho_tool) | 14.18 | 3.39 to 4.18 | 1.18 to 1.45 | 28 to 34 |
+| i02_l05 (160x60; 2.88 s) | hood_entry (6.175, 1.175) | (4.775, 1.175) | 1.400 | 0.22, -0.82 (etch_chamber) | 14.96 | 4.18 to 4.96 | 1.45 to 1.72 | 34 to 41 |
+| sc02 (160x60; 2.30 s) | near_door (0.975, 1.475) | (2.525, 1.475) | 1.550 | 0.23, -0.52 (server_rack) | 13.45 | 2.66 to 3.45 | 1.15 to 1.50 | 27 to 35 |
+| sc02 (160x60; 2.30 s) | above_gap_1 (2.675, 2.475) | (2.875, 2.225) | 0.320 | 0.33, 0.23 (litho_tool) | 12.66 | 1.87 to 2.66 | 0.81 to 1.15 | 19 to 27 |
+| sc02 (160x60; 2.30 s) | above_gap_2 (4.775, 2.475) | (4.525, 2.175) | 0.391 | 0.03, 0.17 (litho_tool) | 13.45 | 2.66 to 3.45 | 1.15 to 1.50 | 27 to 35 |
+| sc02 (160x60; 2.30 s) | hood_entry (6.175, 1.175) | (4.825, 1.175) | 1.350 | 0.17, -0.82 (etch_chamber) | 15.03 | 4.24 to 5.03 | 1.84 to 2.18 | 43 to 52 |
+| gate_320x120 (320x120; 2.30 s) | near_door (0.988, 1.488) | (2.588, 1.413) | 1.602 | 0.29, -0.59 (server_rack) | 13.04 | 2.68 to 3.04 | 1.16 to 1.32 | 27 to 31 |
+| gate_320x120 (320x120; 2.30 s) | above_gap_1 (2.688, 2.488) | (2.963, 2.213) | 0.389 | 0.24, 0.21 (litho_tool) | 11.96 | 1.59 to 1.96 | 0.69 to 0.85 | 16 to 20 |
+| gate_320x120 (320x120; 2.30 s) | above_gap_2 (4.788, 2.488) | (4.588, 2.063) | 0.470 | 0.09, 0.06 (litho_tool) | 14.49 | 4.13 to 4.49 | 1.79 to 1.95 | 42 to 46 |
+| gate_320x120 (320x120; 2.30 s) | hood_entry (6.188, 1.188) | (4.763, 1.188) | 1.425 | 0.24, -0.81 (etch_chamber) | 15.58 | 5.22 to 5.58 | 2.26 to 2.42 | 53 to 57 |
+
+Ranges over the table's rows (frame bounds, so each time is one frame spacing wide: 0.79 s on 160x60, 0.36 s on 320x120):
+
+- The gap sensors, every arm (12 rows): 0.03 to 0.33 m beyond the obstacle's edge, 0.06 to 0.27 m above its top (negative: below it); 1.59 to 4.49 s after onset; t / T_L 0.60 to 3.02; row station 14 to 71 M.
+- The gap sensors, the file's inputs (i05 and the gate) (4 rows): 0.08 to 0.27 m beyond the obstacle's edge, 0.06 to 0.23 m above its top (negative: below it); 1.59 to 4.49 s after onset; t / T_L 0.69 to 1.95; row station 16 to 46 M.
+- The door and hood sensors, every arm (12 rows): 0.12 to 0.29 m beyond the obstacle's edge, -0.98 to -0.52 m above its top (negative: below it); 2.60 to 7.71 s after onset; t / T_L 0.83 to 4.40; row station 20 to 104 M.
+- All sensors, every arm (24 rows): 0.03 to 0.33 m beyond the obstacle's edge, -0.98 to 0.27 m above its top (negative: below it); 1.59 to 7.71 s after onset; t / T_L 0.60 to 4.40; row station 14 to 104 M.
+
+The fall to the floor returns (7 s) at each arm's supply T_L, t / T_L and the row station with the same t / T_L: i05 3.0 (72 M); i10 6.1 (143 M); i10_l30 2.0 (48 M); i02_l05 2.4 (57 M); sc02 3.0 (72 M); gate_320x120 3.0 (72 M).
+
+The row of cells just above the tool tops: the x range reached and the earliest frame at or above threshold on it:
+
+- i05 (y 2.025): x 2.77 to 4.63 m; earliest frame 11.87 s.
+- i10 (y 2.025): x 2.77 to 4.63 m; earliest frame 11.90 s.
+- i10_l30 (y 2.025): x 2.68 to 4.73 m; earliest frame 12.08 s.
+- i02_l05 (y 2.025): x 2.77 to 4.63 m; earliest frame 12.60 s.
+- sc02 (y 2.025): x 2.73 to 4.68 m; earliest frame 11.87 s.
+- gate_320x120 (y 2.013): x 2.79 to 4.64 m; earliest frame 11.96 s.
 
 #### T12. The model's width over the measured across the stations the spill puts the gap sensors' nearest contour cells at (T11, 14 to 71 M on the row's axis): the 52 M source's points interpolated in log-log as in T9, the rerun's widths on both grids
 
