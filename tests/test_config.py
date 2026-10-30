@@ -1614,7 +1614,8 @@ class TestPressureKeys:
         ECR-002 section 8, step 8). The cylinder (VAL-022, a tier-2 case)
         carries 1e-4 by the amendment of 2026-10-18 (Alex, prompt 68): its
         Strouhal number at 1e-8 and 1e-4 differs by 1.4e-8 relative
-        (docs/reports/val022/tables68.md, V8).
+        (docs/reports/val022/tables68.md, V8). The line source (VAL-024, prompt 71)
+        carries the product setting, as the other turbulent validation cases do.
         """
         turbulent = {
             "clean_room_default.yaml": 1e-4,
@@ -1629,6 +1630,7 @@ class TestPressureKeys:
             "validation_backstep.yaml": 1e-4,
             "validation_cylinder.yaml": 1e-4,
             "validation_impinging_jet.yaml": 1e-4,
+            "validation_line_source.yaml": 1e-4,
         }
         for path in sorted(CONFIG_DIR.glob("*.yaml")):
             config = SimConfig(path)
