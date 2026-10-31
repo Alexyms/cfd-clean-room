@@ -101,7 +101,12 @@ runs missing on 320x120 cannot bring a contour nearer a sensor. Condition 2: the
 mean 100:1 ratio rises by the same step at each refinement (3.0, 3.91, 4.77 on 80x30, 160x60
 and 320x120), no order is observed, and so it and the local recovery field stay comparative,
 not numbers of the room. The two flow states that did not converge within the cap are an
-open item in `docs/PROJECT_PLAN.md`'s deferred table.
+open item in `docs/PROJECT_PLAN.md`'s deferred table. Step 2 (prompt 73, branch
+phase5/step2-monitor, 2026-10-31) built the alert monitor (`src/monitor.py`): it reads every
+sensor after every step, opens an alert at the first reading at or above the class's threshold
+and closes it at the first below, leaves the fields untouched, and its table is in the run
+file and its state in the checkpoint. VAL-009 passes, and the thresholds may be given as an ISO
+class number. Review and test 73 run before its pull request.
 Phases 6 and 7 have not begun.
 
 The product room itself has never been solved, and on 2026-10-04 it was found that the laminar
