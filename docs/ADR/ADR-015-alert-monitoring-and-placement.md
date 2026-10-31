@@ -598,6 +598,23 @@ bound.
 breach repeated on 320x120. The width's resolution on 160x60 is a 5 cm cell, so a width that
 changes by under a cell between arms is reported as unchanged to the cell.
 
+**An arm added at the build (orchestrator, 2026-10-30; prompt 72, step 1).** A sixth arm,
+`widest`: 10% intensity, 0.3 m dissipation length and Sc_t 0.2, the largest supply nu_t over
+the lowest Schmidt number, which spreads a plume most, so that the arm that decides whether
+"no sensor detects" survives the inputs' range is in the sweep. On 160x60 it reuses the
+largest-nu_t arm's flow state; on 320x120 it solves its own. The two extreme arms repeated on
+320x120 are `widest` and the smallest-nu_t corner (2%, 0.05 m, Sc_t 0.7), for every scenario.
+The arm's intensity and length are set on the supply and on every event segment that carries
+the supply's keys, the breach's three replacement segments and the door's inflow segment
+(whose keys the scenario file defines as a copy of the supply's). The report is
+`docs/reports/phase5_sensitivity.md`. *Built 2026-10-31.* Two flow states did not converge
+within the solver's cap and are reported there, not fixed (its section 1.2): the `widest`
+inputs on 320x120, whose residual cycles, so the product-grid repeat of that arm is missing
+for every scenario; and the door's open state at the control arm on 160x60, so the door's
+control and Sc_t arms are missing on the coarse grid. No sensor's cell is reached at any arm
+that ran; the breach at `widest` on 160x60 brings the gap sensors' readings inside the
+resolved range for the first time in an event scenario, at a few hundredths of threshold.
+
 **The cost.** From T2 and the probe's march walls (the probe section): a 160x60 breach arm is
 its flow solve plus its 120 s march. The three event scenarios at five arms are 15 runs,
 concurrent five, and the two fine-grid arms are two runs at the gate's cost (66 minutes each,

@@ -85,8 +85,16 @@ in the order of the ADR's section H. Step 0 (prompt 71) is built on branch
 phase5/step0-val024: the Phase 4 coverage debt is paid by tests for each refusal and
 fallback the gate report listed, and VAL-024, the line source in decaying grid turbulence,
 passes its criterion (`tests/test_line_source.py` on 280x50; the harness rows `val024_280x50`
-and `val024_560x100`). Review and test 71 run before its pull request. Phases 6 and 7 have
-not begun.
+and `val024_560x100`), merged as PR 99. Step 1 (prompt 72, branch phase5/step1-sweep,
+2026-10-31) ran the sensitivity sweep of ADR-015 B with a sixth arm and the clean-out's
+third grid (`docs/reports/phase5_sensitivity.md`): no sensor's cell is reached by any plume
+at any arm that ran, on either grid; the breach at the widest arm brings the gap sensors'
+readings inside the resolved range on 160x60; two flow states did not converge within the
+solver's cap (the widest inputs on the product grid, the door's open state at the file's
+inputs on 160x60) and are reported, not fixed; the clean-out's free-area mean 100:1 time
+forms an arithmetic series over the three grids and stays comparative, while the
+unrecovered share of the room converges. Review and test 72 run before its pull request.
+Phases 6 and 7 have not begun.
 
 The product room itself has never been solved, and on 2026-10-04 it was found that the laminar
 flow solver does not solve it. Its Reynolds number on the room height is
