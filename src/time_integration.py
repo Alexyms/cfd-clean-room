@@ -44,14 +44,15 @@ refused.
 
 The clean-out (ADR-014 C, a scenario with an initial event). A sensor reads
 the cell containing it, the one below or to the left of it when it sits on
-a face (``sensor_cells``). A class is within spec when every sensor reads below
-its threshold, the room when every class is. Updated every step and carried
-in the checkpoint (prompt 64's decision 1): the last step time each cell was
-at or above its class's threshold, when each sensor and the free-area mean
-first fell to a hundredth of the initial level, and the start of the current
-within-spec stretch per class and for the room. With ``scenario.hold_time``
-the run stops once the room has held within spec that long (decision 2). At
-the end the recovery outputs are written to ``/recovery/``.
+a face (``monitor.sensor_cells``, re-exported here). A class is within spec
+when every sensor reads below its threshold, the room when every class is.
+Updated every step and carried in the checkpoint (prompt 64's decision 1):
+the last step time each cell was at or above its class's threshold, when
+each sensor and the free-area mean first fell to a hundredth of the initial
+level, and the start of the current within-spec stretch per class and for
+the room. With ``scenario.hold_time`` the run stops once the room has held
+within spec that long (decision 2). At the end the recovery outputs are
+written to ``/recovery/``.
 
 Tier 2 (ADR-014 G, step 6b). A configuration with a ``transient`` section
 runs the flow itself through time: ``StaggeredSolver.solve_transient`` from
@@ -88,6 +89,8 @@ from src.config import Initial, SimConfig
 from src.forces import ForceGauge, StrouhalReading, strouhal
 from src.io_manager import RecoveryRecord, RunFile, StepSeries
 from src.mesh import SOLID, Mesh
+from src.monitor import SENSOR_FACE_RTOL as SENSOR_FACE_RTOL
+from src.monitor import sensor_cells
 from src.particles import ParticlePhysics
 from src.scenarios import Interval, ScenarioManager
 from src.solver_staggered import (
@@ -111,10 +114,6 @@ HUNDRED_TO_ONE = 100.0
 # concentration can carry the rounding of the product (35.2 x 100 is
 # 3520.0000000000005), so the comparison is read to this relative tolerance.
 DEFINED_RTOL = 1.0e-9
-# A sensor this fraction of the room's extent from a face is on it. The faces
-# carry the rounding of the mesh's coordinates (about 1e-16 of the extent),
-# and the room's sensors are stated on multiples of 0.05 m that fall on faces.
-SENSOR_FACE_RTOL = 1.0e-9
 # The sections and solver keys a steady flow solve does not read, so a state
 # kept in another run file is this run's state when every other key agrees
 # and the fingerprint does. The boundaries are compared by the fingerprint.
@@ -438,53 +437,6 @@ class TransientRunRecord:
     strouhal_refusal: str | None
     drag_coefficient: float | None
     restarted_from: int | None = None
-
-
-def _cell_holding(faces: np.ndarray, position: float) -> int:
-    """The index of the cell whose faces hold POSITION, the lower one on a face."""
-    tolerance = SENSOR_FACE_RTOL * float(faces[-1] - faces[0])
-    index = int(np.searchsorted(faces, position - tolerance, side="left")) - 1
-    return min(max(index, 0), faces.size - 2)
-
-
-def sensor_cells(config: SimConfig, mesh: Mesh) -> tuple[tuple[int, int], ...]:
-    """The (j, i) of the cell each sensor reads, in the configuration's order.
-
-    The cell containing the sensor (ADR-014 C). The room's sensors sit on
-    cell faces on every grid that puts its positions on faces, so a sensor
-    within ``SENSOR_FACE_RTOL`` of the room's extent of a face reads the
-    cell below it or to its left, on each axis. On 160x60 that is the cell
-    the probe of ADR-014 T7 read for every sensor, by the nearest centre;
-    the nearest centre itself is not a rule on a face, since which of the
-    two equidistant centres is nearer is decided by rounding (on 80x30 it
-    puts above_gap_1 to the right of its face and the other three to the
-    left).
-
-    Parameters
-    ----------
-    config : SimConfig
-        Supplies the sensors.
-    mesh : Mesh
-        The run's mesh.
-
-    Returns
-    -------
-    tuple[tuple[int, int], ...]
-        One (j, i) per sensor.
-
-    Raises
-    ------
-    ValueError
-        If a sensor's cell is SOLID.
-    """
-    cells = []
-    for sensor in config.sensors:
-        i = _cell_holding(mesh.x, sensor.x)
-        j = _cell_holding(mesh.y, sensor.y)
-        if mesh.cell_type[j, i] == SOLID:
-            raise ValueError(f"sensor {sensor.name} reads a SOLID cell ({j}, {i})")
-        cells.append((j, i))
-    return tuple(cells)
 
 
 def air_change_rate(state: FlowState, mesh: Mesh) -> float:

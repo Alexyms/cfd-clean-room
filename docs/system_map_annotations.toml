@@ -59,6 +59,10 @@ serves = ["REQ-S07", "REQ-S13"]
 responsibility = "Assembles the staggered pressure correction equation from the momentum diagonals with the discrete divergence of u* as its right-hand side, solves it by conjugate gradients preconditioned with its diagonal or, under the pressure_preconditioner key, with one multigrid V-cycle per iteration, to a relative residual, a rounding floor or a reported iteration cap, corrects the face velocities and updates the pressure."
 serves = ["REQ-S04", "REQ-S08"]
 
+[modules."src/monitor.py"]
+responsibility = "Reads each sensor's cell of every class field after every step by ADR-014 C's cell rule, opens an alert at the first reading at or above the class's threshold and closes it at the first below, keeping each alert's times, opening reading and peak, gives the latency from each event onset, and carries its whole state for the checkpoint; it reads the fields and never writes them."
+serves = ["REQ-A01", "REQ-A02", "REQ-A06"]
+
 [modules."src/multigrid.py"]
 responsibility = "Builds an additive-correction multigrid hierarchy from a five-point pressure system by 2x2 aggregation, its coarse operators the exact Galerkin sums with no probing, and applies one symmetric V-cycle with weighted Jacobi smoothing and a dense pseudo-inverse on the coarsest level as the preconditioner of the pressure correction's conjugate gradients."
 serves = ["REQ-S08"]
