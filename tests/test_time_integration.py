@@ -20,7 +20,8 @@ planted defect it was shown to catch:
 - The restart: from a checkpoint after a switch, with no checkpoint, to a
   later t_end, and a capped flow solve continued under a larger cap, each the
   uninterrupted run bitwise where the ADR asks for it.
-- scripts/run_scenario.py: its exit codes and summary lines.
+- scripts/run_scenario.py: its exit codes and summary lines, the alerts
+  opened among them (ADR-015 C).
 
 The coarse fixtures extend the reference scenario files with the grid
 overridden to 80x30 and the error_estimate per-cell tolerance set by
@@ -56,6 +57,7 @@ from src.boundary_staggered import StaggeredBoundary
 from src.config import SimConfig
 from src.io_manager import RunFile
 from src.mesh import SOLID, Mesh
+from src.monitor import Alert
 from src.particles import ParticlePhysics
 from src.scenarios import Interval, ScenarioManager
 from src.solver_staggered import FlowState, StaggeredSolver
@@ -1619,6 +1621,17 @@ class TestRunScenario:
             sum("free-area mean 100:1: not reached by 6.0000 s" in x for x in lines)
             == 5
         )
+        # The initial field is 100 thresholds everywhere, so every sensor's
+        # class opens at step 0 (ADR-015 C).
+        table = record.read_alerts()
+        start = lines.index(
+            f"alerts (ADR-015 C): {len(table)} opened, "
+            f"{int(np.sum(table.step_off == -1))} still open at the end"
+        )
+        assert len(table) == 20 and (table.step_on == 0).all()
+        assert len(lines) == start + 1 + len(table)
+        named = [line.split(",")[0].strip() for line in lines[start + 1 :]]
+        assert named == [table.names[s] for s in table.sensor]
 
     def test_a_class_nothing_supplied_is_not_defined_in_the_summary(
         self,
@@ -1654,6 +1667,33 @@ class TestRunScenario:
             supplied = "relative not defined (nothing supplied)" in line
             assert supplied == (k != 2), line
         assert "relative " in closure[2]
+        assert len(RunFile(tmp_path / "run.h5").read_alerts()) == 0
+        assert lines[-1] == (
+            "alerts (ADR-015 C): none (no sensor at or above its threshold)"
+        )
+
+    def test_the_alert_lines_name_each_alert_and_its_close(self) -> None:
+        """alert_lines on planted alerts: the count, an open and a closed line.
+
+        Defects caught: an open alert printed with a closing time; the class
+        named by index into the wrong list; a run without sensors reported
+        as one with no alerts.
+        """
+        closed = Alert("hood_entry", 1, 3, 0.3, 2.0e4, 5, 0.5, 3.0e4, 0.4)
+        still = Alert("near_door", 4, 7, 0.7, 30.0, None, None, 31.5, 0.8)
+        lines = run_scenario.alert_lines(
+            [closed, still], [1e-7, 3e-7, 0, 0, 5e-6], True
+        )
+        assert lines == [
+            "alerts (ADR-015 C): 2 opened, 1 still open at the end",
+            "  hood_entry, class 1 (0.3 um): at or above from t = 0.3000 s (step 3), "
+            "reading 2e+04; below at t = 0.5000 s (step 5); peak 3e+04 at t = 0.4000 s",
+            "  near_door, class 4 (5 um): at or above from t = 0.7000 s (step 7), "
+            "reading 30; still open; peak 31.5 at t = 0.8000 s",
+        ]
+        assert run_scenario.alert_lines([], [1e-7], False) == [
+            "alerts (ADR-015 C): no sensors"
+        ]
 
     def test_the_restart_flag_continues_a_run_file(
         self,
