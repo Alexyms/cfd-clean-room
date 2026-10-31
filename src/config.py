@@ -295,9 +295,11 @@ def _segment_widths(length: float, start: float, end: float) -> list[float]:
     The finer end's spacing is kept exactly; the count is the smallest whole
     number at least that of the geometric series growing from it to the
     coarser end's spacing, and the ratio is then the one whose widths sum to
-    the length. A count at or above the series' makes the ratio at or below
-    the series', so no width exceeds the coarser end's spacing. Equal
-    spacings give equal widths, the fewest no wider than the spacing.
+    the length. Rounding the count up lowers the ratio, so the widths usually
+    stay under the coarser end's spacing; when the series does not fit the
+    length they can exceed it (1.0 m from 0.4 to 0.5 m gives [0.4, 0.6]), and
+    the loader's growth cap is what refuses such an axis. Equal spacings give
+    equal widths, the fewest no wider than the spacing.
     """
     fine, coarse = min(start, end), max(start, end)
     if fine == coarse:

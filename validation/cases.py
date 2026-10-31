@@ -521,6 +521,11 @@ def load_line_source(
             f"the case's cells must be square; the grid {base.nx}x{base.ny} gives "
             f"{dx} m by {dy} m"
         )
+    if not Mesh(base).is_uniform:
+        # The width reader weights each cell's moment without its height, which
+        # is right on a uniform axis only; the nominal spacings above do not see
+        # a stretch ratio.
+        raise ValueError("the case's mesh must be uniform; a stretched axis is refused")
     raw["solver"] = {
         **raw["solver"],
         "mass_imbalance_tol": MASS_IMBALANCE_FRACTION * base.rho * dx * dy / base.t_end,

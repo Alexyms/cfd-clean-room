@@ -57,6 +57,7 @@ from src.mesh import Mesh
 from src.particles import ParticlePhysics
 from src.solver_staggered import StaggeredSolver
 from src.solver_transport import TransportSolver
+from src.staggered import FaceVelocities
 from src.turbulence import STANDARD, VARIANTS
 
 # Warhaft (1984) as Viswanathan and Pope (2008, Phys. Fluids 20, table I)
@@ -129,6 +130,9 @@ NEAR_SOURCE = (
 
 # The inlet segment and the report's metric.
 INLET = "stream"
+# The inlet's keys are the experiment's constants written at full precision;
+# this is the tolerance ``evaluate`` holds them to.
+INLET_RTOL = 1.0e-9
 METRIC = "largest_scored_width_departure"
 REFERENCE = (
     "warhaft_1984_52M_digitised_T8_loglog; criterion Alex 2026-10-30 (ADR-015 A): "
@@ -454,7 +458,14 @@ def width_at(mesh: Mesh, widths: np.ndarray, source_x: float, station: float) ->
     xc = np.asarray(mesh.xc)
     x_prime = (xc - source_x) / MESH_LENGTH
     ok = x_prime > NEAR_SOURCE
-    return float(np.interp(station, x_prime[ok], widths[ok]))
+    usable = x_prime[ok]
+    if not usable[0] <= station <= usable[-1]:
+        # np.interp would return the end column's width for a station past it.
+        raise ValueError(
+            f"station {station:g} M lies outside the columns read, "
+            f"{usable[0]:.2f} to {usable[-1]:.2f} M downstream of the source"
+        )
+    return float(np.interp(station, usable, widths[ok]))
 
 
 @dataclass(frozen=True)
@@ -487,7 +498,19 @@ class Solution:
 
 
 def source_row(mesh: Mesh) -> int:
-    """Return the row of the source cell: the first above the centreline."""
+    """Return the row of the source cell: the first above the centreline.
+
+    Parameters
+    ----------
+    mesh : Mesh
+        The case's mesh, [ny, nx] cells.
+
+    Returns
+    -------
+    int
+        The row index ny // 2, the lower of the two rows beside the
+        centreline on an even count.
+    """
     return mesh.cell_type.shape[0] // 2
 
 
@@ -495,7 +518,7 @@ def march_scalar(
     mesh: Mesh,
     config: SimConfig,
     nu_t: np.ndarray,
-    faces: object,
+    faces: FaceVelocities,
 ) -> tuple[np.ndarray, dict[str, object]]:
     """March one passive class from a unit source to its steady state.
 
@@ -527,7 +550,7 @@ def march_scalar(
         ConcentrationBoundary(mesh, config, physics, BoundaryRegistry(config)),
     )
     viscosity = np.ascontiguousarray(nu_t, dtype=np.float64)
-    dt = transport.stable_dt(faces, 0)  # type: ignore[arg-type]
+    dt = transport.stable_dt(faces, 0)
     ny, nx = mesh.cell_type.shape
     sources = np.zeros((ny, nx))
     sources[source_row(mesh), SOURCE_COLUMN] = SOURCE_RATE
@@ -538,7 +561,7 @@ def march_scalar(
         step += 1
         new = transport.solve_timestep(
             field,
-            faces,  # type: ignore[arg-type]
+            faces,
             0,
             dt,
             sources=sources,
@@ -573,8 +596,10 @@ def solve(config: SimConfig) -> Solution:
     Raises
     ------
     RuntimeError
-        If the flow solve leaves no face velocities or turbulence state, which
-        is a solve that raised before its first iteration completed.
+        If the solver holds no flow state or face velocities after
+        ``solve_steady`` returns. The solver sets both before it returns and
+        raises otherwise, so this is a guard on its contract for the type
+        checker, not a path a case reaches.
     """
     mesh = Mesh(config)
     solver = StaggeredSolver(mesh, config, StaggeredBoundary(mesh, config))
@@ -607,7 +632,9 @@ def evaluate(mesh: Mesh, config: SimConfig, k: np.ndarray, field: np.ndarray) ->
     mesh : Mesh
         The case's mesh.
     config : SimConfig
-        The case; its inlet and source give the reference's parameters.
+        The case. Its inlet must carry the experiment's speed and the source
+        station's turbulence keys (``source_turbulence``), which set the
+        reference's parameters and the decay's virtual origin.
     k : np.ndarray
         The final turbulent kinetic energy, [ny, nx].
     field : np.ndarray
@@ -618,15 +645,31 @@ def evaluate(mesh: Mesh, config: SimConfig, k: np.ndarray, field: np.ndarray) ->
     dict
         ``decay`` (the exponent ``n``, the model's own ``n_model``, the
         ``departure`` between them, the ``allowance`` and ``passed``);
-        ``stations`` (per station of STATIONS_M: ``model_sigma_m``, the data
-        (``data_sigma_m``, a list of one estimate or two at 100 M), ``ratio``
-        the model over each estimate, ``reference_curve_sigma_m``, ``scored``
-        and, for a scored station, ``departure`` and ``passed``); ``value`` the
-        largest departure of a scored ratio from 1; and ``passed`` the decay
-        and every scored station together. Nothing outside the criterion
-        changes ``passed``.
+        ``source_column_sigma_m``, the plume's width at the source column
+        itself (the cell's size on the grid, reported beside the near-field
+        ratios); ``stations`` (per station of STATIONS_M: ``model_sigma_m``,
+        the data (``data_sigma_m``, a list of one estimate or two at 100 M),
+        ``ratio`` the model over each estimate, ``reference_curve_sigma_m``,
+        ``scored`` and, for a scored station, ``departure`` and ``passed``);
+        ``value`` the largest departure of a scored ratio from 1; and
+        ``passed`` the decay and every scored station together. Nothing
+        outside the criterion changes ``passed``.
+
+    Raises
+    ------
+    ValueError
+        If the inlet's speed or turbulence keys are not the experiment's, so
+        that the reference and the virtual origin would not be the case's.
     """
     turbulence = source_turbulence()
+    inlet = config.boundaries[INLET]
+    given = (inlet.velocity, inlet.turbulence_intensity, inlet.dissipation_length)
+    wanted = (SPEED, turbulence.intensity, turbulence.dissipation_length)
+    if not np.allclose(given, wanted, rtol=INLET_RTOL, atol=0.0):
+        raise ValueError(
+            f"the inlet {INLET!r} carries velocity, intensity and dissipation length "
+            f"{given}; the reference assumes {wanted}"
+        )
     n = decay_exponent(mesh, np.asarray(k)[source_row(mesh), :], turbulence)
     n_model = model_decay_exponent()
     decay = {
@@ -662,6 +705,7 @@ def evaluate(mesh: Mesh, config: SimConfig, k: np.ndarray, field: np.ndarray) ->
     scored = [row for row in stations if row["scored"]]
     return {
         "decay": decay,
+        "source_column_sigma_m": float(widths[SOURCE_COLUMN]),
         "stations": stations,
         "value": max(float(row["departure"]) for row in scored),  # type: ignore[arg-type]
         "passed": bool(decay["passed"] and all(row["passed"] for row in scored)),

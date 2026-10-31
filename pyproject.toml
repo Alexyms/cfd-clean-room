@@ -43,6 +43,9 @@ quote-style = "double"
 testpaths = ["tests"]
 strict_markers = true
 xfail_strict = true
+# xunit1 keeps record_property's values in the JUnit XML (VAL-024 records its
+# unscored stations that way); the default xunit2 drops them with a warning.
+junit_family = "xunit1"
 markers = [
     "unit: Unit tests -- isolated function and class behavior",
     "integration: Integration tests -- module interaction and data flow",

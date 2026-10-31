@@ -751,7 +751,10 @@ def line_source_accuracy(
     assert state is not None and faces is not None
     field, march = line_source.march_scalar(mesh, config, state.nu_t, faces)
     report = line_source.evaluate(mesh, config, np.array(state.k), field)
-    components: dict[str, float] = {"decay_exponent": report["decay"]["n"]}
+    components: dict[str, float] = {
+        "decay_exponent": report["decay"]["n"],
+        "source_column_sigma_m": report["source_column_sigma_m"],
+    }
     for row in report["stations"]:
         key = f"width_ratio_{row['station']:g}M"
         components[key] = row["ratio"][0]
