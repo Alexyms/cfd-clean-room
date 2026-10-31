@@ -47,7 +47,15 @@ count over the cap as its value, ``passed`` whether the solve stopped by
 the rule within the cap (criterion 10's convergence clause), and the
 readings the step 8 report compares its runs by (the worst cell imbalance,
 the core eddy viscosity); the comparative clause is judged in that report.
-The square cylinder (VAL-022, ``val022_*``, ADR-014 F) is a tier-2 run: the
+The line source in decaying grid turbulence (VAL-024, ``val024_280x50`` and
+``val024_560x100``, ADR-015 A) is scored: after the flow solve the row marches
+one passive class from a unit source to its steady state
+(``validation.line_source.march_scalar``, the march's wall time in its record
+and not in the row's work or time) and compares the model's decay exponent and
+plume width with Warhaft (1984); the value is the largest departure of the two
+scored widths (20 and 50 mesh lengths downstream) from the measured, and
+``passed`` is the criterion of Alex's decision of 2026-10-30. The square
+cylinder (VAL-022, ``val022_*``, ADR-014 F) is a tier-2 run: the
 probe's perturbed start-up (``validation.cylinder.perturbed_startup``), then
 ``time_integration.run`` marching it to the preset's end, the run file under
 results/val022/. Each row carries its criterion's reading: Re 40 the decay of
@@ -136,6 +144,7 @@ from validation import (  # noqa: E402 -- follows sys.path.insert
     backstep,
     cylinder,
     impinging_jet,
+    line_source,
 )
 from validation.cases import (  # noqa: E402 -- follows sys.path.insert
     CASE_GRIDS,
@@ -213,6 +222,12 @@ IMPINGING_JET_REFERENCE = (
     "(ECR-002 criterion 13 OPEN)"
 )
 
+# The line source in decaying grid turbulence (VAL-024), scored by Alex's
+# criterion of 2026-10-30 from the final k and a scalar march on the final flow.
+LINE_SOURCE_FAMILY = "line_source"
+LINE_SOURCE_METRIC = line_source.METRIC
+LINE_SOURCE_REFERENCE = line_source.REFERENCE
+
 # The product room (VAL-018), reported from the stop and the final state;
 # no reference exists, and criterion 10's convergence clause is the pass.
 PRODUCT_FAMILY = "product"
@@ -239,6 +254,7 @@ FACE_SCORED_FAMILIES = (
     ANNEX20_FAMILY,
     BACKSTEP_FAMILY,
     IMPINGING_JET_FAMILY,
+    LINE_SOURCE_FAMILY,
     PRODUCT_FAMILY,
 )
 
@@ -704,6 +720,54 @@ def impinging_jet_accuracy(
     }
 
 
+def line_source_accuracy(
+    mesh: Mesh, config: SimConfig, solver: StaggeredSolver
+) -> dict:
+    """The line source's scored comparison with Warhaft (1984).
+
+    Parameters
+    ----------
+    mesh : Mesh
+        Mesh the fields belong to.
+    config : SimConfig
+        The case, with its transport and turbulence sections.
+    solver : StaggeredSolver
+        The solver after its flow solve; its flow state (k and the eddy
+        viscosity) and face velocities are read.
+
+    Returns
+    -------
+    dict
+        ``metric``, ``value`` (the largest departure of a scored width from the
+        measured), ``reference``, ``components`` (the decay exponent and the
+        model-over-measured width ratio at each station; at 100 mesh lengths,
+        where the data end, the ratio to the extrapolation and, with the
+        suffix ``_collapse``, to the 20 M source's collapse), ``report``
+        (``validation.line_source.evaluate``'s whole dictionary), ``march``
+        (the scalar march's record) and ``passed``: the decay exponent and both
+        scored widths inside their allowances.
+    """
+    state, faces = solver.flow_state, solver.face_velocities
+    assert state is not None and faces is not None
+    field, march = line_source.march_scalar(mesh, config, state.nu_t, faces)
+    report = line_source.evaluate(mesh, config, np.array(state.k), field)
+    components: dict[str, float] = {"decay_exponent": report["decay"]["n"]}
+    for row in report["stations"]:
+        key = f"width_ratio_{row['station']:g}M"
+        components[key] = row["ratio"][0]
+        if len(row["ratio"]) > 1:
+            components[f"{key}_collapse"] = row["ratio"][1]
+    return {
+        "metric": LINE_SOURCE_METRIC,
+        "value": report["value"],
+        "reference": LINE_SOURCE_REFERENCE,
+        "components": components,
+        "report": report,
+        "march": march,
+        "passed": report["passed"],
+    }
+
+
 def product_accuracy(
     mesh: Mesh,
     config: SimConfig,
@@ -832,6 +896,8 @@ def run_case(case_id: str, method: str, sample_every: int, concurrent: int) -> d
         accuracy = impinging_jet_accuracy(
             mesh, config, solver.face_velocities, np.array(solver.turbulence_state.k)
         )
+    elif kind == LINE_SOURCE_FAMILY:
+        accuracy = line_source_accuracy(mesh, config, solver)
     elif kind == PRODUCT_FAMILY:
         assert solver.turbulence_state is not None
         accuracy = product_accuracy(

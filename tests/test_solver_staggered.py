@@ -21,7 +21,7 @@ from src.config import SimConfig
 from src.mesh import SOLID, Mesh
 from src.momentum import MomentumPrediction, MomentumPredictor
 from src.pressure import PressureCorrection, PressureCorrector
-from src.solver_staggered import StaggeredSolver
+from src.solver_staggered import StaggeredSolver, rule_version
 from src.staggered import FaceVelocities, allocate_fields, to_cell_centers
 from src.stopping import ErrorEstimateRule, ImbalanceSummary, IterationState
 from tests.vent_cases import DISCHARGE, EXHAUST, INTAKE, vent_raw
@@ -535,6 +535,21 @@ class TestStoppingRule:
         with pytest.raises(RuntimeError, match="first correction"):
             solver.solve_steady()
         assert (solver.converged, solver.stop_reason) == (False, None)
+
+    def test_rule_version_names_the_rule_the_configuration_stops_by(self) -> None:
+        """None under velocity_step, 3 under error_estimate without the model.
+
+        A script decides from the version whether a saved solve can be
+        reused, so a velocity_step file must not claim a rule's version, and
+        the function and the solver it predicts must agree. Version 5, with
+        the turbulence section, is pinned by the harness tests.
+        """
+        stepped = _case("cavity", 6)
+        ruled = _ruled("cavity", (6, 6), stopping_rule="error_estimate")
+        assert rule_version(stepped) is None
+        assert rule_version(ruled) == 3
+        assert _build(stepped)[2].rule_version is None
+        assert _build(ruled)[2].rule_version == 3
 
     def test_error_estimate_stops_later_with_continuity_met(
         self, monkeypatch: pytest.MonkeyPatch

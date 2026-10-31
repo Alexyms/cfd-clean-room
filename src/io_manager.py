@@ -1150,7 +1150,11 @@ class RunFile:
         step = _step(step)
         t = _real("t", t)
         for name, given in (("state", state), ("previous", previous)):
-            if given is not None and not isinstance(given, FlowState):
+            # Only the previous level may be absent: BDF2 reads it, implicit Euler
+            # and a march at step 0 do not.
+            if given is None and name == "previous":
+                continue
+            if not isinstance(given, FlowState):
                 raise TypeError(
                     f"{name} must be a FlowState, got {type(given).__name__}"
                 )

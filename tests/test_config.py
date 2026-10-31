@@ -8,6 +8,7 @@ time (REQ-C02).
 import copy
 import dataclasses
 import math
+import re
 from itertools import pairwise
 from pathlib import Path
 
@@ -28,9 +29,11 @@ from src.config import (
     Breakpoint,
     ForceSpec,
     SimConfig,
+    StretchSpec,
     TransientSpec,
     TransportSpec,
     TurbulenceSpec,
+    _segment_widths,
     breakpoint_faces,
 )
 from validation.cases import CONFIG_DIR, load_case
@@ -1611,7 +1614,8 @@ class TestPressureKeys:
         ECR-002 section 8, step 8). The cylinder (VAL-022, a tier-2 case)
         carries 1e-4 by the amendment of 2026-10-18 (Alex, prompt 68): its
         Strouhal number at 1e-8 and 1e-4 differs by 1.4e-8 relative
-        (docs/reports/val022/tables68.md, V8).
+        (docs/reports/val022/tables68.md, V8). The line source (VAL-024, prompt 71)
+        carries the product setting, as the other turbulent validation cases do.
         """
         turbulent = {
             "clean_room_default.yaml": 1e-4,
@@ -1626,6 +1630,7 @@ class TestPressureKeys:
             "validation_backstep.yaml": 1e-4,
             "validation_cylinder.yaml": 1e-4,
             "validation_impinging_jet.yaml": 1e-4,
+            "validation_line_source.yaml": 1e-4,
         }
         for path in sorted(CONFIG_DIR.glob("*.yaml")):
             config = SimConfig(path)
@@ -4015,3 +4020,337 @@ class TestTransientSection:
         raw["transient"] = ["bdf2"]
         with pytest.raises(ValueError, match="must be a mapping"):
             SimConfig.from_dict(raw)
+
+
+# ---------------------------------------------------------------------------
+# Refusals and fallbacks the Phase 4 gate report's table Cv2 listed as untested
+# (ADR-015 H step 0, prompt 71): each test asserts the refusal's type and
+# message, or the fallback's value, so removing or inverting the line fails it.
+# ---------------------------------------------------------------------------
+
+
+def _base_raw(tmp_path: Path) -> dict:
+    """The valid base mapping of _write_config, as from_dict takes it."""
+    with open(_write_config(tmp_path), encoding="utf-8") as handle:
+        return yaml.safe_load(handle)
+
+
+@pytest.mark.unit
+class TestSectionShapeGuards:
+    """A section or entry of the wrong shape is refused by name at load (REQ-C02)."""
+
+    @pytest.mark.parametrize(
+        ("section", "value", "match"),
+        [
+            ("mesh", [1.0], r"mesh must be a mapping"),
+            ("fluid", 5, r"fluid must be a mapping"),
+            ("particles", [1.0], r"particles must be a mapping"),
+            ("solver", [1.0], r"solver must be a mapping"),
+            ("boundaries", {"hepa_supply": 5}, r"boundaries\.hepa_supply must be a"),
+            ("obstacles", [5], r"obstacles\[0\] must be a mapping"),
+            ("sensors", {"center": 1.0}, r"sensors must be a list"),
+            ("sensors", [5], r"sensors\[0\] must be a mapping"),
+            ("thresholds", [3520.0], r"thresholds must be a mapping"),
+        ],
+    )
+    def test_a_section_of_the_wrong_shape_is_refused(
+        self, tmp_path: Path, section: str, value: object, match: str
+    ) -> None:
+        """Each guard stands before code that would fail on the type without naming it."""
+        raw = _base_raw(tmp_path)
+        raw[section] = value
+        with pytest.raises(ValueError, match=match):
+            SimConfig.from_dict(raw)
+
+    def test_hepa_reference_that_is_not_a_mapping_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        raw = _base_raw(tmp_path)
+        raw["particles"]["hepa_reference"] = [0.99999]
+        with pytest.raises(
+            ValueError, match=r"particles\.hepa_reference must be a mapping"
+        ):
+            SimConfig.from_dict(raw)
+
+    def test_hepa_reference_without_efficiencies_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        """The efficiencies list is required beside the diameters it pairs with."""
+        raw = _base_raw(tmp_path)
+        del raw["particles"]["hepa_reference"]["efficiencies"]
+        with pytest.raises(
+            ValueError,
+            match=r"Missing required key: 'particles\.hepa_reference\.efficiencies'",
+        ):
+            SimConfig.from_dict(raw)
+
+    @pytest.mark.parametrize(
+        ("path", "match"),
+        [
+            (("sizes",), r"particles\.sizes must be a list, got float"),
+            (
+                ("hepa_reference", "diameters"),
+                r"particles\.hepa_reference\.diameters must be a list, got float",
+            ),
+        ],
+    )
+    def test_a_scalar_where_a_positive_list_is_required_is_refused(
+        self, tmp_path: Path, path: tuple[str, ...], match: str
+    ) -> None:
+        """A bare number is a TypeError that names the key, not a len() failure."""
+        raw = _base_raw(tmp_path)
+        holder = raw["particles"]
+        for key in path[:-1]:
+            holder = holder[key]
+        holder[path[-1]] = 0.1e-6
+        with pytest.raises(TypeError, match=match):
+            SimConfig.from_dict(raw)
+
+
+@pytest.mark.unit
+class TestMeshSectionFallbacks:
+    """A blank or empty mesh section is uniform; a malformed axis is refused."""
+
+    def test_a_blank_mesh_section_is_uniform(self, tmp_path: Path) -> None:
+        """YAML `mesh:` with nothing after it reads as None, which means no section."""
+        raw = _base_raw(tmp_path)
+        raw["mesh"] = None
+        config = SimConfig.from_dict(raw)
+        assert config.stretch_x == StretchSpec()
+        assert config.stretch_y == StretchSpec()
+
+    def test_an_empty_axis_is_uniform(self, tmp_path: Path) -> None:
+        """An axis given as {} states none of the three keys, so it is uniform."""
+        raw = _base_raw(tmp_path)
+        raw["mesh"] = {"x": {}, "y": {}}
+        config = SimConfig.from_dict(raw)
+        for spec in (config.stretch_x, config.stretch_y):
+            assert spec == StretchSpec()
+            assert spec.ratio == 1.0
+            assert spec.min_spacing is None
+            assert spec.breakpoints == () and spec.faces == ()
+
+    def test_an_axis_that_is_not_a_mapping_is_refused(self, tmp_path: Path) -> None:
+        raw = _base_raw(tmp_path)
+        raw["mesh"] = {"y": 1.1}
+        with pytest.raises(ValueError, match=r"mesh\.y must be a mapping"):
+            SimConfig.from_dict(raw)
+
+
+@pytest.mark.unit
+class TestSegmentWidths:
+    """The cell widths between two breakpoints, in the corners the loader's cap hides."""
+
+    def test_a_segment_that_fits_one_cell_is_one_cell(self) -> None:
+        """Two cells of the finer spacing would overfill the segment, so there is one.
+
+        A length of 1.0 between spacings of 0.8 and 0.9 has a geometric series
+        of two cells, but two cells of at least 0.8 exceed the length. Without
+        the single-cell return the bisection for the ratio has no root.
+        """
+        assert _segment_widths(1.0, 0.8, 0.9) == [1.0]
+        assert _segment_widths(1.0, 0.9, 0.8) == [1.0]
+        assert breakpoint_faces([Breakpoint(0.0, 0.8), Breakpoint(1.0, 0.9)]) == (
+            0.0,
+            1.0,
+        )
+
+    def test_the_count_is_cut_until_the_finer_spacing_fits(self) -> None:
+        """The series asks for three cells; three of 0.4 overfill 1.0, so there are two.
+
+        The finer end's spacing is kept exactly, which is why the second width
+        (0.6) ends above the coarser spacing of 0.5. The loader's cap on
+        adjacent widths refuses such an axis; the helper does not.
+        """
+        widths = _segment_widths(1.0, 0.4, 0.5)
+        assert len(widths) == 2
+        assert widths[0] == 0.4
+        assert sum(widths) == pytest.approx(1.0, rel=1e-12)
+        assert widths[1] == pytest.approx(0.6, rel=1e-12)
+
+    def test_a_ratio_above_two_is_found_by_doubling_the_bracket(self) -> None:
+        """Three widths from 0.1 filling 1.0 grow by (-1 + sqrt(37)) / 2, above 2.
+
+        The bisection starts from a bracket of (1, 2); a ratio above 2 needs
+        the bracket's upper end doubled first. The loader's growth cap keeps a
+        loaded axis far below this ratio, so the helper is called directly.
+        """
+        widths = _segment_widths(1.0, 0.1, 0.8)
+        ratio = 0.5 * (-1.0 + math.sqrt(37.0))
+        assert ratio > 2.0
+        assert widths[0] == 0.1
+        assert widths == pytest.approx([0.1, 0.1 * ratio, 0.1 * ratio**2], rel=1e-12)
+        assert sum(widths) == pytest.approx(1.0, rel=1e-12)
+        # A segment that coarsens toward its end is the same widths reversed.
+        assert _segment_widths(1.0, 0.8, 0.1) == widths[::-1]
+
+
+@pytest.mark.unit
+class TestObstacleBoundsInY:
+    """An obstacle must lie inside the domain on y as it must on x."""
+
+    @pytest.mark.parametrize(("y_start", "y_end"), [(0.0, 3.5), (-0.5, 1.0)])
+    def test_an_obstacle_outside_the_domain_in_y_is_refused(
+        self, tmp_path: Path, y_start: float, y_end: float
+    ) -> None:
+        """Both ends are checked: above the height and below zero."""
+        raw = _base_raw(tmp_path)
+        raw["obstacles"] = [
+            {
+                "name": "bad",
+                "x_start": 1.0,
+                "x_end": 2.0,
+                "y_start": y_start,
+                "y_end": y_end,
+            }
+        ]
+        message = f"obstacles[0]: y range [{y_start}, {y_end}] outside domain [0, 3.0]"
+        with pytest.raises(ValueError, match=re.escape(message)):
+            SimConfig.from_dict(raw)
+
+    def test_an_obstacle_touching_the_top_wall_loads(self, tmp_path: Path) -> None:
+        """The bound is inclusive: y_end equal to the height is inside."""
+        raw = _base_raw(tmp_path)
+        raw["obstacles"][0]["y_end"] = 3.0
+        assert SimConfig.from_dict(raw).obstacles[0].y_end == 3.0
+
+
+# Explicit-component inlets in a closed room of stated outflows: the edge, the
+# component that carries air in and its sign, and the opposite edge's outlet.
+COMPONENT_INLETS = [
+    ("bottom", "v_velocity", 0.5, "top"),
+    ("top", "v_velocity", -0.5, "bottom"),
+    ("left", "u_velocity", 0.5, "right"),
+    ("right", "u_velocity", -0.5, "left"),
+]
+
+
+def _extent(edge: str) -> dict:
+    """A one-metre segment away from the base room's obstacle, along `edge`."""
+    if edge in ("top", "bottom"):
+        return {"x_start": 2.5, "x_end": 3.5}
+    return {"y_start": 1.5, "y_end": 2.5}
+
+
+@pytest.mark.unit
+class TestBalanceWithComponentInlets:
+    """The stated-outflow balance reads an inlet given by components (ADR-014 J)."""
+
+    def _raw(self, tmp_path: Path, inlet: dict, outlet: dict) -> dict:
+        raw = _base_raw(tmp_path)
+        raw["boundaries"] = {"supply": inlet, "exhaust": outlet}
+        return raw
+
+    @pytest.mark.parametrize(("edge", "key", "value", "opposite"), COMPONENT_INLETS)
+    def test_the_inflow_is_the_component_signed_into_the_room(
+        self, tmp_path: Path, edge: str, key: str, value: float, opposite: str
+    ) -> None:
+        """A balanced pair loads on every edge and an unbalanced one reports 0.5.
+
+        The component that points into the room has the sign of the edge's
+        inward normal: +v on the bottom, -v on the top, +u on the left, -u on
+        the right. A wrong sign on any edge makes the balanced pair fail to
+        load, since the inflow would be -0.5 against an outflow of 0.5.
+        """
+        inlet = {
+            "type": "velocity_inlet",
+            "location": edge,
+            key: value,
+            **_extent(edge),
+        }
+        outlet = {
+            "type": "fixed_flow_outlet",
+            "location": opposite,
+            "velocity": 0.5,
+            **_extent(opposite),
+        }
+        config = SimConfig.from_dict(self._raw(tmp_path, inlet, outlet))
+        assert list(config.boundaries) == ["supply", "exhaust"]
+        outlet["velocity"] = 0.9
+        with pytest.raises(
+            ValueError,
+            match=r"the stated outflow 0\.9 m\^2/s differs from the inflow 0\.5 m\^2/s",
+        ):
+            SimConfig.from_dict(self._raw(tmp_path, inlet, outlet))
+
+    def test_the_tangential_component_adds_nothing(self, tmp_path: Path) -> None:
+        """An oblique inlet carries air in by its normal component alone."""
+        inlet = {
+            "type": "velocity_inlet",
+            "location": "top",
+            "u_velocity": 0.3,
+            "v_velocity": -0.5,
+            **_extent("top"),
+        }
+        outlet = {
+            "type": "fixed_flow_outlet",
+            "location": "bottom",
+            "velocity": 0.5,
+            **_extent("bottom"),
+        }
+        SimConfig.from_dict(self._raw(tmp_path, inlet, outlet))
+
+    @pytest.mark.parametrize(
+        ("edge", "key", "opposite"),
+        [
+            ("top", "u_velocity", "bottom"),
+            ("bottom", "u_velocity", "top"),
+            ("left", "v_velocity", "right"),
+            ("right", "v_velocity", "left"),
+        ],
+    )
+    def test_a_lid_given_by_one_tangential_component_admits_nothing(
+        self, tmp_path: Path, edge: str, key: str, opposite: str
+    ) -> None:
+        """A lid with only its tangential component has no normal one: the inflow is 0.
+
+        The missing component reads as zero on every edge, so the other axis
+        contributes nothing whichever way the dictionary indexes it.
+        """
+        lid = {
+            "type": "velocity_inlet",
+            "location": edge,
+            key: 1.0,
+            **_extent(edge),
+        }
+        outlet = {
+            "type": "fixed_flow_outlet",
+            "location": opposite,
+            "velocity": 0.5,
+            **_extent(opposite),
+        }
+        with pytest.raises(
+            ValueError,
+            match=r"the stated outflow 0\.5 m\^2/s differs from the inflow 0 m\^2/s",
+        ):
+            SimConfig.from_dict(self._raw(tmp_path, lid, outlet))
+
+
+@pytest.mark.unit
+class TestClassThresholdsKeys:
+    """class_thresholds reads the numeric keys and passes over the others."""
+
+    def test_a_non_numeric_threshold_key_is_skipped(self, tmp_path: Path) -> None:
+        """A label beside the diameters is kept by the loader and ignored by the lookup."""
+        raw = _base_raw(tmp_path)
+        raw["thresholds"] = {
+            "0.1e-6": 1.0,
+            "0.3e-6": 2.0,
+            "0.5e-6": 3.0,
+            "1.0e-6": 4.0,
+            "5.0e-6": 5.0,
+            "iso_class_5_note": 7.0,
+        }
+        config = SimConfig.from_dict(raw)
+        assert config.thresholds["iso_class_5_note"] == 7.0
+        assert config.class_thresholds() == (1.0, 2.0, 3.0, 4.0, 5.0)
+
+    def test_a_class_without_a_numeric_key_is_refused_naming_the_keys(
+        self, tmp_path: Path
+    ) -> None:
+        """A label is not a diameter: the class it was meant for still has no key."""
+        raw = _base_raw(tmp_path)
+        raw["thresholds"] = {"0.5e-6": 3520.0, "label": 1.0}
+        config = SimConfig.from_dict(raw)
+        with pytest.raises(ValueError, match=r"the class of diameter 1e-07 m has no"):
+            config.class_thresholds()

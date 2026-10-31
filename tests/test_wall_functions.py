@@ -15,6 +15,7 @@ mesh, the y*_0 floor in the wall viscosity and in the wall-cell production,
 and each edge's own wall speed in the production and the wall stencil.
 """
 
+import dataclasses
 import math
 
 import numpy as np
@@ -33,6 +34,7 @@ from src.turbulence import (
     KEpsilonModel,
     TurbulenceBoundary,
     TurbulenceConditions,
+    _velocity_walls,
     inflow_values,
     log_law_floor,
     wall_viscosity,
@@ -185,6 +187,20 @@ class TestLogLawFloor:
     def test_laws_that_do_not_meet_are_refused(self) -> None:
         with pytest.raises(ValueError, match="do not meet"):
             log_law_floor(0.41, 1.0)
+
+    def test_laws_that_barely_meet_are_refused_not_returned_unsettled(self) -> None:
+        """Newton's method stalls where the two roots nearly coincide.
+
+        E is 1% above the value at which the laws touch (e kappa), so the
+        function kappa y - ln(E y) has a root pair within a few percent of its
+        minimum and the iteration jitters at the size of the rounding in the
+        logarithm, above the 4 ulp it needs. The helper must raise, not hand
+        back the last iterate as a floor. The control is the same kappa with
+        the published E, which settles.
+        """
+        with pytest.raises(ValueError, match="did not settle"):
+            log_law_floor(0.41, 0.41 * math.e * 1.01)
+        assert log_law_floor(0.41, E_WALL) == Y_STAR_FLOOR
 
 
 @pytest.mark.unit
@@ -816,6 +832,44 @@ class TestInflow:
         with pytest.raises(ValueError, match="turbulence section"):
             TurbulenceBoundary(mesh, raw_config, StaggeredBoundary(mesh, raw_config))
 
+    @pytest.mark.parametrize("missing", ["turbulence_intensity", "dissipation_length"])
+    def test_a_domain_inlet_without_its_turbulence_keys_is_refused(
+        self, missing: str
+    ) -> None:
+        """The loader refuses the file; the boundary refuses a spec that got past it.
+
+        The first line of defence is the loader (REQ-C02), so the missing key
+        is planted on the loaded spec. An inlet with no stated intensity or
+        length has no k and eps to carry in, and a default here would be a
+        hidden simulation parameter.
+        """
+        config = _config(
+            2.5,
+            1.2,
+            5,
+            4,
+            {
+                "supply": {
+                    "type": "velocity_inlet",
+                    "location": "top",
+                    "x_start": 0.0,
+                    "x_end": 2.5,
+                    "velocity": 0.45,
+                    "turbulence_intensity": 0.05,
+                    "dissipation_length": 0.2,
+                }
+            },
+        )
+        config.boundaries["supply"] = dataclasses.replace(
+            config.boundaries["supply"], **{missing: None}
+        )
+        mesh = Mesh(config)
+        with pytest.raises(
+            ValueError,
+            match="boundary 'supply' admits air but states no turbulence_intensity",
+        ):
+            TurbulenceBoundary(mesh, config, StaggeredBoundary(mesh, config))
+
 
 @pytest.mark.unit
 class TestVents:
@@ -830,6 +884,43 @@ class TestVents:
             KEpsilonModel(mesh, config),
             TurbulenceBoundary(mesh, config, boundary),
         )
+
+    def test_no_vent_argument_is_a_vent_mask_of_no_faces(self) -> None:
+        """``_velocity_walls`` without ``vent`` finds the walls an empty mask finds.
+
+        The default is the room without vents, and a mask that covers every
+        stencil face must take all of them away, so the comparison is not
+        between two empty results.
+        """
+        solid = np.zeros((3, 4), dtype=bool)
+        solid[1, 1:3] = True
+        low = np.array([True, True, False, False, False])
+        high = np.array([False, False, False, True, True])
+        t_faces, t_centers = np.linspace(0.0, 3.0, 4), np.arange(3) + 0.5
+        args = (solid, low, high, t_faces, t_centers, False)
+        bare = _velocity_walls(*args)
+        empty = _velocity_walls(*args, vent=np.zeros((4, 5), dtype=bool))
+        covered = _velocity_walls(*args, vent=np.ones((4, 5), dtype=bool))
+        assert bare.rows.size > 0
+        for name in ("mask", "rows", "cols", "frame_t", "frame_s", "distance"):
+            assert np.array_equal(getattr(bare, name), getattr(empty, name)), name
+        assert covered.rows.size == 0 and not covered.mask.any()
+
+    @pytest.mark.parametrize("missing", ["turbulence_intensity", "dissipation_length"])
+    def test_a_discharge_without_its_turbulence_keys_is_refused(
+        self, missing: str
+    ) -> None:
+        """A discharge admits air as an inlet does, so it needs an inlet's k and eps."""
+        config = vent_config({"discharge": DISCHARGE}, turbulence=True)
+        config.boundaries["discharge"] = dataclasses.replace(
+            config.boundaries["discharge"], **{missing: None}
+        )
+        mesh = Mesh(config)
+        with pytest.raises(
+            ValueError,
+            match="boundary 'discharge' admits air but states no turbulence_intensity",
+        ):
+            TurbulenceBoundary(mesh, config, StaggeredBoundary(mesh, config))
 
     def test_wall_faces_drop_the_vent_span_and_keep_the_rest_of_the_box(
         self,

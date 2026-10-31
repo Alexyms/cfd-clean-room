@@ -24,6 +24,7 @@ from src.boundary_concentration import (
     SURFACE_WALL,
     ConcentrationBoundary,
     ConcentrationFaces,
+    Recirculation,
 )
 from src.boundary_registry import BoundaryRegistry
 from src.boundary_staggered import StaggeredBoundary
@@ -49,6 +50,7 @@ from tests.vent_cases import (
 )
 from validation.metrics import centroid
 from validation.transport_cases import (
+    PARTICLE_SIZE,
     FixedConditions,
     ScalarPhysics,
     conditions_with,
@@ -1924,6 +1926,39 @@ class TestVents:
         assert box_walls == 4 + 4 + 4 - 2 - 2
         assert budget.deposited["obstacle"] > 0.0
 
+    def test_a_recirculation_whose_intake_draws_nothing_returns_nothing(self) -> None:
+        """The discharge blows, the intake draws no air: nothing is carried back.
+
+        The carried concentration is a flux-weighted average over the intake,
+        a quotient with the drawn flux in the denominator. With no flux drawn
+        it must be zero, not 0 / 0: the discharge's flux is nonzero, so a NaN
+        concentration would enter the room above it on the first step.
+        Defect caught: the guard on the drawn flux removed.
+        """
+        vents = {
+            "discharge": {**DISCHARGE, "recirculate_from": "intake"},
+            "intake": INTAKE,
+        }
+        config = vent_config(vents, supply=False, returns=False)
+        mesh = Mesh(config)
+        physics = ParticlePhysics(config)
+        boundary = ConcentrationBoundary(
+            mesh, config, physics, BoundaryRegistry(config)
+        )
+        solver = TransportSolver(mesh, config, physics, boundary)
+        u, v, _p = allocate_fields(mesh)
+        StaggeredBoundary(mesh, config).apply_normal_velocity(u, v)
+        # The intake is the box's left side, u faces of column 6, rows 1 and 2;
+        # the discharge on its top keeps the 0.5 m/s the boundary wrote.
+        assert u[1:3, 6].tolist() == [0.5, 0.5] and v[4, 7:9].tolist() == [0.5, 0.5]
+        u[1:3, 6] = 0.0
+        faces = FaceVelocities.copy_of(u, v)
+        c = np.where(mesh.cell_type != SOLID, 50.0, 0.0)
+        out = solver.solve_timestep(c, faces, 0, 0.5 * solver.stable_dt(faces, 0))
+        assert np.isfinite(out).all()
+        assert solver.budget[0].inflow == 0.0
+        assert solver.budget[0].outflow == 0.0
+
     def test_a_recirculating_pair_books_equal_inflow_and_outflow(self) -> None:
         """The intake's outflow returns through the discharge, every step."""
         vents = {
@@ -2070,6 +2105,116 @@ def _stretched_pair() -> tuple[Mesh, SimConfig, FaceVelocities, np.ndarray]:
     assert faces is not None
     intake_faces = boundary.vent_faces().normal_u
     return mesh, config, faces, intake_faces
+
+
+@pytest.mark.unit
+class TestVentConditionRefusals:
+    """The checks on a class's vent faces and recirculation pairs (ADR-014 J).
+
+    Every check runs when the solver is built, so a boundary layer that hands
+    over a malformed vent fails at construction and not in the middle of a
+    march.
+    """
+
+    def setup_method(self) -> None:
+        self.config = transport_config(1.0, 0.5, 6, 3)
+        self.mesh = Mesh(self.config)
+        self.vent_u = np.zeros(u_shape(self.mesh), dtype=bool)
+        self.vent_v = np.zeros(v_shape(self.mesh), dtype=bool)
+
+    def _build(self, **changes: object) -> TransportSolver:
+        """A solver whose one class carries the zero conditions with ``changes``."""
+        faces = dataclasses.replace(zero_conditions(self.mesh), **changes)
+        return TransportSolver(self.mesh, self.config, INERT, FixedConditions(faces))
+
+    def _pair(self, passed: float) -> Recirculation:
+        return Recirculation(
+            intake_u=self.vent_u,
+            intake_v=self.vent_v,
+            discharge_u=self.vent_u,
+            discharge_v=self.vent_v,
+            passed=passed,
+        )
+
+    def test_one_vent_component_without_the_other_is_refused(self) -> None:
+        """vent_u and vent_v describe one set of faces, so one alone is no vent."""
+        for changes in ({"vent_u": self.vent_u}, {"vent_v": self.vent_v}):
+            with pytest.raises(ValueError, match="given together or not"):
+                self._build(**changes)
+
+    @pytest.mark.parametrize("name", ["vent_u", "vent_v"])
+    def test_a_vent_array_of_another_shape_or_dtype_is_refused(self, name: str) -> None:
+        """Each component must be a bool array of its own face shape."""
+        right = {"vent_u": self.vent_u, "vent_v": self.vent_v}
+        shape = right[name].shape
+        wrong_shape = np.zeros((shape[0] + 1, shape[1]), dtype=bool)
+        wrong_dtype = np.zeros(shape, dtype=np.int8)
+        for bad in (wrong_shape, wrong_dtype):
+            with pytest.raises(ValueError, match=f"{name} must be bool of shape"):
+                self._build(**{**right, name: bad})
+
+    def test_a_recirculation_without_vent_faces_is_refused(self) -> None:
+        """A pair names faces of the vent arrays, which must then exist."""
+        with pytest.raises(ValueError, match="a recirculation needs the vent faces"):
+            self._build(recirculation=(self._pair(0.5),))
+
+    @pytest.mark.parametrize("passed", [-0.1, 1.5])
+    def test_a_passed_fraction_outside_zero_to_one_is_refused(
+        self, passed: float
+    ) -> None:
+        """The discharge cannot carry a negative or a larger than drawn share."""
+        with pytest.raises(ValueError, match=r"passes a fraction in \[0, 1\]"):
+            self._build(
+                vent_u=self.vent_u,
+                vent_v=self.vent_v,
+                recirculation=(self._pair(passed),),
+            )
+
+    @pytest.mark.parametrize("passed", [0.0, 1.0])
+    def test_the_ends_of_the_passed_fraction_are_accepted(self, passed: float) -> None:
+        """Fully filtered (0) and unfiltered (1) discharges are the two extremes."""
+        solver = self._build(
+            vent_u=self.vent_u, vent_v=self.vent_v, recirculation=(self._pair(passed),)
+        )
+        assert solver.stable_dt(uniform_face_field(self.mesh, 0.3, 0.0), 0) > 0.0
+
+    def test_classes_must_name_the_same_vent_faces(self) -> None:
+        """The vents are the room's, so a second class cannot name other faces."""
+        raw = vent_raw()
+        raw["particles"]["sizes"] = [PARTICLE_SIZE, 2.0 * PARTICLE_SIZE]
+        config = SimConfig.from_dict(raw)
+        mesh = Mesh(config)
+        first_u = np.zeros(u_shape(mesh), dtype=bool)
+        first_v = np.zeros(v_shape(mesh), dtype=bool)
+        first_u[1, 4] = True
+        other_u = first_u.copy()
+        other_u[1, 4], other_u[1, 5] = False, True
+        base = zero_conditions(mesh)
+        by_class = [
+            dataclasses.replace(base, vent_u=first_u, vent_v=first_v),
+            dataclasses.replace(base, vent_u=other_u, vent_v=first_v),
+        ]
+
+        class PerClass:
+            def faces_for(self, size_class: int) -> ConcentrationFaces:
+                return by_class[size_class]
+
+        physics = ScalarPhysics(settling=0.0, diffusion=0.0, n_classes=2)
+        with pytest.raises(ValueError, match="class 1 names other vent faces"):
+            TransportSolver(mesh, config, physics, PerClass())
+
+    def test_the_same_vent_faces_for_every_class_are_accepted(self) -> None:
+        """The control of the refusal above: equal arrays build a solver."""
+        raw = vent_raw()
+        raw["particles"]["sizes"] = [PARTICLE_SIZE, 2.0 * PARTICLE_SIZE]
+        config = SimConfig.from_dict(raw)
+        mesh = Mesh(config)
+        vent_u = np.zeros(u_shape(mesh), dtype=bool)
+        vent_u[1, 4] = True
+        vent_v = np.zeros(v_shape(mesh), dtype=bool)
+        faces = dataclasses.replace(zero_conditions(mesh), vent_u=vent_u, vent_v=vent_v)
+        physics = ScalarPhysics(settling=0.0, diffusion=0.0, n_classes=2)
+        TransportSolver(mesh, config, physics, FixedConditions(faces))
 
 
 @pytest.mark.integration

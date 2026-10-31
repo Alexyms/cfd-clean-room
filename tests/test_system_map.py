@@ -606,7 +606,7 @@ class TestTheRealDocumentMatchesTheRealTree:
             [f"REQ-S{n:02d}" for n in range(1, 13)]
             + ["REQ-S12.1"]
             + [f"REQ-S{n:02d}" for n in range(13, 19)]
-            + [f"REQ-T{n:02d}" for n in range(1, 14)]
+            + [f"REQ-T{n:02d}" for n in range(1, 15)]
             + [f"REQ-C{n:02d}" for n in range(1, 5)]
             + [f"REQ-A{n:02d}" for n in range(1, 7)]
             + [f"REQ-V{n:02d}" for n in range(1, 4)]

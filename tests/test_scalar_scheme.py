@@ -804,6 +804,29 @@ class TestConjugateGradient:
         assert not result.converged
         assert np.array_equal(result.field, jacobi.field)
 
+    def test_a_cap_of_zero_returns_the_start_unconverged(self) -> None:
+        """No iteration is taken and the start comes back, with the stop unmet.
+
+        The solve with a cap that allows work converges from the same start,
+        so the zero is the cap's doing. Defect caught: the loop entered once
+        at a cap of zero (an iterate that is not the start).
+        """
+        mesh = _mesh()
+        rng = np.random.default_rng(31)
+        solid = mesh.cell_type == SOLID
+        g_u, g_v = _conductances(mesh, rng, high=1e3)
+        c_star = np.where(solid, 0.0, rng.uniform(0.5, 1.0, size=solid.shape))
+        volume = np.outer(mesh.dy_cell, mesh.dx_cell)
+        a_p = volume + g_u[:, :-1] + g_u[:, 1:] + g_v[:-1, :] + g_v[1:, :]
+        args = (a_p, volume * c_star, g_u, g_v, solid, 1e-12)
+        _field, taken, met = scalar_scheme._conjugate_gradient(
+            c_star.copy(), *args, 500
+        )
+        assert met and taken > 0
+        field, taken, met = scalar_scheme._conjugate_gradient(c_star.copy(), *args, 0)
+        assert (taken, met) == (0, False)
+        assert np.array_equal(field, c_star)
+
     def test_a_negative_converged_cg_value_falls_back_to_jacobi_from_c_star(
         self,
     ) -> None:

@@ -515,6 +515,45 @@ class TestResume:
             assert _same_state(state, kept) and state.outer == kept.outer
         assert _same_state(end, whole.flow_state)
 
+    def test_an_implicit_euler_resume_needs_no_previous_level(self) -> None:
+        """Implicit Euler reads one old level, so ``previous=None`` resumes exactly.
+
+        Catches: the previous level read when it is None, and a resume that
+        refuses a march whose scheme has no use for the second level.
+        """
+        config = _channel_from_rest()
+        whole, seen = _march(config, 6, scheme=IMPLICIT_EULER, dt=CHANNEL_DT)
+        end = staggered_solver(config).solve_transient(
+            CHANNEL_DT,
+            6 * CHANNEL_DT,
+            resume=TransientResume(state=seen[2][1], previous=None, step=3),
+            step_tol=STEP_TOL,
+            step_cap=200,
+            scheme=IMPLICIT_EULER,
+        )
+        assert _same_state(end, whole.flow_state)
+
+    def test_a_resume_at_step_zero_is_a_new_march(self) -> None:
+        """A BDF2 resume at step 0 has no previous level and takes the first step.
+
+        The first step of a BDF2 march is implicit Euler, so the resume at
+        step 0 from the rest state must be the march begun with ``initial``.
+        Catches: a resume at step 0 refused for the missing level, and the
+        step count of a resume restarted from the wrong index.
+        """
+        config = _channel_from_rest()
+        whole, _seen = _march(config, 3, dt=CHANNEL_DT)
+        resumed = staggered_solver(config)
+        end = resumed.solve_transient(
+            CHANNEL_DT,
+            3 * CHANNEL_DT,
+            resume=TransientResume(state=_rest(resumed), previous=None, step=0),
+            step_tol=STEP_TOL,
+            step_cap=200,
+        )
+        assert [r.step for r in resumed.transient_steps] == [1, 2, 3]
+        assert _same_state(end, whole.flow_state)
+
     def test_what_cannot_be_resumed_is_refused(self) -> None:
         config = _channel_from_rest()
         _whole, seen = _march(config, 2, dt=CHANNEL_DT)

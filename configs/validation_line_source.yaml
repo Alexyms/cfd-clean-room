@@ -1,0 +1,127 @@
+# VAL-024: a line source in decaying grid turbulence (ADR-015 A; Warhaft 1984,
+# JFM 144, 297-338, the single heated wire at x_o / M = 52).
+#
+# The experiment is a wind tunnel behind a biplane grid of mesh M = 0.025 m
+# (Warhaft's section 2) at U = 7 m/s, with a heated wire across the stream
+# at 52 mesh lengths. The case is that station onward: a uniform stream at
+# U carrying the turbulence the grid has left at the wire, a point source
+# (a line across the tunnel, a point in this 2D section) on the centreline
+# two cells from the inlet, and the plume's width read as the second moment
+# of each column's profile (a Gaussian's standard deviation, which is what
+# the experiment fits; sigma = 0.849 times the half-width it reports).
+#
+# The inlet's turbulence is Warhaft's at the source station. The velocity
+# standard deviations at one mesh length, sigma_u 2.44 and sigma_v = sigma_w
+# 2.27 m/s, decay as (x / M)^(-m / 2) with m = 1.4 (Viswanathan and Pope
+# 2008, table I, Sawford's refit of Warhaft's data), so at 52 M
+# k_o = (sigma_u^2 + 2 sigma_v^2) / 2 = 0.032186 m^2/s^2 and eps_o =
+# m k_o U / x_o = 0.24263 m^2/s^3, x_o = 52 M / U the wire's flight time.
+# The solver takes an intensity I = sqrt(k / 1.5) / U and a dissipation
+# length l_e = k^(3/2) / eps (ADR-012 C), which are the two values below at
+# full precision; validation/line_source.py derives them again from the
+# experiment's constants, and tests/test_line_source.py pins the two
+# against each other.
+#
+# The walls top and bottom stand 25 cm from the centreline, so far from a
+# plume under 3 cm wide that their shear layers do not reach it and the
+# stream stays uniform; the outlet states no velocity, so the domain has no
+# pressure outlet (a fixed-flow outlet, ADR-012 D). The model and the solver
+# keys are the product's: standard k-epsilon with k and eps advected by
+# upwind, the rule version 5, multigrid-preconditioned conjugate gradients.
+# The transport step is the product's too (UMIST at a Courant number of 0.4,
+# Sc_t 0.7). The class is 0.1 um, whose Brownian diffusivity is negligible, so
+# the plume spreads by nu_t / Sc_t alone.
+#
+# Grids: uniform, square cells. The default is the row's, 560x100 (5 mm
+# cells, about five cells across sigma at 10 M and ten at 100 M); the suite's
+# is 280x50 (val024_280x50). mass_imbalance_tol is ADR-011 G's per-cell
+# bound, 1e-4 rho V_cell / t_end, for this grid's cell; load_line_source sets
+# it for any other. The criterion is Alex's (ADR-015 A, 2026-10-30): the
+# decay exponent within 0.1 of the model's own 1.087, and the width within
+# 20% of the measured at 20 and 50 M.
+
+domain:
+  width: 2.8
+  height: 0.5
+  nx: 560
+  ny: 100
+
+mesh:
+  x:
+    stretch_ratio: 1.0
+  y:
+    stretch_ratio: 1.0
+
+fluid:
+  density: 1.2
+  viscosity: 1.81e-5
+  temperature: 293.0
+
+particles:
+  density: 1000.0
+  sizes: [0.1e-6]
+  mean_free_path: 67.0e-9
+  boundary_layer_thickness: 1.0e-3
+  hepa_reference:
+    diameters: [0.1e-6]
+    efficiencies: [0.99999]
+
+solver:
+  dt: 0.01
+  t_end: 60.0
+  output_interval: 10
+  convergence_tol: 1.0e-6
+  stopping_rule: error_estimate
+  iteration_error_tol: 1.0e-6
+  mass_imbalance_tol: 5.0e-11
+  max_simple_iter: 15000
+  momentum_sweeps: 10
+  pressure_rtol: 1.0e-4
+  alpha_velocity: 0.5
+  alpha_pressure: 0.3
+  max_pressure_iter: 5000
+  pressure_preconditioner: multigrid
+
+transport:
+  cfl_number: 0.4
+  advection_scheme: umist
+  max_diffusion_iter: 200
+  diffusion_tol: 1.0e-8
+  turbulent_schmidt: 0.7
+
+turbulence:
+  model: k_epsilon
+  variant: standard
+  wall_treatment: scalable_wall_functions
+  cfl_number: 0.25
+  advection_scheme: upwind
+  alpha_turbulence: 0.7
+  max_iter: 500
+  tol: 1.0e-10
+
+boundaries:
+  stream:
+    type: velocity_inlet
+    location: left
+    y_start: 0.0
+    y_end: 0.5
+    velocity: 7.0
+    hepa_filtered: true
+    turbulence_intensity: 0.020926242306943243
+    dissipation_length: 0.02379864308986026
+
+  exit:
+    type: fixed_flow_outlet
+    location: right
+    y_start: 0.0
+    y_end: 0.5
+
+obstacles: []
+
+sensors:
+  - name: axis
+    x: 1.4
+    y: 0.25
+
+thresholds:
+  "0.1e-6": 1.0

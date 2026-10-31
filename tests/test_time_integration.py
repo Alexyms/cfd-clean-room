@@ -60,7 +60,7 @@ from src.particles import ParticlePhysics
 from src.scenarios import Interval, ScenarioManager
 from src.solver_staggered import FlowState, StaggeredSolver
 from src.solver_transport import TransportSolver
-from src.staggered import FaceVelocities
+from src.staggered import FaceVelocities, allocate_fields
 from src.time_integration import (
     DEFINED_RTOL,
     KEPT,
@@ -72,6 +72,8 @@ from src.time_integration import (
     MarchStep,
     Provenance,
     RecoveryTracker,
+    _first_flow_difference,
+    _Run,
     air_change_rate,
     flow_inputs,
     plan_interval,
@@ -422,6 +424,47 @@ class TestSensorsAndInputs:
         assert inputs["solver"]["mass_imbalance_tol"] == COARSE_MASS_IMBALANCE_TOL
         assert mapping["solver"]["t_end"] == 240.0
 
+    def test_a_solver_entry_that_is_not_a_mapping_passes_through(self) -> None:
+        """Only a solver mapping is filtered; anything else is kept as given.
+
+        The flow inputs are compared, not parsed, so an entry that is not a
+        mapping must reach the comparison unchanged and not be iterated.
+        Defect caught: the solver entry assumed to be a mapping (an
+        AttributeError on a string).
+        """
+        assert flow_inputs({"domain": {"nx": 4}, "solver": "unset"}) == {
+            "domain": {"nx": 4},
+            "solver": "unset",
+        }
+        assert flow_inputs({"domain": {"nx": 4}}) == {"domain": {"nx": 4}}
+
+    @pytest.mark.parametrize(
+        ("kept", "ours", "expected"),
+        [
+            ({"a": {"x": 1}}, {"a": {"x": 1}}, None),
+            ({"a": {"x": 1, "y": 2}}, {"a": {"x": 1, "y": 3}}, "a.y"),
+            ({"a": {"x": 1}}, {"a": {"x": 1, "z": 0}}, "a.z"),
+            ({"a": {"x": 1, "y": None}}, {"a": {"x": 1}}, "a.y"),
+            ({"obstacles": [1, 2]}, {"obstacles": [1]}, "obstacles"),
+            ({"a": {"x": 1}}, {"a": 5}, "a"),
+            ({"a": 1}, {"a": 1, "extra": {"k": 1}}, "extra"),
+            ({"a": 1, "b": 2}, {"a": 9, "b": 8}, "a"),
+        ],
+    )
+    def test_the_first_flow_difference_names_the_section_or_the_key(
+        self, kept: dict, ours: dict, expected: str | None
+    ) -> None:
+        """A mapping section is named down to its first differing key.
+
+        A section that is not a mapping on both sides, or that exists on one
+        side only, is named whole, the sections in the kept file's order. A
+        key present with value None on one side only is a difference.
+        Defects caught: a section named whole when its key differs; a key
+        present on one side with value None passed over; a section found in
+        the new file only skipped.
+        """
+        assert _first_flow_difference(kept, ours) == expected
+
 
 # ---------------------------------------------------------------------------
 # Units: the recovery tracker on a prescribed history
@@ -631,12 +674,31 @@ class TestRunGuards:
             run(config, tmp_path / "a.h5", restart=tmp_path / "b.h5")
         with pytest.raises(ValueError, match="flows_from is for a new run"):
             run(config, restart=tmp_path / "b.h5", flows_from=tmp_path / "c.h5")
+        u, v, p = allocate_fields(Mesh(config))
+        with pytest.raises(ValueError, match="initial is tier 2's"):
+            run(config, tmp_path / "a.h5", initial=FlowState(u=u, v=v, p=p))
         for existing in (tmp_path / "x.h5", tmp_path / "y.checkpoint.h5"):
             existing.write_bytes(b"")
         for name in ("x.h5", "y.h5"):
             with pytest.raises(ValueError, match="exists; a new run writes new files"):
                 run(config, tmp_path / name)
         assert not (tmp_path / "a.h5").exists()
+
+    def test_a_checkpoint_past_every_interval_is_refused(self, tmp_path: Path) -> None:
+        """``resume_point`` names a checkpoint time that lies in no plan.
+
+        ``run`` refuses a checkpoint at or past t_end first, so this is the
+        guard behind that one. Defect caught: a time past the plans resumed
+        in the last interval, which would march a run beyond its end.
+        """
+        config = SimConfig.from_dict(coarse_raw("scenario_clean_out.yaml"))
+        state = _Run(config, RunFile(tmp_path / "x.h5"), None)
+        plans = [plan_interval(i, iv, 0.1) for i, iv in enumerate(state.intervals)]
+        before, past = plans[0].t_start, plans[-1].t_end
+        assert state.resume_point(plans, before, None)[1] == (0, 0)
+        for t in (past, past + 1.0):
+            with pytest.raises(AssertionError, match="lies in no interval"):
+                state.resume_point(plans, t, None)
 
 
 @pytest.mark.integration
@@ -963,6 +1025,35 @@ class TestTransportOnly:
         frames = case.run.read_frames()
         assert all((c >= 0.0).all() for c in frames.fields.values())
 
+    def test_a_run_without_sensors_writes_its_frames_and_no_readings(
+        self, tmp_path: Path, clean_out: SimpleNamespace
+    ) -> None:
+        """An empty sensor list is a run: frame 0 and the march, no readings group.
+
+        Defects caught: the readings of zero sensors written as an empty
+        array (a group with no columns), a run refused for having no sensor,
+        and frame 0 skipped with the readings.
+        """
+        raw = rescheduled(
+            coarse_raw("scenario_equipment_dust.yaml", output_interval=10),
+            2.0,
+            {"litho_dust": (0.5, 1.0)},
+        )
+        raw["sensors"] = []
+        config = SimConfig.from_dict(raw)
+        record = run(
+            config,
+            tmp_path / "run.h5",
+            flows_from=clean_out.record.path,
+            provenance=PROVENANCE,
+        )
+        written = RunFile(record.path)
+        frames = written.read_frames()
+        assert frames.steps[0] == 0 and frames.steps.size > 1
+        assert record.steps == frames.steps[-1] or record.steps > frames.steps[-1]
+        with pytest.raises(KeyError, match="holds no /transport/sensors/"):
+            written.read_sensor_readings()
+
     def test_the_source_enters_the_source_slot_for_its_duration(
         self, transport_only: dict[str, SimpleNamespace]
     ) -> None:
@@ -1252,6 +1343,33 @@ class TestRestart:
         assert again.restarted_from == 0
         same_frames(RunFile(cut), RunFile(whole.path))
         same_recovery(again.recovery, whole.recovery)
+
+    def test_a_restart_without_a_clean_out_restores_no_tracker(
+        self, tmp_path: Path, door: SimpleNamespace
+    ) -> None:
+        """The door leak has no recovery tracker, and its restart is bitwise too.
+
+        Its checkpoint carries no recovery arrays and the restart must not
+        look for any. Killed at 95, after the checkpoint at 90 that follows
+        the first opening. Defects caught: a tracker restored from a
+        checkpoint that has none (an error on the way back); a restart that
+        marches from step 0; the frames after the checkpoint kept.
+        """
+        cut = tmp_path / "cut.h5"
+        with pytest.raises(_KilledError):
+            run(
+                door.config,
+                cut,
+                flows_from=door.record.path,
+                on_step=killer(95),
+                provenance=PROVENANCE,
+            )
+        assert RunFile(cut).read_checkpoint().step == 90
+        again = run(door.config, restart=cut)
+        assert again.restarted_from == 90
+        assert again.recovery is None
+        same_frames(RunFile(cut), door.run)
+        same_budgets(again.budgets, door.record.budgets)
 
     def test_a_later_t_end_divides_the_last_interval_again(
         self, tmp_path: Path, door: SimpleNamespace

@@ -13,7 +13,9 @@ that must reproduce a field saved under it; and the backward-facing step's
 y clustering, which load_backstep derives so that a face falls on the step
 height on any grid (ADR-012 G (ii)); and the impinging jet's y clustering,
 which load_impinging_jet derives as a fixed fraction of the uniform spacing
-toward the plate and the nozzle's plane (ADR-012 G (vi)); and the square
+toward the plate and the nozzle's plane (ADR-012 G (vi)); and the line source's
+per-cell mass imbalance bound, which load_line_source sets for the grid at hand
+(VAL-024, ADR-015 A); and the square
 cylinder's Reynolds number, end time and, for the uniform rung, mesh, which
 load_cylinder sets for the four VAL-022 presets (ADR-014 F, step 6b). A named preset is loaded by
 load_preset, which picks the loader, so no consumer repeats that choice.
@@ -37,6 +39,8 @@ CASE_FILES: dict[str, str] = {
     "annex20": "validation_annex20.yaml",
     "backstep": "validation_backstep.yaml",
     "impinging_jet": "validation_impinging_jet.yaml",
+    # A line source in decaying grid turbulence (VAL-024, ADR-015 A).
+    "line_source": "validation_line_source.yaml",
     # The product room (VAL-018, ECR-002 step 8): the default file is the
     # product configuration since prompt 56, so the harness runs it as a case.
     "product": "clean_room_default.yaml",
@@ -62,6 +66,8 @@ CASE_GRIDS: dict[str, tuple[str, int, int]] = {
     "val019_984x90": ("backstep", 984, 90),
     "val020_272x90": ("impinging_jet", 272, 90),
     "val020_408x135": ("impinging_jet", 408, 135),
+    "val024_280x50": ("line_source", 280, 50),
+    "val024_560x100": ("line_source", 560, 100),
     "val018_320x120": ("product", 320, 120),
     "val022_re40": ("cylinder", 280, 150),
     "val022_re60": ("cylinder", 280, 150),
@@ -114,6 +120,17 @@ IMPINGING_JET_INLET = "nozzle"
 # The impinging jet's wall cell as a fraction of the uniform spacing H / ny
 # (prompt 55; docs/reports/ecr002_val020_impinging_jet.md, section 2.3).
 IMPINGING_JET_WALL_FRACTION = 0.5
+
+# Presets loaded by load_line_source, which sets the per-cell mass imbalance
+# bound for the grid at hand.
+LINE_SOURCE_GRIDS: frozenset[str] = frozenset({"val024_280x50", "val024_560x100"})
+
+# The line source's inlet segment, the uniform stream carrying the turbulence.
+LINE_SOURCE_INLET = "stream"
+
+# ADR-011 G's per-cell bound on the mass imbalance, as a fraction of the mass of
+# the smallest cell per second of the run: 1e-4 rho V_cell / t_end.
+MASS_IMBALANCE_FRACTION = 1.0e-4
 
 # The step height's face is the one this share of ny up from the floor, so
 # the clustered cells under the step height are 1.5 times as many as a uniform
@@ -461,6 +478,56 @@ def load_impinging_jet(
     return SimConfig.from_dict(raw)
 
 
+def load_line_source(
+    name: str = "line_source", grid: tuple[int, int] | None = None
+) -> SimConfig:
+    """Load the line source in decaying grid turbulence on a grid.
+
+    The case is uniform with square cells; the only grid-dependent setting is
+    the per-cell mass imbalance bound of ADR-011 G, 1e-4 rho V_cell / t_end,
+    which this loader sets for the grid at hand (the committed file carries the
+    value for its own).
+
+    Parameters
+    ----------
+    name : str
+        The case name, "line_source"; a parameter so load_preset can call every
+        loader the same way.
+    grid : tuple[int, int], optional
+        (nx, ny) to use instead of the values in the file.
+
+    Returns
+    -------
+    SimConfig
+        The case at the grid, with ``solver.mass_imbalance_tol`` set for it.
+
+    Raises
+    ------
+    ValueError
+        If the case file or the grid fails SimConfig's validation, if the file
+        names no velocity inlet called LINE_SOURCE_INLET on the left edge, or if
+        the cells are not square.
+    """
+    raw = _raw_case(name, grid)
+    base = SimConfig.from_dict(raw)
+    inlet = base.boundaries.get(LINE_SOURCE_INLET)
+    if inlet is None or inlet.type != "velocity_inlet" or inlet.location != "left":
+        raise ValueError(
+            f"the case needs a velocity inlet named {LINE_SOURCE_INLET!r} on the left edge"
+        )
+    dx, dy = base.room_width / base.nx, base.room_height / base.ny
+    if abs(dx - dy) > FACE_TOLERANCE * dx:
+        raise ValueError(
+            f"the case's cells must be square; the grid {base.nx}x{base.ny} gives "
+            f"{dx} m by {dy} m"
+        )
+    raw["solver"] = {
+        **raw["solver"],
+        "mass_imbalance_tol": MASS_IMBALANCE_FRACTION * base.rho * dx * dy / base.t_end,
+    }
+    return SimConfig.from_dict(raw)
+
+
 def step_corner_offsets(mesh: Mesh, config: SimConfig) -> tuple[float, float]:
     """How far the step's corner lies from the nearest grid line in each axis.
 
@@ -498,7 +565,8 @@ def load_preset(case_id: str) -> SimConfig:
         The preset's case at its grid, by load_wall_clustered for a preset
         in WALL_CLUSTERED_GRIDS, by load_annex20 for one in ANNEX20_GRIDS,
         by load_backstep for one in BACKSTEP_GRIDS, by load_impinging_jet
-        for one in IMPINGING_JET_GRIDS and by load_case for every other.
+        for one in IMPINGING_JET_GRIDS, by load_line_source for one in
+        LINE_SOURCE_GRIDS and by load_case for every other.
 
     Raises
     ------
@@ -521,6 +589,8 @@ def load_preset(case_id: str) -> SimConfig:
         loader = load_backstep
     elif case_id in IMPINGING_JET_GRIDS:
         loader = load_impinging_jet
+    elif case_id in LINE_SOURCE_GRIDS:
+        loader = load_line_source
     else:
         loader = load_case
     return loader(kind, grid=(nx, ny))
