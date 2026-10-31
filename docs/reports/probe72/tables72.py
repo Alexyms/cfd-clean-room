@@ -39,8 +39,10 @@ probe tables of ADR-015 they repeat:
   mean's 100:1 time and its ratio to the well-mixed ln(100)/N, and the cells
   not recovered at the end, with the observed order of convergence where the
   three values allow one. A count's order is read in cells of the finest
-  grid, and a difference at or below one such cell is at the count's
-  resolution and gives no order (review 72 B1).
+  grid; each difference's resolution is one cell of the finer grid of its
+  pair (four fine cells between 80x30 and 160x60, one between 160x60 and
+  320x120), and a difference at or below it gives no order (review 72 B1,
+  both rounds).
 """
 
 import argparse

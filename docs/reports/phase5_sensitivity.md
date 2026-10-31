@@ -420,8 +420,8 @@ distances are grid-dependent at that size and the bound does not hold for them; 
 5 um contour, four decades above its threshold, moves by about one coarse cell between the
 grids and in the same direction as the breach's (D1, min_nut rows: the fine grid's farther at
 every sensor). The product-grid repeat of `widest` is missing (section 1.2); the coarse
-`widest` rows are therefore bounds on the fine grid for the breach and the door only in the
-direction the other arms show, not measured.
+`widest` rows are therefore bounds on the fine grid for the breach, the door and the dust's
+5 um contour only in the direction the min_nut pair shows, not measured.
 
 ## 2. The clean-out on 160x60
 
@@ -471,7 +471,9 @@ were reached before 120 s). What the three grids show:
   the coarser grid's, plus or minus one cell of the finer grid, which is a count's resolution
   and not a convergence, so no order is observed. What the counts show is the pocket between
   the bench and the right wall, a fixed region of the room, at the same share of the free
-  area on every grid to within that resolution. (The first version of this report read a
+  area on every grid to within that resolution (the same by count; the region's edge cells
+  differ between grids by a few cells of the finer grid, as a count's edge does). (The
+  first version of this report read a
   second order into the 0.1 um counts; review 72 B1 showed the second difference to be one
   320x120 cell, and its round 2 that the first is one 160x60 cell.)
 
@@ -537,9 +539,10 @@ so here, and each is an inference from the arms that ran, not a measurement:
   coarse readings in the direction the measured pair shows: at `min_nut` the fine grid's
   contour is farther from every sensor than the coarse grid's for the door at 0.1 um and for
   the dust at 5 um (section 1.6 and D1's min_nut rows), the classes whose contours come
-  nearest; the dust's 0.1 um contour is excluded from this, since section 1.6 shows the bound
-  does not hold for it, and it stands farther from every sensor than the 5 um one at every
-  arm (D1).
+  nearest; the dust's 0.1 and 0.3 um contours are excluded from this, since section 1.6
+  shows the bound does not hold for the 0.1 um one and D1's min_nut rows show the 0.3 um one
+  unchanged or nearer at two sensors, and both stand farther from every sensor than the 5 um
+  one at every arm (D1).
 
 With those qualifications the "never" of the gate report's table S1 is geometric for the door
 across the range, for the dust across the range short of its widest corner, and for the

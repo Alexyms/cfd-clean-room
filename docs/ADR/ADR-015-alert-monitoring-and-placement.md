@@ -609,7 +609,7 @@ the supply's keys, the breach's three replacement segments and the door's inflow
 (whose keys the scenario file defines as a copy of the supply's). The report is
 `docs/reports/phase5_sensitivity.md`. *Built 2026-10-31.* Two flow states did not converge
 within the solver's cap and are reported there, not fixed (its section 1.2): the `widest`
-inputs on 320x120, whose residual cycles, so the product-grid repeat of that arm is missing
+inputs on 320x120, whose residual stays bounded with no trend, so the product-grid repeat of that arm is missing
 for every scenario; and the door's open state at the control arm on 160x60, so the door's
 control and Sc_t arms are missing on the coarse grid. No sensor's cell is reached at any arm
 that ran; the breach at `widest` on 160x60 brings the gap sensors' readings inside the
