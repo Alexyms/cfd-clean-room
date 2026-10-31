@@ -2,7 +2,7 @@
 
 **Project:** CFD Clean Room Simulation
 **Last Updated:** 2026-10-31
-**Current Phase:** Phase 5 (Alert Monitoring System), IN PROGRESS: ADR-015 accepted by Alex on 2026-10-30, step 0 (the coverage debt and VAL-024, prompt 71) merged as PR 99 and step 1 (the sensitivity sweep and the clean-out's third grid, prompt 72) built; Phase 4 COMPLETE (CONDITIONAL PASS, Alex, 2026-10-29, three conditions in `docs/reports/phase4_scenarios_report.md`); Phase 3 COMPLETE (CONDITIONAL PASS, Alex, 2026-10-16); ECR-002 closed 2026-10-15 and ECR-003 2026-10-07
+**Current Phase:** Phase 5 (Alert Monitoring System), IN PROGRESS: ADR-015 accepted by Alex on 2026-10-30, step 0 (the coverage debt and VAL-024, prompt 71) merged as PR 99 and step 1 (the sensitivity sweep and the clean-out's third grid, prompt 72) merged as PR 100; Phase 4 COMPLETE (CONDITIONAL PASS, Alex, 2026-10-29, three conditions in `docs/reports/phase4_scenarios_report.md`, conditions 2 and 3 met by step 1); Phase 3 COMPLETE (CONDITIONAL PASS, Alex, 2026-10-16); ECR-002 closed 2026-10-15 and ECR-003 2026-10-07
 
 This document tracks development progress by phase. Code review reads this document to determine the current phase and verify that PRs are in scope; the policy is `docs/REVIEW_POLICY.md`. Update this document as work progresses.
 
@@ -16,7 +16,7 @@ This document tracks development progress by phase. Code review reads this docum
 | 1 | Foundation | COMPLETE | PASS | phase1_foundation_report.md |
 | 2 | Navier-Stokes Solver | COMPLETE | PASS | phase2_navier_stokes_report.md |
 | 3 | Transport Solver | COMPLETE | CONDITIONAL PASS | phase3_transport_report.md |
-| 4 | Scenarios & Time Integration | COMPLETE | CONDITIONAL PASS (Alex, 2026-10-29; three conditions, the report's "The decision") | phase4_scenarios_report.md |
+| 4 | Scenarios & Time Integration | COMPLETE | CONDITIONAL PASS (Alex, 2026-10-29; three conditions, the report's "The decision"; conditions 2 and 3 met by Phase 5 step 1, 2026-10-31) | phase4_scenarios_report.md |
 | 5 | Alert Monitoring System | IN PROGRESS (ADR-015 accepted, Alex, 2026-10-30; step 0, prompt 71) | -- | -- |
 | 6 | CUDA Acceleration | NOT STARTED | -- | -- |
 | 7 | Visualization & Portfolio | NOT STARTED | -- | -- |
@@ -304,6 +304,12 @@ Laminar flow past a square cylinder in a channel is Phase 4's validation and sho
 - Output files produced and loadable: HOLDS (the run files read back through `RunFile`, the gate report's table R1)
 - All previous validation tests still pass: HOLDS (the full suite and the hashes of record at the gate's commit, the gate report's Test Results and table H2)
 
+The gate's conditions (Alex, 2026-10-29; the gate report's "The decision"):
+
+1. The budget residual's mechanism, before Phase 6's finer grids: OPEN.
+2. A third grid of the clean-out before the free-area mean's ratio or the local recovery field is quoted as a number of the room: MET by Phase 5 step 1 (prompt 72, PR 100; `docs/reports/phase5_sensitivity.md` section 2). The mean 100:1 ratio rises by the same step per refinement (3.0, 3.91, 4.77 on 80x30, 160x60 and 320x120) and no order is observed, so it and the local recovery field stay comparative.
+3. A turbulent-spreading sensitivity check before Phase 5 reports any detection result: MET by Phase 5 step 1 (`docs/reports/phase5_sensitivity.md` section 1) with VAL-024. No sensor detects any event scenario at any input arm that ran. The coarse grid's threshold contour bounds the fine one's from outside, so the `widest` runs missing on 320x120 cannot bring a contour nearer a sensor.
+
 ### Phase-Specific Risks
 
 | Risk | Mitigation |
@@ -423,6 +429,7 @@ with where it was recorded.
 |-----------|----------|-------|
 | An outer iteration that adapts rather than overshoots: an outflow correction, or under-relaxation that adapts to the damping the solver observes | 2026-10-02 (`docs/STATUS.md`, open questions) | Note 2026-10-07: the net-outflow oscillation that raised it belonged to the weighted Jacobi correction; under ECR-003's conjugate gradients it is gone on the validation channels (`docs/reports/ecr003_step2_baseline.md`, section 6). Whether the outer iteration overshoots on the product case is not measured |
 | A tier-2 step that reaches `transient.step_cap` cannot be continued under a larger cap | 2026-10-28 (review 68 S9) | A capped step raises `TransientStepError` and leaves the checkpoint, but `transient.step_cap` is in the restart hash (`io_manager.RESTART_EXCLUDED_KEYS` lists only `solver.max_simple_iter`, `solver.t_end` and `solver.checkpoint_interval`), so the usual remedy, restarting under a larger cap as the steady solve does, is refused. The Re 40 probes (`floor68.py`, `runout68.py`) avoid it with a separate script, which is right for a changed `step_tol` and not for a cap. Excluding the cap from the hash is the candidate; no run has hit the cap yet |
+| Two flow states that do not converge within the 15,000 cap (OPEN item) | 2026-10-31 (Phase 5 step 1, `docs/reports/phase5_sensitivity.md` section 1.2) | The `widest` inputs (10%, 0.3 m) on 320x120, the momentum residual bounded with no trend; the door's open state at the control arm on 160x60, a repeating residual. The product's inputs converge. Whether the solver's convergence at high inlet turbulence needs work is for before any such arm is used; not taken up in step 2 |
 | A pressure tolerance loose early and tight near the stop | 2026-10-07 (ECR-003 step 3) | On the 80x80 cavity CG at the default `pressure_rtol` of 1e-8 takes between about 2% and 18% more wall time than the two weighted Jacobi rows of identical arithmetic, inside the 7% to 8% spread between identical runs, the outer counts within 0.27% (`docs/reports/ecr003_step2_baseline.md`, sections 4 and 5; ADR-013, planned against built). Not measured. ADR-013 B measured a loose level from rest diverging in the 40x15 and 80x30 rooms at real air (1e-1), and its decision 3 ranks the reverse order, a tight start before a looser level; either needs the outer loop measured first |
 
 ---
@@ -514,3 +521,4 @@ Phase 3 completion is the minimum viable portfolio artifact. A working, validate
 | 2026-10-30 | ADR-015 accepted by Alex (prompt 71, branch phase5/step0-val024, commit 0): A in the rounds of prompt 70, B to H as recommended, the counter's sample time OPEN. The status table's Phase 5 row reads IN PROGRESS and the header names the phase; the ADR's deliverable row reads ACCEPTED; two rows added for step 0 (the Phase 4 coverage debt; VAL-024's case builder and test). No code changed in this commit. |
 | 2026-10-30 | ADR-015 step 0 built (prompt 71): the Phase 4 coverage debt paid by tests for each reachable refusal and fallback of Cv2, and VAL-024 built (case file, readers, loader, harness rows, test) and passing its criterion. The two Phase 5 rows added by the acceptance commit read BUILT, and the validation gate's VAL-024 row names its test and rows. |
 | 2026-10-31 | ADR-015 step 1 built (prompt 72, branch phase5/step1-sweep): the sensitivity sweep (`docs/reports/phase5_sensitivity.md`, Phase 4 condition 3) and the clean-out on 160x60 (condition 2), a sixth arm `widest` added to ADR-015 B by the orchestrator. No sensor's cell reached at any arm that ran; predictions (e), (f) and (g) hold. Two capped flow states reported, not fixed. Review 71 and test 71's Suggestions applied in one commit (the one src/ change a docstring in config.py). The Phase 5 deliverables gain the step 1 row. Nothing under src/ changes in arithmetic. |
+| 2026-10-31 | Records after step 1's merge (prompt 73, commit 0): Phase 4's conditions 2 and 3 marked met by step 1 with what each found; the two flow states capped in step 1 entered in the deferred table as an open item. No code changed in this commit. |

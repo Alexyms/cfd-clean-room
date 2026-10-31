@@ -94,7 +94,14 @@ solver's cap (the widest inputs on the product grid, the door's open state at th
 inputs on 160x60) and are reported, not fixed; the clean-out's free-area mean 100:1 time
 forms an arithmetic series over the three grids and stays comparative, while the cells
 not recovered at 240 s are the same region on the three grids to within one cell of the
-finer grid at each refinement. Review and test 72 run before its pull request.
+finer grid at each refinement. It was merged as PR 100. Step 1 meets Phase 4's conditions 2
+and 3 (2026-10-31). Condition 3: no sensor detects any event scenario at any input arm that
+ran; the coarse grid's threshold contour bounds the fine one's from outside, so the `widest`
+runs missing on 320x120 cannot bring a contour nearer a sensor. Condition 2: the clean-out's
+mean 100:1 ratio rises by the same step at each refinement (3.0, 3.91, 4.77 on 80x30, 160x60
+and 320x120), no order is observed, and so it and the local recovery field stay comparative,
+not numbers of the room. The two flow states that did not converge within the cap are an
+open item in `docs/PROJECT_PLAN.md`'s deferred table.
 Phases 6 and 7 have not begun.
 
 The product room itself has never been solved, and on 2026-10-04 it was found that the laminar
