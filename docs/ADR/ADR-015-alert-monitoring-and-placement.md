@@ -579,7 +579,7 @@ the threshold, centre to centre, in metres and in cells (T6's reading), on both 
 the extreme arms; on each sensor's row, the plume's width at the threshold level and at ten
 times it, at the end of the event and the largest over the frames, and the extent of the
 threshold cells (T4's); the arrival map's fraction of cells reached (T5's). A sensor's peak
-reading is stated as a number only when it is within a hundredth of its threshold (the
+reading is stated as a number only when it is at or above a hundredth of its threshold (the
 resolved range of the front on either grid); below that it is "below the resolved plume",
 because the tail's value is the grid's (11 to 16 decades between 160x60 and 320x120 at the
 same inputs, T3 of the gate report against T3 here) and not the inputs'. The plume's width

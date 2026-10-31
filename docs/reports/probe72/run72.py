@@ -75,21 +75,25 @@ def jobs() -> list[dict]:
 
 
 def summary_complete(name: str) -> bool:
+    """Whether the job's summary reports a wall time, which the runner prints last."""
     path = RESULTS / f"{name}.txt"
     return path.exists() and "wall time:" in path.read_text(encoding="utf-8")
 
 
 def load_record() -> dict:
+    """The queue record, job name to its start, end, pid and exit code."""
     if RECORD.exists():
         return json.loads(RECORD.read_text(encoding="utf-8"))
     return {}
 
 
 def save_record(record: dict) -> None:
+    """Write the queue record."""
     RECORD.write_text(json.dumps(record, indent=2), encoding="utf-8")
 
 
 def launch(job: dict, running: int) -> subprocess.Popen:
+    """Start a job's run_scenario.py process; ``running`` is the count already running."""
     name = job["name"]
     command = [
         str(PYTHON),
@@ -111,6 +115,7 @@ def launch(job: dict, running: int) -> subprocess.Popen:
 
 
 def run(selected: list[dict]) -> int:
+    """Run the selected jobs, at most MAX_CONCURRENT at once, honouring dependencies."""
     RESULTS.mkdir(parents=True, exist_ok=True)
     LOGS.mkdir(parents=True, exist_ok=True)
     subprocess.run([str(PYTHON), str(HERE / "configs72.py")], check=True, cwd=ROOT)
@@ -203,6 +208,7 @@ def status() -> int:
 
 
 def main() -> int:
+    """Run the queue, print it, or report the running jobs' progress."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--status", action="store_true")

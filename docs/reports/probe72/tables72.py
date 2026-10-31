@@ -561,15 +561,18 @@ def count_order(coarse: int, medium: int, fine: int) -> str:
     """The order of a cell count, read in cells of the finest grid.
 
     The counts are scaled to the finest grid (a coarse cell is sixteen fine
-    cells, a medium one four). A difference at or below one fine cell is at
-    the count's resolution and gives no order (review 72 B1).
+    cells, a medium one four). Each difference is between two counts, and
+    its resolution is one cell of the finer of the two: four fine cells for
+    the coarse-to-medium difference, one for the medium-to-fine. A difference
+    at or below its resolution gives no order (review 72 B1, both rounds).
     """
     a = 16 * coarse - 4 * medium
     b = 4 * medium - fine
     text = f"differences {a:+d} then {b:+d} fine cells"
-    if abs(a) <= 1 or abs(b) <= 1:
+    if abs(a) <= 4 or abs(b) <= 1:
         return (
-            f"none: a difference is at the count's resolution of one fine cell ({text})"
+            "none: a difference is at the count's resolution, one cell of the finer "
+            f"grid of its pair ({text})"
         )
     if a * b < 0:
         return f"none: the series is not monotone ({text})"
@@ -605,9 +608,10 @@ def c1(runs_clean: list[CleanOut | None]) -> list[str]:
             "Observed order of convergence over 80x30 (to 240 s), 160x60 and 320x120 "
             "(refinement ratio 2; p = log2 of the ratio of successive differences, defined "
             "when the three values change monotonically). The unrecovered cells are counts: "
-            "they are read in cells of the finest grid, and a difference of one such cell is "
-            "the count's resolution, not a convergence; the share in brackets is the count "
-            "over the grid's free cells.",
+            "they are read in cells of the finest grid, and a difference of one cell of the "
+            "finer grid of its pair (four fine cells between 80x30 and 160x60, one between "
+            "160x60 and 320x120) is the count's resolution, not a convergence; the share in "
+            "brackets is the count over the grid's free cells.",
             "",
             "| Quantity | 80x30 | 160x60 | 320x120 | Observed order |",
             "|---|---|---|---|---|",

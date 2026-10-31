@@ -242,7 +242,7 @@ first of an event scenario inside the resolved range, at a few hundredths of thr
 the gate's S1 and the probe's T3 have none), and no cell of theirs is reached. The classes do not differ: the panel carries a hundred times each
 class's threshold, so every class's contour is the same set of cells to the cell (the
 per-class table). On the product grid the `min_nut` contour stands farther from every sensor
-than on 160x60, by under a coarse cell, as the gate's control did (section 1.6).
+than on 160x60, by up to about one coarse cell, as the gate's control did (section 1.6).
 
 ### 1.4 The door leak
 
@@ -408,7 +408,7 @@ The two extreme arms on both grids, 0.1 um: the distance from each sensor's cell
 <!-- tables72 grids end -->
 
 For the breach and the door, the fine grid's contour stands farther from every sensor than
-the coarse grid's, by under one coarse cell, and the breach's plume on the gap sensors' row is
+the coarse grid's, by up to about one coarse cell, and the breach's plume on the gap sensors' row is
 narrower by one coarse cell (the door's rows hold no threshold cell on either grid): the
 coarse distance is a one-sided bound, as ADR-015 B's picture states and as the gate's control
 showed. The dust's 0.1 um contour is the exception: on 320x120 its nearest cell to near_door
@@ -433,15 +433,15 @@ direction the other arms show, not measured.
 | 160x60, this pass | 160x60 | 240.0 | 25.6135 | 29.2117 | 100.0336 | 3.9055 | 7,008 | 145 (2.07%) | 145 (2.07%) |
 | 320x120, the gate (prompt 69; G1's row) | 320x120 | 240.0 | 25.6135 | 27.9433 | 122.2410 | 4.7725 | 28,032 | 581 (2.07%) | 579 (2.07%) |
 
-Observed order of convergence over 80x30 (to 240 s), 160x60 and 320x120 (refinement ratio 2; p = log2 of the ratio of successive differences, defined when the three values change monotonically). The unrecovered cells are counts: they are read in cells of the finest grid, and a difference of one such cell is the count's resolution, not a convergence; the share in brackets is the count over the grid's free cells.
+Observed order of convergence over 80x30 (to 240 s), 160x60 and 320x120 (refinement ratio 2; p = log2 of the ratio of successive differences, defined when the three values change monotonically). The unrecovered cells are counts: they are read in cells of the finest grid, and a difference of one cell of the finer grid of its pair (four fine cells between 80x30 and 160x60, one between 160x60 and 320x120) is the count's resolution, not a convergence; the share in brackets is the count over the grid's free cells.
 
 | Quantity | 80x30 | 160x60 | 320x120 | Observed order |
 |---|---|---|---|---|
 | Room recovery time (s) | 25.6211 | 29.2117 | 27.9433 | none: the series is not monotone (differences -3.591 then +1.268) |
 | Free-area mean 100:1 (s) | 77.6564 | 100.0336 | 122.2410 | 0.01 (differences -22.38 then -22.21) |
 | Ratio to the well-mixed | 3.0319 | 3.9055 | 4.7725 | 0.01 (differences -0.8736 then -0.867) |
-| Not recovered at 240 s, 0.1 um (cells, share) | 36 (2.055%) | 145 (2.069%) | 581 (2.073%) | none: a difference is at the count's resolution of one fine cell (differences -4 then -1 fine cells) |
-| Not recovered at 240 s, 5 um (cells, share) | 36 (2.055%) | 145 (2.069%) | 579 (2.065%) | none: a difference is at the count's resolution of one fine cell (differences -4 then +1 fine cells) |
+| Not recovered at 240 s, 0.1 um (cells, share) | 36 (2.055%) | 145 (2.069%) | 581 (2.073%) | none: a difference is at the count's resolution, one cell of the finer grid of its pair (differences -4 then -1 fine cells) |
+| Not recovered at 240 s, 5 um (cells, share) | 36 (2.055%) | 145 (2.069%) | 579 (2.065%) | none: a difference is at the count's resolution, one cell of the finer grid of its pair (differences -4 then +1 fine cells) |
 <!-- tables72 cleanout end -->
 
 The 160x60 run is the reference clean-out at the file's inputs to 240 s; the gate's 80x30 row
@@ -465,20 +465,23 @@ were reached before 120 s). What the three grids show:
   and the sensor's 100:1 crossing on a decaying curve moves with that cell. The three values
   lie within 15% of each other; no order is defined.
 - **The cells not recovered at 240 s are the same region on the three grids, to within one
-  cell of the finest.** The counts are cell counts, and in cells of the finest grid each
-  refinement adds one cell to the region (the order table's last two rows: the differences
-  are four fine cells, then one, at 0.1 um, and the 5 um series is not monotone), so no order
-  is observed; what the counts show is the pocket between the bench and the right wall, a
-  fixed region of the room, at the same share of the free area on every grid to the
-  resolution a count has. (The first version of this report read a second order into the
-  0.1 um counts; review 72 B1 showed the second difference to be one 320x120 cell.)
+  cell of the finer grid at each refinement.** The counts are cell counts. In cells of the
+  finest grid they are 576, 580 and 581 at 0.1 um and 576, 580 and 579 at 5 um (the order
+  table's last two rows, which print the differences): each refinement's count is four times
+  the coarser grid's, plus or minus one cell of the finer grid, which is a count's resolution
+  and not a convergence, so no order is observed. What the counts show is the pocket between
+  the bench and the right wall, a fixed region of the room, at the same share of the free
+  area on every grid to within that resolution. (The first version of this report read a
+  second order into the 0.1 um counts; review 72 B1 showed the second difference to be one
+  320x120 cell, and its round 2 that the first is one 160x60 cell.)
 
 The condition's purpose was to decide whether the mean's 100:1 ratio and the local recovery
 field can be quoted as numbers of the room. The ratio cannot: the three grids give a series
 that is still moving by a fifth of its value per refinement with no sign of slowing. The
-unrecovered region's share of the room is the same on the three grids to within a cell, so it
-can be quoted as a share of the free area to the resolution the counts have (about two per
-cent); its time to recover cannot, since no grid recovers it by 240 s. The room recovery time
+unrecovered region's share of the free area, about two per cent, is the same on the three
+grids to within one cell of the finer grid at each refinement (the three shares in C1 differ
+by under two hundredths of a percentage point), so it can be quoted as a share of the room at
+that precision; its time to recover cannot, since no grid recovers it by 240 s. The room recovery time
 stays the sensor-based number the gate report quotes, with the 160x60 value beside the other
 two.
 
@@ -515,18 +518,32 @@ Both halves of the Phase 4 gate's condition 3 are now in: VAL-024 (step 0) and t
 the room's sensor layout no scenario reaches a sensor's cell at any arm that ran: the breach
 and the dust at all six arms on 160x60 and at `min_nut` on 320x120, the door at four of the
 six arms on 160x60 (i10, max_nut, min_nut and widest) and at `min_nut` on 320x120, and all
-three at the file's inputs on 320x120 (the gate's runs). The one place the contour comes
-within a few cells of a sensor is the breach at the `widest` arm. Two readings were not made
-(section 1.2): the `widest` arm on 320x120 for every scenario, and the door at its control
-and `sc02` arms on 160x60, so the door's `sc02` arm (Sc_t 0.2 on the file's flow state) is
-unmeasured on either grid. For that arm the report takes `widest` as the bound, on this
-ground: at the door's four coarse arms the distance from near_door to the contour falls as the
-supply's nu_t rises and is shortest at `widest` (the door's distance table), and `sc02` has
-the control's nu_t, a fifth of `widest`'s, at the same Schmidt number, so its plume's
-diffusivity lies between the control's (the gate's row) and `widest`'s; that is an inference
-from the arms that ran, not a measurement. With that qualification the "never" of the gate
-report's table S1 is geometric for the door and the dust across the range, and for the breach
-across the range short of its widest corner, where the gap sensors read a few hundredths of
-threshold on the coarse grid. The product-grid reading at that corner is the measurement the
-pass could not make. The arrival maps of ADR-015 D carry the placement question from here: the
-distances in D1 say which cells a sensor would have to stand in.
+three at the file's inputs on 320x120 (the gate's runs). The contour comes within a few cells
+of a sensor in two places, both at the `widest` arm on 160x60 and both at the gap sensors:
+the breach's contour, where the sensors' readings are inside the resolved range, and the
+dust's 5 um contour, as near but with the sensors' readings below the floor (D1 and P1,
+`widest` rows). Three readings were not made (section 1.2): the `widest` arm on 320x120 for
+every scenario, so neither of those two corners has a product-grid reading; and the door at
+its control and `sc02` arms on 160x60, so the door's `sc02` arm (Sc_t 0.2 on the file's flow
+state) is unmeasured on either grid. Where the report reasons past a missing reading it says
+so here, and each is an inference from the arms that ran, not a measurement:
+
+- the door's `sc02` arm is taken to lie inside `widest`'s reading, because at the door's
+  four coarse arms the distance from near_door to the contour falls as the supply's nu_t
+  rises and is shortest at `widest` (the door's distance table), and `sc02` has the control's
+  nu_t, a sixth of `widest`'s, at the same Schmidt number, so its plume's diffusivity lies
+  between `i10`'s and `max_nut`'s, both measured;
+- the door's and the dust's `widest` corners on 320x120 are taken to lie outside their
+  coarse readings in the direction the measured pair shows: at `min_nut` the fine grid's
+  contour is farther from every sensor than the coarse grid's for the door at 0.1 um and for
+  the dust at 5 um (section 1.6 and D1's min_nut rows), the classes whose contours come
+  nearest; the dust's 0.1 um contour is excluded from this, since section 1.6 shows the bound
+  does not hold for it, and it stands farther from every sensor than the 5 um one at every
+  arm (D1).
+
+With those qualifications the "never" of the gate report's table S1 is geometric for the door
+across the range, for the dust across the range short of its widest corner, and for the
+breach across the range short of its widest corner, the two corners where a gap sensor
+stands about four coarse cells from the contour and the product-grid reading is the
+measurement the pass could not make. The arrival maps of ADR-015 D carry the placement
+question from here: the distances in D1 say which cells a sensor would have to stand in.

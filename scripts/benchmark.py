@@ -739,7 +739,8 @@ def line_source_accuracy(
     -------
     dict
         ``metric``, ``value`` (the largest departure of a scored width from the
-        measured), ``reference``, ``components`` (the decay exponent and the
+        measured), ``reference``, ``components`` (the decay exponent, the plume's
+        width at the source column ``source_column_sigma_m`` and the
         model-over-measured width ratio at each station; at 100 mesh lengths,
         where the data end, the ratio to the extrapolation and, with the
         suffix ``_collapse``, to the 20 M source's collapse), ``report``

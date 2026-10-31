@@ -94,7 +94,7 @@ solver's cap (the widest inputs on the product grid, the door's open state at th
 inputs on 160x60) and are reported, not fixed; the clean-out's free-area mean 100:1 time
 forms an arithmetic series over the three grids and stays comparative, while the cells
 not recovered at 240 s are the same region on the three grids to within one cell of the
-finest. Review and test 72 run before its pull request.
+finer grid at each refinement. Review and test 72 run before its pull request.
 Phases 6 and 7 have not begun.
 
 The product room itself has never been solved, and on 2026-10-04 it was found that the laminar
