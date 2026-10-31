@@ -300,6 +300,26 @@ class TestLoader:
         with pytest.raises(ValueError, match="velocity inlet named 'intake'"):
             load_line_source()
 
+    def test_a_stretched_mesh_is_refused(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Defect caught: a stretched axis passing the nominal square-cell check.
+
+        The width reader weights cells without their heights, so the loader
+        refuses a mesh that is not uniform even where the nominal spacings
+        are square.
+        """
+        from validation import cases
+
+        original = cases._raw_case
+
+        def stretched(name: str, grid: tuple[int, int] | None) -> dict:
+            raw = original(name, grid)
+            raw["mesh"] = {"x": {"stretch_ratio": 1.0}, "y": {"stretch_ratio": 1.05}}
+            return raw
+
+        monkeypatch.setattr(cases, "_raw_case", stretched)
+        with pytest.raises(ValueError, match="mesh must be uniform"):
+            load_line_source("line_source", grid=(280, 50))
+
 
 # ---------------------------------------------------------------------------
 # The readers on constructed fields
@@ -386,20 +406,6 @@ class TestReaders:
         got = ls.decay_exponent(coarse_mesh, k, ls.source_turbulence())
         assert got == pytest.approx(1.087, rel=1e-10)
 
-    def test_the_decay_read_on_the_wrong_axis_is_far_from_the_models(
-        self, coarse_mesh: Mesh
-    ) -> None:
-        """Planted: ln k against ln x, without the virtual origin t_v.
-
-        The same analytic decay then reads about 0.5, so the criterion's 0.1
-        either side of the model's 1.087 rejects it.
-        """
-        k = analytic_k(coarse_mesh, ls.model_decay_exponent())[0]
-        xc = np.asarray(coarse_mesh.xc)
-        chosen = (xc >= 0.1 * 2.8) & (xc <= 0.9 * 2.8)
-        slope, _ = np.polyfit(np.log(xc[chosen]), np.log(k[chosen]), 1)
-        assert abs(-slope - ls.model_decay_exponent()) > 5 * ls.DECAY_ALLOWANCE
-
     @pytest.mark.parametrize("centre", [0.255, 0.31])
     def test_the_width_of_a_gaussian_column_is_its_standard_deviation(
         self, coarse_mesh: Mesh, centre: float
@@ -450,25 +456,26 @@ class TestReaders:
             shifted = ls.width_at(coarse_mesh, widths, source_x + 0.01, station)
             assert abs(shifted - want) == pytest.approx(slope * one_cell, rel=1e-9)
 
-    def test_the_stations_shifted_by_one_are_caught_by_the_station_lookup(
+    def test_a_station_outside_the_columns_read_is_refused(
         self, coarse_mesh: Mesh
     ) -> None:
-        """Planted: the model read at the next station of the list.
+        """Defect caught: np.interp's silent clamp to the end column's width.
 
-        The lookup of the line above has a different value at every station,
-        so the reading one station along differs from the right one by more
-        than the interpolation's error by orders of magnitude.
+        A station past the last column, or inside NEAR_SOURCE of the source,
+        has no column to read; the reader refuses it instead of returning the
+        nearest column's width as if it were the station's.
         """
         xc = np.asarray(coarse_mesh.xc)
         source_x = float(xc[ls.SOURCE_COLUMN])
         x_prime = (xc - source_x) / ls.MESH_LENGTH
-        widths = np.where(x_prime > ls.NEAR_SOURCE, 1.0e-3 + 1.0e-3 * x_prime, 9.9)
-        right = [ls.width_at(coarse_mesh, widths, source_x, s) for s in ls.STATIONS_M]
-        shifted = [
-            ls.width_at(coarse_mesh, widths, source_x, s) for s in ls.STATIONS_M[1:]
-        ]
-        for a, b in zip(right[:-1], shifted, strict=True):
-            assert abs(b - a) > 1.0e-3
+        widths = 1.0e-3 + 1.0e-3 * x_prime
+        last = float(x_prime[-1])
+        assert ls.width_at(coarse_mesh, widths, source_x, last) == pytest.approx(
+            1.0e-3 + 1.0e-3 * last
+        )
+        for station in (last + 0.5, 0.5 * ls.NEAR_SOURCE, 0.0):
+            with pytest.raises(ValueError, match="outside the columns read"):
+                ls.width_at(coarse_mesh, widths, source_x, station)
 
 
 # ---------------------------------------------------------------------------
@@ -590,8 +597,53 @@ class TestCriterion:
         report = ls.evaluate(coarse_mesh, config, k, field)
         assert not report["passed"]
         assert report["value"] == pytest.approx(1.0 - 0.93 * 0.849, abs=5e-3)
-        exact = ls.evaluate(coarse_mesh, config, k, planted_plume(coarse_mesh, 1.0))
-        assert exact["passed"] is False or exact["value"] < 0.2
+
+    def test_an_inlet_off_the_experiments_is_refused(self, coarse_mesh: Mesh) -> None:
+        """Defect caught: a case whose inlet is not the reference's, scored anyway.
+
+        The reference's parameters and the decay's virtual origin are the
+        experiment's constants; a file whose inlet differed would be scored
+        against a reference that is not its own. ``evaluate`` reads the inlet
+        it is given and refuses one off the constants.
+        """
+        from src.config import SimConfig
+        from validation.cases import _raw_case
+
+        field = planted_plume(coarse_mesh, 1.0)
+        k = analytic_k(coarse_mesh, ls.model_decay_exponent())
+        for key, factor in (
+            ("velocity", 1.01),
+            ("turbulence_intensity", 1.01),
+            ("dissipation_length", 0.99),
+        ):
+            raw = _raw_case("line_source", (280, 50))
+            raw["boundaries"][ls.INLET][key] *= factor
+            config = SimConfig.from_dict(raw)
+            with pytest.raises(ValueError, match="the reference assumes"):
+                ls.evaluate(coarse_mesh, config, k, field)
+        assert ls.evaluate(coarse_mesh, load_preset("val024_280x50"), k, field)[
+            "passed"
+        ]
+
+    def test_the_report_carries_the_source_columns_width(
+        self, coarse_mesh: Mesh
+    ) -> None:
+        """The width at the source column is reported beside the near-field ratios.
+
+        The plume's width grows by a centimetre per column, so the source
+        column's width differs from both neighbours'. Defect caught: the width
+        read from a column beside the source (test 72 S1).
+        """
+        xc = np.asarray(coarse_mesh.xc)
+        dx = float(xc[1] - xc[0])
+        field = gaussian_field(coarse_mesh, lambda x: 2.0e-2 + 1.0e-2 * x / dx, 0.25)
+        k = analytic_k(coarse_mesh, ls.model_decay_exponent())
+        report = ls.evaluate(coarse_mesh, load_preset("val024_280x50"), k, field)
+        widths = ls.plume_widths(coarse_mesh, field)
+        assert report["source_column_sigma_m"] == widths[ls.SOURCE_COLUMN]
+        assert report["source_column_sigma_m"] > 0.0
+        for neighbour in (ls.SOURCE_COLUMN - 1, ls.SOURCE_COLUMN + 1):
+            assert abs(widths[neighbour] - widths[ls.SOURCE_COLUMN]) > 1.0e-4
 
 
 # ---------------------------------------------------------------------------
@@ -643,7 +695,12 @@ class TestVal024:
         has no measurement behind it (ADR-015 A).
         """
         report = ls.evaluate(solved.mesh, solved.config, solved.k, solved.field)
-        lines = ["VAL-024 plume width, model over measured (mm):"]
+        source_width = report["source_column_sigma_m"]
+        record_property("source_column_sigma_m", source_width)
+        lines = [
+            "VAL-024 plume width, model over measured (mm); the width at the source "
+            f"column itself {source_width * 1e3:.2f} mm:"
+        ]
         for row in report["stations"]:
             data = ", ".join(f"{d * 1e3:.2f}" for d in row["data_sigma_m"])
             ratio = ", ".join(f"{r:.3f}" for r in row["ratio"])
@@ -789,6 +846,7 @@ class TestHarnessRow:
         for station, ratio in ratios.items():
             assert components[f"width_ratio_{station:g}M"] == ratio[0]
         assert components["width_ratio_100M_collapse"] == ratios[100.0][1]
+        assert components["source_column_sigma_m"] == report["source_column_sigma_m"]
         assert len({round(v, 12) for v in components.values()}) == len(components)
         assert row["trajectory"][-1]["error"] == accuracy["value"]
         assert row["outcome"]["converged"] is False

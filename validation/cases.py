@@ -505,8 +505,9 @@ def load_line_source(
     ------
     ValueError
         If the case file or the grid fails SimConfig's validation, if the file
-        names no velocity inlet called LINE_SOURCE_INLET on the left edge, or if
-        the cells are not square.
+        names no velocity inlet called LINE_SOURCE_INLET on the left edge, if
+        the cells are not square, or if the mesh is not uniform (a stretched
+        axis passes the nominal square-cell check and is refused here).
     """
     raw = _raw_case(name, grid)
     base = SimConfig.from_dict(raw)
@@ -521,6 +522,11 @@ def load_line_source(
             f"the case's cells must be square; the grid {base.nx}x{base.ny} gives "
             f"{dx} m by {dy} m"
         )
+    if not Mesh(base).is_uniform:
+        # The width reader weights each cell's moment without its height, which
+        # is right on a uniform axis only; the nominal spacings above do not see
+        # a stretch ratio.
+        raise ValueError("the case's mesh must be uniform; a stretched axis is refused")
     raw["solver"] = {
         **raw["solver"],
         "mass_imbalance_tol": MASS_IMBALANCE_FRACTION * base.rho * dx * dy / base.t_end,

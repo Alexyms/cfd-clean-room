@@ -739,7 +739,8 @@ def line_source_accuracy(
     -------
     dict
         ``metric``, ``value`` (the largest departure of a scored width from the
-        measured), ``reference``, ``components`` (the decay exponent and the
+        measured), ``reference``, ``components`` (the decay exponent, the plume's
+        width at the source column ``source_column_sigma_m`` and the
         model-over-measured width ratio at each station; at 100 mesh lengths,
         where the data end, the ratio to the extrapolation and, with the
         suffix ``_collapse``, to the 20 M source's collapse), ``report``
@@ -751,7 +752,10 @@ def line_source_accuracy(
     assert state is not None and faces is not None
     field, march = line_source.march_scalar(mesh, config, state.nu_t, faces)
     report = line_source.evaluate(mesh, config, np.array(state.k), field)
-    components: dict[str, float] = {"decay_exponent": report["decay"]["n"]}
+    components: dict[str, float] = {
+        "decay_exponent": report["decay"]["n"],
+        "source_column_sigma_m": report["source_column_sigma_m"],
+    }
     for row in report["stations"]:
         key = f"width_ratio_{row['station']:g}M"
         components[key] = row["ratio"][0]
