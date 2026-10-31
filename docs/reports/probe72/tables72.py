@@ -7,13 +7,14 @@ Writes docs/reports/probe72/tables72.md (the per-class tables) and replaces
 the marked blocks of docs/reports/phase5_sensitivity.md (the summaries, class
 0.1 um unless a column says otherwise). Every number is read from the run
 files under results/builder72/ (configs72.py's runs, made by run72.py), the
-gate's 320x120 clean-out and breach under results/builder69/ (prompt 69) and
-the step 4 80x30 clean-out under results/builder64/coarse/ (prompt 64). The
-readings, with the probe tables of ADR-015 they repeat:
+gate's 320x120 runs under results/builder69/ (prompt 69) and the step 4 80x30
+clean-out under results/builder64/coarse/ (prompt 64). The readings, with the
+probe tables of ADR-015 they repeat:
 
 - R1: each run's inputs, the supply's inlet eddy viscosity C_mu sqrt(k) l_e
-  with k = 1.5 (I U)^2 (ADR-012 C), its flow states (outer count, stop, wall,
-  from the runner's summary) and its march (steps, wall).
+  with k = 1.5 (I U)^2 (ADR-012 C; C_mu the standard variant's constant from
+  src/turbulence.py), its flow states (outer count, stop, wall, from the
+  runner's summary) and its march (steps, wall).
 - D1 (T6's reading): per run, class and sensor, the distance from the
   sensor's cell to the nearest non-SOLID cell ever at or above the class's
   threshold in any stored frame, centre to centre, in metres and in cells,
@@ -23,16 +24,23 @@ readings, with the probe tables of ADR-015 they repeat:
 - W1 (T4's reading): per run, class and sensor row (the row of cells holding
   the sensor height, the cell below a face, ADR-014 C), the number of
   non-SOLID cells at or above the threshold and at or above ten times it,
-  times dx, at the stored frame nearest the event's end and the largest over
-  the frames, and the x extent of the threshold cells at that frame.
+  times dx, at the stored frame nearest the event's end (the contaminating
+  event's start plus its duration, read from the run's configuration) and
+  the largest over the frames, and the x extent of the threshold cells at
+  that frame.
 - P1 (T3's reading): per run, class and sensor, the peak reading over the
-  threshold, stated as a number only when at or above RESOLVED_FLOOR of it
-  (ADR-015 B: below that the value is the grid's, not the inputs'), and the
-  first time at or above.
+  threshold, stated as a number only when at or above RESOLVED_FLOOR of the
+  threshold (ADR-015 B: below that the value is the grid's, not the
+  inputs'), and the first time at or above.
+- F1: per run and class, the field's largest value over the frames and the
+  non-SOLID cells, over the class's threshold: how far above its threshold
+  each plume's contour is drawn.
 - C1: the clean-out on three grids: the room recovery time, the free-area
   mean's 100:1 time and its ratio to the well-mixed ln(100)/N, and the cells
   not recovered at the end, with the observed order of convergence where the
-  three values allow one.
+  three values allow one. A count's order is read in cells of the finest
+  grid, and a difference at or below one such cell is at the count's
+  resolution and gives no order (review 72 B1).
 """
 
 import argparse
@@ -41,6 +49,7 @@ import math
 import re
 import sys
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -51,12 +60,13 @@ ROOT = HERE.parents[2]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(HERE))
 
-import configs72  # noqa: E402
+import configs72  # noqa: E402 -- follows sys.path.insert
 
-from src.config import SimConfig  # noqa: E402
-from src.io_manager import RunFile  # noqa: E402
-from src.mesh import SOLID, Mesh  # noqa: E402
-from src.time_integration import sensor_cells  # noqa: E402
+from src.config import SimConfig  # noqa: E402 -- follows sys.path.insert
+from src.io_manager import RunFile  # noqa: E402 -- follows sys.path.insert
+from src.mesh import SOLID, Mesh  # noqa: E402 -- follows sys.path.insert
+from src.time_integration import sensor_cells  # noqa: E402 -- follows sys.path.insert
+from src.turbulence import STANDARD, VARIANTS  # noqa: E402 -- follows sys.path.insert
 
 RESULTS = ROOT / "results" / "builder72"
 LOGS = RESULTS / "logs"
@@ -64,10 +74,8 @@ TABLES = HERE / "tables72.md"
 REPORT = ROOT / "docs" / "reports" / "phase5_sensitivity.md"
 GATE = ROOT / "results" / "builder69"
 STEP4 = ROOT / "results" / "builder64" / "coarse"
-C_MU = 0.09
+C_MU = VARIANTS[STANDARD].c_mu
 RESOLVED_FLOOR = 1e-2
-EVENT_START = 10.0
-EVENT_END = {"filter_breach": 70.0, "door_leak": 15.0, "equipment_dust": 40.0}
 SCENARIO_TITLES = {
     "filter_breach": "The filter breach",
     "door_leak": "The door leak",
@@ -76,7 +84,7 @@ SCENARIO_TITLES = {
 # The sensor rows (y of the sensors) and the first row over the tool tops.
 ROWS_M = (2.5, 2.05, 1.5, 1.2)
 SUMMARY_CLASS = 0  # 0.1 um
-DUST_EXTRA_CLASS = 4  # 5 um, whose dust contour is the widest (the prediction)
+EXTRA_CLASS = 4  # 5 um, whose dust contour is the widest (the prediction)
 MARKERS = ("runs", "breach", "door", "dust", "grids", "cleanout")
 SCENARIO_MARKER = {
     "filter_breach": "breach",
@@ -107,6 +115,7 @@ class Summary:
 
 
 def read_summary(path: Path) -> Summary:
+    """Parse the runner's summary file: its flow-state, steps and wall-time lines."""
     flows = []
     steps, t_end, wall = 0, math.nan, math.nan
     for line in path.read_text(encoding="utf-8").splitlines():
@@ -133,7 +142,17 @@ def read_summary(path: Path) -> Summary:
 
 
 class Run:
-    """One run's records: configuration, mesh, frames, sensors and summary."""
+    """One run's records: configuration, mesh, frames, sensors and summary.
+
+    Parameters
+    ----------
+    name : str
+        The queue name, scenario_arm_grid.
+    scenario_path : Path
+        The scenario file the run was made from.
+    run_path : Path
+        The run file; its summary is the .txt beside it.
+    """
 
     def __init__(self, name: str, scenario_path: Path, run_path: Path) -> None:
         self.name = name
@@ -163,12 +182,23 @@ class Run:
 
     @property
     def grid(self) -> str:
+        """The grid as "nx x ny"."""
         return f"{self.config.nx}x{self.config.ny}"
 
     @property
     def nu_t_in(self) -> float:
+        """The supply's inlet eddy viscosity, C_mu sqrt(k) l_e with k = 1.5 (I U)^2."""
         k_in = 1.5 * (self.intensity * self.u_in) ** 2
         return C_MU * math.sqrt(k_in) * self.length
+
+    @property
+    def event_end(self) -> float:
+        """The end of the contaminating event: its start plus its duration."""
+        assert self.config.scenario is not None
+        for event in self.config.scenario.events:
+            if event.duration is not None:
+                return float(event.start + event.duration)
+        raise ValueError(f"{self.name}: no event with a duration")
 
     def ever_reached(self, k: int) -> np.ndarray:
         """[ny, nx] bool: non-SOLID cells at or above the threshold in any frame."""
@@ -176,6 +206,11 @@ class Run:
             field = self.frames.fields[k]
             self._ever[k] = (field >= self.thresholds[k]).any(axis=0) & self.live
         return self._ever[k]
+
+    def peak_over_threshold(self, k: int) -> float:
+        """The field's largest value over the frames and non-SOLID cells, over the threshold."""
+        field = self.frames.fields[k] * self.live[None, :, :]
+        return float(field.max() / self.thresholds[k])
 
     def distances(self, k: int) -> list[tuple[str, float, bool]]:
         """Per sensor: name, distance to the contour (m), the sensor cell reached."""
@@ -197,9 +232,16 @@ class Run:
         return int(np.searchsorted(faces, y - 1e-9 * faces[-1], side="right") - 1)
 
     def widths(self, k: int, y: float) -> tuple[float, float, float, float, str]:
-        """Width at the threshold and at ten times it, at the event's end and largest."""
-        scenario = parse_name(self.name)[0]
-        at_end = int(np.argmin(np.abs(self.frames.times - EVENT_END[scenario])))
+        """Width at the threshold and at ten times it, at the event's end and largest.
+
+        Returns
+        -------
+        tuple
+            (width at the threshold at the end, largest at the threshold, width
+            at ten times at the end, largest at ten times), metres, and the x
+            extent of the threshold cells at the end as text.
+        """
+        at_end = int(np.argmin(np.abs(self.frames.times - self.event_end)))
         j = self.row_index(y)
         row = self.frames.fields[k][:, j, :] * self.live[j][None, :]
         threshold = self.thresholds[k]
@@ -238,7 +280,7 @@ def failure(name: str) -> str:
     depends = configs72.FLOWS_FROM.get(arm)
     if depends is not None and grid == configs72.grid_tag(configs72.COARSE):
         source = RESULTS / f"{scenario}_{depends}_{grid}.txt"
-        if not (source.exists() and "wall time:" in source.read_text(encoding="utf-8")):
+        if not complete(source):
             return f"not run: its flow state is {depends}'s, which did not converge"
     log = LOGS / f"{name}.log"
     if not log.exists():
@@ -253,6 +295,11 @@ def failure(name: str) -> str:
     return "no summary: running or interrupted"
 
 
+def complete(summary: Path) -> bool:
+    """Whether a runner summary reports a wall time, which it does only at the end."""
+    return summary.exists() and "wall time:" in summary.read_text(encoding="utf-8")
+
+
 def load_runs() -> dict[str, Run | None]:
     """Every sweep run in queue order (None where it did not complete), then the
     gate's three event runs at the file's inputs on 320x120 (prompt 69), which
@@ -262,12 +309,7 @@ def load_runs() -> dict[str, Run | None]:
         if scenario == "clean_out":
             continue
         run_path = RESULTS / f"{name}.h5"
-        summary = RESULTS / f"{name}.txt"
-        if (
-            run_path.exists()
-            and summary.exists()
-            and "wall time:" in summary.read_text(encoding="utf-8")
-        ):
+        if run_path.exists() and complete(RESULTS / f"{name}.txt"):
             runs[name] = Run(
                 name, RESULTS / "configs" / f"scenario_{name}.yaml", run_path
             )
@@ -293,6 +335,7 @@ def label(run: Run, name: str) -> tuple[str, str]:
 
 
 def fmt_d(distance: float) -> str:
+    """A distance in metres, or the words for a plume that reaches no cell."""
     return "no cell reached" if math.isinf(distance) else f"{distance:.3f}"
 
 
@@ -302,7 +345,7 @@ def fmt_d(distance: float) -> str:
 
 
 def r1(runs: dict[str, Run | None]) -> list[str]:
-    nu = None
+    """R1: inputs, the supply's eddy viscosity, the flow states and the march."""
     lines = [
         "### R1. The runs: inputs, the supply's inlet eddy viscosity, the flow states and "
         "the march",
@@ -331,6 +374,7 @@ def r1(runs: dict[str, Run | None]) -> list[str]:
 
 
 def d1(runs: dict[str, Run | None]) -> list[str]:
+    """D1: the distance from each sensor's cell to the threshold contour, per class."""
     lines = [
         "### D1. The plume's edge against the sensors: the distance from each sensor's cell "
         "to the nearest non-SOLID cell ever at or above the class's threshold (centre to "
@@ -355,10 +399,11 @@ def d1(runs: dict[str, Run | None]) -> list[str]:
 
 
 def w1(runs: dict[str, Run | None]) -> list[str]:
+    """W1: the plume's width on the sensor rows, per class."""
     lines = [
         "### W1. The plume's width on the sensor rows and the first row over the tool tops: "
         "cells at or above the threshold and at ten times it, times dx; at the frame nearest "
-        "the event's end (70 s breach, 15 s door, 40 s dust) and the largest over the frames",
+        "the contaminating event's end and the largest over the frames",
         "",
         "| Scenario | Arm | Grid | Class (um) | Row y (m) | Width at the threshold at the "
         "end (m) | Largest at the threshold (m) | Width at 10x at the end (m) | Largest at "
@@ -380,6 +425,7 @@ def w1(runs: dict[str, Run | None]) -> list[str]:
 
 
 def p1(runs: dict[str, Run | None]) -> list[str]:
+    """P1: each sensor's peak over its threshold and first time at or above, per class."""
     lines = [
         "### P1. The sensors: peak reading over threshold and first time at or above, per "
         f"run and class; a peak below {RESOLVED_FLOOR:g} of threshold is the front's "
@@ -402,6 +448,28 @@ def p1(runs: dict[str, Run | None]) -> list[str]:
     return lines
 
 
+def f1(runs: dict[str, Run | None]) -> list[str]:
+    """F1: the field's largest value over its threshold, per run and class."""
+    first = next((r for r in runs.values() if r is not None), None)
+    sizes = first.sizes_um if first is not None else []
+    lines = [
+        "### F1. The field's largest value over the frames and the non-SOLID cells, over the "
+        "class's threshold: how far above its threshold each plume's contour is drawn",
+        "",
+        "| Scenario | Arm | Grid | " + " | ".join(f"{s:g} um" for s in sizes) + " |",
+        "|---|---|---|" + "---|" * len(sizes),
+    ]
+    for name, run in runs.items():
+        if run is None:
+            continue
+        scenario, arm = label(run, name)
+        peaks = " | ".join(
+            f"{run.peak_over_threshold(k):.3e}" for k in range(len(run.sizes_um))
+        )
+        lines.append(f"| {scenario} | {arm} | {run.grid} | {peaks} |")
+    return lines
+
+
 # ---------------------------------------------------------------------------
 # The clean-out
 # ---------------------------------------------------------------------------
@@ -409,6 +477,8 @@ def p1(runs: dict[str, Run | None]) -> list[str]:
 
 @dataclass(frozen=True)
 class CleanOut:
+    """A clean-out run's section C outputs and its unrecovered cells at the end."""
+
     label: str
     grid: str
     t_final: float
@@ -424,10 +494,8 @@ class CleanOut:
 def read_clean_out(
     label_text: str, scenario_path: Path, run_path: Path
 ) -> CleanOut | None:
-    summary = run_path.with_suffix(".txt")
-    if not run_path.exists() or not summary.exists():
-        return None
-    if "wall time:" not in summary.read_text(encoding="utf-8"):  # still running
+    """Read a clean-out's recovery record; None when the run is absent or unfinished."""
+    if not run_path.exists() or not complete(run_path.with_suffix(".txt")):
         return None
     config = SimConfig(scenario_path)
     mesh = Mesh(config)
@@ -452,6 +520,7 @@ def read_clean_out(
 
 
 def clean_outs() -> list[CleanOut | None]:
+    """The four records: the gate's 80x30, this pass's 80x30 and 160x60, the gate's 320x120."""
     return [
         read_clean_out(
             "80x30, step 4 (prompt 64; G1's row, run to 120 s)",
@@ -477,7 +546,7 @@ def clean_outs() -> list[CleanOut | None]:
 
 
 def observed_order(coarse: float, medium: float, fine: float) -> str:
-    """Richardson's order from three values at a refinement ratio of two."""
+    """Richardson's order from three values of a continuous quantity at a ratio of two."""
     if any(math.isnan(v) for v in (coarse, medium, fine)):
         return "not defined (a value is not reached)"
     a, b = coarse - medium, medium - fine
@@ -488,7 +557,27 @@ def observed_order(coarse: float, medium: float, fine: float) -> str:
     return f"{math.log2(a / b):.2f} (differences {a:+.4g} then {b:+.4g})"
 
 
+def count_order(coarse: int, medium: int, fine: int) -> str:
+    """The order of a cell count, read in cells of the finest grid.
+
+    The counts are scaled to the finest grid (a coarse cell is sixteen fine
+    cells, a medium one four). A difference at or below one fine cell is at
+    the count's resolution and gives no order (review 72 B1).
+    """
+    a = 16 * coarse - 4 * medium
+    b = 4 * medium - fine
+    text = f"differences {a:+d} then {b:+d} fine cells"
+    if abs(a) <= 1 or abs(b) <= 1:
+        return (
+            f"none: a difference is at the count's resolution of one fine cell ({text})"
+        )
+    if a * b < 0:
+        return f"none: the series is not monotone ({text})"
+    return f"{math.log2(a / b):.2f} ({text})"
+
+
 def c1(runs_clean: list[CleanOut | None]) -> list[str]:
+    """C1: section C's outputs and the unrecovered cells on each grid, with the orders."""
     lines = [
         "### C1. The clean-out on three grids: section C's outputs (ADR-014 C) at 0.1 um, "
         "and the cells not recovered at the end of the run",
@@ -515,7 +604,10 @@ def c1(runs_clean: list[CleanOut | None]) -> list[str]:
             "",
             "Observed order of convergence over 80x30 (to 240 s), 160x60 and 320x120 "
             "(refinement ratio 2; p = log2 of the ratio of successive differences, defined "
-            "when the three values change monotonically):",
+            "when the three values change monotonically). The unrecovered cells are counts: "
+            "they are read in cells of the finest grid, and a difference of one such cell is "
+            "the count's resolution, not a convergence; the share in brackets is the count "
+            "over the grid's free cells.",
             "",
             "| Quantity | 80x30 | 160x60 | 320x120 | Observed order |",
             "|---|---|---|---|---|",
@@ -525,17 +617,19 @@ def c1(runs_clean: list[CleanOut | None]) -> list[str]:
             f"{fine.mean:.4f} | {observed_order(coarse.mean, medium.mean, fine.mean)} |",
             f"| Ratio to the well-mixed | {coarse.ratio:.4f} | {medium.ratio:.4f} | "
             f"{fine.ratio:.4f} | {observed_order(coarse.ratio, medium.ratio, fine.ratio)} |",
-            "| Not recovered at 240 s, 0.1 um (share of the free cells) | "
-            + " | ".join(
-                f"{100 * c.unrecovered[0] / c.free:.3f}%"
+        ]
+        for k in (SUMMARY_CLASS, EXTRA_CLASS):
+            size = coarse.sizes_um[k]
+            cells = " | ".join(
+                f"{c.unrecovered[k]:,} ({100 * c.unrecovered[k] / c.free:.3f}%)"
                 for c in (coarse, medium, fine)
             )
-            + " | "
-            + observed_order(
-                *(100 * c.unrecovered[0] / c.free for c in (coarse, medium, fine))
+            order = count_order(
+                coarse.unrecovered[k], medium.unrecovered[k], fine.unrecovered[k]
             )
-            + " |",
-        ]
+            lines.append(
+                f"| Not recovered at 240 s, {size:g} um (cells, share) | {cells} | {order} |"
+            )
     return lines
 
 
@@ -545,6 +639,7 @@ def c1(runs_clean: list[CleanOut | None]) -> list[str]:
 
 
 def runs_block(runs: dict[str, Run | None]) -> list[str]:
+    """The report's run table and the queue's span from runs72.json."""
     lines = [
         "| Run | Grid | Flow states: origin, outer, stop, wall (s) | March steps | Run wall "
         "(s) |",
@@ -569,20 +664,31 @@ def runs_block(runs: dict[str, Run | None]) -> list[str]:
         record = json.loads(record_path.read_text(encoding="utf-8"))
         starts = sorted(r["started"] for r in record.values())
         ends = sorted(r["ended"] for r in record.values() if "ended" in r)
+        failed = {
+            name: (
+                datetime.fromisoformat(r["ended"])
+                - datetime.fromisoformat(r["started"])
+            ).total_seconds()
+            / 60
+            for name, r in record.items()
+            if r.get("returncode") not in (0, None)
+        }
         if starts and ends:
-            from datetime import datetime
-
             span = datetime.fromisoformat(ends[-1]) - datetime.fromisoformat(starts[0])
             lines += [
                 "",
                 f"The queue ran from {starts[0]} to {ends[-1]} (machine local time), "
                 f"{span.total_seconds() / 3600:.2f} hours of wall clock, at most five runs at "
-                f"a time, each on one BLAS thread (`runs72.json`).",
+                f"a time, each on one BLAS thread (`runs72.json`). Runs that exited without a "
+                f"result, with the minutes each took: "
+                + ", ".join(f"{n} ({m:.1f})" for n, m in failed.items())
+                + ".",
             ]
     return lines
 
 
 def scenario_runs(runs: dict[str, Run | None], scenario: str) -> list[tuple[str, Run]]:
+    """(arm label, run) for the complete runs of a scenario, the gate's last."""
     rows = []
     for name, run in runs.items():
         if run is None or not run.name.startswith(scenario):
@@ -592,6 +698,7 @@ def scenario_runs(runs: dict[str, Run | None], scenario: str) -> list[tuple[str,
 
 
 def scenario_block(runs: dict[str, Run | None], scenario: str) -> list[str]:
+    """A scenario's summary: distances, their range over the classes, widths, peaks."""
     rows = scenario_runs(runs, scenario)
     if not rows:
         return ["(no run of this scenario is complete)"]
@@ -645,7 +752,7 @@ def scenario_block(runs: dict[str, Run | None], scenario: str) -> list[str]:
         lines.append(f"| {arm} | {run.grid} | " + " | ".join(cells) + " |")
     classes = [SUMMARY_CLASS]
     if scenario == "equipment_dust":
-        classes.append(DUST_EXTRA_CLASS)
+        classes.append(EXTRA_CLASS)
     for k in classes:
         size = rows[0][1].sizes_um[k]
         lines += [
@@ -663,37 +770,63 @@ def scenario_block(runs: dict[str, Run | None], scenario: str) -> list[str]:
                 _w1e, w1m, _w10e, w10m, _ext = run.widths(k, y)
                 cells.append(f"{w1m:.2f} / {w10m:.2f}")
             lines.append(f"| {arm} | {run.grid} | " + " | ".join(cells) + " |")
+    size_a, size_b = (
+        rows[0][1].sizes_um[SUMMARY_CLASS],
+        rows[0][1].sizes_um[EXTRA_CLASS],
+    )
+    lines += [
+        "",
+        "The field's largest value over the frames and the non-SOLID cells, over the class's "
+        "threshold (F1 of `tables72.md`): how far above its threshold the contour is drawn:",
+        "",
+        f"| Arm | Grid | {size_a:g} um | {size_b:g} um |",
+        "|---|---|---|---|",
+    ]
+    for arm, run in rows:
+        lines.append(
+            f"| {arm} | {run.grid} | {run.peak_over_threshold(SUMMARY_CLASS):.3g} | "
+            f"{run.peak_over_threshold(EXTRA_CLASS):.3g} |"
+        )
+    resolved = resolved_peaks(rows)
     lines += [
         "",
         "Sensor peaks (P1 of `tables72.md`): "
         + (
-            "every sensor of every class at every arm is below the resolved plume (under a "
-            "hundredth of its threshold)."
-            if not any_peak_resolved(rows)
-            else "see P1; at least one sensor reads within a hundredth of its threshold."
+            f"every sensor of every class at every arm is below {RESOLVED_FLOOR:g} of its "
+            "threshold, below the resolved plume."
+            if not resolved
+            else f"at or above {RESOLVED_FLOOR:g} of the threshold, the resolved range, at: "
+            + "; ".join(resolved)
+            + "; every other sensor, class and arm is below the resolved plume."
         ),
     ]
     if reached_any:
         lines += [
             "",
-            "Sensor cells reached at 0.1 um: "
+            f"Sensor cells reached at {size0:g} um: "
             + "; ".join(f"{s} at {a} on {g}" for a, g, s in reached_any)
             + ".",
         ]
     return lines
 
 
-def any_peak_resolved(rows: list[tuple[str, Run]]) -> bool:
-    for _arm, run in rows:
-        for k in range(len(run.sizes_um)):
-            for s in range(len(run.sensors.names)):
-                series = run.sensors.readings[:, k, s]
-                if series.max() / run.thresholds[k] >= RESOLVED_FLOOR:
-                    return True
-    return False
+def resolved_peaks(rows: list[tuple[str, Run]]) -> list[str]:
+    """The sensors whose peak is at or above the floor, as text, 0.1 um and 5 um."""
+    out = []
+    for arm, run in rows:
+        for k in (SUMMARY_CLASS, EXTRA_CLASS):
+            for s, name in enumerate(run.sensors.names):
+                margin = run.sensors.readings[:, k, s].max() / run.thresholds[k]
+                if margin >= RESOLVED_FLOOR:
+                    out.append(
+                        f"{name} at {arm} on {run.grid}, {run.sizes_um[k]:g} um, "
+                        f"{margin:.3f} of threshold"
+                    )
+    return out
 
 
 def grids_block(runs: dict[str, Run | None]) -> list[str]:
+    """The two extreme arms on both grids: distances and widths side by side."""
     lines = [
         "The two extreme arms on both grids, 0.1 um: the distance from each sensor's cell to "
         "the contour (m), 160x60 against 320x120, and the plume's largest width at the "
@@ -730,6 +863,7 @@ def grids_block(runs: dict[str, Run | None]) -> list[str]:
 
 
 def cleanout_block(runs_clean: list[CleanOut | None]) -> list[str]:
+    """C1 without its heading, for the report."""
     return c1(runs_clean)[2:]
 
 
@@ -739,6 +873,7 @@ def cleanout_block(runs_clean: list[CleanOut | None]) -> list[str]:
 
 
 def replace_block(text: str, marker: str, body: list[str]) -> str:
+    """Replace the text between a marker pair in the report."""
     begin = f"<!-- tables72 {marker} begin -->"
     end = f"<!-- tables72 {marker} end -->"
     start = text.index(begin) + len(begin)
@@ -747,6 +882,7 @@ def replace_block(text: str, marker: str, body: list[str]) -> str:
 
 
 def generate() -> tuple[str, str]:
+    """(tables72.md's text, the report's text with its blocks regenerated)."""
     runs = load_runs()
     clean = clean_outs()
     tables = [
@@ -764,6 +900,8 @@ def generate() -> tuple[str, str]:
         "",
         *p1(runs),
         "",
+        *f1(runs),
+        "",
         *c1(clean),
     ]
     report = REPORT.read_text(encoding="utf-8")
@@ -780,6 +918,7 @@ def generate() -> tuple[str, str]:
 
 
 def main() -> int:
+    """Write the tables and the report's blocks, or compare them with --check."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()

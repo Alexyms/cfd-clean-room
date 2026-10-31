@@ -505,8 +505,9 @@ def load_line_source(
     ------
     ValueError
         If the case file or the grid fails SimConfig's validation, if the file
-        names no velocity inlet called LINE_SOURCE_INLET on the left edge, or if
-        the cells are not square.
+        names no velocity inlet called LINE_SOURCE_INLET on the left edge, if
+        the cells are not square, or if the mesh is not uniform (a stretched
+        axis passes the nominal square-cell check and is refused here).
     """
     raw = _raw_case(name, grid)
     base = SimConfig.from_dict(raw)

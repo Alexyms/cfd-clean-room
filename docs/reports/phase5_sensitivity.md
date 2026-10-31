@@ -5,7 +5,8 @@
 **What this is:** ADR-015 section B as accepted (the sweep of the three event scenarios over
 the supply's turbulence intensity, its dissipation length and the turbulent Schmidt number),
 which is condition 3 of the Phase 4 gate, and the clean-out on 160x60, which is its condition
-2. Nothing under `src/` changes. The records are in `results/builder72/` (untracked, this
+2. No arithmetic under `src/` changes; the branch's one `src/` hunk is a docstring that review 71
+asked for. The records are in `results/builder72/` (untracked, this
 machine): the configurations written by `docs/reports/probe72/configs72.py`, the runs made by
 `run72.py`, and every table below generated from the run files by `tables72.py`, whose
 `--check` regenerates the tables here and in `docs/reports/probe72/tables72.md` and compares.
@@ -14,17 +15,19 @@ per-class tables (R1, D1, W1, P1, C1) are in `tables72.md`. The 320x120 runs at 
 inputs are the gate's (prompt 69, `results/builder69/`), read by the same script and shown as
 the control arm on the product grid.
 
-**In one paragraph.** No sensor's cell is reached by any plume at any arm on either grid
-(D1). The breach's contour comes nearest: at the `widest` arm on 160x60 it stands three to
-four cells from the two gap sensors, whose readings are then the first of an event scenario
-inside the resolved range, a few hundredths of threshold (P1). The door's corridor air stays on the
-floor at every arm and the dust's contour reaches no sensor in any class. Two flow states did
-not converge within the solver's cap and are reported, not fixed (section 1.2): the `widest`
-inputs on 320x120 and the door's open state at the control arm on 160x60, so the product-grid
-repeat of `widest` and the door's control and Sc_t arms on 160x60 are missing. The 160x60
-clean-out's mean 100:1 ratio falls inside prediction (g)'s band, but the three grids'
-mean times form an arithmetic series (section 2): the mean's 100:1 time is not converging
-over these grids and stays comparative, as the gate report reads it.
+**In one paragraph.** No sensor's cell is reached by any plume at any arm that ran, on either
+grid (D1); twenty-one of the twenty-six runs have a result. The breach's contour comes
+nearest: at the `widest` arm on 160x60 it stands about four cells from the two gap sensors,
+whose readings are then the first of an event scenario inside the resolved range, a few
+hundredths of threshold (P1). The door's corridor air stays on the floor at the arms that ran
+and the dust's contour reaches no sensor in any class. Two flow states did not converge within
+the solver's cap and are reported, not fixed (section 1.2): the `widest` inputs on 320x120
+and the door's open state at the control arm on 160x60, so the product-grid repeat of
+`widest` is missing for every scenario, and the door has no reading at its control arm on
+160x60 and none at its `sc02` arm on either grid. The 160x60 clean-out's mean 100:1 ratio
+falls inside prediction (g)'s band, but the three grids' mean times form an arithmetic series
+(section 2): the mean's 100:1 time is not converging over these grids and stays comparative,
+as the gate report reads it.
 
 ## Predictions, committed before the runs
 
@@ -101,9 +104,11 @@ concentration and the threshold is the sensor's):
   frame nearest the event's end (70 s for the breach, 15 s for the door, 40 s for the dust) and
   the largest over the frames (T4's reading);
 - the contour's grid dependence from the 320x120 arms: the same two readings on both grids;
-- each sensor's peak reading over its threshold, stated as a number only when it is within a
-  hundredth of the threshold; below that it is "below the resolved plume", because the tail's
-  value is the grid's and not the inputs' (ADR-015 B, review 70 B3).
+- each sensor's peak reading over its threshold, stated as a number only when it is at or
+  above a hundredth of the threshold; below that it is "below the resolved plume", because
+  the tail's value is the grid's and not the inputs' (ADR-015 B, review 70 B3);
+- the field's largest value over its threshold per class (F1), which says how far above its
+  threshold each plume's contour is drawn, and so how far the grid can move it.
 
 Any sensor the contour reaches on 160x60 at any arm is rerun on 320x120 at that arm before
 anything is said about detection. None was reached (D1), so no rerun was triggered.
@@ -138,7 +143,7 @@ anything is said about detection. None was reached (D1), so no rerun was trigger
 | equipment_dust_widest_160x60 | 160x60 | kept, 3,067, error_estimate_and_continuity, 164 | 14,904 | 556 |
 | equipment_dust_widest_320x120 | not run: flow state 13962217d6cf stopped by max_simple_iter after 15000 outer iterations without converging; the march needs a converged state | | | |
 
-The queue ran from 2026-10-31T07:16:49 to 2026-10-31T09:14:50 (machine local time), 1.97 hours of wall clock, at most five runs at a time, each on one BLAS thread (`runs72.json`).
+The queue ran from 2026-10-31T07:16:49 to 2026-10-31T09:14:50 (machine local time), 1.97 hours of wall clock, at most five runs at a time, each on one BLAS thread (`runs72.json`). Runs that exited without a result, with the minutes each took: filter_breach_widest_320x120 (54.0), door_leak_widest_320x120 (54.0), equipment_dust_widest_320x120 (49.0), door_leak_control_160x60 (14.2).
 <!-- tables72 runs end -->
 
 Five runs of the twenty-six have no result, from two flow states that stopped at the solver's
@@ -157,16 +162,18 @@ property of the arm generator, since the same inputs converge on the other grid.
    first seen on the room itself.
 2. **The door's open state at the control arm on 160x60** (5%, 0.1 m; the open-door state,
    fingerprint eddc5d9212f0, warm-started from the closed state): from its first thousand
-   iterations the residual repeats a period-three cycle exactly (1.42e-7, 6.82e-8, 1.61e-7),
-   to the cap. The closed state converges, the open state at the other four arms converges on
+   iterations the residual, printed every fifty, repeats the same three values to seven
+   digits (1.42e-7, 6.82e-8, 1.61e-7) to the cap, so it sits in a cycle whose period divides
+   150 iterations (the log does not fix it closer). The closed state converges, the open state at the other four arms converges on
    160x60 (R1), and the same open state converges on 320x120 at the gate (3,872 iterations,
    `results/builder69/`). The door's control and `sc02` arms on 160x60 are therefore missing;
    the door's coarse-grid readings are at i10, max_nut, min_nut and widest, and its
    file-input readings are the gate's on 320x120.
 
-Raising the cap would not finish either solve: both residual histories are periodic, not
-decaying. What would is a question for a prompt of its own (the stopping rule's view of a
-limit cycle, and whether the cycle is the outlets' as in VAL-020).
+Raising the cap would not finish either solve: neither residual history decays, the one
+repeating and the other bounded with no trend. What would is a question for a prompt of its
+own (the stopping rule's view of a limit cycle, and whether the cycle is the outlets' as in
+VAL-020).
 
 ### 1.3 The filter breach
 
@@ -210,7 +217,20 @@ The plume's width on the sensor rows, 0.1 um: the largest over the frames of the
 | widest | 160x60 | 1.60 / 1.20 | 2.35 / 2.00 | 1.40 / 1.00 | 1.40 / 1.05 |
 | control (gate, prompt 69) | 320x120 | 0.98 / 0.88 | 1.83 / 1.70 | 0.88 / 0.78 | 0.90 / 0.83 |
 
-Sensor peaks (P1 of `tables72.md`): see P1; at least one sensor reads within a hundredth of its threshold.
+The field's largest value over the frames and the non-SOLID cells, over the class's threshold (F1 of `tables72.md`): how far above its threshold the contour is drawn:
+
+| Arm | Grid | 0.1 um | 5 um |
+|---|---|---|---|
+| control | 160x60 | 100 | 99.9 |
+| i10 | 160x60 | 100 | 99.8 |
+| max_nut | 160x60 | 100 | 99.9 |
+| min_nut | 160x60 | 100 | 99.8 |
+| min_nut | 320x120 | 100 | 99.9 |
+| sc02 | 160x60 | 100 | 99.9 |
+| widest | 160x60 | 100 | 99.9 |
+| control (gate, prompt 69) | 320x120 | 100 | 99.8 |
+
+Sensor peaks (P1 of `tables72.md`): at or above 0.01 of the threshold, the resolved range, at: above_gap_1 at widest on 160x60, 0.1 um, 0.030 of threshold; above_gap_2 at widest on 160x60, 0.1 um, 0.016 of threshold; above_gap_1 at widest on 160x60, 5 um, 0.029 of threshold; above_gap_2 at widest on 160x60, 5 um, 0.015 of threshold; every other sensor, class and arm is below the resolved plume.
 <!-- tables72 breach end -->
 
 The breach is the scenario whose contour comes nearest a sensor. Across the five arms the
@@ -221,8 +241,8 @@ about half (the width table, y = 2.50 m). At that arm the gap sensors' peak read
 first of an event scenario inside the resolved range, at a few hundredths of threshold (P1;
 the gate's S1 and the probe's T3 have none), and no cell of theirs is reached. The classes do not differ: the panel carries a hundred times each
 class's threshold, so every class's contour is the same set of cells to the cell (the
-per-class table). On the product grid the `min_nut` contour stands one to two coarse cells
-farther from every sensor than on 160x60, as the gate's control did (section 1.6).
+per-class table). On the product grid the `min_nut` contour stands farther from every sensor
+than on 160x60, by under a coarse cell, as the gate's control did (section 1.6).
 
 ### 1.4 The door leak
 
@@ -260,7 +280,18 @@ The plume's width on the sensor rows, 0.1 um: the largest over the frames of the
 | widest | 160x60 | 0.00 / 0.00 | 0.00 / 0.00 | 0.00 / 0.00 | 0.25 / 0.00 |
 | control (gate, prompt 69) | 320x120 | 0.00 / 0.00 | 0.00 / 0.00 | 0.00 / 0.00 | 0.00 / 0.00 |
 
-Sensor peaks (P1 of `tables72.md`): every sensor of every class at every arm is below the resolved plume (under a hundredth of its threshold).
+The field's largest value over the frames and the non-SOLID cells, over the class's threshold (F1 of `tables72.md`): how far above its threshold the contour is drawn:
+
+| Arm | Grid | 0.1 um | 5 um |
+|---|---|---|---|
+| i10 | 160x60 | 100 | 100 |
+| max_nut | 160x60 | 100 | 100 |
+| min_nut | 160x60 | 100 | 100 |
+| min_nut | 320x120 | 100 | 100 |
+| widest | 160x60 | 100 | 100 |
+| control (gate, prompt 69) | 320x120 | 100 | 100 |
+
+Sensor peaks (P1 of `tables72.md`): every sensor of every class at every arm is below 0.01 of its threshold, below the resolved plume.
 <!-- tables72 door end -->
 
 The corridor air enters over the lower half of the doorway and falls to the first floor
@@ -327,16 +358,29 @@ The plume's width on the sensor rows, 5 um: the largest over the frames of the c
 | widest | 160x60 | 0.80 / 0.00 | 2.45 / 2.20 | 1.40 / 1.30 | 1.40 / 1.35 |
 | control (gate, prompt 69) | 320x120 | 0.00 / 0.00 | 1.12 / 0.98 | 0.50 / 0.48 | 0.55 / 0.53 |
 
-Sensor peaks (P1 of `tables72.md`): every sensor of every class at every arm is below the resolved plume (under a hundredth of its threshold).
+The field's largest value over the frames and the non-SOLID cells, over the class's threshold (F1 of `tables72.md`): how far above its threshold the contour is drawn:
+
+| Arm | Grid | 0.1 um | 5 um |
+|---|---|---|---|
+| control | 160x60 | 6.86 | 2.33e+04 |
+| i10 | 160x60 | 6.81 | 2.32e+04 |
+| max_nut | 160x60 | 6.51 | 2.22e+04 |
+| min_nut | 160x60 | 6.94 | 2.36e+04 |
+| min_nut | 320x120 | 7.2 | 2.46e+04 |
+| sc02 | 160x60 | 6.35 | 2.16e+04 |
+| widest | 160x60 | 5 | 1.7e+04 |
+| control (gate, prompt 69) | 320x120 | 7.29 | 2.49e+04 |
+
+Sensor peaks (P1 of `tables72.md`): every sensor of every class at every arm is below 0.01 of its threshold, below the resolved plume.
 <!-- tables72 dust end -->
 
 The dust is the one scenario whose contour depends on the class, because its source emits the
 same number per class while the thresholds span three and a half decades: the 0.1 um field
-peaks at a few times its threshold and its contour is a patch of a few tens of coarse cells
-over the tool top (W1: no threshold cell on the gap sensors' row at any arm), while the 5 um field
-peaks at tens of thousands of times its threshold and its contour reaches down the gaps beside
-the tool (the 5 um width table). The widest 5 um contour, at `widest`, stands four cells from
-each gap sensor, the same distance the breach's does there; no sensor's cell is reached in any
+peaks at a few times its threshold (the F1 table above) and its contour is a patch over the
+tool top (W1: no threshold cell on the gap sensors' row at any arm), while the 5 um field
+peaks at four decades above its threshold and its contour reaches down the gaps beside the
+tool (the 5 um width table). The widest 5 um contour, at `widest`, stands about four cells
+from each gap sensor, the distance the breach's does there; no sensor's cell is reached in any
 class at any arm.
 
 ### 1.6 The contour's grid dependence
@@ -364,18 +408,20 @@ The two extreme arms on both grids, 0.1 um: the distance from each sensor's cell
 <!-- tables72 grids end -->
 
 For the breach and the door, the fine grid's contour stands farther from every sensor than
-the coarse grid's by up to one coarse cell, and the plume on the gap sensors' row is narrower
-by one to two coarse cells: the coarse distance is a one-sided bound, as ADR-015 B's picture
-states and as the gate's control showed. The dust's 0.1 um contour is the exception: on
-320x120 its nearest cell to near_door is a quarter of a metre nearer than on 160x60, a cell at
-the sensor's own height in the gap beside the server rack that the coarse grid does not raise
-above threshold (the gate's control reaches a cell at the same height, one column over). A field that peaks at a few times
-its threshold has a contour the grid moves by more than a cell, so the dust's 0.1 um
-distances are grid-dependent at that size and the bound does not hold for them; the 5 um
-contour, a hundred times above its threshold, moves by under a coarse cell between the grids
-(the per-class table, min_nut rows). The product-grid repeat of `widest` is missing (section
-1.2); the coarse `widest` rows are therefore bounds on the fine grid for the breach and the
-door only in the direction the other arms show, not measured.
+the coarse grid's, by under one coarse cell, and the breach's plume on the gap sensors' row is
+narrower by one coarse cell (the door's rows hold no threshold cell on either grid): the
+coarse distance is a one-sided bound, as ADR-015 B's picture states and as the gate's control
+showed. The dust's 0.1 um contour is the exception: on 320x120 its nearest cell to near_door
+is a quarter of a metre nearer than on 160x60, a cell at the sensor's own height in the gap
+beside the server rack that the coarse grid does not raise above threshold (the gate's control
+reaches a cell at the same height, one column over). A field that peaks at a few times its
+threshold (F1) has a contour the grid moves by more than a cell, so the dust's 0.1 um
+distances are grid-dependent at that size and the bound does not hold for them; the dust's
+5 um contour, four decades above its threshold, moves by about one coarse cell between the
+grids and in the same direction as the breach's (D1, min_nut rows: the fine grid's farther at
+every sensor). The product-grid repeat of `widest` is missing (section 1.2); the coarse
+`widest` rows are therefore bounds on the fine grid for the breach and the door only in the
+direction the other arms show, not measured.
 
 ## 2. The clean-out on 160x60
 
@@ -387,14 +433,15 @@ door only in the direction the other arms show, not measured.
 | 160x60, this pass | 160x60 | 240.0 | 25.6135 | 29.2117 | 100.0336 | 3.9055 | 7,008 | 145 (2.07%) | 145 (2.07%) |
 | 320x120, the gate (prompt 69; G1's row) | 320x120 | 240.0 | 25.6135 | 27.9433 | 122.2410 | 4.7725 | 28,032 | 581 (2.07%) | 579 (2.07%) |
 
-Observed order of convergence over 80x30 (to 240 s), 160x60 and 320x120 (refinement ratio 2; p = log2 of the ratio of successive differences, defined when the three values change monotonically):
+Observed order of convergence over 80x30 (to 240 s), 160x60 and 320x120 (refinement ratio 2; p = log2 of the ratio of successive differences, defined when the three values change monotonically). The unrecovered cells are counts: they are read in cells of the finest grid, and a difference of one such cell is the count's resolution, not a convergence; the share in brackets is the count over the grid's free cells.
 
 | Quantity | 80x30 | 160x60 | 320x120 | Observed order |
 |---|---|---|---|---|
 | Room recovery time (s) | 25.6211 | 29.2117 | 27.9433 | none: the series is not monotone (differences -3.591 then +1.268) |
 | Free-area mean 100:1 (s) | 77.6564 | 100.0336 | 122.2410 | 0.01 (differences -22.38 then -22.21) |
 | Ratio to the well-mixed | 3.0319 | 3.9055 | 4.7725 | 0.01 (differences -0.8736 then -0.867) |
-| Not recovered at 240 s, 0.1 um (share of the free cells) | 2.055% | 2.069% | 2.073% | 2.00 (differences -0.01427 then -0.003567) |
+| Not recovered at 240 s, 0.1 um (cells, share) | 36 (2.055%) | 145 (2.069%) | 581 (2.073%) | none: a difference is at the count's resolution of one fine cell (differences -4 then -1 fine cells) |
+| Not recovered at 240 s, 5 um (cells, share) | 36 (2.055%) | 145 (2.069%) | 579 (2.065%) | none: a difference is at the count's resolution of one fine cell (differences -4 then +1 fine cells) |
 <!-- tables72 cleanout end -->
 
 The 160x60 run is the reference clean-out at the file's inputs to 240 s; the gate's 80x30 row
@@ -417,16 +464,23 @@ were reached before 120 s). What the three grids show:
   way across the flow at each grid (the sensor rule reads the cell below and left of a face),
   and the sensor's 100:1 crossing on a decaying curve moves with that cell. The three values
   lie within 15% of each other; no order is defined.
-- **The share of the free area not recovered at 240 s is converging at second order**
-  (2.055%, 2.069%, 2.073%): the pocket between the bench and the right wall is a fixed region
-  of the room, and its area fraction converges with the grid as a geometric quantity should.
+- **The cells not recovered at 240 s are the same region on the three grids, to within one
+  cell of the finest.** The counts are cell counts, and in cells of the finest grid each
+  refinement adds one cell to the region (the order table's last two rows: the differences
+  are four fine cells, then one, at 0.1 um, and the 5 um series is not monotone), so no order
+  is observed; what the counts show is the pocket between the bench and the right wall, a
+  fixed region of the room, at the same share of the free area on every grid to the
+  resolution a count has. (The first version of this report read a second order into the
+  0.1 um counts; review 72 B1 showed the second difference to be one 320x120 cell.)
 
 The condition's purpose was to decide whether the mean's 100:1 ratio and the local recovery
 field can be quoted as numbers of the room. The ratio cannot: the three grids give a series
 that is still moving by a fifth of its value per refinement with no sign of slowing. The
-unrecovered region can be quoted as a share of the room to three figures. The room recovery
-time stays the sensor-based number the gate report quotes, with the 160x60 value beside the
-other two.
+unrecovered region's share of the room is the same on the three grids to within a cell, so it
+can be quoted as a share of the free area to the resolution the counts have (about two per
+cent); its time to recover cannot, since no grid recovers it by 240 s. The room recovery time
+stays the sensor-based number the gate report quotes, with the 160x60 value beside the other
+two.
 
 ## 3. Predictions against measurement
 
@@ -444,23 +498,35 @@ other two.
 ## 4. The budget
 
 The prompt's budget was 8 hours of wall clock, to be estimated from the first minutes of each
-march. The queue (section 1.2's closing line) took 1.83 hours from the first start to the
-last exit, five runs at a time. The estimate taken at the first checkpoints of the 160x60
-marches was 21 to 25 steps per second, so a 120 s coarse march of about 15,000 steps takes
-about 11 minutes with its flow solve, and the 240 s clean-out about 20 minutes; the product
-grid's marches ran at the gate's rate (about 10 steps per second: 33,000 steps in 55 to 60
-minutes beside their flow solves). The three capped solves cost 54 and 49 minutes each
-(their 15,000 iterations) and returned nothing. With all six fine runs completing the pass
-would have taken about 2.5 hours; no run was dropped for the budget.
+march. The queue's span is the generated line that closes the run table in section 1.2 (under
+two hours, five runs at a time). The estimate taken at the first checkpoints of the 160x60
+marches (`run72.py --status`) was 21 to 25 steps per second, so a 120 s coarse march of
+about 15,000 steps takes about 11 minutes with its flow solve, and the 240 s clean-out about
+20 minutes; the product grid's marches ran at the gate's rate (the run table: about 33,000
+steps in the hour left after their flow solves). The four runs that exited without a result
+(the three `widest` solves on 320x120 and the door's control on 160x60) cost the minutes the
+same generated line gives, their 15,000 iterations each, and returned nothing. With all six
+fine runs completing the pass would have taken about 2.5 hours; no run was dropped for the
+budget.
 
 ## 5. What this says for detection
 
 Both halves of the Phase 4 gate's condition 3 are now in: VAL-024 (step 0) and this sweep. On
-the room's sensor layout no scenario reaches a sensor's cell at any arm of the inputs' range
-on 160x60, nor at the arms run on 320x120, and the one place the contour comes within a few
-cells of a sensor is the breach at the `widest` arm. The "never" of the gate report's table S1
-is therefore geometric for the door and the dust across the range, and for the breach across
-the range short of its widest corner, where the gap sensors read a few hundredths of threshold
-on the coarse grid. The product-grid reading at that corner is the one measurement the pass
-could not make (section 1.2). The arrival maps of ADR-015 D carry the placement question from
-here: the distances in D1 say which cells a sensor would have to stand in.
+the room's sensor layout no scenario reaches a sensor's cell at any arm that ran: the breach
+and the dust at all six arms on 160x60 and at `min_nut` on 320x120, the door at four of the
+six arms on 160x60 (i10, max_nut, min_nut and widest) and at `min_nut` on 320x120, and all
+three at the file's inputs on 320x120 (the gate's runs). The one place the contour comes
+within a few cells of a sensor is the breach at the `widest` arm. Two readings were not made
+(section 1.2): the `widest` arm on 320x120 for every scenario, and the door at its control
+and `sc02` arms on 160x60, so the door's `sc02` arm (Sc_t 0.2 on the file's flow state) is
+unmeasured on either grid. For that arm the report takes `widest` as the bound, on this
+ground: at the door's four coarse arms the distance from near_door to the contour falls as the
+supply's nu_t rises and is shortest at `widest` (the door's distance table), and `sc02` has
+the control's nu_t, a fifth of `widest`'s, at the same Schmidt number, so its plume's
+diffusivity lies between the control's (the gate's row) and `widest`'s; that is an inference
+from the arms that ran, not a measurement. With that qualification the "never" of the gate
+report's table S1 is geometric for the door and the dust across the range, and for the breach
+across the range short of its widest corner, where the gap sensors read a few hundredths of
+threshold on the coarse grid. The product-grid reading at that corner is the measurement the
+pass could not make. The arrival maps of ADR-015 D carry the placement question from here: the
+distances in D1 say which cells a sensor would have to stand in.

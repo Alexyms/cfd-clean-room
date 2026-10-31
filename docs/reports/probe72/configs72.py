@@ -63,6 +63,7 @@ SUPPLY_KEYS = ("turbulence_intensity", "dissipation_length")
 
 
 def grid_tag(grid: tuple[int, int]) -> str:
+    """The grid as its file and run names spell it, "160x60"."""
     return f"{grid[0]}x{grid[1]}"
 
 
@@ -114,6 +115,7 @@ def write_scenario(
     arm: tuple[float, float, float] | None,
     t_end: float | None = None,
 ) -> Path:
+    """Write one run's scenario file on its base; None for the arm keeps the file's keys."""
     scenario = yaml.safe_load(
         (ROOT / "configs" / f"scenario_{scenario_name}.yaml").read_text(
             encoding="utf-8"
@@ -152,6 +154,7 @@ def run_names() -> list[tuple[str, str, str, tuple[int, int]]]:
 
 
 def main() -> int:
+    """Write every base and scenario file of run_names()."""
     OUT.mkdir(parents=True, exist_ok=True)
     bases: dict[tuple[str, tuple[int, int]], tuple[Path, dict]] = {}
     for run_name, scenario, arm, grid in run_names():

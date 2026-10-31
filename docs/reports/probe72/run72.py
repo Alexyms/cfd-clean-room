@@ -37,7 +37,7 @@ ROOT = HERE.parents[2]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(HERE))
 
-import configs72  # noqa: E402
+import configs72  # noqa: E402 -- follows sys.path.insert
 
 RESULTS = ROOT / "results" / "builder72"
 LOGS = RESULTS / "logs"
@@ -102,8 +102,9 @@ def launch(job: dict, running: int) -> subprocess.Popen:
     ]
     if job["depends"] is not None:
         command += ["--flows-from", str(RESULTS / f"{job['depends']}.h5")]
-    out = open(RESULTS / f"{name}.txt", "w", encoding="utf-8")  # noqa: SIM115
-    err = open(LOGS / f"{name}.log", "w", encoding="utf-8")  # noqa: SIM115
+    # Handed to Popen, which holds them for the process lifetime; closed with it.
+    out = open(RESULTS / f"{name}.txt", "w", encoding="utf-8")  # noqa: SIM115 -- see above
+    err = open(LOGS / f"{name}.log", "w", encoding="utf-8")  # noqa: SIM115 -- see above
     return subprocess.Popen(
         command, stdout=out, stderr=err, cwd=ROOT, env={**os.environ, **ENV}
     )

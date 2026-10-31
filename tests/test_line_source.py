@@ -628,12 +628,22 @@ class TestCriterion:
     def test_the_report_carries_the_source_columns_width(
         self, coarse_mesh: Mesh
     ) -> None:
-        """The width at the source column is reported beside the near-field ratios."""
-        field = planted_plume(coarse_mesh, 1.0)
-        report = verdict(coarse_mesh)
+        """The width at the source column is reported beside the near-field ratios.
+
+        The plume's width grows by a centimetre per column, so the source
+        column's width differs from both neighbours'. Defect caught: the width
+        read from a column beside the source (test 72 S1).
+        """
+        xc = np.asarray(coarse_mesh.xc)
+        dx = float(xc[1] - xc[0])
+        field = gaussian_field(coarse_mesh, lambda x: 2.0e-2 + 1.0e-2 * x / dx, 0.25)
+        k = analytic_k(coarse_mesh, ls.model_decay_exponent())
+        report = ls.evaluate(coarse_mesh, load_preset("val024_280x50"), k, field)
         widths = ls.plume_widths(coarse_mesh, field)
         assert report["source_column_sigma_m"] == widths[ls.SOURCE_COLUMN]
         assert report["source_column_sigma_m"] > 0.0
+        for neighbour in (ls.SOURCE_COLUMN - 1, ls.SOURCE_COLUMN + 1):
+            assert abs(widths[neighbour] - widths[ls.SOURCE_COLUMN]) > 1.0e-4
 
 
 # ---------------------------------------------------------------------------
@@ -836,6 +846,7 @@ class TestHarnessRow:
         for station, ratio in ratios.items():
             assert components[f"width_ratio_{station:g}M"] == ratio[0]
         assert components["width_ratio_100M_collapse"] == ratios[100.0][1]
+        assert components["source_column_sigma_m"] == report["source_column_sigma_m"]
         assert len({round(v, 12) for v in components.values()}) == len(components)
         assert row["trajectory"][-1]["error"] == accuracy["value"]
         assert row["outcome"]["converged"] is False
