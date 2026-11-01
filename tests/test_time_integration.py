@@ -1564,6 +1564,40 @@ class TestArrivalMaps:
         assert again.latencies is not None
         assert again.latencies.tobytes() == sensed_door.record.latencies.tobytes()
 
+    def test_a_restart_rewrites_the_maps_from_its_checkpoint_at_once(
+        self, tmp_path: Path, door: SimpleNamespace, sensed_door: SimpleNamespace
+    ) -> None:
+        """Maps ahead of the checkpoint are replaced before the march continues.
+
+        A crash between a checkpoint's map write and its checkpoint leaves
+        /arrival/ ahead of the checkpoint; planted here by writing the whole
+        run's maps after a kill at 95. The restart is killed again at 92,
+        before its next checkpoint: the file's maps are checkpoint 90's.
+        Defect caught: the restart not rewriting /arrival/ (the whole run's
+        maps left in a file whose march stopped at 92).
+        """
+        config = sensed_door.config
+        path = tmp_path / "run.h5"
+        with pytest.raises(_KilledError):
+            run(
+                config,
+                path,
+                flows_from=door.record.path,
+                on_step=killer(95),
+                provenance=PROVENANCE,
+            )
+        cut = RunFile(path)
+        checkpoint = cut.read_checkpoint()
+        cut.write_arrival(sensed_door.run.read_arrival())
+        with pytest.raises(_KilledError):
+            run(config, restart=path, on_step=killer(92))
+        held = cut.read_arrival()
+        assert held.t_final == checkpoint.t
+        expected = checkpoint.recovery["first_above"].copy()
+        live = np.broadcast_to(Mesh(config).cell_type != SOLID, expected.shape)
+        expected[live & np.isnan(expected)] = np.inf
+        assert held.first_above.tobytes() == expected.tobytes()
+
     def test_a_checkpoint_without_the_maps_refuses_the_restart(
         self, tmp_path: Path, door: SimpleNamespace
     ) -> None:
