@@ -812,6 +812,22 @@ class TestContaminatingEvents:
         raw["scenario"]["events"] = [early, dust]
         assert events_of(raw) == (("early", 5.0), ("litho_dust", 10.0))
 
+    def test_an_event_active_over_no_interval_is_left_out(self) -> None:
+        """A release inside the time tolerance of t_end starts no interval: no event.
+
+        The loader accepts it (it ends by t_end), and ``times`` merges its
+        start and end into t_end, so it is active over no interval and
+        brings nothing in. Defect caught: such an event given its stated
+        start as an onset, past the march's last step.
+        """
+        raw = scenario_raw("scenario_equipment_dust.yaml")
+        spec = SimConfig.from_dict(raw).scenario
+        assert spec is not None
+        (dust,) = raw["scenario"]["events"]
+        dust["start"] = spec.t_end - 0.5 * spec.time_tolerance
+        dust["duration"] = 0.25 * spec.time_tolerance
+        assert events_of(raw) == ((RUN_START, 0.0),)
+
 
 def raw_events(raw: dict) -> tuple:
     """The loaded events of a scenario mapping."""
