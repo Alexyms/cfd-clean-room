@@ -1583,10 +1583,20 @@ class SimConfig:
         if not isinstance(sensors_raw, list):
             raise ValueError("sensors must be a list")
         self.sensors: list[SensorSpec] = []
+        named: dict[str, int] = {}
         for i, sensor in enumerate(sensors_raw):
             if not isinstance(sensor, dict):
                 raise ValueError(f"sensors[{i}] must be a mapping")
             ctx = f"sensors[{i}]"
+            # The alert monitor, its table and its checkpoint state name a
+            # sensor by its name, so two sensors of one name would be one.
+            name = self._require_string(sensor, "name", ctx)
+            if name in named:
+                raise ValueError(
+                    f"{ctx}: the name {name!r} is sensors[{named[name]}]'s; each "
+                    "sensor needs its own name"
+                )
+            named[name] = i
             sx = self._require_float(sensor, "x", ctx)
             sy = self._require_float(sensor, "y", ctx)
             if not 0 <= sx <= self.room_width:
@@ -1595,13 +1605,7 @@ class SimConfig:
                 raise ValueError(
                     f"{ctx}: y={sy} outside domain [0, {self.room_height}]"
                 )
-            self.sensors.append(
-                SensorSpec(
-                    name=self._require_string(sensor, "name", ctx),
-                    x=sx,
-                    y=sy,
-                )
-            )
+            self.sensors.append(SensorSpec(name=name, x=sx, y=sy))
 
         # Thresholds
         thresholds_raw = self._require_section(raw, "thresholds")

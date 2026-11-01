@@ -791,6 +791,24 @@ class TestSimConfigInvalidValues:
         with pytest.raises(ValueError, match=r"sensors\[0\].*x=10"):
             SimConfig(path)
 
+    def test_two_sensors_of_one_name_are_refused(self, tmp_path) -> None:
+        """A repeated sensor name is refused, naming both entries (review 73 S1, test 73).
+
+        The alert monitor keys its alerts, latencies, table and checkpoint
+        state by name. Defect caught: the second sensor's alerts filed under
+        the first's index, so a latency lands on the wrong sensor.
+        """
+        sensors = [
+            {"name": "probe", "x": 1.0, "y": 1.5},
+            {"name": "other", "x": 2.0, "y": 1.5},
+            {"name": "probe", "x": 2.7, "y": 2.5},
+        ]
+        path = _write_config(tmp_path, overrides={"sensors": sensors})
+        with pytest.raises(
+            ValueError, match=r"sensors\[2\]: the name 'probe' is sensors\[0\]'s"
+        ):
+            SimConfig(path)
+
     def test_sensor_out_of_domain_y_raises(self, tmp_path) -> None:
         """Sensor y coordinate outside domain raises ValueError."""
         path = _write_config(
