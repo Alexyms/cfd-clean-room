@@ -719,7 +719,9 @@ sweep can be read before step 3 is built.
 
 **Latency** (revised 2026-10-29, prompt 70b, review 70 S7). The onset of an event that
 carries contamination is its `start` (a `replace` with a concentration key, a `source`, or
-the initial condition at t = 0). The tracker keeps one map per such event (the events axis
+the initial condition at t = 0; and a `set` that gives a segment a concentration, the
+whole-supply breach of ADR-014 B, which this list left out: the clarification of prompt 74,
+step 3, 2026-11-01). The tracker keeps one map per such event (the events axis
 of `first_above`, the onsets handed to it at construction): at each onset the map for that
 event starts, and records per class and cell the first step time at or after the onset at
 which the cell is at or above threshold, so a cell already at or above it at the onset
@@ -728,7 +730,12 @@ reads the onset itself. The latency for event e at a cell is that time minus
 with the run's end beside it. The monitor's `latencies(onsets)` is defined the same way on
 the sensors' cells: for each onset, the time of the first reading at or above threshold at
 or after it, an alert open at the onset counting as the onset, so the two instruments
-agree at a sensor's cell by construction and a test pins that they do. Each reference
+agree at a sensor's cell by construction and a test pins that they do. *As built (step 3,
+prompt 74, 2026-11-01):* `latencies` follows this paragraph, not section C's contract line
+("inf if none before the next onset or the end"), which step 2 had built: an alert open at
+the onset counts, and there is no cut at the next onset, since the map makes none. An onset is the start of the
+first interval the event is active over, a step time of the march, which is what makes the
+agreement exact. Each reference
 scenario has one such event, so its latency is arrival minus 10 s (the door, the breach,
 the dust) and zero for the clean-out; a scenario with several is reported per event.
 
