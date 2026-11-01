@@ -1056,6 +1056,50 @@ class TestTransportOnly:
         with pytest.raises(KeyError, match="holds no /transport/sensors/"):
             written.read_sensor_readings()
 
+    def test_a_run_without_sensors_restarts_with_no_monitor(
+        self, tmp_path: Path, clean_out: SimpleNamespace
+    ) -> None:
+        """Killed after a checkpoint and restarted: the frames bitwise, still no alerts.
+
+        A run without sensors has no monitor, so the restart has none to
+        restore. Defects caught: the restart restoring a monitor the run never
+        had; an alert table written for a run without sensors.
+        """
+        raw = rescheduled(
+            coarse_raw(
+                "scenario_equipment_dust.yaml",
+                output_interval=10,
+                checkpoint_interval=20,
+            ),
+            2.0,
+            {"litho_dust": (0.5, 1.0)},
+        )
+        raw["sensors"] = []
+        config = SimConfig.from_dict(raw)
+        whole = run(
+            config,
+            tmp_path / "whole.h5",
+            flows_from=clean_out.record.path,
+            provenance=PROVENANCE,
+        )
+        path = tmp_path / "run.h5"
+        with pytest.raises(_KilledError):
+            run(
+                config,
+                path,
+                flows_from=clean_out.record.path,
+                on_step=killer(43),
+                provenance=PROVENANCE,
+            )
+        record = run(config, restart=path)
+        assert record.restarted_from == 40 and record.alerts == ()
+        a, b = RunFile(path).read_frames(), RunFile(whole.path).read_frames()
+        assert a.steps.tolist() == b.steps.tolist()
+        for k in b.fields:
+            assert a.fields[k].tobytes() == b.fields[k].tobytes(), k
+        with pytest.raises(KeyError, match="holds no /transport/alerts/"):
+            RunFile(path).read_alerts()
+
     def test_the_source_enters_the_source_slot_for_its_duration(
         self, transport_only: dict[str, SimpleNamespace]
     ) -> None:
