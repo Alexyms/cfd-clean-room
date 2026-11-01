@@ -21,6 +21,15 @@ continues an open alert and writes the alert table the uninterrupted run
 writes, bitwise. The closed alerts are carried as well as the open ones
 because the run file's alert table is replaced whole at each write, and a
 restart would otherwise lose the rows before the checkpoint.
+
+The arrival maps (ADR-015 D, step 3). Per contaminating event, class and
+non-SOLID cell, ``ArrivalTracker`` keeps the first step time at or after the
+event's onset at which the cell is at or above its class's threshold: the
+forward counterpart of the clean-out's local recovery field, updated every
+step beside it from the same fields. The events and their onsets come from
+the scenario's plan (``contaminating_events``), and the monitor's
+``latencies`` follow the same rule on the sensors' cells, so the two
+instruments agree to the step at a sensor.
 """
 
 import math
@@ -29,7 +38,16 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from src.config import SimConfig
+from src.config import (
+    EventSpec,
+    Initial,
+    Replace,
+    ScenarioSpec,
+    Set,
+    SimConfig,
+    Source,
+)
+from src.io_manager import ArrivalRecord
 from src.mesh import SOLID, Mesh
 
 # A sensor this fraction of the room's extent from a face is on it. The faces
@@ -58,6 +76,13 @@ STATE_NAMES: tuple[str, ...] = (
     "alert_t",
     "alert_readings",
 )
+# The names ``ArrivalTracker.state()`` carries, distinct from the recovery
+# tracker's and the monitor's in the one checkpoint mapping.
+ARRIVAL_STATE_NAMES: tuple[str, ...] = ("first_above", "arrival_onsets", "arrival_t")
+# The one event of a run whose plan has no contaminating event (ADR-015 D).
+RUN_START = "run_start"
+# The segment key that gives a boundary segment a concentration of its own.
+CONCENTRATION_KEY = "concentration"
 
 
 @dataclass(frozen=True)
@@ -145,6 +170,108 @@ def sensor_cells(config: SimConfig, mesh: Mesh) -> tuple[tuple[int, int], ...]:
             raise ValueError(f"sensor {sensor.name} reads a SOLID cell ({j}, {i})")
         cells.append((j, i))
     return tuple(cells)
+
+
+def carries_contamination(event: EventSpec) -> bool:
+    """Whether an event brings particles into the room (ADR-015 D).
+
+    An initial condition, a source, a replacement one of whose segments
+    states a concentration, or a set that gives its segment one (the
+    whole-supply breach of ADR-014 B, a clarification of section D's list,
+    which names the first three). A concentration key counts whatever its
+    values: the plan's events are read from the file, not from the fields.
+
+    Parameters
+    ----------
+    event : EventSpec
+        One of the scenario's events.
+
+    Returns
+    -------
+    bool
+    """
+    change = event.change
+    if isinstance(change, (Initial, Source)):
+        return True
+    if isinstance(change, Replace):
+        return any(CONCENTRATION_KEY in keys for _, keys in change.segments)
+    assert isinstance(change, Set)
+    return CONCENTRATION_KEY in change.keys
+
+
+def contaminating_events(scenario: ScenarioSpec) -> tuple[tuple[str, float], ...]:
+    """The plan's contaminating events and their onsets, in onset order (ADR-015 D).
+
+    Parameters
+    ----------
+    scenario : ScenarioSpec
+        The configuration's scenario section.
+
+    Returns
+    -------
+    tuple[tuple[str, float], ...]
+        (name, onset) per event that ``carries_contamination``, ordered by
+        onset and then by the file's order. An initial's onset is t = 0;
+        any other event's is the start of the first interval it is active
+        over (``ScenarioSpec.times`` and ``is_active``, the manager's
+        rule), so it is a step time of the march. An event active over no
+        interval contaminates nothing and is left out. A plan with none has
+        the one event ``RUN_START`` at t = 0.
+    """
+    starts = scenario.times()[:-1]
+    out = []
+    for event in scenario.events:
+        if not carries_contamination(event):
+            continue
+        if isinstance(event.change, Initial):
+            out.append((event.name, 0.0))
+            continue
+        onset = next((t for t in starts if scenario.is_active(event, t)), None)
+        if onset is not None:
+            out.append((event.name, onset))
+    if not out:
+        return ((RUN_START, 0.0),)
+    return tuple(sorted(out, key=lambda pair: pair[1]))
+
+
+def _real(name: str, value: object) -> float:
+    """VALUE as a float; TypeError unless it is a real number (a bool is not)."""
+    if isinstance(value, (bool, np.bool_)) or not isinstance(
+        value, (int, float, np.integer, np.floating)
+    ):
+        raise TypeError(f"{name} must be a real number, got {type(value).__name__}")
+    return float(value)
+
+
+def _onsets(onsets: Sequence[float]) -> np.ndarray:
+    """The onsets as [events] float64; raises unless 1-D, real, finite and in order."""
+    if np.ndim(onsets) != 1:
+        raise ValueError(f"onsets must be [events], got shape {np.shape(onsets)}")
+    for onset in onsets:
+        _real("an onset", onset)
+    times = np.asarray(onsets, dtype=np.float64)
+    if not np.isfinite(times).all():
+        raise ValueError("the onsets must be finite")
+    if np.any(np.diff(times) < 0.0):
+        raise ValueError("the onsets must be in order")
+    return times
+
+
+def _check_fields(
+    fields: Mapping[int, np.ndarray], n_classes: int, shape: tuple[int, ...]
+) -> None:
+    """Raise unless FIELDS holds classes 0 to n - 1, each of SHAPE."""
+    if sorted(fields) != list(range(n_classes)):
+        raise ValueError(
+            f"fields for classes {sorted(fields)}; the monitor reads classes 0 "
+            f"to {n_classes - 1}"
+        )
+    for k in range(n_classes):
+        given = np.shape(fields[k])
+        if given != shape:
+            raise ValueError(
+                f"class {k}'s field has shape {given}; the mesh's is {shape}"
+            )
 
 
 def _whole(value: float, below: float = math.inf) -> bool:
@@ -312,17 +439,7 @@ class AlertMonitor:
                 f"t = {t!r} s is not above the last update's {self._t!r} s"
             )
         n_classes = self._thresholds.shape[0]
-        if sorted(fields) != list(range(n_classes)):
-            raise ValueError(
-                f"fields for classes {sorted(fields)}; the monitor reads classes 0 "
-                f"to {n_classes - 1}"
-            )
-        for k in range(n_classes):
-            shape = np.shape(fields[k])
-            if shape != self._shape:
-                raise ValueError(
-                    f"class {k}'s field has shape {shape}; the mesh's is {self._shape}"
-                )
+        _check_fields(fields, n_classes, self._shape)
         readings = np.array(
             [np.asarray(fields[k])[self._rows, self._cols] for k in range(n_classes)],
             dtype=np.float64,
@@ -350,54 +467,55 @@ class AlertMonitor:
         return tuple(changed)
 
     def latencies(self, onsets: Sequence[float]) -> np.ndarray:
-        """Each sensor's detection latency per event and class (REQ-A04).
+        """Each sensor's detection latency per event and class (REQ-A04, ADR-015 D).
 
         Parameters
         ----------
         onsets : Sequence[float]
-            The events' onsets, seconds, finite and increasing.
+            The events' onsets, seconds (``contaminating_events``), finite
+            and in order; two events may share one.
 
         Returns
         -------
         np.ndarray
-            [events, classes, sensors]: the ``t_on`` of the first alert
-            opened at or after the event's onset and before the next one's
-            (or at any time after the last onset) minus the onset; inf when
-            no alert opened in that window. An alert already open at an
-            onset is not that event's detection.
+            [events, classes, sensors]: the time of the first reading at or
+            above the threshold at or after the event's onset, minus the
+            onset; inf when there is none by the last update. An alert open
+            at the onset counts as the onset itself, so a sensor already at
+            or above its threshold when the event starts reads zero.
 
         Raises
         ------
         TypeError
             If an onset is not a real number.
         ValueError
-            If the onsets are not one-dimensional, finite and increasing.
+            If the onsets are not one-dimensional, finite and in order.
+
+        Notes
+        -----
+        This is the arrival map's rule on the sensors' cells
+        (``ArrivalTracker``), so the two agree to the step: every event
+        starts on an interval boundary, and the march puts a step on each
+        boundary, so an onset is an update's time. An alert closed at the
+        onset's own update is not open at it. An event's latency is not cut
+        off at the next event's onset, as the map's is not.
         """
-        if np.ndim(onsets) != 1:
-            raise ValueError(f"onsets must be [events], got shape {np.shape(onsets)}")
-        for onset in onsets:
-            if isinstance(onset, (bool, np.bool_)) or not isinstance(
-                onset, (int, float, np.integer, np.floating)
-            ):
-                raise TypeError(
-                    f"an onset must be a real number, got {type(onset).__name__}"
-                )
-        times = np.asarray(onsets, dtype=np.float64)
-        if not np.isfinite(times).all():
-            raise ValueError("the onsets must be finite")
-        if np.any(np.diff(times) <= 0.0):
-            raise ValueError("the onsets must be increasing")
+        times = _onsets(onsets)
         n_classes, n_sensors = self._readings.shape
         out = np.full((times.size, n_classes, n_sensors), np.inf)
-        ends = np.append(times[1:], np.inf)
+        last = -math.inf if self._t is None else self._t
         sensor_index = {name: s for s, name in enumerate(self.names)}
         for alert in self.alerts:
-            s = sensor_index[alert.sensor]
-            inside = (times <= alert.t_on) & (alert.t_on < ends)
-            for e in np.flatnonzero(inside):
-                delay = alert.t_on - times[e]
-                if delay < out[e, alert.size_class, s]:
-                    out[e, alert.size_class, s] = delay
+            s, k = sensor_index[alert.sensor], alert.size_class
+            off = math.inf if alert.t_off is None else alert.t_off
+            for e, onset in enumerate(times):
+                if alert.t_on >= onset:
+                    delay = alert.t_on - onset
+                elif onset < off and onset <= last:
+                    delay = 0.0
+                else:
+                    continue
+                out[e, k, s] = min(out[e, k, s], delay)
         return out
 
     def state(self) -> dict[str, np.ndarray]:
@@ -534,3 +652,244 @@ class AlertMonitor:
         self._step = None if np.isnan(step) else int(step)
         self._t = None if np.isnan(t) else float(t)
         self._readings = readings
+
+
+class ArrivalTracker:
+    """Per event, class and cell, the first time at or above threshold (ADR-015 D).
+
+    Parameters
+    ----------
+    thresholds : Sequence[float]
+        Per class, particles per cubic metre, finite and non-negative.
+    live : np.ndarray
+        [ny, nx] bool, the non-SOLID cells.
+    onsets : Sequence[float]
+        The contaminating events' onsets, seconds, finite, non-negative
+        and in order (``contaminating_events``); at least one.
+
+    Raises
+    ------
+    TypeError
+        If a threshold or an onset is not a real number, or ``live`` is
+        not a bool array.
+    ValueError
+        With no class or no onset, a threshold not finite and
+        non-negative, ``live`` not 2-D, or the onsets not finite,
+        non-negative and in order.
+
+    Notes
+    -----
+    ``first_above[e, k, j, i]`` is the first update's time at or after
+    onset e at which class k's field in cell (j, i) is at or above its
+    threshold, NaN until then. Each event's map starts at its own onset, so
+    a cell already at or above its threshold then reads the onset itself,
+    and a cell reached for one event before a later event's onset is not
+    counted for the later one until it is at or above at or after that
+    onset. "At or above" is the monitor's opening rule and the recovery
+    field's "not below". SOLID cells stay NaN. The arrays are the whole
+    state (``state`` and ``restore``), so a restart continues the maps
+    bitwise.
+    """
+
+    def __init__(
+        self,
+        thresholds: Sequence[float],
+        live: np.ndarray,
+        onsets: Sequence[float],
+    ) -> None:
+        if np.ndim(thresholds) != 1 or len(thresholds) == 0:
+            raise ValueError(
+                f"thresholds must be [classes], at least one, got shape "
+                f"{np.shape(thresholds)}"
+            )
+        for value in thresholds:
+            _real("a threshold", value)
+        self._thresholds = np.asarray(thresholds, dtype=np.float64)
+        if not (np.isfinite(self._thresholds).all() and (self._thresholds >= 0).all()):
+            raise ValueError(
+                f"the thresholds must be finite and non-negative, got "
+                f"{self._thresholds.tolist()}"
+            )
+        if not isinstance(live, np.ndarray) or live.dtype != np.bool_:
+            raise TypeError("live must be a bool array, the non-SOLID cells")
+        if live.ndim != 2:
+            raise ValueError(f"live must be [ny, nx], got shape {live.shape}")
+        self._live = live.copy()
+        self._onsets = _onsets(onsets)
+        if self._onsets.size == 0:
+            raise ValueError(
+                "the arrival maps need at least one event; a plan with no "
+                f"contaminating event has {RUN_START} at t = 0"
+            )
+        if self._onsets[0] < 0.0:
+            raise ValueError(f"the onsets must be non-negative, got {self._onsets[0]}")
+        shape = (self._onsets.size, self._thresholds.size, *live.shape)
+        self._first = np.full(shape, np.nan)
+        self._t: float | None = None
+
+    @property
+    def onsets(self) -> np.ndarray:
+        """[events], the events' onsets, seconds (a copy)."""
+        return self._onsets.copy()
+
+    @property
+    def first_above(self) -> np.ndarray:
+        """[events, classes, ny, nx], the first time at or above, NaN until then (a copy)."""
+        return self._first.copy()
+
+    def update(self, t: float, fields: Mapping[int, np.ndarray]) -> None:
+        """Read the fields after a step (or the initial fields at t = 0).
+
+        Parameters
+        ----------
+        t : float
+            The step's time, seconds, finite and above the last update's.
+        fields : Mapping[int, np.ndarray]
+            Class to its field, [ny, nx], for every class 0 to n - 1. Read,
+            never written.
+
+        Raises
+        ------
+        TypeError
+            If ``t`` is not a real number.
+        ValueError
+            If ``t`` is not finite or not above the last update's, or the
+            classes are not 0 to n - 1 on the mesh's shape.
+        """
+        t = _real("t", t)
+        if not math.isfinite(t):
+            raise ValueError(f"t must be finite, got {t}")
+        if self._t is not None and t <= self._t:
+            raise ValueError(
+                f"t = {t!r} s is not above the last update's {self._t!r} s"
+            )
+        _check_fields(fields, self._thresholds.size, self._live.shape)
+        started = np.flatnonzero(self._onsets <= t)
+        if started.size:
+            for k, threshold in enumerate(self._thresholds):
+                above = (np.asarray(fields[k]) >= threshold) & self._live
+                for e in started:
+                    first = self._first[e, k]
+                    first[above & np.isnan(first)] = t
+        self._t = t
+
+    def state(self) -> dict[str, np.ndarray]:
+        """The tracker's state, for the march's checkpoint.
+
+        Returns
+        -------
+        dict[str, np.ndarray]
+            ``ARRIVAL_STATE_NAMES``: ``first_above`` [events, classes, ny,
+            nx], ``arrival_onsets`` [events] and ``arrival_t``, the last
+            update's time (NaN before any). All float64 and new arrays.
+        """
+        return {
+            "first_above": self._first.copy(),
+            "arrival_onsets": self._onsets.copy(),
+            "arrival_t": np.array(np.nan if self._t is None else self._t),
+        }
+
+    def restore(self, state: Mapping[str, np.ndarray]) -> None:
+        """Continue from ``state()`` as a checkpoint carried it.
+
+        Parameters
+        ----------
+        state : Mapping[str, np.ndarray]
+            The checkpoint's carried arrays; the names of
+            ``ARRIVAL_STATE_NAMES`` are read and any others ignored.
+
+        Raises
+        ------
+        KeyError
+            If one of ``ARRIVAL_STATE_NAMES`` is missing: a checkpoint
+            written before the arrival maps (ADR-015 step 3).
+        ValueError
+            If ``first_above`` is not this tracker's shape, the onsets are
+            not this tracker's, ``arrival_t`` is not a scalar that is NaN or
+            finite, or a time in the maps is set before any update, in a
+            SOLID cell, before its event's onset or after ``arrival_t``.
+        """
+        missing = [name for name in ARRIVAL_STATE_NAMES if name not in state]
+        if missing:
+            raise KeyError(
+                f"the checkpoint carries no {missing}: it was written before the "
+                "arrival maps (ADR-015 step 3)"
+            )
+        first = np.array(state["first_above"], dtype=np.float64)
+        onsets = np.array(state["arrival_onsets"], dtype=np.float64)
+        t = np.array(state["arrival_t"], dtype=np.float64)
+        if first.shape != self._first.shape:
+            raise ValueError(
+                f"the checkpoint's first_above has shape {first.shape}; this run's "
+                f"is {self._first.shape}"
+            )
+        if onsets.shape != self._onsets.shape or (
+            onsets.tobytes() != self._onsets.tobytes()
+        ):
+            raise ValueError(
+                f"the checkpoint's onsets {onsets.tolist()} are not this run's "
+                f"{self._onsets.tolist()}"
+            )
+        if t.shape != () or np.isinf(t):
+            raise ValueError(
+                "the checkpoint's arrival_t must be a NaN or finite scalar"
+            )
+        reached = ~np.isnan(first)
+        if np.isnan(t) and reached.any():
+            raise ValueError("the checkpoint's maps hold times but no last update")
+        if (reached & ~self._live).any():
+            raise ValueError("the checkpoint's maps hold a time in a SOLID cell")
+        lower = np.broadcast_to(self._onsets[:, None, None, None], first.shape)
+        if not ((first[reached] >= lower[reached]) & (first[reached] <= t)).all():
+            raise ValueError(
+                "the checkpoint's maps hold a time before its event's onset or after "
+                "the last update"
+            )
+        self._first = first
+        self._t = None if np.isnan(t) else float(t)
+
+    def record(self, event_names: Sequence[str], t_final: float) -> ArrivalRecord:
+        """The maps as the run file's ``/arrival/`` holds them.
+
+        Parameters
+        ----------
+        event_names : Sequence[str]
+            One per event, in the onsets' order.
+        t_final : float
+            The run's last step time, seconds, at or after the last
+            update's.
+
+        Returns
+        -------
+        ArrivalRecord
+            ``first_above`` with inf in a non-SOLID cell not reached by
+            the last update, NaN in SOLID cells, as ``local_recovery`` is
+            written; new arrays.
+
+        Raises
+        ------
+        TypeError
+            If ``t_final`` is not a real number.
+        ValueError
+            If the names are not one per event, or ``t_final`` is not
+            finite or is before the last update.
+        """
+        names = tuple(event_names)
+        if len(names) != self._onsets.size:
+            raise ValueError(f"{len(names)} event names for {self._onsets.size} events")
+        t_final = _real("t_final", t_final)
+        if not math.isfinite(t_final) or (self._t is not None and t_final < self._t):
+            raise ValueError(
+                f"t_final = {t_final!r} s is not finite and at or after the last "
+                f"update's {self._t!r} s"
+            )
+        maps = self._first.copy()
+        live = np.broadcast_to(self._live, maps.shape)
+        maps[live & np.isnan(maps)] = np.inf
+        return ArrivalRecord(
+            thresholds=self._thresholds.copy(),
+            event_names=names,
+            onsets=self._onsets.copy(),
+            first_above=maps,
+            t_final=t_final,
+        )

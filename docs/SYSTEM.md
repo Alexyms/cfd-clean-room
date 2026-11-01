@@ -129,7 +129,7 @@ forces                             .                     .                  .   
 io_manager                         .                     .                  .                 .           .         .        .         .        .       .         .         .          .         .            .            .             X                 X              .         .             .              .
 mesh                               .                     .                  .                 .           X         .        .         .        .       .         .         .          .         .            .            .             .                 .              .         .             .              .
 momentum                           .                     .                  X                 .           X         .        .         .        X       .         .         .          .         .            .            .             .                 .              X         .             .              .
-monitor                            .                     .                  .                 .           X         .        .         .        X       .         .         .          .         .            .            .             .                 .              .         .             .              .
+monitor                            .                     .                  .                 .           X         .        .         X        X       .         .         .          .         .            .            .             .                 .              .         .             .              .
 multigrid                          .                     .                  .                 .           .         .        .         .        .       .         .         .          .         .            .            .             .                 .              .         .             .              .
 particles                          .                     .                  .                 .           X         X        .         .        .       .         .         .          .         .            .            .             .                 .              .         .             .              .
 pressure                           .                     .                  X                 .           X         .        .         .        X       X         .         X          .         .            .            .             .                 .              X         .             .              .
@@ -143,7 +143,7 @@ time_integration                   .                     .                  X   
 turbulence                         .                     X                  X                 X           X         .        .         .        X       .         .         .          .         .            X            .             .                 .              X         .             .              .
 ```
 
-Rows import columns. Edges, 77 total:
+Rows import columns. Edges, 78 total:
 
 ```
 boundary_concentration -> boundary_registry, boundary_vents, config, mesh, particles, staggered
@@ -154,7 +154,7 @@ forces                 -> config, mesh
 io_manager             -> solver_staggered, solver_transport
 mesh                   -> config
 momentum               -> boundary_staggered, config, mesh, staggered
-monitor                -> config, mesh
+monitor                -> config, io_manager, mesh
 particles              -> config, constants
 pressure               -> boundary_staggered, config, mesh, momentum, multigrid, staggered
 scalar_scheme          -> mesh, momentum
@@ -225,10 +225,10 @@ Generated. The responsibility and serves columns are editorial and come from `do
 | `src/config.py` | 2879 | Loads the YAML configuration into typed dataclasses and rejects missing keys, wrong types and out-of-range values at load time. | A02, A03, C01, C02, C03, S10 |
 | `src/constants.py` | 8 | Holds the physical constants shared by every module so that none of them defines its own copy. | C04 |
 | `src/forces.py` | 350 | Integrates the pressure and shear the staggered fields put on a named obstacle's faces, read where the momentum predictor's stencils put them, into its drag and lift and their coefficients, and reads the Strouhal number of a lift signal from its last ten periods' interpolated zero crossings with the spectrum's peak as the cross-check, refusing fewer than ten. | none |
-| `src/io_manager.py` | 1822 | Writes a run's HDF5 run file by appending (the merged configuration with its restart hash, the flow states, the transport frames, budgets, sensor readings and alert table, and a clean-out's recovery outputs) and its checkpoint file by atomic replacement (the march's checkpoint and the steady solve's), reads each back bitwise, and refuses a restart under a changed configuration, so a killed or capped run continues to what the uninterrupted run reaches. | none |
+| `src/io_manager.py` | 1959 | Writes a run's HDF5 run file by appending (the merged configuration with its restart hash, the flow states, the transport frames, budgets, sensor readings and alert table, a clean-out's recovery outputs and the arrival maps) and its checkpoint file by atomic replacement (the march's checkpoint and the steady solve's), reads each back bitwise, and refuses a restart under a changed configuration, so a killed or capped run continues to what the uninterrupted run reaches. | none |
 | `src/mesh.py` | 465 | Builds the structured grid, uniform, geometrically clustered at the walls or between interior breakpoints the loader derives, with the face, center, width and center-to-center arrays a face-based stencil needs, and classifies each cell as FLUID, SOLID or BOUNDARY. | S11 |
 | `src/momentum.py` | 1191 | Predicts u* and v* on the staggered grid with QUICK advection by deferred correction over an upwind implicit matrix, a configured number of under-relaxed Jacobi sweeps per call, an optional per-cell viscosity field with its face rule and stress source, the domain edge's wall stencil at obstacle faces, and an optional implicit Euler or BDF2 time derivative at the unknown faces, and returns the diagonal coefficients the pressure correction needs. | S07, S09, S14 |
-| `src/monitor.py` | 536 | Reads each sensor's cell of every class field after every step by ADR-014 C's cell rule, opens an alert at the first reading at or above the class's threshold and closes it at the first below, keeping each alert's times, opening reading and peak, gives the latency from each event onset, and carries its whole state for the checkpoint; it reads the fields and never writes them. | A01, A02, A06 |
+| `src/monitor.py` | 895 | Reads each sensor's cell of every class field after every step by ADR-014 C's cell rule, opens an alert at the first reading at or above the class's threshold and closes it at the first below, keeping each alert's times, opening reading and peak, gives each sensor's latency from each event onset, keeps the arrival maps (per contaminating event of the plan, class and non-SOLID cell, the first step time at or after the onset at or above the threshold) by the same rule, and carries both states for the checkpoint; it reads the fields and never writes them. | A01, A02, A04, A06 |
 | `src/multigrid.py` | 384 | Builds an additive-correction multigrid hierarchy from a five-point pressure system by 2x2 aggregation, its coarse operators the exact Galerkin sums with no probing, and applies one symmetric V-cycle with weighted Jacobi smoothing and a dense pseudo-inverse on the coarsest level as the preconditioner of the pressure correction's conjugate gradients. | S08 |
 | `src/particles.py` | 263 | Computes per-size-class transport properties: Cunningham correction, settling velocity, Brownian diffusion, deposition velocity and HEPA efficiency. | T03, T04, T09, T10 |
 | `src/pressure.py` | 859 | Assembles the staggered pressure correction equation from the momentum diagonals with the discrete divergence of u* as its right-hand side, solves it by conjugate gradients preconditioned with its diagonal or, under the pressure_preconditioner key, with one multigrid V-cycle per iteration, to a relative residual, a rounding floor or a reported iteration cap, corrects the face velocities and updates the pressure. | S04, S08 |
@@ -241,7 +241,7 @@ Generated. The responsibility and serves columns are editorial and come from `do
 | `src/time_integration.py` | 1586 | Runs a scenario under tier 1: solves each distinct flow state once, warm-started from the state before it, or reuses one a run file holds, then marches every particle class at one step through the intervals, dividing each into equal steps under the stable step and carrying the fields and budgets across each switch, writing frames, budgets, sensor readings, the alert monitor's table and checkpoints through the run file, continuing a run from its checkpoint, and for a clean-out tracking the recovery outputs every step; under tier 2 marches the flow itself through solve_transient, writing its frames, per-step counts, lift and drag and two-level checkpoints, restarting bitwise, and reading the Strouhal number and drag coefficient at the end; it discretises nothing. | N01 |
 | `src/turbulence.py` | 1622 | Advances the k-epsilon model's k and eps one step on a prescribed face velocity field, standard or RNG with each variant's constants as module data: advection, explicit growth from the strain the faces give and implicit decay and diffusion through the shared scalar scheme, boundary values from a conditions object the caller builds each step, the kinematic eddy viscosity, and an assertion that k and eps are positive and finite after every step; and the scalable wall functions, which build those conditions, the wall viscosity of the momentum wall faces and the inlet values the coupled solve starts from. | S14, S15, S17 |
 
-Total 23 Python files, 18102 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
+Total 23 Python files, 18598 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
 
 `Declares it serves` is an EDITORIAL CLAIM read from `docs/system_map_annotations.toml`. It says which requirements a module is meant to satisfy, not that it does. Whether a requirement is met is answered by the tests named in the register's `Verified By` column.
 <!-- END GENERATED: components -->
@@ -266,7 +266,7 @@ Generated. Static import analysis cannot see a function bound into a registry by
 |---|---|
 | Scope | `src/**/*.py` |
 | Files hashed | 23 |
-| Digest | `sha256:29ac8bdcf4f27806d6fe4891dc3e78e031b48ceeb425582ec96099c65e93d0d1` |
+| Digest | `sha256:ac73e683d47c30a8cd52568f27c5ac5e039af9c03ee7767d9b0ff615f95b6182` |
 
 This is what lets the document answer whether it is current, which is the one question a stale table cannot be asked. `python scripts/gen_system_map.py --check` recomputes the whole set of generated regions, this digest included, and exits non-zero on any disagreement.
 

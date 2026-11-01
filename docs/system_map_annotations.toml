@@ -40,7 +40,7 @@ responsibility = "Integrates the pressure and shear the staggered fields put on 
 serves = []
 
 [modules."src/io_manager.py"]
-responsibility = "Writes a run's HDF5 run file by appending (the merged configuration with its restart hash, the flow states, the transport frames, budgets, sensor readings and alert table, and a clean-out's recovery outputs) and its checkpoint file by atomic replacement (the march's checkpoint and the steady solve's), reads each back bitwise, and refuses a restart under a changed configuration, so a killed or capped run continues to what the uninterrupted run reaches."
+responsibility = "Writes a run's HDF5 run file by appending (the merged configuration with its restart hash, the flow states, the transport frames, budgets, sensor readings and alert table, a clean-out's recovery outputs and the arrival maps) and its checkpoint file by atomic replacement (the march's checkpoint and the steady solve's), reads each back bitwise, and refuses a restart under a changed configuration, so a killed or capped run continues to what the uninterrupted run reaches."
 serves = []
 
 [modules."src/mesh.py"]
@@ -60,8 +60,8 @@ responsibility = "Assembles the staggered pressure correction equation from the 
 serves = ["REQ-S04", "REQ-S08"]
 
 [modules."src/monitor.py"]
-responsibility = "Reads each sensor's cell of every class field after every step by ADR-014 C's cell rule, opens an alert at the first reading at or above the class's threshold and closes it at the first below, keeping each alert's times, opening reading and peak, gives the latency from each event onset, and carries its whole state for the checkpoint; it reads the fields and never writes them."
-serves = ["REQ-A01", "REQ-A02", "REQ-A06"]
+responsibility = "Reads each sensor's cell of every class field after every step by ADR-014 C's cell rule, opens an alert at the first reading at or above the class's threshold and closes it at the first below, keeping each alert's times, opening reading and peak, gives each sensor's latency from each event onset, keeps the arrival maps (per contaminating event of the plan, class and non-SOLID cell, the first step time at or after the onset at or above the threshold) by the same rule, and carries both states for the checkpoint; it reads the fields and never writes them."
+serves = ["REQ-A01", "REQ-A02", "REQ-A04", "REQ-A06"]
 
 [modules."src/multigrid.py"]
 responsibility = "Builds an additive-correction multigrid hierarchy from a five-point pressure system by 2x2 aggregation, its coarse operators the exact Galerkin sums with no probing, and applies one symmetric V-cycle with weighted Jacobi smoothing and a dense pseudo-inverse on the coarsest level as the preconditioner of the pressure correction's conjugate gradients."
