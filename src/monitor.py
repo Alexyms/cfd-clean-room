@@ -147,6 +147,11 @@ def sensor_cells(config: SimConfig, mesh: Mesh) -> tuple[tuple[int, int], ...]:
     return tuple(cells)
 
 
+def _whole(value: float, below: float = math.inf) -> bool:
+    """Whether VALUE is a whole number from 0 to below BELOW (finite by then)."""
+    return bool(np.isfinite(value) and value == int(value) and 0 <= value < below)
+
+
 @dataclass
 class _Open:
     """An open alert's running record."""
@@ -425,7 +430,7 @@ class AlertMonitor:
         table = np.array(rows, dtype=np.float64).reshape(len(rows), len(ALERT_COLUMNS))
         return {
             "alert_rows": table,
-            "alert_step": np.array(np.nan if self._step is None else self._step),
+            "alert_step": np.array(np.nan if self._step is None else float(self._step)),
             "alert_t": np.array(np.nan if self._t is None else self._t),
             "alert_readings": self._readings.copy(),
         }
@@ -442,13 +447,23 @@ class AlertMonitor:
         Raises
         ------
         KeyError
-            If one of ``STATE_NAMES`` is missing.
+            If one of ``STATE_NAMES`` is missing: a checkpoint written
+            before the monitor existed, or by a run without sensors.
         ValueError
-            If an array's shape is not this monitor's, a row's class or
-            sensor is not one of this monitor's, an open row's step_off and
-            t_off are not both NaN, or two alerts of one sensor and class
-            are open.
+            If an array's shape is not this monitor's; a row's class or
+            sensor is not one of this monitor's; a step is not a
+            non-negative whole number or a time not finite; an open row's
+            step_off and t_off are not both NaN, or a closed row closes at
+            or before it opened; two alerts of one sensor and class are
+            open; or the last update's step and time are not both NaN or
+            both finite, at or after every row's steps.
         """
+        missing = [name for name in STATE_NAMES if name not in state]
+        if missing:
+            raise KeyError(
+                f"the checkpoint carries no {missing}: it was written before the "
+                "alert monitor (ADR-015 step 2) or by a run without sensors"
+            )
         rows = np.array(state["alert_rows"], dtype=np.float64)
         step = np.array(state["alert_step"], dtype=np.float64)
         t = np.array(state["alert_t"], dtype=np.float64)
@@ -468,22 +483,35 @@ class AlertMonitor:
         n_classes, n_sensors = self._readings.shape
         closed: list[Alert] = []
         opened: dict[tuple[int, int], _Open] = {}
+        latest = -1.0
         for row in rows:
-            k, s = int(row[4]), int(row[5])
-            if (
-                row[4] != k
-                or row[5] != s
-                or not (0 <= k < n_classes and 0 <= s < n_sensors)
-            ):
+            if not (_whole(row[4], n_classes) and _whole(row[5], n_sensors)):
                 raise ValueError(
                     f"an alert row names class {row[4]} and sensor {row[5]}; this "
                     f"monitor has {n_classes} classes and {n_sensors} sensors"
+                )
+            k, s = int(row[4]), int(row[5])
+            if not _whole(row[0]) or not np.isfinite(row[[1, 6, 7, 8]]).all():
+                raise ValueError(
+                    f"an alert row's step_on {row[0]} is not a non-negative whole "
+                    "number, or its t_on, reading_on, peak or peak_t is not finite"
                 )
             record = _Open(int(row[0]), float(row[1]), *map(float, row[6:9]))
             if np.isnan(row[2]) != np.isnan(row[3]):
                 raise ValueError(
                     "an alert row has one of step_off and t_off and not the other"
                 )
+            if not np.isnan(row[2]) and not (
+                _whole(row[2])
+                and row[2] > row[0]
+                and np.isfinite(row[3])
+                and row[3] > row[1]
+            ):
+                raise ValueError(
+                    f"an alert row closes at step {row[2]}, t = {row[3]} s, not "
+                    f"after it opened at step {row[0]}, t = {row[1]} s"
+                )
+            latest = max(latest, row[0], -1.0 if np.isnan(row[2]) else row[2])
             if np.isnan(row[2]):
                 if (k, s) in opened:
                     raise ValueError(
@@ -492,6 +520,15 @@ class AlertMonitor:
                 opened[(k, s)] = record
             else:
                 closed.append(self._alert((k, s), record, int(row[2]), float(row[3])))
+        if np.isnan(step) != np.isnan(t) or not (
+            np.isnan(step) or (_whole(step) and np.isfinite(t) and step >= latest)
+        ):
+            raise ValueError(
+                f"the checkpoint's last update (step {step}, t = {t} s) is not both "
+                "NaN or a whole step and a finite time at or after every alert's"
+            )
+        if np.isnan(step) and rows.shape[0]:
+            raise ValueError("the checkpoint holds alerts but no last update")
         self._closed = closed
         self._open = opened
         self._step = None if np.isnan(step) else int(step)

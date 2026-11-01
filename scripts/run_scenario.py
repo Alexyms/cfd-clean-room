@@ -10,8 +10,9 @@ Run from the repository root with the project's interpreter:
 A scenario file in; a run file (and its checkpoint file beside it) and a
 short text summary out: the intervals, the flow states solved and reused,
 the steps, the wall time, each class's budget closure, for a clean-out the
-recovery outputs of ADR-014 C, and the alerts the run opened (ADR-015 C). A file with a transient section runs
-under tier 2 (ADR-014 G, step 6b) from rest, and its summary is the steps,
+recovery outputs of ADR-014 C, and the alerts the run opened (ADR-015 C).
+A file with a transient section runs under tier 2 (ADR-014 G, step 6b) from
+rest, and its summary is the steps,
 the mean and largest outer count per step, the Strouhal number of the last
 ten periods with the spectrum's cross-check, or why there is none, and the
 drag coefficient. ``--flows-from`` names another run file

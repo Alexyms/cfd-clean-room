@@ -299,9 +299,15 @@ class TestUpdate:
         assert monitor.update(1, 0.1, zeros) == ()
 
 
-def planted_alert(sensor: str, size_class: int, t_on: float) -> Alert:
-    """A closed alert opened at T_ON, for latencies."""
-    return Alert(sensor, size_class, 0, t_on, 1.0, 1, t_on + 1.0, 1.0, t_on)
+def planted_state(monitor: AlertMonitor, alerts: list[tuple[int, int, float]]) -> dict:
+    """A state of closed alerts (sensor index, class, t_on), each one step long."""
+    rows = [[0, t_on, 1, t_on + 1.0, k, s, 1.0, 1.0, t_on] for s, k, t_on in alerts]
+    return {
+        "alert_rows": np.array(rows, dtype=np.float64),
+        "alert_step": np.array(1.0),
+        "alert_t": np.array(10.0),
+        "alert_readings": np.zeros(monitor.readings.shape),
+    }
 
 
 @pytest.mark.unit
@@ -322,14 +328,10 @@ class TestLatencies:
         """
         config, mesh = product
         monitor = AlertMonitor(config, mesh)
-        monitor._closed = [  # planted, as update would leave them
-            planted_alert("above_gap_1", 0, 1.5),
-            planted_alert("above_gap_1", 0, 2.5),
-            planted_alert("above_gap_1", 0, 4.0),
-            planted_alert("hood_entry", 2, 3.0),
-            planted_alert("near_door", 4, 0.5),
-            planted_alert("near_door", 4, 3.5),
-        ]
+        # Sensors 0 to 3 are near_door, above_gap_1, above_gap_2, hood_entry.
+        planted = [(1, 0, 1.5), (1, 0, 2.5), (1, 0, 4.0), (3, 2, 3.0)]
+        planted += [(0, 4, 0.5), (0, 4, 3.5)]
+        monitor.restore(planted_state(monitor, planted))
         latency = monitor.latencies([1.0, 3.0])
         assert latency.shape == (2, 5, 4)
         assert latency[0, 0, 1] == 0.5 and latency[1, 0, 1] == 1.0
@@ -380,7 +382,7 @@ class TestLatencies:
 
 @pytest.mark.unit
 class TestState:
-    def _history(self, mesh: Mesh, monitor: AlertMonitor) -> list[np.ndarray]:
+    def _history(self, monitor: AlertMonitor) -> list[np.ndarray]:
         """Six steps: one alert closed, one open across step 3, one opened after."""
         above = 2.0 * monitor.thresholds
         series = [np.zeros((5, 4)) for _ in range(6)]
@@ -403,7 +405,7 @@ class TestState:
         """
         config, mesh = product
         whole = AlertMonitor(config, mesh)
-        series = self._history(mesh, whole)
+        series = self._history(whole)
         feed(whole, product, series)
         first = AlertMonitor(config, mesh)
         feed(first, product, series[:4])
@@ -418,6 +420,8 @@ class TestState:
         zeros = {k: np.zeros(mesh.cell_type.shape) for k in range(5)}
         with pytest.raises(ValueError, match="step 3 is not above"):
             resumed.update(3, 0.35, zeros)
+        with pytest.raises(ValueError, match=r"t = 0\.3 s is not above the last"):
+            resumed.update(4, 0.3, zeros)
         for n in (4, 5):
             resumed.update(n, n * 0.1, fields_of(mesh, series[n], cells))
         assert resumed.alerts == whole.alerts
@@ -492,6 +496,18 @@ class TestState:
             ([1, 0.1, 2, 0.2, 0.5, 0, 1, 1, 0.1], "names class 0.5"),
             ([1, 0.1, np.nan, 0.2, 0, 0, 1, 1, 0.1], "one of step_off and t_off"),
             ([1, 0.1, 2, np.nan, 0, 0, 1, 1, 0.1], "one of step_off and t_off"),
+            ([1.5, 0.1, 2, 0.2, 0, 0, 1, 1, 0.1], "step_on 1.5 is not a non-negative"),
+            ([-1, 0.1, 2, 0.2, 0, 0, 1, 1, 0.1], r"step_on -1\.0 is not"),
+            ([1, np.inf, 2, 0.2, 0, 0, 1, 1, 0.1], "or peak_t is not finite"),
+            ([1, 0.1, 2, 0.2, 0, 0, 1, np.nan, 0.1], "or peak_t is not finite"),
+            (
+                [3, 0.3, 3, 0.4, 0, 0, 1, 1, 0.3],
+                r"closes at step 3\.0, t = 0\.4 s, not",
+            ),
+            ([1, 0.3, 2, 0.3, 0, 0, 1, 1, 0.3], "not after it opened"),
+            ([1, 0.1, 2.5, 0.2, 0, 0, 1, 1, 0.1], "not after it opened"),
+            ([1, 0.1, 2, np.inf, 0, 0, 1, 1, 0.1], "not after it opened"),
+            ([1, 0.1, 12, 1.2, 0, 0, 1, 1, 0.1], r"last update \(step 9\.0"),
         ],
     )
     def test_a_row_naming_no_class_or_sensor_or_half_open_is_refused(
@@ -501,6 +517,34 @@ class TestState:
         config, mesh = product
         with pytest.raises(ValueError, match=match):
             AlertMonitor(config, mesh).restore(self._rows(row))
+
+    @pytest.mark.parametrize(
+        ("step", "t", "match"),
+        [
+            (np.nan, 0.9, "is not both NaN or a whole step"),
+            (9.0, np.nan, "is not both NaN or a whole step"),
+            (9.5, 0.9, "is not both NaN or a whole step"),
+            (9.0, np.inf, "is not both NaN or a whole step"),
+            (np.nan, np.nan, "holds alerts but no last update"),
+        ],
+    )
+    def test_the_last_update_is_refused_unless_whole_finite_and_after_the_rows(
+        self, product: tuple, step: float, t: float, match: str
+    ) -> None:
+        """The restored step and time guard every later update, so they are checked."""
+        config, mesh = product
+        state = self._rows([1, 0.1, 2, 0.2, 0, 0, 1, 1, 0.1])
+        state["alert_step"], state["alert_t"] = np.array(step), np.array(t)
+        with pytest.raises(ValueError, match=match):
+            AlertMonitor(config, mesh).restore(state)
+
+    def test_a_checkpoint_without_the_monitors_arrays_names_why(
+        self, product: tuple
+    ) -> None:
+        """A checkpoint from before the monitor (or a run without sensors) says so."""
+        config, mesh = product
+        with pytest.raises(KeyError, match="written before the alert monitor"):
+            AlertMonitor(config, mesh).restore({"last_above": np.zeros(1)})
 
     def test_two_open_alerts_of_one_sensor_and_class_are_refused(
         self, product: tuple

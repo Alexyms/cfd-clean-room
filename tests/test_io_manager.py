@@ -1843,6 +1843,8 @@ class TestAlerts:
             ({"step_on": [[3, 7, 9]]}, ValueError, r"step_on must be \[n\]"),
             ({"peak_t": [0.4, 0.7]}, ValueError, r"peak_t has shape \(2,\) for 3"),
             ({"step_off": [5, 8]}, ValueError, r"step_off has shape \(2,\) for 3"),
+            ({"step_on": [3, 7.5, 9]}, ValueError, "step_on must hold whole numbers"),
+            ({"sensor": [1, 0, np.nan]}, ValueError, "sensor must hold whole numbers"),
             ({"sensor": [1, 0, 2]}, ValueError, "a sensor index is outside the 2"),
             ({"sensor": [1, -1, 0]}, ValueError, "a sensor index is outside the 2"),
             ({"t_off": [0.5, 0.8, 1.0]}, ValueError, r"step_off is -1 \(open\)"),

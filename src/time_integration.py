@@ -1266,6 +1266,9 @@ def run(
         or before the checkpoint's time (the message names both); for a
         sensor in a SOLID cell, a clean-out without sensors or thresholds, or
         sensors without a threshold for every class (the alert monitor's).
+    KeyError
+        For a restart of a run with sensors from a checkpoint that carries no
+        alert monitor state (one written before ADR-015 step 2).
     FlowNotConvergedError
         When a flow state stops at its cap or goes non-finite.
     TransientStepError

@@ -271,7 +271,8 @@ class AlertTable:
     TypeError
         If a sensor name is not a str.
     ValueError
-        If a column is not [n] with the others, a sensor index is not one of
+        If an integer column holds a value that is not a whole number, a
+        column is not [n] with the others, a sensor index is not one of
         ``names``, or a row's step_off and t_off disagree on whether it is
         open.
     """
@@ -296,7 +297,12 @@ class AlertTable:
                 )
         object.__setattr__(self, "names", names)
         for name in ALERT_TABLE_INTEGERS:
-            object.__setattr__(self, name, np.asarray(getattr(self, name), "<i8"))
+            given = np.asarray(getattr(self, name))
+            if given.dtype.kind == "f" and not (
+                np.isfinite(given).all() and (given == np.round(given)).all()
+            ):
+                raise ValueError(f"{name} must hold whole numbers, got {given}")
+            object.__setattr__(self, name, given.astype("<i8"))
         for name in ALERT_TABLE_REALS:
             object.__setattr__(self, name, np.asarray(getattr(self, name), "<f8"))
         shape = self.step_on.shape

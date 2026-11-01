@@ -1056,6 +1056,35 @@ class TestTransportOnly:
         with pytest.raises(KeyError, match="holds no /transport/sensors/"):
             written.read_sensor_readings()
 
+    @pytest.mark.parametrize(
+        ("name", "match"),
+        [
+            ("scenario_equipment_dust.yaml", "the alert monitor: the class of diam"),
+            ("scenario_clean_out.yaml", "the clean-out's recovery: the class of diam"),
+        ],
+    )
+    def test_sensors_without_a_class_threshold_refuse_the_run(
+        self, tmp_path: Path, name: str, match: str
+    ) -> None:
+        """A run with sensors needs every class's threshold; a clean-out names its recovery.
+
+        The last class is given a diameter the thresholds have no key for (a
+        scenario's thresholds merge over the base's, so a key cannot be
+        removed), and the clean-out's initial is stated as a concentration,
+        since a threshold factor needs the thresholds at load. The monitor is
+        built after the tracker, so the clean-out is refused for its recovery
+        first (review 73 S6). Defects caught: the run starting without a
+        class's threshold; the monitor's message given to a clean-out.
+        """
+        raw = rescheduled(coarse_raw(name), 2.0, {"litho_dust": (0.5, 1.0)})
+        raw["particles"] = {"sizes": [0.1e-6, 0.3e-6, 0.5e-6, 1.0e-6, 2.0e-6]}
+        for event in raw["scenario"]["events"]:
+            if "initial" in event:
+                event["initial"] = {"concentration": [1.0e7] * 5}
+        config = SimConfig.from_dict(raw)
+        with pytest.raises(ValueError, match=match):
+            run(config, tmp_path / "run.h5", provenance=PROVENANCE)
+
     def test_a_run_without_sensors_restarts_with_no_monitor(
         self, tmp_path: Path, clean_out: SimpleNamespace
     ) -> None:

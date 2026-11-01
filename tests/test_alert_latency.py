@@ -456,21 +456,35 @@ class TestRestart:
     ) -> None:
         """Killed after a checkpoint inside an open alert, restarted: the same table.
 
-        The checkpoint chosen is the first multiple of the cadence at which
-        some alert of the uninterrupted run is open and stays open past it.
-        The run is killed two steps later, so the restart discards two steps
-        of readings and an alert table written after the checkpoint.
-        Defect caught: the open alert dropped from the checkpoint (it opens
-        again at the step after the checkpoint).
+        The checkpoint chosen is the first multiple of the cadence with an
+        alert of the uninterrupted run open across it, another opened after
+        it, and a frame before the next checkpoint. The run is killed at that
+        frame, so the killed file holds readings and an alert table past the
+        checkpoint (the table the readings imply, written at the frame's
+        flush), which the restart discards and replaces. Defects caught: the
+        open alert dropped from the checkpoint (it opens again at the step
+        after the checkpoint); the table written only at the end of the march
+        (the killed file holds none).
         """
         table = released.run.read_alerts()
         last = released.record.steps
         off = np.where(table.step_off == OPEN_STEP, last + 1, table.step_off)
+        frame = released.config.output_interval
+
+        def kill_at(c: int) -> int | None:
+            """The frame step after checkpoint C and before the next, if any."""
+            f = (c // frame + 1) * frame
+            return f if f < c + CHECKPOINT_INTERVAL else None
+
         checkpoint = next(
             c
             for c in range(CHECKPOINT_INTERVAL, last, CHECKPOINT_INTERVAL)
-            if np.any((table.step_on < c) & (off > c + 2))
+            if (f := kill_at(c)) is not None
+            and np.any((table.step_on < c) & (off > f))
+            and np.any((c < table.step_on) & (table.step_on <= f))
         )
+        kill = kill_at(checkpoint)
+        assert kill is not None
         config = released.config
         path = tmp_path / "run.h5"
         with pytest.raises(_KilledError):
@@ -478,10 +492,22 @@ class TestRestart:
                 config,
                 path,
                 flows_from=released.record.path,
-                on_step=_killer(checkpoint + 2),
+                on_step=_killer(kill),
                 provenance=PROVENANCE,
             )
-        assert RunFile(path).read_checkpoint().step == checkpoint
+        killed = RunFile(path)
+        assert killed.read_checkpoint().step == checkpoint
+        series = killed.read_sensor_readings()
+        assert series.steps[-1] == kill
+        thresholds = np.array(config.class_thresholds())
+        written = killed.read_alerts()
+        same_table(
+            written,
+            expected_table(
+                series.readings, series.steps, series.times, thresholds, series.names
+            ),
+        )
+        assert np.any(written.step_on > checkpoint)
         record = run(config, restart=path)
         assert record.restarted_from == checkpoint
         same_table(RunFile(path).read_alerts(), table)
