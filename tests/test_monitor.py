@@ -936,6 +936,9 @@ class TestArrivalTracker:
         tracker = ArrivalTracker(THRESHOLDS, LIVE, [0.0, 0.5])
         run_series(tracker, [planted(0.0)] + [planted(2.0)] * 3)
         record = tracker.record(["a", "b"], TIMES[3])
+        onsets = tracker.onsets
+        onsets[0] = 9.0
+        assert tracker.onsets.tolist() == [0.0, 0.5]
         assert record.event_names == ("a", "b")
         assert record.onsets.tolist() == [0.0, 0.5]
         assert record.thresholds.tolist() == list(THRESHOLDS)
