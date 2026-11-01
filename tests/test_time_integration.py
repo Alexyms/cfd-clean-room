@@ -20,7 +20,8 @@ planted defect it was shown to catch:
 - The restart: from a checkpoint after a switch, with no checkpoint, to a
   later t_end, and a capped flow solve continued under a larger cap, each the
   uninterrupted run bitwise where the ADR asks for it.
-- scripts/run_scenario.py: its exit codes and summary lines.
+- scripts/run_scenario.py: its exit codes and summary lines, the alerts
+  opened among them (ADR-015 C).
 
 The coarse fixtures extend the reference scenario files with the grid
 overridden to 80x30 and the error_estimate per-cell tolerance set by
@@ -56,6 +57,7 @@ from src.boundary_staggered import StaggeredBoundary
 from src.config import SimConfig
 from src.io_manager import RunFile
 from src.mesh import SOLID, Mesh
+from src.monitor import Alert
 from src.particles import ParticlePhysics
 from src.scenarios import Interval, ScenarioManager
 from src.solver_staggered import FlowState, StaggeredSolver
@@ -1054,6 +1056,79 @@ class TestTransportOnly:
         with pytest.raises(KeyError, match="holds no /transport/sensors/"):
             written.read_sensor_readings()
 
+    @pytest.mark.parametrize(
+        ("name", "match"),
+        [
+            ("scenario_equipment_dust.yaml", "the alert monitor: the class of diam"),
+            ("scenario_clean_out.yaml", "the clean-out's recovery: the class of diam"),
+        ],
+    )
+    def test_sensors_without_a_class_threshold_refuse_the_run(
+        self, tmp_path: Path, name: str, match: str
+    ) -> None:
+        """A run with sensors needs every class's threshold; a clean-out names its recovery.
+
+        The last class is given a diameter the thresholds have no key for (a
+        scenario's thresholds merge over the base's, so a key cannot be
+        removed), and the clean-out's initial is stated as a concentration,
+        since a threshold factor needs the thresholds at load. The monitor is
+        built after the tracker, so the clean-out is refused for its recovery
+        first (review 73 S6). Defects caught: the run starting without a
+        class's threshold; the monitor's message given to a clean-out.
+        """
+        raw = rescheduled(coarse_raw(name), 2.0, {"litho_dust": (0.5, 1.0)})
+        raw["particles"] = {"sizes": [0.1e-6, 0.3e-6, 0.5e-6, 1.0e-6, 2.0e-6]}
+        for event in raw["scenario"]["events"]:
+            if "initial" in event:
+                event["initial"] = {"concentration": [1.0e7] * 5}
+        config = SimConfig.from_dict(raw)
+        with pytest.raises(ValueError, match=match):
+            run(config, tmp_path / "run.h5", provenance=PROVENANCE)
+
+    def test_a_run_without_sensors_restarts_with_no_monitor(
+        self, tmp_path: Path, clean_out: SimpleNamespace
+    ) -> None:
+        """Killed after a checkpoint and restarted: the frames bitwise, still no alerts.
+
+        A run without sensors has no monitor, so the restart has none to
+        restore. Defects caught: the restart restoring a monitor the run never
+        had; an alert table written for a run without sensors.
+        """
+        raw = rescheduled(
+            coarse_raw(
+                "scenario_equipment_dust.yaml",
+                output_interval=10,
+                checkpoint_interval=20,
+            ),
+            2.0,
+            {"litho_dust": (0.5, 1.0)},
+        )
+        raw["sensors"] = []
+        config = SimConfig.from_dict(raw)
+        whole = run(
+            config,
+            tmp_path / "whole.h5",
+            flows_from=clean_out.record.path,
+            provenance=PROVENANCE,
+        )
+        path = tmp_path / "run.h5"
+        with pytest.raises(_KilledError):
+            run(
+                config,
+                path,
+                flows_from=clean_out.record.path,
+                on_step=killer(43),
+                provenance=PROVENANCE,
+            )
+        record = run(config, restart=path)
+        assert record.restarted_from == 40 and record.alerts == ()
+        a, b = RunFile(path).read_frames(), RunFile(whole.path).read_frames()
+        assert a.steps.tolist() == b.steps.tolist()
+        for k in b.fields:
+            assert a.fields[k].tobytes() == b.fields[k].tobytes(), k
+        with pytest.raises(KeyError, match="holds no /transport/alerts/"):
+            RunFile(path).read_alerts()
+
     def test_the_source_enters_the_source_slot_for_its_duration(
         self, transport_only: dict[str, SimpleNamespace]
     ) -> None:
@@ -1619,6 +1694,17 @@ class TestRunScenario:
             sum("free-area mean 100:1: not reached by 6.0000 s" in x for x in lines)
             == 5
         )
+        # The initial field is 100 thresholds everywhere, so every sensor's
+        # class opens at step 0 (ADR-015 C).
+        table = record.read_alerts()
+        start = lines.index(
+            f"alerts (ADR-015 C): {len(table)} opened, "
+            f"{int(np.sum(table.step_off == -1))} still open at the end"
+        )
+        assert len(table) == 20 and (table.step_on == 0).all()
+        assert len(lines) == start + 1 + len(table)
+        named = [line.split(",")[0].strip() for line in lines[start + 1 :]]
+        assert named == [table.names[s] for s in table.sensor]
 
     def test_a_class_nothing_supplied_is_not_defined_in_the_summary(
         self,
@@ -1654,6 +1740,33 @@ class TestRunScenario:
             supplied = "relative not defined (nothing supplied)" in line
             assert supplied == (k != 2), line
         assert "relative " in closure[2]
+        assert len(RunFile(tmp_path / "run.h5").read_alerts()) == 0
+        assert lines[-1] == (
+            "alerts (ADR-015 C): none (no sensor at or above its threshold)"
+        )
+
+    def test_the_alert_lines_name_each_alert_and_its_close(self) -> None:
+        """alert_lines on planted alerts: the count, an open and a closed line.
+
+        Defects caught: an open alert printed with a closing time; the class
+        named by index into the wrong list; a run without sensors reported
+        as one with no alerts.
+        """
+        closed = Alert("hood_entry", 1, 3, 0.3, 2.0e4, 5, 0.5, 3.0e4, 0.4)
+        still = Alert("near_door", 4, 7, 0.7, 30.0, None, None, 31.5, 0.8)
+        lines = run_scenario.alert_lines(
+            [closed, still], [1e-7, 3e-7, 0, 0, 5e-6], True
+        )
+        assert lines == [
+            "alerts (ADR-015 C): 2 opened, 1 still open at the end",
+            "  hood_entry, class 1 (0.3 um): at or above from t = 0.3000 s (step 3), "
+            "reading 2e+04; below at t = 0.5000 s (step 5); peak 3e+04 at t = 0.4000 s",
+            "  near_door, class 4 (5 um): at or above from t = 0.7000 s (step 7), "
+            "reading 30; still open; peak 31.5 at t = 0.8000 s",
+        ]
+        assert run_scenario.alert_lines([], [1e-7], False) == [
+            "alerts (ADR-015 C): no sensors"
+        ]
 
     def test_the_restart_flag_continues_a_run_file(
         self,

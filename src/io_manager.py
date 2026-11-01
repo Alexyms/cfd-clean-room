@@ -15,9 +15,12 @@ written before. Its groups:
   whose attributes are those mappings;
 - ``/transport/``: ``steps`` (int64), ``times`` and ``C_<k>`` [n, ny, nx]
   per class (``FieldHistory``'s keys), ``budgets`` [n, classes, terms] with
-  the term names ``BUDGET_TERMS`` as its attribute, and ``/transport/sensors/``
+  the term names ``BUDGET_TERMS`` as its attribute, ``/transport/sensors/``
   with ``steps``, ``times``, ``readings`` [n, classes, sensors] and the
-  sensor names as an attribute;
+  sensor names as an attribute, and ``/transport/alerts/``, the alert
+  monitor's table (ADR-015 C, ``AlertTable``): one dataset per column of
+  ``ALERT_TABLE_COLUMNS``, one row per alert, the sensor names as an
+  attribute, replaced whole at each write;
 - ``/recovery/``: a clean-out's recovery outputs (ADR-014 C), written once
   at the end of the run (``RecoveryRecord``); ``discard_after`` does not
   touch it, and a restart that runs to a new end replaces it;
@@ -32,7 +35,8 @@ The checkpoint file, ``<run>.checkpoint.h5`` beside it (the run file's path
 less its suffix), holds what a restart continues from: ``/checkpoint/``, the
 march's step, simulated time, class fields, budgets and the fingerprint of
 the flow state it was marching on, with any named arrays the march carries
-besides (the recovery tracker's, ``recovery``), and ``/steady_checkpoint/``, a steady
+besides (the recovery tracker's and the alert monitor's, ``recovery``), and
+``/steady_checkpoint/``, a steady
 solve's SteadyCheckpoint (step 0's layout: ``u``, ``v``, ``p`` and ``k``,
 ``eps``, ``nu_t``, the three series, ``outer``, ``pressure_cap_hits``,
 ``stop_reason`` and ``rule_version`` when not None) with the fingerprint of
@@ -73,6 +77,7 @@ CONFIG = "config"
 FLOW = "flow"
 TRANSPORT = "transport"
 SENSORS = "sensors"
+ALERTS = "alerts"
 CHECKPOINT = "checkpoint"
 STEADY_CHECKPOINT = "steady_checkpoint"
 RECOVERY = "recovery"
@@ -89,6 +94,13 @@ STEP_SERIES_REALS: tuple[str, ...] = (
     "c_d",
     "c_l",
 )
+# The columns of /transport/alerts/ (ADR-015 C), the integer ones first.
+# step_off is OPEN_STEP and t_off NaN while an alert is open; sensor indexes
+# the group's names.
+ALERT_TABLE_INTEGERS: tuple[str, ...] = ("step_on", "step_off", "size_class", "sensor")
+ALERT_TABLE_REALS: tuple[str, ...] = ("t_on", "t_off", "reading_on", "peak", "peak_t")
+ALERT_TABLE_COLUMNS: tuple[str, ...] = (*ALERT_TABLE_INTEGERS, *ALERT_TABLE_REALS)
+OPEN_STEP = -1
 CHECKPOINT_SUFFIX = ".checkpoint.h5"
 TEMPORARY_SUFFIX = ".tmp"
 # The keys a continuation exists to change (prompt 63, decision 2): a capped
@@ -231,6 +243,92 @@ class SensorReadings:
     readings: np.ndarray
 
 
+@dataclass(frozen=True, eq=False)
+class AlertTable:
+    """The run file's ``/transport/alerts/``: one row per alert (ADR-015 C).
+
+    The rows are the alert monitor's ``alerts`` in its order, the closed
+    ones first. Every column is [n], int64 for ``ALERT_TABLE_INTEGERS`` and
+    float64 for ``ALERT_TABLE_REALS``, stored so when the table is built.
+
+    Parameters
+    ----------
+    names : tuple[str, ...]
+        The sensors; ``sensor`` indexes them.
+    step_on, step_off : np.ndarray
+        The step that opened each alert and the step that closed it,
+        ``OPEN_STEP`` while it is open.
+    size_class, sensor : np.ndarray
+        The class index and the sensor's index into ``names``.
+    t_on, t_off : np.ndarray
+        The times of step_on and step_off, seconds; t_off NaN while open.
+    reading_on, peak, peak_t : np.ndarray
+        The opening reading, the largest reading while open and its first
+        time, particles per cubic metre and seconds.
+
+    Raises
+    ------
+    TypeError
+        If a sensor name is not a str.
+    ValueError
+        If an integer column holds a value that is not a whole number, a
+        column is not [n] with the others, a sensor index is not one of
+        ``names``, or a row's step_off and t_off disagree on whether it is
+        open.
+    """
+
+    names: tuple[str, ...]
+    step_on: np.ndarray
+    step_off: np.ndarray
+    size_class: np.ndarray
+    sensor: np.ndarray
+    t_on: np.ndarray
+    t_off: np.ndarray
+    reading_on: np.ndarray
+    peak: np.ndarray
+    peak_t: np.ndarray
+
+    def __post_init__(self) -> None:
+        names = tuple(self.names)
+        for name in names:
+            if not isinstance(name, str):
+                raise TypeError(
+                    f"a sensor name must be a str, got {type(name).__name__}"
+                )
+        object.__setattr__(self, "names", names)
+        for name in ALERT_TABLE_INTEGERS:
+            given = np.asarray(getattr(self, name))
+            if given.dtype.kind == "f" and not (
+                np.isfinite(given).all() and (given == np.round(given)).all()
+            ):
+                raise ValueError(f"{name} must hold whole numbers, got {given}")
+            object.__setattr__(self, name, given.astype("<i8"))
+        for name in ALERT_TABLE_REALS:
+            object.__setattr__(self, name, np.asarray(getattr(self, name), "<f8"))
+        shape = self.step_on.shape
+        if len(shape) != 1:
+            raise ValueError(f"step_on must be [n], got shape {shape}")
+        for name in ALERT_TABLE_COLUMNS:
+            if getattr(self, name).shape != shape:
+                raise ValueError(
+                    f"{name} has shape {getattr(self, name).shape} for {shape[0]} "
+                    "alerts"
+                )
+        if np.any((self.sensor < 0) | (self.sensor >= len(names))):
+            raise ValueError(
+                f"a sensor index is outside the {len(names)} sensors {list(names)}"
+            )
+        if np.any((self.step_off == OPEN_STEP) != np.isnan(self.t_off)):
+            raise ValueError(
+                f"an alert's step_off is {OPEN_STEP} (open) where its t_off is not "
+                "NaN, or the reverse"
+            )
+
+    def __len__(self) -> int:
+        """The number of alerts."""
+        return int(self.step_on.shape[0])
+
+
 @dataclass(frozen=True)
 class MarchCheckpoint:
     """The checkpoint file's ``/checkpoint/``: what a march resumes from.
@@ -249,7 +347,8 @@ class MarchCheckpoint:
         The flow state the march was stepping on (``/flow/<fingerprint>/``).
     recovery : dict[str, np.ndarray]
         The named float64 arrays the march carried besides (the recovery
-        tracker's state, ADR-014 C); empty when it carried none.
+        tracker's state, ADR-014 C, and the alert monitor's, ADR-015 C);
+        empty when it carried none.
     plan_start : float or None
         The start of the plan the march was stepping when it wrote the
         checkpoint: the interval's start, or the time a restart divided the
@@ -940,12 +1039,62 @@ class RunFile:
                 readings=group["readings"][()],
             )
 
+    def write_alerts(self, table: AlertTable) -> None:
+        """Write the alert monitor's table, replacing any the file holds.
+
+        Parameters
+        ----------
+        table : AlertTable
+            Every alert so far. The march writes it whole with each append of
+            the readings, so the table and the readings end at one step.
+
+        Raises
+        ------
+        TypeError
+            If ``table`` is not an AlertTable.
+        """
+        if not isinstance(table, AlertTable):
+            raise TypeError(f"table must be an AlertTable, got {type(table).__name__}")
+        with h5py.File(self.path, "a") as run_file:
+            transport = run_file.require_group(TRANSPORT)
+            if ALERTS in transport:
+                del transport[ALERTS]
+            group = transport.create_group(ALERTS)
+            group.attrs["names"] = list(table.names)
+            for name in ALERT_TABLE_INTEGERS:
+                group.create_dataset(name, data=getattr(table, name), dtype="<i8")
+            for name in ALERT_TABLE_REALS:
+                group.create_dataset(name, data=getattr(table, name), dtype="<f8")
+
+    def read_alerts(self) -> AlertTable:
+        """Read back the table ``write_alerts`` wrote.
+
+        Returns
+        -------
+        AlertTable
+            As written, its columns bitwise.
+
+        Raises
+        ------
+        KeyError
+            If the file holds no ``/transport/alerts/``.
+        """
+        with h5py.File(self.path, "r") as run_file:
+            group = run_file.get(TRANSPORT, {}).get(ALERTS)
+            if group is None:
+                raise KeyError(f"{self.path} holds no /{TRANSPORT}/{ALERTS}/")
+            return AlertTable(
+                names=tuple(str(x) for x in group.attrs["names"]),
+                **{name: group[name][()] for name in ALERT_TABLE_COLUMNS},
+            )
+
     def discard_after(self, step: int) -> None:
         """Drop the frames, sensor readings and step rows after ``step``.
 
         A march restarted from its checkpoint at ``step`` writes them again;
         those a crash left after the checkpoint would otherwise be written
-        twice.
+        twice. The alert table is not touched: the restart replaces it with
+        the one its checkpoint carries before the march continues.
 
         Parameters
         ----------
@@ -1300,7 +1449,8 @@ class RunFile:
             The flow state the march steps on.
         recovery : Mapping[str, np.ndarray], optional
             Named arrays the march carries besides, stored as float64 and
-            read back bitwise (the recovery tracker's state, ADR-014 C).
+            read back bitwise (the recovery tracker's state, ADR-014 C, and
+            the alert monitor's, ADR-015 C).
         plan_start : float, optional
             The start of the plan the march steps, so a restart can find the
             checkpoint on a plan a restart before it divided again.

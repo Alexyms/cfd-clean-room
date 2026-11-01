@@ -976,6 +976,15 @@ SCENARIO_RUN_KEYS: tuple[tuple[str, str], ...] = (
 # The relative tolerance a threshold key's diameter is matched to a class's
 # at: both are parsed from the same decimal text, so they agree to rounding.
 _DIAMETER_MATCH_RTOL = 1.0e-9
+# The thresholds section's second form (ADR-015 C, REQ-A03): an ISO 14644-1
+# class number N, from which each class's limit is C_n = 10^N (D_0 / D)^2.08
+# per cubic metre, rounded to three significant figures as the standard's
+# table is. The standard's classes run from 1 to 9.
+ISO_CLASS_KEY = "iso_class"
+ISO_CLASS_RANGE: tuple[float, float] = (1.0, 9.0)
+ISO_REFERENCE_DIAMETER = 0.1e-6
+ISO_EXPONENT = 2.08
+ISO_SIGNIFICANT_FIGURES = 3
 # Two event times closer than this times solver.t_end are one instant (review
 # 62 S5). start + duration carries the rounding of a sum, about 1e-16 of the
 # times (0.1 + 0.2 is above 0.3), so two events written to meet would otherwise
@@ -1574,10 +1583,20 @@ class SimConfig:
         if not isinstance(sensors_raw, list):
             raise ValueError("sensors must be a list")
         self.sensors: list[SensorSpec] = []
+        named: dict[str, int] = {}
         for i, sensor in enumerate(sensors_raw):
             if not isinstance(sensor, dict):
                 raise ValueError(f"sensors[{i}] must be a mapping")
             ctx = f"sensors[{i}]"
+            # The alert monitor, its table and its checkpoint state name a
+            # sensor by its name, so two sensors of one name would be one.
+            name = self._require_string(sensor, "name", ctx)
+            if name in named:
+                raise ValueError(
+                    f"{ctx}: the name {name!r} is sensors[{named[name]}]'s; each "
+                    "sensor needs its own name"
+                )
+            named[name] = i
             sx = self._require_float(sensor, "x", ctx)
             sy = self._require_float(sensor, "y", ctx)
             if not 0 <= sx <= self.room_width:
@@ -1586,24 +1605,65 @@ class SimConfig:
                 raise ValueError(
                     f"{ctx}: y={sy} outside domain [0, {self.room_height}]"
                 )
-            self.sensors.append(
-                SensorSpec(
-                    name=self._require_string(sensor, "name", ctx),
-                    x=sx,
-                    y=sy,
-                )
-            )
+            self.sensors.append(SensorSpec(name=name, x=sx, y=sy))
 
         # Thresholds
         thresholds_raw = self._require_section(raw, "thresholds")
         if not isinstance(thresholds_raw, dict):
             raise ValueError("thresholds must be a mapping")
         self.thresholds: dict[str, float] = {}
-        for key, val in thresholds_raw.items():
-            number = self._finite_number(val, f"thresholds.{key}")
-            if number < 0:
-                raise ValueError(f"thresholds.{key} must be non-negative, got {val}")
-            self.thresholds[str(key)] = number
+        self.iso_class: float | None = None
+        if ISO_CLASS_KEY in thresholds_raw:
+            self._iso_thresholds(thresholds_raw)
+        else:
+            for key, val in thresholds_raw.items():
+                number = self._finite_number(val, f"thresholds.{key}")
+                if number < 0:
+                    raise ValueError(
+                        f"thresholds.{key} must be non-negative, got {val}"
+                    )
+                self.thresholds[str(key)] = number
+
+    def _iso_thresholds(self, section: dict) -> None:
+        """The thresholds from an ISO 14644-1 class number (ADR-015 C, REQ-A03).
+
+        Each configured class of diameter D gets C_n = 10^N (0.1 um / D)^2.08
+        particles per cubic metre, rounded to three significant figures, under
+        the key ``repr(D)``. At N = 5 that is the product file's five values
+        (100,000; 10,200; 3,520; 832; 29.3). The standard's 2015 table leaves
+        some size and class pairs blank (no 5 um limit at Class 5, none at 0.1
+        and 0.3 um at Class 8); the formula is used for them, as the product
+        file does.
+
+        Raises
+        ------
+        TypeError
+            If N is not a number (a bool is not one here).
+        ValueError
+            If N is not finite or outside ``ISO_CLASS_RANGE``, or the section
+            holds keys besides ``iso_class`` (a scenario's thresholds merge
+            over its base's key by key, so its form must be the base's).
+        """
+        others = sorted(str(key) for key in section if key != ISO_CLASS_KEY)
+        if others:
+            raise ValueError(
+                f"thresholds states {ISO_CLASS_KEY} and {others}: give either the "
+                f"limits by size or {ISO_CLASS_KEY} alone (a scenario's thresholds "
+                "merge over its base's, so a scenario states the base's form)"
+            )
+        label = f"thresholds.{ISO_CLASS_KEY}"
+        number = self._finite_number(section[ISO_CLASS_KEY], label)
+        low, high = ISO_CLASS_RANGE
+        if not low <= number <= high:
+            raise ValueError(
+                f"{label} must be from {low:g} to {high:g} (ISO 14644-1's classes), "
+                f"got {number:g}"
+            )
+        self.iso_class = number
+        digits = ISO_SIGNIFICANT_FIGURES - 1
+        for size in self.particle_sizes:
+            limit = 10.0**number * (ISO_REFERENCE_DIAMETER / size) ** ISO_EXPONENT
+            self.thresholds[repr(size)] = float(f"{limit:.{digits}e}")
 
     def _inlet_turbulence(
         self, spec: dict, ctx: str, bc_type: str, admits_air: bool

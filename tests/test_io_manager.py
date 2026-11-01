@@ -24,6 +24,10 @@ docstring:
   force now; a clean-out's recovery outputs round-trip through /recovery/,
   which neither discard touches; the march checkpoint carries named arrays
   (the recovery tracker's state); discard_march drops /transport/ alone.
+- ADR-015 step 2: the alert table round-trips through /transport/alerts/,
+  is replaced whole at each write, goes with discard_march and not with
+  discard_after; AlertTable refuses columns that disagree; the monitor's
+  state, an empty alert array included, rides in the checkpoint.
 """
 
 import hashlib
@@ -42,10 +46,13 @@ from src.boundary_registry import BoundaryRegistry
 from src.boundary_staggered import StaggeredBoundary
 from src.config import SimConfig
 from src.io_manager import (
+    ALERT_TABLE_COLUMNS,
     BUDGET_TERMS,
     CHECKPOINT,
+    OPEN_STEP,
     RESTART_EXCLUDED_KEYS,
     STEADY_CHECKPOINT,
+    AlertTable,
     RecoveryRecord,
     RunFile,
     StepSeries,
@@ -1737,6 +1744,140 @@ class TestRecovery:
         assert run.read_checkpoint().plan_start is None
         with pytest.raises(TypeError, match="plan_start must be a real number"):
             run.checkpoint(6, 0.6, _fields(6), budgets, FINGERPRINT, plan_start=True)
+
+
+def _alerts(**changed: object) -> AlertTable:
+    """Two sensors and three alerts, the last open; CHANGED replaces columns."""
+    columns: dict[str, object] = {
+        "names": ("near_door", "above_gap_1"),
+        "step_on": [3, 7, 9],
+        "step_off": [5, 8, OPEN_STEP],
+        "size_class": [0, 4, 4],
+        "sensor": [1, 0, 1],
+        "t_on": [0.1 + 0.2, 0.7, 0.9],
+        "t_off": [0.5, 0.8, np.nan],
+        "reading_on": [1.0e5, 1.0 / 3.0, 29.3],
+        "peak": [2.5e5, 1.0 / 3.0, 31.0],
+        "peak_t": [0.4, 0.7, 0.9],
+    }
+    columns.update(changed)
+    return AlertTable(**columns)  # type: ignore[arg-type]
+
+
+def _same_alerts(a: AlertTable, b: AlertTable) -> None:
+    """Two alert tables, column by column, bitwise."""
+    assert a.names == b.names
+    for name in ALERT_TABLE_COLUMNS:
+        x, y = getattr(a, name), getattr(b, name)
+        assert x.dtype == y.dtype and x.tobytes() == y.tobytes(), name
+
+
+@pytest.mark.unit
+class TestAlerts:
+    def test_what_is_written_is_what_is_read(self, tmp_path: Path) -> None:
+        """Every column bitwise, int64 and float64, an open row's NaN included.
+
+        Defects caught: a time stored as float32; the step columns stored as
+        float64; the sensor names dropped; an open row's t_off read as 0.
+        """
+        run = RunFile(tmp_path / "run.h5")
+        table = _alerts()
+        run.write_alerts(table)
+        read = run.read_alerts()
+        _same_alerts(read, table)
+        assert len(read) == 3
+        assert read.step_on.dtype == np.int64 and read.t_on.dtype == np.float64
+
+    def test_an_empty_table_round_trips(self, tmp_path: Path) -> None:
+        """A monitored run with no alert writes a table of no rows, not nothing."""
+        run = RunFile(tmp_path / "run.h5")
+        empty = AlertTable(names=("near_door",), **{n: [] for n in ALERT_TABLE_COLUMNS})
+        run.write_alerts(empty)
+        read = run.read_alerts()
+        _same_alerts(read, empty)
+        assert len(read) == 0
+
+    def test_a_second_write_replaces_the_first_whole(self, tmp_path: Path) -> None:
+        """The table is replaced, not appended to: a restart's table is its own.
+
+        Defect caught: the rows appended, so a restart writes the alerts
+        before its checkpoint twice.
+        """
+        run = RunFile(tmp_path / "run.h5")
+        first = _alerts()
+        run.write_alerts(first)
+        later = _alerts(**{n: getattr(first, n)[:1] for n in ALERT_TABLE_COLUMNS})
+        run.write_alerts(later)
+        _same_alerts(run.read_alerts(), later)
+
+    def test_a_file_without_alerts_and_a_wrong_type_are_refused(
+        self, tmp_path: Path
+    ) -> None:
+        """read_alerts raises KeyError on a file without the group; write needs a table."""
+        run = RunFile(tmp_path / "run.h5")
+        run.write_frame(0, 0.0, _fields(1), [_budget(1), _budget(2)])
+        with pytest.raises(KeyError, match="holds no /transport/alerts/"):
+            run.read_alerts()
+        with pytest.raises(TypeError, match="table must be an AlertTable, got dict"):
+            run.write_alerts({})  # type: ignore[arg-type]
+
+    def test_the_discards(self, tmp_path: Path) -> None:
+        """discard_march drops the table with /transport/; discard_after leaves it.
+
+        The restart replaces the table from its checkpoint right after
+        discard_after, so discard_after has nothing to cut.
+        """
+        run = RunFile(tmp_path / "run.h5")
+        run.write_frame(0, 0.0, _fields(1), [_budget(1), _budget(2)])
+        run.write_alerts(_alerts())
+        run.discard_after(4)
+        _same_alerts(run.read_alerts(), _alerts())
+        run.discard_march()
+        with pytest.raises(KeyError):
+            run.read_alerts()
+
+    @pytest.mark.parametrize(
+        ("changed", "error", "match"),
+        [
+            ({"names": ("a", 1)}, TypeError, "a sensor name must be a str, got int"),
+            ({"step_on": [[3, 7, 9]]}, ValueError, r"step_on must be \[n\]"),
+            ({"peak_t": [0.4, 0.7]}, ValueError, r"peak_t has shape \(2,\) for 3"),
+            ({"step_off": [5, 8]}, ValueError, r"step_off has shape \(2,\) for 3"),
+            ({"step_on": [3, 7.5, 9]}, ValueError, "step_on must hold whole numbers"),
+            ({"sensor": [1, 0, np.nan]}, ValueError, "sensor must hold whole numbers"),
+            ({"sensor": [1, 0, 2]}, ValueError, "a sensor index is outside the 2"),
+            ({"sensor": [1, -1, 0]}, ValueError, "a sensor index is outside the 2"),
+            ({"t_off": [0.5, 0.8, 1.0]}, ValueError, r"step_off is -1 \(open\)"),
+            ({"t_off": [np.nan, 0.8, np.nan]}, ValueError, r"step_off is -1 \(open\)"),
+        ],
+    )
+    def test_a_table_whose_columns_disagree_is_refused(
+        self, changed: dict, error: type, match: str
+    ) -> None:
+        """Each guard of AlertTable, one at a time."""
+        with pytest.raises(error, match=match):
+            _alerts(**changed)
+
+    def test_the_monitors_state_rides_in_the_checkpoint(self, tmp_path: Path) -> None:
+        """An empty [0, 9] alert array and 0-d NaNs come back bitwise, shapes kept.
+
+        Defect caught: an empty dataset stored as shape (0,), which the
+        monitor's restore then refuses.
+        """
+        run = RunFile(tmp_path / "run.h5")
+        carried = {
+            "alert_rows": np.zeros((0, 9)),
+            "alert_step": np.array(np.nan),
+            "alert_t": np.array(np.nan),
+            "alert_readings": np.full((2, 3), np.nan),
+        }
+        run.checkpoint(
+            1, 0.1, _fields(1), [_budget(1), _budget(2)], FINGERPRINT, recovery=carried
+        )
+        read = run.read_checkpoint().recovery
+        for name, array in carried.items():
+            assert read[name].shape == array.shape, name
+            assert read[name].tobytes() == array.tobytes(), name
 
 
 # ---------------------------------------------------------------------------

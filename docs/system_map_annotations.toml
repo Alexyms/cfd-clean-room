@@ -40,7 +40,7 @@ responsibility = "Integrates the pressure and shear the staggered fields put on 
 serves = []
 
 [modules."src/io_manager.py"]
-responsibility = "Writes a run's HDF5 run file by appending (the merged configuration with its restart hash, the flow states, the transport frames, budgets and sensor readings, and a clean-out's recovery outputs) and its checkpoint file by atomic replacement (the march's checkpoint and the steady solve's), reads each back bitwise, and refuses a restart under a changed configuration, so a killed or capped run continues to what the uninterrupted run reaches."
+responsibility = "Writes a run's HDF5 run file by appending (the merged configuration with its restart hash, the flow states, the transport frames, budgets, sensor readings and alert table, and a clean-out's recovery outputs) and its checkpoint file by atomic replacement (the march's checkpoint and the steady solve's), reads each back bitwise, and refuses a restart under a changed configuration, so a killed or capped run continues to what the uninterrupted run reaches."
 serves = []
 
 [modules."src/mesh.py"]
@@ -58,6 +58,10 @@ serves = ["REQ-S07", "REQ-S13"]
 [modules."src/pressure.py"]
 responsibility = "Assembles the staggered pressure correction equation from the momentum diagonals with the discrete divergence of u* as its right-hand side, solves it by conjugate gradients preconditioned with its diagonal or, under the pressure_preconditioner key, with one multigrid V-cycle per iteration, to a relative residual, a rounding floor or a reported iteration cap, corrects the face velocities and updates the pressure."
 serves = ["REQ-S04", "REQ-S08"]
+
+[modules."src/monitor.py"]
+responsibility = "Reads each sensor's cell of every class field after every step by ADR-014 C's cell rule, opens an alert at the first reading at or above the class's threshold and closes it at the first below, keeping each alert's times, opening reading and peak, gives the latency from each event onset, and carries its whole state for the checkpoint; it reads the fields and never writes them."
+serves = ["REQ-A01", "REQ-A02", "REQ-A06"]
 
 [modules."src/multigrid.py"]
 responsibility = "Builds an additive-correction multigrid hierarchy from a five-point pressure system by 2x2 aggregation, its coarse operators the exact Galerkin sums with no probing, and applies one symmetric V-cycle with weighted Jacobi smoothing and a dense pseudo-inverse on the coarsest level as the preconditioner of the pressure correction's conjugate gradients."
@@ -88,7 +92,7 @@ responsibility = "Decides when the steady outer iteration has converged, on four
 serves = ["REQ-S01", "REQ-S04"]
 
 [modules."src/time_integration.py"]
-responsibility = "Runs a scenario under tier 1: solves each distinct flow state once, warm-started from the state before it, or reuses one a run file holds, then marches every particle class at one step through the intervals, dividing each into equal steps under the stable step and carrying the fields and budgets across each switch, writing frames, budgets, sensor readings and checkpoints through the run file, continuing a run from its checkpoint, and for a clean-out tracking the recovery outputs every step; under tier 2 marches the flow itself through solve_transient, writing its frames, per-step counts, lift and drag and two-level checkpoints, restarting bitwise, and reading the Strouhal number and drag coefficient at the end; it discretises nothing."
+responsibility = "Runs a scenario under tier 1: solves each distinct flow state once, warm-started from the state before it, or reuses one a run file holds, then marches every particle class at one step through the intervals, dividing each into equal steps under the stable step and carrying the fields and budgets across each switch, writing frames, budgets, sensor readings, the alert monitor's table and checkpoints through the run file, continuing a run from its checkpoint, and for a clean-out tracking the recovery outputs every step; under tier 2 marches the flow itself through solve_transient, writing its frames, per-step counts, lift and drag and two-level checkpoints, restarting bitwise, and reading the Strouhal number and drag coefficient at the end; it discretises nothing."
 serves = ["REQ-N01"]
 
 [modules."src/turbulence.py"]

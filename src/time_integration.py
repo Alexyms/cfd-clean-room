@@ -31,7 +31,14 @@ The records (ADR-014 D). The run file holds the merged mapping, every flow
 state, the frames every ``output_interval`` steps and at the last step, the
 budgets with them, and the sensor readings of every step, held and appended
 at each frame and before each checkpoint (prompt 64's decision 3), so a
-restart leaves no gap whatever the two intervals are. With
+restart leaves no gap whatever the two intervals are.
+
+The alerts (ADR-015 C). With sensors, the alert monitor
+(``monitor.AlertMonitor``) reads every sensor after every step, the initial
+fields at step 0 included, from fields already made read-only; its readings
+are the ones the run file stores, and its alert table is written whole to
+``/transport/alerts/`` with each append of them. Its state joins the
+checkpoint's carried arrays, so a restart continues an open alert. With
 ``checkpoint_interval`` the march's checkpoint is rewritten every that many
 steps and at the last, after that step's frame, and a steady solve hands its
 own checkpoint at the same cadence. A restart checks the configuration,
@@ -44,14 +51,15 @@ refused.
 
 The clean-out (ADR-014 C, a scenario with an initial event). A sensor reads
 the cell containing it, the one below or to the left of it when it sits on
-a face (``sensor_cells``). A class is within spec when every sensor reads below
-its threshold, the room when every class is. Updated every step and carried
-in the checkpoint (prompt 64's decision 1): the last step time each cell was
-at or above its class's threshold, when each sensor and the free-area mean
-first fell to a hundredth of the initial level, and the start of the current
-within-spec stretch per class and for the room. With ``scenario.hold_time``
-the run stops once the room has held within spec that long (decision 2). At
-the end the recovery outputs are written to ``/recovery/``.
+a face (``monitor.sensor_cells``, re-exported here). A class is within spec
+when every sensor reads below its threshold, the room when every class is.
+Updated every step and carried in the checkpoint (prompt 64's decision 1):
+the last step time each cell was at or above its class's threshold, when
+each sensor and the free-area mean first fell to a hundredth of the initial
+level, and the start of the current within-spec stretch per class and for
+the room. With ``scenario.hold_time`` the run stops once the room has held
+within spec that long (decision 2). At the end the recovery outputs are
+written to ``/recovery/``.
 
 Tier 2 (ADR-014 G, step 6b). A configuration with a ``transient`` section
 runs the flow itself through time: ``StaggeredSolver.solve_transient`` from
@@ -86,8 +94,10 @@ import numpy as np
 from src.boundary_staggered import StaggeredBoundary
 from src.config import Initial, SimConfig
 from src.forces import ForceGauge, StrouhalReading, strouhal
-from src.io_manager import RecoveryRecord, RunFile, StepSeries
+from src.io_manager import OPEN_STEP, AlertTable, RecoveryRecord, RunFile, StepSeries
 from src.mesh import SOLID, Mesh
+from src.monitor import SENSOR_FACE_RTOL as SENSOR_FACE_RTOL
+from src.monitor import Alert, AlertMonitor, sensor_cells
 from src.particles import ParticlePhysics
 from src.scenarios import Interval, ScenarioManager
 from src.solver_staggered import (
@@ -111,10 +121,6 @@ HUNDRED_TO_ONE = 100.0
 # concentration can carry the rounding of the product (35.2 x 100 is
 # 3520.0000000000005), so the comparison is read to this relative tolerance.
 DEFINED_RTOL = 1.0e-9
-# A sensor this fraction of the room's extent from a face is on it. The faces
-# carry the rounding of the mesh's coordinates (about 1e-16 of the extent),
-# and the room's sensors are stated on multiples of 0.05 m that fall on faces.
-SENSOR_FACE_RTOL = 1.0e-9
 # The sections and solver keys a steady flow solve does not read, so a state
 # kept in another run file is this run's state when every other key agrees
 # and the fingerprint does. The boundaries are compared by the fingerprint.
@@ -321,6 +327,9 @@ class MarchStep:
         Class to its field after the step, read-only.
     budgets : tuple[MassBudget, ...]
         Copies of the transport solver's budgets after the step.
+    alerts : tuple[Alert, ...]
+        The alerts the step opened or closed (``AlertMonitor.update``);
+        empty without sensors.
     """
 
     step: int
@@ -329,6 +338,7 @@ class MarchStep:
     interval: int
     fields: Mapping[int, np.ndarray]
     budgets: tuple[MassBudget, ...]
+    alerts: tuple[Alert, ...] = ()
 
 
 @dataclass(frozen=True, eq=False)
@@ -362,6 +372,9 @@ class RunRecord:
         found none and marched again; None for a new run.
     resumed_plan : IntervalPlan or None
         The interval a restart divided again from its checkpoint's time.
+    alerts : tuple[Alert, ...]
+        Every alert of the run, a restart's before its checkpoint included,
+        in ``AlertMonitor.alerts``' order; empty without sensors.
     """
 
     path: Path
@@ -375,6 +388,7 @@ class RunRecord:
     recovery: RecoveryRecord | None
     restarted_from: int | None = None
     resumed_plan: IntervalPlan | None = None
+    alerts: tuple[Alert, ...] = ()
 
 
 @dataclass(frozen=True, eq=False)
@@ -440,51 +454,34 @@ class TransientRunRecord:
     restarted_from: int | None = None
 
 
-def _cell_holding(faces: np.ndarray, position: float) -> int:
-    """The index of the cell whose faces hold POSITION, the lower one on a face."""
-    tolerance = SENSOR_FACE_RTOL * float(faces[-1] - faces[0])
-    index = int(np.searchsorted(faces, position - tolerance, side="left")) - 1
-    return min(max(index, 0), faces.size - 2)
-
-
-def sensor_cells(config: SimConfig, mesh: Mesh) -> tuple[tuple[int, int], ...]:
-    """The (j, i) of the cell each sensor reads, in the configuration's order.
-
-    The cell containing the sensor (ADR-014 C). The room's sensors sit on
-    cell faces on every grid that puts its positions on faces, so a sensor
-    within ``SENSOR_FACE_RTOL`` of the room's extent of a face reads the
-    cell below it or to its left, on each axis. On 160x60 that is the cell
-    the probe of ADR-014 T7 read for every sensor, by the nearest centre;
-    the nearest centre itself is not a rule on a face, since which of the
-    two equidistant centres is nearer is decided by rounding (on 80x30 it
-    puts above_gap_1 to the right of its face and the other three to the
-    left).
+def alert_table(monitor: AlertMonitor) -> AlertTable:
+    """The monitor's alerts as the run file's table, in ``alerts``' order.
 
     Parameters
     ----------
-    config : SimConfig
-        Supplies the sensors.
-    mesh : Mesh
-        The run's mesh.
+    monitor : AlertMonitor
+        The run's monitor.
 
     Returns
     -------
-    tuple[tuple[int, int], ...]
-        One (j, i) per sensor.
-
-    Raises
-    ------
-    ValueError
-        If a sensor's cell is SOLID.
+    AlertTable
+        One row per alert, ``OPEN_STEP`` and NaN for an open alert's
+        step_off and t_off.
     """
-    cells = []
-    for sensor in config.sensors:
-        i = _cell_holding(mesh.x, sensor.x)
-        j = _cell_holding(mesh.y, sensor.y)
-        if mesh.cell_type[j, i] == SOLID:
-            raise ValueError(f"sensor {sensor.name} reads a SOLID cell ({j}, {i})")
-        cells.append((j, i))
-    return tuple(cells)
+    alerts = monitor.alerts
+    index = {name: s for s, name in enumerate(monitor.names)}
+    return AlertTable(
+        names=monitor.names,
+        step_on=[a.step_on for a in alerts],
+        step_off=[OPEN_STEP if a.step_off is None else a.step_off for a in alerts],
+        size_class=[a.size_class for a in alerts],
+        sensor=[index[a.sensor] for a in alerts],
+        t_on=[a.t_on for a in alerts],
+        t_off=[np.nan if a.t_off is None else a.t_off for a in alerts],
+        reading_on=[a.reading_on for a in alerts],
+        peak=[a.peak for a in alerts],
+        peak_t=[a.peak_t for a in alerts],
+    )
 
 
 def air_change_rate(state: FlowState, mesh: Mesh) -> float:
@@ -887,6 +884,11 @@ class _Run:
                 self.live,
                 spec.hold_time,
             )
+        # Built after the tracker so a clean-out without a class's threshold
+        # is refused naming the recovery, as before the monitor existed.
+        self.monitor: AlertMonitor | None = None
+        if config.sensors:
+            self.monitor = AlertMonitor(config, self.mesh)
 
     # -- Flow states ---------------------------------------------------------
 
@@ -1021,9 +1023,40 @@ class _Run:
             out.append(plan_interval(index, interval, stable[key]))
         return out
 
-    def readings(self, fields: Mapping[int, np.ndarray]) -> list[list[float]]:
-        """Every sensor's reading per class."""
-        return [[float(fields[k][j, i]) for j, i in self.cells] for k in fields]
+    def observe(
+        self,
+        step: int,
+        t: float,
+        fields: Mapping[int, np.ndarray],
+        pending: list[tuple[int, float, np.ndarray]],
+    ) -> tuple[Alert, ...]:
+        """The monitor's update after a step; its readings join PENDING.
+
+        Returns the alerts the step opened or closed, empty without sensors.
+        """
+        if self.monitor is None:
+            return ()
+        alerts = self.monitor.update(step, t, fields)
+        pending.append((step, t, self.monitor.readings))
+        for alert in alerts:
+            if alert.is_open:
+                logger.info(
+                    "alert: %s, class %d, at or above threshold at t = %.6g s "
+                    "(step %d)",
+                    alert.sensor,
+                    alert.size_class,
+                    alert.t_on,
+                    alert.step_on,
+                )
+        return alerts
+
+    def carried(self) -> dict[str, np.ndarray] | None:
+        """The tracker's and the monitor's states, for the checkpoint; None for none."""
+        out: dict[str, np.ndarray] = {}
+        for part in (self.tracker, self.monitor):
+            if part is not None:
+                out.update(part.state())
+        return out or None
 
     def means(self, fields: Mapping[int, np.ndarray]) -> list[float]:
         """Every class's free-area mean."""
@@ -1047,7 +1080,7 @@ class _Run:
         """
         config = self.config
         output, cadence = config.output_interval, config.checkpoint_interval
-        pending: list[tuple[int, float, list[list[float]]]] = []
+        pending: list[tuple[int, float, np.ndarray]] = []
         held = self.tracker is not None and self.tracker.held()
         first_plan, first_i = start
         current = tuple(budgets)
@@ -1078,7 +1111,7 @@ class _Run:
                     c.flags.writeable = False
                 step += 1
                 t = plan.time(i)
-                pending.append((step, t, self.readings(fields)))
+                alerts = self.observe(step, t, fields, pending)
                 if self.tracker is not None:
                     means = [b.current / self.free_area for b in solver.budget]
                     self.tracker.update(t, fields, means)
@@ -1095,13 +1128,19 @@ class _Run:
                         fields,
                         solver.budget,
                         plan.fingerprint,
-                        recovery=None if self.tracker is None else self.tracker.state(),
+                        recovery=self.carried(),
                         plan_start=plan.t_start,
                     )
                 if self.on_step is not None:
                     self.on_step(
                         MarchStep(
-                            step, t, plan.dt, plan.index, fields, _copies(solver.budget)
+                            step,
+                            t,
+                            plan.dt,
+                            plan.index,
+                            fields,
+                            _copies(solver.budget),
+                            alerts,
                         )
                     )
                 if held:
@@ -1110,15 +1149,16 @@ class _Run:
         self._flush(pending)
         return fields, _copies(current), step, t, held
 
-    def _flush(self, pending: list[tuple[int, float, list[list[float]]]]) -> None:
-        """Append the held sensor readings to the run file and empty the list."""
-        if pending and self.cells:
+    def _flush(self, pending: list[tuple[int, float, np.ndarray]]) -> None:
+        """Append the held readings, replace the alert table, and empty the list."""
+        if pending and self.monitor is not None:
             self.run.write_sensor_readings(
                 np.array([row[0] for row in pending]),
                 np.array([row[1] for row in pending]),
                 np.array([row[2] for row in pending]),
                 self.names,
             )
+            self.run.write_alerts(alert_table(self.monitor))
         pending.clear()
 
     def resume_point(
@@ -1224,7 +1264,11 @@ def run(
         message names the first key); for a restart under another
         configuration (``RunFile.check_restart``), or under a ``t_end`` at
         or before the checkpoint's time (the message names both); for a
-        sensor in a SOLID cell, or a clean-out without sensors or thresholds.
+        sensor in a SOLID cell, a clean-out without sensors or thresholds, or
+        sensors without a threshold for every class (the alert monitor's).
+    KeyError
+        For a restart of a run with sensors from a checkpoint that carries no
+        alert monitor state (one written before ADR-015 step 2).
     FlowNotConvergedError
         When a flow state stops at its cap or goes non-finite.
     TransientStepError
@@ -1319,6 +1363,10 @@ def run(
         budgets: Sequence[MassBudget] = checkpoint.budgets
         if state.tracker is not None:
             state.tracker.restore(checkpoint.recovery)
+        if state.monitor is not None:
+            # The table a crash left may hold alerts after the checkpoint.
+            state.monitor.restore(checkpoint.recovery)
+            run_path.write_alerts(alert_table(state.monitor))
         march_plans, start, resumed_plan = state.resume_point(
             plans, checkpoint.t, checkpoint.plan_start
         )
@@ -1328,15 +1376,13 @@ def run(
             restarted_from = 0
             run_path.discard_march()
         fields = state.manager.initial_fields()
+        for c in fields.values():
+            c.flags.writeable = False
         budgets = tuple(MassBudget() for _ in range(state.n_classes))
         run_path.write_frame(0, 0.0, fields, budgets)
-        if state.cells:
-            run_path.write_sensor_readings(
-                np.array([0]),
-                np.array([0.0]),
-                np.array([state.readings(fields)]),
-                state.names,
-            )
+        pending: list[tuple[int, float, np.ndarray]] = []
+        state.observe(0, 0.0, fields, pending)
+        state._flush(pending)
         if state.tracker is not None:
             state.tracker.update(0.0, fields, state.means(fields))
         march_plans, start, step, t = plans, (0, 0), 0, 0.0
@@ -1362,6 +1408,7 @@ def run(
         recovery=recovery,
         restarted_from=restarted_from,
         resumed_plan=resumed_plan,
+        alerts=() if state.monitor is None else state.monitor.alerts,
     )
 
 

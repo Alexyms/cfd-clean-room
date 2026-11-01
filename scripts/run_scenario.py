@@ -9,9 +9,10 @@ Run from the repository root with the project's interpreter:
 
 A scenario file in; a run file (and its checkpoint file beside it) and a
 short text summary out: the intervals, the flow states solved and reused,
-the steps, the wall time, each class's budget closure, and for a clean-out
-the recovery outputs of ADR-014 C. A file with a transient section runs
-under tier 2 (ADR-014 G, step 6b) from rest, and its summary is the steps,
+the steps, the wall time, each class's budget closure, for a clean-out the
+recovery outputs of ADR-014 C, and the alerts the run opened (ADR-015 C).
+A file with a transient section runs under tier 2 (ADR-014 G, step 6b) from
+rest, and its summary is the steps,
 the mean and largest outer count per step, the Strouhal number of the last
 ten periods with the spectrum's cross-check, or why there is none, and the
 drag coefficient. ``--flows-from`` names another run file
@@ -42,6 +43,7 @@ if str(ROOT) not in sys.path:
 
 from src.config import SimConfig  # noqa: E402 -- follows sys.path.insert
 from src.io_manager import RecoveryRecord  # noqa: E402 -- follows sys.path.insert
+from src.monitor import Alert  # noqa: E402 -- follows sys.path.insert
 from src.solver_staggered import (  # noqa: E402 -- follows sys.path.insert
     TransientStepError,
 )
@@ -150,6 +152,48 @@ def recovery_lines(record: RecoveryRecord, sizes: Sequence[float]) -> list[str]:
     return lines
 
 
+def alert_lines(
+    alerts: Sequence[Alert], sizes: Sequence[float], monitored: bool
+) -> list[str]:
+    """The alerts the run opened (ADR-015 C), one to a line.
+
+    Parameters
+    ----------
+    alerts : Sequence[Alert]
+        ``RunRecord.alerts``, closed ones first.
+    sizes : Sequence[float]
+        The class diameters, metres, to name the classes.
+    monitored : bool
+        Whether the run had sensors; without them there is no monitor.
+
+    Returns
+    -------
+    list[str]
+        The lines, without newlines: the count and how many are still open,
+        then each alert's sensor, class, opening step and reading, closing
+        step or "still open", and peak.
+    """
+    if not monitored:
+        return ["alerts (ADR-015 C): no sensors"]
+    if not alerts:
+        return ["alerts (ADR-015 C): none (no sensor at or above its threshold)"]
+    still = sum(alert.is_open for alert in alerts)
+    lines = [f"alerts (ADR-015 C): {len(alerts)} opened, {still} still open at the end"]
+    for alert in alerts:
+        if alert.is_open:
+            end = "still open"
+        else:
+            end = f"below at t = {alert.t_off:.4f} s (step {alert.step_off})"
+        size = sizes[alert.size_class] * 1e6
+        lines.append(
+            f"  {alert.sensor}, class {alert.size_class} ({size:g} um): at or above "
+            f"from t = {alert.t_on:.4f} s (step {alert.step_on}), reading "
+            f"{alert.reading_on:.4g}; {end}; peak {alert.peak:.4g} at "
+            f"t = {alert.peak_t:.4f} s"
+        )
+    return lines
+
+
 def summary(record: RunRecord, config: SimConfig, scenario: Path) -> list[str]:
     """The run's summary lines.
 
@@ -218,6 +262,9 @@ def summary(record: RunRecord, config: SimConfig, scenario: Path) -> list[str]:
         )
     if record.recovery is not None:
         lines.extend(recovery_lines(record.recovery, config.particle_sizes))
+    lines.extend(
+        alert_lines(record.alerts, config.particle_sizes, bool(config.sensors))
+    )
     return lines
 
 
