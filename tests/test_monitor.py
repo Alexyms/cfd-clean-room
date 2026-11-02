@@ -900,6 +900,43 @@ class TestArrivalTracker:
         reached[0, 0] = reached[0, 1] = reached[2, 3] = reached[2, 0] = True
         assert np.isnan(first[0][:, ~reached]).all()
 
+    def test_the_maps_and_the_state_are_copies(self) -> None:
+        """A write to what first_above and state() return leaves the tracker as it was.
+
+        Reached cells and a set time, so there is something to corrupt.
+        Defects caught: ``first_above`` returning the live array; ``state()``
+        returning the live maps, onsets or time (the checkpoint's write would
+        then alias a later update).
+        """
+        tracker = ArrivalTracker(THRESHOLDS, LIVE, [0.0])
+        tracker.update(0.0, planted(0.0, {(0, 0): 2.0}))
+        held = {**tracker.state(), "onsets": tracker.onsets}
+        before = {name: array.copy() for name, array in held.items()}
+        assert before["first_above"][0, 0, 0, 0] == 0.0
+        tracker.first_above[...] = -1.0
+        for array in tracker.state().values():
+            array[...] = -1.0
+        tracker.onsets[...] = -1.0
+        after = {**tracker.state(), "onsets": tracker.onsets}
+        assert after.keys() == before.keys()
+        for name, array in before.items():
+            assert after[name].tobytes() == array.tobytes(), name
+        assert tracker.first_above.tobytes() == before["first_above"].tobytes()
+
+    def test_update_leaves_a_writeable_field_bitwise_as_it_was(self) -> None:
+        """REQ-A06 on the tracker's update alone: every field's bytes are equal after.
+
+        The fields are handed writeable and with cells above and below the
+        thresholds, so a write would land. Defect caught: a field written in
+        update (the reached cells zeroed).
+        """
+        tracker = ArrivalTracker(THRESHOLDS, LIVE, [0.0])
+        fields = planted(0.5, {(0, 0): 2.0, (2, 3): 1.0})
+        before = {k: fields[k].tobytes() for k in fields}
+        tracker.update(0.0, fields)
+        assert np.isfinite(tracker.first_above).any()
+        assert all(fields[k].tobytes() == before[k] for k in fields)
+
     def test_a_second_events_map_starts_at_its_onset(self) -> None:
         """Onsets 0 and 0.25: a cell reached for event 0 counts for event 1 only from 0.3.
 
@@ -1100,10 +1137,11 @@ class TestArrivalTracker:
         """A random series at the sensors: the map's latency there is the monitor's, exactly.
 
         Sixty updates of readings drawn up to 3% over each class's threshold
-        and a few exactly at it, hood_entry's 5 um class never reached; four
-        onsets at update times, two of them equal. Defects caught: any
-        difference between the two rules (the window, the open alert at an
-        onset, the strict comparison) shows as a sensor that disagrees.
+        and a few exactly at it (each class's own), hood_entry's 5 um class
+        never reached; four onsets at update times, two of them equal.
+        Defects caught: any difference between the two rules (the window,
+        the open alert at an onset, the strict comparison) shows as a sensor
+        that disagrees.
         """
         config, mesh = product
         monitor = AlertMonitor(config, mesh)
@@ -1116,7 +1154,8 @@ class TestArrivalTracker:
         for n, t in enumerate(times):
             scale = rng.uniform(0.0, 1.03, size=(5, 4))
             values = scale * monitor.thresholds[:, None]
-            values[rng.uniform(size=(5, 4)) < 0.02] = monitor.thresholds[0]
+            at_threshold = rng.uniform(size=(5, 4)) < 0.02
+            values = np.where(at_threshold, monitor.thresholds[:, None], values)
             values[4, 3] = 0.5 * monitor.thresholds[4]
             fields = fields_of(mesh, values, cells)
             monitor.update(n, t, fields)

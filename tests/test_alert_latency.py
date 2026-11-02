@@ -13,8 +13,9 @@ each test naming in its docstring the planted defect it was shown to catch:
   from the series alone, and the series has every step (the march called
   the monitor after every step); the stored readings are the frames' cell
   values at the frames' steps.
-- REQ-A06: the fields the march hands the monitor are not writeable, and
-  their bytes are unchanged across every ``update`` of the run.
+- REQ-A06: the fields the march hands the monitor and the arrival tracker
+  are not writeable, and their bytes are unchanged across every ``update``
+  of the run.
 - A restart across an open alert writes the uninterrupted run's alert table
   and readings, bitwise.
 
@@ -36,7 +37,7 @@ from src import time_integration
 from src.config import SimConfig
 from src.io_manager import OPEN_STEP, AlertTable, RunFile
 from src.mesh import Mesh
-from src.monitor import Alert, AlertMonitor, sensor_cells
+from src.monitor import Alert, AlertMonitor, ArrivalTracker, sensor_cells
 from src.time_integration import MarchStep, Provenance, run
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -185,15 +186,31 @@ class _Watched(AlertMonitor):
         return out
 
 
+class _WatchedArrival(ArrivalTracker):
+    """The arrival tracker, checked as _Watched checks the monitor (REQ-A06)."""
+
+    unwritable: ClassVar[list[bool]] = []
+    unchanged: ClassVar[list[bool]] = []
+
+    def update(self, t: float, fields: Mapping[int, np.ndarray]) -> None:
+        """Record the flags and compare the fields' bytes across the update."""
+        before = {k: fields[k].tobytes() for k in fields}
+        self.unwritable.append(all(not fields[k].flags.writeable for k in fields))
+        super().update(t, fields)
+        self.unchanged.append(all(fields[k].tobytes() == before[k] for k in fields))
+
+
 @pytest.fixture(scope="module")
 def released(tmp_path_factory: pytest.TempPathFactory) -> SimpleNamespace:
     """The release solved from rest and marched, its monitor watched every step."""
     folder = tmp_path_factory.mktemp("released")
     config = SimConfig.from_dict(source_raw(checkpoint_interval=CHECKPOINT_INTERVAL))
     _Watched.seen, _Watched.unwritable, _Watched.unchanged = [], [], []
+    _WatchedArrival.unwritable, _WatchedArrival.unchanged = [], []
     steps: list[MarchStep] = []
     patch = pytest.MonkeyPatch()
     patch.setattr(time_integration, "AlertMonitor", _Watched)
+    patch.setattr(time_integration, "ArrivalTracker", _WatchedArrival)
     try:
         record = run(
             config, folder / "run.h5", on_step=steps.append, provenance=PROVENANCE
@@ -208,6 +225,8 @@ def released(tmp_path_factory: pytest.TempPathFactory) -> SimpleNamespace:
         seen=list(_Watched.seen),
         unwritable=list(_Watched.unwritable),
         unchanged=list(_Watched.unchanged),
+        arrival_unwritable=list(_WatchedArrival.unwritable),
+        arrival_unchanged=list(_WatchedArrival.unchanged),
     )
 
 
@@ -431,12 +450,19 @@ class TestScenarioRun:
         """REQ-A06 in the march: at every update the fields are not writeable, and
         their bytes are the same after it as before.
 
-        Defects caught: the march handing the monitor writeable fields (step
-        0's initial fields were writeable before step 2); a field written in
-        update.
+        The monitor's updates and the arrival tracker's, the tracker called
+        once per monitor update. Defects caught: the march handing the
+        monitor writeable fields (step 0's initial fields were writeable
+        before step 2); a field written in the monitor's update; the march
+        handing the tracker writeable fields; a field written in the
+        tracker's update.
         """
         assert released.unwritable and all(released.unwritable)
         assert released.unchanged and all(released.unchanged)
+        assert len(released.arrival_unwritable) == len(released.unwritable)
+        assert all(released.arrival_unwritable)
+        assert len(released.arrival_unchanged) == len(released.unchanged)
+        assert all(released.arrival_unchanged)
 
 
 def _killer(at: int) -> Callable[[MarchStep], None]:
