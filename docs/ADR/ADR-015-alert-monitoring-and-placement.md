@@ -787,6 +787,16 @@ a non-SOLID cell whose centre is within the standoff of a named surface, excludi
 adjacent to an inlet or outlet face (a sensor in the supply's or a return's face reads the
 boundary, not the room). The free optimum over every non-SOLID cell is always reported beside
 the mountable one, as the bound.
+*As built (step 4, prompt 75, 2026-11-02).* A surface is the set of mesh faces between it and
+a non-SOLID cell, as the solver sees it: `walls` the left and right domain edges, `ceiling`
+the top edge, `obstacle_tops` and `obstacle_sides` each obstacle's top face and its left and
+right faces; the floor is not a mounting surface. The distance is from the cell's centre to
+the nearest point of those faces, so a cell diagonal to an obstacle's corner within the
+standoff counts for both the top and the side. A cell with a face on a segment or vent that
+is not a wall, in the configuration or in any interval of its scenario (the open door's two
+halves), is never a candidate, the free set included. The product file states walls, ceiling,
+obstacle tops and sides at 0.05 m (two cells on 320x120, one on 80x30), four sensors and the
+worst case, and no coverage time.
 
 **The search.** `placement.search(maps, onsets, candidates, count, rule)`:
 - count 1: the argmin over candidates (exact);
@@ -806,6 +816,24 @@ the mountable one, as the bound.
 - the mean rule above two: greedy (add the cell that lowers the score most) followed by
   one-sensor exchanges until none improves, checked against the exhaustive answer at count 2.
 NumPy only (ADR-013 decision 2: no new dependency).
+*As built (step 4, prompt 75, 2026-11-02).* `search(units, candidates, count, rule)` removes
+the uncoverable units for either rule and reports them, and the layout is scored over the
+rest, so a layout set beside it (the file's sensors) is scored over the same units
+(`exclude_units`) and `rank` refuses two unit sets. The sweep is bisected over the sorted
+distinct latencies, since a cover at T is a cover at every later T. The programme runs on
+the masks no other contains (a cover with a contained mask is one with its container), from
+the empty set, which needs no mask; the distinct and the maximal masks are both counted at the
+optimum. Each cover found is made a layout by the cells of its masks that lower the mean
+most, the spare sensors added the same way, and the best by the mean is improved by
+exchanges that keep the worst case at the optimum: the worst case is exact, its tie-break by
+the mean the best this finds. "When no pair is coverable" is read as no layout of the count
+covering every coverable unit: the worst case is then inf for every layout, the search runs
+the mean rule's method at the count and returns the rule as `MEAN`. Ties under the worst case
+go to the mean and under the mean to the worst case, then to candidate order. The set cover
+refuses more than 20 units (2^20 subsets); the reference set has fifteen. On twelve random
+maps of six units and 31 candidates the worst case is exact at one to three sensors, and the
+mean rule's greedy at three equals the optimum on ten and is above it on two (0.67 and 0.83 s
+against 0.5), `tests/test_placement.py`.
 
 **What the result can claim.** The latencies are comparative between layouts on one grid at
 the file's inputs; B's spread is stated beside them. A latency's resolution is the step
@@ -821,6 +849,21 @@ turbulence over the tops, the spreading limit now bounded by A and B rather than
 *Step 4's prediction (orchestrator, 2026-11-02, prompt 75), committed before the 80x30 runs.*
 (h) On 80x30 the file's four sensors detect none of the three event scenarios' (scenario,
 event, class) units, and the searched four detect at least one unit in every scenario.
+
+*Result (prompt 75, 2026-11-02): FAILS on the mountable candidates, HOLDS on the free set.*
+The three scenarios ran on 80x30 to their own t_end (the door from rest, both states; the
+breach and the dust release on its kept closed state; about 64 s each), and
+`tests/test_sensor_evaluation.py` reruns them. The first clause holds: the file's four
+detect none of the fifteen units. The second fails for the mountable search: none of the
+215 mountable candidates reaches a door unit, so the door's five are reported uncovered and
+the searched four detect the breach's five and the dust's five (worst case 1.97 s, the set
+cover exact, 6 distinct masks at the optimum, 2 maximal). The door's plume reaches 66 cells,
+all within 0.9 m of the left wall and 1.3 m of the floor; at a standoff of 0.05 m the only
+wall candidates on this grid are the left column's, and every one of those under 2.1 m lies
+beside the open door's faces and is excluded. At 0.15 m, 11 mountable candidates reach a door
+unit. The free optimum's four detect all fifteen units (worst case 0.19 s, 6 distinct masks,
+3 maximal), two of its cells in the floor row beside the door. The search took 4 ms over the
+mountable candidates and 36 ms over the 1,630 free ones.
 
 ## E. The gate's latency report
 
@@ -877,6 +920,12 @@ placement.py --> scripts/latency_report.py (step 5); tests
     candidates(mesh, config, mount, standoff) -> np.ndarray     # [n, 2] cells
     search(latencies, candidates, count, rule) -> Layout        # cells, score, method, exact (bool)
     rank(layouts) -> list[Layout]
+    # As built at step 4 (prompt 75): the latencies are Units, (scenario, event,
+    # class) stacked by detection_units(arrivals) from each run's RunArrival (which
+    # gains event_names, t_final and fallback); score(units, cells, *, within) has no
+    # rule, since a Score carries every rule; search(units, candidates, count, rule,
+    # *, within) -> Layout adds rule, units, uncovered and the set cover's mask
+    # counts; given_layout and exclude_units score the file's sensors beside it
 
 io_manager.py
     RunFile.write_alerts(rows) / read_alerts()  # /transport/alerts/, replaced whole
