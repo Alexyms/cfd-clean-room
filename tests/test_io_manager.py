@@ -28,6 +28,9 @@ docstring:
   is replaced whole at each write, goes with discard_march and not with
   discard_after; AlertTable refuses columns that disagree; the monitor's
   state, an empty alert array included, rides in the checkpoint.
+- ADR-015 step 3: the arrival maps round-trip through /arrival/, inf and
+  NaN included, are replaced whole at each write, go with discard_march and
+  not with discard_after; ArrivalRecord refuses parts that disagree.
 """
 
 import hashlib
@@ -53,6 +56,7 @@ from src.io_manager import (
     RESTART_EXCLUDED_KEYS,
     STEADY_CHECKPOINT,
     AlertTable,
+    ArrivalRecord,
     RecoveryRecord,
     RunFile,
     StepSeries,
@@ -1878,6 +1882,134 @@ class TestAlerts:
         for name, array in carried.items():
             assert read[name].shape == array.shape, name
             assert read[name].tobytes() == array.tobytes(), name
+
+
+def _arrival(**changed: object) -> ArrivalRecord:
+    """Two events, two classes on a 3x4 grid: times, inf and a SOLID cell's NaN."""
+    maps = np.full((2, 2, 3, 4), np.inf)
+    maps[0, 0, 0, :] = [0.1, 0.2 + 0.1, 1.0 / 3.0, 0.5]
+    maps[1, 1, 2, 3] = 2.0
+    maps[:, :, 1, 2] = np.nan
+    fields: dict[str, object] = {
+        "thresholds": [1.0e5, 29.3],
+        "event_names": ("door_open", "door_open_again"),
+        "onsets": [0.0, 1.5],
+        "first_above": maps,
+        "t_final": 3.0,
+    }
+    fields.update(changed)
+    return ArrivalRecord(**fields)  # type: ignore[arg-type]
+
+
+def _same_arrival(a: ArrivalRecord, b: ArrivalRecord) -> None:
+    """Two arrival records, bitwise."""
+    assert a.event_names == b.event_names and a.t_final == b.t_final
+    for name in ("thresholds", "onsets", "first_above"):
+        x, y = getattr(a, name), getattr(b, name)
+        assert x.dtype == y.dtype and x.shape == y.shape, name
+        assert x.tobytes() == y.tobytes(), name
+
+
+@pytest.mark.unit
+class TestArrival:
+    def test_what_is_written_is_what_is_read(self, tmp_path: Path) -> None:
+        """Every array bitwise, its inf and NaN included, the names and the end.
+
+        Defects caught: the maps stored as float32; inf read back as NaN;
+        the event names or t_final dropped.
+        """
+        run = RunFile(tmp_path / "run.h5")
+        record = _arrival()
+        run.write_arrival(record)
+        read = run.read_arrival()
+        _same_arrival(read, record)
+        assert read.first_above.dtype == np.float64
+
+    def test_a_second_write_replaces_the_first_whole(self, tmp_path: Path) -> None:
+        """Written at each checkpoint and at the end: the last write is the file's."""
+        run = RunFile(tmp_path / "run.h5")
+        run.write_arrival(_arrival())
+        later = _arrival(t_final=4.0, event_names=("a", "b"))
+        run.write_arrival(later)
+        _same_arrival(run.read_arrival(), later)
+
+    def test_a_file_without_maps_and_a_wrong_type_are_refused(
+        self, tmp_path: Path
+    ) -> None:
+        """read_arrival raises KeyError on a file without /arrival/; write needs a record."""
+        run = RunFile(tmp_path / "run.h5")
+        run.write_frame(0, 0.0, _fields(1), [_budget(1), _budget(2)])
+        with pytest.raises(KeyError, match="holds no /arrival/"):
+            run.read_arrival()
+        with pytest.raises(TypeError, match="record must be an ArrivalRecord, got"):
+            run.write_arrival({})  # type: ignore[arg-type]
+
+    def test_the_discards(self, tmp_path: Path) -> None:
+        """discard_march drops the maps with /transport/; discard_after leaves them.
+
+        A restart from step 0 marches again and writes maps of its own; a
+        restart from a checkpoint replaces them right after discard_after.
+        Defect caught: a march from step 0 leaving the earlier march's maps.
+        """
+        run = RunFile(tmp_path / "run.h5")
+        run.write_frame(0, 0.0, _fields(1), [_budget(1), _budget(2)])
+        run.write_arrival(_arrival())
+        run.discard_after(0)
+        _same_arrival(run.read_arrival(), _arrival())
+        run.discard_march()
+        with pytest.raises(KeyError):
+            run.read_arrival()
+        with pytest.raises(KeyError):
+            run.read_frames()
+
+    @pytest.mark.parametrize(
+        ("changed", "error", "match"),
+        [
+            ({"event_names": ("a", 2)}, TypeError, "an event name must be a str"),
+            ({"t_final": True}, TypeError, "t_final must be a real number"),
+            ({"t_final": np.nan}, ValueError, "t_final must be finite"),
+            ({"t_final": np.inf}, ValueError, "t_final must be finite"),
+            ({"thresholds": [1.0, np.nan]}, ValueError, "thresholds must be finite"),
+            ({"thresholds": [1.0, -1.0]}, ValueError, "finite and non-negative"),
+            ({"thresholds": [1.0, True]}, TypeError, "a threshold must be a real"),
+            (
+                {"thresholds": np.array([True, False])},
+                TypeError,
+                "a threshold must be a real",
+            ),
+            ({"onsets": [-0.5, 1.5]}, ValueError, "the onsets must be non-negative"),
+            ({"onsets": [0.0, np.inf]}, ValueError, "the onsets must be finite"),
+            ({"onsets": np.array([False, True])}, TypeError, "an onset must be a real"),
+            (
+                {"thresholds": [[1.0, 2.0]]},
+                ValueError,
+                r"thresholds must be \[classes\]",
+            ),
+            ({"onsets": [0.0]}, ValueError, r"onsets has shape \(1,\) for 2 events"),
+            ({"onsets": [1.5, 0.0]}, ValueError, "the onsets must be in order"),
+            ({"onsets": [0.0, np.nan]}, ValueError, "the onsets must be finite"),
+            (
+                {"first_above": np.zeros((2, 2, 3))},
+                ValueError,
+                r"expected \[2, 2, ny, nx\]",
+            ),
+            (
+                {"first_above": np.zeros((2, 3, 3, 4))},
+                ValueError,
+                r"expected \[2, 2, ny, nx\]",
+            ),
+        ],
+    )
+    def test_a_record_whose_parts_disagree_is_refused(
+        self, changed: dict, error: type, match: str
+    ) -> None:
+        """Each guard of ArrivalRecord, one at a time."""
+        with pytest.raises(error, match=match):
+            _arrival(**changed)
+
+    def test_two_events_may_share_an_onset(self) -> None:
+        """Equal onsets are in order: two events starting together."""
+        assert _arrival(onsets=[1.5, 1.5]).onsets.tolist() == [1.5, 1.5]
 
 
 # ---------------------------------------------------------------------------

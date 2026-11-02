@@ -2,7 +2,7 @@
 
 **Project:** CFD Clean Room Simulation
 **Status:** ECR-001 closed; the staggered Navier-Stokes solver is built and validated and is the only solver (ADR-010; the collocated solver was retired on 2026-10-02, tag `collocated-final`). ECR-002, the k-epsilon turbulence model (ADR-012), was accepted on 2026-10-04 and closed on 2026-10-15 at step 9 (prompt 58): the model on a face field (`src/scalar_scheme.py`, `src/turbulence.py`), its coupling into the transport solver (`src/solver_transport.py`) and the flow solver (`src/momentum.py`, `src/solver_staggered.py`, `src/stopping.py`), the fixed-flow outlets, the wall functions and stopping condition (e) are built, the product configuration is `configs/clean_room_default.yaml`, and ADR-012's planned-against-built table records the build; section 2 marks each requirement's verification. ECR-003, the pressure correction solver (ADR-013), was accepted on 2026-10-06 and closed on 2026-10-07: its step 1 replaced the weighted Jacobi sweep by Jacobi-preconditioned conjugate gradients (REQ-S08 amended), and its step 2 retook the laminar baseline (REQ-S02, REQ-S03). Phase status is in `docs/PROJECT_PLAN.md`.
-**Last Updated:** 2026-10-31
+**Last Updated:** 2026-11-01
 
 This document is the single reference for system architecture, requirements, module interfaces, and dependency relationships. Review and test, run before each pull request as `/cfd-review` and `/cfd-test` in fresh Claude Code sessions (`.claude/commands/`), check branches against this document under the policy in `docs/REVIEW_POLICY.md`. Keep it current.
 
@@ -85,7 +85,7 @@ Since ECR-001 step 9 (2026-09-30), "the NS solver" in this table is the staggere
 | REQ-A01 | The alert monitor shall read every sensor after every transport step and raise an alert at the first step whose reading is at or above the class's threshold, so that it adds no delay of its own to the detection latency, whose resolution is the step. | Delayed detection defeats the purpose of monitoring. Reworded 2026-10-30 (ADR-015 G, accepted by Alex): the earlier text, "detect threshold exceedance within one timestep of occurrence", holds by construction when the monitor reads every step, so no test could fail it. VAL-009 tests the alert's step against the first reading at or above threshold (ADR-015 C). | VAL-009 |
 | REQ-A02 | Sensor locations shall be configurable via the YAML configuration. | Enables comparison of sensor placement strategies without code changes. | Unit test |
 | REQ-A03 | Contamination thresholds shall be configurable per particle size class, either as a mapping by size or as an ISO 14644-1 class number from which the loader computes the limits by the standard's formula rounded to three significant figures; the product file's Class 5 values are the test. | Different size classes have different regulatory limits. Class 5 allows zero 5.0 um particles but 3.52 million 0.5 um particles per cubic meter. Reworded 2026-10-30 (ADR-015 G, accepted by Alex): "following ISO 14644-1 classification limits" is not testable without the formula (ADR-015 C). | Unit test |
-| REQ-A04 | The monitor shall report detection latency per sensor per scenario: elapsed time from event onset to first threshold exceedance at each sensor. | Core metric for reactive monitoring. Answers "how fast do we know about a contamination event?" | Integration test |
+| REQ-A04 | The monitor shall report detection latency per sensor per scenario: elapsed time from event onset to first threshold exceedance at each sensor. The onset is the start of the event that carries the contamination (a replacement with a concentration, a set that gives a segment a concentration, a source, or the initial condition at t = 0); a sensor never at or above threshold within the run reports no latency and the run's end. | Core metric for reactive monitoring. Answers "how fast do we know about a contamination event?" | Integration test: `tests/test_time_integration.py` (TestArrivalMaps, ADR-015 step 3: on an 80x30 door opened twice, the run record's latencies from the monitor and from the arrival maps at the sensors' cells agree bitwise and equal the stored sensor series' rule); the rule on planted series in `tests/test_monitor.py` |
 | REQ-A05 | The monitor's placement module shall score any set of sensor layouts over a set of scenario run files by stated rules (worst case, mean, coverage within a stated time), rank them, and search the stated candidate positions for the layout of a stated count that is best under a rule, exact for one and two sensors and for the worst-case rule at any count over the pairs some candidate reaches, reproducible from the run files alone. | Core value of proactive design mode. Answers "where should sensors go?" Reworded 2026-10-30 (ADR-015 G, accepted by Alex): "optimal" names no rule, so the requirement states the rules and the search (ADR-015 D). | Integration test |
 | REQ-A06 | The alert monitor shall read concentration fields but never modify them. | Separation of concerns. Monitoring is observation, not intervention. | Architecture review; VAL-009's tests (`tests/test_alert_latency.py`: the fields not writeable and bitwise unchanged across every update of a run) |
 
@@ -118,32 +118,33 @@ Generated from the import statements in `src/` by `scripts/gen_system_map.py`. R
 
 <!-- BEGIN GENERATED: dsm -->
 ```
-                         boundary_concentration  boundary_registry  boundary_staggered  boundary_vents  config  constants  forces  io_manager  mesh  momentum  monitor  multigrid  particles  pressure  scalar_scheme  scenarios  solver_staggered  solver_transport  staggered  stopping  time_integration  turbulence
-boundary_concentration             .                     X                  .                 X           X         .        .         .        X       .         .         .          X         .            .            .             .                 .              X         .             .              .
-boundary_registry                  .                     .                  .                 .           X         .        .         .        .       .         .         .          .         .            .            .             .                 .              .         .             .              .
-boundary_staggered                 .                     X                  .                 X           X         .        .         .        X       .         .         .          .         .            .            .             .                 .              X         .             .              .
-boundary_vents                     .                     X                  .                 .           X         .        .         .        X       .         .         .          .         .            .            .             .                 .              X         .             .              .
-config                             .                     .                  .                 .           .         .        .         .        .       .         .         .          .         .            .            .             .                 .              .         .             .              .
-constants                          .                     .                  .                 .           .         .        .         .        .       .         .         .          .         .            .            .             .                 .              .         .             .              .
-forces                             .                     .                  .                 .           X         .        .         .        X       .         .         .          .         .            .            .             .                 .              .         .             .              .
-io_manager                         .                     .                  .                 .           .         .        .         .        .       .         .         .          .         .            .            .             X                 X              .         .             .              .
-mesh                               .                     .                  .                 .           X         .        .         .        .       .         .         .          .         .            .            .             .                 .              .         .             .              .
-momentum                           .                     .                  X                 .           X         .        .         .        X       .         .         .          .         .            .            .             .                 .              X         .             .              .
-monitor                            .                     .                  .                 .           X         .        .         .        X       .         .         .          .         .            .            .             .                 .              .         .             .              .
-multigrid                          .                     .                  .                 .           .         .        .         .        .       .         .         .          .         .            .            .             .                 .              .         .             .              .
-particles                          .                     .                  .                 .           X         X        .         .        .       .         .         .          .         .            .            .             .                 .              .         .             .              .
-pressure                           .                     .                  X                 .           X         .        .         .        X       X         .         X          .         .            .            .             .                 .              X         .             .              .
-scalar_scheme                      .                     .                  .                 .           .         .        .         .        X       X         .         .          .         .            .            .             .                 .              .         .             .              .
-scenarios                          X                     X                  .                 X           X         .        .         .        X       .         .         .          X         .            .            .             .                 .              .         .             .              .
-solver_staggered                   .                     .                  X                 .           X         .        .         .        X       X         .         .          .         X            .            .             .                 .              X         X             .              X
-solver_transport                   X                     .                  .                 .           X         .        .         .        X       .         .         .          X         .            X            .             .                 .              X         .             .              .
-staggered                          .                     .                  .                 .           X         .        .         .        X       .         .         .          .         .            .            .             .                 .              .         .             .              .
-stopping                           .                     .                  .                 .           .         .        .         .        .       .         .         .          .         .            .            .             .                 .              .         .             .              .
-time_integration                   .                     .                  X                 .           X         .        X         X        X       .         X         .          X         .            .            X             X                 X              X         .             .              .
-turbulence                         .                     X                  X                 X           X         .        .         .        X       .         .         .          .         .            X            .             .                 .              X         .             .              .
+                         boundary_concentration  boundary_registry  boundary_staggered  boundary_vents  config  constants  forces  io_manager  mesh  momentum  monitor  multigrid  particles  placement  pressure  scalar_scheme  scenarios  solver_staggered  solver_transport  staggered  stopping  time_integration  turbulence
+boundary_concentration             .                     X                  .                 X           X         .        .         .        X       .         .         .          X          .         .            .            .             .                 .              X         .             .              .
+boundary_registry                  .                     .                  .                 .           X         .        .         .        .       .         .         .          .          .         .            .            .             .                 .              .         .             .              .
+boundary_staggered                 .                     X                  .                 X           X         .        .         .        X       .         .         .          .          .         .            .            .             .                 .              X         .             .              .
+boundary_vents                     .                     X                  .                 .           X         .        .         .        X       .         .         .          .          .         .            .            .             .                 .              X         .             .              .
+config                             .                     .                  .                 .           .         .        .         .        .       .         .         .          .          .         .            .            .             .                 .              .         .             .              .
+constants                          .                     .                  .                 .           .         .        .         .        .       .         .         .          .          .         .            .            .             .                 .              .         .             .              .
+forces                             .                     .                  .                 .           X         .        .         .        X       .         .         .          .          .         .            .            .             .                 .              .         .             .              .
+io_manager                         .                     .                  .                 .           .         .        .         .        .       .         .         .          .          .         .            .            .             X                 X              .         .             .              .
+mesh                               .                     .                  .                 .           X         .        .         .        .       .         .         .          .          .         .            .            .             .                 .              .         .             .              .
+momentum                           .                     .                  X                 .           X         .        .         .        X       .         .         .          .          .         .            .            .             .                 .              X         .             .              .
+monitor                            .                     .                  .                 .           X         .        .         X        X       .         .         .          .          .         .            .            .             .                 .              .         .             .              .
+multigrid                          .                     .                  .                 .           .         .        .         .        .       .         .         .          .          .         .            .            .             .                 .              .         .             .              .
+particles                          .                     .                  .                 .           X         X        .         .        .       .         .         .          .          .         .            .            .             .                 .              .         .             .              .
+placement                          .                     .                  .                 .           X         .        .         X        X       .         X         .          .          .         .            .            .             .                 .              .         .             .              .
+pressure                           .                     .                  X                 .           X         .        .         .        X       X         .         X          .          .         .            .            .             .                 .              X         .             .              .
+scalar_scheme                      .                     .                  .                 .           .         .        .         .        X       X         .         .          .          .         .            .            .             .                 .              .         .             .              .
+scenarios                          X                     X                  .                 X           X         .        .         .        X       .         .         .          X          .         .            .            .             .                 .              .         .             .              .
+solver_staggered                   .                     .                  X                 .           X         .        .         .        X       X         .         .          .          .         X            .            .             .                 .              X         X             .              X
+solver_transport                   X                     .                  .                 .           X         .        .         .        X       .         .         .          X          .         .            X            .             .                 .              X         .             .              .
+staggered                          .                     .                  .                 .           X         .        .         .        X       .         .         .          .          .         .            .            .             .                 .              .         .             .              .
+stopping                           .                     .                  .                 .           .         .        .         .        .       .         .         .          .          .         .            .            .             .                 .              .         .             .              .
+time_integration                   .                     .                  X                 .           X         .        X         X        X       .         X         .          X          .         .            .            X             X                 X              X         .             .              .
+turbulence                         .                     X                  X                 X           X         .        .         .        X       .         .         .          .          .         .            X            .             .                 .              X         .             .              .
 ```
 
-Rows import columns. Edges, 77 total:
+Rows import columns. Edges, 82 total:
 
 ```
 boundary_concentration -> boundary_registry, boundary_vents, config, mesh, particles, staggered
@@ -154,8 +155,9 @@ forces                 -> config, mesh
 io_manager             -> solver_staggered, solver_transport
 mesh                   -> config
 momentum               -> boundary_staggered, config, mesh, staggered
-monitor                -> config, mesh
+monitor                -> config, io_manager, mesh
 particles              -> config, constants
+placement              -> config, io_manager, mesh, monitor
 pressure               -> boundary_staggered, config, mesh, momentum, multigrid, staggered
 scalar_scheme          -> mesh, momentum
 scenarios              -> boundary_concentration, boundary_registry, boundary_vents, config, mesh, particles
@@ -195,10 +197,10 @@ When a PR modifies a module, the reviewer verifies impact on downstream modules.
 | solver_transport.py | io_manager (MassBudget, DEPOSIT_SURFACES); time_integration (built at ADR-014 step 4: stable_dt, solve_timestep with sources and eddy_viscosity, restore_budgets, budget, MassBudget.in_domain); the Phase 7 animation (FieldHistory); tests/test_solver_transport.py, tests/test_diffusion.py, tests/test_advection.py, tests/test_constancy.py, tests/test_smith_hutton.py, tests/test_conservation.py, tests/test_sealed_box.py; validation/transport_cases.py hands it stand-ins | solve_timestep takes FaceVelocities, not cell means, a sources rate array and the keyword-only eddy_viscosity field (nu_t per cell, m^2/s, None the laminar path bitwise; the face value is the distance-weighted harmonic mean, so a caller that hands another face rule changes the contract), and returns a new [ny, nx] float64 contiguous field with SOLID cells zero; stable_dt's definition, the sum of the two directional rates, infinite at rest; v_ext a FaceVelocities-shaped per-class drift on the interior faces, None read as zero (REQ-T06); MassBudget field names (initial, inflow, outflow, source, deposited by floor, ceiling, wall, obstacle, current) and that only the solver writes them, solve_timestep step by step and restore_budgets whole from a checkpoint (ADR-014 step 3, which io_manager's run file round-trips); FieldHistory's record signature and npz keys (steps, times, C_<k>). The solver reads settling_velocity and diffusion_coeff of physics and faces_for of boundary and nothing else of either, so the validation cases hand it ScalarPhysics and FixedConditions (validation/transport_cases.py); a change to what it reads changes that contract. The vents (ADR-014 J, step 0b): ConcentrationFaces' vent_u and vent_v open faces of SOLID cells to the advection and the budget, and a recirculating discharge carries the flux-weighted mean of its intake's room cells in the field the step starts from, times its passed fraction; a configuration without vents runs the earlier lines bit for bit. |
 | particles.py | boundary_concentration, scenarios, solver_transport | Settling velocity, diffusion coefficient and deposition velocity interface unchanged. Return types, units and signs unchanged (settling positive downward, deposition non-negative; the floor value includes settling, which the solver must not add again, ADR-011 D). |
 | scenarios.py | time_integration (built at ADR-014 step 4); tests/test_scenarios.py | Built at ADR-014 step 2. intervals(), flow_states(), sources_at(t), conditions_for(interval), initial_fields() and n_flow_states unchanged in signature and meaning; an event's start and end are interval boundaries, active from its start and expired at its end. The fingerprint reads FLOW_KEYS only, over the segments in configuration order with contiguous pieces of one segment joined, so a transport-only event (TRANSPORT_KEYS) never adds a flow state; every BoundarySpec field is in exactly one of the two tuples, which tests/test_scenarios.py checks, so a new segment key must be classified before it loads. A state joined from pieces is the split state to the rounding of the inflow sums, not bitwise. sources_at returns solve_timestep's sources, one [ny, nx] rate per class, zero in SOLID cells. |
-| monitor.py | time_integration (the march hook, alert_table, the re-exported sensor_cells and SENSOR_FACE_RTOL); scripts/run_scenario.py (Alert in the summary); tests/test_monitor.py, tests/test_alert_latency.py, tests/test_time_integration.py | Update and query interfaces unchanged: the at-or-above opening and the first-below closing, the alerts' order (closed then open, by step_on, class and the sensor's place), the state's names (distinct from the recovery tracker's, since both ride in one checkpoint mapping) and its columns; sensor_cells' face rule, which the clean-out's recovery outputs read through. |
+| monitor.py | time_integration (the march hook, alert_table, the arrival tracker, contaminating_events, the re-exported sensor_cells and SENSOR_FACE_RTOL); placement (contaminating_events, built at ADR-015 step 3); scripts/run_scenario.py (Alert in the summary); tests/test_monitor.py, tests/test_alert_latency.py, tests/test_time_integration.py | Update and query interfaces unchanged: the at-or-above opening and the first-below closing, the alerts' order (closed then open, by step_on, class and the sensor's place), the state's names (distinct from the recovery tracker's, since both ride in one checkpoint mapping) and its columns; sensor_cells' face rule, which the clean-out's recovery outputs read through. Since step 3: `latencies` and `ArrivalTracker` keep one rule (the first reading at or after the onset at or above the threshold, an alert open at the onset counting as the onset, no cut at the next onset), so a change to either is a change to both, and REQ-A04's test pins that they agree; `contaminating_events` is the one list of which events carry contamination and when they start, read by the march and by placement's reader of older files; ArrivalRecord comes from io_manager. |
 | csolver/ | solver_staggered (REQ-N03's NumPy reference, ADR-010), solver_transport; both planned, Phase 6 | CUDA kernel signatures match pybind11 declarations. Memory layout assumptions (row-major, contiguous, double precision) unchanged. |
-| time_integration.py | nothing in src/ (ADR-014 G: nothing imports it); scripts/run_scenario.py (built at step 4, the runner step 7's runs go through), tests/test_time_integration.py | Timestep sequence and output trigger logic unchanged: one step for every class, the interval to the next switch divided into equal steps with the last on the switch exactly, the concentration fields and the budget carried across a switch unchanged (ADR-014 A); frames at step 0, every output_interval and the last step, sensor readings every step flushed before each checkpoint, the march checkpoint after its step's frame, so a restart is the uninterrupted run bitwise; the recovery outputs (ADR-014 C) as RecoveryRecord defines them. run_scenario.py reads RunRecord's fields and RecoveryRecord's by name, so a field renamed in either is renamed in its summary. Since step 6b: run dispatches on config.transient to tier 2 (solve_transient, forces.ForceGauge, forces.strouhal, RunFile's /transient/ groups and the transient checkpoint) and returns TransientRunRecord; scripts/run_scenario.py summarises it and scripts/benchmark.py's VAL-022 rows run through it. |
-| io_manager.py | time_integration (built at ADR-014 step 4); scripts/run_scenario.py (RecoveryRecord); tests/test_io_manager.py | The run file's groups and dataset names (ADR-014 D) unchanged, so a run file written before a change still restarts after it (one break, ADR-015 step 2: a restart of a run with sensors needs the alert monitor's arrays in the march checkpoint, so a checkpoint written before that step is refused with a KeyError saying so); /transport/ keeps FieldHistory's keys (steps, times, C_<k>), so Phase 7 reads one format; the checkpoint file's /steady_checkpoint/ holds every field of SteadyCheckpoint and /checkpoint/ the march's step, time, class fields and budgets, all as "<f8", so a restart from them is the uninterrupted run bitwise; the checkpoint file is replaced whole by os.replace and never written in place; RESTART_EXCLUDED_KEYS is the one list of keys a restart may change, and a key added to it widens what a restart accepts. It reads MassBudget's fields by name (BUDGET_TERMS) and SteadyCheckpoint's, so a field added to either is added here. Since step 6b: /transient/ (frames, the per-step StepSeries) and /transient_checkpoint/ (TransientResume's two levels); discard_after trims the tier-2 frames and rows too, so a tier-2 restart writes them again once. |
+| time_integration.py | nothing in src/ (ADR-014 G: nothing imports it); scripts/run_scenario.py (built at step 4, the runner step 7's runs go through; RunRecord's latencies, map_latencies and arrival since ADR-015 step 3), tests/test_time_integration.py | Timestep sequence and output trigger logic unchanged: one step for every class, the interval to the next switch divided into equal steps with the last on the switch exactly, the concentration fields and the budget carried across a switch unchanged (ADR-014 A); frames at step 0, every output_interval and the last step, sensor readings every step flushed before each checkpoint, the march checkpoint after its step's frame, so a restart is the uninterrupted run bitwise; the recovery outputs (ADR-014 C) as RecoveryRecord defines them. run_scenario.py reads RunRecord's fields and RecoveryRecord's by name, so a field renamed in either is renamed in its summary. Since step 6b: run dispatches on config.transient to tier 2 (solve_transient, forces.ForceGauge, forces.strouhal, RunFile's /transient/ groups and the transient checkpoint) and returns TransientRunRecord; scripts/run_scenario.py summarises it and scripts/benchmark.py's VAL-022 rows run through it. |
+| io_manager.py | time_integration (built at ADR-014 step 4); monitor (ArrivalRecord and the three input checks, since ADR-015 step 3); placement (RunFile, TransportFrames and the checks); scripts/run_scenario.py (RecoveryRecord); tests/test_io_manager.py | The run file's groups and dataset names (ADR-014 D) unchanged, so a run file written before a change still restarts after it (two breaks: ADR-015 step 2, a restart of a run with sensors needs the alert monitor's arrays in the march checkpoint; step 3, every restart needs the arrival tracker's; a checkpoint written before either step is refused with a KeyError saying so); /transport/ keeps FieldHistory's keys (steps, times, C_<k>), so Phase 7 reads one format; the checkpoint file's /steady_checkpoint/ holds every field of SteadyCheckpoint and /checkpoint/ the march's step, time, class fields and budgets, all as "<f8", so a restart from them is the uninterrupted run bitwise; the checkpoint file is replaced whole by os.replace and never written in place; RESTART_EXCLUDED_KEYS is the one list of keys a restart may change, and a key added to it widens what a restart accepts. It reads MassBudget's fields by name (BUDGET_TERMS) and SteadyCheckpoint's, so a field added to either is added here. Since step 6b: /transient/ (frames, the per-step StepSeries) and /transient_checkpoint/ (TransientResume's two levels); discard_after trims the tier-2 frames and rows too, so a tier-2 restart writes them again once. Since the step 3 fix pass (prompt 74b): `real_number`, `checked_thresholds` and `checked_onsets` are public and are the one check of the class thresholds, the onsets and the real numbers that reach the arrival maps (the tracker, ArrivalRecord, AlertMonitor.latencies and placement's frames reader); a change to what they refuse is a change to all four, and `latencies` now refuses a negative onset as the tracker does. |
 | forces.py | time_integration (tier 2, step 6b); tests/test_forces.py | ForceGauge reads the pressure of the live cell beside each face and the shear by the momentum predictor's obstacle wall stencil: a change to either stencil in momentum.py changes what the gauge must read to stay consistent with the discrete equations. ObstacleForces' signs (+x downstream, +y up) and the coefficients' 0.5 rho U^2 D, D the obstacle's height, are what the VAL-022 rows score; strouhal's ten periods and its refusal are VAL-022's instrument. |
 
 ### 3.3 Cross-Cutting Concerns
@@ -225,12 +227,13 @@ Generated. The responsibility and serves columns are editorial and come from `do
 | `src/config.py` | 2879 | Loads the YAML configuration into typed dataclasses and rejects missing keys, wrong types and out-of-range values at load time. | A02, A03, C01, C02, C03, S10 |
 | `src/constants.py` | 8 | Holds the physical constants shared by every module so that none of them defines its own copy. | C04 |
 | `src/forces.py` | 350 | Integrates the pressure and shear the staggered fields put on a named obstacle's faces, read where the momentum predictor's stencils put them, into its drag and lift and their coefficients, and reads the Strouhal number of a lift signal from its last ten periods' interpolated zero crossings with the spectrum's peak as the cross-check, refusing fewer than ten. | none |
-| `src/io_manager.py` | 1822 | Writes a run's HDF5 run file by appending (the merged configuration with its restart hash, the flow states, the transport frames, budgets, sensor readings and alert table, and a clean-out's recovery outputs) and its checkpoint file by atomic replacement (the march's checkpoint and the steady solve's), reads each back bitwise, and refuses a restart under a changed configuration, so a killed or capped run continues to what the uninterrupted run reaches. | none |
+| `src/io_manager.py` | 2040 | Writes a run's HDF5 run file by appending (the merged configuration with its restart hash, the flow states, the transport frames, budgets, sensor readings and alert table, a clean-out's recovery outputs and the arrival maps) and its checkpoint file by atomic replacement (the march's checkpoint and the steady solve's), reads each back bitwise, and refuses a restart under a changed configuration, so a killed or capped run continues to what the uninterrupted run reaches. | none |
 | `src/mesh.py` | 465 | Builds the structured grid, uniform, geometrically clustered at the walls or between interior breakpoints the loader derives, with the face, center, width and center-to-center arrays a face-based stencil needs, and classifies each cell as FLUID, SOLID or BOUNDARY. | S11 |
 | `src/momentum.py` | 1191 | Predicts u* and v* on the staggered grid with QUICK advection by deferred correction over an upwind implicit matrix, a configured number of under-relaxed Jacobi sweeps per call, an optional per-cell viscosity field with its face rule and stress source, the domain edge's wall stencil at obstacle faces, and an optional implicit Euler or BDF2 time derivative at the unknown faces, and returns the diagonal coefficients the pressure correction needs. | S07, S09, S14 |
-| `src/monitor.py` | 536 | Reads each sensor's cell of every class field after every step by ADR-014 C's cell rule, opens an alert at the first reading at or above the class's threshold and closes it at the first below, keeping each alert's times, opening reading and peak, gives the latency from each event onset, and carries its whole state for the checkpoint; it reads the fields and never writes them. | A01, A02, A06 |
+| `src/monitor.py` | 866 | Reads each sensor's cell of every class field after every step by ADR-014 C's cell rule, opens an alert at the first reading at or above the class's threshold and closes it at the first below, keeping each alert's times, opening reading and peak, gives each sensor's latency from each event onset, keeps the arrival maps (per contaminating event of the plan, class and non-SOLID cell, the first step time at or after the onset at or above the threshold) by the same rule, and carries both states for the checkpoint; it reads the fields and never writes them. | A01, A02, A04, A06 |
 | `src/multigrid.py` | 384 | Builds an additive-correction multigrid hierarchy from a five-point pressure system by 2x2 aggregation, its coarse operators the exact Galerkin sums with no probing, and applies one symmetric V-cycle with weighted Jacobi smoothing and a dense pseudo-inverse on the coarsest level as the preconditioner of the pressure correction's conjugate gradients. | S08 |
 | `src/particles.py` | 263 | Computes per-size-class transport properties: Cunningham correction, settling velocity, Brownian diffusion, deposition velocity and HEPA efficiency. | T03, T04, T09, T10 |
+| `src/placement.py` | 178 | Reads a run file's arrival maps for sensor placement: its /arrival/ maps, resolved to the step, or for a file written before them the maps rebuilt from its stored frames at the output cadence by the same rule, flagged as frame-resolved; the scoring, candidates and search are ADR-015 step 4's. | A04 |
 | `src/pressure.py` | 859 | Assembles the staggered pressure correction equation from the momentum diagonals with the discrete divergence of u* as its right-hand side, solves it by conjugate gradients preconditioned with its diagonal or, under the pressure_preconditioner key, with one multigrid V-cycle per iteration, to a relative residual, a rounding floor or a reported iteration cap, corrects the face velocities and updates the pressure. | S04, S08 |
 | `src/scalar_scheme.py` | 568 | Holds the cell-centred scalar scheme the transport solver and the k-epsilon model share: QUICK's face value bounded by the UMIST limiter, the advective flux along one axis with the inflow value or the upwind cell at a domain face, and the backward Euler solve of diffusion with a non-negative cell sink by Jacobi or, for k and eps, by diagonal-preconditioned conjugate gradients that fall back to Jacobi on the cap or a non-positive value, on per-face conductances with one step or a step per cell, with an optional mask of cells held at their value. | S15, T12 |
 | `src/scenarios.py` | 404 | Turns a loaded scenario into its intervals between event boundaries, keys each interval's flow state by a fingerprint of the segment keys the velocity layer reads so transport-only events add no state, and gives the source rate of every class at a time, an interval's concentration boundary and the initial fields on the mesh; it solves and marches nothing. | none |
@@ -238,10 +241,10 @@ Generated. The responsibility and serves columns are editorial and come from `do
 | `src/solver_transport.py` | 1075 | Advances one particle class one explicit step on the staggered face velocities: QUICK's face value bounded by the UMIST limiter under forward Euler at a Courant number the configuration sets, implicit diffusion and deposition by Jacobi on per-face conductances, the Brownian coefficient plus nu_t / Sc_t on interior faces when handed an eddy viscosity field, the settling increment on interior faces, sources added and booked, SOLID cells zero; keeps one MassBudget per class and defines FieldHistory, the output contract for the animation. | N01, T01, T03, T04, T05, T06, T07, T08, T11, T12, T13 |
 | `src/staggered.py` | 443 | Defines the staggered (MAC) field layout: shapes and allocation of face-centered u and v and cell-centered p, the face-to-center averaging the solver applies before returning, and FaceVelocities, the read-only face pair the solver exposes and the transport solver advects with. | S07, S13 |
 | `src/stopping.py` | 408 | Decides when the steady outer iteration has converged, on four conditions: (a) the iteration error estimated from the step and its fitted geometric rate, over a physical velocity scale; (b) the worst per-cell mass imbalance against its own tolerance; (c) the summed imbalance over the through-flow, which shares the tolerance of (a); and (d) the signed imbalance summed over the domain, which shares the tolerance of (b); and with the turbulence model a fifth, (e), the same estimate on the eddy viscosity over the molecular viscosity plus the median eddy viscosity of the FLUID cells, which the solver passes each outer iteration. Also defines IterationState, the snapshot a solver hands its callback once per outer iteration. | S01, S04 |
-| `src/time_integration.py` | 1586 | Runs a scenario under tier 1: solves each distinct flow state once, warm-started from the state before it, or reuses one a run file holds, then marches every particle class at one step through the intervals, dividing each into equal steps under the stable step and carrying the fields and budgets across each switch, writing frames, budgets, sensor readings, the alert monitor's table and checkpoints through the run file, continuing a run from its checkpoint, and for a clean-out tracking the recovery outputs every step; under tier 2 marches the flow itself through solve_transient, writing its frames, per-step counts, lift and drag and two-level checkpoints, restarting bitwise, and reading the Strouhal number and drag coefficient at the end; it discretises nothing. | N01 |
+| `src/time_integration.py` | 1677 | Runs a scenario under tier 1: solves each distinct flow state once, warm-started from the state before it, or reuses one a run file holds, then marches every particle class at one step through the intervals, dividing each into equal steps under the stable step and carrying the fields and budgets across each switch, writing frames, budgets, sensor readings, the alert monitor's table and checkpoints through the run file, continuing a run from its checkpoint, keeping the arrival maps of every run every step and for a clean-out the recovery outputs, and giving each sensor's latency per contaminating event from the monitor and from the maps; under tier 2 marches the flow itself through solve_transient, writing its frames, per-step counts, lift and drag and two-level checkpoints, restarting bitwise, and reading the Strouhal number and drag coefficient at the end; it discretises nothing. | A04, N01 |
 | `src/turbulence.py` | 1622 | Advances the k-epsilon model's k and eps one step on a prescribed face velocity field, standard or RNG with each variant's constants as module data: advection, explicit growth from the strain the faces give and implicit decay and diffusion through the shared scalar scheme, boundary values from a conditions object the caller builds each step, the kinematic eddy viscosity, and an assertion that k and eps are positive and finite after every step; and the scalable wall functions, which build those conditions, the wall viscosity of the momentum wall faces and the inlet values the coupled solve starts from. | S14, S15, S17 |
 
-Total 23 Python files, 18102 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
+Total 24 Python files, 18919 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
 
 `Declares it serves` is an EDITORIAL CLAIM read from `docs/system_map_annotations.toml`. It says which requirements a module is meant to satisfy, not that it does. Whether a requirement is met is answered by the tests named in the register's `Verified By` column.
 <!-- END GENERATED: components -->
@@ -265,8 +268,8 @@ Generated. Static import analysis cannot see a function bound into a registry by
 | Property | Value |
 |---|---|
 | Scope | `src/**/*.py` |
-| Files hashed | 23 |
-| Digest | `sha256:29ac8bdcf4f27806d6fe4891dc3e78e031b48ceeb425582ec96099c65e93d0d1` |
+| Files hashed | 24 |
+| Digest | `sha256:9a3d01fa9ed07428b69ac80d9027e1a69c685d6546fcaec8aaf18cd50c365064` |
 
 This is what lets the document answer whether it is current, which is the one question a stale table cannot be asked. `python scripts/gen_system_map.py --check` recomputes the whole set of generated regions, this digest included, and exits non-zero on any disagreement.
 
@@ -1529,9 +1532,11 @@ FieldHistory:                       # output contract for Phase 7's animation
 Built at ADR-015 step 2 (prompt 73), from ADR-015 C (accepted 2026-10-30). It replaces the
 development plan's draft (`update(C_fields, t)`, `get_alerts`, `get_detection_latency`): the
 monitor reads the cell containing each sensor every step by ADR-014 C's rule, and the march
-calls it (time_integration's block). Section H's `ArrivalTracker` joins this module at step 3
-and `placement.py` at step 4. Imports config and mesh only; the run file's table is built
-from `alerts` in time_integration (`alert_table`), so the module has no io_manager import.
+calls it (time_integration's block). Section H's `ArrivalTracker` and the plan's
+contaminating events joined it at step 3 (prompt 74). It imports config, mesh and, since step
+3, io_manager for `ArrivalRecord`, the return type section H gives `record` (section H's
+dependency line, monitor -> config, mesh, predates that contract); the run file's alert table
+is still built from `alerts` in time_integration (`alert_table`).
 
 ```
 SENSOR_FACE_RTOL                                   # moved here from time_integration (re-exported there)
@@ -1556,11 +1561,15 @@ AlertMonitor(config, mesh)                         # the sensors' cells, the nam
                                                    # NaN before any
     alerts -> tuple[Alert, ...]                    # every alert so far: closed, then open, each by
                                                    # step_on, class, the sensor's place in the file
-    latencies(onsets) -> np.ndarray                # [events, classes, sensors]: t_on of the first alert
-                                                   # at or after each onset minus the onset, inf if none
-                                                   # before the next onset or the end; an alert open
-                                                   # at an onset is not that event's. ValueError unless
-                                                   # 1-D, finite, increasing; TypeError for a non-real
+    latencies(onsets) -> np.ndarray                # [events, classes, sensors]: the time of the first
+                                                   # reading at or above threshold at or after each
+                                                   # onset minus the onset, an alert open at the onset
+                                                   # counting as the onset; inf if none by the last
+                                                   # update (step 3, section D's rule; step 2 cut it at
+                                                   # the next onset and did not count an open alert).
+                                                   # ValueError unless 1-D, finite, non-negative, in
+                                                   # order (equal onsets allowed); TypeError for a
+                                                   # non-real (checked_onsets, io_manager's)
     state() -> dict[str, ndarray]                  # STATE_NAMES: alert_rows [alerts, ALERT_COLUMNS]
                                                    # (every alert, open ones with NaN step_off and
                                                    # t_off), alert_step, alert_t (NaN before any
@@ -1573,6 +1582,35 @@ AlertMonitor(config, mesh)                         # the sensors' cells, the nam
                                                    # before the open, two open alerts of one sensor and
                                                    # class, a last update not after every row's steps
 ALERT_COLUMNS, STATE_NAMES
+carries_contamination(event) -> bool               # an initial, a source, a replace one of whose
+                                                   # segments states a concentration, or a set that
+                                                   # gives its segment one (step 3: the set is a
+                                                   # clarification of section D's list)
+contaminating_events(scenario) -> tuple[(name, onset), ...]
+                                                   # in onset order, then file order; an initial's
+                                                   # onset 0, any other's the start of the first
+                                                   # interval it is active over (times(), is_active),
+                                                   # a step time; ((RUN_START, 0.0),) when none
+ArrivalTracker(thresholds, live, onsets)           # [classes], [ny, nx] bool, [events] finite,
+                                                   # non-negative, in order, at least one; TypeError
+                                                   # for a non-real or non-bool, ValueError otherwise
+    onsets -> np.ndarray; first_above -> np.ndarray   # copies; first_above [events, classes, ny,
+                                                   # nx], NaN until reached, NaN in SOLID cells
+    update(t, fields) -> None                      # for each event with onset <= t, first_above = t
+                                                   # where NaN, non-SOLID and at or above; t real,
+                                                   # finite, above the last; the classes 0 to n - 1
+                                                   # on the mesh's shape
+    state() -> dict[str, ndarray]                  # ARRIVAL_STATE_NAMES: first_above, arrival_onsets,
+                                                   # arrival_t (NaN before any update)
+    restore(state) -> None                         # other names ignored; KeyError for a missing one,
+                                                   # saying the checkpoint predates step 3; ValueError
+                                                   # for a shape, other onsets, a non-scalar or inf
+                                                   # time, a time in the maps with no update, in a
+                                                   # SOLID cell, before its onset or after arrival_t
+    record(event_names, t_final) -> ArrivalRecord  # inf where a non-SOLID cell was not reached;
+                                                   # one name per event, t_final finite, not before
+                                                   # the last update
+ARRIVAL_STATE_NAMES, RUN_START ("run_start"), CONCENTRATION_KEY ("concentration")
 ```
 
 As built, `state()` carries every alert, not only the open ones and their peaks as section C
@@ -1580,6 +1618,43 @@ wrote it: the run file's table is replaced whole at each write, so a restart tha
 only the open alerts would write a table without the alerts closed before its checkpoint.
 `latencies` is built here, a step ahead of section H's table (which put it at step 3), as
 prompt 73 asks; REQ-A04's per-sensor latency in the record and the summary stays step 3's.
+
+Step 3 (prompt 74) changed `latencies` to section D's latency paragraph, the rule the arrival
+map keeps: an alert open at an onset counts as the onset, and an event's latency is not cut at
+the next event's onset. Step 2 had built section C's contract line ("inf if none before the
+next onset or the end"), under which the two instruments disagree at a sensor wherever a
+sensor reached for one event is still at or above at the next onset, or first reached after
+it; prompt 74 asks that they agree to the step. The agreement is exact because every onset is
+a step time: an event starts on an interval boundary and the march puts a step on each.
+Section D's list of contaminating events (a replace with a concentration key, a source, the
+initial condition) leaves out a set that gives a segment a concentration, the whole-supply
+breach of ADR-014 B; `carries_contamination` counts it, recorded as a clarification of section
+D in the ADR. A concentration key counts whatever its values.
+
+### placement.py --> tests/test_placement.py, tests/test_time_integration.py
+
+Built in part at ADR-015 step 3 (prompt 74): the arrival maps' readers of section D's "Run
+files without it". Imports config, io_manager, mesh and monitor. Section H's `latency`,
+`score`, `candidates`, `search` and `rank` are step 4's.
+
+```
+arrival_from_frames(frames: TransportFrames, thresholds, live, onsets) -> np.ndarray
+    # [events, classes, ny, nx]: per event, the first stored frame time at or after
+    # its onset at or above the class's threshold; inf where no frame is, NaN in
+    # SOLID cells. Never before the march's map and reaching no cell it does not;
+    # misses a cell at or above only between two frames. TypeError for a threshold
+    # or an onset that is not a real number; ValueError unless one finite,
+    # non-negative threshold per class 0 to n - 1 of the frames, live of their
+    # shape, onsets 1-D, finite, non-negative and in order (checked_thresholds and
+    # checked_onsets, io_manager's, the tracker's and the record's too)
+arrival_from_run(run_file: RunFile | path) -> RunArrival
+    # the file's /arrival/ (STEP_RESOLVED); else arrival_from_frames on its frames
+    # with the thresholds, mesh and contaminating_events of the configuration the
+    # file records (FRAME_RESOLVED). KeyError with neither maps nor frames;
+    # ValueError for a recorded configuration without a scenario section
+RunArrival(maps, onsets, resolution)    # a NamedTuple, section H's three
+STEP_RESOLVED ("step"), FRAME_RESOLVED ("frame")
+```
 
 ### scenarios.py --> time_integration; tests/test_scenarios.py
 
@@ -1664,6 +1739,14 @@ run(config, run_file=None, *, restart=None, flows_from=None, on_step=None,
     # arrays; a restart restores it and rewrites the table at once. ValueError
     # for sensors without a threshold for every class. Without sensors there
     # is no monitor, no readings and no table.
+    # Every run (ADR-015 D, step 3, prompt 74): an ArrivalTracker, built last,
+    # on contaminating_events' onsets, updated at step 0 and after every step
+    # beside the monitor and before the recovery tracker. Its state joins the
+    # checkpoint's carried arrays, so every run now carries them (the
+    # clean-out's beside the tracker's); /arrival/ is written at each
+    # checkpoint, by a restart from its checkpoint before it continues, and at
+    # the end. ValueError for any run without a threshold for every class;
+    # KeyError for a restart from a checkpoint without the maps.
 smallest_stable_dt(solver, faces, n_classes) -> float   # min over the classes
 plan_interval(index, interval, stable_dt, t_start=None) -> IntervalPlan
     # the fewest equal steps no larger than stable_dt (one more when the
@@ -1673,8 +1756,12 @@ IntervalPlan: index, t_start, t_end, fingerprint, events, steps, dt, stable_dt
 MarchStep: step, t, dt, interval, fields (read-only), budgets (copies),
     alerts (the alerts the step opened or closed; () without sensors)
 RunRecord: path, intervals, flows, steps, t_final, held, wall_seconds, budgets,
-    recovery (RecoveryRecord or None), restarted_from, resumed_plan,
-    alerts (every alert of the run, AlertMonitor.alerts' order; ())
+    recovery (RecoveryRecord or None), arrival (ArrivalRecord), restarted_from,
+    resumed_plan, alerts (every alert of the run, AlertMonitor.alerts' order; ()),
+    latencies (AlertMonitor.latencies on arrival's onsets, [events, classes,
+    sensors]; None without sensors), map_latencies (the maps at the sensors'
+    cells; equal to latencies to the step)
+map_latencies(arrival, cells) -> np.ndarray   # first_above at each cell minus the onset
 alert_table(monitor) -> AlertTable  # one row per alert, OPEN_STEP and NaN while open
 SENSOR_FACE_RTOL, sensor_cells      # re-exported from monitor (moved at step 2)
 FlowSolve: fingerprint, origin (REST, WARM, RESUMED, RUN_FILE, KEPT), outer,
@@ -1781,8 +1868,9 @@ RunFile(path)
     write_transient_checkpoint(step, t, state: FlowState, previous: FlowState | None)
         # /transient_checkpoint/ of the checkpoint file, replaced atomically
     read_transient_checkpoint() -> (t, TransientResume)   # bitwise as written
-    discard_march() -> None         # drops /transport/ whole: a restart with no
-                                    # march checkpoint marches again from step 0
+    discard_march() -> None         # drops /transport/ whole and /arrival/: a
+                                    # restart with no march checkpoint marches
+                                    # again from step 0
     write_recovery(record: RecoveryRecord) -> None   # /recovery/, replacing any:
         # a clean-out's outputs (ADR-014 C), written at the end of the run;
         # datasets thresholds, initial, recovery_time, sensor_time, mean_time,
@@ -1791,13 +1879,18 @@ RunFile(path)
         # well_mixed_time, room_recovery_time and hold_time when not None.
         # Neither discard touches it (review 63 S3)
     read_recovery() -> RecoveryRecord   # KeyError without one
+    write_arrival(record: ArrivalRecord) -> None   # /arrival/, replacing any
+        # (ADR-015 D, step 3): datasets thresholds, onsets, first_above ("<f8"),
+        # attributes event_names and t_final; TypeError for another type
+    read_arrival() -> ArrivalRecord     # KeyError without one (a file from
+                                    # before step 3)
     checkpoint(step, t, fields, budgets, fingerprint, recovery=None,
                plan_start=None) -> None
         # /checkpoint/ of the checkpoint file: attributes step, t, fingerprint,
         # plan_start when given (the start of the plan the march stepped,
         # prompt 66); C_<k> and budgets as in /transport/; recovery, named
-        # arrays the march carries besides (the recovery tracker's and the
-        # alert monitor's), in its /recovery/ child
+        # arrays the march carries besides (the recovery tracker's, the alert
+        # monitor's and the arrival tracker's), in its /recovery/ child
     read_checkpoint() -> MarchCheckpoint   # step, t, fields, budgets,
                                     # fingerprint, recovery ({} without),
                                     # plan_start (None without);
@@ -1815,6 +1908,14 @@ RunFile(path)
     # the group it does not replace across, closes both files and os.replace's
     # it over checkpoint_path: a kill at any point leaves the previous
     # checkpoint file whole
+real_number(name, value) -> float          # TypeError unless a real number (a bool is not)
+checked_thresholds(thresholds) -> np.ndarray   # [classes] float64, a new array; TypeError for a
+                                # non-real or a bool; ValueError unless 1-D, finite, non-negative
+checked_onsets(onsets) -> np.ndarray   # [events] float64, a new array; TypeError for a non-real
+                                # or a bool; ValueError unless 1-D, finite, non-negative, in order
+                                # (equal onsets allowed). The one check of these inputs: the
+                                # tracker, ArrivalRecord, AlertMonitor.latencies and placement's
+                                # frames reader all take them through it
 config_text(mapping) -> str     # yaml.safe_dump, keys in their order, ASCII
 restart_hash(mapping) -> str    # SHA-256 of config_text of the mapping less
                                 # RESTART_EXCLUDED_KEYS
@@ -1823,8 +1924,14 @@ RESTART_EXCLUDED_KEYS = (("solver", "max_simple_iter"), ("solver", "t_end"),
 BUDGET_TERMS = ("initial", "inflow", "outflow", "source", "deposited_floor",
                 "deposited_ceiling", "deposited_wall", "deposited_obstacle",
                 "current")
+ArrivalRecord: thresholds [classes], event_names, onsets [events],
+    first_above [events, classes, ny, nx] (inf where not reached, NaN in SOLID
+    cells), t_final   # TypeError for a non-str name, or a non-real (a bool is not)
+                      # threshold, onset or t_final; ValueError for shapes that
+                      # disagree, a threshold not finite and non-negative, onsets
+                      # not finite, non-negative and in order, or t_final not finite
 CONFIG, FLOW, TRANSPORT, SENSORS, ALERTS, CHECKPOINT, STEADY_CHECKPOINT,
-    RECOVERY, TRANSIENT, SERIES, TRANSIENT_CHECKPOINT   # group names
+    RECOVERY, ARRIVAL, TRANSIENT, SERIES, TRANSIENT_CHECKPOINT   # group names
 AlertTable(names, step_on, step_off, size_class, sensor, t_on, t_off,
            reading_on, peak, peak_t)
     # one row per alert, [n] each: int64 ALERT_TABLE_INTEGERS, float64
@@ -2040,4 +2147,6 @@ ADR-008, ADR-010, ADR-011, ADR-012, ADR-013 and ADR-014 are files in `docs/ADR/`
 | 2026-10-30 | Prompt 70d, review 70 round 3 on ADR-015 (branch phase5/design): the line-source probe rerun at Warhaft's 2.5 cm (`line70.py --mesh 0.025`) so that model, data and curve share one mesh length; prompt 70c's 0.80 at 80 M mixed 2.54 cm and 2.5 cm, the records give 0.784 and 0.783, so prediction (d) holds in the near field and at 20 and 50 M and fails at 80 and 100 M. VAL-024's threshold is Alex's (2026-10-30): the width within 20% at 20 and 50 M, 80 M reported and recorded as a carried limit (the model's plume about a fifth narrower far downstream, near the returns), the options not taken in ADR-015 decision A. No module, generated region or requirement text changed. | Claude (builder) |
 | 2026-10-30 | ADR-015 accepted by Alex (prompt 71, branch phase5/step0-val024, commit 0): A in the rounds of prompt 70, B to H as recommended on 2026-10-30, the counter's sample time OPEN until a counter is specified. Section 2: REQ-A01, REQ-A03 and REQ-A05 take the forms of ADR-015 G, and REQ-T14 is added (VAL-024's width clause, the allowance Alex's of 2026-10-30), its Verified By planned until the row is built. Section 4: the planned `AlertMonitor` block is replaced by ADR-015 C's contract, marked planned. No module, generated region or interface in `src/` changed. | Claude (builder) |
 | 2026-10-30 | ADR-015 step 0 built (prompt 71, branch phase5/step0-val024). The Phase 4 coverage debt (the gate report's table Cv2): a test for each refusal and fallback of config.py, io_manager.py, mesh.py, forces.py, particles.py, staggered.py, solver_staggered.py, solver_transport.py, turbulence.py, time_integration.py, pressure.py and scalar_scheme.py that a test can reach. One defect found by them: `RunFile.write_transient_checkpoint` skipped its type check for a None state (only the previous level may be absent), now refused with the TypeError the docstring names. VAL-024: `configs/validation_line_source.yaml`, `validation/line_source.py` (the experiment's constants, the digitised widths of T8, the readers, the scalar march and the comparison), `validation.cases.load_line_source` and the presets `val024_280x50` and `val024_560x100`, the harness family `line_source` in `scripts/benchmark.py`, and `tests/test_line_source.py`. Section 2: REQ-S14 and REQ-T14 name the tests that verify them. The system map's line counts are regenerated. No interface of a `src/` module changed. | Claude (builder) |
-| 2026-10-31 | ADR-015 step 2 built (prompt 73, branch phase5/step2-monitor). monitor.py (new): AlertMonitor (update, readings, alerts, latencies, state, restore), Alert, sensor_cells and SENSOR_FACE_RTOL moved from time_integration and re-exported there; its state carries every alert, not only the open ones, because the run file's table is replaced whole (section 4's monitor block). config.py: `thresholds: {iso_class: N}`, REQ-A03's second form, and `iso_class`. io_manager.py: AlertTable, write_alerts and read_alerts, /transport/alerts/; the checkpoint's carried arrays hold the monitor's state beside the tracker's. time_integration.py: the monitor called at step 0 and after every step on read-only fields (the initial fields made read-only), its readings the stored ones, alert_table, MarchStep.alerts and RunRecord.alerts; scripts/run_scenario.py prints the alerts. REQ-A06's Verified By names VAL-009's tests. The cascade rules' monitor row and the planned markers on config, mesh and solver_transport updated. Section 3 regenerated (monitor -> config, mesh; time_integration -> monitor). |
+| 2026-10-31 | ADR-015 step 2 built (prompt 73, branch phase5/step2-monitor). monitor.py (new): AlertMonitor (update, readings, alerts, latencies, state, restore), Alert, sensor_cells and SENSOR_FACE_RTOL moved from time_integration and re-exported there; its state carries every alert, not only the open ones, because the run file's table is replaced whole (section 4's monitor block). config.py: `thresholds: {iso_class: N}`, REQ-A03's second form, and `iso_class`. io_manager.py: AlertTable, write_alerts and read_alerts, /transport/alerts/; the checkpoint's carried arrays hold the monitor's state beside the tracker's. time_integration.py: the monitor called at step 0 and after every step on read-only fields (the initial fields made read-only), its readings the stored ones, alert_table, MarchStep.alerts and RunRecord.alerts; scripts/run_scenario.py prints the alerts. REQ-A06's Verified By names VAL-009's tests. The cascade rules' monitor row and the planned markers on config, mesh and solver_transport updated. Section 3 regenerated (monitor -> config, mesh; time_integration -> monitor). | Claude (builder) |
+| 2026-11-01 | ADR-015 step 3 built (prompt 74, branch phase5/step3-arrival). monitor.py: ArrivalTracker (update, first_above, onsets, state, restore, record), contaminating_events and carries_contamination (a set that gives a segment a concentration counted, a clarification of ADR-015 D's list), ARRIVAL_STATE_NAMES, RUN_START; latencies changed to section D's rule (an alert open at an onset counts as the onset, no cut at the next onset), so the monitor and the map agree to the step; monitor now imports io_manager. io_manager.py: ArrivalRecord, write_arrival and read_arrival, /arrival/; discard_march drops it. placement.py (new, in part): arrival_from_frames, arrival_from_run, RunArrival. time_integration.py: every tier-1 run keeps the maps, carries the tracker's state in the checkpoint and writes /arrival/ at each checkpoint and at the end; RunRecord gains arrival, latencies and map_latencies; map_latencies; scripts/run_scenario.py prints each sensor's latency per event, the monitor's beside the map's. REQ-A04's Verified By names its test. Section 3 regenerated (monitor -> io_manager; placement -> config, io_manager, mesh, monitor). No change to the solve or march arithmetic. | Claude (builder) |
+| 2026-11-01 | ADR-015 step 3 fix pass (prompt 74b, same branch). io_manager.py: `real_number` (was private, and copied in monitor), `checked_thresholds` and `checked_onsets` public, the one check of the class thresholds and the onsets that reach the arrival maps; `ArrivalRecord` also refuses a non-finite `t_final`, a negative threshold or onset and bool arrays. monitor.py: the tracker's and `latencies`' inputs go through them (`latencies` now refuses a negative onset); its private copies removed. placement.py: `arrival_from_frames` takes its thresholds and onsets through them; its docstrings state that the frames' map misses cells at or above their threshold only between two frames. REQ-A04's requirement text gains the onset definition (ADR-015 G, accepted by Alex). The io_manager cascade row names monitor and placement as consumers. Section 3 regenerated. No change to the solve or march arithmetic. | Claude (builder) |

@@ -24,6 +24,11 @@ written before. Its groups:
 - ``/recovery/``: a clean-out's recovery outputs (ADR-014 C), written once
   at the end of the run (``RecoveryRecord``); ``discard_after`` does not
   touch it, and a restart that runs to a new end replaces it;
+- ``/arrival/``: the arrival maps (ADR-015 D, ``ArrivalRecord``): datasets
+  ``thresholds`` [classes], ``onsets`` [events] and ``first_above``
+  [events, classes, ny, nx], attributes ``event_names`` and ``t_final``;
+  replaced whole at each march checkpoint and at the end, dropped by
+  ``discard_march``;
 - ``/transient/``, a tier-2 run's (ADR-014 D, tier 2; step 6b): ``steps``
   (int64), ``times`` and the frames ``u`` [n, ny, nx+1], ``v`` [n, ny+1, nx]
   and ``p`` [n, ny, nx], and ``/transient/series/``, one row per step:
@@ -35,7 +40,8 @@ The checkpoint file, ``<run>.checkpoint.h5`` beside it (the run file's path
 less its suffix), holds what a restart continues from: ``/checkpoint/``, the
 march's step, simulated time, class fields, budgets and the fingerprint of
 the flow state it was marching on, with any named arrays the march carries
-besides (the recovery tracker's and the alert monitor's, ``recovery``), and
+besides (the recovery tracker's, the alert monitor's and the arrival maps',
+``recovery``), and
 ``/steady_checkpoint/``, a steady
 solve's SteadyCheckpoint (step 0's layout: ``u``, ``v``, ``p`` and ``k``,
 ``eps``, ``nu_t``, the three series, ``outer``, ``pressure_cap_hits``,
@@ -81,6 +87,7 @@ ALERTS = "alerts"
 CHECKPOINT = "checkpoint"
 STEADY_CHECKPOINT = "steady_checkpoint"
 RECOVERY = "recovery"
+ARRIVAL = "arrival"
 TRANSIENT = "transient"
 SERIES = "series"
 TRANSIENT_CHECKPOINT = "transient_checkpoint"
@@ -141,6 +148,8 @@ _RECOVERY_ARRAYS = (
     "local_recovery",
     "local_recovery_max",
 )
+# ArrivalRecord's float64 arrays, the datasets of /arrival/.
+_ARRIVAL_ARRAYS = ("thresholds", "onsets", "first_above")
 _RECOVERY_SCALARS = (
     "t_final",
     "air_change_rate",
@@ -347,8 +356,8 @@ class MarchCheckpoint:
         The flow state the march was stepping on (``/flow/<fingerprint>/``).
     recovery : dict[str, np.ndarray]
         The named float64 arrays the march carried besides (the recovery
-        tracker's state, ADR-014 C, and the alert monitor's, ADR-015 C);
-        empty when it carried none.
+        tracker's state, ADR-014 C, the alert monitor's, ADR-015 C, and the
+        arrival maps', ADR-015 D); empty when it carried none.
     plan_start : float or None
         The start of the plan the march was stepping when it wrote the
         checkpoint: the interval's start, or the time a restart divided the
@@ -517,7 +526,7 @@ class RecoveryRecord:
         if self.hold_time is not None:
             scalars.append("hold_time")
         for name in scalars:
-            object.__setattr__(self, name, _real(name, getattr(self, name)))
+            object.__setattr__(self, name, real_number(name, getattr(self, name)))
         for name in _RECOVERY_ARRAYS:
             array = np.asarray(getattr(self, name), dtype="<f8")
             object.__setattr__(self, name, array)
@@ -548,6 +557,154 @@ class RecoveryRecord:
             raise ValueError(
                 f"local_recovery has shape {local}; expected [{classes[0]}, ny, nx]"
             )
+
+
+@dataclass(frozen=True, eq=False)
+class ArrivalRecord:
+    """The arrival maps (ADR-015 D), as ``/arrival/`` holds them.
+
+    The arrays are stored as float64 when the record is built.
+
+    Parameters
+    ----------
+    thresholds : np.ndarray
+        [classes], particles per cubic metre.
+    event_names : tuple[str, ...]
+        The contaminating events, in the onsets' order.
+    onsets : np.ndarray
+        [events], seconds, finite and in order.
+    first_above : np.ndarray
+        [events, classes, ny, nx]: the first step time at or after the
+        event's onset at which the cell is at or above the class's
+        threshold; inf for a non-SOLID cell not reached by ``t_final``, NaN
+        in SOLID cells.
+    t_final : float
+        The last step time the maps read, seconds, finite.
+
+    Raises
+    ------
+    TypeError
+        If an event name is not a str, or a threshold, an onset or
+        ``t_final`` is not a real number (a bool is not).
+    ValueError
+        If the shapes do not agree on the events and the classes, a
+        threshold is not finite and non-negative, the onsets are not finite,
+        non-negative and in order, or ``t_final`` is not finite.
+    """
+
+    thresholds: np.ndarray
+    event_names: tuple[str, ...]
+    onsets: np.ndarray
+    first_above: np.ndarray
+    t_final: float
+
+    def __post_init__(self) -> None:
+        names = tuple(self.event_names)
+        for name in names:
+            if not isinstance(name, str):
+                raise TypeError(
+                    f"an event name must be a str, got {type(name).__name__}"
+                )
+        object.__setattr__(self, "event_names", names)
+        t_final = real_number("t_final", self.t_final)
+        if not np.isfinite(t_final):
+            raise ValueError(f"t_final must be finite, got {t_final}")
+        object.__setattr__(self, "t_final", t_final)
+        for name, check in (
+            ("thresholds", checked_thresholds),
+            ("onsets", checked_onsets),
+        ):
+            object.__setattr__(self, name, check(getattr(self, name)).astype("<f8"))
+        object.__setattr__(
+            self, "first_above", np.asarray(self.first_above, dtype="<f8")
+        )
+        if self.onsets.shape != (len(names),):
+            raise ValueError(
+                f"onsets has shape {self.onsets.shape} for {len(names)} events"
+            )
+        maps = self.first_above.shape
+        if len(maps) != 4 or maps[:2] != (len(names), self.thresholds.size):
+            raise ValueError(
+                f"first_above has shape {maps}; expected [{len(names)}, "
+                f"{self.thresholds.size}, ny, nx]"
+            )
+
+
+def checked_thresholds(thresholds: Sequence[float] | np.ndarray) -> np.ndarray:
+    """The class thresholds as a new [classes] float64 array, or a refusal.
+
+    The one check of the thresholds that reach the arrival maps: the tracker,
+    ``ArrivalRecord`` and the frames' reader (``placement``) all take them
+    through it.
+
+    Parameters
+    ----------
+    thresholds : Sequence[float] or np.ndarray
+        Per class, particles per cubic metre.
+
+    Returns
+    -------
+    np.ndarray
+        The thresholds, float64; empty if none were given.
+
+    Raises
+    ------
+    TypeError
+        If a threshold is not a real number (a bool is not).
+    ValueError
+        If the thresholds are not one-dimensional, or one is not finite and
+        non-negative.
+    """
+    if np.ndim(thresholds) != 1:
+        raise ValueError(
+            f"thresholds must be [classes], got shape {np.shape(thresholds)}"
+        )
+    for value in thresholds:
+        real_number("a threshold", value)
+    out = np.array(thresholds, dtype=np.float64)
+    if not (np.isfinite(out).all() and (out >= 0).all()):
+        raise ValueError(
+            f"the thresholds must be finite and non-negative, got {out.tolist()}"
+        )
+    return out
+
+
+def checked_onsets(onsets: Sequence[float] | np.ndarray) -> np.ndarray:
+    """The contaminating events' onsets as a new [events] float64 array, or a refusal.
+
+    The one check of the onsets that reach the arrival maps and the latencies
+    (``monitor``, ``ArrivalRecord``, ``placement``).
+
+    Parameters
+    ----------
+    onsets : Sequence[float] or np.ndarray
+        Seconds, one per event.
+
+    Returns
+    -------
+    np.ndarray
+        The onsets, float64; empty if none were given.
+
+    Raises
+    ------
+    TypeError
+        If an onset is not a real number (a bool is not).
+    ValueError
+        If the onsets are not one-dimensional, finite, non-negative and in
+        order (two events may share an onset).
+    """
+    if np.ndim(onsets) != 1:
+        raise ValueError(f"onsets must be [events], got shape {np.shape(onsets)}")
+    for onset in onsets:
+        real_number("an onset", onset)
+    out = np.array(onsets, dtype=np.float64)
+    if not np.isfinite(out).all():
+        raise ValueError("the onsets must be finite")
+    if np.any(np.diff(out) < 0.0):
+        raise ValueError("the onsets must be in order")
+    if out.size and out[0] < 0.0:
+        raise ValueError(f"the onsets must be non-negative, got {out[0]}")
+    return out
 
 
 def config_text(mapping: Mapping[str, object]) -> str:
@@ -788,12 +945,14 @@ class RunFile:
         _check_fingerprint(fingerprint)
         if not isinstance(state, FlowState):
             raise TypeError(f"state must be a FlowState, got {type(state).__name__}")
-        wall = _real("wall_seconds", wall_seconds)
+        wall = real_number("wall_seconds", wall_seconds)
         stages = {
-            str(k): _real(f"stage_seconds[{k}]", v) for k, v in stage_seconds.items()
+            str(k): real_number(f"stage_seconds[{k}]", v)
+            for k, v in stage_seconds.items()
         }
         readings = {
-            str(k): _real(f"rule_readings[{k}]", v) for k, v in rule_readings.items()
+            str(k): real_number(f"rule_readings[{k}]", v)
+            for k, v in rule_readings.items()
         }
         with h5py.File(self.path, "a") as run_file:
             flows = run_file.require_group(FLOW)
@@ -890,7 +1049,7 @@ class RunFile:
             from the first frame's, or ``step`` is not above the last frame's.
         """
         step = _step(step)
-        t = _real("t", t)
+        t = real_number("t", t)
         arrays = _class_fields(fields, budgets)
         classes = list(arrays)
         row = np.array([_budget_row(b) for b in budgets], dtype="<f8")
@@ -1131,18 +1290,20 @@ class RunFile:
                         dataset.resize(keep, axis=0)
 
     def discard_march(self) -> None:
-        """Drop every frame and sensor reading: the whole ``/transport/`` group.
+        """Drop every frame, sensor reading and arrival map.
 
         A restart that finds no march checkpoint (none written yet, or no
         ``checkpoint_interval``) marches again from step 0, so what an
-        interrupted march wrote is written again. ``/config``, ``/flow/``
-        and ``/recovery/`` are kept.
+        interrupted march wrote is written again: the whole ``/transport/``
+        group and ``/arrival/`` go. ``/config``, ``/flow/`` and
+        ``/recovery/`` are kept.
         """
         if not self.path.exists():
             return
         with h5py.File(self.path, "a") as run_file:
-            if TRANSPORT in run_file:
-                del run_file[TRANSPORT]
+            for name in (TRANSPORT, ARRIVAL):
+                if name in run_file:
+                    del run_file[name]
 
     # ------------------------------------------------------------------
     # /transient/ (tier 2)
@@ -1172,7 +1333,7 @@ class RunFile:
             field's shape differs from the first frame's.
         """
         step = _step(step)
-        t = _real("t", t)
+        t = real_number("t", t)
         arrays = {
             name: np.asarray(array, dtype="<f8")
             for name, array in (("u", u), ("v", v), ("p", p))
@@ -1297,7 +1458,7 @@ class RunFile:
             not a FlowState.
         """
         step = _step(step)
-        t = _real("t", t)
+        t = real_number("t", t)
         for name, given in (("state", state), ("previous", previous)):
             # Only the previous level may be absent: BDF2 reads it, implicit Euler
             # and a march at step 0 do not.
@@ -1420,6 +1581,63 @@ class RunFile:
         )
 
     # ------------------------------------------------------------------
+    # /arrival/
+    # ------------------------------------------------------------------
+
+    def write_arrival(self, record: ArrivalRecord) -> None:
+        """Write the arrival maps, replacing any the file holds.
+
+        Parameters
+        ----------
+        record : ArrivalRecord
+            The maps so far. The march writes them at each checkpoint and at
+            the end; a restart writes its checkpoint's before it continues.
+
+        Raises
+        ------
+        TypeError
+            If ``record`` is not an ArrivalRecord.
+        """
+        if not isinstance(record, ArrivalRecord):
+            raise TypeError(
+                f"record must be an ArrivalRecord, got {type(record).__name__}"
+            )
+        with h5py.File(self.path, "a") as run_file:
+            if ARRIVAL in run_file:
+                del run_file[ARRIVAL]
+            group = run_file.create_group(ARRIVAL)
+            for name in _ARRIVAL_ARRAYS:
+                group.create_dataset(name, data=getattr(record, name), dtype="<f8")
+            group.attrs["event_names"] = list(record.event_names)
+            group.attrs["t_final"] = np.float64(record.t_final)
+
+    def read_arrival(self) -> ArrivalRecord:
+        """Read back the maps ``write_arrival`` wrote.
+
+        Returns
+        -------
+        ArrivalRecord
+            As written, its arrays bitwise.
+
+        Raises
+        ------
+        KeyError
+            If the file holds no ``/arrival/``: a run file written before
+            ADR-015 step 3 (``placement.arrival_from_run`` reads its frames).
+        """
+        with h5py.File(self.path, "r") as run_file:
+            if ARRIVAL not in run_file:
+                raise KeyError(f"{self.path} holds no /{ARRIVAL}/")
+            group = run_file[ARRIVAL]
+            arrays = {name: group[name][()] for name in _ARRIVAL_ARRAYS}
+            attrs = dict(group.attrs)
+        return ArrivalRecord(
+            event_names=tuple(str(x) for x in attrs["event_names"]),
+            t_final=float(attrs["t_final"]),
+            **arrays,
+        )
+
+    # ------------------------------------------------------------------
     # The checkpoint file
     # ------------------------------------------------------------------
 
@@ -1449,8 +1667,8 @@ class RunFile:
             The flow state the march steps on.
         recovery : Mapping[str, np.ndarray], optional
             Named arrays the march carries besides, stored as float64 and
-            read back bitwise (the recovery tracker's state, ADR-014 C, and
-            the alert monitor's, ADR-015 C).
+            read back bitwise (the recovery tracker's state, ADR-014 C, the
+            alert monitor's, ADR-015 C, and the arrival maps', ADR-015 D).
         plan_start : float, optional
             The start of the plan the march steps, so a restart can find the
             checkpoint on a plan a restart before it divided again.
@@ -1466,11 +1684,11 @@ class RunFile:
             SHA-256.
         """
         step = _step(step)
-        t = _real("t", t)
+        t = real_number("t", t)
         arrays = _class_fields(fields, budgets)
         _check_fingerprint(fingerprint)
         if plan_start is not None:
-            plan_start = _real("plan_start", plan_start)
+            plan_start = real_number("plan_start", plan_start)
         rows = np.array([_budget_row(b) for b in budgets], dtype="<f8")
         carried = {}
         for name, array in (recovery or {}).items():
@@ -1729,7 +1947,7 @@ def _check_fingerprint(fingerprint: object) -> None:
         )
 
 
-def _real(name: str, value: object) -> float:
+def real_number(name: str, value: object) -> float:
     """A real number that is not a bool, as a float, or a refusal."""
     if isinstance(value, (bool, np.bool_)) or not isinstance(
         value, (int, float, np.integer, np.floating)

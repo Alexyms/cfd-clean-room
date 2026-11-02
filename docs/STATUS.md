@@ -106,7 +106,16 @@ phase5/step2-monitor, 2026-10-31) built the alert monitor (`src/monitor.py`): it
 sensor after every step, opens an alert at the first reading at or above the class's threshold
 and closes it at the first below, leaves the fields untouched, and its table is in the run
 file and its state in the checkpoint. VAL-009 passes, and the thresholds may be given as an ISO
-class number. Review and test 73 run before its pull request.
+class number. It was merged as PR 101. Step 3 (prompt 74, branch phase5/step3-arrival,
+2026-11-01) built the arrival maps: for every run, per contaminating event, size class and
+cell, the first step time at or after the event's start at which the cell is at or above
+its threshold, kept every step, carried across a restart and written to the run file. Each
+sensor's detection latency per event is in the run's record and summary, read from the
+monitor and from the map, and the two agree to the step. Older run files' maps are rebuilt
+from their stored frames, flagged as resolved only to the frames, and those maps miss the
+cells at or above their threshold only between two frames. Review and test 74 ran; prompt 74b
+closed the one missing test (a frame at an onset's own time) and the Suggestions on the same
+branch before its pull request.
 Phases 6 and 7 have not begun.
 
 The product room itself has never been solved, and on 2026-10-04 it was found that the laminar

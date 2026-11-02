@@ -10,7 +10,9 @@ Run from the repository root with the project's interpreter:
 A scenario file in; a run file (and its checkpoint file beside it) and a
 short text summary out: the intervals, the flow states solved and reused,
 the steps, the wall time, each class's budget closure, for a clean-out the
-recovery outputs of ADR-014 C, and the alerts the run opened (ADR-015 C).
+recovery outputs of ADR-014 C, the alerts the run opened (ADR-015 C), and
+each sensor's latency per contaminating event, the monitor's beside the
+arrival map's at the sensor's cell (REQ-A04, ADR-015 D).
 A file with a transient section runs under tier 2 (ADR-014 G, step 6b) from
 rest, and its summary is the steps,
 the mean and largest outer count per step, the Strouhal number of the last
@@ -36,6 +38,8 @@ import subprocess
 import sys
 from collections.abc import Sequence
 from pathlib import Path
+
+import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -194,6 +198,63 @@ def alert_lines(
     return lines
 
 
+def _latency(value: float, end: float | None = None) -> str:
+    """A latency to four decimals, or "never" (by the run's END, when given) for inf."""
+    if math.isinf(value):
+        return "never" if end is None else f"never by {end:.4f} s"
+    return f"{value:.4f} s"
+
+
+def latency_lines(
+    record: RunRecord, sizes: Sequence[float], names: Sequence[str]
+) -> list[str]:
+    """Each sensor's latency per event and class (REQ-A04, ADR-015 D).
+
+    Parameters
+    ----------
+    record : RunRecord
+        The run's record: its arrival maps' events and onsets, the
+        monitor's ``latencies`` and the maps' at the sensors' cells.
+    sizes : Sequence[float]
+        The class diameters, metres, to name the classes.
+    names : Sequence[str]
+        The sensors' names, in the configuration's order.
+
+    Returns
+    -------
+    list[str]
+        The lines, without newlines: per event its onset, then per class
+        each sensor's latency from the onset, the monitor's then the map's,
+        "never by" the run's end where a sensor is not reached. The two
+        agree to the step; a sensor where they do not is marked DISAGREES.
+    """
+    if record.latencies is None or record.map_latencies is None:
+        return ["latency (REQ-A04): no sensors"]
+    arrival = record.arrival
+    agree = bool(np.array_equal(record.latencies, record.map_latencies))
+    lines = [
+        "latency (REQ-A04, ADR-015 D): from each event's onset, the monitor's and the "
+        "arrival map's at the sensor's cell, "
+        + ("which agree" if agree else "which DISAGREE")
+    ]
+    end = record.t_final
+    for e, (event, onset) in enumerate(
+        zip(arrival.event_names, arrival.onsets, strict=True)
+    ):
+        lines.append(f"  event {event}, onset t = {float(onset):.4f} s:")
+        for k, size in enumerate(sizes):
+            parts = []
+            for s, name in enumerate(names):
+                monitor = float(record.latencies[e, k, s])
+                mapped = float(record.map_latencies[e, k, s])
+                part = f"{name} {_latency(monitor, end)}, map {_latency(mapped)}"
+                if monitor != mapped:
+                    part += " DISAGREES"
+                parts.append(part)
+            lines.append(f"    class {k} ({size * 1e6:g} um): " + "; ".join(parts))
+    return lines
+
+
 def summary(record: RunRecord, config: SimConfig, scenario: Path) -> list[str]:
     """The run's summary lines.
 
@@ -264,6 +325,11 @@ def summary(record: RunRecord, config: SimConfig, scenario: Path) -> list[str]:
         lines.extend(recovery_lines(record.recovery, config.particle_sizes))
     lines.extend(
         alert_lines(record.alerts, config.particle_sizes, bool(config.sensors))
+    )
+    lines.extend(
+        latency_lines(
+            record, config.particle_sizes, [sensor.name for sensor in config.sensors]
+        )
     )
     return lines
 

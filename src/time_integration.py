@@ -38,7 +38,19 @@ The alerts (ADR-015 C). With sensors, the alert monitor
 fields at step 0 included, from fields already made read-only; its readings
 are the ones the run file stores, and its alert table is written whole to
 ``/transport/alerts/`` with each append of them. Its state joins the
-checkpoint's carried arrays, so a restart continues an open alert. With
+checkpoint's carried arrays, so a restart continues an open alert.
+
+The arrival maps (ADR-015 D, step 3). Every run keeps them
+(``monitor.ArrivalTracker``): per contaminating event of the plan
+(``monitor.contaminating_events``), class and non-SOLID cell, the first step
+time at or after the event's onset at which the cell is at or above its
+class's threshold, read from the initial fields at step 0 and after every
+step beside the monitor and the recovery tracker. The tracker's state joins
+the checkpoint's carried arrays, so every run now carries them; the maps are
+written to ``/arrival/`` at each checkpoint and at the end. With sensors the
+record carries each sensor's latency per event, the monitor's
+(``AlertMonitor.latencies``) and the map's at the sensor's cell, which agree
+to the step (REQ-A04). With
 ``checkpoint_interval`` the march's checkpoint is rewritten every that many
 steps and at the last, after that step's frame, and a steady solve hands its
 own checkpoint at the same cadence. A restart checks the configuration,
@@ -94,10 +106,23 @@ import numpy as np
 from src.boundary_staggered import StaggeredBoundary
 from src.config import Initial, SimConfig
 from src.forces import ForceGauge, StrouhalReading, strouhal
-from src.io_manager import OPEN_STEP, AlertTable, RecoveryRecord, RunFile, StepSeries
+from src.io_manager import (
+    OPEN_STEP,
+    AlertTable,
+    ArrivalRecord,
+    RecoveryRecord,
+    RunFile,
+    StepSeries,
+)
 from src.mesh import SOLID, Mesh
 from src.monitor import SENSOR_FACE_RTOL as SENSOR_FACE_RTOL
-from src.monitor import Alert, AlertMonitor, sensor_cells
+from src.monitor import (
+    Alert,
+    AlertMonitor,
+    ArrivalTracker,
+    contaminating_events,
+    sensor_cells,
+)
 from src.particles import ParticlePhysics
 from src.scenarios import Interval, ScenarioManager
 from src.solver_staggered import (
@@ -367,6 +392,9 @@ class RunRecord:
         Copies of the budgets at the end, one per class.
     recovery : RecoveryRecord or None
         A clean-out's outputs; None for a scenario without an initial event.
+    arrival : ArrivalRecord
+        The arrival maps at the end (ADR-015 D), as ``/arrival/`` holds
+        them.
     restarted_from : int or None
         The checkpoint step a restart continued from, 0 for a restart that
         found none and marched again; None for a new run.
@@ -375,6 +403,14 @@ class RunRecord:
     alerts : tuple[Alert, ...]
         Every alert of the run, a restart's before its checkpoint included,
         in ``AlertMonitor.alerts``' order; empty without sensors.
+    latencies : np.ndarray or None
+        [events, classes, sensors], each sensor's detection latency per
+        event of ``arrival``, the monitor's (``AlertMonitor.latencies``),
+        seconds from the onset, inf where the sensor is not at or above its
+        threshold by ``t_final`` (REQ-A04); None without sensors.
+    map_latencies : np.ndarray or None
+        The same read from the arrival maps at each sensor's cell
+        (``map_latencies``); it equals ``latencies`` to the step.
     """
 
     path: Path
@@ -386,9 +422,12 @@ class RunRecord:
     wall_seconds: float
     budgets: tuple[MassBudget, ...]
     recovery: RecoveryRecord | None
+    arrival: ArrivalRecord
     restarted_from: int | None = None
     resumed_plan: IntervalPlan | None = None
     alerts: tuple[Alert, ...] = ()
+    latencies: np.ndarray | None = None
+    map_latencies: np.ndarray | None = None
 
 
 @dataclass(frozen=True, eq=False)
@@ -482,6 +521,30 @@ def alert_table(monitor: AlertMonitor) -> AlertTable:
         peak=[a.peak for a in alerts],
         peak_t=[a.peak_t for a in alerts],
     )
+
+
+def map_latencies(
+    arrival: ArrivalRecord, cells: Sequence[tuple[int, int]]
+) -> np.ndarray:
+    """The arrival maps' latency at each sensor's cell (REQ-A04, ADR-015 D).
+
+    Parameters
+    ----------
+    arrival : ArrivalRecord
+        The run's maps.
+    cells : Sequence[tuple[int, int]]
+        The (j, i) each sensor reads (``sensor_cells``).
+
+    Returns
+    -------
+    np.ndarray
+        [events, classes, sensors]: the cell's first time at or above the
+        threshold at or after the event's onset, minus the onset; inf where
+        the cell was not reached by the end.
+    """
+    rows = np.array([j for j, _ in cells], dtype=np.intp)
+    cols = np.array([i for _, i in cells], dtype=np.intp)
+    return arrival.first_above[:, :, rows, cols] - arrival.onsets[:, None, None]
 
 
 def air_change_rate(state: FlowState, mesh: Mesh) -> float:
@@ -889,6 +952,14 @@ class _Run:
         self.monitor: AlertMonitor | None = None
         if config.sensors:
             self.monitor = AlertMonitor(config, self.mesh)
+        # Built last, so a run refused for a class's threshold names the
+        # recovery or the monitor where it has them, as before the maps.
+        self.events = contaminating_events(spec)
+        self.arrival = ArrivalTracker(
+            config.class_thresholds("the arrival maps"),
+            self.live,
+            [onset for _, onset in self.events],
+        )
 
     # -- Flow states ---------------------------------------------------------
 
@@ -1050,13 +1121,17 @@ class _Run:
                 )
         return alerts
 
-    def carried(self) -> dict[str, np.ndarray] | None:
-        """The tracker's and the monitor's states, for the checkpoint; None for none."""
-        out: dict[str, np.ndarray] = {}
+    def carried(self) -> dict[str, np.ndarray]:
+        """The trackers' and the monitor's states, for the checkpoint."""
+        out = self.arrival.state()
         for part in (self.tracker, self.monitor):
             if part is not None:
                 out.update(part.state())
-        return out or None
+        return out
+
+    def arrival_record(self, t: float) -> ArrivalRecord:
+        """The arrival maps at time t, the last step's, named by the plan's events."""
+        return self.arrival.record([name for name, _ in self.events], t)
 
     def means(self, fields: Mapping[int, np.ndarray]) -> list[float]:
         """Every class's free-area mean."""
@@ -1112,6 +1187,7 @@ class _Run:
                 step += 1
                 t = plan.time(i)
                 alerts = self.observe(step, t, fields, pending)
+                self.arrival.update(t, fields)
                 if self.tracker is not None:
                     means = [b.current / self.free_area for b in solver.budget]
                     self.tracker.update(t, fields, means)
@@ -1122,6 +1198,7 @@ class _Run:
                     self._flush(pending)
                 if cadence is not None and (step % cadence == 0 or last):
                     self._flush(pending)
+                    self.run.write_arrival(self.arrival_record(t))
                     self.run.checkpoint(
                         step,
                         t,
@@ -1264,11 +1341,13 @@ def run(
         message names the first key); for a restart under another
         configuration (``RunFile.check_restart``), or under a ``t_end`` at
         or before the checkpoint's time (the message names both); for a
-        sensor in a SOLID cell, a clean-out without sensors or thresholds, or
-        sensors without a threshold for every class (the alert monitor's).
+        sensor in a SOLID cell, a clean-out without sensors or thresholds,
+        sensors without a threshold for every class (the alert monitor's),
+        or any run without a threshold for every class (the arrival maps').
     KeyError
-        For a restart of a run with sensors from a checkpoint that carries no
-        alert monitor state (one written before ADR-015 step 2).
+        For a restart from a checkpoint that carries no arrival maps (one
+        written before ADR-015 step 3), or, for a run with sensors, no alert
+        monitor state (before step 2).
     FlowNotConvergedError
         When a flow state stops at its cap or goes non-finite.
     TransientStepError
@@ -1367,6 +1446,8 @@ def run(
             # The table a crash left may hold alerts after the checkpoint.
             state.monitor.restore(checkpoint.recovery)
             run_path.write_alerts(alert_table(state.monitor))
+        state.arrival.restore(checkpoint.recovery)
+        run_path.write_arrival(state.arrival_record(checkpoint.t))
         march_plans, start, resumed_plan = state.resume_point(
             plans, checkpoint.t, checkpoint.plan_start
         )
@@ -1383,6 +1464,7 @@ def run(
         pending: list[tuple[int, float, np.ndarray]] = []
         state.observe(0, 0.0, fields, pending)
         state._flush(pending)
+        state.arrival.update(0.0, fields)
         if state.tracker is not None:
             state.tracker.update(0.0, fields, state.means(fields))
         march_plans, start, step, t = plans, (0, 0), 0, 0.0
@@ -1396,6 +1478,12 @@ def run(
         rate = air_change_rate(state.states[state.intervals[0].fingerprint], state.mesh)
         recovery = state.tracker.record(state.names, rate, held)
         run_path.write_recovery(recovery)
+    arrival = state.arrival_record(t)
+    run_path.write_arrival(arrival)
+    latencies = mapped = None
+    if state.monitor is not None:
+        latencies = state.monitor.latencies(arrival.onsets.tolist())
+        mapped = map_latencies(arrival, state.cells)
     return RunRecord(
         path=run_path.path,
         intervals=tuple(plans),
@@ -1406,9 +1494,12 @@ def run(
         wall_seconds=perf_counter() - started,
         budgets=tuple(budgets),
         recovery=recovery,
+        arrival=arrival,
         restarted_from=restarted_from,
         resumed_plan=resumed_plan,
         alerts=() if state.monitor is None else state.monitor.alerts,
+        latencies=latencies,
+        map_latencies=mapped,
     )
 
 

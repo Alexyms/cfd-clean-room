@@ -643,9 +643,12 @@ AlertMonitor(config, mesh)                         # the sensors' cells, the nam
                                                    # step above the last, t above the last
     readings -> np.ndarray                         # [classes, sensors] of the last update
     alerts -> tuple[Alert, ...]                    # every alert so far, open ones last
-    latencies(onsets) -> np.ndarray                # [events, classes, sensors]: t_on of the first alert
-                                                   # at or after each onset minus the onset, inf if none
-                                                   # before the next onset or the end
+    latencies(onsets) -> np.ndarray                # [events, classes, sensors]: the time of the first
+                                                   # reading at or above threshold at or after each onset
+                                                   # minus the onset, an alert open at the onset counting
+                                                   # as the onset, no cut at the next onset (section D's
+                                                   # rule, as built at step 3); inf if none by the last
+                                                   # update
     state() / restore(state)                       # the open alerts and the peaks, for the checkpoint
 ```
 
@@ -717,9 +720,31 @@ events axis at the output cadence's resolution, and `arrival_from_run` flags the
 frame-resolved. The Phase 4 run files and probe B's are read this way (T5), and section F's
 sweep can be read before step 3 is built.
 
+*Limits of the frames' map (step 3, prompt 74b, 2026-11-01).* The stored frames are a subset
+of the steps (step 0, every `output_interval` steps and the last), so a cell at or above its
+threshold only between two stored frames is `inf` in the frames' map and has a time in the
+march's: 15 of the 520 cells the march reached on step 3's door run, 4 of 530 on its dust
+run, none on the breach. Where both maps reach a cell the frames' time is never earlier than
+the march's, and on the runs measured it is within the largest frame spacing of it; that is a
+measurement and not a bound, since a cell can be below at one frame and above again at a
+later one. The frames' map therefore reaches no cell the march's does not, is late at the
+cells it reaches, and misses some the march reaches. Step 4 reads frame-resolved maps for the
+Phase 4 and sweep files with those limits, which is why `arrival_from_run` flags them.
+*The criterion changed:* prompt 74 asked that the march's map agree with `arrival_from_frames`
+"to within one output interval at every cell". That cannot hold, for the cells above; the
+test (`test_the_step_map_against_the_frames_map`) pins the form that does: the frames' map
+equals section D's rule applied to the frames alone, is never before the march's, reaches no
+cell the march's does not, and is within the largest frame spacing of it where both reach a
+cell; and it asserts that the missed cells exist. One comparison with the onset is a tie that
+matters: a frame at an onset's own time counts (every clean-out has one, its onset and its
+first frame both at t = 0), pinned by a planted-frames case and a clean-out read without its
+`/arrival/`.
+
 **Latency** (revised 2026-10-29, prompt 70b, review 70 S7). The onset of an event that
 carries contamination is its `start` (a `replace` with a concentration key, a `source`, or
-the initial condition at t = 0). The tracker keeps one map per such event (the events axis
+the initial condition at t = 0; and a `set` that gives a segment a concentration, the
+whole-supply breach of ADR-014 B, which this list left out: the clarification of prompt 74,
+step 3, 2026-11-01). The tracker keeps one map per such event (the events axis
 of `first_above`, the onsets handed to it at construction): at each onset the map for that
 event starts, and records per class and cell the first step time at or after the onset at
 which the cell is at or above threshold, so a cell already at or above it at the onset
@@ -728,7 +753,12 @@ reads the onset itself. The latency for event e at a cell is that time minus
 with the run's end beside it. The monitor's `latencies(onsets)` is defined the same way on
 the sensors' cells: for each onset, the time of the first reading at or above threshold at
 or after it, an alert open at the onset counting as the onset, so the two instruments
-agree at a sensor's cell by construction and a test pins that they do. Each reference
+agree at a sensor's cell by construction and a test pins that they do. *As built (step 3,
+prompt 74, 2026-11-01):* `latencies` follows this paragraph, not section C's contract line
+("inf if none before the next onset or the end"), which step 2 had built: an alert open at
+the onset counts, and there is no cut at the next onset, since the map makes none. An onset is the start of the
+first interval the event is active over, a step time of the march, which is what makes the
+agreement exact. Each reference
 scenario has one such event, so its latency is arrival minus 10 s (the door, the breach,
 the dust) and zero for the clean-out; a scenario with several is reported per event.
 
@@ -808,7 +838,7 @@ turbulence over the tops, the spreading limit now bounded by A and B rather than
 | REQ-A01 "detect threshold exceedance within one timestep of occurrence" | A latency bound on the instrument | No: it holds by construction when the monitor reads every step, so no test can fail it; "occurrence" is the step's reading | "The alert monitor shall read every sensor after every transport step and raise an alert at the first step whose reading is at or above the class's threshold, so that it adds no delay of its own to the detection latency, whose resolution is the step." Verified by VAL-009 as section C defines it |
 | REQ-A02 sensor locations configurable in YAML | The sensors section | Yes (unit: a sensor added or moved in the mapping changes the cell read; a SOLID cell refused; the face rule) | Add the reading rule: "a sensor reads the cell containing it, the one below or to the left of a position on a face (ADR-014 C)" |
 | REQ-A03 thresholds per class following ISO 14644-1 | The thresholds mapping | Partly: configurable per class is testable; "following ISO 14644-1" is not without the formula | "Contamination thresholds shall be configurable per particle size class, either as a mapping by size or as an ISO 14644-1 class number from which the loader computes the limits by the standard's formula rounded to three significant figures; the product file's Class 5 values are the test" |
-| REQ-A04 latency per sensor per scenario from event onset | The report's core number | Yes once onset is defined (integration test on a coarse run) | Append: "the onset is the start of the event that carries the contamination (a replacement with a concentration, a source, or the initial condition at t = 0); a sensor never at or above threshold within the run reports no latency and the run's end" |
+| REQ-A04 latency per sensor per scenario from event onset | The report's core number | Yes once onset is defined (integration test on a coarse run) | Append: "the onset is the start of the event that carries the contamination (a replacement with a concentration, a source, or the initial condition at t = 0); a sensor never at or above threshold within the run reports no latency and the run's end" (applied to SYSTEM.md 2026-11-01, prompt 74b, with D's clarification added to the list: a set that gives a segment a concentration) |
 | REQ-A05 multiple configurations across scenarios to identify optimal placement | The placement question | No: "optimal" names no rule | "The monitor's placement module shall score any set of sensor layouts over a set of scenario run files by stated rules (worst case, mean, coverage within a stated time), rank them, and search the stated candidate positions for the layout of a stated count that is best under a rule, exact for one and two sensors and for the worst-case rule at any count over the pairs some candidate reaches, reproducible from the run files alone" |
 | REQ-A06 reads but never modifies | Separation of concerns | Yes, and by test as well as review: the fields' bytes before and after `update`, the writeable flag False | Append: "verified by test: the fields are bitwise unchanged across every monitor call" |
 | REQ-T14, proposed (prompt 70b, review 70 S9) | VAL-024's width clause verifies no requirement as written: REQ-T13 states the diffusivity's formula, met by construction | A new requirement, for Alex | "With the turbulence model on, the transport solver's spreading of a passive scalar released from a line source in decaying grid turbulence shall match the measured plume width in the far field within a stated allowance, the near-field width reported beside it." Verified by VAL-024; the decay clause of VAL-024 joins REQ-S14's Verified By |
@@ -854,7 +884,8 @@ config.py
     placement: PlacementSpec | None: mount (tuple of names), standoff (m), count, rule, within
 ```
 
-Dependencies: `monitor -> config, mesh`; `placement -> config, mesh, io_manager, monitor`;
+Dependencies: `monitor -> config, mesh, io_manager` (io_manager for `ArrivalRecord`, the return
+type of `record`, as built at step 3); `placement -> config, mesh, io_manager, monitor`;
 `time_integration -> monitor` (new edge); `io_manager` gains two groups and no import. The
 system map (`scripts/gen_system_map.py`) regenerates section 3 at each step; SYSTEM.md
 section 4's planned monitor block is replaced by section C's at acceptance and marked built
@@ -1347,7 +1378,7 @@ decision D's maps are the instrument the sweep already needed.
 | gate_320x120 | 5 | 1.50 | 0.88 | 0.88 | 0.78 | 0.78 | 2.60 to 4.78 |
 | gate_320x120 | 5 | 1.20 | 0.90 | 0.90 | 0.83 | 0.83 | 2.58 to 4.78 |
 
-#### T5. The arrival map at frame resolution: cells reached, the earliest arrival, and the map at the file's sensors. A frame is stored every 100 steps, so every time here is the first stored frame at or after the crossing, an upper bound by up to one frame spacing (the spacing is in the column); section D's in-march maps remove that bound
+#### T5. The arrival map at frame resolution: cells reached, the earliest arrival, and the map at the file's sensors. A frame is stored every 100 steps, so every time here is the first stored frame at or after the crossing: an upper bound on the arrival, late by about one frame spacing where the cell stays at or above (the spacing is in the column), and a cell at or above only between two frames is missing; section D's in-march maps remove both limits
 
 | Arm | Class (um) | Non-SOLID cells reached by the end | Earliest arrival: cell centre (x, y) m, first frame at or above (s), its bound on the latency from 10 s; frame spacing (s) | Map at near_door, above_gap_1, above_gap_2, hood_entry (s, first frame) |
 |---|---|---|---|---|

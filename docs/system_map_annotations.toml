@@ -40,7 +40,7 @@ responsibility = "Integrates the pressure and shear the staggered fields put on 
 serves = []
 
 [modules."src/io_manager.py"]
-responsibility = "Writes a run's HDF5 run file by appending (the merged configuration with its restart hash, the flow states, the transport frames, budgets, sensor readings and alert table, and a clean-out's recovery outputs) and its checkpoint file by atomic replacement (the march's checkpoint and the steady solve's), reads each back bitwise, and refuses a restart under a changed configuration, so a killed or capped run continues to what the uninterrupted run reaches."
+responsibility = "Writes a run's HDF5 run file by appending (the merged configuration with its restart hash, the flow states, the transport frames, budgets, sensor readings and alert table, a clean-out's recovery outputs and the arrival maps) and its checkpoint file by atomic replacement (the march's checkpoint and the steady solve's), reads each back bitwise, and refuses a restart under a changed configuration, so a killed or capped run continues to what the uninterrupted run reaches."
 serves = []
 
 [modules."src/mesh.py"]
@@ -55,13 +55,17 @@ serves = ["REQ-T03", "REQ-T04", "REQ-T09", "REQ-T10"]
 responsibility = "Defines the staggered (MAC) field layout: shapes and allocation of face-centered u and v and cell-centered p, the face-to-center averaging the solver applies before returning, and FaceVelocities, the read-only face pair the solver exposes and the transport solver advects with."
 serves = ["REQ-S07", "REQ-S13"]
 
+[modules."src/placement.py"]
+responsibility = "Reads a run file's arrival maps for sensor placement: its /arrival/ maps, resolved to the step, or for a file written before them the maps rebuilt from its stored frames at the output cadence by the same rule, flagged as frame-resolved; the scoring, candidates and search are ADR-015 step 4's."
+serves = ["REQ-A04"]
+
 [modules."src/pressure.py"]
 responsibility = "Assembles the staggered pressure correction equation from the momentum diagonals with the discrete divergence of u* as its right-hand side, solves it by conjugate gradients preconditioned with its diagonal or, under the pressure_preconditioner key, with one multigrid V-cycle per iteration, to a relative residual, a rounding floor or a reported iteration cap, corrects the face velocities and updates the pressure."
 serves = ["REQ-S04", "REQ-S08"]
 
 [modules."src/monitor.py"]
-responsibility = "Reads each sensor's cell of every class field after every step by ADR-014 C's cell rule, opens an alert at the first reading at or above the class's threshold and closes it at the first below, keeping each alert's times, opening reading and peak, gives the latency from each event onset, and carries its whole state for the checkpoint; it reads the fields and never writes them."
-serves = ["REQ-A01", "REQ-A02", "REQ-A06"]
+responsibility = "Reads each sensor's cell of every class field after every step by ADR-014 C's cell rule, opens an alert at the first reading at or above the class's threshold and closes it at the first below, keeping each alert's times, opening reading and peak, gives each sensor's latency from each event onset, keeps the arrival maps (per contaminating event of the plan, class and non-SOLID cell, the first step time at or after the onset at or above the threshold) by the same rule, and carries both states for the checkpoint; it reads the fields and never writes them."
+serves = ["REQ-A01", "REQ-A02", "REQ-A04", "REQ-A06"]
 
 [modules."src/multigrid.py"]
 responsibility = "Builds an additive-correction multigrid hierarchy from a five-point pressure system by 2x2 aggregation, its coarse operators the exact Galerkin sums with no probing, and applies one symmetric V-cycle with weighted Jacobi smoothing and a dense pseudo-inverse on the coarsest level as the preconditioner of the pressure correction's conjugate gradients."
@@ -92,8 +96,8 @@ responsibility = "Decides when the steady outer iteration has converged, on four
 serves = ["REQ-S01", "REQ-S04"]
 
 [modules."src/time_integration.py"]
-responsibility = "Runs a scenario under tier 1: solves each distinct flow state once, warm-started from the state before it, or reuses one a run file holds, then marches every particle class at one step through the intervals, dividing each into equal steps under the stable step and carrying the fields and budgets across each switch, writing frames, budgets, sensor readings, the alert monitor's table and checkpoints through the run file, continuing a run from its checkpoint, and for a clean-out tracking the recovery outputs every step; under tier 2 marches the flow itself through solve_transient, writing its frames, per-step counts, lift and drag and two-level checkpoints, restarting bitwise, and reading the Strouhal number and drag coefficient at the end; it discretises nothing."
-serves = ["REQ-N01"]
+responsibility = "Runs a scenario under tier 1: solves each distinct flow state once, warm-started from the state before it, or reuses one a run file holds, then marches every particle class at one step through the intervals, dividing each into equal steps under the stable step and carrying the fields and budgets across each switch, writing frames, budgets, sensor readings, the alert monitor's table and checkpoints through the run file, continuing a run from its checkpoint, keeping the arrival maps of every run every step and for a clean-out the recovery outputs, and giving each sensor's latency per contaminating event from the monitor and from the maps; under tier 2 marches the flow itself through solve_transient, writing its frames, per-step counts, lift and drag and two-level checkpoints, restarting bitwise, and reading the Strouhal number and drag coefficient at the end; it discretises nothing."
+serves = ["REQ-A04", "REQ-N01"]
 
 [modules."src/turbulence.py"]
 responsibility = "Advances the k-epsilon model's k and eps one step on a prescribed face velocity field, standard or RNG with each variant's constants as module data: advection, explicit growth from the strain the faces give and implicit decay and diffusion through the shared scalar scheme, boundary values from a conditions object the caller builds each step, the kinematic eddy viscosity, and an assertion that k and eps are positive and finite after every step; and the scalable wall functions, which build those conditions, the wall viscosity of the momentum wall faces and the inlet values the coupled solve starts from."

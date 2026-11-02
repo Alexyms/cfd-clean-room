@@ -21,7 +21,16 @@ planted defect it was shown to catch:
   later t_end, and a capped flow solve continued under a larger cap, each the
   uninterrupted run bitwise where the ADR asks for it.
 - scripts/run_scenario.py: its exit codes and summary lines, the alerts
-  opened among them (ADR-015 C).
+  opened among them (ADR-015 C) and each sensor's latency per event, the
+  monitor's beside the map's (REQ-A04).
+- ADR-015 step 3, the arrival maps through the march: /arrival/ is section
+  D's rule applied to every step's fields, bitwise; the record's two
+  latencies agree to the step and are the stored series' rule; the frames'
+  map is never before the step map and within one output interval where
+  both reach a cell, and misses the cells at or above only between frames;
+  a restart across a partly filled map is the uninterrupted run's; a
+  checkpoint without the maps refuses the restart; a file without /arrival/
+  is read from its frames and flagged; every run keeps the maps.
 
 The coarse fixtures extend the reference scenario files with the grid
 overridden to 80x30 and the error_estimate per-cell tolerance set by
@@ -36,10 +45,11 @@ fields are the reference files'.
 
 import math
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from types import SimpleNamespace
 
+import h5py
 import numpy as np
 import pytest
 import yaml
@@ -57,8 +67,14 @@ from src.boundary_staggered import StaggeredBoundary
 from src.config import SimConfig
 from src.io_manager import RunFile
 from src.mesh import SOLID, Mesh
-from src.monitor import Alert
+from src.monitor import ARRIVAL_STATE_NAMES, Alert
 from src.particles import ParticlePhysics
+from src.placement import (
+    FRAME_RESOLVED,
+    STEP_RESOLVED,
+    arrival_from_frames,
+    arrival_from_run,
+)
 from src.scenarios import Interval, ScenarioManager
 from src.solver_staggered import FlowState, StaggeredSolver
 from src.solver_transport import TransportSolver
@@ -1307,6 +1323,409 @@ class TestDoor:
         assert all(b.inflow > 0.0 for b in opened.budgets)
 
 
+# ---------------------------------------------------------------------------
+# ADR-015 step 3: the arrival maps through the march (REQ-A04)
+# ---------------------------------------------------------------------------
+
+# Two sensors in the door's air on 80x30, besides the file's four: one in the
+# cell beside the inlet, which is still at or above every threshold when the
+# second opening starts, and one a few cells into the room, reached during
+# the first opening and below by the second.
+DOOR_SENSORS = (
+    {"name": "in_door", "x": 0.15, "y": 0.5},
+    {"name": "door_room", "x": 0.6, "y": 0.4},
+)
+
+
+def sensed_door_raw(cadence: int | None = 30) -> dict:
+    """The door fixture's two openings with DOOR_SENSORS, checkpoints every CADENCE."""
+    solver = {} if cadence is None else {"checkpoint_interval": cadence}
+    raw = coarse_raw("scenario_door_leak.yaml", **solver)
+    raw = rescheduled(raw, 5.0, {"door_open": (1.0, 1.0)})
+    raw["scenario"]["events"] = door_events(raw, (3.0, 0.5))
+    base = yaml.safe_load(
+        (CONFIGS / "clean_room_default.yaml").read_text(encoding="utf-8")
+    )
+    raw["sensors"] = [*base["sensors"], *map(dict, DOOR_SENSORS)]
+    return raw
+
+
+@pytest.fixture(scope="module")
+def sensed_door(
+    tmp_path_factory: pytest.TempPathFactory, door: SimpleNamespace
+) -> SimpleNamespace:
+    """The two-opening door with sensors in its air, every step's fields kept.
+
+    The flow states are the door fixture's, so nothing is solved.
+    """
+    folder = tmp_path_factory.mktemp("sensed_door")
+    config = SimConfig.from_dict(sensed_door_raw())
+    steps, on_step = recorder()
+    record = run(
+        config,
+        folder / "run.h5",
+        flows_from=door.record.path,
+        on_step=on_step,
+        provenance=PROVENANCE,
+    )
+    return SimpleNamespace(
+        config=config, record=record, run=RunFile(record.path), steps=steps
+    )
+
+
+def maps_by_rule(
+    times: list[float],
+    fields: list[Mapping[int, np.ndarray]],
+    thresholds: np.ndarray,
+    live: np.ndarray,
+    onsets: np.ndarray,
+) -> np.ndarray:
+    """The arrival maps of a series of fields, by section D's rule alone.
+
+    Per event, class and non-SOLID cell, the first of TIMES at or after the
+    onset whose field is at or above the threshold; inf where none is, NaN
+    in SOLID cells. Written cell by cell from the definition, not from the
+    tracker's vectorised update.
+    """
+    ny, nx = live.shape
+    at = np.array(times)
+    stack = np.array([[f[k] for k in range(thresholds.size)] for f in fields])
+    out = np.full((onsets.size, thresholds.size, ny, nx), np.nan)
+    for e, onset in enumerate(onsets):
+        for k, threshold in enumerate(thresholds):
+            for j, i in zip(*np.nonzero(live), strict=True):
+                hits = at[(at >= onset) & (stack[:, k, j, i] >= threshold)]
+                out[e, k, j, i] = hits[0] if hits.size else np.inf
+    return out
+
+
+def latencies_by_rule(
+    times: np.ndarray, readings: np.ndarray, thresholds: np.ndarray, onsets: np.ndarray
+) -> np.ndarray:
+    """[events, classes, sensors] from a stored sensor series, by section D's rule."""
+    n_classes, n_sensors = readings.shape[1:]
+    out = np.full((onsets.size, n_classes, n_sensors), np.inf)
+    for e, onset in enumerate(onsets):
+        for k in range(n_classes):
+            for s in range(n_sensors):
+                hits = (times >= onset) & (readings[:, k, s] >= thresholds[k])
+                if hits.any():
+                    out[e, k, s] = times[np.argmax(hits)] - onset
+    return out
+
+
+@pytest.mark.integration
+class TestArrivalMaps:
+    def test_the_maps_are_the_rule_on_every_steps_fields(
+        self, sensed_door: SimpleNamespace
+    ) -> None:
+        """/arrival/ is section D's rule applied to every step's fields, bitwise.
+
+        The fields of step 0 (the first frame) and of every step after it
+        (on_step's) rebuilt into maps cell by cell. Two events, onsets 1 and
+        3 s, each a step time. Defects caught: the last time kept instead of
+        the first; ">" for "at or above"; an event's map started at t = 0
+        instead of its onset; the tracker not updated at step 0 or after some
+        step; the record's unreached cells left NaN.
+        """
+        record, config = sensed_door.record, sensed_door.config
+        arrival = sensed_door.run.read_arrival()
+        assert arrival.event_names == ("door_open", "door_open_again")
+        assert arrival.onsets.tolist() == [1.0, 3.0]
+        assert arrival.t_final == record.t_final == 5.0
+        times = [0.0] + [info.t for info in sensed_door.steps]
+        assert {1.0, 3.0} <= set(times)
+        first = sensed_door.run.read_frames()
+        fields = [{k: first.fields[k][0] for k in first.fields}]
+        fields += [info.fields for info in sensed_door.steps]
+        live = Mesh(config).cell_type != SOLID
+        thresholds = np.array(config.class_thresholds())
+        expected = maps_by_rule(times, fields, thresholds, live, arrival.onsets)
+        assert arrival.first_above.tobytes() == expected.tobytes()
+        assert arrival.thresholds.tobytes() == thresholds.tobytes()
+        for name in ("thresholds", "onsets", "first_above"):
+            assert getattr(record.arrival, name).tobytes() == (
+                getattr(arrival, name).tobytes()
+            )
+        # The first opening reaches cells it the second does not, and the
+        # second reaches cells only from its own onset.
+        reached = np.isfinite(expected)
+        assert reached[0].sum() > reached[1].sum() > 0
+        assert (expected[1][reached[1]] >= 3.0).all()
+
+    def test_the_sensors_latencies_from_the_map_equal_the_monitors(
+        self, sensed_door: SimpleNamespace
+    ) -> None:
+        """REQ-A04: the record's two latencies agree to the step, and the stored series' rule.
+
+        in_door is at or above every threshold from the first opening to past
+        the second's onset, so the second event reads zero there (an alert
+        open at the onset counts as the onset); door_room is reached in the
+        first opening only. Defects caught: the two instruments on different
+        rules (step 2's window gave inf for in_door's second event); the
+        map read at the wrong cell; the latency not taken from the onset.
+        """
+        record, config = sensed_door.record, sensed_door.config
+        assert record.latencies is not None and record.map_latencies is not None
+        assert record.latencies.shape == (2, 5, 6)
+        assert record.latencies.tobytes() == record.map_latencies.tobytes()
+        stored = sensed_door.run.read_sensor_readings()
+        expected = latencies_by_rule(
+            stored.times,
+            stored.readings,
+            np.array(config.class_thresholds()),
+            record.arrival.onsets,
+        )
+        assert record.latencies.tobytes() == expected.tobytes()
+        in_door, door_room = 4, 5
+        assert np.isfinite(record.latencies[0, :, in_door]).all()
+        assert (record.latencies[1, :, in_door] == 0.0).all()
+        assert (record.latencies[0, :, door_room] > 0.0).all()
+        assert np.isinf(record.latencies[1, :, door_room]).all()
+        assert np.isinf(record.latencies[:, :, :4]).all()
+
+    def test_the_step_map_against_the_frames_map(
+        self, sensed_door: SimpleNamespace
+    ) -> None:
+        """The frames' map is the step map read at the frames, within one output interval.
+
+        ``arrival_from_frames`` on the run's own frames equals the rule
+        applied to the frames' fields alone, bitwise; it is never before the
+        step map and reaches no cell the step map does not. Where both reach
+        a cell they differ by at most the largest frame spacing on this run
+        (a cell can drop below and return later, so that is a measurement,
+        not a bound). The prompt expected agreement within one interval at
+        every cell; it does not hold at the cells at or above their threshold
+        only between two frames, which the frames never see: there are some
+        on this run (15 when first measured), each with a step time that is
+        no frame's. Defects caught: the frames' map started at t = 0 (cells
+        reached before the second onset counted for it); the frames' times
+        taken from the wrong axis; a cell the frames miss given the step
+        map's time.
+        """
+        config = sensed_door.config
+        frames = sensed_door.run.read_frames()
+        arrival = sensed_door.run.read_arrival()
+        live = Mesh(config).cell_type != SOLID
+        framed = arrival_from_frames(frames, arrival.thresholds, live, arrival.onsets)
+        stack = [{k: frames.fields[k][n] for k in frames.fields} for n in range(4)]
+        assert frames.steps.size == 4
+        expected = maps_by_rule(
+            frames.times.tolist(), stack, arrival.thresholds, live, arrival.onsets
+        )
+        assert framed.tobytes() == expected.tobytes()
+        step = arrival.first_above
+        both = np.isfinite(step) & np.isfinite(framed)
+        assert (framed[both] >= step[both]).all()
+        assert not (np.isinf(step) & np.isfinite(framed)).any()
+        spacing = float(np.max(np.diff(frames.times)))
+        assert (framed[both] - step[both] <= spacing).all()
+        missed = np.isfinite(step) & np.isinf(framed)
+        assert missed.any()
+        assert not np.isin(step[missed], frames.times).any()
+        assert np.array_equal(np.isnan(step), np.isnan(framed))
+
+    def test_a_restart_across_a_partly_filled_map_is_the_uninterrupted_run(
+        self, tmp_path: Path, door: SimpleNamespace, sensed_door: SimpleNamespace
+    ) -> None:
+        """Killed after checkpoint 90, between the openings, restarted: /arrival/ bitwise.
+
+        At checkpoint 90 the first opening's map is partly filled and the
+        second's empty; the file's /arrival/ is the checkpoint's. Defects
+        caught: the tracker's state dropped from the checkpoint (the restart
+        refuses for want of it, or a restored empty map reads later times);
+        the maps not written at the checkpoint; the restart not rewriting
+        them.
+        """
+        config = sensed_door.config
+        path = tmp_path / "run.h5"
+        with pytest.raises(_KilledError):
+            run(
+                config,
+                path,
+                flows_from=door.record.path,
+                on_step=killer(95),
+                provenance=PROVENANCE,
+            )
+        cut = RunFile(path)
+        checkpoint = cut.read_checkpoint()
+        assert checkpoint.step == 90 and 1.0 < checkpoint.t < 3.0
+        partial = cut.read_arrival()
+        assert partial.t_final == checkpoint.t
+        held = checkpoint.recovery["first_above"]
+        assert np.isfinite(held[0]).any() and np.isnan(held[1]).all()
+        assert not np.isfinite(held[0][:, Mesh(config).cell_type != SOLID]).all()
+        again = run(config, restart=path)
+        assert again.restarted_from == 90
+        whole = sensed_door.run.read_arrival()
+        restarted = cut.read_arrival()
+        assert restarted.first_above.tobytes() == whole.first_above.tobytes()
+        assert restarted.t_final == whole.t_final
+        assert again.latencies is not None
+        assert again.latencies.tobytes() == sensed_door.record.latencies.tobytes()
+
+    def test_a_restart_rewrites_the_maps_from_its_checkpoint_at_once(
+        self, tmp_path: Path, door: SimpleNamespace, sensed_door: SimpleNamespace
+    ) -> None:
+        """Maps ahead of the checkpoint are replaced before the march continues.
+
+        A crash between a checkpoint's map write and its checkpoint leaves
+        /arrival/ ahead of the checkpoint; planted here by writing the whole
+        run's maps after a kill at 95. The restart is killed again at 92,
+        before its next checkpoint: the file's maps are checkpoint 90's.
+        Defect caught: the restart not rewriting /arrival/ (the whole run's
+        maps left in a file whose march stopped at 92).
+        """
+        config = sensed_door.config
+        path = tmp_path / "run.h5"
+        with pytest.raises(_KilledError):
+            run(
+                config,
+                path,
+                flows_from=door.record.path,
+                on_step=killer(95),
+                provenance=PROVENANCE,
+            )
+        cut = RunFile(path)
+        checkpoint = cut.read_checkpoint()
+        cut.write_arrival(sensed_door.run.read_arrival())
+        with pytest.raises(_KilledError):
+            run(config, restart=path, on_step=killer(92))
+        held = cut.read_arrival()
+        assert held.t_final == checkpoint.t
+        expected = checkpoint.recovery["first_above"].copy()
+        live = np.broadcast_to(Mesh(config).cell_type != SOLID, expected.shape)
+        expected[live & np.isnan(expected)] = np.inf
+        assert held.first_above.tobytes() == expected.tobytes()
+
+    def test_a_checkpoint_without_the_maps_refuses_the_restart(
+        self, tmp_path: Path, door: SimpleNamespace
+    ) -> None:
+        """A checkpoint from before step 3 carries no maps: KeyError, saying so.
+
+        The three arrays are deleted from a checkpoint the branch wrote.
+        """
+        config = SimConfig.from_dict(sensed_door_raw())
+        path = tmp_path / "run.h5"
+        with pytest.raises(_KilledError):
+            run(
+                config,
+                path,
+                flows_from=door.record.path,
+                on_step=killer(35),
+                provenance=PROVENANCE,
+            )
+        with h5py.File(RunFile(path).checkpoint_path, "a") as checkpoint:
+            for name in ARRIVAL_STATE_NAMES:
+                del checkpoint["checkpoint/recovery"][name]
+        with pytest.raises(KeyError, match=r"before the arrival maps \(ADR-015 step 3"):
+            run(config, restart=path)
+
+    def test_a_phase_4_file_is_read_from_its_frames_and_flagged(
+        self, tmp_path: Path, sensed_door: SimpleNamespace
+    ) -> None:
+        """No /arrival/: arrival_from_run rebuilds the maps from the frames, FRAME_RESOLVED.
+
+        The run file is copied and its /arrival/ deleted, as a file written
+        before step 3 has none. The onsets come from the configuration the
+        file records. With /arrival/ the file's own maps come back,
+        STEP_RESOLVED. Defects caught: the frame-resolved maps returned
+        unflagged; the onsets taken as t = 0 for a file without the maps.
+        """
+        whole = arrival_from_run(sensed_door.record.path)
+        assert whole.resolution == STEP_RESOLVED
+        arrival = sensed_door.record.arrival
+        assert whole.maps.tobytes() == arrival.first_above.tobytes()
+        assert whole.onsets.tobytes() == arrival.onsets.tobytes()
+        path = tmp_path / "phase4.h5"
+        path.write_bytes(Path(sensed_door.record.path).read_bytes())
+        with h5py.File(path, "a") as copy:
+            del copy["arrival"]
+        old = arrival_from_run(path)
+        assert old.resolution == FRAME_RESOLVED
+        assert old.onsets.tolist() == [1.0, 3.0]
+        live = Mesh(sensed_door.config).cell_type != SOLID
+        expected = arrival_from_frames(
+            RunFile(path).read_frames(), arrival.thresholds, live, arrival.onsets
+        )
+        assert old.maps.tobytes() == expected.tobytes()
+        assert arrival_from_run(RunFile(path)).maps.tobytes() == expected.tobytes()
+
+    def test_a_clean_out_read_from_its_frames_reads_zero_at_every_live_cell(
+        self, tmp_path: Path, clean_out: SimpleNamespace
+    ) -> None:
+        """No /arrival/: the clean-out's first frame is at its onset, so every cell reads 0.0.
+
+        The one event starts at t = 0 and the first frame is at t = 0, where
+        every non-SOLID cell is at or above every threshold; the frames' map
+        agrees with the file's own /arrival/ there. Defect caught: ">" for
+        ">=" in arrival_from_frames' comparison with the onset (every cell
+        reading the second frame's time).
+        """
+        path = tmp_path / "clean_out.h5"
+        path.write_bytes(Path(clean_out.record.path).read_bytes())
+        with h5py.File(path, "a") as copy:
+            del copy["arrival"]
+        old = arrival_from_run(path)
+        assert old.resolution == FRAME_RESOLVED
+        assert old.onsets.tolist() == [0.0]
+        assert RunFile(path).read_frames().times[0] == 0.0
+        live = Mesh(clean_out.config).cell_type != SOLID
+        assert (old.maps[:, :, live] == 0.0).all()
+        assert np.isnan(old.maps[:, :, ~live]).all()
+        whole = arrival_from_run(clean_out.record.path)
+        assert whole.resolution == STEP_RESOLVED
+        assert old.maps.tobytes() == whole.maps.tobytes()
+
+    def test_every_run_has_maps_and_no_sensors_no_latencies(
+        self, tmp_path: Path, clean_out: SimpleNamespace
+    ) -> None:
+        """A run without sensors still writes /arrival/; its record has no latencies.
+
+        The clean-out has one event, its initial, at t = 0: every non-SOLID
+        cell is at or above every threshold then, so its map is t = 0
+        everywhere (section D: the clearing companion says nothing new).
+        """
+        arrival = clean_out.run.read_arrival()
+        assert arrival.event_names == ("contaminated_start",)
+        live = Mesh(clean_out.config).cell_type != SOLID
+        assert (arrival.first_above[:, :, live] == 0.0).all()
+        assert clean_out.record.latencies is not None
+        assert (clean_out.record.latencies == 0.0).all()
+        raw = rescheduled(
+            coarse_raw("scenario_equipment_dust.yaml", output_interval=10),
+            1.0,
+            {"litho_dust": (0.5, 0.25)},
+        )
+        raw["sensors"] = []
+        record = run(
+            SimConfig.from_dict(raw),
+            tmp_path / "run.h5",
+            flows_from=clean_out.record.path,
+            provenance=PROVENANCE,
+        )
+        assert record.latencies is None and record.map_latencies is None
+        assert RunFile(record.path).read_arrival().event_names == ("litho_dust",)
+        assert run_scenario.latency_lines(record, [1e-7] * 5, []) == [
+            "latency (REQ-A04): no sensors"
+        ]
+
+    def test_a_run_without_a_class_threshold_is_refused_for_its_maps(
+        self, tmp_path: Path
+    ) -> None:
+        """Without sensors there is no monitor, but every run keeps the maps.
+
+        Defect caught: a run without sensors starting with no map.
+        """
+        raw = rescheduled(
+            coarse_raw("scenario_equipment_dust.yaml"), 2.0, {"litho_dust": (0.5, 1.0)}
+        )
+        raw["particles"] = {"sizes": [0.1e-6, 0.3e-6, 0.5e-6, 1.0e-6, 2.0e-6]}
+        raw["sensors"] = []
+        with pytest.raises(ValueError, match="the arrival maps: the class of diam"):
+            run(SimConfig.from_dict(raw), tmp_path / "run.h5", provenance=PROVENANCE)
+
+
 def _transport(interval: Interval, mesh: Mesh) -> TransportSolver:
     """A transport solver on an interval's boundary, built without the run."""
     config = interval.config
@@ -1702,9 +2121,18 @@ class TestRunScenario:
             f"{int(np.sum(table.step_off == -1))} still open at the end"
         )
         assert len(table) == 20 and (table.step_on == 0).all()
-        assert len(lines) == start + 1 + len(table)
-        named = [line.split(",")[0].strip() for line in lines[start + 1 :]]
+        latency = start + 1 + len(table)
+        named = [line.split(",")[0].strip() for line in lines[start + 1 : latency]]
         assert named == [table.names[s] for s in table.sensor]
+        # Every sensor is at or above at the initial event's onset, t = 0.
+        assert lines[latency] == (
+            "latency (REQ-A04, ADR-015 D): from each event's onset, the monitor's "
+            "and the arrival map's at the sensor's cell, which agree"
+        )
+        assert lines[latency + 1] == "  event contaminated_start, onset t = 0.0000 s:"
+        assert len(lines) == latency + 2 + 5
+        for line in lines[latency + 2 :]:
+            assert line.count("0.0000 s, map 0.0000 s") == 4, line
 
     def test_a_class_nothing_supplied_is_not_defined_in_the_summary(
         self,
@@ -1741,9 +2169,12 @@ class TestRunScenario:
             assert supplied == (k != 2), line
         assert "relative " in closure[2]
         assert len(RunFile(tmp_path / "run.h5").read_alerts()) == 0
-        assert lines[-1] == (
+        assert lines[-8] == (
             "alerts (ADR-015 C): none (no sensor at or above its threshold)"
         )
+        assert lines[-6] == "  event litho_dust, onset t = 0.5000 s:"
+        for line in lines[-5:]:
+            assert line.count("never by 2.0000 s, map never") == 4, line
 
     def test_the_alert_lines_name_each_alert_and_its_close(self) -> None:
         """alert_lines on planted alerts: the count, an open and a closed line.
@@ -1766,6 +2197,32 @@ class TestRunScenario:
         ]
         assert run_scenario.alert_lines([], [1e-7], False) == [
             "alerts (ADR-015 C): no sensors"
+        ]
+
+    def test_the_latency_lines_give_both_instruments_and_never(self) -> None:
+        """latency_lines on a planted record: a time, a never and a disagreement.
+
+        Defects caught: the map's column printed from the monitor's array; a
+        disagreement not marked; "never" printed without the run's end; the
+        events or classes misnamed.
+        """
+        monitor = np.array([[[0.25, np.inf]], [[0.0, 1.5]]])
+        mapped = monitor.copy()
+        mapped[1, 0, 1] = 1.75
+        arrival = SimpleNamespace(event_names=("a", "b"), onsets=np.array([1.0, 3.0]))
+        record = SimpleNamespace(
+            latencies=monitor, map_latencies=mapped, arrival=arrival, t_final=6.0
+        )
+        lines = run_scenario.latency_lines(record, [2e-6], ["s0", "s1"])  # type: ignore[arg-type]
+        assert lines == [
+            "latency (REQ-A04, ADR-015 D): from each event's onset, the monitor's and "
+            "the arrival map's at the sensor's cell, which DISAGREE",
+            "  event a, onset t = 1.0000 s:",
+            "    class 0 (2 um): s0 0.2500 s, map 0.2500 s; s1 never by 6.0000 s, map "
+            "never",
+            "  event b, onset t = 3.0000 s:",
+            "    class 0 (2 um): s0 0.0000 s, map 0.0000 s; s1 1.5000 s, map 1.7500 s "
+            "DISAGREES",
         ]
 
     def test_the_restart_flag_continues_a_run_file(
