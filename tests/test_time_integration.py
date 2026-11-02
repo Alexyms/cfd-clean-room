@@ -1651,6 +1651,32 @@ class TestArrivalMaps:
         assert old.maps.tobytes() == expected.tobytes()
         assert arrival_from_run(RunFile(path)).maps.tobytes() == expected.tobytes()
 
+    def test_a_clean_out_read_from_its_frames_reads_zero_at_every_live_cell(
+        self, tmp_path: Path, clean_out: SimpleNamespace
+    ) -> None:
+        """No /arrival/: the clean-out's first frame is at its onset, so every cell reads 0.0.
+
+        The one event starts at t = 0 and the first frame is at t = 0, where
+        every non-SOLID cell is at or above every threshold; the frames' map
+        agrees with the file's own /arrival/ there. Defect caught: ">" for
+        ">=" in arrival_from_frames' comparison with the onset (every cell
+        reading the second frame's time).
+        """
+        path = tmp_path / "clean_out.h5"
+        path.write_bytes(Path(clean_out.record.path).read_bytes())
+        with h5py.File(path, "a") as copy:
+            del copy["arrival"]
+        old = arrival_from_run(path)
+        assert old.resolution == FRAME_RESOLVED
+        assert old.onsets.tolist() == [0.0]
+        assert RunFile(path).read_frames().times[0] == 0.0
+        live = Mesh(clean_out.config).cell_type != SOLID
+        assert (old.maps[:, :, live] == 0.0).all()
+        assert np.isnan(old.maps[:, :, ~live]).all()
+        whole = arrival_from_run(clean_out.record.path)
+        assert whole.resolution == STEP_RESOLVED
+        assert old.maps.tobytes() == whole.maps.tobytes()
+
     def test_every_run_has_maps_and_no_sensors_no_latencies(
         self, tmp_path: Path, clean_out: SimpleNamespace
     ) -> None:

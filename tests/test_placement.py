@@ -6,8 +6,9 @@ ADR-015 H's step 3 builds only ``arrival_from_frames`` and
 planted defect it was shown to catch:
 
 - ``arrival_from_frames`` on planted frames: the first frame time at or
-  after each onset at or above the threshold, inf where none is, NaN in
-  SOLID cells, a second event's map from its own onset; its refusals.
+  after each onset at or above the threshold (a frame at the onset counts),
+  inf where none is, NaN in SOLID cells, a second event's map from its own
+  onset, each class against its own threshold; its refusals.
 - ``arrival_from_run``'s refusals on files it cannot read: a recorded
   configuration with no scenario section, and a file with neither maps nor
   frames.
@@ -85,11 +86,34 @@ class TestArrivalFromFrames:
             assert np.isinf(maps[:, k, 1, :2]).all()
         assert np.isnan(maps[:, :, 0, 2]).all()
 
+    def test_a_frame_at_an_onset_counts_for_that_event(self) -> None:
+        """A frame whose time is an onset is the first frame at or after it.
+
+        Onsets 0 and 1 s, both frame times. Cell (0, 0) is above in the
+        frame at 0 only: event 0 reads 0.0 and event 1 never. Cell (0, 1) is
+        above in the frame at 1.0 only: both events read 1.0. Every clean-out
+        has this tie (its onset and its first frame are both t = 0). Defect
+        caught: ">" for ">=" in the comparison with the onset ((0, 0) inf
+        for event 0, (0, 1) inf for event 1).
+        """
+        frames = frames_of({(0, 0): [2.0, 0.0, 0.0, 0.0], (0, 1): [0.0, 0.0, 2.0, 0.0]})
+        maps = arrival_from_frames(frames, THRESHOLDS, LIVE, np.array([0.0, 1.0]))
+        for k in (0, 1):
+            assert maps[0, k, 0, 0] == 0.0 and np.isinf(maps[1, k, 0, 0])
+            assert maps[0, k, 0, 1] == maps[1, k, 0, 1] == 1.0
+
     def test_a_class_with_its_own_threshold(self) -> None:
-        """Each class against its own threshold: class 1's is ten times class 0's."""
+        """Each class against its own threshold, not class 0's and not the last.
+
+        Class 1's field is ten times class 0's and its threshold twenty
+        times, so the cell reaches class 0's threshold at 1.0 s and never
+        reaches class 1's. Defects caught: class 0's threshold used for every
+        class (class 1 reads 0.5); the last class's used for every class
+        (class 0 never).
+        """
         frames = frames_of({(1, 0): [0.0, 0.5, 1.0, 1.0]})
-        maps = arrival_from_frames(frames, np.array([1.0, 1.0]), LIVE, np.array([0.0]))
-        assert maps[0, 0, 1, 0] == 1.0 and maps[0, 1, 1, 0] == 0.5
+        maps = arrival_from_frames(frames, np.array([1.0, 20.0]), LIVE, np.array([0.0]))
+        assert maps[0, 0, 1, 0] == 1.0 and np.isinf(maps[0, 1, 1, 0])
 
     @pytest.mark.parametrize(
         ("thresholds", "live", "onsets", "match"),
