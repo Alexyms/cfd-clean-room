@@ -44,6 +44,7 @@ fields are the reference files'.
 """
 
 import math
+import re
 import sys
 from collections.abc import Callable, Mapping
 from pathlib import Path
@@ -423,9 +424,10 @@ class TestSensorsAndInputs:
     def test_the_flow_inputs_leave_out_what_the_flow_solve_does_not_read(
         self,
     ) -> None:
-        """Defects caught: a run key or the transport section counted, so a kept
-        state is refused for a run that differs only in them; a solver key the
-        solve reads left out, so a state of other settings is reused."""
+        """Defects caught: a run key, the transport section or the placement
+        section (the product file's, prompt 75) counted, so a kept state is
+        refused for a run that differs only in them; a solver key the solve
+        reads left out, so a state of other settings is reused."""
         raw = SimConfig.from_dict(coarse_raw("scenario_clean_out.yaml"))
         mapping = raw.merged_mapping()
         inputs = flow_inputs(mapping)
@@ -1630,13 +1632,16 @@ class TestArrivalMaps:
         before step 3 has none. The onsets come from the configuration the
         file records. With /arrival/ the file's own maps come back,
         STEP_RESOLVED. Defects caught: the frame-resolved maps returned
-        unflagged; the onsets taken as t = 0 for a file without the maps.
+        unflagged; the onsets taken as t = 0 for a file without the maps; the
+        fallback's reason dropped (step 3's open item, prompt 75).
         """
         whole = arrival_from_run(sensed_door.record.path)
         assert whole.resolution == STEP_RESOLVED
         arrival = sensed_door.record.arrival
         assert whole.maps.tobytes() == arrival.first_above.tobytes()
         assert whole.onsets.tobytes() == arrival.onsets.tobytes()
+        assert whole.event_names == arrival.event_names
+        assert whole.t_final == arrival.t_final and whole.fallback is None
         path = tmp_path / "phase4.h5"
         path.write_bytes(Path(sensed_door.record.path).read_bytes())
         with h5py.File(path, "a") as copy:
@@ -1644,12 +1649,47 @@ class TestArrivalMaps:
         old = arrival_from_run(path)
         assert old.resolution == FRAME_RESOLVED
         assert old.onsets.tolist() == [1.0, 3.0]
+        assert old.event_names == arrival.event_names
+        assert old.fallback == f"KeyError: {path} holds no /arrival/"
+        assert old.t_final == RunFile(path).read_frames().times[-1]
         live = Mesh(sensed_door.config).cell_type != SOLID
         expected = arrival_from_frames(
             RunFile(path).read_frames(), arrival.thresholds, live, arrival.onsets
         )
         assert old.maps.tobytes() == expected.tobytes()
         assert arrival_from_run(RunFile(path)).maps.tobytes() == expected.tobytes()
+
+    @pytest.mark.parametrize(
+        ("damage", "reason"),
+        [
+            ("member", r"^KeyError: .*onsets"),
+            ("t_final", r"^ValueError: t_final must be finite, got nan$"),
+            ("onsets", r"^ValueError: the onsets must be in order"),
+        ],
+    )
+    def test_a_damaged_arrival_group_falls_back_to_the_frames_saying_why(
+        self, tmp_path: Path, sensed_door: SimpleNamespace, damage: str, reason: str
+    ) -> None:
+        """A missing member, a non-finite t_final or unordered onsets: the frames, with the check.
+
+        Step 3's open item (test 74): the fallback hid why. Defect caught:
+        the reason not carried (``fallback`` None, or "absent" for a group
+        that is there).
+        """
+        path = tmp_path / "damaged.h5"
+        path.write_bytes(Path(sensed_door.record.path).read_bytes())
+        with h5py.File(path, "a") as copy:
+            group = copy["arrival"]
+            if damage == "member":
+                del group["onsets"]
+            elif damage == "t_final":
+                group.attrs["t_final"] = np.nan
+            else:
+                group["onsets"][...] = group["onsets"][()][::-1]
+        old = arrival_from_run(path)
+        assert old.resolution == FRAME_RESOLVED
+        assert re.search(reason, old.fallback), old.fallback
+        assert "holds no /arrival/" not in old.fallback
 
     def test_a_clean_out_read_from_its_frames_reads_zero_at_every_live_cell(
         self, tmp_path: Path, clean_out: SimpleNamespace
@@ -1660,7 +1700,10 @@ class TestArrivalMaps:
         every non-SOLID cell is at or above every threshold; the frames' map
         agrees with the file's own /arrival/ there. Defect caught: ">" for
         ">=" in arrival_from_frames' comparison with the onset (every cell
-        reading the second frame's time).
+        reading the second frame's time). The held run stops before its
+        t_end, and the frames' t_final is its last frame's, as /arrival/'s is
+        its last step's. Defect caught: the frames' t_final taken from the
+        configuration's t_end (prompt 75).
         """
         path = tmp_path / "clean_out.h5"
         path.write_bytes(Path(clean_out.record.path).read_bytes())
@@ -1676,6 +1719,7 @@ class TestArrivalMaps:
         whole = arrival_from_run(clean_out.record.path)
         assert whole.resolution == STEP_RESOLVED
         assert old.maps.tobytes() == whole.maps.tobytes()
+        assert old.t_final == whole.t_final < clean_out.config.t_end
 
     def test_every_run_has_maps_and_no_sensors_no_latencies(
         self, tmp_path: Path, clean_out: SimpleNamespace

@@ -442,6 +442,35 @@ class TurbulenceSpec:
 
 
 @dataclass(frozen=True)
+class PlacementSpec:
+    """The placement section: the assumptions a layout search states (ADR-015 D).
+
+    Parameters
+    ----------
+    mount : tuple[str, ...]
+        The surfaces a sensor may be mounted on, from ``MOUNT_SURFACES``,
+        at least one, none twice.
+    standoff : float
+        Metres, positive and finite: a candidate cell's centre lies within
+        this distance of a named surface.
+    count : int
+        The layout's sensor count, positive.
+    rule : str
+        ``WORST_CASE`` or ``MEAN``, the rule the layout is searched under.
+    within : float or None
+        Seconds, positive and finite: the coverage rule's time, the
+        fraction of units detected at or within it. None reports no
+        coverage.
+    """
+
+    mount: tuple[str, ...]
+    standoff: float
+    count: int
+    rule: str
+    within: float | None = None
+
+
+@dataclass(frozen=True)
 class Replace:
     """An event's replacement of one boundary segment (ADR-014 B).
 
@@ -992,6 +1021,31 @@ ISO_SIGNIFICANT_FIGURES = 3
 # is 1.2e-7 s at t_end 120 s, far below a transport step (a few milliseconds on
 # the product grid at Courant 0.4) and far above the rounding.
 EVENT_TIME_RTOL = 1.0e-9
+# The placement section (ADR-015 D, step 4): the surfaces a sensor may be
+# mounted on, how far from one its cell's centre may lie, the layout's sensor
+# count, the rule it is searched under, and the coverage rule's time. "free"
+# is every non-SOLID cell, the bound the mountable optimum is read against.
+PLACEMENT_KEY = "placement"
+_PLACEMENT_KEYS: frozenset[str] = frozenset(
+    {"mount", "standoff", "count", "rule", "within"}
+)
+MOUNT_WALLS = "walls"
+MOUNT_CEILING = "ceiling"
+MOUNT_OBSTACLE_TOPS = "obstacle_tops"
+MOUNT_OBSTACLE_SIDES = "obstacle_sides"
+MOUNT_FREE = "free"
+MOUNT_SURFACES: tuple[str, ...] = (
+    MOUNT_WALLS,
+    MOUNT_CEILING,
+    MOUNT_OBSTACLE_TOPS,
+    MOUNT_OBSTACLE_SIDES,
+    MOUNT_FREE,
+)
+# The two rules a layout is searched under; the coverage rule is reported
+# beside them and is not searched (ADR-015 D, "The search").
+WORST_CASE = "worst_case"
+MEAN = "mean"
+PLACEMENT_RULES: tuple[str, ...] = (WORST_CASE, MEAN)
 
 
 class SimConfig:
@@ -1623,6 +1677,62 @@ class SimConfig:
                         f"thresholds.{key} must be non-negative, got {val}"
                     )
                 self.thresholds[str(key)] = number
+
+        # Placement (optional, ADR-015 D). Absent states no search assumption;
+        # placement.candidates still takes a mount and a standoff directly.
+        self.placement: PlacementSpec | None = None
+        if PLACEMENT_KEY in raw:
+            self.placement = self._parse_placement(raw[PLACEMENT_KEY])
+
+    @classmethod
+    def _parse_placement(cls, section: object) -> PlacementSpec:
+        """Parse the placement section into a PlacementSpec.
+
+        ``mount``, ``standoff``, ``count`` and ``rule`` are required and
+        ``within`` is optional; any other key raises.
+        """
+        if not isinstance(section, dict):
+            raise ValueError(f"{PLACEMENT_KEY} must be a mapping")
+        for key in section:
+            if key not in _PLACEMENT_KEYS:
+                raise ValueError(
+                    f"{PLACEMENT_KEY}.{key} is not a recognised placement key; "
+                    f"known: {sorted(_PLACEMENT_KEYS)}"
+                )
+        if "mount" not in section:
+            raise ValueError(f"Missing required key: '{PLACEMENT_KEY}.mount'")
+        mount = section["mount"]
+        if not isinstance(mount, list):
+            raise TypeError(
+                f"{PLACEMENT_KEY}.mount must be a list, got {type(mount).__name__}"
+            )
+        if not mount:
+            raise ValueError(
+                f"{PLACEMENT_KEY}.mount must name at least one of {list(MOUNT_SURFACES)}"
+            )
+        for i, name in enumerate(mount):
+            if not isinstance(name, str):
+                raise TypeError(
+                    f"{PLACEMENT_KEY}.mount[{i}] must be a string, "
+                    f"got {type(name).__name__}"
+                )
+            if name not in MOUNT_SURFACES:
+                raise ValueError(
+                    f"{PLACEMENT_KEY}.mount[{i}] must be one of "
+                    f"{list(MOUNT_SURFACES)}, got '{name}'"
+                )
+            if name in mount[:i]:
+                raise ValueError(f"{PLACEMENT_KEY}.mount names '{name}' twice")
+        within = None
+        if "within" in section:
+            within = cls._require_positive_float(section, "within", PLACEMENT_KEY)
+        return PlacementSpec(
+            mount=tuple(mount),
+            standoff=cls._require_positive_float(section, "standoff", PLACEMENT_KEY),
+            count=cls._require_positive_int(section, "count", PLACEMENT_KEY),
+            rule=cls._require_choice(section, "rule", PLACEMENT_KEY, PLACEMENT_RULES),
+            within=within,
+        )
 
     def _iso_thresholds(self, section: dict) -> None:
         """The thresholds from an ISO 14644-1 class number (ADR-015 C, REQ-A03).

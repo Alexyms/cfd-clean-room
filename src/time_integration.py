@@ -156,6 +156,7 @@ FLOW_FREE_SECTIONS: tuple[str, ...] = (
     "particles",
     "sensors",
     "thresholds",
+    "placement",
 )
 FLOW_FREE_SOLVER_KEYS: tuple[str, ...] = (
     "dt",

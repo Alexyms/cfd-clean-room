@@ -56,8 +56,8 @@ responsibility = "Defines the staggered (MAC) field layout: shapes and allocatio
 serves = ["REQ-S07", "REQ-S13"]
 
 [modules."src/placement.py"]
-responsibility = "Reads a run file's arrival maps for sensor placement: its /arrival/ maps, resolved to the step, or for a file written before them the maps rebuilt from its stored frames at the output cadence by the same rule, flagged as frame-resolved; the scoring, candidates and search are ADR-015 step 4's."
-serves = ["REQ-A04"]
+responsibility = "Reads a run file's arrival maps for sensor placement (its /arrival/ maps, resolved to the step, or for a file written before them the maps rebuilt from its stored frames at the output cadence by the same rule, flagged as frame-resolved with the reason), stacks runs' latencies into (scenario, event, class) units, scores any layout by lookup under the worst-case, mean and coverage rules, states the candidate cells by mounting surface and standoff, searches the best layout of a count (exact for one and two sensors and for the worst case at any count by a set cover), and ranks layouts."
+serves = ["REQ-A04", "REQ-A05"]
 
 [modules."src/pressure.py"]
 responsibility = "Assembles the staggered pressure correction equation from the momentum diagonals with the discrete divergence of u* as its right-hand side, solves it by conjugate gradients preconditioned with its diagonal or, under the pressure_preconditioner key, with one multigrid V-cycle per iteration, to a relative residual, a rounding floor or a reported iteration cap, corrects the face velocities and updates the pressure."
