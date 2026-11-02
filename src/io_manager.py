@@ -526,7 +526,7 @@ class RecoveryRecord:
         if self.hold_time is not None:
             scalars.append("hold_time")
         for name in scalars:
-            object.__setattr__(self, name, _real(name, getattr(self, name)))
+            object.__setattr__(self, name, real_number(name, getattr(self, name)))
         for name in _RECOVERY_ARRAYS:
             array = np.asarray(getattr(self, name), dtype="<f8")
             object.__setattr__(self, name, array)
@@ -579,15 +579,17 @@ class ArrivalRecord:
         threshold; inf for a non-SOLID cell not reached by ``t_final``, NaN
         in SOLID cells.
     t_final : float
-        The last step time the maps read, seconds.
+        The last step time the maps read, seconds, finite.
 
     Raises
     ------
     TypeError
-        If an event name is not a str or ``t_final`` is not a real number.
+        If an event name is not a str, or a threshold, an onset or
+        ``t_final`` is not a real number (a bool is not).
     ValueError
-        If the shapes do not agree on the events and the classes, or the
-        onsets are not finite and in order.
+        If the shapes do not agree on the events and the classes, a
+        threshold is not finite and non-negative, the onsets are not finite,
+        non-negative and in order, or ``t_final`` is not finite.
     """
 
     thresholds: np.ndarray
@@ -604,21 +606,21 @@ class ArrivalRecord:
                     f"an event name must be a str, got {type(name).__name__}"
                 )
         object.__setattr__(self, "event_names", names)
-        object.__setattr__(self, "t_final", _real("t_final", self.t_final))
-        for name in _ARRIVAL_ARRAYS:
-            array = np.asarray(getattr(self, name), dtype="<f8")
-            object.__setattr__(self, name, array)
-        if self.thresholds.ndim != 1:
-            raise ValueError(
-                f"thresholds must be [classes], got shape {self.thresholds.shape}"
-            )
+        t_final = real_number("t_final", self.t_final)
+        if not np.isfinite(t_final):
+            raise ValueError(f"t_final must be finite, got {t_final}")
+        object.__setattr__(self, "t_final", t_final)
+        for name, check in (
+            ("thresholds", checked_thresholds),
+            ("onsets", checked_onsets),
+        ):
+            object.__setattr__(self, name, check(getattr(self, name)).astype("<f8"))
+        object.__setattr__(
+            self, "first_above", np.asarray(self.first_above, dtype="<f8")
+        )
         if self.onsets.shape != (len(names),):
             raise ValueError(
                 f"onsets has shape {self.onsets.shape} for {len(names)} events"
-            )
-        if not np.isfinite(self.onsets).all() or np.any(np.diff(self.onsets) < 0):
-            raise ValueError(
-                f"the onsets must be finite and in order, got {self.onsets.tolist()}"
             )
         maps = self.first_above.shape
         if len(maps) != 4 or maps[:2] != (len(names), self.thresholds.size):
@@ -626,6 +628,83 @@ class ArrivalRecord:
                 f"first_above has shape {maps}; expected [{len(names)}, "
                 f"{self.thresholds.size}, ny, nx]"
             )
+
+
+def checked_thresholds(thresholds: Sequence[float] | np.ndarray) -> np.ndarray:
+    """The class thresholds as a new [classes] float64 array, or a refusal.
+
+    The one check of the thresholds that reach the arrival maps: the tracker,
+    ``ArrivalRecord`` and the frames' reader (``placement``) all take them
+    through it.
+
+    Parameters
+    ----------
+    thresholds : Sequence[float] or np.ndarray
+        Per class, particles per cubic metre.
+
+    Returns
+    -------
+    np.ndarray
+        The thresholds, float64; empty if none were given.
+
+    Raises
+    ------
+    TypeError
+        If a threshold is not a real number (a bool is not).
+    ValueError
+        If the thresholds are not one-dimensional, or one is not finite and
+        non-negative.
+    """
+    if np.ndim(thresholds) != 1:
+        raise ValueError(
+            f"thresholds must be [classes], got shape {np.shape(thresholds)}"
+        )
+    for value in thresholds:
+        real_number("a threshold", value)
+    out = np.array(thresholds, dtype=np.float64)
+    if not (np.isfinite(out).all() and (out >= 0).all()):
+        raise ValueError(
+            f"the thresholds must be finite and non-negative, got {out.tolist()}"
+        )
+    return out
+
+
+def checked_onsets(onsets: Sequence[float] | np.ndarray) -> np.ndarray:
+    """The contaminating events' onsets as a new [events] float64 array, or a refusal.
+
+    The one check of the onsets that reach the arrival maps and the latencies
+    (``monitor``, ``ArrivalRecord``, ``placement``).
+
+    Parameters
+    ----------
+    onsets : Sequence[float] or np.ndarray
+        Seconds, one per event.
+
+    Returns
+    -------
+    np.ndarray
+        The onsets, float64; empty if none were given.
+
+    Raises
+    ------
+    TypeError
+        If an onset is not a real number (a bool is not).
+    ValueError
+        If the onsets are not one-dimensional, finite, non-negative and in
+        order (two events may share an onset).
+    """
+    if np.ndim(onsets) != 1:
+        raise ValueError(f"onsets must be [events], got shape {np.shape(onsets)}")
+    for onset in onsets:
+        real_number("an onset", onset)
+    out = np.array(onsets, dtype=np.float64)
+    if not np.isfinite(out).all():
+        raise ValueError("the onsets must be finite")
+    if np.any(np.diff(out) < 0.0):
+        raise ValueError("the onsets must be in order")
+    if out.size and out[0] < 0.0:
+        raise ValueError(f"the onsets must be non-negative, got {out[0]}")
+    return out
 
 
 def config_text(mapping: Mapping[str, object]) -> str:
@@ -866,12 +945,14 @@ class RunFile:
         _check_fingerprint(fingerprint)
         if not isinstance(state, FlowState):
             raise TypeError(f"state must be a FlowState, got {type(state).__name__}")
-        wall = _real("wall_seconds", wall_seconds)
+        wall = real_number("wall_seconds", wall_seconds)
         stages = {
-            str(k): _real(f"stage_seconds[{k}]", v) for k, v in stage_seconds.items()
+            str(k): real_number(f"stage_seconds[{k}]", v)
+            for k, v in stage_seconds.items()
         }
         readings = {
-            str(k): _real(f"rule_readings[{k}]", v) for k, v in rule_readings.items()
+            str(k): real_number(f"rule_readings[{k}]", v)
+            for k, v in rule_readings.items()
         }
         with h5py.File(self.path, "a") as run_file:
             flows = run_file.require_group(FLOW)
@@ -968,7 +1049,7 @@ class RunFile:
             from the first frame's, or ``step`` is not above the last frame's.
         """
         step = _step(step)
-        t = _real("t", t)
+        t = real_number("t", t)
         arrays = _class_fields(fields, budgets)
         classes = list(arrays)
         row = np.array([_budget_row(b) for b in budgets], dtype="<f8")
@@ -1252,7 +1333,7 @@ class RunFile:
             field's shape differs from the first frame's.
         """
         step = _step(step)
-        t = _real("t", t)
+        t = real_number("t", t)
         arrays = {
             name: np.asarray(array, dtype="<f8")
             for name, array in (("u", u), ("v", v), ("p", p))
@@ -1377,7 +1458,7 @@ class RunFile:
             not a FlowState.
         """
         step = _step(step)
-        t = _real("t", t)
+        t = real_number("t", t)
         for name, given in (("state", state), ("previous", previous)):
             # Only the previous level may be absent: BDF2 reads it, implicit Euler
             # and a march at step 0 do not.
@@ -1603,11 +1684,11 @@ class RunFile:
             SHA-256.
         """
         step = _step(step)
-        t = _real("t", t)
+        t = real_number("t", t)
         arrays = _class_fields(fields, budgets)
         _check_fingerprint(fingerprint)
         if plan_start is not None:
-            plan_start = _real("plan_start", plan_start)
+            plan_start = real_number("plan_start", plan_start)
         rows = np.array([_budget_row(b) for b in budgets], dtype="<f8")
         carried = {}
         for name, array in (recovery or {}).items():
@@ -1866,7 +1947,7 @@ def _check_fingerprint(fingerprint: object) -> None:
         )
 
 
-def _real(name: str, value: object) -> float:
+def real_number(name: str, value: object) -> float:
     """A real number that is not a bool, as a float, or a refusal."""
     if isinstance(value, (bool, np.bool_)) or not isinstance(
         value, (int, float, np.integer, np.floating)

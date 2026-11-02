@@ -47,7 +47,12 @@ from src.config import (
     SimConfig,
     Source,
 )
-from src.io_manager import ArrivalRecord
+from src.io_manager import (
+    ArrivalRecord,
+    checked_onsets,
+    checked_thresholds,
+    real_number,
+)
 from src.mesh import SOLID, Mesh
 
 # A sensor this fraction of the room's extent from a face is on it. The faces
@@ -232,29 +237,6 @@ def contaminating_events(scenario: ScenarioSpec) -> tuple[tuple[str, float], ...
     if not out:
         return ((RUN_START, 0.0),)
     return tuple(sorted(out, key=lambda pair: pair[1]))
-
-
-def _real(name: str, value: object) -> float:
-    """VALUE as a float; TypeError unless it is a real number (a bool is not)."""
-    if isinstance(value, (bool, np.bool_)) or not isinstance(
-        value, (int, float, np.integer, np.floating)
-    ):
-        raise TypeError(f"{name} must be a real number, got {type(value).__name__}")
-    return float(value)
-
-
-def _onsets(onsets: Sequence[float]) -> np.ndarray:
-    """The onsets as [events] float64; raises unless 1-D, real, finite and in order."""
-    if np.ndim(onsets) != 1:
-        raise ValueError(f"onsets must be [events], got shape {np.shape(onsets)}")
-    for onset in onsets:
-        _real("an onset", onset)
-    times = np.asarray(onsets, dtype=np.float64)
-    if not np.isfinite(times).all():
-        raise ValueError("the onsets must be finite")
-    if np.any(np.diff(times) < 0.0):
-        raise ValueError("the onsets must be in order")
-    return times
 
 
 def _check_fields(
@@ -472,8 +454,8 @@ class AlertMonitor:
         Parameters
         ----------
         onsets : Sequence[float]
-            The events' onsets, seconds (``contaminating_events``), finite
-            and in order; two events may share one.
+            The events' onsets, seconds (``contaminating_events``), finite,
+            non-negative and in order; two events may share one.
 
         Returns
         -------
@@ -489,7 +471,8 @@ class AlertMonitor:
         TypeError
             If an onset is not a real number.
         ValueError
-            If the onsets are not one-dimensional, finite and in order.
+            If the onsets are not one-dimensional, finite, non-negative and
+            in order.
 
         Notes
         -----
@@ -500,7 +483,7 @@ class AlertMonitor:
         onset's own update is not open at it. An event's latency is not cut
         off at the next event's onset, as the map's is not.
         """
-        times = _onsets(onsets)
+        times = checked_onsets(onsets)
         n_classes, n_sensors = self._readings.shape
         out = np.full((times.size, n_classes, n_sensors), np.inf)
         last = -math.inf if self._t is None else self._t
@@ -697,32 +680,20 @@ class ArrivalTracker:
         live: np.ndarray,
         onsets: Sequence[float],
     ) -> None:
-        if np.ndim(thresholds) != 1 or len(thresholds) == 0:
-            raise ValueError(
-                f"thresholds must be [classes], at least one, got shape "
-                f"{np.shape(thresholds)}"
-            )
-        for value in thresholds:
-            _real("a threshold", value)
-        self._thresholds = np.asarray(thresholds, dtype=np.float64)
-        if not (np.isfinite(self._thresholds).all() and (self._thresholds >= 0).all()):
-            raise ValueError(
-                f"the thresholds must be finite and non-negative, got "
-                f"{self._thresholds.tolist()}"
-            )
+        self._thresholds = checked_thresholds(thresholds)
+        if self._thresholds.size == 0:
+            raise ValueError("thresholds must be [classes], at least one, got none")
         if not isinstance(live, np.ndarray) or live.dtype != np.bool_:
             raise TypeError("live must be a bool array, the non-SOLID cells")
         if live.ndim != 2:
             raise ValueError(f"live must be [ny, nx], got shape {live.shape}")
         self._live = live.copy()
-        self._onsets = _onsets(onsets)
+        self._onsets = checked_onsets(onsets)
         if self._onsets.size == 0:
             raise ValueError(
                 "the arrival maps need at least one event; a plan with no "
                 f"contaminating event has {RUN_START} at t = 0"
             )
-        if self._onsets[0] < 0.0:
-            raise ValueError(f"the onsets must be non-negative, got {self._onsets[0]}")
         shape = (self._onsets.size, self._thresholds.size, *live.shape)
         self._first = np.full(shape, np.nan)
         self._t: float | None = None
@@ -756,7 +727,7 @@ class ArrivalTracker:
             If ``t`` is not finite or not above the last update's, or the
             classes are not 0 to n - 1 on the mesh's shape.
         """
-        t = _real("t", t)
+        t = real_number("t", t)
         if not math.isfinite(t):
             raise ValueError(f"t must be finite, got {t}")
         if self._t is not None and t <= self._t:
@@ -877,7 +848,7 @@ class ArrivalTracker:
         names = tuple(event_names)
         if len(names) != self._onsets.size:
             raise ValueError(f"{len(names)} event names for {self._onsets.size} events")
-        t_final = _real("t_final", t_final)
+        t_final = real_number("t_final", t_final)
         if not math.isfinite(t_final) or (self._t is not None and t_final < self._t):
             raise ValueError(
                 f"t_final = {t_final!r} s is not finite and at or after the last "

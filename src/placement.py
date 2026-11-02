@@ -20,7 +20,12 @@ from typing import NamedTuple
 import numpy as np
 
 from src.config import SimConfig
-from src.io_manager import RunFile, TransportFrames
+from src.io_manager import (
+    RunFile,
+    TransportFrames,
+    checked_onsets,
+    checked_thresholds,
+)
 from src.mesh import SOLID, Mesh
 from src.monitor import contaminating_events
 
@@ -64,11 +69,13 @@ def arrival_from_frames(
     frames : TransportFrames
         The run file's ``/transport/`` frames.
     thresholds : np.ndarray
-        [classes], particles per cubic metre, one per class the frames hold.
+        [classes], particles per cubic metre, finite and non-negative, one
+        per class the frames hold.
     live : np.ndarray
         [ny, nx] bool, the non-SOLID cells.
     onsets : np.ndarray
-        [events], the contaminating events' onsets, seconds.
+        [events], the contaminating events' onsets, seconds, finite,
+        non-negative and in order.
 
     Returns
     -------
@@ -80,9 +87,12 @@ def arrival_from_frames(
 
     Raises
     ------
+    TypeError
+        If a threshold or an onset is not a real number (a bool is not).
     ValueError
-        If the thresholds are not one per class of the frames, ``live`` is
-        not the frames' [ny, nx], or the onsets are not [events].
+        If the thresholds are not one per class of the frames, finite and
+        non-negative, ``live`` is not the frames' [ny, nx], or the onsets are
+        not [events], finite, non-negative and in order.
 
     Notes
     -----
@@ -90,15 +100,13 @@ def arrival_from_frames(
     frames are a subset of its steps, so where both reach a cell this map
     is at or after the march's, and it reaches no cell the march's does not.
     """
-    thresholds = np.asarray(thresholds, dtype=np.float64)
-    onsets = np.asarray(onsets, dtype=np.float64)
+    thresholds = checked_thresholds(thresholds)
+    onsets = checked_onsets(onsets)
     classes = sorted(frames.fields)
     if thresholds.shape != (len(classes),) or classes != list(range(len(classes))):
         raise ValueError(
             f"thresholds of shape {thresholds.shape} for the frames' classes {classes}"
         )
-    if onsets.ndim != 1:
-        raise ValueError(f"onsets must be [events], got shape {onsets.shape}")
     times = np.asarray(frames.times, dtype=np.float64)
     out = np.full((onsets.size, len(classes), *live.shape), np.inf)
     for k in classes:

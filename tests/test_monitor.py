@@ -399,6 +399,7 @@ class TestLatencies:
             (["1.0"], TypeError, "an onset must be a real number"),
             ([2.0, 1.0], ValueError, "the onsets must be in order"),
             ([float("nan")], ValueError, "the onsets must be finite"),
+            ([-1.0, 2.0], ValueError, "the onsets must be non-negative"),
         ],
     )
     def test_the_onsets_are_refused_unless_finite_and_in_order(

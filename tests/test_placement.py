@@ -119,7 +119,12 @@ class TestArrivalFromFrames:
         ("thresholds", "live", "onsets", "match"),
         [
             (np.array([1.0]), LIVE, np.array([0.0]), r"thresholds of shape \(1,\)"),
-            (THRESHOLDS[None], LIVE, np.array([0.0]), r"thresholds of shape \(1, 2\)"),
+            (
+                THRESHOLDS[None],
+                LIVE,
+                np.array([0.0]),
+                r"thresholds must be \[classes\]",
+            ),
             (THRESHOLDS, LIVE[:, :2], np.array([0.0]), "frames are"),
             (THRESHOLDS, LIVE, np.array([[0.0]]), r"onsets must be \[events\]"),
         ],
@@ -130,6 +135,33 @@ class TestArrivalFromFrames:
         """One threshold per class of the frames, live of their shape, onsets [events]."""
         with pytest.raises(ValueError, match=match):
             arrival_from_frames(frames_of({}), thresholds, live, onsets)
+
+    @pytest.mark.parametrize(
+        ("thresholds", "onsets", "error", "match"),
+        [
+            (np.array([1.0, np.nan]), [0.0], ValueError, "thresholds must be finite"),
+            (np.array([1.0, np.inf]), [0.0], ValueError, "thresholds must be finite"),
+            (np.array([1.0, -1.0]), [0.0], ValueError, "finite and non-negative"),
+            (np.array([True, False]), [0.0], TypeError, "a threshold must be a real"),
+            (THRESHOLDS, [np.nan], ValueError, "the onsets must be finite"),
+            (THRESHOLDS, [0.0, np.inf], ValueError, "the onsets must be finite"),
+            (THRESHOLDS, [-0.5], ValueError, "the onsets must be non-negative"),
+            (THRESHOLDS, [1.0, 0.5], ValueError, "the onsets must be in order"),
+            (THRESHOLDS, np.array([True]), TypeError, "an onset must be a real"),
+        ],
+    )
+    def test_thresholds_and_onsets_the_tracker_would_refuse_are_refused(
+        self, thresholds: np.ndarray, onsets: list, error: type, match: str
+    ) -> None:
+        """The tracker's input guards, at the frames reader too.
+
+        A NaN threshold or onset compares False everywhere, so without the
+        guards every cell would silently read "never". Defects caught: any of
+        the checks missing from ``arrival_from_frames`` (the frames read
+        with the bad value).
+        """
+        with pytest.raises(error, match=match):
+            arrival_from_frames(frames_of({}), thresholds, LIVE, np.array(onsets))
 
     def test_frames_whose_classes_are_not_0_to_n_minus_1_are_refused(self) -> None:
         """A frames object holding classes 0 and 2 has no class 1 to read."""
