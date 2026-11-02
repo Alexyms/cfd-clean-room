@@ -5,9 +5,13 @@ to the run file's ``/arrival/`` at each checkpoint and at the end, resolved
 to the step. A run file written before ADR-015 step 3 (Phase 4's, and the
 sweep's of step 1) has no ``/arrival/``; its maps are rebuilt from the stored
 frames by the same rule, which resolves an arrival only to the output
-cadence: a cell's time is the first stored frame at or after the crossing,
-up to one frame spacing late, and a cell at or above threshold only between
-two frames is not seen. ``arrival_from_run`` says which of the two a result
+cadence: a cell's time is the first stored frame at or after the onset at
+which the cell is at or above its threshold. That is never before the
+march's time, and on the runs measured within one frame spacing after it (a
+cell can be below at one frame and above at a later one, so that is a
+measurement and not a bound). A cell at or above threshold only between two
+frames is not seen, so the map misses cells the steps reach (15 of 520 on
+the coarse door run). ``arrival_from_run`` says which of the two a result
 is.
 
 The scoring rules, the candidates and the search (section D's "Scoring a
@@ -99,6 +103,7 @@ def arrival_from_frames(
     The march's own map (``ArrivalTracker``) reads every step, and the
     frames are a subset of its steps, so where both reach a cell this map
     is at or after the march's, and it reaches no cell the march's does not.
+    It misses the cells at or above their threshold only between two frames.
     """
     thresholds = checked_thresholds(thresholds)
     onsets = checked_onsets(onsets)
