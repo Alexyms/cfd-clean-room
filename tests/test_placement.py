@@ -627,6 +627,43 @@ class TestSearch:
         assert (three.method, three.rule, three.exact) == (GREEDY, MEAN, False)
         assert three.distinct_masks == 5 and three.score.undetected == 4
 
+    @pytest.mark.parametrize(("count", "left_out"), [(3, (0, 1)), (4, (0,))])
+    def test_the_fallback_layout_at_three_or_more_is_the_mean_rules_search(
+        self, count: int, left_out: tuple[int, ...]
+    ) -> None:
+        """No cover of ten units: the layout is the mean rule's, not the first candidates'.
+
+        Ten units, unit u reached only by candidate u // 2 at latency 5 - c
+        (the later candidates are the faster), caps 10. Three sensors cover
+        three of the five pairs and four cover four, so no layout detects
+        every unit and the worst case is inf for all. The optimum leaves out
+        the slowest candidates: cells 2 to 4 at three sensors (mean 5.2) and
+        1 to 4 at four (mean 4.0), which the mean rule's search and a brute
+        force over every layout both find, and the first ``count``
+        candidates are not (mean 6.4 and 5.8). Defect caught: the arm
+        returning the first ``count`` candidates, with the right rule,
+        method and mask counts, which the symmetric fixture above scores
+        alike for every layout.
+        """
+        latencies = np.full((10, 1, 5), INF)
+        for u in range(10):
+            latencies[u, 0, u // 2] = 5.0 - u // 2
+        units = Units(
+            latencies, np.full(10, 10.0), tuple(("s", "e", u) for u in range(10))
+        )
+        cells = row_cells(*range(5))
+        found = search(units, cells, count, WORST_CASE)
+        by_mean = search(units, cells, count, MEAN)
+        optimum = tuple((0, c) for c in range(5) if c not in left_out)
+        _, means = brute_force(units, cells, count)
+        assert (found.method, found.rule, found.exact) == (GREEDY, MEAN, False)
+        assert (found.distinct_masks, found.maximal_masks) == (5, 5)
+        assert found.cells == by_mean.cells == optimum
+        assert found.score == by_mean.score
+        assert found.score.mean == pytest.approx(means.min())
+        assert found.score.mean < score(units, cells[:count]).mean
+        assert np.isinf(found.score.worst)
+
     @pytest.mark.parametrize(
         ("count", "rule", "cells", "error", "match"),
         [
