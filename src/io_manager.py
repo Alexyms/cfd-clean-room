@@ -6,7 +6,8 @@ process killed between two outputs leaves it readable with every frame
 written before. Its groups:
 
 - ``/config``: the merged mapping as YAML text, the text's SHA-256, the
-  restart hash (the same over the mapping less ``RESTART_EXCLUDED_KEYS``),
+  restart hash (the same over the mapping less ``RESTART_EXCLUDED_KEYS`` and
+  ``RESTART_EXCLUDED_SECTIONS``),
   and the commit, start time, machine and process count;
 - ``/flow/<fingerprint>/``: per flow state solved, datasets ``u_faces``,
   ``v_faces``, ``p`` and with the turbulence section ``k``, ``eps``,
@@ -119,6 +120,11 @@ RESTART_EXCLUDED_KEYS: tuple[tuple[str, str], ...] = (
     ("solver", "t_end"),
     ("solver", "checkpoint_interval"),
 )
+# The top-level sections a continuation may also change whole (prompt 75b,
+# the orchestrator's decision of 2026-11-03): the placement section is
+# analysis read after a run, and nothing the march computes reads it, so a
+# file written before it, or under other values, still restarts.
+RESTART_EXCLUDED_SECTIONS: tuple[str, ...] = ("placement",)
 # One column per MassBudget term; deposition by surface in DEPOSIT_SURFACES'
 # order. A budget before its first step has initial and current None, stored
 # as NaN, which no booked term can be (the solver refuses non-finite input).
@@ -726,7 +732,7 @@ def config_text(mapping: Mapping[str, object]) -> str:
 
 
 def restart_hash(mapping: Mapping[str, object]) -> str:
-    """SHA-256 of a mapping's YAML text less RESTART_EXCLUDED_KEYS.
+    """SHA-256 of a mapping's YAML text less the restart's excluded keys and sections.
 
     Parameters
     ----------
@@ -737,7 +743,8 @@ def restart_hash(mapping: Mapping[str, object]) -> str:
     -------
     str
         Hexadecimal. Equal for two mappings that differ at most in the
-        excluded keys, present or absent; key order counts, since a
+        keys of RESTART_EXCLUDED_KEYS or the sections of
+        RESTART_EXCLUDED_SECTIONS, present or absent; key order counts, since a
         boundary segment's place in the order is part of its meaning.
     """
     text = config_text(_without_excluded(_plain(mapping)))
@@ -876,14 +883,16 @@ class RunFile:
         ValueError
             If the restart hash differs from the file's: the message names
             the first key, in the file's order, that differs, was added or
-            was removed. The keys in RESTART_EXCLUDED_KEYS may differ.
+            was removed. The keys in RESTART_EXCLUDED_KEYS and the sections
+            in RESTART_EXCLUDED_SECTIONS may differ.
 
         Notes
         -----
         The file's side is recomputed from its stored text under the
-        RESTART_EXCLUDED_KEYS in force now, not read from ``restart_sha256``,
-        which holds the set in force when the file was written, so a key
-        added to the set widens what an existing file's restart accepts
+        RESTART_EXCLUDED_KEYS and RESTART_EXCLUDED_SECTIONS in force now, not
+        read from ``restart_sha256``, which holds the set in force when the
+        file was written, so a key added to the set widens what an existing
+        file's restart accepts
         (review 63 S2, prompt 64's decision 3). ``restart_sha256`` stays as
         the record of what the run was hashed under.
         """
@@ -900,8 +909,8 @@ class RunFile:
         raise ValueError(
             f"restart refused: {first or 'the configuration'} differs from the "
             f"configuration {self.path} was run with; only "
-            f"{', '.join('.'.join(path) for path in RESTART_EXCLUDED_KEYS)} may "
-            "change on a restart"
+            f"{', '.join('.'.join(path) for path in RESTART_EXCLUDED_KEYS)} and the "
+            f"{', '.join(RESTART_EXCLUDED_SECTIONS)} section may change on a restart"
         )
 
     # ------------------------------------------------------------------
@@ -1894,12 +1903,13 @@ def _plain(value: object) -> object:
 
 
 def _without_excluded(mapping: object) -> object:
-    """A copy of a plain mapping with RESTART_EXCLUDED_KEYS removed where present."""
+    """A copy of a plain mapping without the restart's excluded keys and sections."""
     if not isinstance(mapping, dict):
         return mapping
     out = {
         key: dict(item) if isinstance(item, dict) else item
         for key, item in mapping.items()
+        if key not in RESTART_EXCLUDED_SECTIONS
     }
     for section, key in RESTART_EXCLUDED_KEYS:
         block = out.get(section)

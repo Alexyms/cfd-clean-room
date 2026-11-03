@@ -76,7 +76,7 @@ from src.placement import (
     arrival_from_frames,
     arrival_from_run,
 )
-from src.scenarios import Interval, ScenarioManager
+from src.scenarios import Interval, ScenarioManager, flow_fingerprint
 from src.solver_staggered import FlowState, StaggeredSolver
 from src.solver_transport import TransportSolver
 from src.staggered import FaceVelocities, allocate_fields
@@ -1906,6 +1906,56 @@ class TestRestart:
         again = run(door.config, restart=cut)
         assert again.restarted_from == 90
         assert again.recovery is None
+        same_frames(RunFile(cut), door.run)
+        same_budgets(again.budgets, door.record.budgets)
+
+    @pytest.mark.parametrize("written", ["without", "other_value"])
+    def test_a_file_written_without_or_under_other_placement_restarts(
+        self, tmp_path: Path, door: SimpleNamespace, written: str
+    ) -> None:
+        """A run file made before the placement section, or under other values, restarts.
+
+        The door run is killed at 95 under a base file that states no
+        placement section (a Phase 4 file's configuration) or another
+        count and rule, and restarted under the same base with the product
+        file's section stated in the scenario file: accepted, from
+        checkpoint 90, and the frames, budgets and readings are the
+        uninterrupted run's bitwise (the section changes nothing the march
+        computes). The flow fingerprint is the same with and without the
+        section. Defects caught: the section left in the restart hash (the
+        restart refused naming ``placement``); the section read by the flow
+        fingerprint (the kept state not matched).
+        """
+        base = yaml.safe_load(
+            (CONFIGS / "clean_room_default.yaml").read_text(encoding="utf-8")
+        )
+        if written == "without":
+            del base["placement"]
+        else:
+            base["placement"].update({"count": 2, "rule": "mean"})
+        base_path = tmp_path / "base.yaml"
+        base_path.write_text(yaml.safe_dump(base, sort_keys=False), encoding="utf-8")
+        raw = yaml.safe_load(yaml.safe_dump(door.raw))
+        raw["scenario"]["base"] = str(base_path)
+        older = SimConfig.from_dict(raw)
+        assert ("placement" in older.merged_mapping()) == (written != "without")
+        cut = tmp_path / "cut.h5"
+        with pytest.raises(_KilledError):
+            run(
+                older,
+                cut,
+                flows_from=door.record.path,
+                on_step=killer(95),
+                provenance=PROVENANCE,
+            )
+        raw["placement"] = yaml.safe_load(
+            (CONFIGS / "clean_room_default.yaml").read_text(encoding="utf-8")
+        )["placement"]
+        newer = SimConfig.from_dict(raw)
+        assert newer.placement == door.config.placement
+        assert flow_fingerprint(newer) == flow_fingerprint(older)
+        again = run(newer, restart=cut)
+        assert again.restarted_from == 90
         same_frames(RunFile(cut), door.run)
         same_budgets(again.budgets, door.record.budgets)
 
