@@ -121,7 +121,9 @@ are the ones within a stated distance of a wall, the ceiling or an obstacle, and
 layout of a count is searched, exactly for the worst case at any count. On 80x30 the file's
 four sensors detect nothing in the three event scenarios; the searched four detect the breach
 and the dust release, and no mountable cell at the stated 5 cm reaches the door's plume on
-that grid. Review and test 75 run before its pull request.
+that grid. Review and test 75 ran; prompt 75b fixed their one missing test, let a Phase 4 run
+file restart under the new configuration section, and made the integration test assert the
+result above, on the same branch before its pull request.
 Phases 6 and 7 have not begun.
 
 The product room itself has never been solved, and on 2026-10-04 it was found that the laminar

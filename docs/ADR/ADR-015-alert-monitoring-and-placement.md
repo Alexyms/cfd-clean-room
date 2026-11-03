@@ -592,9 +592,9 @@ spill off the litho tool's top (T11), which the line source does not test; the
 model's spill rests on VAL-020's carried limit, the turbulence over the tool tops about 30%
 high (ADR-014 H), which would widen the model's spill against the real one, an inference
 from that case's reading of k and not a measurement of a scalar there. The arrival times
-read from stored frames are bounded by the
-frame spacing (T5's caption) and are not latencies; section D's in-march maps remove that
-bound.
+read from stored frames are upper bounds on the arrival, the first stored frame at or after
+the crossing (T5's caption), and are not latencies; they can also miss a cell the steps reach
+between two frames. Section D's in-march maps remove both limits.
 
 **The grid.** 160x60, with the reason given under decision B, and the two extreme arms of the
 breach repeated on 320x120. The width's resolution on 160x60 is a 5 cm cell, so a width that
@@ -811,8 +811,10 @@ worst case, and no coverage time.
   distinct masks, whose number is measured and reported, not assumed), and the smallest T
   with a cover of the count is the optimum. The covers attaining it are enumerated by a
   depth-first search over the distinct masks bounded by the count, which is small, and the
-  tie among them is broken by the mean. When no pair is coverable the ranking falls to the
-  mean rule, and the report says so;
+  tie among them is broken by the mean. When no layout of the count detects every
+  coverable unit the ranking falls to the mean rule, and the layout's rule says so (read as
+  built, prompt 75b, 2026-11-03: the first form said "when no pair is coverable"; a search
+  in which no unit at all is coverable raises, since every layout would tie at the caps);
 - the mean rule above two: greedy (add the cell that lowers the score most) followed by
   one-sensor exchanges until none improves, checked against the exhaustive answer at count 2.
 NumPy only (ADR-013 decision 2: no new dependency).
@@ -826,14 +828,42 @@ the empty set, which needs no mask; the distinct and the maximal masks are both 
 optimum. Each cover found is made a layout by the cells of its masks that lower the mean
 most, the spare sensors added the same way, and the best by the mean is improved by
 exchanges that keep the worst case at the optimum: the worst case is exact, its tie-break by
-the mean the best this finds. "When no pair is coverable" is read as no layout of the count
-covering every coverable unit: the worst case is then inf for every layout, the search runs
-the mean rule's method at the count and returns the rule as `MEAN`. Ties under the worst case
+the mean the best this finds. When no layout of the count detects every coverable unit the
+worst case is inf for every layout, the search runs the mean rule's method at the count and
+returns the rule as `MEAN`; when no unit at all is coverable it raises `ValueError`. Ties under the worst case
 go to the mean and under the mean to the worst case, then to candidate order. The set cover
 refuses more than 20 units (2^20 subsets); the reference set has fifteen. On twelve random
 maps of six units and 31 candidates the worst case is exact at one to three sensors, and the
 mean rule's greedy at three equals the optimum on ten and is above it on two (0.67 and 0.83 s
 against 0.5), `tests/test_placement.py`.
+*Fix pass (prompt 75b, 2026-11-03), from review 75 and test 75.* (1) The fallback layout at
+three and four sensors is pinned against the mean rule's own search and a brute force on a map
+where the first candidates are not the answer. (2) The tie-break among the worst-case optima
+is the best the enumeration finds and is not always the least: test 75 measured, against brute
+force, a mean above the least among the optimal layouts in 4 of 724 random searches at three
+sensors and 1 of 430 at four, and in 2 of 28 and 3 of 29 at the reference size (12 to 15
+units, 30 to 31 candidates), the gaps recorded 11% to 67% of the least mean; the worst case
+was never above the optimum. (3) `detection_units` marks each unit whose run
+`arrival_from_run` rebuilt from stored frames, and the mark reaches `Score.frame_resolved` and
+`Layout.frame_resolved`: such a layout is exact over latencies that are upper bounds, with the
+limits of the frames' map above. A resolution that is neither flag is refused. (4) A searched
+layout's cells are sorted by (j, i). (5) The candidate set depends on the configuration given:
+for a scenario it is the base's less the cells any interval opens (215 with the door
+scenario's on 80x30, 236 with the base room's), so a search over several scenarios takes the
+configuration whose intervals open the union of their openings. (6) Memory. `_maximal` tests
+containment in chunks of 256 masks (`results/builder75/maximal75.py`: 15 units, 38,400
+candidates on a synthetic 320x120 map, four sensors, the worst-case rule). Spreading fronts, a
+source point and a speed per unit: at most 83 distinct masks (9 maximal) over the bisection,
+0.9 s and 27 MB. The same with 2 s of noise: 703 (26), 0.9 s and 26 MB. Every cell and unit
+independent, the most diverse a map can be: 22,731 distinct masks (626 maximal), where the
+first form's [d, d] broadcast peaked at 4.7 GB in 5.8 s and the chunked form at 83 MB in
+3.5 s, the same masks and layout. The product's maps are plumes and sit in the first two
+groups. (7) Restarts. The placement section is analysis read after a run, and nothing the
+march computes reads it, so the whole section is out of the restart hash
+(`io_manager.RESTART_EXCLUDED_SECTIONS`, the orchestrator's decision of 2026-11-03): a run
+file written without it, or under other values, restarts under the product configuration,
+which review 75 and test 75 found refused naming `placement`. It was already out of the flow
+fingerprint and `FLOW_FREE_SECTIONS`.
 
 **What the result can claim.** The latencies are comparative between layouts on one grid at
 the file's inputs; B's spread is stated beside them. A latency's resolution is the step
@@ -894,7 +924,7 @@ mountable candidates and 36 ms over the 1,630 free ones.
 | REQ-A02 sensor locations configurable in YAML | The sensors section | Yes (unit: a sensor added or moved in the mapping changes the cell read; a SOLID cell refused; the face rule) | Add the reading rule: "a sensor reads the cell containing it, the one below or to the left of a position on a face (ADR-014 C)" |
 | REQ-A03 thresholds per class following ISO 14644-1 | The thresholds mapping | Partly: configurable per class is testable; "following ISO 14644-1" is not without the formula | "Contamination thresholds shall be configurable per particle size class, either as a mapping by size or as an ISO 14644-1 class number from which the loader computes the limits by the standard's formula rounded to three significant figures; the product file's Class 5 values are the test" |
 | REQ-A04 latency per sensor per scenario from event onset | The report's core number | Yes once onset is defined (integration test on a coarse run) | Append: "the onset is the start of the event that carries the contamination (a replacement with a concentration, a source, or the initial condition at t = 0); a sensor never at or above threshold within the run reports no latency and the run's end" (applied to SYSTEM.md 2026-11-01, prompt 74b, with D's clarification added to the list: a set that gives a segment a concentration) |
-| REQ-A05 multiple configurations across scenarios to identify optimal placement | The placement question | No: "optimal" names no rule | "The monitor's placement module shall score any set of sensor layouts over a set of scenario run files by stated rules (worst case, mean, coverage within a stated time), rank them, and search the stated candidate positions for the layout of a stated count that is best under a rule, exact for one and two sensors and for the worst-case rule at any count over the pairs some candidate reaches, reproducible from the run files alone" |
+| REQ-A05 multiple configurations across scenarios to identify optimal placement | The placement question | No: "optimal" names no rule | "The monitor's placement module shall score any set of sensor layouts over a set of scenario run files by stated rules (worst case, mean, coverage within a stated time), rank them, and search the stated candidate positions for the layout of a stated count that is best under a rule, exact for one and two sensors and, over the units some candidate reaches, for the worst-case rule at any count while some layout of the count detects them all (when none does, the layout returned is the mean rule's and says so), reproducible from the run files alone (reworded as built, prompt 75b, 2026-11-03: the first form promised exactness at any count "over the pairs some candidate reaches", which holds only while a layout of the count detects every such unit)" |
 | REQ-A06 reads but never modifies | Separation of concerns | Yes, and by test as well as review: the fields' bytes before and after `update`, the writeable flag False | Append: "verified by test: the fields are bitwise unchanged across every monitor call" |
 | REQ-T14, proposed (prompt 70b, review 70 S9) | VAL-024's width clause verifies no requirement as written: REQ-T13 states the diffusivity's formula, met by construction | A new requirement, for Alex | "With the turbulence model on, the transport solver's spreading of a passive scalar released from a line source in decaying grid turbulence shall match the measured plume width in the far field within a stated allowance, the near-field width reported beside it." Verified by VAL-024; the decay clause of VAL-024 joins REQ-S14's Verified By |
 
