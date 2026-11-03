@@ -8,14 +8,16 @@ searched four are scored over the same units and ranked, and the searched
 layout is at least as good as the file's under each rule. Integration tier:
 the runs take about three minutes.
 
-Measured on these runs (prompt 75, 2026-11-02): fifteen units; the file's
-four detect none of them. Of the 215 mountable candidates (the product
-file's placement section: walls, ceiling, obstacle tops and sides at 0.05
-m, one cell on this grid) none reaches a door unit, since the door's plume
-stays within 0.9 m of the left wall and the wall's one column of candidates
-lies beside the open door's faces; the searched four detect the other ten
-with a worst case of 1.97 s. The free optimum's four detect all fifteen
-with a worst case of 0.19 s.
+Prediction (h) of ADR-015 D, asserted as it was scored (prompt 75, 2026-11-02;
+prompt 75b made the test say it): fifteen units, and the file's four detect
+none of them. Of the 215 mountable candidates (the product file's placement
+section: walls, ceiling, obstacle tops and sides at 0.05 m, one cell on this
+grid) none reaches a door unit, so the door's five are reported uncovered and
+the searched four detect the breach's and the dust's ten, with a worst case of
+1.97 s. The door's plume stays within 0.9 m of the left wall and 1.3 m of the
+floor; the wall column's cells below 2.1 m are beside the open doorway's
+faces and excluded, and the ones above it lie out of the plume. The free
+set's four detect all fifteen, with a worst case of 0.19 s.
 """
 
 from pathlib import Path
@@ -37,6 +39,7 @@ from src.placement import (
     exclude_units,
     given_layout,
     rank,
+    score,
     search,
 )
 from src.time_integration import Provenance, run
@@ -135,26 +138,78 @@ class TestSensorEvaluation:
         assert evaluated.found.uncovered == unreached
         assert evaluated.found.units == evaluated.kept.labels
 
-    def test_the_searched_four_rank_above_the_files_four_under_each_rule(
+    def test_the_files_four_detect_none_of_the_fifteen_units(
         self, evaluated: SimpleNamespace
     ) -> None:
-        """Over the same units: worst case, mean and coverage no worse, ranked first.
+        """(h), first clause: the file's four sensors detect nothing in any scenario.
 
-        The worst-case search is exact (the set cover); the mean rule's
-        search at four is greedy and still no worse than the file's.
+        Defect caught: the units' latencies read at the wrong cells, or a
+        sensor's cell taken from another mesh, so that a layout the room
+        never reaches reads as detecting.
         """
         file_cells = sensor_cells(evaluated.config, evaluated.mesh)
-        mine = given_layout(evaluated.kept, file_cells, within=WITHIN)
+        mine = score(evaluated.units, file_cells, within=WITHIN)
+        assert len(evaluated.units.labels) == 15
+        assert mine.undetected == 15 and np.isinf(mine.worst)
+        assert mine.coverage == 0.0
+
+    def test_on_the_mountable_set_the_door_is_uncovered_and_the_rest_detected(
+        self, evaluated: SimpleNamespace
+    ) -> None:
+        """(h), second clause as scored: the breach's and the dust's units, not the door's.
+
+        The door's five units are the uncovered ones; the searched four
+        detect every other unit (worst case a few seconds, coverage 1 within
+        10 s); the file's four over the same ten units detect none, and the
+        search ranks above them. Defects caught: the interval exclusion in
+        ``candidates`` removed (the door's units become coverable, so
+        ``uncovered`` is empty); a search that leaves a coverable unit
+        undetected.
+        """
         found = evaluated.found
+        doors = tuple(label for label in evaluated.units.labels if label[0] == "door")
+        assert len(doors) == 5 and found.uncovered == doors
+        assert {label[0] for label in found.units} == {"breach", "dust"}
+        assert len(found.units) == 10 and found.units == evaluated.kept.labels
+        assert found.score.undetected == 0 and found.score.coverage == 1.0
+        assert 0.0 < found.score.worst < 5.0
+        file_cells = sensor_cells(evaluated.config, evaluated.mesh)
+        mine = given_layout(evaluated.kept, file_cells, within=WITHIN)
+        assert mine.score.undetected == 10 and mine.score.coverage == 0.0
         assert (found.method, found.rule, found.exact) == (SET_COVER, WORST_CASE, True)
-        assert found.score.worst <= mine.score.worst
-        assert found.score.mean <= mine.score.mean
-        assert found.score.coverage >= mine.score.coverage
         assert rank([mine, found])[0] is found
+
+    def test_the_mean_rule_detects_the_same_ten_units(
+        self, evaluated: SimpleNamespace
+    ) -> None:
+        """The mean rule's four over the mountable set: the same units, all detected.
+
+        Defect caught: the mean rule's greedy settling on a layout that
+        leaves a coverable unit at its cap.
+        """
         by_mean = search(evaluated.units, evaluated.mounted, 4, MEAN, within=WITHIN)
+        assert by_mean.uncovered == evaluated.found.uncovered
         assert by_mean.units == evaluated.kept.labels
-        assert by_mean.score.mean <= mine.score.mean
-        assert by_mean.score.mean <= found.score.mean
+        assert by_mean.score.undetected == 0
+        file_cells = sensor_cells(evaluated.config, evaluated.mesh)
+        mine = given_layout(evaluated.kept, file_cells, within=WITHIN)
+        assert by_mean.score.mean < mine.score.mean
+
+    def test_on_the_free_set_every_unit_is_detected(
+        self, evaluated: SimpleNamespace
+    ) -> None:
+        """(h), second clause on the free set: all fifteen units, the door's included.
+
+        Nothing is uncovered, the set cover finds a layout of four detecting
+        all fifteen, and its worst case is below the mountable layout's.
+        Defect caught: the free set losing the cells beside the doorway (the
+        door's units uncovered again).
+        """
+        free = search(evaluated.units, evaluated.free, 4, WORST_CASE, within=WITHIN)
+        assert free.uncovered == () and free.units == evaluated.units.labels
+        assert free.score.undetected == 0 and free.score.coverage == 1.0
+        assert (free.method, free.rule) == (SET_COVER, WORST_CASE)
+        assert free.score.worst < evaluated.found.score.worst
 
     def test_the_free_optimum_bounds_the_mountable_one(
         self, evaluated: SimpleNamespace
@@ -166,3 +221,4 @@ class TestSensorEvaluation:
         assert free.uncovered == ()
         assert free.score.worst <= evaluated.found.score.worst
         assert free.distinct_masks is not None and free.maximal_masks is not None
+        assert free.maximal_masks <= free.distinct_masks
