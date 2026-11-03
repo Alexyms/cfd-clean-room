@@ -35,7 +35,6 @@ from src.config import (
     MEAN,
     MOUNT_CEILING,
     MOUNT_FREE,
-    MOUNT_OBSTACLE_SIDES,
     MOUNT_OBSTACLE_TOPS,
     MOUNT_SURFACES,
     MOUNT_WALLS,
@@ -901,10 +900,10 @@ def _exchanged(
         move: tuple | None = None
         pool = np.setdiff1d(np.arange(len(table)), chosen)
         for p in range(len(chosen)):
+            # A layout exchanged here has three or more sensors (counts one and
+            # two are exhaustive), so the others are never empty.
             others = chosen[:p] + chosen[p + 1 :]
-            rows = table[pool]
-            if others:
-                rows = np.minimum(table[others].min(axis=0), rows)
+            rows = np.minimum(table[others].min(axis=0), table[pool])
             worst, mean = _rules(rows, caps)
             allowed = (
                 np.ones(len(pool), dtype=bool) if limit is None else worst <= limit
@@ -1062,7 +1061,8 @@ def _surface_faces(
             top = obstacle_face_inputs(mesh, obstacle, "top")
             for r, c in zip(top.rows, top.cols, strict=True):
                 faces.append((x[c], y[r], x[c + 1], y[r]))
-    elif name == MOUNT_OBSTACLE_SIDES:
+    else:
+        # MOUNT_OBSTACLE_SIDES: candidates handles MOUNT_FREE without surfaces.
         for obstacle in config.obstacles:
             for face in ("left", "right"):
                 side = obstacle_face_inputs(mesh, obstacle, face)

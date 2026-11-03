@@ -764,6 +764,41 @@ class TestCandidates:
         union = self.found("walls", "ceiling", "obstacle_tops", "obstacle_sides")
         assert union == (self.found("walls") | self.found("ceiling") | tops | sides)
 
+    def test_a_wall_or_ceiling_face_behind_a_solid_cell_is_no_surface(self) -> None:
+        """Boxes in the top-left and on the right wall: their edge faces bound no room.
+
+        At 0.15 m, (5, 1) and (3, 8) are 0.15 m from the wall faces of the
+        SOLID cells (5, 0) and (3, 9) and 0.158 m from any face of a live
+        cell, and (4, 0) is 0.15 m from (5, 0)'s ceiling face, so none is a
+        candidate. Defect caught: a domain-edge face behind a SOLID cell
+        counted as a wall or the ceiling (all three candidates).
+        """
+        raw = small_room()
+        raw["obstacles"] += [
+            {
+                "name": "corner",
+                "x_start": 0.0,
+                "x_end": 0.1,
+                "y_start": 0.5,
+                "y_end": 0.6,
+            },
+            {
+                "name": "shelf",
+                "x_start": 0.9,
+                "x_end": 1.0,
+                "y_start": 0.3,
+                "y_end": 0.4,
+            },
+        ]
+        config = SimConfig.from_dict(raw)
+        mesh = Mesh(config)
+        assert mesh.cell_type[5, 0] == SOLID and mesh.cell_type[3, 9] == SOLID
+        walls = cells_of(candidates(mesh, config, ["walls"], 0.15))
+        assert (5, 1) not in walls and (3, 8) not in walls
+        assert {(4, 1), (2, 8)} <= walls
+        ceiling = cells_of(candidates(mesh, config, ["ceiling"], 0.15))
+        assert (4, 0) not in ceiling and (4, 1) in ceiling
+
     def test_a_larger_standoff_reaches_the_next_cells(self) -> None:
         """At 0.15 m the walls reach columns 1 and 8 as well (centres 0.15 m away)."""
         walls = self.found("walls", standoff=0.15)
