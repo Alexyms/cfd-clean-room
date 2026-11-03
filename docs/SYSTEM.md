@@ -234,7 +234,7 @@ Generated. The responsibility and serves columns are editorial and come from `do
 | `src/monitor.py` | 866 | Reads each sensor's cell of every class field after every step by ADR-014 C's cell rule, opens an alert at the first reading at or above the class's threshold and closes it at the first below, keeping each alert's times, opening reading and peak, gives each sensor's latency from each event onset, keeps the arrival maps (per contaminating event of the plan, class and non-SOLID cell, the first step time at or after the onset at or above the threshold) by the same rule, and carries both states for the checkpoint; it reads the fields and never writes them. | A01, A02, A04, A06 |
 | `src/multigrid.py` | 384 | Builds an additive-correction multigrid hierarchy from a five-point pressure system by 2x2 aggregation, its coarse operators the exact Galerkin sums with no probing, and applies one symmetric V-cycle with weighted Jacobi smoothing and a dense pseudo-inverse on the coarsest level as the preconditioner of the pressure correction's conjugate gradients. | S08 |
 | `src/particles.py` | 263 | Computes per-size-class transport properties: Cunningham correction, settling velocity, Brownian diffusion, deposition velocity and HEPA efficiency. | T03, T04, T09, T10 |
-| `src/placement.py` | 1125 | Reads a run file's arrival maps for sensor placement (its /arrival/ maps, resolved to the step, or for a file written before them the maps rebuilt from its stored frames at the output cadence by the same rule, flagged as frame-resolved with the reason), stacks runs' latencies into (scenario, event, class) units, scores any layout by lookup under the worst-case, mean and coverage rules, states the candidate cells by mounting surface and standoff, searches the best layout of a count (exact for one and two sensors and for the worst case at any count by a set cover), and ranks layouts. | A04, A05 |
+| `src/placement.py` | 1187 | Reads a run file's arrival maps for sensor placement (its /arrival/ maps, resolved to the step, or for a file written before them the maps rebuilt from its stored frames at the output cadence by the same rule, flagged as frame-resolved with the reason), stacks runs' latencies into (scenario, event, class) units, scores any layout by lookup under the worst-case, mean and coverage rules, states the candidate cells by mounting surface and standoff, searches the best layout of a count (exact for one and two sensors and for the worst case at any count by a set cover), and ranks layouts. | A04, A05 |
 | `src/pressure.py` | 859 | Assembles the staggered pressure correction equation from the momentum diagonals with the discrete divergence of u* as its right-hand side, solves it by conjugate gradients preconditioned with its diagonal or, under the pressure_preconditioner key, with one multigrid V-cycle per iteration, to a relative residual, a rounding floor or a reported iteration cap, corrects the face velocities and updates the pressure. | S04, S08 |
 | `src/scalar_scheme.py` | 568 | Holds the cell-centred scalar scheme the transport solver and the k-epsilon model share: QUICK's face value bounded by the UMIST limiter, the advective flux along one axis with the inflow value or the upwind cell at a domain face, and the backward Euler solve of diffusion with a non-negative cell sink by Jacobi or, for k and eps, by diagonal-preconditioned conjugate gradients that fall back to Jacobi on the cap or a non-positive value, on per-face conductances with one step or a step per cell, with an optional mask of cells held at their value. | S15, T12 |
 | `src/scenarios.py` | 404 | Turns a loaded scenario into its intervals between event boundaries, keys each interval's flow state by a fingerprint of the segment keys the velocity layer reads so transport-only events add no state, and gives the source rate of every class at a time, an interval's concentration boundary and the initial fields on the mesh; it solves and marches nothing. | none |
@@ -245,7 +245,7 @@ Generated. The responsibility and serves columns are editorial and come from `do
 | `src/time_integration.py` | 1679 | Runs a scenario under tier 1: solves each distinct flow state once, warm-started from the state before it, or reuses one a run file holds, then marches every particle class at one step through the intervals, dividing each into equal steps under the stable step and carrying the fields and budgets across each switch, writing frames, budgets, sensor readings, the alert monitor's table and checkpoints through the run file, continuing a run from its checkpoint, keeping the arrival maps of every run every step and for a clean-out the recovery outputs, and giving each sensor's latency per contaminating event from the monitor and from the maps; under tier 2 marches the flow itself through solve_transient, writing its frames, per-step counts, lift and drag and two-level checkpoints, restarting bitwise, and reading the Strouhal number and drag coefficient at the end; it discretises nothing. | A04, N01 |
 | `src/turbulence.py` | 1622 | Advances the k-epsilon model's k and eps one step on a prescribed face velocity field, standard or RNG with each variant's constants as module data: advection, explicit growth from the strain the faces give and implicit decay and diffusion through the shared scalar scheme, boundary values from a conditions object the caller builds each step, the kinematic eddy viscosity, and an assertion that k and eps are positive and finite after every step; and the scalable wall functions, which build those conditions, the wall viscosity of the momentum wall faces and the inlet values the coupled solve starts from. | S14, S15, S17 |
 
-Total 24 Python files, 19988 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
+Total 24 Python files, 20050 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
 
 `Declares it serves` is an EDITORIAL CLAIM read from `docs/system_map_annotations.toml`. It says which requirements a module is meant to satisfy, not that it does. Whether a requirement is met is answered by the tests named in the register's `Verified By` column.
 <!-- END GENERATED: components -->
@@ -270,7 +270,7 @@ Generated. Static import analysis cannot see a function bound into a registry by
 |---|---|
 | Scope | `src/**/*.py` |
 | Files hashed | 24 |
-| Digest | `sha256:0f72e233b3df062f6e7b6ed6e3394239681de846b4004b362c0ebdd54a1b62dc` |
+| Digest | `sha256:2a8973e17566d4d92bafc4f355e046621ac1ec3b162e81baf3b8d4500c1e64cb` |
 
 This is what lets the document answer whether it is current, which is the one question a stale table cannot be asked. `python scripts/gen_system_map.py --check` recomputes the whole set of generated regions, this digest included, and exits non-zero on any disagreement.
 
@@ -1677,16 +1677,19 @@ latency(maps, onsets) -> np.ndarray     # [events, classes, ny, nx], arrival min
 detection_units(arrivals: Mapping[str, RunArrival]) -> Units
     # one unit per scenario, event and class, in that order; caps the run's
     # t_final minus the unit's onset. ValueError with no run, maps on two meshes,
-    # names not one per event, a t_final not finite or before an onset; TypeError
-    # for a scenario name that is not a str or a t_final that is not a real number
-Units(latencies [units, ny, nx], caps [units], labels ((scenario, event, class), ...))
+    # names not one per event, a resolution that is neither STEP_RESOLVED nor
+    # FRAME_RESOLVED, a t_final not finite or before an onset; TypeError for a
+    # scenario name that is not a str or a t_final that is not a real number
+Units(latencies [units, ny, nx], caps [units], labels ((scenario, event, class), ...),
+      frame_resolved (bool per unit: its run's maps were rebuilt from stored frames))
 exclude_units(units, labels) -> Units   # the rest; ValueError for an unknown label
                                         # or none left
 score(units, cells, *, within=None) -> Score
     # per unit the least latency over the cells; Score(worst, mean, undetected,
-    # coverage): worst the most over the units (inf when one is undetected), mean
-    # over the units of the latency capped at its cap, coverage the fraction at or
-    # within `within` (None without it). TypeError for cells that are not integer
+    # coverage, frame_resolved): worst the most over the units (inf when one is
+    # undetected), mean over the units of the latency capped at its cap, coverage
+    # the fraction at or within `within` (None without it), frame_resolved True when
+    # some unit scored is frame-resolved (its latencies upper bounds, prompt 75b). TypeError for cells that are not integer
     # (j, i) or a within that is not a real number; ValueError for no cell, a cell
     # off the grid, twice or SOLID, a within not positive and finite
 given_layout(units, cells, *, within=None) -> Layout    # GIVEN, rule None, not exact
@@ -1704,8 +1707,9 @@ search(units, candidates, count, rule, *, within=None) -> Layout
     # argmin and count 2 every pair (exact under either rule); the worst-case rule
     # above two the threshold sweep over a set cover (exact in the worst case, the
     # covers attaining it tie-broken by the mean); the mean rule above two greedy
-    # with one-sensor exchanges. Ties under the worst case by the mean, under the
-    # mean by the worst case, then candidate order. A worst-case search with no
+    # with one-sensor exchanges. Ties under the worst case by the mean (the best
+    # the cover enumeration finds, not always the least: ADR-015 D), under the mean
+    # by the worst case, then candidate order. The layout's cells are sorted by (j, i). A worst-case search with no
     # layout of the count detecting every coverable unit falls to the mean and
     # returns rule MEAN. TypeError for a count that is not an int; ValueError for
     # an unknown rule, a count not in 1 to the candidates, a candidate SOLID, off
@@ -1713,7 +1717,8 @@ search(units, candidates, count, rule, *, within=None) -> Layout
     # MAX_SET_COVER_UNITS (20) units in the set cover
 Layout(cells, score, rule, method, exact, units, uncovered, distinct_masks,
        maximal_masks)                   # NamedTuple; the masks the set cover's, at
-                                        # its optimum, None for the other methods
+                                        # its optimum, None for the other methods;
+                                        # .frame_resolved is score.frame_resolved
 GIVEN, ARGMIN, EXHAUSTIVE, SET_COVER, GREEDY    # the methods
 rank(layouts) -> list[Layout]           # by the worst case, then the mean, stable;
                                         # ValueError for none or two unit sets
@@ -2219,3 +2224,4 @@ ADR-008, ADR-010, ADR-011, ADR-012, ADR-013 and ADR-014 are files in `docs/ADR/`
 | 2026-11-01 | ADR-015 step 3 fix pass (prompt 74b, same branch). io_manager.py: `real_number` (was private, and copied in monitor), `checked_thresholds` and `checked_onsets` public, the one check of the class thresholds and the onsets that reach the arrival maps; `ArrivalRecord` also refuses a non-finite `t_final`, a negative threshold or onset and bool arrays. monitor.py: the tracker's and `latencies`' inputs go through them (`latencies` now refuses a negative onset); its private copies removed. placement.py: `arrival_from_frames` takes its thresholds and onsets through them; its docstrings state that the frames' map misses cells at or above their threshold only between two frames. REQ-A04's requirement text gains the onset definition (ADR-015 G, accepted by Alex). The io_manager cascade row names monitor and placement as consumers. Section 3 regenerated. No change to the solve or march arithmetic. | Claude (builder) |
 | 2026-11-02 | ADR-015 step 4 built (prompt 75, branch phase5/step4-placement). placement.py: latency, detection_units (the unit is (scenario, event, class), section D's clarification), Units, exclude_units, score and Score (worst case, capped mean, undetected count, coverage), given_layout, candidates (walls, ceiling, obstacle tops and sides by standoff, free; cells beside an inlet, outlet or vent face of any interval excluded), search and Layout (argmin, every pair, the worst-case set cover by a threshold sweep with the distinct and maximal masks counted, greedy with exchanges for the mean), rank; RunArrival gains event_names, t_final and fallback (why /arrival/ was not used); placement now imports boundary_registry and staggered. config.py: the placement section (PlacementSpec, MOUNT_SURFACES, PLACEMENT_RULES). time_integration.py: FLOW_FREE_SECTIONS gains placement. The product file and its vents, L1 and L2 copies state a placement section. REQ-A05's Verified By names its tests. Section 3 regenerated. No change to the solve or march arithmetic. | Claude (builder) |
 | 2026-11-03 | ADR-015 step 4 fix pass (prompt 75b, same branch), from review 75 and test 75. io_manager.py: `RESTART_EXCLUDED_SECTIONS = ("placement",)`, removed whole from the restart hash beside `RESTART_EXCLUDED_KEYS` (the orchestrator's decision of 2026-11-03: the section is analysis read after a run, so a run file written before it restarts under the product configuration, which review 75 S1 and test 75 S1 found refused); the refusal's message names the section. Section 3 regenerated. No change to the solve or march arithmetic. | Claude (builder) |
+| 2026-11-03 | ADR-015 step 4 fix pass, continued (prompt 75b). placement.py: `Units` gains `frame_resolved` (per unit), `Score` gains `frame_resolved` and `Layout.frame_resolved` reads it, so a score or layout built on a Phase 4 or sweep file's rebuilt maps says so; `detection_units` refuses a resolution that is neither flag; a searched layout's cells are sorted by (j, i); `_maximal` tests containment in chunks of `_MAXIMAL_CHUNK` rows, the same masks with a bounded working array. Section 3 regenerated. No change to the solve or march arithmetic. | Claude (builder) |

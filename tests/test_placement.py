@@ -44,14 +44,17 @@ from src.mesh import SOLID, Mesh
 from src.placement import (
     ARGMIN,
     EXHAUSTIVE,
+    FRAME_RESOLVED,
     GIVEN,
     GREEDY,
     MAX_SET_COVER_UNITS,
     SET_COVER,
+    STEP_RESOLVED,
     Layout,
     RunArrival,
     Score,
     Units,
+    _maximal,
     _worst_case_cover,
     arrival_from_frames,
     arrival_from_run,
@@ -100,7 +103,7 @@ def units_of(rows: list[list[float]], caps: float | list[float] = 10.0) -> Units
     latencies = np.array(rows, dtype=np.float64)[:, None, :]
     caps = np.broadcast_to(np.asarray(caps, dtype=np.float64), (len(rows),)).copy()
     labels = tuple(("s", "e", u) for u in range(len(rows)))
-    return Units(latencies, caps, labels)
+    return Units(latencies, caps, labels, (False,) * len(rows))
 
 
 def row_cells(*columns: int) -> list[tuple[int, int]]:
@@ -252,10 +255,14 @@ class TestArrivalFromRun:
 
 
 def arrival(
-    maps: np.ndarray, onsets: list[float], t_final: float, names: tuple[str, ...]
+    maps: np.ndarray,
+    onsets: list[float],
+    t_final: float,
+    names: tuple[str, ...],
+    resolution: str = STEP_RESOLVED,
 ) -> RunArrival:
-    """A RunArrival from planted maps, step-resolved."""
-    return RunArrival(maps, np.array(onsets), "step", names, t_final)
+    """A RunArrival from planted maps, step-resolved unless RESOLUTION says otherwise."""
+    return RunArrival(maps, np.array(onsets), resolution, names, t_final)
 
 
 @pytest.mark.unit
@@ -375,6 +382,48 @@ class TestLatencyAndUnits:
         with pytest.raises(error, match=match):
             detection_units(arrivals)
 
+    def test_the_frame_resolved_flag_reaches_the_scores_and_layouts(self) -> None:
+        """Units of a frame-built run are flagged, and so is whatever scores them.
+
+        A step-resolved run and a frame-resolved one, one class each: the
+        units carry their run's flag, ``exclude_units`` keeps the flags with
+        their units, a score and a given layout over a flagged unit are
+        flagged, and a search whose flagged unit no candidate reaches
+        (reported uncovered, so not scored) is not. Defects caught: the
+        flag dropped (``arrival_from_run``'s fallback unmarked downstream);
+        flagged for every unit once any is; the flag kept for a unit the
+        search removed.
+        """
+        step = np.full((1, 1, 1, 2), INF)
+        step[0, 0, 0, 1] = 2.0
+        frame = np.full((1, 1, 1, 2), INF)
+        frame[0, 0, 0, 0] = 3.0
+        units = detection_units(
+            {
+                "step": arrival(step, [0.0], 10.0, ("e",)),
+                "frame": arrival(frame, [0.0], 10.0, ("e",), FRAME_RESOLVED),
+            }
+        )
+        assert units.frame_resolved == (False, True)
+        only_step = exclude_units(units, [("frame", "e", 0)])
+        assert only_step.frame_resolved == (False,)
+        only_frame = exclude_units(units, [("step", "e", 0)])
+        assert only_frame.frame_resolved == (True,)
+        assert score(only_frame, row_cells(0)).frame_resolved
+        assert score(units, row_cells(0, 1)).frame_resolved
+        assert not score(only_step, row_cells(0, 1)).frame_resolved
+        assert given_layout(units, row_cells(1)).frame_resolved
+        both = search(units, row_cells(0, 1), 1, MEAN)
+        assert both.frame_resolved and both.score.frame_resolved
+        flat = search(units, row_cells(1), 1, MEAN)
+        assert flat.uncovered == (("frame", "e", 0),) and not flat.frame_resolved
+
+    def test_a_resolution_that_is_neither_is_refused(self) -> None:
+        """A run's resolution is ``STEP_RESOLVED`` or ``FRAME_RESOLVED``, nothing else."""
+        bad = arrival(np.zeros((1, 1, 1, 2)), [0.0], 1.0, ("e",), "coarse")
+        with pytest.raises(ValueError, match="resolution is 'coarse'"):
+            detection_units({"a": bad})
+
     def test_exclude_units_leaves_the_named_out_and_refuses_the_unknown(self) -> None:
         """The rest in order; an unknown label, or none left, is refused."""
         units = units_of([[1.0], [2.0], [3.0]])
@@ -453,7 +502,8 @@ def random_units(seed: int) -> tuple[Units, list[tuple[int, int]]]:
     latencies = rng.integers(0, 6, size=(6, 4, 8)).astype(np.float64)
     latencies[rng.random(latencies.shape) < 0.5] = INF
     latencies[:, 0, 0] = np.nan
-    units = Units(latencies, np.full(6, 10.0), tuple(("s", "e", u) for u in range(6)))
+    labels = tuple(("s", "e", u) for u in range(6))
+    units = Units(latencies, np.full(6, 10.0), labels, (False,) * 6)
     cells = [(j, i) for j in range(4) for i in range(8) if (j, i) != (0, 0)]
     return units, cells
 
@@ -567,6 +617,27 @@ class TestSearch:
         else:
             assert table[list(cover.columns)].min(axis=0).max() == layout.score.worst
 
+    @pytest.mark.parametrize("chunk", [1, 3, 7, 256])
+    def test_the_maximal_masks_are_those_no_other_contains_at_any_chunk(
+        self, chunk: int, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Against a plain containment test, with the chunk from one row to more than all.
+
+        Defects caught: a chunk's diagonal cleared at the wrong offset (a
+        mask in the second chunk judged against itself, kept as contained,
+        or a container's twin dropped); the last short chunk left out.
+        """
+        monkeypatch.setattr("src.placement._MAXIMAL_CHUNK", chunk)
+        rng = np.random.default_rng(chunk)
+        masks = np.unique(rng.integers(0, 1 << 9, size=40)).astype(np.int64)
+        expected = [
+            int(m)
+            for m in masks
+            if m and not any(o != m and (o & m) == m for o in masks)
+        ]
+        assert _maximal(masks).tolist() == expected
+        assert _maximal(np.array([0, 5], dtype=np.int64)).tolist() == [5]
+
     def test_units_no_candidate_reaches_are_removed_and_reported(self) -> None:
         """Unit 1 is inf at every candidate: reported uncovered, the rest searched.
 
@@ -648,9 +719,8 @@ class TestSearch:
         latencies = np.full((10, 1, 5), INF)
         for u in range(10):
             latencies[u, 0, u // 2] = 5.0 - u // 2
-        units = Units(
-            latencies, np.full(10, 10.0), tuple(("s", "e", u) for u in range(10))
-        )
+        labels = tuple(("s", "e", u) for u in range(10))
+        units = Units(latencies, np.full(10, 10.0), labels, (False,) * 10)
         cells = row_cells(*range(5))
         found = search(units, cells, count, WORST_CASE)
         by_mean = search(units, cells, count, MEAN)
@@ -663,6 +733,24 @@ class TestSearch:
         assert found.score.mean == pytest.approx(means.min())
         assert found.score.mean < score(units, cells[:count]).mean
         assert np.isinf(found.score.worst)
+
+    def test_a_searched_layouts_cells_are_in_row_major_order(self) -> None:
+        """Candidates given last row first: the layout's cells come back sorted by (j, i).
+
+        Two rows of two cells, each unit reached by one cell only, so all
+        four are chosen at four sensors. Defect caught: the cells in the
+        order of the candidates given (the documented row-major order
+        holding only for candidates as ``candidates()`` returns them).
+        """
+        latencies = np.full((4, 2, 2), INF)
+        for u, (j, i) in enumerate([(1, 1), (0, 0), (1, 0), (0, 1)]):
+            latencies[u, j, i] = 1.0 + u
+        labels = tuple(("s", "e", u) for u in range(4))
+        units = Units(latencies, np.full(4, 10.0), labels, (False,) * 4)
+        backwards = [(1, 1), (1, 0), (0, 1), (0, 0)]
+        for rule in (WORST_CASE, MEAN):
+            found = search(units, backwards, 4, rule)
+            assert found.cells == ((0, 0), (0, 1), (1, 0), (1, 1))
 
     @pytest.mark.parametrize(
         ("count", "rule", "cells", "error", "match"),

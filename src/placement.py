@@ -74,6 +74,11 @@ MAX_SET_COVER_UNITS = 20
 # Members of the reachable unions combined with the masks at once in the
 # programme, which bounds its working array to this times the masks.
 _UNION_CHUNK = 1 << 14
+# Masks tested for containment at once in ``_maximal``: the broadcast it forms
+# is this many rows of the distinct masks, 8 bytes each. On independent noise
+# at the product's size (22,731 distinct masks) the unchunked [d, d] form
+# peaked at 4.7 GB (prompt 75b).
+_MAXIMAL_CHUNK = 256
 # A cell centre exactly a standoff from a surface (a standoff of half a cell)
 # meets it to within an ulp, and the inclusive comparison would then decide by
 # rounding; the tolerance is far above rounding and far below any standoff
@@ -128,11 +133,17 @@ class Units(NamedTuple):
         the latency the mean rule gives an undetected unit.
     labels : tuple[tuple[str, str, int], ...]
         (scenario, event name, class index) per unit.
+    frame_resolved : tuple[bool, ...]
+        Per unit, whether its maps were rebuilt from the run file's stored
+        frames (``FRAME_RESOLVED``) and not read from the march's: such a
+        latency is an upper bound on the step's, and a cell the steps reach
+        only between two frames reads as never.
     """
 
     latencies: np.ndarray
     caps: np.ndarray
     labels: tuple[tuple[str, str, int], ...]
+    frame_resolved: tuple[bool, ...]
 
 
 class Score(NamedTuple):
@@ -151,12 +162,18 @@ class Score(NamedTuple):
     coverage : float or None
         The fraction of the units detected at or within ``within``; None
         when no time is stated.
+    frame_resolved : bool
+        True when some unit scored was read from maps rebuilt from stored
+        frames (``Units.frame_resolved``): its latencies are upper bounds
+        on the march's, and the layout's exactness, where it has any, is
+        over those maps.
     """
 
     worst: float
     mean: float
     undetected: int
     coverage: float | None
+    frame_resolved: bool = False
 
 
 class Layout(NamedTuple):
@@ -165,7 +182,8 @@ class Layout(NamedTuple):
     Parameters
     ----------
     cells : tuple[tuple[int, int], ...]
-        (j, i) per sensor, in row-major order for a searched layout.
+        (j, i) per sensor: sorted by (j, i), the row-major order, for a
+        searched layout; in the order given for a given one.
     score : Score
         Over ``units``.
     rule : str or None
@@ -175,9 +193,12 @@ class Layout(NamedTuple):
     method : str
         ``GIVEN``, ``ARGMIN``, ``EXHAUSTIVE``, ``SET_COVER`` or ``GREEDY``.
     exact : bool
-        True when the method proves the layout best under ``rule``: the
-        argmin and every pair under either rule, the set cover in the worst
-        case (its tie-break by the mean is the best its enumeration finds).
+        True when the method proves the layout best under ``rule``, over the
+        maps scored: the argmin and every pair under either rule, the set
+        cover in the worst case. Its tie-break by the mean is the best the
+        enumeration finds and not always the least (ADR-015 D: test 75
+        measured a mean above the least in 4 of 724 random searches at
+        three sensors and 1 of 430 at four).
     units : tuple[tuple[str, str, int], ...]
         The labels of the units scored over.
     uncovered : tuple[tuple[str, str, int], ...]
@@ -200,6 +221,11 @@ class Layout(NamedTuple):
     uncovered: tuple[tuple[str, str, int], ...] = ()
     distinct_masks: int | None = None
     maximal_masks: int | None = None
+
+    @property
+    def frame_resolved(self) -> bool:
+        """Whether some unit scored was read from frame-resolved maps."""
+        return self.score.frame_resolved
 
 
 def arrival_from_frames(
@@ -400,14 +426,23 @@ def detection_units(arrivals: Mapping[str, RunArrival]) -> Units:
         number.
     ValueError
         If there is no run, the maps are not on one mesh, the event names do
-        not match the events, a ``t_final`` is not finite, or an onset lies
-        after its run's ``t_final``.
+        not match the events, a ``resolution`` is neither ``STEP_RESOLVED``
+        nor ``FRAME_RESOLVED``, a ``t_final`` is not finite, or an onset
+        lies after its run's ``t_final``.
+
+    Notes
+    -----
+    A run read from its stored frames (``arrival_from_run`` flags it) makes
+    frame-resolved units, and the flag reaches every Score and Layout built
+    on them. Runs of both resolutions may be scored together; the flag says
+    some of the units are upper bounds.
     """
     if not arrivals:
         raise ValueError("no run to score: give at least one scenario's maps")
     blocks: list[np.ndarray] = []
     caps: list[float] = []
     labels: list[tuple[str, str, int]] = []
+    flags: list[bool] = []
     shape: tuple[int, ...] | None = None
     for name, arrival in arrivals.items():
         if not isinstance(name, str):
@@ -419,6 +454,11 @@ def detection_units(arrivals: Mapping[str, RunArrival]) -> Units:
             raise ValueError(
                 f"{name}'s maps are {lat.shape[2:]} and the first run's {shape}: the "
                 "runs must share a mesh"
+            )
+        if arrival.resolution not in (STEP_RESOLVED, FRAME_RESOLVED):
+            raise ValueError(
+                f"{name}'s resolution is {arrival.resolution!r}; it must be "
+                f"{STEP_RESOLVED!r} or {FRAME_RESOLVED!r}"
             )
         events = tuple(arrival.event_names)
         if len(events) != lat.shape[0]:
@@ -436,7 +476,8 @@ def detection_units(arrivals: Mapping[str, RunArrival]) -> Units:
                 blocks.append(lat[e, k])
                 caps.append(float(remaining[e]))
                 labels.append((name, event, k))
-    return Units(np.stack(blocks), np.array(caps), tuple(labels))
+                flags.append(arrival.resolution == FRAME_RESOLVED)
+    return Units(np.stack(blocks), np.array(caps), tuple(labels), tuple(flags))
 
 
 def exclude_units(units: Units, labels: Iterable[tuple[str, str, int]]) -> Units:
@@ -470,6 +511,9 @@ def exclude_units(units: Units, labels: Iterable[tuple[str, str, int]]) -> Units
         units.latencies[keep],
         units.caps[keep],
         tuple(label for label, kept in zip(units.labels, keep, strict=True) if kept),
+        tuple(
+            flag for flag, kept in zip(units.frame_resolved, keep, strict=True) if kept
+        ),
     )
 
 
@@ -508,7 +552,9 @@ def score(
     """
     picked = _checked_cells(units, cells, "cells")
     rows = units.latencies[:, picked[:, 0], picked[:, 1]].T
-    return _score_of(rows.min(axis=0), units.caps, _checked_within(within))
+    return _score_of(
+        rows.min(axis=0), units.caps, _checked_within(within), any(units.frame_resolved)
+    )
 
 
 def given_layout(
@@ -696,7 +742,8 @@ def search(
     cells of its masks that lower the mean most, the spare sensors added the
     same way, and the best of them by the mean is improved by one-sensor
     exchanges that keep the worst case at the optimum. The worst case is
-    exact; the mean among the layouts attaining it is the best this finds.
+    exact; the mean among the layouts attaining it is the best this finds,
+    not always the least (see ``Layout.exact``).
     """
     if rule not in PLACEMENT_RULES:
         raise ValueError(f"rule must be one of {list(PLACEMENT_RULES)}, got {rule!r}")
@@ -721,11 +768,12 @@ def search(
     kept = tuple(label for label, hit in zip(units.labels, reached, strict=True) if hit)
     table = np.ascontiguousarray(table[:, reached])
     caps = units.caps[reached]
+    frame_resolved = any(np.asarray(units.frame_resolved, dtype=bool)[reached])
     found = _find(table, caps, int(count), rule)
-    columns = sorted(found.columns)
+    columns = list(found.columns)
     return Layout(
-        cells=tuple((int(pool[c, 0]), int(pool[c, 1])) for c in columns),
-        score=_score_of(table[columns].min(axis=0), caps, within),
+        cells=tuple(sorted((int(pool[c, 0]), int(pool[c, 1])) for c in columns)),
+        score=_score_of(table[columns].min(axis=0), caps, within, frame_resolved),
         rule=found.rule,
         method=found.method,
         exact=found.exact,
@@ -819,7 +867,12 @@ def _rules(rows: np.ndarray, caps: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return rows.max(axis=1), np.minimum(rows, caps).mean(axis=1)
 
 
-def _score_of(latencies: np.ndarray, caps: np.ndarray, within: float | None) -> Score:
+def _score_of(
+    latencies: np.ndarray,
+    caps: np.ndarray,
+    within: float | None,
+    frame_resolved: bool,
+) -> Score:
     """The Score of one layout's per-unit latencies."""
     worst, mean = _rules(latencies[None, :], caps)
     coverage = None if within is None else float(np.mean(latencies <= within))
@@ -828,6 +881,7 @@ def _score_of(latencies: np.ndarray, caps: np.ndarray, within: float | None) -> 
         mean=float(mean[0]),
         undetected=int(np.isinf(latencies).sum()),
         coverage=coverage,
+        frame_resolved=frame_resolved,
     )
 
 
@@ -932,11 +986,19 @@ def _greedy(table: np.ndarray, caps: np.ndarray, count: int) -> tuple[int, ...]:
 
 
 def _maximal(masks: np.ndarray) -> np.ndarray:
-    """The non-empty distinct masks no other distinct mask contains."""
+    """The non-empty distinct masks no other distinct mask contains.
+
+    The masks must be distinct (``np.unique``'s), so that a mask contains
+    itself and no other.
+    """
     masks = masks[masks != 0]
-    inside = (masks[:, None] & masks[None, :]) == masks[:, None]
-    np.fill_diagonal(inside, False)
-    return masks[~inside.any(axis=1)]
+    contained = np.zeros(masks.size, dtype=bool)
+    for start in range(0, masks.size, _MAXIMAL_CHUNK):
+        rows = masks[start : start + _MAXIMAL_CHUNK]
+        inside = (rows[:, None] & masks[None, :]) == rows[:, None]
+        inside[np.arange(rows.size), np.arange(start, start + rows.size)] = False
+        contained[start : start + rows.size] = inside.any(axis=1)
+    return masks[~contained]
 
 
 def _fewest(masks: np.ndarray, units: int, count: int) -> np.ndarray:

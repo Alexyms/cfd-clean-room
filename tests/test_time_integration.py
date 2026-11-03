@@ -75,6 +75,7 @@ from src.placement import (
     STEP_RESOLVED,
     arrival_from_frames,
     arrival_from_run,
+    detection_units,
 )
 from src.scenarios import Interval, ScenarioManager, flow_fingerprint
 from src.solver_staggered import FlowState, StaggeredSolver
@@ -1652,6 +1653,9 @@ class TestArrivalMaps:
         assert old.event_names == arrival.event_names
         assert old.fallback == f"KeyError: {path} holds no /arrival/"
         assert old.t_final == RunFile(path).read_frames().times[-1]
+        units = detection_units({"old": old, "new": whole})
+        n = len(units.labels) // 2
+        assert units.frame_resolved == (True,) * n + (False,) * n
         live = Mesh(sensed_door.config).cell_type != SOLID
         expected = arrival_from_frames(
             RunFile(path).read_frames(), arrival.thresholds, live, arrival.onsets
