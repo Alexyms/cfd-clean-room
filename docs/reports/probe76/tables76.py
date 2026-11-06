@@ -18,6 +18,7 @@ which. The coverage rule's time is this report's, WITHIN: the product file state
 """
 
 import argparse
+import json
 import math
 import sys
 from itertools import pairwise
@@ -63,6 +64,20 @@ SWEEP = ROOT / "results" / "builder72"
 GATE = ROOT / "results" / "builder69"
 TABLES = HERE / "tables76.md"
 REPORT = ROOT / "docs" / "reports" / "phase5_alert_report.md"
+GATE_REPORT = ROOT / "docs" / "reports" / "phase5_alert_system_report.md"
+HASHES = ROOT / "results" / "builder62"
+# The six rows the Phase 4 gate reproduced, its table H2.
+HASH_CASES = (
+    "val001_80x40",
+    "val001_80x40_stretched",
+    "val002_20x20",
+    "val002_40x40",
+    "val002_80x80",
+    "product_80x30",
+)
+# Phase 5 step 0's coverage, the baseline the gate is measured from (prompt 71).
+COVERAGE_BASE = ROOT / "results" / "builder71" / "after" / "coverage.json"
+COVERAGE_HEAD = RESULTS / "coverage.json"
 FIGURES = ROOT / "docs" / "reports"
 PRODUCT = ROOT / "configs" / "clean_room_default.yaml"
 
@@ -99,6 +114,7 @@ MARKERS = (
     "arms",
     "predictions",
 )
+GATE_MARKERS = ("hashes", "bitwise", "coverage")
 
 
 class Run(tables69.Run):
@@ -125,14 +141,19 @@ def cell_at(mesh: Mesh, x: float, y: float) -> tuple[int, int]:
 def mapped(
     source: Mesh, target: Mesh, cells: tuple[tuple[int, int], ...]
 ) -> tuple[tuple[int, int], ...]:
-    """The cells of TARGET holding the centres of CELLS of SOURCE; ValueError on SOLID."""
-    out = []
+    """The cells of TARGET holding the centres of CELLS of SOURCE; ValueError on SOLID.
+
+    Two cells of a finer grid in one cell of a coarser are one reading there, so a
+    layout read on a coarser grid can hold fewer cells than it has sensors.
+    """
+    out: list[tuple[int, int]] = []
     for cell in cells:
         x, y = where(source, cell)
         found = cell_at(target, x, y)
         if target.cell_type[found] == SOLID:
             raise ValueError(f"({x}, {y}) is SOLID on the target grid")
-        out.append(found)
+        if found not in out:
+            out.append(found)
     return tuple(out)
 
 
@@ -322,6 +343,102 @@ def states_table(runs: dict[str, Run]) -> list[str]:
                 theirs = tables69.face_hash(other.u, other.v)[:16]
                 gap = f"{max(np.abs(state.u - other.u).max(), np.abs(state.v - other.v).max()):.2e}"
             lines.append(f"| {name} | {fingerprint[:12]} | {ours} | {theirs} | {gap} |")
+    return lines
+
+
+def bitwise_table(runs: dict[str, Run]) -> list[str]:
+    """X1: each run's stored records against the gate's run of the same scenario."""
+    lines = [
+        "### X1. The runs against the gate's (prompt 69), the same scenario files before Phase 5's modules: stored frames, budgets and sensor readings",
+        "",
+        "| Run | Frames here, the gate's | Fields, every class, bitwise | Budgets, bitwise | Sensor readings, bitwise |",
+        "|---|---|---|---|---|",
+    ]
+    for name in NAMES:
+        run = runs[name]
+        path = GATE / f"{name}.h5"
+        if not path.exists():
+            lines.append(f"| {name} | no such run | | | |")
+            continue
+        gate = RunFile(path)
+        frames = gate.read_frames()
+        readings = gate.read_sensor_readings()
+        same_fields = sorted(frames.fields) == sorted(run.frames.fields) and all(
+            frames.fields[k].tobytes() == run.frames.fields[k].tobytes()
+            for k in frames.fields
+        )
+        same_budgets = frames.budgets == run.frames.budgets
+        same_readings = readings.readings.tobytes() == run.sensors.readings.tobytes()
+        lines.append(
+            f"| {name} | {len(run.frames.steps)}, {len(frames.steps)} | "
+            f"{'equal' if same_fields else 'DIFFER'} | "
+            f"{'equal' if same_budgets else 'DIFFER'} | "
+            f"{'equal' if same_readings else 'DIFFER'} |"
+        )
+    return lines
+
+
+def hashes_table() -> list[str]:
+    """H1: the six rows the Phase 4 gate reproduced, solved at this commit."""
+    lines = [
+        "### H1. The hashes of record at the gate's source (hash62.py, against the Phase 4 gate's _69 records)",
+        "",
+        "| Case | Commit | Stop | Outer | Hash (first 16) | Equal to _69 | Wall (s) | Processes |",
+        "|---|---|---|---|---|---|---|---|",
+    ]
+    for case in HASH_CASES:
+        path = HASHES / f"hash_{case}_76.json"
+        if not path.exists():
+            lines.append(f"| {case} | | not run | | | | | |")
+            continue
+        new = json.loads(path.read_text(encoding="utf-8"))
+        old = json.loads((HASHES / f"hash_{case}_69.json").read_text(encoding="utf-8"))
+        lines.append(
+            f"| {case} | {new['commit']} | {new['stop']} | {new['outer']:,} | "
+            f"{new['face_hash'][:16]} | {'yes' if old['face_hash'] == new['face_hash'] else 'NO'} | "
+            f"{new['wall_seconds']:.0f} | {new['concurrent_processes']} |"
+        )
+    return lines
+
+
+def coverage_table() -> list[str]:
+    """Cv1: statements and branches apart, at the gate against Phase 5 step 0."""
+    lines = [
+        "### Cv1. Coverage, statements and branches apart, the gate against Phase 4's after step 0",
+        "",
+    ]
+    if not COVERAGE_HEAD.exists():
+        return [*lines, "not run"]
+    head = json.loads(COVERAGE_HEAD.read_text(encoding="utf-8"))
+    base = json.loads(COVERAGE_BASE.read_text(encoding="utf-8"))
+    h, b = head["totals"], base["totals"]
+    missing = [
+        f"`{name.replace(chr(92), '/')}` {arc[0]}->{arc[1]}"
+        for name, entry in head["files"].items()
+        for arc in entry.get("missing_branches", [])
+    ]
+    uncovered = [
+        name.replace(chr(92), "/")
+        for name, entry in head["files"].items()
+        if entry["missing_lines"]
+    ]
+    lines += [
+        "| Measure | The gate | After step 0 (prompt 71) | Covered count, change | Percentage, change (points) |",
+        "|---|---|---|---|---|",
+        f"| Statements covered | {h['covered_lines']:,} of {h['num_statements']:,} "
+        f"({100 * h['covered_lines'] / h['num_statements']:.2f}%) | {b['covered_lines']:,} of "
+        f"{b['num_statements']:,} ({100 * b['covered_lines'] / b['num_statements']:.2f}%) | "
+        f"+{h['covered_lines'] - b['covered_lines']:,} | "
+        f"{100 * (h['covered_lines'] / h['num_statements'] - b['covered_lines'] / b['num_statements']):+.2f} |",
+        f"| Branches covered | {h['covered_branches']:,} of {h['num_branches']:,} "
+        f"({100 * h['covered_branches'] / h['num_branches']:.2f}%) | {b['covered_branches']:,} of "
+        f"{b['num_branches']:,} ({100 * b['covered_branches'] / b['num_branches']:.2f}%) | "
+        f"+{h['covered_branches'] - b['covered_branches']:,} | "
+        f"{100 * (h['covered_branches'] / h['num_branches'] - b['covered_branches'] / b['num_branches']):+.2f} |",
+        "",
+        f"Files with an uncovered statement: {', '.join(uncovered) or 'none'}. Uncovered branch "
+        f"arms: {', '.join(missing) or 'none'}.",
+    ]
     return lines
 
 
@@ -666,8 +783,8 @@ def stability_table(a: Analysis) -> list[str]:
     lines = [
         "### K1. The searches on 80x30 and 320x120, the same rule and mount, each layout scored on both grids over the units the grid's mountable search covers; a layout from the other grid is read at the cells holding its centres",
         "",
-        "| Grid | Layout | Cell centres (x, y), m | Worst case (s) | Mean (s) | Undetected | Coverage within 10 s |",
-        "|---|---|---|---|---|---|---|",
+        "| Grid | Layout | Cell centres (x, y), m | Mountable on this grid | Worst case (s) | Mean (s) | Undetected | Coverage within 10 s |",
+        "|---|---|---|---|---|---|---|---|",
     ]
     fine_on_coarse = mapped(a.mesh, mesh, a.found.cells)
     coarse_on_fine = mapped(mesh, a.mesh, found.cells)
@@ -675,6 +792,7 @@ def stability_table(a: Analysis) -> list[str]:
         "80x30": (
             mesh,
             kept,
+            mounted,
             {
                 "the file's four": grid_sensors,
                 "searched here": found.cells,
@@ -685,6 +803,7 @@ def stability_table(a: Analysis) -> list[str]:
         "320x120": (
             a.mesh,
             a.kept,
+            a.mounted,
             {
                 "the file's four": a.sensors,
                 "searched here": a.found.cells,
@@ -694,13 +813,14 @@ def stability_table(a: Analysis) -> list[str]:
         ),
     }
     orders = []
-    for grid, (grid_mesh, grid_units, layouts) in entries.items():
+    for grid, (grid_mesh, grid_units, pool, layouts) in entries.items():
         scores = {}
         for name, cells in layouts.items():
             s = score(grid_units, cells, within=WITHIN)
             scores[name] = s
             lines.append(
-                f"| {grid} | {name} | {places(grid_mesh, cells)} | {text_time(s.worst)} | "
+                f"| {grid} | {name} | {places(grid_mesh, cells)} | "
+                f"{mountable_text(cells, pool)} | {text_time(s.worst)} | "
                 f"{s.mean:.3f} | {s.undetected} of {len(grid_units.labels)} | {s.coverage:.3f} |"
             )
         orders.append(
@@ -725,8 +845,8 @@ def arms_table(a: Analysis) -> list[str]:
     lines = [
         "### K2. The searched 320x120 layout on step 1's arm runs (arrival_from_run: frame-resolved, flagged), read at the cells holding its centres, beside the file's four and the arm's own mountable search, over the units the arm's own search covers",
         "",
-        "| Arm | Grid | Scenarios run | Frame-resolved | Layout | Worst case (s) | Mean (s) | Undetected | Detected, of the arm's units | Own search's rule, method |",
-        "|---|---|---|---|---|---|---|---|---|---|",
+        "| Arm | Grid | Scenarios run | Frame-resolved | Layout | Mountable on this grid | Worst case (s) | Mean (s) | Undetected | Detected, of the arm's units | Own search's rule, method |",
+        "|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     orders = []
     rows = [(arm, "160x60") for arm in ARMS] + [("min_nut", "320x120")]
@@ -742,7 +862,7 @@ def arms_table(a: Analysis) -> list[str]:
                 if config_door is None or name == "door_leak":
                     config_door = SimConfig.from_dict(run.read_config().mapping)
         if not arrivals:
-            lines.append(f"| {arm} | {grid} | none | | | | | | | |")
+            lines.append(f"| {arm} | {grid} | none | | | | | | | | |")
             continue
         assert config_door is not None
         mesh = Mesh(config_door)
@@ -767,7 +887,8 @@ def arms_table(a: Analysis) -> list[str]:
             scores[title] = s
             lines.append(
                 f"| {arm} | {grid} | {detected_scenarios(arrivals)} | "
-                f"{'yes' if s.frame_resolved else 'no'} | {title} | {text_time(s.worst)} | "
+                f"{'yes' if s.frame_resolved else 'no'} | {title} | "
+                f"{mountable_text(cells, mounted)} | {text_time(s.worst)} | "
                 f"{s.mean:.3f} | {s.undetected} of {len(kept.labels)} | "
                 f"{detected_text(detected_by_scenario(units, cells))} | "
                 f"{own.rule}, {own.method} |"
@@ -778,6 +899,12 @@ def arms_table(a: Analysis) -> list[str]:
         )
     lines += ["", "The order per rule, best first:", "", *orders]
     return lines
+
+
+def mountable_text(cells: tuple[tuple[int, int], ...], pool: np.ndarray) -> str:
+    """How many of a layout's cells are candidates on the grid it is read on."""
+    allowed = {(int(j), int(i)) for j, i in pool}
+    return f"{sum(cell in allowed for cell in cells)} of {len(cells)}"
 
 
 def detected_scenarios(arrivals: dict[str, RunArrival]) -> str:
@@ -837,6 +964,9 @@ def render(a: Analysis) -> tuple[str, dict[str, str]]:
         "stability": stability_table(a),
         "arms": arms_table(a),
         "predictions": predictions_table(a),
+        "hashes": hashes_table(),
+        "bitwise": bitwise_table(runs),
+        "coverage": coverage_table(),
     }
     head = [
         "# Step 5's tables: the latency report (ADR-015 E)",
@@ -848,7 +978,7 @@ def render(a: Analysis) -> tuple[str, dict[str, str]]:
         "",
     ]
     body: list[str] = []
-    for name in MARKERS:
+    for name in (*MARKERS, *GATE_MARKERS):
         body.extend(tables[name])
         body.append("")
         if name == "units":
@@ -872,10 +1002,10 @@ def splice(text: str, tables: dict[str, str]) -> str:
     return text
 
 
-def report_copies(text: str) -> dict[str, str]:
-    """The report's copies of the tables, keyed by marker name."""
+def report_copies(text: str, markers: tuple[str, ...]) -> dict[str, str]:
+    """A report's copies of the tables, keyed by marker name."""
     copies = {}
-    for name in MARKERS:
+    for name in markers:
         begin = f"<!-- tables76 {name} begin -->"
         end = f"<!-- tables76 {name} end -->"
         if begin in text and end in text:
@@ -978,14 +1108,17 @@ def main() -> int:
         failures = []
         if not args.out.exists() or args.out.read_text(encoding="utf-8") != text:
             failures.append(f"{args.out} differs from the records")
-        if REPORT.exists():
-            copies = report_copies(REPORT.read_text(encoding="utf-8"))
-            for name in MARKERS:
+        for path, markers in ((REPORT, MARKERS), (GATE_REPORT, GATE_MARKERS)):
+            if not path.exists():
+                failures.append(f"{path} is missing")
+                continue
+            copies = report_copies(path.read_text(encoding="utf-8"), markers)
+            for name in markers:
                 if name not in copies:
-                    failures.append(f"{REPORT}: no copy of table '{name}'")
+                    failures.append(f"{path}: no copy of table '{name}'")
                 elif copies[name] != tables[name]:
                     failures.append(
-                        f"{REPORT}: the copy of '{name}' differs from the records"
+                        f"{path}: the copy of '{name}' differs from the records"
                     )
         for failure in failures:
             print(failure)
@@ -994,12 +1127,14 @@ def main() -> int:
     args.out.write_text(text, encoding="utf-8", newline="\n")
     print(f"wrote {args.out}")
     if args.splice:
-        REPORT.write_text(
-            splice(REPORT.read_text(encoding="utf-8"), tables),
-            encoding="utf-8",
-            newline="\n",
-        )
-        print(f"spliced {REPORT}")
+        for path in (REPORT, GATE_REPORT):
+            if path.exists():
+                path.write_text(
+                    splice(path.read_text(encoding="utf-8"), tables),
+                    encoding="utf-8",
+                    newline="\n",
+                )
+                print(f"spliced {path}")
     if args.figures:
         for path in figures(analysis, args.figures_dir):
             print(f"wrote {path}")
