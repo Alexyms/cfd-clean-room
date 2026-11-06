@@ -442,8 +442,10 @@ gap sensor, the ones T6's distances are measured to, are set in that spill: 0.03
 beyond the tool's edges and 0.06 to 0.27 m above its top, 1.6 to 4.5 s after onset, t / T_L
 0.6 to 3.0 at each arm's own T_L (T11, read from the arms' run files by
 `docs/reports/probe70/spill70c.py`: for each arm the reached cell nearest each sensor, the
-first stored frame at or above threshold there, a bound one frame spacing wide, 0.79 s on
-160x60 and 0.36 s on 320x120). On the row's axis that is 14 to 71 M (16 to 46 M at the
+first stored frame at or above threshold there, an upper bound on the arrival, with the
+frames 0.79 s apart on 160x60 and 0.36 s on 320x120; the frame before it is no lower bound,
+since a cell can be at or above between two frames and below at both, section D's limits of
+the frames' map, prompt 75). On the row's axis that is 14 to 71 M (16 to 46 M at the
 file's inputs). The scored stations, 20 and 50 M, lie inside that range. The part from 14 to
 20 M lies between the reported 10 M and the scored 20 M: it holds the contour cells nearest
 above_gap_1 on the product grid at the file's inputs (16 to 20 M) and both gap sensors on
@@ -590,9 +592,9 @@ spill off the litho tool's top (T11), which the line source does not test; the
 model's spill rests on VAL-020's carried limit, the turbulence over the tool tops about 30%
 high (ADR-014 H), which would widen the model's spill against the real one, an inference
 from that case's reading of k and not a measurement of a scalar there. The arrival times
-read from stored frames are bounded by the
-frame spacing (T5's caption) and are not latencies; section D's in-march maps remove that
-bound.
+read from stored frames are upper bounds on the arrival, the first stored frame at or after
+the crossing (T5's caption), and are not latencies; they can also miss a cell the steps reach
+between two frames. Section D's in-march maps remove both limits.
 
 **The grid.** 160x60, with the reason given under decision B, and the two extreme arms of the
 breach repeated on 320x120. The width's resolution on 160x60 is a 5 cm cell, so a width that
@@ -772,6 +774,12 @@ scenarios, five classes, fifteen pairs for the reference set):
 Layouts are ranked by the worst case, ties by the mean; the report shows all three. The rules
 are `placement.score(maps, onsets, cells, rule)` on the maps in memory, so scoring every
 candidate single cell is one vectorised minimum.
+*The unit (prompt 75, step 4, 2026-11-02).* The rules above are written for one contaminating
+event per scenario. A scenario can have several (the door opened twice), so the unit a layout
+is scored over is (scenario, event, class): every contaminating event of every scenario, in
+every class, is a unit to detect, P is the set of those units, and T_cap is the run's
+remaining time after the unit's own onset. The reference set has one event per scenario, so
+its fifteen units are the fifteen scenario-class pairs above.
 
 **Candidates.** An assumption the configuration states, `placement.candidates`: `mount` from
 {walls, ceiling, obstacle_tops, obstacle_sides, free} and `standoff` in metres; a candidate is
@@ -779,6 +787,16 @@ a non-SOLID cell whose centre is within the standoff of a named surface, excludi
 adjacent to an inlet or outlet face (a sensor in the supply's or a return's face reads the
 boundary, not the room). The free optimum over every non-SOLID cell is always reported beside
 the mountable one, as the bound.
+*As built (step 4, prompt 75, 2026-11-02).* A surface is the set of mesh faces between it and
+a non-SOLID cell, as the solver sees it: `walls` the left and right domain edges, `ceiling`
+the top edge, `obstacle_tops` and `obstacle_sides` each obstacle's top face and its left and
+right faces; the floor is not a mounting surface. The distance is from the cell's centre to
+the nearest point of those faces, so a cell diagonal to an obstacle's corner within the
+standoff counts for both the top and the side. A cell with a face on a segment or vent that
+is not a wall, in the configuration or in any interval of its scenario (the open door's two
+halves), is never a candidate, the free set included. The product file states walls, ceiling,
+obstacle tops and sides at 0.05 m (two cells on 320x120, one on 80x30), four sensors and the
+worst case, and no coverage time.
 
 **The search.** `placement.search(maps, onsets, candidates, count, rule)`:
 - count 1: the argmin over candidates (exact);
@@ -793,11 +811,59 @@ the mountable one, as the bound.
   distinct masks, whose number is measured and reported, not assumed), and the smallest T
   with a cover of the count is the optimum. The covers attaining it are enumerated by a
   depth-first search over the distinct masks bounded by the count, which is small, and the
-  tie among them is broken by the mean. When no pair is coverable the ranking falls to the
-  mean rule, and the report says so;
+  tie among them is broken by the mean. When no layout of the count detects every
+  coverable unit the ranking falls to the mean rule, and the layout's rule says so (read as
+  built, prompt 75b, 2026-11-03: the first form said "when no pair is coverable"; a search
+  in which no unit at all is coverable raises, since every layout would tie at the caps);
 - the mean rule above two: greedy (add the cell that lowers the score most) followed by
   one-sensor exchanges until none improves, checked against the exhaustive answer at count 2.
 NumPy only (ADR-013 decision 2: no new dependency).
+*As built (step 4, prompt 75, 2026-11-02).* `search(units, candidates, count, rule)` removes
+the uncoverable units for either rule and reports them, and the layout is scored over the
+rest, so a layout set beside it (the file's sensors) is scored over the same units
+(`exclude_units`) and `rank` refuses two unit sets. The sweep is bisected over the sorted
+distinct latencies, since a cover at T is a cover at every later T. The programme runs on
+the masks no other contains (a cover with a contained mask is one with its container), from
+the empty set, which needs no mask; the distinct and the maximal masks are both counted at the
+optimum. Each cover found is made a layout by the cells of its masks that lower the mean
+most, the spare sensors added the same way, and the best by the mean is improved by
+exchanges that keep the worst case at the optimum: the worst case is exact, its tie-break by
+the mean the best this finds. When no layout of the count detects every coverable unit the
+worst case is inf for every layout, the search runs the mean rule's method at the count and
+returns the rule as `MEAN`; when no unit at all is coverable it raises `ValueError`. Ties under the worst case
+go to the mean and under the mean to the worst case, then to candidate order. The set cover
+refuses more than 20 units (2^20 subsets); the reference set has fifteen. On twelve random
+maps of six units and 31 candidates the worst case is exact at one to three sensors, and the
+mean rule's greedy at three equals the optimum on ten and is above it on two (0.67 and 0.83 s
+against 0.5), `tests/test_placement.py`.
+*Fix pass (prompt 75b, 2026-11-03), from review 75 and test 75.* (1) The fallback layout at
+three and four sensors is pinned against the mean rule's own search and a brute force on a map
+where the first candidates are not the answer. (2) The tie-break among the worst-case optima
+is the best the enumeration finds and is not always the least: test 75 measured, against brute
+force, a mean above the least among the optimal layouts in 4 of 724 random searches at three
+sensors and 1 of 430 at four, and in 2 of 28 and 3 of 29 at the reference size (12 to 15
+units, 30 to 31 candidates), the gaps recorded 11% to 67% of the least mean; the worst case
+was never above the optimum. (3) `detection_units` marks each unit whose run
+`arrival_from_run` rebuilt from stored frames, and the mark reaches `Score.frame_resolved` and
+`Layout.frame_resolved`: such a layout is exact over latencies that are upper bounds, with the
+limits of the frames' map above. A resolution that is neither flag is refused. (4) A searched
+layout's cells are sorted by (j, i). (5) The candidate set depends on the configuration given:
+for a scenario it is the base's less the cells any interval opens (215 with the door
+scenario's on 80x30, 236 with the base room's), so a search over several scenarios takes the
+configuration whose intervals open the union of their openings. (6) Memory. `_maximal` tests
+containment in chunks of 256 masks (`results/builder75/maximal75.py`: 15 units, 38,400
+candidates on a synthetic 320x120 map, four sensors, the worst-case rule). Spreading fronts, a
+source point and a speed per unit: at most 83 distinct masks (9 maximal) over the bisection,
+0.9 s and 27 MB. The same with 2 s of noise: 703 (26), 0.9 s and 26 MB. Every cell and unit
+independent, the most diverse a map can be: 22,731 distinct masks (626 maximal), where the
+first form's [d, d] broadcast peaked at 4.7 GB in 5.8 s and the chunked form at 83 MB in
+3.5 s, the same masks and layout. The product's maps are plumes and sit in the first two
+groups. (7) Restarts. The placement section is analysis read after a run, and nothing the
+march computes reads it, so the whole section is out of the restart hash
+(`io_manager.RESTART_EXCLUDED_SECTIONS`, the orchestrator's decision of 2026-11-03): a run
+file written without it, or under other values, restarts under the product configuration,
+which review 75 and test 75 found refused naming `placement`. It was already out of the flow
+fingerprint and `FLOW_FREE_SECTIONS`.
 
 **What the result can claim.** The latencies are comparative between layouts on one grid at
 the file's inputs; B's spread is stated beside them. A latency's resolution is the step
@@ -809,6 +875,25 @@ one VAL-018 makes for deposition, that the ranking of layouts is stable under th
 and across B's arms, stated per rule with ties, not an absolute latency. ADR-014 H's limits
 stand: the 2D slice (a line source, exchanges per metre of depth), the steady extreme, the
 turbulence over the tops, the spreading limit now bounded by A and B rather than open.
+
+*Step 4's prediction (orchestrator, 2026-11-02, prompt 75), committed before the 80x30 runs.*
+(h) On 80x30 the file's four sensors detect none of the three event scenarios' (scenario,
+event, class) units, and the searched four detect at least one unit in every scenario.
+
+*Result (prompt 75, 2026-11-02): FAILS on the mountable candidates, HOLDS on the free set.*
+The three scenarios ran on 80x30 to their own t_end (the door from rest, both states; the
+breach and the dust release on its kept closed state; about 64 s each), and
+`tests/test_sensor_evaluation.py` reruns them. The first clause holds: the file's four
+detect none of the fifteen units. The second fails for the mountable search: none of the
+215 mountable candidates reaches a door unit, so the door's five are reported uncovered and
+the searched four detect the breach's five and the dust's five (worst case 1.97 s, the set
+cover exact, 6 distinct masks at the optimum, 2 maximal). The door's plume reaches 66 cells,
+all within 0.9 m of the left wall and 1.3 m of the floor; at a standoff of 0.05 m the only
+wall candidates on this grid are the left column's, and every one of those under 2.1 m lies
+beside the open door's faces and is excluded. At 0.15 m, 11 mountable candidates reach a door
+unit. The free optimum's four detect all fifteen units (worst case 0.19 s, 6 distinct masks,
+3 maximal), two of its cells in the floor row beside the door. The search took 4 ms over the
+mountable candidates and 36 ms over the 1,630 free ones.
 
 ## E. The gate's latency report
 
@@ -839,7 +924,7 @@ turbulence over the tops, the spreading limit now bounded by A and B rather than
 | REQ-A02 sensor locations configurable in YAML | The sensors section | Yes (unit: a sensor added or moved in the mapping changes the cell read; a SOLID cell refused; the face rule) | Add the reading rule: "a sensor reads the cell containing it, the one below or to the left of a position on a face (ADR-014 C)" |
 | REQ-A03 thresholds per class following ISO 14644-1 | The thresholds mapping | Partly: configurable per class is testable; "following ISO 14644-1" is not without the formula | "Contamination thresholds shall be configurable per particle size class, either as a mapping by size or as an ISO 14644-1 class number from which the loader computes the limits by the standard's formula rounded to three significant figures; the product file's Class 5 values are the test" |
 | REQ-A04 latency per sensor per scenario from event onset | The report's core number | Yes once onset is defined (integration test on a coarse run) | Append: "the onset is the start of the event that carries the contamination (a replacement with a concentration, a source, or the initial condition at t = 0); a sensor never at or above threshold within the run reports no latency and the run's end" (applied to SYSTEM.md 2026-11-01, prompt 74b, with D's clarification added to the list: a set that gives a segment a concentration) |
-| REQ-A05 multiple configurations across scenarios to identify optimal placement | The placement question | No: "optimal" names no rule | "The monitor's placement module shall score any set of sensor layouts over a set of scenario run files by stated rules (worst case, mean, coverage within a stated time), rank them, and search the stated candidate positions for the layout of a stated count that is best under a rule, exact for one and two sensors and for the worst-case rule at any count over the pairs some candidate reaches, reproducible from the run files alone" |
+| REQ-A05 multiple configurations across scenarios to identify optimal placement | The placement question | No: "optimal" names no rule | "The monitor's placement module shall score any set of sensor layouts over a set of scenario run files by stated rules (worst case, mean, coverage within a stated time), rank them, and search the stated candidate positions for the layout of a stated count that is best under a rule, exact for one and two sensors and, over the units some candidate reaches, for the worst-case rule at any count while some layout of the count detects them all (when none does, the layout returned is the mean rule's and says so), reproducible from the run files alone (reworded as built, prompt 75b, 2026-11-03: the first form promised exactness at any count "over the pairs some candidate reaches", which holds only while a layout of the count detects every such unit)" |
 | REQ-A06 reads but never modifies | Separation of concerns | Yes, and by test as well as review: the fields' bytes before and after `update`, the writeable flag False | Append: "verified by test: the fields are bitwise unchanged across every monitor call" |
 | REQ-T14, proposed (prompt 70b, review 70 S9) | VAL-024's width clause verifies no requirement as written: REQ-T13 states the diffusivity's formula, met by construction | A new requirement, for Alex | "With the turbulence model on, the transport solver's spreading of a passive scalar released from a line source in decaying grid turbulence shall match the measured plume width in the far field within a stated allowance, the near-field width reported beside it." Verified by VAL-024; the decay clause of VAL-024 joins REQ-S14's Verified By |
 
@@ -865,6 +950,12 @@ placement.py --> scripts/latency_report.py (step 5); tests
     candidates(mesh, config, mount, standoff) -> np.ndarray     # [n, 2] cells
     search(latencies, candidates, count, rule) -> Layout        # cells, score, method, exact (bool)
     rank(layouts) -> list[Layout]
+    # As built at step 4 (prompt 75): the latencies are Units, (scenario, event,
+    # class) stacked by detection_units(arrivals) from each run's RunArrival (which
+    # gains event_names, t_final and fallback); score(units, cells, *, within) has no
+    # rule, since a Score carries every rule; search(units, candidates, count, rule,
+    # *, within) -> Layout adds rule, units, uncovered and the set cover's mask
+    # counts; given_layout and exclude_units score the file's sensors beside it
 
 io_manager.py
     RunFile.write_alerts(rows) / read_alerts()  # /transport/alerts/, replaced whole
@@ -1078,8 +1169,9 @@ grids show it is the model's.
 held. (b) held in every part, including the geometry: the arrival maps (T5, `arrival70.png`)
 put the earliest reached cell under the panel's edge at 2.8 m height, by the first stored
 frame after the onset (0.24 to 0.47 s after it, each the thirteenth frame of its arm, so an
-upper bound by up to one frame spacing of 0.79 to 0.81 s and not a measured latency; review
-70 S5), the reached cells (17% to 20% of the room's free cells) under the panel, on the
+upper bound on the arrival and not a measured latency, review 70 S5; not one within a frame
+spacing of 0.79 to 0.81 s of it either, since the frames miss what lies between them,
+section D's limits of the frames' map, prompt 75), the reached cells (17% to 20% of the room's free cells) under the panel, on the
 litho tool's top and in both gaps to the floor returns, and the file's four sensors outside
 the reached set at every arm.
 
@@ -1616,7 +1708,7 @@ Digitising precision: a centroid is good to about 2 px, which is 0.3% (figure 4(
 
 **The spill** (prompt 70d, review 70 round 3 S4; copied from `docs/reports/probe70/spill70c.md`, generated by `spill70c.py` from the breach arms' run files; `--check` compares it with them).
 
-#### T11. For each breach arm and sensor, class 0.1 um: the cell nearest the sensor that is ever at or above threshold (the cell T6's distance is measured to), its offset from the nearest obstacle, the first stored frame at or above threshold there, the bound that frame puts on the time after the 10 s onset (one frame spacing wide), that bound over the arm's supply T_L, and the row station with the same t / T_L (T_L U / M = 23.6 M per Lagrangian time)
+#### T11. For each breach arm and sensor, class 0.1 um: the cell nearest the sensor that is ever at or above threshold (the cell T6's distance is measured to), its offset from the nearest obstacle, the first stored frame at or above threshold there, the time after the 10 s onset from the frame before it to that frame (the upper end bounds the arrival and the lower end does not, since a cell can be at or above between two earlier frames: section D's limits of the frames' map, prompt 75), that time over the arm's supply T_L, and the row station with the same t / T_L (T_L U / M = 23.6 M per Lagrangian time)
 
 | Arm (grid; T_L at its supply) | Sensor (cell centre, m) | Nearest contour cell (m) | Distance (m) | Beyond the nearest obstacle's edge, above its top (m) | First frame at or above (s) | After onset (s) | t / T_L | Row station (M) |
 |---|---|---|---|---|---|---|---|---|
@@ -1645,7 +1737,7 @@ Digitising precision: a centroid is good to about 2 px, which is 0.3% (figure 4(
 | gate_320x120 (320x120; 2.30 s) | above_gap_2 (4.788, 2.488) | (4.588, 2.063) | 0.470 | 0.09, 0.06 (litho_tool) | 14.49 | 4.13 to 4.49 | 1.79 to 1.95 | 42 to 46 |
 | gate_320x120 (320x120; 2.30 s) | hood_entry (6.188, 1.188) | (4.763, 1.188) | 1.425 | 0.24, -0.81 (etch_chamber) | 15.58 | 5.22 to 5.58 | 2.26 to 2.42 | 53 to 57 |
 
-Ranges over the table's rows (frame bounds, so each time is one frame spacing wide: 0.79 s on 160x60, 0.36 s on 320x120):
+Ranges over the table's rows (frame times: each upper end bounds the arrival and each lower end does not, the frames 0.79 s apart on 160x60 and 0.36 s on 320x120; prompt 75):
 
 - The gap sensors, every arm (12 rows): 0.03 to 0.33 m beyond the obstacle's edge, 0.06 to 0.27 m above its top (negative: below it); 1.59 to 4.49 s after onset; t / T_L 0.60 to 3.02; row station 14 to 71 M.
 - The gap sensors, the file's inputs (i05 and the gate) (4 rows): 0.08 to 0.27 m beyond the obstacle's edge, 0.06 to 0.23 m above its top (negative: below it); 1.59 to 4.49 s after onset; t / T_L 0.69 to 1.95; row station 16 to 46 M.

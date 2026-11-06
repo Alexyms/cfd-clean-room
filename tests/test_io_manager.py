@@ -54,6 +54,7 @@ from src.io_manager import (
     CHECKPOINT,
     OPEN_STEP,
     RESTART_EXCLUDED_KEYS,
+    RESTART_EXCLUDED_SECTIONS,
     STEADY_CHECKPOINT,
     AlertTable,
     ArrivalRecord,
@@ -1377,6 +1378,15 @@ def yaml_copy(raw: dict) -> dict:
     return yaml.safe_load(config_text(raw))
 
 
+# A placement section, which a restart may add, change or drop.
+PLACEMENT_SECTION = {
+    "mount": ["walls"],
+    "standoff": 0.05,
+    "count": 4,
+    "rule": "worst_case",
+}
+
+
 @pytest.mark.unit
 class TestRestartRefusals:
     @pytest.mark.parametrize(
@@ -1442,6 +1452,45 @@ class TestRestartRefusals:
             gone = yaml_copy(raw)
             del gone["solver"][key]
             run.check_restart(gone)
+
+    def test_the_placement_section_may_be_added_changed_or_removed(
+        self, tmp_path: Path
+    ) -> None:
+        """A file made without the section restarts under one with it, and under others.
+
+        The section is analysis read after a run (prompt 75b, the
+        orchestrator's decision of 2026-11-03), so a Phase 4 file restarts
+        under the product configuration. Defects caught: the section left
+        in the restart hash (the restart refused naming ``placement``); only
+        a changed value accepted and not an added or a removed section; a
+        neighbouring section (the sensors) excluded with it.
+        """
+        assert RESTART_EXCLUDED_SECTIONS == ("placement",)
+        run = RunFile(tmp_path / "run.h5")
+        bare = _room_raw()
+        run.write_config(bare, **PROVENANCE)
+        with_section = _changed(bare, ("placement",), dict(PLACEMENT_SECTION))
+        run.check_restart(with_section)
+        run.check_restart(_changed(with_section, ("placement", "count"), 2))
+        other = _changed(
+            with_section, ("placement",), {**PLACEMENT_SECTION, "rule": "mean"}
+        )
+        run.check_restart(other)
+        later = RunFile(tmp_path / "later.h5")
+        later.write_config(with_section, **PROVENANCE)
+        later.check_restart(bare)
+        later.check_restart(other)
+        assert restart_hash(bare) == restart_hash(with_section) == restart_hash(other)
+        with pytest.raises(ValueError, match=r"sensors\[0\]\.x differs"):
+            later.check_restart(_changed(with_section, ("sensors", 0, "x"), 0.9))
+
+    def test_the_refusal_names_the_excluded_sections_too(self, tmp_path: Path) -> None:
+        """The message lists what may change, the placement section included."""
+        run = RunFile(tmp_path / "run.h5")
+        raw = _room_raw()
+        run.write_config(raw, **PROVENANCE)
+        with pytest.raises(ValueError, match=r"and the placement section may change"):
+            run.check_restart(_changed(raw, ("fluid", "density"), 1.3))
 
     def test_a_file_without_a_configuration_is_refused(self, tmp_path: Path) -> None:
         """Defect caught: a restart from a file that records no configuration accepted."""
@@ -1558,6 +1607,16 @@ class TestRestartHash:
             restart_hash(mapping)
             == hashlib.sha256(config_text(mapping).encode("ascii")).hexdigest()
         )
+
+    def test_an_excluded_section_is_removed_from_a_copy(self) -> None:
+        """The section is dropped from the hashed copy and kept in the caller's mapping.
+
+        Defect caught: the section popped from the caller's mapping, so the
+        configuration the run goes on to load has lost its placement.
+        """
+        mapping = {"solver": {"dt": 0.1}, "placement": {"count": 4}}
+        assert _without_excluded(mapping) == {"solver": {"dt": 0.1}}
+        assert mapping["placement"] == {"count": 4}
 
     def test_the_excluded_keys_are_removed_from_a_copy(self) -> None:
         """Defect caught: the key popped from the caller's mapping, so the

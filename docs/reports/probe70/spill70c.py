@@ -3,8 +3,10 @@
 For each breach arm of probe B (tables70.ARMS: the 160x60 arms and the gate's 320x120
 breach), class 0.1 um: the non-SOLID cell ever at or above threshold that lies nearest
 each sensor's cell (the argmin of T6's centre-to-centre distance), the first stored frame
-at or above threshold in that cell, the bound that frame puts on the time after the
-onset at 10 s (one frame spacing wide), and that bound over the supply's Lagrangian time
+at or above threshold in that cell, the time after the onset at 10 s from the frame
+before it to that frame (the upper end bounds the arrival and the lower end does not:
+a cell can be at or above between two earlier frames, ADR-015 D's limits of the frames'
+map), and that time over the supply's Lagrangian time
 scale T_L = (4 / (3 C_0)) k / eps at the arm's inlet values, with C_0 as the reference
 curve of line70.py has it. The cell's offset from the nearest obstacle (beyond its
 edge, above its top) shows where in the room it lies. The row station is t / T_L times
@@ -194,8 +196,10 @@ def build_text() -> str:
         "### T11. For each breach arm and sensor, class 0.1 um: the cell nearest the sensor "
         "that is ever at or above threshold (the cell T6's distance is measured to), its "
         "offset from the nearest obstacle, the first stored frame at or above threshold "
-        "there, the bound that frame puts on the time after the 10 s onset (one frame "
-        "spacing wide), that bound over the arm's supply T_L, and the row station with the "
+        "there, the time after the 10 s onset from the frame before it to that frame (the "
+        "upper end bounds the arrival and the lower end does not, since a cell can be at or "
+        "above between two earlier frames: section D's limits of the frames' map, prompt "
+        "75), that time over the arm's supply T_L, and the row station with the "
         f"same t / T_L (T_L U / M = {ROW_M_PER_T_L:.1f} M per Lagrangian time)",
         "",
         "| Arm (grid; T_L at its supply) | Sensor (cell centre, m) | Nearest contour cell (m) "
@@ -223,11 +227,10 @@ def build_text() -> str:
     file_gap = [r for r in file_inputs if r["sensor"].startswith("above_gap")]
     lines += [
         "",
-        "Ranges over the table's rows (frame bounds, so each time is one frame spacing wide: "
-        + ", ".join(
-            f"{a['spacing']:.2f} s on {a['grid']}" for a in arms[:1] + arms[-1:]
-        )
-        + "):",
+        "Ranges over the table's rows (frame times: each upper end bounds the arrival and "
+        "each lower end does not, the frames "
+        f"{arms[0]['spacing']:.2f} s apart on {arms[0]['grid']} and "
+        f"{arms[-1]['spacing']:.2f} s on {arms[-1]['grid']}; prompt 75):",
         "",
         summarise("The gap sensors, every arm", gap),
         summarise("The gap sensors, the file's inputs (i05 and the gate)", file_gap),

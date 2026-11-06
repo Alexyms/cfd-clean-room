@@ -156,6 +156,7 @@ FLOW_FREE_SECTIONS: tuple[str, ...] = (
     "particles",
     "sensors",
     "thresholds",
+    "placement",
 )
 FLOW_FREE_SOLVER_KEYS: tuple[str, ...] = (
     "dt",
@@ -1302,7 +1303,8 @@ def run(
         A new run's file; neither it nor its checkpoint file may exist.
     restart : str or Path, optional
         The run file of a run to continue: its configuration must be this
-        one but for ``io_manager.RESTART_EXCLUDED_KEYS``. Exactly one of
+        one but for ``io_manager.RESTART_EXCLUDED_KEYS`` and
+        ``RESTART_EXCLUDED_SECTIONS``. Exactly one of
         ``run_file`` and ``restart``.
     flows_from : str or Path, optional
         A new run's source of kept flow states: another run file whose

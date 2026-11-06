@@ -20,14 +20,18 @@ from src.config import (
     CFL_NUMBER_BOUND,
     DEFAULT_PRESSURE_PRECONDITIONER,
     EVENT_TIME_RTOL,
+    MEAN,
+    MOUNT_SURFACES,
     MULTIGRID,
     PRESSURE_JACOBI,
     PRESSURE_PRECONDITIONERS,
     PRESSURE_RTOL_BOUNDS,
     RETIRED_PRESSURE_TOL_KEY,
     SOLVER_KEYS,
+    WORST_CASE,
     Breakpoint,
     ForceSpec,
+    PlacementSpec,
     SimConfig,
     StretchSpec,
     TransientSpec,
@@ -4372,3 +4376,98 @@ class TestClassThresholdsKeys:
         config = SimConfig.from_dict(raw)
         with pytest.raises(ValueError, match=r"the class of diameter 1e-07 m has no"):
             config.class_thresholds()
+
+
+# A valid placement section, as the tests below vary it.
+PLACEMENT_SECTION = {
+    "mount": ["walls", "obstacle_tops"],
+    "standoff": 0.05,
+    "count": 4,
+    "rule": "worst_case",
+}
+
+
+@pytest.mark.unit
+class TestPlacementSection:
+    """The placement section (ADR-015 D, step 4): what a layout search assumes."""
+
+    def test_the_section_is_read_and_its_absence_is_none(self, tmp_path: Path) -> None:
+        """Every key read as given, within optional; no section, no spec."""
+        raw = _base_raw(tmp_path)
+        assert SimConfig.from_dict(raw).placement is None
+        raw["placement"] = {**PLACEMENT_SECTION, "within": 5.0}
+        spec = SimConfig.from_dict(raw).placement
+        assert spec == PlacementSpec(
+            mount=("walls", "obstacle_tops"),
+            standoff=0.05,
+            count=4,
+            rule=WORST_CASE,
+            within=5.0,
+        )
+        raw["placement"] = dict(PLACEMENT_SECTION)
+        assert SimConfig.from_dict(raw).placement.within is None
+
+    def test_the_product_file_states_its_placement(self) -> None:
+        """The mountable surfaces, a 5 cm standoff, four sensors, the worst case."""
+        spec = SimConfig(CONFIG_DIR / "clean_room_default.yaml").placement
+        assert spec == PlacementSpec(
+            mount=("walls", "ceiling", "obstacle_tops", "obstacle_sides"),
+            standoff=0.05,
+            count=4,
+            rule=WORST_CASE,
+        )
+        assert set(spec.mount) == set(MOUNT_SURFACES) - {"free"}
+
+    @pytest.mark.parametrize(
+        ("change", "error", "match"),
+        [
+            ({"__section__": ["walls"]}, ValueError, "placement must be a mapping"),
+            ({"where": 1}, ValueError, "placement.where is not a recognised"),
+            ({"mount": None}, ValueError, r"Missing required key: 'placement.mount'"),
+            ({"mount": "walls"}, TypeError, "placement.mount must be a list"),
+            ({"mount": []}, ValueError, "placement.mount must name at least one"),
+            ({"mount": ["walls", 3]}, TypeError, r"placement.mount\[1\] must be a str"),
+            ({"mount": ["floor"]}, ValueError, r"placement.mount\[0\] must be one of"),
+            ({"mount": ["walls", "walls"]}, ValueError, "names 'walls' twice"),
+            ({"standoff": None}, ValueError, "'placement.standoff'"),
+            ({"standoff": 0.0}, ValueError, "placement.standoff must be positive"),
+            ({"standoff": True}, TypeError, "placement.standoff must be a number"),
+            (
+                {"standoff": float("nan")},
+                ValueError,
+                "placement.standoff must be finite",
+            ),
+            ({"count": None}, ValueError, "'placement.count'"),
+            ({"count": 0}, ValueError, "placement.count must be positive"),
+            ({"count": 2.0}, TypeError, "placement.count must be an integer"),
+            ({"count": True}, TypeError, "placement.count must be an integer"),
+            ({"rule": None}, ValueError, "'placement.rule'"),
+            ({"rule": "coverage"}, ValueError, "placement.rule must be one of"),
+            ({"within": -1.0}, ValueError, "placement.within must be positive"),
+            ({"within": False}, TypeError, "placement.within must be a number"),
+        ],
+    )
+    def test_a_bad_section_is_refused_by_name(
+        self, tmp_path: Path, change: dict, error: type, match: str
+    ) -> None:
+        """Each key's type, range and presence; an unknown key; the surfaces' names."""
+        raw = _base_raw(tmp_path)
+        if "__section__" in change:
+            raw["placement"] = change["__section__"]
+        else:
+            section = {**PLACEMENT_SECTION, **change}
+            raw["placement"] = {k: v for k, v in section.items() if v is not None}
+        with pytest.raises(error, match=match):
+            SimConfig.from_dict(raw)
+
+    def test_a_scenario_reads_the_section_of_its_merged_base(
+        self, tmp_path: Path
+    ) -> None:
+        """The scenario file's own section merges over the base's, as every section does."""
+        raw = yaml.safe_load(
+            (CONFIG_DIR / "scenario_door_leak.yaml").read_text(encoding="utf-8")
+        )
+        raw["scenario"]["base"] = str(CONFIG_DIR / "clean_room_default.yaml")
+        raw["placement"] = {"count": 2, "rule": "mean"}
+        spec = SimConfig.from_dict(raw).placement
+        assert (spec.count, spec.rule, spec.standoff) == (2, MEAN, 0.05)

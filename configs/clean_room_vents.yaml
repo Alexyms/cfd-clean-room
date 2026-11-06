@@ -276,3 +276,20 @@ thresholds:
   "0.5e-6": 3.52e+3
   "1.0e-6": 8.32e+2
   "5.0e-6": 2.93e+1
+
+# Sensor placement (ADR-015 D, step 4): where the layout search may put a
+# sensor and the rule it ranks layouts by. Each value is an assumption until
+# a counter's mounting is specified:
+# - mount: a sensor fixed to a wall, the ceiling, or an obstacle's top or
+#   sides. The floor is not a mounting surface, and the free set (every
+#   non-SOLID cell) is searched beside this as the bound;
+# - standoff 0.05 m: the sensor's head within 5 cm of its surface, two cells
+#   on the product grid (section D's two-cell standoff), one on 80x30;
+# - count 4: the file's four sensors are four (section E);
+# - rule worst_case: section D's ranking, ties by the mean.
+# No coverage time (within) is stated, so no coverage is reported.
+placement:
+  mount: [walls, ceiling, obstacle_tops, obstacle_sides]
+  standoff: 0.05
+  count: 4
+  rule: worst_case
