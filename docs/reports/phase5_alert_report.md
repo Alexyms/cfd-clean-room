@@ -18,3 +18,45 @@ The orchestrator's (2026-11-05, prompt 76), copied verbatim:
   be mounted on.
 - (k) The searched mountable four detect every breach and dust unit on 320x120, with a worst
   case under 3 s.
+
+<!-- tables76 reload begin -->
+<!-- tables76 reload end -->
+
+<!-- tables76 flows begin -->
+<!-- tables76 flows end -->
+
+<!-- tables76 states begin -->
+<!-- tables76 states end -->
+
+<!-- tables76 march begin -->
+<!-- tables76 march end -->
+
+<!-- tables76 budgets begin -->
+<!-- tables76 budgets end -->
+
+<!-- tables76 alerts begin -->
+<!-- tables76 alerts end -->
+
+<!-- tables76 layouts begin -->
+<!-- tables76 layouts end -->
+
+<!-- tables76 curve begin -->
+<!-- tables76 curve end -->
+
+<!-- tables76 headline begin -->
+<!-- tables76 headline end -->
+
+<!-- tables76 units begin -->
+<!-- tables76 units end -->
+
+<!-- tables76 recovery begin -->
+<!-- tables76 recovery end -->
+
+<!-- tables76 stability begin -->
+<!-- tables76 stability end -->
+
+<!-- tables76 arms begin -->
+<!-- tables76 arms end -->
+
+<!-- tables76 predictions begin -->
+<!-- tables76 predictions end -->
