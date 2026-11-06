@@ -95,6 +95,8 @@ ARMS = ("control", "i10", "max_nut", "min_nut", "sc02", "widest")
 # file states none, so this is the report's reading, not a requirement.
 WITHIN = 10.0
 RESOLVED_FLOOR = 1.0e-2
+# The standoffs the door is read at beside the product file's (prompt 76's (j)).
+DOOR_STANDOFFS = (0.05, 0.1, 0.2, 0.5, 1.0)
 FILE = "the file's four"
 MOUNTED = "searched, mountable"
 FREE = "free optimum"
@@ -562,6 +564,22 @@ def layouts_table(analysis: Analysis) -> list[str]:
     lines.append(
         f"Mountable candidates that detect a door unit: "
         f"{int(np.isfinite(reach[door]).any(axis=0).sum())} of {len(a.mounted):,}."
+    )
+    reached = np.isfinite(a.units.latencies[door]).any(axis=0)
+    rows, columns = np.nonzero(reached)
+    lines.append(
+        f"The door's plume reaches {int(reached.sum()):,} cells, x up to "
+        f"{a.mesh.x[columns.max() + 1]:.3f} m and y up to {a.mesh.y[rows.max() + 1]:.3f} m; the "
+        "first floor return spans x 0.5 to 1.25 m."
+    )
+    counts = []
+    for standoff in DOOR_STANDOFFS:
+        pool = candidates(a.mesh, a.config, a.spec.mount, standoff)
+        found = int(reached[pool[:, 0], pool[:, 1]].sum())
+        counts.append(f"{standoff:g} m: {found} of {len(pool):,}")
+    lines.append(
+        "Mountable candidates that detect a door unit at other standoffs, the rule of item 0 "
+        "held: " + "; ".join(counts) + "."
     )
     named = {
         FILE: a.file_kept,
