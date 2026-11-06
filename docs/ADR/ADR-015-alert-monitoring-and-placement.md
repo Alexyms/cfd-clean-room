@@ -797,6 +797,21 @@ is not a wall, in the configuration or in any interval of its scenario (the open
 halves), is never a candidate, the free set included. The product file states walls, ceiling,
 obstacle tops and sides at 0.05 m (two cells on 320x120, one on 80x30), four sensors and the
 worst case, and no coverage time.
+*Openings (prompt 76, 2026-11-05, before step 5's runs).* A mounting surface is a face whose
+boundary is a wall in every interval of the scenario: an opening is never a surface, and a cell
+within the standoff of an opening is not a candidate, the free set included. The rule as first
+built excluded only the cells beside an opening's face and counted a domain edge whole. On
+80x30 the 0.05 m standoff holds one cell, so the two readings agree (215 mountable and 1,630
+free, the (h) counts below, unchanged). On 320x120 it holds two, and with the door open the
+first rule made 84 cells of column 1 in the doorway's rows wall-mounted candidates (a sensor 4
+cm inside an open doorway with nothing to mount on), and likewise the 280 cells of the second
+row under the supply and the 36 of the second column of the hood's exhaust. Under this rule
+2,152 mountable cells become 1,737 and 27,544 free cells become 27,017. The wall above the
+doorway stays mountable from the rows the door's top no longer reaches ((86, 0) and (85, 1)).
+One exclusion does the work of both clauses: every cell an opening's face could bring in as a
+surface lies within the standoff of that opening. Pinned by
+`test_a_sensor_cannot_hang_in_the_open_doorway_on_the_product_grid`, whose plant is the
+exclusion read as beside the face alone.
 
 **The search.** `placement.search(maps, onsets, candidates, count, rule)`:
 - count 1: the argmin over candidates (exact);

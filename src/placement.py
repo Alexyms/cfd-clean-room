@@ -601,14 +601,17 @@ def candidates(
     """The cells a sensor may be placed in (ADR-015 D, "Candidates").
 
     A candidate is a non-SOLID cell whose centre lies within ``standoff`` of
-    a named surface, and not beside an inlet or outlet face: a sensor in the
-    supply's or a return's face reads the boundary, not the room. The
-    surfaces are the mesh faces between the room and a wall or obstacle, as
-    the solver sees them: ``walls`` the left and right domain edges,
-    ``ceiling`` the top edge, ``obstacle_tops`` and ``obstacle_sides`` the
-    obstacles' top faces and their left and right faces; the floor is not a
-    mounting surface. ``free`` is every non-SOLID cell, whatever the
-    standoff, the set the free optimum is searched over.
+    a named surface, and neither beside an opening's face nor within
+    ``standoff`` of one. An opening is a face on a segment or vent that is not
+    a wall in some interval of the scenario: a sensor in the supply's or a
+    return's face reads the boundary, not the room, and an open doorway or a
+    filter face has nothing to mount on. The surfaces are the mesh faces
+    between the room and a wall or obstacle, as the solver sees them:
+    ``walls`` the left and right domain edges, ``ceiling`` the top edge,
+    ``obstacle_tops`` and ``obstacle_sides`` the obstacles' top faces and
+    their left and right faces; the floor is not a mounting surface. ``free``
+    is every non-SOLID cell outside the same exclusion, the set the free
+    optimum is searched over.
 
     Parameters
     ----------
@@ -621,7 +624,8 @@ def candidates(
         Names from ``MOUNT_SURFACES``, at least one, none twice.
     standoff : float
         Metres, positive and finite: the largest distance from a cell's
-        centre to the nearest point of a named surface.
+        centre to the nearest point of a named surface, and the distance
+        inside which an opening's face excludes a cell.
 
     Returns
     -------
@@ -636,6 +640,16 @@ def candidates(
         If ``mount`` is empty, names an unknown surface or one twice, the
         standoff is not positive and finite, the mesh is not the
         configuration's, or no cell is a candidate.
+
+    Notes
+    -----
+    An opening's face is never a surface, and the one exclusion is enough
+    to make it so: every cell such a face would bring in lies within the
+    standoff of that opening and is excluded (ADR-015 D, prompt 76). On
+    320x120 the 0.05 m standoff holds two columns, so a rule of "beside the
+    face" alone left the second column of an open doorway, the second row
+    under the supply and the second column of the hood's exhaust as
+    candidates.
     """
     names = tuple(mount)
     if not names:
@@ -658,23 +672,20 @@ def candidates(
             f"({config.ny}, {config.nx}): candidates need the configuration's mesh"
         )
     live = mesh.cell_type != SOLID
+    limit = standoff * (1.0 + STANDOFF_RTOL)
     if MOUNT_FREE in names:
         near = live.copy()
     else:
-        xc, yc = np.meshgrid(mesh.xc, mesh.yc)
-        distance = np.full(live.shape, np.inf)
-        for name in names:
-            for x0, y0, x1, y1 in _surface_faces(mesh, config, name):
-                gap_x = np.maximum(np.maximum(x0 - xc, xc - x1), 0.0)
-                gap_y = np.maximum(np.maximum(y0 - yc, yc - y1), 0.0)
-                np.minimum(distance, np.hypot(gap_x, gap_y), out=distance)
-        near = live & (distance <= standoff * (1.0 + STANDOFF_RTOL))
-    near &= ~_beside_openings(mesh, config)
+        faces = [f for name in names for f in _surface_faces(mesh, config, name)]
+        near = live & (_distance_to(mesh, faces) <= limit)
+    beside, openings = _openings(mesh, config)
+    near &= ~beside & (_distance_to(mesh, openings) > limit)
     j, i = np.nonzero(near)
     if j.size == 0:
         raise ValueError(
             f"no cell is a candidate: none within {standoff} m of {list(names)} that "
-            "is not SOLID or beside an inlet or outlet face"
+            "is not SOLID, beside an inlet or outlet face or within that distance of "
+            "one"
         )
     return np.stack([j, i], axis=1).astype(np.int64)
 
@@ -1149,10 +1160,32 @@ def _interval_configs(config: SimConfig) -> list[SimConfig]:
     return out
 
 
-def _beside_openings(mesh: Mesh, config: SimConfig) -> np.ndarray:
-    """[ny, nx] bool: the cells with a face on an inlet or outlet segment or vent."""
+def _distance_to(
+    mesh: Mesh, faces: list[tuple[float, float, float, float]]
+) -> np.ndarray:
+    """[ny, nx]: from each cell's centre to the nearest point of FACES, inf with none."""
+    xc, yc = np.meshgrid(mesh.xc, mesh.yc)
+    distance = np.full(xc.shape, np.inf)
+    for x0, y0, x1, y1 in faces:
+        gap_x = np.maximum(np.maximum(x0 - xc, xc - x1), 0.0)
+        gap_y = np.maximum(np.maximum(y0 - yc, yc - y1), 0.0)
+        np.minimum(distance, np.hypot(gap_x, gap_y), out=distance)
+    return distance
+
+
+def _openings(
+    mesh: Mesh, config: SimConfig
+) -> tuple[np.ndarray, list[tuple[float, float, float, float]]]:
+    """The cells beside an opening, [ny, nx] bool, and the openings' faces.
+
+    An opening is a face on a segment or vent that is not a wall in some
+    interval of the configuration. Each face is (x0, y0, x1, y1), the form
+    ``_surface_faces`` gives.
+    """
+    x, y = mesh.x, mesh.y
     out = np.zeros(mesh.cell_type.shape, dtype=bool)
     ny, nx = out.shape
+    found: set[tuple[float, float, float, float]] = set()
     for interval in _interval_configs(config):
         registry = BoundaryRegistry(interval)
         for edge in EDGES:
@@ -1160,13 +1193,16 @@ def _beside_openings(mesh: Mesh, config: SimConfig) -> np.ndarray:
             for k, point in enumerate(coverage):
                 if point.spec is None or point.condition.bc_type == WALL:
                     continue
-                cell = {
-                    "bottom": (0, k),
-                    "top": (ny - 1, k),
-                    "left": (k, 0),
-                    "right": (k, nx - 1),
-                }[edge]
-                out[cell] = True
+                if edge in ("bottom", "top"):
+                    row = 0 if edge == "bottom" else ny - 1
+                    level = y[0] if edge == "bottom" else y[-1]
+                    out[row, k] = True
+                    found.add((x[k], level, x[k + 1], level))
+                else:
+                    column = 0 if edge == "left" else nx - 1
+                    level = x[0] if edge == "left" else x[-1]
+                    out[k, column] = True
+                    found.add((level, y[k], level, y[k + 1]))
         for obstacle in interval.obstacles:
             for face in ("top", "bottom", "left", "right"):
                 faces = obstacle_face_inputs(mesh, obstacle, face)
@@ -1184,4 +1220,8 @@ def _beside_openings(mesh: Mesh, config: SimConfig) -> np.ndarray:
                         "right": (r, c),
                     }[face]
                     out[room] = True
-    return out
+                    if face in ("top", "bottom"):
+                        found.add((x[c], y[r], x[c + 1], y[r]))
+                    else:
+                        found.add((x[c], y[r], x[c], y[r + 1]))
+    return out, sorted(found)

@@ -870,21 +870,23 @@ class TestCandidates:
     def test_each_surface_at_a_one_cell_standoff(self) -> None:
         """Centres within 0.1 m of each surface's faces, the ends' diagonals included.
 
-        The walls are columns 0 and 9; the ceiling row 5 but for the two
-        cells under the supply; the box's top row 2 from i 3 to 6, and (1, 3)
-        and (1, 6) beside its sides, 0.071 m from its top corners as (2, 3)
-        and (2, 6) are; its sides columns 3 and 6 from j 0 to 2, and (2, 4)
-        and (2, 5) above the top, 0.071 m from the sides' upper ends. Defect
-        caught: the standoff measured from the box's bottom face (on the
-        floor, so no face and no top candidate).
+        The walls are columns 0 and 9 but for (0, 9), 0.071 m from the return's
+        end; the ceiling row 5 but for the two cells under the supply and the
+        two 0.071 m from its ends; the box's top row 2 from i 3 to 6, and
+        (1, 3) and (1, 6) beside its sides, 0.071 m from its top corners as
+        (2, 3) and (2, 6) are; its sides columns 3 and 6 from j 0 to 2 but for
+        (0, 6), 0.071 m from the return's end, and (2, 4) and (2, 5) above the
+        top, 0.071 m from the sides' upper ends. Defect caught: the standoff
+        measured from the box's bottom face (on the floor, so no face and no
+        top candidate).
         """
         rows = range(6)
-        assert self.found("walls") == {(j, 0) for j in rows} | {(j, 9) for j in rows}
-        assert self.found("ceiling") == {(5, i) for i in range(10)} - {(5, 3), (5, 4)}
+        walls = {(j, 0) for j in rows} | {(j, 9) for j in rows[1:]}
+        assert self.found("walls") == walls
+        assert self.found("ceiling") == {(5, i) for i in (0, 1, 6, 7, 8, 9)}
         tops = {(2, 3), (2, 4), (2, 5), (2, 6), (1, 3), (1, 6)}
         assert self.found("obstacle_tops") == tops
-        sides = {(j, 3) for j in range(3)} | {(j, 6) for j in range(3)}
-        sides |= {(2, 4), (2, 5)}
+        sides = {(j, 3) for j in range(3)} | {(1, 6), (2, 6), (2, 4), (2, 5)}
         assert self.found("obstacle_sides") == sides
         union = self.found("walls", "ceiling", "obstacle_tops", "obstacle_sides")
         assert union == (self.found("walls") | self.found("ceiling") | tops | sides)
@@ -929,22 +931,34 @@ class TestCandidates:
         walls = self.found("walls", standoff=0.15)
         assert {i for _, i in walls} == {0, 1, 8, 9}
 
-    def test_cells_beside_an_inlet_or_outlet_face_are_excluded(self) -> None:
-        """The supply's two cells and the return's two are never candidates, free or not.
+    def test_cells_beside_or_within_the_standoff_of_an_opening_are_excluded(
+        self,
+    ) -> None:
+        """The supply's two cells, the return's two and their neighbours, free or not.
 
-        Defects caught: the inlet's cells kept on the ceiling; the free set
-        not excluding them.
+        Beside: (5, 3), (5, 4), (0, 7), (0, 8). Within 0.1 m of a face's end:
+        (5, 2), (5, 5), (0, 6), (0, 9), each 0.071 m away. At a standoff under
+        the half cell only the cells beside the faces go, so the free set
+        still excludes them. Defects caught: the inlet's cells kept on the
+        ceiling; the free set not excluding them; the exclusion read as
+        beside the face alone.
         """
         free = self.found("free")
         live = Mesh(self.config).cell_type != SOLID
-        openings = {(5, 3), (5, 4), (0, 7), (0, 8)}
-        assert (
-            free == {(j, i) for j, i in zip(*np.nonzero(live), strict=True)} - openings
-        )
-        assert not openings & self.found("walls", "ceiling", "obstacle_tops")
+        every = {(j, i) for j, i in zip(*np.nonzero(live), strict=True)}
+        beside = {(5, 3), (5, 4), (0, 7), (0, 8)}
+        near = {(5, 2), (5, 5), (0, 6), (0, 9)}
+        assert free == every - beside - near
+        assert not (beside | near) & self.found("walls", "ceiling", "obstacle_tops")
+        assert self.found("free", standoff=0.01) == every - beside
 
     def test_a_vent_on_an_obstacle_face_excludes_the_room_cell_beside_it(self) -> None:
-        """An exhaust over the box's top half from x 0.4 to 0.5: cell (2, 4) is out."""
+        """An exhaust over the box's top from x 0.4 to 0.5: its room cell and neighbours.
+
+        Cell (2, 4) is beside the vent; (2, 3), (2, 5) and (1, 3) are 0.071 m
+        from its ends. Defect caught: the vent's faces left out of the
+        openings, or their room cell taken on the obstacle's side.
+        """
         raw = small_room()
         raw["boundaries"]["box_exhaust"] = {
             "type": "fixed_flow_outlet",
@@ -957,14 +971,15 @@ class TestCandidates:
         }
         config = SimConfig.from_dict(raw)
         found = cells_of(candidates(Mesh(config), config, ["obstacle_tops"], 0.1))
-        assert found == {(2, 3), (2, 5), (2, 6), (1, 3), (1, 6)}
+        assert found == {(2, 6), (1, 6)}
 
     def test_a_scenario_excludes_the_cells_an_event_opens(self, tmp_path: Path) -> None:
-        """The door replaced by an inlet for one second: its three wall cells are out.
+        """The door replaced by an inlet for one second: its wall cells are out.
 
         The base's door is a wall, so the cells beside it are wall
         candidates there; the scenario's interval with the door open makes
-        them an inlet's. Defect caught: only the base's segments read.
+        them an inlet's, and (3, 0), 0.071 m from the door's top, goes with
+        them. Defect caught: only the base's segments read.
         """
         base = tmp_path / "room.yaml"
         base.write_text(yaml.safe_dump(small_room()), encoding="utf-8")
@@ -996,7 +1011,42 @@ class TestCandidates:
         }
         scenario = SimConfig.from_dict(raw)
         found = cells_of(candidates(Mesh(scenario), scenario, ["walls"], 0.1))
-        assert found == self.found("walls") - {(0, 0), (1, 0), (2, 0)}
+        assert found == self.found("walls") - {(0, 0), (1, 0), (2, 0), (3, 0)}
+
+    def test_a_sensor_cannot_hang_in_the_open_doorway_on_the_product_grid(self) -> None:
+        """320x120, the door scenario: 0.05 m holds two columns, and neither is mountable.
+
+        The cells are 0.025 m, so columns 0 and 1 of the doorway's rows (y to
+        2.1 m, rows 0 to 83) lie within the standoff of the opening; column 1
+        is not beside its faces. The wall above the doorway is mountable from
+        the rows the door's top no longer reaches: (86, 0) and (85, 1), and
+        (85, 0) and (84, 1) are 0.040 m from it and are not. The second row
+        under the supply and the second column of the hood's rows go for the
+        same reason, while the ceiling beyond the supply stays. Defect caught:
+        the edge counted whole, the exclusion read as beside the face alone
+        (84 doorway cells, 280 under the supply and 36 at the hood mounted
+        with nothing to mount on).
+        """
+        config = SimConfig(CONFIGS / "scenario_door_leak.yaml")
+        mesh = Mesh(config)
+        assert (config.ny, config.nx) == (120, 320)
+        spec = config.placement
+        mounted = cells_of(candidates(mesh, config, spec.mount, spec.standoff))
+        doorway = np.flatnonzero(mesh.yc <= 2.1)
+        assert doorway.tolist() == list(range(84))
+        for j in doorway:
+            assert (int(j), 0) not in mounted and (int(j), 1) not in mounted
+        assert {(85, 0), (84, 1), (84, 0)}.isdisjoint(mounted)
+        assert {(j, 0) for j in range(86, 120)} <= mounted
+        assert {(j, 1) for j in range(85, 120)} <= mounted
+        under_supply = np.flatnonzero((mesh.xc >= 0.5) & (mesh.xc <= 7.5))
+        assert not {(118, int(i)) for i in under_supply} & mounted
+        assert {(118, 0), (119, 0), (118, 319), (119, 319)} <= mounted
+        hood = np.flatnonzero((mesh.yc >= 0.9) & (mesh.yc <= 1.8))
+        assert not {(int(j), 318) for j in hood} & mounted
+        free = cells_of(candidates(mesh, config, ("free",), spec.standoff))
+        assert mounted <= free
+        assert not {(int(j), 1) for j in doorway} & free
 
     @pytest.mark.parametrize(
         ("mount", "standoff", "error", "match"),
