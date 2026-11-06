@@ -973,6 +973,67 @@ class TestCandidates:
         found = cells_of(candidates(Mesh(config), config, ["obstacle_tops"], 0.1))
         assert found == {(2, 6), (1, 6)}
 
+    @pytest.mark.parametrize(
+        ("face", "lost"),
+        [("right", {(1, 6)}), ("left", {(0, 3), (1, 3)})],
+    )
+    def test_a_vent_on_an_obstacle_side_excludes_the_cells_near_its_faces(
+        self, face: str, lost: set[tuple[int, int]]
+    ) -> None:
+        """An exhaust over the box's side from y 0 to 0.1: the room cell and the next above.
+
+        The vent's face is vertical, at the side's x, so the cell beside it
+        and the one above, 0.071 m from the face's top, go. On the right the
+        cell beside it, (0, 6), is out already for the return. Defect caught:
+        a side vent's face stored as a horizontal one (the cell above it, 0.15
+        m from the wrong segment, kept).
+        """
+        raw = small_room()
+        raw["boundaries"]["box_exhaust"] = {
+            "type": "fixed_flow_outlet",
+            "location": "obstacle",
+            "obstacle": "box",
+            "face": face,
+            "y_start": 0.0,
+            "y_end": 0.1,
+            "velocity": 0.1,
+        }
+        config = SimConfig.from_dict(raw)
+        found = cells_of(candidates(Mesh(config), config, ["obstacle_sides"], 0.1))
+        assert found == self.found("obstacle_sides") - lost
+
+    def test_a_vent_on_an_obstacle_bottom_excludes_the_room_cell_below_it(self) -> None:
+        """A shelf at x 0.1 to 0.2, y 0.3 to 0.4 (cell (3, 1)), its underside venting.
+
+        Under a standoff below the half cell only the cell beside the face
+        goes: (2, 1), below the shelf, while (4, 1) above it stays. Defect
+        caught: the room's cell taken above the face, inside the shelf.
+        """
+        raw = small_room()
+        raw["obstacles"].append(
+            {
+                "name": "shelf",
+                "x_start": 0.1,
+                "x_end": 0.2,
+                "y_start": 0.3,
+                "y_end": 0.4,
+            }
+        )
+        raw["boundaries"]["shelf_exhaust"] = {
+            "type": "fixed_flow_outlet",
+            "location": "obstacle",
+            "obstacle": "shelf",
+            "face": "bottom",
+            "x_start": 0.1,
+            "x_end": 0.2,
+            "velocity": 0.1,
+        }
+        config = SimConfig.from_dict(raw)
+        mesh = Mesh(config)
+        assert mesh.cell_type[3, 1] == SOLID
+        free = cells_of(candidates(mesh, config, ["free"], 0.01))
+        assert (2, 1) not in free and (4, 1) in free
+
     def test_a_scenario_excludes_the_cells_an_event_opens(self, tmp_path: Path) -> None:
         """The door replaced by an inlet for one second: its wall cells are out.
 
