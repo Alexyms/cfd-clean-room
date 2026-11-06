@@ -1,7 +1,9 @@
 # ADR-015: Alert Monitoring and Sensor Placement: Spreading Checked Both Ways, a Read-Only Monitor, Arrival Maps
 
 ## Status
-Accepted, 2026-10-30 (Alex; prompt 71, commit 0; the note after this paragraph). Written
+Accepted, 2026-10-30 (Alex; prompt 71, commit 0; the note after this paragraph); built to its
+six steps by 2026-11-05 (prompt 76), the planned-against-built table below section H, the Phase 5
+gate's verdict Alex's to set. Written
 2026-10-29 (prompt 70, branch `phase5/design`) and revised the same day
 on review 70 (prompt 70b: section A rewritten to a line source in grid turbulence by Alex's
 decision, section B read on the plume's edge, the review's other findings applied in
@@ -891,6 +893,12 @@ and across B's arms, stated per rule with ties, not an absolute latency. ADR-014
 stand: the 2D slice (a line source, exchanges per metre of depth), the steady extreme, the
 turbulence over the tops, the spreading limit now bounded by A and B rather than open.
 
+*On the product grid (prompt 76, 2026-11-05).* `docs/reports/phase5_alert_report.md` holds the
+result: predictions (i), (j) and (k) hold, the file's four detect none of the fifteen units, no
+mountable position at any standoff detects the door, and the ranking (free optimum, searched, the
+file's four) holds under both rules on 80x30 and 320x120 and at every sweep arm that ran. Its
+values do not carry between grids, so section D's comparative claim is the one the records support.
+
 *Step 4's prediction (orchestrator, 2026-11-02, prompt 75), committed before the 80x30 runs.*
 (h) On 80x30 the file's four sensors detect none of the three event scenarios' (scenario,
 event, class) units, and the searched four detect at least one unit in every scenario.
@@ -905,8 +913,9 @@ the searched four detect the breach's five and the dust's five (worst case 1.97 
 cover exact, 6 distinct masks at the optimum, 2 maximal). The door's plume reaches 66 cells,
 all within 0.9 m of the left wall and 1.3 m of the floor; at a standoff of 0.05 m the only
 wall candidates on this grid are the left column's, and every one of those under 2.1 m lies
-beside the open door's faces and is excluded. At 0.15 m, 11 mountable candidates reach a door
-unit. The free optimum's four detect all fifteen units (worst case 0.19 s, 6 distinct masks,
+beside the open door's faces and is excluded. At 0.15 m, 11 mountable candidates reached a door
+unit under the rule as it then stood, each within 0.15 m of the doorway, which the rule of prompt
+76 (Openings, above) excludes. The free optimum's four detect all fifteen units (worst case 0.19 s, 6 distinct masks,
 3 maximal), two of its cells in the floor row beside the door. The search took 4 ms over the
 mountable candidates and 36 ms over the 1,630 free ones.
 
@@ -957,7 +966,8 @@ monitor.py --> time_integration, placement; scripts/run_scenario.py; tests
         state() / restore(state)
         record(event_names, t_final) -> ArrivalRecord
 
-placement.py --> scripts/latency_report.py (step 5); tests
+placement.py --> docs/reports/probe76/tables76.py (step 5, in place of a script under scripts/);
+    tests
     arrival_from_run(run_file) -> (maps, onsets, resolution)    # /arrival/, else from the frames, flagged
     arrival_from_frames(frames, thresholds, live, onsets) -> np.ndarray   # [events, classes, ny, nx]
     latency(maps, onsets) -> np.ndarray         # [events, classes, ny, nx], arrival minus onset, inf never
@@ -1006,7 +1016,7 @@ at step 2.
 | 2 | 73 | `monitor.py` (AlertMonitor, Alert, sensor_cells moved), the march hook, `/transport/alerts/`, the runner's summary | `tests/test_monitor.py` (unit: thresholds by size and by class, the cell rule, open and close, the iso_class form, REQ-A06's bytes), `tests/test_alert_latency.py` | VAL-009 |
 | 3 | 74 | `ArrivalTracker`, `/arrival/`, the checkpoint arrays and restart, `latencies(onsets)` and REQ-A04's per-sensor latency in `RunRecord` and the summary; `placement.arrival_from_frames` | `tests/test_monitor.py` (the tracker on planted series, restart bitwise), `tests/test_time_integration.py` (the map against the frames' map on a coarse run) | none; REQ-A04's integration test |
 | 4 | 75 | `placement.py`: latency, score, candidates, search, rank; the `placement` section | `tests/test_placement.py` (exhaustive equals the sweep and the greedy on small maps, the rules on planted maps, the candidate rule), `tests/test_sensor_evaluation.py` (REQ-A05: the three event scenarios on 80x30, two layouts scored and ranked, the search's layout at least as good as the file's) | none; REQ-A05's integration test |
-| 5 | 76 | The four reference scenarios rerun on 320x120 with the maps (about three hours wall, concurrent), the latency report (section E), the Phase 5 gate report with the planned-against-built table | none new | the gate's criteria |
+| 5 | 76 | BUILT (2026-11-05). The four reference scenarios rerun on 320x120 with the maps (about three hours wall, concurrent; 1 h 41 min as run), the latency report (section E), the Phase 5 gate report with the planned-against-built table | none new but the openings' tests of item 0 in `tests/test_placement.py` | the gate's criteria |
 
 **The coverage debt.** Phase 4's statements fell from 99.25% to 98.86% and branches from
 97.13% to 96.21% (Cv1). Step 0 pays it before any Phase 5 module lands: its pull request's
@@ -1014,6 +1024,21 @@ coverage at or above Phase 3's two figures, measured by the same command (`pytes
 --cov=src --cov-branch`), so that the Phase 5 gate's "does not decrease" is measured from
 Phase 4's figures with the debt already cleared. A line found unreachable is listed in the
 pull request with the reason, not excluded from measurement.
+
+## Planned against built
+
+Added at the Phase 5 gate (prompt 76), as ADR-011's, ADR-012's and ADR-014's were at theirs;
+the same table is in `docs/reports/phase5_alert_system_report.md`.
+
+| Step | Prompt, date | Built | Departures and amendments recorded |
+|---|---|---|---|
+| Design | 70, 70b to 70d, 2026-10-29 and 2026-10-30 (PR 98) | ADR-015; the probes under `docs/reports/probe70/` | VAL-024 moved from a plane jet to a line source in grid turbulence (Alex, review 70 B2); the sweep read on the plume's edge; the threshold Alex's, at 20 and 50 M, with 80 M a carried limit; the spill region stated as outside what the row tests |
+| 0, the coverage debt and VAL-024 | 71, 2026-10-30 (PR 99) | A test for each reachable refusal and fallback of Phase 4's Cv2; `validation/line_source.py`, the case file, the harness rows, `tests/test_line_source.py`; REQ-T14 | A defect the debt's tests found and fixed (`write_transient_checkpoint` accepted a None state); one arm left and listed as unreachable; the coverage taken before the last test-only commits, the tester reran it |
+| 1, the sweep and the third grid | 72, 2026-10-31 (PR 100) | `docs/reports/phase5_sensitivity.md` and its generator; the clean-out on 160x60 | A sixth arm `widest` added by the orchestrator; five of twenty-six runs have no result, from two flow states stopped at the cap, reported and not fixed (carried below) |
+| 2, the alert monitor | 73, 2026-10-31 (PR 101) | `src/monitor.py`, the march hook, `/transport/alerts/`, the runner's summary, the iso_class form; VAL-009 | The state carries every alert, not only the open ones, since the table is replaced whole; it rides in the checkpoint's existing named arrays; no sensors, no monitor |
+| 3, the arrival maps | 74, 74b, 2026-11-01 (PR 102) | `ArrivalTracker`, `/arrival/`, restart, `latencies(onsets)`, REQ-A04; `arrival_from_frames`, `arrival_from_run` | `latencies` moved to section D's rule so the monitor and the map agree; a `set` giving a segment a concentration counts as contaminating; the frames map misses between-frame cells, so the criterion "within one output interval at every cell" was changed to what holds; the input checks moved to `io_manager`; `monitor` imports `io_manager` |
+| 4, placement | 75, 75b, 2026-11-02 and 2026-11-03 (PR 103) | `latency`, the units, `score`, `candidates`, `search`, `rank`; the `placement` section; REQ-A05 | The unit is (scenario, event, class); `score` has no `rule`; the sweep is bisected and the programme runs on the maximal masks; the fallback reads as no layout of the count covering every coverable unit, and no coverable unit at all raises; `_maximal` chunked after a 4.7 GB peak on a synthetic map; the section out of the restart hash (orchestrator); frame-resolved units flagged; REQ-A05's exactness restated as built |
+| 5, the runs, the report, the gate | 76, 2026-11-05 (this pull request) | The four scenarios on 320x120 with their maps; `docs/reports/phase5_alert_report.md` and `probe76/`; this report | A cell within the standoff of an opening is not a candidate (item 0), found before the runs by the prompt; the planned `scripts/latency_report.py` is `tables76.py`, as section E names it; the copies of the scenario files add a checkpoint every 1000 steps and nothing else |
 
 ## Probes (the predictions fixed in the prompt before the runs; results after)
 

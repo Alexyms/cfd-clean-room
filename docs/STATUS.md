@@ -123,7 +123,18 @@ four sensors detect nothing in the three event scenarios; the searched four dete
 and the dust release, and no mountable cell at the stated 5 cm reaches the door's plume on
 that grid. Review and test 75 ran; prompt 75b fixed their one missing test, let a Phase 4 run
 file restart under the new configuration section, and made the integration test assert the
-result above, on the same branch before its pull request.
+result above, on the same branch before its pull request. It was merged as PR 103. Step 5
+(prompt 76, branch phase5/step5-gate, 2026-11-05) first changed the candidates' rule, since on the
+product grid a sensor could have been mounted inside the open doorway. It then ran the four
+reference scenarios on the product grid with their maps, and those runs equal the Phase 4 gate's
+bitwise, so Phase 5 changed nothing the march computes. `docs/reports/phase5_alert_report.md`
+holds the latencies: the file's four sensors detect nothing in the three event scenarios, a
+searched layout on the mountable surfaces detects the breach and the dust release, and no mounted
+sensor at any standoff detects the door. The claim is the ranking of layouts, which holds across
+the two grids and the sweep's arms, not any latency's value.
+`docs/reports/phase5_alert_system_report.md` is the gate report, proposing a CONDITIONAL PASS for
+Alex to decide, with Phase 4's condition on the budget residual's mechanism carried and due before
+Phase 6. Review and test 76 run before its pull request.
 Phases 6 and 7 have not begun.
 
 The product room itself has never been solved, and on 2026-10-04 it was found that the laminar
