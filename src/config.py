@@ -465,7 +465,8 @@ class PlacementSpec:
     stand_height : tuple[float, float] or None
         (low, high), metres above the floor: the heights a stand's inlet
         may stand at, low below high, low non-negative, high at most the
-        room's height. Given exactly when ``mount`` names ``MOUNT_STAND``.
+        room's height. Required when ``mount`` names ``MOUNT_STAND``,
+        checked whenever given, None when absent.
     all_clear : int
         The sensors of ``count`` that take the all-clear role (ADR-015 D,
         "Two roles"), from 0 to ``count`` minus 1; the rest detect.
@@ -1706,7 +1707,7 @@ class SimConfig:
         ``mount``, ``standoff``, ``count`` and ``rule`` are required;
         ``within`` and ``all_clear`` (default 0) are optional;
         ``stand_height`` is required when ``mount`` names ``MOUNT_STAND``
-        and refused otherwise; any other key raises.
+        and checked whenever given; any other key raises.
         """
         if not isinstance(section, dict):
             raise ValueError(f"{PLACEMENT_KEY} must be a mapping")
@@ -1743,14 +1744,13 @@ class SimConfig:
         within = None
         if "within" in section:
             within = cls._require_positive_float(section, "within", PLACEMENT_KEY)
+        # A band given without a stand is checked and kept, not refused: a run
+        # file records its merged mapping and a reload merges it over the base
+        # file as it is now, so a run recorded before the stand existed reads
+        # its own mount list beside the product file's band (prompt 76b).
         stand_height = None
-        if MOUNT_STAND in mount:
+        if MOUNT_STAND in mount or "stand_height" in section:
             stand_height = cls._stand_height(section, room_height)
-        elif "stand_height" in section:
-            raise ValueError(
-                f"{PLACEMENT_KEY}.stand_height is given but {PLACEMENT_KEY}.mount does "
-                f"not name '{MOUNT_STAND}': nothing would read it"
-            )
         count = cls._require_positive_int(section, "count", PLACEMENT_KEY)
         all_clear = 0
         if "all_clear" in section:

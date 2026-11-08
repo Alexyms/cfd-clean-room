@@ -4454,9 +4454,9 @@ class TestPlacementSection:
             ({"within": -1.0}, ValueError, "placement.within must be positive"),
             ({"within": False}, TypeError, "placement.within must be a number"),
             (
-                {"stand_height": [0.3, 1.2]},
+                {"stand_height": [0.3, 1.2, 2.0]},
                 ValueError,
-                "stand_height is given but placement.mount does not name 'stand'",
+                "stand_height must be two numbers",
             ),
             ({"all_clear": 4}, ValueError, r"all_clear must be from 0 to count - 1"),
             ({"all_clear": -1}, ValueError, r"all_clear must be from 0 to count - 1"),
@@ -4537,3 +4537,29 @@ class TestPlacementSection:
         raw["placement"] = {"count": 2, "rule": "mean"}
         spec = SimConfig.from_dict(raw).placement
         assert (spec.count, spec.rule, spec.standoff) == (2, MEAN, 0.05)
+
+    def test_a_record_from_before_the_stand_reloads_over_the_product_file(
+        self, tmp_path: Path
+    ) -> None:
+        """A run file's mapping merges over the base as it is now (prompt 76b).
+
+        Step 5's run files record a placement section without the stand; the
+        product file now states a stand band and one all-clear sensor. Merged,
+        the record's mount list replaces the base's whole and the band stays: it
+        is checked and kept, so the old file still loads. Defect caught: a band
+        without a stand refused (every run file recorded before prompt 76b
+        unreadable by arrival_from_run).
+        """
+        raw = yaml.safe_load(
+            (CONFIG_DIR / "scenario_door_leak.yaml").read_text(encoding="utf-8")
+        )
+        raw["scenario"]["base"] = str(CONFIG_DIR / "clean_room_default.yaml")
+        raw["placement"] = {
+            "mount": ["walls", "ceiling", "obstacle_tops", "obstacle_sides"],
+            "standoff": 0.05,
+            "count": 4,
+            "rule": "worst_case",
+        }
+        spec = SimConfig.from_dict(raw).placement
+        assert "stand" not in spec.mount
+        assert spec.stand_height == (0.3, 1.2) and spec.all_clear == 1

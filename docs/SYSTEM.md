@@ -270,7 +270,7 @@ Generated. Static import analysis cannot see a function bound into a registry by
 |---|---|
 | Scope | `src/**/*.py` |
 | Files hashed | 24 |
-| Digest | `sha256:c9c0d83a24333af52355c7120cca53800b8db4dd05ddf40157767c68eadabe17` |
+| Digest | `sha256:365a0b93fd3dd9f739645ea4f41c0550d4b729ebfb75b750b7e3aa93de949097` |
 
 This is what lets the document answer whether it is current, which is the one question a stale table cannot be asked. `python scripts/gen_system_map.py --check` recomputes the whole set of generated regions, this digest included, and exits non-zero on any disagreement.
 
@@ -422,7 +422,9 @@ ISO_CLASS_KEY, ISO_CLASS_RANGE, ISO_REFERENCE_DIAMETER, ISO_EXPONENT,
     # and count positive; rule one of PLACEMENT_RULES (WORST_CASE "worst_case",
     # MEAN "mean"); within s, optional, positive. stand_height (prompt 76b): two
     # numbers, low then high, m above the floor, required when mount names
-    # MOUNT_STAND "stand" and refused otherwise; ValueError unless two values,
+    # MOUNT_STAND "stand" and checked whenever given (a run file's recorded
+    # mapping merges over the base on disk, so a record from before the stand
+    # reads the product's band); ValueError unless two values,
     # finite, low below high, low non-negative, high at most domain.height;
     # TypeError for a non-number or bool. all_clear (prompt 76b): an int from 0 to
     # count - 1, 0 when absent; TypeError for a non-int or bool. Unknown keys
