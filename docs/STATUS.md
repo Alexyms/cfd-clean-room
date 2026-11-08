@@ -128,13 +128,19 @@ result above, on the same branch before its pull request. It was merged as PR 10
 product grid a sensor could have been mounted inside the open doorway. It then ran the four
 reference scenarios on the product grid with their maps, and those runs equal the Phase 4 gate's
 bitwise, so Phase 5 changed nothing the march computes. `docs/reports/phase5_alert_report.md`
-holds the latencies: the file's four sensors detect nothing in the three event scenarios, a
-searched layout on the mountable surfaces detects the breach and the dust release, and no mounted
-sensor at any standoff detects the door. The claim is the ranking of layouts, which holds across
-the two grids and the sweep's arms, not any latency's value.
+holds the latencies. Review and test 76 found Suggestions only, and on 2026-11-07 Alex decided
+that a counter's inlet may stand on the floor on a stand, that a release's source box is not a
+candidate, and that detection and the all-clear are separate roles; the orchestrator added the
+door's seal leak as a fifth scenario (prompt 76b, the same branch). The file's four sensors detect
+nothing in the four event scenarios. On the mounting surfaces a searched layout detects the breach
+and the dust release and neither the door nor the seal leak; with stands it detects all four, the
+seal leak only from the bottom of the stand's height band. Every layout that detects declares the
+room clean while a pocket is still contaminated, and the clean-out's room does not clear by the
+run's end, which decides where the all-clear sensor goes. The claim is the ranking of layouts,
+which holds across the two grids and the sweep's arms, not any latency's value.
 `docs/reports/phase5_alert_system_report.md` is the gate report, proposing a CONDITIONAL PASS for
 Alex to decide, with Phase 4's condition on the budget residual's mechanism carried and due before
-Phase 6. Review and test 76 run before its pull request.
+Phase 6. A second round of review and test 76 runs before its pull request.
 Phases 6 and 7 have not begun.
 
 The product room itself has never been solved, and on 2026-10-04 it was found that the laminar

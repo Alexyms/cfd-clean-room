@@ -2,8 +2,9 @@
 
 ## Status
 Accepted, 2026-10-30 (Alex; prompt 71, commit 0; the note after this paragraph); built to its
-six steps by 2026-11-05 (prompt 76), the planned-against-built table below section H, the Phase 5
-gate's verdict Alex's to set. Written
+six steps by 2026-11-05 (prompt 76) and revised on 2026-11-07 by Alex's decisions (prompt 76b:
+the stand, the source rule, the all-clear role, the seal leak), the planned-against-built table
+below section H, the Phase 5 gate's verdict Alex's to set. Written
 2026-10-29 (prompt 70, branch `phase5/design`) and revised the same day
 on review 70 (prompt 70b: section A rewritten to a line source in grid turbulence by Alex's
 decision, section B read on the plume's edge, the review's other findings applied in
@@ -947,10 +948,13 @@ stand: the 2D slice (a line source, exchanges per metre of depth), the steady ex
 turbulence over the tops, the spreading limit now bounded by A and B rather than open.
 
 *On the product grid (prompt 76, 2026-11-05).* `docs/reports/phase5_alert_report.md` holds the
-result: predictions (i), (j) and (k) hold, the file's four detect none of the fifteen units, no
-mountable position at any standoff detects the door, and the ranking (free optimum, searched, the
-file's four) holds under both rules on 80x30 and 320x120 and at every sweep arm that ran. Its
-values do not carry between grids, so section D's comparative claim is the one the records support.
+result: predictions (i), (j) and (k) hold, the file's four detect none of the fifteen units, and no
+mountable position detects the door with its inlet within about 0.7 m of its surface (beyond that
+the openings' exclusion holds the whole plume, so the zero is by construction; review 76 S3, test
+76 S1). The ranking (free optimum, searched, the file's four) holds under both rules on each grid
+and at every sweep arm that ran, with the middle of the order inverted on 80x30 by candidacy (the
+report's K1). Its values do not carry between grids, so section D's comparative claim is the one
+the records support.
 
 *Prompt 76b's predictions (orchestrator, 2026-11-07), committed before the seal-leak run and any
 re-scoring.* Alex decided three things on 2026-11-07: a sensor on a free-standing stand is a
@@ -966,6 +970,16 @@ leak (`configs/scenario_seal_leak.yaml`) as a fifth scenario.
   above threshold remains, at every class.
 - (p) The three-plus-one's worst detection latency over the door, breach and dust units equals the
   detection-only four's, and its worst premature interval is smaller.
+
+*Prompt 76b's result (2026-11-07).* `docs/reports/phase5_alert_report.md`, tables P2, L1, C0 and C2.
+(l), (m), (o) and (p) hold; (n) fails in both clauses: the seal leak's air reaches 0.45 m, so the
+stand cells at the bottom of the band detect it, late, and free cells above 0.3 m do too. With the
+source box and its ring excluded the dust is read from just beyond the ring within a frame. The
+clean-out's room does not clear by 240 s (the pocket between the hood's bench and the right wall),
+so under the ranking above every layout that clears is unbounded there and the search puts the
+all-clear sensor in that pocket, where it improves no event scenario: (p)'s smaller interval comes
+from the clean-out alone. The seal leak ran on 320x120 only (its 0.025 m slot covers no face of
+80x30 and a double-width face of 160x60).
 
 *Step 4's prediction (orchestrator, 2026-11-02, prompt 75), committed before the 80x30 runs.*
 (h) On 80x30 the file's four sensors detect none of the three event scenarios' (scenario,
@@ -1107,6 +1121,7 @@ the same table is in `docs/reports/phase5_alert_system_report.md`.
 | 3, the arrival maps | 74, 74b, 2026-11-01 (PR 102) | `ArrivalTracker`, `/arrival/`, restart, `latencies(onsets)`, REQ-A04; `arrival_from_frames`, `arrival_from_run` | `latencies` moved to section D's rule so the monitor and the map agree; a `set` giving a segment a concentration counts as contaminating; the frames map misses between-frame cells, so the criterion "within one output interval at every cell" was changed to what holds; the input checks moved to `io_manager`; `monitor` imports `io_manager` |
 | 4, placement | 75, 75b, 2026-11-02 and 2026-11-03 (PR 103) | `latency`, the units, `score`, `candidates`, `search`, `rank`; the `placement` section; REQ-A05 | The unit is (scenario, event, class); `score` has no `rule`; the sweep is bisected and the programme runs on the maximal masks; the fallback reads as no layout of the count covering every coverable unit, and no coverable unit at all raises; `_maximal` chunked after a 4.7 GB peak on a synthetic map; the section out of the restart hash (orchestrator); frame-resolved units flagged; REQ-A05's exactness restated as built |
 | 5, the runs, the report, the gate | 76, 2026-11-05 (this pull request) | The four scenarios on 320x120 with their maps; `docs/reports/phase5_alert_report.md` and `probe76/`; this report | A cell within the standoff of an opening is not a candidate (item 0), found before the runs by the prompt; the planned `scripts/latency_report.py` is `tables76.py`, as section E names it; the copies of the scenario files add a checkpoint every 1000 steps and nothing else |
+| 5, revised: two roles | 76b, 2026-11-07 (this pull request) | Alex's three decisions of 2026-11-07: the `stand` mount and `stand_height`; a source box and its standoff never a candidate; the all-clear role (`placement.all_clear`, `clear_units`, `clear_score`, `search_roles`). The candidates over every scored scenario (review 76 S5). The seal leak, the fifth scenario (orchestrator), run on 320x120; the other four re-scored from step 5's files | Not planned in ADR-015: the role, the stand and the seal leak are new decisions recorded in its section D. The all-clear search is sequential, not joint. A run file's recorded mapping merges over the base file as it is now, so a stand band given without a stand is kept rather than refused (else every earlier run file failed to reload) |
 
 ## Probes (the predictions fixed in the prompt before the runs; results after)
 

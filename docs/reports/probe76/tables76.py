@@ -1,17 +1,19 @@
-"""Prompt 76: the latency report's tables and figures, from the run files (ADR-015 E).
+"""Prompts 76 and 76b: the latency report's tables and figures, from the run files (ADR-015 E).
 
-Reads the four reference scenarios on 320x120 (results/builder76/), step 4's 80x30
-runs (results/builder75/runs/) and step 1's arm runs (results/builder72/), all untracked
-and on this machine, and writes tables76.md, the copies in
-docs/reports/phase5_alert_report.md and the arrival-map figures.
+Reads the five reference scenarios on 320x120 (results/builder76/: step 5's four and
+prompt 76b's seal leak), step 4's 80x30 runs (results/builder75/runs/), step 1's 80x30
+clean-out and arm runs (results/builder72/), all untracked and on this machine, and writes
+tables76.md, the copies in docs/reports/phase5_alert_report.md and the figures.
 
-The layouts are read as ADR-015 D and E state them: the units are (scenario, event,
-class) over the three event scenarios; the candidates come from the door scenario's
-configuration, whose intervals open every opening the three scenarios have; the mount,
-the standoff, the count and the rule are the product file's placement section. A layout's
-latency comes from the arrival maps by lookup. A file sensor's peak and time above come
-from its every-step readings, a searched cell's from the stored frames, and the tables say
-which. The coverage rule's time is this report's, WITHIN: the product file states none.
+The layouts are read as ADR-015 D and E state them, with prompt 76b's decisions: the
+detection units are (scenario, event, class) over the four event scenarios, the all-clear
+units (scenario, class) over the five; the candidates come from every scored scenario's
+configuration, the source boxes and their standoff excluded; the mount, the standoff, the
+stand's height band, the count, the all-clear count and the rule are the product file's
+placement section. A layout's latency comes from the arrival maps by lookup, its clear time
+from the stored frames. A file sensor's peak and time above come from its every-step
+readings, a searched cell's from the stored frames, and the tables say which. The coverage
+rule's time is this report's, WITHIN: the product file states none.
 
     python docs/reports/probe76/tables76.py --splice --figures    # write everything
     python docs/reports/probe76/tables76.py --check               # regenerate and compare
@@ -21,7 +23,7 @@ import argparse
 import json
 import math
 import sys
-from itertools import pairwise
+from itertools import pairwise, product
 from pathlib import Path
 
 import numpy as np
@@ -33,24 +35,36 @@ sys.path.insert(0, str(HERE.parent / "probe69"))
 
 import tables69  # noqa: E402 -- follows sys.path.insert
 
-from src.config import MEAN, MOUNT_FREE, WORST_CASE, SimConfig  # noqa: E402
+from src.config import (  # noqa: E402
+    MEAN,
+    MOUNT_FREE,
+    MOUNT_STAND,
+    WORST_CASE,
+    SimConfig,
+)
 from src.io_manager import OPEN_STEP, RunFile  # noqa: E402
 from src.mesh import SOLID, Mesh  # noqa: E402
 from src.monitor import sensor_cells  # noqa: E402
 from src.placement import (  # noqa: E402
+    ClearScore,
+    ClearUnits,
     Layout,
     RunArrival,
     Score,
     Units,
     arrival_from_run,
     candidates,
+    clear_score,
+    clear_units,
     detection_units,
     exclude_units,
     given_layout,
     latency,
     rank,
+    room_clear,
     score,
     search,
+    search_roles,
 )
 
 RESULTS = ROOT / "results" / "builder76"
@@ -61,6 +75,8 @@ COARSE_STEMS = {
     "equipment_dust": "dust",
 }
 SWEEP = ROOT / "results" / "builder72"
+# Step 1's third clean-out grid (Phase 4's condition 2), the 80x30 all-clear reading.
+COARSE_CLEAN_OUT = SWEEP / "clean_out_80x30.h5"
 GATE = ROOT / "results" / "builder69"
 TABLES = HERE / "tables76.md"
 REPORT = ROOT / "docs" / "reports" / "phase5_alert_report.md"
@@ -81,12 +97,15 @@ COVERAGE_HEAD = RESULTS / "coverage.json"
 FIGURES = ROOT / "docs" / "reports"
 PRODUCT = ROOT / "configs" / "clean_room_default.yaml"
 
-EVENT_NAMES = ("door_leak", "filter_breach", "equipment_dust")
+STEP5_EVENTS = ("door_leak", "filter_breach", "equipment_dust")
+EVENT_NAMES = (*STEP5_EVENTS, "seal_leak")
 NAMES = (*EVENT_NAMES, "clean_out")
 TITLES = {
     "door_leak": "the door",
     "filter_breach": "the breach",
     "equipment_dust": "the dust",
+    "seal_leak": "the seal leak",
+    "clean_out": "the clean-out",
 }
 REPORT_CLASSES = (0, 4)  # 0.1 um and 5 um
 FREE_COUNTS = (1, 2, 3, 4)
@@ -98,7 +117,9 @@ RESOLVED_FLOOR = 1.0e-2
 # The standoffs the door is read at beside the product file's (prompt 76's (j)).
 DOOR_STANDOFFS = (0.05, 0.1, 0.2, 0.5, 1.0)
 FILE = "the file's four"
-MOUNTED = "searched, mountable"
+SURF = "searched four, mountable without stands"
+STAND = "searched four with stands"
+ROLES = "the three-plus-one"
 FREE = "free optimum"
 MARKERS = (
     "reload",
@@ -107,14 +128,18 @@ MARKERS = (
     "march",
     "budgets",
     "alerts",
+    "candidates",
     "layouts",
     "curve",
     "headline",
     "units",
+    "rooms",
+    "clearing",
     "recovery",
     "stability",
     "arms",
     "predictions",
+    "predictions76b",
 )
 GATE_MARKERS = ("hashes", "bitwise", "coverage")
 
@@ -138,6 +163,20 @@ def cell_at(mesh: Mesh, x: float, y: float) -> tuple[int, int]:
     i = int(np.searchsorted(mesh.x, x, side="left")) - 1
     j = int(np.searchsorted(mesh.y, y, side="left")) - 1
     return max(j, 0), max(i, 0)
+
+
+def cells_around(mesh: Mesh, x: float, y: float) -> list[tuple[int, int]]:
+    """The cells sharing a point: one inside a cell, two on a face, four on a corner.
+
+    The first is ``cell_at``'s, the one below or left of it (the lower-left).
+    """
+    rows = [int(np.searchsorted(mesh.y, y, side="left")) - 1]
+    columns = [int(np.searchsorted(mesh.x, x, side="left")) - 1]
+    if np.isclose(mesh.y[rows[0] + 1], y):
+        rows.append(rows[0] + 1)
+    if np.isclose(mesh.x[columns[0] + 1], x):
+        columns.append(columns[0] + 1)
+    return [(j, i) for j in rows for i in columns]
 
 
 def mapped(
@@ -169,6 +208,28 @@ def text_time(value: float) -> str:
     return "inf" if math.isinf(value) else f"{value:.3f}"
 
 
+def clear_text(value: float) -> str:
+    """A clear time, or "not clear"."""
+    return "not clear" if math.isinf(value) else f"{value:.2f}"
+
+
+def key_text(value: float) -> str:
+    """A premature interval's ranking key: inf only where the room is not clear and the layout is."""
+    if math.isinf(value):
+        return "unbounded (the room not clear where the layout reads clean)"
+    return f"{value:.2f} s"
+
+
+def seconds(value: float) -> str:
+    """A clear time with its unit, or "not clear"."""
+    return "not clear" if math.isinf(value) else f"{value:.2f} s"
+
+
+def short(name: str) -> str:
+    """A scenario's short title."""
+    return TITLES[name].removeprefix("the ")
+
+
 def detected_by_scenario(
     units: Units, cells: tuple[tuple[int, int], ...]
 ) -> dict[str, tuple[int, int]]:
@@ -193,12 +254,22 @@ def working_cells(units: Units, cells: tuple[tuple[int, int], ...]) -> int:
 
 
 def detected_text(counts: dict[str, tuple[int, int]]) -> str:
-    """Detected counts as text, door first, the scenarios present only."""
+    """Detected counts as text, the scenarios present only, in the report's order."""
     return ", ".join(
-        f"{TITLES[name].removeprefix('the ')} {counts[name][0]} of {counts[name][1]}"
+        f"{short(name)} {counts[name][0]} of {counts[name][1]}"
         for name in EVENT_NAMES
         if name in counts
     )
+
+
+def uncovered_text(labels: tuple[tuple[str, str, int], ...]) -> str:
+    """Uncoverable units by scenario, or none."""
+    if not labels:
+        return "none"
+    counts: dict[str, int] = {}
+    for name, _, _ in labels:
+        counts[name] = counts.get(name, 0) + 1
+    return ", ".join(f"{short(name)} {n}" for name, n in counts.items())
 
 
 def order(entries: dict[str, Score], rule: str) -> str:
@@ -217,7 +288,7 @@ def order(entries: dict[str, Score], rule: str) -> str:
 
 
 class Analysis:
-    """The units, the candidates and the layouts on the product grid's runs."""
+    """The units, the candidates and the layouts on the product grid's runs (prompt 76b)."""
 
     def __init__(self, runs: dict[str, Run]) -> None:
         door = runs["door_leak"]
@@ -226,40 +297,79 @@ class Analysis:
         self.mesh = door.mesh
         self.spec = SimConfig(PRODUCT).placement
         assert self.spec is not None
+        self.surfaces = tuple(m for m in self.spec.mount if m != MOUNT_STAND)
+        # Every scored scenario's configuration (review 76 S5): the detection
+        # scenarios' and the clean-out's, whose units the all-clear role scores.
+        self.configs = [runs[name].config for name in NAMES]
         self.arrivals: dict[str, RunArrival] = {
             name: arrival_from_run(runs[name].file) for name in EVENT_NAMES
         }
         self.units = detection_units(self.arrivals)
+        self.clear = clear_units({name: runs[name].file for name in NAMES})
         self.sensors = sensor_cells(self.config, self.mesh)
         self.sensor_names = tuple(sensor.name for sensor in self.config.sensors)
-        self.mounted = candidates(
-            self.mesh, self.config, self.spec.mount, self.spec.standoff
+        standoff = self.spec.standoff
+        self.mountable = candidates(self.mesh, self.configs, self.surfaces, standoff)
+        self.product = candidates(
+            self.mesh,
+            self.configs,
+            self.spec.mount,
+            standoff,
+            stand_height=self.spec.stand_height,
         )
-        self.free = candidates(
-            self.mesh, self.config, (MOUNT_FREE,), self.spec.standoff
+        self.free = candidates(self.mesh, self.configs, (MOUNT_FREE,), standoff)
+        count, rule = self.spec.count, self.spec.rule
+        self.surf = search(self.units, self.mountable, count, rule, within=WITHIN)
+        self.stand = search(self.units, self.product, count, rule, within=WITHIN)
+        self.stand_mean = search(self.units, self.product, count, MEAN, within=WITHIN)
+        self.roles = search_roles(
+            self.units,
+            self.clear,
+            self.product,
+            count,
+            self.spec.all_clear,
+            rule,
+            within=WITHIN,
         )
-        self.found = search(
-            self.units, self.mounted, self.spec.count, self.spec.rule, within=WITHIN
-        )
-        self.by_mean = search(
-            self.units, self.mounted, self.spec.count, MEAN, within=WITHIN
-        )
-        self.kept = exclude_units(self.units, self.found.uncovered)
-        self.file_all = given_layout(self.units, self.sensors, within=WITHIN)
-        self.file_kept = given_layout(self.kept, self.sensors, within=WITHIN)
         self.curve = {
             n: search(self.units, self.free, n, WORST_CASE, within=WITHIN)
             for n in FREE_COUNTS
         }
-        self.free_mean = search(
-            self.units, self.free, self.spec.count, MEAN, within=WITHIN
-        )
+        self.kept = exclude_units(self.units, self.stand.uncovered)
+        self.file_all = given_layout(self.units, self.sensors, within=WITHIN)
+        self.file_kept = given_layout(self.kept, self.sensors, within=WITHIN)
         self.free_on_kept = search(
-            self.kept, self.free, self.spec.count, WORST_CASE, within=WITHIN
+            self.kept, self.free, count, WORST_CASE, within=WITHIN
+        )
+        self.layouts: dict[str, tuple[tuple[int, int], ...]] = {
+            FILE: self.sensors,
+            SURF: self.surf.cells,
+            STAND: self.stand.cells,
+            ROLES: self.roles.layout.cells,
+            FREE: self.curve[count].cells,
+        }
+        self.clearing = {
+            name: clear_score(self.clear, cells) for name, cells in self.layouts.items()
+        }
+        # Step 5's search as first scored: the door's configuration alone, the
+        # surfaces, the three event scenarios (prediction (k)'s basis).
+        self.step5_units = detection_units(
+            {name: self.arrivals[name] for name in STEP5_EVENTS}
+        )
+        self.step5_mounted = candidates(self.mesh, door.config, self.surfaces, standoff)
+        self.step5_free = candidates(self.mesh, door.config, (MOUNT_FREE,), standoff)
+        self.step5_found = search(
+            self.step5_units, self.step5_mounted, count, rule, within=WITHIN
         )
         self.t7, self.t7_mean, self.t7_air = tables69.t7_errors()
         self.t7_largest = max(abs(value) for value in self.t7.values())
         self._widths: dict[str, list[np.ndarray]] = {}
+        self._y = np.asarray(self.mesh.y)
+
+    def reach(self, scenario: str) -> np.ndarray:
+        """[ny, nx] bool: the cells some unit of SCENARIO reaches."""
+        rows = [u for u, label in enumerate(self.units.labels) if label[0] == scenario]
+        return np.isfinite(self.units.latencies[rows]).any(axis=0)
 
     def widths(self, scenario: str, k: int, y: float) -> str:
         """The sweep's width at the threshold on a height's row, over step 1's 160x60 arms."""
@@ -289,9 +399,11 @@ class Analysis:
                     ]
                 )
                 rows.append(table)
+                self._sweep_y = np.asarray(mesh.y)
             self._widths[scenario] = rows
-            self._y = np.asarray(mesh.y)
-        j = int(np.searchsorted(self._y, y, side="left")) - 1
+        if not self._widths[scenario]:
+            return "no arm"
+        j = int(np.searchsorted(self._sweep_y, y, side="left")) - 1
         values = [float(table[k, max(j, 0)]) for table in self._widths[scenario]]
         return f"{min(values):.2f} to {max(values):.2f}"
 
@@ -320,9 +432,13 @@ def reload_table(runs: dict[str, Run]) -> list[str]:
 
 
 def states_table(runs: dict[str, Run]) -> list[str]:
-    """F2: each flow state against the gate's run of the same fingerprint."""
+    """F2: each flow state against the gate's run of the same fingerprint.
+
+    The seal leak has no gate run; its closed state is the door's rest state, so it
+    is read against the gate's door run.
+    """
     lines = [
-        "### F2. The flow states against the gate's (prompt 69, the same files before the placement section)",
+        "### F2. The flow states against the gate's (prompt 69, the same files before the placement section; the seal leak against the gate's door run)",
         "",
         "| Run | State | Face hash (first 16) | The gate's | Largest face difference (m/s) |",
         "|---|---|---|---|---|",
@@ -330,6 +446,8 @@ def states_table(runs: dict[str, Run]) -> list[str]:
     for name in NAMES:
         run = runs[name]
         gate_path = GATE / f"{name}.h5"
+        if not gate_path.exists():
+            gate_path = GATE / "door_leak.h5"
         gate = RunFile(gate_path) if gate_path.exists() else None
         for fingerprint in run.file.flow_fingerprints():
             state = run.file.read_flow_state(fingerprint).state
@@ -337,11 +455,6 @@ def states_table(runs: dict[str, Run]) -> list[str]:
             theirs, gap = "no such state", "-"
             if gate is not None and fingerprint in gate.flow_fingerprints():
                 other = gate.read_flow_state(fingerprint).state
-                if other.u.shape != state.u.shape:
-                    lines.append(
-                        f"| {name} | {fingerprint[:12]} | {ours} | another grid | - |"
-                    )
-                    continue
                 theirs = tables69.face_hash(other.u, other.v)[:16]
                 gap = f"{max(np.abs(state.u - other.u).max(), np.abs(state.v - other.v).max()):.2e}"
             lines.append(f"| {name} | {fingerprint[:12]} | {ours} | {theirs} | {gap} |")
@@ -360,7 +473,7 @@ def bitwise_table(runs: dict[str, Run]) -> list[str]:
         run = runs[name]
         path = GATE / f"{name}.h5"
         if not path.exists():
-            lines.append(f"| {name} | no such run | | | |")
+            lines.append(f"| {name} | no gate run (a scenario of prompt 76b) | | | |")
             continue
         gate = RunFile(path)
         frames = gate.read_frames()
@@ -507,7 +620,52 @@ def alerts_table(analysis: Analysis) -> list[str]:
     return lines
 
 
-def score_row(name: str, layout: Layout, mesh: Mesh, units: Units) -> str:
+def candidates_table(a: Analysis) -> list[str]:
+    """N1: the candidate counts on 320x120, step 5's rule and each of prompt 76b's."""
+    door = a.runs["door_leak"].config
+    no_source = [a.runs[name].config for name in NAMES if name != "equipment_dust"]
+    standoff = a.spec.standoff
+    band = a.spec.stand_height
+    rows = (
+        (
+            "step 5's: the door's configuration, the surfaces",
+            candidates(a.mesh, door, a.surfaces, standoff),
+            candidates(a.mesh, door, (MOUNT_FREE,), standoff),
+        ),
+        (
+            "every scenario's openings, no source box",
+            candidates(a.mesh, no_source, a.surfaces, standoff),
+            candidates(a.mesh, no_source, (MOUNT_FREE,), standoff),
+        ),
+        ("and the dust's box and its standoff", a.mountable, a.free),
+        ("and the stands (the product mount)", a.product, a.free),
+    )
+    lines = [
+        f"### N1. The candidates on 320x120 (standoff {standoff:g} m, the stand's inlet {band[0]:g} to {band[1]:g} m above the floor)",
+        "",
+        "| Rule | Mountable | Free |",
+        "|---|---|---|",
+    ]
+    for title, mounted, free in rows:
+        lines.append(f"| {title} | {len(mounted):,} | {len(free):,} |")
+    stands = candidates(a.mesh, a.configs, (MOUNT_STAND,), standoff, stand_height=band)
+    mounted = {(int(j), int(i)) for j, i in a.mountable}
+    extra = sum((int(j), int(i)) not in mounted for j, i in stands)
+    lines += [
+        "",
+        f"Stand cells: {len(stands):,}, of which {extra:,} are not already mountable on a "
+        "surface.",
+    ]
+    return lines
+
+
+def score_row(
+    name: str,
+    layout: Layout,
+    mesh: Mesh,
+    units: Units,
+    uncovered: tuple[tuple[str, str, int], ...] | None = None,
+) -> str:
     """One row of the layouts' tables."""
     s = layout.score
     masks = (
@@ -515,9 +673,11 @@ def score_row(name: str, layout: Layout, mesh: Mesh, units: Units) -> str:
         if layout.distinct_masks is None
         else f"{layout.distinct_masks} / {layout.maximal_masks}"
     )
+    gaps = layout.uncovered if uncovered is None else uncovered
     return (
         f"| {name} | {places(mesh, layout.cells)} | {layout.rule or '-'} | {layout.method} | "
-        f"{'yes' if layout.exact else 'no'} | {len(layout.units)} | {len(layout.uncovered)} | "
+        f"{'yes' if layout.exact else 'no'} | {len(layout.units)} | "
+        f"{'-' if layout.method == 'given' and uncovered is None else uncovered_text(gaps)} | "
         f"{text_time(s.worst)} | {s.mean:.3f} | {s.undetected} | {s.coverage:.3f} | {masks} | "
         f"{detected_text(detected_by_scenario(units, layout.cells))} | "
         f"{working_cells(units, layout.cells)} of {len(layout.cells)} |"
@@ -525,9 +685,9 @@ def score_row(name: str, layout: Layout, mesh: Mesh, units: Units) -> str:
 
 
 LAYOUT_HEAD = (
-    "| Layout | Cell centres (x, y), m | Rule | Method | Exact | Units scored | Uncovered | "
-    "Worst case (s) | Mean (s) | Undetected | Coverage within 10 s | Distinct / maximal "
-    "masks | Detected, of all fifteen | Cells setting a latency |"
+    "| Layout | Cell centres (x, y), m | Rule | Method | Exact | Units scored | Uncoverable "
+    "by its candidates | Worst case (s) | Mean (s) | Undetected | Coverage within 10 s | "
+    "Distinct / maximal masks | Detected, of all twenty | Cells setting a latency |"
 )
 LAYOUT_RULE = "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"
 
@@ -535,64 +695,92 @@ LAYOUT_RULE = "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"
 def layouts_table(analysis: Analysis) -> list[str]:
     """L1: the configurations, over the units each is scored on."""
     a = analysis
+    roles = a.roles
     lines = [
-        f"### L1. The layouts on 320x120: mount {list(a.spec.mount)} at {a.spec.standoff} m, "
-        f"{len(a.mounted):,} mountable and {len(a.free):,} free candidates; the means are capped "
-        "at each unit's remaining run time",
+        f"### L1. The layouts on 320x120: mount {list(a.spec.mount)} at {a.spec.standoff} m "
+        f"(stand {a.spec.stand_height[0]:g} to {a.spec.stand_height[1]:g} m), "
+        f"{len(a.mountable):,} mountable without stands, {len(a.product):,} with them and "
+        f"{len(a.free):,} free candidates; the means are capped at each unit's remaining run time",
         "",
         LAYOUT_HEAD,
         LAYOUT_RULE,
-        score_row(f"{FILE}, all fifteen units", a.file_all, a.mesh, a.units),
-        score_row(f"{FILE}, the mountable set's units", a.file_kept, a.mesh, a.units),
-        score_row(f"{MOUNTED}, worst-case rule", a.found, a.mesh, a.units),
-        score_row(f"{MOUNTED}, mean rule", a.by_mean, a.mesh, a.units),
-        score_row(f"{FREE}, worst-case rule", a.curve[a.spec.count], a.mesh, a.units),
-        score_row(f"{FREE}, mean rule", a.free_mean, a.mesh, a.units),
+        score_row(f"{FILE}, all twenty units", a.file_all, a.mesh, a.units),
+        score_row(f"{FILE}, the product search's units", a.file_kept, a.mesh, a.units),
+        score_row(f"{SURF}, worst-case rule", a.surf, a.mesh, a.units),
+        score_row(f"{STAND}, worst-case rule", a.stand, a.mesh, a.units),
+        score_row(f"{STAND}, mean rule", a.stand_mean, a.mesh, a.units),
         score_row(
-            f"{FREE}, worst-case rule, the mountable set's units",
+            f"{ROLES}: its three detection sensors", roles.detection, a.mesh, a.units
+        ),
+        score_row(
+            f"{ROLES}: the four",
+            roles.layout,
+            a.mesh,
+            a.units,
+            roles.detection.uncovered,
+        ),
+        score_row(f"{FREE}, worst-case rule", a.curve[a.spec.count], a.mesh, a.units),
+        score_row(
+            f"{FREE}, worst-case rule, the product search's units",
             a.free_on_kept,
             a.mesh,
             a.units,
         ),
         "",
-        "Uncovered by the mountable set: "
-        + (", ".join(f"{s} {e} class {k}" for s, e, k in a.found.uncovered) or "none")
-        + ".",
+        f"The three-plus-one's all-clear sensor: {places(a.mesh, roles.all_clear)}.",
     ]
-    reach = a.units.latencies[:, a.mounted[:, 0], a.mounted[:, 1]]
-    door = [u for u, label in enumerate(a.units.labels) if label[0] == "door_leak"]
-    lines.append(
-        f"Mountable candidates that detect a door unit: "
-        f"{int(np.isfinite(reach[door]).any(axis=0).sum())} of {len(a.mounted):,}."
-    )
-    reached = np.isfinite(a.units.latencies[door]).any(axis=0)
-    rows, columns = np.nonzero(reached)
-    lines.append(
-        f"The door's plume reaches {int(reached.sum()):,} cells, x up to "
-        f"{a.mesh.x[columns.max() + 1]:.3f} m and y up to {a.mesh.y[rows.max() + 1]:.3f} m; the "
-        "first floor return spans x 0.5 to 1.25 m."
-    )
+    for scenario in ("door_leak", "seal_leak"):
+        reached = a.reach(scenario)
+        rows, columns = np.nonzero(reached)
+        if rows.size == 0:
+            lines.append(f"{TITLES[scenario].capitalize()}'s plume reaches no cell.")
+            continue
+        counts = []
+        for title, pool in (
+            ("mountable without stands", a.mountable),
+            ("with stands", a.product),
+            ("free", a.free),
+        ):
+            counts.append(
+                f"{int(reached[pool[:, 0], pool[:, 1]].sum()):,} of {len(pool):,} {title}"
+            )
+        lines.append(
+            f"{TITLES[scenario].capitalize()}'s plume reaches {int(reached.sum()):,} cells, x up "
+            f"to {a.mesh.x[columns.max() + 1]:.3f} m and y up to {a.mesh.y[rows.max() + 1]:.3f} m; "
+            f"candidates reaching a unit of it: " + "; ".join(counts) + "."
+        )
+    seal = a.reach("seal_leak")
+    free_seal = [where(a.mesh, (int(j), int(i))) for j, i in a.free if seal[j, i]]
+    if free_seal:
+        lines.append(
+            f"The free cells that detect a seal-leak unit lie from y "
+            f"{min(y for _, y in free_seal):.4f} to {max(y for _, y in free_seal):.4f} m and "
+            f"x {min(x for x, _ in free_seal):.4f} to {max(x for x, _ in free_seal):.4f} m."
+        )
+    door = a.reach("door_leak")
     counts = []
     for standoff in DOOR_STANDOFFS:
-        pool = candidates(a.mesh, a.config, a.spec.mount, standoff)
-        found = int(reached[pool[:, 0], pool[:, 1]].sum())
-        counts.append(f"{standoff:g} m: {found} of {len(pool):,}")
+        pool = candidates(a.mesh, a.configs, a.surfaces, standoff)
+        counts.append(
+            f"{standoff:g} m: {int(door[pool[:, 0], pool[:, 1]].sum())} of {len(pool):,}"
+        )
     lines.append(
-        "Mountable candidates that detect a door unit at other standoffs, the rule of item 0 "
-        "held: " + "; ".join(counts) + "."
+        "Candidates on the surfaces that detect a door unit at other standoffs, the openings' "
+        "exclusion widening with the standoff: " + "; ".join(counts) + "."
     )
     named = {
         FILE: a.file_kept,
-        f"{MOUNTED} (worst case)": a.found,
-        f"{MOUNTED} (mean)": a.by_mean,
-        f"{FREE} (worst case)": a.free_on_kept,
+        f"{SURF}": given_layout(a.kept, a.surf.cells, within=WITHIN),
+        f"{STAND}": a.stand,
+        ROLES: given_layout(a.kept, a.roles.layout.cells, within=WITHIN),
+        f"{FREE}": a.free_on_kept,
     }
     scores = {name: layout.score for name, layout in named.items()}
     names = {id(layout): name for name, layout in named.items()}
     ranked = rank(list(named.values()))
     lines += [
         "",
-        f"Over the {len(a.kept.labels)} units the mountable set covers, the order per rule, "
+        f"Over the {len(a.kept.labels)} units the product search covers, the order per rule, "
         "best first:",
         "",
         f"- worst case: {order(scores, WORST_CASE)};",
@@ -622,24 +810,18 @@ def curve_table(analysis: Analysis) -> list[str]:
 def headline_table(analysis: Analysis) -> list[str]:
     """U2: per unit, each configuration's latency, the least over its cells."""
     a = analysis
-    layouts = (
-        (FILE, a.file_all),
-        (MOUNTED, a.found),
-        (FREE, a.curve[a.spec.count]),
-    )
     lines = [
         "### U2. Per unit, the layout's latency, the least over its cells (s; never with the run's end)",
         "",
-        "| Scenario | Event | Class (um) | " + " | ".join(n for n, _ in layouts) + " |",
-        "|---|---|---|" + "---|" * len(layouts),
+        "| Scenario | Event | Class (um) | " + " | ".join(a.layouts) + " |",
+        "|---|---|---|" + "---|" * len(a.layouts),
     ]
     sizes = [size * 1.0e6 for size in a.config.particle_sizes]
     for u, (name, event, k) in enumerate(a.units.labels):
         end = a.arrivals[name].t_final
         cells = []
-        for _, layout in layouts:
-            values = [a.units.latencies[u, j, i] for j, i in layout.cells]
-            best = float(min(values))
+        for layout in a.layouts.values():
+            best = float(min(a.units.latencies[u, j, i] for j, i in layout))
             cells.append(f"never (to {end:g})" if math.isinf(best) else f"{best:.3f}")
         lines.append(f"| {name} | {event} | {sizes[k]:g} | " + " | ".join(cells) + " |")
     return lines
@@ -681,12 +863,14 @@ def peak_text(ratio: float) -> str:
 
 def units_table(a: Analysis, classes: tuple[int, ...] | None) -> list[str]:
     """U1: per scenario, event, class and sensor, for each configuration."""
+    roles = a.roles.layout.cells
     configurations = (
         (FILE, a.sensors, a.sensor_names),
         (
-            MOUNTED,
-            a.found.cells,
-            tuple(f"S{n + 1}" for n in range(len(a.found.cells))),
+            ROLES,
+            roles,
+            tuple(f"D{n + 1}" for n in range(len(a.roles.detection.cells)))
+            + tuple(f"A{n + 1}" for n in range(len(a.roles.all_clear))),
         ),
         (
             FREE,
@@ -700,11 +884,12 @@ def units_table(a: Analysis, classes: tuple[int, ...] | None) -> list[str]:
         else "0.1 um and 5 um; every class in tables76.md"
     )
     lines = [
-        f"### U1. Per scenario, event, class and sensor, for each configuration ({which}). A file "
+        f"### U1. Per scenario, event, class and sensor, for the file's four, the three-plus-one (D detection, A all-clear) and the free optimum ({which}). A file "
         "sensor's peak and time above are from its every-step readings, a searched cell's from "
         "the stored frames (every 100 steps, about 0.36 s). The time error is T7's (160x60, one "
         "direction), measured at the file's sensors only. The width is the plume's largest at "
-        "the threshold on the cell's row over step 1's 160x60 arms, read at frame resolution.",
+        "the threshold on the cell's row over step 1's 160x60 arms, read at frame resolution; "
+        "the seal leak ran on no arm.",
         "",
         "| Scenario | Event | Class (um) | Configuration | Sensor | Latency (s) | Peak over threshold | Time above (s) | Read from | T7 time error | Sweep's width on the row (m) |",
         "|---|---|---|---|---|---|---|---|---|---|---|",
@@ -752,19 +937,92 @@ def where_text(a: Analysis, cell: tuple[int, int]) -> str:
     return "({:.3f}, {:.3f})".format(*where(a.mesh, cell))
 
 
-def recovery_table(a: Analysis) -> list[str]:
-    """C1: each layout's clean-out recovery times, the clearing companion (ADR-014 C)."""
-    record = a.runs["clean_out"].recovery
-    assert record is not None
-    configurations: list[tuple[str, tuple[tuple[int, int], ...]]] = [
-        (FILE, a.sensors),
-        (MOUNTED, a.found.cells),
-    ]
-    configurations += [(f"{FREE}, {n}", a.curve[n].cells) for n in FREE_COUNTS]
+def rooms_table(a: Analysis) -> list[str]:
+    """C0: per all-clear unit, t_e, the frames' resolution and the room's clear time."""
+    times, cells = room_clear(a.clear)
     sizes = [size * 1.0e6 for size in a.config.particle_sizes]
     lines = [
-        f"### C1. The clean-out: each layout's recovery, the last time each cell was at or above "
-        f"its threshold (the run went to {record.t_final:g} s; inf is still above at the end). "
+        "### C0. The all-clear units: per scenario and class, t_e (the end of its last event), the stored frames from t_e on and their largest spacing (the clear times' resolution), and the room's clear time, the latest over the live cells, with the cell that sets it",
+        "",
+        "| Scenario | Class (um) | t_e (s) | Frames from t_e | Largest spacing (s) | The room's clear time (s) | Set by the cell at (x, y), m |",
+        "|---|---|---|---|---|---|---|",
+    ]
+    for u, (name, k) in enumerate(a.clear.labels):
+        lines.append(
+            f"| {name} | {sizes[k]:g} | {a.clear.ends[u]:g} | {a.clear.times[u].size} | "
+            f"{a.clear.spacing[u]:.3f} | {clear_text(times[u])} | {where_text(a, cells[u])} |"
+        )
+    return lines
+
+
+def clearing_table(a: Analysis, classes: tuple[int, ...] | None) -> list[str]:
+    """C2: per configuration and all-clear unit, the layout's clear time against the room's."""
+    which = (
+        "every class"
+        if classes is None
+        else "0.1 um and 5 um; every class in tables76.md"
+    )
+    sizes = [size * 1.0e6 for size in a.config.particle_sizes]
+    lines = [
+        f"### C2. Each configuration's all-clear reading ({which}): the layout's clear time (the latest of its cells'), the room's, the premature interval (the room's less the layout's) and the live area's fraction at or above threshold at the first stored frame at or after the layout's clear time. Frame-resolved (C0's spacing); a \"not clear\" enters no arithmetic",
+        "",
+    ]
+    for title, result in a.clearing.items():
+        lines += [
+            f"**{title}**, {places(a.mesh, a.layouts[title])}",
+            "",
+            "| Scenario | Class (um) | The layout's clear time (s) | The room's (s) | Premature interval (s) | Area at or above at the layout's time |",
+            "|---|---|---|---|---|---|",
+        ]
+        for u, (name, k) in enumerate(a.clear.labels):
+            if classes is not None and k not in classes:
+                continue
+            lines.append(
+                f"| {name} | {sizes[k]:g} | {clear_text(result.layout[u])} | "
+                f"{clear_text(result.room[u])} | {interval_text(result, u)} | "
+                f"{fraction_text(result, u)} |"
+            )
+        lines += ["", clear_summary(result), ""]
+    return lines[:-1]
+
+
+def interval_text(result: ClearScore, u: int) -> str:
+    """A unit's premature interval, or which side is not clear."""
+    if math.isinf(result.layout[u]):
+        return "layout not clear"
+    if math.isinf(result.room[u]):
+        return "room not clear"
+    return f"{result.interval[u]:.2f}"
+
+
+def fraction_text(result: ClearScore, u: int) -> str:
+    """A unit's area fraction at the layout's clear time, or none."""
+    return "-" if np.isnan(result.fraction[u]) else f"{100 * result.fraction[u]:.2f}%"
+
+
+def clear_summary(result: ClearScore) -> str:
+    """A layout's all-clear reading in one line."""
+    premature = int(np.sum(np.nan_to_num(result.interval, nan=0.0) > 0.0))
+
+    return (
+        f"Worst premature interval {key_text(result.worst)}, mean {key_text(result.mean)}, "
+        f"largest area fraction {100 * result.worst_fraction:.2f}%; premature in {premature} "
+        f"of {result.layout.size} units, the layout not clear in "
+        f"{int(np.isinf(result.layout).sum())}, the room not clear in "
+        f"{int(np.isinf(result.room).sum())}."
+    )
+
+
+def recovery_table(a: Analysis) -> list[str]:
+    """C1: each layout's clean-out recovery times from the steps (ADR-014 C)."""
+    record = a.runs["clean_out"].recovery
+    assert record is not None
+    configurations = [(title, cells) for title, cells in a.layouts.items()]
+    configurations += [(f"{FREE}, {n}", a.curve[n].cells) for n in FREE_COUNTS[:-1]]
+    sizes = [size * 1.0e6 for size in a.config.particle_sizes]
+    lines = [
+        f"### C1. The clean-out at the steps: each layout's recovery, the last step time each cell was at or above "
+        f"its threshold (the run went to {record.t_final:g} s; inf is still above at the end), beside C2's frame reading. "
         f"The well-mixed 100:1 time is {record.well_mixed_time:.4f} s, the file's room recovery "
         f"time, the first step below and staying below, {record.room_recovery_time:.4f} s. "
         f"T7's time error at the file's sensors is up to "
@@ -784,72 +1042,129 @@ def recovery_table(a: Analysis) -> list[str]:
     return lines
 
 
+class Grid:
+    """A grid's detection and all-clear units and its product search (K1)."""
+
+    def __init__(
+        self,
+        mesh: Mesh,
+        configs: list[SimConfig],
+        units: Units,
+        clear: ClearUnits,
+        spec: object,
+    ) -> None:
+        self.mesh = mesh
+        self.units = units
+        self.clear = clear
+        self.product = candidates(
+            mesh, configs, spec.mount, spec.standoff, stand_height=spec.stand_height
+        )
+        self.free = candidates(mesh, configs, (MOUNT_FREE,), spec.standoff)
+        self.roles = search_roles(
+            units, clear, self.product, spec.count, spec.all_clear, spec.rule
+        )
+        self.kept = exclude_units(units, self.roles.detection.uncovered)
+        self.free_found = search(self.kept, self.free, spec.count, WORST_CASE)
+
+
 def stability_table(a: Analysis) -> list[str]:
-    """K1: the 80x30 and 320x120 searches, same rule and mount, and each on the other's maps."""
+    """K1: the product search on 80x30 and 320x120, and each on the other's maps.
+
+    Both grids are read over the door, the breach and the dust (the seal leak ran on
+    320x120 alone) and the all-clear units of those three and the clean-out.
+    """
     source = {name: COARSE / f"{stem}.h5" for name, stem in COARSE_STEMS.items()}
-    door = RunFile(source["door_leak"])
-    config = SimConfig.from_dict(door.read_config().mapping)
-    mesh = Mesh(config)
-    arrivals = {name: arrival_from_run(path) for name, path in source.items()}
-    units = detection_units(arrivals)
-    mounted = candidates(mesh, config, a.spec.mount, a.spec.standoff)
-    free = candidates(mesh, config, (MOUNT_FREE,), a.spec.standoff)
-    found = search(units, mounted, a.spec.count, a.spec.rule, within=WITHIN)
-    kept = exclude_units(units, found.uncovered)
-    grid_sensors = sensor_cells(config, mesh)
-    free_found = search(kept, free, a.spec.count, WORST_CASE, within=WITHIN)
-    lines = [
-        "### K1. The searches on 80x30 and 320x120, the same rule and mount, each layout scored on both grids over the units the grid's mountable search covers; a layout from the other grid is read at the cells holding its centres",
-        "",
-        "| Grid | Layout | Cell centres (x, y), m | Mountable on this grid | Worst case (s) | Mean (s) | Undetected | Coverage within 10 s |",
-        "|---|---|---|---|---|---|---|---|",
+    coarse_configs = [
+        SimConfig.from_dict(RunFile(path).read_config().mapping)
+        for path in (*source.values(), COARSE_CLEAN_OUT)
     ]
-    fine_on_coarse = mapped(a.mesh, mesh, a.found.cells)
-    coarse_on_fine = mapped(mesh, a.mesh, found.cells)
+    coarse_mesh = Mesh(coarse_configs[0])
+    coarse = Grid(
+        coarse_mesh,
+        coarse_configs,
+        detection_units(
+            {name: arrival_from_run(path) for name, path in source.items()}
+        ),
+        clear_units({**source, "clean_out": COARSE_CLEAN_OUT}),
+        a.spec,
+    )
+    fine = Grid(
+        a.mesh,
+        [a.runs[name].config for name in (*STEP5_EVENTS, "clean_out")],
+        a.step5_units,
+        clear_units({name: a.runs[name].file for name in (*STEP5_EVENTS, "clean_out")}),
+        a.spec,
+    )
+    fine_on_coarse = mapped(a.mesh, coarse_mesh, fine.roles.layout.cells)
+    coarse_on_fine = mapped(coarse_mesh, a.mesh, coarse.roles.layout.cells)
+    lines = [
+        "### K1. The product search (three detection sensors and one all-clear, with stands) on 80x30 and 320x120, each layout scored on both grids over the door, the breach and the dust units the grid's search covers and over the all-clear units of those three and the clean-out (the seal leak has one grid). A layout from the other grid is read at the cell holding each centre, the one below or left of it on a face or corner (the lower-left); the line under the table gives the range over every reading",
+        "",
+        "| Grid | Layout | Cell centres (x, y), m | Candidates on this grid | Worst case (s) | Mean (s) | Undetected | Coverage within 10 s | Worst premature interval | Mean interval | Largest area fraction |",
+        "|---|---|---|---|---|---|---|---|---|---|---|",
+    ]
     entries = {
         "80x30": (
-            mesh,
-            kept,
-            mounted,
+            coarse,
             {
-                "the file's four": grid_sensors,
-                "searched here": found.cells,
-                "searched on 320x120": fine_on_coarse,
-                "free optimum here": free_found.cells,
+                FILE: sensor_cells(coarse_configs[0], coarse_mesh),
+                "the product searched here": coarse.roles.layout.cells,
+                "the product searched on 320x120": fine_on_coarse,
+                "free optimum here": coarse.free_found.cells,
             },
         ),
         "320x120": (
-            a.mesh,
-            a.kept,
-            a.mounted,
+            fine,
             {
-                "the file's four": a.sensors,
-                "searched here": a.found.cells,
-                "searched on 80x30": coarse_on_fine,
-                "free optimum here": a.free_on_kept.cells,
+                FILE: a.sensors,
+                "the product searched here": fine.roles.layout.cells,
+                "the product searched on 80x30": coarse_on_fine,
+                "free optimum here": fine.free_found.cells,
             },
         ),
     }
     orders = []
-    for grid, (grid_mesh, grid_units, pool, layouts) in entries.items():
+    for grid, (g, layouts) in entries.items():
         scores = {}
         for name, cells in layouts.items():
-            s = score(grid_units, cells, within=WITHIN)
+            s = score(g.kept, cells, within=WITHIN)
+            c = clear_score(g.clear, cells)
             scores[name] = s
             lines.append(
-                f"| {grid} | {name} | {places(grid_mesh, cells)} | "
-                f"{mountable_text(cells, pool)} | {text_time(s.worst)} | "
-                f"{s.mean:.3f} | {s.undetected} of {len(grid_units.labels)} | {s.coverage:.3f} |"
+                f"| {grid} | {name} | {places(g.mesh, cells)} | "
+                f"{mountable_text(cells, g.product)} | {text_time(s.worst)} | "
+                f"{s.mean:.3f} | {s.undetected} of {len(g.kept.labels)} | {s.coverage:.3f} | "
+                f"{key_text(c.worst)} | {key_text(c.mean)} | {100 * c.worst_fraction:.2f}% |"
             )
         orders.append(
             f"- {grid}: worst case {order(scores, WORST_CASE)}; mean {order(scores, MEAN)}; "
             f"coverage within {WITHIN:g} s {order(scores, 'coverage')}."
         )
+    worsts, means, count = [], [], 0
+    choices = [
+        cells_around(a.mesh, *where(coarse_mesh, cell))
+        for cell in coarse.roles.layout.cells
+    ]
+    for reading in product(*choices):
+        if any(a.mesh.cell_type[c] == SOLID for c in reading) or len(
+            set(reading)
+        ) < len(reading):
+            continue
+        s = score(fine.kept, reading, within=WITHIN)
+        worsts.append(s.worst)
+        means.append(s.mean)
+        count += 1
     lines += [
         "",
-        f"Uncovered by the mountable set on 80x30: {len(found.uncovered)} units "
-        f"({', '.join(sorted({label[0] for label in found.uncovered})) or 'none'}); on 320x120: "
-        f"{len(a.found.uncovered)} ({', '.join(sorted({label[0] for label in a.found.uncovered})) or 'none'}).",
+        f"Read at every choice of the 320x120 cells sharing each 80x30 centre ({' x '.join(str(len(c)) for c in choices)} = "
+        f"{math.prod(len(c) for c in choices)} readings, {count} with no SOLID or repeated cell), "
+        f"the product searched on 80x30 has a worst case from {text_time(min(worsts))} to "
+        f"{text_time(max(worsts))} s and a mean from {min(means):.3f} to {max(means):.3f} s on "
+        "320x120; the table's row is the lower-left reading.",
+        f"Uncovered by the product's candidates on 80x30: {uncovered_text(coarse.roles.detection.uncovered)}; "
+        f"on 320x120: {uncovered_text(fine.roles.detection.uncovered)}. The all-clear sensor: "
+        f"{places(coarse_mesh, coarse.roles.all_clear)} on 80x30, "
+        f"{places(a.mesh, fine.roles.all_clear)} on 320x120.",
         "",
         "The order per rule, best first:",
         "",
@@ -859,63 +1174,93 @@ def stability_table(a: Analysis) -> list[str]:
 
 
 def arms_table(a: Analysis) -> list[str]:
-    """K2: the searched 320x120 layout on step 1's arms, frame-resolved and flagged."""
+    """K2: the product layout of 320x120 on step 1's arms, frame-resolved and flagged."""
     lines = [
-        "### K2. The searched 320x120 layout on step 1's arm runs (arrival_from_run: frame-resolved, flagged), read at the cells holding its centres, beside the file's four and the arm's own mountable search, over the units the arm's own search covers",
+        "### K2. The product layout of 320x120 (the three-plus-one over the door, the breach and the dust, as K1's) on step 1's arm runs (arrival_from_run: frame-resolved, flagged), read at the cells holding its centres, beside the file's four, the arm's own product search and the arm's free optimum, over the units the arm's own search covers",
         "",
-        "| Arm | Grid | Scenarios run | Frame-resolved | Layout | Mountable on this grid | Worst case (s) | Mean (s) | Undetected | Detected, of the arm's units | Own search's rule, method |",
+        "| Arm | Grid | Scenarios run | Frame-resolved | Layout | Candidates on this grid | Worst case (s) | Mean (s) | Undetected | Detected, of the arm's units | Own search's rule, method |",
         "|---|---|---|---|---|---|---|---|---|---|---|",
     ]
+    fine = Grid(
+        a.mesh,
+        [a.runs[name].config for name in (*STEP5_EVENTS, "clean_out")],
+        a.step5_units,
+        clear_units({name: a.runs[name].file for name in (*STEP5_EVENTS, "clean_out")}),
+        a.spec,
+    )
     orders = []
+    readings: dict[str, tuple] = {}
     rows = [(arm, "160x60") for arm in ARMS] + [("min_nut", "320x120")]
     for arm, grid in rows:
-        arrivals = {}
-        config_door = None
-        for name in EVENT_NAMES:
+        paths = {}
+        for name in STEP5_EVENTS:
             path = SWEEP / f"{name}_{arm}_{grid}.h5"
             summary = path.with_suffix(".txt")
             if summary.exists() and "wall time:" in summary.read_text(encoding="utf-8"):
-                arrivals[name] = arrival_from_run(path)
-                run = RunFile(path)
-                if config_door is None or name == "door_leak":
-                    config_door = SimConfig.from_dict(run.read_config().mapping)
-        if not arrivals:
+                paths[name] = path
+        if not paths:
             lines.append(f"| {arm} | {grid} | none | | | | | | | | |")
             continue
-        assert config_door is not None
-        mesh = Mesh(config_door)
-        if "door_leak" not in arrivals:
+        arrivals = {name: arrival_from_run(path) for name, path in paths.items()}
+        configs = [
+            SimConfig.from_dict(RunFile(path).read_config().mapping)
+            for path in paths.values()
+        ]
+        if "door_leak" not in paths:
             # The door's run is capped at this arm, but its openings are the room's;
             # the door's configuration of the arm gives the same candidates.
-            config_door = SimConfig(
-                SWEEP / "configs" / f"scenario_door_leak_{arm}_{grid}.yaml"
+            configs.append(
+                SimConfig(SWEEP / "configs" / f"scenario_door_leak_{arm}_{grid}.yaml")
             )
-        units = detection_units(arrivals)
-        mounted = candidates(mesh, config_door, a.spec.mount, a.spec.standoff)
-        own = search(units, mounted, a.spec.count, a.spec.rule)
-        kept = exclude_units(units, own.uncovered)
+        mesh = Mesh(configs[0])
+        own = Grid(mesh, configs, detection_units(arrivals), clear_units(paths), a.spec)
         layouts = {
-            "searched on 320x120": mapped(a.mesh, mesh, a.found.cells),
-            "the file's four": sensor_cells(config_door, mesh),
-            "the arm's own": own.cells,
+            "the product of 320x120": mapped(a.mesh, mesh, fine.roles.layout.cells),
+            FILE: sensor_cells(configs[0], mesh),
+            "the arm's own product search": own.roles.layout.cells,
+            "the arm's free optimum": own.free_found.cells,
         }
         scores = {}
         for title, cells in layouts.items():
-            s = score(kept, cells, within=WITHIN)
+            s = score(own.kept, cells, within=WITHIN)
             scores[title] = s
             lines.append(
-                f"| {arm} | {grid} | {detected_scenarios(arrivals)} | "
+                f"| {arm} | {grid} | {', '.join(short(n) for n in arrivals)} | "
                 f"{'yes' if s.frame_resolved else 'no'} | {title} | "
-                f"{mountable_text(cells, mounted)} | {text_time(s.worst)} | "
-                f"{s.mean:.3f} | {s.undetected} of {len(kept.labels)} | "
-                f"{detected_text(detected_by_scenario(units, cells))} | "
-                f"{own.rule}, {own.method} |"
+                f"{mountable_text(cells, own.product)} | {text_time(s.worst)} | "
+                f"{s.mean:.3f} | {s.undetected} of {len(own.kept.labels)} | "
+                f"{detected_text(detected_by_scenario(own.units, cells))} | "
+                f"{own.roles.detection.rule}, {own.roles.detection.method} |"
             )
+            if title == "the product of 320x120" and grid == "160x60":
+                table = own.kept.latencies[
+                    :, [c[0] for c in cells], [c[1] for c in cells]
+                ]
+                readings[arm] = (own.kept.labels, tuple(np.round(table.min(axis=1), 9)))
         orders.append(
             f"- {arm} ({grid}): worst case {order(scores, WORST_CASE)}; mean "
             f"{order(scores, MEAN)}."
         )
-    lines += ["", "The order per rule, best first:", "", *orders]
+    groups: list[list[str]] = []
+    for arm, key in readings.items():
+        for group in groups:
+            if readings[group[0]] == key:
+                group.append(arm)
+                break
+        else:
+            groups.append([arm])
+    lines += [
+        "",
+        f"The product layout's readings on the {len(readings)} 160x60 arms that ran: "
+        f"{len(groups)} distinct (the same units and the same latency in each): "
+        + "; ".join(" = ".join(group) for group in groups)
+        + ". With min_nut on 320x120 that is "
+        + f"{len(groups) + 1} distinct readings.",
+        "",
+        "The order per rule, best first:",
+        "",
+        *orders,
+    ]
     return lines
 
 
@@ -925,41 +1270,116 @@ def mountable_text(cells: tuple[tuple[int, int], ...], pool: np.ndarray) -> str:
     return f"{sum(cell in allowed for cell in cells)} of {len(cells)}"
 
 
-def detected_scenarios(arrivals: dict[str, RunArrival]) -> str:
-    """The scenarios an arm ran."""
-    return ", ".join(TITLES[name].removeprefix("the ") for name in arrivals)
-
-
 def predictions_table(a: Analysis) -> list[str]:
-    """P1: prompt 76's predictions against the measurements."""
-    door = {label for label in a.units.labels if label[0] == "door_leak"}
-    rest = [label for label in a.units.labels if label[0] != "door_leak"]
-    reach = a.units.latencies[:, a.mounted[:, 0], a.mounted[:, 1]]
-    door_rows = [u for u, label in enumerate(a.units.labels) if label[0] == "door_leak"]
+    """P1: prompt 76's predictions as step 5 first scored them.
+
+    The door's configuration alone, the surfaces, the three event scenarios: the
+    candidates and units step 5 had, before prompt 76b's rules.
+    """
+    units = a.step5_units
+    found = a.step5_found
+    door = {label for label in units.labels if label[0] == "door_leak"}
+    rest = [label for label in units.labels if label[0] != "door_leak"]
+    reach = units.latencies[:, a.step5_mounted[:, 0], a.step5_mounted[:, 1]]
+    door_rows = [u for u, label in enumerate(units.labels) if label[0] == "door_leak"]
     door_cells = int(np.isfinite(reach[door_rows]).any(axis=0).sum())
-    file_detected = len(a.units.labels) - a.file_all.score.undetected
-    counts = detected_by_scenario(a.units, a.found.cells)
+    file_detected = len(units.labels) - given_layout(units, a.sensors).score.undetected
+    counts = detected_by_scenario(units, found.cells)
     k_holds = (
-        all(label in a.found.units for label in rest)
-        and a.found.score.undetected == 0
-        and a.found.score.worst < 3.0
+        all(label in found.units for label in rest)
+        and found.score.undetected == 0
+        and found.score.worst < 3.0
     )
     return [
-        "### P1. Prompt 76's predictions against the measurements",
+        "### P1. Prompt 76's predictions, as step 5 scored them (the door's configuration alone, the surfaces, the three event scenarios)",
         "",
         "| Prediction | Measured | Verdict |",
         "|---|---|---|",
         f"| (i) the file's four detect none of the event scenarios' units on 320x120 | "
-        f"{file_detected} of {len(a.units.labels)} units detected | "
+        f"{file_detected} of {len(units.labels)} units detected | "
         f"{'holds' if file_detected == 0 else 'fails'} |",
         f"| (j) no mountable candidate detects a door unit on 320x120 | {door_cells} of "
-        f"{len(a.mounted):,} mountable candidates detect one; door units uncovered: "
-        f"{len(door & set(a.found.uncovered))} of {len(door)} | "
+        f"{len(a.step5_mounted):,} mountable candidates detect one; door units uncovered: "
+        f"{len(door & set(found.uncovered))} of {len(door)} | "
         f"{'holds' if door_cells == 0 else 'fails'} |",
         f"| (k) the searched mountable four detect every breach and dust unit, worst case "
         f"under 3 s | {detected_text(counts)}; worst case over the units scored "
-        f"{text_time(a.found.score.worst)} s, {len(a.found.units)} units scored | "
-        f"{'holds' if k_holds else 'fails'} |",
+        f"{text_time(found.score.worst)} s, {len(found.units)} units scored; cells "
+        f"{places(a.mesh, found.cells)} | {'holds' if k_holds else 'fails'} |",
+    ]
+
+
+def predictions76b_table(a: Analysis) -> list[str]:
+    """P2: prompt 76b's predictions (l) to (p) against the measurements."""
+    surf = detected_by_scenario(a.units, a.surf.cells)
+    stand = detected_by_scenario(a.units, a.stand.cells)
+    l_holds = (
+        surf["filter_breach"][0] == surf["filter_breach"][1]
+        and surf["equipment_dust"][0] == surf["equipment_dust"][1]
+        and surf["door_leak"][0] == 0
+        and surf["seal_leak"][0] == 0
+    )
+    m_holds = all(
+        stand[name][0] == stand[name][1]
+        for name in ("door_leak", "filter_breach", "equipment_dust")
+    )
+    seal = a.reach("seal_leak")
+    mounts = {
+        "surfaces": a.mountable,
+        "stands": candidates(
+            a.mesh,
+            a.configs,
+            (MOUNT_STAND,),
+            a.spec.standoff,
+            stand_height=a.spec.stand_height,
+        ),
+    }
+    seal_counts = {
+        name: int(seal[p[:, 0], p[:, 1]].sum()) for name, p in mounts.items()
+    }
+    free_heights = [float(a.mesh.yc[j]) for j, i in a.free if seal[j, i]]
+    n_holds = all(v == 0 for v in seal_counts.values()) and (
+        not free_heights or max(free_heights) < 0.3
+    )
+    clean = [u for u, (name, _) in enumerate(a.clear.labels) if name == "clean_out"]
+    stand_clear = a.clearing[STAND]
+    remaining = [float(stand_clear.fraction[u]) for u in clean]
+    o_holds = all(np.isfinite(v) and v > 0.0 for v in remaining)
+    three = [
+        u
+        for u, label in enumerate(a.units.labels)
+        if label[0] in ("door_leak", "filter_breach", "equipment_dust")
+    ]
+
+    def worst_over(cells: tuple[tuple[int, int], ...]) -> float:
+        table = a.units.latencies[three][
+            :, [c[0] for c in cells], [c[1] for c in cells]
+        ]
+        return float(table.min(axis=1).max())
+
+    roles_worst = worst_over(a.roles.layout.cells)
+    stand_worst = worst_over(a.stand.cells)
+    p_holds = roles_worst == stand_worst and a.clearing[ROLES].worst < stand_clear.worst
+    events = [u for u, (name, _) in enumerate(a.clear.labels) if name != "clean_out"]
+
+    def events_worst(result: ClearScore) -> str:
+        values = result.interval[events]
+        return (
+            key_text(float(values.max()))
+            if np.isfinite(values).all()
+            else "a not clear"
+        )
+
+    return [
+        "### P2. Prompt 76b's predictions against the measurements",
+        "",
+        "| Prediction | Measured | Verdict |",
+        "|---|---|---|",
+        f"| (l) without stands, the source excluded, the searched four detect every breach and dust unit and no door or seal-leak unit | {detected_text(surf)} | {'holds' if l_holds else 'fails'} |",
+        f"| (m) with stands the searched four detect every door, breach and dust unit | {detected_text(stand)} | {'holds' if m_holds else 'fails'} |",
+        f"| (n) no candidate of any mount detects a seal-leak unit; the free cells that do lie below 0.3 m | surface candidates {seal_counts['surfaces']}, stand candidates {seal_counts['stands']}; free cells {len(free_heights)}, the highest centre at {max(free_heights, default=math.nan):.4f} m | {'holds' if n_holds else 'fails'} |",
+        f"| (o) in the clean-out the detection-only four with stands declare clean while live area at or above threshold remains, at every class | area at or above at its clear time, per class: {', '.join(f'{100 * v:.2f}%' for v in remaining)} | {'holds' if o_holds else 'fails'} |",
+        f"| (p) the three-plus-one's worst latency over the door, breach and dust units equals the detection-only four's, and its worst premature interval is smaller | worst latency {text_time(roles_worst)} s against {text_time(stand_worst)} s; worst premature interval {key_text(a.clearing[ROLES].worst)} against {key_text(stand_clear.worst)}; over the four event scenarios alone {events_worst(a.clearing[ROLES])} against {events_worst(stand_clear)} | {'holds' if p_holds else 'fails'} |",
     ]
 
 
@@ -974,20 +1394,24 @@ def render(a: Analysis) -> tuple[str, dict[str, str]]:
         "march": tables69.march_table(ordered),
         "budgets": budget_table(runs),
         "alerts": alerts_table(a),
+        "candidates": candidates_table(a),
         "layouts": layouts_table(a),
         "curve": curve_table(a),
         "headline": headline_table(a),
         "units": units_table(a, REPORT_CLASSES),
+        "rooms": rooms_table(a),
+        "clearing": clearing_table(a, REPORT_CLASSES),
         "recovery": recovery_table(a),
         "stability": stability_table(a),
         "arms": arms_table(a),
         "predictions": predictions_table(a),
+        "predictions76b": predictions76b_table(a),
         "hashes": hashes_table(),
         "bitwise": bitwise_table(runs),
         "coverage": coverage_table(),
     }
     head = [
-        "# Step 5's tables: the latency report (ADR-015 E)",
+        "# Step 5's tables: the latency report (ADR-015 E, prompts 76 and 76b)",
         "",
         "Generated by `docs/reports/probe76/tables76.py` from the run files under "
         "`results/builder76/`, `results/builder75/runs/` and `results/builder72/`; `--check` "
@@ -1001,6 +1425,9 @@ def render(a: Analysis) -> tuple[str, dict[str, str]]:
         body.append("")
         if name == "units":
             body.extend(units_table(a, None))
+            body.append("")
+        if name == "clearing":
+            body.extend(clearing_table(a, None))
             body.append("")
     return "\n".join(head + body), {
         name: "\n".join(lines) for name, lines in tables.items()
@@ -1033,19 +1460,64 @@ def report_copies(text: str, markers: tuple[str, ...]) -> dict[str, str]:
     return copies
 
 
+def draw_room(ax: object, a: Analysis) -> None:
+    """The obstacles and the axes of a room panel."""
+    import matplotlib.patches as patches
+
+    for obstacle in a.config.obstacles:
+        ax.add_patch(
+            patches.Rectangle(
+                (obstacle.x_start, obstacle.y_start),
+                obstacle.x_end - obstacle.x_start,
+                obstacle.y_end - obstacle.y_start,
+                facecolor="0.55",
+                edgecolor="0.3",
+                linewidth=0.8,
+                zorder=3,
+            )
+        )
+    ax.set_xlim(a.mesh.x[0], a.mesh.x[-1])
+    ax.set_ylim(a.mesh.y[0], a.mesh.y[-1])
+    ax.set_aspect("equal")
+    ax.set_xlabel("x (m)")
+    ax.set_ylabel("y (m)")
+
+
+def draw_cells(ax: object, a: Analysis, sets: list[tuple[tuple, str, str]]) -> None:
+    """Each layout's cells as markers."""
+    for cells, marker, label in sets:
+        xy = np.array([where(a.mesh, cell) for cell in cells])
+        ax.plot(
+            xy[:, 0],
+            xy[:, 1],
+            linestyle="none",
+            marker=marker,
+            markersize=8,
+            markerfacecolor="white",
+            markeredgecolor="black",
+            label=label,
+            zorder=4,
+        )
+
+
 def figures(a: Analysis, out: Path) -> list[Path]:
-    """Per event scenario, the 0.1 um and 5 um arrival maps with the sensors drawn."""
+    """The arrival maps per event scenario, and the clean-out's clear-time map."""
     import matplotlib
 
     matplotlib.use("Agg")
     import matplotlib.colors as colors
-    import matplotlib.patches as patches
     import matplotlib.pyplot as plt
 
     paths = []
     sizes = [size * 1.0e6 for size in a.config.particle_sizes]
     cmap = plt.get_cmap("Blues_r").copy()
     cmap.set_bad("0.93")
+    sets = [
+        (a.sensors, "o", FILE),
+        (a.roles.detection.cells, "s", f"{ROLES}: detection"),
+        (a.roles.all_clear, "*", f"{ROLES}: all-clear"),
+        (a.curve[a.spec.count].cells, "^", FREE),
+    ]
     for name in EVENT_NAMES:
         arrival = a.arrivals[name]
         table = latency(arrival.maps, arrival.onsets)
@@ -1060,40 +1532,8 @@ def figures(a: Analysis, out: Path) -> list[Path]:
                 norm=colors.LogNorm(vmin=0.1, vmax=arrival.t_final - arrival.onsets[0]),
                 shading="flat",
             )
-            for obstacle in a.config.obstacles:
-                ax.add_patch(
-                    patches.Rectangle(
-                        (obstacle.x_start, obstacle.y_start),
-                        obstacle.x_end - obstacle.x_start,
-                        obstacle.y_end - obstacle.y_start,
-                        facecolor="0.55",
-                        edgecolor="0.3",
-                        linewidth=0.8,
-                        zorder=3,
-                    )
-                )
-            for cells, marker, label in (
-                (a.sensors, "o", "the file's four"),
-                (a.found.cells, "s", "searched, mountable"),
-                (a.curve[a.spec.count].cells, "^", "free optimum"),
-            ):
-                xy = np.array([where(a.mesh, cell) for cell in cells])
-                ax.plot(
-                    xy[:, 0],
-                    xy[:, 1],
-                    linestyle="none",
-                    marker=marker,
-                    markersize=8,
-                    markerfacecolor="white",
-                    markeredgecolor="black",
-                    label=label,
-                    zorder=4,
-                )
-            ax.set_xlim(a.mesh.x[0], a.mesh.x[-1])
-            ax.set_ylim(a.mesh.y[0], a.mesh.y[-1])
-            ax.set_aspect("equal")
-            ax.set_xlabel("x (m)")
-            ax.set_ylabel("y (m)")
+            draw_room(ax, a)
+            draw_cells(ax, a, sets)
             ax.set_title(
                 f"{TITLES[name].capitalize()}, {sizes[k]:g} um: first time at or above "
                 f"threshold after the onset (light grey: never by {arrival.t_final:g} s)",
@@ -1101,11 +1541,59 @@ def figures(a: Analysis, out: Path) -> list[Path]:
             )
             fig.colorbar(image, ax=ax, label="s after the onset", shrink=0.9)
         handles, labels = axes[0].get_legend_handles_labels()
-        fig.legend(handles, labels, loc="outside lower center", ncol=3, fontsize=9)
+        fig.legend(handles, labels, loc="outside lower center", ncol=4, fontsize=9)
         path = out / f"phase5_arrival_{name}.png"
         fig.savefig(path, dpi=150)
         plt.close(fig)
         paths.append(path)
+    clean = {k: u for u, (name, k) in enumerate(a.clear.labels) if name == "clean_out"}
+    times, cells = room_clear(a.clear)
+    fig, axes = plt.subplots(2, 1, figsize=(9.0, 7.0), layout="constrained")
+    warm = plt.get_cmap("viridis").copy()
+    warm.set_bad("0.55")
+    warm.set_over("crimson")
+    for ax, k in zip(axes, REPORT_CLASSES, strict=True):
+        u = clean[k]
+        field = a.clear.clear[u]
+        finite = field[np.isfinite(field)]
+        top = float(finite.max()) if finite.size else 1.0
+        shown = np.where(np.isinf(field), top * 2.0, field)
+        image = ax.pcolormesh(
+            a.mesh.x,
+            a.mesh.y,
+            np.ma.masked_invalid(shown),
+            cmap=warm,
+            vmin=0.0,
+            vmax=top,
+            shading="flat",
+        )
+        draw_room(ax, a)
+        draw_cells(ax, a, sets[1:3])
+        x, y = where(a.mesh, cells[u])
+        ax.plot(
+            [x],
+            [y],
+            marker="x",
+            color="crimson",
+            markersize=9,
+            zorder=5,
+            linestyle="none",
+            label="the cell that clears last",
+        )
+        result = a.clearing[ROLES]
+        ax.set_title(
+            f"The clean-out, {sizes[k]:g} um: each cell's clear time (frames; red: not clear "
+            f"by {a.clear.times[u][-1]:g} s; the room {seconds(times[u])}, the three-plus-one "
+            f"{seconds(result.layout[u])})",
+            fontsize=10,
+        )
+        fig.colorbar(image, ax=ax, label="clear time (s)", shrink=0.9, extend="max")
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="outside lower center", ncol=3, fontsize=9)
+    path = out / "phase5_clear_clean_out.png"
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    paths.append(path)
     return paths
 
 
