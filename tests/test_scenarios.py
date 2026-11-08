@@ -490,7 +490,10 @@ def test_the_seal_leaks_slot_and_the_returns_that_take_it(
             for name in shares
             if name.startswith("floor_return")
         }
-        outflow = sum(shares[name] * widths[name] for name in widths) + 0.5 * 0.9
+        hood = config.boundaries["hood_exhaust"]
+        outflow = sum(shares[name] * widths[name] for name in widths) + (
+            hood.velocity * (hood.y_end - hood.y_start)
+        )
         inflow = boundary.get_total_inlet_flux()
         assert outflow == pytest.approx(inflow, rel=1e-12)
         flows.append(inflow)

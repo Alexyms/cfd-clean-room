@@ -3919,6 +3919,44 @@ def test_the_reference_scenarios_state_their_sources_values() -> None:
     assert panel["concentration"] == hundredfold
 
 
+@pytest.mark.unit
+def test_the_seal_leak_states_its_slot_and_its_run_keys() -> None:
+    """The seal leak's file (prompt 76b) against its header, and the door's run keys.
+
+    One 0.025 m slot at the doorway's foot on the left edge, 0.8 m/s (0.02
+    m^2/s per metre of depth, the 10 mm undercut at about 2 m/s), carrying the
+    supply's turbulence keys and the door's corridor concentration (the
+    thresholds times 100), from 10 s for 30 s, run to 120 s with a frame
+    every 100 steps at the dust's Courant number. The door's file states its
+    own run keys, 60 s and 100 steps. Defects caught: the concentration, either
+    turbulence key, the slot's side, extent or speed, the times, or a run key
+    changed in the file.
+    """
+    seal = SimConfig(CONFIG_DIR / "scenario_seal_leak.yaml")
+    event = seal.scenario.events[0]
+    assert (event.name, event.start, event.end) == ("seal_leak", 10.0, 40.0)
+    assert event.change.segment == "door"
+    ((name, slot),) = event.change.segments
+    assert name == "door_in"
+    assert (slot["type"], slot["location"]) == ("velocity_inlet", "left")
+    assert (slot["y_start"], slot["y_end"], slot["velocity"]) == (0.0, 0.025, 0.8)
+    assert (slot["turbulence_intensity"], slot["dissipation_length"]) == (0.05, 0.1)
+    default = SimConfig(CONFIG_DIR / "clean_room_default.yaml")
+    supply = default.boundaries["hepa_supply"]
+    assert (supply.turbulence_intensity, supply.dissipation_length) == (0.05, 0.1)
+    hundredfold = tuple(100.0 * t for t in default.class_thresholds())
+    assert slot["concentration"] == hundredfold
+    door = SimConfig(CONFIG_DIR / "scenario_door_leak.yaml")
+    ((_, door_in), _) = door.scenario.events[0].change.segments
+    assert slot["concentration"] == door_in["concentration"]
+    assert (seal.t_end, seal.output_interval, seal.transport.cfl_number) == (
+        120.0,
+        100,
+        0.4,
+    )
+    assert (door.t_end, door.output_interval) == (60.0, 100)
+
+
 TRANSIENT = {
     "scheme": "bdf2",
     "step_tol": 1.0e-4,
@@ -4565,14 +4603,18 @@ class TestPlacementSection:
         assert "stand" not in spec.mount
         assert spec.stand_height == (0.1, 1.2) and spec.all_clear == 0
 
-    def test_a_record_of_prompt_76b_keeps_its_band_and_all_clear(self) -> None:
+    def test_a_record_that_states_a_band_and_all_clear_keeps_them(self) -> None:
         """A record's own band and all-clear count win over the product file's.
 
-        The seal leak's run file (prompt 76b) records the 0.3 m band and one
-        all-clear sensor; the product file now states 0.1 m and none (prompt
-        76c). Merged, the record's values are read. Defect caught: the base's
-        values taking precedence, which would re-score an old run under a
-        configuration it did not record.
+        The record is the one a run made with prompt 76b's product file would
+        hold: the 0.3 m band and one all-clear sensor; the product file now
+        states 0.1 m and none (prompt 76c). Merged, the record's values are
+        read. (``results/builder76/seal_leak.h5`` was started before the stand
+        existed and records neither: its placement is a mount list, a
+        standoff, a count and a rule, and it reloads with the product's band,
+        the case of the test above.) Defect caught: the base's values taking
+        precedence, which would re-score an old run under a configuration it
+        did not record.
         """
         raw = yaml.safe_load(
             (CONFIG_DIR / "scenario_seal_leak.yaml").read_text(encoding="utf-8")
