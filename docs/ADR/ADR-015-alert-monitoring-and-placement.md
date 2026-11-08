@@ -4,7 +4,8 @@
 Accepted, 2026-10-30 (Alex; prompt 71, commit 0; the note after this paragraph); built to its
 six steps by 2026-11-05 (prompt 76) and revised on 2026-11-07 by Alex's decisions (prompt 76b:
 the stand, the source rule, the all-clear role, the seal leak) and on 2026-11-08 (prompt 76c: the
-stand band from 0.1 m, the all-clear sensor's position carried open), the planned-against-built table
+stand band from 0.1 m, the all-clear sensor's position carried open; prompt 76d: round 2's findings
+fixed), the planned-against-built table
 below section H, the Phase 5 gate's verdict Alex's to set. Written
 2026-10-29 (prompt 70, branch `phase5/design`) and revised the same day
 on review 70 (prompt 70b: section A rewritten to a line source in grid turbulence by Alex's
@@ -913,7 +914,8 @@ the mean the best this finds. When no layout of the count detects every coverabl
 worst case is inf for every layout, the search runs the mean rule's method at the count and
 returns the rule as `MEAN`; when no unit at all is coverable it raises `ValueError`. Ties under the worst case
 go to the mean and under the mean to the worst case, then to candidate order. The set cover
-refuses more than 20 units (2^20 subsets); the reference set has fifteen. On twelve random
+refuses more than 20 units (2^20 subsets); the reference set has fifteen (since prompt 76b,
+twenty: four scenarios, five classes, which is the cap). On twelve random
 maps of six units and 31 candidates the worst case is exact at one to three sensors, and the
 mean rule's greedy at three equals the optimum on ten and is above it on two (0.67 and 0.83 s
 against 0.5), `tests/test_placement.py`.
@@ -995,8 +997,12 @@ from the clean-out alone. The seal leak ran on 320x120 only (its 0.025 m slot co
 two things on 2026-11-08: the stand band is 0.1 to 1.2 m, and the all-clear sensor's position is
 carried open (`placement.all_clear` 0 in the product file). The orchestrator found in the seal
 leak's map that, outside the doorway's standoff, the only cell of the 0.3 to 1.2 m band the leak
-reaches before 33 s is (2, 12), at (0.0625, 0.3125), and that between 0.1 and 0.2 m in the same
-columns every class is reached within 0.71 s.
+reaches before 33 s is (i 2, j 12), at (0.0625, 0.3125), and that between 0.1 and 0.2 m every class
+is reached within 0.71 s. As read from `/arrival/` of `seal_leak.h5` the first half holds (the
+cell is reached at 16.36 to 16.58 s in the four smaller classes and at 30.59 s at 5 um) and the
+second holds for the fastest cell only: (i 5, j 4), at (0.1375, 0.1125), reads every class from
+0.699 to 0.706 s, while the cells of columns 2 and 3 in those rows are reached at 0.74 to 6.06 s
+(test 76 round 2, S5).
 - (q) With the band at 0.1 m, the product search detects all 20 units with a worst case under 3 s;
   it detects the seal leak within 1 s, and no worst-case latency carries the marker "after the flow
   switch" (a latency that falls after the end of an event whose end changes the flow state).
@@ -1009,6 +1015,20 @@ band the seal leak's 5 um class was read only after the leak had ended, the one 
 and it set that layout's worst case. The marker is built as `placement.flow_switches` (an interval
 boundary at which an event has ended and the flow fingerprint changes) and
 `placement.after_flow_switch` (an arrival strictly after a switch at or after the onset).
+
+*Prompt 76d (2026-11-08), round 2's findings.* (1) `candidates` refuses a configuration whose
+own mesh is not the one given (grid, domain and obstacles): the surfaces are taken from the room, so
+two rooms on one grid made the answer follow the order given (39 cells one way and 135 the other, review 76
+round 2 S4). (2) A `stand_height` given without `stand` in the mount is checked and ignored, as the
+loader does, so the spec of a run record made before the stand, which reloads with the product
+file's band, can be passed on as it is (review S5, test S3). (3) The exact worst-case search stops at
+20 units, which the product's four scenarios and five classes now fill, and one unit more raises;
+scoring the dust at several release positions needs the mean rule's greedy search, which is not
+exact, or a larger cap measured first (review S3). (4) A switch at an event's own onset counts in
+`after_flow_switch` (another event's end that coincides with the start), the arrival strictly after
+it. (5) The all-clear computation's class thresholds, the stand's SOLID rule, the sequential search
+and the other plants that survived round 2 are pinned by tests (test B1, S1, S2); the orchestrator's
+reading of the seal leak's map is corrected above (S5).
 
 *Step 4's prediction (orchestrator, 2026-11-02, prompt 75), committed before the 80x30 runs.*
 (h) On 80x30 the file's four sensors detect none of the three event scenarios' (scenario,
@@ -1155,6 +1175,7 @@ the same table is in `docs/reports/phase5_alert_system_report.md`.
 | 4, placement | 75, 75b, 2026-11-02 and 2026-11-03 (PR 103) | `latency`, the units, `score`, `candidates`, `search`, `rank`; the `placement` section; REQ-A05 | The unit is (scenario, event, class); `score` has no `rule`; the sweep is bisected and the programme runs on the maximal masks; the fallback reads as no layout of the count covering every coverable unit, and no coverable unit at all raises; `_maximal` chunked after a 4.7 GB peak on a synthetic map; the section out of the restart hash (orchestrator); frame-resolved units flagged; REQ-A05's exactness restated as built |
 | 5, the runs, the report, the gate | 76, 2026-11-05 (this pull request) | The four scenarios on 320x120 with their maps; `docs/reports/phase5_alert_report.md` and `probe76/`; this report | A cell within the standoff of an opening is not a candidate (item 0), found before the runs by the prompt; the planned `scripts/latency_report.py` is `tables76.py`, as section E names it; the copies of the scenario files add a checkpoint every 1000 steps and nothing else |
 | 5, revised: two roles | 76b, 2026-11-07 (this pull request) | Alex's three decisions of 2026-11-07: the `stand` mount and `stand_height`; a source box and its standoff never a candidate; the all-clear role (`placement.all_clear`, `clear_units`, `clear_score`, `search_roles`). The candidates over every scored scenario (review 76 S5). The seal leak, the fifth scenario (orchestrator), run on 320x120; the other four re-scored from step 5's files | Not planned in ADR-015: the role, the stand and the seal leak are new decisions recorded in its section D. The all-clear search is sequential, not joint. A run file's recorded mapping merges over the base file as it is now, so a stand band given without a stand is kept rather than refused (else every earlier run file failed to reload) |
+| 5, revised: round 2's findings | 76d, 2026-11-08 (this pull request) | `candidates` refuses configurations of another room and ignores a stand band without a stand; tests that separate the classes of the all-clear computation, pin the stand rule, the sequential search, the refusals of `add_all_clear`, the marker at an onset and the seal leak's file | No run, no new module. `candidates`' contract in SYSTEM.md changes (the room check, the band) |
 | 5, revised: the band and the open all-clear | 76c, 2026-11-08 (this pull request) | Alex's two decisions of 2026-11-08: `stand_height` 0.1 to 1.2 m and `all_clear` 0 in the product file and its three copies, the all-clear code and tests kept; `flow_switches` and `after_flow_switch`, the latency tables' marker "after the flow switch"; the five runs re-scored, the 0.3 m band's search and the three-plus-one kept as one row each | No run. `placement` imports `scenarios.flow_fingerprint` for the marker. Prediction (q) committed before the re-score and holds |
 
 ## Probes (the predictions fixed in the prompt before the runs; results after)

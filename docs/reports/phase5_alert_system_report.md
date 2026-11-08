@@ -1,8 +1,8 @@
 # Phase 5 Completion Report: Alert Monitoring System
 
 **Date:** 2026-11-05, revised 2026-11-07 after review 76, test 76 and Alex's decisions of that
-day (prompt 76b), and 2026-11-08 after Alex's decisions of that day (prompt 76c; the machine's
-local date)
+day (prompt 76b), and 2026-11-08 after Alex's decisions of that day (prompt 76c) and round 2 of
+review and test 76 (prompt 76d; the machine's local date)
 **Phase Gate Verdict:** PROPOSED: CONDITIONAL PASS, for Alex to decide (the section "The proposed
 verdict" below)
 **Branches Merged:** six pull requests, #98 to #103, and this one (`phase5/step5-gate`):
@@ -13,8 +13,8 @@ verdict" below)
   search and REQ-A05).
 - This pull request: step 5, the four reference scenarios with their arrival maps, the latency
   report and this report; prompt 76b, the stand, the source rule, the fifth scenario (the door
-  seal leak) and the all-clear role; and prompt 76c, the stand band from 0.1 m, the all-clear
-  sensor's position carried open and the flow-switch marker.
+  seal leak) and the all-clear role; prompt 76c, the stand band from 0.1 m, the all-clear
+  sensor's position carried open and the flow-switch marker; and prompt 76d, round 2's findings.
 
 The scenario numbers of this phase live in the tables `docs/reports/probe76/tables76.py`
 generates from the run files under `results/builder76/`, `results/builder75/runs/` and
@@ -49,6 +49,7 @@ ADR-015 built to its design, with the planned-against-built table below (also in
 | 4, placement | 75, 75b, 2026-11-02 and 2026-11-03 (PR 103) | `latency`, the units, `score`, `candidates`, `search`, `rank`; the `placement` section; REQ-A05 | The unit is (scenario, event, class); `score` has no `rule`; the sweep is bisected and the programme runs on the maximal masks; the fallback reads as no layout of the count covering every coverable unit, and no coverable unit at all raises; `_maximal` chunked after a 4.7 GB peak on a synthetic map; the section out of the restart hash (orchestrator); frame-resolved units flagged; REQ-A05's exactness restated as built |
 | 5, the runs, the report, the gate | 76, 2026-11-05 (this pull request) | The four scenarios on 320x120 with their maps; `docs/reports/phase5_alert_report.md` and `probe76/`; this report | A cell within the standoff of an opening is not a candidate (item 0), found before the runs by the prompt; the planned `scripts/latency_report.py` is `tables76.py`, as section E names it; the copies of the scenario files add a checkpoint every 1000 steps and nothing else |
 | 5, revised: two roles | 76b, 2026-11-07 (this pull request) | Alex's three decisions of 2026-11-07: the `stand` mount and `stand_height`; a source box and its standoff never a candidate; the all-clear role (`placement.all_clear`, `clear_units`, `clear_score`, `search_roles`). The candidates over every scored scenario (review 76 S5). The seal leak, the fifth scenario (orchestrator), run on 320x120; the other four re-scored from step 5's files | Not planned in ADR-015: the role, the stand and the seal leak are new decisions recorded in its section D. The all-clear search is sequential, not joint. A run file's recorded mapping merges over the base file as it is now, so a stand band given without a stand is kept rather than refused (else every earlier run file failed to reload) |
+| 5, revised: round 2's findings | 76d, 2026-11-08 (this pull request) | `candidates` refuses configurations of another room and ignores a stand band without a stand; tests that separate the classes of the all-clear computation, pin the stand rule, the sequential search, the refusals of `add_all_clear`, the marker at an onset and the seal leak's file | No run, no new module. `candidates`' contract in SYSTEM.md changes (the room check, the band) |
 | 5, revised: the band and the open all-clear | 76c, 2026-11-08 (this pull request) | Alex's two decisions of 2026-11-08: `stand_height` 0.1 to 1.2 m and `all_clear` 0 in the product file and its three copies, the all-clear code and tests kept; `flow_switches` and `after_flow_switch`, the latency tables' marker "after the flow switch"; the five runs re-scored, the 0.3 m band's search and the three-plus-one kept as one row each | No run. `placement` imports `scenarios.flow_fingerprint` for the marker. Prediction (q) committed before the re-score and holds |
 
 Also added without plan entries, each to measure the build: the probe directories
@@ -58,8 +59,9 @@ Also added without plan entries, each to measure the build: the probe directorie
 
 - **The counter's sample time** stays OPEN (ADR-015 C): an additive instrument delay until a
   counter is specified.
-- **The seal leak on the coarser grids.** The 0.025 m slot covers no face of 80x30 and two cells'
-  worth of 160x60, so the scenario is a 320x120 one and has no grid pair or sweep arm.
+- **The seal leak on the coarser grids.** The 0.025 m slot covers no face of 80x30 and one 0.05 m
+  face of 160x60, which then carries twice the flux, so the scenario is a 320x120 one and has no
+  grid pair or sweep arm.
 - **The ranking across the `widest` inputs on the product grid**: that state does not converge
   (carried below).
 - **A layout searched for detection and clearing together.** The search is sequential (the
@@ -162,9 +164,11 @@ the floor) the product search detects all twenty within the breach's worst case,
 within a second from a stand just above the band's floor; at the earlier 0.3 m floor the seal
 leak was detected tens of seconds late (L1, U2). Every layout that detects declares the room clean
 early (C2). In the clean-out the room does not clear by 240 s, so the all-clear rule's choice is
-the run's end, and the position is carried open. The ranking holds on 80x30 and 320x120 and at
-every sweep arm that ran (K1 and K2, with a free row per arm); the latencies are comparative and do
-not carry over between grids. Prompt 76's three predictions hold as step 5 scored them; of prompt
+the run's end, and the position is carried open. The ranking holds on 80x30 and 320x120, except
+that on 80x30 the middle of the order inverts by candidacy (K1: the layout searched on 320x120
+beats 80x30's own, three of its four cells not being candidates there), and at every sweep arm that
+ran (K1 and K2, with a free row per arm); the latencies are comparative and do not carry over
+between grids. Prompt 76's three predictions hold as step 5 scored them; of prompt
 76b's five, (n) fails; prompt 76c's (q) holds (P1 to P3).
 
 ## Phase Gate Criteria
@@ -255,7 +259,8 @@ Phase 4's conditions first, then what this phase carries.
   0.1 to 1.2 m band and the exclusions. The seal leak's detection rests on the band's floor (L1's
   0.3 m row). The source box and its standoff are now excluded, but the
   dust is one release position: a sensor just beyond the ring still reads it within a frame,
-  so the dust's latency is still a statement about where the box is.
+  so the dust's latency is still a statement about where the box is. The exact search is at its
+  20-unit cap (decide item 2), so more release positions cannot be scored exactly as built.
 
 ## Implementation Decisions
 
@@ -283,7 +288,11 @@ planned-against-built table.
    after an interval boundary at which an event has ended and the flow fingerprint changed, at or
    after the unit's onset. An arrival on the boundary itself was reached on the step taken on the
    state before it, so it is not marked.
-9. **Measure before building, predictions before runs.** Each step committed its predictions before
+9. **Round 2 of review and test 76** (prompt 76d, the orchestrator, 2026-11-08): the round found
+   as many findings as round 1 and every one was in code 76b or 76c added, so one fix pass with
+   no round 3. The Bug, a missing guard on the all-clear computation's per-class thresholds, is
+   fixed and the plants that survived are pinned.
+10. **Measure before building, predictions before runs.** Each step committed its predictions before
    its runs or its re-score. (e), (f), (g), (i), (j), (k), (l), (m), (o), (p) and (q) hold; (h)
    failed on the mountable set on 80x30, and that failure is what led to reading the door on the
    product grid; (n) failed: the seal leak's air rises above the 0.3 m band's lower limit.
@@ -298,7 +307,8 @@ planned-against-built table.
   first contract line. Prompt 76b: `candidates` takes a sequence of configurations and a
   `stand_height`; the all-clear functions and `ClearUnits`, `ClearScore` and `Roles` are new.
   Prompt 76c: `flow_switches` and `after_flow_switch`, for which `placement` imports
-  `scenarios.flow_fingerprint`.
+  `scenarios.flow_fingerprint`. Prompt 76d: `candidates` refuses a configuration of another room
+  (grid, domain, obstacles) and ignores a `stand_height` given without `stand`.
 - **Configuration.** The optional `placement` section, in the product file and its three layout
   copies, outside the flow inputs and the restart hash, with `stand`, `stand_height` and
   `all_clear` since prompt 76b (the band 0.1 to 1.2 m and `all_clear` 0 since prompt 76c);
@@ -329,6 +339,9 @@ Each change was recorded in SYSTEM.md's Document History when it was made.
 - **A role's rule can be decided by a run's length.** The all-clear search put its sensor where the
   clean-out had not cleared by its end, not where the event scenarios clear last; a score that
   counts only one side of an error rewards never answering.
+- **A fixture can hide what a test claims.** The all-clear tests' frames put every value on the
+  same side of both classes' thresholds, so an assertion that class 1 was read against its own
+  threshold could not fail. A test of a per-class rule needs a value between the thresholds.
 - **A band's floor is a detection decision.** Lowering the stand's floor by 0.2 m moved the seal
   leak's detection from tens of seconds, one class after the event had ended, to under one.
 
@@ -338,7 +351,7 @@ The builder's proposal is CONDITIONAL PASS, carrying one condition of Phase 4's.
 to decide:
 
 **Why not FAIL.** Both planned validation rows pass, the full suite passes, lint and the system map
-pass, SYSTEM.md is current, the latency report exists for all scenarios with five configurations,
+pass, SYSTEM.md is current, the latency report exists for all scenarios with six configurations,
 and the monitor does not modify the fields, by test and at the product grid's scale. Every flow state
 of the runs converged, and nothing found here is a wrong computed result against a stated contract.
 Coverage is at step 0's figures or above (criterion 4).
@@ -365,6 +378,13 @@ their latencies, which are claimed only as a ranking.
 2. **The dust rests on one release position.** With the box and its standoff excluded, a sensor just
    beyond the ring still reads the release within a frame, so the dust's latency still says where
    the box is. The proposed remedy is to score over several release positions per tool top.
+   That adds units, positions times five classes, and the exact worst-case search stops at 20
+   units (`MAX_SET_COVER_UNITS`, 2^20 subsets, a megabyte of flags): the product search is at
+   that cap now (four scenarios, five classes), so a second release position raises
+   `ValueError`. The remedy needs one of two things first: the mean rule's greedy search with
+   its one-sensor exchanges, which is not exact for the worst case, or a larger cap whose memory
+   and time are measured first (the subsets double with each unit, 2^25 is 32 megabytes of
+   flags, and the time has not been measured). Which one is Alex's choice beside the remedy.
 3. **An all-clear requirement, proposed and not applied to SYSTEM.md.** "The placement module shall
    report, for a layout, each all-clear unit's layout clear time, the room's clear time with the cell
    that sets it, and the premature interval between them, frame-resolved with the spacing stated,

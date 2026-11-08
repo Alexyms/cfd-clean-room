@@ -21,9 +21,9 @@ worst case, the seal leak from a stand just above the band's floor. At the earli
 the seal leak was detected only tens of seconds late, one class after the leak had ended. Every
 layout that detects declares the room clean while a pocket is still contaminated; where an
 all-clear sensor should go is carried open, because the score counts only clearing early and the
-clean-out's run ends before its room clears. The ranking of layouts holds between the two grids
-and across the sweep's arms that ran; the latencies themselves do not carry over between grids and
-are not claimed.
+clean-out's run ends before its room clears. The ranking of layouts holds between the two grids,
+the middle of the order inverting on 80x30 by candidacy (K1), and across the sweep's arms that ran;
+the latencies themselves do not carry over between grids and are not claimed.
 
 ## Predictions, committed before the runs
 

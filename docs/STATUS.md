@@ -140,7 +140,8 @@ doorway. Every layout that detects declares the room clean while a pocket is sti
 The clean-out's room does not clear by the run's end, and the all-clear score counts only
 clearing early, so where an all-clear sensor goes waits on a cost for clearing late and a
 clean-out run until the room clears. The claim is the ranking of layouts,
-which holds across the two grids and the sweep's arms, not any latency's value.
+which holds across the two grids, the middle of the order inverting on 80x30 by candidacy,
+and the sweep's arms, not any latency's value.
 `docs/reports/phase5_alert_system_report.md` is the gate report, proposing a CONDITIONAL PASS for
 Alex to decide, with Phase 4's condition on the budget residual's mechanism carried and due before
 Phase 6. A second round of review and test 76 runs before its pull request.
