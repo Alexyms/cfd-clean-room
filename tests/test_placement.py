@@ -1698,6 +1698,14 @@ class TestClearUnitsFromRuns:
             clear_units({})
         with pytest.raises(TypeError, match="a scenario name must be a str"):
             clear_units({1: runs["early"]})
+        again = self._run(tmp_path, "again", early, 30.0)
+        both = clear_units(
+            {"early": runs["early"], "late": runs["late"], "again": again}
+        )
+        assert [label[0] for label in both.labels] == ["early"] * 5 + ["again"] * 5
+        assert (
+            both.clear.tobytes() == np.concatenate([units.clear, units.clear]).tobytes()
+        )
         coarse = self._run(tmp_path, "coarse", early, 30.0, grid=(40, 15))
         with pytest.raises(ValueError, match="the runs must share a mesh"):
             clear_units({"early": runs["early"], "coarse": coarse})
