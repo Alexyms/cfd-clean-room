@@ -1648,6 +1648,7 @@ class TestPressureKeys:
             "scenario_door_leak.yaml": 1e-4,
             "scenario_equipment_dust.yaml": 1e-4,
             "scenario_filter_breach.yaml": 1e-4,
+            "scenario_seal_leak.yaml": 1e-4,
             "validation_annex20.yaml": 1e-4,
             "validation_backstep.yaml": 1e-4,
             "validation_cylinder.yaml": 1e-4,
@@ -3849,6 +3850,7 @@ REFERENCE_SCENARIOS = {
     "scenario_filter_breach.yaml": ("panel_breach", "replace"),
     "scenario_equipment_dust.yaml": ("litho_dust", "source"),
     "scenario_clean_out.yaml": ("contaminated_start", "initial"),
+    "scenario_seal_leak.yaml": ("seal_leak", "replace"),
 }
 
 

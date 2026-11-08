@@ -725,6 +725,7 @@ class TestContaminatingEvents:
             ("scenario_door_leak.yaml", (("door_open", 10.0),)),
             ("scenario_filter_breach.yaml", (("panel_breach", 10.0),)),
             ("scenario_equipment_dust.yaml", (("litho_dust", 10.0),)),
+            ("scenario_seal_leak.yaml", (("seal_leak", 10.0),)),
         ],
     )
     def test_each_reference_scenarios_one_event(

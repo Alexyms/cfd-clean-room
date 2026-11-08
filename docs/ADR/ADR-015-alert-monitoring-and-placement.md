@@ -899,6 +899,21 @@ mountable position at any standoff detects the door, and the ranking (free optim
 file's four) holds under both rules on 80x30 and 320x120 and at every sweep arm that ran. Its
 values do not carry between grids, so section D's comparative claim is the one the records support.
 
+*Prompt 76b's predictions (orchestrator, 2026-11-07), committed before the seal-leak run and any
+re-scoring.* Alex decided three things on 2026-11-07: a sensor on a free-standing stand is a
+mounting option, `stand`, with its inlet 0.3 to 1.2 m above the floor; a scenario's source box is
+not a candidate; detection and all-clear are separate roles. The orchestrator added the door seal
+leak (`configs/scenario_seal_leak.yaml`) as a fifth scenario.
+- (l) On the mountable candidates without stands, with the source excluded, the searched four
+  detect every breach and every dust unit, and no door or seal-leak unit.
+- (m) With stands, the searched four detect every door, breach and dust unit.
+- (n) No candidate of any mount, stands included, detects a seal-leak unit; the free cells that do
+  lie below 0.3 m.
+- (o) In the clean-out, the detection-only four with stands declare clean while live area at or
+  above threshold remains, at every class.
+- (p) The three-plus-one's worst detection latency over the door, breach and dust units equals the
+  detection-only four's, and its worst premature interval is smaller.
+
 *Step 4's prediction (orchestrator, 2026-11-02, prompt 75), committed before the 80x30 runs.*
 (h) On 80x30 the file's four sensors detect none of the three event scenarios' (scenario,
 event, class) units, and the searched four detect at least one unit in every scenario.

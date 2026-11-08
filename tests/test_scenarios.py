@@ -31,7 +31,7 @@ from src.scenarios import (
     flow_fingerprint,
     flow_segments,
 )
-from src.staggered import allocate_fields, obstacle_face_inputs
+from src.staggered import allocate_fields, edge_cell_inputs, obstacle_face_inputs
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_DIR = ROOT / "configs"
@@ -43,6 +43,7 @@ REFERENCE_STATES = {
     "scenario_filter_breach.yaml": 1,
     "scenario_equipment_dust.yaml": 1,
     "scenario_clean_out.yaml": 1,
+    "scenario_seal_leak.yaml": 2,
 }
 # The coarse product grid: every stated position is a multiple of 0.05 m, so
 # 160x60 puts each on a cell face (ECR-002 section 8).
@@ -442,6 +443,61 @@ class TestFlowStates:
     ) -> None:
         config = SimConfig(CONFIG_DIR / name)
         assert _manager(config).n_flow_states == REFERENCE_STATES[name]
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    ("grid", "slot_faces"),
+    [((320, 120), 1), ((160, 60), 1), ((80, 30), 0)],
+)
+def test_the_seal_leaks_slot_and_the_returns_that_take_it(
+    grid: tuple[int, int], slot_faces: int
+) -> None:
+    """The seal leak (prompt 76b): one product cell at 0.8 m/s, the returns take it.
+
+    The slot is y 0 to 0.025 m. On 320x120 it is the first cell, 0.02 m^2/s
+    per metre of depth, the 10 mm undercut's flux at about 2 m/s. On 160x60 the
+    first face's centre is the slot's end, a tie the coverage rule gives to the
+    slot, so the face carries twice the flux; on 80x30 the first face's centre
+    lies above the slot and no face is covered, so the leak vanishes there. On
+    every grid the returns, which state no velocity, share the discrete inflow
+    left after the hood, the slot's included, and outflow equals inflow.
+
+    Defects caught: the returns held at the closed door's share (outflow short
+    of inflow by the slot's flux), the slot read as the whole doorway.
+    """
+    spec = SimConfig(CONFIG_DIR / "scenario_seal_leak.yaml").scenario
+    flows = []
+    for events in ((), spec.active(20.0)):
+        raw = spec.mapping(events)
+        raw["domain"]["nx"], raw["domain"]["ny"] = grid
+        config = SimConfig.from_dict(raw)
+        mesh = Mesh(config)
+        boundary = StaggeredBoundary(mesh, config)
+        shares = boundary.fixed_flow_velocities()
+        widths = {
+            name: sum(
+                float(w)
+                for w, point in zip(
+                    mesh.dx_cell,
+                    BoundaryRegistry(config).coverage_along(
+                        "bottom", *edge_cell_inputs(mesh, "bottom")
+                    ),
+                    strict=True,
+                )
+                if point.name == name
+            )
+            for name in shares
+            if name.startswith("floor_return")
+        }
+        outflow = sum(shares[name] * widths[name] for name in widths) + 0.5 * 0.9
+        inflow = boundary.get_total_inlet_flux()
+        assert outflow == pytest.approx(inflow, rel=1e-12)
+        flows.append(inflow)
+    dy = float(Mesh(SimConfig.from_dict(raw)).dy_cell[0])
+    assert flows[1] - flows[0] == pytest.approx(slot_faces * 0.8 * dy, abs=1e-12)
+    if grid == (320, 120):
+        assert flows[1] - flows[0] == pytest.approx(0.02, rel=1e-12)
 
 
 @pytest.mark.integration

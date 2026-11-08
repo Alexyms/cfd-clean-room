@@ -1,4 +1,4 @@
-"""Write the step 5 copies of the four reference scenarios (prompt 76).
+"""Write the step 5 copies of the five reference scenarios (prompts 76 and 76b).
 
 Usage: python docs/reports/probe76/configs76.py  (from the repository root)
 
@@ -16,11 +16,12 @@ from pathlib import Path
 import yaml
 
 ROOT = Path(__file__).resolve().parents[3]
-SCENARIOS = ("clean_out", "door_leak", "equipment_dust", "filter_breach")
+SCENARIOS = ("clean_out", "door_leak", "equipment_dust", "filter_breach", "seal_leak")
 CHECKPOINT_INTERVAL = 1000
 
 
 def main() -> int:
+    """Write each copy under results/builder76/configs/; return 0."""
     out = ROOT / "results" / "builder76" / "configs"
     out.mkdir(parents=True, exist_ok=True)
     for name in SCENARIOS:
