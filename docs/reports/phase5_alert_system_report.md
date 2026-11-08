@@ -21,7 +21,8 @@ generates from the run files under `results/builder76/`, `results/builder75/runs
 `results/builder72/` (untracked, this machine), copied into
 `docs/reports/phase5_alert_report.md` and here between markers; its `--check` regenerates and
 compares. The sentences point at the tables and restate a number only where a verdict turns on
-it. The test and coverage figures are from one run at c7e9a29.
+it. The test and coverage figures are from one run at f5bf43d, the last commit that changes `src/` or
+`tests/`.
 
 ## Scope
 
@@ -73,21 +74,22 @@ Also added without plan entries, each to measure the build: the probe directorie
 ## Test Results
 
 One run: `OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 pytest tests/ -v --cov=src --cov-branch
---cov-report=term-missing --cov-report=json:...` at c7e9a29 on 2026-11-08, the only run of the
-build on the machine (`results/builder76/full_suite76c.txt`, untracked). The per-tier counts are
+--cov-report=term-missing --cov-report=json:...` at f5bf43d on 2026-11-08, the only run of the
+build on the machine (`results/builder76/full_suite76d.txt`, untracked). The per-tier counts are
 `pytest tests/ --collect-only -q -m <tier>` at the same commit; every collected test carries one of
 the three markers. The branch changes nothing under `src/` or `tests/` after that commit. The runs
-at a8549ab (step 5, 2,908 tests) and aefff78 (prompt 76b, 2,967) are superseded.
+at a8549ab (step 5, 2,908 tests), aefff78 (prompt 76b, 2,967) and c7e9a29 (prompt 76c, 2,981) are
+superseded.
 
 | Tier | Collected | Passed | Failed | Skipped or xfailed | Phase 4 (5aabe1d) |
 |---|---|---|---|---|---|
-| Unit | 2590 | 2590 | 0 | 0 | 1984 |
+| Unit | 2610 | 2610 | 0 | 0 | 1984 |
 | Integration | 311 | 311 | 0 | 0 | 273 |
 | Validation | 80 | 80 | 0 | 0 | 61 |
-| All | 2981 | 2981 | 0 | 0 | 2318 |
+| All | 3001 | 3001 | 0 | 0 | 2318 |
 
-The suite took 4045 s (1328 s for prompt 76b's run at aefff78; the machine's other load was not
-recorded, so the time is not a measure of the code).
+The suite took 1498 s (1328 s for prompt 76b's run at aefff78 and 4045 s for prompt 76c's at
+c7e9a29; the machine's other load was not recorded, so the time is not a measure of the code).
 
 ### Validation Tests
 
@@ -141,7 +143,7 @@ the step 0 run that the plan names as Phase 4's after the debt was paid.
 
 | Measure | The gate | After step 0 (prompt 71) | Covered count, change | Percentage, change (points) |
 |---|---|---|---|---|
-| Statements covered | 7,079 of 7,079 (100.00%) | 5,807 of 5,807 (100.00%) | +1,272 | +0.00 |
+| Statements covered | 7,080 of 7,080 (100.00%) | 5,807 of 5,807 (100.00%) | +1,273 | +0.00 |
 | Branches covered | 2,541 of 2,542 (99.96%) | 2,005 of 2,006 (99.95%) | +536 | +0.01 |
 
 Files with an uncovered statement: none. Uncovered branch arms: `src/time_integration.py` 613->616.
@@ -176,7 +178,7 @@ between grids. Prompt 76's three predictions hold as step 5 scored them; of prom
 1. **All planned validation tests pass.** Holds: VAL-009 and VAL-024, the rows above, and every
    test-carried row of the earlier phases in the suite.
 2. **All unit and integration tests pass.** Holds: every collected test passed in the one run at
-   c7e9a29, none failed or skipped.
+   f5bf43d, none failed or skipped.
 3. **No ruff errors.** Holds: `ruff format --check .` and `ruff check .` pass at HEAD.
 4. **Coverage does not decrease.** Holds: 100.00% of statements against step 0's 100.00%, 99.96% of branches
    against its 99.95% (table Cv1), the measure the coverage debt's payment set.
