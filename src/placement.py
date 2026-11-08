@@ -28,10 +28,15 @@ unit is (scenario, class) for a scenario whose events all end before its run
 does; ``clear_units`` reads each cell's clear time from the stored frames,
 ``clear_score`` reads a layout's against the room's, and ``search_roles``
 searches the detection sensors and then adds the all-clear ones in turn.
+
+Prompt 76c marks a latency that falls after a flow switch: ``flow_switches``
+states when an event's end changes a scenario's flow state, and
+``after_flow_switch`` marks the arrivals after one.
 """
 
 import os
 from collections.abc import Iterable, Mapping, Sequence
+from itertools import pairwise
 from typing import NamedTuple
 
 import numpy as np
@@ -60,6 +65,7 @@ from src.io_manager import (
 )
 from src.mesh import SOLID, Mesh
 from src.monitor import contaminating_events
+from src.scenarios import flow_fingerprint
 from src.staggered import edge_cell_inputs, obstacle_face_inputs
 
 # What resolves an arrival map's times: the march's every step, or the run
@@ -971,6 +977,102 @@ def rank(layouts: Iterable[Layout]) -> list[Layout]:
                 "set (exclude_units) before ranking"
             )
     return sorted(out, key=lambda layout: (layout.score.worst, layout.score.mean))
+
+
+def flow_switches(config: SimConfig) -> tuple[float, ...]:
+    """The times at which an event's end changes a scenario's flow state (ADR-015 E).
+
+    Parameters
+    ----------
+    config : SimConfig
+        A scenario's configuration.
+
+    Returns
+    -------
+    tuple[float, ...]
+        Seconds, in order: each interval boundary (``ScenarioSpec.times``)
+        at which an event active over the interval before it is no longer
+        active, and the flow fingerprint (``scenarios.flow_fingerprint``) of
+        the interval after differs from the one before. Empty for a
+        configuration with no scenario, and for one whose events end only in
+        a source or a transport-only change. An end at or after ``t_end`` is
+        no boundary and no switch.
+    """
+    spec = config.scenario
+    if spec is None:
+        return ()
+    fingerprints: dict[tuple[str, ...], str] = {}
+
+    def fingerprint(t: float) -> str:
+        active = spec.active(t)
+        names = tuple(event.name for event in active)
+        if names not in fingerprints:
+            fingerprints[names] = flow_fingerprint(
+                SimConfig.from_dict(spec.mapping(active))
+            )
+        return fingerprints[names]
+
+    out = []
+    times = spec.times()
+    for before, t in pairwise(times[:-1]):
+        ended = any(
+            spec.is_active(event, before) and not spec.is_active(event, t)
+            for event in spec.events
+        )
+        if ended and fingerprint(before) != fingerprint(t):
+            out.append(float(t))
+    return tuple(out)
+
+
+def after_flow_switch(
+    latencies: np.ndarray | float, onset: float, switches: Sequence[float]
+) -> np.ndarray:
+    """Mark latencies that fall after a flow switch (ADR-015 E).
+
+    Parameters
+    ----------
+    latencies : np.ndarray or float
+        Seconds after the event's onset, any shape; inf for never reached,
+        NaN for SOLID.
+    onset : float
+        The event's onset, seconds, finite and non-negative.
+    switches : Sequence[float]
+        The scenario's flow switches, seconds (``flow_switches``).
+
+    Returns
+    -------
+    np.ndarray
+        bool, the shape of ``latencies``: True where the arrival, onset plus
+        latency, is finite and strictly after a switch at or after the onset.
+        A unit reached after the flow switch was read on a flow state other
+        than its event's.
+
+    Raises
+    ------
+    TypeError
+        If the onset or a switch is not a real number (a bool is not).
+    ValueError
+        If the onset is not finite and non-negative, or a switch is not
+        finite.
+
+    Notes
+    -----
+    A switch at time t ends the interval [.., t), and the step that lands on
+    t was taken on the state before it, so an arrival at t itself is not
+    marked.
+    """
+    onset = real_number("onset", onset)
+    if not (np.isfinite(onset) and onset >= 0.0):
+        raise ValueError(f"onset must be finite and non-negative, got {onset}")
+    times = [real_number("a flow switch", value) for value in switches]
+    if not all(np.isfinite(times)):
+        raise ValueError(f"every flow switch must be finite, got {times}")
+    arrival = onset + np.asarray(latencies, dtype=np.float64)
+    out = np.zeros(arrival.shape, dtype=bool)
+    for t in times:
+        if t >= onset:
+            out |= np.isfinite(arrival) & (arrival > t)
+    return out
 
 
 def scenario_end(config: SimConfig) -> float | None:

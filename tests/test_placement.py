@@ -59,6 +59,7 @@ from src.placement import (
     _maximal,
     _worst_case_cover,
     add_all_clear,
+    after_flow_switch,
     arrival_from_frames,
     arrival_from_run,
     candidates,
@@ -67,6 +68,7 @@ from src.placement import (
     clear_units,
     detection_units,
     exclude_units,
+    flow_switches,
     given_layout,
     latency,
     rank,
@@ -1445,6 +1447,94 @@ class TestScenarioEnd:
         late = [{"name": "a", "start": 10.0, "duration": 50.0, "source": DUST_BOX}]
         assert scenario_end(scenario_config(tmp_path, late, 60.0)) is None
         assert scenario_end(SimConfig.from_dict(small_room())) is None
+
+
+@pytest.mark.unit
+class TestFlowSwitch:
+    def test_only_an_end_that_changes_the_flow_state_is_a_switch(
+        self, tmp_path: Path
+    ) -> None:
+        """A door open 10 to 20 s, a split supply 10 to 15 s, a source 25 to 35 s.
+
+        The split supply (the breach's replacement, which joins to the base's
+        segment) ends at 15 s on the same flow state; the source changes no
+        flow; a second door opening reaches t_end. The one switch is the
+        door's end at 20 s. Defects caught: starts counted (10, 50); every
+        event end counted (15, 20, 35); an end at t_end counted (60); an end
+        compared with the base's state and not the interval's before it (15).
+        """
+        door = yaml.safe_load(
+            (CONFIGS / "scenario_door_leak.yaml").read_text(encoding="utf-8")
+        )["scenario"]["events"][0]
+        breach = yaml.safe_load(
+            (CONFIGS / "scenario_filter_breach.yaml").read_text(encoding="utf-8")
+        )["scenario"]["events"][0]
+        events = [
+            {**door, "name": "door_a", "start": 10.0, "duration": 10.0},
+            {**breach, "start": 10.0, "duration": 5.0},
+            {"name": "dust", "start": 25.0, "duration": 10.0, "source": DUST_BOX},
+            {**door, "name": "door_b", "start": 50.0, "duration": 10.0},
+        ]
+        assert flow_switches(scenario_config(tmp_path, events, 60.0)) == (20.0,)
+
+    def test_the_reference_scenarios_switch_at_the_door_and_the_seal(self) -> None:
+        """The door at 15 s and the seal leak at 40 s; the breach, dust and clean-out never."""
+        expected = {
+            "door_leak": (15.0,),
+            "filter_breach": (),
+            "equipment_dust": (),
+            "seal_leak": (40.0,),
+            "clean_out": (),
+        }
+        for name, times in expected.items():
+            assert flow_switches(SimConfig(CONFIGS / f"scenario_{name}.yaml")) == times
+        assert flow_switches(SimConfig.from_dict(small_room())) == ()
+
+    def test_a_latency_is_marked_when_its_arrival_is_after_a_switch(self) -> None:
+        """Onset 10 s, a switch at 15 s: 4.9 and 5.0 s unmarked, 5.1 s marked.
+
+        A unit never reached (inf) and a SOLID cell (NaN) are unmarked. Defects
+        caught: the comparison inclusive (5.0 marked); the latency compared
+        with the switch without the onset (none marked); inf marked.
+        """
+        latencies = np.array([4.9, 5.0, 5.1, np.inf, np.nan])
+        marked = after_flow_switch(latencies, 10.0, (15.0,))
+        assert marked.tolist() == [False, False, True, False, False]
+        assert marked.dtype == bool and marked.shape == latencies.shape
+        assert after_flow_switch(30.6, 10.0, (40.0,)).item() is True
+        assert after_flow_switch(29.4, 10.0, (40.0,)).item() is False
+
+    def test_a_switch_before_the_onset_marks_nothing(self) -> None:
+        """A door opened twice: the first close at 15 s is before the second onset.
+
+        Onset 30 s, switches 15 and 35 s: 4 s unmarked, 6 s marked by the second
+        switch alone. Defect caught: every switch of the scenario counted (all
+        marked).
+        """
+        marked = after_flow_switch(np.array([4.0, 6.0]), 30.0, (15.0, 35.0))
+        assert marked.tolist() == [False, True]
+        assert not after_flow_switch(np.array([4.0, 6.0]), 30.0, ()).any()
+
+    @pytest.mark.parametrize(
+        ("onset", "switches", "error", "match"),
+        [
+            (True, (15.0,), TypeError, "onset must be a real number"),
+            ("10", (15.0,), TypeError, "onset must be a real number"),
+            (-1.0, (15.0,), ValueError, "onset must be finite and non-negative"),
+            (np.inf, (15.0,), ValueError, "onset must be finite and non-negative"),
+            (np.nan, (15.0,), ValueError, "onset must be finite and non-negative"),
+            (10.0, (True,), TypeError, "a flow switch must be a real number"),
+            (10.0, ("15",), TypeError, "a flow switch must be a real number"),
+            (10.0, (np.nan,), ValueError, "every flow switch must be finite"),
+            (10.0, (np.inf,), ValueError, "every flow switch must be finite"),
+        ],
+    )
+    def test_a_bad_onset_or_switch_is_refused(
+        self, onset: object, switches: tuple, error: type, match: str
+    ) -> None:
+        """The onset and the switches are checked before any arithmetic."""
+        with pytest.raises(error, match=match):
+            after_flow_switch(np.array([1.0]), onset, switches)
 
 
 DUST_BOX = {

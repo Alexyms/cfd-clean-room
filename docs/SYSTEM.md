@@ -132,7 +132,7 @@ momentum                           .                     .                  X   
 monitor                            .                     .                  .                 .           X         .        .         X        X       .         .         .          .          .         .            .            .             .                 .              .         .             .              .
 multigrid                          .                     .                  .                 .           .         .        .         .        .       .         .         .          .          .         .            .            .             .                 .              .         .             .              .
 particles                          .                     .                  .                 .           X         X        .         .        .       .         .         .          .          .         .            .            .             .                 .              .         .             .              .
-placement                          .                     X                  .                 .           X         .        .         X        X       .         X         .          .          .         .            .            .             .                 .              X         .             .              .
+placement                          .                     X                  .                 .           X         .        .         X        X       .         X         .          .          .         .            .            X             .                 .              X         .             .              .
 pressure                           .                     .                  X                 .           X         .        .         .        X       X         .         X          .          .         .            .            .             .                 .              X         .             .              .
 scalar_scheme                      .                     .                  .                 .           .         .        .         .        X       X         .         .          .          .         .            .            .             .                 .              .         .             .              .
 scenarios                          X                     X                  .                 X           X         .        .         .        X       .         .         .          X          .         .            .            .             .                 .              .         .             .              .
@@ -144,7 +144,7 @@ time_integration                   .                     .                  X   
 turbulence                         .                     X                  X                 X           X         .        .         .        X       .         .         .          .          .         .            X            .             .                 .              X         .             .              .
 ```
 
-Rows import columns. Edges, 84 total:
+Rows import columns. Edges, 85 total:
 
 ```
 boundary_concentration -> boundary_registry, boundary_vents, config, mesh, particles, staggered
@@ -157,7 +157,7 @@ mesh                   -> config
 momentum               -> boundary_staggered, config, mesh, staggered
 monitor                -> config, io_manager, mesh
 particles              -> config, constants
-placement              -> boundary_registry, config, io_manager, mesh, monitor, staggered
+placement              -> boundary_registry, config, io_manager, mesh, monitor, scenarios, staggered
 pressure               -> boundary_staggered, config, mesh, momentum, multigrid, staggered
 scalar_scheme          -> mesh, momentum
 scenarios              -> boundary_concentration, boundary_registry, boundary_vents, config, mesh, particles
@@ -234,7 +234,7 @@ Generated. The responsibility and serves columns are editorial and come from `do
 | `src/monitor.py` | 866 | Reads each sensor's cell of every class field after every step by ADR-014 C's cell rule, opens an alert at the first reading at or above the class's threshold and closes it at the first below, keeping each alert's times, opening reading and peak, gives each sensor's latency from each event onset, keeps the arrival maps (per contaminating event of the plan, class and non-SOLID cell, the first step time at or after the onset at or above the threshold) by the same rule, and carries both states for the checkpoint; it reads the fields and never writes them. | A01, A02, A04, A06 |
 | `src/multigrid.py` | 384 | Builds an additive-correction multigrid hierarchy from a five-point pressure system by 2x2 aggregation, its coarse operators the exact Galerkin sums with no probing, and applies one symmetric V-cycle with weighted Jacobi smoothing and a dense pseudo-inverse on the coarsest level as the preconditioner of the pressure correction's conjugate gradients. | S08 |
 | `src/particles.py` | 263 | Computes per-size-class transport properties: Cunningham correction, settling velocity, Brownian diffusion, deposition velocity and HEPA efficiency. | T03, T04, T09, T10 |
-| `src/placement.py` | 1885 | Reads a run file's arrival maps for sensor placement (its /arrival/ maps, resolved to the step, or for a file written before them the maps rebuilt from its stored frames at the output cadence by the same rule, flagged as frame-resolved with the reason), stacks runs' latencies into (scenario, event, class) units, scores any layout by lookup under the worst-case, mean and coverage rules, states the candidate cells by mounting surface and standoff or a floor stand's height band, excluding the cells near any scored scenario's openings and source boxes, searches the best layout of a count (exact for one and two sensors and for the worst case at any count by a set cover), ranks layouts, and for the all-clear role reads each cell's clear time after a scenario's last event from the stored frames, a layout's and the room's clear times and the premature interval between them, and adds all-clear sensors to a detection layout one at a time. | A04, A05 |
+| `src/placement.py` | 1987 | Reads a run file's arrival maps for sensor placement (its /arrival/ maps, resolved to the step, or for a file written before them the maps rebuilt from its stored frames at the output cadence by the same rule, flagged as frame-resolved with the reason), stacks runs' latencies into (scenario, event, class) units, scores any layout by lookup under the worst-case, mean and coverage rules, states the candidate cells by mounting surface and standoff or a floor stand's height band, excluding the cells near any scored scenario's openings and source boxes, searches the best layout of a count (exact for one and two sensors and for the worst case at any count by a set cover), ranks layouts, and for the all-clear role reads each cell's clear time after a scenario's last event from the stored frames, a layout's and the room's clear times and the premature interval between them, and adds all-clear sensors to a detection layout one at a time, and marks a latency that falls after an event's end has changed the scenario's flow state. | A04, A05 |
 | `src/pressure.py` | 859 | Assembles the staggered pressure correction equation from the momentum diagonals with the discrete divergence of u* as its right-hand side, solves it by conjugate gradients preconditioned with its diagonal or, under the pressure_preconditioner key, with one multigrid V-cycle per iteration, to a relative residual, a rounding floor or a reported iteration cap, corrects the face velocities and updates the pressure. | S04, S08 |
 | `src/scalar_scheme.py` | 568 | Holds the cell-centred scalar scheme the transport solver and the k-epsilon model share: QUICK's face value bounded by the UMIST limiter, the advective flux along one axis with the inflow value or the upwind cell at a domain face, and the backward Euler solve of diffusion with a non-negative cell sink by Jacobi or, for k and eps, by diagonal-preconditioned conjugate gradients that fall back to Jacobi on the cap or a non-positive value, on per-face conductances with one step or a step per cell, with an optional mask of cells held at their value. | S15, T12 |
 | `src/scenarios.py` | 404 | Turns a loaded scenario into its intervals between event boundaries, keys each interval's flow state by a fingerprint of the segment keys the velocity layer reads so transport-only events add no state, and gives the source rate of every class at a time, an interval's concentration boundary and the initial fields on the mesh; it solves and marches nothing. | none |
@@ -245,7 +245,7 @@ Generated. The responsibility and serves columns are editorial and come from `do
 | `src/time_integration.py` | 1679 | Runs a scenario under tier 1: solves each distinct flow state once, warm-started from the state before it, or reuses one a run file holds, then marches every particle class at one step through the intervals, dividing each into equal steps under the stable step and carrying the fields and budgets across each switch, writing frames, budgets, sensor readings, the alert monitor's table and checkpoints through the run file, continuing a run from its checkpoint, keeping the arrival maps of every run every step and for a clean-out the recovery outputs, and giving each sensor's latency per contaminating event from the monitor and from the maps; under tier 2 marches the flow itself through solve_transient, writing its frames, per-step counts, lift and drag and two-level checkpoints, restarting bitwise, and reading the Strouhal number and drag coefficient at the end; it discretises nothing. | A04, N01 |
 | `src/turbulence.py` | 1622 | Advances the k-epsilon model's k and eps one step on a prescribed face velocity field, standard or RNG with each variant's constants as module data: advection, explicit growth from the strain the faces give and implicit decay and diffusion through the shared scalar scheme, boundary values from a conditions object the caller builds each step, the kinematic eddy viscosity, and an assertion that k and eps are positive and finite after every step; and the scalable wall functions, which build those conditions, the wall viscosity of the momentum wall faces and the inlet values the coupled solve starts from. | S14, S15, S17 |
 
-Total 24 Python files, 20813 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
+Total 24 Python files, 20915 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
 
 `Declares it serves` is an EDITORIAL CLAIM read from `docs/system_map_annotations.toml`. It says which requirements a module is meant to satisfy, not that it does. Whether a requirement is met is answered by the tests named in the register's `Verified By` column.
 <!-- END GENERATED: components -->
@@ -270,7 +270,7 @@ Generated. Static import analysis cannot see a function bound into a registry by
 |---|---|
 | Scope | `src/**/*.py` |
 | Files hashed | 24 |
-| Digest | `sha256:365a0b93fd3dd9f739645ea4f41c0550d4b729ebfb75b750b7e3aa93de949097` |
+| Digest | `sha256:283747a2ae5b62a32608b735f9957dee68289545279c8c9b0e02222f732fcac1` |
 
 This is what lets the document answer whether it is current, which is the one question a stale table cannot be asked. `python scripts/gen_system_map.py --check` recomputes the whole set of generated regions, this digest included, and exits non-zero on any disagreement.
 
@@ -1770,6 +1770,15 @@ clear_score(units: ClearUnits, cells) -> ClearScore
     # (NaN where the layout is not clear); worst and mean of the ranking keys (the
     # interval; inf where the room is not clear and the layout is; 0 where the
     # layout is not clear); cell checks as score's
+flow_switches(config) -> tuple[float, ...]    # prompt 76c: each interval boundary
+    # at which an event active before it has ended and the flow fingerprint
+    # (scenarios.flow_fingerprint) differs from the interval's before; () with no
+    # scenario; an end at or after t_end is none
+after_flow_switch(latencies, onset, switches) -> np.ndarray[bool]
+    # latencies' shape: True where onset + latency is finite and strictly after
+    # a switch at or after the onset (the arrival read on another flow state).
+    # TypeError for an onset or switch that is not a real number or is a bool;
+    # ValueError for an onset not finite and non-negative or a switch not finite
 room_clear(units) -> (times [units], cells)    # the room's clear time and its cell,
                                                # the first in row-major order
 add_all_clear(units: ClearUnits, candidates, cells, count) -> tuple[(j, i), ...]
@@ -1785,7 +1794,7 @@ search_roles(units, clear, candidates, count, all_clear, rule, *, within=None) -
     # count - 1 or the two unit sets on two meshes
 ```
 
-### scenarios.py --> time_integration; tests/test_scenarios.py
+### scenarios.py --> time_integration, placement; tests/test_scenarios.py
 
 Built at ADR-014 step 2 (prompt 62), from ADR-014 A, B and G. The contract
 replaces the earlier draft's get_active_sources(t) and get_bc_modifications(t):
@@ -2288,4 +2297,5 @@ ADR-008, ADR-010, ADR-011, ADR-012, ADR-013 and ADR-014 are files in `docs/ADR/`
 | 2026-11-03 | ADR-015 step 4 fix pass, continued (prompt 75b). placement.py: `Units` gains `frame_resolved` (per unit), `Score` gains `frame_resolved` and `Layout.frame_resolved` reads it, so a score or layout built on a Phase 4 or sweep file's rebuilt maps says so; `detection_units` refuses a resolution that is neither flag; a searched layout's cells are sorted by (j, i); `_maximal` tests containment in chunks of `_MAXIMAL_CHUNK` rows, the same masks with a bounded working array. Section 3 regenerated. No change to the solve or march arithmetic. | Claude (builder) |
 | 2026-11-05 | ADR-015 step 5, item 0 (prompt 76, branch phase5/step5-gate). placement.py: a cell within the standoff of an opening is not a candidate, the free set included (`_openings` in place of `_beside_openings`, `_distance_to`); on 320x120 the rule as first built mounted sensors in the open doorway, under the supply and at the hood. Section 3 regenerated. No change to the solve or march arithmetic. | Claude (builder) |
 | 2026-11-07 | ADR-015 step 5, prompt 76b (same branch), Alex's decisions of 2026-11-07. config.py: `MOUNT_STAND` ("stand") joins MOUNT_SURFACES; PlacementSpec gains `stand_height` (required with a stand) and `all_clear`; the product file and its three copies state the stand, its 0.3 to 1.2 m band and one all-clear sensor. placement.py: `candidates` takes every scored scenario's configuration, excludes source boxes and their standoff, and offers stand cells; `scenario_end`, `clear_times`, `clear_units`, `ClearUnits`, `clear_score`, `ClearScore`, `room_clear`, `add_all_clear`, `search_roles` and `Roles` (section D's "Two roles"). `configs/scenario_seal_leak.yaml`, the fifth reference scenario. Section 3 regenerated. No change to the solve or march arithmetic. | Claude (builder) |
+| 2026-11-08 | ADR-015 step 5, prompt 76c (same branch), Alex's decisions of 2026-11-08. The product file and its three copies state the stand band 0.1 to 1.2 m and `all_clear` 0 (the all-clear position carried open; the code stays). placement.py: `flow_switches` and `after_flow_switch`, the latency tables' marker "after the flow switch"; placement now imports `scenarios.flow_fingerprint`, so scenarios.py serves placement. Sections 1 and 3 regenerated. No change to the solve or march arithmetic. | Claude (builder) |
 | 2026-11-05 | ADR-015 step 5 and the Phase 5 gate (prompt 76, branch phase5/step5-gate): the four reference scenarios on 320x120 with their arrival maps and alert tables, `docs/reports/phase5_alert_report.md`, `docs/reports/phase5_alert_system_report.md` and `docs/reports/probe76/`. The ADR-015 row reads built; placement's cascade row names the generator in place of the planned script. No requirement's text changed. The runs equal the Phase 4 gate's bitwise, so no change to the solve or march arithmetic. | Claude (builder) |
