@@ -4410,10 +4410,11 @@ class TestPlacementSection:
         assert SimConfig.from_dict(raw).placement.within is None
 
     def test_the_product_file_states_its_placement(self) -> None:
-        """The surfaces and a stand, a 5 cm standoff, four sensors with one all-clear.
+        """The surfaces and a stand, a 5 cm standoff, four detection sensors.
 
-        Alex's decision of 2026-11-07: a stand's inlet 0.3 to 1.2 m above the
-        floor, and one of the four in the all-clear role.
+        Alex's decisions: a stand's inlet 0.1 to 1.2 m above the floor (the
+        floor lowered from 0.3 m on 2026-11-08), and no all-clear sensor while
+        its position is carried open (2026-11-08).
         """
         spec = SimConfig(CONFIG_DIR / "clean_room_default.yaml").placement
         assert spec == PlacementSpec(
@@ -4421,8 +4422,8 @@ class TestPlacementSection:
             standoff=0.05,
             count=4,
             rule=WORST_CASE,
-            stand_height=(0.3, 1.2),
-            all_clear=1,
+            stand_height=(0.1, 1.2),
+            all_clear=0,
         )
         assert set(spec.mount) == set(MOUNT_SURFACES) - {"free"}
 
@@ -4544,7 +4545,7 @@ class TestPlacementSection:
         """A run file's mapping merges over the base as it is now (prompt 76b).
 
         Step 5's run files record a placement section without the stand; the
-        product file now states a stand band and one all-clear sensor. Merged,
+        product file now states a stand band and an all-clear count. Merged,
         the record's mount list replaces the base's whole and the band stays: it
         is checked and kept, so the old file still loads. Defect caught: a band
         without a stand refused (every run file recorded before prompt 76b
@@ -4562,4 +4563,28 @@ class TestPlacementSection:
         }
         spec = SimConfig.from_dict(raw).placement
         assert "stand" not in spec.mount
+        assert spec.stand_height == (0.1, 1.2) and spec.all_clear == 0
+
+    def test_a_record_of_prompt_76b_keeps_its_band_and_all_clear(self) -> None:
+        """A record's own band and all-clear count win over the product file's.
+
+        The seal leak's run file (prompt 76b) records the 0.3 m band and one
+        all-clear sensor; the product file now states 0.1 m and none (prompt
+        76c). Merged, the record's values are read. Defect caught: the base's
+        values taking precedence, which would re-score an old run under a
+        configuration it did not record.
+        """
+        raw = yaml.safe_load(
+            (CONFIG_DIR / "scenario_seal_leak.yaml").read_text(encoding="utf-8")
+        )
+        raw["scenario"]["base"] = str(CONFIG_DIR / "clean_room_default.yaml")
+        raw["placement"] = {
+            "mount": ["walls", "ceiling", "obstacle_tops", "obstacle_sides", "stand"],
+            "standoff": 0.05,
+            "stand_height": [0.3, 1.2],
+            "count": 4,
+            "all_clear": 1,
+            "rule": "worst_case",
+        }
+        spec = SimConfig.from_dict(raw).placement
         assert spec.stand_height == (0.3, 1.2) and spec.all_clear == 1

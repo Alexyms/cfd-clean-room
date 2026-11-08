@@ -2,7 +2,7 @@
 
 **Project:** CFD Clean Room Simulation
 **Status:** ECR-001 closed; the staggered Navier-Stokes solver is built and validated and is the only solver (ADR-010; the collocated solver was retired on 2026-10-02, tag `collocated-final`). ECR-002, the k-epsilon turbulence model (ADR-012), was accepted on 2026-10-04 and closed on 2026-10-15 at step 9 (prompt 58): the model on a face field (`src/scalar_scheme.py`, `src/turbulence.py`), its coupling into the transport solver (`src/solver_transport.py`) and the flow solver (`src/momentum.py`, `src/solver_staggered.py`, `src/stopping.py`), the fixed-flow outlets, the wall functions and stopping condition (e) are built, the product configuration is `configs/clean_room_default.yaml`, and ADR-012's planned-against-built table records the build; section 2 marks each requirement's verification. ECR-003, the pressure correction solver (ADR-013), was accepted on 2026-10-06 and closed on 2026-10-07: its step 1 replaced the weighted Jacobi sweep by Jacobi-preconditioned conjugate gradients (REQ-S08 amended), and its step 2 retook the laminar baseline (REQ-S02, REQ-S03). Phase status is in `docs/PROJECT_PLAN.md`.
-**Last Updated:** 2026-11-07
+**Last Updated:** 2026-11-08
 
 This document is the single reference for system architecture, requirements, module interfaces, and dependency relationships. Review and test, run before each pull request as `/cfd-review` and `/cfd-test` in fresh Claude Code sessions (`.claude/commands/`), check branches against this document under the policy in `docs/REVIEW_POLICY.md`. Keep it current.
 
@@ -431,8 +431,9 @@ ISO_CLASS_KEY, ISO_CLASS_RANGE, ISO_REFERENCE_DIAMETER, ISO_EXPONENT,
     # refused; TypeError for a non-list mount, a non-str name, a non-number or
     # bool standoff or within, a non-int or bool count. The product file and its
     # three layout copies state walls, ceiling, obstacle tops and sides and a
-    # stand, at 0.05 m and a stand height of 0.3 to 1.2 m, four sensors of which
-    # one all-clear, the worst case, no within (Alex, 2026-11-07)
+    # stand, at 0.05 m and a stand height of 0.1 to 1.2 m, four sensors and no
+    # all-clear sensor (all_clear 0, its position carried open), the worst case,
+    # no within (Alex, 2026-11-07 and 2026-11-08)
 ```
 
 ```
