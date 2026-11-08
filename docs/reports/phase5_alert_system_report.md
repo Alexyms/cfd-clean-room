@@ -21,7 +21,7 @@ generates from the run files under `results/builder76/`, `results/builder75/runs
 `results/builder72/` (untracked, this machine), copied into
 `docs/reports/phase5_alert_report.md` and here between markers; its `--check` regenerates and
 compares. The sentences point at the tables and restate a number only where a verdict turns on
-it. The test and coverage figures are from one run at aefff78.
+it. The test and coverage figures are from one run at c7e9a29.
 
 ## Scope
 
@@ -71,20 +71,21 @@ Also added without plan entries, each to measure the build: the probe directorie
 ## Test Results
 
 One run: `OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 pytest tests/ -v --cov=src --cov-branch
---cov-report=term-missing --cov-report=json:...` at aefff78 on 2026-11-07, one process on the
-machine after the seal leak's run had finished (`results/builder76/full_suite76b.txt`, untracked).
-The per-tier counts are `pytest tests/ --collect-only -q -m <tier>` at the same commit; every
-collected test carries one of the three markers. The branch changes nothing under `src/` or
-`tests/` after that commit. Step 5's run at a8549ab (2,908 tests) is superseded.
+--cov-report=term-missing --cov-report=json:...` at c7e9a29 on 2026-11-08, the only run of the
+build on the machine (`results/builder76/full_suite76c.txt`, untracked). The per-tier counts are
+`pytest tests/ --collect-only -q -m <tier>` at the same commit; every collected test carries one of
+the three markers. The branch changes nothing under `src/` or `tests/` after that commit. The runs
+at a8549ab (step 5, 2,908 tests) and aefff78 (prompt 76b, 2,967) are superseded.
 
 | Tier | Collected | Passed | Failed | Skipped or xfailed | Phase 4 (5aabe1d) |
 |---|---|---|---|---|---|
-| Unit | 2576 | 2576 | 0 | 0 | 1984 |
+| Unit | 2590 | 2590 | 0 | 0 | 1984 |
 | Integration | 311 | 311 | 0 | 0 | 273 |
 | Validation | 80 | 80 | 0 | 0 | 61 |
-| All | 2967 | 2967 | 0 | 0 | 2318 |
+| All | 2981 | 2981 | 0 | 0 | 2318 |
 
-The suite took 1328 s.
+The suite took 4045 s (1328 s for prompt 76b's run at aefff78; the machine's other load was not
+recorded, so the time is not a measure of the code).
 
 ### Validation Tests
 
@@ -138,8 +139,8 @@ the step 0 run that the plan names as Phase 4's after the debt was paid.
 
 | Measure | The gate | After step 0 (prompt 71) | Covered count, change | Percentage, change (points) |
 |---|---|---|---|---|
-| Statements covered | 7,046 of 7,046 (100.00%) | 5,807 of 5,807 (100.00%) | +1,239 | +0.00 |
-| Branches covered | 2,525 of 2,526 (99.96%) | 2,005 of 2,006 (99.95%) | +520 | +0.01 |
+| Statements covered | 7,079 of 7,079 (100.00%) | 5,807 of 5,807 (100.00%) | +1,272 | +0.00 |
+| Branches covered | 2,541 of 2,542 (99.96%) | 2,005 of 2,006 (99.95%) | +536 | +0.01 |
 
 Files with an uncovered statement: none. Uncovered branch arms: `src/time_integration.py` 613->616.
 <!-- tables76 coverage end -->
@@ -149,7 +150,7 @@ is `time_integration.py` 613->616, step 0's (552->555 then; the lines above it h
 unreachable because two unequal mappings differ at some key. Earlier runs each found one line or
 arm the pass had just written and no test reached (`placement.py` 1226 at f50206d, step 5's item 0;
 `clear_units`' second run on one mesh at a334264, prompt 76b); a test was added each time and the
-run repeated, and this is the last repeat.
+run repeated. Prompt 76c's code was covered on its first run.
 
 ## The latency report
 
@@ -171,7 +172,7 @@ not carry over between grids. Prompt 76's three predictions hold as step 5 score
 1. **All planned validation tests pass.** Holds: VAL-009 and VAL-024, the rows above, and every
    test-carried row of the earlier phases in the suite.
 2. **All unit and integration tests pass.** Holds: every collected test passed in the one run at
-   aefff78, none failed or skipped.
+   c7e9a29, none failed or skipped.
 3. **No ruff errors.** Holds: `ruff format --check .` and `ruff check .` pass at HEAD.
 4. **Coverage does not decrease.** Holds: 100.00% of statements against step 0's 100.00%, 99.96% of branches
    against its 99.95% (table Cv1), the measure the coverage debt's payment set.

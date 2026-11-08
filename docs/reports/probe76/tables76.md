@@ -1086,7 +1086,7 @@ The order per rule, best first:
 
 | Measure | The gate | After step 0 (prompt 71) | Covered count, change | Percentage, change (points) |
 |---|---|---|---|---|
-| Statements covered | 7,046 of 7,046 (100.00%) | 5,807 of 5,807 (100.00%) | +1,239 | +0.00 |
-| Branches covered | 2,525 of 2,526 (99.96%) | 2,005 of 2,006 (99.95%) | +520 | +0.01 |
+| Statements covered | 7,079 of 7,079 (100.00%) | 5,807 of 5,807 (100.00%) | +1,272 | +0.00 |
+| Branches covered | 2,541 of 2,542 (99.96%) | 2,005 of 2,006 (99.95%) | +536 | +0.01 |
 
 Files with an uncovered statement: none. Uncovered branch arms: `src/time_integration.py` 613->616.
