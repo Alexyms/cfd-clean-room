@@ -84,7 +84,7 @@ GREEDY = "greedy_exchange"
 
 # The set cover's dynamic programme holds one entry per subset of the
 # coverable units, 2^units of them: 2^20 is a megabyte of flags. The
-# reference set has fifteen units (three scenarios, five classes).
+# reference set has twenty (four scenarios, five classes), which is the cap.
 MAX_SET_COVER_UNITS = 20
 # Members of the reachable unions combined with the masks at once in the
 # programme, which bounds its working array to this times the masks.
@@ -751,7 +751,8 @@ def candidates(
     Parameters
     ----------
     mesh : Mesh
-        The mesh of every configuration given.
+        The mesh of every configuration given: each configuration's own mesh
+        must equal it (the grid, the domain and the obstacles).
     configs : SimConfig or Sequence[SimConfig]
         The configurations of every scenario whose units are scored, at least
         one: a cell excluded under any of them is out. For a scenario, every
@@ -764,8 +765,10 @@ def candidates(
         centre to the nearest point of a named surface, and the distance
         inside which an opening's face or a source's box excludes a cell.
     stand_height : tuple[float, float] or None
-        (low, high), metres above the floor, finite, 0 <= low < high: given
-        exactly when ``mount`` names ``stand``.
+        (low, high), metres above the floor, finite, 0 <= low < high: required
+        when ``mount`` names ``stand``. Checked whenever given and used only
+        with a stand, as the loader does (a run record made before the stand
+        reloads with the product file's band and a mount without ``stand``).
 
     Returns
     -------
@@ -780,9 +783,10 @@ def candidates(
     ValueError
         If ``mount`` is empty, names an unknown surface or one twice, no
         configuration is given, the standoff is not positive and finite, the
-        mesh is not every configuration's, ``stand_height`` is missing with
-        ``stand``, given without it or not finite with 0 <= low < high, or
-        no cell is a candidate.
+        mesh is not every configuration's (its grid, or its domain and
+        obstacles), ``stand_height`` is missing with ``stand`` or given and
+        not two finite numbers with 0 <= low < high, or no cell is a
+        candidate.
 
     Notes
     -----
@@ -817,8 +821,8 @@ def candidates(
     if MOUNT_FREE in names:
         near = live.copy()
     else:
-        # The surfaces are the room's: every configuration given shares its
-        # domain and obstacles (the mesh check), so the first one's serve.
+        # The surfaces are the room's: every configuration given has the
+        # mesh's domain and obstacles (the mesh check), so the first one's serve.
         surfaces = [name for name in names if name != MOUNT_STAND]
         faces = [f for name in surfaces for f in _surface_faces(mesh, given[0], name)]
         near = live & (_distance_to(mesh, faces) <= limit)
@@ -1044,6 +1048,8 @@ def after_flow_switch(
     np.ndarray
         bool, the shape of ``latencies``: True where the arrival, onset plus
         latency, is finite and strictly after a switch at or after the onset.
+        A switch at the onset itself counts: another event's end that
+        coincides with this one's start is a flow switch the arrival follows.
         A unit reached after the flow switch was read on a flow state other
         than its event's.
 
@@ -1802,7 +1808,12 @@ def _worst_case_cover(table: np.ndarray, caps: np.ndarray, count: int) -> _Found
 def _checked_configs(
     mesh: Mesh, configs: SimConfig | Sequence[SimConfig]
 ) -> list[SimConfig]:
-    """CONFIGS as a non-empty list of SimConfigs, each on MESH's grid."""
+    """CONFIGS as a non-empty list of SimConfigs, each with MESH as its mesh.
+
+    The grid is compared first, then the cells and the faces: a configuration
+    whose domain or obstacles differ would give other surfaces, so the answer
+    would follow the order the configurations are given in.
+    """
     given = [configs] if isinstance(configs, SimConfig) else list(configs)
     if not given:
         raise ValueError("give at least one configuration: the scenarios scored")
@@ -1816,21 +1827,30 @@ def _checked_configs(
                 f"the mesh is {mesh.cell_type.shape} and configuration {n}'s "
                 f"({config.ny}, {config.nx}): candidates need the configurations' mesh"
             )
+        own = Mesh(config)
+        if not (
+            np.array_equal(own.cell_type, mesh.cell_type)
+            and np.array_equal(own.x, mesh.x)
+            and np.array_equal(own.y, mesh.y)
+        ):
+            raise ValueError(
+                f"configuration {n}'s domain or obstacles differ from the mesh's: "
+                "candidates need one room"
+            )
     return given
 
 
 def _checked_stand_height(
     names: tuple[str, ...], stand_height: tuple[float, float] | None
 ) -> tuple[float, float] | None:
-    """STAND_HEIGHT checked against whether MOUNT names a stand."""
-    if MOUNT_STAND not in names:
-        if stand_height is not None:
-            raise ValueError(
-                f"stand_height is given but mount does not name '{MOUNT_STAND}'"
-            )
-        return None
+    """STAND_HEIGHT as (low, high) when MOUNT names a stand, else None.
+
+    A band is checked whenever it is given and kept only with a stand.
+    """
     if stand_height is None:
-        raise ValueError(f"mount names '{MOUNT_STAND}': give its stand_height")
+        if MOUNT_STAND in names:
+            raise ValueError(f"mount names '{MOUNT_STAND}': give its stand_height")
+        return None
     values = tuple(stand_height)
     if len(values) != 2:
         raise ValueError(f"stand_height must be (low, high), got {stand_height!r}")
@@ -1839,7 +1859,7 @@ def _checked_stand_height(
         raise ValueError(
             f"stand_height must be finite with 0 <= low < high, got ({low}, {high})"
         )
-    return low, high
+    return (low, high) if MOUNT_STAND in names else None
 
 
 def _stand_cells(mesh: Mesh, band: tuple[float, float]) -> np.ndarray:
