@@ -3,7 +3,8 @@
 ## Status
 Accepted, 2026-10-30 (Alex; prompt 71, commit 0; the note after this paragraph); built to its
 six steps by 2026-11-05 (prompt 76) and revised on 2026-11-07 by Alex's decisions (prompt 76b:
-the stand, the source rule, the all-clear role, the seal leak), the planned-against-built table
+the stand, the source rule, the all-clear role, the seal leak) and on 2026-11-08 (prompt 76c: the
+stand band from 0.1 m, the all-clear sensor's position carried open), the planned-against-built table
 below section H, the Phase 5 gate's verdict Alex's to set. Written
 2026-10-29 (prompt 70, branch `phase5/design`) and revised the same day
 on review 70 (prompt 70b: section A rewritten to a line source in grid turbulence by Alex's
@@ -830,7 +831,8 @@ the free set included. The search must not use knowledge of where the release ha
 ring is there because a cell one row outside the box reads the source as fast as the box's own
 cells do. (3) A sensor is a particle counter's sampling inlet, and an inlet on a free-standing
 stand is a mounting option, `stand`: a cell whose centre's height above the floor lies in
-`placement.stand_height` (low then high, inclusive; the product's 0.3 and 1.2 m), that is not
+`placement.stand_height` (low then high, inclusive; the product's 0.1 and 1.2 m since
+2026-11-08, 0.3 and 1.2 m before), that is not
 SOLID, that has no SOLID cell below it in its column (the stand stands on the floor, not on a
 tool) and that no opening or source excludes. The standoff does not apply to the height band.
 The stand is a pole outside the 2D slice and is not an obstruction to the flow: nothing in the
@@ -860,14 +862,22 @@ failed at the second job. The definitions, as built in `placement.py`:
   the room is not clear and the layout is, the interval is not a number and the search ranks it
   above every number; where the layout is not clear it never declares the room clean, so it
   declares nothing early and ranks as zero.
-- *The search* (`search_roles`). `placement.all_clear` sensors (the product's 1, an integer from 0
-  to count minus 1) take the role. The detection sensors are searched at count minus `all_clear`
+- *The search* (`search_roles`). `placement.all_clear` sensors (an integer from 0 to count minus
+  1; the product's 0 since 2026-11-08, 1 before) take the role. The detection sensors are searched at count minus `all_clear`
   by the configured rule over the detection units. Then each all-clear sensor is added in turn
   (`add_all_clear`): the candidate, from the same candidates, with the least worst premature
   interval over the all-clear units, ties by the mean interval, then by the least of the largest
   area fraction over the units, then the first in candidate order. The search is sequential, not
   joint: the detection sensors are fixed before the all-clear one is chosen, and the layout is
   not claimed best for the two roles together.
+- *Carried open* (Alex, 2026-11-08, prompt 76c). The score counts only clearing early, so a cell
+  that never clears scores perfectly, and the clean-out ends at 240 s before its room clears; the
+  rule therefore puts an all-clear sensor where the run ended, not where clearing is read well.
+  The product file states none (`all_clear` 0); the code and its tests stay. Before a position
+  means anything the role needs a cost for clearing late, and a clean-out that runs until the room
+  clears or a stated room-clean criterion. What stands is the premature interval of the detecting
+  layouts, up to about a minute in the event scenarios (the latency report's C2). The all-clear
+  requirement of the gate report stays a proposal.
 
 **The search.** `placement.search(maps, onsets, candidates, count, rule)`:
 - count 1: the argmin over candidates (exact);
@@ -991,6 +1001,15 @@ columns every class is reached within 0.71 s.
   it detects the seal leak within 1 s, and no worst-case latency carries the marker "after the flow
   switch" (a latency that falls after the end of an event whose end changes the flow state).
 
+*Prompt 76c's result (2026-11-08).* `docs/reports/phase5_alert_report.md`, tables P3, L1 and U2.
+(q) holds: with the band at 0.1 m the product search detects all twenty units, its worst case is
+the breach's as without stands, and it reads the seal leak from a stand by the doorway just above
+the band's floor within a second; none of its latencies falls after a flow switch. At the 0.3 m
+band the seal leak's 5 um class was read only after the leak had ended, the one latency so marked,
+and it set that layout's worst case. The marker is built as `placement.flow_switches` (an interval
+boundary at which an event has ended and the flow fingerprint changes) and
+`placement.after_flow_switch` (an arrival strictly after a switch at or after the onset).
+
 *Step 4's prediction (orchestrator, 2026-11-02, prompt 75), committed before the 80x30 runs.*
 (h) On 80x30 the file's four sensors detect none of the three event scenarios' (scenario,
 event, class) units, and the searched four detect at least one unit in every scenario.
@@ -1023,6 +1042,10 @@ mountable candidates and 36 ms over the 1,630 free ones.
   room recovery time and per-sensor recovery times (ADR-014 C) as the clearing companion;
 - the counter's sample time stated as an additive instrument delay, OPEN;
 - the maps as figures: per scenario the 0.1 um and 5 um arrival maps with the sensors drawn.
+
+*As built (prompts 76 to 76c).* A latency read after the end of an event whose end changes the
+flow state is marked "after the flow switch" (`placement.after_flow_switch`, prompt 76c): it was
+read on the closed room's flow, not its event's.
 
 ## F. The Phase 4 conditions: order and cost
 
@@ -1132,6 +1155,7 @@ the same table is in `docs/reports/phase5_alert_system_report.md`.
 | 4, placement | 75, 75b, 2026-11-02 and 2026-11-03 (PR 103) | `latency`, the units, `score`, `candidates`, `search`, `rank`; the `placement` section; REQ-A05 | The unit is (scenario, event, class); `score` has no `rule`; the sweep is bisected and the programme runs on the maximal masks; the fallback reads as no layout of the count covering every coverable unit, and no coverable unit at all raises; `_maximal` chunked after a 4.7 GB peak on a synthetic map; the section out of the restart hash (orchestrator); frame-resolved units flagged; REQ-A05's exactness restated as built |
 | 5, the runs, the report, the gate | 76, 2026-11-05 (this pull request) | The four scenarios on 320x120 with their maps; `docs/reports/phase5_alert_report.md` and `probe76/`; this report | A cell within the standoff of an opening is not a candidate (item 0), found before the runs by the prompt; the planned `scripts/latency_report.py` is `tables76.py`, as section E names it; the copies of the scenario files add a checkpoint every 1000 steps and nothing else |
 | 5, revised: two roles | 76b, 2026-11-07 (this pull request) | Alex's three decisions of 2026-11-07: the `stand` mount and `stand_height`; a source box and its standoff never a candidate; the all-clear role (`placement.all_clear`, `clear_units`, `clear_score`, `search_roles`). The candidates over every scored scenario (review 76 S5). The seal leak, the fifth scenario (orchestrator), run on 320x120; the other four re-scored from step 5's files | Not planned in ADR-015: the role, the stand and the seal leak are new decisions recorded in its section D. The all-clear search is sequential, not joint. A run file's recorded mapping merges over the base file as it is now, so a stand band given without a stand is kept rather than refused (else every earlier run file failed to reload) |
+| 5, revised: the band and the open all-clear | 76c, 2026-11-08 (this pull request) | Alex's two decisions of 2026-11-08: `stand_height` 0.1 to 1.2 m and `all_clear` 0 in the product file and its three copies, the all-clear code and tests kept; `flow_switches` and `after_flow_switch`, the latency tables' marker "after the flow switch"; the five runs re-scored, the 0.3 m band's search and the three-plus-one kept as one row each | No run. `placement` imports `scenarios.flow_fingerprint` for the marker. Prediction (q) committed before the re-score and holds |
 
 ## Probes (the predictions fixed in the prompt before the runs; results after)
 

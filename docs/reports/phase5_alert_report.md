@@ -1,8 +1,8 @@
 # Phase 5 step 5: the latency report
 
-**Date:** 2026-11-05, revised 2026-11-07 (the machine's local date)
-**Branch:** `phase5/step5-gate` (prompts 76 and 76b, `docs/prompts/cc-prompt-76-step5-gate.md` and
-`cc-prompt-76b-sensor-roles.md`)
+**Date:** 2026-11-05, revised 2026-11-07 and 2026-11-08 (the machine's local date)
+**Branch:** `phase5/step5-gate` (prompts 76, 76b and 76c, `docs/prompts/cc-prompt-76-step5-gate.md`,
+`cc-prompt-76b-sensor-roles.md` and `cc-prompt-76c-band-and-all-clear.md`)
 **What this is:** ADR-015 section E: the five reference scenarios on 320x120 with their arrival
 maps and alert tables, the layouts scored and searched on them for detection and for the
 all-clear, and what the ranking can claim. The runs are made by `docs/reports/probe76/run76.sh`
@@ -15,13 +15,15 @@ the 0.1 um and 5 um classes where a caption says so; every class is in
 **In one paragraph.** The file's four sensors detect nothing in any of the four event scenarios on
 the product grid. On the mounting surfaces alone, with the dust's source box excluded, a searched
 layout detects the breach and the dust release and neither the door nor the seal leak. With a
-counter's inlet on a stand, 0.3 to 1.2 m above the floor (Alex, 2026-11-07), the searched layout
-detects every unit of all four, the seal leak only from a stand at the bottom of the band and tens of seconds late.
-Detection and the all-clear are different jobs: every layout that detects well declares the room
-clean while a pocket is still contaminated, and in the clean-out the room itself does not clear
-by the run's end, which decides where the search puts the all-clear sensor. The ranking of
-layouts holds between the two grids and across the sweep's arms that ran; the latencies
-themselves do not carry over between grids and are not claimed.
+counter's inlet on a stand 0.1 to 1.2 m above the floor (Alex, 2026-11-07, the floor lowered from
+0.3 m on 2026-11-08), the searched layout detects every unit of all four within the breach's
+worst case, the seal leak from a stand just above the band's floor. At the earlier 0.3 m floor
+the seal leak was detected only tens of seconds late, one class after the leak had ended. Every
+layout that detects declares the room clean while a pocket is still contaminated; where an
+all-clear sensor should go is carried open, because the score counts only clearing early and the
+clean-out's run ends before its room clears. The ranking of layouts holds between the two grids
+and across the sweep's arms that ran; the latencies themselves do not carry over between grids and
+are not claimed.
 
 ## Predictions, committed before the runs
 
@@ -48,6 +50,12 @@ themselves do not carry over between grids and are not claimed.
 - (p) The three-plus-one's worst detection latency over the door, breach and dust units equals the
   detection-only four's, and its worst premature interval is smaller.
 
+**Prompt 76c's**, committed in 804bd23 at 10:15:33 on 2026-11-08, before the re-score (there are no
+new runs). The orchestrator's, copied verbatim:
+
+- (q) With the band at 0.1 m, the product search detects all 20 units with a worst case under 3 s.
+  The seal leak is detected within 1 s, and no worst-case latency carries the flow-switch marker.
+
 ## 1. The candidates
 
 **Before step 5's runs: a sensor cannot hang in a doorway.** The rule as first built excluded
@@ -69,21 +77,23 @@ free set included (ADR-015 D, "Openings";
 - A scenario's source box and the cells within the standoff of it are not candidates, in every
   mount including the free set. The search must not use knowledge of where a release happens.
 - A sensor is a particle counter's sampling inlet, and an inlet on a free-standing stand is a
-  mounting option, `stand`: a cell whose centre is 0.3 to 1.2 m above the floor with no SOLID
-  cell below it (the stand stands on the floor, not on the hood's bench), and that no opening or
-  source excludes. The stand is a pole outside the 2D slice, not an obstruction to the flow.
+  mounting option, `stand`: a cell whose centre is in the stand's height band with no SOLID cell
+  below it (the stand stands on the floor, not on the hood's bench), and that no opening or source
+  excludes. The stand is a pole outside the 2D slice, not an obstruction to the flow. The band is
+  0.1 to 1.2 m (Alex, 2026-11-08); prompt 76b's was 0.3 to 1.2 m, and N1 and L1 keep a row for it.
 
 <!-- tables76 candidates begin -->
-### N1. The candidates on 320x120 (standoff 0.05 m, the stand's inlet 0.3 to 1.2 m above the floor)
+### N1. The candidates on 320x120 (standoff 0.05 m; the stand's inlet 0.1 to 1.2 m above the floor, the earlier band 0.3 to 1.2 m)
 
 | Rule | Mountable | Free |
 |---|---|---|
 | step 5's: the door's configuration, the surfaces | 1,737 | 27,017 |
 | every scenario's openings, no source box | 1,737 | 27,017 |
 | and the dust's box and its standoff | 1,721 | 26,971 |
-| and the stands (the product mount) | 6,947 | 26,971 |
+| and the stands at the earlier band, 0.3 to 1.2 m | 6,947 | 26,971 |
+| and the stands at 0.1 to 1.2 m (the product mount) | 8,099 | 26,971 |
 
-Stand cells: 5,805, of which 5,226 are not already mountable on a surface.
+Stand cells: 7,101 at 0.1 to 1.2 m, of which 6,378 are not already mountable on a surface; 5,805 at 0.3 to 1.2 m, of which 5,226 are not already mountable on a surface.
 <!-- tables76 candidates end -->
 
 ## 2. The runs
@@ -91,7 +101,7 @@ Stand cells: 5,805, of which 5,226 are not already mountable on a surface.
 Step 5's four: the files under `configs/` as they are on `main`, each loaded from a copy that adds
 a checkpoint every 1000 steps (`docs/reports/probe76/configs76.py`), run concurrently, each from
 rest, through `scripts/run_scenario.py`, one BLAS thread each, in 1 h 41 min against an 8 h
-budget. Prompt 76b re-scores their run files and does not rerun them.
+budget. Prompts 76b and 76c re-score their run files and do not rerun them.
 
 **The seal leak** (`configs/scenario_seal_leak.yaml`, the fifth reference scenario, added by the
 orchestrator). The door stays closed and its seal is worn; for 30 s from 10 s the room's positive
@@ -220,51 +230,57 @@ every sensor, class and event (A1), REQ-A04's two instruments on the product gri
 
 ## 3. Detection: the layouts
 
-The configurations section E and prompt 76b ask for, over the twenty detection units (four
-scenarios, one event each, five classes): the file's four; the searched four on the mounting
-surfaces without stands; the searched four with stands (the product mount); the three-plus-one,
-three detection sensors searched with stands and one all-clear sensor added (section 5); and the
-free optimum for one to four sensors, the bound. Each search removes the units its candidates
-cannot reach and says which (the "uncoverable" column).
+The configurations section E and prompts 76b and 76c ask for, over the twenty detection units
+(four scenarios, one event each, five classes): the file's four; the searched four on the mounting
+surfaces without stands; the searched four with stands at the earlier 0.3 m band; the product
+search, four with stands from 0.1 m (the product file's placement section, no all-clear sensor);
+the three-plus-one, three detection sensors searched with stands and a fourth added by the
+all-clear rule, whose cell is set by the clean-out's run end (section 5); and the free optimum for
+one to four sensors, the bound. Each search removes the units its candidates cannot reach and says
+which (the "uncoverable" column). A latency is marked "after the flow switch" when it falls after
+the end of an event whose end changes the flow state (`placement.flow_switches` and
+`after_flow_switch`): the door's close and the seal leak's end. Such a unit was read on the closed
+room's flow and not on its event's.
 
 <!-- tables76 layouts begin -->
-### L1. The layouts on 320x120: mount ['walls', 'ceiling', 'obstacle_tops', 'obstacle_sides', 'stand'] at 0.05 m (stand 0.3 to 1.2 m), 1,721 mountable without stands, 6,947 with them and 26,971 free candidates; the means are capped at each unit's remaining run time
+### L1. The layouts on 320x120: mount ['walls', 'ceiling', 'obstacle_tops', 'obstacle_sides', 'stand'] at 0.05 m (stand 0.1 to 1.2 m), 1,721 mountable without stands, 8,099 with them (6,947 at the earlier band, 0.3 to 1.2 m) and 26,971 free candidates; the means are capped at each unit's remaining run time. A latency after the flow switch is one read after the end of an event whose end changes the flow state (the door's close at 15 s, the seal leak's end at 40 s)
 
-| Layout | Cell centres (x, y), m | Rule | Method | Exact | Units scored | Uncoverable by its candidates | Worst case (s) | Mean (s) | Undetected | Coverage within 10 s | Distinct / maximal masks | Detected, of all twenty | Cells setting a latency |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| the file's four, all twenty units | (0.988, 1.488), (2.688, 2.488), (4.788, 2.488), (6.188, 1.188) | - | given | no | 20 | - | inf | 95.000 | 20 | 0.000 | - | door 0 of 5, breach 0 of 5, dust 0 of 5, seal leak 0 of 5 | 0 of 4 |
-| the file's four, the product search's units | (0.988, 1.488), (2.688, 2.488), (4.788, 2.488), (6.188, 1.188) | - | given | no | 20 | - | inf | 95.000 | 20 | 0.000 | - | door 0 of 5, breach 0 of 5, dust 0 of 5, seal leak 0 of 5 | 0 of 4 |
-| searched four, mountable without stands, worst-case rule | (1.463, 0.013), (1.488, 0.013), (3.188, 2.038), (3.738, 2.038) | worst_case | set_cover | yes | 10 | door 5, seal leak 5 | 2.565 | 1.382 | 0 | 1.000 | 7 / 2 | door 0 of 5, breach 5 of 5, dust 5 of 5, seal leak 0 of 5 | 2 of 4 |
-| searched four with stands, worst-case rule | (0.062, 0.313), (0.062, 0.562), (3.188, 2.038), (3.738, 2.038) | worst_case | set_cover | yes | 20 | none | 30.594 | 5.532 | 0 | 0.750 | 10 / 2 | door 5 of 5, breach 5 of 5, dust 5 of 5, seal leak 5 of 5 | 4 of 4 |
-| searched four with stands, mean rule | (0.062, 0.313), (0.062, 0.562), (3.188, 2.038), (3.738, 2.038) | mean | greedy_exchange | no | 20 | none | 30.594 | 5.532 | 0 | 0.750 | - | door 5 of 5, breach 5 of 5, dust 5 of 5, seal leak 5 of 5 | 4 of 4 |
-| the three-plus-one: its three detection sensors | (0.062, 0.313), (3.188, 2.038), (3.738, 2.038) | worst_case | set_cover | yes | 20 | none | 30.594 | 5.532 | 0 | 0.750 | 10 / 2 | door 5 of 5, breach 5 of 5, dust 5 of 5, seal leak 5 of 5 | 3 of 3 |
-| the three-plus-one: the four | (0.062, 0.313), (3.188, 2.038), (3.738, 2.038), (7.613, 0.013) | - | given | no | 20 | none | 30.594 | 5.532 | 0 | 0.750 | - | door 5 of 5, breach 5 of 5, dust 5 of 5, seal leak 5 of 5 | 3 of 4 |
-| free optimum, worst-case rule | (0.062, 0.013), (0.062, 0.562), (3.738, 2.038), (3.513, 2.938) | worst_case | set_cover | yes | 20 | none | 0.399 | 0.097 | 0 | 1.000 | 11 / 3 | door 5 of 5, breach 5 of 5, dust 5 of 5, seal leak 5 of 5 | 4 of 4 |
-| free optimum, worst-case rule, the product search's units | (0.062, 0.013), (0.062, 0.562), (3.738, 2.038), (3.513, 2.938) | worst_case | set_cover | yes | 20 | none | 0.399 | 0.097 | 0 | 1.000 | 11 / 3 | door 5 of 5, breach 5 of 5, dust 5 of 5, seal leak 5 of 5 | 4 of 4 |
+| Layout | Cell centres (x, y), m | Rule | Method | Exact | Units scored | Uncoverable by its candidates | Worst case (s) | Worst case after the flow switch; units so marked | Mean (s) | Undetected | Coverage within 10 s | Distinct / maximal masks | Detected, of all twenty | Cells setting a latency |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| the file's four, all twenty units | (0.988, 1.488), (2.688, 2.488), (4.788, 2.488), (6.188, 1.188) | - | given | no | 20 | - | inf | no; 0 of 20 | 95.000 | 20 | 0.000 | - | door 0 of 5, breach 0 of 5, dust 0 of 5, seal leak 0 of 5 | 0 of 4 |
+| the file's four, the product search's units | (0.988, 1.488), (2.688, 2.488), (4.788, 2.488), (6.188, 1.188) | - | given | no | 20 | - | inf | no; 0 of 20 | 95.000 | 20 | 0.000 | - | door 0 of 5, breach 0 of 5, dust 0 of 5, seal leak 0 of 5 | 0 of 4 |
+| searched four, mountable without stands, worst-case rule | (1.463, 0.013), (1.488, 0.013), (3.188, 2.038), (3.738, 2.038) | worst_case | set_cover | yes | 10 | door 5, seal leak 5 | 2.565 | no; 0 of 10 | 1.382 | 0 | 1.000 | 7 / 2 | door 0 of 5, breach 5 of 5, dust 5 of 5, seal leak 0 of 5 | 2 of 4 |
+| searched four with stands, the earlier 0.3 m band, worst-case rule | (0.062, 0.313), (0.062, 0.562), (3.188, 2.038), (3.738, 2.038) | worst_case | set_cover | yes | 20 | none | 30.594 | yes; 1 of 20 | 5.532 | 0 | 0.750 | 10 / 2 | door 5 of 5, breach 5 of 5, dust 5 of 5, seal leak 5 of 5 | 4 of 4 |
+| the product search, four with stands, worst-case rule | (0.138, 0.113), (0.062, 0.562), (3.188, 2.038), (3.738, 2.038) | worst_case | set_cover | yes | 20 | none | 2.565 | no; 0 of 20 | 0.890 | 0 | 1.000 | 9 / 3 | door 5 of 5, breach 5 of 5, dust 5 of 5, seal leak 5 of 5 | 4 of 4 |
+| the product search, four with stands, mean rule | (0.138, 0.113), (0.062, 0.562), (3.188, 2.038), (3.738, 2.038) | mean | greedy_exchange | no | 20 | none | 2.565 | no; 0 of 20 | 0.890 | 0 | 1.000 | - | door 5 of 5, breach 5 of 5, dust 5 of 5, seal leak 5 of 5 | 4 of 4 |
+| the three-plus-one, fourth cell set by the clean-out's run end: its three detection sensors | (0.088, 0.113), (3.188, 2.038), (3.738, 2.038) | worst_case | set_cover | yes | 20 | none | 2.565 | no; 0 of 20 | 0.919 | 0 | 1.000 | 9 / 3 | door 5 of 5, breach 5 of 5, dust 5 of 5, seal leak 5 of 5 | 3 of 3 |
+| the three-plus-one, fourth cell set by the clean-out's run end: the four | (0.088, 0.113), (3.188, 2.038), (3.738, 2.038), (7.613, 0.013) | - | given | no | 20 | none | 2.565 | no; 0 of 20 | 0.919 | 0 | 1.000 | - | door 5 of 5, breach 5 of 5, dust 5 of 5, seal leak 5 of 5 | 3 of 4 |
+| free optimum, worst-case rule | (0.062, 0.013), (0.062, 0.562), (3.738, 2.038), (3.513, 2.938) | worst_case | set_cover | yes | 20 | none | 0.399 | no; 0 of 20 | 0.097 | 0 | 1.000 | 11 / 3 | door 5 of 5, breach 5 of 5, dust 5 of 5, seal leak 5 of 5 | 4 of 4 |
+| free optimum, worst-case rule, the product search's units | (0.062, 0.013), (0.062, 0.562), (3.738, 2.038), (3.513, 2.938) | worst_case | set_cover | yes | 20 | none | 0.399 | no; 0 of 20 | 0.097 | 0 | 1.000 | 11 / 3 | door 5 of 5, breach 5 of 5, dust 5 of 5, seal leak 5 of 5 | 4 of 4 |
 
 The three-plus-one's all-clear sensor: (7.613, 0.013).
-The door's plume reaches 854 cells, x up to 0.825 m and y up to 1.125 m; candidates reaching a unit of it: 0 of 1,721 mountable without stands; 431 of 6,947 with stands; 736 of 26,971 free.
-The seal leak's plume reaches 171 cells, x up to 0.600 m and y up to 0.450 m; candidates reaching a unit of it: 0 of 1,721 mountable without stands; 7 of 6,947 with stands; 125 of 26,971 free.
+The door's plume reaches 854 cells, x up to 0.825 m and y up to 1.125 m; candidates reaching a unit of it: 0 of 1,721 mountable without stands; 431 of 6,947 with stands at the earlier band; 644 of 8,099 with stands; 736 of 26,971 free.
+The seal leak's plume reaches 171 cells, x up to 0.600 m and y up to 0.450 m; candidates reaching a unit of it: 0 of 1,721 mountable without stands; 7 of 6,947 with stands at the earlier band; 57 of 8,099 with stands; 125 of 26,971 free.
 The free cells that detect a seal-leak unit lie from y 0.0125 to 0.3875 m and x 0.0625 to 0.5125 m.
 Candidates on the surfaces that detect a door unit at other standoffs, the openings' exclusion widening with the standoff: 0.05 m: 0 of 1,721; 0.1 m: 0 of 3,366; 0.2 m: 0 of 6,427; 0.5 m: 0 of 10,760; 1 m: 0 of 4,575.
 
 Over the 20 units the product search covers, the order per rule, best first:
 
-- worst case: free optimum < searched four with stands = the three-plus-one < the file's four = searched four, mountable without stands;
-- mean: free optimum < searched four with stands < the three-plus-one < searched four, mountable without stands < the file's four;
-- coverage within 10 s: free optimum < searched four with stands = the three-plus-one < searched four, mountable without stands < the file's four;
-- section D's ranking, the worst case with ties by the mean: free optimum, searched four with stands, the three-plus-one, searched four, mountable without stands, the file's four.
+- worst case: free optimum < the product search, four with stands = the three-plus-one, fourth cell set by the clean-out's run end < searched four with stands, the earlier 0.3 m band < the file's four = searched four, mountable without stands;
+- mean: free optimum < the product search, four with stands < the three-plus-one, fourth cell set by the clean-out's run end < searched four with stands, the earlier 0.3 m band < searched four, mountable without stands < the file's four;
+- coverage within 10 s: the product search, four with stands = the three-plus-one, fourth cell set by the clean-out's run end = free optimum < searched four with stands, the earlier 0.3 m band < searched four, mountable without stands < the file's four;
+- section D's ranking, the worst case with ties by the mean: free optimum, the product search, four with stands, the three-plus-one, fourth cell set by the clean-out's run end, searched four with stands, the earlier 0.3 m band, searched four, mountable without stands, the file's four.
 <!-- tables76 layouts end -->
 
 <!-- tables76 curve begin -->
 ### L2. The free optimum for one to four sensors, the worst-case rule (the bound)
 
-| Layout | Cell centres (x, y), m | Rule | Method | Exact | Units scored | Uncoverable by its candidates | Worst case (s) | Mean (s) | Undetected | Coverage within 10 s | Distinct / maximal masks | Detected, of all twenty | Cells setting a latency |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 1 sensors | (3.738, 2.088) | mean | argmin | yes | 20 | none | inf | 40.739 | 10 | 0.500 | - | door 0 of 5, breach 5 of 5, dust 5 of 5, seal leak 0 of 5 | 1 of 1 |
-| 2 sensors | (0.062, 0.013), (3.138, 2.013) | worst_case | exhaustive | yes | 20 | none | 2.551 | 1.048 | 0 | 1.000 | - | door 5 of 5, breach 5 of 5, dust 5 of 5, seal leak 5 of 5 | 2 of 2 |
-| 3 sensors | (0.062, 0.013), (3.738, 2.038), (3.513, 2.938) | worst_case | set_cover | yes | 20 | none | 0.399 | 0.098 | 0 | 1.000 | 11 / 3 | door 5 of 5, breach 5 of 5, dust 5 of 5, seal leak 5 of 5 | 3 of 3 |
-| 4 sensors | (0.062, 0.013), (0.062, 0.562), (3.738, 2.038), (3.513, 2.938) | worst_case | set_cover | yes | 20 | none | 0.399 | 0.097 | 0 | 1.000 | 11 / 3 | door 5 of 5, breach 5 of 5, dust 5 of 5, seal leak 5 of 5 | 4 of 4 |
+| Layout | Cell centres (x, y), m | Rule | Method | Exact | Units scored | Uncoverable by its candidates | Worst case (s) | Worst case after the flow switch; units so marked | Mean (s) | Undetected | Coverage within 10 s | Distinct / maximal masks | Detected, of all twenty | Cells setting a latency |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1 sensors | (3.738, 2.088) | mean | argmin | yes | 20 | none | inf | no; 0 of 20 | 40.739 | 10 | 0.500 | - | door 0 of 5, breach 5 of 5, dust 5 of 5, seal leak 0 of 5 | 1 of 1 |
+| 2 sensors | (0.062, 0.013), (3.138, 2.013) | worst_case | exhaustive | yes | 20 | none | 2.551 | no; 0 of 20 | 1.048 | 0 | 1.000 | - | door 5 of 5, breach 5 of 5, dust 5 of 5, seal leak 5 of 5 | 2 of 2 |
+| 3 sensors | (0.062, 0.013), (3.738, 2.038), (3.513, 2.938) | worst_case | set_cover | yes | 20 | none | 0.399 | no; 0 of 20 | 0.098 | 0 | 1.000 | 11 / 3 | door 5 of 5, breach 5 of 5, dust 5 of 5, seal leak 5 of 5 | 3 of 3 |
+| 4 sensors | (0.062, 0.013), (0.062, 0.562), (3.738, 2.038), (3.513, 2.938) | worst_case | set_cover | yes | 20 | none | 0.399 | no; 0 of 20 | 0.097 | 0 | 1.000 | 11 / 3 | door 5 of 5, breach 5 of 5, dust 5 of 5, seal leak 5 of 5 | 4 of 4 |
 <!-- tables76 curve end -->
 
 Step 5's first numbers had a sensor inside the dust's source box, which read the release at its
@@ -279,13 +295,17 @@ What L1 says:
   set every latency: one over the litho tool's left corner, where the breach's spill passes, and
   one on the tool's top just beyond the dust's ring. The door's and the seal leak's air stays
   low beside the doorway, where nothing can be mounted on a surface (the reach lines under L1).
-- **With stands** the four detect all twenty units. The door is reached from a stand 6 cm from the
-  doorway at 0.56 m, as fast as by the free optimum. The seal leak is reached only by the few
-  stand cells at the bottom of the band (the reach line), the layout's at 0.31 m, and late, tens
-  of seconds against the free optimum's hundredths (U2): it sets the worst case. The leak's plume
-  reaches 0.45 m at most, so the band's lower limit decides whether it is detected at all.
-- **The three-plus-one's** three detection sensors detect all twenty units at the same latencies
-  as the detection-only four: the fourth of those four is a spare under the worst case.
+- **The product search, with stands from 0.1 m,** detects all twenty units, and its worst case is
+  the breach's, the same as without stands. The door is reached from a stand 6 cm from the doorway
+  at 0.56 m, as fast as by the free optimum; the seal leak from a stand by the doorway just above
+  the band's floor, within a second (U2). No latency of it falls after a flow switch.
+- **At the earlier 0.3 m band** the seal leak is reached only by the few stand cells at the bottom
+  of the band (the reach lines), late, tens of seconds against the product's under one (U2), and
+  its 5 um class only after the leak has ended and the flow has switched back: that latency sets the
+  worst case and is the one marked. The leak's plume reaches 0.45 m at most, so the band's floor
+  decides how fast it is detected and, above that height, whether it is.
+- **The three-plus-one's** three detection sensors detect all twenty units with the product's worst
+  case; its fourth cell, the all-clear rule's, sets no latency.
 - **The free optimum** is the bound: three cells cover all twenty units (L2), each standing where a
   plume starts, two of them just outside an exclusion. It says how much of the latency is
   position; it is not a place a sensor could be fixed.
@@ -303,34 +323,34 @@ file's sensors, on 160x60, in one direction; at a searched cell the column gives
 the scale. The width column says how far the sweep's inputs move the plume on the cell's row.
 
 <!-- tables76 headline begin -->
-### U2. Per unit, the layout's latency, the least over its cells (s; never with the run's end)
+### U2. Per unit, the layout's latency, the least over its cells (s; never with the run's end; marked when read after the end of an event whose end changes the flow state)
 
-| Scenario | Event | Class (um) | the file's four | searched four, mountable without stands | searched four with stands | the three-plus-one | free optimum |
-|---|---|---|---|---|---|---|---|
-| door_leak | door_open | 0.1 | never (to 60) | never (to 60) | 0.099 | 0.102 | 0.099 |
-| door_leak | door_open | 0.3 | never (to 60) | never (to 60) | 0.099 | 0.102 | 0.099 |
-| door_leak | door_open | 0.5 | never (to 60) | never (to 60) | 0.099 | 0.102 | 0.099 |
-| door_leak | door_open | 1 | never (to 60) | never (to 60) | 0.099 | 0.102 | 0.099 |
-| door_leak | door_open | 5 | never (to 60) | never (to 60) | 0.099 | 0.102 | 0.099 |
-| filter_breach | panel_breach | 0.1 | never (to 120) | 2.565 | 2.565 | 2.565 | 0.058 |
-| filter_breach | panel_breach | 0.3 | never (to 120) | 2.565 | 2.565 | 2.565 | 0.058 |
-| filter_breach | panel_breach | 0.5 | never (to 120) | 2.565 | 2.565 | 2.565 | 0.058 |
-| filter_breach | panel_breach | 1 | never (to 120) | 2.565 | 2.565 | 2.565 | 0.058 |
-| filter_breach | panel_breach | 5 | never (to 120) | 2.562 | 2.562 | 2.562 | 0.058 |
-| equipment_dust | litho_dust | 0.1 | never (to 120) | 0.399 | 0.399 | 0.399 | 0.399 |
-| equipment_dust | litho_dust | 0.3 | never (to 120) | 0.210 | 0.210 | 0.210 | 0.210 |
-| equipment_dust | litho_dust | 0.5 | never (to 120) | 0.174 | 0.174 | 0.174 | 0.174 |
-| equipment_dust | litho_dust | 1 | never (to 120) | 0.138 | 0.138 | 0.138 | 0.138 |
-| equipment_dust | litho_dust | 5 | never (to 120) | 0.072 | 0.072 | 0.072 | 0.072 |
-| seal_leak | seal_leak | 0.1 | never (to 120) | never (to 120) | 16.361 | 16.361 | 0.035 |
-| seal_leak | seal_leak | 0.3 | never (to 120) | never (to 120) | 16.378 | 16.378 | 0.035 |
-| seal_leak | seal_leak | 0.5 | never (to 120) | never (to 120) | 16.413 | 16.413 | 0.035 |
-| seal_leak | seal_leak | 1 | never (to 120) | never (to 120) | 16.577 | 16.577 | 0.035 |
-| seal_leak | seal_leak | 5 | never (to 120) | never (to 120) | 30.594 | 30.594 | 0.035 |
+| Scenario | Event | Class (um) | the file's four | searched four, mountable without stands | searched four with stands, the earlier 0.3 m band | the product search, four with stands | the three-plus-one, fourth cell set by the clean-out's run end | free optimum |
+|---|---|---|---|---|---|---|---|---|
+| door_leak | door_open | 0.1 | never (to 60) | never (to 60) | 0.099 | 0.099 | 0.173 | 0.099 |
+| door_leak | door_open | 0.3 | never (to 60) | never (to 60) | 0.099 | 0.099 | 0.173 | 0.099 |
+| door_leak | door_open | 0.5 | never (to 60) | never (to 60) | 0.099 | 0.099 | 0.173 | 0.099 |
+| door_leak | door_open | 1 | never (to 60) | never (to 60) | 0.099 | 0.099 | 0.173 | 0.099 |
+| door_leak | door_open | 5 | never (to 60) | never (to 60) | 0.099 | 0.099 | 0.173 | 0.099 |
+| filter_breach | panel_breach | 0.1 | never (to 120) | 2.565 | 2.565 | 2.565 | 2.565 | 0.058 |
+| filter_breach | panel_breach | 0.3 | never (to 120) | 2.565 | 2.565 | 2.565 | 2.565 | 0.058 |
+| filter_breach | panel_breach | 0.5 | never (to 120) | 2.565 | 2.565 | 2.565 | 2.565 | 0.058 |
+| filter_breach | panel_breach | 1 | never (to 120) | 2.565 | 2.565 | 2.565 | 2.565 | 0.058 |
+| filter_breach | panel_breach | 5 | never (to 120) | 2.562 | 2.562 | 2.562 | 2.562 | 0.058 |
+| equipment_dust | litho_dust | 0.1 | never (to 120) | 0.399 | 0.399 | 0.399 | 0.399 | 0.399 |
+| equipment_dust | litho_dust | 0.3 | never (to 120) | 0.210 | 0.210 | 0.210 | 0.210 | 0.210 |
+| equipment_dust | litho_dust | 0.5 | never (to 120) | 0.174 | 0.174 | 0.174 | 0.174 | 0.174 |
+| equipment_dust | litho_dust | 1 | never (to 120) | 0.138 | 0.138 | 0.138 | 0.138 | 0.138 |
+| equipment_dust | litho_dust | 5 | never (to 120) | 0.072 | 0.072 | 0.072 | 0.072 | 0.072 |
+| seal_leak | seal_leak | 0.1 | never (to 120) | never (to 120) | 16.361 | 0.699 | 0.737 | 0.035 |
+| seal_leak | seal_leak | 0.3 | never (to 120) | never (to 120) | 16.378 | 0.699 | 0.737 | 0.035 |
+| seal_leak | seal_leak | 0.5 | never (to 120) | never (to 120) | 16.413 | 0.699 | 0.737 | 0.035 |
+| seal_leak | seal_leak | 1 | never (to 120) | never (to 120) | 16.577 | 0.699 | 0.741 | 0.035 |
+| seal_leak | seal_leak | 5 | never (to 120) | never (to 120) | 30.594 (after the flow switch) | 0.706 | 0.751 | 0.035 |
 <!-- tables76 headline end -->
 
 <!-- tables76 units begin -->
-### U1. Per scenario, event, class and sensor, for the file's four, the three-plus-one (D detection, A all-clear) and the free optimum (0.1 um and 5 um; every class in tables76.md). A file sensor's peak and time above are from its every-step readings, a searched cell's from the stored frames (every 100 steps, about 0.36 s). The time error is T7's (160x60, one direction), measured at the file's sensors only. The width is the plume's largest at the threshold on the cell's row over step 1's 160x60 arms, read at frame resolution; the seal leak ran on no arm.
+### U1. Per scenario, event, class and sensor, for the file's four, the product search (P), the three-plus-one (D detection, A all-clear) and the free optimum (0.1 um and 5 um; every class in tables76.md); a latency read after the flow switch is marked. A file sensor's peak and time above are from its every-step readings, a searched cell's from the stored frames (every 100 steps, about 0.36 s). The time error is T7's (160x60, one direction), measured at the file's sensors only. The width is the plume's largest at the threshold on the cell's row over step 1's 160x60 arms, read at frame resolution; the seal leak ran on no arm.
 
 | Scenario | Event | Class (um) | Configuration | Sensor | Latency (s) | Peak over threshold | Time above (s) | Read from | T7 time error | Sweep's width on the row (m) |
 |---|---|---|---|---|---|---|---|---|---|---|
@@ -338,10 +358,14 @@ the scale. The width column says how far the sweep's inputs move the plume on th
 | door_leak | door_open | 0.1 | the file's four | above_gap_1 (2.688, 2.488) | never (to 60) | below the resolved plume (< 0.01) | 0.00 | steps | -3.63% | 0.00 to 0.00 |
 | door_leak | door_open | 0.1 | the file's four | above_gap_2 (4.788, 2.488) | never (to 60) | below the resolved plume (< 0.01) | 0.00 | steps | -3.49% | 0.00 to 0.00 |
 | door_leak | door_open | 0.1 | the file's four | hood_entry (6.188, 1.188) | never (to 60) | below the resolved plume (< 0.01) | 0.00 | steps | -3.00% | 0.00 to 0.25 |
-| door_leak | door_open | 0.1 | the three-plus-one | D1 (0.062, 0.313) | 0.102 | 100 | 36.45 | frames | up to 3.63% (T7's largest) | 0.65 to 0.95 |
-| door_leak | door_open | 0.1 | the three-plus-one | D2 (3.188, 2.038) | never (to 60) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | 0.00 to 0.00 |
-| door_leak | door_open | 0.1 | the three-plus-one | D3 (3.738, 2.038) | never (to 60) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | 0.00 to 0.00 |
-| door_leak | door_open | 0.1 | the three-plus-one | A1 (7.613, 0.013) | never (to 60) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | 0.85 to 1.15 |
+| door_leak | door_open | 0.1 | the product search, four with stands | P1 (0.138, 0.113) | 0.324 | 100 | 39.72 | frames | up to 3.63% (T7's largest) | 0.75 to 1.10 |
+| door_leak | door_open | 0.1 | the product search, four with stands | P2 (0.062, 0.562) | 0.099 | 100 | 6.74 | frames | up to 3.63% (T7's largest) | 0.45 to 0.75 |
+| door_leak | door_open | 0.1 | the product search, four with stands | P3 (3.188, 2.038) | never (to 60) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | 0.00 to 0.00 |
+| door_leak | door_open | 0.1 | the product search, four with stands | P4 (3.738, 2.038) | never (to 60) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | 0.00 to 0.00 |
+| door_leak | door_open | 0.1 | the three-plus-one, fourth cell set by the clean-out's run end | D1 (0.088, 0.113) | 0.173 | 100 | 41.89 | frames | up to 3.63% (T7's largest) | 0.75 to 1.10 |
+| door_leak | door_open | 0.1 | the three-plus-one, fourth cell set by the clean-out's run end | D2 (3.188, 2.038) | never (to 60) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | 0.00 to 0.00 |
+| door_leak | door_open | 0.1 | the three-plus-one, fourth cell set by the clean-out's run end | D3 (3.738, 2.038) | never (to 60) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | 0.00 to 0.00 |
+| door_leak | door_open | 0.1 | the three-plus-one, fourth cell set by the clean-out's run end | A1 (7.613, 0.013) | never (to 60) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | 0.85 to 1.15 |
 | door_leak | door_open | 0.1 | free optimum | F1 (0.062, 0.013) | 0.102 | 100 | 41.16 | frames | up to 3.63% (T7's largest) | 0.85 to 1.15 |
 | door_leak | door_open | 0.1 | free optimum | F2 (0.062, 0.562) | 0.099 | 100 | 6.74 | frames | up to 3.63% (T7's largest) | 0.45 to 0.75 |
 | door_leak | door_open | 0.1 | free optimum | F3 (3.738, 2.038) | never (to 60) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | 0.00 to 0.00 |
@@ -350,10 +374,14 @@ the scale. The width column says how far the sweep's inputs move the plume on th
 | door_leak | door_open | 5 | the file's four | above_gap_1 (2.688, 2.488) | never (to 60) | below the resolved plume (< 0.01) | 0.00 | steps | -3.63% | 0.00 to 0.00 |
 | door_leak | door_open | 5 | the file's four | above_gap_2 (4.788, 2.488) | never (to 60) | below the resolved plume (< 0.01) | 0.00 | steps | -3.49% | 0.00 to 0.00 |
 | door_leak | door_open | 5 | the file's four | hood_entry (6.188, 1.188) | never (to 60) | below the resolved plume (< 0.01) | 0.00 | steps | -3.00% | 0.00 to 0.25 |
-| door_leak | door_open | 5 | the three-plus-one | D1 (0.062, 0.313) | 0.102 | 100 | 36.09 | frames | up to 3.63% (T7's largest) | 0.65 to 0.95 |
-| door_leak | door_open | 5 | the three-plus-one | D2 (3.188, 2.038) | never (to 60) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | 0.00 to 0.00 |
-| door_leak | door_open | 5 | the three-plus-one | D3 (3.738, 2.038) | never (to 60) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | 0.00 to 0.00 |
-| door_leak | door_open | 5 | the three-plus-one | A1 (7.613, 0.013) | never (to 60) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | 0.85 to 1.15 |
+| door_leak | door_open | 5 | the product search, four with stands | P1 (0.138, 0.113) | 0.324 | 100 | 39.36 | frames | up to 3.63% (T7's largest) | 0.75 to 1.10 |
+| door_leak | door_open | 5 | the product search, four with stands | P2 (0.062, 0.562) | 0.099 | 100 | 6.74 | frames | up to 3.63% (T7's largest) | 0.45 to 0.75 |
+| door_leak | door_open | 5 | the product search, four with stands | P3 (3.188, 2.038) | never (to 60) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | 0.00 to 0.00 |
+| door_leak | door_open | 5 | the product search, four with stands | P4 (3.738, 2.038) | never (to 60) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | 0.00 to 0.00 |
+| door_leak | door_open | 5 | the three-plus-one, fourth cell set by the clean-out's run end | D1 (0.088, 0.113) | 0.173 | 100 | 41.53 | frames | up to 3.63% (T7's largest) | 0.75 to 1.10 |
+| door_leak | door_open | 5 | the three-plus-one, fourth cell set by the clean-out's run end | D2 (3.188, 2.038) | never (to 60) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | 0.00 to 0.00 |
+| door_leak | door_open | 5 | the three-plus-one, fourth cell set by the clean-out's run end | D3 (3.738, 2.038) | never (to 60) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | 0.00 to 0.00 |
+| door_leak | door_open | 5 | the three-plus-one, fourth cell set by the clean-out's run end | A1 (7.613, 0.013) | never (to 60) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | 0.85 to 1.15 |
 | door_leak | door_open | 5 | free optimum | F1 (0.062, 0.013) | 0.102 | 100 | 40.80 | frames | up to 3.63% (T7's largest) | 0.85 to 1.15 |
 | door_leak | door_open | 5 | free optimum | F2 (0.062, 0.562) | 0.099 | 100 | 6.74 | frames | up to 3.63% (T7's largest) | 0.45 to 0.75 |
 | door_leak | door_open | 5 | free optimum | F3 (3.738, 2.038) | never (to 60) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | 0.00 to 0.00 |
@@ -362,10 +390,14 @@ the scale. The width column says how far the sweep's inputs move the plume on th
 | filter_breach | panel_breach | 0.1 | the file's four | above_gap_1 (2.688, 2.488) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | steps | -3.63% | 0.95 to 1.60 |
 | filter_breach | panel_breach | 0.1 | the file's four | above_gap_2 (4.788, 2.488) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | steps | -3.49% | 0.95 to 1.60 |
 | filter_breach | panel_breach | 0.1 | the file's four | hood_entry (6.188, 1.188) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | steps | -3.00% | 0.95 to 1.40 |
-| filter_breach | panel_breach | 0.1 | the three-plus-one | D1 (0.062, 0.313) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | 0.95 to 1.40 |
-| filter_breach | panel_breach | 0.1 | the three-plus-one | D2 (3.188, 2.038) | 2.565 | 99.8 | 64.86 | frames | up to 3.63% (T7's largest) | 1.90 to 2.35 |
-| filter_breach | panel_breach | 0.1 | the three-plus-one | D3 (3.738, 2.038) | 3.069 | 98.4 | 65.22 | frames | up to 3.63% (T7's largest) | 1.90 to 2.35 |
-| filter_breach | panel_breach | 0.1 | the three-plus-one | A1 (7.613, 0.013) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | 0.85 to 1.40 |
+| filter_breach | panel_breach | 0.1 | the product search, four with stands | P1 (0.138, 0.113) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | 0.85 to 1.40 |
+| filter_breach | panel_breach | 0.1 | the product search, four with stands | P2 (0.062, 0.562) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | 0.95 to 1.40 |
+| filter_breach | panel_breach | 0.1 | the product search, four with stands | P3 (3.188, 2.038) | 2.565 | 99.8 | 64.86 | frames | up to 3.63% (T7's largest) | 1.90 to 2.35 |
+| filter_breach | panel_breach | 0.1 | the product search, four with stands | P4 (3.738, 2.038) | 3.069 | 98.4 | 65.22 | frames | up to 3.63% (T7's largest) | 1.90 to 2.35 |
+| filter_breach | panel_breach | 0.1 | the three-plus-one, fourth cell set by the clean-out's run end | D1 (0.088, 0.113) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | 0.85 to 1.40 |
+| filter_breach | panel_breach | 0.1 | the three-plus-one, fourth cell set by the clean-out's run end | D2 (3.188, 2.038) | 2.565 | 99.8 | 64.86 | frames | up to 3.63% (T7's largest) | 1.90 to 2.35 |
+| filter_breach | panel_breach | 0.1 | the three-plus-one, fourth cell set by the clean-out's run end | D3 (3.738, 2.038) | 3.069 | 98.4 | 65.22 | frames | up to 3.63% (T7's largest) | 1.90 to 2.35 |
+| filter_breach | panel_breach | 0.1 | the three-plus-one, fourth cell set by the clean-out's run end | A1 (7.613, 0.013) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | 0.85 to 1.40 |
 | filter_breach | panel_breach | 0.1 | free optimum | F1 (0.062, 0.013) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | 0.85 to 1.40 |
 | filter_breach | panel_breach | 0.1 | free optimum | F2 (0.062, 0.562) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | 0.95 to 1.40 |
 | filter_breach | panel_breach | 0.1 | free optimum | F3 (3.738, 2.038) | 3.069 | 98.4 | 65.22 | frames | up to 3.63% (T7's largest) | 1.90 to 2.35 |
@@ -374,10 +406,14 @@ the scale. The width column says how far the sweep's inputs move the plume on th
 | filter_breach | panel_breach | 5 | the file's four | above_gap_1 (2.688, 2.488) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | steps | -3.63% | 0.95 to 1.60 |
 | filter_breach | panel_breach | 5 | the file's four | above_gap_2 (4.788, 2.488) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | steps | -3.49% | 0.95 to 1.60 |
 | filter_breach | panel_breach | 5 | the file's four | hood_entry (6.188, 1.188) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | steps | -3.00% | 0.95 to 1.40 |
-| filter_breach | panel_breach | 5 | the three-plus-one | D1 (0.062, 0.313) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | 0.95 to 1.40 |
-| filter_breach | panel_breach | 5 | the three-plus-one | D2 (3.188, 2.038) | 2.562 | 99.6 | 64.49 | frames | up to 3.63% (T7's largest) | 1.90 to 2.35 |
-| filter_breach | panel_breach | 5 | the three-plus-one | D3 (3.738, 2.038) | 3.058 | 98.3 | 64.86 | frames | up to 3.63% (T7's largest) | 1.90 to 2.35 |
-| filter_breach | panel_breach | 5 | the three-plus-one | A1 (7.613, 0.013) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | 0.85 to 1.40 |
+| filter_breach | panel_breach | 5 | the product search, four with stands | P1 (0.138, 0.113) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | 0.85 to 1.40 |
+| filter_breach | panel_breach | 5 | the product search, four with stands | P2 (0.062, 0.562) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | 0.95 to 1.40 |
+| filter_breach | panel_breach | 5 | the product search, four with stands | P3 (3.188, 2.038) | 2.562 | 99.6 | 64.49 | frames | up to 3.63% (T7's largest) | 1.90 to 2.35 |
+| filter_breach | panel_breach | 5 | the product search, four with stands | P4 (3.738, 2.038) | 3.058 | 98.3 | 64.86 | frames | up to 3.63% (T7's largest) | 1.90 to 2.35 |
+| filter_breach | panel_breach | 5 | the three-plus-one, fourth cell set by the clean-out's run end | D1 (0.088, 0.113) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | 0.85 to 1.40 |
+| filter_breach | panel_breach | 5 | the three-plus-one, fourth cell set by the clean-out's run end | D2 (3.188, 2.038) | 2.562 | 99.6 | 64.49 | frames | up to 3.63% (T7's largest) | 1.90 to 2.35 |
+| filter_breach | panel_breach | 5 | the three-plus-one, fourth cell set by the clean-out's run end | D3 (3.738, 2.038) | 3.058 | 98.3 | 64.86 | frames | up to 3.63% (T7's largest) | 1.90 to 2.35 |
+| filter_breach | panel_breach | 5 | the three-plus-one, fourth cell set by the clean-out's run end | A1 (7.613, 0.013) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | 0.85 to 1.40 |
 | filter_breach | panel_breach | 5 | free optimum | F1 (0.062, 0.013) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | 0.85 to 1.40 |
 | filter_breach | panel_breach | 5 | free optimum | F2 (0.062, 0.562) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | 0.95 to 1.40 |
 | filter_breach | panel_breach | 5 | free optimum | F3 (3.738, 2.038) | 3.058 | 98.3 | 64.86 | frames | up to 3.63% (T7's largest) | 1.90 to 2.35 |
@@ -386,10 +422,14 @@ the scale. The width column says how far the sweep's inputs move the plume on th
 | equipment_dust | litho_dust | 0.1 | the file's four | above_gap_1 (2.688, 2.488) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | steps | -3.63% | 0.00 to 0.00 |
 | equipment_dust | litho_dust | 0.1 | the file's four | above_gap_2 (4.788, 2.488) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | steps | -3.49% | 0.00 to 0.00 |
 | equipment_dust | litho_dust | 0.1 | the file's four | hood_entry (6.188, 1.188) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | steps | -3.00% | 0.00 to 0.00 |
-| equipment_dust | litho_dust | 0.1 | the three-plus-one | D1 (0.062, 0.313) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | 0.00 to 0.00 |
-| equipment_dust | litho_dust | 0.1 | the three-plus-one | D2 (3.188, 2.038) | never (to 120) | 0.551 | 0.00 | frames | up to 3.63% (T7's largest) | 0.70 to 0.75 |
-| equipment_dust | litho_dust | 0.1 | the three-plus-one | D3 (3.738, 2.038) | 0.399 | 5.01 | 30.43 | frames | up to 3.63% (T7's largest) | 0.70 to 0.75 |
-| equipment_dust | litho_dust | 0.1 | the three-plus-one | A1 (7.613, 0.013) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | 0.00 to 0.00 |
+| equipment_dust | litho_dust | 0.1 | the product search, four with stands | P1 (0.138, 0.113) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | 0.00 to 0.00 |
+| equipment_dust | litho_dust | 0.1 | the product search, four with stands | P2 (0.062, 0.562) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | 0.00 to 0.00 |
+| equipment_dust | litho_dust | 0.1 | the product search, four with stands | P3 (3.188, 2.038) | never (to 120) | 0.551 | 0.00 | frames | up to 3.63% (T7's largest) | 0.70 to 0.75 |
+| equipment_dust | litho_dust | 0.1 | the product search, four with stands | P4 (3.738, 2.038) | 0.399 | 5.01 | 30.43 | frames | up to 3.63% (T7's largest) | 0.70 to 0.75 |
+| equipment_dust | litho_dust | 0.1 | the three-plus-one, fourth cell set by the clean-out's run end | D1 (0.088, 0.113) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | 0.00 to 0.00 |
+| equipment_dust | litho_dust | 0.1 | the three-plus-one, fourth cell set by the clean-out's run end | D2 (3.188, 2.038) | never (to 120) | 0.551 | 0.00 | frames | up to 3.63% (T7's largest) | 0.70 to 0.75 |
+| equipment_dust | litho_dust | 0.1 | the three-plus-one, fourth cell set by the clean-out's run end | D3 (3.738, 2.038) | 0.399 | 5.01 | 30.43 | frames | up to 3.63% (T7's largest) | 0.70 to 0.75 |
+| equipment_dust | litho_dust | 0.1 | the three-plus-one, fourth cell set by the clean-out's run end | A1 (7.613, 0.013) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | 0.00 to 0.00 |
 | equipment_dust | litho_dust | 0.1 | free optimum | F1 (0.062, 0.013) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | 0.00 to 0.00 |
 | equipment_dust | litho_dust | 0.1 | free optimum | F2 (0.062, 0.562) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | 0.00 to 0.00 |
 | equipment_dust | litho_dust | 0.1 | free optimum | F3 (3.738, 2.038) | 0.399 | 5.01 | 30.43 | frames | up to 3.63% (T7's largest) | 0.70 to 0.75 |
@@ -398,10 +438,14 @@ the scale. The width column says how far the sweep's inputs move the plume on th
 | equipment_dust | litho_dust | 5 | the file's four | above_gap_1 (2.688, 2.488) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | steps | -3.63% | 0.00 to 0.80 |
 | equipment_dust | litho_dust | 5 | the file's four | above_gap_2 (4.788, 2.488) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | steps | -3.49% | 0.00 to 0.80 |
 | equipment_dust | litho_dust | 5 | the file's four | hood_entry (6.188, 1.188) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | steps | -3.00% | 0.60 to 1.40 |
-| equipment_dust | litho_dust | 5 | the three-plus-one | D1 (0.062, 0.313) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | 0.60 to 1.40 |
-| equipment_dust | litho_dust | 5 | the three-plus-one | D2 (3.188, 2.038) | 1.181 | 1.81e+03 | 32.61 | frames | up to 3.63% (T7's largest) | 1.10 to 2.45 |
-| equipment_dust | litho_dust | 5 | the three-plus-one | D3 (3.738, 2.038) | 0.072 | 1.7e+04 | 33.33 | frames | up to 3.63% (T7's largest) | 1.10 to 2.45 |
-| equipment_dust | litho_dust | 5 | the three-plus-one | A1 (7.613, 0.013) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | 0.60 to 1.40 |
+| equipment_dust | litho_dust | 5 | the product search, four with stands | P1 (0.138, 0.113) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | 0.60 to 1.40 |
+| equipment_dust | litho_dust | 5 | the product search, four with stands | P2 (0.062, 0.562) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | 0.60 to 1.40 |
+| equipment_dust | litho_dust | 5 | the product search, four with stands | P3 (3.188, 2.038) | 1.181 | 1.81e+03 | 32.61 | frames | up to 3.63% (T7's largest) | 1.10 to 2.45 |
+| equipment_dust | litho_dust | 5 | the product search, four with stands | P4 (3.738, 2.038) | 0.072 | 1.7e+04 | 33.33 | frames | up to 3.63% (T7's largest) | 1.10 to 2.45 |
+| equipment_dust | litho_dust | 5 | the three-plus-one, fourth cell set by the clean-out's run end | D1 (0.088, 0.113) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | 0.60 to 1.40 |
+| equipment_dust | litho_dust | 5 | the three-plus-one, fourth cell set by the clean-out's run end | D2 (3.188, 2.038) | 1.181 | 1.81e+03 | 32.61 | frames | up to 3.63% (T7's largest) | 1.10 to 2.45 |
+| equipment_dust | litho_dust | 5 | the three-plus-one, fourth cell set by the clean-out's run end | D3 (3.738, 2.038) | 0.072 | 1.7e+04 | 33.33 | frames | up to 3.63% (T7's largest) | 1.10 to 2.45 |
+| equipment_dust | litho_dust | 5 | the three-plus-one, fourth cell set by the clean-out's run end | A1 (7.613, 0.013) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | 0.60 to 1.40 |
 | equipment_dust | litho_dust | 5 | free optimum | F1 (0.062, 0.013) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | 0.60 to 1.40 |
 | equipment_dust | litho_dust | 5 | free optimum | F2 (0.062, 0.562) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | 0.60 to 1.40 |
 | equipment_dust | litho_dust | 5 | free optimum | F3 (3.738, 2.038) | 0.072 | 1.7e+04 | 33.33 | frames | up to 3.63% (T7's largest) | 1.10 to 2.45 |
@@ -410,10 +454,14 @@ the scale. The width column says how far the sweep's inputs move the plume on th
 | seal_leak | seal_leak | 0.1 | the file's four | above_gap_1 (2.688, 2.488) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | steps | -3.63% | no arm |
 | seal_leak | seal_leak | 0.1 | the file's four | above_gap_2 (4.788, 2.488) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | steps | -3.49% | no arm |
 | seal_leak | seal_leak | 0.1 | the file's four | hood_entry (6.188, 1.188) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | steps | -3.00% | no arm |
-| seal_leak | seal_leak | 0.1 | the three-plus-one | D1 (0.062, 0.313) | 16.361 | 7.14 | 32.75 | frames | up to 3.63% (T7's largest) | no arm |
-| seal_leak | seal_leak | 0.1 | the three-plus-one | D2 (3.188, 2.038) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | no arm |
-| seal_leak | seal_leak | 0.1 | the three-plus-one | D3 (3.738, 2.038) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | no arm |
-| seal_leak | seal_leak | 0.1 | the three-plus-one | A1 (7.613, 0.013) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | no arm |
+| seal_leak | seal_leak | 0.1 | the product search, four with stands | P1 (0.138, 0.113) | 0.699 | 9.64 | 52.02 | frames | up to 3.63% (T7's largest) | no arm |
+| seal_leak | seal_leak | 0.1 | the product search, four with stands | P2 (0.062, 0.562) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | no arm |
+| seal_leak | seal_leak | 0.1 | the product search, four with stands | P3 (3.188, 2.038) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | no arm |
+| seal_leak | seal_leak | 0.1 | the product search, four with stands | P4 (3.738, 2.038) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | no arm |
+| seal_leak | seal_leak | 0.1 | the three-plus-one, fourth cell set by the clean-out's run end | D1 (0.088, 0.113) | 0.737 | 18.5 | 54.19 | frames | up to 3.63% (T7's largest) | no arm |
+| seal_leak | seal_leak | 0.1 | the three-plus-one, fourth cell set by the clean-out's run end | D2 (3.188, 2.038) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | no arm |
+| seal_leak | seal_leak | 0.1 | the three-plus-one, fourth cell set by the clean-out's run end | D3 (3.738, 2.038) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | no arm |
+| seal_leak | seal_leak | 0.1 | the three-plus-one, fourth cell set by the clean-out's run end | A1 (7.613, 0.013) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | no arm |
 | seal_leak | seal_leak | 0.1 | free optimum | F1 (0.062, 0.013) | 0.035 | 97.5 | 53.81 | frames | up to 3.63% (T7's largest) | no arm |
 | seal_leak | seal_leak | 0.1 | free optimum | F2 (0.062, 0.562) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | no arm |
 | seal_leak | seal_leak | 0.1 | free optimum | F3 (3.738, 2.038) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | no arm |
@@ -422,10 +470,14 @@ the scale. The width column says how far the sweep's inputs move the plume on th
 | seal_leak | seal_leak | 5 | the file's four | above_gap_1 (2.688, 2.488) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | steps | -3.63% | no arm |
 | seal_leak | seal_leak | 5 | the file's four | above_gap_2 (4.788, 2.488) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | steps | -3.49% | no arm |
 | seal_leak | seal_leak | 5 | the file's four | hood_entry (6.188, 1.188) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | steps | -3.00% | no arm |
-| seal_leak | seal_leak | 5 | the three-plus-one | D1 (0.062, 0.313) | 30.594 | 6.78 | 18.12 | frames | up to 3.63% (T7's largest) | no arm |
-| seal_leak | seal_leak | 5 | the three-plus-one | D2 (3.188, 2.038) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | no arm |
-| seal_leak | seal_leak | 5 | the three-plus-one | D3 (3.738, 2.038) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | no arm |
-| seal_leak | seal_leak | 5 | the three-plus-one | A1 (7.613, 0.013) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | no arm |
+| seal_leak | seal_leak | 5 | the product search, four with stands | P1 (0.138, 0.113) | 0.706 | 9.17 | 51.29 | frames | up to 3.63% (T7's largest) | no arm |
+| seal_leak | seal_leak | 5 | the product search, four with stands | P2 (0.062, 0.562) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | no arm |
+| seal_leak | seal_leak | 5 | the product search, four with stands | P3 (3.188, 2.038) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | no arm |
+| seal_leak | seal_leak | 5 | the product search, four with stands | P4 (3.738, 2.038) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | no arm |
+| seal_leak | seal_leak | 5 | the three-plus-one, fourth cell set by the clean-out's run end | D1 (0.088, 0.113) | 0.751 | 17.7 | 53.47 | frames | up to 3.63% (T7's largest) | no arm |
+| seal_leak | seal_leak | 5 | the three-plus-one, fourth cell set by the clean-out's run end | D2 (3.188, 2.038) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | no arm |
+| seal_leak | seal_leak | 5 | the three-plus-one, fourth cell set by the clean-out's run end | D3 (3.738, 2.038) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | no arm |
+| seal_leak | seal_leak | 5 | the three-plus-one, fourth cell set by the clean-out's run end | A1 (7.613, 0.013) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | no arm |
 | seal_leak | seal_leak | 5 | free optimum | F1 (0.062, 0.013) | 0.035 | 97.4 | 53.45 | frames | up to 3.63% (T7's largest) | no arm |
 | seal_leak | seal_leak | 5 | free optimum | F2 (0.062, 0.562) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | no arm |
 | seal_leak | seal_leak | 5 | free optimum | F3 (3.738, 2.038) | never (to 120) | below the resolved plume (< 0.01) | 0.00 | frames | up to 3.63% (T7's largest) | no arm |
@@ -509,7 +561,7 @@ Worst premature interval unbounded (the room not clear where the layout reads cl
 
 Worst premature interval unbounded (the room not clear where the layout reads clean), mean unbounded (the room not clear where the layout reads clean), largest area fraction 13.73%; premature in 20 of 25 units, the layout not clear in 0, the room not clear in 5.
 
-**searched four with stands**, (0.062, 0.313), (0.062, 0.562), (3.188, 2.038), (3.738, 2.038)
+**searched four with stands, the earlier 0.3 m band**, (0.062, 0.313), (0.062, 0.562), (3.188, 2.038), (3.738, 2.038)
 
 | Scenario | Class (um) | The layout's clear time (s) | The room's (s) | Premature interval (s) | Area at or above at the layout's time |
 |---|---|---|---|---|---|
@@ -526,22 +578,39 @@ Worst premature interval unbounded (the room not clear where the layout reads cl
 
 Worst premature interval unbounded (the room not clear where the layout reads clean), mean unbounded (the room not clear where the layout reads clean), largest area fraction 7.50%; premature in 20 of 25 units, the layout not clear in 0, the room not clear in 5.
 
-**the three-plus-one**, (0.062, 0.313), (3.188, 2.038), (3.738, 2.038), (7.613, 0.013)
+**the product search, four with stands**, (0.138, 0.113), (0.062, 0.562), (3.188, 2.038), (3.738, 2.038)
 
 | Scenario | Class (um) | The layout's clear time (s) | The room's (s) | Premature interval (s) | Area at or above at the layout's time |
 |---|---|---|---|---|---|
-| door_leak | 0.1 | 46.60 | 54.57 | 7.97 | 0.31% |
-| door_leak | 5 | 46.24 | 54.21 | 7.97 | 0.31% |
+| door_leak | 0.1 | 50.22 | 54.57 | 4.35 | 0.19% |
+| door_leak | 5 | 49.86 | 54.21 | 4.35 | 0.20% |
 | filter_breach | 0.1 | 78.62 | 113.77 | 35.14 | 7.44% |
 | filter_breach | 5 | 78.26 | 113.77 | 35.51 | 7.50% |
 | equipment_dust | 0.1 | 40.94 | 42.39 | 1.45 | 0.44% |
 | equipment_dust | 5 | 43.84 | 106.89 | 63.05 | 5.43% |
-| seal_leak | 0.1 | 59.24 | 67.22 | 7.97 | 0.31% |
-| seal_leak | 5 | 58.88 | 66.85 | 7.97 | 0.31% |
+| seal_leak | 0.1 | 62.87 | 67.22 | 4.35 | 0.20% |
+| seal_leak | 5 | 62.14 | 66.85 | 4.71 | 0.20% |
+| clean_out | 0.1 | 109.06 | not clear | room not clear | 7.29% |
+| clean_out | 5 | 108.34 | not clear | room not clear | 7.27% |
+
+Worst premature interval unbounded (the room not clear where the layout reads clean), mean unbounded (the room not clear where the layout reads clean), largest area fraction 7.50%; premature in 20 of 25 units, the layout not clear in 0, the room not clear in 5.
+
+**the three-plus-one, fourth cell set by the clean-out's run end**, (0.088, 0.113), (3.188, 2.038), (3.738, 2.038), (7.613, 0.013)
+
+| Scenario | Class (um) | The layout's clear time (s) | The room's (s) | Premature interval (s) | Area at or above at the layout's time |
+|---|---|---|---|---|---|
+| door_leak | 0.1 | 52.39 | 54.57 | 2.17 | 0.09% |
+| door_leak | 5 | 52.03 | 54.21 | 2.17 | 0.09% |
+| filter_breach | 0.1 | 78.62 | 113.77 | 35.14 | 7.44% |
+| filter_breach | 5 | 78.26 | 113.77 | 35.51 | 7.50% |
+| equipment_dust | 0.1 | 40.94 | 42.39 | 1.45 | 0.44% |
+| equipment_dust | 5 | 43.84 | 106.89 | 63.05 | 5.43% |
+| seal_leak | 0.1 | 65.04 | 67.22 | 2.17 | 0.09% |
+| seal_leak | 5 | 64.32 | 66.85 | 2.54 | 0.10% |
 | clean_out | 0.1 | not clear | not clear | layout not clear | - |
 | clean_out | 5 | not clear | not clear | layout not clear | - |
 
-Worst premature interval 63.05 s, mean 16.30 s, largest area fraction 7.50%; premature in 20 of 25 units, the layout not clear in 5, the room not clear in 5.
+Worst premature interval 63.05 s, mean 14.01 s, largest area fraction 7.50%; premature in 20 of 25 units, the layout not clear in 5, the room not clear in 5.
 
 **free optimum**, (0.062, 0.013), (0.062, 0.562), (3.738, 2.038), (3.513, 2.938)
 
@@ -570,10 +639,12 @@ Worst premature interval unbounded (the room not clear where the layout reads cl
 | the file's four | 5 | 27.730, 1.391, 1.449, 3.283 | 27.730 |
 | searched four, mountable without stands | 0.1 | 55.100, 55.560, 7.268, 8.417 | 55.560 |
 | searched four, mountable without stands | 5 | 55.028, 55.488, 7.167, 8.287 | 55.488 |
-| searched four with stands | 0.1 | 107.556, 98.870, 7.268, 8.417 | 107.556 |
-| searched four with stands | 5 | 106.748, 98.142, 7.167, 8.287 | 106.748 |
-| the three-plus-one | 0.1 | 107.556, 7.268, 8.417, inf | inf |
-| the three-plus-one | 5 | 106.748, 7.167, 8.287, inf | inf |
+| searched four with stands, the earlier 0.3 m band | 0.1 | 107.556, 98.870, 7.268, 8.417 | 107.556 |
+| searched four with stands, the earlier 0.3 m band | 5 | 106.748, 98.142, 7.167, 8.287 | 106.748 |
+| the product search, four with stands | 0.1 | 109.023, 98.870, 7.268, 8.417 | 109.023 |
+| the product search, four with stands | 5 | 108.197, 98.142, 7.167, 8.287 | 108.197 |
+| the three-plus-one, fourth cell set by the clean-out's run end | 0.1 | 111.009, 7.268, 8.417, inf | inf |
+| the three-plus-one, fourth cell set by the clean-out's run end | 5 | 110.190, 7.167, 8.287, inf | inf |
 | free optimum | 0.1 | 110.099, 98.870, 8.417, 0.301 | 110.099 |
 | free optimum | 5 | 109.284, 98.142, 8.287, 0.297 | 109.284 |
 | free optimum, 1 | 0.1 | 6.102 | 6.102 |
@@ -595,22 +666,26 @@ What these say:
   bench and the right wall, below the hood's exhaust, is still above threshold at the last frame
   (C0, and the figure in section 6). So every layout whose cells clear is premature there without
   bound, and the only cells that are not are the pocket's own.
-- **The search's all-clear sensor goes into that pocket.** Under the ranking of section D a layout
-  whose cell is not clear never declares the room clean, so it declares nothing early; every other
-  candidate is unbounded in the clean-out. The sensor added is therefore one of the pocket's cells,
-  the floor corner by the wall. It adds nothing to the four event scenarios, where it clears before
-  the detection cells: the three-plus-one's premature intervals there equal the detection-only
-  four's (C2). The role does what its rule asks, and the rule as scored is decided by a run too
-  short for the clean-out's room to clear. A longer clean-out, or a rule that weighs the event
-  scenarios when the room is not clear, would change the choice; that is for Alex (the gate
-  report's decide list).
+- **Where the all-clear sensor goes is carried open** (Alex, 2026-11-08), and the product file
+  states none (`all_clear` 0). The score counts only clearing early: under section D's ranking a
+  layout whose cell is not clear never declares the room clean, so it declares nothing early and
+  scores perfectly, while every other candidate is unbounded in the clean-out. The rule therefore
+  puts the fourth cell of the three-plus-one in the pocket, the floor corner by the wall, because
+  the run ended before that pocket cleared, not because clearing is read well there. That cell adds
+  nothing to the four event scenarios, where it clears before the detection cells (C2). The open
+  item needs two things before a position means anything: a cost for clearing late, and a clean-out
+  that runs until the room clears or a stated room-clean criterion (the gate report's decide list).
+- **What stands is the premature interval.** Every layout that detects declares the room clean
+  early in every event scenario, up to about a minute in the dust's 5 um class (C2), and none of the
+  candidates the detection search uses reads the pockets that clear last.
 - **C1** reads the clean-out's step-resolved recovery at each layout's cells, the instrument the
   frame reading of C2 can be checked against.
 
 ## 6. The maps
 
-Per event scenario, the 0.1 um and 5 um arrival maps with the file's four, the three-plus-one and
-the free optimum drawn; and the clean-out's clear-time map, with the three-plus-one. The clean-out's
+Per event scenario, the 0.1 um and 5 um arrival maps with the file's four, the product search, the
+three-plus-one's fourth cell and the free optimum drawn; and the clean-out's clear-time map, with
+the product search and that fourth cell. The clean-out's
 arrival map is t = 0 at every non-SOLID cell (ADR-015 D), so it is not drawn.
 
 ![The door's arrival maps](phase5_arrival_door_leak.png)
@@ -630,21 +705,21 @@ product configuration with stands is read on both grids (K1) and on the sweep's 
 door, the breach and the dust: the seal leak ran on one grid.
 
 <!-- tables76 stability begin -->
-### K1. The product search (three detection sensors and one all-clear, with stands) on 80x30 and 320x120, each layout scored on both grids over the door, the breach and the dust units the grid's search covers and over the all-clear units of those three and the clean-out (the seal leak has one grid). A layout from the other grid is read at the cell holding each centre, the one below or left of it on a face or corner (the lower-left); the line under the table gives the range over every reading
+### K1. The product search (4 detection sensors, no all-clear, with stands from 0.1 m) on 80x30 and 320x120, each layout scored on both grids over the door, the breach and the dust units the grid's search covers and over the all-clear units of those three and the clean-out (the seal leak has one grid). A layout from the other grid is read at the cell holding each centre, the one below or left of it on a face or corner (the lower-left); the line under the table gives the range over every reading
 
 | Grid | Layout | Cell centres (x, y), m | Candidates on this grid | Worst case (s) | Mean (s) | Undetected | Coverage within 10 s | Worst premature interval | Mean interval | Largest area fraction |
 |---|---|---|---|---|---|---|---|---|---|---|
 | 80x30 | the file's four | (0.950, 1.450), (2.650, 2.450), (4.750, 2.450), (6.150, 1.150) | 1 of 4 | inf | 90.000 | 15 of 15 | 0.000 | unbounded (the room not clear where the layout reads clean) | unbounded (the room not clear where the layout reads clean) | 21.06% |
-| 80x30 | the product searched here | (0.150, 0.350), (3.250, 2.050), (3.650, 2.050), (7.650, 0.050) | 4 of 4 | 1.974 | 0.845 | 0 of 15 | 1.000 | 40.53 s | 16.91 s | 7.08% |
-| 80x30 | the product searched on 320x120 | (0.050, 0.550), (3.150, 2.050), (3.750, 2.050), (7.650, 0.050) | 1 of 4 | 1.727 | 0.627 | 0 of 15 | 1.000 | 38.77 s | 17.27 s | 7.08% |
+| 80x30 | the product searched here | (1.450, 0.050), (0.150, 0.150), (3.250, 2.050), (3.650, 2.050) | 4 of 4 | 1.974 | 0.845 | 0 of 15 | 1.000 | unbounded (the room not clear where the layout reads clean) | unbounded (the room not clear where the layout reads clean) | 7.19% |
+| 80x30 | the product searched on 320x120 | (1.450, 0.050), (0.050, 0.550), (3.150, 2.050), (3.750, 2.050) | 1 of 4 | 1.727 | 0.627 | 0 of 15 | 1.000 | unbounded (the room not clear where the layout reads clean) | unbounded (the room not clear where the layout reads clean) | 8.16% |
 | 80x30 | free optimum here | (0.150, 0.050), (3.650, 2.050), (3.750, 2.150), (3.550, 2.850) | 1 of 4 | 0.793 | 0.221 | 0 of 15 | 1.000 | unbounded (the room not clear where the layout reads clean) | unbounded (the room not clear where the layout reads clean) | 7.08% |
 | 320x120 | the file's four | (0.988, 1.488), (2.688, 2.488), (4.788, 2.488), (6.188, 1.188) | 1 of 4 | inf | 90.000 | 15 of 15 | 0.000 | unbounded (the room not clear where the layout reads clean) | unbounded (the room not clear where the layout reads clean) | 20.26% |
-| 320x120 | the product searched here | (0.062, 0.562), (3.188, 2.038), (3.738, 2.038), (7.613, 0.013) | 4 of 4 | 2.565 | 0.954 | 0 of 15 | 1.000 | 63.05 s | 25.80 s | 7.50% |
-| 320x120 | the product searched on 80x30 | (0.138, 0.338), (3.238, 2.038), (3.638, 2.038), (7.638, 0.038) | 4 of 4 | 2.728 | 1.189 | 0 of 15 | 1.000 | 63.05 s | 25.33 s | 7.50% |
+| 320x120 | the product searched here | (1.463, 0.013), (0.062, 0.562), (3.188, 2.038), (3.738, 2.038) | 4 of 4 | 2.565 | 0.954 | 0 of 15 | 1.000 | unbounded (the room not clear where the layout reads clean) | unbounded (the room not clear where the layout reads clean) | 8.11% |
+| 320x120 | the product searched on 80x30 | (1.438, 0.038), (0.138, 0.138), (3.238, 2.038), (3.638, 2.038) | 3 of 4 | 2.728 | 1.189 | 0 of 15 | 1.000 | unbounded (the room not clear where the layout reads clean) | unbounded (the room not clear where the layout reads clean) | 7.50% |
 | 320x120 | free optimum here | (0.062, 0.562), (3.738, 2.038), (3.738, 2.063), (3.513, 2.938) | 2 of 4 | 0.399 | 0.118 | 0 of 15 | 1.000 | unbounded (the room not clear where the layout reads clean) | unbounded (the room not clear where the layout reads clean) | 8.11% |
 
 Read at every choice of the 320x120 cells sharing each 80x30 centre (4 x 4 x 4 x 4 = 256 readings, 256 with no SOLID or repeated cell), the product searched on 80x30 has a worst case from 2.504 to 2.786 s and a mean from 1.089 to 1.247 s on 320x120; the table's row is the lower-left reading.
-Uncovered by the product's candidates on 80x30: none; on 320x120: none. The all-clear sensor: (7.650, 0.050) on 80x30, (7.613, 0.013) on 320x120.
+Uncovered by the product's candidates on 80x30: none; on 320x120: none. No all-clear sensor (the product file's all_clear is 0).
 
 The order per rule, best first:
 
@@ -653,7 +728,7 @@ The order per rule, best first:
 <!-- tables76 stability end -->
 
 <!-- tables76 arms begin -->
-### K2. The product layout of 320x120 (the three-plus-one over the door, the breach and the dust, as K1's) on step 1's arm runs (arrival_from_run: frame-resolved, flagged), read at the cells holding its centres, beside the file's four, the arm's own product search and the arm's free optimum, over the units the arm's own search covers
+### K2. The product layout of 320x120 (the product search over the door, the breach and the dust, as K1's) on step 1's arm runs (arrival_from_run: frame-resolved, flagged), read at the cells holding its centres, beside the file's four, the arm's own product search and the arm's free optimum, over the units the arm's own search covers
 
 | Arm | Grid | Scenarios run | Frame-resolved | Layout | Candidates on this grid | Worst case (s) | Mean (s) | Undetected | Detected, of the arm's units | Own search's rule, method |
 |---|---|---|---|---|---|---|---|---|---|---|
@@ -704,8 +779,8 @@ The order per rule, best first:
 - **Between 80x30 and 320x120** (K1): under the worst case and the mean the free optimum comes
   first and the file's four last on both grids, and the product layouts' working cells are the
   same places: a stand by the doorway, the tool's left corner and its top beyond the ring. The
-  all-clear sensor goes to the same corner by the bench on both grids, read by the same rule, and
-  the room does not clear there by 240 s on either.
+  clean-out's room does not clear by 240 s on either grid, so every layout's premature interval
+  there is unbounded on both (K1's columns).
 - **Across the sweep's inputs** (K2): at each arm that ran the product layout of 320x120 detects
   every unit the arm ran, door included, the file's four detect none, the arm's free optimum is
   better, and the product layout ties the arm's own product search under both rules. The line
@@ -749,7 +824,7 @@ tops (ADR-015 A).
 <!-- tables76 predictions end -->
 
 <!-- tables76 predictions76b begin -->
-### P2. Prompt 76b's predictions against the measurements
+### P2. Prompt 76b's predictions against the measurements, on its configurations (the stand band 0.3 to 1.2 m; the three-plus-one on it)
 
 | Prediction | Measured | Verdict |
 |---|---|---|
@@ -760,9 +835,22 @@ tops (ADR-015 A).
 | (p) the three-plus-one's worst latency over the door, breach and dust units equals the detection-only four's, and its worst premature interval is smaller | worst latency 2.565 s against 2.565 s; worst premature interval 63.05 s against unbounded (the room not clear where the layout reads clean); over the four event scenarios alone 63.05 s against 63.05 s | holds |
 <!-- tables76 predictions76b end -->
 
+<!-- tables76 predictions76c begin -->
+### P3. Prompt 76c's prediction against the re-score
+
+| Prediction | Measured | Verdict |
+|---|---|---|
+| (q) with the band at 0.1 m the product search detects all 20 units with a worst case under 3 s, the seal leak within 1 s, and no worst-case latency is after the flow switch | door 5 of 5, breach 5 of 5, dust 5 of 5, seal leak 5 of 5; 20 units scored, uncovered none; worst case 2.565 s, set by filter_breach panel_breach class 0, filter_breach panel_breach class 1, filter_breach panel_breach class 2, filter_breach panel_breach class 3; the seal leak's latencies 0.699 to 0.706 s; units after the flow switch 0, of them setting the worst case 0; cells (0.138, 0.113), (0.062, 0.562), (3.188, 2.038), (3.738, 2.038) | holds |
+<!-- tables76 predictions76c end -->
+
 Step 5's three hold as they were scored then (P1). Of prompt 76b's, (l), (m), (o) and (p) hold and
 (n) fails in both clauses: the seal leak's air reaches 0.45 m, so a stand at the bottom of the
 0.3 m band detects it and so do free cells above 0.3 m (P2). (p) holds for the reason the clean-out
 gives: over the four event scenarios the two layouts' worst premature intervals are equal, and the
 three-plus-one's is smaller only because the detection-only four declare the clean-out's room
-clean while its pocket is not.
+clean while its pocket is not. P2 is scored on prompt 76b's configurations, the 0.3 m band and the
+three-plus-one on it, so its verdicts stand as made.
+
+Prompt 76c's (q) holds (P3): with the band at 0.1 m the product search detects every unit within the
+breach's worst case, the seal leak within a second, and none of its latencies falls after a flow
+switch.

@@ -1,4 +1,4 @@
-"""Prompts 76 and 76b: the latency report's tables and figures, from the run files (ADR-015 E).
+"""Prompts 76 to 76c: the latency report's tables and figures, from the run files (ADR-015 E).
 
 Reads the five reference scenarios on 320x120 (results/builder76/: step 5's four and
 prompt 76b's seal leak), step 4's 80x30 runs (results/builder75/runs/), step 1's 80x30
@@ -10,7 +10,10 @@ detection units are (scenario, event, class) over the four event scenarios, the 
 units (scenario, class) over the five; the candidates come from every scored scenario's
 configuration, the source boxes and their standoff excluded; the mount, the standoff, the
 stand's height band, the count, the all-clear count and the rule are the product file's
-placement section. A layout's latency comes from the arrival maps by lookup, its clear time
+placement section (prompt 76c: the band from 0.1 m, no all-clear sensor). The 0.3 m band's
+search and the three-plus-one are kept as one row each. A latency read after an event's end
+changed the flow state is marked (``after_flow_switch``). A layout's latency comes from the
+arrival maps by lookup, its clear time
 from the stored frames. A file sensor's peak and time above come from its every-step
 readings, a searched cell's from the stored frames, and the tables say which. The coverage
 rule's time is this report's, WITHIN: the product file states none.
@@ -52,12 +55,14 @@ from src.placement import (  # noqa: E402
     RunArrival,
     Score,
     Units,
+    after_flow_switch,
     arrival_from_run,
     candidates,
     clear_score,
     clear_units,
     detection_units,
     exclude_units,
+    flow_switches,
     given_layout,
     latency,
     rank,
@@ -118,9 +123,16 @@ RESOLVED_FLOOR = 1.0e-2
 DOOR_STANDOFFS = (0.05, 0.1, 0.2, 0.5, 1.0)
 FILE = "the file's four"
 SURF = "searched four, mountable without stands"
-STAND = "searched four with stands"
-ROLES = "the three-plus-one"
+EARLIER = "searched four with stands, the earlier 0.3 m band"
+STAND = "the product search, four with stands"
+ROLES = "the three-plus-one, fourth cell set by the clean-out's run end"
 FREE = "free optimum"
+# Prompt 76b's band, kept as one row so the cost of the band's floor is shown.
+EARLIER_BAND = (0.3, 1.2)
+# Prompt 76b's all-clear count, kept as one row (the three-plus-one); the
+# product file carries the all-clear position open (prompt 76c).
+ROLES_ALL_CLEAR = 1
+AFTER_SWITCH = " (after the flow switch)"
 MARKERS = (
     "reload",
     "flows",
@@ -140,6 +152,7 @@ MARKERS = (
     "arms",
     "predictions",
     "predictions76b",
+    "predictions76c",
 )
 GATE_MARKERS = ("hashes", "bitwise", "coverage")
 
@@ -317,20 +330,50 @@ class Analysis:
             standoff,
             stand_height=self.spec.stand_height,
         )
+        self.earlier_pool = candidates(
+            self.mesh,
+            self.configs,
+            self.spec.mount,
+            standoff,
+            stand_height=EARLIER_BAND,
+        )
         self.free = candidates(self.mesh, self.configs, (MOUNT_FREE,), standoff)
         count, rule = self.spec.count, self.spec.rule
+        # The product search is the file's: four detection sensors (prompt 76c).
+        assert self.spec.all_clear == 0, "the product file states no all-clear sensor"
         self.surf = search(self.units, self.mountable, count, rule, within=WITHIN)
         self.stand = search(self.units, self.product, count, rule, within=WITHIN)
+        self.earlier = search(self.units, self.earlier_pool, count, rule, within=WITHIN)
         self.stand_mean = search(self.units, self.product, count, MEAN, within=WITHIN)
         self.roles = search_roles(
             self.units,
             self.clear,
             self.product,
             count,
-            self.spec.all_clear,
+            ROLES_ALL_CLEAR,
             rule,
             within=WITHIN,
         )
+        # Prompt 76b's configurations as it scored them, for its predictions (P2).
+        self.earlier_roles = search_roles(
+            self.units,
+            self.clear,
+            self.earlier_pool,
+            count,
+            ROLES_ALL_CLEAR,
+            rule,
+            within=WITHIN,
+        )
+        self.switches = {name: flow_switches(runs[name].config) for name in EVENT_NAMES}
+        self.onsets = {
+            (name, event): float(onset)
+            for name in EVENT_NAMES
+            for event, onset in zip(
+                self.arrivals[name].event_names,
+                self.arrivals[name].onsets,
+                strict=True,
+            )
+        }
         self.curve = {
             n: search(self.units, self.free, n, WORST_CASE, within=WITHIN)
             for n in FREE_COUNTS
@@ -344,6 +387,7 @@ class Analysis:
         self.layouts: dict[str, tuple[tuple[int, int], ...]] = {
             FILE: self.sensors,
             SURF: self.surf.cells,
+            EARLIER: self.earlier.cells,
             STAND: self.stand.cells,
             ROLES: self.roles.layout.cells,
             FREE: self.curve[count].cells,
@@ -365,6 +409,19 @@ class Analysis:
         self.t7_largest = max(abs(value) for value in self.t7.values())
         self._widths: dict[str, list[np.ndarray]] = {}
         self._y = np.asarray(self.mesh.y)
+
+    def switched(self, label: tuple[str, str, int], value: float) -> bool:
+        """Whether a unit's latency falls after a flow switch of its scenario."""
+        name, event, _ = label
+        return bool(
+            after_flow_switch(value, self.onsets[(name, event)], self.switches[name])
+        )
+
+    def latency_text(self, label: tuple[str, str, int], value: float) -> str:
+        """A latency with its marker, or never with the run's end."""
+        if math.isinf(value):
+            return f"never (to {self.arrivals[label[0]].t_final:g})"
+        return f"{value:.3f}" + (AFTER_SWITCH if self.switched(label, value) else "")
 
     def reach(self, scenario: str) -> np.ndarray:
         """[ny, nx] bool: the cells some unit of SCENARIO reaches."""
@@ -638,35 +695,64 @@ def candidates_table(a: Analysis) -> list[str]:
             candidates(a.mesh, no_source, (MOUNT_FREE,), standoff),
         ),
         ("and the dust's box and its standoff", a.mountable, a.free),
-        ("and the stands (the product mount)", a.product, a.free),
+        (
+            f"and the stands at the earlier band, {EARLIER_BAND[0]:g} to {EARLIER_BAND[1]:g} m",
+            a.earlier_pool,
+            a.free,
+        ),
+        (
+            f"and the stands at {band[0]:g} to {band[1]:g} m (the product mount)",
+            a.product,
+            a.free,
+        ),
     )
     lines = [
-        f"### N1. The candidates on 320x120 (standoff {standoff:g} m, the stand's inlet {band[0]:g} to {band[1]:g} m above the floor)",
+        f"### N1. The candidates on 320x120 (standoff {standoff:g} m; the stand's inlet {band[0]:g} to {band[1]:g} m above the floor, the earlier band {EARLIER_BAND[0]:g} to {EARLIER_BAND[1]:g} m)",
         "",
         "| Rule | Mountable | Free |",
         "|---|---|---|",
     ]
     for title, mounted, free in rows:
         lines.append(f"| {title} | {len(mounted):,} | {len(free):,} |")
-    stands = candidates(a.mesh, a.configs, (MOUNT_STAND,), standoff, stand_height=band)
     mounted = {(int(j), int(i)) for j, i in a.mountable}
-    extra = sum((int(j), int(i)) not in mounted for j, i in stands)
-    lines += [
-        "",
-        f"Stand cells: {len(stands):,}, of which {extra:,} are not already mountable on a "
-        "surface.",
-    ]
+    counts = []
+    for low_high in (band, EARLIER_BAND):
+        stands = candidates(
+            a.mesh, a.configs, (MOUNT_STAND,), standoff, stand_height=low_high
+        )
+        extra = sum((int(j), int(i)) not in mounted for j, i in stands)
+        counts.append(
+            f"{len(stands):,} at {low_high[0]:g} to {low_high[1]:g} m, of which "
+            f"{extra:,} are not already mountable on a surface"
+        )
+    lines += ["", "Stand cells: " + "; ".join(counts) + "."]
     return lines
+
+
+def switch_text(a: Analysis, layout: Layout) -> str:
+    """Whether a unit setting the worst case is read after a flow switch, and how many are."""
+    labels = set(layout.units)
+    picked = [c[0] for c in layout.cells], [c[1] for c in layout.cells]
+    worst_marked, marked = False, 0
+    for u, label in enumerate(a.units.labels):
+        if label not in labels:
+            continue
+        best = float(a.units.latencies[u][picked].min())
+        if math.isinf(best) or not a.switched(label, best):
+            continue
+        marked += 1
+        worst_marked |= best == layout.score.worst
+    return f"{'yes' if worst_marked else 'no'}; {marked} of {len(labels)}"
 
 
 def score_row(
     name: str,
     layout: Layout,
-    mesh: Mesh,
-    units: Units,
+    a: Analysis,
     uncovered: tuple[tuple[str, str, int], ...] | None = None,
 ) -> str:
     """One row of the layouts' tables."""
+    mesh, units = a.mesh, a.units
     s = layout.score
     masks = (
         "-"
@@ -678,7 +764,8 @@ def score_row(
         f"| {name} | {places(mesh, layout.cells)} | {layout.rule or '-'} | {layout.method} | "
         f"{'yes' if layout.exact else 'no'} | {len(layout.units)} | "
         f"{'-' if layout.method == 'given' and uncovered is None else uncovered_text(gaps)} | "
-        f"{text_time(s.worst)} | {s.mean:.3f} | {s.undetected} | {s.coverage:.3f} | {masks} | "
+        f"{text_time(s.worst)} | {switch_text(a, layout)} | {s.mean:.3f} | {s.undetected} | "
+        f"{s.coverage:.3f} | {masks} | "
         f"{detected_text(detected_by_scenario(units, layout.cells))} | "
         f"{working_cells(units, layout.cells)} of {len(layout.cells)} |"
     )
@@ -686,10 +773,11 @@ def score_row(
 
 LAYOUT_HEAD = (
     "| Layout | Cell centres (x, y), m | Rule | Method | Exact | Units scored | Uncoverable "
-    "by its candidates | Worst case (s) | Mean (s) | Undetected | Coverage within 10 s | "
+    "by its candidates | Worst case (s) | Worst case after the flow switch; units so "
+    "marked | Mean (s) | Undetected | Coverage within 10 s | "
     "Distinct / maximal masks | Detected, of all twenty | Cells setting a latency |"
 )
-LAYOUT_RULE = "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"
+LAYOUT_RULE = "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"
 
 
 def layouts_table(analysis: Analysis) -> list[str]:
@@ -699,32 +787,26 @@ def layouts_table(analysis: Analysis) -> list[str]:
     lines = [
         f"### L1. The layouts on 320x120: mount {list(a.spec.mount)} at {a.spec.standoff} m "
         f"(stand {a.spec.stand_height[0]:g} to {a.spec.stand_height[1]:g} m), "
-        f"{len(a.mountable):,} mountable without stands, {len(a.product):,} with them and "
-        f"{len(a.free):,} free candidates; the means are capped at each unit's remaining run time",
+        f"{len(a.mountable):,} mountable without stands, {len(a.product):,} with them "
+        f"({len(a.earlier_pool):,} at the earlier band, {EARLIER_BAND[0]:g} to "
+        f"{EARLIER_BAND[1]:g} m) and {len(a.free):,} free candidates; the means are capped at "
+        "each unit's remaining run time. A latency after the flow switch is one read after "
+        "the end of an event whose end changes the flow state (the door's close at 15 s, the "
+        "seal leak's end at 40 s)",
         "",
         LAYOUT_HEAD,
         LAYOUT_RULE,
-        score_row(f"{FILE}, all twenty units", a.file_all, a.mesh, a.units),
-        score_row(f"{FILE}, the product search's units", a.file_kept, a.mesh, a.units),
-        score_row(f"{SURF}, worst-case rule", a.surf, a.mesh, a.units),
-        score_row(f"{STAND}, worst-case rule", a.stand, a.mesh, a.units),
-        score_row(f"{STAND}, mean rule", a.stand_mean, a.mesh, a.units),
+        score_row(f"{FILE}, all twenty units", a.file_all, a),
+        score_row(f"{FILE}, the product search's units", a.file_kept, a),
+        score_row(f"{SURF}, worst-case rule", a.surf, a),
+        score_row(f"{EARLIER}, worst-case rule", a.earlier, a),
+        score_row(f"{STAND}, worst-case rule", a.stand, a),
+        score_row(f"{STAND}, mean rule", a.stand_mean, a),
+        score_row(f"{ROLES}: its three detection sensors", roles.detection, a),
+        score_row(f"{ROLES}: the four", roles.layout, a, roles.detection.uncovered),
+        score_row(f"{FREE}, worst-case rule", a.curve[a.spec.count], a),
         score_row(
-            f"{ROLES}: its three detection sensors", roles.detection, a.mesh, a.units
-        ),
-        score_row(
-            f"{ROLES}: the four",
-            roles.layout,
-            a.mesh,
-            a.units,
-            roles.detection.uncovered,
-        ),
-        score_row(f"{FREE}, worst-case rule", a.curve[a.spec.count], a.mesh, a.units),
-        score_row(
-            f"{FREE}, worst-case rule, the product search's units",
-            a.free_on_kept,
-            a.mesh,
-            a.units,
+            f"{FREE}, worst-case rule, the product search's units", a.free_on_kept, a
         ),
         "",
         f"The three-plus-one's all-clear sensor: {places(a.mesh, roles.all_clear)}.",
@@ -738,6 +820,7 @@ def layouts_table(analysis: Analysis) -> list[str]:
         counts = []
         for title, pool in (
             ("mountable without stands", a.mountable),
+            ("with stands at the earlier band", a.earlier_pool),
             ("with stands", a.product),
             ("free", a.free),
         ):
@@ -771,6 +854,7 @@ def layouts_table(analysis: Analysis) -> list[str]:
     named = {
         FILE: a.file_kept,
         f"{SURF}": given_layout(a.kept, a.surf.cells, within=WITHIN),
+        f"{EARLIER}": given_layout(a.kept, a.earlier.cells, within=WITHIN),
         f"{STAND}": a.stand,
         ROLES: given_layout(a.kept, a.roles.layout.cells, within=WITHIN),
         f"{FREE}": a.free_on_kept,
@@ -803,7 +887,7 @@ def curve_table(analysis: Analysis) -> list[str]:
         LAYOUT_RULE,
     ]
     for n in FREE_COUNTS:
-        lines.append(score_row(f"{n} sensors", a.curve[n], a.mesh, a.units))
+        lines.append(score_row(f"{n} sensors", a.curve[n], a))
     return lines
 
 
@@ -811,18 +895,17 @@ def headline_table(analysis: Analysis) -> list[str]:
     """U2: per unit, each configuration's latency, the least over its cells."""
     a = analysis
     lines = [
-        "### U2. Per unit, the layout's latency, the least over its cells (s; never with the run's end)",
+        "### U2. Per unit, the layout's latency, the least over its cells (s; never with the run's end; marked when read after the end of an event whose end changes the flow state)",
         "",
         "| Scenario | Event | Class (um) | " + " | ".join(a.layouts) + " |",
         "|---|---|---|" + "---|" * len(a.layouts),
     ]
     sizes = [size * 1.0e6 for size in a.config.particle_sizes]
     for u, (name, event, k) in enumerate(a.units.labels):
-        end = a.arrivals[name].t_final
         cells = []
         for layout in a.layouts.values():
             best = float(min(a.units.latencies[u, j, i] for j, i in layout))
-            cells.append(f"never (to {end:g})" if math.isinf(best) else f"{best:.3f}")
+            cells.append(a.latency_text((name, event, k), best))
         lines.append(f"| {name} | {event} | {sizes[k]:g} | " + " | ".join(cells) + " |")
     return lines
 
@@ -867,6 +950,11 @@ def units_table(a: Analysis, classes: tuple[int, ...] | None) -> list[str]:
     configurations = (
         (FILE, a.sensors, a.sensor_names),
         (
+            STAND,
+            a.stand.cells,
+            tuple(f"P{n + 1}" for n in range(len(a.stand.cells))),
+        ),
+        (
             ROLES,
             roles,
             tuple(f"D{n + 1}" for n in range(len(a.roles.detection.cells)))
@@ -884,7 +972,7 @@ def units_table(a: Analysis, classes: tuple[int, ...] | None) -> list[str]:
         else "0.1 um and 5 um; every class in tables76.md"
     )
     lines = [
-        f"### U1. Per scenario, event, class and sensor, for the file's four, the three-plus-one (D detection, A all-clear) and the free optimum ({which}). A file "
+        f"### U1. Per scenario, event, class and sensor, for the file's four, the product search (P), the three-plus-one (D detection, A all-clear) and the free optimum ({which}); a latency read after the flow switch is marked. A file "
         "sensor's peak and time above are from its every-step readings, a searched cell's from "
         "the stored frames (every 100 steps, about 0.36 s). The time error is T7's (160x60, one "
         "direction), measured at the file's sensors only. The width is the plume's largest at "
@@ -911,11 +999,7 @@ def units_table(a: Analysis, classes: tuple[int, ...] | None) -> list[str]:
                     ):
                         j, i = cell
                         value = float(table_by_name[name][e, k, j, i])
-                        text = (
-                            f"never (to {arrival.t_final:g})"
-                            if math.isinf(value)
-                            else f"{value:.3f}"
-                        )
+                        text = a.latency_text((name, event, k), value)
                         s = position if title == FILE else None
                         ratio, above, source = read_series(a, name, k, cell, s)
                         t7 = (
@@ -1097,8 +1181,14 @@ def stability_table(a: Analysis) -> list[str]:
     )
     fine_on_coarse = mapped(a.mesh, coarse_mesh, fine.roles.layout.cells)
     coarse_on_fine = mapped(coarse_mesh, a.mesh, coarse.roles.layout.cells)
+    spec = a.spec
+    roles_text = (
+        f"{spec.count - spec.all_clear} detection sensors and {spec.all_clear} all-clear"
+        if spec.all_clear
+        else f"{spec.count} detection sensors, no all-clear"
+    )
     lines = [
-        "### K1. The product search (three detection sensors and one all-clear, with stands) on 80x30 and 320x120, each layout scored on both grids over the door, the breach and the dust units the grid's search covers and over the all-clear units of those three and the clean-out (the seal leak has one grid). A layout from the other grid is read at the cell holding each centre, the one below or left of it on a face or corner (the lower-left); the line under the table gives the range over every reading",
+        f"### K1. The product search ({roles_text}, with stands from {spec.stand_height[0]:g} m) on 80x30 and 320x120, each layout scored on both grids over the door, the breach and the dust units the grid's search covers and over the all-clear units of those three and the clean-out (the seal leak has one grid). A layout from the other grid is read at the cell holding each centre, the one below or left of it on a face or corner (the lower-left); the line under the table gives the range over every reading",
         "",
         "| Grid | Layout | Cell centres (x, y), m | Candidates on this grid | Worst case (s) | Mean (s) | Undetected | Coverage within 10 s | Worst premature interval | Mean interval | Largest area fraction |",
         "|---|---|---|---|---|---|---|---|---|---|---|",
@@ -1162,9 +1252,13 @@ def stability_table(a: Analysis) -> list[str]:
         f"{text_time(max(worsts))} s and a mean from {min(means):.3f} to {max(means):.3f} s on "
         "320x120; the table's row is the lower-left reading.",
         f"Uncovered by the product's candidates on 80x30: {uncovered_text(coarse.roles.detection.uncovered)}; "
-        f"on 320x120: {uncovered_text(fine.roles.detection.uncovered)}. The all-clear sensor: "
-        f"{places(coarse_mesh, coarse.roles.all_clear)} on 80x30, "
-        f"{places(a.mesh, fine.roles.all_clear)} on 320x120.",
+        f"on 320x120: {uncovered_text(fine.roles.detection.uncovered)}. "
+        + (
+            f"The all-clear sensor: {places(coarse_mesh, coarse.roles.all_clear)} on 80x30, "
+            f"{places(a.mesh, fine.roles.all_clear)} on 320x120."
+            if spec.all_clear
+            else "No all-clear sensor (the product file's all_clear is 0)."
+        ),
         "",
         "The order per rule, best first:",
         "",
@@ -1176,7 +1270,7 @@ def stability_table(a: Analysis) -> list[str]:
 def arms_table(a: Analysis) -> list[str]:
     """K2: the product layout of 320x120 on step 1's arms, frame-resolved and flagged."""
     lines = [
-        "### K2. The product layout of 320x120 (the three-plus-one over the door, the breach and the dust, as K1's) on step 1's arm runs (arrival_from_run: frame-resolved, flagged), read at the cells holding its centres, beside the file's four, the arm's own product search and the arm's free optimum, over the units the arm's own search covers",
+        "### K2. The product layout of 320x120 (the product search over the door, the breach and the dust, as K1's) on step 1's arm runs (arrival_from_run: frame-resolved, flagged), read at the cells holding its centres, beside the file's four, the arm's own product search and the arm's free optimum, over the units the arm's own search covers",
         "",
         "| Arm | Grid | Scenarios run | Frame-resolved | Layout | Candidates on this grid | Worst case (s) | Mean (s) | Undetected | Detected, of the arm's units | Own search's rule, method |",
         "|---|---|---|---|---|---|---|---|---|---|---|",
@@ -1310,9 +1404,12 @@ def predictions_table(a: Analysis) -> list[str]:
 
 
 def predictions76b_table(a: Analysis) -> list[str]:
-    """P2: prompt 76b's predictions (l) to (p) against the measurements."""
+    """P2: prompt 76b's predictions (l) to (p), on its configurations.
+
+    The 0.3 m band and the three-plus-one on it, as prompt 76b scored them.
+    """
     surf = detected_by_scenario(a.units, a.surf.cells)
-    stand = detected_by_scenario(a.units, a.stand.cells)
+    stand = detected_by_scenario(a.units, a.earlier.cells)
     l_holds = (
         surf["filter_breach"][0] == surf["filter_breach"][1]
         and surf["equipment_dust"][0] == surf["equipment_dust"][1]
@@ -1331,7 +1428,7 @@ def predictions76b_table(a: Analysis) -> list[str]:
             a.configs,
             (MOUNT_STAND,),
             a.spec.standoff,
-            stand_height=a.spec.stand_height,
+            stand_height=EARLIER_BAND,
         ),
     }
     seal_counts = {
@@ -1342,7 +1439,8 @@ def predictions76b_table(a: Analysis) -> list[str]:
         not free_heights or max(free_heights) < 0.3
     )
     clean = [u for u, (name, _) in enumerate(a.clear.labels) if name == "clean_out"]
-    stand_clear = a.clearing[STAND]
+    stand_clear = clear_score(a.clear, a.earlier.cells)
+    roles_clear = a.earlier_roles.clear
     remaining = [float(stand_clear.fraction[u]) for u in clean]
     o_holds = all(np.isfinite(v) and v > 0.0 for v in remaining)
     three = [
@@ -1357,9 +1455,9 @@ def predictions76b_table(a: Analysis) -> list[str]:
         ]
         return float(table.min(axis=1).max())
 
-    roles_worst = worst_over(a.roles.layout.cells)
-    stand_worst = worst_over(a.stand.cells)
-    p_holds = roles_worst == stand_worst and a.clearing[ROLES].worst < stand_clear.worst
+    roles_worst = worst_over(a.earlier_roles.layout.cells)
+    stand_worst = worst_over(a.earlier.cells)
+    p_holds = roles_worst == stand_worst and roles_clear.worst < stand_clear.worst
     events = [u for u, (name, _) in enumerate(a.clear.labels) if name != "clean_out"]
 
     def events_worst(result: ClearScore) -> str:
@@ -1371,7 +1469,7 @@ def predictions76b_table(a: Analysis) -> list[str]:
         )
 
     return [
-        "### P2. Prompt 76b's predictions against the measurements",
+        f"### P2. Prompt 76b's predictions against the measurements, on its configurations (the stand band {EARLIER_BAND[0]:g} to {EARLIER_BAND[1]:g} m; the three-plus-one on it)",
         "",
         "| Prediction | Measured | Verdict |",
         "|---|---|---|",
@@ -1379,7 +1477,51 @@ def predictions76b_table(a: Analysis) -> list[str]:
         f"| (m) with stands the searched four detect every door, breach and dust unit | {detected_text(stand)} | {'holds' if m_holds else 'fails'} |",
         f"| (n) no candidate of any mount detects a seal-leak unit; the free cells that do lie below 0.3 m | surface candidates {seal_counts['surfaces']}, stand candidates {seal_counts['stands']}; free cells {len(free_heights)}, the highest centre at {max(free_heights, default=math.nan):.4f} m | {'holds' if n_holds else 'fails'} |",
         f"| (o) in the clean-out the detection-only four with stands declare clean while live area at or above threshold remains, at every class | area at or above at its clear time, per class: {', '.join(f'{100 * v:.2f}%' for v in remaining)} | {'holds' if o_holds else 'fails'} |",
-        f"| (p) the three-plus-one's worst latency over the door, breach and dust units equals the detection-only four's, and its worst premature interval is smaller | worst latency {text_time(roles_worst)} s against {text_time(stand_worst)} s; worst premature interval {key_text(a.clearing[ROLES].worst)} against {key_text(stand_clear.worst)}; over the four event scenarios alone {events_worst(a.clearing[ROLES])} against {events_worst(stand_clear)} | {'holds' if p_holds else 'fails'} |",
+        f"| (p) the three-plus-one's worst latency over the door, breach and dust units equals the detection-only four's, and its worst premature interval is smaller | worst latency {text_time(roles_worst)} s against {text_time(stand_worst)} s; worst premature interval {key_text(roles_clear.worst)} against {key_text(stand_clear.worst)}; over the four event scenarios alone {events_worst(roles_clear)} against {events_worst(stand_clear)} | {'holds' if p_holds else 'fails'} |",
+    ]
+
+
+def predictions76c_table(a: Analysis) -> list[str]:
+    """P3: prompt 76c's prediction (q) against the re-score."""
+    found = a.stand
+    counts = detected_by_scenario(a.units, found.cells)
+    picked = [c[0] for c in found.cells], [c[1] for c in found.cells]
+    best = {
+        label: float(a.units.latencies[u][picked].min())
+        for u, label in enumerate(a.units.labels)
+    }
+    seal = [value for label, value in best.items() if label[0] == "seal_leak"]
+    worst_labels = [
+        label for label, value in best.items() if value == found.score.worst
+    ]
+    worst_marked = [label for label in worst_labels if a.switched(label, best[label])]
+    marked = [
+        label
+        for label, value in best.items()
+        if np.isfinite(value) and a.switched(label, value)
+    ]
+    holds = (
+        found.score.undetected == 0
+        and not found.uncovered
+        and len(found.units) == len(a.units.labels)
+        and found.score.worst < 3.0
+        and max(seal) < 1.0
+        and not worst_marked
+    )
+    return [
+        "### P3. Prompt 76c's prediction against the re-score",
+        "",
+        "| Prediction | Measured | Verdict |",
+        "|---|---|---|",
+        f"| (q) with the band at {a.spec.stand_height[0]:g} m the product search detects all "
+        f"{len(a.units.labels)} units with a worst case under 3 s, the seal leak within 1 s, "
+        "and no worst-case latency is after the flow switch | "
+        f"{detected_text(counts)}; {len(found.units)} units scored, uncovered "
+        f"{uncovered_text(found.uncovered)}; worst case {text_time(found.score.worst)} s, set "
+        f"by {', '.join(f'{n} {e} class {k}' for n, e, k in worst_labels)}; the seal leak's "
+        f"latencies {min(seal):.3f} to {max(seal):.3f} s; units after the flow switch "
+        f"{len(marked)}, of them setting the worst case {len(worst_marked)}; cells "
+        f"{places(a.mesh, found.cells)} | {'holds' if holds else 'fails'} |",
     ]
 
 
@@ -1406,12 +1548,13 @@ def render(a: Analysis) -> tuple[str, dict[str, str]]:
         "arms": arms_table(a),
         "predictions": predictions_table(a),
         "predictions76b": predictions76b_table(a),
+        "predictions76c": predictions76c_table(a),
         "hashes": hashes_table(),
         "bitwise": bitwise_table(runs),
         "coverage": coverage_table(),
     }
     head = [
-        "# Step 5's tables: the latency report (ADR-015 E, prompts 76 and 76b)",
+        "# Step 5's tables: the latency report (ADR-015 E, prompts 76 to 76c)",
         "",
         "Generated by `docs/reports/probe76/tables76.py` from the run files under "
         "`results/builder76/`, `results/builder75/runs/` and `results/builder72/`; `--check` "
@@ -1514,8 +1657,12 @@ def figures(a: Analysis, out: Path) -> list[Path]:
     cmap.set_bad("0.93")
     sets = [
         (a.sensors, "o", FILE),
-        (a.roles.detection.cells, "s", f"{ROLES}: detection"),
-        (a.roles.all_clear, "*", f"{ROLES}: all-clear"),
+        (a.stand.cells, "s", STAND),
+        (
+            a.roles.all_clear,
+            "*",
+            "the three-plus-one's fourth cell (set by the run's end)",
+        ),
         (a.curve[a.spec.count].cells, "^", FREE),
     ]
     for name in EVENT_NAMES:
@@ -1541,7 +1688,7 @@ def figures(a: Analysis, out: Path) -> list[Path]:
             )
             fig.colorbar(image, ax=ax, label="s after the onset", shrink=0.9)
         handles, labels = axes[0].get_legend_handles_labels()
-        fig.legend(handles, labels, loc="outside lower center", ncol=4, fontsize=9)
+        fig.legend(handles, labels, loc="outside lower center", ncol=2, fontsize=9)
         path = out / f"phase5_arrival_{name}.png"
         fig.savefig(path, dpi=150)
         plt.close(fig)
@@ -1580,16 +1727,16 @@ def figures(a: Analysis, out: Path) -> list[Path]:
             linestyle="none",
             label="the cell that clears last",
         )
-        result = a.clearing[ROLES]
+        result = a.clearing[STAND]
         ax.set_title(
             f"The clean-out, {sizes[k]:g} um: each cell's clear time (frames; red: not clear "
-            f"by {a.clear.times[u][-1]:g} s; the room {seconds(times[u])}, the three-plus-one "
-            f"{seconds(result.layout[u])})",
+            f"by {a.clear.times[u][-1]:g} s)\nthe room {seconds(times[u])}, the product search "
+            f"{seconds(result.layout[u])}",
             fontsize=10,
         )
         fig.colorbar(image, ax=ax, label="clear time (s)", shrink=0.9, extend="max")
     handles, labels = axes[0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc="outside lower center", ncol=3, fontsize=9)
+    fig.legend(handles, labels, loc="outside lower center", ncol=2, fontsize=9)
     path = out / "phase5_clear_clean_out.png"
     fig.savefig(path, dpi=150)
     plt.close(fig)
