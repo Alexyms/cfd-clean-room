@@ -449,7 +449,8 @@ class PlacementSpec:
     ----------
     mount : tuple[str, ...]
         The surfaces a sensor may be mounted on, from ``MOUNT_SURFACES``,
-        at least one, none twice.
+        at least one, none twice. ``MOUNT_STAND`` is a free-standing stand
+        on the floor, not a surface.
     standoff : float
         Metres, positive and finite: a candidate cell's centre lies within
         this distance of a named surface.
@@ -461,6 +462,13 @@ class PlacementSpec:
         Seconds, positive and finite: the coverage rule's time, the
         fraction of units detected at or within it. None reports no
         coverage.
+    stand_height : tuple[float, float] or None
+        (low, high), metres above the floor: the heights a stand's inlet
+        may stand at, low below high, low non-negative, high at most the
+        room's height. Given exactly when ``mount`` names ``MOUNT_STAND``.
+    all_clear : int
+        The sensors of ``count`` that take the all-clear role (ADR-015 D,
+        "Two roles"), from 0 to ``count`` minus 1; the rest detect.
     """
 
     mount: tuple[str, ...]
@@ -468,6 +476,8 @@ class PlacementSpec:
     count: int
     rule: str
     within: float | None = None
+    stand_height: tuple[float, float] | None = None
+    all_clear: int = 0
 
 
 @dataclass(frozen=True)
@@ -1024,22 +1034,27 @@ EVENT_TIME_RTOL = 1.0e-9
 # The placement section (ADR-015 D, step 4): the surfaces a sensor may be
 # mounted on, how far from one its cell's centre may lie, the layout's sensor
 # count, the rule it is searched under, and the coverage rule's time. "free"
-# is every non-SOLID cell, the bound the mountable optimum is read against.
+# is every non-SOLID cell outside the openings' and sources' exclusions, the
+# bound the mountable optimum is read against. "stand" is a counter's inlet on
+# a free-standing stand (Alex, 2026-11-07), at a height in stand_height; and
+# all_clear is how many of the count's sensors take the all-clear role.
 PLACEMENT_KEY = "placement"
 _PLACEMENT_KEYS: frozenset[str] = frozenset(
-    {"mount", "standoff", "count", "rule", "within"}
+    {"mount", "standoff", "count", "rule", "within", "stand_height", "all_clear"}
 )
 MOUNT_WALLS = "walls"
 MOUNT_CEILING = "ceiling"
 MOUNT_OBSTACLE_TOPS = "obstacle_tops"
 MOUNT_OBSTACLE_SIDES = "obstacle_sides"
 MOUNT_FREE = "free"
+MOUNT_STAND = "stand"
 MOUNT_SURFACES: tuple[str, ...] = (
     MOUNT_WALLS,
     MOUNT_CEILING,
     MOUNT_OBSTACLE_TOPS,
     MOUNT_OBSTACLE_SIDES,
     MOUNT_FREE,
+    MOUNT_STAND,
 )
 # The two rules a layout is searched under; the coverage rule is reported
 # beside them and is not searched (ADR-015 D, "The search").
@@ -1682,14 +1697,16 @@ class SimConfig:
         # placement.candidates still takes a mount and a standoff directly.
         self.placement: PlacementSpec | None = None
         if PLACEMENT_KEY in raw:
-            self.placement = self._parse_placement(raw[PLACEMENT_KEY])
+            self.placement = self._parse_placement(raw[PLACEMENT_KEY], self.room_height)
 
     @classmethod
-    def _parse_placement(cls, section: object) -> PlacementSpec:
+    def _parse_placement(cls, section: object, room_height: float) -> PlacementSpec:
         """Parse the placement section into a PlacementSpec.
 
-        ``mount``, ``standoff``, ``count`` and ``rule`` are required and
-        ``within`` is optional; any other key raises.
+        ``mount``, ``standoff``, ``count`` and ``rule`` are required;
+        ``within`` and ``all_clear`` (default 0) are optional;
+        ``stand_height`` is required when ``mount`` names ``MOUNT_STAND``
+        and refused otherwise; any other key raises.
         """
         if not isinstance(section, dict):
             raise ValueError(f"{PLACEMENT_KEY} must be a mapping")
@@ -1726,13 +1743,61 @@ class SimConfig:
         within = None
         if "within" in section:
             within = cls._require_positive_float(section, "within", PLACEMENT_KEY)
+        stand_height = None
+        if MOUNT_STAND in mount:
+            stand_height = cls._stand_height(section, room_height)
+        elif "stand_height" in section:
+            raise ValueError(
+                f"{PLACEMENT_KEY}.stand_height is given but {PLACEMENT_KEY}.mount does "
+                f"not name '{MOUNT_STAND}': nothing would read it"
+            )
+        count = cls._require_positive_int(section, "count", PLACEMENT_KEY)
+        all_clear = 0
+        if "all_clear" in section:
+            all_clear = section["all_clear"]
+            if not isinstance(all_clear, int) or isinstance(all_clear, bool):
+                raise TypeError(
+                    f"{PLACEMENT_KEY}.all_clear must be an integer, got "
+                    f"{type(all_clear).__name__}"
+                )
+            if not 0 <= all_clear < count:
+                raise ValueError(
+                    f"{PLACEMENT_KEY}.all_clear must be from 0 to count - 1 = "
+                    f"{count - 1}, got {all_clear}: at least one sensor detects"
+                )
         return PlacementSpec(
             mount=tuple(mount),
             standoff=cls._require_positive_float(section, "standoff", PLACEMENT_KEY),
-            count=cls._require_positive_int(section, "count", PLACEMENT_KEY),
+            count=count,
             rule=cls._require_choice(section, "rule", PLACEMENT_KEY, PLACEMENT_RULES),
             within=within,
+            stand_height=stand_height,
+            all_clear=all_clear,
         )
+
+    @classmethod
+    def _stand_height(cls, section: dict, room_height: float) -> tuple[float, float]:
+        """The stand's (low, high) heights above the floor, checked against the room."""
+        key = f"{PLACEMENT_KEY}.stand_height"
+        if "stand_height" not in section:
+            raise ValueError(
+                f"Missing required key: '{key}' (mount names '{MOUNT_STAND}')"
+            )
+        value = section["stand_height"]
+        if not isinstance(value, list) or len(value) != 2:
+            raise ValueError(f"{key} must be two numbers, low then high, got {value!r}")
+        low, high = (
+            cls._finite_number(item, f"{key}[{i}]") for i, item in enumerate(value)
+        )
+        if not low < high:
+            raise ValueError(f"{key} must have low below high, got [{low}, {high}]")
+        if low < 0.0:
+            raise ValueError(f"{key}[0] must be non-negative, got {low}")
+        if high > room_height:
+            raise ValueError(
+                f"{key}[1] must be at most the room's height {room_height}, got {high}"
+            )
+        return low, high
 
     def _iso_thresholds(self, section: dict) -> None:
         """The thresholds from an ISO 14644-1 class number (ADR-015 C, REQ-A03).

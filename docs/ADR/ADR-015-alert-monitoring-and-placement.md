@@ -271,7 +271,7 @@ probe of its own.
 *Options, ranked.* (1) Condition 3 first (steps 0 and 1 of H), condition 2 in step 1 beside
 the sweep (a 160x60 clean-out, under an hour), condition 1 before Phase 6 as a prompt of its
 own designed from the records, after the Phase 5 gate. (2) Condition 1 first: it bears on no
-Phase 5 number (the residual is 1e-6 of the supply, the thresholds 1e-2 of the inlet value).
+Phase 5 number (the residual's size is the gate's table B1).
 *Recommendation.* (1).
 
 **G. Requirements review (section G).**
@@ -806,14 +806,67 @@ built excluded only the cells beside an opening's face and counted a domain edge
 80x30 the 0.05 m standoff holds one cell, so the two readings agree (215 mountable and 1,630
 free, the (h) counts below, unchanged). On 320x120 it holds two, and with the door open the
 first rule made 84 cells of column 1 in the doorway's rows wall-mounted candidates (a sensor 4
-cm inside an open doorway with nothing to mount on), and likewise the 280 cells of the second
-row under the supply and the 36 of the second column of the hood's exhaust. Under this rule
+cm inside an open doorway with nothing to mount on), and likewise 282 cells of the second
+row under the supply and 38 of the second column of the hood's exhaust (the opening's own 280
+and 36 and the end cell beside each, within the standoff of the opening's end). Under this rule
 2,152 mountable cells become 1,737 and 27,544 free cells become 27,017. The wall above the
 doorway stays mountable from the rows the door's top no longer reaches ((86, 0) and (85, 1)).
 One exclusion does the work of both clauses: every cell an opening's face could bring in as a
 surface lies within the standoff of that opening. Pinned by
 `test_a_sensor_cannot_hang_in_the_open_doorway_on_the_product_grid`, whose plant is the
-exclusion read as beside the face alone.
+exclusion read as beside the face alone. The rule is read on the solver's faces, so an
+opening's end that falls mid-cell follows the coverage rule: on 80x30 the first return's end at
+x 1.25 m is a cell centre, its face is not covered, and the free cell (0, 12) at exactly the
+standoff from the configured end is kept (review 76 S7); 160x60 and 320x120 put every opening
+on cell faces.
+*Every scenario scored, the source boxes and the stand (prompt 76b, Alex's decisions of
+2026-11-07).* (1) `candidates` takes the configurations of every scenario whose units are
+scored, and a cell excluded under any of them is out (review 76 S5): the breach's configuration
+alone leaves the doorway a wall and gives its two columns back as wall candidates, and with the
+door's they are excluded. (2) A scenario's source box is not a candidate: a cell whose centre
+lies inside a `source` event's box, or within the standoff of the box, is out in every mount,
+the free set included. The search must not use knowledge of where the release happens, and the
+ring is there because a cell one row outside the box reads the source as fast as the box's own
+cells do. (3) A sensor is a particle counter's sampling inlet, and an inlet on a free-standing
+stand is a mounting option, `stand`: a cell whose centre's height above the floor lies in
+`placement.stand_height` (low then high, inclusive; the product's 0.3 and 1.2 m), that is not
+SOLID, that has no SOLID cell below it in its column (the stand stands on the floor, not on a
+tool) and that no opening or source excludes. The standoff does not apply to the height band.
+The stand is a pole outside the 2D slice and is not an obstruction to the flow: nothing in the
+solve sees it. (4) The distance is Euclidean, pinned by a cell diagonal to an obstacle's corner
+that a Manhattan distance would put outside (test 76 S3).
+
+**Two roles** (prompt 76b, Alex's decision 3 of 2026-11-07). Detection and all-clear are
+separate roles. A sensor in the fast supply stream sees a release first and clears first; the
+dead pockets clear last, and a layout that says "clean" while a pocket is still contaminated has
+failed at the second job. The definitions, as built in `placement.py`:
+- *An all-clear unit* is (scenario, class), for a scenario whose events all end before its run
+  does. Its t_e is the end of the last event to end, an initial condition's being its start, so
+  the clean-out's is 0 (`scenario_end`). The door, the breach, the dust and the seal leak count.
+- *A cell's clear time* is the earliest stored frame time at or after t_e from which every stored
+  frame, to the run's end, reads below the class threshold; it is t_e when no frame from t_e on
+  reads at or above, and "not clear" when the last frame does (`clear_times`). A cell that dips
+  below and rises again clears after its last frame above, not at the dip. It is frame-resolved:
+  a cell above only between two frames is not seen and a clear time is late by up to the frame
+  spacing, which `ClearUnits.spacing` states per unit.
+- *A layout's clear time* is the latest of its cells': the layout declares clean when every
+  sensor reads below.
+- *The room's clear time* is the latest over the live cells, and the cell that sets it is named
+  (the first in row-major order of the cells not clear, or of those at the latest time).
+- *The premature interval* is the room's clear time minus the layout's, so zero or more. Beside
+  it is the fraction of the live area at or above threshold at the first stored frame at or after
+  the layout's clear time. A "not clear" is reported as such and never enters arithmetic: where
+  the room is not clear and the layout is, the interval is not a number and the search ranks it
+  above every number; where the layout is not clear it never declares the room clean, so it
+  declares nothing early and ranks as zero.
+- *The search* (`search_roles`). `placement.all_clear` sensors (the product's 1, an integer from 0
+  to count minus 1) take the role. The detection sensors are searched at count minus `all_clear`
+  by the configured rule over the detection units. Then each all-clear sensor is added in turn
+  (`add_all_clear`): the candidate, from the same candidates, with the least worst premature
+  interval over the all-clear units, ties by the mean interval, then by the least of the largest
+  area fraction over the units, then the first in candidate order. The search is sequential, not
+  joint: the detection sensors are fixed before the all-clear one is chosen, and the layout is
+  not claimed best for the two roles together.
 
 **The search.** `placement.search(maps, onsets, candidates, count, rule)`:
 - count 1: the argmin over candidates (exact);
@@ -953,7 +1006,7 @@ mountable candidates and 36 ms over the 1,630 free ones.
 |---|---|---|---|
 | 3: the spreading check (A and B) | Steps 0 and 1 of H, before any detection result | A: measured (T7): the row grid 560x100 solves in 2,609 outer iterations, 512 s, and marches its scalar to steady in 110 s; the coarse grid in 89 and 27 s; two processes on an unloaded machine. B: 15 coarse runs concurrent five (each about 2 minutes of flow and 11 minutes of march on 160x60, T2 and the probe section) and the two fine arms per scenario at the gate's 66 minutes each | Whether the plumes' widths and the sensors' distances to the contour move with the assumed inputs: if the contour reaches a sensor's cell at an arm on 160x60, that arm is rerun on 320x120 and the report states the detection result as a range over the arms on the fine grid; if none does on either grid, the "never" is geometric and the maps carry the placement question |
 | 2: a third clean-out grid | Step 1, beside the sweep (a run, no code) | One 160x60 clean-out, 240 s at Courant 0.4: about an eighth of the product grid's 2.6 hours (table M1), under an hour with its flow solve | Whether the mean's 100:1 ratio and the local recovery field can be quoted as numbers of the room: a 160x60 value between 80x30's 3.0 and 320x120's 4.8 shows a series not yet converged and the numbers stay comparative; the room recovery time (25.6 and 27.9 s) is unaffected either way |
-| 1: the budget residual's mechanism | Before Phase 6's finer grids, after the Phase 5 gate, a prompt of its own | One session: a sealed-box march (VAL-014's) with a source and an interval switch at a known time on 40x15, the budget read every step, the residual's accrual against the content and its sign at the switches (the records put the sign changes near 10.5 and 25 s in the dust release and 80.4 s in the breach, and B3 rules the flow's continuity out by two orders) | The budget instrument (REQ-T05's verification) if the residual is bookkeeping between the content and the running sums or the source's integral at a switch; the scheme's inlet booking if the limited face value at an inlet face differs from the inflow the budget books. Neither moves a Phase 5 latency: the residual is 1e-6 of the supply against thresholds at 1e-2 of the inlet value |
+| 1: the budget residual's mechanism | Before Phase 6's finer grids, after the Phase 5 gate, a prompt of its own | One session: a sealed-box march (VAL-014's) with a source and an interval switch at a known time on 40x15, the budget read every step, the residual's accrual against the content and its sign at the switches (the records put the sign changes near 10.5 and 25 s in the dust release and 80.4 s in the breach, and B3 rules the flow's continuity out by two orders) | The budget instrument (REQ-T05's verification) if the residual is bookkeeping between the content and the running sums or the source's integral at a switch; the scheme's inlet booking if the limited face value at an inlet face differs from the inflow the budget books. Neither moves a Phase 5 latency: the residual's size is the latency report's table B1, the thresholds 1e-2 of the inlet value |
 
 ## G. Requirements review, REQ-A01 to A06
 

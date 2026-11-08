@@ -4410,13 +4410,19 @@ class TestPlacementSection:
         assert SimConfig.from_dict(raw).placement.within is None
 
     def test_the_product_file_states_its_placement(self) -> None:
-        """The mountable surfaces, a 5 cm standoff, four sensors, the worst case."""
+        """The surfaces and a stand, a 5 cm standoff, four sensors with one all-clear.
+
+        Alex's decision of 2026-11-07: a stand's inlet 0.3 to 1.2 m above the
+        floor, and one of the four in the all-clear role.
+        """
         spec = SimConfig(CONFIG_DIR / "clean_room_default.yaml").placement
         assert spec == PlacementSpec(
-            mount=("walls", "ceiling", "obstacle_tops", "obstacle_sides"),
+            mount=("walls", "ceiling", "obstacle_tops", "obstacle_sides", "stand"),
             standoff=0.05,
             count=4,
             rule=WORST_CASE,
+            stand_height=(0.3, 1.2),
+            all_clear=1,
         )
         assert set(spec.mount) == set(MOUNT_SURFACES) - {"free"}
 
@@ -4447,6 +4453,15 @@ class TestPlacementSection:
             ({"rule": "coverage"}, ValueError, "placement.rule must be one of"),
             ({"within": -1.0}, ValueError, "placement.within must be positive"),
             ({"within": False}, TypeError, "placement.within must be a number"),
+            (
+                {"stand_height": [0.3, 1.2]},
+                ValueError,
+                "stand_height is given but placement.mount does not name 'stand'",
+            ),
+            ({"all_clear": 4}, ValueError, r"all_clear must be from 0 to count - 1"),
+            ({"all_clear": -1}, ValueError, r"all_clear must be from 0 to count - 1"),
+            ({"all_clear": 1.0}, TypeError, "all_clear must be an integer"),
+            ({"all_clear": True}, TypeError, "all_clear must be an integer"),
         ],
     )
     def test_a_bad_section_is_refused_by_name(
@@ -4461,6 +4476,55 @@ class TestPlacementSection:
             raw["placement"] = {k: v for k, v in section.items() if v is not None}
         with pytest.raises(error, match=match):
             SimConfig.from_dict(raw)
+
+    def test_a_stand_and_the_all_clear_role_are_read(self, tmp_path: Path) -> None:
+        """A stand names its band; all_clear is 0 when absent and up to count - 1."""
+        raw = _base_raw(tmp_path)
+        raw["placement"] = dict(PLACEMENT_SECTION)
+        assert SimConfig.from_dict(raw).placement.stand_height is None
+        assert SimConfig.from_dict(raw).placement.all_clear == 0
+        raw["placement"] = {
+            **PLACEMENT_SECTION,
+            "mount": ["walls", "stand"],
+            "stand_height": [0, 1.5],
+            "all_clear": 3,
+        }
+        spec = SimConfig.from_dict(raw).placement
+        assert spec.stand_height == (0.0, 1.5) and spec.all_clear == 3
+        assert all(type(v) is float for v in spec.stand_height)
+
+    @pytest.mark.parametrize(
+        ("height", "error", "match"),
+        [
+            (None, ValueError, r"Missing required key: 'placement.stand_height'"),
+            (0.5, ValueError, "stand_height must be two numbers"),
+            ([0.3], ValueError, "stand_height must be two numbers"),
+            ([0.3, 0.6, 0.9], ValueError, "stand_height must be two numbers"),
+            ([0.3, "1.2"], TypeError, r"stand_height\[1\] must be a number"),
+            ([True, 1.2], TypeError, r"stand_height\[0\] must be a number"),
+            ([0.3, float("inf")], ValueError, r"stand_height\[1\] must be finite"),
+            ([float("nan"), 1.2], ValueError, r"stand_height\[0\] must be finite"),
+            ([1.2, 1.2], ValueError, "must have low below high"),
+            ([1.2, 0.3], ValueError, "must have low below high"),
+            ([-0.1, 1.2], ValueError, r"stand_height\[0\] must be non-negative"),
+            ([0.3, 3.5], ValueError, r"at most the room's height"),
+        ],
+    )
+    def test_a_bad_stand_height_is_refused_by_name(
+        self, tmp_path: Path, height: object, error: type, match: str
+    ) -> None:
+        """Two finite non-bool numbers, low below high, from the floor to the room's top."""
+        raw = _base_raw(tmp_path)
+        section = {**PLACEMENT_SECTION, "mount": ["walls", "stand"]}
+        if height is not None:
+            section["stand_height"] = height
+        raw["placement"] = section
+        assert raw["domain"]["height"] == 3.0
+        with pytest.raises(error, match=match):
+            SimConfig.from_dict(raw)
+        if height == [0.3, 3.5]:
+            section["stand_height"] = [0.3, 3.0]
+            assert SimConfig.from_dict(raw).placement.stand_height == (0.3, 3.0)
 
     def test_a_scenario_reads_the_section_of_its_merged_base(
         self, tmp_path: Path

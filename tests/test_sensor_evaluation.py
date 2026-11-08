@@ -10,9 +10,9 @@ the runs take about three minutes.
 
 Prediction (h) of ADR-015 D, asserted as it was scored (prompt 75, 2026-11-02;
 prompt 75b made the test say it): fifteen units, and the file's four detect
-none of them. Of the 215 mountable candidates (the product file's placement
-section: walls, ceiling, obstacle tops and sides at 0.05 m, one cell on this
-grid) none reaches a door unit, so the door's five are reported uncovered and
+none of them. Of the 215 mountable candidates (step 4's placement section:
+walls, ceiling, obstacle tops and sides at 0.05 m, one cell on this grid,
+before prompt 76b added the stand and the source rule) none reaches a door unit, so the door's five are reported uncovered and
 the searched four detect the breach's and the dust's ten, with a worst case of
 1.97 s. The door's plume stays within 0.9 m of the left wall and 1.3 m of the
 floor; the wall column's cells below 2.1 m are beside the open doorway's
@@ -56,6 +56,12 @@ SCENARIOS = {
     "breach": "scenario_filter_breach.yaml",
     "dust": "scenario_equipment_dust.yaml",
 }
+# Step 4's mounting surfaces, the product file's mount before prompt 76b added
+# the stand: prediction (h) is asserted on the candidates it was scored on,
+# read from the door's configuration alone (whose intervals open every opening
+# of the three; the dust's source box, which prompt 76b excludes, was in the
+# set then).
+STEP4_SURFACES = ("walls", "ceiling", "obstacle_tops", "obstacle_sides")
 # The coverage rule's time for these tests; the product file states none.
 WITHIN = 10.0
 
@@ -89,7 +95,7 @@ def evaluated(tmp_path_factory: pytest.TempPathFactory) -> SimpleNamespace:
     spec = config.placement
     arrivals = {name: arrival_from_run(path) for name, path in paths.items()}
     units = detection_units(arrivals)
-    mounted = candidates(mesh, config, spec.mount, spec.standoff)
+    mounted = candidates(mesh, config, STEP4_SURFACES, spec.standoff)
     free = candidates(mesh, config, (MOUNT_FREE,), spec.standoff)
     found = search(units, mounted, spec.count, spec.rule, within=WITHIN)
     return SimpleNamespace(

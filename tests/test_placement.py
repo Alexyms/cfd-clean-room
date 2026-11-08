@@ -31,6 +31,7 @@ tests in tests/test_time_integration.py; REQ-A05's scenarios on 80x30 are
 tests/test_sensor_evaluation.py.
 """
 
+from collections.abc import Sequence
 from itertools import combinations
 from pathlib import Path
 
@@ -38,7 +39,7 @@ import numpy as np
 import pytest
 import yaml
 
-from src.config import MEAN, WORST_CASE, SimConfig
+from src.config import MEAN, MOUNT_FREE, WORST_CASE, SimConfig
 from src.io_manager import RunFile, TransportFrames
 from src.mesh import SOLID, Mesh
 from src.placement import (
@@ -50,22 +51,30 @@ from src.placement import (
     MAX_SET_COVER_UNITS,
     SET_COVER,
     STEP_RESOLVED,
+    ClearUnits,
     Layout,
     RunArrival,
     Score,
     Units,
     _maximal,
     _worst_case_cover,
+    add_all_clear,
     arrival_from_frames,
     arrival_from_run,
     candidates,
+    clear_score,
+    clear_times,
+    clear_units,
     detection_units,
     exclude_units,
     given_layout,
     latency,
     rank,
+    room_clear,
+    scenario_end,
     score,
     search,
+    search_roles,
 )
 from src.solver_transport import MassBudget
 
@@ -819,6 +828,10 @@ class TestRank:
         )
 
 
+# The four fixed surfaces of the product file's mount, without its stand.
+SURFACES = ("walls", "ceiling", "obstacle_tops", "obstacle_sides")
+
+
 def small_room(**changes: object) -> dict:
     """A 1.0 x 0.6 m room on 10x6 cells of 0.1 m, from the product file's sections.
 
@@ -830,6 +843,8 @@ def small_room(**changes: object) -> dict:
         (CONFIGS / "clean_room_default.yaml").read_text(encoding="utf-8")
     )
     raw["domain"] = {"width": 1.0, "height": 0.6, "nx": 10, "ny": 6}
+    # The product's stand band, 0.3 to 1.2 m, reaches above this room's 0.6 m.
+    raw["placement"] = dict(raw["placement"], stand_height=[0.1, 0.3])
     supply = dict(raw["boundaries"]["hepa_supply"], x_start=0.3, x_end=0.5)
     raw["boundaries"] = {
         "hepa_supply": supply,
@@ -1085,14 +1100,14 @@ class TestCandidates:
         under the supply and the second column of the hood's rows go for the
         same reason, while the ceiling beyond the supply stays. Defect caught:
         the edge counted whole, the exclusion read as beside the face alone
-        (84 doorway cells, 280 under the supply and 36 at the hood mounted
+        (84 doorway cells, 282 under the supply and 38 at the hood mounted
         with nothing to mount on).
         """
         config = SimConfig(CONFIGS / "scenario_door_leak.yaml")
         mesh = Mesh(config)
         assert (config.ny, config.nx) == (120, 320)
         spec = config.placement
-        mounted = cells_of(candidates(mesh, config, spec.mount, spec.standoff))
+        mounted = cells_of(candidates(mesh, config, SURFACES, spec.standoff))
         doorway = np.flatnonzero(mesh.yc <= 2.1)
         assert doorway.tolist() == list(range(84))
         for j in doorway:
@@ -1134,6 +1149,555 @@ class TestCandidates:
         other = small_room()
         other["domain"] = dict(other["domain"], nx=20)
         with pytest.raises(
-            ValueError, match="candidates need the configuration's mesh"
+            ValueError, match="candidates need the configurations' mesh"
         ):
             candidates(Mesh(SimConfig.from_dict(other)), self.config, ["walls"], 0.1)
+
+
+# ---------------------------------------------------------------------------
+# Prompt 76b: every scored scenario, the source boxes, the stand, the metric
+# ---------------------------------------------------------------------------
+
+
+def product_config(name: str) -> SimConfig:
+    """A reference scenario on the product grid, 320x120."""
+    config = SimConfig(CONFIGS / name)
+    assert (config.ny, config.nx) == (120, 320)
+    return config
+
+
+@pytest.mark.unit
+class TestCandidatesOverScenarios:
+    def test_every_scored_scenarios_openings_exclude(self) -> None:
+        """The breach's configuration alone gives the doorway back; with the door's, not.
+
+        The breach leaves the doorway a wall, so its cells within 0.05 m of the
+        left wall (columns 0 and 1, rows 0 to 83) are wall-mounted candidates.
+        The door's intervals open it, and a cell excluded under any scenario
+        scored is out. The breach is given first. Defect caught: the union over
+        the configurations replaced by the first configuration (the doorway's
+        168 cells kept).
+        """
+        breach = product_config("scenario_filter_breach.yaml")
+        door = product_config("scenario_door_leak.yaml")
+        mesh = Mesh(breach)
+        doorway = {(j, i) for j in range(84) for i in (0, 1)}
+        alone = cells_of(candidates(mesh, breach, SURFACES, 0.05))
+        assert doorway <= alone
+        both = cells_of(candidates(mesh, [breach, door], SURFACES, 0.05))
+        assert doorway.isdisjoint(both)
+        assert both == cells_of(candidates(mesh, [door, breach], SURFACES, 0.05))
+        assert both == cells_of(candidates(mesh, door, SURFACES, 0.05))
+        assert cells_of(candidates(mesh, (breach,), SURFACES, 0.05)) == alone
+
+    def test_a_source_box_and_its_ring_are_no_candidate_in_any_mount(self) -> None:
+        """The dust's box, x 3.80 to 3.90 and y 2.00 to 2.10, and 0.05 m around it.
+
+        The box holds rows 80 to 83 and columns 152 to 155. A cell one row
+        above it, (84, 153) at y 2.1125, and the next, (85, 153) at 2.1375,
+        read the source as its own cells do and are out; (86, 153) at 2.1625
+        is 0.0625 m away and is a free candidate. On the tool's top, (80, 150)
+        at x 3.7625 is out and (80, 149) at 3.7375 is in. The same cells go
+        from the free set. Defects caught: the ring dropped ((84, 153) and
+        (80, 150) kept); the box read for the mountable set only (the free set
+        keeps the box).
+        """
+        dust = product_config("scenario_equipment_dust.yaml")
+        door = product_config("scenario_door_leak.yaml")
+        mesh = Mesh(dust)
+        box = {(j, i) for j in range(80, 84) for i in range(152, 156)}
+        ring = {(84, 153), (85, 153), (80, 150), (80, 151), (81, 156), (81, 157)}
+        tops = cells_of(candidates(mesh, [door, dust], ("obstacle_tops",), 0.05))
+        free = cells_of(candidates(mesh, [door, dust], (MOUNT_FREE,), 0.05))
+        for found in (tops, free):
+            assert (box | ring).isdisjoint(found)
+        assert {(80, 149), (81, 158)} <= tops
+        assert (86, 153) in free
+        # Without the dust's configuration the box is a candidate like any cell.
+        assert box <= cells_of(candidates(mesh, door, (MOUNT_FREE,), 0.05))
+
+    def test_a_stand_stands_on_the_floor_within_its_band(self) -> None:
+        """Stand cells: centre height in [0.3, 1.2] m and no SOLID cell below.
+
+        Rows 12 (y 0.3125) to 47 (y 1.1875) are in the band; rows 11 and 48
+        are not. Over the hood's bench (y to 0.9 m, columns 256 to 303) rows
+        36 to 47 are air but stand on the bench, not the floor, and are out.
+        The doorway's two columns are out under the door's opening, whatever
+        the band, and the standoff does not apply to a stand. Defects caught:
+        the column check dropped ((40, 280) a stand cell over the bench); the
+        band read as the standoff from the floor; the opening's exclusion not
+        applied to stands ((20, 0) kept).
+        """
+        door = product_config("scenario_door_leak.yaml")
+        mesh = Mesh(door)
+        stands = cells_of(
+            candidates(mesh, door, ("stand",), 0.05, stand_height=(0.3, 1.2))
+        )
+        assert {(12, 100), (47, 100), (40, 250), (20, 2), (30, 310)} <= stands
+        assert {(11, 100), (48, 100), (40, 280), (36, 256), (20, 0)}.isdisjoint(stands)
+        assert {j for j, _ in stands} == set(range(12, 48))
+        assert all(mesh.cell_type[j, i] != SOLID for j, i in stands)
+        with_walls = cells_of(
+            candidates(mesh, door, ("walls", "stand"), 0.05, stand_height=(0.3, 1.2))
+        )
+        assert with_walls == stands | cells_of(candidates(mesh, door, ("walls",), 0.05))
+        free = cells_of(candidates(mesh, door, (MOUNT_FREE,), 0.05))
+        assert stands <= free
+
+    @pytest.mark.parametrize(
+        ("mount", "height", "error", "match"),
+        [
+            (("stand",), None, ValueError, "give its stand_height"),
+            (("walls",), (0.1, 0.3), ValueError, "mount does not name 'stand'"),
+            (("stand",), (0.1, 0.2, 0.3), ValueError, r"must be \(low, high\)"),
+            (("stand",), (0.3, 0.1), ValueError, "0 <= low < high"),
+            (("stand",), (-0.1, 0.3), ValueError, "0 <= low < high"),
+            (("stand",), (0.1, np.nan), ValueError, "0 <= low < high"),
+            (("stand",), (True, 0.3), TypeError, r"stand_height\[0\] must be a real"),
+            (("stand",), (0.41, 0.44), ValueError, "no cell is a candidate"),
+        ],
+    )
+    def test_a_stand_height_that_does_not_fit_is_refused(
+        self, mount: tuple, height: object, error: type, match: str
+    ) -> None:
+        """Given exactly with a stand, two finite numbers from the floor up, some cell."""
+        config = SimConfig.from_dict(small_room())
+        with pytest.raises(error, match=match):
+            candidates(Mesh(config), config, mount, 0.1, stand_height=height)
+
+    def test_the_configurations_given_are_checked(self) -> None:
+        """At least one, each a SimConfig, each on the mesh's grid."""
+        config = SimConfig.from_dict(small_room())
+        mesh = Mesh(config)
+        with pytest.raises(ValueError, match="give at least one configuration"):
+            candidates(mesh, [], ["walls"], 0.1)
+        with pytest.raises(TypeError, match=r"configs\[1\] must be a SimConfig"):
+            candidates(mesh, [config, "door.yaml"], ["walls"], 0.1)
+        other = small_room()
+        other["domain"] = dict(other["domain"], nx=20)
+        with pytest.raises(ValueError, match="configuration 1's"):
+            candidates(mesh, [config, SimConfig.from_dict(other)], ["walls"], 0.1)
+
+    def test_the_standoff_is_euclidean(self) -> None:
+        """A cell diagonal to the box's corner: 0.0707 m away, inside a 0.08 m standoff.
+
+        Cell (2, 3), centre (0.35, 0.25), lies 0.05 m left of and above the
+        box's top-left corner (0.4, 0.2): 0.0707 m by Euclidean distance and
+        0.1 m by Manhattan; (1, 3) lies as far left of and below it, and (2, 6)
+        and (1, 6) mirror both at the top-right corner. Defect caught:
+        ``gap_x + gap_y`` for the hypotenuse (the four cells out).
+        """
+        config = SimConfig.from_dict(small_room())
+        found = cells_of(candidates(Mesh(config), config, ["obstacle_tops"], 0.08))
+        assert {(2, 3), (2, 6), (1, 3), (1, 6)} <= found
+        assert found == {(1, 3), (2, 3), (2, 4), (2, 5), (2, 6), (1, 6)}
+
+
+# ---------------------------------------------------------------------------
+# Prompt 76b: the all-clear role
+# ---------------------------------------------------------------------------
+
+AREAS = np.ones(LIVE.shape)
+
+
+def clear_of(cells: dict[tuple[int, int], list[float]], end: float = 0.0) -> ClearUnits:
+    """The two classes' all-clear units of frames_of(CELLS), t_e END."""
+    clear, times, fractions = clear_times(
+        frames_of(cells), THRESHOLDS, LIVE, AREAS, end
+    )
+    return ClearUnits(
+        clear=clear,
+        ends=np.full(2, end),
+        times=(times, times),
+        fractions=tuple(fractions),
+        spacing=np.full(2, float(np.diff(times).max())),
+        labels=(("s", 0), ("s", 1)),
+    )
+
+
+# Room (1, 0) clears last, at 2.0; (0, 0) at 1.0; (0, 1) at 0.5; the rest are
+# never above. The SOLID cell (0, 2) holds 9, above every threshold, throughout.
+CLEARING = {
+    (0, 0): [2.0, 2.0, 0.0, 0.0],
+    (0, 1): [2.0, 0.0, 0.0, 0.0],
+    (1, 0): [2.0, 2.0, 2.0, 0.0],
+    (0, 2): [9.0, 9.0, 9.0, 9.0],
+}
+
+
+@pytest.mark.unit
+class TestClearTimes:
+    def test_a_cell_clears_after_its_last_frame_at_or_above(self) -> None:
+        """The frame after the last at or above, t_e when none, not clear when the last is.
+
+        (0, 0) dips below at 0.5 s and rises at 1.0 s: it clears at 2.0, not at
+        the dip. (0, 1) is above at 0 only: 0.5. (1, 0) is never above: t_e.
+        (1, 1) is above at the last frame: not clear (inf), not the run's end.
+        (1, 2) is exactly at the threshold at 1.0: 2.0. Defects caught: the
+        dip read as clearing ((0, 0) at 0.5); "not clear" read as the run's
+        end ((1, 1) at 2.0); ">" for "at or above" ((1, 2) at t_e); SOLID cells
+        given a time.
+        """
+        clear, times, fractions = clear_times(
+            frames_of(
+                {
+                    (0, 0): [2.0, 0.0, 2.0, 0.0],
+                    (0, 1): [2.0, 0.0, 0.0, 0.0],
+                    (1, 1): [0.0, 0.0, 0.0, 5.0],
+                    (1, 2): [0.0, 0.0, 1.0, 0.0],
+                    (0, 2): [9.0, 9.0, 9.0, 9.0],
+                }
+            ),
+            THRESHOLDS,
+            LIVE,
+            AREAS,
+            0.0,
+        )
+        assert times.tolist() == TIMES.tolist()
+        row0, row1 = clear[0].tolist()
+        assert row0[:2] == [2.0, 0.5] and np.isnan(row0[2])
+        assert row1 == [0.0, np.inf, 2.0]
+        # Class 1 is ten times the field against ten times the threshold.
+        assert np.array_equal(clear[1], clear[0], equal_nan=True)
+        # Live area at or above, five live cells: (0, 0) and (0, 1) at 0; none at
+        # 0.5; (0, 0) and (1, 2) at 1.0; (1, 1) at 2.0.
+        assert fractions[0].tolist() == [0.4, 0.0, 0.4, 0.2]
+
+    def test_frames_before_t_e_are_not_read(self) -> None:
+        """From t_e = 0.75 s: the frames at 1.0 and 2.0 only.
+
+        (0, 1) is above at 0 only and clears at t_e itself; (0, 0), above at
+        1.0, at 2.0. Defect caught: every frame read (a cell above before t_e
+        given that frame's successor, (0, 1) at 0.5).
+        """
+        clear, times, fractions = clear_times(
+            frames_of({(0, 0): [2.0, 0.0, 2.0, 0.0], (0, 1): [2.0, 0.0, 0.0, 0.0]}),
+            THRESHOLDS,
+            LIVE,
+            AREAS,
+            0.75,
+        )
+        assert times.tolist() == [1.0, 2.0]
+        assert clear[0, 0, 0] == 2.0 and clear[0, 0, 1] == 0.75
+        assert clear[0, 1].tolist() == [0.75, 0.75, 0.75]
+        assert fractions.shape == (2, 2)
+
+    def test_the_area_fraction_weighs_cells_by_their_area(self) -> None:
+        """A cell three times the others' area is three sevenths of the live area."""
+        areas = np.ones(LIVE.shape)
+        areas[0, 0] = 3.0
+        _, _, fractions = clear_times(
+            frames_of({(0, 0): [2.0, 0.0, 0.0, 0.0]}), THRESHOLDS, LIVE, areas, 0.0
+        )
+        assert fractions[0, 0] == pytest.approx(3.0 / 7.0)
+
+    @pytest.mark.parametrize(
+        ("thresholds", "areas", "end", "error", "match"),
+        [
+            (np.array([1.0]), AREAS, 0.0, ValueError, r"thresholds of shape \(1,\)"),
+            (THRESHOLDS, AREAS[:, :2], 0.0, ValueError, "areas are"),
+            (THRESHOLDS, AREAS, -1.0, ValueError, "end must be finite"),
+            (THRESHOLDS, AREAS, np.nan, ValueError, "end must be finite"),
+            (THRESHOLDS, AREAS, True, TypeError, "end must be a real number"),
+            (THRESHOLDS, AREAS, 2.5, ValueError, "no stored frame lies at or after"),
+        ],
+    )
+    def test_inputs_that_do_not_fit_the_frames_are_refused(
+        self,
+        thresholds: np.ndarray,
+        areas: np.ndarray,
+        end: object,
+        error: type,
+        match: str,
+    ) -> None:
+        """One threshold per class, areas of the grid, t_e finite, from the floor, framed."""
+        with pytest.raises(error, match=match):
+            clear_times(frames_of({}), thresholds, LIVE, areas, end)
+
+    def test_frames_of_another_grid_are_refused(self) -> None:
+        """A class whose frames are not live's [ny, nx]."""
+        with pytest.raises(ValueError, match="class 0's frames are"):
+            clear_times(frames_of({}), THRESHOLDS, LIVE[:, :2], AREAS[:, :2], 0.0)
+
+
+@pytest.mark.unit
+class TestScenarioEnd:
+    def test_t_e_is_the_end_of_the_last_event_to_end(self, tmp_path: Path) -> None:
+        """Three sources ending at 15, 50 and 35 s: t_e 50, the middle one in the file.
+
+        Defects caught: t_e from the first event's end (15); from the last
+        event's in the file (35).
+        """
+        events = [
+            {"name": "a", "start": 10.0, "duration": 5.0, "source": DUST_BOX},
+            {"name": "b", "start": 20.0, "duration": 30.0, "source": DUST_BOX},
+            {"name": "c", "start": 30.0, "duration": 5.0, "source": DUST_BOX},
+        ]
+        assert scenario_end(scenario_config(tmp_path, events, 60.0)) == 50.0
+
+    def test_an_initial_ends_at_zero_and_an_event_at_the_run_end_is_none(
+        self, tmp_path: Path
+    ) -> None:
+        """The clean-out's t_e is 0; a scenario whose last event reaches t_end has none."""
+        assert scenario_end(SimConfig(CONFIGS / "scenario_clean_out.yaml")) == 0.0
+        assert scenario_end(SimConfig(CONFIGS / "scenario_seal_leak.yaml")) == 40.0
+        assert scenario_end(SimConfig(CONFIGS / "scenario_door_leak.yaml")) == 15.0
+        late = [{"name": "a", "start": 10.0, "duration": 50.0, "source": DUST_BOX}]
+        assert scenario_end(scenario_config(tmp_path, late, 60.0)) is None
+        assert scenario_end(SimConfig.from_dict(small_room())) is None
+
+
+DUST_BOX = {
+    "x_start": 3.80,
+    "x_end": 3.90,
+    "y_start": 2.00,
+    "y_end": 2.10,
+    "emission": [1.0e4] * 5,
+}
+
+
+def scenario_config(tmp_path: Path, events: list, t_end: float) -> SimConfig:
+    """A scenario of EVENTS over the default room on 80x30, run to T_END."""
+    return SimConfig.from_dict(
+        {
+            "scenario": {
+                "base": str(CONFIGS / "clean_room_default.yaml"),
+                "events": events,
+            },
+            "domain": {"nx": 80, "ny": 30},
+            "solver": {"t_end": t_end, "output_interval": 100},
+            "transport": {"cfl_number": 0.4},
+        },
+        base_dir=tmp_path,
+    )
+
+
+@pytest.mark.unit
+class TestClearScore:
+    def test_the_layout_clears_when_its_last_cell_does(self) -> None:
+        """Clear times 1.0 and 0.5: the layout's is 1.0, the room's 2.0 at (1, 0).
+
+        The interval is the room's less the layout's, 1.0; the live area at or
+        above at the layout's clear time is (1, 0) alone, a fifth. The SOLID
+        cell, above throughout, sets nothing. Defects caught: the layout's
+        clear time taken as the earliest of its cells (0.5, interval 1.5);
+        the interval's sign flipped (-1.0); SOLID cells counted in the room's
+        clear time (inf, or the SOLID cell named).
+        """
+        result = clear_score(clear_of(CLEARING), [(0, 0), (0, 1)])
+        assert result.layout.tolist() == [1.0, 1.0]
+        assert result.room.tolist() == [2.0, 2.0]
+        assert result.room_cells == ((1, 0), (1, 0))
+        assert result.interval.tolist() == [1.0, 1.0]
+        assert result.fraction.tolist() == [0.2, 0.2]
+        assert (result.worst, result.mean, result.worst_fraction) == (1.0, 1.0, 0.2)
+        alone = clear_score(clear_of(CLEARING), [(0, 1)])
+        assert alone.interval.tolist() == [1.5, 1.5]
+        assert alone.fraction.tolist() == [0.4, 0.4]
+        last = clear_score(clear_of(CLEARING), [(1, 0), (0, 1)])
+        assert last.interval.tolist() == [0.0, 0.0] and last.fraction.tolist() == [0, 0]
+
+    def test_a_not_clear_never_enters_arithmetic(self) -> None:
+        """(1, 1) above at the last frame: the room is not clear.
+
+        A layout that clears is reported with no interval and ranks worst
+        (inf); a layout holding (1, 1) never declares the room clean, so it
+        declares nothing early: no interval, no fraction, rank zero. Defect
+        caught: "not clear" read as the run's end (an interval of 2.0 less the
+        layout's, a finite number).
+        """
+        units = clear_of({**CLEARING, (1, 1): [0.0, 0.0, 0.0, 5.0]})
+        early = clear_score(units, [(0, 0)])
+        assert np.isinf(early.room).all() and early.room_cells[0] == (1, 1)
+        assert np.isnan(early.interval).all() and early.layout.tolist() == [1.0, 1.0]
+        assert np.isinf(early.worst) and np.isinf(early.mean)
+        holding = clear_score(units, [(0, 0), (1, 1)])
+        assert np.isinf(holding.layout).all() and np.isnan(holding.interval).all()
+        assert np.isnan(holding.fraction).all()
+        assert (holding.worst, holding.mean, holding.worst_fraction) == (0.0, 0.0, 0.0)
+
+    def test_the_room_ties_go_to_the_first_cell_in_row_major_order(self) -> None:
+        """Two cells clear last at 2.0: the room names the first, (0, 0)."""
+        units = clear_of({(0, 0): [2.0, 2.0, 2.0, 0.0], (1, 0): [2.0, 2.0, 2.0, 0.0]})
+        assert room_clear(units)[1] == ((0, 0), (0, 0))
+
+    def test_a_layout_off_the_grid_or_solid_is_refused(self) -> None:
+        """The cell checks the detection scoring makes."""
+        with pytest.raises(ValueError, match="SOLID"):
+            clear_score(clear_of(CLEARING), [(0, 2)])
+        with pytest.raises(ValueError, match="is empty"):
+            clear_score(clear_of(CLEARING), [])
+
+
+def line_units(
+    rows: Sequence[Sequence[float]], fractions: Sequence[Sequence[float]]
+) -> ClearUnits:
+    """All-clear units on a 1 x n grid: ROWS[u][c] is unit u's clear time at cell c.
+
+    Each unit's frames are at 0, 1, 2, ... s, one per entry of FRACTIONS[u], the
+    live area above at each.
+    """
+    times = np.arange(float(len(fractions[0])))
+    return ClearUnits(
+        clear=np.array(rows, dtype=np.float64)[:, None, :],
+        ends=np.zeros(len(rows)),
+        times=tuple(times for _ in rows),
+        fractions=tuple(np.array(f, dtype=np.float64) for f in fractions),
+        spacing=np.ones(len(rows)),
+        labels=tuple(("s", u) for u in range(len(rows))),
+    )
+
+
+@pytest.mark.unit
+class TestAddAllClear:
+    # Two units, the room clearing at 4 in both. Cell 0 is the detection
+    # sensor (clear at 1). Added to it, cell 1 gives intervals (2, 2); cell 2
+    # (0, 2), read at the area fractions of t = 4 and 2, at most 0.1; cell 3
+    # (1, 1); cell 4 (2, 0), read at t = 2 and 4, at most 0.3; cell 5 (0, 0).
+    ROWS = ((1.0, 2.0, 4.0, 3.0, 2.0, 4.0), (1.0, 2.0, 2.0, 3.0, 4.0, 4.0))
+    FRACTIONS = ((0.5, 0.4, 0.3, 0.2, 0.0), (0.5, 0.4, 0.1, 0.6, 0.0))
+
+    def test_each_is_the_least_worst_interval_ties_by_the_mean_then_the_area(
+        self,
+    ) -> None:
+        """The least worst interval, then the least mean, then the least area fraction.
+
+        Cell 5 (worst 0) comes first; after it every cell leaves the layout's
+        clear times at 4, and the tie goes to candidate order (cell 1). Of
+        cells 1 to 4, cell 3 (worst 1). Of cells 1, 4 and 2, all worst 2:
+        cell 1's mean is 2, cells 4 and 2 tie at 1, and cell 2's largest
+        fraction, 0.1, is below cell 4's 0.3. Defects caught: the fraction
+        tie-break dropped (cell 4); the worst case dropped (cell 2 or 4 before
+        cell 3 would need a lower mean, which the next test plants).
+        """
+        units = line_units(self.ROWS, self.FRACTIONS)
+        pool = [(0, c) for c in range(1, 6)]
+        assert add_all_clear(units, pool, [(0, 0)], 2) == ((0, 5), (0, 1))
+        assert add_all_clear(units, pool[:4], [(0, 0)], 1) == ((0, 3),)
+        ties = [(0, 1), (0, 4), (0, 2)]
+        assert add_all_clear(units, ties, [(0, 0)], 1) == ((0, 2),)
+
+    def test_the_worst_comes_before_the_mean_and_the_mean_before_the_area(
+        self,
+    ) -> None:
+        """Three units, rooms clearing at 6; cells 1 to 3 against the detection cell 0.
+
+        Cell 1 clears at (4, 4, 4): intervals (2, 2, 2), mean 2, largest
+        fraction 0.1. Cell 2 at (4, 5, 6): (2, 1, 0), mean 1, but unit 1's
+        field rises again at 5 s, so its fraction is 0.3. Cell 3 at
+        (6, 6, 3.5): (0, 0, 2.5), worst 2.5, mean 0.83. Cell 2 is the answer.
+        Defects caught: the worst and the mean swapped (cell 3, the least
+        mean); the mean tie-break dropped (cell 1, the least fraction among the
+        worst-2 cells).
+        """
+        units = line_units(
+            [
+                [1.0, 4.0, 4.0, 6.0, 6.0],
+                [1.0, 4.0, 5.0, 6.0, 6.0],
+                [1.0, 4.0, 6.0, 3.5, 6.0],
+            ],
+            [
+                [0.5, 0.4, 0.3, 0.2, 0.1, 0.05, 0.0],
+                [0.5, 0.4, 0.3, 0.2, 0.05, 0.3, 0.0],
+                [0.5, 0.4, 0.3, 0.2, 0.1, 0.05, 0.0],
+            ],
+        )
+        assert room_clear(units)[0].tolist() == [6.0, 6.0, 6.0]
+        pool = [(0, 1), (0, 2), (0, 3)]
+        assert add_all_clear(units, pool, [(0, 0)], 1) == ((0, 2),)
+        scores = [clear_score(units, [(0, 0), cell]) for cell in pool]
+        assert [s.worst for s in scores] == [2.0, 2.0, 2.5]
+        assert [s.mean for s in scores] == pytest.approx([2.0, 1.0, 2.5 / 3.0])
+        assert [s.worst_fraction for s in scores] == [0.1, 0.3, 0.1]
+
+    def test_count_zero_adds_nothing_and_a_count_past_the_pool_is_refused(
+        self,
+    ) -> None:
+        """From 0 to the candidates not already in the layout."""
+        units = line_units(self.ROWS, self.FRACTIONS)
+        pool = [(0, c) for c in range(6)]
+        assert add_all_clear(units, pool, [(0, 0)], 0) == ()
+        with pytest.raises(ValueError, match="count must be from 0 to the 5"):
+            add_all_clear(units, pool, [(0, 0)], 6)
+        with pytest.raises(TypeError, match="count must be an int"):
+            add_all_clear(units, pool, [(0, 0)], True)
+        assert len(add_all_clear(units, pool, [], 6)) == 6
+
+    def test_the_whole_search_detects_then_clears(self) -> None:
+        """search_roles: the detection search at count - all_clear, then the additions."""
+        units = line_units(self.ROWS, self.FRACTIONS)
+        detection = units_of(
+            [[0.5, 1.0, 9.0, 9.0, 9.0, 9.0], [0.5, 2.0, 9.0, 9.0, 9.0, 1.0]]
+        )
+        pool = [(0, c) for c in range(6)]
+        roles = search_roles(detection, units, pool, 2, 1, WORST_CASE)
+        assert roles.detection.cells == ((0, 0),)
+        assert roles.all_clear == ((0, 5),)
+        assert roles.layout.cells == ((0, 0), (0, 5))
+        assert roles.clear.worst == 0.0
+        assert roles.layout.units == detection.labels
+        with pytest.raises(ValueError, match="all_clear must be from 0 to count - 1"):
+            search_roles(detection, units, pool, 2, 2, WORST_CASE)
+        with pytest.raises(TypeError, match="all_clear must be an int"):
+            search_roles(detection, units, pool, 2, 1.0, WORST_CASE)
+        other = line_units([[1.0, 2.0]], [[0.0] * 5])
+        with pytest.raises(ValueError, match="they must share a mesh"):
+            search_roles(detection, other, pool, 2, 1, WORST_CASE)
+        none = search_roles(detection, units, pool, 1, 0, WORST_CASE)
+        assert none.all_clear == () and none.layout.cells == none.detection.cells
+
+
+@pytest.mark.unit
+class TestClearUnitsFromRuns:
+    def _run(
+        self,
+        tmp_path: Path,
+        name: str,
+        events: list,
+        t_end: float,
+        grid: tuple[int, int] = (80, 30),
+    ) -> RunFile:
+        """A run file of EVENTS: four frames at 0, 10, 20 and 30 s, above until 25 s."""
+        mapping = {
+            "scenario": {
+                "base": str(CONFIGS / "clean_room_default.yaml"),
+                "events": events,
+            },
+            "domain": {"nx": grid[0], "ny": grid[1]},
+            "solver": {"t_end": t_end, "output_interval": 100},
+            "transport": {"cfl_number": 0.4},
+        }
+        mesh = Mesh(SimConfig.from_dict(mapping))
+        run = RunFile(tmp_path / f"{name}.h5")
+        run.write_config(mapping, **PROVENANCE)
+        live = mesh.cell_type != SOLID
+        for step, t in enumerate((0.0, 10.0, 20.0, 30.0)):
+            fields = {k: np.where(live & (t < 25.0), 1.0e9, 0.0) for k in range(5)}
+            run.write_frame(step, t, fields, [MassBudget()] * 5)
+        return run
+
+    def test_the_units_of_runs_that_end_in_time(self, tmp_path: Path) -> None:
+        """A run whose source ends at 15 s gives five units; one ending at t_end none."""
+        early = [{"name": "a", "start": 5.0, "duration": 10.0, "source": DUST_BOX}]
+        late = [{"name": "b", "start": 5.0, "duration": 25.0, "source": DUST_BOX}]
+        runs = {
+            "early": self._run(tmp_path, "early", early, 30.0),
+            "late": self._run(tmp_path, "late", late, 30.0),
+        }
+        units = clear_units(runs)
+        assert units.labels == tuple(("early", k) for k in range(5))
+        assert units.ends.tolist() == [15.0] * 5
+        assert units.spacing.tolist() == [10.0] * 5
+        assert all(times.tolist() == [20.0, 30.0] for times in units.times)
+        live = ~np.isnan(units.clear[0])
+        assert (units.clear[:, live] == 30.0).all()
+        assert units.fractions[0] == pytest.approx([1.0, 0.0], abs=1e-12)
+        with pytest.raises(ValueError, match="there is no all-clear unit"):
+            clear_units({"late": runs["late"].path})
+        with pytest.raises(ValueError, match="no run to read"):
+            clear_units({})
+        with pytest.raises(TypeError, match="a scenario name must be a str"):
+            clear_units({1: runs["early"]})
+        coarse = self._run(tmp_path, "coarse", early, 30.0, grid=(40, 15))
+        with pytest.raises(ValueError, match="the runs must share a mesh"):
+            clear_units({"early": runs["early"], "coarse": coarse})
