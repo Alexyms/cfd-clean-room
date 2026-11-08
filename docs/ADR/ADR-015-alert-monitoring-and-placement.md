@@ -981,6 +981,16 @@ all-clear sensor in that pocket, where it improves no event scenario: (p)'s smal
 from the clean-out alone. The seal leak ran on 320x120 only (its 0.025 m slot covers no face of
 80x30 and a double-width face of 160x60).
 
+*Prompt 76c's prediction (orchestrator, 2026-11-08), committed before the re-score.* Alex decided
+two things on 2026-11-08: the stand band is 0.1 to 1.2 m, and the all-clear sensor's position is
+carried open (`placement.all_clear` 0 in the product file). The orchestrator found in the seal
+leak's map that, outside the doorway's standoff, the only cell of the 0.3 to 1.2 m band the leak
+reaches before 33 s is (2, 12), at (0.0625, 0.3125), and that between 0.1 and 0.2 m in the same
+columns every class is reached within 0.71 s.
+- (q) With the band at 0.1 m, the product search detects all 20 units with a worst case under 3 s;
+  it detects the seal leak within 1 s, and no worst-case latency carries the marker "after the flow
+  switch" (a latency that falls after the end of an event whose end changes the flow state).
+
 *Step 4's prediction (orchestrator, 2026-11-02, prompt 75), committed before the 80x30 runs.*
 (h) On 80x30 the file's four sensors detect none of the three event scenarios' (scenario,
 event, class) units, and the searched four detect at least one unit in every scenario.
