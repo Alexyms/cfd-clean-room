@@ -72,9 +72,9 @@ class Run:
     grid : tuple[int, int]
         (nx, ny).
     diffusion_tol : float or None
-        transport.diffusion_tol; None keeps the base's (1e-8).
+        transport.diffusion_tol; None keeps the base file's.
     max_diffusion_iter : int or None
-        transport.max_diffusion_iter; None keeps the base's (200).
+        transport.max_diffusion_iter; None keeps the base file's.
     """
 
     name: str

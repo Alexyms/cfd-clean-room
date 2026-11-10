@@ -269,7 +269,7 @@ def runs_table(runs: list[Run]) -> list[str]:
         rows.append(
             [
                 label(run),
-                f"{run.spec.sweep_cap}",
+                f"{run.meta['max_diffusion_iter']}",
                 f"{run.meta['flows_from']}",
                 f"{steps:,}",
                 f"{run.frames.times[-1]:.4f}",
@@ -563,9 +563,15 @@ def per_decade(r: list[float]) -> tuple[float, float]:
     """The end residual's factor per decade between the arms 1e-6, 1e-8 and 1e-10.
 
     The arms are two decades apart, so a ratio between neighbouring arms is the
-    factor over two decades; its square root is the factor per decade.
+    factor over two decades; its square root is the factor per decade. A ratio
+    that is not positive (the residual changed sign between arms) has no factor
+    and gives NaN, which decade_ok scores as failing.
     """
-    return math.sqrt(r[0] / r[1]), math.sqrt(r[1] / r[2])
+
+    def root(ratio: float) -> float:
+        return math.sqrt(ratio) if ratio > 0.0 else math.nan
+
+    return root(r[0] / r[1]), root(r[1] / r[2])
 
 
 def decade_ok(f1: float, f2: float) -> bool:
