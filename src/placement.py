@@ -22,10 +22,21 @@ class. ``detection_units`` stacks the runs' latencies into those units,
 ``score`` and ``given_layout`` read a layout by lookup, ``candidates`` states
 where a sensor may go, ``search`` finds the best layout of a count under a
 rule, and ``rank`` orders layouts scored over the same units.
+
+Prompt 76b adds the all-clear role (section D's "Two roles"). An all-clear
+unit is (scenario, class) for a scenario whose events all end before its run
+does; ``clear_units`` reads each cell's clear time from the stored frames,
+``clear_score`` reads a layout's against the room's, and ``search_roles``
+searches the detection sensors and then adds the all-clear ones in turn.
+
+Prompt 76c marks a latency that falls after a flow switch: ``flow_switches``
+states when an event's end changes a scenario's flow state, and
+``after_flow_switch`` marks the arrivals after one.
 """
 
 import os
 from collections.abc import Iterable, Mapping, Sequence
+from itertools import pairwise
 from typing import NamedTuple
 
 import numpy as np
@@ -36,11 +47,14 @@ from src.config import (
     MOUNT_CEILING,
     MOUNT_FREE,
     MOUNT_OBSTACLE_TOPS,
+    MOUNT_STAND,
     MOUNT_SURFACES,
     MOUNT_WALLS,
     PLACEMENT_RULES,
     WORST_CASE,
+    ScenarioSpec,
     SimConfig,
+    Source,
 )
 from src.io_manager import (
     RunFile,
@@ -51,6 +65,7 @@ from src.io_manager import (
 )
 from src.mesh import SOLID, Mesh
 from src.monitor import contaminating_events
+from src.scenarios import flow_fingerprint
 from src.staggered import edge_cell_inputs, obstacle_face_inputs
 
 # What resolves an arrival map's times: the march's every step, or the run
@@ -69,7 +84,7 @@ GREEDY = "greedy_exchange"
 
 # The set cover's dynamic programme holds one entry per subset of the
 # coverable units, 2^units of them: 2^20 is a megabyte of flags. The
-# reference set has fifteen units (three scenarios, five classes).
+# reference set has twenty (four scenarios, five classes), which is the cap.
 MAX_SET_COVER_UNITS = 20
 # Members of the reachable unions combined with the masks at once in the
 # programme, which bounds its working array to this times the masks.
@@ -84,6 +99,114 @@ _MAXIMAL_CHUNK = 256
 # rounding; the tolerance is far above rounding and far below any standoff
 # meant.
 STANDOFF_RTOL = 1.0e-9
+
+
+class ClearUnits(NamedTuple):
+    """The all-clear units, (scenario, class), and their cells' clear times (ADR-015 D).
+
+    Parameters
+    ----------
+    clear : np.ndarray
+        [units, ny, nx], seconds: per cell, the earliest stored frame time at
+        or after the unit's ``ends`` from which every stored frame to the
+        run's end reads below the class's threshold; ``ends`` itself when no
+        frame from then on reads at or above; inf ("not clear") when the
+        last frame does; NaN in SOLID cells.
+    ends : np.ndarray
+        [units], seconds: t_e, the end of the scenario's last event (0 for
+        the clean-out's initial condition).
+    times : tuple[np.ndarray, ...]
+        Per unit, [frames]: the stored frames' times at or after t_e.
+    fractions : tuple[np.ndarray, ...]
+        Per unit, [frames]: the fraction of the live area at or above the
+        class's threshold at each of those frames.
+    spacing : np.ndarray
+        [units], seconds: the largest spacing between consecutive stored
+        frames from t_e on, the clear times' resolution.
+    labels : tuple[tuple[str, int], ...]
+        (scenario, class index) per unit.
+
+    Notes
+    -----
+    The clear times are frame-resolved: a cell above its threshold only
+    between two stored frames is not seen, and a clear time is late by up to
+    ``spacing``.
+    """
+
+    clear: np.ndarray
+    ends: np.ndarray
+    times: tuple[np.ndarray, ...]
+    fractions: tuple[np.ndarray, ...]
+    spacing: np.ndarray
+    labels: tuple[tuple[str, int], ...]
+
+
+class ClearScore(NamedTuple):
+    """A layout's all-clear reading over the all-clear units (ADR-015 D).
+
+    Parameters
+    ----------
+    layout : np.ndarray
+        [units], seconds: the layout's clear time, the latest of its cells';
+        inf when a cell is not clear by the run's end.
+    room : np.ndarray
+        [units], seconds: the room's clear time, the latest over the live
+        cells; inf when some live cell is not clear.
+    room_cells : tuple[tuple[int, int], ...]
+        Per unit, (j, i) of the live cell that sets the room's clear time:
+        the first in row-major order of those that are not clear, or of
+        those at the latest time.
+    interval : np.ndarray
+        [units], seconds: the premature interval, the room's clear time less
+        the layout's, zero or more; NaN where either is not clear (a "not
+        clear" never enters arithmetic).
+    fraction : np.ndarray
+        [units]: the fraction of the live area at or above threshold at the
+        first stored frame at or after the layout's clear time; NaN where the
+        layout is not clear.
+    worst : float
+        The largest over the units of the ranking key: the interval; inf for
+        a unit the layout clears and the room does not; zero for a unit the
+        layout does not clear (it never declares the room clean, so it
+        declares nothing early).
+    mean : float
+        The mean of the same keys.
+    worst_fraction : float
+        The largest over the units of the fraction, zero where the layout is
+        not clear.
+    """
+
+    layout: np.ndarray
+    room: np.ndarray
+    room_cells: tuple[tuple[int, int], ...]
+    interval: np.ndarray
+    fraction: np.ndarray
+    worst: float
+    mean: float
+    worst_fraction: float
+
+
+class Roles(NamedTuple):
+    """A layout searched in two roles: detection, then all-clear (ADR-015 D).
+
+    Parameters
+    ----------
+    detection : Layout
+        The detection sensors' search, ``count`` less ``all_clear`` of them,
+        over the detection units it covers.
+    all_clear : tuple[tuple[int, int], ...]
+        (j, i) of the all-clear sensors, in the order they were added.
+    layout : Layout
+        The whole layout, the detection cells then the all-clear cells, as a
+        given layout over the detection search's units.
+    clear : ClearScore
+        The whole layout's all-clear reading.
+    """
+
+    detection: "Layout"
+    all_clear: tuple[tuple[int, int], ...]
+    layout: "Layout"
+    clear: ClearScore
 
 
 class RunArrival(NamedTuple):
@@ -596,32 +719,56 @@ def given_layout(
 
 
 def candidates(
-    mesh: Mesh, config: SimConfig, mount: Sequence[str], standoff: float
+    mesh: Mesh,
+    configs: SimConfig | Sequence[SimConfig],
+    mount: Sequence[str],
+    standoff: float,
+    *,
+    stand_height: tuple[float, float] | None = None,
 ) -> np.ndarray:
     """The cells a sensor may be placed in (ADR-015 D, "Candidates").
 
     A candidate is a non-SOLID cell whose centre lies within ``standoff`` of
-    a named surface, and not beside an inlet or outlet face: a sensor in the
-    supply's or a return's face reads the boundary, not the room. The
-    surfaces are the mesh faces between the room and a wall or obstacle, as
-    the solver sees them: ``walls`` the left and right domain edges,
-    ``ceiling`` the top edge, ``obstacle_tops`` and ``obstacle_sides`` the
-    obstacles' top faces and their left and right faces; the floor is not a
-    mounting surface. ``free`` is every non-SOLID cell, whatever the
-    standoff, the set the free optimum is searched over.
+    a named surface, or a stand cell when ``stand`` is named, and that no
+    exclusion removes. An opening excludes the cells beside its faces and
+    within ``standoff`` of one: an opening is a face on a segment or vent that
+    is not a wall in some interval of some scenario given, since a sensor in
+    the supply's or a return's face reads the boundary, not the room, and an
+    open doorway or a filter face has nothing to mount on. A ``source``
+    event's box excludes the cells whose centres lie inside it or within
+    ``standoff`` of it: the search must not use knowledge of where a release
+    happens (Alex, 2026-11-07). The surfaces are the mesh faces between the
+    room and a wall or obstacle, as the solver sees them: ``walls`` the left
+    and right domain edges, ``ceiling`` the top edge, ``obstacle_tops`` and
+    ``obstacle_sides`` the obstacles' top faces and their left and right
+    faces; the floor is not a mounting surface. A ``stand`` cell is a
+    non-SOLID cell whose centre's height above the floor lies in
+    ``stand_height`` and that has no SOLID cell below it in its column (the
+    stand stands on the floor); the standoff is not its rule. ``free`` is
+    every non-SOLID cell outside the exclusions, the set the free optimum is
+    searched over.
 
     Parameters
     ----------
     mesh : Mesh
-        The mesh of ``config``.
-    config : SimConfig
-        Its segments set the inlet and outlet faces; for a scenario, every
-        interval's segments (an open door's two halves).
+        The mesh of every configuration given: each configuration's own mesh
+        must equal it (the grid, the domain and the obstacles).
+    configs : SimConfig or Sequence[SimConfig]
+        The configurations of every scenario whose units are scored, at least
+        one: a cell excluded under any of them is out. For a scenario, every
+        interval's segments (an open door's two halves) and every source
+        event's box.
     mount : Sequence[str]
         Names from ``MOUNT_SURFACES``, at least one, none twice.
     standoff : float
         Metres, positive and finite: the largest distance from a cell's
-        centre to the nearest point of a named surface.
+        centre to the nearest point of a named surface, and the distance
+        inside which an opening's face or a source's box excludes a cell.
+    stand_height : tuple[float, float] or None
+        (low, high), metres above the floor, finite, 0 <= low < high: required
+        when ``mount`` names ``stand``. Checked whenever given and used only
+        with a stand, as the loader does (a run record made before the stand
+        reloads with the product file's band and a mount without ``stand``).
 
     Returns
     -------
@@ -631,11 +778,26 @@ def candidates(
     Raises
     ------
     TypeError
-        If a name is not a str or ``standoff`` not a real number.
+        If a name is not a str, a configuration is not a SimConfig, or
+        ``standoff`` or a stand height not a real number.
     ValueError
-        If ``mount`` is empty, names an unknown surface or one twice, the
-        standoff is not positive and finite, the mesh is not the
-        configuration's, or no cell is a candidate.
+        If ``mount`` is empty, names an unknown surface or one twice, no
+        configuration is given, the standoff is not positive and finite, the
+        mesh is not every configuration's (its grid, or its domain and
+        obstacles), ``stand_height`` is missing with ``stand`` or given and
+        not two finite numbers with 0 <= low < high, or no cell is a
+        candidate.
+
+    Notes
+    -----
+    An opening's face is never a surface, and the one exclusion is enough
+    to make it so: every cell such a face would bring in lies within the
+    standoff of that opening and is excluded (ADR-015 D, prompt 76). On
+    320x120 the 0.05 m standoff holds two columns, so a rule of "beside the
+    face" alone left the second column of an open doorway, the second row
+    under the supply and the second column of the hood's exhaust as
+    candidates. A source's ring is there because a cell one row outside the
+    box reads the source as fast as the box's own cells do (prompt 76b).
     """
     names = tuple(mount)
     if not names:
@@ -652,29 +814,36 @@ def candidates(
     standoff = real_number("standoff", standoff)
     if not (np.isfinite(standoff) and standoff > 0.0):
         raise ValueError(f"standoff must be positive and finite, got {standoff}")
-    if mesh.cell_type.shape != (config.ny, config.nx):
-        raise ValueError(
-            f"the mesh is {mesh.cell_type.shape} and the configuration "
-            f"({config.ny}, {config.nx}): candidates need the configuration's mesh"
-        )
+    band = _checked_stand_height(names, stand_height)
+    given = _checked_configs(mesh, configs)
     live = mesh.cell_type != SOLID
+    limit = standoff * (1.0 + STANDOFF_RTOL)
     if MOUNT_FREE in names:
         near = live.copy()
     else:
-        xc, yc = np.meshgrid(mesh.xc, mesh.yc)
-        distance = np.full(live.shape, np.inf)
-        for name in names:
-            for x0, y0, x1, y1 in _surface_faces(mesh, config, name):
-                gap_x = np.maximum(np.maximum(x0 - xc, xc - x1), 0.0)
-                gap_y = np.maximum(np.maximum(y0 - yc, yc - y1), 0.0)
-                np.minimum(distance, np.hypot(gap_x, gap_y), out=distance)
-        near = live & (distance <= standoff * (1.0 + STANDOFF_RTOL))
-    near &= ~_beside_openings(mesh, config)
+        # The surfaces are the room's: every configuration given has the
+        # mesh's domain and obstacles (the mesh check), so the first one's serve.
+        surfaces = [name for name in names if name != MOUNT_STAND]
+        faces = [f for name in surfaces for f in _surface_faces(mesh, given[0], name)]
+        near = live & (_distance_to(mesh, faces) <= limit)
+        if band is not None:
+            near |= _stand_cells(mesh, band)
+    beside = np.zeros(live.shape, dtype=bool)
+    openings: list[tuple[float, float, float, float]] = []
+    boxes: list[tuple[float, float, float, float]] = []
+    for config in given:
+        cells, faces = _openings(mesh, config)
+        beside |= cells
+        openings += faces
+        boxes += _source_boxes(config)
+    near &= ~beside & (_distance_to(mesh, sorted(set(openings))) > limit)
+    near &= _distance_to(mesh, sorted(set(boxes))) > limit
     j, i = np.nonzero(near)
     if j.size == 0:
         raise ValueError(
             f"no cell is a candidate: none within {standoff} m of {list(names)} that "
-            "is not SOLID or beside an inlet or outlet face"
+            "is not SOLID, beside an inlet or outlet face or within that distance of "
+            "one or of a source's box"
         )
     return np.stack([j, i], axis=1).astype(np.int64)
 
@@ -814,6 +983,534 @@ def rank(layouts: Iterable[Layout]) -> list[Layout]:
     return sorted(out, key=lambda layout: (layout.score.worst, layout.score.mean))
 
 
+def flow_switches(config: SimConfig) -> tuple[float, ...]:
+    """The times at which an event's end changes a scenario's flow state (ADR-015 E).
+
+    Parameters
+    ----------
+    config : SimConfig
+        A scenario's configuration.
+
+    Returns
+    -------
+    tuple[float, ...]
+        Seconds, in order: each interval boundary (``ScenarioSpec.times``)
+        at which an event active over the interval before it is no longer
+        active, and the flow fingerprint (``scenarios.flow_fingerprint``) of
+        the interval after differs from the one before. Empty for a
+        configuration with no scenario, and for one whose events end only in
+        a source or a transport-only change. An end at or after ``t_end`` is
+        no boundary and no switch.
+    """
+    spec = config.scenario
+    if spec is None:
+        return ()
+    fingerprints: dict[tuple[str, ...], str] = {}
+
+    def fingerprint(t: float) -> str:
+        active = spec.active(t)
+        names = tuple(event.name for event in active)
+        if names not in fingerprints:
+            fingerprints[names] = flow_fingerprint(
+                SimConfig.from_dict(spec.mapping(active))
+            )
+        return fingerprints[names]
+
+    out = []
+    times = spec.times()
+    for before, t in pairwise(times[:-1]):
+        ended = any(
+            spec.is_active(event, before) and not spec.is_active(event, t)
+            for event in spec.events
+        )
+        if ended and fingerprint(before) != fingerprint(t):
+            out.append(float(t))
+    return tuple(out)
+
+
+def after_flow_switch(
+    latencies: np.ndarray | float, onset: float, switches: Sequence[float]
+) -> np.ndarray:
+    """Mark latencies that fall after a flow switch (ADR-015 E).
+
+    Parameters
+    ----------
+    latencies : np.ndarray or float
+        Seconds after the event's onset, any shape; inf for never reached,
+        NaN for SOLID.
+    onset : float
+        The event's onset, seconds, finite and non-negative.
+    switches : Sequence[float]
+        The scenario's flow switches, seconds (``flow_switches``).
+
+    Returns
+    -------
+    np.ndarray
+        bool, the shape of ``latencies``: True where the arrival, onset plus
+        latency, is finite and strictly after a switch at or after the onset.
+        A switch at the onset itself counts: another event's end that
+        coincides with this one's start is a flow switch the arrival follows.
+        A unit reached after the flow switch was read on a flow state other
+        than its event's.
+
+    Raises
+    ------
+    TypeError
+        If the onset or a switch is not a real number (a bool is not).
+    ValueError
+        If the onset is not finite and non-negative, or a switch is not
+        finite.
+
+    Notes
+    -----
+    A switch at time t ends the interval [.., t), and the step that lands on
+    t was taken on the state before it, so an arrival at t itself is not
+    marked.
+    """
+    onset = real_number("onset", onset)
+    if not (np.isfinite(onset) and onset >= 0.0):
+        raise ValueError(f"onset must be finite and non-negative, got {onset}")
+    times = [real_number("a flow switch", value) for value in switches]
+    if not all(np.isfinite(times)):
+        raise ValueError(f"every flow switch must be finite, got {times}")
+    arrival = onset + np.asarray(latencies, dtype=np.float64)
+    out = np.zeros(arrival.shape, dtype=bool)
+    for t in times:
+        if t >= onset:
+            out |= np.isfinite(arrival) & (arrival > t)
+    return out
+
+
+def scenario_end(config: SimConfig) -> float | None:
+    """t_e of an all-clear unit: the end of the scenario's last event (ADR-015 D).
+
+    Parameters
+    ----------
+    config : SimConfig
+        A scenario's configuration.
+
+    Returns
+    -------
+    float or None
+        Seconds: the latest over the events of each one's end, an initial
+        condition's being its start (0); None when the configuration has no
+        scenario or that time is not before ``t_end`` (the run does not see
+        the room clear after its last event).
+    """
+    spec = config.scenario
+    if spec is None or not spec.events:
+        return None
+    end = max(e.start if e.end is None else e.end for e in spec.events)
+    return float(end) if end < config.t_end else None
+
+
+def clear_times(
+    frames: TransportFrames,
+    thresholds: np.ndarray,
+    live: np.ndarray,
+    areas: np.ndarray,
+    end: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Each cell's clear time from t_e on, at the stored frames' resolution (ADR-015 D).
+
+    Parameters
+    ----------
+    frames : TransportFrames
+        The run file's ``/transport/`` frames.
+    thresholds : np.ndarray
+        [classes], particles per cubic metre, finite and non-negative, one
+        per class the frames hold.
+    live : np.ndarray
+        [ny, nx] bool, the non-SOLID cells.
+    areas : np.ndarray
+        [ny, nx], square metres per metre of depth: each cell's area.
+    end : float
+        t_e, seconds, finite and non-negative, at or before the last frame.
+
+    Returns
+    -------
+    clear : np.ndarray
+        [classes, ny, nx], seconds: the earliest stored frame time at or
+        after ``end`` from which every stored frame reads below the class's
+        threshold; ``end`` where no frame from ``end`` on reads at or above;
+        inf ("not clear") where the last frame does; NaN in SOLID cells.
+    times : np.ndarray
+        [n], the stored frames' times at or after ``end``.
+    fractions : np.ndarray
+        [classes, n]: the fraction of the live area at or above the class's
+        threshold at each of those frames.
+
+    Raises
+    ------
+    TypeError
+        If a threshold or ``end`` is not a real number.
+    ValueError
+        If the thresholds are not one per class of the frames, finite and
+        non-negative, ``live`` or ``areas`` is not the frames' [ny, nx],
+        ``end`` is not finite and non-negative, or no stored frame lies at or
+        after it.
+
+    Notes
+    -----
+    A cell that dips below its threshold and rises again is not clear at
+    the dip: its clear time follows the last frame at or above.
+    """
+    thresholds = checked_thresholds(thresholds)
+    end = real_number("end", end)
+    if not (np.isfinite(end) and end >= 0.0):
+        raise ValueError(f"end must be finite and non-negative, got {end}")
+    classes = sorted(frames.fields)
+    if thresholds.shape != (len(classes),) or classes != list(range(len(classes))):
+        raise ValueError(
+            f"thresholds of shape {thresholds.shape} for the frames' classes {classes}"
+        )
+    areas = np.asarray(areas, dtype=np.float64)
+    if areas.shape != live.shape:
+        raise ValueError(f"areas are {areas.shape}; live is {live.shape}")
+    times = np.asarray(frames.times, dtype=np.float64)
+    kept = times >= end
+    if not kept.any():
+        raise ValueError(
+            f"no stored frame lies at or after t_e = {end} s (the last is at "
+            f"{times[-1]} s)"
+        )
+    times = times[kept]
+    n = times.size
+    total = float(areas[live].sum())
+    clear = np.full((len(classes), *live.shape), end)
+    fractions = np.empty((len(classes), n))
+    for k in classes:
+        stack = frames.fields[k][kept]
+        if stack.shape[1:] != live.shape:
+            raise ValueError(
+                f"class {k}'s frames are {stack.shape[1:]}; live is {live.shape}"
+            )
+        above = (stack >= thresholds[k]) & live
+        fractions[k] = (above * areas).sum(axis=(1, 2)) / total
+        ever = above.any(axis=0)
+        last = n - 1 - np.argmax(above[::-1], axis=0)
+        after = np.where(last < n - 1, times[np.minimum(last + 1, n - 1)], np.inf)
+        clear[k][ever] = after[ever]
+    clear[:, ~live] = np.nan
+    return clear, times, fractions
+
+
+def clear_units(runs: Mapping[str, RunFile | str | os.PathLike[str]]) -> ClearUnits:
+    """The all-clear units of runs whose scenarios' events all end before the run does.
+
+    Parameters
+    ----------
+    runs : Mapping[str, RunFile or str or Path]
+        Scenario name to its tier-1 run's file, all on one mesh.
+
+    Returns
+    -------
+    ClearUnits
+        One unit per class of each run whose ``scenario_end`` is not None,
+        in the mapping's order, then the classes'.
+
+    Raises
+    ------
+    TypeError
+        If a scenario name is not a str.
+    ValueError
+        If there is no run, no run's scenario ends before its run does, the
+        runs are not on one mesh, or a run records no threshold for a class.
+    """
+    if not runs:
+        raise ValueError("no run to read: give at least one scenario's file")
+    clear: list[np.ndarray] = []
+    ends: list[float] = []
+    times: list[np.ndarray] = []
+    fractions: list[np.ndarray] = []
+    spacing: list[float] = []
+    labels: list[tuple[str, int]] = []
+    shape: tuple[int, ...] | None = None
+    for name, source in runs.items():
+        if not isinstance(name, str):
+            raise TypeError(f"a scenario name must be a str, got {type(name).__name__}")
+        run = source if isinstance(source, RunFile) else RunFile(source)
+        config = SimConfig.from_dict(run.read_config().mapping)
+        end = scenario_end(config)
+        if end is None:
+            continue
+        mesh = Mesh(config)
+        if shape is None:
+            shape = mesh.cell_type.shape
+        elif mesh.cell_type.shape != shape:
+            raise ValueError(
+                f"{name}'s mesh is {mesh.cell_type.shape} and the first run's {shape}: "
+                "the runs must share a mesh"
+            )
+        live = mesh.cell_type != SOLID
+        areas = np.outer(mesh.dy_cell, mesh.dx_cell)
+        maps, kept, share = clear_times(
+            run.read_frames(),
+            np.array(config.class_thresholds("the all-clear units")),
+            live,
+            areas,
+            end,
+        )
+        gap = float(np.diff(kept).max()) if kept.size > 1 else 0.0
+        for k in range(maps.shape[0]):
+            clear.append(maps[k])
+            ends.append(end)
+            times.append(kept)
+            fractions.append(share[k])
+            spacing.append(gap)
+            labels.append((name, k))
+    if not labels:
+        raise ValueError(
+            "no run's scenario ends before its run does: there is no all-clear unit"
+        )
+    return ClearUnits(
+        np.stack(clear),
+        np.array(ends),
+        tuple(times),
+        tuple(fractions),
+        np.array(spacing),
+        tuple(labels),
+    )
+
+
+def clear_score(
+    units: ClearUnits, cells: Sequence[tuple[int, int]] | np.ndarray
+) -> ClearScore:
+    """A layout's clear time, the room's and the premature interval per unit (ADR-015 D).
+
+    The layout declares the room clean when every sensor reads below, so its
+    clear time is the latest of its cells'.
+
+    Parameters
+    ----------
+    units : ClearUnits
+        From ``clear_units``.
+    cells : Sequence[tuple[int, int]] or np.ndarray
+        [sensors, 2]: (j, i) per sensor, non-SOLID, none twice.
+
+    Returns
+    -------
+    ClearScore
+
+    Raises
+    ------
+    TypeError
+        If a cell index is not an integer.
+    ValueError
+        If ``cells`` is empty, not [sensors, 2], off the grid, names a cell
+        twice or a SOLID cell.
+    """
+    picked = _checked_grid_cells(units.clear[0], cells, "cells")
+    layout = units.clear[:, picked[:, 0], picked[:, 1]].max(axis=1)
+    return _clear_score_of(units, layout)
+
+
+def add_all_clear(
+    units: ClearUnits,
+    candidates: np.ndarray | Sequence[tuple[int, int]],
+    cells: Sequence[tuple[int, int]],
+    count: int,
+) -> tuple[tuple[int, int], ...]:
+    """All-clear sensors added to a layout one at a time (ADR-015 D, "Two roles").
+
+    Each is the candidate, not already in the layout, whose addition gives
+    the least worst premature interval over the units, ties by the mean
+    interval, then by the least largest area fraction, then the first in
+    candidate order. The search is sequential, not joint.
+
+    Parameters
+    ----------
+    units : ClearUnits
+        From ``clear_units``.
+    candidates : np.ndarray or Sequence[tuple[int, int]]
+        [n, 2], (j, i), as ``candidates`` returns them.
+    cells : Sequence[tuple[int, int]]
+        The layout's cells so far (the detection sensors'), possibly none.
+    count : int
+        Sensors to add, from 0 to the candidates not in the layout.
+
+    Returns
+    -------
+    tuple[tuple[int, int], ...]
+        The added cells, in the order they were added.
+
+    Raises
+    ------
+    TypeError
+        If ``count`` is not an int, or a cell index not an integer.
+    ValueError
+        If ``count`` is negative or more than the candidates left, or a
+        candidate or a cell is SOLID, off the grid or given twice.
+    """
+    if isinstance(count, bool) or not isinstance(count, (int, np.integer)):
+        raise TypeError(f"count must be an int, got {type(count).__name__}")
+    pool = _checked_grid_cells(units.clear[0], candidates, "candidates")
+    chosen = [(int(j), int(i)) for j, i in cells]
+    if chosen:
+        _checked_grid_cells(units.clear[0], chosen, "cells")
+    free = np.array([(int(j), int(i)) not in set(chosen) for j, i in pool])
+    if not 0 <= count <= int(free.sum()):
+        raise ValueError(
+            f"count must be from 0 to the {int(free.sum())} candidates not in the "
+            f"layout, got {count}"
+        )
+    # [candidates, units]: each candidate's clear time.
+    table = units.clear[:, pool[:, 0], pool[:, 1]].T
+    current = (
+        units.clear[:, [c[0] for c in chosen], [c[1] for c in chosen]].max(axis=1)
+        if chosen
+        else np.full(len(units.labels), -np.inf)
+    )
+    added: list[tuple[int, int]] = []
+    for _ in range(int(count)):
+        layout = np.maximum(current[None, :], table)
+        worst, mean, fraction = _clear_keys(units, layout)
+        order = np.lexsort((np.arange(len(pool)), fraction, mean, worst, ~free))
+        best = int(order[0])
+        added.append((int(pool[best, 0]), int(pool[best, 1])))
+        free[best] = False
+        current = layout[best]
+    return tuple(added)
+
+
+def search_roles(
+    units: Units,
+    clear: ClearUnits,
+    candidates: np.ndarray | Sequence[tuple[int, int]],
+    count: int,
+    all_clear: int,
+    rule: str,
+    *,
+    within: float | None = None,
+) -> Roles:
+    """A layout of COUNT sensors in two roles, detection and all-clear (ADR-015 D).
+
+    The detection sensors, ``count`` less ``all_clear``, are searched by
+    ``search`` under ``rule`` over the detection units; then the all-clear
+    sensors are added in turn by ``add_all_clear`` over the all-clear units.
+
+    Parameters
+    ----------
+    units : Units
+        The detection units, from ``detection_units``.
+    clear : ClearUnits
+        The all-clear units, from ``clear_units``, on the same mesh.
+    candidates : np.ndarray or Sequence[tuple[int, int]]
+        [n, 2], (j, i), as ``candidates`` returns them.
+    count : int
+        Sensors, positive.
+    all_clear : int
+        The all-clear sensors, from 0 to ``count`` minus 1.
+    rule : str
+        ``WORST_CASE`` or ``MEAN``, the detection search's rule.
+    within : float or None
+        The coverage rule's time for the layouts' scores.
+
+    Returns
+    -------
+    Roles
+
+    Raises
+    ------
+    TypeError
+        If ``count`` or ``all_clear`` is not an int.
+    ValueError
+        If ``all_clear`` is not from 0 to ``count`` minus 1, the units are
+        not on one mesh, or as ``search`` and ``add_all_clear`` raise.
+    """
+    for label, value in (("count", count), ("all_clear", all_clear)):
+        if isinstance(value, bool) or not isinstance(value, (int, np.integer)):
+            raise TypeError(f"{label} must be an int, got {type(value).__name__}")
+    if not 0 <= all_clear < count:
+        raise ValueError(
+            f"all_clear must be from 0 to count - 1 = {count - 1}, got {all_clear}"
+        )
+    if units.latencies.shape[1:] != clear.clear.shape[1:]:
+        raise ValueError(
+            f"the detection units are {units.latencies.shape[1:]} and the all-clear "
+            f"units {clear.clear.shape[1:]}: they must share a mesh"
+        )
+    detection = search(units, candidates, int(count - all_clear), rule, within=within)
+    added = add_all_clear(clear, candidates, detection.cells, int(all_clear))
+    cells = detection.cells + added
+    scored = exclude_units(units, detection.uncovered) if detection.uncovered else units
+    return Roles(
+        detection=detection,
+        all_clear=added,
+        layout=given_layout(scored, cells, within=within),
+        clear=clear_score(clear, cells),
+    )
+
+
+def room_clear(units: ClearUnits) -> tuple[np.ndarray, tuple[tuple[int, int], ...]]:
+    """The room's clear time per unit, the latest over the live cells, and its cell.
+
+    Parameters
+    ----------
+    units : ClearUnits
+        From ``clear_units``.
+
+    Returns
+    -------
+    times : np.ndarray
+        [units], seconds; inf when some live cell is not clear.
+    cells : tuple[tuple[int, int], ...]
+        Per unit, (j, i) of the cell that sets it: the first in row-major
+        order of the cells not clear, or of those at the latest time.
+    """
+    times = np.empty(len(units.labels))
+    cells: list[tuple[int, int]] = []
+    for u, field in enumerate(units.clear):
+        # SOLID cells are NaN and read as -inf, so no SOLID cell sets the time.
+        flat = np.where(np.isnan(field), -np.inf, field).ravel()
+        at = int(np.argmax(flat))
+        times[u] = flat[at]
+        cells.append(tuple(int(v) for v in np.unravel_index(at, field.shape)))
+    return times, tuple(cells)
+
+
+def _clear_keys(
+    units: ClearUnits, layout: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Per row of LAYOUT [layouts, units] of clear times: worst key, mean key, worst fraction."""
+    room, _ = room_clear(units)
+    cleared = np.isfinite(layout)
+    # A layout that is not clear is read as 0 before the subtraction, so no
+    # "not clear" enters the arithmetic.
+    gap = room[None, :] - np.where(cleared, layout, 0.0)
+    keys = np.where(~cleared, 0.0, np.where(np.isinf(room)[None, :], np.inf, gap))
+    fraction = np.zeros(layout.shape)
+    for u in range(layout.shape[1]):
+        column = layout[:, u]
+        finite = np.isfinite(column)
+        index = np.searchsorted(units.times[u], column[finite], side="left")
+        fraction[finite, u] = units.fractions[u][index]
+    return keys.max(axis=1), keys.mean(axis=1), fraction.max(axis=1)
+
+
+def _clear_score_of(units: ClearUnits, layout: np.ndarray) -> ClearScore:
+    """The ClearScore of one layout's per-unit clear times."""
+    room, room_cells = room_clear(units)
+    both = np.isfinite(layout) & np.isfinite(room)
+    interval = np.full(layout.shape, np.nan)
+    interval[both] = room[both] - layout[both]
+    fraction = np.full(layout.shape, np.nan)
+    for u in np.flatnonzero(np.isfinite(layout)):
+        index = int(np.searchsorted(units.times[u], layout[u], side="left"))
+        fraction[u] = units.fractions[u][index]
+    worst, mean, worst_fraction = _clear_keys(units, layout[None, :])
+    return ClearScore(
+        layout=layout,
+        room=room,
+        room_cells=room_cells,
+        interval=interval,
+        fraction=fraction,
+        worst=float(worst[0]),
+        mean=float(mean[0]),
+        worst_fraction=float(worst_fraction[0]),
+    )
+
+
 # ---------------------------------------------------------------------------
 # The scoring's and the search's helpers
 # ---------------------------------------------------------------------------
@@ -834,6 +1531,13 @@ def _checked_cells(
     units: Units, cells: Sequence[tuple[int, int]] | np.ndarray, label: str
 ) -> np.ndarray:
     """CELLS as [n, 2] int64, each a non-SOLID cell of the units' grid, none twice."""
+    return _checked_grid_cells(units.latencies[0], cells, label)
+
+
+def _checked_grid_cells(
+    grid: np.ndarray, cells: Sequence[tuple[int, int]] | np.ndarray, label: str
+) -> np.ndarray:
+    """CELLS as [n, 2] int64, each a cell of GRID [ny, nx] that is not NaN, none twice."""
     picked = np.asarray(cells)
     if picked.size == 0:
         raise ValueError(f"{label} is empty: give at least one (j, i)")
@@ -841,13 +1545,13 @@ def _checked_cells(
         raise TypeError(f"{label} must hold integer (j, i) indices, got {picked.dtype}")
     if picked.ndim != 2 or picked.shape[1] != 2:
         raise ValueError(f"{label} must be [n, 2], (j, i) per cell, got {picked.shape}")
-    ny, nx = units.latencies.shape[1:]
+    ny, nx = grid.shape
     j, i = picked[:, 0], picked[:, 1]
     if ((j < 0) | (j >= ny) | (i < 0) | (i >= nx)).any():
         raise ValueError(f"{label} has a cell off the {ny}x{nx} grid")
     if len({(int(a), int(b)) for a, b in picked}) != len(picked):
         raise ValueError(f"{label} names a cell twice")
-    if np.isnan(units.latencies[0, j, i]).any():
+    if np.isnan(grid[j, i]).any():
         raise ValueError(f"{label} has a SOLID cell, where no sensor reads air")
     return picked.astype(np.int64)
 
@@ -1101,6 +1805,89 @@ def _worst_case_cover(table: np.ndarray, caps: np.ndarray, count: int) -> _Found
     return _Found(columns, WORST_CASE, SET_COVER, True, distinct.size, maximal.size)
 
 
+def _checked_configs(
+    mesh: Mesh, configs: SimConfig | Sequence[SimConfig]
+) -> list[SimConfig]:
+    """CONFIGS as a non-empty list of SimConfigs, each with MESH as its mesh.
+
+    The grid is compared first, then the cells and the faces: a configuration
+    whose domain or obstacles differ would give other surfaces, so the answer
+    would follow the order the configurations are given in.
+    """
+    given = [configs] if isinstance(configs, SimConfig) else list(configs)
+    if not given:
+        raise ValueError("give at least one configuration: the scenarios scored")
+    for n, config in enumerate(given):
+        if not isinstance(config, SimConfig):
+            raise TypeError(
+                f"configs[{n}] must be a SimConfig, got {type(config).__name__}"
+            )
+        if mesh.cell_type.shape != (config.ny, config.nx):
+            raise ValueError(
+                f"the mesh is {mesh.cell_type.shape} and configuration {n}'s "
+                f"({config.ny}, {config.nx}): candidates need the configurations' mesh"
+            )
+        own = Mesh(config)
+        if not (
+            np.array_equal(own.cell_type, mesh.cell_type)
+            and np.array_equal(own.x, mesh.x)
+            and np.array_equal(own.y, mesh.y)
+        ):
+            raise ValueError(
+                f"configuration {n}'s domain or obstacles differ from the mesh's: "
+                "candidates need one room"
+            )
+    return given
+
+
+def _checked_stand_height(
+    names: tuple[str, ...], stand_height: tuple[float, float] | None
+) -> tuple[float, float] | None:
+    """STAND_HEIGHT as (low, high) when MOUNT names a stand, else None.
+
+    A band is checked whenever it is given and kept only with a stand.
+    """
+    if stand_height is None:
+        if MOUNT_STAND in names:
+            raise ValueError(f"mount names '{MOUNT_STAND}': give its stand_height")
+        return None
+    values = tuple(stand_height)
+    if len(values) != 2:
+        raise ValueError(f"stand_height must be (low, high), got {stand_height!r}")
+    low, high = (real_number(f"stand_height[{n}]", v) for n, v in enumerate(values))
+    if not (np.isfinite(low) and np.isfinite(high) and 0.0 <= low < high):
+        raise ValueError(
+            f"stand_height must be finite with 0 <= low < high, got ({low}, {high})"
+        )
+    return (low, high) if MOUNT_STAND in names else None
+
+
+def _stand_cells(mesh: Mesh, band: tuple[float, float]) -> np.ndarray:
+    """[ny, nx] bool: the cells a stand on the floor can hold an inlet in.
+
+    The centre's height above the floor lies in BAND, inclusive, and no cell
+    below it in its column is SOLID.
+    """
+    solid = mesh.cell_type == SOLID
+    # A column's cells at and below row j, SOLID or not, by a running count.
+    below = np.cumsum(solid, axis=0)
+    height = np.asarray(mesh.yc) - mesh.y[0]
+    in_band = (height >= band[0]) & (height <= band[1])
+    return in_band[:, None] & (below == 0)
+
+
+def _source_boxes(config: SimConfig) -> list[tuple[float, float, float, float]]:
+    """The boxes of CONFIG's source events, as (x0, y0, x1, y1)."""
+    spec: ScenarioSpec | None = config.scenario
+    if spec is None:
+        return []
+    return [
+        (e.change.x_start, e.change.y_start, e.change.x_end, e.change.y_end)
+        for e in spec.events
+        if isinstance(e.change, Source)
+    ]
+
+
 def _surface_faces(
     mesh: Mesh, config: SimConfig, name: str
 ) -> list[tuple[float, float, float, float]]:
@@ -1149,10 +1936,36 @@ def _interval_configs(config: SimConfig) -> list[SimConfig]:
     return out
 
 
-def _beside_openings(mesh: Mesh, config: SimConfig) -> np.ndarray:
-    """[ny, nx] bool: the cells with a face on an inlet or outlet segment or vent."""
+def _distance_to(
+    mesh: Mesh, faces: list[tuple[float, float, float, float]]
+) -> np.ndarray:
+    """[ny, nx]: from each cell's centre to the nearest point of FACES, inf with none.
+
+    A face is a closed rectangle (x0, y0, x1, y1), a segment when it is thin,
+    and the distance is Euclidean: zero inside it.
+    """
+    xc, yc = np.meshgrid(mesh.xc, mesh.yc)
+    distance = np.full(xc.shape, np.inf)
+    for x0, y0, x1, y1 in faces:
+        gap_x = np.maximum(np.maximum(x0 - xc, xc - x1), 0.0)
+        gap_y = np.maximum(np.maximum(y0 - yc, yc - y1), 0.0)
+        np.minimum(distance, np.hypot(gap_x, gap_y), out=distance)
+    return distance
+
+
+def _openings(
+    mesh: Mesh, config: SimConfig
+) -> tuple[np.ndarray, list[tuple[float, float, float, float]]]:
+    """The cells beside an opening, [ny, nx] bool, and the openings' faces.
+
+    An opening is a face on a segment or vent that is not a wall in some
+    interval of the configuration. Each face is (x0, y0, x1, y1), the form
+    ``_surface_faces`` gives.
+    """
+    x, y = mesh.x, mesh.y
     out = np.zeros(mesh.cell_type.shape, dtype=bool)
     ny, nx = out.shape
+    found: set[tuple[float, float, float, float]] = set()
     for interval in _interval_configs(config):
         registry = BoundaryRegistry(interval)
         for edge in EDGES:
@@ -1160,13 +1973,16 @@ def _beside_openings(mesh: Mesh, config: SimConfig) -> np.ndarray:
             for k, point in enumerate(coverage):
                 if point.spec is None or point.condition.bc_type == WALL:
                     continue
-                cell = {
-                    "bottom": (0, k),
-                    "top": (ny - 1, k),
-                    "left": (k, 0),
-                    "right": (k, nx - 1),
-                }[edge]
-                out[cell] = True
+                if edge in ("bottom", "top"):
+                    row = 0 if edge == "bottom" else ny - 1
+                    level = y[0] if edge == "bottom" else y[-1]
+                    out[row, k] = True
+                    found.add((x[k], level, x[k + 1], level))
+                else:
+                    column = 0 if edge == "left" else nx - 1
+                    level = x[0] if edge == "left" else x[-1]
+                    out[k, column] = True
+                    found.add((level, y[k], level, y[k + 1]))
         for obstacle in interval.obstacles:
             for face in ("top", "bottom", "left", "right"):
                 faces = obstacle_face_inputs(mesh, obstacle, face)
@@ -1184,4 +2000,8 @@ def _beside_openings(mesh: Mesh, config: SimConfig) -> np.ndarray:
                         "right": (r, c),
                     }[face]
                     out[room] = True
-    return out
+                    if face in ("top", "bottom"):
+                        found.add((x[c], y[r], x[c + 1], y[r]))
+                    else:
+                        found.add((x[c], y[r], x[c], y[r + 1]))
+    return out, sorted(found)

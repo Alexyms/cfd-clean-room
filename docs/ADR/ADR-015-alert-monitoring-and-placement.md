@@ -1,7 +1,12 @@
 # ADR-015: Alert Monitoring and Sensor Placement: Spreading Checked Both Ways, a Read-Only Monitor, Arrival Maps
 
 ## Status
-Accepted, 2026-10-30 (Alex; prompt 71, commit 0; the note after this paragraph). Written
+Accepted, 2026-10-30 (Alex; prompt 71, commit 0; the note after this paragraph); built to its
+six steps by 2026-11-05 (prompt 76) and revised on 2026-11-07 by Alex's decisions (prompt 76b:
+the stand, the source rule, the all-clear role, the seal leak) and on 2026-11-08 (prompt 76c: the
+stand band from 0.1 m, the all-clear sensor's position carried open; prompt 76d: round 2's findings
+fixed), the planned-against-built table
+below section H, the Phase 5 gate's verdict Alex's to set. Written
 2026-10-29 (prompt 70, branch `phase5/design`) and revised the same day
 on review 70 (prompt 70b: section A rewritten to a line source in grid turbulence by Alex's
 decision, section B read on the plume's edge, the review's other findings applied in
@@ -269,7 +274,7 @@ probe of its own.
 *Options, ranked.* (1) Condition 3 first (steps 0 and 1 of H), condition 2 in step 1 beside
 the sweep (a 160x60 clean-out, under an hour), condition 1 before Phase 6 as a prompt of its
 own designed from the records, after the Phase 5 gate. (2) Condition 1 first: it bears on no
-Phase 5 number (the residual is 1e-6 of the supply, the thresholds 1e-2 of the inlet value).
+Phase 5 number (the residual's size is the gate's table B1).
 *Recommendation.* (1).
 
 **G. Requirements review (section G).**
@@ -797,6 +802,83 @@ is not a wall, in the configuration or in any interval of its scenario (the open
 halves), is never a candidate, the free set included. The product file states walls, ceiling,
 obstacle tops and sides at 0.05 m (two cells on 320x120, one on 80x30), four sensors and the
 worst case, and no coverage time.
+*Openings (prompt 76, 2026-11-05, before step 5's runs).* A mounting surface is a face whose
+boundary is a wall in every interval of the scenario: an opening is never a surface, and a cell
+within the standoff of an opening is not a candidate, the free set included. The rule as first
+built excluded only the cells beside an opening's face and counted a domain edge whole. On
+80x30 the 0.05 m standoff holds one cell, so the two readings agree (215 mountable and 1,630
+free, the (h) counts below, unchanged). On 320x120 it holds two, and with the door open the
+first rule made 84 cells of column 1 in the doorway's rows wall-mounted candidates (a sensor 4
+cm inside an open doorway with nothing to mount on), and likewise 282 cells of the second
+row under the supply and 38 of the second column of the hood's exhaust (the opening's own 280
+and 36 and the end cell beside each, within the standoff of the opening's end). Under this rule
+2,152 mountable cells become 1,737 and 27,544 free cells become 27,017. The wall above the
+doorway stays mountable from the rows the door's top no longer reaches ((86, 0) and (85, 1)).
+One exclusion does the work of both clauses: every cell an opening's face could bring in as a
+surface lies within the standoff of that opening. Pinned by
+`test_a_sensor_cannot_hang_in_the_open_doorway_on_the_product_grid`, whose plant is the
+exclusion read as beside the face alone. The rule is read on the solver's faces, so an
+opening's end that falls mid-cell follows the coverage rule: on 80x30 the first return's end at
+x 1.25 m is a cell centre, its face is not covered, and the free cell (0, 12) at exactly the
+standoff from the configured end is kept (review 76 S7); 160x60 and 320x120 put every opening
+on cell faces.
+*Every scenario scored, the source boxes and the stand (prompt 76b, Alex's decisions of
+2026-11-07).* (1) `candidates` takes the configurations of every scenario whose units are
+scored, and a cell excluded under any of them is out (review 76 S5): the breach's configuration
+alone leaves the doorway a wall and gives its two columns back as wall candidates, and with the
+door's they are excluded. (2) A scenario's source box is not a candidate: a cell whose centre
+lies inside a `source` event's box, or within the standoff of the box, is out in every mount,
+the free set included. The search must not use knowledge of where the release happens, and the
+ring is there because a cell one row outside the box reads the source as fast as the box's own
+cells do. (3) A sensor is a particle counter's sampling inlet, and an inlet on a free-standing
+stand is a mounting option, `stand`: a cell whose centre's height above the floor lies in
+`placement.stand_height` (low then high, inclusive; the product's 0.1 and 1.2 m since
+2026-11-08, 0.3 and 1.2 m before), that is not
+SOLID, that has no SOLID cell below it in its column (the stand stands on the floor, not on a
+tool) and that no opening or source excludes. The standoff does not apply to the height band.
+The stand is a pole outside the 2D slice and is not an obstruction to the flow: nothing in the
+solve sees it. (4) The distance is Euclidean, pinned by a cell diagonal to an obstacle's corner
+that a Manhattan distance would put outside (test 76 S3).
+
+**Two roles** (prompt 76b, Alex's decision 3 of 2026-11-07). Detection and all-clear are
+separate roles. A sensor in the fast supply stream sees a release first and clears first; the
+dead pockets clear last, and a layout that says "clean" while a pocket is still contaminated has
+failed at the second job. The definitions, as built in `placement.py`:
+- *An all-clear unit* is (scenario, class), for a scenario whose events all end before its run
+  does. Its t_e is the end of the last event to end, an initial condition's being its start, so
+  the clean-out's is 0 (`scenario_end`). The door, the breach, the dust and the seal leak count.
+- *A cell's clear time* is the earliest stored frame time at or after t_e from which every stored
+  frame, to the run's end, reads below the class threshold; it is t_e when no frame from t_e on
+  reads at or above, and "not clear" when the last frame does (`clear_times`). A cell that dips
+  below and rises again clears after its last frame above, not at the dip. It is frame-resolved:
+  a cell above only between two frames is not seen and a clear time is late by up to the frame
+  spacing, which `ClearUnits.spacing` states per unit.
+- *A layout's clear time* is the latest of its cells': the layout declares clean when every
+  sensor reads below.
+- *The room's clear time* is the latest over the live cells, and the cell that sets it is named
+  (the first in row-major order of the cells not clear, or of those at the latest time).
+- *The premature interval* is the room's clear time minus the layout's, so zero or more. Beside
+  it is the fraction of the live area at or above threshold at the first stored frame at or after
+  the layout's clear time. A "not clear" is reported as such and never enters arithmetic: where
+  the room is not clear and the layout is, the interval is not a number and the search ranks it
+  above every number; where the layout is not clear it never declares the room clean, so it
+  declares nothing early and ranks as zero.
+- *The search* (`search_roles`). `placement.all_clear` sensors (an integer from 0 to count minus
+  1; the product's 0 since 2026-11-08, 1 before) take the role. The detection sensors are searched at count minus `all_clear`
+  by the configured rule over the detection units. Then each all-clear sensor is added in turn
+  (`add_all_clear`): the candidate, from the same candidates, with the least worst premature
+  interval over the all-clear units, ties by the mean interval, then by the least of the largest
+  area fraction over the units, then the first in candidate order. The search is sequential, not
+  joint: the detection sensors are fixed before the all-clear one is chosen, and the layout is
+  not claimed best for the two roles together.
+- *Carried open* (Alex, 2026-11-08, prompt 76c). The score counts only clearing early, so a cell
+  that never clears scores perfectly, and the clean-out ends at 240 s before its room clears; the
+  rule therefore puts an all-clear sensor where the run ended, not where clearing is read well.
+  The product file states none (`all_clear` 0); the code and its tests stay. Before a position
+  means anything the role needs a cost for clearing late, and a clean-out that runs until the room
+  clears or a stated room-clean criterion. What stands is the premature interval of the detecting
+  layouts, up to about a minute in the event scenarios (the latency report's C2). The all-clear
+  requirement of the gate report stays a proposal.
 
 **The search.** `placement.search(maps, onsets, candidates, count, rule)`:
 - count 1: the argmin over candidates (exact);
@@ -832,7 +914,8 @@ the mean the best this finds. When no layout of the count detects every coverabl
 worst case is inf for every layout, the search runs the mean rule's method at the count and
 returns the rule as `MEAN`; when no unit at all is coverable it raises `ValueError`. Ties under the worst case
 go to the mean and under the mean to the worst case, then to candidate order. The set cover
-refuses more than 20 units (2^20 subsets); the reference set has fifteen. On twelve random
+refuses more than 20 units (2^20 subsets); the reference set has fifteen (since prompt 76b,
+twenty: four scenarios, five classes, which is the cap). On twelve random
 maps of six units and 31 candidates the worst case is exact at one to three sensors, and the
 mean rule's greedy at three equals the optimum on ten and is above it on two (0.67 and 0.83 s
 against 0.5), `tests/test_placement.py`.
@@ -876,6 +959,77 @@ and across B's arms, stated per rule with ties, not an absolute latency. ADR-014
 stand: the 2D slice (a line source, exchanges per metre of depth), the steady extreme, the
 turbulence over the tops, the spreading limit now bounded by A and B rather than open.
 
+*On the product grid (prompt 76, 2026-11-05).* `docs/reports/phase5_alert_report.md` holds the
+result: predictions (i), (j) and (k) hold, the file's four detect none of the fifteen units, and no
+mountable position detects the door with its inlet within about 0.7 m of its surface (beyond that
+the openings' exclusion holds the whole plume, so the zero is by construction; review 76 S3, test
+76 S1). The ranking (free optimum, searched, the file's four) holds under both rules on each grid
+and at every sweep arm that ran, with the middle of the order inverted on 80x30 by candidacy (the
+report's K1). Its values do not carry between grids, so section D's comparative claim is the one
+the records support.
+
+*Prompt 76b's predictions (orchestrator, 2026-11-07), committed before the seal-leak run and any
+re-scoring.* Alex decided three things on 2026-11-07: a sensor on a free-standing stand is a
+mounting option, `stand`, with its inlet 0.3 to 1.2 m above the floor; a scenario's source box is
+not a candidate; detection and all-clear are separate roles. The orchestrator added the door seal
+leak (`configs/scenario_seal_leak.yaml`) as a fifth scenario.
+- (l) On the mountable candidates without stands, with the source excluded, the searched four
+  detect every breach and every dust unit, and no door or seal-leak unit.
+- (m) With stands, the searched four detect every door, breach and dust unit.
+- (n) No candidate of any mount, stands included, detects a seal-leak unit; the free cells that do
+  lie below 0.3 m.
+- (o) In the clean-out, the detection-only four with stands declare clean while live area at or
+  above threshold remains, at every class.
+- (p) The three-plus-one's worst detection latency over the door, breach and dust units equals the
+  detection-only four's, and its worst premature interval is smaller.
+
+*Prompt 76b's result (2026-11-07).* `docs/reports/phase5_alert_report.md`, tables P2, L1, C0 and C2.
+(l), (m), (o) and (p) hold; (n) fails in both clauses: the seal leak's air reaches 0.45 m, so the
+stand cells at the bottom of the band detect it, late, and free cells above 0.3 m do too. With the
+source box and its ring excluded the dust is read from just beyond the ring within a frame. The
+clean-out's room does not clear by 240 s (the pocket between the hood's bench and the right wall),
+so under the ranking above every layout that clears is unbounded there and the search puts the
+all-clear sensor in that pocket, where it improves no event scenario: (p)'s smaller interval comes
+from the clean-out alone. The seal leak ran on 320x120 only (its 0.025 m slot covers no face of
+80x30 and a double-width face of 160x60).
+
+*Prompt 76c's prediction (orchestrator, 2026-11-08), committed before the re-score.* Alex decided
+two things on 2026-11-08: the stand band is 0.1 to 1.2 m, and the all-clear sensor's position is
+carried open (`placement.all_clear` 0 in the product file). The orchestrator found in the seal
+leak's map that, outside the doorway's standoff, the only cell of the 0.3 to 1.2 m band the leak
+reaches before 33 s is (i 2, j 12), at (0.0625, 0.3125), and that between 0.1 and 0.2 m every class
+is reached within 0.71 s. As read from `/arrival/` of `seal_leak.h5` the first half holds (the
+cell is reached at 16.36 to 16.58 s in the four smaller classes and at 30.59 s at 5 um) and the
+second holds for the fastest cell only: (i 5, j 4), at (0.1375, 0.1125), reads every class from
+0.699 to 0.706 s, while the cells of columns 2 and 3 in those rows are reached at 0.74 to 6.06 s
+(test 76 round 2, S5).
+- (q) With the band at 0.1 m, the product search detects all 20 units with a worst case under 3 s;
+  it detects the seal leak within 1 s, and no worst-case latency carries the marker "after the flow
+  switch" (a latency that falls after the end of an event whose end changes the flow state).
+
+*Prompt 76c's result (2026-11-08).* `docs/reports/phase5_alert_report.md`, tables P3, L1 and U2.
+(q) holds: with the band at 0.1 m the product search detects all twenty units, its worst case is
+the breach's as without stands, and it reads the seal leak from a stand by the doorway just above
+the band's floor within a second; none of its latencies falls after a flow switch. At the 0.3 m
+band the seal leak's 5 um class was read only after the leak had ended, the one latency so marked,
+and it set that layout's worst case. The marker is built as `placement.flow_switches` (an interval
+boundary at which an event has ended and the flow fingerprint changes) and
+`placement.after_flow_switch` (an arrival strictly after a switch at or after the onset).
+
+*Prompt 76d (2026-11-08), round 2's findings.* (1) `candidates` refuses a configuration whose
+own mesh is not the one given (grid, domain and obstacles): the surfaces are taken from the room, so
+two rooms on one grid made the answer follow the order given (39 cells one way and 135 the other, review 76
+round 2 S4). (2) A `stand_height` given without `stand` in the mount is checked and ignored, as the
+loader does, so the spec of a run record made before the stand, which reloads with the product
+file's band, can be passed on as it is (review S5, test S3). (3) The exact worst-case search stops at
+20 units, which the product's four scenarios and five classes now fill, and one unit more raises;
+scoring the dust at several release positions needs the mean rule's greedy search, which is not
+exact, or a larger cap measured first (review S3). (4) A switch at an event's own onset counts in
+`after_flow_switch` (another event's end that coincides with the start), the arrival strictly after
+it. (5) The all-clear computation's class thresholds, the stand's SOLID rule, the sequential search
+and the other plants that survived round 2 are pinned by tests (test B1, S1, S2); the orchestrator's
+reading of the seal leak's map is corrected above (S5).
+
 *Step 4's prediction (orchestrator, 2026-11-02, prompt 75), committed before the 80x30 runs.*
 (h) On 80x30 the file's four sensors detect none of the three event scenarios' (scenario,
 event, class) units, and the searched four detect at least one unit in every scenario.
@@ -890,8 +1044,9 @@ the searched four detect the breach's five and the dust's five (worst case 1.97 
 cover exact, 6 distinct masks at the optimum, 2 maximal). The door's plume reaches 66 cells,
 all within 0.9 m of the left wall and 1.3 m of the floor; at a standoff of 0.05 m the only
 wall candidates on this grid are the left column's, and every one of those under 2.1 m lies
-beside the open door's faces and is excluded. At 0.15 m, 11 mountable candidates reach a door
-unit. The free optimum's four detect all fifteen units (worst case 0.19 s, 6 distinct masks,
+beside the open door's faces and is excluded. At 0.15 m, 11 mountable candidates reached a door
+unit under the rule as it then stood, each within 0.15 m of the doorway, which the rule of prompt
+76 (Openings, above) excludes. The free optimum's four detect all fifteen units (worst case 0.19 s, 6 distinct masks,
 3 maximal), two of its cells in the floor row beside the door. The search took 4 ms over the
 mountable candidates and 36 ms over the 1,630 free ones.
 
@@ -908,13 +1063,17 @@ mountable candidates and 36 ms over the 1,630 free ones.
 - the counter's sample time stated as an additive instrument delay, OPEN;
 - the maps as figures: per scenario the 0.1 um and 5 um arrival maps with the sensors drawn.
 
+*As built (prompts 76 to 76c).* A latency read after the end of an event whose end changes the
+flow state is marked "after the flow switch" (`placement.after_flow_switch`, prompt 76c): it was
+read on the closed room's flow, not its event's.
+
 ## F. The Phase 4 conditions: order and cost
 
 | Condition | When | What it costs | What it could change |
 |---|---|---|---|
 | 3: the spreading check (A and B) | Steps 0 and 1 of H, before any detection result | A: measured (T7): the row grid 560x100 solves in 2,609 outer iterations, 512 s, and marches its scalar to steady in 110 s; the coarse grid in 89 and 27 s; two processes on an unloaded machine. B: 15 coarse runs concurrent five (each about 2 minutes of flow and 11 minutes of march on 160x60, T2 and the probe section) and the two fine arms per scenario at the gate's 66 minutes each | Whether the plumes' widths and the sensors' distances to the contour move with the assumed inputs: if the contour reaches a sensor's cell at an arm on 160x60, that arm is rerun on 320x120 and the report states the detection result as a range over the arms on the fine grid; if none does on either grid, the "never" is geometric and the maps carry the placement question |
 | 2: a third clean-out grid | Step 1, beside the sweep (a run, no code) | One 160x60 clean-out, 240 s at Courant 0.4: about an eighth of the product grid's 2.6 hours (table M1), under an hour with its flow solve | Whether the mean's 100:1 ratio and the local recovery field can be quoted as numbers of the room: a 160x60 value between 80x30's 3.0 and 320x120's 4.8 shows a series not yet converged and the numbers stay comparative; the room recovery time (25.6 and 27.9 s) is unaffected either way |
-| 1: the budget residual's mechanism | Before Phase 6's finer grids, after the Phase 5 gate, a prompt of its own | One session: a sealed-box march (VAL-014's) with a source and an interval switch at a known time on 40x15, the budget read every step, the residual's accrual against the content and its sign at the switches (the records put the sign changes near 10.5 and 25 s in the dust release and 80.4 s in the breach, and B3 rules the flow's continuity out by two orders) | The budget instrument (REQ-T05's verification) if the residual is bookkeeping between the content and the running sums or the source's integral at a switch; the scheme's inlet booking if the limited face value at an inlet face differs from the inflow the budget books. Neither moves a Phase 5 latency: the residual is 1e-6 of the supply against thresholds at 1e-2 of the inlet value |
+| 1: the budget residual's mechanism | Before Phase 6's finer grids, after the Phase 5 gate, a prompt of its own | One session: a sealed-box march (VAL-014's) with a source and an interval switch at a known time on 40x15, the budget read every step, the residual's accrual against the content and its sign at the switches (the records put the sign changes near 10.5 and 25 s in the dust release and 80.4 s in the breach, and B3 rules the flow's continuity out by two orders) | The budget instrument (REQ-T05's verification) if the residual is bookkeeping between the content and the running sums or the source's integral at a switch; the scheme's inlet booking if the limited face value at an inlet face differs from the inflow the budget books. Neither moves a Phase 5 latency: the residual's size is the latency report's table B1, the thresholds 1e-2 of the inlet value |
 
 ## G. Requirements review, REQ-A01 to A06
 
@@ -942,7 +1101,8 @@ monitor.py --> time_integration, placement; scripts/run_scenario.py; tests
         state() / restore(state)
         record(event_names, t_final) -> ArrivalRecord
 
-placement.py --> scripts/latency_report.py (step 5); tests
+placement.py --> docs/reports/probe76/tables76.py (step 5, in place of a script under scripts/);
+    tests
     arrival_from_run(run_file) -> (maps, onsets, resolution)    # /arrival/, else from the frames, flagged
     arrival_from_frames(frames, thresholds, live, onsets) -> np.ndarray   # [events, classes, ny, nx]
     latency(maps, onsets) -> np.ndarray         # [events, classes, ny, nx], arrival minus onset, inf never
@@ -991,7 +1151,7 @@ at step 2.
 | 2 | 73 | `monitor.py` (AlertMonitor, Alert, sensor_cells moved), the march hook, `/transport/alerts/`, the runner's summary | `tests/test_monitor.py` (unit: thresholds by size and by class, the cell rule, open and close, the iso_class form, REQ-A06's bytes), `tests/test_alert_latency.py` | VAL-009 |
 | 3 | 74 | `ArrivalTracker`, `/arrival/`, the checkpoint arrays and restart, `latencies(onsets)` and REQ-A04's per-sensor latency in `RunRecord` and the summary; `placement.arrival_from_frames` | `tests/test_monitor.py` (the tracker on planted series, restart bitwise), `tests/test_time_integration.py` (the map against the frames' map on a coarse run) | none; REQ-A04's integration test |
 | 4 | 75 | `placement.py`: latency, score, candidates, search, rank; the `placement` section | `tests/test_placement.py` (exhaustive equals the sweep and the greedy on small maps, the rules on planted maps, the candidate rule), `tests/test_sensor_evaluation.py` (REQ-A05: the three event scenarios on 80x30, two layouts scored and ranked, the search's layout at least as good as the file's) | none; REQ-A05's integration test |
-| 5 | 76 | The four reference scenarios rerun on 320x120 with the maps (about three hours wall, concurrent), the latency report (section E), the Phase 5 gate report with the planned-against-built table | none new | the gate's criteria |
+| 5 | 76 | BUILT (2026-11-05). The four reference scenarios rerun on 320x120 with the maps (about three hours wall, concurrent; 1 h 41 min as run), the latency report (section E), the Phase 5 gate report with the planned-against-built table | none new but the openings' tests of item 0 in `tests/test_placement.py` | the gate's criteria |
 
 **The coverage debt.** Phase 4's statements fell from 99.25% to 98.86% and branches from
 97.13% to 96.21% (Cv1). Step 0 pays it before any Phase 5 module lands: its pull request's
@@ -999,6 +1159,24 @@ coverage at or above Phase 3's two figures, measured by the same command (`pytes
 --cov=src --cov-branch`), so that the Phase 5 gate's "does not decrease" is measured from
 Phase 4's figures with the debt already cleared. A line found unreachable is listed in the
 pull request with the reason, not excluded from measurement.
+
+## Planned against built
+
+Added at the Phase 5 gate (prompt 76), as ADR-011's, ADR-012's and ADR-014's were at theirs;
+the same table is in `docs/reports/phase5_alert_system_report.md`.
+
+| Step | Prompt, date | Built | Departures and amendments recorded |
+|---|---|---|---|
+| Design | 70, 70b to 70d, 2026-10-29 and 2026-10-30 (PR 98) | ADR-015; the probes under `docs/reports/probe70/` | VAL-024 moved from a plane jet to a line source in grid turbulence (Alex, review 70 B2); the sweep read on the plume's edge; the threshold Alex's, at 20 and 50 M, with 80 M a carried limit; the spill region stated as outside what the row tests |
+| 0, the coverage debt and VAL-024 | 71, 2026-10-30 (PR 99) | A test for each reachable refusal and fallback of Phase 4's Cv2; `validation/line_source.py`, the case file, the harness rows, `tests/test_line_source.py`; REQ-T14 | A defect the debt's tests found and fixed (`write_transient_checkpoint` accepted a None state); one arm left and listed as unreachable; the coverage taken before the last test-only commits, the tester reran it |
+| 1, the sweep and the third grid | 72, 2026-10-31 (PR 100) | `docs/reports/phase5_sensitivity.md` and its generator; the clean-out on 160x60 | A sixth arm `widest` added by the orchestrator; five of twenty-six runs have no result, from two flow states stopped at the cap, reported and not fixed (carried below) |
+| 2, the alert monitor | 73, 2026-10-31 (PR 101) | `src/monitor.py`, the march hook, `/transport/alerts/`, the runner's summary, the iso_class form; VAL-009 | The state carries every alert, not only the open ones, since the table is replaced whole; it rides in the checkpoint's existing named arrays; no sensors, no monitor |
+| 3, the arrival maps | 74, 74b, 2026-11-01 (PR 102) | `ArrivalTracker`, `/arrival/`, restart, `latencies(onsets)`, REQ-A04; `arrival_from_frames`, `arrival_from_run` | `latencies` moved to section D's rule so the monitor and the map agree; a `set` giving a segment a concentration counts as contaminating; the frames map misses between-frame cells, so the criterion "within one output interval at every cell" was changed to what holds; the input checks moved to `io_manager`; `monitor` imports `io_manager` |
+| 4, placement | 75, 75b, 2026-11-02 and 2026-11-03 (PR 103) | `latency`, the units, `score`, `candidates`, `search`, `rank`; the `placement` section; REQ-A05 | The unit is (scenario, event, class); `score` has no `rule`; the sweep is bisected and the programme runs on the maximal masks; the fallback reads as no layout of the count covering every coverable unit, and no coverable unit at all raises; `_maximal` chunked after a 4.7 GB peak on a synthetic map; the section out of the restart hash (orchestrator); frame-resolved units flagged; REQ-A05's exactness restated as built |
+| 5, the runs, the report, the gate | 76, 2026-11-05 (this pull request) | The four scenarios on 320x120 with their maps; `docs/reports/phase5_alert_report.md` and `probe76/`; this report | A cell within the standoff of an opening is not a candidate (item 0), found before the runs by the prompt; the planned `scripts/latency_report.py` is `tables76.py`, as section E names it; the copies of the scenario files add a checkpoint every 1000 steps and nothing else |
+| 5, revised: two roles | 76b, 2026-11-07 (this pull request) | Alex's three decisions of 2026-11-07: the `stand` mount and `stand_height`; a source box and its standoff never a candidate; the all-clear role (`placement.all_clear`, `clear_units`, `clear_score`, `search_roles`). The candidates over every scored scenario (review 76 S5). The seal leak, the fifth scenario (orchestrator), run on 320x120; the other four re-scored from step 5's files | Not planned in ADR-015: the role, the stand and the seal leak are new decisions recorded in its section D. The all-clear search is sequential, not joint. A run file's recorded mapping merges over the base file as it is now, so a stand band given without a stand is kept rather than refused (else every earlier run file failed to reload) |
+| 5, revised: round 2's findings | 76d, 2026-11-08 (this pull request) | `candidates` refuses configurations of another room and ignores a stand band without a stand; tests that separate the classes of the all-clear computation, pin the stand rule, the sequential search, the refusals of `add_all_clear`, the marker at an onset and the seal leak's file | No run, no new module. `candidates`' contract in SYSTEM.md changes (the room check, the band) |
+| 5, revised: the band and the open all-clear | 76c, 2026-11-08 (this pull request) | Alex's two decisions of 2026-11-08: `stand_height` 0.1 to 1.2 m and `all_clear` 0 in the product file and its three copies, the all-clear code and tests kept; `flow_switches` and `after_flow_switch`, the latency tables' marker "after the flow switch"; the five runs re-scored, the 0.3 m band's search and the three-plus-one kept as one row each | No run. `placement` imports `scenarios.flow_fingerprint` for the marker. Prediction (q) committed before the re-score and holds |
 
 ## Probes (the predictions fixed in the prompt before the runs; results after)
 

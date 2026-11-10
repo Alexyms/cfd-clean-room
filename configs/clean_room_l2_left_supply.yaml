@@ -222,19 +222,32 @@ thresholds:
   "1.0e-6": 8.32e+2
   "5.0e-6": 2.93e+1
 
-# Sensor placement (ADR-015 D, step 4): where the layout search may put a
-# sensor and the rule it ranks layouts by. Each value is an assumption until
-# a counter's mounting is specified:
-# - mount: a sensor fixed to a wall, the ceiling, or an obstacle's top or
-#   sides. The floor is not a mounting surface, and the free set (every
-#   non-SOLID cell) is searched beside this as the bound;
-# - standoff 0.05 m: the sensor's head within 5 cm of its surface, two cells
-#   on the product grid (section D's two-cell standoff), one on 80x30;
+# Sensor placement (ADR-015 D, steps 4 and 5): where the layout search may put
+# a sensor and the rule it ranks layouts by. A sensor is a particle counter's
+# sampling inlet. Each value is an assumption until a counter's mounting is
+# specified:
+# - mount: an inlet fixed to a wall, the ceiling, or an obstacle's top or
+#   sides, or on a free-standing stand on the floor (Alex, 2026-11-07). The
+#   floor is not a mounting surface. The free set (every non-SOLID cell
+#   outside the exclusions of the openings and the sources) is searched beside
+#   this as the bound;
+# - standoff 0.05 m: the inlet within 5 cm of its surface, two cells on the
+#   product grid (section D's two-cell standoff), one on 80x30. A stand has no
+#   surface, so the standoff is not its rule;
+# - stand_height 0.1 to 1.2 m: a stand's inlet height above the floor (Alex,
+#   2026-11-07, the floor lowered from 0.3 m on 2026-11-08). The stand is a
+#   pole outside the 2D slice, not an obstruction;
 # - count 4: the file's four sensors are four (section E);
+# - all_clear 0: the four detect. The all-clear sensor's position is carried
+#   open (Alex, 2026-11-08): the score counts only clearing early, and the
+#   clean-out ends before its room clears, so the run's end would place it
+#   (section D, "Two roles");
 # - rule worst_case: section D's ranking, ties by the mean.
 # No coverage time (within) is stated, so no coverage is reported.
 placement:
-  mount: [walls, ceiling, obstacle_tops, obstacle_sides]
+  mount: [walls, ceiling, obstacle_tops, obstacle_sides, stand]
   standoff: 0.05
+  stand_height: [0.1, 1.2]
   count: 4
+  all_clear: 0
   rule: worst_case

@@ -1,0 +1,61 @@
+# Reference scenario: the door seal leaks (ADR-014 B, decision 6, option 3)
+#
+# The default room (configs/clean_room_default.yaml, the room without vents,
+# Alex's decision of 2026-10-17) with its door closed and its seal worn, for
+# 30 s of lost pressure (prompt 76b, the orchestrator's fifth scenario,
+# 2026-11-07). Under tier 1 the leak is its steady extreme for the event's
+# duration (ADR-014 decision 2): two flow states, closed and leaking.
+#
+# Each value is an assumption until a measurement sets it:
+# - In a room at positive pressure a worn seal leaks outward. Corridor air
+#   enters through it when the differential collapses or reverses, from a
+#   door opened elsewhere or an HVAC upset (ADR-014 decision 6, option 3,
+#   source [5]). The scenario is a 30 s loss of pressure with a worn seal:
+#   from 10 s for 30 s.
+# - The leak is a 10 mm undercut at about 2 m/s, the orifice speed of 2.5 Pa
+#   at a density of 1.2 kg/m^3 (sqrt(2 x 2.5 / 1.2) = 2.04 m/s): 0.02 m^2/s
+#   per metre of depth. The grid cannot hold a 10 mm slot, so one 0.025 m
+#   cell of the product grid (320x120) carries the same flux at 0.8 m/s, at
+#   the foot of the doorway, y 0 to 0.025 m. The rest of the doorway stays a
+#   wall: the replacement names the slot alone, and an edge face no segment
+#   covers is a wall.
+# - The slot carries the supply's turbulence keys (5%, 0.1 m) and the door's
+#   corridor concentration, the thresholds times 100 per class (an assumed
+#   corridor two ISO classes below the room, as the door's file states).
+# - The returns take the extra inflow (ADR-014 B): they state no velocity and
+#   share what the hood leaves of the discrete inflow, the slot's included.
+#
+# The scenario is defined for 320x120. On a grid whose first cell is taller
+# than the slot the slot's faces round as every opening's do (the coverage
+# rule), and prompt 76b's report records what the loader does at 80x30 and
+# 160x60.
+#
+# The run keys of the dust's file (ADR-014 B): t_end 120 s, the Courant number
+# 0.4 (ADR-014 decision 2), a frame every 100 steps (about 0.36 s on the L0
+# faces, T6 of docs/reports/probe59/tables59.md).
+
+scenario:
+  base: clean_room_default.yaml
+  events:
+    - name: seal_leak
+      start: 10.0
+      duration: 30.0
+      replace:
+        segment: door
+        with:
+          - name: door_in
+            type: velocity_inlet
+            location: left
+            y_start: 0.0
+            y_end: 0.025
+            velocity: 0.8
+            turbulence_intensity: 0.05
+            dissipation_length: 0.1
+            concentration: [1.0e+7, 1.02e+6, 3.52e+5, 8.32e+4, 2.93e+3]
+
+solver:
+  t_end: 120.0
+  output_interval: 100
+
+transport:
+  cfl_number: 0.4

@@ -123,7 +123,28 @@ four sensors detect nothing in the three event scenarios; the searched four dete
 and the dust release, and no mountable cell at the stated 5 cm reaches the door's plume on
 that grid. Review and test 75 ran; prompt 75b fixed their one missing test, let a Phase 4 run
 file restart under the new configuration section, and made the integration test assert the
-result above, on the same branch before its pull request.
+result above, on the same branch before its pull request. It was merged as PR 103. Step 5
+(prompt 76, branch phase5/step5-gate, 2026-11-05) first changed the candidates' rule, since on the
+product grid a sensor could have been mounted inside the open doorway. It then ran the four
+reference scenarios on the product grid with their maps, and those runs equal the Phase 4 gate's
+bitwise, so Phase 5 changed nothing the march computes. `docs/reports/phase5_alert_report.md`
+holds the latencies. Review and test 76 found Suggestions only, and on 2026-11-07 Alex decided
+that a counter's inlet may stand on the floor on a stand, that a release's source box is not a
+candidate, and that detection and the all-clear are separate roles; the orchestrator added the
+door's seal leak as a fifth scenario (prompt 76b, the same branch). On 2026-11-08 Alex set the
+stand's height band to 0.1 to 1.2 m and carried the all-clear sensor's position open (prompt 76c).
+The file's four sensors detect nothing in the four event scenarios. On the mounting surfaces a
+searched layout detects the breach and the dust release and neither the door nor the seal leak;
+with stands from 0.1 m it detects all four, the seal leak within a second from a stand by the
+doorway. Every layout that detects declares the room clean while a pocket is still contaminated.
+The clean-out's room does not clear by the run's end, and the all-clear score counts only
+clearing early, so where an all-clear sensor goes waits on a cost for clearing late and a
+clean-out run until the room clears. The claim is the ranking of layouts,
+which holds across the two grids, the middle of the order inverting on 80x30 by candidacy,
+and the sweep's arms, not any latency's value.
+`docs/reports/phase5_alert_system_report.md` is the gate report, proposing a CONDITIONAL PASS for
+Alex to decide, with Phase 4's condition on the budget residual's mechanism carried and due before
+Phase 6. A second round of review and test 76 runs before its pull request.
 Phases 6 and 7 have not begun.
 
 The product room itself has never been solved, and on 2026-10-04 it was found that the laminar

@@ -1648,6 +1648,7 @@ class TestPressureKeys:
             "scenario_door_leak.yaml": 1e-4,
             "scenario_equipment_dust.yaml": 1e-4,
             "scenario_filter_breach.yaml": 1e-4,
+            "scenario_seal_leak.yaml": 1e-4,
             "validation_annex20.yaml": 1e-4,
             "validation_backstep.yaml": 1e-4,
             "validation_cylinder.yaml": 1e-4,
@@ -3849,6 +3850,7 @@ REFERENCE_SCENARIOS = {
     "scenario_filter_breach.yaml": ("panel_breach", "replace"),
     "scenario_equipment_dust.yaml": ("litho_dust", "source"),
     "scenario_clean_out.yaml": ("contaminated_start", "initial"),
+    "scenario_seal_leak.yaml": ("seal_leak", "replace"),
 }
 
 
@@ -3915,6 +3917,44 @@ def test_the_reference_scenarios_state_their_sources_values() -> None:
         False,
     )
     assert panel["concentration"] == hundredfold
+
+
+@pytest.mark.unit
+def test_the_seal_leak_states_its_slot_and_its_run_keys() -> None:
+    """The seal leak's file (prompt 76b) against its header, and the door's run keys.
+
+    One 0.025 m slot at the doorway's foot on the left edge, 0.8 m/s (0.02
+    m^2/s per metre of depth, the 10 mm undercut at about 2 m/s), carrying the
+    supply's turbulence keys and the door's corridor concentration (the
+    thresholds times 100), from 10 s for 30 s, run to 120 s with a frame
+    every 100 steps at the dust's Courant number. The door's file states its
+    own run keys, 60 s and 100 steps. Defects caught: the concentration, either
+    turbulence key, the slot's side, extent or speed, the times, or a run key
+    changed in the file.
+    """
+    seal = SimConfig(CONFIG_DIR / "scenario_seal_leak.yaml")
+    event = seal.scenario.events[0]
+    assert (event.name, event.start, event.end) == ("seal_leak", 10.0, 40.0)
+    assert event.change.segment == "door"
+    ((name, slot),) = event.change.segments
+    assert name == "door_in"
+    assert (slot["type"], slot["location"]) == ("velocity_inlet", "left")
+    assert (slot["y_start"], slot["y_end"], slot["velocity"]) == (0.0, 0.025, 0.8)
+    assert (slot["turbulence_intensity"], slot["dissipation_length"]) == (0.05, 0.1)
+    default = SimConfig(CONFIG_DIR / "clean_room_default.yaml")
+    supply = default.boundaries["hepa_supply"]
+    assert (supply.turbulence_intensity, supply.dissipation_length) == (0.05, 0.1)
+    hundredfold = tuple(100.0 * t for t in default.class_thresholds())
+    assert slot["concentration"] == hundredfold
+    door = SimConfig(CONFIG_DIR / "scenario_door_leak.yaml")
+    ((_, door_in), _) = door.scenario.events[0].change.segments
+    assert slot["concentration"] == door_in["concentration"]
+    assert (seal.t_end, seal.output_interval, seal.transport.cfl_number) == (
+        120.0,
+        100,
+        0.4,
+    )
+    assert (door.t_end, door.output_interval) == (60.0, 100)
 
 
 TRANSIENT = {
@@ -4408,13 +4448,20 @@ class TestPlacementSection:
         assert SimConfig.from_dict(raw).placement.within is None
 
     def test_the_product_file_states_its_placement(self) -> None:
-        """The mountable surfaces, a 5 cm standoff, four sensors, the worst case."""
+        """The surfaces and a stand, a 5 cm standoff, four detection sensors.
+
+        Alex's decisions: a stand's inlet 0.1 to 1.2 m above the floor (the
+        floor lowered from 0.3 m on 2026-11-08), and no all-clear sensor while
+        its position is carried open (2026-11-08).
+        """
         spec = SimConfig(CONFIG_DIR / "clean_room_default.yaml").placement
         assert spec == PlacementSpec(
-            mount=("walls", "ceiling", "obstacle_tops", "obstacle_sides"),
+            mount=("walls", "ceiling", "obstacle_tops", "obstacle_sides", "stand"),
             standoff=0.05,
             count=4,
             rule=WORST_CASE,
+            stand_height=(0.1, 1.2),
+            all_clear=0,
         )
         assert set(spec.mount) == set(MOUNT_SURFACES) - {"free"}
 
@@ -4445,6 +4492,15 @@ class TestPlacementSection:
             ({"rule": "coverage"}, ValueError, "placement.rule must be one of"),
             ({"within": -1.0}, ValueError, "placement.within must be positive"),
             ({"within": False}, TypeError, "placement.within must be a number"),
+            (
+                {"stand_height": [0.3, 1.2, 2.0]},
+                ValueError,
+                "stand_height must be two numbers",
+            ),
+            ({"all_clear": 4}, ValueError, r"all_clear must be from 0 to count - 1"),
+            ({"all_clear": -1}, ValueError, r"all_clear must be from 0 to count - 1"),
+            ({"all_clear": 1.0}, TypeError, "all_clear must be an integer"),
+            ({"all_clear": True}, TypeError, "all_clear must be an integer"),
         ],
     )
     def test_a_bad_section_is_refused_by_name(
@@ -4460,6 +4516,55 @@ class TestPlacementSection:
         with pytest.raises(error, match=match):
             SimConfig.from_dict(raw)
 
+    def test_a_stand_and_the_all_clear_role_are_read(self, tmp_path: Path) -> None:
+        """A stand names its band; all_clear is 0 when absent and up to count - 1."""
+        raw = _base_raw(tmp_path)
+        raw["placement"] = dict(PLACEMENT_SECTION)
+        assert SimConfig.from_dict(raw).placement.stand_height is None
+        assert SimConfig.from_dict(raw).placement.all_clear == 0
+        raw["placement"] = {
+            **PLACEMENT_SECTION,
+            "mount": ["walls", "stand"],
+            "stand_height": [0, 1.5],
+            "all_clear": 3,
+        }
+        spec = SimConfig.from_dict(raw).placement
+        assert spec.stand_height == (0.0, 1.5) and spec.all_clear == 3
+        assert all(type(v) is float for v in spec.stand_height)
+
+    @pytest.mark.parametrize(
+        ("height", "error", "match"),
+        [
+            (None, ValueError, r"Missing required key: 'placement.stand_height'"),
+            (0.5, ValueError, "stand_height must be two numbers"),
+            ([0.3], ValueError, "stand_height must be two numbers"),
+            ([0.3, 0.6, 0.9], ValueError, "stand_height must be two numbers"),
+            ([0.3, "1.2"], TypeError, r"stand_height\[1\] must be a number"),
+            ([True, 1.2], TypeError, r"stand_height\[0\] must be a number"),
+            ([0.3, float("inf")], ValueError, r"stand_height\[1\] must be finite"),
+            ([float("nan"), 1.2], ValueError, r"stand_height\[0\] must be finite"),
+            ([1.2, 1.2], ValueError, "must have low below high"),
+            ([1.2, 0.3], ValueError, "must have low below high"),
+            ([-0.1, 1.2], ValueError, r"stand_height\[0\] must be non-negative"),
+            ([0.3, 3.5], ValueError, r"at most the room's height"),
+        ],
+    )
+    def test_a_bad_stand_height_is_refused_by_name(
+        self, tmp_path: Path, height: object, error: type, match: str
+    ) -> None:
+        """Two finite non-bool numbers, low below high, from the floor to the room's top."""
+        raw = _base_raw(tmp_path)
+        section = {**PLACEMENT_SECTION, "mount": ["walls", "stand"]}
+        if height is not None:
+            section["stand_height"] = height
+        raw["placement"] = section
+        assert raw["domain"]["height"] == 3.0
+        with pytest.raises(error, match=match):
+            SimConfig.from_dict(raw)
+        if height == [0.3, 3.5]:
+            section["stand_height"] = [0.3, 3.0]
+            assert SimConfig.from_dict(raw).placement.stand_height == (0.3, 3.0)
+
     def test_a_scenario_reads_the_section_of_its_merged_base(
         self, tmp_path: Path
     ) -> None:
@@ -4471,3 +4576,57 @@ class TestPlacementSection:
         raw["placement"] = {"count": 2, "rule": "mean"}
         spec = SimConfig.from_dict(raw).placement
         assert (spec.count, spec.rule, spec.standoff) == (2, MEAN, 0.05)
+
+    def test_a_record_from_before_the_stand_reloads_over_the_product_file(
+        self, tmp_path: Path
+    ) -> None:
+        """A run file's mapping merges over the base as it is now (prompt 76b).
+
+        Step 5's run files record a placement section without the stand; the
+        product file now states a stand band and an all-clear count. Merged,
+        the record's mount list replaces the base's whole and the band stays: it
+        is checked and kept, so the old file still loads. Defect caught: a band
+        without a stand refused (every run file recorded before prompt 76b
+        unreadable by arrival_from_run).
+        """
+        raw = yaml.safe_load(
+            (CONFIG_DIR / "scenario_door_leak.yaml").read_text(encoding="utf-8")
+        )
+        raw["scenario"]["base"] = str(CONFIG_DIR / "clean_room_default.yaml")
+        raw["placement"] = {
+            "mount": ["walls", "ceiling", "obstacle_tops", "obstacle_sides"],
+            "standoff": 0.05,
+            "count": 4,
+            "rule": "worst_case",
+        }
+        spec = SimConfig.from_dict(raw).placement
+        assert "stand" not in spec.mount
+        assert spec.stand_height == (0.1, 1.2) and spec.all_clear == 0
+
+    def test_a_record_that_states_a_band_and_all_clear_keeps_them(self) -> None:
+        """A record's own band and all-clear count win over the product file's.
+
+        The record is the one a run made with prompt 76b's product file would
+        hold: the 0.3 m band and one all-clear sensor; the product file now
+        states 0.1 m and none (prompt 76c). Merged, the record's values are
+        read. (``results/builder76/seal_leak.h5`` was started before the stand
+        existed and records neither: its placement is a mount list, a
+        standoff, a count and a rule, and it reloads with the product's band,
+        the case of the test above.) Defect caught: the base's values taking
+        precedence, which would re-score an old run under a configuration it
+        did not record.
+        """
+        raw = yaml.safe_load(
+            (CONFIG_DIR / "scenario_seal_leak.yaml").read_text(encoding="utf-8")
+        )
+        raw["scenario"]["base"] = str(CONFIG_DIR / "clean_room_default.yaml")
+        raw["placement"] = {
+            "mount": ["walls", "ceiling", "obstacle_tops", "obstacle_sides", "stand"],
+            "standoff": 0.05,
+            "stand_height": [0.3, 1.2],
+            "count": 4,
+            "all_clear": 1,
+            "rule": "worst_case",
+        }
+        spec = SimConfig.from_dict(raw).placement
+        assert spec.stand_height == (0.3, 1.2) and spec.all_clear == 1
