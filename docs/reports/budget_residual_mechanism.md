@@ -27,9 +27,10 @@ in the field and books none of it. Split apart (table K1), nearly all of T5 is t
 part, of either sign. The sink part is never positive and is under 2% of T5 in every class of
 the five runs split.
 
-The residual follows the tolerance much more steeply than predicted. Each decade of
-`diffusion_tol` moves it by about a hundred times (table D1; prediction (d) fails), and at
-1e-6 the 80x30 dust release is outside REQ-T05. On the dust release the residual grows with
+The residual follows the tolerance. Each decade of `diffusion_tol` moves it by about ten
+times on 80x30 (table D1). Prediction (d) holds on the dust release and fails on the
+clean-out, whose factor grows as the tolerance tightens instead of shrinking. At 1e-6 the
+80x30 dust release is outside REQ-T05. On the dust release the residual grows with
 the grid: the step count grows faster than T5 per step falls (table G1). The extrapolation to
 640x240 is in table G2.
 
@@ -68,21 +69,27 @@ the runs took about an hour of wall clock).
 
 | Prediction | As stated (abridged) | Measured | Outcome |
 |---|---|---|---|
-| (a) closure | every run and class, every scored frame: within 1e-6 of the largest residual | largest 1.83e-08 of it (R8); table A1 | holds |
+| (a) closure | every run and class, every stored frame: within 1e-6 of the largest residual | largest 1.83e-08 of it (R8); table A1 | holds |
 | (b) T5 carries it | R1 to R4, R9, R10, every class, end and worst frame: T5 within 1% of R; the rest under 1% | largest abs(T5 - R) over abs(R) 5.32e-07; largest abs(rest) over abs(R) 5.32e-07; tables E1, W1 | holds |
 | (c) both signs, one mechanism | T5's sign is R's at the end of R1 to R4 (door +, others -); R10 0.1 um: the same frame intervals, 10.5 to 10.9 and 25.0 to 25.4 s | end signs (0.1 um): dust release -, clean-out -, door leak +, filter breach -; R10 0.1 um: residual changes sign 10.51 to 10.87; 25.00 to 25.36 s, cumulative T5 10.51 to 10.87; 25.00 to 25.36 s; table S1 | holds |
-| (d) dose response | 80x30 dust and clean-out, every class: each decade moves R by 3 to 30, less as the tolerance tightens | factors 79.5 to 166; abs(R - T5) at most 4.8e-06 of R; table D1 | FAILS |
+| (d) dose response | 80x30 dust and clean-out, every class: each decade moves R by 3 to 30, less as the tolerance tightens | per decade 8.91 to 12.9; the factor grows as the tolerance tightens in: clean-out; second clause, the part T5 does not carry: abs(R - T5) at most 4.8e-06 of R at each tolerance; table D1 | FAILS in: clean-out; holds in the others |
 <!-- tables77 predictions end -->
 
-(b) and (c) hold. (a) holds, but most of what it tests is arithmetic: T6 is the implicit stage's
-remainder after T5, so the stage closes by definition. It does test that no stage outside the
-listed ones changes the field: the closure gap is the budget's own increment against the
-telescoped totals of the fields measured (section 2). (d) fails. Its first clause fails in
-every row of D1: the factors per decade are far above 30, and on the clean-out they grow as
-the tolerance tightens instead of shrinking. The second clause describes what any other
-mechanism would show. Read as the part of the residual T5 does not carry, `R - T5` is at
-rounding size at all three tolerances. It moves by more than 10% between tolerances because
-rounding does (D1's spread column), not because a second mechanism is there.
+(b) and (c) hold. (a) holds, but it tests arithmetic only. The terms are built from the
+budget's own increments and T6 is the implicit stage's remainder after T5, so the closure gap
+is zero by construction up to rounding. A planted error in a term moves T2 or T6, not the gap
+(test 77). What guards the decomposition is elsewhere: the advection update rebuilt bit for bit
+every step (M1), the check that the budget's `current` is the total of the returned field
+(`probe77._terms` raises otherwise), and T1, T2, T4 and T6 staying at rounding size (I1).
+
+(d) fails on one scenario. The arms are two decades apart, so D1 gives the factor over two
+decades and its square root per decade. Per decade the dust release's factors are inside 3 to
+30 and fall as the tolerance tightens, in every class. The clean-out's are inside 3 to 30 and
+rise as it tightens, in every class, which the first clause rules out. The second clause
+describes what any other mechanism would show. Read as the part of the residual T5 does not
+carry, `R - T5` is at rounding size at all three tolerances. It moves by more than 10% between
+tolerances because rounding does (D1's spread column), not because a second mechanism is
+there.
 
 ## 1. What was run
 
@@ -183,7 +190,8 @@ Table I1 gives, per run, the largest of each term the identity puts at zero, aga
 and the particles the SOLID zeroing removed are exactly zero at every step of every run. T2, T4
 and T6 are rounding, each five orders of magnitude or more below T5 over every run. T4 is the
 only one with a drift, visible in the figure: the source is added cell by cell and booked as
-one sum, and the two roundings differ by the same sign each step of the release.
+one sum, and the two roundings differ with a bias to one sign over the release (on R10's 0.1 um
+class more steps are positive than negative, and many are zero; test 77).
 
 <!-- tables77 identity begin -->
 ### I1. The identity against the code as built: the terms it puts at zero, largest over the five classes
@@ -339,7 +347,7 @@ one sum, and the two roundings differ by the same sign each step of the release.
 <!-- tables77 worst end -->
 
 <!-- tables77 closure begin -->
-### A1. Closure: T1 to T6 summed from the first step against the budget's residual at every scored frame
+### A1. Closure: T1 to T6 summed from the first step against the budget's residual at every stored frame after step 0
 
 | Run | Largest residual magnitude | Largest difference over the frames and classes | Over the largest residual | Within 1e-6 of it (prediction (a)) |
 |---|---|---|---|---|
@@ -410,27 +418,26 @@ shows the other terms and the closure gap on their own scale. The release's 30 s
 <!-- tables77 signs end -->
 
 <!-- tables77 dose begin -->
-### D1. The dose response on 80x30: the end residual at three tolerances (R5/R1/R7 and R6/R2/R8)
+### D1. The dose response on 80x30: the end residual at three tolerances two decades apart (R5/R1/R7 and R6/R2/R8)
 
-| Scenario | Class (um) | R at 1e-6 | R at 1e-8 | R at 1e-10 | Sweeps per solve, 1e-6 | 1e-8 | 1e-10 | R(1e-6) / R(1e-8) | R(1e-8) / R(1e-10) | Both in 3 to 30, the second smaller | R - T5 at 1e-6 | at 1e-8 | at 1e-10 | Spread of R - T5 over its largest magnitude | Worst relative residual over the scored frames, 1e-6 | 1e-8 | 1e-10 | At 1e-6, inside REQ-T05's 1e-4 |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| dust release | 0.1 | -9.5276e+01 | -5.7257e-01 | -3.5622e-03 | 2.51 | 4.29 | 6.10 | 166 | 161 | NO | 2.1721e-09 | 3.1193e-09 | 2.2578e-09 | 0.304 | -3.176e-04 | -1.909e-06 | -1.187e-08 | NO |
-| dust release | 0.3 | -9.5270e+01 | -5.7254e-01 | -3.5620e-03 | 2.51 | 4.29 | 6.10 | 166 | 161 | NO | 3.8489e-09 | 2.2358e-09 | 1.3805e-09 | 0.641 | -3.176e-04 | -1.908e-06 | -1.187e-08 | NO |
-| dust release | 0.5 | -9.5262e+01 | -5.7249e-01 | -3.5617e-03 | 2.51 | 4.29 | 6.10 | 166 | 161 | NO | 2.6971e-09 | 4.8484e-09 | 8.7864e-11 | 0.982 | -3.175e-04 | -1.908e-06 | -1.187e-08 | NO |
-| dust release | 1 | -9.5228e+01 | -5.7232e-01 | -3.5605e-03 | 2.51 | 4.29 | 6.10 | 166 | 161 | NO | 2.9215e-09 | 4.2605e-09 | 2.7033e-09 | 0.366 | -3.174e-04 | -1.908e-06 | -1.187e-08 | NO |
-| dust release | 5 | -9.4224e+01 | -5.6751e-01 | -3.5205e-03 | 2.51 | 4.29 | 6.10 | 166 | 161 | NO | 3.3358e-09 | 3.2835e-09 | 8.0686e-10 | 0.758 | -3.141e-04 | -1.892e-06 | -1.174e-08 | NO |
-| clean-out | 0.1 | -3.6373e+03 | -4.5772e+01 | -5.0440e-01 | 1.36 | 2.65 | 4.02 | 79.5 | 90.7 | NO | 6.1616e-07 | -7.7920e-07 | 2.4370e-06 | 1.32 | -2.555e-05 | -2.755e-07 | -2.917e-09 | yes |
-| clean-out | 0.3 | -3.7122e+02 | -4.6715e+00 | -5.1325e-02 | 1.36 | 2.65 | 4.02 | 79.5 | 91 | NO | -8.5538e-09 | -1.1645e-08 | -9.8232e-08 | 0.913 | -2.556e-05 | -2.757e-07 | -2.910e-09 | yes |
-| clean-out | 0.5 | -1.2823e+02 | -1.6129e+00 | -1.7738e-02 | 1.36 | 2.65 | 4.02 | 79.5 | 90.9 | NO | -2.6874e-08 | -1.2320e-08 | -1.2820e-08 | 0.542 | -2.557e-05 | -2.758e-07 | -2.914e-09 | yes |
-| clean-out | 1 | -3.0437e+01 | -3.8211e-01 | -4.1606e-03 | 1.36 | 2.65 | 4.03 | 79.7 | 91.8 | NO | -1.6418e-08 | 1.8897e-09 | -1.6233e-08 | 1.12 | -2.559e-05 | -2.762e-07 | -2.891e-09 | yes |
-| clean-out | 5 | -1.1711e+00 | -1.3594e-02 | -1.4395e-04 | 1.36 | 2.65 | 4.04 | 86.1 | 94.4 | NO | -4.3902e-10 | 1.0164e-10 | 1.0267e-10 | 1.23 | -2.585e-05 | -2.744e-07 | -2.828e-09 | yes |
+| Scenario | Class (um) | R at 1e-6 | R at 1e-8 | R at 1e-10 | Sweeps per solve, 1e-6 | 1e-8 | 1e-10 | R(1e-6) / R(1e-8), two decades | R(1e-8) / R(1e-10), two decades | Per decade, 1e-6 to 1e-8 | Per decade, 1e-8 to 1e-10 | Sweeps per decade, 1e-6 to 1e-8 | 1e-8 to 1e-10 | Per decade both in 3 to 30, the second smaller | R - T5 at 1e-6 | at 1e-8 | at 1e-10 | Spread of R - T5 over its largest magnitude | Worst relative residual over the scored frames, 1e-6 | 1e-8 | 1e-10 | At 1e-6, inside REQ-T05's 1e-4 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| dust release | 0.1 | -9.5276e+01 | -5.7257e-01 | -3.5622e-03 | 2.51 | 4.29 | 6.10 | 166 | 161 | 12.9 | 12.7 | 0.89 | 0.90 | yes | 2.1721e-09 | 3.1193e-09 | 2.2578e-09 | 0.304 | -3.176e-04 | -1.909e-06 | -1.187e-08 | NO |
+| dust release | 0.3 | -9.5270e+01 | -5.7254e-01 | -3.5620e-03 | 2.51 | 4.29 | 6.10 | 166 | 161 | 12.9 | 12.7 | 0.89 | 0.90 | yes | 3.8489e-09 | 2.2358e-09 | 1.3805e-09 | 0.641 | -3.176e-04 | -1.908e-06 | -1.187e-08 | NO |
+| dust release | 0.5 | -9.5262e+01 | -5.7249e-01 | -3.5617e-03 | 2.51 | 4.29 | 6.10 | 166 | 161 | 12.9 | 12.7 | 0.89 | 0.90 | yes | 2.6971e-09 | 4.8484e-09 | 8.7864e-11 | 0.982 | -3.175e-04 | -1.908e-06 | -1.187e-08 | NO |
+| dust release | 1 | -9.5228e+01 | -5.7232e-01 | -3.5605e-03 | 2.51 | 4.29 | 6.10 | 166 | 161 | 12.9 | 12.7 | 0.89 | 0.90 | yes | 2.9215e-09 | 4.2605e-09 | 2.7033e-09 | 0.366 | -3.174e-04 | -1.908e-06 | -1.187e-08 | NO |
+| dust release | 5 | -9.4224e+01 | -5.6751e-01 | -3.5205e-03 | 2.51 | 4.29 | 6.10 | 166 | 161 | 12.9 | 12.7 | 0.89 | 0.90 | yes | 3.3358e-09 | 3.2835e-09 | 8.0686e-10 | 0.758 | -3.141e-04 | -1.892e-06 | -1.174e-08 | NO |
+| clean-out | 0.1 | -3.6373e+03 | -4.5772e+01 | -5.0440e-01 | 1.36 | 2.65 | 4.02 | 79.5 | 90.7 | 8.91 | 9.53 | 0.64 | 0.69 | NO | 6.1616e-07 | -7.7920e-07 | 2.4370e-06 | 1.32 | -2.555e-05 | -2.755e-07 | -2.917e-09 | yes |
+| clean-out | 0.3 | -3.7122e+02 | -4.6715e+00 | -5.1325e-02 | 1.36 | 2.65 | 4.02 | 79.5 | 91 | 8.91 | 9.54 | 0.64 | 0.69 | NO | -8.5538e-09 | -1.1645e-08 | -9.8232e-08 | 0.913 | -2.556e-05 | -2.757e-07 | -2.910e-09 | yes |
+| clean-out | 0.5 | -1.2823e+02 | -1.6129e+00 | -1.7738e-02 | 1.36 | 2.65 | 4.02 | 79.5 | 90.9 | 8.92 | 9.54 | 0.64 | 0.69 | NO | -2.6874e-08 | -1.2320e-08 | -1.2820e-08 | 0.542 | -2.557e-05 | -2.758e-07 | -2.914e-09 | yes |
+| clean-out | 1 | -3.0437e+01 | -3.8211e-01 | -4.1606e-03 | 1.36 | 2.65 | 4.03 | 79.7 | 91.8 | 8.93 | 9.58 | 0.64 | 0.69 | NO | -1.6418e-08 | 1.8897e-09 | -1.6233e-08 | 1.12 | -2.559e-05 | -2.762e-07 | -2.891e-09 | yes |
+| clean-out | 5 | -1.1711e+00 | -1.3594e-02 | -1.4395e-04 | 1.36 | 2.65 | 4.04 | 86.1 | 94.4 | 9.28 | 9.72 | 0.65 | 0.69 | NO | -4.3902e-10 | 1.0164e-10 | 1.0267e-10 | 1.23 | -2.585e-05 | -2.744e-07 | -2.828e-09 | yes |
 <!-- tables77 dose end -->
 
-The per-decade factors are not one number per decade because the sweep count is an integer
-that the max-norm stop picks. Each decade costs between one and two sweeps per solve on 80x30
-(D1's sweep columns), and the summed residual falls much faster per sweep than the largest
-cell's. One reading, not measured: the largest residual sits where `w` is largest and decays
-slowest, while each sweep multiplies the sum by a typical `w`.
+The per-decade factors are not one number because the sweep count is an integer that the
+max-norm stop picks. Each decade costs 0.64 to 0.90 sweeps per solve on 80x30 (D1), and the
+summed leftover falls by about the decade the stop asks for, a little more on the dust release
+and a little less on the clean-out.
 
 ## 5. The mechanism, and the four facts of the Phase 4 record
 
@@ -454,7 +461,8 @@ How each fact of the Phase 4 record follows (section "The marches and the budget
 2. **It follows the particles present, not the particles supplied.** T5 per step is linear in
    the field the solve is given. Its coefficient is the `w`-weighted diffusion residual of that
    field, which depends on where the plume sits against the variation of `nu_t` and the walls.
-   That is why no one normalisation collapses the four scenarios (table B2's last column there).
+   That is why no one normalisation collapses the four scenarios (table B2's second-to-last
+   column there).
    Follows.
 3. **Both signs.** The sink part is never positive and is a small part of T5. The diffusion part
    has either sign, from step to step within a run (K1's last column). The door leak's residual
@@ -511,9 +519,10 @@ than at the end (G1).
 
 Listed with what each costs and changes. None is chosen here.
 
-1. **Tighten `diffusion_tol`.** Each decade costs one to two Jacobi sweeps per solve on 80x30
-   (D1) and divides the residual by about a hundred. The sweep cost per decade grows on finer
-   grids (G1's sweeps). Every field changes at the tolerance's size, so the budgets and hashes
+1. **Tighten `diffusion_tol`.** Each decade costs under one Jacobi sweep per solve on 80x30
+   (D1) and divides the residual by about ten. Whether the cost per decade grows on finer grids
+   is not measured; at one tolerance the sweeps per solve rise with the grid (G1). Every field
+   changes at the tolerance's size, so the budgets and hashes
    of the Phase 4 and 5 records no longer reproduce. A configuration change only, nothing under
    `src/`.
 2. **Stop on the summed residual as well.** Add a second stop, `dt |sum_P r_P|` below a fraction

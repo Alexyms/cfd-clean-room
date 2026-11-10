@@ -269,7 +269,7 @@ def runs_table(runs: list[Run]) -> list[str]:
         rows.append(
             [
                 label(run),
-                f"{run.spec.max_diffusion_iter or 200}",
+                f"{run.spec.sweep_cap}",
                 f"{run.meta['flows_from']}",
                 f"{steps:,}",
                 f"{run.frames.times[-1]:.4f}",
@@ -410,12 +410,12 @@ def terms_table(runs: list[Run], which: str) -> list[str]:
 
 
 def closure_rows(run: Run) -> list[float]:
-    """Per class: the largest |sum of T1 to T6 - R| over the scored frames."""
+    """Per class: the largest |sum of T1 to T6 - R| over every frame after step 0."""
     out = []
     for k in sorted(run.series):
         total = np.cumsum(sum(run.col(k, n) for n in TERMS))
         worst = 0.0
-        for i in scored(run, k):
+        for i in range(1, len(run.frames.steps)):
             step = int(run.frames.steps[i])
             worst = max(
                 worst, abs(total[step - 1] - run.frames.budgets[i][k].residual())
@@ -450,7 +450,7 @@ def closure_table(runs: list[Run]) -> list[str]:
             ]
         )
     return [
-        "### A1. Closure: T1 to T6 summed from the first step against the budget's residual at every scored frame",
+        "### A1. Closure: T1 to T6 summed from the first step against the budget's residual at every stored frame after step 0",
         "",
         *table(
             [
@@ -559,12 +559,27 @@ def dose_rows(runs: dict[str, Run]) -> list[dict]:
     return out
 
 
+def per_decade(r: list[float]) -> tuple[float, float]:
+    """The end residual's factor per decade between the arms 1e-6, 1e-8 and 1e-10.
+
+    The arms are two decades apart, so a ratio between neighbouring arms is the
+    factor over two decades; its square root is the factor per decade.
+    """
+    return math.sqrt(r[0] / r[1]), math.sqrt(r[1] / r[2])
+
+
+def decade_ok(f1: float, f2: float) -> bool:
+    """Prediction (d)'s first clause: each in 3 to 30, smaller as the tolerance tightens."""
+    return 3 <= f1 <= 30 and 3 <= f2 <= 30 and f2 < f1
+
+
 def dose_table(runs: dict[str, Run]) -> list[str]:
     """D1: prediction (d), the end residual at 1e-6, 1e-8 and 1e-10."""
     rows = []
     for row in dose_rows(runs):
         r = row["R"]
-        f1, f2 = r[0] / r[1], r[1] / r[2]
+        f1, f2 = per_decade(r)
+        sweeps = row["sweeps"]
         other = row["other"]
         spread = (
             (max(other) - min(other)) / max(abs(x) for x in other)
@@ -577,9 +592,13 @@ def dose_table(runs: dict[str, Run]) -> list[str]:
                 SIZES_UM[row["k"]],
                 *(e(x) for x in r),
                 *(f"{s:.2f}" for s in row["sweeps"]),
+                f"{r[0] / r[1]:.3g}",
+                f"{r[1] / r[2]:.3g}",
                 f"{f1:.3g}",
                 f"{f2:.3g}",
-                "yes" if 3 <= f1 <= 30 and 3 <= f2 <= 30 and f2 < f1 else "NO",
+                f"{(sweeps[1] - sweeps[0]) / 2:.2f}",
+                f"{(sweeps[2] - sweeps[1]) / 2:.2f}",
+                "yes" if decade_ok(f1, f2) else "NO",
                 *(e(x) for x in other),
                 f"{spread:.3g}",
                 *(f"{x:.3e}" for x in row["worst"]),
@@ -587,7 +606,7 @@ def dose_table(runs: dict[str, Run]) -> list[str]:
             ]
         )
     return [
-        "### D1. The dose response on 80x30: the end residual at three tolerances (R5/R1/R7 and R6/R2/R8)",
+        "### D1. The dose response on 80x30: the end residual at three tolerances two decades apart (R5/R1/R7 and R6/R2/R8)",
         "",
         *table(
             [
@@ -599,9 +618,13 @@ def dose_table(runs: dict[str, Run]) -> list[str]:
                 "Sweeps per solve, 1e-6",
                 "1e-8",
                 "1e-10",
-                "R(1e-6) / R(1e-8)",
-                "R(1e-8) / R(1e-10)",
-                "Both in 3 to 30, the second smaller",
+                "R(1e-6) / R(1e-8), two decades",
+                "R(1e-8) / R(1e-10), two decades",
+                "Per decade, 1e-6 to 1e-8",
+                "Per decade, 1e-8 to 1e-10",
+                "Sweeps per decade, 1e-6 to 1e-8",
+                "1e-8 to 1e-10",
+                "Per decade both in 3 to 30, the second smaller",
                 "R - T5 at 1e-6",
                 "at 1e-8",
                 "at 1e-10",
@@ -793,7 +816,7 @@ def predictions_table(runs: dict[str, Run]) -> list[str]:
     rows.append(
         [
             "(a) closure",
-            "every run and class, every scored frame: within 1e-6 of the largest residual",
+            "every run and class, every stored frame: within 1e-6 of the largest residual",
             f"largest {top[0]:.2e} of it ({top[1]}); table A1",
             "holds" if a_ok else "FAILS",
         ]
@@ -862,8 +885,7 @@ def predictions_table(runs: dict[str, Run]) -> list[str]:
         ch_r = sign_changes(times, residual)
         ch_5 = sign_changes(times, cum)
         within = all(
-            any(lo - 0.05 <= a and b <= hi + 0.05 for a, b in ch_5)
-            for lo, hi in SIGN_WINDOWS
+            any(lo <= a and b <= hi for a, b in ch_5) for lo, hi in SIGN_WINDOWS
         ) and len(ch_5) == len(SIGN_WINDOWS)
         same = ch_r == ch_5
         c_ok = c_ok and within and same
@@ -882,12 +904,24 @@ def predictions_table(runs: dict[str, Run]) -> list[str]:
     # (d)
     d_rows = dose_rows(runs)
     if d_rows:
-        factors = [
-            (row["R"][0] / row["R"][1], row["R"][1] / row["R"][2]) for row in d_rows
-        ]
-        d_ok = all(3 <= f1 <= 30 and 3 <= f2 <= 30 and f2 < f1 for f1, f2 in factors)
+        factors = [per_decade(row["R"]) for row in d_rows]
+        d_ok = all(decade_ok(f1, f2) for f1, f2 in factors)
         low = min(min(f) for f in factors)
         high = max(max(f) for f in factors)
+        failing = sorted(
+            {
+                SCENARIO_NAMES[row["scenario"]]
+                for row, (f1, f2) in zip(d_rows, factors, strict=True)
+                if not decade_ok(f1, f2)
+            }
+        )
+        rising = sorted(
+            {
+                SCENARIO_NAMES[row["scenario"]]
+                for row, (f1, f2) in zip(d_rows, factors, strict=True)
+                if f2 >= f1
+            }
+        )
         rest = max(
             abs(x) / abs(r)
             for row in d_rows
@@ -897,8 +931,13 @@ def predictions_table(runs: dict[str, Run]) -> list[str]:
             [
                 "(d) dose response",
                 "80x30 dust and clean-out, every class: each decade moves R by 3 to 30, less as the tolerance tightens",
-                f"factors {low:.3g} to {high:.3g}; abs(R - T5) at most {rest:.1e} of R; table D1",
-                "holds" if d_ok else "FAILS",
+                f"per decade {low:.3g} to {high:.3g}; the factor grows as the tolerance "
+                f"tightens in: {', '.join(rising) if rising else 'none'}; second clause, "
+                f"the part T5 does not carry: abs(R - T5) at most {rest:.1e} of R at each "
+                "tolerance; table D1",
+                "holds"
+                if d_ok
+                else "FAILS in: " + ", ".join(failing) + "; holds in the others",
             ]
         )
     return [

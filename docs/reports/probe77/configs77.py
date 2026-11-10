@@ -90,8 +90,25 @@ class Run:
 
     @property
     def tolerance(self) -> float:
-        """The diffusion_tol the run steps at."""
-        return 1e-8 if self.diffusion_tol is None else self.diffusion_tol
+        """The diffusion_tol the run steps at: its own, or the base file's."""
+        if self.diffusion_tol is not None:
+            return self.diffusion_tol
+        return float(base_transport()["diffusion_tol"])
+
+    @property
+    def sweep_cap(self) -> int:
+        """The max_diffusion_iter the run steps at: its own, or the base file's."""
+        if self.max_diffusion_iter is not None:
+            return self.max_diffusion_iter
+        return int(base_transport()["max_diffusion_iter"])
+
+
+def base_transport() -> dict:
+    """The transport section of configs/clean_room_default.yaml."""
+    base = yaml.safe_load(
+        (ROOT / "configs" / "clean_room_default.yaml").read_text(encoding="utf-8")
+    )
+    return base["transport"]
 
 
 RUNS: tuple[Run, ...] = (

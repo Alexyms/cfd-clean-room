@@ -396,7 +396,7 @@ def probe(name: str, concurrent: int) -> int:
         "scenario": selected.scenario,
         "grid": configs77.grid_tag(selected.grid),
         "diffusion_tol": selected.tolerance,
-        "max_diffusion_iter": selected.max_diffusion_iter or 200,
+        "max_diffusion_iter": selected.sweep_cap,
         "flows_from": str(selected.flows_from.relative_to(ROOT)),
         "exit": status,
         "wall_seconds": wall,
