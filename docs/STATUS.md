@@ -142,9 +142,11 @@ clearing early, so where an all-clear sensor goes waits on a cost for clearing l
 clean-out run until the room clears. The claim is the ranking of layouts,
 which holds across the two grids, the middle of the order inverting on 80x30 by candidacy,
 and the sweep's arms, not any latency's value.
-`docs/reports/phase5_alert_system_report.md` is the gate report, proposing a CONDITIONAL PASS for
-Alex to decide, with Phase 4's condition on the budget residual's mechanism carried and due before
-Phase 6. A second round of review and test 76 runs before its pull request.
+`docs/reports/phase5_alert_system_report.md` is the gate report. Alex set the verdict on
+2026-11-10: CONDITIONAL PASS, carrying Phase 4's condition on the budget residual's mechanism,
+due before Phase 6's finer grids (the report's section "The decision"). The all-clear
+requirement's reporting half is adopted as REQ-A07; the all-clear sensor's position and the
+dust's single release position are carried open. Phase 5 is COMPLETE under that condition.
 Phases 6 and 7 have not begun.
 
 The product room itself has never been solved, and on 2026-10-04 it was found that the laminar

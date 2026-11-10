@@ -2,16 +2,15 @@
 
 **Date:** 2026-11-05, revised 2026-11-07 after review 76, test 76 and Alex's decisions of that
 day (prompt 76b), and 2026-11-08 after Alex's decisions of that day (prompt 76c) and round 2 of
-review and test 76 (prompt 76d; the machine's local date)
-**Phase Gate Verdict:** PROPOSED: CONDITIONAL PASS, for Alex to decide (the section "The proposed
-verdict" below)
-**Branches Merged:** six pull requests, #98 to #103, and this one (`phase5/step5-gate`):
+review and test 76 (prompt 76d; the machine's local date), and 2026-11-10 with Alex's verdict
+**Phase Gate Verdict:** CONDITIONAL PASS (Alex, 2026-11-10; the section "The decision" below)
+**Branches Merged:** seven pull requests, #98 to #104:
 - The design: #98 (ADR-015, Proposed, accepted by Alex on 2026-10-30).
 - ADR-015's build order, section H: #99 (step 0, the coverage debt and VAL-024), #100 (step 1,
   the sensitivity sweep and the clean-out's third grid), #101 (step 2, the alert monitor and
   VAL-009), #102 (step 3, the arrival maps and REQ-A04's latency), #103 (step 4, the placement
   search and REQ-A05).
-- This pull request: step 5, the four reference scenarios with their arrival maps, the latency
+- #104 (`phase5/step5-gate`): step 5, the four reference scenarios with their arrival maps, the latency
   report and this report; prompt 76b, the stand, the source rule, the fifth scenario (the door
   seal leak) and the all-clear role; prompt 76c, the stand band from 0.1 m, the all-clear
   sensor's position carried open and the flow-switch marker; and prompt 76d, round 2's findings.
@@ -187,7 +186,7 @@ between grids. Prompt 76's three predictions hold as step 5 scored them; of prom
    `config` were brought current at each step's pull request, and the Document History carries this
    gate.
 6. **The report is filled out and committed.** This report; the verdict line at its head is
-   proposed, and Alex sets it, as for Phases 3 and 4.
+   Alex's (2026-11-10), as for Phases 3 and 4.
 
 The plan's additional gate criteria for Phase 5:
 
@@ -402,6 +401,30 @@ their latencies, which are claimed only as a ranking.
 
 Nothing above is reported as an absolute latency for the room. The claim is the ranking on the model,
 stated per rule with ties, with the limits above beside it.
+
+## The decision (Alex, 2026-11-10)
+
+CONDITIONAL PASS, carrying one condition:
+
+1. **The budget residual's mechanism** (Phase 4's condition 1) is found before Phase 6's finer
+   grids, in a prompt of its own.
+
+Beside the verdict:
+
+- **The all-clear requirement.** Its reporting half is adopted as REQ-A07 (`docs/SYSTEM.md`
+  section 2). The search half is not: it rests on a score that counts only clearing early, and it
+  waits with the all-clear sensor's position.
+- **The all-clear sensor's position** stays carried open (2026-11-08). It needs a cost for
+  clearing late, and a clean-out that runs until the room clears or a stated room-clean criterion.
+- **The dust's single release position** is carried open, as a follow-up after condition 1. The
+  memory and time of a larger set-cover cap are measured first, and the choice between that cap
+  and the mean rule's greedy search is made with those numbers.
+- **The door and the seal leak.** The product mount includes the stand from 0.1 m (2026-11-07 and
+  2026-11-08). Whether a counter's inlet can stand that low by a doorway is a question about the
+  room, carried as a stated assumption.
+- The other limits stand as the section "The carried limits" states them.
+
+Phase 5 is complete under this condition.
 
 ## Sources
 
