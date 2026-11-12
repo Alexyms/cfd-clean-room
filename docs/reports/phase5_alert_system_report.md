@@ -426,6 +426,11 @@ Beside the verdict:
 
 Phase 5 is complete under this condition.
 
+**Condition 1 met (Alex, 2026-11-12).** Prompt 77 (PR 106,
+`docs/reports/budget_residual_mechanism.md`) found the residual to be the implicit diffusion
+solve's unfinished Jacobi iteration. The remedy is prompts 78 and 79 (that report, "Alex's
+decisions").
+
 ## Sources
 
 1. `docs/ADR/ADR-015-alert-monitoring-and-placement.md`: the decisions, the dated notes per section,

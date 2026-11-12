@@ -78,8 +78,9 @@ the runs took about an hour of wall clock).
 
 (b) and (c) hold. (a) holds, but it tests arithmetic only. The terms are built from the
 budget's own increments and T6 is the implicit stage's remainder after T5, so the closure gap
-is zero by construction up to rounding. A planted error in a term moves T2 or T6, not the gap
-(test 77). What guards the decomposition is elsewhere: the advection update rebuilt bit for bit
+is zero by construction up to rounding. A planted error that keeps the terms' sum equal to the
+stage's change moves T2, T4 or T6 and not the gap; one that breaks a term's sign convention
+moves the gap as well (the pass's independent test planted both kinds). What guards the decomposition is elsewhere: the advection update rebuilt bit for bit
 every step (M1), the check that the budget's `current` is the total of the returned field
 (`probe77._terms` raises otherwise), and T1, T2, T4 and T6 staying at rounding size (I1).
 
@@ -107,7 +108,8 @@ same process. Its configuration comes from `configs77.py`, its flow states from 
 with `--flows-from`, and five processes at most ran at once with one BLAS thread each
 (`run77.py`).
 
-**The calibration.** Before any production run, `probe77.py --calibrate` ran steps 1 to 2,000
+**The calibration.** Table C1 reads the re-run on the committed file (section 8), whose
+record replaced the first run's; the first ran before any production run. It ran steps 1 to 2,000
 of R1's configuration unwrapped and then wrapped in one process. It compared every step's five
 fields (by SHA-256 of their bytes) and five budgets (every field exactly). All were equal
 (table C1). The window holds the release's onset at step 569.
@@ -192,7 +194,7 @@ and the particles the SOLID zeroing removed are exactly zero at every step of ev
 and T6 are rounding, each five orders of magnitude or more below T5 over every run. T4 is the
 only one with a drift, visible in the figure: the source is added cell by cell and booked as
 one sum, and the two roundings differ with a bias to one sign over the release (on R10's 0.1 um
-class more steps are positive than negative, and many are zero; test 77).
+class more steps are positive than negative, and many are zero).
 
 <!-- tables77 identity begin -->
 ### I1. The identity against the code as built: the terms it puts at zero, largest over the five classes
@@ -225,7 +227,7 @@ class more steps are positive than negative, and many are zero; test 77).
    is uniform. `split77.py` carries the two parts through each solve's own sweep count, and
    table K1 shows the diffusion part is nearly all of T5 in every class of R1 to R4 and R9.
 3. The bound the prompt names, `dt` times the cell count times the stop, is loose by two to
-   three orders (M1's ratio of T5 to it). The weighted sum cancels across the plume, and most
+   three orders on the mean step and about two on the largest (M1's two ratios of T5 to it). The weighted sum cancels across the plume, and most
    cells are far below the largest residual.
 4. "The allowed summed error grows with the cell count" holds for the bound, not for T5. On the
    dust release T5 per step falls as the grid is refined, while its ratio to the bound stays
@@ -468,14 +470,15 @@ How each fact of the Phase 4 record follows (section "The marches and the budget
 3. **Both signs.** The sink part is never positive and is a small part of T5. The diffusion part
    has either sign, from step to step within a run (K1's last column). The door leak's residual
    is positive and the other three negative because their diffusion parts are, on balance over
-   the run. Follows.
+   the run. That both signs come from the one term is measured (S1, E1); why each scenario's
+   balance falls on its side is not.
 4. **The dust release's sign changes.** On R10 the cumulative T5 changes sign in the same
    frame intervals as the residual, and read every step over 9 to 27 s, at the same steps
    (table S1). R1 and R9 change sign once each, at their own grids' times, as does the 80x30
    filter breach. The figure shows the shape on R10: the leftover is positive in the release's
    first seconds and negative from about 16 s, and its running sum crosses zero when the two
    balance. That the per-step leftover changes sign as the plume grows from the tool top into
-   regions of different `w` follows from the mechanism. Why the plume's growth gives these
+   regions of different `w` is an inference from the mechanism, not a measurement. Why the plume's growth gives these
    particular times is not measured.
 
 The Phase 4 record also said the residual grows with the grid on two of four scenarios and
@@ -503,7 +506,8 @@ per refinement. Section 6 measures the dust release only.
 
 R9 and R10 have 4 and 16 times R1's cells and about 2.2 and 4.9 times its steps, since Courant
 0.4 sets the step by the cell. The mean sweeps per solve rise with the grid, because `w`
-approaches 1 as `D dt / dx^2` grows like `1 / dx`, so Jacobi converges more slowly per sweep.
+approaches 1 as `D dt / dx^2` grows like `1 / dx`, so Jacobi converges more slowly per sweep (an inference: the sweeps were counted, the
+rate per sweep was not).
 T5 per step falls, by less than the step count rises, so the run's T5 grows, more slowly at
 the second refinement than at the first (G2's two ratios). T5 over the content's time integral,
 a leftover rate per particle-second, changes less at the second refinement than at the first,
@@ -566,6 +570,33 @@ Listed with what each costs and changes. None is chosen here.
   renamed. The calibration was run again on the committed file, and table C1 reads that run.
 - The grid scaling is the dust release's only (R1, R9, R10). The other three scenarios ran on
   80x30 alone.
+
+## Alex's decisions (2026-11-12)
+
+- **Condition 1 is met.** The mechanism is found: the residual is T5 on every run, class and
+  grid, and every number reproduced in an independent test.
+- **The `mass_imbalance_tol` departure is accepted.** The prompt's premise was the
+  orchestrator's error: prompts 64 and 69 used ADR-011 G's rule at the base's `t_end` of 60 s,
+  not at each scenario's. Taking each source's recorded value is what reuses the same flow
+  states, which the bitwise budgets prove, and the transport step does not read it.
+- **Prediction (d), the orchestrator's note.** "Smaller as the tolerance tightens" was meant of
+  the residual, which falls by about ten per decade in every run and class. Read of the
+  per-decade factor, as scored above, the sub-clause is inside the noise of the integer sweep
+  count on both scenarios: the independent test's extra arm at 1e-9 gives the dust release
+  12.55 then 12.81 per decade, a rise. The scoring above stands as the builder's.
+- **REQ-T05 is kept at 0.01%, with a stated basis.** A particle counter at the ISO 14644-1
+  Class 5 limit resolves concentrations to about 10%; a bookkeeping error below 1% of that,
+  0.1%, cannot change a reading, and 0.01% is ten times inside it (`docs/SYSTEM.md`, REQ-T05).
+- **The remedy: the accumulated leftover shall stay below the requirement.** The leftover is
+  booked as its own budget term, the implicit solve stops only when a step's leftover is within
+  its share of the requirement over the run, and a run whose accumulated leftover reaches the
+  requirement is refused (prompt 78). The product scenarios and the placement are run again on
+  the changed solve (prompt 79). Never loosen `diffusion_tol` for speed: at 1e-6 the 80x30 dust
+  release is outside REQ-T05 (D1).
+- **Recorded for the Phase 6 design pass:** a semiconductor-grade target (ISO 1 to 3
+  thresholds, a ten-thousandth to a millionth of the source's peak). The solve's precision
+  already resolves it; the plume's edges at those levels are not validated, and at a few
+  particles per cubic metre detection is a counting probability, not a crossing time.
 
 ## Sources
 

@@ -853,7 +853,8 @@ table.
 
 CONDITIONAL PASS, with the two conditions proposed above and a third:
 
-1. **The budget residual's mechanism** is found before Phase 6's finer grids.
+1. **The budget residual's mechanism** is found before Phase 6's finer grids. Met
+   2026-11-12 (Alex): `docs/reports/budget_residual_mechanism.md`.
 2. **A third grid of the clean-out** is run before the free-area mean's ratio or the local
    recovery field is quoted as a number of the room.
 3. **A turbulent-spreading sensitivity check** is made before Phase 5 reports any detection
