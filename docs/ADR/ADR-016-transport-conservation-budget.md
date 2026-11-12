@@ -107,10 +107,13 @@ The share over that floor is
 
 `n = T / dt` the steps of the run, since `Q <= S` (the content is what was supplied less what
 left, deposited or was left over, and the leftover is bounded above). At `f L = 1e-5` and
-`c = 10` this is `9e9 / (n (1 + kappa))`. The 80x30 runs take at most 13,620 steps and
-`kappa` is below 0.1 there; a 640x240 run of 120 s takes about 55,000 steps at Courant 0.4,
-with `kappa` about 0.6 at the room's largest `nu_t`. The margin is above 1e5 on both, and the
-share cannot fall to the floor at the configured values below about 1e9 steps.
+`c = 10` this is `9e9 / (n (1 + kappa))`. The 80x30 runs take at most 13,620 steps, with
+`kappa` 0.11 at the room's largest `nu_t`; the 320x120 dust release takes 33,119 steps with
+`kappa` 0.42, and a 640x240 run of 120 s, at twice both, about 66,000 steps with `kappa`
+0.84. The margin is above 7e4 on every one (`docs/reports/conservation_budget.md`, table
+R1), and at `kappa` 0.84 the share cannot fall to the floor below about 5e9 steps.
+(Corrected 2026-11-12 in the report's commit: the figures first written here, `kappa` below
+0.1 and about 0.6 and 55,000 steps, were estimates made before table R1 measured them.)
 
 ## Alternatives (the mechanism report, section 7)
 
