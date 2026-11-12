@@ -147,6 +147,13 @@ and the sweep's arms, not any latency's value.
 due before Phase 6's finer grids (the report's section "The decision"). The all-clear
 requirement's reporting half is adopted as REQ-A07; the all-clear sensor's position and the
 dust's single release position are carried open. Phase 5 is COMPLETE under that condition.
+Prompt 77 (PR 106, `docs/reports/budget_residual_mechanism.md`) found the residual's mechanism:
+the implicit diffusion solve stops on its largest cell residual, Jacobi is not conservative
+before it converges, and the unfinished part is booked nowhere; every other part of the step
+closes to rounding. Alex set condition 1 met on 2026-11-12. He kept REQ-T05 at 0.01% with a
+stated basis and required the accumulated leftover to stay below it by construction: the
+leftover booked, the solve budgeted per step, a run that reaches the limit refused (prompt 78),
+then the product scenarios and the placement run again (prompt 79).
 Phases 6 and 7 have not begun.
 
 The product room itself has never been solved, and on 2026-10-04 it was found that the laminar
