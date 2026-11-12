@@ -29,8 +29,10 @@ never imports it.
 
 import math
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
+import yaml
 
 from src.boundary_concentration import SURFACE_FLOOR, ConcentrationFaces
 from src.config import UMIST, SimConfig
@@ -237,6 +239,27 @@ class TransportCase:
 # ---------------------------------------------------------------------------
 
 
+# The room's base file, the one place REQ-T05's limit and the leftover's
+# share are set (ADR-016); the validation configurations read them from it.
+BASE_CONFIG = (
+    Path(__file__).resolve().parents[1] / "configs" / "clean_room_default.yaml"
+)
+CONSERVATION_KEYS: tuple[str, ...] = ("conservation_limit", "leftover_share")
+
+
+def conservation_keys() -> dict[str, float]:
+    """``transport.conservation_limit`` and ``leftover_share`` as the base file sets them.
+
+    Returns
+    -------
+    dict[str, float]
+        The two keys and their values, to merge into a transport section a
+        case builds by hand.
+    """
+    raw = yaml.safe_load(BASE_CONFIG.read_text(encoding="utf-8"))
+    return {key: raw["transport"][key] for key in CONSERVATION_KEYS}
+
+
 def transport_config(
     width: float,
     height: float,
@@ -294,7 +317,7 @@ def transport_config(
         "advection_scheme": scheme,
         "max_diffusion_iter": max_diffusion_iter,
         "diffusion_tol": diffusion_tol,
-    }
+    } | conservation_keys()
     if turbulent_schmidt is not None:
         transport["turbulent_schmidt"] = turbulent_schmidt
     raw = {

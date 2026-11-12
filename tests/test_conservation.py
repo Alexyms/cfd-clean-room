@@ -33,12 +33,14 @@ from validation.transport_cases import (
     CFL_NUMBER,
     PARTICLE_SIZE,
     TURBULENT_SCHMIDT,
+    conservation_keys,
     prescribed_eddy_viscosity,
     random_face_field,
     transport_config,
 )
 
-CRITERION = 1.0e-4
+# REQ-T05's 0.01%, the configured limit (ADR-016).
+CRITERION = conservation_keys()["conservation_limit"]
 # ADR-011 F: the residual is rounding, about the number of steps times the
 # machine epsilon; prompt 32 stops at 1e-10 as a flux-assembly defect.
 ROUNDING_EXPECTATION = 1.0e-10
@@ -181,7 +183,7 @@ def test_mass_conservation_on_the_val001_faces_val007() -> None:
         "advection_scheme": "umist",
         "max_diffusion_iter": 100,
         "diffusion_tol": 1.0e-14,
-    }
+    } | conservation_keys()
     config = SimConfig.from_dict(raw)
     mesh = Mesh(config)
     staggered = StaggeredBoundary(mesh, config)
@@ -252,7 +254,7 @@ def _val001_config(turbulent_schmidt: float | None) -> SimConfig:
         "advection_scheme": "umist",
         "max_diffusion_iter": 100,
         "diffusion_tol": 1.0e-14,
-    }
+    } | conservation_keys()
     if turbulent_schmidt is not None:
         raw["transport"]["turbulent_schmidt"] = turbulent_schmidt
     return SimConfig.from_dict(raw)

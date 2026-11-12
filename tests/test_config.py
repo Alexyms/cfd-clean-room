@@ -41,7 +41,7 @@ from src.config import (
     breakpoint_faces,
 )
 from validation.cases import CONFIG_DIR, load_case
-from validation.transport_cases import SOLVER_BLOCK
+from validation.transport_cases import SOLVER_BLOCK, conservation_keys
 
 
 def _write_config(tmp_path, overrides: dict | None = None) -> str:
@@ -248,7 +248,8 @@ class TestSimConfigValid:
         assert config.iteration_error_tol == 1e-6
         v_min = (config.room_width / config.nx) * (config.room_height / config.ny)
         assert config.mass_imbalance_tol == pytest.approx(
-            1e-4 * config.rho * v_min / config.t_end, rel=1e-12
+            config.transport.conservation_limit * config.rho * v_min / config.t_end,
+            rel=1e-12,
         )
         assert config.momentum_sweeps == 10
         assert config.pressure_rtol == 1e-4
@@ -273,6 +274,8 @@ class TestSimConfigValid:
             advection_scheme="umist",
             max_diffusion_iter=200,
             diffusion_tol=1e-8,
+            conservation_limit=1e-4,
+            leftover_share=0.1,
             turbulent_schmidt=0.7,
         )
         supply = config.boundaries["hepa_supply"]
@@ -1671,11 +1674,15 @@ class TestTransportSection:
         with open(_write_config(tmp_path), encoding="utf-8") as handle:
             raw = yaml.safe_load(handle)
         if transport is None:
-            transport = {
-                "cfl_number": 0.1,
-                "max_diffusion_iter": 200,
-                "diffusion_tol": 1e-8,
-            } | keys
+            transport = (
+                {
+                    "cfl_number": 0.1,
+                    "max_diffusion_iter": 200,
+                    "diffusion_tol": 1e-8,
+                }
+                | conservation_keys()
+                | keys
+            )
         raw["transport"] = transport
         return raw
 
@@ -1694,6 +1701,8 @@ class TestTransportSection:
             advection_scheme="umist",
             max_diffusion_iter=200,
             diffusion_tol=1e-8,
+            conservation_limit=1e-4,
+            leftover_share=0.1,
         )
         given = SimConfig.from_dict(
             self._raw(tmp_path, advection_scheme="upwind", cfl_number=CFL_NUMBER_BOUND)
@@ -1718,6 +1727,19 @@ class TestTransportSection:
             ("diffusion_tol", 0.0, ValueError),
             ("diffusion_tol", -1e-8, ValueError),
             ("diffusion_tol", False, TypeError),
+            ("conservation_limit", 0.0, ValueError),
+            ("conservation_limit", -1e-4, ValueError),
+            ("conservation_limit", 1.0, ValueError),
+            ("conservation_limit", 2.0, ValueError),
+            ("conservation_limit", float("nan"), ValueError),
+            ("conservation_limit", True, TypeError),
+            ("conservation_limit", "1e-4", TypeError),
+            ("leftover_share", 0.0, ValueError),
+            ("leftover_share", -0.1, ValueError),
+            ("leftover_share", 1.0000001, ValueError),
+            ("leftover_share", float("inf"), ValueError),
+            ("leftover_share", False, TypeError),
+            ("leftover_share", [0.1], TypeError),
         ],
     )
     def test_bad_values_are_rejected(
@@ -1728,7 +1750,14 @@ class TestTransportSection:
             SimConfig.from_dict(self._raw(tmp_path, **{key: bad}))
 
     @pytest.mark.parametrize(
-        "key", ["cfl_number", "max_diffusion_iter", "diffusion_tol"]
+        "key",
+        [
+            "cfl_number",
+            "max_diffusion_iter",
+            "diffusion_tol",
+            "conservation_limit",
+            "leftover_share",
+        ],
     )
     def test_missing_required_key_raises(self, tmp_path: Path, key: str) -> None:
         raw = self._raw(tmp_path)
@@ -1744,6 +1773,38 @@ class TestTransportSection:
             SimConfig.from_dict(self._raw(tmp_path, cfl_numbre=0.1))
         with pytest.raises(ValueError, match="transport must be a mapping"):
             SimConfig.from_dict(self._raw(tmp_path, transport=[0.1]))
+
+    def test_the_conservation_keys_at_their_edges_are_read(
+        self, tmp_path: Path
+    ) -> None:
+        """ADR-016: a limit just inside (0, 1) and the whole limit to the solve.
+
+        Defects caught: the share's range closed at 1 (the whole limit
+        refused); an int read without conversion to float.
+        """
+        spec = SimConfig.from_dict(
+            self._raw(tmp_path, conservation_limit=0.999, leftover_share=1)
+        ).transport
+        assert (spec.conservation_limit, spec.leftover_share) == (0.999, 1.0)
+        assert isinstance(spec.leftover_share, float)
+
+    def test_every_transport_section_of_record_carries_the_two_keys(self) -> None:
+        """The base file and its copies, and every scenario merged onto them.
+
+        REQ-T05's 1e-4 and the share 0.1, the one value each (ADR-016).
+        Defect caught: a copy of the base file left without the keys, which
+        would refuse to load.
+        """
+        names = sorted(p.name for p in CONFIG_DIR.glob("*.yaml"))
+        read = 0
+        for name in names:
+            config = SimConfig(CONFIG_DIR / name)
+            if config.transport is None:
+                continue
+            spec = config.transport
+            assert (spec.conservation_limit, spec.leftover_share) == (1e-4, 0.1), name
+            read += 1
+        assert read >= 10
 
     def test_turbulent_schmidt_absent_is_none_with_no_default(
         self, tmp_path: Path
@@ -1878,7 +1939,7 @@ class TestTurbulenceSection:
             "cfl_number": 0.1,
             "max_diffusion_iter": 200,
             "diffusion_tol": 1e-8,
-        }
+        } | conservation_keys()
         config = SimConfig.from_dict(raw)
         assert (
             config.turbulence.advection_scheme,
@@ -2358,7 +2419,7 @@ class TestFiniteNumbers:
             "cfl_number": 0.1,
             "max_diffusion_iter": 200,
             "diffusion_tol": 1e-8,
-        }
+        } | conservation_keys()
         raw["boundaries"]["hepa_supply"]["concentration"] = [1.0, 2.0, 3.0, 4.0, 5.0]
         return raw
 
@@ -2870,7 +2931,7 @@ SCENARIO_TRANSPORT = {
     "cfl_number": 0.1,
     "max_diffusion_iter": 200,
     "diffusion_tol": 1e-8,
-}
+} | conservation_keys()
 DOOR_IN = {
     "name": "door_in",
     "type": "velocity_inlet",

@@ -43,6 +43,7 @@ from validation.transport_cases import (
     FixedConditions,
     ScalarPhysics,
     conditions_with,
+    conservation_keys,
     prescribed_eddy_viscosity,
 )
 
@@ -82,7 +83,7 @@ def _channel_config(
         "advection_scheme": "umist",
         "max_diffusion_iter": 100,
         "diffusion_tol": diffusion_tol,
-    }
+    } | conservation_keys()
     if turbulent_schmidt is not None:
         raw["transport"]["turbulent_schmidt"] = turbulent_schmidt
     config = SimConfig.from_dict(raw)

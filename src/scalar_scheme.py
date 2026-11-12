@@ -51,6 +51,16 @@ is then the Jacobi path's, bit for bit, and keeps its sign guarantee. A
 system conditioned beyond double precision is where CG needs it: the
 prompt 51 probe found a truncated CG iterate of k at -3.5e16 where the
 condition number was 2.4e16 (results/builder51/).
+
+The leftover (ADR-016, prompt 78). Stopped before it converges, the solve
+leaves ``dt sum_P r_P``, its final residual summed over the cells, in the
+field and books it nowhere: summed over the cells, every diffusion term of
+the system cancels, so the solve changes the field's total by the sink less
+that sum (``docs/reports/budget_residual_mechanism.md``, section 2).
+``ImplicitResult.leftover`` returns it, formed from the residual the last
+stop test read. With ``leftover_bound`` the stop also needs the leftover's
+magnitude within that bound, the transport solver's share of REQ-T05;
+without it the stop is the max-norm one alone, bit for bit (REQ-S16).
 """
 
 from dataclasses import dataclass
@@ -127,6 +137,12 @@ class ImplicitResult:
         1 when a CG solve fell back to Jacobi from ``C*``, else 0.
     fallback_sweeps : int
         The fallback's Jacobi sweeps; 0 without one.
+    leftover : float
+        ``dt`` times the sum over the cells of the returned field's residual
+        ``b + sum_f G_f C_N - a_P C``, zero in SOLID and held cells: what
+        the unfinished solve took from the field's total beyond the sink, in
+        the units of ``V C``. With a per-cell ``dt``, the sum of ``dt r``.
+        0.0 when nothing diffuses and no cell has a sink.
     """
 
     field: np.ndarray
@@ -135,6 +151,7 @@ class ImplicitResult:
     converged: bool
     fallbacks: int
     fallback_sweeps: int
+    leftover: float
 
 
 def mesh_axes(mesh: Mesh) -> tuple[Axis, Axis]:
@@ -296,6 +313,7 @@ def implicit_step(
     max_iter: int,
     held: np.ndarray | None = None,
     method: str = JACOBI,
+    leftover_bound: float | None = None,
 ) -> ImplicitResult:
     """Backward Euler diffusion with a cell sink, by Jacobi or conjugate gradients.
 
@@ -331,24 +349,35 @@ def implicit_step(
         positive in every cell it solves for, as k and eps are: CG falls back
         to Jacobi when it reaches the cap or returns a value at or below zero
         in such a cell.
+    leftover_bound : float, optional
+        The largest magnitude of the leftover the stop accepts, in the units
+        of ``V C`` (ADR-016): the solve stops only when the max-norm test
+        holds and ``abs(leftover) <= leftover_bound``. Non-negative; an
+        infinite bound accepts every finite leftover. None is the max-norm
+        stop alone, and the arithmetic is the one without the argument, bit
+        for bit.
 
     Returns
     -------
     ImplicitResult
-        The field, the method, its iterations, whether the tolerance was met
-        and the fallback, if any.
+        The field, the method, its iterations, whether the stop held within
+        the cap, the fallback, if any, and the leftover.
 
     Raises
     ------
     ValueError
-        If ``method`` is not one of ``IMPLICIT_METHODS``.
+        If ``method`` is not one of ``IMPLICIT_METHODS``, or
+        ``leftover_bound`` is negative or NaN.
 
     Notes
     -----
     ``a_P C_P - sum_f G_f C_N = (V / dt) C*`` with ``a_P = V / dt + sum_f
     G_f + D_P``. The stop is the same under both methods: the largest
     absolute residual over the non-SOLID, unheld cells, at most ``tol``
-    times the largest ``|b|`` over all cells. Each Jacobi sweep adds the
+    times the largest ``|b|`` over all cells, and with ``leftover_bound``
+    the iterate's leftover within it. The leftover is formed only where the
+    max-norm test holds, from the residual that test read, so the returned
+    field's leftover is not formed twice. Each Jacobi sweep adds the
     residual over the diagonal, so the stop reads the system's own residual
     every sweep. The diagonal's terms are summed in a fixed order, west,
     east, south, north, then the sink: floating-point sums depend on order,
@@ -365,6 +394,11 @@ def implicit_step(
     """
     if method not in IMPLICIT_METHODS:
         raise ValueError(f"method must be one of {IMPLICIT_METHODS}, got {method!r}")
+    # Written as "not >= 0" so that a NaN bound is refused as well.
+    if leftover_bound is not None and not leftover_bound >= 0.0:
+        raise ValueError(
+            f"leftover_bound must be non-negative or None, got {leftover_bound!r}"
+        )
     diag_extra = g_u[:, :-1] + g_u[:, 1:] + g_v[:-1, :] + g_v[1:, :] + diagonal
     if not diag_extra.any():
         return ImplicitResult(
@@ -374,14 +408,16 @@ def implicit_step(
             converged=True,
             fallbacks=0,
             fallback_sweeps=0,
+            leftover=0.0,
         )
     over_dt = volume / dt
     a_p = over_dt + diag_extra
     b = over_dt * c_star
     stop = tol * float(np.abs(b).max())
+    accept = _Acceptance(dt, solid, leftover_bound)
     if method == JACOBI:
         c, sweeps, converged = _jacobi(
-            c_star, a_p, b, g_u, g_v, solid, held, stop, max_iter
+            c_star, a_p, b, g_u, g_v, solid, held, stop, max_iter, accept
         )
         return ImplicitResult(
             field=c,
@@ -390,13 +426,14 @@ def implicit_step(
             converged=converged,
             fallbacks=0,
             fallback_sweeps=0,
+            leftover=accept.leftover,
         )
     fixed = solid if held is None else solid | held
     c = c_star.copy()
     c[solid] = 0.0
     with _BLAS_CONTROLLER.limit(limits=SCALAR_BLAS_THREADS, user_api="blas"):
         c, iterations, converged = _conjugate_gradient(
-            c, a_p, b, g_u, g_v, fixed, stop, max_iter
+            c, a_p, b, g_u, g_v, fixed, stop, max_iter, accept
         )
     if converged and bool(np.all(c[~fixed] > 0.0)):
         return ImplicitResult(
@@ -406,9 +443,11 @@ def implicit_step(
             converged=True,
             fallbacks=0,
             fallback_sweeps=0,
+            leftover=accept.leftover,
         )
+    accept = _Acceptance(dt, solid, leftover_bound)
     c, sweeps, converged = _jacobi(
-        c_star, a_p, b, g_u, g_v, solid, held, stop, max_iter
+        c_star, a_p, b, g_u, g_v, solid, held, stop, max_iter, accept
     )
     return ImplicitResult(
         field=c,
@@ -417,7 +456,62 @@ def implicit_step(
         converged=converged,
         fallbacks=1,
         fallback_sweeps=sweeps,
+        leftover=accept.leftover,
     )
+
+
+class _Acceptance:
+    """The stop's second clause, and the leftover of the field a solve returns.
+
+    ``test`` is called with the residual of an iterate that met the max-norm
+    stop: it forms the leftover from that residual and accepts the iterate
+    when there is no bound or the leftover is within it. ``final`` is called
+    with the residual of the iterate the solve returns and forms its
+    leftover, unless the last ``test`` formed it from that same array.
+
+    Parameters
+    ----------
+    dt : float or np.ndarray
+        The step, as ``implicit_step`` takes it.
+    solid : np.ndarray
+        The SOLID mask, where a per-cell ``dt`` is not read.
+    bound : float or None
+        ``implicit_step``'s ``leftover_bound``.
+    """
+
+    def __init__(
+        self, dt: float | np.ndarray, solid: np.ndarray, bound: float | None
+    ) -> None:
+        self._scalar: bool = np.ndim(dt) == 0
+        # A per-cell step need not be finite in a SOLID cell, where the
+        # residual is zero, and inf times zero would put NaN in the sum.
+        self._dt: float | np.ndarray = (
+            float(dt) if self._scalar else np.where(solid, 0.0, dt)
+        )
+        self._bound = bound
+        self._formed: np.ndarray | None = None
+        self.leftover: float = 0.0
+
+    def _form(self, residual: np.ndarray) -> float:
+        """Set and return the leftover of RESIDUAL."""
+        if self._scalar:
+            leftover = self._dt * float(np.sum(residual))
+        else:
+            leftover = float(np.sum(self._dt * residual))
+        self._formed = residual
+        self.leftover = leftover
+        return leftover
+
+    def test(self, residual: np.ndarray) -> bool:
+        """Whether an iterate that met the max-norm stop also meets the bound."""
+        if self._bound is None:
+            return True
+        return abs(self._form(residual)) <= self._bound
+
+    def final(self, residual: np.ndarray) -> None:
+        """Form the returned field's leftover, unless ``test`` already has."""
+        if self._formed is not residual:
+            self._form(residual)
 
 
 def _jacobi(
@@ -430,13 +524,15 @@ def _jacobi(
     held: np.ndarray | None,
     stop: float,
     max_iter: int,
+    accept: _Acceptance | None = None,
 ) -> tuple[np.ndarray, int, bool]:
     """Jacobi sweeps from ``C*`` on ``implicit_step``'s system.
 
-    Returns the field, the sweeps and whether the largest residual over the
-    non-SOLID, unheld cells met ``stop`` within ``max_iter`` sweeps. Each
-    sweep is a non-negative combination of the last iterate and ``b``, so a
-    non-negative ``C*`` gives non-negative iterates throughout.
+    Returns the field, the sweeps and whether, within ``max_iter`` sweeps,
+    the largest residual over the non-SOLID, unheld cells met ``stop`` and
+    ``accept`` took the iterate; ``accept.leftover`` is then the returned
+    field's. None accepts every iterate and forms no leftover. Each sweep is a non-negative combination of the last iterate and
+    ``b``, so a non-negative ``C*`` gives non-negative iterates throughout.
     """
     c = c_star.copy()
     padded = np.pad(c, 1)
@@ -448,7 +544,9 @@ def _jacobi(
         residual[solid] = 0.0
         if held is not None:
             residual[held] = 0.0
-        if float(np.abs(residual).max()) <= stop:
+        if float(np.abs(residual).max()) <= stop and (
+            accept is None or accept.test(residual)
+        ):
             converged = True
             break
         if sweeps >= max_iter:
@@ -456,6 +554,8 @@ def _jacobi(
         c = c + residual / a_p
         c[solid] = 0.0
         sweeps += 1
+    if accept is not None:
+        accept.final(residual)
     return c, sweeps, converged
 
 
@@ -482,6 +582,7 @@ def _conjugate_gradient(
     fixed: np.ndarray,
     stop: float,
     max_iter: int,
+    accept: _Acceptance | None = None,
 ) -> tuple[np.ndarray, int, bool]:
     """Diagonal-preconditioned conjugate gradients on ``implicit_step``'s system.
 
@@ -501,6 +602,9 @@ def _conjugate_gradient(
         ends.
     max_iter : int
         The iteration cap.
+    accept : _Acceptance, optional
+        The stop's second clause, read on the true residual only, and the
+        returned field's leftover; None accepts every iterate.
 
     Returns
     -------
@@ -538,7 +642,9 @@ def _conjugate_gradient(
         return q
 
     r = true_residual()
-    if float(np.abs(r).max()) <= stop:
+    if float(np.abs(r).max()) <= stop and (accept is None or accept.test(r)):
+        if accept is not None:
+            accept.final(r)
         return c, 0, True
     z = inverse * r
     p = z.copy()
@@ -552,7 +658,9 @@ def _conjugate_gradient(
         iterations += 1
         if float(np.abs(r).max()) <= stop or iterations == max_iter:
             r = true_residual()
-            if float(np.abs(r).max()) <= stop:
+            if float(np.abs(r).max()) <= stop and (accept is None or accept.test(r)):
+                if accept is not None:
+                    accept.final(r)
                 return c, iterations, True
             if iterations == max_iter:
                 break
@@ -565,4 +673,7 @@ def _conjugate_gradient(
         p *= rz_new / rz
         p += z
         rz = rz_new
+    # The loop leaves only by the cap's break, where r is c's true residual.
+    if accept is not None:
+        accept.final(r)
     return c, iterations, False

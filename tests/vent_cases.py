@@ -40,7 +40,12 @@ Each test file of a layer builds the configurations it needs from
 import copy
 
 from src.config import SimConfig
-from validation.transport_cases import AIR, PARTICLES, SOLVER_BLOCK
+from validation.transport_cases import (
+    AIR,
+    PARTICLES,
+    SOLVER_BLOCK,
+    conservation_keys,
+)
 
 WIDTH, HEIGHT, NX, NY = 2.0, 1.0, 16, 8
 BOX = {"name": "box", "x_start": 0.75, "x_end": 1.25, "y_start": 0.0, "y_end": 0.5}
@@ -156,7 +161,7 @@ TRANSPORT = {
     "advection_scheme": "umist",
     "max_diffusion_iter": 500,
     "diffusion_tol": 1.0e-13,
-}
+} | conservation_keys()
 
 
 def vent_raw(
