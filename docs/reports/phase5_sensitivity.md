@@ -67,6 +67,8 @@ The builder's (2026-10-30, before the runs, scored apart; the reasoning from the
 
 ## 1. The sweep
 
+*Superseded 2026-11-13: these runs were made again on the budgeted solve (prompt 79). `docs/reports/rerun79.md` (F1, F2, L1, D1; the tables re-scored in section 7) gives the new values beside these; the numbers here are left as they were.*
+
 ### 1.1 The arms and what is read
 
 | Arm | Intensity | Dissipation length | Sc_t | Flow state | Grids |
@@ -424,6 +426,8 @@ every sensor). The product-grid repeat of `widest` is missing (section 1.2); the
 5 um contour only in the direction the min_nut pair shows, not measured.
 
 ## 2. The clean-out on 160x60
+
+*Superseded 2026-11-13: these runs were made again on the budgeted solve (prompt 79). `docs/reports/rerun79.md` (C1; C1 re-scored in section 7) gives the new values beside these; the numbers here are left as they were.*
 
 <!-- tables72 cleanout begin -->
 | Run | Grid | Run to t (s) | Well-mixed 100:1 time ln(100)/N (s) | Room recovery time (s) | Free-area mean 100:1 (s) | Ratio to the well-mixed | Free cells | Not recovered at the end, 0.1 um (cells, share) | 5 um |

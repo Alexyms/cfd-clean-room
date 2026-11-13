@@ -242,6 +242,8 @@ siblings), so they are upper bounds on a run alone.
 
 ### The marches and the budgets
 
+*Superseded 2026-11-13: these runs were made again on the budgeted solve (prompt 79). `docs/reports/rerun79.md` (A1, B1 and E1; the tables re-scored in section 7) gives the new values beside these; the numbers here are left as they were.*
+
 <!-- tables69 march begin -->
 ### M1. The marches (Courant 0.4, five classes at one step)
 
@@ -366,6 +368,8 @@ about.
 
 
 ### The sensors, and the time error beside every time
+
+*Superseded 2026-11-13: these runs were made again on the budgeted solve (prompt 79). `docs/reports/rerun79.md` (L1, and S1 and G1 re-scored in section 7) gives the new values beside these; the numbers here are left as they were.*
 
 ADR-014 decision 2 asks for T7's time error at Courant 0.4 to be stated beside every recovery
 and detection time. T7 (160x60, L0's flow) is the only measurement of that error; table E1 reads
@@ -510,6 +514,8 @@ time error for the free-area mean's crossing, since its mean never reached 100:1
 
 ### The door leak: two flow states
 
+*Superseded 2026-11-13: these runs were made again on the budgeted solve (prompt 79). `docs/reports/rerun79.md` (F1; D1 re-scored in section 7) gives the new values beside these; the numbers here are left as they were.*
+
 <!-- tables69 door begin -->
 ### D1. The door: the open state warm-started against the closed state from rest
 
@@ -532,6 +538,8 @@ closed state is kept across the opening and reused for the last interval without
 intervals; the summary reports one interval on a state already held).
 
 ### The clean-out: recovery (ADR-014 C)
+
+*Superseded 2026-11-13: these runs were made again on the budgeted solve (prompt 79). `docs/reports/rerun79.md` (C1; C1, L1 and L2 re-scored in section 7) gives the new values beside these; the numbers here are left as they were.*
 
 <!-- tables69 recovery begin -->
 ### C1. The clean-out: recovery (ADR-014 C), T7's time error at Courant 0.4 beside each time
@@ -605,6 +613,8 @@ free-area mean's 100:1 time, which it never reached (table E1).
 ![The clean-out's sensors against the well-mixed line](phase4_cleanout_sensors.png)
 
 ### One snapshot per scenario
+
+*Superseded 2026-11-13: these runs were made again on the budgeted solve (prompt 79). `docs/reports/rerun79.md` (section 7; the snapshots were not redrawn) gives the new values beside these; the numbers here are left as they were.*
 
 Each at the class 0.5 um, the concentration over the class's threshold on a log scale, the
 threshold drawn as a contour: the door at the end of its opening, the breach at the end of the
