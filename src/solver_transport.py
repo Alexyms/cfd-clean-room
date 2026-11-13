@@ -79,7 +79,21 @@ The budget (ADR-011 F). ``MassBudget``, one per class, is written by the
 solver from the face fluxes it subtracts from the cells and the source array
 it adds, in the same step, and by nothing else; a restarted march hands back
 the totals its checkpoint carried with ``restore_budgets`` and steps on
-(ADR-014 D, step 3). ``FieldHistory`` is the
+(ADR-014 D, step 3).
+
+The conservation budget (ADR-016, REQ-T05). The implicit solve stops on its
+largest cell residual, and the field it returns is short of the backward
+Euler solution by a part whose sum is not zero: ``dt sum_P r_P``, the
+leftover, which the budget books as its own term, so that with every term
+booked it closes to rounding. Each step's solve stops only when its
+leftover is also within ``leftover_share * conservation_limit * S_n * dt /
+t_end``, ``S_n`` the class's particles supplied with this step's inflow and
+source booked; the supply never falls, so the leftover accumulated to any
+``t <= t_end`` is at most ``leftover_share * conservation_limit * S(t) * t /
+t_end``. A step that leaves the accumulated leftover at
+``conservation_limit`` times the supply or more raises
+ConservationBreachError, the backstop for a solve the sweep cap stopped
+before its share held. ``FieldHistory`` is the
 output contract for Phase 7's animation; the solver never calls it, since it
 does not own the loop.
 
@@ -164,6 +178,13 @@ class MassBudget:
         Cumulative deposition by surface: floor, ceiling, wall, obstacle.
     current : float or None
         ``in_domain`` of the field the last step returned; None before it.
+    leftover : float or None
+        Cumulative leftover of the implicit solve (ADR-016): each step adds
+        ``ImplicitResult.leftover``, ``dt`` times the sum of the solve's final
+        residual over the non-SOLID cells, the particles the unfinished
+        solve took from the field beyond the deposition it books. None when
+        unknown: a budget read from a run file written before the term was
+        booked (prompt 78), whose residual then still holds it.
     """
 
     initial: float | None = None
@@ -174,6 +195,7 @@ class MassBudget:
         default_factory=lambda: dict.fromkeys(DEPOSIT_SURFACES, 0.0)
     )
     current: float | None = None
+    leftover: float | None = 0.0
 
     @staticmethod
     def in_domain(C_k: np.ndarray, mesh: Mesh) -> float:  # noqa: N803 -- the contract's name for the class field (SYSTEM.md section 4)
@@ -197,7 +219,11 @@ class MassBudget:
         return float(np.sum((C_k * volumes)[mesh.cell_type != SOLID]))
 
     def residual(self) -> float:
-        """``initial + inflow + source - outflow - deposited - current``.
+        """``initial + inflow + source - outflow - deposited - leftover - current``.
+
+        With every term booked it closes to rounding (ADR-016). With the
+        leftover unknown (None) the term is left out, and the residual is
+        the one a budget read before prompt 78 always had, the leftover in it.
 
         Raises
         ------
@@ -206,17 +232,31 @@ class MassBudget:
         """
         if self.initial is None or self.current is None:
             raise ValueError("the budget has no field yet; step one first")
-        return (
+        residual = (
             self.initial
             + self.inflow
             + self.source
             - self.outflow
             - sum(self.deposited.values())
-            - self.current
         )
+        if self.leftover is not None:
+            residual -= self.leftover
+        return residual - self.current
+
+    def supplied(self) -> float:
+        """``initial + inflow + source``, the particles supplied so far.
+
+        Raises
+        ------
+        ValueError
+            Before the first step, when no initial content is booked.
+        """
+        if self.initial is None:
+            raise ValueError("the budget has no field yet; step one first")
+        return self.initial + self.inflow + self.source
 
     def relative(self) -> float:
-        """``residual()`` over ``initial + inflow + source``, the particles supplied.
+        """``residual()`` over ``supplied()``, the particles supplied.
 
         Raises
         ------
@@ -225,10 +265,64 @@ class MassBudget:
             ratio is undefined.
         """
         residual = self.residual()
-        supplied = self.initial + self.inflow + self.source
+        supplied = self.supplied()
         if supplied == 0.0:
             raise ValueError("no particles were supplied; the ratio is undefined")
         return residual / supplied
+
+    def leftover_relative(self) -> float:
+        """``leftover`` over ``supplied()``, what REQ-T05's limit is set against.
+
+        Raises
+        ------
+        ValueError
+            Before the first step, when the leftover is unknown, or when
+            nothing was supplied and the ratio is undefined.
+        """
+        if self.leftover is None:
+            raise ValueError(
+                "the leftover is unknown: the budget was written before it was "
+                "booked (prompt 78)"
+            )
+        supplied = self.supplied()
+        if supplied == 0.0:
+            raise ValueError("no particles were supplied; the ratio is undefined")
+        return self.leftover / supplied
+
+
+class ConservationBreachError(RuntimeError):
+    """A class's accumulated leftover reached REQ-T05's limit (ADR-016).
+
+    ``TransportSolver.solve_timestep`` raises it after the step that took
+    ``abs(leftover)`` to ``conservation_limit`` times the class's supplied
+    particles. The per-step share keeps a run below a tenth of that, so it
+    fires only when a solve stopped at its sweep cap before its share held.
+
+    Parameters
+    ----------
+    size_class : int
+        The class.
+    leftover : float
+        Its accumulated leftover, particles per metre of depth.
+    supplied : float
+        Its particles supplied, ``MassBudget.supplied()``.
+    limit : float
+        ``transport.conservation_limit``.
+    """
+
+    def __init__(
+        self, size_class: int, leftover: float, supplied: float, limit: float
+    ) -> None:
+        self.size_class = size_class
+        self.leftover = leftover
+        self.supplied = supplied
+        self.limit = limit
+        super().__init__(
+            f"class {size_class}: the implicit solve's accumulated leftover "
+            f"{leftover:.6g} reached transport.conservation_limit ({limit:g}) of "
+            f"the {supplied:.6g} particles supplied (REQ-T05); a solve stopped "
+            "at max_diffusion_iter before its share held"
+        )
 
 
 class FieldHistory:
@@ -382,8 +476,10 @@ class TransportSolver:
         The computational mesh, uniform or stretched.
     config : SimConfig
         Must carry a ``transport`` section: cfl_number, advection_scheme,
-        max_diffusion_iter, diffusion_tol, and, for a call with an eddy
-        viscosity field, turbulent_schmidt. Supplies the class count.
+        max_diffusion_iter, diffusion_tol, conservation_limit,
+        leftover_share, and, for a call with an eddy viscosity field,
+        turbulent_schmidt. Supplies the class count, and ``t_end``, the
+        horizon the leftover's share is spread over (ADR-016).
     physics : ParticlePhysics or ParticleProperties
         Supplies ``settling_velocity`` and ``diffusion_coeff`` per class;
         nothing else of it is read.
@@ -399,7 +495,13 @@ class TransportSolver:
     last_diffusion_sweeps : int
         Jacobi sweeps the last implicit solve took.
     diffusion_converged : bool
-        Whether the last implicit solve met ``diffusion_tol`` within the cap.
+        Whether the last implicit solve's stop held within the cap: its
+        largest residual within ``diffusion_tol`` and its leftover within
+        the step's share.
+    last_leftover : float
+        The last implicit solve's leftover, ``ImplicitResult.leftover``.
+    last_leftover_bound : float
+        The share the last step gave its leftover (ADR-016).
 
     Raises
     ------
@@ -426,6 +528,9 @@ class TransportSolver:
         self._upwind = spec.advection_scheme == UPWIND
         self._max_sweeps = spec.max_diffusion_iter
         self._tol = spec.diffusion_tol
+        self._limit = spec.conservation_limit
+        self._share = spec.leftover_share
+        self._horizon = config.t_end
         self._schmidt = spec.turbulent_schmidt
         self._u_shape = u_shape(mesh)
         self._v_shape = v_shape(mesh)
@@ -524,6 +629,8 @@ class TransportSolver:
         self.budget: list[MassBudget] = [MassBudget() for _ in range(self._n_classes)]
         self.last_diffusion_sweeps: int = 0
         self.diffusion_converged: bool = True
+        self.last_leftover: float = 0.0
+        self.last_leftover_bound: float = 0.0
 
     # ------------------------------------------------------------------
     # Public interface
@@ -548,8 +655,10 @@ class TransportSolver:
         TypeError
             If an element is not a MassBudget.
         ValueError
-            If there is not one per class, or a budget's ``deposited`` keys
-            are not the four deposition surfaces.
+            If there is not one per class, a budget's ``deposited`` keys are
+            not the four deposition surfaces, or its leftover is unknown (a
+            budget written before the leftover was booked: the bound on the
+            accumulated leftover cannot be carried across the restart).
         """
         if len(budgets) != self._n_classes:
             raise ValueError(
@@ -565,6 +674,13 @@ class TransportSolver:
                 raise ValueError(
                     f"budget {k} books deposition to {list(budget.deposited)}, not "
                     f"{list(DEPOSIT_SURFACES)}"
+                )
+            if budget.leftover is None:
+                raise ValueError(
+                    f"budget {k}'s leftover is unknown: it was written before the "
+                    "implicit solve's leftover was booked (prompt 78), so the "
+                    "accumulated leftover before the restart is unknown and REQ-T05's "
+                    "bound cannot be carried across it (ADR-016)"
                 )
         self.budget = [replace(b, deposited=dict(b.deposited)) for b in budgets]
 
@@ -669,6 +785,10 @@ class TransportSolver:
 
         Raises
         ------
+        ConservationBreachError
+            After the step, when the class's accumulated leftover has reached
+            ``conservation_limit`` times its particles supplied (ADR-016).
+            The budget holds the step; the field is not returned.
         TypeError
             If ``size_class`` or ``dt`` is a bool (Python's, numpy's, or for
             ``dt`` a 0-d bool array), or ``size_class`` is not an int, or
@@ -793,9 +913,18 @@ class TransportSolver:
             nu_u, nu_v = self._face_eddy_viscosity(nu_t)
             g_u = (self._diffusion[k] + nu_u / self._schmidt) * self._conductance_u
             g_v = (self._diffusion[k] + nu_v / self._schmidt) * self._conductance_v
-        c_new = self._implicit_step(c_star, dt, g_u, g_v, k)
+        # The step's share of REQ-T05 (ADR-016): f L S_n dt / T, S_n the
+        # particles supplied with this step's inflow and source booked. S
+        # never falls, so the leftover accumulated to any t <= T is at most
+        # f L S(t) t / T. Evaluated left to right in this order.
+        supplied = budget.initial + budget.inflow + budget.source
+        bound = self._share * self._limit * supplied * dt / self._horizon
+        c_new, leftover = self._implicit_step(c_star, dt, g_u, g_v, k, bound)
+        budget.leftover += leftover
         self._book_deposition(c_new, dt, k, conditions)
         budget.current = MassBudget.in_domain(c_new, mesh)
+        if budget.leftover != 0.0 and abs(budget.leftover) >= self._limit * supplied:
+            raise ConservationBreachError(k, budget.leftover, supplied, self._limit)
         return np.ascontiguousarray(c_new)
 
     # ------------------------------------------------------------------
@@ -1017,16 +1146,24 @@ class TransportSolver:
         return nu_u, nu_v
 
     def _implicit_step(
-        self, c_star: np.ndarray, dt: float, g_u: np.ndarray, g_v: np.ndarray, k: int
-    ) -> np.ndarray:
+        self,
+        c_star: np.ndarray,
+        dt: float,
+        g_u: np.ndarray,
+        g_v: np.ndarray,
+        k: int,
+        bound: float,
+    ) -> tuple[np.ndarray, float]:
         """Backward Euler diffusion and deposition, by ``scalar_scheme.implicit_step``.
 
         ``g_u`` and ``g_v`` are the conductances ``G_f = D_f A_f / d_f``,
         formed by the caller: zero on every face but the interior ones
         between non-SOLID cells. The deposition sink of every wall face of P
         is in the diagonal, so the step cannot take a cell below zero
-        (ADR-011 C). Records the sweeps and whether the tolerance was met,
-        and logs a warning at the cap.
+        (ADR-011 C). ``bound`` is the step's share of REQ-T05, the solve's
+        ``leftover_bound`` (ADR-016). Returns the field and its leftover;
+        records the sweeps, whether the stop held, the leftover and its
+        bound, and logs a warning at the cap.
         """
         result = implicit_step(
             c_star,
@@ -1039,6 +1176,7 @@ class TransportSolver:
             self._tol,
             self._max_sweeps,
             method=JACOBI,
+            leftover_bound=bound,
         )
         if not result.converged:
             logger.warning(
@@ -1047,7 +1185,9 @@ class TransportSolver:
             )
         self.last_diffusion_sweeps = result.iterations
         self.diffusion_converged = result.converged
-        return result.field
+        self.last_leftover = result.leftover
+        self.last_leftover_bound = bound
+        return result.field, result.leftover
 
     def _book_deposition(
         self, c_new: np.ndarray, dt: float, k: int, conditions: ConcentrationFaces

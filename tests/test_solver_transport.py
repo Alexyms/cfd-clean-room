@@ -35,6 +35,7 @@ from src.pressure import PressureCorrector
 from src.scalar_scheme import limited_face_values
 from src.solver_staggered import StaggeredSolver
 from src.solver_transport import (
+    ConservationBreachError,
     FieldHistory,
     MassBudget,
     TransportSolver,
@@ -895,14 +896,21 @@ class TestDiffusion:
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         """Two sweeps cannot reach 1e-14 on a resolved coefficient: the counters
-        say so and a warning names the cap (SYSTEM.md section 4)."""
+        say so and a warning names the cap (SYSTEM.md section 4).
+
+        The step's leftover is then 0.2% of the supply, past REQ-T05's limit,
+        so the step also raises the breach (ADR-016); the counters are set
+        before it."""
         config = transport_config(
             1.0, 0.5, 8, 4, max_diffusion_iter=2, diffusion_tol=1e-14
         )
         mesh, solver = _solver(
             config, physics=ScalarPhysics(settling=0.0, diffusion=1.0e-2)
         )
-        with caplog.at_level(logging.WARNING, logger="src.solver_transport"):
+        with (
+            caplog.at_level(logging.WARNING, logger="src.solver_transport"),
+            pytest.raises(ConservationBreachError),
+        ):
             solver.solve_timestep(
                 _random_field(mesh, 9), uniform_face_field(mesh, 0.0, 0.0), 0, 1.0
             )

@@ -1341,8 +1341,10 @@ def run(
         ``restart``; when a new run's files exist; with ``flows_from`` on a
         restart, or a ``flows_from`` file whose flow inputs differ (the
         message names the first key); for a restart under another
-        configuration (``RunFile.check_restart``), or under a ``t_end`` at
-        or before the checkpoint's time (the message names both); for a
+        configuration (``RunFile.check_restart``), from a checkpoint whose
+        budgets carry no leftover (written before prompt 78, ADR-016; checked
+        first), or under a ``t_end`` at or before the checkpoint's time (the
+        message names both); for a
         sensor in a SOLID cell, a clean-out without sensors or thresholds,
         sensors without a threshold for every class (the alert monitor's),
         or any run without a threshold for every class (the arrival maps').
@@ -1352,6 +1354,10 @@ def run(
         monitor state (before step 2).
     FlowNotConvergedError
         When a flow state stops at its cap or goes non-finite.
+    ConservationBreachError
+        When a class's accumulated leftover reaches REQ-T05's limit
+        (``TransportSolver.solve_timestep``, ADR-016); the run file and the
+        checkpoint file hold what was written before the step.
     TransientStepError
         Under tier 2, when a step reaches ``transient.step_cap`` or goes
         non-finite; the rows of the steps before it are written first.
@@ -1383,11 +1389,23 @@ def run(
     checkpoint = None
     if restart is not None:
         run_path = RunFile(restart)
-        run_path.check_restart(mapping)
         try:
             checkpoint = run_path.read_checkpoint()
         except KeyError:
             checkpoint = None
+        # Before the configuration's check, which a file this old fails as
+        # well, so the refusal names the reason that cannot be mended.
+        if checkpoint is not None and any(
+            b.leftover is None for b in checkpoint.budgets
+        ):
+            raise ValueError(
+                f"restart refused: {run_path.checkpoint_path}'s budgets were written "
+                "before the implicit solve's leftover was booked (prompt 78), so the "
+                "leftover accumulated before the restart is unknown and REQ-T05's "
+                "bound cannot be carried across it (ADR-016); run it again from the "
+                "start"
+            )
+        run_path.check_restart(mapping)
         if checkpoint is not None and checkpoint.t >= config.t_end:
             raise ValueError(
                 f"restart refused: the checkpoint is at t = {checkpoint.t!r} s (step "

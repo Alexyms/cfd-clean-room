@@ -919,14 +919,14 @@ def test_harness_row_records_each_axis_clustering(
 def test_the_product_preset_is_the_file_on_its_own_grid() -> None:
     """``val018_320x120`` loads the product file on 320x120 with its own tolerance.
 
-    mass_imbalance_tol is 1e-4 rho V_min / t_end, V_min the smallest cell
+    mass_imbalance_tol is conservation_limit rho V_min / t_end, V_min the smallest cell
     area (configs/clean_room_default.yaml's comment), which is the file's
     1.25e-9 on this grid (test 56 S1).
     """
     config = load_preset("val018_320x120")
     assert (config.nx, config.ny) == (320, 120)
     v_min = (config.room_width / config.nx) * (config.room_height / config.ny)
-    expected = 1e-4 * config.rho * v_min / config.t_end
+    expected = config.transport.conservation_limit * config.rho * v_min / config.t_end
     assert config.mass_imbalance_tol == pytest.approx(expected, rel=1e-12)
     assert config.mass_imbalance_tol == 1.25e-9
 

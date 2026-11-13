@@ -39,13 +39,16 @@ from src.io_manager import OPEN_STEP, AlertTable, RunFile
 from src.mesh import Mesh
 from src.monitor import Alert, AlertMonitor, ArrivalTracker, sensor_cells
 from src.time_integration import MarchStep, Provenance, run
+from validation.transport_cases import conservation_keys
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIGS = ROOT / "configs"
 # The coarse grid and its imbalance tolerance, ADR-011 G's formula at the
 # base's t_end, as tests/test_time_integration.py runs the scenarios.
 COARSE_GRID = {"nx": 80, "ny": 30}
-COARSE_MASS_IMBALANCE_TOL = 1.0e-4 * 1.2 * (0.1 * 0.1) / 60.0
+COARSE_MASS_IMBALANCE_TOL = (
+    conservation_keys()["conservation_limit"] * 1.2 * (0.1 * 0.1) / 60.0
+)
 PROVENANCE = Provenance("test", "2026-10-31T00:00:00", "test-machine", 0)
 # The dust release's box on the litho tool's top is one cell of 80x30, the
 # cell this sensor reads. Released from 0.5 s for 1 s, the run to 7 s sees

@@ -382,6 +382,16 @@ class TransportSpec:
         system per class per step.
     diffusion_tol : float
         Tolerance the implicit diffusion solve iterates to.
+    conservation_limit : float
+        REQ-T05's limit on the particle budget, a fraction of the particles
+        supplied, in (0, 1): 1e-4, the requirement's 0.01%. The accumulated
+        leftover of the implicit solve that reaches it stops the run
+        (ADR-016), and VAL-007 and ADR-011 G's tolerance rule read it.
+    leftover_share : float
+        The fraction of ``conservation_limit`` given to the implicit
+        solve's leftover, in (0, 1]: each step's solve stops only when its
+        leftover is within ``leftover_share * conservation_limit * S * dt /
+        t_end`` (ADR-016). 0.1, a margin of ten.
     turbulent_schmidt : float or None
         Sc_t of ``D_t = nu_t / Sc_t``, the turbulent particle diffusivity
         (REQ-T13, ADR-012 F and decision 8): positive and finite, with no
@@ -393,6 +403,8 @@ class TransportSpec:
     advection_scheme: str
     max_diffusion_iter: int
     diffusion_tol: float
+    conservation_limit: float
+    leftover_share: float
     turbulent_schmidt: float | None = None
 
 
@@ -923,6 +935,8 @@ _TRANSPORT_KEYS: frozenset[str] = frozenset(
         "advection_scheme",
         "max_diffusion_iter",
         "diffusion_tol",
+        "conservation_limit",
+        "leftover_share",
         "turbulent_schmidt",
     }
 )
@@ -2803,8 +2817,9 @@ class SimConfig:
 
         ``cfl_number`` must lie in (0, CFL_NUMBER_BOUND]; ``advection_scheme``
         defaults to umist; ``turbulent_schmidt`` is optional, positive and
-        finite when present, and None when absent; the other two keys are
-        required. Any other key raises.
+        finite when present, and None when absent; ``conservation_limit``
+        must lie in (0, 1) and ``leftover_share`` in (0, 1]; the other keys
+        are required. Any other key raises.
         """
         if not isinstance(section, dict):
             raise ValueError("transport must be a mapping")
@@ -2836,6 +2851,25 @@ class SimConfig:
             turbulent_schmidt = cls._require_positive_float(
                 section, "turbulent_schmidt", "transport"
             )
+        # A fraction of the particles supplied: 1 or more would let the
+        # leftover exceed the supply before the run is refused (ADR-016).
+        conservation_limit = cls._require_positive_float(
+            section, "conservation_limit", "transport"
+        )
+        if not conservation_limit < 1.0:
+            raise ValueError(
+                "transport.conservation_limit must be in (0, 1), a fraction of the "
+                f"particles supplied, got {conservation_limit}"
+            )
+        # The whole limit may go to the solve, no more.
+        leftover_share = cls._require_positive_float(
+            section, "leftover_share", "transport"
+        )
+        if leftover_share > 1.0:
+            raise ValueError(
+                "transport.leftover_share must be in (0, 1], a fraction of "
+                f"conservation_limit, got {leftover_share}"
+            )
         return TransportSpec(
             cfl_number=cfl_number,
             advection_scheme=scheme,
@@ -2845,6 +2879,8 @@ class SimConfig:
             diffusion_tol=cls._require_positive_float(
                 section, "diffusion_tol", "transport"
             ),
+            conservation_limit=conservation_limit,
+            leftover_share=leftover_share,
             turbulent_schmidt=turbulent_schmidt,
         )
 

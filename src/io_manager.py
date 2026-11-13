@@ -128,6 +128,8 @@ RESTART_EXCLUDED_SECTIONS: tuple[str, ...] = ("placement",)
 # One column per MassBudget term; deposition by surface in DEPOSIT_SURFACES'
 # order. A budget before its first step has initial and current None, stored
 # as NaN, which no booked term can be (the solver refuses non-finite input).
+# The leftover (ADR-016) is the last column; a file written before it has
+# none, and its budgets read with the leftover None.
 BUDGET_TERMS: tuple[str, ...] = (
     "initial",
     "inflow",
@@ -135,6 +137,7 @@ BUDGET_TERMS: tuple[str, ...] = (
     "source",
     *(f"deposited_{surface}" for surface in DEPOSIT_SURFACES),
     "current",
+    "leftover",
 )
 _FIELDS = ("u", "v", "p")
 _FLOW_FIELDS = ("u_faces", "v_faces", "p")
@@ -1071,6 +1074,12 @@ class RunFile:
                     _new_series(group, f"C_{k}", array.shape, "<f8")
                 _new_series(group, "budgets", row.shape, "<f8")
                 group["budgets"].attrs["terms"] = list(BUDGET_TERMS)
+            terms = [str(t) for t in group["budgets"].attrs["terms"]]
+            if terms != list(BUDGET_TERMS):
+                raise ValueError(
+                    f"the file's budget rows hold the terms {terms}, written before "
+                    f"{list(BUDGET_TERMS)}; a frame is not appended to them"
+                )
             stored = sorted(int(name[2:]) for name in group if name.startswith("C_"))
             if stored != classes:
                 raise ValueError(
@@ -1114,7 +1123,8 @@ class RunFile:
                 if name.startswith("C_")
             }
             rows = group["budgets"][()]
-        budgets = tuple(tuple(_budget_of(r) for r in frame) for frame in rows)
+            terms = [str(t) for t in group["budgets"].attrs["terms"]]
+        budgets = tuple(tuple(_budget_of(r, terms) for r in frame) for frame in rows)
         return TransportFrames(steps, times, dict(sorted(fields.items())), budgets)
 
     def write_sensor_readings(
@@ -1740,6 +1750,7 @@ class RunFile:
                 if name.startswith("C_")
             }
             rows = group["budgets"][()]
+            terms = [str(t) for t in group["budgets"].attrs["terms"]]
             carried = (
                 {name: data[()] for name, data in group[RECOVERY].items()}
                 if RECOVERY in group
@@ -1749,7 +1760,7 @@ class RunFile:
             step=int(attrs["step"]),
             t=float(attrs["t"]),
             fields=dict(sorted(fields.items())),
-            budgets=tuple(_budget_of(row) for row in rows),
+            budgets=tuple(_budget_of(row, terms) for row in rows),
             fingerprint=str(attrs["fingerprint"]),
             recovery=carried,
             plan_start=float(attrs["plan_start"]) if "plan_start" in attrs else None,
@@ -2010,13 +2021,20 @@ def _budget_row(budget: MassBudget) -> list[float]:
         budget.source,
         *(budget.deposited[surface] for surface in DEPOSIT_SURFACES),
         np.nan if budget.current is None else budget.current,
+        np.nan if budget.leftover is None else budget.leftover,
     ]
 
 
-def _budget_of(row: np.ndarray) -> MassBudget:
-    """The budget a row of BUDGET_TERMS holds, NaN in initial or current as None."""
-    values = dict(zip(BUDGET_TERMS, (float(x) for x in row), strict=True))
+def _budget_of(row: np.ndarray, terms: Sequence[str]) -> MassBudget:
+    """The budget a row holds, its columns named by TERMS, the dataset's attribute.
+
+    NaN in initial, current or leftover reads as None. A file written before
+    the leftover was booked (prompt 78) has no leftover column, and its
+    budgets read with the leftover None, unknown.
+    """
+    values = dict(zip(terms, (float(x) for x in row), strict=True))
     initial, current = values["initial"], values["current"]
+    leftover = values.get("leftover", np.nan)
     return MassBudget(
         initial=None if np.isnan(initial) else initial,
         inflow=values["inflow"],
@@ -2024,6 +2042,7 @@ def _budget_of(row: np.ndarray) -> MassBudget:
         source=values["source"],
         deposited={s: values[f"deposited_{s}"] for s in DEPOSIT_SURFACES},
         current=None if np.isnan(current) else current,
+        leftover=None if np.isnan(leftover) else leftover,
     )
 
 

@@ -53,7 +53,10 @@ def product_raw(
     raw["domain"]["nx"], raw["domain"]["ny"] = 40, 15
     cell = (raw["domain"]["width"] / 40) * (raw["domain"]["height"] / 15)
     raw["solver"]["mass_imbalance_tol"] = (
-        1e-4 * raw["fluid"]["density"] * cell / raw["solver"]["t_end"]
+        raw["transport"]["conservation_limit"]
+        * raw["fluid"]["density"]
+        * cell
+        / raw["solver"]["t_end"]
     )
     raw["solver"]["max_simple_iter"] = cap
     if inlet is not None:
@@ -96,7 +99,7 @@ def same_budgets(a: tuple[MassBudget, ...], b: tuple[MassBudget, ...]) -> None:
     """Two sequences of budgets, every term bit for bit, None as None."""
     assert len(a) == len(b)
     for x, y in zip(a, b, strict=True):
-        for name in ("initial", "inflow", "outflow", "source", "current"):
+        for name in ("initial", "inflow", "outflow", "source", "current", "leftover"):
             p, q = getattr(x, name), getattr(y, name)
             assert (p is None) == (q is None), name
             if p is not None:

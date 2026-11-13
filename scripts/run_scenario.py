@@ -25,7 +25,9 @@ the same scenario file but for the keys a continuation may change
 
 The exit status is 0 when the run finished, 1 when a flow state did not
 converge (a capped one leaves its steady checkpoint, so a restart under a
-larger cap continues it) or a tier-2 step reached its cap, and 2 when the scenario, the run file or the
+larger cap continues it), a tier-2 step reached its cap, or a class's
+accumulated leftover reached REQ-T05's limit (ADR-016; the checkpoint is left
+as the last one written), and 2 when the scenario, the run file or the
 restart was refused. The loader and ``time_integration.run`` check what they
 can before any flow is solved; a ValueError raised later in the run is
 reported the same way.
@@ -50,6 +52,9 @@ from src.io_manager import RecoveryRecord  # noqa: E402 -- follows sys.path.inse
 from src.monitor import Alert  # noqa: E402 -- follows sys.path.insert
 from src.solver_staggered import (  # noqa: E402 -- follows sys.path.insert
     TransientStepError,
+)
+from src.solver_transport import (  # noqa: E402 -- follows sys.path.insert
+    ConservationBreachError,
 )
 from src.time_integration import (  # noqa: E402 -- follows sys.path.insert
     FlowNotConvergedError,
@@ -305,7 +310,10 @@ def summary(record: RunRecord, config: SimConfig, scenario: Path) -> list[str]:
     stop = "the hold" if record.held else "t_end"
     lines.append(f"steps: {record.steps} to t = {record.t_final:.6g} s ({stop})")
     lines.append(f"wall time: {record.wall_seconds:.1f} s")
-    lines.append("budget closure (residual, relative to the particles supplied):")
+    lines.append(
+        "budget closure (residual, relative to the particles supplied; the "
+        "implicit solve's leftover, booked, ADR-016):"
+    )
     for k, budget in enumerate(record.budgets):
         size = config.particle_sizes[k]
         if budget.current is None:
@@ -317,9 +325,20 @@ def summary(record: RunRecord, config: SimConfig, scenario: Path) -> list[str]:
             # A class no event and no inlet supplied has nothing to close
             # against (a single-size release leaves the others at zero).
             relative = "relative not defined (nothing supplied)"
+        try:
+            leftover = (
+                f"leftover {budget.leftover:.6g}, relative "
+                f"{budget.leftover_relative():.3e}"
+            )
+        except ValueError:
+            leftover = (
+                "leftover unknown"
+                if budget.leftover is None
+                else f"leftover {budget.leftover:.6g}, relative not defined"
+            )
         lines.append(
             f"  class {k} ({size * 1e6:g} um): residual {budget.residual():.6g}, "
-            f"{relative}"
+            f"{relative}; {leftover}"
         )
     if record.recovery is not None:
         lines.extend(recovery_lines(record.recovery, config.particle_sizes))
@@ -414,7 +433,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             flows_from=args.flows_from,
             provenance=Provenance.here(commit(), args.concurrent),
         )
-    except (FlowNotConvergedError, TransientStepError) as err:
+    except (FlowNotConvergedError, TransientStepError, ConservationBreachError) as err:
         print(f"error: {err}", file=sys.stderr)
         return EXIT_NOT_CONVERGED
     except (ValueError, KeyError, FileNotFoundError, TypeError) as err:

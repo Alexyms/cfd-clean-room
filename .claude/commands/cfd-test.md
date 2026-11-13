@@ -33,6 +33,13 @@ Run this in a fresh Claude Code session, never in the builder's or the reviewer'
   that costs minutes, not hours.
 - `ruff format --check .`, `ruff check .`, `python scripts/gen_system_map.py --check`.
 
+## Running processes
+
+Run at most three processes at once, planted-defect runs and suite runs together: nine at
+once crashed the machine during test 78. Serialise the runs that write large files (a march
+that writes run files, a planted copy of the tree), so that two of them never write at the
+same time.
+
 Before finishing, confirm `git status` shows no tracked file modified.
 
 ## Output

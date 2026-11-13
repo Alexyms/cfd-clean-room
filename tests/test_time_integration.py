@@ -102,13 +102,16 @@ from src.time_integration import (
     smallest_stable_dt,
 )
 from tests.helpers import same_budgets, same_recovery
+from validation.transport_cases import conservation_keys
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIGS = ROOT / "configs"
 COARSE_GRID = {"nx": 80, "ny": 30}
-# ADR-011 G's per-cell bound, 1e-4 rho V_min / t_end, on 80x30 at the base's
+# ADR-011 G's per-cell bound, conservation_limit rho V_min / t_end, on 80x30 at the base's
 # t_end of 60 s, as the product row of record on this grid ran it.
-COARSE_MASS_IMBALANCE_TOL = 1.0e-4 * 1.2 * (0.1 * 0.1) / 60.0
+COARSE_MASS_IMBALANCE_TOL = (
+    conservation_keys()["conservation_limit"] * 1.2 * (0.1 * 0.1) / 60.0
+)
 COARSE_OUTER = 1021
 # The open door's state warm-started from the closed one on 80x30, as prompt
 # 64 first solved it.
@@ -119,7 +122,7 @@ ONE_AIR_CHANGE = 5.562
 HELD_T_END = 120.0
 # REQ-T05: particle mass conserved to 0.01%. The march closes to about 1e-7
 # here, set by the implicit diffusion's diffusion_tol of 1e-8 per step.
-REQ_T05 = 1.0e-4
+REQ_T05 = conservation_keys()["conservation_limit"]
 PROVENANCE = Provenance("test", "2026-10-17T00:00:00", "test-machine", 0)
 
 
@@ -2258,7 +2261,8 @@ class TestRunScenario:
         assert run_scenario.main(argv) == run_scenario.EXIT_DONE
         lines = capsys.readouterr().out.splitlines()
         start = lines.index(
-            "budget closure (residual, relative to the particles supplied):"
+            "budget closure (residual, relative to the particles supplied; the "
+            "implicit solve's leftover, booked, ADR-016):"
         )
         closure = lines[start + 1 : start + 6]
         for k, line in enumerate(closure):
@@ -2367,3 +2371,271 @@ class TestRunScenario:
         assert "max_simple_iter after 5 outer" in capsys.readouterr().err
         assert run_scenario.main(argv) == run_scenario.EXIT_REFUSED
         assert "exists; a new run writes new files" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# ADR-016: the conservation budget on the 80x30 room (prompt 78)
+# ---------------------------------------------------------------------------
+
+# The dust release's window, rescheduled as TRANSPORT_ONLY's, at a tolerance
+# whose max-norm stop alone leaves more than the share on most release steps,
+# so the share is what holds the leftover there.
+BUDGET_WINDOW_TOL = 1.0e-5
+BUDGET_WINDOW = ("scenario_equipment_dust.yaml", 4.0, {"litho_dust": (1.0, 2.0)})
+BUDGET_WINDOW_CHECKPOINT = 50
+
+
+def budget_window_raw(**transport: object) -> dict:
+    """The coarse dust release from 1 s to 3 s, to 4 s, with TRANSPORT's keys set."""
+    name, t_end, times = BUDGET_WINDOW
+    raw = rescheduled(coarse_raw(name, output_interval=10), t_end, times)
+    raw.setdefault("transport", {})["diffusion_tol"] = BUDGET_WINDOW_TOL
+    raw["transport"].update(transport)
+    return raw
+
+
+@pytest.fixture(scope="module")
+def budget_window(
+    tmp_path_factory: pytest.TempPathFactory, clean_out: SimpleNamespace
+) -> SimpleNamespace:
+    """The window on the clean-out's kept state, every step recorded."""
+    folder = tmp_path_factory.mktemp("budget_window")
+    raw = budget_window_raw()
+    raw["solver"]["checkpoint_interval"] = BUDGET_WINDOW_CHECKPOINT
+    config = SimConfig.from_dict(raw)
+    steps, on_step = recorder()
+    record = run(
+        config,
+        folder / "run.h5",
+        flows_from=clean_out.record.path,
+        on_step=on_step,
+        provenance=PROVENANCE,
+    )
+    return SimpleNamespace(config=config, record=record, steps=steps)
+
+
+def _strip_leftover(path: Path) -> None:
+    """Rewrite a run file's and its checkpoint's budgets as a writer before prompt 78 did.
+
+    The leftover column is dropped and the terms attribute is the nine terms
+    without it, which is what every run file written before the term was
+    booked holds.
+    """
+    targets = ((path, TRANSPORT_GROUP), (RunFile(path).checkpoint_path, "checkpoint"))
+    for target, group in targets:
+        with h5py.File(target, "a") as handle:
+            budgets = handle[group]["budgets"]
+            terms = [str(t) for t in budgets.attrs["terms"]]
+            assert terms[-1] == "leftover"
+            rows = budgets[()][..., :-1]
+            del handle[group]["budgets"]
+            if group == TRANSPORT_GROUP:
+                stored = handle[group].create_dataset(
+                    "budgets",
+                    data=rows,
+                    maxshape=(None, *rows.shape[1:]),
+                    chunks=(1, *rows.shape[1:]),
+                )
+            else:
+                stored = handle[group].create_dataset("budgets", data=rows)
+            stored.attrs["terms"] = terms[:-1]
+
+
+TRANSPORT_GROUP = "transport"
+
+
+@pytest.mark.integration
+class TestConservationBudget:
+    def test_the_window_closes_to_rounding_at_every_step_and_class(
+        self, budget_window: SimpleNamespace
+    ) -> None:
+        """With the leftover booked, every step's budget closes within 1e-12 of the supply.
+
+        Across the release's onset and end, every class. Without the term the
+        residual is the leftover itself, which here exceeds 1e-8 of the
+        supply. Defect caught: the booking removed (budget.leftover not added).
+        """
+        steps = budget_window.steps
+        assert len(steps) == budget_window.record.steps
+        largest_leftover = 0.0
+        for info in steps:
+            for budget in info.budgets:
+                supplied = budget.supplied()
+                if supplied == 0.0:
+                    assert budget.residual() == 0.0 and budget.leftover == 0.0
+                    continue
+                assert abs(budget.residual()) <= 1e-12 * supplied
+                largest_leftover = max(
+                    largest_leftover, abs(budget.leftover_relative())
+                )
+        assert largest_leftover > 1e-8
+
+    def test_every_steps_leftover_is_within_its_share_and_the_bound_holds(
+        self, budget_window: SimpleNamespace
+    ) -> None:
+        """|leftover_n| <= f L S_n dt_n / T at every step; the sum within f L S(t) t / T.
+
+        S_n is the supply after the step, the step's inflow and source booked
+        before its solve. A relative allowance of 1e-9 covers the difference
+        of two accumulated sums. Defect caught: the share ignored in the stop
+        (the max-norm stop alone at BUDGET_WINDOW_TOL leaves the release's
+        leftover above its share).
+        """
+        config = budget_window.config
+        limit = config.transport.conservation_limit
+        share = config.transport.leftover_share
+        horizon = config.t_end
+        previous = [0.0] * len(config.particle_sizes)
+        supplied_steps = 0
+        for info in budget_window.steps:
+            for k, budget in enumerate(info.budgets):
+                supplied = budget.supplied()
+                step = budget.leftover - previous[k]
+                previous[k] = budget.leftover
+                allowed = share * limit * supplied * info.dt / horizon
+                assert abs(step) <= allowed * (1.0 + 1e-9), (info.step, k)
+                bound = share * limit * supplied * info.t / horizon
+                assert abs(budget.leftover) <= bound * (1.0 + 1e-9), (info.step, k)
+                supplied_steps += supplied > 0.0
+        assert supplied_steps > 0
+
+    def test_the_share_bites_in_the_window(
+        self, budget_window: SimpleNamespace
+    ) -> None:
+        """Somewhere in the window a step's leftover is above a tenth of its share.
+
+        Leftovers far below the share at every step would leave the test above
+        unable to fail; at BUDGET_WINDOW_TOL the max-norm stop leaves more, so
+        the share's own sweeps end some steps just inside it.
+        """
+        config = budget_window.config
+        f_l = config.transport.leftover_share * config.transport.conservation_limit
+        previous = [0.0] * len(config.particle_sizes)
+        close = 0
+        for info in budget_window.steps:
+            for k, budget in enumerate(info.budgets):
+                step = budget.leftover - previous[k]
+                previous[k] = budget.leftover
+                allowed = f_l * budget.supplied() * info.dt / config.t_end
+                close += allowed > 0.0 and abs(step) > 0.1 * allowed
+        assert close > 0
+
+    def test_a_breach_exits_1_and_leaves_the_checkpoint(
+        self,
+        tmp_path: Path,
+        clean_out: SimpleNamespace,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """One sweep per solve: the share cannot hold and the run is refused.
+
+        scripts/run_scenario.py reports the class and the limit and exits 1;
+        the checkpoint written before the breach is left. Defect caught: the
+        refusal's check removed (the run then finishes and exits 0).
+        """
+        raw = budget_window_raw(max_diffusion_iter=1)
+        raw["solver"]["checkpoint_interval"] = 20
+        scenario = _scenario_file(tmp_path, raw)
+        out = tmp_path / "run.h5"
+        argv = [
+            str(scenario), "--out", str(out), "--flows-from",
+            str(clean_out.record.path), "--quiet",
+        ]  # fmt: skip
+        assert run_scenario.main(argv) == run_scenario.EXIT_NOT_CONVERGED
+        err = capsys.readouterr().err
+        assert "accumulated leftover" in err and "conservation_limit" in err
+        checkpoint = RunFile(out).read_checkpoint()
+        assert checkpoint.step > 0
+        assert all(b.leftover is not None for b in checkpoint.budgets)
+        assert checkpoint.t < BUDGET_WINDOW[1]
+
+    def test_a_restart_carries_the_accumulated_leftover(
+        self,
+        tmp_path: Path,
+        clean_out: SimpleNamespace,
+        budget_window: SimpleNamespace,
+    ) -> None:
+        """Killed inside the release after a checkpoint, restarted: the window's own budgets.
+
+        The leftover accumulated to the checkpoint is nonzero in every class,
+        and the checkpoint file holds it by value. The restarted run ends with
+        every budget term, the leftover included, and every stored frame's
+        budgets, bitwise those of the uninterrupted run, which is the window
+        the fixture marched in this process. Defects caught (each a leftover
+        that starts a restarted run from zero, so the bound of ADR-016 is not
+        carried across it): the writer storing 0.0 for the leftover; the
+        reader returning 0.0; the restart beginning the accumulated leftover
+        at 0.0.
+        """
+        config, whole = budget_window.config, budget_window.record
+        by_step = {info.step: info for info in budget_window.steps}
+        checkpoint = next(
+            info.step
+            for info in budget_window.steps
+            if info.step % BUDGET_WINDOW_CHECKPOINT == 0 and info.t > 1.5
+        )
+        kill = checkpoint + 7
+        assert kill < whole.steps
+        at_checkpoint = by_step[checkpoint].budgets
+        assert all(b.leftover != 0.0 for b in at_checkpoint)
+        cut = tmp_path / "cut.h5"
+        with pytest.raises(_KilledError):
+            run(
+                config,
+                cut,
+                flows_from=clean_out.record.path,
+                on_step=killer(kill),
+                provenance=PROVENANCE,
+            )
+        saved = RunFile(cut).read_checkpoint()
+        assert saved.step == checkpoint
+        same_budgets(saved.budgets, at_checkpoint)
+        again = run(config, restart=cut)
+        assert again.restarted_from == checkpoint
+        assert (again.steps, again.t_final) == (whole.steps, whole.t_final)
+        same_budgets(again.budgets, whole.budgets)
+        same_frames(RunFile(cut), RunFile(whole.path))
+
+    def test_an_older_run_file_reads_and_its_restart_is_refused(
+        self,
+        tmp_path: Path,
+        budget_window: SimpleNamespace,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """The window's files rewritten as before prompt 78: read, leftover unknown.
+
+        The frames read with the leftover None and the residual they always
+        had, the booked residual plus the leftover; a restart is refused
+        before anything is written, naming the unknown leftover, and the
+        runner exits 2; no frame is appended to the older rows. Defects
+        caught: the reader zipping the rows with the current terms (an older
+        file then fails to read); the restart's check removed (the refusal
+        then names the configuration instead).
+        """
+        source = Path(budget_window.record.path)
+        old = tmp_path / "old.h5"
+        _copy_run(source, old)
+        _strip_leftover(old)
+        new_frames = RunFile(source).read_frames()
+        old_frames = RunFile(old).read_frames()
+        assert old_frames.steps.tolist() == new_frames.steps.tolist()
+        for mine, theirs in zip(old_frames.budgets, new_frames.budgets, strict=True):
+            for a, b in zip(mine, theirs, strict=True):
+                assert a.leftover is None
+                if b.current is None:
+                    continue
+                assert a.residual() == pytest.approx(
+                    b.residual() + b.leftover, rel=1e-12, abs=1e-9
+                )
+        assert all(b.leftover is None for b in RunFile(old).read_checkpoint().budgets)
+        later = _with_t_end(budget_window.config, 5.0)
+        before = old.read_bytes()
+        with pytest.raises(ValueError, match="leftover accumulated before the restart"):
+            run(later, restart=old, provenance=PROVENANCE)
+        assert old.read_bytes() == before
+        scenario = _scenario_file(tmp_path, later.merged_mapping())
+        argv = [str(scenario), "--restart", str(old), "--quiet"]
+        assert run_scenario.main(argv) == run_scenario.EXIT_REFUSED
+        assert "leftover" in capsys.readouterr().err
+        last = {k: fields[-1] for k, fields in new_frames.fields.items()}
+        with pytest.raises(ValueError, match="written before"):
+            RunFile(old).write_frame(10_000, 9.0, last, new_frames.budgets[-1])

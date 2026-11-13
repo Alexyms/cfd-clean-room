@@ -43,13 +43,16 @@ from src.placement import (
     search,
 )
 from src.time_integration import Provenance, run
+from validation.transport_cases import conservation_keys
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIGS = ROOT / "configs"
 COARSE_GRID = {"nx": 80, "ny": 30}
 # ADR-011 G's per-cell bound, 1e-4 rho V_min / t_end, on 80x30 at the base's
 # t_end of 60 s, as tests/test_time_integration.py runs this grid.
-COARSE_MASS_IMBALANCE_TOL = 1.0e-4 * 1.2 * (0.1 * 0.1) / 60.0
+COARSE_MASS_IMBALANCE_TOL = (
+    conservation_keys()["conservation_limit"] * 1.2 * (0.1 * 0.1) / 60.0
+)
 PROVENANCE = Provenance("test", "2026-11-02T00:00:00", "test-machine", 0)
 SCENARIOS = {
     "door": "scenario_door_leak.yaml",
