@@ -99,7 +99,7 @@ def same_budgets(a: tuple[MassBudget, ...], b: tuple[MassBudget, ...]) -> None:
     """Two sequences of budgets, every term bit for bit, None as None."""
     assert len(a) == len(b)
     for x, y in zip(a, b, strict=True):
-        for name in ("initial", "inflow", "outflow", "source", "current"):
+        for name in ("initial", "inflow", "outflow", "source", "current", "leftover"):
             p, q = getattr(x, name), getattr(y, name)
             assert (p is None) == (q is None), name
             if p is not None:

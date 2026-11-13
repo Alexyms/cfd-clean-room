@@ -365,6 +365,9 @@ def implicit_step(
 
     Raises
     ------
+    TypeError
+        If ``leftover_bound`` is a bool (Python's or numpy's), which would
+        read as the bound 1.0 or 0.0.
     ValueError
         If ``method`` is not one of ``IMPLICIT_METHODS``, or
         ``leftover_bound`` is negative or NaN.
@@ -394,6 +397,10 @@ def implicit_step(
     """
     if method not in IMPLICIT_METHODS:
         raise ValueError(f"method must be one of {IMPLICIT_METHODS}, got {method!r}")
+    if isinstance(leftover_bound, (bool, np.bool_)):
+        raise TypeError(
+            f"leftover_bound must be a number or None, not a bool, got {leftover_bound!r}"
+        )
     # Written as "not >= 0" so that a NaN bound is refused as well.
     if leftover_bound is not None and not leftover_bound >= 0.0:
         raise ValueError(

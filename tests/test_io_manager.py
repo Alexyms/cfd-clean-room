@@ -35,6 +35,7 @@ docstring:
 
 import hashlib
 import re
+from dataclasses import replace
 from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
@@ -118,9 +119,14 @@ def _same_checkpoint(a: SteadyCheckpoint, b: SteadyCheckpoint) -> None:
 
 
 def _budget(seed: int, *, fresh: bool = False) -> MassBudget:
-    """A budget with a distinct value in every term; FRESH has no field yet."""
+    """A budget with a distinct value in every term; FRESH has no field yet.
+
+    The leftover is a nonzero value of its own, since a writer or reader that
+    stored zero for it is a defect the round trips must see (ADR-016). A fresh
+    budget has booked no step and leaves it at zero.
+    """
     rng = np.random.default_rng(seed)
-    values = rng.random(9)
+    values = rng.random(10)
     return MassBudget(
         initial=None if fresh else float(values[0]),
         inflow=float(values[1]),
@@ -130,6 +136,7 @@ def _budget(seed: int, *, fresh: bool = False) -> MassBudget:
             s: float(v) for s, v in zip(DEPOSIT_SURFACES, values[4:8], strict=True)
         },
         current=None if fresh else float(values[8]),
+        leftover=0.0 if fresh else float(values[9]),
     )
 
 
@@ -383,7 +390,9 @@ class TestFrames:
 
         The first frame's budgets have no field yet (initial and current
         None). Defects caught: None read back as NaN or zero; the budgets of
-        two classes swapped; a frame appended over the last one.
+        two classes swapped; a frame appended over the last one; the leftover
+        stored as zero by the writer or returned as zero by the reader (every
+        later frame's budget carries a nonzero one).
         """
         run = RunFile(tmp_path / "run.h5")
         frames = self._write(run)
@@ -400,6 +409,22 @@ class TestFrames:
             assert list(handle["transport/budgets"].attrs["terms"]) == list(
                 BUDGET_TERMS
             )
+
+    def test_an_unknown_leftover_is_stored_and_read_back_as_unknown(
+        self, tmp_path: Path
+    ) -> None:
+        """A budget whose leftover is None keeps it None, not zero, through the file.
+
+        Zero would read as a leftover booked and found nothing (ADR-016), and a
+        restart would carry it. Defect caught: the writer storing 0.0 for an
+        unknown leftover.
+        """
+        run = RunFile(tmp_path / "run.h5")
+        unknown = replace(_budget(3), leftover=None)
+        run.write_frame(5, 0.125, _fields(2), [unknown, _budget(4)])
+        got = run.read_frames().budgets[0]
+        assert got[0].leftover is None
+        same_budgets(got, (unknown, _budget(4)))
 
     def test_a_frame_out_of_order_or_of_other_classes_is_refused(
         self, tmp_path: Path
@@ -928,7 +953,9 @@ class TestCheckpoints:
 
         Defects caught: the time stored as float32 or rebuilt from the step;
         a class field or budget dropped; the checkpoint written into the run
-        file, which a crash while it is open can make unreadable.
+        file, which a crash while it is open can make unreadable; the
+        leftover stored or read as zero, which a restart would carry as the
+        accumulated leftover (ADR-016).
         """
         run = RunFile(tmp_path / "run.h5")
         fields, budgets = _fields(7), [_budget(7), _budget(8)]

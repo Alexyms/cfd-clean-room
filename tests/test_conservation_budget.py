@@ -9,9 +9,11 @@ test naming in its docstring the planted defect it was shown to catch
 - ``scalar_scheme.implicit_step`` returns the leftover of the field it
   returns, ``dt`` times the residual summed over the cells, recomputed here
   face by face; with ``leftover_bound`` the solve stops only when the
-  leftover is within it as well, under Jacobi and conjugate gradients; a
-  bound that cannot be met leaves the solve unconverged at its cap; a
-  negative or NaN bound is refused.
+  leftover is within it as well, under Jacobi and conjugate gradients, at
+  the start iterate and in the loop; a bound that cannot be met leaves the
+  solve unconverged at its cap; a capped conjugate gradient iterate's
+  leftover is formed; a per-cell step infinite in a SOLID cell leaves the
+  leftover finite; a negative, NaN or bool bound is refused.
 - Without the argument the solve is the one with an infinite bound, bit for
   bit, for every system the transport solver and the k-epsilon model hand
   it, fallbacks included.
@@ -21,7 +23,9 @@ test naming in its docstring the planted defect it was shown to catch
 - ``TransportSolver.solve_timestep`` books each step's leftover, gives each
   step the share ``leftover_share * conservation_limit * S * dt / t_end``,
   and raises ConservationBreachError when the accumulated leftover reaches
-  ``conservation_limit`` times the supply.
+  ``conservation_limit`` times the supply, not the content: the share of the
+  first release step carries that step's own source, and a room whose
+  content is far below its supply is refused at ``L S`` and not before.
 
 The 80x30 room's window spanning a release, the runner's exit code and the
 older run file's restart are in tests/test_time_integration.py
@@ -216,6 +220,102 @@ class TestLeftover:
                 c_star, volume, 0.8, g_u, g_v, sink, solid, 1e-6, 10,
                 leftover_bound=bad,
             )  # fmt: skip
+
+    @pytest.mark.parametrize("bad", [True, False, np.True_, np.False_])
+    def test_a_bool_bound_is_refused(self, bad: bool) -> None:
+        """True would read as the bound 1.0 and False as 0.0 (review 78 S4).
+
+        Defect caught: the bool check removed, so both are accepted as numbers.
+        """
+        c_star, volume, g_u, g_v, sink, solid = _system(1)
+        with pytest.raises(TypeError, match="leftover_bound"):
+            implicit_step(
+                c_star, volume, 0.8, g_u, g_v, sink, solid, 1e-6, 10,
+                leftover_bound=bad,
+            )  # fmt: skip
+
+    @pytest.mark.parametrize("method", [JACOBI, CONJUGATE_GRADIENT])
+    def test_a_step_infinite_in_a_solid_cell_leaves_the_leftover_finite(
+        self, method: str
+    ) -> None:
+        """A per-cell step that is infinite in the SOLID cells, as the contract allows.
+
+        The leftover and the field are bitwise those under a finite step there:
+        the residual is zero in a SOLID cell and the step is not read. Defect
+        caught: the per-cell step not masked in SOLID cells (infinity times the
+        zero residual is NaN in the sum). The Jacobi sweep divides zero by the
+        zero diagonal of an infinite-step SOLID cell and resets the cell, so
+        its invalid-value warning is expected here.
+        """
+        c_star, volume, g_u, g_v, sink, solid = _system(3)
+        assert solid.any()
+        step = np.random.default_rng(4).uniform(0.2, 2.0, solid.shape)
+        rest = (g_u, g_v, sink, solid, 1e-3, 500)
+        finite = implicit_step(c_star, volume, step, *rest, method=method)
+        with np.errstate(invalid="ignore"):
+            infinite = implicit_step(
+                c_star, volume, np.where(solid, np.inf, step), *rest, method=method
+            )
+        assert finite.leftover != 0.0 and math.isfinite(infinite.leftover)
+        assert np.float64(infinite.leftover).tobytes() == (
+            np.float64(finite.leftover).tobytes()
+        )
+        assert infinite.field.tobytes() == finite.field.tobytes()
+
+    @pytest.mark.parametrize("method", [JACOBI, CONJUGATE_GRADIENT])
+    def test_the_start_is_refused_when_its_leftover_is_over_the_bound(
+        self, method: str
+    ) -> None:
+        """A tolerance the start meets, and a bound half the start's own leftover.
+
+        Without the bound the solve takes no iteration and returns the start;
+        with it the start is refused and the solve goes on until the leftover
+        is within the bound. Defect caught: the stop's second clause ignored
+        at the start iterate under conjugate gradients (the loop's own clause
+        is the next test's).
+        """
+        c_star, volume, g_u, g_v, sink, solid = _system(9)
+        dt = 0.8
+        args = (c_star, volume, dt, g_u, g_v, sink, solid, 1e6, 2000)
+        start = dt * float(
+            np.sum(_residual(c_star, c_star, volume, dt, g_u, g_v, sink, solid))
+        )
+        bound = 0.5 * abs(start)
+        free = implicit_step(*args, method=method)
+        assert free.iterations == 0 and free.converged
+        assert abs(free.leftover - start) <= 1e-12 * abs(start)
+        held = implicit_step(*args, method=method, leftover_bound=bound)
+        assert held.iterations > 0 and held.converged
+        assert abs(held.leftover) <= bound
+
+    def test_a_capped_conjugate_gradient_forms_the_leftover_of_its_iterate(
+        self,
+    ) -> None:
+        """Three iterations of a tight solve: ``accept.leftover`` is the iterate's.
+
+        Called on the helper, since ``implicit_step`` discards a capped CG
+        iterate for the Jacobi fallback's and never reads this one. The tight
+        stop is never met, so ``test`` is never called and only ``final``
+        forms the leftover. Defect caught: ``final`` not called at the cap (the
+        leftover then stays at the zero it started from).
+        """
+        c_star, volume, g_u, g_v, sink, solid = _system(11)
+        dt = 0.8
+        over_dt = volume / dt
+        a_p = over_dt + g_u[:, :-1] + g_u[:, 1:] + g_v[:-1, :] + g_v[1:, :] + sink
+        b = over_dt * c_star
+        accept = scalar_scheme._Acceptance(dt, solid, 0.0)
+        field, iterations, converged = scalar_scheme._conjugate_gradient(
+            c_star.copy(), a_p, b, g_u, g_v, solid, 1e-14 * float(np.abs(b).max()), 3,
+            accept,
+        )  # fmt: skip
+        assert iterations == 3 and not converged
+        expected = dt * float(
+            np.sum(_residual(field, c_star, volume, dt, g_u, g_v, sink, solid))
+        )
+        scale = float(np.sum(volume * c_star))
+        assert expected != 0.0
+        assert abs(accept.leftover - expected) <= 1e-12 * scale
 
     def test_nothing_to_solve_has_no_leftover(self) -> None:
         c_star, volume, g_u, g_v, sink, solid = _system(2)
@@ -486,9 +586,11 @@ class TestSolverBudget:
         mesh, solver = _closed_box(max_diffusion_iter=1, diffusion_tol=1e-12)
         still = uniform_face_field(mesh, 0.0, 0.0)
         c = np.random.default_rng(23).uniform(0.0, 1e5, mesh.cell_type.shape)
+        before = 0.0
         with pytest.raises(ConservationBreachError) as caught:
             for _ in range(200):
                 c = solver.solve_timestep(c, still, 0, 0.02)
+                before = solver.budget[0].leftover
         budget = solver.budget[0]
         assert caught.value.size_class == 0
         assert caught.value.leftover == budget.leftover
@@ -496,6 +598,72 @@ class TestSolverBudget:
         assert caught.value.limit == LIMIT
         assert abs(budget.leftover) >= LIMIT * budget.supplied()
         assert "conservation_limit" in str(caught.value)
+        # The step that raised was the first to reach the limit, so a threshold
+        # set too high would let the steps before it through and fail here.
+        assert abs(before) < LIMIT * budget.supplied()
+
+    def test_the_refusal_reads_the_supply_not_the_content(self) -> None:
+        """A room whose content is a thousandth of its supply, as late in a clean-out.
+
+        The accumulated leftover is set to a fraction of ``L S`` through
+        ``restore_budgets`` and one more step is taken. At 0.5 and 0.99 of
+        ``L S`` it is far above ``L`` times the content and below ``L S``: not
+        refused. At 1.01 of ``L S`` it is refused. Defects caught: the check
+        reading the content instead of the supply (a clean-out inside REQ-T05
+        would be stopped); the threshold ten times the limit, which the
+        runner's test alone caught before (test 78 B2, T-S4).
+        """
+        for fraction, refused in ((0.5, False), (0.99, False), (1.01, True)):
+            mesh, solver = _closed_box()
+            still = uniform_face_field(mesh, 0.0, 0.0)
+            c = np.random.default_rng(24).uniform(0.0, 1e5, mesh.cell_type.shape)
+            content = MassBudget.in_domain(c, mesh)
+            supply = 1000.0 * content
+            leftover = fraction * LIMIT * supply
+            # Closed: what was supplied is in the room or has left, less the leftover.
+            booked = MassBudget(
+                initial=supply,
+                outflow=supply - content - leftover,
+                current=content,
+                leftover=leftover,
+            )
+            solver.restore_budgets([booked, *(MassBudget() for _ in solver.budget[1:])])
+            if refused:
+                with pytest.raises(ConservationBreachError) as caught:
+                    solver.solve_timestep(c, still, 0, 0.02)
+                assert caught.value.supplied == supply
+                assert abs(caught.value.leftover) >= LIMIT * supply
+            else:
+                solver.solve_timestep(c, still, 0, 0.02)
+                budget = solver.budget[0]
+                assert abs(budget.leftover) > 100.0 * LIMIT * budget.current
+                assert abs(budget.leftover) < LIMIT * budget.supplied()
+
+    def test_the_first_release_step_gets_a_share_with_its_own_source_in_the_supply(
+        self,
+    ) -> None:
+        """From an empty room, the first step's supply is its own source, and so is its share.
+
+        Before the step the budget holds nothing, so a share formed from the
+        supply before the step's inflow and source are booked is zero for the
+        whole first step. Defect caught: that share (test 78 T-S2).
+        """
+        t_end, dt = 2.0, 0.02
+        mesh, solver = _closed_box(t_end=t_end)
+        still = uniform_face_field(mesh, 0.0, 0.0)
+        rate = np.zeros(mesh.cell_type.shape)
+        rate[3, 5] = 2.0e3
+        released = float(np.sum(rate * np.outer(mesh.dy_cell, mesh.dx_cell))) * dt
+        solver.solve_timestep(
+            np.zeros(mesh.cell_type.shape), still, 0, dt, sources=rate
+        )
+        budget = solver.budget[0]
+        assert budget.initial == 0.0 and budget.inflow == 0.0
+        assert budget.supplied() == pytest.approx(released, rel=1e-12)
+        share = SHARE * LIMIT * budget.supplied() * dt / t_end
+        assert share > 0.0
+        assert solver.last_leftover_bound == share
+        assert abs(solver.last_leftover) <= share
 
     def test_with_the_share_working_the_refusal_does_not_fire(self) -> None:
         """The same box and steps under the file's cap: the share holds, no breach."""

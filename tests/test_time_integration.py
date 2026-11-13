@@ -2382,6 +2382,7 @@ class TestRunScenario:
 # so the share is what holds the leftover there.
 BUDGET_WINDOW_TOL = 1.0e-5
 BUDGET_WINDOW = ("scenario_equipment_dust.yaml", 4.0, {"litho_dust": (1.0, 2.0)})
+BUDGET_WINDOW_CHECKPOINT = 50
 
 
 def budget_window_raw(**transport: object) -> dict:
@@ -2400,7 +2401,7 @@ def budget_window(
     """The window on the clean-out's kept state, every step recorded."""
     folder = tmp_path_factory.mktemp("budget_window")
     raw = budget_window_raw()
-    raw["solver"]["checkpoint_interval"] = 50
+    raw["solver"]["checkpoint_interval"] = BUDGET_WINDOW_CHECKPOINT
     config = SimConfig.from_dict(raw)
     steps, on_step = recorder()
     record = run(
@@ -2546,6 +2547,53 @@ class TestConservationBudget:
         assert checkpoint.step > 0
         assert all(b.leftover is not None for b in checkpoint.budgets)
         assert checkpoint.t < BUDGET_WINDOW[1]
+
+    def test_a_restart_carries_the_accumulated_leftover(
+        self,
+        tmp_path: Path,
+        clean_out: SimpleNamespace,
+        budget_window: SimpleNamespace,
+    ) -> None:
+        """Killed inside the release after a checkpoint, restarted: the window's own budgets.
+
+        The leftover accumulated to the checkpoint is nonzero in every class,
+        and the checkpoint file holds it by value. The restarted run ends with
+        every budget term, the leftover included, and every stored frame's
+        budgets, bitwise those of the uninterrupted run, which is the window
+        the fixture marched in this process. Defects caught (each a leftover
+        that starts a restarted run from zero, so the bound of ADR-016 is not
+        carried across it): the writer storing 0.0 for the leftover; the
+        reader returning 0.0; the restart beginning the accumulated leftover
+        at 0.0.
+        """
+        config, whole = budget_window.config, budget_window.record
+        by_step = {info.step: info for info in budget_window.steps}
+        checkpoint = next(
+            info.step
+            for info in budget_window.steps
+            if info.step % BUDGET_WINDOW_CHECKPOINT == 0 and info.t > 1.5
+        )
+        kill = checkpoint + 7
+        assert kill < whole.steps
+        at_checkpoint = by_step[checkpoint].budgets
+        assert all(b.leftover != 0.0 for b in at_checkpoint)
+        cut = tmp_path / "cut.h5"
+        with pytest.raises(_KilledError):
+            run(
+                config,
+                cut,
+                flows_from=clean_out.record.path,
+                on_step=killer(kill),
+                provenance=PROVENANCE,
+            )
+        saved = RunFile(cut).read_checkpoint()
+        assert saved.step == checkpoint
+        same_budgets(saved.budgets, at_checkpoint)
+        again = run(config, restart=cut)
+        assert again.restarted_from == checkpoint
+        assert (again.steps, again.t_final) == (whole.steps, whole.t_final)
+        same_budgets(again.budgets, whole.budgets)
+        same_frames(RunFile(cut), RunFile(whole.path))
 
     def test_an_older_run_file_reads_and_its_restart_is_refused(
         self,

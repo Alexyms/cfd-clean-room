@@ -128,10 +128,6 @@ LINE_SOURCE_GRIDS: frozenset[str] = frozenset({"val024_280x50", "val024_560x100"
 # The line source's inlet segment, the uniform stream carrying the turbulence.
 LINE_SOURCE_INLET = "stream"
 
-# ADR-011 G's per-cell bound on the mass imbalance, as a fraction of the mass of
-# the smallest cell per second of the run: 1e-4 rho V_cell / t_end.
-MASS_IMBALANCE_FRACTION = 1.0e-4
-
 # The step height's face is the one this share of ny up from the floor, so
 # the clustered cells under the step height are 1.5 times as many as a uniform
 # spacing would put there (ADR-012 G (ii): the step's corner on a grid line).
@@ -484,9 +480,9 @@ def load_line_source(
     """Load the line source in decaying grid turbulence on a grid.
 
     The case is uniform with square cells; the only grid-dependent setting is
-    the per-cell mass imbalance bound of ADR-011 G, 1e-4 rho V_cell / t_end,
-    which this loader sets for the grid at hand (the committed file carries the
-    value for its own).
+    the per-cell mass imbalance bound of ADR-011 G, ``transport.conservation_limit``
+    (REQ-T05's 1e-4) times rho V_cell / t_end, which this loader sets for the
+    grid at hand (the committed file carries the value for its own).
 
     Parameters
     ----------
@@ -527,9 +523,14 @@ def load_line_source(
         # is right on a uniform axis only; the nominal spacings above do not see
         # a stretch ratio.
         raise ValueError("the case's mesh must be uniform; a stretched axis is refused")
+    # The line source file carries a transport section, being a transport
+    # march; the assert narrows the optional type.
+    assert base.transport is not None
     raw["solver"] = {
         **raw["solver"],
-        "mass_imbalance_tol": MASS_IMBALANCE_FRACTION * base.rho * dx * dy / base.t_end,
+        "mass_imbalance_tol": (
+            base.transport.conservation_limit * base.rho * dx * dy / base.t_end
+        ),
     }
     return SimConfig.from_dict(raw)
 
