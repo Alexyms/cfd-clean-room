@@ -50,8 +50,9 @@ solver:
   # The stop (ADR-011 decision 6 of 2026-10-03; ADR-011 G): error_estimate,
   # whose conditions are the iteration error of the velocity and of the eddy
   # viscosity below iteration_error_tol and the continuity readings below
-  # mass_imbalance_tol = conservation_limit rho V_min / t_end, V_min the smallest cell
-  # volume per metre of depth (0.025 x 0.025 m^2): 1e-4 x 1.2 x 6.25e-4 / 60.
+  # mass_imbalance_tol = L rho V_min / t_end, L the transport section's
+  # conservation_limit, V_min the smallest cell volume per metre of depth
+  # (0.025 x 0.025 m^2): 1e-4 x 1.2 x 6.25e-4 / 60.
   stopping_rule: error_estimate
   iteration_error_tol: 1.0e-6
   mass_imbalance_tol: 1.25e-9

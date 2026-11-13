@@ -96,6 +96,9 @@ MARKERS = (
     "harness_transport",
     "plants",
     "floor",
+    "plants_78b",
+    "cancellation",
+    "val022_coverage",
 )
 
 
@@ -662,11 +665,117 @@ def plants_table() -> list[str]:
         "|---|---|---|---|---|",
     ]
     for name, r in plants.items():
+        if not (name == "none" or name.startswith("P")):
+            continue
         caught = "baseline" if name == "none" else yes(bool(r["caught"]))
         tests = len(r["tests"])
         lines.append(
             f"| {name} | {r['file'] or '-'} | {tests} | {r['summary']} | {caught} |"
         )
+    return lines
+
+
+def failing_tests(name: str) -> str:
+    """The test functions a planted copy's log reports failed or errored."""
+    log = (RESULTS / "plants" / f"{name}.log").read_text(encoding="utf-8")
+    failed = sorted(
+        {
+            line.split()[1].split("::")[-1].split("[")[0]
+            for line in log.splitlines()
+            if line.startswith(("FAILED ", "ERROR "))
+        }
+    )
+    return ", ".join(failed) if failed else "-"
+
+
+def plants_78b_table() -> list[str]:
+    """Round 1's planted defects (prompt 78b), each with the tests that failed on it."""
+    plants = json.loads((RESULTS / "plants.json").read_text(encoding="utf-8"))
+    lines = [
+        "### X1. The planted defects of round 1's fixes (results/builder78/plant78.py, Q plants)",
+        "",
+        "Each applied to a copy of the tree at the fix pass and the tests that claim it run "
+        "there; `none_78b` runs every one of those tests on the unchanged copy. A "
+        "parametrised test that fails on one case only (a conjugate gradient case of a "
+        "test that also runs Jacobi) is listed once.",
+        "",
+        "| Plant | File | Tests run | Outcome | Caught | Failing tests |",
+        "|---|---|---|---|---|---|",
+    ]
+    for name, r in plants.items():
+        if not (name == "none_78b" or name.startswith("Q")):
+            continue
+        caught = "baseline" if name == "none_78b" else yes(bool(r["caught"]))
+        failing = "-" if name == "none_78b" else failing_tests(name)
+        lines.append(
+            f"| {name} | {r['file'] or '-'} | {len(r['tests'])} | {r['summary']} | "
+            f"{caught} | {failing} |"
+        )
+    return lines
+
+
+def cancellation_table() -> list[str]:
+    """Why the accumulated leftover sits far below its bound: slack or cancellation."""
+    lines = [
+        "### X2. The accumulated leftover against the step leftovers it sums (prompt 78b)",
+        "",
+        "Over the scored steps of each run and class (supply above zero). If the steps "
+        "cancelled, the sum of their magnitudes would be many times the magnitude of their "
+        "sum; if most steps sit far inside their share, the sum of magnitudes would be a "
+        "small fraction of the sum of the shares.",
+        "",
+        "| Run | Class (um) | Steps scored | Sum of abs(step leftover) over abs(sum of step leftovers) | Sum of abs(step leftover) over sum of shares | Median abs(step leftover) over its share | Steps above a tenth of their share |",
+        "|---|---|---|---|---|---|---|",
+    ]
+    for run in configs78.RUNS:
+        steps = Steps(RESULTS / "probe" / f"{run.name}.steps.npz")
+        for k in sorted(steps.rows):
+            live = steps.col(k, "supplied") > 0.0
+            if not live.any():
+                lines.append(
+                    f"| {run.name} | {SIZES_UM[k]} | 0 | nothing supplied | - | - | - |"
+                )
+                continue
+            step = steps.col(k, "step_leftover")[live]
+            share = steps.col(k, "share")[live]
+            magnitudes = np.abs(step)
+            lines.append(
+                f"| {run.name} | {SIZES_UM[k]} | {int(live.sum()):,} | "
+                f"{float(magnitudes.sum() / abs(step.sum())):.3f} | "
+                f"{float(magnitudes.sum() / share.sum()):.4f} | "
+                f"{float(np.median(magnitudes / share)):.4f} | "
+                f"{float(np.mean(magnitudes > 0.1 * share)):.4f} |"
+            )
+    return lines
+
+
+def coverage_table() -> list[str]:
+    """The statements this branch changed that a short VAL-022 run executes (cover78b.py)."""
+    record = json.loads((RESULTS / "val022_coverage.json").read_text(encoding="utf-8"))
+    lines = [
+        "### X3. The changed statements a VAL-022 run executes (prompt 78b)",
+        "",
+        f"{record['case']} shortened to {record['steps']} steps with a frame at every step "
+        f"and a checkpoint at every second, after its {record['startup_outer']}-iteration "
+        "perturbed start-up, through time_integration.run under coverage started after "
+        "every module was imported. Changed statements are the executable statements of "
+        f"the lines the working tree changes against {record['base'][:7]} "
+        "(cover78b.py).",
+        "",
+        "| File | Changed lines | Changed statements | Statements the run executed in the file | Changed statements among them |",
+        "|---|---|---|---|---|",
+    ]
+    for row in record["files"]:
+        lines.append(
+            f"| {row['file']} | {row['changed_lines']} | {row['changed_statements']} | "
+            f"{row['executed_in_file']} | {row['executed_statements']} |"
+        )
+    total = sum(row["executed_statements"] for row in record["files"])
+    lines.append(
+        f"| all | {sum(r['changed_lines'] for r in record['files'])} | "
+        f"{sum(r['changed_statements'] for r in record['files'])} | "
+        f"{sum(r['executed_in_file'] for r in record['files'])} | {total} |"
+    )
     return lines
 
 
@@ -851,6 +960,9 @@ def build() -> tuple[str, dict[str, str]]:
     tables["harness_flow"], tables["harness_transport"] = harness_tables()
     tables["plants"] = plants_table()
     tables["floor"] = floor_table(config)
+    tables["plants_78b"] = plants_78b_table()
+    tables["cancellation"] = cancellation_table()
+    tables["val022_coverage"] = coverage_table()
     tables["predictions"] = predictions_table(score(tables))
     head = [
         "# The tables of prompt 78 (generated by tables78.py; do not edit)",

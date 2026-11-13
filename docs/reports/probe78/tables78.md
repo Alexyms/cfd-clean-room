@@ -193,3 +193,70 @@ The floor of a step's leftover is about c u (1 + kappa) Q (ADR-016), u the unit 
 | 320x120 dust release (results/builder69, prompt 77's R10 steps) | 33,119 | 0.4199 | 2.720e+06 (f L / (n u), Q = S) | 1.915e+05 |
 | 640x240, extrapolated (twice the steps and twice kappa of 320x120) | 66,238 | 0.8397 | 1.360e+06 (f L / (n u), Q = S) | 7.391e+04 |
 
+### X1. The planted defects of round 1's fixes (results/builder78/plant78.py, Q plants)
+
+Each applied to a copy of the tree at the fix pass and the tests that claim it run there; `none_78b` runs every one of those tests on the unchanged copy. A parametrised test that fails on one case only (a conjugate gradient case of a test that also runs Jacobi) is listed once.
+
+| Plant | File | Tests run | Outcome | Caught | Failing tests |
+|---|---|---|---|---|---|
+| none_78b | - | 13 | 18 passed in 108.08s (0:01:48) | baseline | - |
+| Q1_writer_stores_zero_leftover | src/io_manager.py | 4 | 4 failed in 89.20s (0:01:29) | yes | test_a_checkpoint_on_an_intervals_last_step, test_a_restart_carries_the_accumulated_leftover, test_the_march_checkpoint_is_what_was_written, test_what_is_written_is_what_is_read |
+| Q2_reader_returns_zero_leftover | src/io_manager.py | 4 | 4 failed in 107.86s (0:01:47) | yes | test_a_checkpoint_on_an_intervals_last_step, test_a_restart_carries_the_accumulated_leftover, test_the_march_checkpoint_is_what_was_written, test_what_is_written_is_what_is_read |
+| Q3_restart_starts_the_leftover_at_zero | src/solver_transport.py | 3 | 2 failed, 1 passed in 94.02s (0:01:34) | yes | test_a_restart_carries_the_accumulated_leftover, test_a_restore_with_an_unknown_leftover_is_refused |
+| Q4_writer_stores_zero_for_an_unknown_leftover | src/io_manager.py | 1 | 1 failed in 7.30s | yes | test_an_unknown_leftover_is_stored_and_read_back_as_unknown |
+| Q5_refusal_reads_the_content | src/solver_transport.py | 1 | 1 failed in 2.16s | yes | test_the_refusal_reads_the_supply_not_the_content |
+| Q6_refusal_threshold_ten_times_the_limit | src/solver_transport.py | 2 | 2 failed in 7.29s | yes | test_the_refusal_fires_when_the_accumulated_leftover_reaches_the_limit, test_the_refusal_reads_the_supply_not_the_content |
+| Q7_share_from_the_supply_before_the_step | src/solver_transport.py | 1 | 1 failed in 5.57s | yes | test_the_first_release_step_gets_a_share_with_its_own_source_in_the_supply |
+| Q8_per_cell_step_not_masked_in_solid | src/scalar_scheme.py | 1 | 2 failed in 4.19s | yes | test_a_step_infinite_in_a_solid_cell_leaves_the_leftover_finite |
+| Q9_cg_start_clause_ignored | src/scalar_scheme.py | 1 | 1 failed, 1 passed in 1.67s | yes | test_the_start_is_refused_when_its_leftover_is_over_the_bound |
+| Q10_cg_cap_final_removed | src/scalar_scheme.py | 1 | 1 failed in 6.62s | yes | test_a_capped_conjugate_gradient_forms_the_leftover_of_its_iterate |
+| Q11_bool_bound_accepted | src/scalar_scheme.py | 1 | 4 failed in 2.49s | yes | test_a_bool_bound_is_refused |
+
+### X2. The accumulated leftover against the step leftovers it sums (prompt 78b)
+
+Over the scored steps of each run and class (supply above zero). If the steps cancelled, the sum of their magnitudes would be many times the magnitude of their sum; if most steps sit far inside their share, the sum of magnitudes would be a small fraction of the sum of the shares.
+
+| Run | Class (um) | Steps scored | Sum of abs(step leftover) over abs(sum of step leftovers) | Sum of abs(step leftover) over sum of shares | Median abs(step leftover) over its share | Steps above a tenth of their share |
+|---|---|---|---|---|---|---|
+| R1 | 0.1 | 6,243 | 1.089 | 0.0296 | 0.0020 | 0.2249 |
+| R1 | 0.3 | 6,243 | 1.089 | 0.0296 | 0.0020 | 0.2249 |
+| R1 | 0.5 | 6,243 | 1.089 | 0.0296 | 0.0020 | 0.2249 |
+| R1 | 1 | 6,243 | 1.089 | 0.0296 | 0.0020 | 0.2247 |
+| R1 | 5 | 6,243 | 1.088 | 0.0292 | 0.0019 | 0.2212 |
+| R2 | 0.1 | 13,620 | 1.109 | 0.0290 | 0.0036 | 0.0919 |
+| R2 | 0.3 | 13,620 | 1.109 | 0.0290 | 0.0036 | 0.0920 |
+| R2 | 0.5 | 13,620 | 1.109 | 0.0290 | 0.0036 | 0.0920 |
+| R2 | 1 | 13,620 | 1.107 | 0.0290 | 0.0036 | 0.0924 |
+| R2 | 5 | 13,620 | 1.072 | 0.0284 | 0.0026 | 0.0902 |
+| R3 | 0.1 | 2,848 | 1.015 | 0.0304 | 0.0009 | 0.0541 |
+| R3 | 0.3 | 2,848 | 1.015 | 0.0304 | 0.0009 | 0.0541 |
+| R3 | 0.5 | 2,848 | 1.015 | 0.0304 | 0.0009 | 0.0541 |
+| R3 | 1 | 2,848 | 1.015 | 0.0304 | 0.0009 | 0.0541 |
+| R3 | 5 | 2,848 | 1.018 | 0.0305 | 0.0008 | 0.0555 |
+| R4 | 0.1 | 6,243 | 1.122 | 0.0153 | 0.0207 | 0.0407 |
+| R4 | 0.3 | 6,243 | 1.122 | 0.0153 | 0.0207 | 0.0407 |
+| R4 | 0.5 | 6,243 | 1.122 | 0.0153 | 0.0207 | 0.0407 |
+| R4 | 1 | 6,243 | 1.122 | 0.0153 | 0.0207 | 0.0407 |
+| R4 | 5 | 6,243 | 1.122 | 0.0153 | 0.0208 | 0.0407 |
+| SL | 0.1 | 0 | nothing supplied | - | - | - |
+| SL | 0.3 | 0 | nothing supplied | - | - | - |
+| SL | 0.5 | 0 | nothing supplied | - | - | - |
+| SL | 1 | 0 | nothing supplied | - | - | - |
+| SL | 5 | 0 | nothing supplied | - | - | - |
+
+### X3. The changed statements a VAL-022 run executes (prompt 78b)
+
+val022_re40 shortened to 4 steps with a frame at every step and a checkpoint at every second, after its 200-iteration perturbed start-up, through time_integration.run under coverage started after every module was imported. Changed statements are the executable statements of the lines the working tree changes against 8e61788 (cover78b.py).
+
+| File | Changed lines | Changed statements | Statements the run executed in the file | Changed statements among them |
+|---|---|---|---|---|
+| scripts/run_scenario.py | 23 | 7 | 0 | 0 |
+| src/config.py | 38 | 8 | 6 | 0 |
+| src/io_manager.py | 24 | 9 | 131 | 0 |
+| src/scalar_scheme.py | 132 | 39 | 0 | 0 |
+| src/solver_transport.py | 157 | 40 | 0 | 0 |
+| src/time_integration.py | 21 | 3 | 107 | 0 |
+| validation/cases.py | 9 | 1 | 0 | 0 |
+| validation/transport_cases.py | 24 | 7 | 0 | 0 |
+| all | 428 | 114 | 244 | 0 |
+

@@ -135,8 +135,14 @@ cases that build a transport section by hand read both from the base file
 (`tests/test_conservation.py`), `tests/test_time_integration.py`'s `REQ_T05`, and ADR-011 G's
 rule `mass_imbalance_tol <= 1e-4 rho V_min / T` wherever a test forms it
 (`tests/helpers.py`, `tests/test_alert_latency.py`, `tests/test_time_integration.py`,
-`tests/test_benchmark.py`, `tests/test_config.py`); the YAML comments that state the rule
-name the key. Not pointed: the YAML values of `solver.mass_imbalance_tol` themselves, which
+`tests/test_benchmark.py`, `tests/test_config.py`, and from round 1 on
+`tests/test_sensor_evaluation.py`) and in `validation.cases.load_line_source`, which sets
+the tolerance of a VAL-024 grid from the case file's key (round 1; the loader's own
+constant is removed); the YAML comments that state the rule name the key where the file
+has one. Left as literals on purpose: `tests/test_line_source.py`'s check of the loader's
+value (2e-10 and 5e-11) and `tests/test_config.py`'s check that every file of record
+carries 1e-4 and 0.1, which assert what the key's value is and could not fail if they read
+it. Not pointed: the YAML values of `solver.mass_imbalance_tol` themselves, which
 are numbers the rule gave (YAML cannot refer to another key, and the tolerance is a flow input,
 so deriving it at load would be a change to every flow state's inputs); ADR-011 G's own text
 and the earlier probes' scripts (`docs/reports/probe77/configs77.py`), which are records of
@@ -232,8 +238,10 @@ only to see whether they reproduce, into `results/builder78/harness_flow.jsonl`.
 Retaken: every turbulent flow row (`val017_216x72`, `val018_320x120`, `val019_656x60`,
 `val020_272x90`), whose k and eps solves go through the changed `implicit_step`, and the five
 laminar rows of VAL-001 and VAL-002. Not retaken: the four VAL-022 cylinder rows, laminar
-transient marches of two to three hours each, which run no line this pass changed (no
-k-epsilon model and no transport solver).
+transient marches of two to three hours each. A tier-2 run from rest takes none of the
+changed statements: the restart block runs only on a restart, and tier 2 books no particle
+budget. Section 9 shows it from the coverage of one VAL-022 case (table X3), which round 1
+asked for.
 
 **Wall clock.** The runs started at 11:50 with `val020_272x90`, the longest (8,328 s in its row
 of record under six processes), and the estimate from it was about 2.5 hours of the 4-hour
@@ -277,6 +285,7 @@ two-sweep cap now also trips the refusal). The prompt's list:
 The other plants (P8 to P11, P14, P15) are of the leftover's arithmetic and the budget's
 ratios. Each was applied to a copy of the tree by `results/builder78/plant78.py`, which runs
 the tests that claim it there; the unchanged copy passes every one of them (table P2).
+Round 1's fixes added more plants, applied to the tree at that pass (section 9, table X1).
  P11 survived the first plant run: the test's tolerance never let the max-norm part
 hold within its five sweeps, so the bound's clause was not what kept the solve going. The
 test now uses a tolerance the max-norm part meets from the first iterate, checks that the
@@ -367,9 +376,9 @@ f L = 1e-05. The step's share is f L S_n dt_n / T and the bound f L S(t) t / T, 
 
 The largest step leftover over its share is near one on the runs where the share binds:
 the solve stops at the first sweep whose leftover is inside it. The accumulated leftover is
-far below its bound, because the leftover changes sign along a run and its steps cancel, as
-prompt 77 found. The clean-out's step leftovers never come within a fifth of the share. The
-seal leak supplies nothing on 80x30 and is not scored.
+far below its bound because most steps sit far inside their share, not because the steps
+cancel (section 9, table X2). The clean-out's step leftovers never come within a fifth of the
+share. The seal leak supplies nothing on 80x30 and is not scored.
 
 ### The cost
 
@@ -549,13 +558,171 @@ The flow states in all of these reproduce (prediction (d)), so prompt 79 can reu
   kept 80x30 flow state the time-integration module solves once, so they sit there
   (`TestConservationBudget`); the rest are in `tests/test_conservation_budget.py`.
 
+## 9. Round 1's fixes (prompt 78b)
+
+Review 78 found one Bug and six Suggestions, and test 78 two Bugs and four Suggestions. The
+three Bugs were load-bearing behaviours with no test that could fail on them. No computed
+result was found wrong, and this pass changes no arithmetic: it adds tests, one refusal of a
+bad argument, and text. Each new or strengthened test was shown to fail on a planted defect
+(table X1; the plants are the Q plants of `results/builder78/plant78.py`, applied to a copy of
+the tree at this pass).
+
+**The leftover through files and restarts (review B1, test B1).** `same_budgets` in
+`tests/helpers.py` now compares the leftover with every other term, bit for bit, as its
+docstring said it did. The budget fixture of `tests/test_io_manager.py` carries a nonzero
+leftover, so the run file's and the checkpoint's round trips assert it by value, and a
+budget with an unknown leftover is stored and read back as unknown, not as zero.
+`TestConservationBudget::test_a_restart_carries_the_accumulated_leftover` kills the window's
+run after a checkpoint inside the release and restarts it in the same process. The checkpoint
+holds every class's leftover by value, and the restarted run's budgets and every stored
+frame's budgets are bitwise those of the uninterrupted run, the leftover included. Plants Q1
+(the writer stores 0.0), Q2 (the reader returns 0.0), Q3 (the restart starts the accumulated
+leftover at 0.0) and Q4 (an unknown leftover stored as 0.0).
+
+**The refusal's operand (test B2).** `test_the_refusal_reads_the_supply_not_the_content`
+restores a closed box's budget with a content a thousandth of its supply, sets the
+accumulated leftover to 0.5, 0.99 and 1.01 times `L S`, and takes one step. The first two are
+above `L` times the content and are not refused; the third is. Plant Q5 (the check reads the
+content). The unit test of the refusal also asserts that the step before the raise was inside
+the limit, so a threshold ten times too large fails in the unit tests and not only in the
+runner's test (test T-S4); plant Q6.
+
+**The Suggestions taken.**
+
+- *Test T-S2.* `test_the_first_release_step_gets_a_share_with_its_own_source_in_the_supply`:
+  from an empty room the first step's supply is its own source, and the share handed to the
+  solve is `f L S_n dt / T` with that source in `S_n`. Plant Q7 (the supply before the step).
+- *Test T-S3.* A per-cell step that is infinite in a SOLID cell leaves the leftover finite and
+  equal to the one under a finite step there (Q8); under conjugate gradients with a bound the
+  start iterate is refused when its leftover is over the bound (Q9); and a capped conjugate
+  gradient iterate has its leftover formed (Q10). The last test calls `_conjugate_gradient`
+  with an `_Acceptance`, since `implicit_step` discards a capped iterate for the Jacobi
+  fallback's, and no public call reads it.
+- *Review S4.* `leftover_bound` refuses a bool with a `TypeError`, as `solve_timestep` does
+  for `dt`; the Raises section and SYSTEM.md section 4 say so. Plant Q11.
+- *Review S1 and test T-S1.* Section 1 lists what now reads the key and what stays a literal
+  and why. The YAML comments name `transport.conservation_limit` only in the files that have
+  it; the three flow files without a transport section state the rule with its 1e-4 again.
+- *Review S2.* SYSTEM.md section 3.2's `scalar_scheme.py` row carries the cascade of
+  `leftover_bound` and `ImplicitResult.leftover`.
+- *Review S5.* ADR-016 states that a recirculating vent is booked as inflow, so the supply
+  counts a particle once per pass and the share loosens in a room that recirculates, and that
+  the reference room has none.
+- *Review S6.* `docs/PROJECT_PLAN.md` has a deliverable row for ADR-016 and the built remedy,
+  and a change log row.
+- *The test command.* `.claude/commands/cfd-test.md` limits a tester to three processes at
+  once and has runs that write large files go one at a time.
+
+<!-- tables78 plants_78b begin -->
+### X1. The planted defects of round 1's fixes (results/builder78/plant78.py, Q plants)
+
+Each applied to a copy of the tree at the fix pass and the tests that claim it run there; `none_78b` runs every one of those tests on the unchanged copy. A parametrised test that fails on one case only (a conjugate gradient case of a test that also runs Jacobi) is listed once.
+
+| Plant | File | Tests run | Outcome | Caught | Failing tests |
+|---|---|---|---|---|---|
+| none_78b | - | 13 | 18 passed in 108.08s (0:01:48) | baseline | - |
+| Q1_writer_stores_zero_leftover | src/io_manager.py | 4 | 4 failed in 89.20s (0:01:29) | yes | test_a_checkpoint_on_an_intervals_last_step, test_a_restart_carries_the_accumulated_leftover, test_the_march_checkpoint_is_what_was_written, test_what_is_written_is_what_is_read |
+| Q2_reader_returns_zero_leftover | src/io_manager.py | 4 | 4 failed in 107.86s (0:01:47) | yes | test_a_checkpoint_on_an_intervals_last_step, test_a_restart_carries_the_accumulated_leftover, test_the_march_checkpoint_is_what_was_written, test_what_is_written_is_what_is_read |
+| Q3_restart_starts_the_leftover_at_zero | src/solver_transport.py | 3 | 2 failed, 1 passed in 94.02s (0:01:34) | yes | test_a_restart_carries_the_accumulated_leftover, test_a_restore_with_an_unknown_leftover_is_refused |
+| Q4_writer_stores_zero_for_an_unknown_leftover | src/io_manager.py | 1 | 1 failed in 7.30s | yes | test_an_unknown_leftover_is_stored_and_read_back_as_unknown |
+| Q5_refusal_reads_the_content | src/solver_transport.py | 1 | 1 failed in 2.16s | yes | test_the_refusal_reads_the_supply_not_the_content |
+| Q6_refusal_threshold_ten_times_the_limit | src/solver_transport.py | 2 | 2 failed in 7.29s | yes | test_the_refusal_fires_when_the_accumulated_leftover_reaches_the_limit, test_the_refusal_reads_the_supply_not_the_content |
+| Q7_share_from_the_supply_before_the_step | src/solver_transport.py | 1 | 1 failed in 5.57s | yes | test_the_first_release_step_gets_a_share_with_its_own_source_in_the_supply |
+| Q8_per_cell_step_not_masked_in_solid | src/scalar_scheme.py | 1 | 2 failed in 4.19s | yes | test_a_step_infinite_in_a_solid_cell_leaves_the_leftover_finite |
+| Q9_cg_start_clause_ignored | src/scalar_scheme.py | 1 | 1 failed, 1 passed in 1.67s | yes | test_the_start_is_refused_when_its_leftover_is_over_the_bound |
+| Q10_cg_cap_final_removed | src/scalar_scheme.py | 1 | 1 failed in 6.62s | yes | test_a_capped_conjugate_gradient_forms_the_leftover_of_its_iterate |
+| Q11_bool_bound_accepted | src/scalar_scheme.py | 1 | 4 failed in 2.49s | yes | test_a_bool_bound_is_refused |
+<!-- tables78 plants_78b end -->
+
+**Why the accumulated leftover sits far below its bound.** Section 5 said the leftover
+changes sign along a run and its steps cancel, as prompt 77 found. Prompt 77 had measured
+little cancellation (the sum of the step magnitudes 1.1 to 1.5 times the magnitude of the
+sum), so the sentence was checked against the recorder's per-step series for R1 to R4
+(table X2). The numbers give slack, not cancellation. In every run and class the sum of the
+step magnitudes is close to the magnitude of the sum, so the steps hardly cancel. What keeps
+the accumulated leftover small is that most steps sit far inside their share: the sum of the
+magnitudes is a small fraction of the sum of the shares, and the median step is a small
+fraction of its own. Where the share binds it binds on a minority of steps (the last column),
+which is where the largest step over its share reaches near one (table B1). Section 5's
+sentence is corrected to say so.
+
+<!-- tables78 cancellation begin -->
+### X2. The accumulated leftover against the step leftovers it sums (prompt 78b)
+
+Over the scored steps of each run and class (supply above zero). If the steps cancelled, the sum of their magnitudes would be many times the magnitude of their sum; if most steps sit far inside their share, the sum of magnitudes would be a small fraction of the sum of the shares.
+
+| Run | Class (um) | Steps scored | Sum of abs(step leftover) over abs(sum of step leftovers) | Sum of abs(step leftover) over sum of shares | Median abs(step leftover) over its share | Steps above a tenth of their share |
+|---|---|---|---|---|---|---|
+| R1 | 0.1 | 6,243 | 1.089 | 0.0296 | 0.0020 | 0.2249 |
+| R1 | 0.3 | 6,243 | 1.089 | 0.0296 | 0.0020 | 0.2249 |
+| R1 | 0.5 | 6,243 | 1.089 | 0.0296 | 0.0020 | 0.2249 |
+| R1 | 1 | 6,243 | 1.089 | 0.0296 | 0.0020 | 0.2247 |
+| R1 | 5 | 6,243 | 1.088 | 0.0292 | 0.0019 | 0.2212 |
+| R2 | 0.1 | 13,620 | 1.109 | 0.0290 | 0.0036 | 0.0919 |
+| R2 | 0.3 | 13,620 | 1.109 | 0.0290 | 0.0036 | 0.0920 |
+| R2 | 0.5 | 13,620 | 1.109 | 0.0290 | 0.0036 | 0.0920 |
+| R2 | 1 | 13,620 | 1.107 | 0.0290 | 0.0036 | 0.0924 |
+| R2 | 5 | 13,620 | 1.072 | 0.0284 | 0.0026 | 0.0902 |
+| R3 | 0.1 | 2,848 | 1.015 | 0.0304 | 0.0009 | 0.0541 |
+| R3 | 0.3 | 2,848 | 1.015 | 0.0304 | 0.0009 | 0.0541 |
+| R3 | 0.5 | 2,848 | 1.015 | 0.0304 | 0.0009 | 0.0541 |
+| R3 | 1 | 2,848 | 1.015 | 0.0304 | 0.0009 | 0.0541 |
+| R3 | 5 | 2,848 | 1.018 | 0.0305 | 0.0008 | 0.0555 |
+| R4 | 0.1 | 6,243 | 1.122 | 0.0153 | 0.0207 | 0.0407 |
+| R4 | 0.3 | 6,243 | 1.122 | 0.0153 | 0.0207 | 0.0407 |
+| R4 | 0.5 | 6,243 | 1.122 | 0.0153 | 0.0207 | 0.0407 |
+| R4 | 1 | 6,243 | 1.122 | 0.0153 | 0.0207 | 0.0407 |
+| R4 | 5 | 6,243 | 1.122 | 0.0153 | 0.0208 | 0.0407 |
+| SL | 0.1 | 0 | nothing supplied | - | - | - |
+| SL | 0.3 | 0 | nothing supplied | - | - | - |
+| SL | 0.5 | 0 | nothing supplied | - | - | - |
+| SL | 1 | 0 | nothing supplied | - | - | - |
+| SL | 5 | 0 | nothing supplied | - | - | - |
+<!-- tables78 cancellation end -->
+
+**Why the four VAL-022 rows need no retake.** The four rows are tier-2 runs, laminar
+transient marches through `time_integration.run` that write a run file and a checkpoint.
+`cover78b.py` ran one case, `val022_re40`, at its shortest under coverage: the harness's
+perturbed start-up, then a few steps with a frame at every step and a checkpoint at every
+second one, so that the run file's and the checkpoint's writers ran. Of the statements this
+pass added or changed in `src/`, `scripts/` and `validation/`, the run executed none
+(table X3). The restart block of `run` is on the tier-1 path and runs only for a restart; the
+transient march books no particle budget and constructs no transport solver; `config.py`'s
+changed statements parse a transport section the cylinder's file does not have. The rows
+therefore stand as recorded.
+
+<!-- tables78 val022_coverage begin -->
+### X3. The changed statements a VAL-022 run executes (prompt 78b)
+
+val022_re40 shortened to 4 steps with a frame at every step and a checkpoint at every second, after its 200-iteration perturbed start-up, through time_integration.run under coverage started after every module was imported. Changed statements are the executable statements of the lines the working tree changes against 8e61788 (cover78b.py).
+
+| File | Changed lines | Changed statements | Statements the run executed in the file | Changed statements among them |
+|---|---|---|---|---|
+| scripts/run_scenario.py | 23 | 7 | 0 | 0 |
+| src/config.py | 38 | 8 | 6 | 0 |
+| src/io_manager.py | 24 | 9 | 131 | 0 |
+| src/scalar_scheme.py | 132 | 39 | 0 | 0 |
+| src/solver_transport.py | 157 | 40 | 0 | 0 |
+| src/time_integration.py | 21 | 3 | 107 | 0 |
+| validation/cases.py | 9 | 1 | 0 | 0 |
+| validation/transport_cases.py | 24 | 7 | 0 | 0 |
+| all | 428 | 114 | 244 | 0 |
+<!-- tables78 val022_coverage end -->
+
+**The suite.** At 789a6aa, the test commit, all three tiers: 3,056 tests passed, none failed
+or skipped (2,976 in the unit and integration run, 80 validation;
+`results/builder78b/suite_ui.txt`, `suite_val.txt` and the JUnit XML beside them). The docs
+commit that follows changes no code. `ruff format --check`, `ruff check`,
+`scripts/gen_system_map.py --check` and `docs/reports/probe78/tables78.py --check` are clean.
+
 ## Sources
 
 1. `docs/reports/probe78/tables78.md`, generated by `tables78.py` from `results/builder78/`
    (untracked, this machine): per run and side `RUN.h5`, `RUN.txt` and `RUN.meta.json`, the
-   probe's `RUN.steps.npz`, `harness_flow.jsonl`, `plants.json` and `runs78.json`; and
-   `benchmarks/results.jsonl`. `--check` regenerates and compares, the report's copies too.
-2. `configs78.py`, `probe78.py`, `run78.py` beside it; `results/builder78/plant78.py`.
+   probe's `RUN.steps.npz`, `harness_flow.jsonl`, `plants.json`, `runs78.json` and
+   `val022_coverage.json`; and `benchmarks/results.jsonl`. `--check` regenerates and compares, the report's copies too.
+2. `configs78.py`, `probe78.py`, `run78.py` and `cover78b.py` (round 1's coverage of a
+   VAL-022 run) beside it; `results/builder78/plant78.py`.
 3. Prompt 77's records, `results/builder77/` (R1 to R4: `RUN.steps.npz`, `RUN.probe.json`,
    `RUN.h5`), and the source runs `results/builder64/coarse/`.
 4. ADR-016, `docs/reports/budget_residual_mechanism.md`, `docs/SYSTEM.md` (REQ-T05, section 4).

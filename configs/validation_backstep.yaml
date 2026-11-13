@@ -81,7 +81,7 @@ solver:
   momentum_sweeps: 10
   stopping_rule: error_estimate
   iteration_error_tol: 1.0e-6
-  # ADR-011 G's per-cell bound, conservation_limit rho V_min / t_end, on the finest preset's
+  # ADR-011 G's per-cell bound, 1e-4 rho V_min / t_end, on the finest preset's
   # smallest cell (984x90: dx 164 H / 984 by the wall spacing 7.1112e-04 m),
   # so one value serves the three grids and the coarser ones meet it the more
   # easily.

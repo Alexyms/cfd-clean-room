@@ -90,6 +90,15 @@ to `2 f L S(t)`, still a fifth of the limit. Extended again and again, `T1 < T2 
 the sum of `(T_k - T_(k-1)) / T_k` is at most `1 + ln(Tm / T1)`: the bound is
 `f L S (1 + ln(Tm / T1))`, and the refusal stops the run before it can pass `L S`.
 
+**A recirculating vent.** A vent that discharges the air an intake drew (ADR-014
+`recirculate_from`) books its discharge as `inflow`, so `S` counts a particle once for
+every pass through the vent, and the bound `f L S(t) t / T` is set against the booked
+supply, not against the particles brought in from outside. In a room that recirculates
+the share therefore loosens: the same leftover is a smaller fraction of a larger `S`.
+REQ-T05's ratio has always used this denominator, so nothing regresses, and the refusal
+at `L S` loosens the same way. The reference room has no recirculating vent
+(`configs/clean_room_vents.yaml` is the one configuration of record that has).
+
 **A caller that marches past `T`.** The validation marches (VAL-024's scalar march among
 them) step their own count, not to `solver.t_end`. Past `T` the bound grows as `t / T`; the
 refusal still holds at `L S`.
