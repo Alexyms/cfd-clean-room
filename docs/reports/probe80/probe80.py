@@ -212,6 +212,71 @@ def frame_maps(
     return {c: tracker.maps() for c, tracker in trackers.items()}, times, low
 
 
+def frame_clear(
+    path: Path,
+    thresholds: Sequence[float] | np.ndarray,
+    live: np.ndarray,
+    areas: np.ndarray,
+    end: float,
+) -> tuple[dict[str, np.ndarray], np.ndarray, dict[str, np.ndarray]]:
+    """Both readings' clear times from t_e on, ``placement.clear_times``'s rule.
+
+    Parameters
+    ----------
+    path : Path
+        A run file with ``/transport/`` frames.
+    thresholds : Sequence[float] or np.ndarray
+        Per channel, particles per cubic metre.
+    live : np.ndarray
+        [ny, nx] bool, the non-SOLID cells.
+    areas : np.ndarray
+        [ny, nx], each cell's area.
+    end : float
+        t_e, seconds.
+
+    Returns
+    -------
+    dict[str, np.ndarray]
+        Counting to [channels, ny, nx]: the earliest frame time at or after
+        ``end`` from which every frame reads below; ``end`` where none from
+        ``end`` on reads at or above; inf where the last frame does; NaN SOLID.
+    np.ndarray
+        The frame times at or after ``end``.
+    dict[str, np.ndarray]
+        Counting to [channels, frames]: the live area's fraction at or above.
+
+    Notes
+    -----
+    One frame of one class is read at a time, as ``frame_maps``.
+    """
+    thresholds = checked_thresholds(thresholds)
+    n_ch = thresholds.size
+    total = float(areas[live].sum())
+    with h5py.File(path, "r") as run_file:
+        group = run_file["transport"]
+        times = group["times"][()]
+        kept = np.flatnonzero(times >= end)
+        last = {c: np.full((n_ch, *live.shape), -1) for c in COUNTINGS}
+        fractions = {c: np.empty((n_ch, kept.size)) for c in COUNTINGS}
+        for m, f in enumerate(kept):
+            fields = {k: group[f"C_{k}"][f] for k in range(n_ch)}
+            for c in COUNTINGS:
+                for k in range(n_ch):
+                    above = (channel(fields, k, c) >= thresholds[k]) & live
+                    last[c][k][above] = m
+                    fractions[c][k, m] = float((above * areas).sum()) / total
+    n = kept.size
+    stamps = times[kept]
+    out = {}
+    for c in COUNTINGS:
+        clear = np.full((n_ch, *live.shape), float(end))
+        after = stamps[np.minimum(last[c] + 1, n - 1)]
+        clear = np.where(last[c] >= 0, np.where(last[c] < n - 1, after, np.inf), clear)
+        clear[:, ~live] = np.nan
+        out[c] = clear
+    return out, stamps, fractions
+
+
 def reading_latencies(
     readings: np.ndarray,
     times: np.ndarray,
