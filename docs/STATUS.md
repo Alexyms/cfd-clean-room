@@ -162,6 +162,11 @@ placement again on it. No conclusion of either gate changed; the 320x120 dust re
 accumulated leftover is 1.4e-6 of its supply, about seventy times inside REQ-T05. On
 step-resolved maps the product layout is within 68 ms (2.5%) of each sweep arm's own search
 in worst case, where the frame-resolved tables showed a tie.
+Prompt 80 (PR 111, `docs/reports/cumulative_counts.md`) measured what ISO 14644-1's cumulative
+counts do: no Phase 5 conclusion changes, single channels alarm up to 42% sooner on 80x30,
+and the room clears later or at the same time. Alex decided on 2026-11-14 to build
+cumulative counting (prompt 81) and to re-score the sweep from its stored frames rather than
+run it again.
 Phases 6 and 7 have not begun.
 
 The product room itself has never been solved, and on 2026-10-04 it was found that the laminar

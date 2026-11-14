@@ -166,8 +166,8 @@ the product layout against 2.565 s), which is the frames' resolution, not the co
 
 **The re-search.** Searched again on the cumulative maps (L2 in tables80.md), the worst-case
 rule's surface search and product layout each move one cell, the litho tool's (3.188, 2.038) to
-its neighbour (3.213, 2.038), with the same worst case and a lower mean: a tie among the
-worst-case optima broken differently by the mean. The mean rule's searches and the free optimum
+its neighbour (3.213, 2.038), with the same worst case and the same mean: a tie in both, broken
+differently by the search's order. The mean rule's searches and the free optimum
 do not change. The per-class searches on the frame maps are not the layouts of record either
 (under the worst-case rule the product layout's first two cells differ, the free optimum's
 second and fourth): that is the
@@ -231,7 +231,7 @@ layout of record, one unit is decided earlier (the dust's 0.5 um channel, whose 
 before the class's own step arrival), the four 5 um units are exact and unchanged, the file's
 four are exact and detect nothing, the surface search's door and seal-leak units are never
 reached at any frame, and every other unit is left open, its bracket at most a frame wide. The
-product layout's worst case is decided to within 3 ms: its cumulative worst case lies in
+product layout's worst case is decided to within one step (3.6 ms): its cumulative worst case lies in
 [2.562, 2.565] s, the lower end being the breach's 5 um unit, which cannot change. That decides
 (b). The free optimum's worst case is left open, between 0.145 and 0.399 s: its worst unit is
 the dust's 0.1 um channel, which the larger classes can reach before the 0.1 um class does.
@@ -253,7 +253,8 @@ The open units' brackets are at most 0.254 s wide (surface search, dust, 0.1 um)
 
 On 80x30 both readings are step-resolved from the probe runs. The product layout's worst case is
 unchanged (the breach's 1 and 5 um channels set it, and neither moves), the free
-optimum's falls by about 40% (the dust's 0.1 um channel), and every layout's mean falls (K1).
+optimum's falls by about 40% (the dust's 0.1 um channel), and every detecting layout's mean falls; the file's four, which detect nothing, keep
+theirs (K1).
 Searched again on the cumulative maps, the product layout moves one cell, (0.150, 0.150) to
 (0.150, 0.250), under both rules, with the same worst case and a lower mean; the surface search
 and the free optimum do not change (K2 in tables80.md). The order of the four is unchanged (O1).
@@ -374,7 +375,7 @@ Under the plant 8 of 12 cases fail.
 (b)'s reason holds as stated: the product layout's worst unit is the breach, whose channels all
 reach their thresholds within a few milliseconds of each other at its worst cell, set by the
 plume's arrival; the 5 um channel cannot move, so the worst case cannot fall by more than the
-gap between the breach's 5 um latency and its largest, 3 ms. (d) holds at the dust, not at the
+gap between the breach's 5 um latency and its largest, one step (3.6 ms). (d) holds at the dust, not at the
 breach or the door.
 
 ## 8. The all-clear reading under the same counting (beyond the prompt's sections)
@@ -437,7 +438,9 @@ The per-class columns against rescored76.md C2's rows for the product layout (th
 
 ## 9. Would cumulative counting change a conclusion of the Phase 5 gate?
 
-No. Each detection conclusion of `docs/reports/phase5_alert_system_report.md` ("The latency
+No, on what was measured here. The sweep's arm runs were not scored in this pass; the pass's
+independent test scored the 19 arm runs that hold frames and maps under the cumulative reading
+and found the ranking holds there too (`results/tester80/`). Each detection conclusion of `docs/reports/phase5_alert_system_report.md` ("The latency
 report" and "What Alex may want to decide") holds under the cumulative reading:
 
 - The file's four detect none of the twenty units: holds, exactly, from their every-step readings
@@ -447,7 +450,7 @@ report" and "What Alex may want to decide") holds under the cumulative reading:
   76's standoffs reaches a door unit (D2); on 80x30 at the steps the door is uncoverable (K2). The
   frames cannot exclude an alarm between frames (K4).
 - With stands the product search detects all twenty within the breach's worst case, and the seal
-  leak within a second: holds; the worst case moves by at most 3 ms (B2) and every latency is at
+  leak within a second: holds; the worst case moves by at most one step, 3.6 ms (B2) and every latency is at
   or before its per-class value (S1).
 - The ranking holds on both grids: holds (O1). The searched layouts move one cell by the mean's
   tie-break, never in the worst case.
@@ -494,6 +497,14 @@ latencies, so this does not touch a claim.
   once; `tables80.py` regenerates everything in about a minute.
 
 ## Records
+
+**Alex's decision (2026-11-14).** Build cumulative counting into the monitor, the arrival maps
+and the all-clear reading (prompt 81), re-run the product grid and the placement on it, and
+re-score the sweep from its stored frames rather than run it again.
+
+**The checks (2026-11-14).** Review and independent test found no blocking finding. The
+recorded plant of section 6 exercises the 5 um clause only; the independent test's further
+plants caught the "never later" clause twice.
 
 Untracked, this machine: `results/builder80/placement/` (the three probe runs: run files,
 summaries, logs and `<run>.channels.npz` with both readings' step maps and the tracker's own),
