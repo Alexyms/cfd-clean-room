@@ -84,7 +84,7 @@ Since ECR-001 step 9 (2026-09-30), "the NS solver" in this table is the staggere
 |----|-------------|-----------|-------------|
 | REQ-A01 | The alert monitor shall read every sensor after every transport step and raise an alert at the first step whose reading is at or above the class's threshold, so that it adds no delay of its own to the detection latency, whose resolution is the step. | Delayed detection defeats the purpose of monitoring. Reworded 2026-10-30 (ADR-015 G, accepted by Alex): the earlier text, "detect threshold exceedance within one timestep of occurrence", holds by construction when the monitor reads every step, so no test could fail it. VAL-009 tests the alert's step against the first reading at or above threshold (ADR-015 C). | VAL-009 |
 | REQ-A02 | Sensor locations shall be configurable via the YAML configuration. | Enables comparison of sensor placement strategies without code changes. | Unit test |
-| REQ-A03 | Contamination thresholds shall be configurable per particle size class, either as a mapping by size or as an ISO 14644-1 class number from which the loader computes the limits by the standard's formula rounded to three significant figures; the product file's Class 5 values are the test. | Different size classes have different regulatory limits. Class 5 allows zero 5.0 um particles but 3.52 million 0.5 um particles per cubic meter. Reworded 2026-10-30 (ADR-015 G, accepted by Alex): "following ISO 14644-1 classification limits" is not testable without the formula (ADR-015 C). | Unit test |
+| REQ-A03 | Contamination thresholds shall be configurable per particle size class, either as a mapping by size or as an ISO 14644-1 class number from which the loader computes the limits by the standard's formula rounded to three significant figures; the product file's Class 5 values are the test. Each threshold shall be compared as the standard's cumulative limit, as a counter's channel reads it: the reading against class k's threshold is the sum of class k and every class of a larger diameter (each class standing for the particles nearest its size), so the largest class's channel is that class alone. | Different size classes have different regulatory limits, and the standard's are cumulative: Class 5 allows 3,520 particles per cubic metre at or above 0.5 um and, by the formula, 29.3 at or above 5 um (3.52 million at 0.5 um is Class 8's limit; the earlier rationale gave that figure for Class 5, corrected 2026-11-14). Reworded 2026-10-30 (ADR-015 G, accepted by Alex): "following ISO 14644-1 classification limits" is not testable without the formula (ADR-015 C). Amended 2026-11-14 (Alex's decision on prompt 80's measurement, `docs/reports/cumulative_counts.md`; ADR-015 C's amendment, built in prompt 81): the comparison is the cumulative one, which the code before it did not make. | Unit test: `tests/test_config.py` (the two forms); `tests/test_cumulative_counting.py` (the channels formed, an alert, a map, the recovery and the frames' readers opening on the sum exactly at the limit where no class alone reaches its own); `tests/test_alert_latency.py` TestCumulativeMaps (a run's maps the channels of its own fields, never later than each class's alone) |
 | REQ-A04 | The monitor shall report detection latency per sensor per scenario: elapsed time from event onset to first threshold exceedance at each sensor. The onset is the start of the event that carries the contamination (a replacement with a concentration, a set that gives a segment a concentration, a source, or the initial condition at t = 0); a sensor never at or above threshold within the run reports no latency and the run's end. | Core metric for reactive monitoring. Answers "how fast do we know about a contamination event?" | Integration test: `tests/test_time_integration.py` (TestArrivalMaps, ADR-015 step 3: on an 80x30 door opened twice, the run record's latencies from the monitor and from the arrival maps at the sensors' cells agree bitwise and equal the stored sensor series' rule); the rule on planted series in `tests/test_monitor.py` |
 | REQ-A05 | The monitor's placement module shall score any set of sensor layouts over a set of scenario run files by stated rules (worst case, mean, coverage within a stated time), rank them, and search the stated candidate positions for the layout of a stated count that is best under a rule, exact for one and two sensors and, over the units some candidate reaches, for the worst-case rule at any count while some layout of the count detects them all (when none does, the layout returned is the mean rule's and says so), reproducible from the run files alone. | Core value of proactive design mode. Answers "where should sensors go?" Reworded 2026-10-30 (ADR-015 G, accepted by Alex): "optimal" names no rule, so the requirement states the rules and the search (ADR-015 D). Exactness restated as built 2026-11-03 (prompt 75b): the worst-case rule is exact at any count while some layout of the count detects every unit some candidate reaches, and otherwise the layout is the mean rule's. | Integration test: `tests/test_sensor_evaluation.py` (ADR-015 step 4: the door, the breach and the dust release on 80x30, the units from the run files alone, the file's four and the searched four scored over the same units and ranked, the searched no worse under each rule, the free optimum bounding the mountable); the rules, the search against brute force and the candidates on planted maps and a small mesh in `tests/test_placement.py` |
 | REQ-A06 | The alert monitor shall read concentration fields but never modify them. | Separation of concerns. Monitoring is observation, not intervention. | Architecture review; VAL-009's tests (`tests/test_alert_latency.py`: the fields not writeable and bitwise unchanged across every update of a run) |
@@ -399,6 +399,12 @@ SimConfig:
         Source(x_start, x_end, y_start, y_end, rate | emission)   # per class
         Initial(values, threshold_factor)     # values per class, resolved at load
     class_thresholds() -> tuple[float, ...]   # each class's threshold by diameter
+    channel_classes() -> tuple[tuple[int, ...], ...]   # prompt 81 (ADR-015 C, amended
+        # 2026-11-14): channel_classes(particle_sizes)
+channel_classes(sizes) -> tuple[tuple[int, ...], ...]   # per class k, the classes whose
+    # diameter is at or above class k's, largest first (ties: the higher index first),
+    # the order every reader adds them in; the largest class's is that class alone.
+    # scenario.hold_time's start check reads the initial levels' channel sums
     # refused at load (ValueError, TypeError for a wrong type): every rule of ADR-014 B
     # (tests/test_config.py, TestScenario*), and every interval's merged mapping must load
     # through from_dict; a recirculating pair of the base whose intake draws while no
@@ -1617,25 +1623,32 @@ sensor_cells(config, mesh) -> tuple[(j, i), ...]   # moved here: ADR-014 C's rul
 Alert: sensor (name), size_class, step_on, t_on, reading_on, step_off, t_off (None while open),
        peak, peak_t; is_open                       # frozen; the peak from step_on to the step
                                                    # before step_off, its first time
-AlertMonitor(config, mesh)                         # the sensors' cells, the names, the class thresholds;
+AlertMonitor(config, mesh)                         # the sensors' cells, the names, the class thresholds,
+                                                   # the channels (config.channel_classes);
                                                    # ValueError with no sensor, no threshold for a
                                                    # class (class_thresholds) or a SOLID sensor cell
-    names -> tuple[str, ...]; thresholds -> np.ndarray [classes] (a copy)
-    update(step, t, fields) -> tuple[Alert, ...]   # reads every sensor of every class; returns the
-                                                   # alerts this step opened or closed, by class then
-                                                   # sensor; opens at a reading at or above the
-                                                   # threshold, closes at the first below; fields
+    names -> tuple[str, ...]; thresholds -> np.ndarray [channels] (a copy; channel k's is
+                                                   # class k's); channels -> the classes each sums
+    update(step, t, fields) -> tuple[Alert, ...]   # reads every sensor of every class and sums the
+                                                   # channels (prompt 81: channel k is class k and
+                                                   # every larger class, ADR-015 C amended
+                                                   # 2026-11-14); returns the alerts this step opened
+                                                   # or closed, by channel then sensor; opens at a
+                                                   # channel reading at or above its threshold,
+                                                   # closes at the first below; Alert.size_class and
+                                                   # reading_on name the channel and its sum; fields
                                                    # read, never written (REQ-A06). TypeError for a
                                                    # non-int step (a bool) or a non-real t;
                                                    # ValueError unless step and t are above the last
                                                    # update's, t finite, the classes 0 to n - 1 on the
                                                    # mesh's shape, every reading finite
-    readings -> np.ndarray                         # [classes, sensors] of the last update (a copy);
-                                                   # NaN before any
+    readings -> np.ndarray                         # [classes, sensors], each class's own reading at
+                                                   # the last update (a copy); NaN before any
+    channel_readings -> np.ndarray                 # [channels, sensors], their channel sums (a copy)
     alerts -> tuple[Alert, ...]                    # every alert so far: closed, then open, each by
                                                    # step_on, class, the sensor's place in the file
-    latencies(onsets) -> np.ndarray                # [events, classes, sensors]: the time of the first
-                                                   # reading at or above threshold at or after each
+    latencies(onsets) -> np.ndarray                # [events, channels, sensors]: the time of the first
+                                                   # channel reading at or above threshold at or after each
                                                    # onset minus the onset, an alert open at the onset
                                                    # counting as the onset; inf if none by the last
                                                    # update (step 3, section D's rule; step 2 cut it at
@@ -1646,7 +1659,8 @@ AlertMonitor(config, mesh)                         # the sensors' cells, the nam
     state() -> dict[str, ndarray]                  # STATE_NAMES: alert_rows [alerts, ALERT_COLUMNS]
                                                    # (every alert, open ones with NaN step_off and
                                                    # t_off), alert_step, alert_t (NaN before any
-                                                   # update), alert_readings
+                                                   # update), alert_readings (per class; restore sums
+                                                   # the channels again)
     restore(state) -> None                         # other names ignored (the tracker's); KeyError for
                                                    # a missing one, saying the checkpoint predates the
                                                    # monitor; ValueError for a shape, a class or sensor
@@ -1664,26 +1678,42 @@ contaminating_events(scenario) -> tuple[(name, onset), ...]
                                                    # onset 0, any other's the start of the first
                                                    # interval it is active over (times(), is_active),
                                                    # a step time; ((RUN_START, 0.0),) when none
-ArrivalTracker(thresholds, live, onsets)           # [classes], [ny, nx] bool, [events] finite,
-                                                   # non-negative, in order, at least one; TypeError
-                                                   # for a non-real or non-bool, ValueError otherwise
-    onsets -> np.ndarray; first_above -> np.ndarray   # copies; first_above [events, classes, ny,
+ArrivalTracker(thresholds, live, onsets, *, channels)
+                                                   # [classes], [ny, nx] bool, [events] finite,
+                                                   # non-negative, in order, at least one; channels
+                                                   # config.channel_classes (checked_channels);
+                                                   # TypeError for a non-real, non-bool or non-int
+                                                   # member, ValueError otherwise
+    onsets -> np.ndarray; first_above -> np.ndarray   # copies; first_above [events, channels, ny,
                                                    # nx], NaN until reached, NaN in SOLID cells
+    channels -> tuple[tuple[int, ...], ...]
     update(t, fields) -> None                      # for each event with onset <= t, first_above = t
-                                                   # where NaN, non-SOLID and at or above; t real,
+                                                   # where NaN, non-SOLID and the channel's sum
+                                                   # (channel_sums) at or above; t real,
                                                    # finite, above the last; the classes 0 to n - 1
                                                    # on the mesh's shape
     state() -> dict[str, ndarray]                  # ARRIVAL_STATE_NAMES: first_above, arrival_onsets,
-                                                   # arrival_t (NaN before any update)
-    restore(state) -> None                         # other names ignored; KeyError for a missing one,
-                                                   # saying the checkpoint predates step 3; ValueError
+                                                   # arrival_t (NaN before any update) and
+                                                   # COUNTING_STATE (1.0, prompt 81's mark)
+    restore(state) -> None                         # other names ignored; KeyError for a missing map
+                                                   # name, saying the checkpoint predates step 3;
+                                                   # ValueError for the maps without COUNTING_STATE
+                                                   # (the per-class code's checkpoint); ValueError
                                                    # for a shape, other onsets, a non-scalar or inf
                                                    # time, a time in the maps with no update, in a
                                                    # SOLID cell, before its onset or after arrival_t
     record(event_names, t_final) -> ArrivalRecord  # inf where a non-SOLID cell was not reached;
                                                    # one name per event, t_final finite, not before
-                                                   # the last update
-ARRIVAL_STATE_NAMES, RUN_START ("run_start"), CONCENTRATION_KEY ("concentration")
+                                                   # the last update; counting CUMULATIVE
+ARRIVAL_STATE_NAMES, COUNTING_STATE ("cumulative_channels"), RUN_START ("run_start"),
+CONCENTRATION_KEY ("concentration")
+checked_channels(channels, n_classes) -> tuple[tuple[int, ...], ...]
+                                                   # one per class, each naming its own class and
+                                                   # others of 0 to n - 1 once; TypeError for a
+                                                   # non-int (a bool), ValueError otherwise
+channel_sums(values, channels) -> dict[int, ndarray]   # channel k: zero, then each named class
+                                                   # added in order; new float64 arrays
+channel_sum(values, members) -> ndarray            # one channel's
 ```
 
 As built, `state()` carries every alert, not only the open ones and their peaks as section C
@@ -1717,9 +1747,12 @@ of every scenario, in every class. Section H's planned `score(latencies, cells, 
 within)` is built without `rule`, since a Score carries every rule; `search` takes the rule.
 
 ```
-arrival_from_frames(frames: TransportFrames, thresholds, live, onsets) -> np.ndarray
-    # [events, classes, ny, nx]: per event, the first stored frame time at or after
-    # its onset at or above the class's threshold; inf where no frame is, NaN in
+arrival_from_frames(frames: TransportFrames, thresholds, live, onsets, *, channels)
+        -> np.ndarray
+    # prompt 81: on the channels (channel_sum of each frame, config.channel_classes,
+    # checked_channels' refusals), CUMULATIVE maps.
+    # [events, channels, ny, nx]: per event, the first stored frame time at or after
+    # its onset at or above the channel's threshold; inf where no frame is, NaN in
     # SOLID cells. Never before the march's map and reaching no cell it does not;
     # misses a cell at or above only between two frames. TypeError for a threshold
     # or an onset that is not a real number; ValueError unless one finite,
@@ -1733,8 +1766,11 @@ arrival_from_run(run_file: RunFile | path) -> RunArrival
     # thresholds, mesh and contaminating_events of the configuration the file
     # records and the last frame's time (FRAME_RESOLVED), fallback naming the
     # exception and its message. KeyError with neither maps nor frames;
-    # ValueError for a recorded configuration without a scenario section
-RunArrival(maps, onsets, resolution, event_names, t_final, fallback=None)   # NamedTuple
+    # ValueError for a recorded configuration without a scenario section.
+    # Prompt 81: the step maps carry /arrival/'s counting (PER_CLASS, the flag,
+    # for a group without one); the frames' maps are CUMULATIVE
+RunArrival(maps, onsets, resolution, event_names, t_final, fallback=None,
+           counting=CUMULATIVE)   # NamedTuple
 STEP_RESOLVED ("step"), FRAME_RESOLVED ("frame")
 latency(maps, onsets) -> np.ndarray     # [events, classes, ny, nx], arrival minus the
     # event's onset, inf and NaN kept; ValueError unless 4-D with one map per onset
@@ -1743,10 +1779,13 @@ detection_units(arrivals: Mapping[str, RunArrival]) -> Units
     # one unit per scenario, event and class, in that order; caps the run's
     # t_final minus the unit's onset. ValueError with no run, maps on two meshes,
     # names not one per event, a resolution that is neither STEP_RESOLVED nor
-    # FRAME_RESOLVED, a t_final not finite or before an onset; TypeError for a
+    # FRAME_RESOLVED, a t_final not finite or before an onset, or (prompt 81)
+    # runs of two countings, cumulative beside per-class; TypeError for a
     # scenario name that is not a str or a t_final that is not a real number
 Units(latencies [units, ny, nx], caps [units], labels ((scenario, event, class), ...),
-      frame_resolved (bool per unit: its run's maps were rebuilt from stored frames))
+      frame_resolved (bool per unit: its run's maps were rebuilt from stored frames),
+      counting (the one counting of the units, CUMULATIVE by default; the label's
+      index is then the channel))
 exclude_units(units, labels) -> Units   # the rest; ValueError for an unknown label
                                         # or none left
 score(units, cells, *, within=None) -> Score
@@ -1802,9 +1841,11 @@ rank(layouts) -> list[Layout]           # by the worst case, then the mean, stab
                                         # ValueError for none or two unit sets
 scenario_end(config) -> float | None    # t_e: the latest event end, an initial's its
     # start (0); None without a scenario or when it is not before t_end
-clear_times(frames, thresholds, live, areas, end) -> (clear, times, fractions)
-    # clear [classes, ny, nx]: per cell the earliest stored frame time at or after
-    # `end` from which every stored frame reads below the threshold; `end` where none
+clear_times(frames, thresholds, live, areas, end, *, channels) -> (clear, times,
+        fractions)
+    # prompt 81: on the channels, as arrival_from_frames reads them.
+    # clear [channels, ny, nx]: per cell the earliest stored frame time at or after
+    # `end` from which every stored frame reads the channel below its threshold; `end` where none
     # from `end` on reads at or above; inf ("not clear") where the last frame does;
     # NaN in SOLID cells. times [n] the frames at or after `end`; fractions
     # [classes, n] the live area's fraction at or above. TypeError for a threshold or
@@ -1812,8 +1853,8 @@ clear_times(frames, thresholds, live, areas, end) -> (clear, times, fractions)
     # live or areas not the frames' shape, end not finite and non-negative, or no
     # frame at or after it
 clear_units(runs: Mapping[str, RunFile | path]) -> ClearUnits
-    # one (scenario, class) unit per class of each run whose scenario_end is not
-    # None. ValueError with no run, no such run, two meshes; TypeError for a name
+    # one (scenario, channel) unit per channel of each run whose scenario_end is not
+    # None, read from its frames on the channels whatever its other records hold. ValueError with no run, no such run, two meshes; TypeError for a name
     # that is not a str
 ClearUnits(clear [units, ny, nx], ends [units], times, fractions, spacing [units],
            labels ((scenario, class), ...))    # NamedTuple; frame-resolved, spacing
@@ -1943,7 +1984,11 @@ run(config, run_file=None, *, restart=None, flows_from=None, on_step=None,
     # clean-out's beside the tracker's); /arrival/ is written at each
     # checkpoint, by a restart from its checkpoint before it continues, and at
     # the end. ValueError for any run without a threshold for every class;
-    # KeyError for a restart from a checkpoint without the maps.
+    # KeyError for a restart from a checkpoint without the maps. Prompt 81: the
+    # monitor, the tracker and the recovery read the channels; the sensor
+    # readings are stored with their channel sums beside them; a restart from
+    # a checkpoint whose maps carry no COUNTING_STATE (the per-class code's) is
+    # refused with a ValueError before the configuration's check.
 smallest_stable_dt(solver, faces, n_classes) -> float   # min over the classes
 plan_interval(index, interval, stable_dt, t_start=None) -> IntervalPlan
     # the fewest equal steps no larger than stable_dt (one more when the
@@ -1955,7 +2000,7 @@ MarchStep: step, t, dt, interval, fields (read-only), budgets (copies),
 RunRecord: path, intervals, flows, steps, t_final, held, wall_seconds, budgets,
     recovery (RecoveryRecord or None), arrival (ArrivalRecord), restarted_from,
     resumed_plan, alerts (every alert of the run, AlertMonitor.alerts' order; ()),
-    latencies (AlertMonitor.latencies on arrival's onsets, [events, classes,
+    latencies (AlertMonitor.latencies on arrival's onsets, [events, channels,
     sensors]; None without sensors), map_latencies (the maps at the sensors'
     cells; equal to latencies to the step)
 map_latencies(arrival, cells) -> np.ndarray   # first_above at each cell minus the onset
@@ -1967,11 +2012,12 @@ Provenance(commit, started, machine, concurrent); Provenance.here(commit, concur
 FlowNotConvergedError: fingerprint, stop_reason, outer
     # solver_transport's ConservationBreachError passes through run unchanged,
     # the run file and checkpoint file as the last writes left them (ADR-016)
-RecoveryTracker(thresholds, initial, cells, live, hold_time)
+RecoveryTracker(thresholds, initial, cells, live, hold_time, *, channels)
     update(t, fields, means); held() -> bool; state() / restore(state);
-    record(names, rate, held) -> RecoveryRecord
-    # within spec: every sensor below its class's threshold; the local field's
-    # "above" is "not below"; the 100:1 level is C0 / HUNDRED_TO_ONE, defined
+    record(names, rate, held) -> RecoveryRecord   # counting CUMULATIVE
+    # within spec: every sensor's channel sum below its threshold (prompt 81), and
+    # the local field reads the same channels; the local field's
+    # "above" is "not below"; the 100:1 times stay per class; the 100:1 level is C0 / HUNDRED_TO_ONE, defined
     # where C0 >= 100 thresholds to DEFINED_RTOL; recovery: the start of the
     # within-spec stretch that reaches the end, if it lasted the hold
 sensor_cells(config, mesh) -> tuple[(j, i), ...]   # the cell containing each
@@ -2053,13 +2099,18 @@ RunFile(path)
                                     # without the leftover column read with the
                                     # leftover None (and read_checkpoint likewise)
     write_sensor_readings(steps, times, readings [n, classes, sensors],
-                          names) -> None   # appends to /transport/sensors/;
-                                    # the names fixed by the first write
+                          names, channels=None) -> None   # appends to
+                                    # /transport/sensors/; the names fixed by the
+                                    # first write; channels [n, channels, sensors]
+                                    # (prompt 81) beside readings, the first write
+                                    # deciding whether the file holds them
     read_sensor_readings() -> SensorReadings
     write_alerts(table: AlertTable) -> None   # /transport/alerts/, replaced whole
         # (ADR-015 C, step 2): one dataset per ALERT_TABLE_COLUMNS, int64 and
-        # "<f8", the sensor names as an attribute; TypeError for another type
-    read_alerts() -> AlertTable     # KeyError without one
+        # "<f8", the sensor names and (prompt 81) the counting as attributes;
+        # TypeError for another type
+    read_alerts() -> AlertTable     # KeyError without one; PER_CLASS without
+                                    # the counting attribute
     discard_after(step) -> None     # drops the frames and readings after step,
                                     # which a restarted march writes again; and
                                     # the tier-2 frames and step rows (step 6b);
@@ -2080,14 +2131,17 @@ RunFile(path)
         # datasets thresholds, initial, recovery_time, sensor_time, mean_time,
         # ratio, local_recovery, local_recovery_max ("<f8") and defined (int8);
         # attributes sensor_names, held, t_final, air_change_rate,
-        # well_mixed_time, room_recovery_time and hold_time when not None.
+        # well_mixed_time, room_recovery_time, the counting (prompt 81; read
+        # PER_CLASS when absent) and hold_time when not None.
         # Neither discard touches it (review 63 S3)
     read_recovery() -> RecoveryRecord   # KeyError without one
     write_arrival(record: ArrivalRecord) -> None   # /arrival/, replacing any
         # (ADR-015 D, step 3): datasets thresholds, onsets, first_above ("<f8"),
-        # attributes event_names and t_final; TypeError for another type
+        # attributes event_names, t_final and (prompt 81) the counting;
+        # TypeError for another type
     read_arrival() -> ArrivalRecord     # KeyError without one (a file from
-                                    # before step 3)
+                                    # before step 3); PER_CLASS without the
+                                    # counting attribute (before prompt 81)
     checkpoint(step, t, fields, budgets, fingerprint, recovery=None,
                plan_start=None) -> None
         # /checkpoint/ of the checkpoint file: attributes step, t, fingerprint,
@@ -2115,6 +2169,9 @@ RunFile(path)
 real_number(name, value) -> float          # TypeError unless a real number (a bool is not)
 checked_thresholds(thresholds) -> np.ndarray   # [classes] float64, a new array; TypeError for a
                                 # non-real or a bool; ValueError unless 1-D, finite, non-negative
+checked_counting(counting) -> str   # TypeError unless a str, ValueError unless in COUNTINGS
+CUMULATIVE ("cumulative"), PER_CLASS ("per_class"), COUNTINGS, COUNTING_ATTR ("counting"),
+    CHANNELS ("channels")   # prompt 81: how a record compares with the thresholds
 checked_onsets(onsets) -> np.ndarray   # [events] float64, a new array; TypeError for a non-real
                                 # or a bool; ValueError unless 1-D, finite, non-negative, in order
                                 # (equal onsets allowed). The one check of these inputs: the
@@ -2133,15 +2190,15 @@ BUDGET_TERMS = ("initial", "inflow", "outflow", "source", "deposited_floor",
                 "deposited_ceiling", "deposited_wall", "deposited_obstacle",
                 "current", "leftover")   # leftover the last column since ADR-016
 ArrivalRecord: thresholds [classes], event_names, onsets [events],
-    first_above [events, classes, ny, nx] (inf where not reached, NaN in SOLID
-    cells), t_final   # TypeError for a non-str name, or a non-real (a bool is not)
+    first_above [events, channels, ny, nx] (inf where not reached, NaN in SOLID
+    cells), t_final, counting=CUMULATIVE (checked_counting)   # TypeError for a non-str name, or a non-real (a bool is not)
                       # threshold, onset or t_final; ValueError for shapes that
                       # disagree, a threshold not finite and non-negative, onsets
                       # not finite, non-negative and in order, or t_final not finite
 CONFIG, FLOW, TRANSPORT, SENSORS, ALERTS, CHECKPOINT, STEADY_CHECKPOINT,
     RECOVERY, ARRIVAL, TRANSIENT, SERIES, TRANSIENT_CHECKPOINT   # group names
 AlertTable(names, step_on, step_off, size_class, sensor, t_on, t_off,
-           reading_on, peak, peak_t)
+           reading_on, peak, peak_t, counting=CUMULATIVE)   # size_class the channel
     # one row per alert, [n] each: int64 ALERT_TABLE_INTEGERS, float64
     # ALERT_TABLE_REALS; step_off OPEN_STEP (-1) and t_off NaN while open;
     # sensor indexes names. TypeError for a name that is not a str; ValueError
@@ -2154,7 +2211,8 @@ StepSeries(step, outer, pressure_cap_hits, t, worst_imbalance, drag, lift, c_d, 
 TransientFrames: steps, times, u, v, p
 RecoveryRecord: sensor_names, thresholds, initial, hold_time, held, t_final,
     air_change_rate, well_mixed_time, room_recovery_time, recovery_time, defined,
-    sensor_time, mean_time, ratio, local_recovery, local_recovery_max
+    sensor_time, mean_time, ratio, local_recovery, local_recovery_max,
+    counting=CUMULATIVE   # recovery_time and local_recovery per channel
     # times in seconds, NaN where not defined or not reached; the shapes are
     # checked against the classes and sensors when it is built
 ```

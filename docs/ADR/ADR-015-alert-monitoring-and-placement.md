@@ -6,7 +6,9 @@ six steps by 2026-11-05 (prompt 76) and revised on 2026-11-07 by Alex's decision
 the stand, the source rule, the all-clear role, the seal leak) and on 2026-11-08 (prompt 76c: the
 stand band from 0.1 m, the all-clear sensor's position carried open; prompt 76d: round 2's findings
 fixed), the planned-against-built table
-below section H, the Phase 5 gate's verdict Alex's to set. Written
+below section H, the Phase 5 gate's verdict Alex's to set; amended on 2026-11-14 by Alex's
+decision to compare the thresholds as ISO 14644-1's cumulative counts (section C's amendment,
+built in prompt 81). Written
 2026-10-29 (prompt 70, branch `phase5/design`) and revised the same day
 on review 70 (prompt 70b: section A rewritten to a line source in grid turbulence by Alex's
 decision, section B read on the plume's edge, the review's other findings applied in
@@ -679,6 +681,39 @@ gives the file's five Class 5 values (100,000; 10,200; 3,520; 832; 29.3 per cubi
 is the testable sense of "following ISO 14644-1" [9]. The standard's 2015 table omits some
 size-class pairs (no 5 um entry at Class 5, none at 0.1 and 0.3 um at Class 8); the formula
 is used for them as the file does, and the loader says so in its docstring.
+
+*Amendment (Alex's decision, 2026-11-14; prompt 80's measurement, built in prompt 81).*
+**Thresholds are compared as ISO 14644-1 and a real counter compare them.** The standard's
+limits are cumulative (the limit at 0.3 um counts every particle at or above 0.3 um), and a
+counter's channel at a size reports that cumulative count. Each of the model's classes is a
+single size and stands for the particles nearest its size (prompt 80, section 1, now a stated
+assumption of the model). Channel k, named by class k's diameter as its lower size edge,
+reads the sum of class k and every class whose diameter is at or above it
+(`SimConfig.channel_classes`, summed by `monitor.channel_sums` from zero, largest first), and
+is compared with class k's threshold, which stays the per-size value above. The largest
+class's channel is that class alone. There is one rule, the standard's, and no switch back to
+the per-class comparison:
+
+- the monitor opens and closes alerts per channel on the cumulative reading; the run file
+  keeps each class's own reading (`/transport/sensors/readings`) and adds the channels'
+  beside them (`/transport/sensors/channels`); the alert table's `size_class` column names
+  the channel;
+- the arrival maps (section D) are per event, channel and cell, the first step time at or
+  after the onset at which the cumulative count is at or above the channel's limit; the
+  frames' fallback reads the same channels;
+- the clean-out's within-spec times (ADR-014 C's room and per-channel recovery times) and
+  REQ-A07's clear times read the same channels, and so does the local recovery field, which
+  records when a cell was last at or above a threshold (prompt 81 found the prompt's reading of
+  it as ratio-based to be mistaken; the report's deviations say why). The 100:1 times compare
+  each class with its own initial level and stay per class;
+- `/arrival/`, `/transport/alerts/` and `/recovery/` record their counting (`counting`,
+  `cumulative`); a group without it was written by the per-class code and reads as
+  `per_class`, flagged; `placement.detection_units` refuses to score or search maps of the two
+  countings together, and a march checkpoint without the channels' mark refuses the restart.
+
+The measurement behind the decision, and why no Phase 5 conclusion changes under it, is
+`docs/reports/cumulative_counts.md` (prompt 80); the build and the re-run on it,
+`docs/reports/cumulative_build.md` (prompt 81).
 
 **VAL-009.** As written ("detection delay 0 or 1 timestep") it holds by construction when the
 monitor reads every step: the alert is the step's reading. What it tests, as
