@@ -154,6 +154,14 @@ closes to rounding. Alex set condition 1 met on 2026-11-12. He kept REQ-T05 at 0
 stated basis and required the accumulated leftover to stay below it by construction: the
 leftover booked, the solve budgeted per step, a run that reaches the limit refused (prompt 78),
 then the product scenarios and the placement run again (prompt 79).
+Prompt 78 (PR 108) built it, with ADR-016, which Alex accepted on 2026-11-14: the leftover is
+booked, each step's solve stops within its share of a tenth of the limit, and a run that
+reaches the limit is refused, so the budget closes to rounding. Prompt 79 (PR 109,
+`docs/reports/rerun79.md`) ran the product grid, the whole sensitivity sweep and the
+placement again on it. No conclusion of either gate changed; the 320x120 dust release's
+accumulated leftover is 1.4e-6 of its supply, about seventy times inside REQ-T05. On
+step-resolved maps the product layout is within 68 ms (2.5%) of each sweep arm's own search
+in worst case, where the frame-resolved tables showed a tie.
 Phases 6 and 7 have not begun.
 
 The product room itself has never been solved, and on 2026-10-04 it was found that the laminar

@@ -181,6 +181,8 @@ scores them.
 
 ### The run files reloaded, the flow states and the hashes of record
 
+*Superseded 2026-11-13: these runs were made again on the budgeted solve (prompt 79). `docs/reports/rerun79.md` (F1 and F2; the reload and hash tables re-scored in section 7) gives the new values beside these; the numbers here are left as they were.*
+
 <!-- tables69 reload begin -->
 ### R1. The run files reloaded (RunFile, every group read back)
 
@@ -630,6 +632,8 @@ breach, the dust release at the end of the release, and the clean-out at the fre
 ![Clean-out](phase4_clean_out_snapshot.png)
 
 ### The predictions
+
+*Scored on prompt 69's runs. The re-run on the budgeted solve has its own predictions, scored in `docs/reports/rerun79.md` section 8 (2026-11-13).*
 
 As set by the orchestrator in prompt 69 (`docs/prompts/cc-prompt-69-step7-gate.md`, the section
 "Predictions", dated 2026-10-28), before the runs, copied verbatim:

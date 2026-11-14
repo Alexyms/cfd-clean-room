@@ -1,7 +1,9 @@
 # ADR-016: The Conservation Budget of the Implicit Transport Solve
 
 ## Status
-Proposed, 2026-11-12 (prompt 78, branch `feature/conservation-budget`). The decision is
+Accepted, 2026-11-14 (Alex), as proposed on 2026-11-12 (prompt 78, PR 108), the margin of
+ten (`transport.leftover_share` 0.1) included; run on the product grid by prompt 79 (PR 109,
+`docs/reports/rerun79.md`). The decision is
 Alex's, of 2026-11-12, on the mechanism report of Phase 4's condition 1
 (`docs/reports/budget_residual_mechanism.md`, "Alex's decisions (2026-11-12)"). This record
 states it, derives the bound as built, gives the alternatives the mechanism report lists and
