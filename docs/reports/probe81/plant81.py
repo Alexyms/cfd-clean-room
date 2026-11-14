@@ -129,7 +129,13 @@ PLANTS: list[tuple[str, str, str, str, str, int, list[str]]] = [
 
 
 def replace_at(text: str, old: str, new: str, occurrence: int) -> str:
-    """TEXT with the OCCURRENCE-th OLD replaced by NEW; ValueError if it is not there."""
+    """TEXT with the OCCURRENCE-th OLD replaced by NEW; ValueError if it is not there.
+
+    A worktree checked out on Windows holds CRLF line ends, so a newline in
+    OLD or NEW is matched and written as the file's own.
+    """
+    if "\r\n" in text:
+        old, new = old.replace("\n", "\r\n"), new.replace("\n", "\r\n")
     start = -1
     for _ in range(occurrence + 1):
         start = text.find(old, start + 1)

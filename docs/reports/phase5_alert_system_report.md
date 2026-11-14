@@ -161,6 +161,8 @@ run repeated. Prompt 76c's code was covered on its first run.
 
 *Superseded 2026-11-13: these runs were made again on the budgeted solve (prompt 79). `docs/reports/rerun79.md` (L1, L2, Z1 and G1) gives the new values beside these; the numbers here are left as they were.*
 
+*Superseded 2026-11-14 for every reading of a threshold: thresholds are now compared as ISO 14644-1's cumulative counts, a class and every larger class summed (Alex's decision; ADR-015 C, amended; prompt 81). `docs/reports/cumulative_build.md` (C1, L1, L2, O1, A1 and R1; rescored76.md) gives the cumulative values beside prompt 79's; the numbers here are left as they were.*
+
 `docs/reports/phase5_alert_report.md` holds the tables section E lists, and its predictions. In
 short: the file's four sensors detect none of the twenty event units (four scenarios, five classes).
 On the mounting surfaces, with the dust's source box excluded, a searched four detect the breach

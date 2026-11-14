@@ -69,6 +69,8 @@ The builder's (2026-10-30, before the runs, scored apart; the reasoning from the
 
 *Superseded 2026-11-13: these runs were made again on the budgeted solve (prompt 79). `docs/reports/rerun79.md` (F1, F2, L1, D1; the tables re-scored in section 7) gives the new values beside these; the numbers here are left as they were.*
 
+*Superseded 2026-11-14 for every reading of a threshold: thresholds are now compared as ISO 14644-1's cumulative counts, a class and every larger class summed (Alex's decision; ADR-015 C, amended; prompt 81). `docs/reports/cumulative_build.md` (E1 and E2) gives the cumulative values beside prompt 79's; the numbers here are left as they were.*
+
 ### 1.1 The arms and what is read
 
 | Arm | Intensity | Dissipation length | Sc_t | Flow state | Grids |
@@ -428,6 +430,8 @@ every sensor). The product-grid repeat of `widest` is missing (section 1.2); the
 ## 2. The clean-out on 160x60
 
 *Superseded 2026-11-13: these runs were made again on the budgeted solve (prompt 79). `docs/reports/rerun79.md` (C1; C1 re-scored in section 7) gives the new values beside these; the numbers here are left as they were.*
+
+*Superseded 2026-11-14 in principle for every reading of a threshold: thresholds are now compared as ISO 14644-1's cumulative counts (Alex's decision; ADR-015 C, amended; prompt 81). This clean-out was not run again, so no cumulative values are given for it (`docs/reports/cumulative_build.md` R1 has the 320x120 clean-out's); the numbers here are left as they were.*
 
 <!-- tables72 cleanout begin -->
 | Run | Grid | Run to t (s) | Well-mixed 100:1 time ln(100)/N (s) | Room recovery time (s) | Free-area mean 100:1 (s) | Ratio to the well-mixed | Free cells | Not recovered at the end, 0.1 um (cells, share) | 5 um |
