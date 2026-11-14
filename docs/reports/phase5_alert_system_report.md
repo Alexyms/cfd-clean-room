@@ -120,6 +120,8 @@ report, not on a separate solve at this commit.
 | product_80x30 | f50206d | error_estimate_and_continuity | 1,021 | 6f27f27f3e89963a | yes | 24 | 10 |
 <!-- tables76 hashes end -->
 
+*Superseded 2026-11-13: these runs were made again on the budgeted solve (prompt 79). `docs/reports/rerun79.md` (X1 and A1; tables76 X1 re-scored in section 7) gives the new values beside these; the numbers here are left as they were.*
+
 <!-- tables76 bitwise begin -->
 ### X1. The runs against the gate's (prompt 69), the same scenario files before Phase 5's modules: stored frames, budgets and sensor readings
 
@@ -156,6 +158,8 @@ arm the pass had just written and no test reached (`placement.py` 1226 at f50206
 run repeated. Prompt 76c's code was covered on its first run.
 
 ## The latency report
+
+*Superseded 2026-11-13: these runs were made again on the budgeted solve (prompt 79). `docs/reports/rerun79.md` (L1, L2, Z1 and G1) gives the new values beside these; the numbers here are left as they were.*
 
 `docs/reports/phase5_alert_report.md` holds the tables section E lists, and its predictions. In
 short: the file's four sensors detect none of the twenty event units (four scenarios, five classes).
