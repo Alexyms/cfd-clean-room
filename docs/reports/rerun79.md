@@ -3,7 +3,9 @@
 **Date:** 2026-11-13
 **Prompt:** 79 (`docs/prompts/cc-prompt-79-rerun-budgeted.md`)
 **Branch:** `phase5/rerun-budgeted`
-**Status:** runs done 2026-11-13; report written. `/cfd-review 79` and `/cfd-test 79` to follow.
+**Status:** runs done 2026-11-13; reviewed (APPROVE) and tested independently (PASS 32, FAIL
+0) the same day; merged as PR 109. The orchestrator's notes of 2026-11-14 are in "Records
+(2026-11-14)" at the end.
 
 Prompt 78 (ADR-016) booked the implicit transport solve's leftover and budgeted it per step.
 Every transport output made before that change is superseded wherever a step's share binds
@@ -39,7 +41,9 @@ one run (a refusal, a crash, a missing input) is recorded, and the queue goes on
 
 The budgeted solve changes no conclusion that either gate rests on.
 
-- Every flow state that converged before reproduces bit for bit, and the two that did not
+- Every flow state that converged before was reused and equals its source bit for bit (a copy
+  checked against its source; two were also solved from scratch by the independent test and
+  equal by bytes), and the two that did not
   converge stop where they stopped in prompt 72 (F1, F2).
 - Every run's budget closes with the leftover booked, every accumulated leftover stays inside
   its bound at every stored frame, and no run was refused (A1, B1).
@@ -698,7 +702,8 @@ One line per start, finish, skip and wait, with the time, the run, the exit stat
    (`SetThreadExecutionState`, no power setting changed) held the machine awake until the
    runner exited. `docs/reports/probe79/standby79.ps1` reads the intervals from the System event
    log into `results/builder79/standby.json`. Q1 and W1 give walls with and without them. The
-   12-hour budget was passed only through the standby and the gap in item 4: the estimate at
+   12-hour budget was passed in wall clock only, through the standby and the gap in item 4
+   (5.43 h awake): the estimate at
    the ten-minute check was under 5 hours, and Q1's span gives the hours awake.
 4. **The runner was closed.** At about 08:13 on 2026-11-13 the runner and the keep-awake helper
    were closed together, along with the blank minimised console windows `Start-Process` had
@@ -726,6 +731,44 @@ One line per start, finish, skip and wait, with the time, the run, the exit stat
    interrupted one would have started again rather than continuing. None was interrupted.
 10. **The capped state on 320x120** was solved once per scenario, to 15,000 outer iterations
     each, because prompt 72's configurations solve it that way (F2).
+
+## Records (2026-11-14)
+
+The orchestrator's notes after the review and the independent test (both 2026-11-13; the
+test's scratch is `results/tester79/`). None changes a number or a verdict above.
+
+- **Traces.** The budget and its bound: REQ-T05 and ADR-016, accepted by Alex on 2026-11-14.
+  The re-scored Phase 5 results trace to the requirements the Phase 5 gate report names
+  (REQ-A01 to REQ-A07).
+- **(a) at every step.** The prediction table reads the bound at the stored frames. The
+  independent test recorded the leftover after every solve of the 320x120, 160x60 and 80x30 dust
+  releases: no step is over the bound and no solve over its share.
+- **(b) by a solve.** Section 3's F1 compares each reused state with its source, a comparison
+  that cannot fail. What tests the flow solve is the four capped solves of F2, which equal prompt
+  72's with their residual histories, and the independent test's two 80x30 states solved from
+  scratch, which equal prompt 75's by bytes.
+- **(c) as scored.** The verdict code tests the latencies and not the all-clear clause, which
+  holds in the tables. Its one-step tolerance is the run's largest step, widened by 1e-5 for
+  the summaries' six printed figures. On the step-resolved maps every moved arrival cell moved by
+  exactly one step of its own interval (independent test).
+- **The ties at the sweep's arms, sized.** On step-resolved maps the product layout no longer
+  ties every arm's own product search exactly. On 160x60 it equals it in worst case at all six
+  arms and is at most 5 ms slower in mean (`max_nut` 0.770 against 0.765 s, `widest` 0.613
+  against 0.610 s), under one step. On 320x120 at `min_nut` its worst case is 2.760 s against
+  the search's 2.692 s (68 ms, 2.5%) and its mean 1.027 against 1.004 s. The Phase 5 sentence
+  that the product layout ties each arm's own search holds at frame resolution only; at step
+  resolution it is within these gaps. Against the file's four, which detect nothing at any arm,
+  the ranking is unchanged.
+- **Two rows still pre-budget.** tables69's G1 80x30 side and tables72's C1 step-4 row read
+  prompt 64's 80x30 runs. They compare grids and carry no decision; the budgeted runs of the
+  same 80x30 scenarios are prompt 78's (`results/builder78/`). Left as recorded.
+- **The runner.** Its restart, abort and adopt paths did not run in this pass; the independent
+  test drove its loop with stand-in jobs and the process caps and memory floor behaved as
+  specified. `run79.py --set` accepts any cap, past the prompt's limits; a later runner should
+  refuse caps above them.
+- **Standby.** The runner held the machine awake with `SetThreadExecutionState`, and the laptop
+  still entered Modern Standby for about 8.5 of the 14 hours. The cause is not established; a
+  closed lid or the platform's standby policy can override that request.
 
 ## 11. Sources
 
