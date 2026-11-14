@@ -41,6 +41,7 @@ from src.mesh import SOLID, Mesh
 from src.monitor import (
     ALERT_COLUMNS,
     ARRIVAL_STATE_NAMES,
+    COUNTING_STATE,
     RUN_START,
     SENSOR_FACE_RTOL,
     STATE_NAMES,
@@ -844,6 +845,10 @@ LIVE = np.ones((3, 4), dtype=bool)
 LIVE[1, 2] = False
 THRESHOLDS = (1.0, 10.0)
 TIMES = [0.1 * n for n in range(8)]
+# The rule's tests read each of the two classes as its own channel, so the
+# planted series test the rule (the onset, at or above, the first time kept)
+# alone; how the channels are formed is tests/test_cumulative_counting.py's.
+ONE_CLASS = ((0,), (1,))
 
 
 def planted(value: float, cells: dict[tuple[int, int], float] | None = None) -> dict:
@@ -878,7 +883,7 @@ class TestArrivalTracker:
         the map started at t = 0 ((0, 0) 0.0, (2, 3) 0.1); the last time
         kept ((2, 0) 0.7).
         """
-        tracker = ArrivalTracker(THRESHOLDS, LIVE, [0.2])
+        tracker = ArrivalTracker(THRESHOLDS, LIVE, [0.2], channels=ONE_CLASS)
         series = []
         for n, t in enumerate(TIMES):
             cells = {(0, 0): 5.0}
@@ -910,7 +915,7 @@ class TestArrivalTracker:
         returning the live maps, onsets or time (the checkpoint's write would
         then alias a later update).
         """
-        tracker = ArrivalTracker(THRESHOLDS, LIVE, [0.0])
+        tracker = ArrivalTracker(THRESHOLDS, LIVE, [0.0], channels=ONE_CLASS)
         tracker.update(0.0, planted(0.0, {(0, 0): 2.0}))
         held = {**tracker.state(), "onsets": tracker.onsets}
         before = {name: array.copy() for name, array in held.items()}
@@ -932,7 +937,7 @@ class TestArrivalTracker:
         thresholds, so a write would land. Defect caught: a field written in
         update (the reached cells zeroed).
         """
-        tracker = ArrivalTracker(THRESHOLDS, LIVE, [0.0])
+        tracker = ArrivalTracker(THRESHOLDS, LIVE, [0.0], channels=ONE_CLASS)
         fields = planted(0.5, {(0, 0): 2.0, (2, 3): 1.0})
         before = {k: fields[k].tobytes() for k in fields}
         tracker.update(0.0, fields)
@@ -949,7 +954,7 @@ class TestArrivalTracker:
         a cell reached for event 0 not counted again for event 1 ((1, 1)
         NaN for event 1).
         """
-        tracker = ArrivalTracker(THRESHOLDS, LIVE, [0.0, 0.25])
+        tracker = ArrivalTracker(THRESHOLDS, LIVE, [0.0, 0.25], channels=ONE_CLASS)
         series = []
         for n in range(len(TIMES)):
             cells = {}
@@ -972,7 +977,7 @@ class TestArrivalTracker:
         caught: a SOLID cell given a time; the record's unreached cells left
         NaN, which a lookup cannot tell from SOLID.
         """
-        tracker = ArrivalTracker(THRESHOLDS, LIVE, [0.0, 0.5])
+        tracker = ArrivalTracker(THRESHOLDS, LIVE, [0.0, 0.5], channels=ONE_CLASS)
         run_series(tracker, [planted(0.0)] + [planted(2.0)] * 3)
         record = tracker.record(["a", "b"], TIMES[3])
         onsets = tracker.onsets
@@ -996,14 +1001,14 @@ class TestArrivalTracker:
         (an update at it accepted again).
         """
         series = [planted(0.0, {(j, j): 0.5 * n for j in range(3)}) for n in range(8)]
-        whole = ArrivalTracker(THRESHOLDS, LIVE, [0.0, 0.25])
+        whole = ArrivalTracker(THRESHOLDS, LIVE, [0.0, 0.25], channels=ONE_CLASS)
         run_series(whole, series)
-        first = ArrivalTracker(THRESHOLDS, LIVE, [0.0, 0.25])
+        first = ArrivalTracker(THRESHOLDS, LIVE, [0.0, 0.25], channels=ONE_CLASS)
         run_series(first, series[:4])
         state = first.state()
         assert set(state) == set(ARRIVAL_STATE_NAMES)
         assert np.isfinite(state["first_above"]).any()
-        resumed = ArrivalTracker(THRESHOLDS, LIVE, [0.0, 0.25])
+        resumed = ArrivalTracker(THRESHOLDS, LIVE, [0.0, 0.25], channels=ONE_CLASS)
         resumed.restore({**state, "last_above": np.zeros(2)})
         with pytest.raises(ValueError, match="is not above the last update's"):
             resumed.update(TIMES[3], series[3])
@@ -1013,22 +1018,28 @@ class TestArrivalTracker:
 
     def test_a_fresh_state_restores_a_fresh_tracker(self) -> None:
         """Before any update the maps are NaN and the time NaN; t = 0 is accepted after."""
-        state = ArrivalTracker(THRESHOLDS, LIVE, [0.0]).state()
+        state = ArrivalTracker(THRESHOLDS, LIVE, [0.0], channels=ONE_CLASS).state()
         assert np.isnan(state["first_above"]).all() and np.isnan(state["arrival_t"])
-        tracker = ArrivalTracker(THRESHOLDS, LIVE, [0.0])
+        tracker = ArrivalTracker(THRESHOLDS, LIVE, [0.0], channels=ONE_CLASS)
         tracker.restore(state)
         tracker.update(0.0, planted(2.0))
         assert tracker.first_above[0, 0, 0, 0] == 0.0
 
-    @pytest.mark.parametrize("missing", ARRIVAL_STATE_NAMES)
+    @pytest.mark.parametrize(
+        "missing", [name for name in ARRIVAL_STATE_NAMES if name != COUNTING_STATE]
+    )
     def test_a_checkpoint_without_the_maps_names_why(self, missing: str) -> None:
-        """A checkpoint from before step 3 carries none of the three names."""
-        state = ArrivalTracker(THRESHOLDS, LIVE, [0.0]).state()
+        """A checkpoint from before step 3 carries none of the maps' three names.
+
+        The fourth, the channels' mark of prompt 81, has its own refusal
+        (tests/test_cumulative_counting.py).
+        """
+        state = ArrivalTracker(THRESHOLDS, LIVE, [0.0], channels=ONE_CLASS).state()
         del state[missing]
         with pytest.raises(
             KeyError, match=r"before the arrival maps \(ADR-015 step 3\)"
         ):
-            ArrivalTracker(THRESHOLDS, LIVE, [0.0]).restore(state)
+            ArrivalTracker(THRESHOLDS, LIVE, [0.0], channels=ONE_CLASS).restore(state)
 
     def _state(self, first: np.ndarray, t: float) -> dict[str, np.ndarray]:
         """A state of FIRST with onsets [0, 0.25] and the last update at T."""
@@ -1036,6 +1047,7 @@ class TestArrivalTracker:
             "first_above": first,
             "arrival_onsets": np.array([0.0, 0.25]),
             "arrival_t": np.array(t),
+            COUNTING_STATE: np.array(1.0),
         }
 
     @pytest.mark.parametrize(
@@ -1072,7 +1084,7 @@ class TestArrivalTracker:
             first[1, 0, 0, 0] = 0.2
         else:
             first[0, 1, 0, 0] = 0.6
-        tracker = ArrivalTracker(THRESHOLDS, LIVE, [0.0, 0.25])
+        tracker = ArrivalTracker(THRESHOLDS, LIVE, [0.0, 0.25], channels=ONE_CLASS)
         with pytest.raises(ValueError, match=match):
             tracker.restore(state)
         assert np.isnan(tracker.first_above).all()
@@ -1099,14 +1111,14 @@ class TestArrivalTracker:
     ) -> None:
         """Each refusal of the constructor."""
         with pytest.raises(error, match=match):
-            ArrivalTracker(*args)
+            ArrivalTracker(*args, channels=ONE_CLASS)
 
     def test_update_refuses_the_time_and_the_fields(self) -> None:
         """A mistyped, non-finite or repeated time and fields of the wrong classes or shape.
 
         A refused update leaves the maps as they were.
         """
-        tracker = ArrivalTracker(THRESHOLDS, LIVE, [0.0])
+        tracker = ArrivalTracker(THRESHOLDS, LIVE, [0.0], channels=ONE_CLASS)
         tracker.update(0.0, planted(0.0))
         cases = [
             (True, planted(2.0), TypeError, "t must be a real number"),
@@ -1122,7 +1134,7 @@ class TestArrivalTracker:
 
     def test_record_refuses_the_names_and_the_end(self) -> None:
         """One name per event, and an end that is finite and not before the last update."""
-        tracker = ArrivalTracker(THRESHOLDS, LIVE, [0.0, 0.25])
+        tracker = ArrivalTracker(THRESHOLDS, LIVE, [0.0, 0.25], channels=ONE_CLASS)
         tracker.update(0.5, planted(0.0))
         with pytest.raises(ValueError, match="1 event names for 2 events"):
             tracker.record(["a"], 0.5)
@@ -1151,7 +1163,9 @@ class TestArrivalTracker:
         live = mesh.cell_type != SOLID
         times = [0.05 * n for n in range(60)]
         onsets = [times[0], times[17], times[17], times[41]]
-        tracker = ArrivalTracker(monitor.thresholds.tolist(), live, onsets)
+        tracker = ArrivalTracker(
+            monitor.thresholds.tolist(), live, onsets, channels=monitor.channels
+        )
         rng = np.random.default_rng(74)
         for n, t in enumerate(times):
             scale = rng.uniform(0.0, 1.03, size=(5, 4))

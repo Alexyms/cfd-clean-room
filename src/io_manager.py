@@ -17,19 +17,27 @@ written before. Its groups:
 - ``/transport/``: ``steps`` (int64), ``times`` and ``C_<k>`` [n, ny, nx]
   per class (``FieldHistory``'s keys), ``budgets`` [n, classes, terms] with
   the term names ``BUDGET_TERMS`` as its attribute, ``/transport/sensors/``
-  with ``steps``, ``times``, ``readings`` [n, classes, sensors] and the
+  with ``steps``, ``times``, ``readings`` [n, classes, sensors], each class's
+  own concentration, and, from prompt 81, ``channels`` [n, channels,
+  sensors], each counter channel's cumulative reading (ADR-015 C), the
   sensor names as an attribute, and ``/transport/alerts/``, the alert
   monitor's table (ADR-015 C, ``AlertTable``): one dataset per column of
-  ``ALERT_TABLE_COLUMNS``, one row per alert, the sensor names as an
-  attribute, replaced whole at each write;
+  ``ALERT_TABLE_COLUMNS``, one row per alert, the sensor names and the
+  counting as attributes, replaced whole at each write;
 - ``/recovery/``: a clean-out's recovery outputs (ADR-014 C), written once
-  at the end of the run (``RecoveryRecord``); ``discard_after`` does not
-  touch it, and a restart that runs to a new end replaces it;
+  at the end of the run (``RecoveryRecord``), with the counting of its
+  within-spec times as an attribute; ``discard_after`` does not touch it,
+  and a restart that runs to a new end replaces it;
 - ``/arrival/``: the arrival maps (ADR-015 D, ``ArrivalRecord``): datasets
   ``thresholds`` [classes], ``onsets`` [events] and ``first_above``
-  [events, classes, ny, nx], attributes ``event_names`` and ``t_final``;
-  replaced whole at each march checkpoint and at the end, dropped by
-  ``discard_march``;
+  [events, channels, ny, nx], attributes ``event_names``, ``t_final`` and
+  the counting; replaced whole at each march checkpoint and at the end,
+  dropped by ``discard_march``;
+
+A group that compares concentrations with the thresholds (the alerts, the
+recovery, the arrival maps) records how as ``COUNTING_ATTR``: ``CUMULATIVE``
+for what this code writes, and a group without it, written before prompt 81,
+reads as ``PER_CLASS``.
 - ``/transient/``, a tier-2 run's (ADR-014 D, tier 2; step 6b): ``steps``
   (int64), ``times`` and the frames ``u`` [n, ny, nx+1], ``v`` [n, ny+1, nx]
   and ``p`` [n, ny, nx], and ``/transient/series/``, one row per step:
@@ -109,6 +117,18 @@ ALERT_TABLE_INTEGERS: tuple[str, ...] = ("step_on", "step_off", "size_class", "s
 ALERT_TABLE_REALS: tuple[str, ...] = ("t_on", "t_off", "reading_on", "peak", "peak_t")
 ALERT_TABLE_COLUMNS: tuple[str, ...] = (*ALERT_TABLE_INTEGERS, *ALERT_TABLE_REALS)
 OPEN_STEP = -1
+# How a record compares concentrations with the thresholds (ADR-015 C, amended
+# 2026-11-14): CUMULATIVE, each channel's sum of its class and every larger
+# class (ISO 14644-1, a counter's reading), is what the code writes; PER_CLASS,
+# each class alone, is what a file written before prompt 81 holds. The groups
+# that hold a comparison carry it as the attribute COUNTING_ATTR, and one
+# without it reads as PER_CLASS.
+CUMULATIVE = "cumulative"
+PER_CLASS = "per_class"
+COUNTINGS: tuple[str, ...] = (CUMULATIVE, PER_CLASS)
+COUNTING_ATTR = "counting"
+# The channel readings beside the per-class ones in /transport/sensors/.
+CHANNELS = "channels"
 CHECKPOINT_SUFFIX = ".checkpoint.h5"
 TEMPORARY_SUFFIX = ".tmp"
 # The keys a continuation exists to change (prompt 63, decision 2): a capped
@@ -252,13 +272,17 @@ class SensorReadings:
     times : np.ndarray
         [n] float64, seconds.
     readings : np.ndarray
-        [n, classes, sensors] float64.
+        [n, classes, sensors] float64, each class's own concentration.
+    channels : np.ndarray or None
+        [n, channels, sensors] float64, each counter channel's cumulative
+        reading (ADR-015 C); None for a file written before prompt 81.
     """
 
     names: tuple[str, ...]
     steps: np.ndarray
     times: np.ndarray
     readings: np.ndarray
+    channels: np.ndarray | None = None
 
 
 @dataclass(frozen=True, eq=False)
@@ -277,12 +301,16 @@ class AlertTable:
         The step that opened each alert and the step that closed it,
         ``OPEN_STEP`` while it is open.
     size_class, sensor : np.ndarray
-        The class index and the sensor's index into ``names``.
+        The channel, named by the class of its lower size edge (the class
+        itself for ``PER_CLASS``), and the sensor's index into ``names``.
     t_on, t_off : np.ndarray
         The times of step_on and step_off, seconds; t_off NaN while open.
     reading_on, peak, peak_t : np.ndarray
         The opening reading, the largest reading while open and its first
         time, particles per cubic metre and seconds.
+    counting : str
+        ``CUMULATIVE`` (the channel's sum of its class and every larger one)
+        or ``PER_CLASS`` (a table written before prompt 81).
 
     Raises
     ------
@@ -291,8 +319,8 @@ class AlertTable:
     ValueError
         If an integer column holds a value that is not a whole number, a
         column is not [n] with the others, a sensor index is not one of
-        ``names``, or a row's step_off and t_off disagree on whether it is
-        open.
+        ``names``, a row's step_off and t_off disagree on whether it is
+        open, or the counting is not one of ``COUNTINGS``.
     """
 
     names: tuple[str, ...]
@@ -305,8 +333,10 @@ class AlertTable:
     reading_on: np.ndarray
     peak: np.ndarray
     peak_t: np.ndarray
+    counting: str = CUMULATIVE
 
     def __post_init__(self) -> None:
+        checked_counting(self.counting)
         names = tuple(self.names)
         for name in names:
             if not isinstance(name, str):
@@ -474,10 +504,10 @@ class RecoveryRecord:
     well_mixed_time : float
         ln(100) / N, the well-mixed slice's 100:1 time.
     room_recovery_time : float
-        When every sensor of every class fell below its threshold and
-        stayed below (ADR-014 C).
+        When every sensor of every channel fell below its threshold and
+        stayed below (ADR-014 C, read on the channels of ADR-015 C).
     recovery_time : np.ndarray
-        [classes], the same per class.
+        [channels], the same per channel.
     defined : np.ndarray
         [classes] bool: C0 at least 100 times the threshold, where the
         100:1 times are defined.
@@ -488,11 +518,16 @@ class RecoveryRecord:
     ratio : np.ndarray
         [classes], ``mean_time / well_mixed_time``.
     local_recovery : np.ndarray
-        [classes, ny, nx], the last step time each cell was at or above its
-        threshold: zero for a cell never so, inf for one still so at the
-        end, NaN in SOLID cells.
+        [channels, ny, nx], the last step time each cell's channel reading
+        was at or above its threshold: zero for a cell never so, inf for one
+        still so at the end, NaN in SOLID cells.
     local_recovery_max : np.ndarray
-        [classes], the largest over the non-SOLID cells.
+        [channels], the largest over the non-SOLID cells.
+    counting : str
+        How the within-spec times and the local field read the thresholds:
+        ``CUMULATIVE``, or ``PER_CLASS`` for a record written before prompt
+        81. The 100:1 times compare each class with its own initial level
+        and are per class under either.
 
     Raises
     ------
@@ -501,7 +536,8 @@ class RecoveryRecord:
         sensor name is not a str.
     ValueError
         If the arrays' shapes do not agree on the classes and the sensors,
-        or ``local_recovery`` is not [classes, ny, nx].
+        ``local_recovery`` is not [classes, ny, nx], or the counting is not
+        one of ``COUNTINGS``.
     """
 
     sensor_names: tuple[str, ...]
@@ -520,8 +556,10 @@ class RecoveryRecord:
     ratio: np.ndarray
     local_recovery: np.ndarray
     local_recovery_max: np.ndarray
+    counting: str = CUMULATIVE
 
     def __post_init__(self) -> None:
+        checked_counting(self.counting)
         names = tuple(self.sensor_names)
         for name in names:
             if not isinstance(name, str):
@@ -583,12 +621,16 @@ class ArrivalRecord:
     onsets : np.ndarray
         [events], seconds, finite and in order.
     first_above : np.ndarray
-        [events, classes, ny, nx]: the first step time at or after the
-        event's onset at which the cell is at or above the class's
-        threshold; inf for a non-SOLID cell not reached by ``t_final``, NaN
-        in SOLID cells.
+        [events, channels, ny, nx]: the first step time at or after the
+        event's onset at which the cell's channel reading is at or above the
+        channel's threshold; inf for a non-SOLID cell not reached by
+        ``t_final``, NaN in SOLID cells.
     t_final : float
         The last step time the maps read, seconds, finite.
+    counting : str
+        ``CUMULATIVE``: channel k reads the sum of class k and every larger
+        class against class k's threshold (ADR-015 C). ``PER_CLASS``: class
+        k alone, which is what ``/arrival/`` written before prompt 81 holds.
 
     Raises
     ------
@@ -598,7 +640,8 @@ class ArrivalRecord:
     ValueError
         If the shapes do not agree on the events and the classes, a
         threshold is not finite and non-negative, the onsets are not finite,
-        non-negative and in order, or ``t_final`` is not finite.
+        non-negative and in order, ``t_final`` is not finite, or the
+        counting is not one of ``COUNTINGS``.
     """
 
     thresholds: np.ndarray
@@ -606,8 +649,10 @@ class ArrivalRecord:
     onsets: np.ndarray
     first_above: np.ndarray
     t_final: float
+    counting: str = CUMULATIVE
 
     def __post_init__(self) -> None:
+        checked_counting(self.counting)
         names = tuple(self.event_names)
         for name in names:
             if not isinstance(name, str):
@@ -637,6 +682,33 @@ class ArrivalRecord:
                 f"first_above has shape {maps}; expected [{len(names)}, "
                 f"{self.thresholds.size}, ny, nx]"
             )
+
+
+def checked_counting(counting: object) -> str:
+    """A record's counting, or a refusal.
+
+    Parameters
+    ----------
+    counting : object
+        ``CUMULATIVE`` or ``PER_CLASS``.
+
+    Returns
+    -------
+    str
+        The counting.
+
+    Raises
+    ------
+    TypeError
+        If it is not a str.
+    ValueError
+        If it is not one of ``COUNTINGS``.
+    """
+    if not isinstance(counting, str):
+        raise TypeError(f"counting must be a str, got {type(counting).__name__}")
+    if counting not in COUNTINGS:
+        raise ValueError(f"counting must be one of {COUNTINGS}, got {counting!r}")
+    return counting
 
 
 def checked_thresholds(thresholds: Sequence[float] | np.ndarray) -> np.ndarray:
@@ -1133,6 +1205,7 @@ class RunFile:
         times: np.ndarray,
         readings: np.ndarray,
         names: Sequence[str],
+        channels: np.ndarray | None = None,
     ) -> None:
         """Append sensor readings for one or more steps.
 
@@ -1143,17 +1216,23 @@ class RunFile:
         times : np.ndarray
             [n] seconds.
         readings : np.ndarray
-            [n, classes, sensors], the concentration each sensor reads.
+            [n, classes, sensors], each class's concentration at each sensor.
         names : Sequence[str]
             The sensors in the order of the last axis; the first write sets
             them and every later write must give the same.
+        channels : np.ndarray, optional
+            [n, channels, sensors], each counter channel's reading
+            (``monitor.channel_sums``), stored beside ``readings``. The
+            first write decides whether the file holds them; every later
+            write must give them, or not, alike.
 
         Raises
         ------
         ValueError
             If the shapes disagree with each other or with the file's, the
-            names differ from the file's, or the steps are not increasing
-            and above the last appended step.
+            names differ from the file's, the steps are not increasing and
+            above the last appended step, or ``channels`` is given to a file
+            without them or withheld from one with them.
         """
         steps = np.asarray(steps, dtype="<i8")
         times = np.asarray(times, dtype="<f8")
@@ -1169,6 +1248,13 @@ class RunFile:
                 f"readings of shape {readings.shape} for {n} steps and "
                 f"{len(names)} sensors"
             )
+        if channels is not None:
+            channels = np.asarray(channels, dtype="<f8")
+            if channels.shape != readings.shape:
+                raise ValueError(
+                    f"channels of shape {channels.shape} beside readings of "
+                    f"{readings.shape}: one channel per class"
+                )
         if np.any(np.diff(steps) <= 0):
             raise ValueError("the steps must be increasing")
         with h5py.File(self.path, "a") as run_file:
@@ -1178,6 +1264,8 @@ class RunFile:
                 _new_series(group, "steps", (), "<i8")
                 _new_series(group, "times", (), "<f8")
                 _new_series(group, "readings", readings.shape[1:], "<f8")
+                if channels is not None:
+                    _new_series(group, CHANNELS, channels.shape[1:], "<f8")
             if [str(x) for x in group.attrs["names"]] != names:
                 raise ValueError(
                     f"the sensors are {names} and the file's "
@@ -1188,6 +1276,13 @@ class RunFile:
                     f"readings of {readings.shape[1:]} per step and the file's "
                     f"{group['readings'].shape[1:]}"
                 )
+            if (CHANNELS in group) != (channels is not None):
+                held = "hold" if CHANNELS in group else "hold no"
+                given = "gives none" if channels is None else "gives them"
+                raise ValueError(
+                    f"the file's sensor readings {held} channel readings and this "
+                    f"write {given}"
+                )
             stored = group["steps"]
             if n and stored.shape[0] and steps[0] <= stored[-1]:
                 raise ValueError(
@@ -1197,6 +1292,8 @@ class RunFile:
             _append(stored, steps, many=True)
             _append(group["times"], times, many=True)
             _append(group["readings"], readings, many=True)
+            if channels is not None:
+                _append(group[CHANNELS], channels, many=True)
 
     def read_sensor_readings(self) -> SensorReadings:
         """Read back the readings ``write_sensor_readings`` appended.
@@ -1215,6 +1312,7 @@ class RunFile:
                 steps=group["steps"][()],
                 times=group["times"][()],
                 readings=group["readings"][()],
+                channels=group[CHANNELS][()] if CHANNELS in group else None,
             )
 
     def write_alerts(self, table: AlertTable) -> None:
@@ -1239,6 +1337,7 @@ class RunFile:
                 del transport[ALERTS]
             group = transport.create_group(ALERTS)
             group.attrs["names"] = list(table.names)
+            group.attrs[COUNTING_ATTR] = table.counting
             for name in ALERT_TABLE_INTEGERS:
                 group.create_dataset(name, data=getattr(table, name), dtype="<i8")
             for name in ALERT_TABLE_REALS:
@@ -1250,7 +1349,8 @@ class RunFile:
         Returns
         -------
         AlertTable
-            As written, its columns bitwise.
+            As written, its columns bitwise; ``PER_CLASS`` when the group
+            carries no counting (written before prompt 81).
 
         Raises
         ------
@@ -1263,6 +1363,7 @@ class RunFile:
                 raise KeyError(f"{self.path} holds no /{TRANSPORT}/{ALERTS}/")
             return AlertTable(
                 names=tuple(str(x) for x in group.attrs["names"]),
+                counting=str(group.attrs.get(COUNTING_ATTR, PER_CLASS)),
                 **{name: group[name][()] for name in ALERT_TABLE_COLUMNS},
             )
 
@@ -1564,6 +1665,7 @@ class RunFile:
             group.create_dataset("defined", data=record.defined.astype(np.int8))
             group.attrs["sensor_names"] = list(record.sensor_names)
             group.attrs["held"] = record.held
+            group.attrs[COUNTING_ATTR] = record.counting
             for name in _RECOVERY_SCALARS:
                 group.attrs[name] = np.float64(getattr(record, name))
             if record.hold_time is not None:
@@ -1595,6 +1697,7 @@ class RunFile:
             hold_time=None if hold is None else float(hold),
             held=bool(attrs["held"]),
             defined=defined,
+            counting=str(attrs.get(COUNTING_ATTR, PER_CLASS)),
             **{name: float(attrs[name]) for name in _RECOVERY_SCALARS},
             **arrays,
         )
@@ -1629,6 +1732,7 @@ class RunFile:
                 group.create_dataset(name, data=getattr(record, name), dtype="<f8")
             group.attrs["event_names"] = list(record.event_names)
             group.attrs["t_final"] = np.float64(record.t_final)
+            group.attrs[COUNTING_ATTR] = record.counting
 
     def read_arrival(self) -> ArrivalRecord:
         """Read back the maps ``write_arrival`` wrote.
@@ -1636,7 +1740,8 @@ class RunFile:
         Returns
         -------
         ArrivalRecord
-            As written, its arrays bitwise.
+            As written, its arrays bitwise; ``PER_CLASS`` when the group
+            carries no counting (written before prompt 81).
 
         Raises
         ------
@@ -1653,6 +1758,7 @@ class RunFile:
         return ArrivalRecord(
             event_names=tuple(str(x) for x in attrs["event_names"]),
             t_final=float(attrs["t_final"]),
+            counting=str(attrs.get(COUNTING_ATTR, PER_CLASS)),
             **arrays,
         )
 

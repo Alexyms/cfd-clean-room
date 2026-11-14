@@ -3705,17 +3705,19 @@ class TestScenarioHoldTime:
         _refused_scenario(tmp_path, raw, r"hold_time needs an initial event")
 
     def test_the_hold_needs_a_start_above_the_thresholds(self, tmp_path: Path) -> None:
-        """A start below every threshold is within spec at t = 0: refused.
+        """A start with every channel below its threshold is within spec at t = 0: refused.
 
-        One class at its threshold is not within spec ("within" is below),
-        so it is accepted. Defects caught: the start not compared (the hold
-        ends the run at hold_time, review 64 S5); any class below taken for
-        every class; a class exactly at its threshold taken as within spec.
+        Half of every threshold sums below each channel's (prompt 81: the
+        channels' sums, tests/test_cumulative_counting.py). One class at its
+        threshold is not within spec ("within" is below), so it is accepted.
+        Defects caught: the start not compared (the hold ends the run at
+        hold_time, review 64 S5); any channel below taken for every channel;
+        a channel exactly at its threshold taken as within spec.
         """
         raw = self._raw(tmp_path, hold_time=5.5)
         raw["scenario"]["events"][0]["initial"] = {"threshold_factor": 0.5}
         _refused_scenario(
-            tmp_path, raw, r"'start_dirty' starts every class below its threshold"
+            tmp_path, raw, r"'start_dirty' starts every channel \(the sum of its"
         )
         below = [0.5 * t for t in SCENARIO_THRESHOLDS.values()]
         raw["scenario"]["events"][0]["initial"] = {"concentration": below}

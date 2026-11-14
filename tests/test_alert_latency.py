@@ -36,7 +36,7 @@ import yaml
 from src import time_integration
 from src.config import SimConfig
 from src.io_manager import OPEN_STEP, AlertTable, RunFile
-from src.mesh import Mesh
+from src.mesh import SOLID, Mesh
 from src.monitor import Alert, AlertMonitor, ArrivalTracker, sensor_cells
 from src.time_integration import MarchStep, Provenance, run
 from validation.transport_cases import conservation_keys
@@ -58,6 +58,12 @@ SOURCE_SENSOR = {"name": "in_source", "x": 3.85, "y": 2.05}
 RELEASE = (0.5, 1.0)
 T_END = 7.0
 CHECKPOINT_INTERVAL = 7
+# The product's channels (ADR-015 C, amended 2026-11-14), written out here so
+# the checks do not read them from the code they check: each class and every
+# larger one, largest first. Each class alone is the per-class reading the
+# cumulative maps are compared with.
+CUMULATIVE_CHANNELS = ((4, 3, 2, 1, 0), (4, 3, 2, 1), (4, 3, 2), (4, 3), (4,))
+PER_CLASS_CHANNELS = ((0,), (1,), (2,), (3,), (4,))
 
 
 class _KilledError(RuntimeError):
@@ -82,6 +88,20 @@ def source_raw(**solver: object) -> dict:
     )
     raw["sensors"] = [*base["sensors"], dict(SOURCE_SENSOR)]
     return raw
+
+
+def channels_of(readings: np.ndarray) -> np.ndarray:
+    """[n, channels, sensors]: the channel sums of READINGS [n, classes, sensors].
+
+    Added from zero in CUMULATIVE_CHANNELS' order, as a counter's channels.
+    """
+    out = np.empty_like(readings)
+    for k, members in enumerate(CUMULATIVE_CHANNELS):
+        total = np.zeros((readings.shape[0], readings.shape[2]))
+        for j in members:
+            total += readings[:, j]
+        out[:, k] = total
+    return out
 
 
 def expected_table(
@@ -372,15 +392,20 @@ class TestScenarioRun:
         """VAL-009's criterion on a run: every alert's step is its crossing step, exact.
 
         The table is rebuilt from the stored readings alone by the rule and
-        compared bitwise, every column. Defects caught: ">" for "at or
-        above" would not show on a run (no reading lands on a threshold), so
-        the planted series carry it; the alert closed a step late; the alert
-        opened a step late; the peak not updated.
+        compared bitwise, every column. Since prompt 81 the alerts read the
+        channels: the stored channel series is the per-class series' sums
+        (``channels_of``), bitwise, and the table is that series' rule.
+        Defects caught: ">" for "at or above" would not show on a run (no
+        reading lands on a threshold), so the planted series carry it; the
+        alert closed a step late; the alert opened a step late; the peak not
+        updated; the alerts read on the classes alone.
         """
         series = released.run.read_sensor_readings()
         thresholds = np.array(released.config.class_thresholds())
+        channels = channels_of(series.readings)
+        assert series.channels.tobytes() == channels.tobytes()
         expected = expected_table(
-            series.readings, series.steps, series.times, thresholds, series.names
+            channels, series.steps, series.times, thresholds, series.names
         )
         same_table(released.run.read_alerts(), expected)
 
@@ -486,11 +511,14 @@ class TestRestart:
         """Killed after a checkpoint inside an open alert, restarted: the same table.
 
         The checkpoint chosen is the first multiple of the cadence with an
-        alert of the uninterrupted run open across it, another opened after
-        it, and a frame before the next checkpoint. The run is killed at that
-        frame, so the killed file holds readings and an alert table past the
-        checkpoint (the table the readings imply, written at the frame's
-        flush), which the restart discards and replaces. Defects caught: the
+        alert of the uninterrupted run open across it, another opened or
+        closed after it, and a frame before the next checkpoint. (Since prompt
+        81 the release's channels all open within one step of each other, so
+        no alert opens while another is open; a close changes the table past
+        the checkpoint as an opening did.) The run is killed at that frame, so
+        the killed file holds readings and an alert table past the checkpoint
+        (the table the readings imply, written at the frame's flush), which
+        the restart discards and replaces. Defects caught: the
         open alert dropped from the checkpoint (it opens again at the step
         after the checkpoint); the table written only at the end of the march
         (the killed file holds none).
@@ -510,7 +538,9 @@ class TestRestart:
             for c in range(CHECKPOINT_INTERVAL, last, CHECKPOINT_INTERVAL)
             if (f := kill_at(c)) is not None
             and np.any((table.step_on < c) & (off > f))
-            and np.any((c < table.step_on) & (table.step_on <= f))
+            and np.any(
+                ((c < table.step_on) & (table.step_on <= f)) | ((c < off) & (off <= f))
+            )
         )
         kill = kill_at(checkpoint)
         assert kill is not None
@@ -533,10 +563,14 @@ class TestRestart:
         same_table(
             written,
             expected_table(
-                series.readings, series.steps, series.times, thresholds, series.names
+                channels_of(series.readings),
+                series.steps,
+                series.times,
+                thresholds,
+                series.names,
             ),
         )
-        assert np.any(written.step_on > checkpoint)
+        assert np.any((written.step_on > checkpoint) | (written.step_off > checkpoint))
         record = run(config, restart=path)
         assert record.restarted_from == checkpoint
         same_table(RunFile(path).read_alerts(), table)
@@ -544,3 +578,47 @@ class TestRestart:
         a, b = RunFile(path).read_sensor_readings(), released.run.read_sensor_readings()
         assert a.steps.tolist() == b.steps.tolist()
         assert a.readings.tobytes() == b.readings.tobytes()
+        assert a.channels.tobytes() == b.channels.tobytes()
+
+
+@pytest.mark.integration
+class TestCumulativeMaps:
+    def test_the_march_maps_are_the_channels_and_never_later_than_per_class(
+        self, released: SimpleNamespace
+    ) -> None:
+        """Prompt 81: /arrival/ is the cumulative rule on the run's own fields.
+
+        Two trackers read the same fields the march stepped (the step-0 frame,
+        then every step's), one on the channels written out above and one on
+        each class alone. The march's maps equal the first bitwise; no entry
+        is later than the second's, every cell the second reaches the first
+        reaches, the 5 um channel's maps are the 5 um class's, and some entry
+        is earlier (the release carries every class into the cells it reaches,
+        so a channel's sum reaches its limit before its class alone). Defects
+        caught: the sum over the smaller classes; the class alone.
+        """
+        config, record = released.config, released.record
+        live = Mesh(config).cell_type != SOLID
+        thresholds = config.class_thresholds()
+        onsets = record.arrival.onsets.tolist()
+        trackers = [
+            ArrivalTracker(thresholds, live, onsets, channels=channels)
+            for channels in (CUMULATIVE_CHANNELS, PER_CLASS_CHANNELS)
+        ]
+        frames = released.run.read_frames()
+        start = {k: frames.fields[k][0] for k in frames.fields}
+        for tracker in trackers:
+            tracker.update(0.0, start)
+            for step in released.steps:
+                tracker.update(step.t, step.fields)
+        names = record.arrival.event_names
+        cumulative, per_class = (
+            t.record(names, record.t_final).first_above for t in trackers
+        )
+        assert record.arrival.first_above.tobytes() == cumulative.tobytes()
+        reached = np.isfinite(per_class)
+        assert np.isfinite(cumulative[reached]).all()
+        assert (cumulative[reached] <= per_class[reached]).all()
+        assert cumulative[:, 4].tobytes() == per_class[:, 4].tobytes()
+        earlier = np.isfinite(cumulative) & ~(cumulative >= per_class)
+        assert earlier.any()

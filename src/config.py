@@ -781,6 +781,44 @@ class ScenarioSpec:
         return raw
 
 
+def channel_classes(sizes: Sequence[float]) -> tuple[tuple[int, ...], ...]:
+    """The classes each counter channel sums: the class and every larger one.
+
+    ISO 14644-1's limits are cumulative, and a counter's channel at a size
+    counts every particle at or above it. Each of the model's classes stands
+    for the particles nearest its size (prompt 80, section 1), so channel k,
+    the one whose lower size edge is class k's diameter, reads the sum of
+    every class whose diameter is at or above class k's, and is compared
+    with class k's threshold (ADR-015 C, amended 2026-11-14).
+
+    Parameters
+    ----------
+    sizes : Sequence[float]
+        The classes' diameters, metres, in class order (any order of size).
+
+    Returns
+    -------
+    tuple[tuple[int, ...], ...]
+        One per class, in class order: the indices of the classes channel k
+        sums, in the order they are added, largest diameter first and, for
+        two of one diameter, the higher index first. The largest class's
+        channel is that class alone.
+
+    Notes
+    -----
+    The order of addition is fixed so that every reader of a channel
+    (the monitor, the arrival maps, the recovery, the frames' readers) adds
+    the same terms in the same order from zero, and two of them agree bit
+    for bit; it is the order prompt 80's probe added them in.
+    """
+    diameters = [float(size) for size in sizes]
+    order = sorted(range(len(diameters)), key=lambda j: (-diameters[j], -j))
+    return tuple(
+        tuple(j for j in order if diameters[j] >= diameters[k])
+        for k in range(len(diameters))
+    )
+
+
 def _freeze(value: object) -> object:
     """A read-only copy: a mapping becomes a MappingProxyType, a list a tuple."""
     if isinstance(value, Mapping):
@@ -2322,19 +2360,27 @@ class SimConfig:
                     f"{SCENARIO_KEY}.hold_time ({hold_time} s) must be below "
                     f"solver.t_end ({self.t_end} s)"
                 )
-            # Within spec is every class below its threshold at every sensor,
-            # and an initial field is uniform, so a start below the thresholds
-            # in every class is within spec at t = 0 and the hold would end
-            # the run at hold_time, before any later event (review 64 S5).
+            # Within spec is every channel below its threshold at every sensor,
+            # and an initial field is uniform, so a start whose every channel
+            # sum is below is within spec at t = 0 and the hold would end the
+            # run at hold_time, before any later event (review 64 S5). The
+            # channels are summed as the recovery tracker sums them.
             start = next(e for e in events if isinstance(e.change, Initial))
             assert isinstance(start.change, Initial)
             thresholds = self.class_thresholds(f"{SCENARIO_KEY}.hold_time")
-            if all(c < t for c, t in zip(start.change.values, thresholds, strict=True)):
+            sums = []
+            for members in self.channel_classes():
+                total = 0.0
+                for j in members:
+                    total += start.change.values[j]
+                sums.append(total)
+            if all(c < t for c, t in zip(sums, thresholds, strict=True)):
                 raise ValueError(
                     f"{SCENARIO_KEY}.hold_time needs an initial event at or above "
-                    f"the thresholds in some class: '{start.name}' starts every class "
-                    "below its threshold, so the room is within spec from t = 0 and "
-                    f"the hold would end the run at {hold_time} s (ADR-014 C)"
+                    f"the thresholds in some channel: '{start.name}' starts every "
+                    "channel (the sum of its class and every larger one) below its "
+                    "threshold, so the room is within spec from t = 0 and the hold "
+                    f"would end the run at {hold_time} s (ADR-014 C)"
                 )
         # A turbulent flow state carries an eddy viscosity, and the transport
         # step refuses one without a Schmidt number. A scenario is marched, so
@@ -2567,6 +2613,16 @@ class SimConfig:
                 )
             out.append(found[0])
         return tuple(out)
+
+    def channel_classes(self) -> tuple[tuple[int, ...], ...]:
+        """The classes each counter channel sums (ISO 14644-1, ADR-015 C).
+
+        Returns
+        -------
+        tuple[tuple[int, ...], ...]
+            ``channel_classes(self.particle_sizes)``.
+        """
+        return channel_classes(self.particle_sizes)
 
     def _class_values(self, section: dict, key: str, ctx: str) -> tuple[float, ...]:
         """One finite non-negative number per configured particle class."""

@@ -6,7 +6,7 @@ to the step. A run file written before ADR-015 step 3 (Phase 4's, and the
 sweep's of step 1) has no ``/arrival/``; its maps are rebuilt from the stored
 frames by the same rule, which resolves an arrival only to the output
 cadence: a cell's time is the first stored frame at or after the onset at
-which the cell is at or above its threshold. That is never before the
+which the cell's channel reading is at or above its threshold. That is never before the
 march's time, and on the runs measured within one frame spacing after it (a
 cell can be below at one frame and above at a later one, so that is a
 measurement and not a bound). A cell at or above threshold only between two
@@ -32,6 +32,14 @@ searches the detection sensors and then adds the all-clear ones in turn.
 Prompt 76c marks a latency that falls after a flow switch: ``flow_switches``
 states when an event's end changes a scenario's flow state, and
 ``after_flow_switch`` marks the arrivals after one.
+
+Prompt 81 reads every threshold on the counter's channels (ADR-015 C): the
+frames' maps and the clear times compare channel k, the sum of class k and
+every larger class (``monitor.channel_sums``), with class k's threshold, as
+the march's maps and the monitor do. A run file whose ``/arrival/`` carries
+no counting was written by the per-class code; ``arrival_from_run`` reads
+its maps as ``PER_CLASS`` and says so, and ``detection_units`` refuses to
+stack maps of the two countings together.
 """
 
 import os
@@ -57,14 +65,17 @@ from src.config import (
     Source,
 )
 from src.io_manager import (
+    CUMULATIVE,
+    PER_CLASS,
     RunFile,
     TransportFrames,
+    checked_counting,
     checked_onsets,
     checked_thresholds,
     real_number,
 )
 from src.mesh import SOLID, Mesh
-from src.monitor import contaminating_events
+from src.monitor import channel_sum, checked_channels, contaminating_events
 from src.scenarios import flow_fingerprint
 from src.staggered import edge_cell_inputs, obstacle_face_inputs
 
@@ -109,7 +120,7 @@ class ClearUnits(NamedTuple):
     clear : np.ndarray
         [units, ny, nx], seconds: per cell, the earliest stored frame time at
         or after the unit's ``ends`` from which every stored frame to the
-        run's end reads below the class's threshold; ``ends`` itself when no
+        run's end reads the channel below its threshold; ``ends`` itself when no
         frame from then on reads at or above; inf ("not clear") when the
         last frame does; NaN in SOLID cells.
     ends : np.ndarray
@@ -118,13 +129,14 @@ class ClearUnits(NamedTuple):
     times : tuple[np.ndarray, ...]
         Per unit, [frames]: the stored frames' times at or after t_e.
     fractions : tuple[np.ndarray, ...]
-        Per unit, [frames]: the fraction of the live area at or above the
-        class's threshold at each of those frames.
+        Per unit, [frames]: the fraction of the live area whose channel is
+        at or above its threshold at each of those frames.
     spacing : np.ndarray
         [units], seconds: the largest spacing between consecutive stored
         frames from t_e on, the clear times' resolution.
     labels : tuple[tuple[str, int], ...]
-        (scenario, class index) per unit.
+        (scenario, channel index) per unit; channel k sums class k and every
+        larger class.
 
     Notes
     -----
@@ -215,8 +227,8 @@ class RunArrival(NamedTuple):
     Parameters
     ----------
     maps : np.ndarray
-        [events, classes, ny, nx]: the first time at or after the event's
-        onset at which the cell is at or above the class's threshold; inf
+        [events, channels, ny, nx]: the first time at or after the event's
+        onset at which the cell's reading is at or above the threshold; inf
         for a non-SOLID cell never reached, NaN in SOLID cells.
     onsets : np.ndarray
         [events], seconds.
@@ -232,6 +244,11 @@ class RunArrival(NamedTuple):
     fallback : str or None
         Why the file's ``/arrival/`` was not used, for ``FRAME_RESOLVED``:
         absent, or the check that refused it. None for ``STEP_RESOLVED``.
+    counting : str
+        ``CUMULATIVE``: the maps read channel k, the sum of class k and
+        every larger class (ADR-015 C), what this code makes. ``PER_CLASS``:
+        each class alone, the flag on a file's ``/arrival/`` written before
+        prompt 81. ``detection_units`` refuses a mix.
     """
 
     maps: np.ndarray
@@ -240,6 +257,7 @@ class RunArrival(NamedTuple):
     event_names: tuple[str, ...]
     t_final: float
     fallback: str | None = None
+    counting: str = CUMULATIVE
 
 
 class Units(NamedTuple):
@@ -261,12 +279,17 @@ class Units(NamedTuple):
         frames (``FRAME_RESOLVED``) and not read from the march's: such a
         latency is an upper bound on the step's, and a cell the steps reach
         only between two frames reads as never.
+    counting : str
+        The one counting of every unit's maps, ``CUMULATIVE`` or
+        ``PER_CLASS`` (``RunArrival.counting``); the index of a label is
+        then the channel or the class.
     """
 
     latencies: np.ndarray
     caps: np.ndarray
     labels: tuple[tuple[str, str, int], ...]
     frame_resolved: tuple[bool, ...]
+    counting: str = CUMULATIVE
 
 
 class Score(NamedTuple):
@@ -356,6 +379,8 @@ def arrival_from_frames(
     thresholds: np.ndarray,
     live: np.ndarray,
     onsets: np.ndarray,
+    *,
+    channels: Sequence[Sequence[int]],
 ) -> np.ndarray:
     """The arrival maps at the stored frames' resolution (ADR-015 D).
 
@@ -365,29 +390,34 @@ def arrival_from_frames(
         The run file's ``/transport/`` frames.
     thresholds : np.ndarray
         [classes], particles per cubic metre, finite and non-negative, one
-        per class the frames hold.
+        per class the frames hold: channel k's threshold is class k's.
     live : np.ndarray
         [ny, nx] bool, the non-SOLID cells.
     onsets : np.ndarray
         [events], the contaminating events' onsets, seconds, finite,
         non-negative and in order.
+    channels : Sequence[Sequence[int]]
+        ``SimConfig.channel_classes``: per channel, the classes it sums.
 
     Returns
     -------
     np.ndarray
-        [events, classes, ny, nx]: per event, the first frame time at or
-        after its onset at which the cell is at or above the class's
-        threshold; inf for a non-SOLID cell no such frame reaches, NaN in
-        SOLID cells.
+        [events, channels, ny, nx]: per event, the first frame time at or
+        after its onset at which the cell's channel reading (``channel_sums``
+        of the frame) is at or above the channel's threshold; inf for a
+        non-SOLID cell no such frame reaches, NaN in SOLID cells. These are
+        ``CUMULATIVE`` maps.
 
     Raises
     ------
     TypeError
-        If a threshold or an onset is not a real number (a bool is not).
+        If a threshold or an onset is not a real number (a bool is not), or
+        a channel's member not an int.
     ValueError
         If the thresholds are not one per class of the frames, finite and
-        non-negative, ``live`` is not the frames' [ny, nx], or the onsets are
-        not [events], finite, non-negative and in order.
+        non-negative, ``live`` is not the frames' [ny, nx], the onsets are
+        not [events], finite, non-negative and in order, or the channels are
+        not ``monitor.checked_channels``'.
 
     Notes
     -----
@@ -403,15 +433,18 @@ def arrival_from_frames(
         raise ValueError(
             f"thresholds of shape {thresholds.shape} for the frames' classes {classes}"
         )
+    channels = checked_channels(channels, len(classes))
+    for k in classes:
+        if frames.fields[k].shape[1:] != live.shape:
+            raise ValueError(
+                f"class {k}'s frames are {frames.fields[k].shape[1:]}; live is "
+                f"{live.shape}"
+            )
     times = np.asarray(frames.times, dtype=np.float64)
     out = np.full((onsets.size, len(classes), *live.shape), np.inf)
     for k in classes:
-        stack = frames.fields[k]
-        if stack.shape[1:] != live.shape:
-            raise ValueError(
-                f"class {k}'s frames are {stack.shape[1:]}; live is {live.shape}"
-            )
-        above = (stack >= thresholds[k]) & live
+        # One channel at a time: a product grid's frames are large.
+        above = (channel_sum(frames.fields, channels[k]) >= thresholds[k]) & live
         for e, onset in enumerate(onsets):
             counted = above & (times >= onset)[:, None, None]
             reached = counted.any(axis=0)
@@ -433,11 +466,13 @@ def arrival_from_run(run_file: RunFile | str | os.PathLike[str]) -> RunArrival:
     -------
     RunArrival
         The maps, onsets, event names and ``t_final`` of ``/arrival/``,
-        ``STEP_RESOLVED``; or, for a file whose ``/arrival/`` is absent or
-        fails ``read_arrival``'s checks, ``arrival_from_frames`` on its
-        frames, with the thresholds, mesh and contaminating events of the
+        ``STEP_RESOLVED``, with the counting ``/arrival/`` records
+        (``PER_CLASS`` for one written before prompt 81, the flag a caller
+        reads); or, for a file whose ``/arrival/`` is absent or fails
+        ``read_arrival``'s checks, ``arrival_from_frames`` on its frames,
+        with the thresholds, channels, mesh and contaminating events of the
         merged configuration it records and the last frame's time,
-        ``FRAME_RESOLVED``, with ``fallback`` saying why.
+        ``FRAME_RESOLVED`` and ``CUMULATIVE``, with ``fallback`` saying why.
 
     Raises
     ------
@@ -462,6 +497,7 @@ def arrival_from_run(run_file: RunFile | str | os.PathLike[str]) -> RunArrival:
             STEP_RESOLVED,
             record.event_names,
             record.t_final,
+            counting=record.counting,
         )
     config = SimConfig.from_dict(run.read_config().mapping)
     if config.scenario is None:
@@ -478,6 +514,7 @@ def arrival_from_run(run_file: RunFile | str | os.PathLike[str]) -> RunArrival:
         np.array(config.class_thresholds("the arrival maps")),
         live,
         onsets,
+        channels=config.channel_classes(),
     )
     return RunArrival(
         maps,
@@ -486,6 +523,7 @@ def arrival_from_run(run_file: RunFile | str | os.PathLike[str]) -> RunArrival:
         tuple(name for name, _ in events),
         float(frames.times[-1]),
         fallback,
+        CUMULATIVE,
     )
 
 
@@ -550,18 +588,33 @@ def detection_units(arrivals: Mapping[str, RunArrival]) -> Units:
     ValueError
         If there is no run, the maps are not on one mesh, the event names do
         not match the events, a ``resolution`` is neither ``STEP_RESOLVED``
-        nor ``FRAME_RESOLVED``, a ``t_final`` is not finite, or an onset
-        lies after its run's ``t_final``.
+        nor ``FRAME_RESOLVED``, a ``counting`` is not one of the two, the
+        runs' countings differ (cumulative maps beside per-class ones), a
+        ``t_final`` is not finite, or an onset lies after its run's
+        ``t_final``.
 
     Notes
     -----
     A run read from its stored frames (``arrival_from_run`` flags it) makes
     frame-resolved units, and the flag reaches every Score and Layout built
     on them. Runs of both resolutions may be scored together; the flag says
-    some of the units are upper bounds.
+    some of the units are upper bounds. Runs of two countings may not: a
+    cumulative channel and a class alone are not the same reading, and a
+    layout scored over both would rank unlike things as like.
     """
     if not arrivals:
         raise ValueError("no run to score: give at least one scenario's maps")
+    countings = {name: checked_counting(a.counting) for name, a in arrivals.items()}
+    if len(set(countings.values())) > 1:
+        kinds = {
+            kind: sorted(str(n) for n, c in countings.items() if c == kind)
+            for kind in (CUMULATIVE, PER_CLASS)
+        }
+        raise ValueError(
+            f"the maps of {kinds[CUMULATIVE]} are cumulative and those of "
+            f"{kinds[PER_CLASS]} per class (written before prompt 81): a layout "
+            "is scored over maps of one counting"
+        )
     blocks: list[np.ndarray] = []
     caps: list[float] = []
     labels: list[tuple[str, str, int]] = []
@@ -600,7 +653,13 @@ def detection_units(arrivals: Mapping[str, RunArrival]) -> Units:
                 caps.append(float(remaining[e]))
                 labels.append((name, event, k))
                 flags.append(arrival.resolution == FRAME_RESOLVED)
-    return Units(np.stack(blocks), np.array(caps), tuple(labels), tuple(flags))
+    return Units(
+        np.stack(blocks),
+        np.array(caps),
+        tuple(labels),
+        tuple(flags),
+        next(iter(countings.values())),
+    )
 
 
 def exclude_units(units: Units, labels: Iterable[tuple[str, str, int]]) -> Units:
@@ -637,6 +696,7 @@ def exclude_units(units: Units, labels: Iterable[tuple[str, str, int]]) -> Units
         tuple(
             flag for flag, kept in zip(units.frame_resolved, keep, strict=True) if kept
         ),
+        units.counting,
     )
 
 
@@ -1110,6 +1170,8 @@ def clear_times(
     live: np.ndarray,
     areas: np.ndarray,
     end: float,
+    *,
+    channels: Sequence[Sequence[int]],
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Each cell's clear time from t_e on, at the stored frames' resolution (ADR-015 D).
 
@@ -1126,29 +1188,33 @@ def clear_times(
         [ny, nx], square metres per metre of depth: each cell's area.
     end : float
         t_e, seconds, finite and non-negative, at or before the last frame.
+    channels : Sequence[Sequence[int]]
+        ``SimConfig.channel_classes``: per channel, the classes it sums.
 
     Returns
     -------
     clear : np.ndarray
-        [classes, ny, nx], seconds: the earliest stored frame time at or
-        after ``end`` from which every stored frame reads below the class's
-        threshold; ``end`` where no frame from ``end`` on reads at or above;
-        inf ("not clear") where the last frame does; NaN in SOLID cells.
+        [channels, ny, nx], seconds: the earliest stored frame time at or
+        after ``end`` from which every stored frame reads the channel (the
+        sum of its class and every larger class) below its threshold;
+        ``end`` where no frame from ``end`` on reads at or above; inf ("not
+        clear") where the last frame does; NaN in SOLID cells.
     times : np.ndarray
         [n], the stored frames' times at or after ``end``.
     fractions : np.ndarray
-        [classes, n]: the fraction of the live area at or above the class's
-        threshold at each of those frames.
+        [channels, n]: the fraction of the live area whose channel is at or
+        above its threshold at each of those frames.
 
     Raises
     ------
     TypeError
-        If a threshold or ``end`` is not a real number.
+        If a threshold or ``end`` is not a real number, or a channel's member
+        not an int.
     ValueError
         If the thresholds are not one per class of the frames, finite and
         non-negative, ``live`` or ``areas`` is not the frames' [ny, nx],
-        ``end`` is not finite and non-negative, or no stored frame lies at or
-        after it.
+        ``end`` is not finite and non-negative, no stored frame lies at or
+        after it, or the channels are not ``monitor.checked_channels``'.
 
     Notes
     -----
@@ -1174,18 +1240,21 @@ def clear_times(
             f"no stored frame lies at or after t_e = {end} s (the last is at "
             f"{times[-1]} s)"
         )
+    channels = checked_channels(channels, len(classes))
+    for k in classes:
+        if frames.fields[k].shape[1:] != live.shape:
+            raise ValueError(
+                f"class {k}'s frames are {frames.fields[k].shape[1:]}; live is "
+                f"{live.shape}"
+            )
     times = times[kept]
     n = times.size
     total = float(areas[live].sum())
     clear = np.full((len(classes), *live.shape), end)
     fractions = np.empty((len(classes), n))
     for k in classes:
-        stack = frames.fields[k][kept]
-        if stack.shape[1:] != live.shape:
-            raise ValueError(
-                f"class {k}'s frames are {stack.shape[1:]}; live is {live.shape}"
-            )
-        above = (stack >= thresholds[k]) & live
+        reading = channel_sum(frames.fields, channels[k])[kept]
+        above = (reading >= thresholds[k]) & live
         fractions[k] = (above * areas).sum(axis=(1, 2)) / total
         ever = above.any(axis=0)
         last = n - 1 - np.argmax(above[::-1], axis=0)
@@ -1206,8 +1275,10 @@ def clear_units(runs: Mapping[str, RunFile | str | os.PathLike[str]]) -> ClearUn
     Returns
     -------
     ClearUnits
-        One unit per class of each run whose ``scenario_end`` is not None,
-        in the mapping's order, then the classes'.
+        One unit per channel of each run whose ``scenario_end`` is not None,
+        in the mapping's order, then the channels', read from the frames on
+        the channels (``clear_times``) whatever the file's other records
+        hold.
 
     Raises
     ------
@@ -1250,6 +1321,7 @@ def clear_units(runs: Mapping[str, RunFile | str | os.PathLike[str]]) -> ClearUn
             live,
             areas,
             end,
+            channels=config.channel_classes(),
         )
         gap = float(np.diff(kept).max()) if kept.size > 1 else 0.0
         for k in range(maps.shape[0]):

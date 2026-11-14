@@ -42,9 +42,9 @@ checkpoint's carried arrays, so a restart continues an open alert.
 
 The arrival maps (ADR-015 D, step 3). Every run keeps them
 (``monitor.ArrivalTracker``): per contaminating event of the plan
-(``monitor.contaminating_events``), class and non-SOLID cell, the first step
-time at or after the event's onset at which the cell is at or above its
-class's threshold, read from the initial fields at step 0 and after every
+(``monitor.contaminating_events``), channel and non-SOLID cell, the first
+step time at or after the event's onset at which the cell's channel reading
+is at or above its threshold, read from the initial fields at step 0 and after every
 step beside the monitor and the recovery tracker. The tracker's state joins
 the checkpoint's carried arrays, so every run now carries them; the maps are
 written to ``/arrival/`` at each checkpoint and at the end. With sensors the
@@ -63,10 +63,11 @@ refused.
 
 The clean-out (ADR-014 C, a scenario with an initial event). A sensor reads
 the cell containing it, the one below or to the left of it when it sits on
-a face (``monitor.sensor_cells``, re-exported here). A class is within spec
-when every sensor reads below its threshold, the room when every class is.
+a face (``monitor.sensor_cells``, re-exported here). A channel (the sum of
+a class and every larger class, ADR-015 C) is within spec when every sensor
+reads it below its threshold, the room when every channel is.
 Updated every step and carried in the checkpoint (prompt 64's decision 1):
-the last step time each cell was at or above its class's threshold, when
+the last step time each cell's channel was at or above its threshold, when
 each sensor and the free-area mean first fell to a hundredth of the initial
 level, and the start of the current within-spec stretch per class and for
 the room. With ``scenario.hold_time`` the run stops once the room has held
@@ -107,6 +108,7 @@ from src.boundary_staggered import StaggeredBoundary
 from src.config import Initial, SimConfig
 from src.forces import ForceGauge, StrouhalReading, strouhal
 from src.io_manager import (
+    CUMULATIVE,
     OPEN_STEP,
     AlertTable,
     ArrivalRecord,
@@ -115,14 +117,17 @@ from src.io_manager import (
     StepSeries,
 )
 from src.mesh import SOLID, Mesh
-from src.monitor import SENSOR_FACE_RTOL as SENSOR_FACE_RTOL
 from src.monitor import (
+    COUNTING_STATE,
     Alert,
     AlertMonitor,
     ArrivalTracker,
+    channel_sums,
+    checked_channels,
     contaminating_events,
     sensor_cells,
 )
+from src.monitor import SENSOR_FACE_RTOL as SENSOR_FACE_RTOL
 from src.particles import ParticlePhysics
 from src.scenarios import Interval, ScenarioManager
 from src.solver_staggered import (
@@ -405,7 +410,7 @@ class RunRecord:
         Every alert of the run, a restart's before its checkpoint included,
         in ``AlertMonitor.alerts``' order; empty without sensors.
     latencies : np.ndarray or None
-        [events, classes, sensors], each sensor's detection latency per
+        [events, channels, sensors], each sensor's detection latency per
         event of ``arrival``, the monitor's (``AlertMonitor.latencies``),
         seconds from the onset, inf where the sensor is not at or above its
         threshold by ``t_final`` (REQ-A04); None without sensors.
@@ -521,6 +526,7 @@ def alert_table(monitor: AlertMonitor) -> AlertTable:
         reading_on=[a.reading_on for a in alerts],
         peak=[a.peak for a in alerts],
         peak_t=[a.peak_t for a in alerts],
+        counting=CUMULATIVE,
     )
 
 
@@ -539,9 +545,9 @@ def map_latencies(
     Returns
     -------
     np.ndarray
-        [events, classes, sensors]: the cell's first time at or above the
-        threshold at or after the event's onset, minus the onset; inf where
-        the cell was not reached by the end.
+        [events, channels, sensors]: the cell's first time at or above the
+        channel's threshold at or after the event's onset, minus the onset;
+        inf where the cell was not reached by the end.
     """
     rows = np.array([j for j, _ in cells], dtype=np.intp)
     cols = np.array([i for _, i in cells], dtype=np.intp)
@@ -631,16 +637,24 @@ class RecoveryTracker:
         [ny, nx] bool, the non-SOLID cells.
     hold_time : float or None
         ``scenario.hold_time``.
+    channels : Sequence[Sequence[int]]
+        ``SimConfig.channel_classes``: per channel, the classes it sums.
 
     Raises
     ------
     ValueError
-        If there is no sensor, or the per-class sequences differ in length.
+        If there is no sensor, the per-class sequences differ in length, or
+        the channels are not ``monitor.checked_channels``'.
 
     Notes
     -----
-    Within spec means below the threshold, so the local field's "above" is
-    "not below": a cell exactly at its threshold has not recovered. The
+    Within spec means every channel below its threshold: channel k's
+    reading, the sum of class k and every larger class (ADR-015 C), below
+    class k's threshold. The local recovery field reads the same channels,
+    since it records when a cell was last at or above a threshold. The
+    100:1 times compare each class with its own initial level and stay per
+    class. Within spec means below, so the local field's "above" is "not
+    below": a cell exactly at its threshold has not recovered. The
     tracker's arrays are its whole state (``state`` and ``restore``), so a
     restart from a checkpoint continues it bitwise.
     """
@@ -652,6 +666,8 @@ class RecoveryTracker:
         cells: Sequence[tuple[int, int]],
         live: np.ndarray,
         hold_time: float | None,
+        *,
+        channels: Sequence[Sequence[int]],
     ) -> None:
         if not cells:
             raise ValueError(
@@ -663,6 +679,7 @@ class RecoveryTracker:
                 f"{len(thresholds)} thresholds and {len(initial)} initial levels"
             )
         self._thresholds = np.asarray(thresholds, dtype=np.float64)
+        self._channels = checked_channels(channels, self._thresholds.shape[0])
         self._initial = np.asarray(initial, dtype=np.float64)
         self._target = self._initial / HUNDRED_TO_ONE
         self._defined = self._initial >= HUNDRED_TO_ONE * self._thresholds * (
@@ -696,10 +713,14 @@ class RecoveryTracker:
             area.
         """
         readings = np.array([fields[k][self._rows, self._cols] for k in fields])
+        sums = channel_sums(fields, self._channels)
         for k, threshold in enumerate(self._thresholds):
-            above = (fields[k] >= threshold) & self._live
+            above = (sums[k] >= threshold) & self._live
             self.last_above[k][above] = t
-        within = (readings < self._thresholds[:, None]).all(axis=1)
+        channel_readings = np.array(
+            [sums[k][self._rows, self._cols] for k in range(len(sums))]
+        )
+        within = (channel_readings < self._thresholds[:, None]).all(axis=1)
         self.class_since = np.where(
             within, np.where(np.isnan(self.class_since), t, self.class_since), np.nan
         )
@@ -791,14 +812,15 @@ class RecoveryTracker:
         Returns
         -------
         RecoveryRecord
-            The room's and each class's recovery time: the start of the
+            The room's and each channel's recovery time: the start of the
             within-spec stretch that reaches the end of the run, NaN when
             the room is not within spec at the end or, with a hold, when the
-            stretch is shorter than it. The 100:1 times, NaN where not
-            defined or not reached; their ratio to ln(100) / N for the
-            free-area mean; and the local field, zero where a cell was never
-            at or above its threshold, inf where it still is, NaN in SOLID
-            cells, with its maximum over the non-SOLID cells.
+            stretch is shorter than it. The 100:1 times per class, NaN where
+            not defined or not reached; their ratio to ln(100) / N for the
+            free-area mean; and the local field per channel, zero where a
+            cell's channel was never at or above its threshold, inf where it
+            still is, NaN in SOLID cells, with its maximum over the
+            non-SOLID cells. Counting ``CUMULATIVE``.
         """
         local = self.last_above.copy()
         live = np.broadcast_to(self._live, local.shape)
@@ -823,6 +845,7 @@ class RecoveryTracker:
             ratio=self.mean_time / well_mixed,
             local_recovery=local,
             local_recovery_max=largest,
+            counting=CUMULATIVE,
         )
 
 
@@ -947,6 +970,7 @@ class _Run:
                 self.cells,
                 self.live,
                 spec.hold_time,
+                channels=config.channel_classes(),
             )
         # Built after the tracker so a clean-out without a class's threshold
         # is refused naming the recovery, as before the monitor existed.
@@ -960,6 +984,7 @@ class _Run:
             config.class_thresholds("the arrival maps"),
             self.live,
             [onset for _, onset in self.events],
+            channels=config.channel_classes(),
         )
 
     # -- Flow states ---------------------------------------------------------
@@ -1100,7 +1125,7 @@ class _Run:
         step: int,
         t: float,
         fields: Mapping[int, np.ndarray],
-        pending: list[tuple[int, float, np.ndarray]],
+        pending: list[tuple[int, float, np.ndarray, np.ndarray]],
     ) -> tuple[Alert, ...]:
         """The monitor's update after a step; its readings join PENDING.
 
@@ -1109,11 +1134,11 @@ class _Run:
         if self.monitor is None:
             return ()
         alerts = self.monitor.update(step, t, fields)
-        pending.append((step, t, self.monitor.readings))
+        pending.append((step, t, self.monitor.readings, self.monitor.channel_readings))
         for alert in alerts:
             if alert.is_open:
                 logger.info(
-                    "alert: %s, class %d, at or above threshold at t = %.6g s "
+                    "alert: %s, channel %d, at or above threshold at t = %.6g s "
                     "(step %d)",
                     alert.sensor,
                     alert.size_class,
@@ -1156,7 +1181,7 @@ class _Run:
         """
         config = self.config
         output, cadence = config.output_interval, config.checkpoint_interval
-        pending: list[tuple[int, float, np.ndarray]] = []
+        pending: list[tuple[int, float, np.ndarray, np.ndarray]] = []
         held = self.tracker is not None and self.tracker.held()
         first_plan, first_i = start
         current = tuple(budgets)
@@ -1227,14 +1252,15 @@ class _Run:
         self._flush(pending)
         return fields, _copies(current), step, t, held
 
-    def _flush(self, pending: list[tuple[int, float, np.ndarray]]) -> None:
-        """Append the held readings, replace the alert table, and empty the list."""
+    def _flush(self, pending: list[tuple[int, float, np.ndarray, np.ndarray]]) -> None:
+        """Append the held readings and channels, replace the alert table, empty the list."""
         if pending and self.monitor is not None:
             self.run.write_sensor_readings(
                 np.array([row[0] for row in pending]),
                 np.array([row[1] for row in pending]),
                 np.array([row[2] for row in pending]),
                 self.names,
+                channels=np.array([row[3] for row in pending]),
             )
             self.run.write_alerts(alert_table(self.monitor))
         pending.clear()
@@ -1343,7 +1369,8 @@ def run(
         message names the first key); for a restart under another
         configuration (``RunFile.check_restart``), from a checkpoint whose
         budgets carry no leftover (written before prompt 78, ADR-016; checked
-        first), or under a ``t_end`` at or before the checkpoint's time (the
+        first), from a checkpoint without ``monitor.COUNTING_STATE`` (the
+        per-class code's, before prompt 81; checked second), or under a ``t_end`` at or before the checkpoint's time (the
         message names both); for a
         sensor in a SOLID cell, a clean-out without sensors or thresholds,
         sensors without a threshold for every class (the alert monitor's),
@@ -1404,6 +1431,23 @@ def run(
                 "leftover accumulated before the restart is unknown and REQ-T05's "
                 "bound cannot be carried across it (ADR-016); run it again from the "
                 "start"
+            )
+        # Before the configuration's check too: a march checkpoint of the
+        # per-class code carries maps, alerts and recovery times made on
+        # another counting, and continuing them would join the two in one run.
+        # A checkpoint without the maps at all predates them, and the
+        # tracker's restore says so.
+        if (
+            checkpoint is not None
+            and "first_above" in checkpoint.recovery
+            and COUNTING_STATE not in checkpoint.recovery
+        ):
+            raise ValueError(
+                f"restart refused: {run_path.checkpoint_path} was written by the "
+                "per-class code, before the cumulative channels of prompt 81 "
+                "(ADR-015 C); its arrival maps, alerts and recovery readings compare "
+                "each class alone with its threshold, so the run cannot continue on "
+                "the channels; run it again from the start"
             )
         run_path.check_restart(mapping)
         if checkpoint is not None and checkpoint.t >= config.t_end:
@@ -1481,7 +1525,7 @@ def run(
             c.flags.writeable = False
         budgets = tuple(MassBudget() for _ in range(state.n_classes))
         run_path.write_frame(0, 0.0, fields, budgets)
-        pending: list[tuple[int, float, np.ndarray]] = []
+        pending: list[tuple[int, float, np.ndarray, np.ndarray]] = []
         state.observe(0, 0.0, fields, pending)
         state._flush(pending)
         state.arrival.update(0.0, fields)

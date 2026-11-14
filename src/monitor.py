@@ -6,10 +6,20 @@ when it sits on a face (``sensor_cells``, ADR-014 C's rule, moved here from
 the step, the reading the clean-out's record already uses, so Phase 4's
 recovery times and Phase 5's latencies come from one instrument.
 
-An alert opens at the first step whose reading is at or above the class's
-threshold and closes at the first step after it whose reading is below; it
-records both steps and times, the opening reading and the peak between
-them. The march calls ``update`` after every transport step with fields it
+The channels (ADR-015 C, amended 2026-11-14 by Alex's decision on prompt
+80's measurement). ISO 14644-1's limits are cumulative and a real counter's
+channel at a size counts every particle at or above it, so the monitor reads
+what a counter reads: channel k is the sum of class k and every larger class
+(``SimConfig.channel_classes``, summed by ``channel_sums``), compared with
+class k's threshold. Each of the model's classes stands for the particles
+nearest its size. There is no per-class comparison beside it: every reader
+of a threshold in ``src/`` reads the channels.
+
+An alert opens at the first step whose channel reading is at or above the
+channel's threshold and closes at the first step after it whose reading is
+below; it records both steps and times, the opening reading and the peak
+between them. Each class's own reading is kept beside the channels', for
+the run file. The march calls ``update`` after every transport step with fields it
 has already made read-only, so the monitor adds no delay of its own to a
 detection (REQ-A01, VAL-009) and reads the fields without writing them
 (REQ-A06). A counter's sample time is not modelled: it is an instrument
@@ -22,9 +32,10 @@ writes, bitwise. The closed alerts are carried as well as the open ones
 because the run file's alert table is replaced whole at each write, and a
 restart would otherwise lose the rows before the checkpoint.
 
-The arrival maps (ADR-015 D, step 3). Per contaminating event, class and
+The arrival maps (ADR-015 D, step 3). Per contaminating event, channel and
 non-SOLID cell, ``ArrivalTracker`` keeps the first step time at or after the
-event's onset at which the cell is at or above its class's threshold: the
+event's onset at which the cell's channel reading is at or above the
+channel's threshold: the
 forward counterpart of the clean-out's local recovery field, updated every
 step beside it from the same fields. The events and their onsets come from
 the scenario's plan (``contaminating_events``), and the monitor's
@@ -48,6 +59,7 @@ from src.config import (
     Source,
 )
 from src.io_manager import (
+    CUMULATIVE,
     ArrivalRecord,
     checked_onsets,
     checked_thresholds,
@@ -81,9 +93,18 @@ STATE_NAMES: tuple[str, ...] = (
     "alert_t",
     "alert_readings",
 )
+# The checkpoint's mark that its maps, alerts and recovery readings were made
+# on the channels (prompt 81). A checkpoint without it was written by the
+# per-class code, and continuing it would join two countings in one run.
+COUNTING_STATE = "cumulative_channels"
 # The names ``ArrivalTracker.state()`` carries, distinct from the recovery
 # tracker's and the monitor's in the one checkpoint mapping.
-ARRIVAL_STATE_NAMES: tuple[str, ...] = ("first_above", "arrival_onsets", "arrival_t")
+ARRIVAL_STATE_NAMES: tuple[str, ...] = (
+    "first_above",
+    "arrival_onsets",
+    "arrival_t",
+    COUNTING_STATE,
+)
 # The one event of a run whose plan has no contaminating event (ADR-015 D).
 RUN_START = "run_start"
 # The segment key that gives a boundary segment a concentration of its own.
@@ -92,19 +113,20 @@ CONCENTRATION_KEY = "concentration"
 
 @dataclass(frozen=True)
 class Alert:
-    """One alert: a sensor's reading of one class at or above its threshold.
+    """One alert: a sensor's reading of one channel at or above its threshold.
 
     Parameters
     ----------
     sensor : str
         The sensor's name.
     size_class : int
-        The class index.
+        The channel, named by the class of its lower size edge: channel k
+        sums class k and every larger class (ADR-015 C).
     step_on, t_on : int, float
         The step that opened it and its time, seconds: the first step of
-        the stretch whose reading is at or above the threshold.
+        the stretch whose channel reading is at or above the threshold.
     reading_on : float
-        That step's reading, particles per cubic metre.
+        That step's channel reading, particles per cubic metre.
     step_off, t_off : int or None, float or None
         The first step after it whose reading is below the threshold, and
         its time; None while the alert is open.
@@ -256,6 +278,100 @@ def _check_fields(
             )
 
 
+def checked_channels(
+    channels: Sequence[Sequence[int]], n_classes: int
+) -> tuple[tuple[int, ...], ...]:
+    """The channels' classes (``SimConfig.channel_classes``), or a refusal.
+
+    Parameters
+    ----------
+    channels : Sequence[Sequence[int]]
+        Per channel k, the classes it sums in the order they are added.
+    n_classes : int
+        The classes the fields hold.
+
+    Returns
+    -------
+    tuple[tuple[int, ...], ...]
+        The channels as tuples of ints.
+
+    Raises
+    ------
+    TypeError
+        If a member is not an int (a bool is not one here).
+    ValueError
+        If there is not one channel per class, or a channel is empty, names
+        a class outside 0 to n - 1 or twice, or leaves out its own class.
+    """
+    out = tuple(tuple(members) for members in channels)
+    if len(out) != n_classes:
+        raise ValueError(f"{len(out)} channels for {n_classes} classes")
+    for k, members in enumerate(out):
+        for j in members:
+            if isinstance(j, (bool, np.bool_)) or not isinstance(j, (int, np.integer)):
+                raise TypeError(
+                    f"channel {k} names {j!r}; a class index must be an int"
+                )
+        if (
+            k not in members
+            or len(set(members)) != len(members)
+            or not all(0 <= j < n_classes for j in members)
+        ):
+            raise ValueError(
+                f"channel {k} sums {list(members)}: it must name its own class and "
+                f"others of 0 to {n_classes - 1}, each once"
+            )
+    return tuple(tuple(int(j) for j in members) for members in out)
+
+
+def channel_sums(
+    values: Mapping[int, np.ndarray], channels: Sequence[Sequence[int]]
+) -> dict[int, np.ndarray]:
+    """Each channel's reading: the sum of the classes it names (ADR-015 C).
+
+    Parameters
+    ----------
+    values : Mapping[int, np.ndarray]
+        Class to its concentration (a field [ny, nx], or the sensors'
+        readings), particles per cubic metre, all of one shape. Read, never
+        written.
+    channels : Sequence[Sequence[int]]
+        ``SimConfig.channel_classes``: per channel, the classes it sums in
+        the order they are added.
+
+    Returns
+    -------
+    dict[int, np.ndarray]
+        Channel k to a new float64 array of the values' shape: zero, then
+        each named class added in turn. A one-class channel is that class's
+        values bitwise, and two readers given the same channels add the
+        same terms in the same order, so they agree bit for bit (the sum at
+        a sensor's cell equals the field sum read at that cell).
+    """
+    return {k: channel_sum(values, members) for k, members in enumerate(channels)}
+
+
+def channel_sum(values: Mapping[int, np.ndarray], members: Sequence[int]) -> np.ndarray:
+    """One channel's reading: zero, then each class of MEMBERS added in turn.
+
+    Parameters
+    ----------
+    values : Mapping[int, np.ndarray]
+        Class to its concentration, all of one shape; read, never written.
+    members : Sequence[int]
+        One channel of ``SimConfig.channel_classes``, at least one class.
+
+    Returns
+    -------
+    np.ndarray
+        A new float64 array of the values' shape (``channel_sums``' entry).
+    """
+    total = np.zeros(np.shape(values[members[0]]), dtype=np.float64)
+    for j in members:
+        total += values[j]
+    return total
+
+
 def _whole(value: float, below: float = math.inf) -> bool:
     """Whether VALUE is a whole number from 0 to below BELOW (finite by then)."""
     return bool(np.isfinite(value) and value == int(value) and 0 <= value < below)
@@ -273,13 +389,14 @@ class _Open:
 
 
 class AlertMonitor:
-    """Each sensor's reading of each class every step, and the alerts (ADR-015 C).
+    """Each sensor's reading of each channel every step, and the alerts (ADR-015 C).
 
     Parameters
     ----------
     config : SimConfig
-        Supplies the sensors and each class's threshold
-        (``SimConfig.class_thresholds``).
+        Supplies the sensors, each class's threshold
+        (``SimConfig.class_thresholds``) and the classes each channel sums
+        (``SimConfig.channel_classes``).
     mesh : Mesh
         The run's mesh, for the cells the sensors read.
 
@@ -291,10 +408,13 @@ class AlertMonitor:
 
     Notes
     -----
-    "At or above" opens an alert and "below" closes it, matching the
-    recovery field's "not below": a reading exactly at its threshold is an
-    exceedance. The fields handed to ``update`` are read by index and never
-    written (REQ-A06).
+    Channel k's reading is the sum of class k and every larger class at the
+    sensor's cell, compared with class k's threshold: a counter's
+    cumulative count against ISO 14644-1's cumulative limit. "At or above"
+    opens an alert and "below" closes it, matching the recovery field's
+    "not below": a reading exactly at its threshold is an exceedance. The
+    fields handed to ``update`` are read by index and never written
+    (REQ-A06).
     """
 
     def __init__(self, config: SimConfig, mesh: Mesh) -> None:
@@ -306,6 +426,9 @@ class AlertMonitor:
         self._thresholds = np.array(
             config.class_thresholds("the alert monitor"), dtype=np.float64
         )
+        self._channels = checked_channels(
+            config.channel_classes(), self._thresholds.shape[0]
+        )
         cells = sensor_cells(config, mesh)
         self._rows = np.array([j for j, _ in cells])
         self._cols = np.array([i for _, i in cells])
@@ -313,6 +436,7 @@ class AlertMonitor:
         self.names: tuple[str, ...] = tuple(sensor.name for sensor in config.sensors)
         n_classes, n_sensors = self._thresholds.shape[0], len(cells)
         self._readings = np.full((n_classes, n_sensors), np.nan)
+        self._channel_readings = np.full((n_classes, n_sensors), np.nan)
         self._closed: list[Alert] = []
         self._open: dict[tuple[int, int], _Open] = {}
         self._step: int | None = None
@@ -320,13 +444,38 @@ class AlertMonitor:
 
     @property
     def thresholds(self) -> np.ndarray:
-        """[classes], each class's threshold, particles per cubic metre (a copy)."""
+        """[channels], channel k's threshold, class k's, per cubic metre (a copy)."""
         return self._thresholds.copy()
 
     @property
+    def channels(self) -> tuple[tuple[int, ...], ...]:
+        """Per channel, the classes it sums (``SimConfig.channel_classes``)."""
+        return self._channels
+
+    @property
     def readings(self) -> np.ndarray:
-        """[classes, sensors], the last update's readings (a copy); NaN before any."""
+        """[classes, sensors], each class's own reading at the last update (a copy).
+
+        NaN before any update. These are the concentrations; the alerts
+        read ``channel_readings``.
+        """
         return self._readings.copy()
+
+    @property
+    def channel_readings(self) -> np.ndarray:
+        """[channels, sensors], each channel's reading at the last update (a copy).
+
+        The sum ``channel_sums`` forms from ``readings``; NaN before any
+        update.
+        """
+        return self._channel_readings.copy()
+
+    def _sums(self, readings: np.ndarray) -> np.ndarray:
+        """[channels, sensors], the channels of per-class READINGS [classes, sensors]."""
+        sums = channel_sums(
+            {k: readings[k] for k in range(readings.shape[0])}, self._channels
+        )
+        return np.array([sums[k] for k in range(readings.shape[0])], dtype=np.float64)
 
     @property
     def alerts(self) -> tuple[Alert, ...]:
@@ -388,8 +537,8 @@ class AlertMonitor:
         -------
         tuple[Alert, ...]
             The alerts this step opened (``step_on == step``) and closed
-            (``step_off == step``), by class then sensor. A sensor's class
-            opens or closes at most one per step.
+            (``step_off == step``), by channel then sensor. A sensor's
+            channel opens or closes at most one per step.
 
         Raises
         ------
@@ -428,11 +577,12 @@ class AlertMonitor:
         )
         if not np.isfinite(readings).all():
             raise ValueError(f"a reading at step {step} is not finite")
+        sums = self._sums(readings)
         changed = []
-        above = readings >= self._thresholds[:, None]
+        above = sums >= self._thresholds[:, None]
         for k in range(n_classes):
             for s in range(len(self.names)):
-                key, reading = (k, s), float(readings[k, s])
+                key, reading = (k, s), float(sums[k, s])
                 record = self._open.get(key)
                 if record is None and above[k, s]:
                     record = _Open(step, t, reading, reading, t)
@@ -445,11 +595,12 @@ class AlertMonitor:
                 elif record is not None and reading > record.peak:
                     record.peak, record.peak_t = reading, t
         self._readings = readings
+        self._channel_readings = sums
         self._step, self._t = step, t
         return tuple(changed)
 
     def latencies(self, onsets: Sequence[float]) -> np.ndarray:
-        """Each sensor's detection latency per event and class (REQ-A04, ADR-015 D).
+        """Each sensor's detection latency per event and channel (REQ-A04, ADR-015 D).
 
         Parameters
         ----------
@@ -460,8 +611,9 @@ class AlertMonitor:
         Returns
         -------
         np.ndarray
-            [events, classes, sensors]: the time of the first reading at or
-            above the threshold at or after the event's onset, minus the
+            [events, channels, sensors]: the time of the first channel
+            reading at or above the threshold at or after the event's onset,
+            minus the
             onset; inf when there is none by the last update. An alert open
             at the onset counts as the onset itself, so a sensor already at
             or above its threshold when the event starts reads zero.
@@ -511,7 +663,8 @@ class AlertMonitor:
             ``alerts``' order with NaN for an open alert's step_off and
             t_off; ``alert_step`` and ``alert_t``, the last update's step
             and time (NaN before any); ``alert_readings`` [classes,
-            sensors]. All float64 and new arrays.
+            sensors], each class's own reading, from which the channels'
+            are summed again on restore. All float64 and new arrays.
         """
         sensor_index = {name: s for s, name in enumerate(self.names)}
         rows = [
@@ -635,35 +788,40 @@ class AlertMonitor:
         self._step = None if np.isnan(step) else int(step)
         self._t = None if np.isnan(t) else float(t)
         self._readings = readings
+        self._channel_readings = self._sums(readings)
 
 
 class ArrivalTracker:
-    """Per event, class and cell, the first time at or above threshold (ADR-015 D).
+    """Per event, channel and cell, the first time at or above threshold (ADR-015 D).
 
     Parameters
     ----------
     thresholds : Sequence[float]
-        Per class, particles per cubic metre, finite and non-negative.
+        Per class, particles per cubic metre, finite and non-negative:
+        channel k's threshold is class k's.
     live : np.ndarray
         [ny, nx] bool, the non-SOLID cells.
     onsets : Sequence[float]
         The contaminating events' onsets, seconds, finite, non-negative
         and in order (``contaminating_events``); at least one.
+    channels : Sequence[Sequence[int]]
+        ``SimConfig.channel_classes``: per channel, the classes it sums.
 
     Raises
     ------
     TypeError
-        If a threshold or an onset is not a real number, or ``live`` is
-        not a bool array.
+        If a threshold or an onset is not a real number, ``live`` is not a
+        bool array, or a channel's member not an int.
     ValueError
         With no class or no onset, a threshold not finite and
-        non-negative, ``live`` not 2-D, or the onsets not finite,
-        non-negative and in order.
+        non-negative, ``live`` not 2-D, the onsets not finite, non-negative
+        and in order, or the channels not ``checked_channels``'.
 
     Notes
     -----
     ``first_above[e, k, j, i]`` is the first update's time at or after
-    onset e at which class k's field in cell (j, i) is at or above its
+    onset e at which channel k's reading in cell (j, i), the sum of class
+    k and every larger class (``channel_sums``), is at or above class k's
     threshold, NaN until then. Each event's map starts at its own onset, so
     a cell already at or above its threshold then reads the onset itself,
     and a cell reached for one event before a later event's onset is not
@@ -679,10 +837,13 @@ class ArrivalTracker:
         thresholds: Sequence[float],
         live: np.ndarray,
         onsets: Sequence[float],
+        *,
+        channels: Sequence[Sequence[int]],
     ) -> None:
         self._thresholds = checked_thresholds(thresholds)
         if self._thresholds.size == 0:
             raise ValueError("thresholds must be [classes], at least one, got none")
+        self._channels = checked_channels(channels, self._thresholds.size)
         if not isinstance(live, np.ndarray) or live.dtype != np.bool_:
             raise TypeError("live must be a bool array, the non-SOLID cells")
         if live.ndim != 2:
@@ -705,8 +866,13 @@ class ArrivalTracker:
 
     @property
     def first_above(self) -> np.ndarray:
-        """[events, classes, ny, nx], the first time at or above, NaN until then (a copy)."""
+        """[events, channels, ny, nx], the first time at or above, NaN until then (a copy)."""
         return self._first.copy()
+
+    @property
+    def channels(self) -> tuple[tuple[int, ...], ...]:
+        """Per channel, the classes it sums."""
+        return self._channels
 
     def update(self, t: float, fields: Mapping[int, np.ndarray]) -> None:
         """Read the fields after a step (or the initial fields at t = 0).
@@ -737,8 +903,9 @@ class ArrivalTracker:
         _check_fields(fields, self._thresholds.size, self._live.shape)
         started = np.flatnonzero(self._onsets <= t)
         if started.size:
+            sums = channel_sums(fields, self._channels)
             for k, threshold in enumerate(self._thresholds):
-                above = (np.asarray(fields[k]) >= threshold) & self._live
+                above = (sums[k] >= threshold) & self._live
                 for e in started:
                     first = self._first[e, k]
                     first[above & np.isnan(first)] = t
@@ -750,14 +917,17 @@ class ArrivalTracker:
         Returns
         -------
         dict[str, np.ndarray]
-            ``ARRIVAL_STATE_NAMES``: ``first_above`` [events, classes, ny,
-            nx], ``arrival_onsets`` [events] and ``arrival_t``, the last
-            update's time (NaN before any). All float64 and new arrays.
+            ``ARRIVAL_STATE_NAMES``: ``first_above`` [events, channels, ny,
+            nx], ``arrival_onsets`` [events], ``arrival_t``, the last
+            update's time (NaN before any), and ``COUNTING_STATE``, 1.0,
+            the mark that the checkpoint was made on the channels. All
+            float64 and new arrays.
         """
         return {
             "first_above": self._first.copy(),
             "arrival_onsets": self._onsets.copy(),
             "arrival_t": np.array(np.nan if self._t is None else self._t),
+            COUNTING_STATE: np.array(1.0),
         }
 
     def restore(self, state: Mapping[str, np.ndarray]) -> None:
@@ -772,19 +942,31 @@ class ArrivalTracker:
         Raises
         ------
         KeyError
-            If one of ``ARRIVAL_STATE_NAMES`` is missing: a checkpoint
-            written before the arrival maps (ADR-015 step 3).
+            If one of the maps' names is missing: a checkpoint written
+            before the arrival maps (ADR-015 step 3).
         ValueError
-            If ``first_above`` is not this tracker's shape, the onsets are
-            not this tracker's, ``arrival_t`` is not a scalar that is NaN or
-            finite, or a time in the maps is set before any update, in a
-            SOLID cell, before its event's onset or after ``arrival_t``.
+            If the maps are there without ``COUNTING_STATE`` (a checkpoint
+            of the per-class code, before prompt 81), ``first_above`` is not
+            this tracker's shape, the onsets are not this tracker's,
+            ``arrival_t`` is not a scalar that is NaN or finite, or a time
+            in the maps is set before any update, in a SOLID cell, before
+            its event's onset or after ``arrival_t``.
         """
-        missing = [name for name in ARRIVAL_STATE_NAMES if name not in state]
+        missing = [
+            name
+            for name in ARRIVAL_STATE_NAMES
+            if name != COUNTING_STATE and name not in state
+        ]
         if missing:
             raise KeyError(
                 f"the checkpoint carries no {missing}: it was written before the "
                 "arrival maps (ADR-015 step 3)"
+            )
+        if COUNTING_STATE not in state:
+            raise ValueError(
+                "the checkpoint's arrival maps were made per class, before the "
+                "channels of prompt 81 (ADR-015 C): continuing them would join two "
+                "countings in one map"
             )
         first = np.array(state["first_above"], dtype=np.float64)
         onsets = np.array(state["arrival_onsets"], dtype=np.float64)
@@ -835,7 +1017,7 @@ class ArrivalTracker:
         ArrivalRecord
             ``first_above`` with inf in a non-SOLID cell not reached by
             the last update, NaN in SOLID cells, as ``local_recovery`` is
-            written; new arrays.
+            written; new arrays; counting ``CUMULATIVE``.
 
         Raises
         ------
@@ -863,4 +1045,5 @@ class ArrivalTracker:
             onsets=self._onsets.copy(),
             first_above=maps,
             t_final=t_final,
+            counting=CUMULATIVE,
         )

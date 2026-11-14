@@ -64,7 +64,7 @@ responsibility = "Assembles the staggered pressure correction equation from the 
 serves = ["REQ-S04", "REQ-S08"]
 
 [modules."src/monitor.py"]
-responsibility = "Reads each sensor's cell of every class field after every step by ADR-014 C's cell rule, opens an alert at the first reading at or above the class's threshold and closes it at the first below, keeping each alert's times, opening reading and peak, gives each sensor's latency from each event onset, keeps the arrival maps (per contaminating event of the plan, class and non-SOLID cell, the first step time at or after the onset at or above the threshold) by the same rule, and carries both states for the checkpoint; it reads the fields and never writes them."
+responsibility = "Reads each sensor's cell of every class field after every step by ADR-014 C's cell rule and sums the counter's channels (each class and every larger one, ISO 14644-1's cumulative counts), opens an alert at the first channel reading at or above its threshold and closes it at the first below, keeping each alert's times, opening reading and peak, gives each sensor's latency from each event onset, keeps the arrival maps (per contaminating event of the plan, channel and non-SOLID cell, the first step time at or after the onset at or above the threshold) by the same rule, and carries both states for the checkpoint; it reads the fields and never writes them."
 serves = ["REQ-A01", "REQ-A02", "REQ-A04", "REQ-A06"]
 
 [modules."src/multigrid.py"]

@@ -86,6 +86,10 @@ CONFIGS = ROOT / "configs"
 LIVE = np.array([[True, True, False], [True, True, True]])
 TIMES = np.array([0.0, 0.5, 1.0, 2.0])
 THRESHOLDS = np.array([1.0, 10.0])
+# The frames readers' rule tests read each of the two classes as its own
+# channel, so the planted frames test the rule alone; how the channels are
+# formed (each class and every larger one) is tests/test_cumulative_counting.py's.
+ONE_CLASS = ((0,), (1,))
 PROVENANCE = {
     "commit": "test",
     "started": "2026-11-01T00:00:00",
@@ -162,7 +166,9 @@ class TestArrivalFromFrames:
                 (0, 2): [9.0, 9.0, 9.0, 9.0],
             }
         )
-        maps = arrival_from_frames(frames, THRESHOLDS, LIVE, np.array([0.0, 0.75]))
+        maps = arrival_from_frames(
+            frames, THRESHOLDS, LIVE, np.array([0.0, 0.75]), channels=ONE_CLASS
+        )
         assert maps.shape == (2, 2, 2, 3)
         for k in (0, 1):
             assert maps[0, k].tolist()[0][:2] == [0.5, 0.5]
@@ -182,7 +188,9 @@ class TestArrivalFromFrames:
         for event 0, (0, 1) inf for event 1).
         """
         frames = frames_of({(0, 0): [2.0, 0.0, 0.0, 0.0], (0, 1): [0.0, 0.0, 2.0, 0.0]})
-        maps = arrival_from_frames(frames, THRESHOLDS, LIVE, np.array([0.0, 1.0]))
+        maps = arrival_from_frames(
+            frames, THRESHOLDS, LIVE, np.array([0.0, 1.0]), channels=ONE_CLASS
+        )
         for k in (0, 1):
             assert maps[0, k, 0, 0] == 0.0 and np.isinf(maps[1, k, 0, 0])
             assert maps[0, k, 0, 1] == maps[1, k, 0, 1] == 1.0
@@ -197,7 +205,9 @@ class TestArrivalFromFrames:
         (class 0 never).
         """
         frames = frames_of({(1, 0): [0.0, 0.5, 1.0, 1.0]})
-        maps = arrival_from_frames(frames, np.array([1.0, 20.0]), LIVE, np.array([0.0]))
+        maps = arrival_from_frames(
+            frames, np.array([1.0, 20.0]), LIVE, np.array([0.0]), channels=ONE_CLASS
+        )
         assert maps[0, 0, 1, 0] == 1.0 and np.isinf(maps[0, 1, 1, 0])
 
     @pytest.mark.parametrize(
@@ -219,7 +229,9 @@ class TestArrivalFromFrames:
     ) -> None:
         """One threshold per class of the frames, live of their shape, onsets [events]."""
         with pytest.raises(ValueError, match=match):
-            arrival_from_frames(frames_of({}), thresholds, live, onsets)
+            arrival_from_frames(
+                frames_of({}), thresholds, live, onsets, channels=ONE_CLASS
+            )
 
     @pytest.mark.parametrize(
         ("thresholds", "onsets", "error", "match"),
@@ -246,14 +258,18 @@ class TestArrivalFromFrames:
         with the bad value).
         """
         with pytest.raises(error, match=match):
-            arrival_from_frames(frames_of({}), thresholds, LIVE, np.array(onsets))
+            arrival_from_frames(
+                frames_of({}), thresholds, LIVE, np.array(onsets), channels=ONE_CLASS
+            )
 
     def test_frames_whose_classes_are_not_0_to_n_minus_1_are_refused(self) -> None:
         """A frames object holding classes 0 and 2 has no class 1 to read."""
         frames = frames_of({})
         frames.fields[2] = frames.fields.pop(1)
         with pytest.raises(ValueError, match=r"frames' classes \[0, 2\]"):
-            arrival_from_frames(frames, THRESHOLDS, LIVE, np.array([0.0]))
+            arrival_from_frames(
+                frames, THRESHOLDS, LIVE, np.array([0.0]), channels=ONE_CLASS
+            )
 
 
 @pytest.mark.unit
@@ -1434,7 +1450,7 @@ AREAS = np.ones(LIVE.shape)
 def clear_of(cells: dict[tuple[int, int], list[float]], end: float = 0.0) -> ClearUnits:
     """The two classes' all-clear units of frames_of(CELLS), t_e END."""
     clear, times, fractions = clear_times(
-        frames_of(cells), THRESHOLDS, LIVE, AREAS, end
+        frames_of(cells), THRESHOLDS, LIVE, AREAS, end, channels=ONE_CLASS
     )
     return ClearUnits(
         clear=clear,
@@ -1483,6 +1499,7 @@ class TestClearTimes:
             LIVE,
             AREAS,
             0.0,
+            channels=ONE_CLASS,
         )
         assert times.tolist() == TIMES.tolist()
         row0, row1 = clear[0].tolist()
@@ -1521,6 +1538,7 @@ class TestClearTimes:
             LIVE,
             AREAS,
             0.0,
+            channels=ONE_CLASS,
         )
         assert clear[0, 0, 0] == 1.0 and clear[1, 0, 0] == 0.0
         assert clear[0, 0, 1] == 1.0 and clear[1, 0, 1] == 1.0
@@ -1542,6 +1560,7 @@ class TestClearTimes:
             LIVE,
             AREAS,
             0.75,
+            channels=ONE_CLASS,
         )
         assert times.tolist() == [1.0, 2.0]
         assert clear[0, 0, 0] == 2.0 and clear[0, 0, 1] == 0.75
@@ -1553,7 +1572,12 @@ class TestClearTimes:
         areas = np.ones(LIVE.shape)
         areas[0, 0] = 3.0
         _, _, fractions = clear_times(
-            frames_of({(0, 0): [2.0, 0.0, 0.0, 0.0]}), THRESHOLDS, LIVE, areas, 0.0
+            frames_of({(0, 0): [2.0, 0.0, 0.0, 0.0]}),
+            THRESHOLDS,
+            LIVE,
+            areas,
+            0.0,
+            channels=ONE_CLASS,
         )
         assert fractions[0, 0] == pytest.approx(3.0 / 7.0)
 
@@ -1578,12 +1602,19 @@ class TestClearTimes:
     ) -> None:
         """One threshold per class, areas of the grid, t_e finite, from the floor, framed."""
         with pytest.raises(error, match=match):
-            clear_times(frames_of({}), thresholds, LIVE, areas, end)
+            clear_times(frames_of({}), thresholds, LIVE, areas, end, channels=ONE_CLASS)
 
     def test_frames_of_another_grid_are_refused(self) -> None:
         """A class whose frames are not live's [ny, nx]."""
         with pytest.raises(ValueError, match="class 0's frames are"):
-            clear_times(frames_of({}), THRESHOLDS, LIVE[:, :2], AREAS[:, :2], 0.0)
+            clear_times(
+                frames_of({}),
+                THRESHOLDS,
+                LIVE[:, :2],
+                AREAS[:, :2],
+                0.0,
+                channels=ONE_CLASS,
+            )
 
 
 @pytest.mark.unit

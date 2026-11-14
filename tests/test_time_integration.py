@@ -68,7 +68,7 @@ from src.boundary_staggered import StaggeredBoundary
 from src.config import SimConfig
 from src.io_manager import RunFile
 from src.mesh import SOLID, Mesh
-from src.monitor import ARRIVAL_STATE_NAMES, Alert
+from src.monitor import ARRIVAL_STATE_NAMES, COUNTING_STATE, Alert
 from src.particles import ParticlePhysics
 from src.placement import (
     FRAME_RESOLVED,
@@ -508,10 +508,19 @@ HISTORY = [
     ([1.0, 2.0, 0.0, 0.5], [0.1, 1.0, 0.0, 0.1], [1.0, 0.4]),
 ]
 RATE = math.log(100.0) / 4.0
+# The tracker's rule tests read each of the two classes as its own channel, so
+# the hand-checked history tests the rule alone; the channels' sums are
+# tests/test_cumulative_counting.py's (TestMapsAndRecoveryOnTheSum).
+ONE_CLASS = ((0,), (1,))
+# The product's channels (ADR-015 C, amended 2026-11-14), written out so the
+# run-level checks do not read them from the code they check.
+CUMULATIVE_CHANNELS = ((4, 3, 2, 1, 0), (4, 3, 2, 1), (4, 3, 2), (4, 3), (4,))
 
 
 def _tracker(hold: float | None = None) -> RecoveryTracker:
-    return RecoveryTracker([10.0, 1.0], [1000.0, 50.0], [(0, 0), (0, 3)], LIVE, hold)
+    return RecoveryTracker(
+        [10.0, 1.0], [1000.0, 50.0], [(0, 0), (0, 3)], LIVE, hold, channels=ONE_CLASS
+    )
 
 
 def _feed(tracker: RecoveryTracker, rows: list) -> list[bool]:
@@ -602,10 +611,14 @@ class TestRecoveryTracker:
         live = np.ones((1, 1), dtype=bool)
         cells = [(0, 0)]
         assert 35.2 * 100.0 > 3520.0
-        defined = RecoveryTracker([35.2], [3520.0], cells, live, None)._defined
+        defined = RecoveryTracker(
+            [35.2], [3520.0], cells, live, None, channels=((0,),)
+        )._defined
         assert defined.tolist() == [True]
         below = 3520.0 * (1.0 - 10.0 * DEFINED_RTOL)
-        defined = RecoveryTracker([35.2], [below], cells, live, None)._defined
+        defined = RecoveryTracker(
+            [35.2], [below], cells, live, None, channels=((0,),)
+        )._defined
         assert defined.tolist() == [False]
 
     def test_a_restored_tracker_continues_bitwise(self) -> None:
@@ -629,9 +642,11 @@ class TestRecoveryTracker:
         """Defects caught: a clean-out with no sensor accepted (the room within
         spec at t = 0 for want of a reading); a state of another shape restored."""
         with pytest.raises(ValueError, match="needs at least one sensor"):
-            RecoveryTracker([1.0], [100.0], [], LIVE, None)
+            RecoveryTracker([1.0], [100.0], [], LIVE, None, channels=((0,),))
         with pytest.raises(ValueError, match="2 thresholds and 1 initial"):
-            RecoveryTracker([1.0, 2.0], [100.0], [(0, 0)], LIVE, None)
+            RecoveryTracker(
+                [1.0, 2.0], [100.0], [(0, 0)], LIVE, None, channels=ONE_CLASS
+            )
         tracker = _tracker()
         state = tracker.state()
         state["last_above"] = np.zeros((2, 1, 5))
@@ -666,14 +681,14 @@ class TestRecoveryLines:
             "  stopped by the hold of 1.0 s",
             "  room recovery time: 5.0000 s",
             "  class 0 (1 um):",
-            "    recovery time: 5.0000 s",
+            "    channel at or above 1 um, recovery time: 5.0000 s",
             "    free-area mean 100:1: 2.0000 s, ratio to well-mixed 0.5000",
             "    sensor 100:1: west 2.0000 s, east 1.0000 s",
-            "    local recovery field maximum: 4.0000 s",
+            "    channel's local recovery field maximum: 4.0000 s",
             "  class 1 (5 um):",
-            "    recovery time: 1.0000 s",
+            "    channel at or above 5 um, recovery time: 1.0000 s",
             "    100:1 times: not defined (initial below 100 thresholds)",
-            "    local recovery field maximum: not recovered (a cell still above)",
+            "    channel's local recovery field maximum: not recovered (a cell still above)",
         ]
 
 
@@ -817,11 +832,13 @@ class TestCleanOut:
     ) -> None:
         """Recomputed from /transport/sensors/: every step from 0, no gap.
 
-        Each class's recovery time is the first step of the trailing run of
-        steps whose every sensor reads below its threshold; each sensor's
-        100:1 time is its first reading at or below C0 / 100. Defects caught:
-        a reading lost at a checkpoint or a frame; the tracker reading other
-        cells than the file records.
+        Each channel's recovery time is the first step of the trailing run of
+        steps whose every sensor reads the channel's sum (the stored channel
+        series, the per-class series' sums bitwise) below its threshold; each
+        sensor's 100:1 time is its first reading of its class at or below
+        C0 / 100. Defects caught: a reading lost at a checkpoint or a frame;
+        the tracker reading other cells than the file records; the recovery
+        read on the classes alone.
         """
         readings = clean_out.run.read_sensor_readings()
         record = clean_out.record
@@ -829,7 +846,9 @@ class TestCleanOut:
         assert readings.names == tuple(s.name for s in clean_out.config.sensors)
         recovery = record.recovery
         thresholds = np.array(clean_out.config.class_thresholds())
-        within = (readings.readings < thresholds[None, :, None]).all(axis=2)
+        channels = channels_of(readings.readings)
+        assert readings.channels.tobytes() == channels.tobytes()
+        within = (channels < thresholds[None, :, None]).all(axis=2)
         for k in range(len(thresholds)):
             assert within[-1, k]
             start = (
@@ -847,7 +866,7 @@ class TestCleanOut:
     def test_the_local_field_and_the_mean_against_the_last_frame(
         self, clean_out: SimpleNamespace
     ) -> None:
-        """inf exactly where the last frame is at or above the threshold.
+        """inf exactly where the last frame's channel is at or above the threshold.
 
         The free-area mean has a 100:1 time only if the last frame's mean is
         at or below C0 / 100 (or it fell there earlier). Defects caught: the
@@ -860,8 +879,9 @@ class TestCleanOut:
         mesh = Mesh(clean_out.config)
         live = mesh.cell_type != SOLID
         recovery = record.recovery
+        last_frame = as_channels({j: frames.fields[j][-1] for j in frames.fields})
         for k, threshold in enumerate(recovery.thresholds):
-            last = frames.fields[k][-1]
+            last = last_frame[k]
             local = recovery.local_recovery[k]
             assert np.array_equal(np.isinf(local), live & (last >= threshold))
             assert np.isnan(local[~live]).all()
@@ -1379,6 +1399,26 @@ def sensed_door(
     )
 
 
+def as_channels(fields: Mapping[int, np.ndarray]) -> dict[int, np.ndarray]:
+    """The product's channels of FIELDS: each class and every larger one, from zero.
+
+    Written out here (CUMULATIVE_CHANNELS), not read from the code checked.
+    """
+    out = {}
+    for k, members in enumerate(CUMULATIVE_CHANNELS):
+        total = np.zeros(np.shape(fields[members[0]]))
+        for j in members:
+            total += fields[j]
+        out[k] = total
+    return out
+
+
+def channels_of(readings: np.ndarray) -> np.ndarray:
+    """[n, channels, sensors]: the channel sums of a stored series [n, classes, sensors]."""
+    sums = as_channels({j: readings[:, j] for j in range(readings.shape[1])})
+    return np.stack([sums[k] for k in range(readings.shape[1])], axis=1)
+
+
 def maps_by_rule(
     times: list[float],
     fields: list[Mapping[int, np.ndarray]],
@@ -1432,7 +1472,8 @@ class TestArrivalMaps:
         3 s, each a step time. Defects caught: the last time kept instead of
         the first; ">" for "at or above"; an event's map started at t = 0
         instead of its onset; the tracker not updated at step 0 or after some
-        step; the record's unreached cells left NaN.
+        step; the record's unreached cells left NaN; the maps read on the
+        classes alone (prompt 81: the rule reads the channels, ``as_channels``).
         """
         record, config = sensed_door.record, sensed_door.config
         arrival = sensed_door.run.read_arrival()
@@ -1442,8 +1483,8 @@ class TestArrivalMaps:
         times = [0.0] + [info.t for info in sensed_door.steps]
         assert {1.0, 3.0} <= set(times)
         first = sensed_door.run.read_frames()
-        fields = [{k: first.fields[k][0] for k in first.fields}]
-        fields += [info.fields for info in sensed_door.steps]
+        fields = [as_channels({k: first.fields[k][0] for k in first.fields})]
+        fields += [as_channels(info.fields) for info in sensed_door.steps]
         live = Mesh(config).cell_type != SOLID
         thresholds = np.array(config.class_thresholds())
         expected = maps_by_rule(times, fields, thresholds, live, arrival.onsets)
@@ -1478,7 +1519,7 @@ class TestArrivalMaps:
         stored = sensed_door.run.read_sensor_readings()
         expected = latencies_by_rule(
             stored.times,
-            stored.readings,
+            channels_of(stored.readings),
             np.array(config.class_thresholds()),
             record.arrival.onsets,
         )
@@ -1513,8 +1554,17 @@ class TestArrivalMaps:
         frames = sensed_door.run.read_frames()
         arrival = sensed_door.run.read_arrival()
         live = Mesh(config).cell_type != SOLID
-        framed = arrival_from_frames(frames, arrival.thresholds, live, arrival.onsets)
-        stack = [{k: frames.fields[k][n] for k in frames.fields} for n in range(4)]
+        framed = arrival_from_frames(
+            frames,
+            arrival.thresholds,
+            live,
+            arrival.onsets,
+            channels=config.channel_classes(),
+        )
+        stack = [
+            as_channels({k: frames.fields[k][n] for k in frames.fields})
+            for n in range(4)
+        ]
         assert frames.steps.size == 4
         expected = maps_by_rule(
             frames.times.tolist(), stack, arrival.thresholds, live, arrival.onsets
@@ -1627,6 +1677,33 @@ class TestArrivalMaps:
         with pytest.raises(KeyError, match=r"before the arrival maps \(ADR-015 step 3"):
             run(config, restart=path)
 
+    def test_a_per_class_checkpoint_refuses_the_restart(
+        self, tmp_path: Path, door: SimpleNamespace
+    ) -> None:
+        """A checkpoint of the per-class code (no channels' mark): ValueError, saying so.
+
+        The mark is deleted from a checkpoint the branch wrote, as the code
+        before prompt 81 wrote none. The refusal comes before the
+        configuration's check and writes nothing. Defect caught: the check
+        removed (the restart would continue per-class maps on the channels).
+        """
+        config = SimConfig.from_dict(sensed_door_raw())
+        path = tmp_path / "run.h5"
+        with pytest.raises(_KilledError):
+            run(
+                config,
+                path,
+                flows_from=door.record.path,
+                on_step=killer(35),
+                provenance=PROVENANCE,
+            )
+        with h5py.File(RunFile(path).checkpoint_path, "a") as checkpoint:
+            del checkpoint["checkpoint/recovery"][COUNTING_STATE]
+        before = path.read_bytes()
+        with pytest.raises(ValueError, match=r"written by the per-class code"):
+            run(config, restart=path)
+        assert path.read_bytes() == before
+
     def test_a_phase_4_file_is_read_from_its_frames_and_flagged(
         self, tmp_path: Path, sensed_door: SimpleNamespace
     ) -> None:
@@ -1661,7 +1738,11 @@ class TestArrivalMaps:
         assert units.frame_resolved == (True,) * n + (False,) * n
         live = Mesh(sensed_door.config).cell_type != SOLID
         expected = arrival_from_frames(
-            RunFile(path).read_frames(), arrival.thresholds, live, arrival.onsets
+            RunFile(path).read_frames(),
+            arrival.thresholds,
+            live,
+            arrival.onsets,
+            channels=sensed_door.config.channel_classes(),
         )
         assert old.maps.tobytes() == expected.tobytes()
         assert arrival_from_run(RunFile(path)).maps.tobytes() == expected.tobytes()
@@ -2292,9 +2373,10 @@ class TestRunScenario:
         )
         assert lines == [
             "alerts (ADR-015 C): 2 opened, 1 still open at the end",
-            "  hood_entry, class 1 (0.3 um): at or above from t = 0.3000 s (step 3), "
-            "reading 2e+04; below at t = 0.5000 s (step 5); peak 3e+04 at t = 0.4000 s",
-            "  near_door, class 4 (5 um): at or above from t = 0.7000 s (step 7), "
+            "  hood_entry, channel 1 (>= 0.3 um): at or above from t = 0.3000 s "
+            "(step 3), reading 2e+04; below at t = 0.5000 s (step 5); peak 3e+04 at "
+            "t = 0.4000 s",
+            "  near_door, channel 4 (>= 5 um): at or above from t = 0.7000 s (step 7), "
             "reading 30; still open; peak 31.5 at t = 0.8000 s",
         ]
         assert run_scenario.alert_lines([], [1e-7], False) == [
@@ -2320,11 +2402,11 @@ class TestRunScenario:
             "latency (REQ-A04, ADR-015 D): from each event's onset, the monitor's and "
             "the arrival map's at the sensor's cell, which DISAGREE",
             "  event a, onset t = 1.0000 s:",
-            "    class 0 (2 um): s0 0.2500 s, map 0.2500 s; s1 never by 6.0000 s, map "
-            "never",
+            "    channel 0 (>= 2 um): s0 0.2500 s, map 0.2500 s; s1 never by 6.0000 s, "
+            "map never",
             "  event b, onset t = 3.0000 s:",
-            "    class 0 (2 um): s0 0.0000 s, map 0.0000 s; s1 1.5000 s, map 1.7500 s "
-            "DISAGREES",
+            "    channel 0 (>= 2 um): s0 0.0000 s, map 0.0000 s; s1 1.5000 s, map "
+            "1.7500 s DISAGREES",
         ]
 
     def test_the_restart_flag_continues_a_run_file(
