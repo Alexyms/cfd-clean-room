@@ -33,17 +33,17 @@ written before. Its groups:
   [events, channels, ny, nx], attributes ``event_names``, ``t_final`` and
   the counting; replaced whole at each march checkpoint and at the end,
   dropped by ``discard_march``;
-
-A group that compares concentrations with the thresholds (the alerts, the
-recovery, the arrival maps) records how as ``COUNTING_ATTR``: ``CUMULATIVE``
-for what this code writes, and a group without it, written before prompt 81,
-reads as ``PER_CLASS``.
 - ``/transient/``, a tier-2 run's (ADR-014 D, tier 2; step 6b): ``steps``
   (int64), ``times`` and the frames ``u`` [n, ny, nx+1], ``v`` [n, ny+1, nx]
   and ``p`` [n, ny, nx], and ``/transient/series/``, one row per step:
   ``step`` and ``outer`` and ``pressure_cap_hits`` (int64), ``t``,
   ``worst_imbalance``, ``drag``, ``lift``, ``c_d`` and ``c_l`` (float64,
   NaN for a run without forces).
+
+A group that compares concentrations with the thresholds (the alerts, the
+recovery, the arrival maps) records how as ``COUNTING_ATTR``: ``CUMULATIVE``
+for what this code writes, and a group without it, written before prompt 81,
+reads as ``PER_CLASS``.
 
 The checkpoint file, ``<run>.checkpoint.h5`` beside it (the run file's path
 less its suffix), holds what a restart continues from: ``/checkpoint/``, the
@@ -310,7 +310,7 @@ class AlertTable:
         time, particles per cubic metre and seconds.
     counting : str
         ``CUMULATIVE`` (the channel's sum of its class and every larger one)
-        or ``PER_CLASS`` (a table written before prompt 81).
+        or ``PER_CLASS`` (a table written before prompt 81). No default.
 
     Raises
     ------
@@ -333,7 +333,7 @@ class AlertTable:
     reading_on: np.ndarray
     peak: np.ndarray
     peak_t: np.ndarray
-    counting: str = CUMULATIVE
+    counting: str
 
     def __post_init__(self) -> None:
         checked_counting(self.counting)
@@ -527,7 +527,7 @@ class RecoveryRecord:
         How the within-spec times and the local field read the thresholds:
         ``CUMULATIVE``, or ``PER_CLASS`` for a record written before prompt
         81. The 100:1 times compare each class with its own initial level
-        and are per class under either.
+        and are per class under either. No default.
 
     Raises
     ------
@@ -556,7 +556,7 @@ class RecoveryRecord:
     ratio: np.ndarray
     local_recovery: np.ndarray
     local_recovery_max: np.ndarray
-    counting: str = CUMULATIVE
+    counting: str
 
     def __post_init__(self) -> None:
         checked_counting(self.counting)
@@ -631,6 +631,7 @@ class ArrivalRecord:
         ``CUMULATIVE``: channel k reads the sum of class k and every larger
         class against class k's threshold (ADR-015 C). ``PER_CLASS``: class
         k alone, which is what ``/arrival/`` written before prompt 81 holds.
+        No default.
 
     Raises
     ------
@@ -649,7 +650,7 @@ class ArrivalRecord:
     onsets: np.ndarray
     first_above: np.ndarray
     t_final: float
-    counting: str = CUMULATIVE
+    counting: str
 
     def __post_init__(self) -> None:
         checked_counting(self.counting)

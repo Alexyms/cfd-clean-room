@@ -35,7 +35,7 @@ import yaml
 
 from src import time_integration
 from src.config import SimConfig
-from src.io_manager import OPEN_STEP, AlertTable, RunFile
+from src.io_manager import CUMULATIVE, OPEN_STEP, AlertTable, RunFile
 from src.mesh import SOLID, Mesh
 from src.monitor import Alert, AlertMonitor, ArrivalTracker, sensor_cells
 from src.time_integration import MarchStep, Provenance, run
@@ -169,7 +169,7 @@ def expected_table(
             "peak_t",
         )
     }
-    return AlertTable(names=names, **columns)
+    return AlertTable(names=names, counting=CUMULATIVE, **columns)
 
 
 def same_table(a: AlertTable, b: AlertTable) -> None:

@@ -53,7 +53,10 @@ from src.io_manager import (
     ALERT_TABLE_COLUMNS,
     BUDGET_TERMS,
     CHECKPOINT,
+    COUNTING_ATTR,
+    CUMULATIVE,
     OPEN_STEP,
+    PER_CLASS,
     RESTART_EXCLUDED_KEYS,
     RESTART_EXCLUDED_SECTIONS,
     STEADY_CHECKPOINT,
@@ -1693,6 +1696,7 @@ def _recovery(**changed: object) -> RecoveryRecord:
         "ratio": np.array([27.0 / 25.6, np.nan]),
         "local_recovery": local,
         "local_recovery_max": np.array([0.9, np.inf]),
+        "counting": CUMULATIVE,
     }
     values.update(changed)
     return RecoveryRecord(**values)
@@ -1849,6 +1853,7 @@ def _alerts(**changed: object) -> AlertTable:
         "reading_on": [1.0e5, 1.0 / 3.0, 29.3],
         "peak": [2.5e5, 1.0 / 3.0, 31.0],
         "peak_t": [0.4, 0.7, 0.9],
+        "counting": CUMULATIVE,
     }
     columns.update(changed)
     return AlertTable(**columns)  # type: ignore[arg-type]
@@ -1881,7 +1886,11 @@ class TestAlerts:
     def test_an_empty_table_round_trips(self, tmp_path: Path) -> None:
         """A monitored run with no alert writes a table of no rows, not nothing."""
         run = RunFile(tmp_path / "run.h5")
-        empty = AlertTable(names=("near_door",), **{n: [] for n in ALERT_TABLE_COLUMNS})
+        empty = AlertTable(
+            names=("near_door",),
+            counting=CUMULATIVE,
+            **{n: [] for n in ALERT_TABLE_COLUMNS},
+        )
         run.write_alerts(empty)
         read = run.read_alerts()
         _same_alerts(read, empty)
@@ -1982,6 +1991,7 @@ def _arrival(**changed: object) -> ArrivalRecord:
         "onsets": [0.0, 1.5],
         "first_above": maps,
         "t_final": 3.0,
+        "counting": CUMULATIVE,
     }
     fields.update(changed)
     return ArrivalRecord(**fields)  # type: ignore[arg-type]
@@ -2178,3 +2188,67 @@ class TestCrashSafety:
         _same_checkpoint(run.read_steady_checkpoint()[1], _steady(True))
         with h5py.File(run.checkpoint_path, "r") as handle:
             assert sorted(handle) == [CHECKPOINT, STEADY_CHECKPOINT]
+
+
+@pytest.mark.unit
+class TestCountingMarks:
+    """The counting each group records (prompt 81, ADR-015 C), read back by value.
+
+    The three groups that compare concentrations with the thresholds record
+    how, as ``COUNTING_ATTR`` on the group. No record has a default counting,
+    so each fixture below says which it holds; a reader hands back an
+    unmarked group (a file written before prompt 81) as ``PER_CLASS``.
+    """
+
+    GROUPS = (
+        pytest.param(
+            "arrival", _arrival, "write_arrival", "read_arrival", id="arrival"
+        ),
+        pytest.param(
+            "recovery", _recovery, "write_recovery", "read_recovery", id="recovery"
+        ),
+        pytest.param(
+            "transport/alerts", _alerts, "write_alerts", "read_alerts", id="alerts"
+        ),
+    )
+
+    @pytest.mark.parametrize(("group", "build", "write", "read"), GROUPS)
+    @pytest.mark.parametrize("counting", [CUMULATIVE, PER_CLASS])
+    def test_the_mark_written_is_the_mark_read(
+        self,
+        tmp_path: Path,
+        group: str,
+        build: object,
+        write: str,
+        read: str,
+        counting: str,
+    ) -> None:
+        """Each counting written reads back as itself, and sits on the group as text.
+
+        An unmarked group reads as per-class, so the cumulative round trip
+        catches a mark not written, and the per-class one a writer or reader
+        that fixes the counting to what this code makes. Defects caught: the
+        writer leaving the mark off (cumulative reads per_class); the writer
+        writing a constant (per_class reads cumulative); the reader returning
+        a constant.
+        """
+        run = RunFile(tmp_path / "run.h5")
+        getattr(run, write)(build(counting=counting))
+        assert getattr(run, read)().counting == counting
+        with h5py.File(run.path, "r") as handle:
+            assert handle[group].attrs[COUNTING_ATTR] == counting
+
+    @pytest.mark.parametrize(("group", "build", "write", "read"), GROUPS)
+    def test_a_group_without_the_mark_reads_as_per_class(
+        self, tmp_path: Path, group: str, build: object, write: str, read: str
+    ) -> None:
+        """A group written before prompt 81 holds no mark and reads PER_CLASS.
+
+        Defect caught: the reader's fallback taken as cumulative (an older
+        file's readings would then pass as the channels').
+        """
+        run = RunFile(tmp_path / "run.h5")
+        getattr(run, write)(build(counting=CUMULATIVE))
+        with h5py.File(run.path, "a") as handle:
+            del handle[group].attrs[COUNTING_ATTR]
+        assert getattr(run, read)().counting == PER_CLASS

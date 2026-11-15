@@ -241,6 +241,16 @@ class Grid:
         }
 
 
+def class_alone(classes: int) -> tuple[tuple[int, ...], ...]:
+    """The per-class reading as channels: each class its own channel.
+
+    Since prompt 81 the frames' readers take the channels they compare, so the
+    per-class reading prompt 79 and this script's per-class side report is
+    asked for by name.
+    """
+    return tuple((k,) for k in range(classes))
+
+
 def events_of(config: SimConfig) -> tuple[tuple[str, ...], np.ndarray]:
     """The plan's contaminating events: names and onsets."""
     events = contaminating_events(config.scenario)
@@ -287,6 +297,7 @@ def clear_units_of(
             tuple(q["fractions"]),
             np.array(q["gap"]),
             tuple(q["labels"]),
+            c,
         )
         for c, q in parts.items()
     }
@@ -321,7 +332,7 @@ class Fine:
             self.times[name], self.low[name] = times, low
             for c in COUNTINGS:
                 self.frames[c][name] = RunArrival(
-                    maps[c], onsets, FRAME_RESOLVED, names, float(times[-1])
+                    maps[c], onsets, FRAME_RESOLVED, names, float(times[-1]), c
                 )
             step = arrival_from_run(path)
             assert step.resolution == STEP_RESOLVED
@@ -381,7 +392,7 @@ class Coarse:
                 maps = np.where(np.isnan(saved[c]), np.inf, saved[c])
                 maps[:, :, ~self.live] = np.nan
                 self.steps[c][name] = RunArrival(
-                    maps, onsets, STEP_RESOLVED, names, t_final
+                    maps, onsets, STEP_RESOLVED, names, t_final, c
                 )
             fmaps, times, low = probe80.frame_maps(
                 path, self.thresholds, self.live, onsets
@@ -390,13 +401,19 @@ class Coarse:
             self.low[name] = min(low, float(saved["low"]))
             for c in COUNTINGS:
                 self.frames[c][name] = RunArrival(
-                    fmaps[c], onsets, FRAME_RESOLVED, names, float(times[-1])
+                    fmaps[c], onsets, FRAME_RESOLVED, names, float(times[-1]), c
                 )
             run, old = RunFile(path), RunFile(self.old[name])
             self.step_times[name] = run.read_sensor_readings().times
             self.calibration[name] = calibrate(run, old, saved, self.live)
             frames = run.read_frames()
-            reference = arrival_from_frames(frames, self.thresholds, self.live, onsets)
+            reference = arrival_from_frames(
+                frames,
+                self.thresholds,
+                self.live,
+                onsets,
+                channels=class_alone(self.thresholds.size),
+            )
             self.calibration[name]["per-class frame map = arrival_from_frames"] = (
                 reference.tobytes() == fmaps[PER_CLASS].tobytes()
             )
@@ -408,7 +425,12 @@ class Coarse:
                 path, self.thresholds, self.live, areas, end
             )
             theirs, kept, fractions = clear_times(
-                RunFile(path).read_frames(), self.thresholds, self.live, areas, end
+                RunFile(path).read_frames(),
+                self.thresholds,
+                self.live,
+                areas,
+                end,
+                channels=class_alone(self.thresholds.size),
             )
             self.clear_check[name] = (
                 mine[PER_CLASS].tobytes() == theirs.tobytes()

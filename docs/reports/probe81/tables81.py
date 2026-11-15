@@ -78,7 +78,10 @@ from src.placement import (  # noqa: E402 -- follows sys.path.insert
     arrival_from_frames,
     arrival_from_run,
     clear_score,
+    clear_times,
     clear_units,
+    room_clear,
+    scenario_end,
 )
 
 RESULTS = run81.RESULTS
@@ -88,7 +91,9 @@ SWEEP = BEFORE / "sweep"
 QUEUE = run81.QUEUE
 STANDBY = RESULTS / "standby.json"
 PLANTS = RESULTS / "plants.json"
+PLANTS_81B = RESULTS / "plants81b.json"
 SUITE = RESULTS / "suite.xml"
+SUITE_81B = RESULTS / "suite81b.xml"
 TABLES = HERE / "tables81.md"
 CHANGES = HERE / "changes81.md"
 RESCORED = {"69": HERE / "rescored69.md", "76": HERE / "rescored76.md"}
@@ -428,7 +433,7 @@ def bitwise_table(paths: dict) -> tuple[list[str], dict[str, bool], dict]:
 def probe_table(paths: dict) -> tuple[list[str], bool]:
     """B1: the 80x30 maps against prompt 80's probe maps, bit for bit."""
     lines = [
-        "### B1. The 80x30 cumulative maps of this pass's runs (/arrival/, made by the march) against prompt 80's probe maps (results/builder80/placement/RUN.channels.npz, made by its wrapper on prompt 79's march), bit for bit (prediction (b))",
+        "### B1. The 80x30 cumulative maps of this pass's runs (/arrival/, made by the march) against prompt 80's probe maps (results/builder80/placement/RUN.channels.npz, made by its wrapper on prompt 79's march), bit for bit, after one normalisation: the probe stores NaN for a live cell not reached, which is read as inf, as /arrival/ holds it (prediction (b))",
         "",
         "| Run | /arrival/ counting | Maps equal, bit for bit | Probe's per-class maps = prompt 79's /arrival/ | t_final equal |",
         "|---|---|---|---|---|",
@@ -863,15 +868,75 @@ def plants_table() -> tuple[list[str], bool]:
     return lines, caught and record["clean"]["exit"] == 0
 
 
-def suite_table() -> list[str]:
-    """U1: the whole suite at the code commit, as pytest recorded it."""
+def fix_plants_table() -> tuple[list[str], bool]:
+    """T2: prompt 81b's planted defects and whether their tests failed."""
     lines = [
-        "### U1. The whole suite at the code commit (pytest tests/, results/builder81/suite.xml)",
+        "### T2. Prompt 81b's planted defects (docs/reports/probe81/plant81.py --set fixes, in a worktree of the fix commit), the tests run under each, and whether they failed (results/builder81/plants81b.json)",
         "",
     ]
-    if not SUITE.exists():
+    if not PLANTS_81B.exists():
+        return [*lines, "Not run."], False
+    record = json.loads(PLANTS_81B.read_text(encoding="utf-8"))
+    lines += [
+        f"Commit {record['commit'][:7]}; the named tests without a plant: exit {record['clean']['exit']}, {record['clean']['summary']}.",
+        "",
+        "| Plant | Defect | File | Tests | Exit | pytest's summary | Caught |",
+        "|---|---|---|---|---|---|---|",
+    ]
+    for p in record["plants"]:
+        tests = ", ".join(t.split("::", 1)[1] if "::" in t else t for t in p["tests"])
+        lines.append(
+            f"| {p['name']} | {p['defect']} | {p['file']} | {tests} | {p['exit']} | "
+            f"{p['summary']} | {yes(p['caught'])} |"
+        )
+    n = len(record["plants"])
+    caught = sum(p["caught"] for p in record["plants"])
+    lines += ["", f"{caught} of {n} plants caught."]
+    return lines, caught == n and record["clean"]["exit"] == 0
+
+
+def clear_sum_table(paths: dict) -> list[str]:
+    """T3: the 80x30 runs' room clear times by the channels and by each class alone."""
+    lines = [
+        "### T3. REQ-A07's room clear times on this pass's 80x30 runs, through placement.clear_units (the channels), beside each class alone as its own channel (what the plant clear_units_identity makes clear_units return; test 81 B1)",
+        "",
+        "| Unit | Room clear, channels (s) | Room clear, each class alone (s) | Earlier read alone |",
+        "|---|---|---|---|",
+    ]
+    for name in run81.PLACEMENT:
+        path = paths[name][0]
+        config = SimConfig.from_dict(RunFile(path).read_config().mapping)
+        end = scenario_end(config)
+        mesh = Mesh(config)
+        sizes = config.particle_sizes
+        built, _ = room_clear(clear_units({name: path}))
+        alone, _, _ = clear_times(
+            RunFile(path).read_frames(),
+            np.array(config.class_thresholds("T3")),
+            mesh.cell_type != SOLID,
+            np.outer(mesh.dy_cell, mesh.dx_cell),
+            end,
+            channels=tuple((k,) for k in range(len(sizes))),
+        )
+        for k in range(len(sizes)):
+            # SOLID cells are NaN and set no time, as room_clear reads them.
+            room_alone = float(np.where(np.isnan(alone[k]), -np.inf, alone[k]).max())
+            lines.append(
+                f"| {TITLES[name]}, {sizes[k] * 1e6:g} um | {t4(float(built[k]))} | "
+                f"{t4(room_alone)} | {yes(room_alone < built[k])} |"
+            )
+    return lines
+
+
+def suite_table(
+    path: Path = SUITE,
+    title: str = "U1. The whole suite at the code commit (pytest tests/, results/builder81/suite.xml)",
+) -> list[str]:
+    """U1: the whole suite at the code commit, as pytest recorded it."""
+    lines = [f"### {title}", ""]
+    if not path.exists():
         return [*lines, "Not run."]
-    root = ET.parse(SUITE).getroot()
+    root = ET.parse(path).getroot()
     suite = root if root.tag == "testsuite" else root.find("testsuite")
     assert suite is not None
     get = {
@@ -937,17 +1002,33 @@ def rescore() -> dict[str, str]:
             FRAME_RESOLVED,
             step.event_names,
             float(frames.times[-1]),
-            "prompt 81: read from the frames on the channels, as the prompt asks",
             CUMULATIVE,
+            "prompt 81: read from the frames on the channels, as the prompt asks",
         )
 
     t76.arrival_from_run = from_frames
     try:
         analysis = t76.Analysis({name: t76.Run(product, name) for name in t76.NAMES})
-        out["76"] = t76.render(analysis)[0]
+        out["76"] = frames_caveat(t76.render(analysis)[0])
     finally:
         t76.arrival_from_run = original
     return out
+
+
+FRAMES_CAVEAT = (
+    "Frame-resolved, as every arm run read here: a cell at or above its limit only between "
+    "two stored frames is not seen (prompt 80's caveat that a crossing between frames can "
+    "be missed), so a latency read from the frames is an upper bound on the step's and a "
+    "unit that reads as never detected may be one the steps reach."
+)
+
+
+def frames_caveat(text: str) -> str:
+    """TEXT with the frames' caveat on the line after K2's heading (review 81 S3)."""
+    lines = text.split("\n")
+    at = next(i for i, line in enumerate(lines) if line.startswith("### K2."))
+    assert lines[at + 1] == "", "K2's heading is followed by a blank line"
+    return "\n".join([*lines[: at + 2], FRAMES_CAVEAT, "", *lines[at + 2 :]])
 
 
 def rescore_header(source: str) -> str:
@@ -1113,6 +1194,12 @@ def build() -> tuple[str, dict[str, str], dict[str, str], str]:
     )
     blocks["plants"], plants_ok = plants_table()
     blocks["suite"] = suite_table()
+    blocks["plants81b"], _ = fix_plants_table()
+    blocks["suite81b"] = suite_table(
+        SUITE_81B,
+        "U2. The whole suite at the fix commit (pytest tests/, results/builder81/suite81b.xml)",
+    )
+    blocks["clear_sum"] = clear_sum_table(paths)
     blocks["predictions"] = predictions_table(v)
     blocks["stops"] = [
         "### X1. The prompt's stop conditions",

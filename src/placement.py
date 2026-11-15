@@ -38,8 +38,11 @@ frames' maps and the clear times compare channel k, the sum of class k and
 every larger class (``monitor.channel_sums``), with class k's threshold, as
 the march's maps and the monitor do. A run file whose ``/arrival/`` carries
 no counting was written by the per-class code; ``arrival_from_run`` reads
-its maps as ``PER_CLASS`` and says so, and ``detection_units`` refuses to
-stack maps of the two countings together.
+its maps as ``PER_CLASS`` and says so. No score or search compares the two
+countings: ``detection_units`` refuses to stack maps of both, ``search_roles``
+refuses detection and all-clear units of different countings, and ``rank``
+refuses layouts scored over different ones. Every record that carries a
+counting takes it without a default, so a caller says which it holds.
 """
 
 import os
@@ -137,6 +140,11 @@ class ClearUnits(NamedTuple):
     labels : tuple[tuple[str, int], ...]
         (scenario, channel index) per unit; channel k sums class k and every
         larger class.
+    counting : str
+        The one counting of every unit's clear times, ``CUMULATIVE`` or
+        ``PER_CLASS`` (as ``Units.counting``). ``clear_units`` reads the
+        channels, so it gives ``CUMULATIVE``; ``search_roles`` refuses
+        all-clear units of another counting than the detection units'.
 
     Notes
     -----
@@ -151,6 +159,7 @@ class ClearUnits(NamedTuple):
     fractions: tuple[np.ndarray, ...]
     spacing: np.ndarray
     labels: tuple[tuple[str, int], ...]
+    counting: str
 
 
 class ClearScore(NamedTuple):
@@ -241,14 +250,16 @@ class RunArrival(NamedTuple):
         The last time the maps read, seconds: ``/arrival/``'s, or the last
         stored frame's. The mean rule caps an undetected unit's latency at
         ``t_final`` minus its onset.
-    fallback : str or None
-        Why the file's ``/arrival/`` was not used, for ``FRAME_RESOLVED``:
-        absent, or the check that refused it. None for ``STEP_RESOLVED``.
     counting : str
         ``CUMULATIVE``: the maps read channel k, the sum of class k and
         every larger class (ADR-015 C), what this code makes. ``PER_CLASS``:
         each class alone, the flag on a file's ``/arrival/`` written before
-        prompt 81. ``detection_units`` refuses a mix.
+        prompt 81. No default: a caller says which it holds, since a silent
+        default would let per-class maps pass as cumulative.
+        ``detection_units`` refuses a mix.
+    fallback : str or None
+        Why the file's ``/arrival/`` was not used, for ``FRAME_RESOLVED``:
+        absent, or the check that refused it. None for ``STEP_RESOLVED``.
     """
 
     maps: np.ndarray
@@ -256,8 +267,8 @@ class RunArrival(NamedTuple):
     resolution: str
     event_names: tuple[str, ...]
     t_final: float
+    counting: str
     fallback: str | None = None
-    counting: str = CUMULATIVE
 
 
 class Units(NamedTuple):
@@ -282,14 +293,14 @@ class Units(NamedTuple):
     counting : str
         The one counting of every unit's maps, ``CUMULATIVE`` or
         ``PER_CLASS`` (``RunArrival.counting``); the index of a label is
-        then the channel or the class.
+        then the channel or the class. No default.
     """
 
     latencies: np.ndarray
     caps: np.ndarray
     labels: tuple[tuple[str, str, int], ...]
     frame_resolved: tuple[bool, ...]
-    counting: str = CUMULATIVE
+    counting: str
 
 
 class Score(NamedTuple):
@@ -347,6 +358,10 @@ class Layout(NamedTuple):
         three sensors and 1 of 430 at four).
     units : tuple[tuple[str, str, int], ...]
         The labels of the units scored over.
+    counting : str
+        The counting of the units scored over (``Units.counting``); ``rank``
+        refuses layouts of two countings, since their scores are not
+        comparable.
     uncovered : tuple[tuple[str, str, int], ...]
         The units no candidate reaches, removed before the search and
         reported; empty for a given layout.
@@ -364,6 +379,7 @@ class Layout(NamedTuple):
     method: str
     exact: bool
     units: tuple[tuple[str, str, int], ...]
+    counting: str
     uncovered: tuple[tuple[str, str, int], ...] = ()
     distinct_masks: int | None = None
     maximal_masks: int | None = None
@@ -522,8 +538,8 @@ def arrival_from_run(run_file: RunFile | str | os.PathLike[str]) -> RunArrival:
         FRAME_RESOLVED,
         tuple(name for name, _ in events),
         float(frames.times[-1]),
-        fallback,
-        CUMULATIVE,
+        counting=CUMULATIVE,
+        fallback=fallback,
     )
 
 
@@ -775,6 +791,7 @@ def given_layout(
         method=GIVEN,
         exact=False,
         units=units.labels,
+        counting=units.counting,
     )
 
 
@@ -1007,6 +1024,7 @@ def search(
         method=found.method,
         exact=found.exact,
         units=kept,
+        counting=units.counting,
         uncovered=uncovered,
         distinct_masks=found.distinct,
         maximal_masks=found.maximal,
@@ -1029,7 +1047,9 @@ def rank(layouts: Iterable[Layout]) -> list[Layout]:
     Raises
     ------
     ValueError
-        If there is no layout, or two are scored over different units.
+        If there is no layout, two are scored over different units, or two
+        are scored over units of different countings (a layout over
+        cumulative channels beside one over per-class readings).
     """
     out = list(layouts)
     if not out:
@@ -1039,6 +1059,14 @@ def rank(layouts: Iterable[Layout]) -> list[Layout]:
             raise ValueError(
                 "the layouts are scored over different units; score them over one "
                 "set (exclude_units) before ranking"
+            )
+        # The labels of a per-class and a cumulative set of units are the
+        # same, so the labels cannot tell them apart.
+        if layout.counting != out[0].counting:
+            both = " and ".join(sorted({out[0].counting, layout.counting}))
+            raise ValueError(
+                f"the layouts are scored over {both} units: a ranking is over "
+                "units of one counting"
             )
     return sorted(out, key=lambda layout: (layout.score.worst, layout.score.mean))
 
@@ -1342,6 +1370,7 @@ def clear_units(runs: Mapping[str, RunFile | str | os.PathLike[str]]) -> ClearUn
         tuple(fractions),
         np.array(spacing),
         tuple(labels),
+        CUMULATIVE,
     )
 
 
@@ -1488,7 +1517,8 @@ def search_roles(
         If ``count`` or ``all_clear`` is not an int.
     ValueError
         If ``all_clear`` is not from 0 to ``count`` minus 1, the units are
-        not on one mesh, or as ``search`` and ``add_all_clear`` raise.
+        not on one mesh, the detection and all-clear units are of different
+        countings, or as ``search`` and ``add_all_clear`` raise.
     """
     for label, value in (("count", count), ("all_clear", all_clear)):
         if isinstance(value, bool) or not isinstance(value, (int, np.integer)):
@@ -1501,6 +1531,14 @@ def search_roles(
         raise ValueError(
             f"the detection units are {units.latencies.shape[1:]} and the all-clear "
             f"units {clear.clear.shape[1:]}: they must share a mesh"
+        )
+    # The all-clear units are read from the frames on the channels; detection
+    # units from an older file's per-class maps would put the two roles of one
+    # layout on different readings.
+    if units.counting != clear.counting:
+        raise ValueError(
+            f"the detection units are {units.counting} and the all-clear units "
+            f"{clear.counting}: a layout is searched over units of one counting"
         )
     detection = search(units, candidates, int(count - all_clear), rule, within=within)
     added = add_all_clear(clear, candidates, detection.cells, int(all_clear))

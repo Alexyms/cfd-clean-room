@@ -17,16 +17,23 @@ test naming in its docstring the planted defect it was shown to catch
 - The arrival maps and the recovery: the same planted series reaches the
   maps and puts the room out of spec, and only by the sum.
 - The records: ``/arrival/``, the alert table and ``/recovery/`` record their
-  counting; an older file (no mark) reads as per-class; ``placement`` refuses
-  to score per-class maps beside cumulative ones; a checkpoint of the
-  per-class code refuses the restart; the hold's start check reads the
-  channels.
+  counting (read back by value, with the older file's missing mark, in
+  ``tests/test_io_manager.py``'s ``TestCountingMarks``); an older file (no
+  mark) reads as per-class; no record has a default counting;
+  ``placement`` refuses to score per-class maps beside cumulative ones
+  (``detection_units``), to search detection and all-clear units of two
+  countings (``search_roles``) and to rank layouts of two (``rank``); a
+  checkpoint of the per-class code refuses the restart; the hold's start
+  check reads the channels.
 
 The run-level check (the march's maps never later than the per-class maps
 of the same run's fields) is ``tests/test_alert_latency.py``'s
-``TestCumulativeMaps``, on that file's release run.
+``TestCumulativeMaps``, on that file's release run. REQ-A07's clear times
+from a run file, through ``clear_units``, on the sum and not the class alone:
+``tests/test_placement.py``'s ``TestClearUnitsFromRuns``.
 """
 
+import dataclasses
 from pathlib import Path
 
 import h5py
@@ -34,12 +41,14 @@ import numpy as np
 import pytest
 import yaml
 
-from src.config import SimConfig, channel_classes
+from src.config import WORST_CASE, SimConfig, channel_classes
 from src.io_manager import (
     COUNTING_ATTR,
     CUMULATIVE,
     PER_CLASS,
+    AlertTable,
     ArrivalRecord,
+    RecoveryRecord,
     RunFile,
 )
 from src.mesh import SOLID, Mesh
@@ -53,10 +62,16 @@ from src.monitor import (
 )
 from src.placement import (
     STEP_RESOLVED,
+    ClearUnits,
+    Layout,
     RunArrival,
+    Units,
     arrival_from_frames,
     arrival_from_run,
     detection_units,
+    exclude_units,
+    given_layout,
+    search,
 )
 from src.time_integration import RecoveryTracker, alert_table
 
@@ -172,11 +187,23 @@ class TestMonitorOnTheSum:
         assert monitor.channel_readings[3, 1] == 832.0
         assert monitor.channel_readings[4, 1] == BELOW_OWN_5UM
 
-    def test_the_alert_table_records_its_counting(self) -> None:
-        """The run file's table says cumulative. Defect caught: the mark not written."""
+    def test_the_alert_table_records_its_counting(self, tmp_path: Path) -> None:
+        """The table the march builds says cumulative, and so does the file it is written to.
+
+        The table takes its counting without a default and an unmarked group
+        reads as per-class, so the file read back says cumulative only if the
+        table was built with the mark and the writer wrote it. Defects caught:
+        the counting left off the table (TypeError); the table marked
+        per-class; ``write_alerts`` dropping the mark (the file reads
+        per-class).
+        """
         config, mesh = product()
         monitor = AlertMonitor(config, mesh)
-        assert alert_table(monitor).counting == CUMULATIVE
+        table = alert_table(monitor)
+        assert table.counting == CUMULATIVE
+        run = RunFile(tmp_path / "run.h5")
+        run.write_alerts(table)
+        assert run.read_alerts().counting == CUMULATIVE
 
     def test_a_restored_monitor_sums_its_channels_again(self) -> None:
         """restore() rebuilds the channel readings from the carried per-class ones."""
@@ -240,6 +267,45 @@ class TestMapsAndRecoveryOnTheSum:
         assert tracker.last_above[3][cells[1]] == 1.0
         assert np.isnan(tracker.last_above[4][cells[1]])
 
+    def test_the_recovery_record_says_cumulative_in_the_file(
+        self, tmp_path: Path
+    ) -> None:
+        """The record's counting is cumulative, and reads back so from /recovery/.
+
+        Defects caught: the record marked per-class; ``write_recovery``
+        dropping the mark (the file reads per-class).
+        """
+        config, mesh = product()
+        live = mesh.cell_type != SOLID
+        cells = sensor_cells(config, mesh)
+        thresholds = config.class_thresholds()
+        tracker = RecoveryTracker(
+            thresholds,
+            [100.0 * t for t in thresholds],
+            cells,
+            live,
+            None,
+            channels=config.channel_classes(),
+        )
+        tracker.update(0.0, planted(mesh, cells[1], BELOW_SUM_1UM), [0.0] * 5)
+        record = tracker.record([f"s{i}" for i in range(len(cells))], 0.18, False)
+        assert record.counting == CUMULATIVE
+        run = RunFile(tmp_path / "run.h5")
+        run.write_recovery(record)
+        assert run.read_recovery().counting == CUMULATIVE
+
+
+def _arrival_of(counting: str) -> RunArrival:
+    """A one-event run's maps of COUNTING, planted zeros on a 2x2 grid."""
+    return RunArrival(
+        np.zeros((1, 5, 2, 2)),
+        np.zeros(1),
+        STEP_RESOLVED,
+        ("e",),
+        3.0,
+        counting=counting,
+    )
+
 
 def _record(counting: str) -> ArrivalRecord:
     """A one-event, one-cell record of COUNTING."""
@@ -289,20 +355,51 @@ class TestRecords:
         Defect caught: the check removed (the units then stack unlike maps).
         """
 
-        def arrival(counting: str) -> RunArrival:
-            return RunArrival(
-                np.zeros((1, 5, 2, 2)),
-                np.zeros(1),
-                STEP_RESOLVED,
-                ("e",),
-                3.0,
-                counting=counting,
-            )
-
         with pytest.raises(ValueError, match=r"a layout is scored over maps of one"):
-            detection_units({"a": arrival(CUMULATIVE), "b": arrival(PER_CLASS)})
-        assert detection_units({"a": arrival(PER_CLASS)}).counting == PER_CLASS
-        assert detection_units({"a": arrival(CUMULATIVE)}).counting == CUMULATIVE
+            detection_units({"a": _arrival_of(CUMULATIVE), "b": _arrival_of(PER_CLASS)})
+        assert detection_units({"a": _arrival_of(PER_CLASS)}).counting == PER_CLASS
+        assert detection_units({"a": _arrival_of(CUMULATIVE)}).counting == CUMULATIVE
+
+    def test_the_units_keep_their_counting_through_every_step(self) -> None:
+        """exclude_units, search and given_layout hand back the counting they were given.
+
+        Per-class units are the case that tells: every step leaves them
+        per-class. Defects caught: ``exclude_units`` marking its units
+        cumulative whatever they were; ``search`` or ``given_layout`` marking
+        the layout cumulative.
+        """
+        units = detection_units({"a": _arrival_of(PER_CLASS)})
+        assert exclude_units(units, [units.labels[0]]).counting == PER_CLASS
+        cells = [(0, 0), (0, 1)]
+        assert given_layout(units, cells[:1]).counting == PER_CLASS
+        assert search(units, cells, 1, WORST_CASE).counting == PER_CLASS
+
+    @pytest.mark.parametrize(
+        "record",
+        [
+            RunArrival,
+            Units,
+            ClearUnits,
+            Layout,
+            ArrivalRecord,
+            AlertTable,
+            RecoveryRecord,
+        ],
+    )
+    def test_no_record_has_a_default_counting(self, record: type) -> None:
+        """A caller says which counting it holds; leaving it out is a TypeError.
+
+        A default would let per-class maps (an older file's, a probe's) pass
+        as cumulative, past ``detection_units``' refusal of a mix. Defect
+        caught: a default restored on any of the seven.
+        """
+        if dataclasses.is_dataclass(record):
+            (field,) = [f for f in dataclasses.fields(record) if f.name == "counting"]
+            assert field.default is dataclasses.MISSING
+            assert field.default_factory is dataclasses.MISSING
+        else:
+            assert "counting" in record._fields
+            assert "counting" not in record._field_defaults
 
     def test_the_counting_is_one_of_two(self) -> None:
         with pytest.raises(ValueError, match=r"counting must be one of"):
@@ -330,6 +427,23 @@ class TestRecords:
             other.write_sensor_readings(
                 [1], [0.5], readings, ["a", "b"], channels=channels
             )
+
+    def test_channels_of_another_shape_than_the_readings_are_refused(
+        self, tmp_path: Path
+    ) -> None:
+        """One channel per class: a series of 4 channels beside 5 classes is refused.
+
+        Defect caught: the shape check removed from ``write_sensor_readings``
+        (the series is stored, and the file then holds readings and channels
+        that do not line up).
+        """
+        run = RunFile(tmp_path / "run.h5")
+        readings = np.arange(10.0).reshape(1, 5, 2)
+        with pytest.raises(ValueError, match=r"one channel per class"):
+            run.write_sensor_readings(
+                [0], [0.0], readings, ["a", "b"], channels=readings[:, :4]
+            )
+        assert not run.path.exists()
 
     def test_a_per_class_checkpoint_refuses_the_tracker(self) -> None:
         """ArrivalTracker.restore refuses maps carried without the channels' mark."""
