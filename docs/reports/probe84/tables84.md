@@ -97,7 +97,7 @@ Stage times are exclusive and sum to the solve's time. The pressure correction h
 
 Whole: the 120 s march of T5's run. Window: 9 s to 14 s, started from zero fields at the step at or before 9 s (the fields are zero before the 10 s onset), the 320x120 one on the stored state of prompt 81. Class stages are summed over the five classes.
 
-The inline lump: solve_timestep's own lines, which the lean instrument times as one per call and which are split over the stages by the fractions of a run with the line regions on (the regions' own time, wrapped calls excluded). The split assumes the regions' slowdown under the line events (T2b) falls on each region in proportion:
+The inline lump: solve_timestep's own lines, which the lean instrument times as one per call and which are split over the stages by the fractions of a run with the line regions on (the regions' own time, wrapped calls excluded). The split assumes the regions' slowdown under the line events (T2b) falls on each region in proportion. The booking region's marker (`inflow = (`) fires after the four inflow edge sums it is meant to open, because a line event on a statement that spans lines fires when its first instruction runs, which for an assignment is the store: those sums are charged to the divergence update, so the divergence update's fraction below is high and the booking's low by their time. Test 84 timed them at about 35 us per class step on both grids, which is under 2% of the march:
 
 | run | lump, s | of the march | split by | remainder (input checks) | advective fluxes and limiter | divergence update | source | deposition and budget booking | implicit solve |
 |---|---|---|---|---|---|---|---|---|---|

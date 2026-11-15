@@ -3,10 +3,12 @@
 **Date:** 2026-11-15
 **Prompt:** 84 (`docs/prompts/cc-prompt-84-profile.md`)
 **Branch:** `phase6/profile`
-**Status:** measured. (a), (b) and (c) fail, (d) holds in part, (e) holds. The first
-instrument met the prompt's stop condition on the 80x30 window (its overhead was over 5%); it
-was replaced by a lighter one that passes, and every table below is the lighter one's. The
-section "The stop condition" says what was done and why, for Alex to accept or overrule.
+**Status:** measured, and corrected once after review 84 and test 84. (a), (b), (c) and (d)
+fail, (e) holds. The prompt's stop condition fired twice: on the 160x60 flow calibration, and
+on the first instrument's 80x30 march window. The march instrument was replaced by a lighter
+one that passes; the flow instrument was kept, and test 84's paired runs measure its overhead
+over 5% on 80x30 and 160x60. Every table below is the instrument as run. The section "The
+stop condition" says what was done and why, for Alex to accept or overrule.
 
 Phase 6 ports the solver to C++ and then CUDA. The first design decision is how much moves: only
 the hot inner loops, with Python driving every step, or the whole step, with the fields resident
@@ -52,48 +54,106 @@ The prompt's stop conditions: the calibration is not bitwise, or the wrappers' o
 
 ## The stop condition, and the instrument as run
 
-The calibration was bitwise everywhere (T2, last column). The overhead was not always within 5%.
+The calibration was bitwise everywhere (T2, last column). The overhead was not always within
+5%, and the prompt's stop fired twice, first on the flow and then on the march. Both are stated
+here in the order they happened, with what was changed after each.
 
-**What happened.** The first instrument wrapped every stage function and labelled the inline code
-of `solve_steady` and `solve_timestep` (the divergence update, the source, the booking, the
-residual) by `sys.monitoring` line events at the first line of each region. Its 80x30 window
-calibration ran 10% to 11% slower wrapped than unwrapped, against a 2% spread between identical
-unwrapped runs: the prompt's stop condition (T2, the rows marked "first, line regions"). The
-first 80x30 window, 9 s to 10.5 s, was too short to decide it (85 steps under a second, a 28%
-spread); the 9 s to 40 s window decided it. On 320x120 the same instrument was within 1%.
+**The first stop: the 160x60 flow calibration.** At 11:43:16 on 2026-11-15 the queue's rule
+stopped on the flow calibration of 160x60, +6.9% wrapped against unwrapped
+(`results/builder84/run84.log`: "calibrate_flow_160x60 overhead 0.0693 over 0.05"). The 80x30
+flow calibration had passed at +4.9% and the 320x120 one at +2.4%. The runner was edited so
+that its 5% rule applies to a march window only, a flow calibration's difference being logged
+and not a stop, and the queue went on (the next job started at 11:45:22). The reasons given were
+that the prompt's rule names a window, that a flow calibration's three unwrapped and two wrapped
+runs differ by less than the spread of identical unwrapped runs on this machine (10% to 15%,
+T2), so they cannot resolve 5%, and that the timers' event estimate puts the flow's overhead at
+about 1% (T2). This stop was not reported in the first version of this report.
 
-**Why.** The timers' events cost about 1.4 us per wrapped call and 1.6 us per region event in
-isolation (`overhead84.py`), which accounts for under 2% of the 80x30 window (T2, "event
-estimate"). An ablation on the 80x30 window (T2b) puts the rest on the line events: the regions
-alone cost the window 5% to 10%, the instrument without them about 1.5%. The callback count is what it
-should be (about nine per class step; disabled lines do not fire again), so the cost is in the
-instrumented function's execution, not in the callbacks. The likely cause, not verified, is that
-CPython runs a code object with LINE events unspecialised.
+**What the flow's overhead is.** Test 84 measured it by paired runs, which resolve what those
+calibrations could not: rounds of an unwrapped run and a wrapped one in rotating order, every
+run's arrays compared bitwise with the first's. The wrapped run was slower in 25 of 26 rounds
+(the 26 include an earlier set of six on 80x30). The full flow instrument costs +11.5% on
+80x30 (300 outer iterations, six rounds), +8.0% on 160x60 (100, eight rounds) and +3.9% on
+320x120 (40, six rounds), against this pass's calibrations of +4.9%, +6.9% and +2.4% and the
+event estimates of 1.0%, 0.7% and 0.3% (T2). A wrapped call in the solver costs about 17 to
+19 us, against the 1.4 us that `overhead84.py` measures on an empty function in a tight loop,
+so the event estimate is low by a factor of about twelve. The flow instrument is therefore over
+the prompt's 5% on two of the three grids, 80x30 by 6.5 points and 160x60 by 3 points, and
+under it on 320x120. It was not replaced, and the flow tables below are the instrument as run.
+What follows from it:
 
-**What was done.** The march is now timed without line events ("lean", `probe84.MARCH_REGIONS`):
-`solve_timestep`'s own lines are one lump per call, and a run of the same window with the regions
-on (`split_window_<grid>`, or the first instrument's whole 80x30 run for the whole 80x30 run)
-gives the fractions the lump is split by (T4, the inline-lump table). The detail wrappers inside
-the advection and the implicit step (QUICK, the limiter) run only with the regions on. The flow
-keeps its regions: twelve events per outer iteration of 19 ms to 150 ms. The lean instrument's
-window calibrations are within 3% on every grid, and its event estimate under 1% (T2).
+- Most wrapped calls sit in the pressure correction (the operator, the V-cycle, the CG loop),
+  so T3's pressure shares are inflated on the two grids over the stop. The solver's own stage
+  clock on unwrapped runs of the same solves (test 84, check 11) gives 38.7% on 80x30 and
+  35.7% on 160x60 against T3's 40.5% and 39.4%: T3's shares are high by 1.8 and 3.7 points,
+  and the other stages' low by the same amount between them. On 320x120 both give 41.1%.
+  Prediction (b) fails by more than T3 shows.
+- T5's outer-iteration ratio of 80x30 over 320x120 compares an overhead of about 12% with one
+  of about 4%; without them it is about 1.9, not 2.1 (test 84, B1). Prediction (c) fails either
+  way.
+- T6 and T12 take the 320x120 flow time from the first 300 outer iterations, wrapped, at the
+  smallest overhead of the three grids. It raises the flow time by about 4% and so lowers the
+  march's share of the run by under a point.
 
-The prompt says to stop and report on this condition. This pass instead replaced the
-instrument, kept the first instrument's records (`*_regions.json`, `ablate_80x30_*.json`), and
-reports the replacement here: the condition is about the instrument, the ablation found which
-part of it was at fault, and the replacement meets the condition. If Alex reads the condition
-as a stop on the pass itself, the tables below are the replacement's and should be read as
-such. Two consequences of the replacement:
+**The second stop: the 80x30 march window.** The first instrument wrapped every stage function
+and labelled the inline code of `solve_steady` and `solve_timestep` (the divergence update, the
+source, the booking, the residual) by `sys.monitoring` line events at the first line of each
+region. Its 80x30 window calibration to 10.5 s stopped the queue at 11:47:16 (+10.2%). That
+window was too short to decide it (85 steps under a second, a 28% spread among identical
+unwrapped runs), so it was rerun to 40 s, and stopped the queue again at 11:50:30 (+10.9%
+against a 2% spread: T2, the rows marked "first, line regions"). On 320x120 the same
+instrument was within 1%. What was changed after it is below: the march was timed without line
+events, the first instrument's records were kept, and the queue was rerun from 12:02:03 with
+the lean march instrument, whose window calibrations are within 3% on every grid (T2).
+
+**Why the march's instrument cost.** The timers' events cost about 1.4 us per wrapped call and
+1.6 us per region event in isolation (`overhead84.py`), which accounts for under 2% of the
+80x30 window (T2, "event estimate"). An ablation on the 80x30 window (T2b) puts the rest on the
+line events: the regions alone cost the window 5% to 10%, the instrument without them about
+1.5%. The callback count is what it should be (about nine per class step; disabled lines do
+not fire again), so the cost is in the instrumented function's execution, not in the
+callbacks. The likely cause, not verified, is that CPython runs a code object with LINE events
+unspecialised.
+
+**What was done to the march.** The march is now timed without line events ("lean",
+`probe84.MARCH_REGIONS`): `solve_timestep`'s own lines are one lump per call, and a run of the
+same window with the regions on (`split_window_<grid>`, or the first instrument's whole 80x30
+run for the whole 80x30 run) gives the fractions the lump is split by (T4, the inline-lump
+table). The detail wrappers inside the advection and the implicit step (QUICK, the limiter)
+run only with the regions on. The flow keeps its regions: twelve events per outer iteration of
+19 ms to 150 ms.
+
+The prompt says to stop and report on this condition. For the march this pass instead replaced
+the instrument, kept the first instrument's records (`*_regions.json`, `ablate_80x30_*.json`),
+and reports the replacement here: the condition is about the instrument, the ablation found
+which part of it was at fault, and the replacement meets the condition. For the flow the
+condition is met on two grids and the instrument was kept, with its measured overhead above.
+If Alex reads the condition as a stop on the pass itself, the tables below are the
+instrument-as-run's and should be read as such. Two consequences of the march's replacement:
 
 - The inline lump's split assumes the line events slow every region of `solve_timestep` in
   proportion. The lump is 10% to 16% of the march (T4), so a misallocation within it moves a
   stage by at most that much. The divergence update and the source are inline code only, so
   they are the split's entirely; the booking and the input checks are partly; the advective
   fluxes and the implicit solve are mostly wrapped calls, which the split does not touch.
-- The flow calibrations' differences (T2, first three rows) are within the spread of identical
-  unwrapped runs on this machine, so they bound the flow's overhead only loosely; the event
-  estimate puts it at about 1% or less. The prompt's 5% rule names a window, and the runner applies it
-  to the windows only.
+- The booking region's marker fires after the four inflow edge sums it is meant to open, so
+  those sums are charged to the divergence update (a line event on a statement that spans
+  lines fires when its first instruction runs, which for an assignment is the store; test 84,
+  S1). They take about 35 us per class step on both grids, under 2% of the march, so the
+  divergence update's fraction in the lump table is high and the booking's low by that much.
+
+**Tests of the lean timers: not taken.** Review 84 (B1) found that the lean path and the
+attribution of the lump to stages have no test, and test 84 confirmed it: ten of eleven mutants
+of `tables84.py` and `probe84.py` (a stage mapping moved, the lump dropped or counted twice,
+a wrapper filter changed) passed all 18 probe tests. This pass adds none. The decision the
+report informs rests on the stage shares, and the tester re-timed the 9 s to 14 s window on
+all three grids with timers of its own, seven plain `perf_counter` wrappers that share no code
+with the probe, with the frames bitwise equal to the run's. On 320x120 its window took 107.69 s,
+with `advective_flux` at 45.28 s and `_implicit_step` with `_face_eddy_viscosity` at 25.80 s
+and 5.15 s, a ratio of 1.46; this pass's window has 46.16 s for the advective stage and 31.85 s
+for the implicit stage, a ratio of 1.45 (T4). On 80x30 and 160x60 the tester's ratios are 1.46
+and 1.77 (test 84, check 12). The shares the decision rests on reproduce by a route that does
+not use the probe's clock; the gap in the probe's tests stays recorded.
 
 <!-- tables84 calibration begin -->
 ### T2. Calibration: wrapped against unwrapped, in one process
@@ -161,8 +221,12 @@ own remainder.
 (the stored 320x120 run's frames say so), so a march started at a step before the onset from zero
 fields, fresh budgets and a fresh monitor and arrival maps is that run's march from that step. A
 window starts at the step at or before 9 s and stops at 14 s; its frames match the run it starts
-inside bit for bit (the frames table under T4). The 320x120 window runs on prompt 81's stored
-state (`results/builder81/product/`).
+inside bit for bit (the frames table under T4). The frames hold the fields and budgets only;
+test 84 also compared the monitor's and the arrival maps' outputs (its check 20): the sensor
+series of every window step are bitwise the run's, and each window's arrival map equals the
+run's with the times after the window's end unset, so the monitor and arrival stages of a
+window time the same work as the run's. The 320x120 window runs on prompt 81's stored state
+(`results/builder81/product/`).
 
 **The grids.** The stored 320x120 run's scenario file, and the same file with the grid and
 `mass_imbalance_tol` changed for 80x30 (2e-8, prompt 75's value) and 160x60 (5e-9), the base
@@ -172,7 +236,13 @@ gives the product grid's 1.25e-9. The 80x30 flow solve stops at the outer count 
 
 **The machine.** It was not quiet: Defender (`msmpeng`) used a quarter to three fifths of a
 logical processor at the start of every job, and VS Code up to 1.7 (T1). Each job ran alone, with one BLAS
-thread.
+thread. Each of T3 to T6 is one run, so no share has a measured spread. The only spreads are
+the calibrations' (T2): identical unwrapped runs differ by 2% to 15%, and by 28% on the one
+window too short to use. Conclusions with a margin of several points on a within-run ratio are
+clear of that: (b), (c), (a)'s first clause and (e), whose thinnest margin is the whole 80x30
+run's, 7.0% against 10% (T11). (a)'s second clause, 40.6% of the
+march against 34.9% (T6), is of the order of the spread; test 84 reproduced its ordering on all
+three grids with timers of its own (the stop-condition section, last paragraph).
 
 <!-- tables84 machine begin -->
 ### T1. The machine and the runs
@@ -242,7 +312,7 @@ Stage times are exclusive and sum to the solve's time. The pressure correction h
 
 The advective fluxes and their limiter are the largest stage of the march on every grid and in
 every window, ahead of the implicit solve; the booking and the input checks together are a fifth
-to a quarter (T4). The classes cost about the same and take the same sweeps, as they would if the
+to over a quarter (T4). The classes cost about the same and take the same sweeps, as they would if the
 eddy diffusivity dominates every class's Brownian one. The per-step stages are a few percent; the frame writes are
 the largest of them on 80x30 and fall away with the grid.
 
@@ -259,7 +329,7 @@ the largest of them on 80x30 and fall away with the grid.
 
 Whole: the 120 s march of T5's run. Window: 9 s to 14 s, started from zero fields at the step at or before 9 s (the fields are zero before the 10 s onset), the 320x120 one on the stored state of prompt 81. Class stages are summed over the five classes.
 
-The inline lump: solve_timestep's own lines, which the lean instrument times as one per call and which are split over the stages by the fractions of a run with the line regions on (the regions' own time, wrapped calls excluded). The split assumes the regions' slowdown under the line events (T2b) falls on each region in proportion:
+The inline lump: solve_timestep's own lines, which the lean instrument times as one per call and which are split over the stages by the fractions of a run with the line regions on (the regions' own time, wrapped calls excluded). The split assumes the regions' slowdown under the line events (T2b) falls on each region in proportion. The booking region's marker (`inflow = (`) fires after the four inflow edge sums it is meant to open, because a line event on a statement that spans lines fires when its first instruction runs, which for an assignment is the store: those sums are charged to the divergence update, so the divergence update's fraction below is high and the booking's low by their time. Test 84 timed them at about 35 us per class step on both grids, which is under 2% of the march:
 
 | run | lump, s | of the march | split by | remainder (input checks) | advective fluxes and limiter | divergence update | source | deposition and budget booking | implicit solve |
 |---|---|---|---|---|---|---|---|---|---|
@@ -368,11 +438,13 @@ The records' walls were taken with another run in the queue beside them (both qu
 
 **The counting rule** (`counts84.py`, module docstring): bytes are those of an ideal fused
 kernel, each distinct cell or face array a kernel reads read once and each it produces for a later
-kernel written once, 8 bytes a double and 1 a bool; temporaries, one-dimensional geometry and
-scalars are not counted; a kernel that must finish before the next (a sweep, a reduction the stop
+kernel written once, 8 bytes a double and 1 a bool; temporaries, one-dimensional geometry
+(including cell sizes that the code broadcasts or multiplies out to a full array) and scalars
+are not counted; a kernel that must finish before the next (a sweep, a reduction the stop
 reads) is counted per execution. Operations are floating-point additions, subtractions,
-multiplications, divisions, float comparisons, `abs`, `max` and `min`, `sqrt`, `log`, a power,
-one each per element; selections, masks, copies and indexing are not. Each kernel's derivation
+multiplications, divisions, float comparisons (a finiteness test counts as one), `abs`, `max`
+and `min`, `sqrt`, `log`, a power, one each per element; selections, masks, copies and indexing
+are not. Each kernel's derivation
 names the lines it counts. A stage's call executes its iterative kernels the measured number of
 times (T7's repeats).
 
@@ -381,21 +453,51 @@ times (T7's repeats).
 specification of the RTX 4070 Laptop GPU, and the FP64 rate from the Ada architecture
 whitepaper (p. 7: "The FP64 TFLOP rate is 1/64th the TFLOP rate of FP32 operations"). The FP64
 balance, peak operations over peak bandwidth, falls inside the boost range, between 0.69 and 1.22
-operations per byte: a kernel near 1 is memory-bound at one end of the range and compute-bound at
-the other.
+operations per byte against DRAM: a kernel near 1 is memory-bound at one end of the range and
+compute-bound at the other. The driver reports a maximum graphics clock of 3105 MHz on this
+machine (`nvidia-smi -q -d CLOCK`), above the specification's range; at it the balance would
+be 1.75. The verdicts use the specification's range.
 
-Every stage counts below one operation per byte (T7), most of them between 0.1 and 0.3, so (d)'s
-first clause holds. Its inference does not follow everywhere: the advective fluxes are near
-the balance, compute-bound in FP64 below about 1.7 GHz, and above 1 when a port fuses their two
-axes or fuses them with the divergence update; three kernels count above 1 inside stages that do
-not (the momentum assembly, the k-epsilon wall sides, the coarsest level's dense pseudo-inverse).
+**Against DRAM.** The advective fluxes count 1.23 operations per byte (T7: 65 operations over
+53 bytes), above the balance at the top of the boost range, so they are compute-bound in FP64
+at every clock of it and (d)'s first clause, every stage below one, fails. The stage is within
+1% of that balance: without the two finiteness tests of `_check_pair`, which the other kernels'
+counts include, it counts 63 operations and 1.19, and is memory-bound above 2113 MHz only. The
+verdict is the same either way. The count was corrected after review 84 and test 84: its
+derivation summed to 30 operations per axis where 31 was stated, and two area arrays were
+counted as fields although they are broadcast views of one-dimensional cell sizes, which the
+rule leaves out. Like cases under the same rule were corrected with it (the input checks' sum,
+the k-epsilon advection, its conductances and wall sides, and a flux step that was counted
+nowhere); each derivation is in `counts84.py`. Every other stage is below one and, against
+DRAM, memory-bound at every clock (T9b); the nearest is the boundary updates at 0.67, just
+under the 0.69 at the bottom of the range. Three kernels count above 1 inside stages that do not
+(the momentum assembly, the k-epsilon wall sides, the coarsest level's dense pseudo-inverse),
+and the advection with other kernel boundaries is higher still (T11).
+
+**Against the L2.** On 320x120 every field is 0.29 MiB and the largest kernel moves 8.4 MiB per
+execution (T9), so each kernel's data fit the 32 MiB L2, and the bandwidth a kernel meets is the
+L2's, which is higher than DRAM's. NVIDIA publishes no L2 bandwidth for this part. The one Ada
+measurement found is the RTX 4090's, about 5 TB/s with all 128 SMs active (Chips and Cheese,
+"Microbenchmarking Nvidia's RTX 4090", 2022; the article notes that the figure exceeds the
+theoretical one at high occupancy because duplicate reads are combined). Scaled by SM count that
+is about 1.4 TB/s for these 36, an extrapolation across dies whose L2 slices differ, so T9b
+states each stage's side at 1, 2 and 4 TB/s, all three assumed. The FP64 balance against the L2
+is then 0.04 to 0.31 operations per byte, among or below the stages' intensities, which are
+mostly 0.1 to 0.3. At 1 TB/s most stages change sides inside the clock range, at 2 TB/s most are
+compute-bound at every clock, and at 4 TB/s all are (T9b, T11). So (d)'s second clause, that
+every stage is memory-bound on the GPU in double precision, is established against DRAM only,
+where all but the advective fluxes satisfy it. For the L2-resident sizes measured here it is
+not established, and for most stages it is false if the L2 delivers 2 TB/s or more. Whether
+double precision costs anything on these stages turns on an L2 bandwidth this pass did not
+measure.
 
 The bandwidth bound (T9) is the time a stage would take if every byte it moves crossed DRAM at
-peak, against its time now: an upper bound on the speedup a port could give that stage, labelled
-as such, and only while the bytes are DRAM traffic. On 320x120 every field is 0.29 MiB, so each
-stage's working set fits in the 32 MiB L2, where the bandwidth is higher; the bound then does not
-bound. Nor does it count kernel launches or the host's reads of each stage's scalars between
-kernels (T7, the scalars table).
+peak, against its time now. It is an upper bound on the speedup a port could give that stage
+only while the bytes are DRAM traffic, and on these grids they are L2 traffic, so it does not
+bound. T9 gives the FP64 time at both ends of the boost range and the bound at each; the
+bound at the top of the range is the favourable one, and only the advective fluxes' bound
+moves between the two ends. Nor does the bound count kernel launches or the host's reads of
+each stage's scalars between kernels (T7, the scalars table).
 
 <!-- tables84 counts begin -->
 ### T7. Operations, bytes and arithmetic intensity, counted from the code
@@ -644,15 +746,20 @@ The plan's kernels (docs/PROJECT_PLAN.md, Phase 6): `pressure_solve.cu`, the CG 
    (T3).
 3. **(c) fails.** A step costs two to two and a half times as much per cell on 80x30 as on
    320x120, not five (T5).
-4. **(d) holds in part.** Every stage is below one operation per byte; the advective fluxes are
-   near the FP64 balance, which lies inside the boost range, and over 1 under a fused port
-   (T7, T8, T11).
+4. **(d) fails.** The advective fluxes count 1.23 operations per byte, above the FP64 balance of
+   DRAM at the top of the boost range, so the first clause fails. Against DRAM every other
+   stage is memory-bound in FP64; against the L2, whose bandwidth NVIDIA does not publish, most
+   stages are compute-bound at 2 TB/s or more, so the second clause is not established for the
+   sizes measured (T7, T9b, T11).
 5. **(e) holds.** The monitor, the arrival maps and the frame writes are a few percent of the
    march on every grid (T4, T6).
-6. **The first instrument met the stop condition** on the 80x30 window; the line events, not the
-   wrappers, were the cost (T2, T2b). The tables are the lean instrument's.
-7. **The DRAM-bandwidth bound is not an upper bound on these grids**: every stage's working set
-   fits in the GPU's L2 (T9, the note).
+6. **The prompt's stop fired twice**: on the 160x60 flow calibration and on the first
+   instrument's 80x30 march window. The march's line events, not its wrappers, were the cost,
+   and the march was re-timed without them (T2, T2b). The flow instrument was kept; test 84's
+   paired runs measure its overhead at +11.5% on 80x30 and +8.0% on 160x60, which inflates
+   T3's pressure shares by 1.8 and 3.7 points.
+7. **The DRAM-bandwidth bound is not an upper bound on these grids**: every kernel's data fit
+   the GPU's L2 (T9, the note).
 8. **The plan's two kernels hold between half and two thirds of a run** (T12).
 
 ## Deviations and limits
@@ -664,6 +771,19 @@ The plan's kernels (docs/PROJECT_PLAN.md, Phase 6): `pressure_solve.cu`, the CG 
   to the steps after the onset only.
 - The records of prompts 79 and 81 differ by about a quarter on the same 320x120 march (T6);
   both were taken with another run beside them, and this pass does not explain the difference.
+- The tables' inputs cannot all be regenerated by the committed queue. `run_80x30_regions`,
+  `calibrate_march_80x30_short`, `calibrate_march_80x30_regions`,
+  `calibrate_march_320x120_regions` and `ablate_80x30_regions3` are the first instrument's
+  records, renamed, and no job in `run84.py` produces them (`probe84.py --regions` could).
+  T1's commit is the predictions commit (5d570e7), which does not contain the code that made
+  the records. The GPU's figures are typed constants in `counts84.py` with their sources
+  named; no record of the driver query is kept (review 84, S2).
+- `momentum_sweeps_x2` (20) and `keps_checks` (4) are typed into `tables84.py`. The first
+  matches `momentum_sweeps: 10` of the base configuration today, and T7 would change without
+  notice if that did (review 84, S8).
+- The input checks' count is for a class step without a source. The rate's own checks
+  (finiteness, sign, SOLID cells) run on the quarter of class steps that have one and are not
+  counted.
 - The full test suite was not run: nothing under `src/` or `tests/` changed. The probe's own tests
   (`docs/reports/probe84/test_probe84.py`) pass.
 

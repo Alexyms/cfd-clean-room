@@ -88,6 +88,7 @@ SAMPLE = (
 
 
 def log(line: str) -> None:
+    """Append LINE to the queue's log with a timestamp, and print it."""
     stamp = datetime.now().isoformat(timespec="seconds")
     with LOG.open("a") as f:
         f.write(f"{stamp} {line}\n")
@@ -126,6 +127,7 @@ def calibration_verdict(job: str) -> str | None:
 
 
 def main() -> int:
+    """Run each job not yet recorded, one at a time; stop on a failure or the stop rule."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--list", action="store_true")
     args = parser.parse_args()

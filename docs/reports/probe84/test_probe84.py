@@ -51,6 +51,7 @@ class Toy:
 
 
 def toy_specs() -> list[probe84.Wrap]:
+    """The wrappers of the toy stage's three functions."""
     return [
         probe84.Wrap(Toy, "outer", "outer"),
         probe84.Wrap(Toy, "inner", "inner"),
@@ -64,10 +65,12 @@ TOY_REGIONS = {
 
 
 def charges(clock: probe84.Clock) -> dict[tuple[str, ...], int]:
+    """A clock's charges as a mapping from label path to nanoseconds."""
     return {tuple(p): ns for p, ns in clock.record()["charge"]}
 
 
 def installed_toy() -> probe84.Clock:
+    """Install the toy stage's wrappers, regions and first-region label."""
     return probe84.install(
         toy_specs(), {"inline": Toy.inline}, TOY_REGIONS, {"inline": "start"}
     )
@@ -82,6 +85,7 @@ def clean() -> None:
 
 
 def test_charges_sum_to_the_total_and_nesting_is_exclusive() -> None:
+    """Charges sum to the clock's total and a nested call is charged to its own path."""
     original = Toy.outer
     installed_toy()
     assert Toy().outer() == 42
@@ -94,6 +98,7 @@ def test_charges_sum_to_the_total_and_nesting_is_exclusive() -> None:
 
 
 def test_regions_relabel_the_running_frame_and_calls_nest_under_them() -> None:
+    """A region marker relabels the running frame and a call nests under the current region."""
     installed_toy()
     assert Toy().inline() == 3 * MS + 5 * MS + 41
     got = charges(probe84.uninstall())
@@ -105,6 +110,7 @@ def test_regions_relabel_the_running_frame_and_calls_nest_under_them() -> None:
 
 
 def test_unwrapped_results_and_calls_counted() -> None:
+    """Wrapped functions return what the originals do, and their calls are counted."""
     before = Toy().inline()
     clock = installed_toy()
     Toy().inline()
@@ -117,6 +123,7 @@ def test_unwrapped_results_and_calls_counted() -> None:
 
 
 def test_reinstall_after_uninstall_times_regions_again() -> None:
+    """A second install after an uninstall times the regions again."""
     installed_toy()
     Toy().inline()
     probe84.uninstall()
@@ -127,6 +134,7 @@ def test_reinstall_after_uninstall_times_regions_again() -> None:
 
 
 def test_marker_lines_refuses_an_absent_or_repeated_marker() -> None:
+    """marker_lines raises when a marker text matches no line or more than one."""
     with pytest.raises(RuntimeError, match="found 0 times"):
         probe84.marker_lines(Toy.inline, [("no such line", "x")])
     with pytest.raises(RuntimeError, match="found 5 times"):
@@ -134,6 +142,7 @@ def test_marker_lines_refuses_an_absent_or_repeated_marker() -> None:
 
 
 def test_the_solver_markers_are_found_once_each() -> None:
+    """Every region marker of the solver functions matches exactly one line."""
     from src.solver_staggered import StaggeredSolver
     from src.solver_transport import TransportSolver
 
@@ -178,4 +187,5 @@ def test_the_solver_markers_are_found_once_each() -> None:
     ],
 )
 def test_stage_of_path(path: tuple[str, ...], stage: str) -> None:
+    """A label path takes the stage of its innermost label that opens one."""
     assert probe84.stage_of_path(path) == stage

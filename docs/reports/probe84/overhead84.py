@@ -47,6 +47,7 @@ REGIONS = {"lines": [("total += 1", "a"), ("total -= 1", "b")]}
 
 
 def batch_calls(obj: Empty) -> int:
+    """Nanoseconds for N calls of the empty function."""
     started = perf_counter_ns()
     for _ in range(N):
         obj.nothing()
@@ -54,12 +55,14 @@ def batch_calls(obj: Empty) -> int:
 
 
 def batch_lines(obj: Empty) -> int:
+    """Nanoseconds for one call of the function that loops N times over two marker lines."""
     started = perf_counter_ns()
     obj.lines(N)
     return perf_counter_ns() - started
 
 
 def measure() -> dict:
+    """The timers' cost per wrapped call and per region marker, in batches."""
     obj = Empty()
     call, line = [], []
     for _ in range(BATCHES):
@@ -124,6 +127,7 @@ def ablate(grid: str, t_stop: float, parts: list[str]) -> dict:
 
 
 def main() -> int:
+    """Write the per-event cost, or run the ablation named on the command line."""
     probe84.RESULTS.mkdir(parents=True, exist_ok=True)
     if len(sys.argv) > 1 and sys.argv[1] == "ablate":
         parts = sys.argv[4].split(",")

@@ -90,6 +90,7 @@ MARKERS_PER_CLASS_STEP = len(probe84.REGIONS["solve_timestep"]) - 1
 
 
 def load(job: str) -> dict:
+    """The JSON record of JOB in results/builder84."""
     return json.loads((RESULTS / f"{job}.json").read_text())
 
 
@@ -173,6 +174,7 @@ def by_stage(record: dict, prefix: str = "", job: str | None = None) -> dict[str
 
 
 def inline_lump(record: dict) -> int:
+    """Exclusive nanoseconds charged to the inline lump of a lean record."""
     return path_ns(record, lambda p: p[-1].endswith(":inline"))
 
 
@@ -187,6 +189,7 @@ def calls(record: dict, label: str) -> int:
 
 
 def class_label_calls(record: dict) -> int:
+    """Entries into a class step's ``checks`` region of a regions-on record."""
     return sum(
         n
         for path, n in record["calls"]
@@ -195,14 +198,17 @@ def class_label_calls(record: dict) -> int:
 
 
 def s(ns: float) -> str:
+    """NS nanoseconds as seconds, two decimals."""
     return f"{ns / 1e9:.2f}"
 
 
 def pct(x: float) -> str:
+    """X as a percentage, one decimal."""
     return f"{100 * x:.1f}%"
 
 
 def table(header: list[str], rows: list[list[str]]) -> list[str]:
+    """A Markdown table of HEADER and ROWS, as lines."""
     out = [
         "| " + " | ".join(header) + " |",
         "|" + "|".join("---" for _ in header) + "|",
@@ -237,6 +243,7 @@ def turbulence_sides(grid: str) -> int:
 
 
 def machine(lines: list[str]) -> None:
+    """T1: the machine and the runs; appends to LINES."""
     env = load("run_80x30")["environment"]
     lines += ["### T1. The machine and the runs", ""]
     lines += table(
@@ -419,6 +426,7 @@ def calibration(lines: list[str]) -> dict[str, dict[str, float]]:
 
 
 def flow_records() -> dict[str, dict]:
+    """The flow solves of T3, by grid."""
     return {
         "80x30": load("run_80x30"),
         "160x60": load("run_160x60"),
@@ -427,6 +435,7 @@ def flow_records() -> dict[str, dict]:
 
 
 def outer_of(record: dict) -> int:
+    """Outer iterations of a flow record (its first solve, for a whole run)."""
     if "flows" in record:
         return record["flows"][0]["outer"]
     return record["outer"]
@@ -516,6 +525,7 @@ def flow_table(lines: list[str], calibrated: dict[str, dict[str, float]]) -> dic
 
 
 def march_records() -> dict[str, dict]:
+    """The march records of T4, by name."""
     return {
         "80x30 whole": load("run_80x30"),
         "160x60 whole": load("run_160x60"),
@@ -526,10 +536,12 @@ def march_records() -> dict[str, dict]:
 
 
 def steps_of(record: dict) -> int:
+    """March steps of RECORD."""
     return record["steps"]
 
 
 def march_table(lines: list[str]) -> dict:
+    """T4 with its lump and per-class tables; returns each run's stage times."""
     lines += ["### T4. The march", ""]
     rows, facts = [], {}
     for name, r in march_records().items():
@@ -572,7 +584,13 @@ def march_table(lines: list[str]) -> dict:
         "The inline lump: solve_timestep's own lines, which the lean instrument times as one "
         "per call and which are split over the stages by the fractions of a run with the line "
         "regions on (the regions' own time, wrapped calls excluded). The split assumes the "
-        "regions' slowdown under the line events (T2b) falls on each region in proportion:",
+        "regions' slowdown under the line events (T2b) falls on each region in proportion. "
+        "The booking region's marker (`inflow = (`) fires after the four inflow edge sums it "
+        "is meant to open, because a line event on a statement that spans lines fires when its "
+        "first instruction runs, which for an assignment is the store: those sums are charged "
+        "to the divergence update, so the divergence update's fraction below is high and the "
+        "booking's low by their time. Test 84 timed them at about 35 us per class step on "
+        "both grids, which is under 2% of the march:",
         "",
     ]
     lines += table(
@@ -601,6 +619,7 @@ def march_table(lines: list[str]) -> dict:
 
 
 def frames_check(lines: list[str]) -> None:
+    """The frames each window shares with the run it starts inside."""
     rows = []
     for grid in GRIDS:
         r = load(f"window_{grid}")
@@ -620,6 +639,7 @@ def frames_check(lines: list[str]) -> None:
 
 
 def per_cell(lines: list[str], flow: dict, march: dict) -> dict:
+    """T5: cost per cell per call by grid; returns the totals T11 reads."""
     lines += ["### T5. Cost per cell per call, and how it scales", ""]
     cells = {g: probe84.cells_of(g) for g in GRIDS}
     rows = []
@@ -689,6 +709,7 @@ def per_cell(lines: list[str], flow: dict, march: dict) -> dict:
 
 
 def ratio(vals: list[float]) -> str:
+    """80x30 over 320x120 of VALS, one decimal, or empty without a 320x120 value."""
     return f"{vals[0] / vals[2]:.1f}" if vals[2] else ""
 
 
@@ -811,12 +832,14 @@ def steps_after(record: dict) -> int:
 
 
 def record_seconds(path: Path, pattern: str) -> float:
+    """The number PATTERN captures in the text of PATH."""
     found = re.search(pattern, path.read_text())
     assert found is not None, (path, pattern)
     return float(found.group(1))
 
 
 def repeats(grid: str, flow: dict, march: dict) -> dict[str, float]:
+    """The executions per call of each repeated kernel on GRID, from the records."""
     f = flow[grid]
     w = march[f"{grid} window"]["record"]
     sweeps = np.array(w["counters"]["sweeps"], dtype=float)
@@ -842,10 +865,12 @@ def repeats(grid: str, flow: dict, march: dict) -> dict[str, float]:
 
 
 def value(x: float | str, rep: dict[str, float]) -> float:
+    """X as a number: a count, or the repeat of that name."""
     return rep[x] if isinstance(x, str) else float(x)
 
 
 def stage_counts(grid: str, rep: dict[str, float]) -> dict[str, tuple[float, float]]:
+    """Operations and bytes per cell per call of each stage on GRID."""
     out: dict[str, list[float]] = defaultdict(lambda: [0.0, 0.0])
     for k in counts84.KERNELS:
         times = value(k.repeat, rep)
@@ -855,6 +880,7 @@ def stage_counts(grid: str, rep: dict[str, float]) -> dict[str, tuple[float, flo
 
 
 def counts_tables(lines: list[str], flow: dict, march: dict) -> dict:
+    """T7: the counts per kernel and per stage; returns the repeats and stage totals."""
     lines += [
         "### T7. Operations, bytes and arithmetic intensity, counted from the code",
         "",
@@ -920,6 +946,7 @@ def counts_tables(lines: list[str], flow: dict, march: dict) -> dict:
 
 
 def gpu_table(lines: list[str]) -> None:
+    """T8: the GPU's peaks."""
     lines += ["### T8. The GPU's peaks", ""]
     lo, hi = counts84.BOOST_HZ
     bw = counts84.PEAK_BANDWIDTH
@@ -959,6 +986,7 @@ def gpu_table(lines: list[str]) -> None:
 
 
 def bound_table(lines: list[str], flow: dict, march: dict, counted: dict) -> dict:
+    """T9: each 320x120 stage's time now against its time at peak bandwidth and FP64; returns the bounds."""
     lines += [
         "### T9. 320x120: each stage's time now against its time at peak bandwidth",
         "",
@@ -1095,6 +1123,7 @@ def balance_table(lines: list[str], counted: dict) -> dict:
 
 
 def cprofile_table(lines: list[str]) -> None:
+    """T10: the profiler's top functions by own time."""
     r = load("cprofile_80x30")
     total = r["total_tt"]
     lines += ["### T10. cProfile of the 80x30 march, top functions by own time", ""]
@@ -1261,6 +1290,7 @@ def predictions(
 
 
 def ports(lines: list[str], flow: dict, march: dict, full: dict) -> None:
+    """T12: what the plan's two kernels would carry."""
     lines += ["### T12. What the plan's two kernels would carry", ""]
     rows = []
 
@@ -1393,6 +1423,7 @@ def splice(text: str, blocks: dict[str, list[str]]) -> str:
 
 
 def main() -> int:
+    """Write the tables and splice the report, or with --check compare them."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()

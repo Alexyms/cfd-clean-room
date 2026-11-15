@@ -710,6 +710,7 @@ def save(job: str, record: dict) -> None:
 
 
 def cells_of(grid: str) -> int:
+    """Cells of GRID's mesh."""
     nx, ny, _ = GRIDS[grid]
     return nx * ny
 
@@ -920,6 +921,7 @@ def profile_march(grid: str) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Run the command named on the command line."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("command")
     parser.add_argument("args", nargs="*")
