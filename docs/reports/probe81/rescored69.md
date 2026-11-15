@@ -275,7 +275,7 @@ Room recovery time (every sensor of every class within spec and staying so): 32.
 | File | Statements | Uncovered | Of which `raise` | Other uncovered lines | Statements covered | Uncovered branch arms | Of which into a `raise` |
 |---|---|---|---|---|---|---|---|
 | src/config.py | 1,147 | 25 | 4 | 310, 312, 319, 1109, 1111, 1125, 1135, 1154, 1183, 1286, 1529, 1573, 1577, 1960-1963, 2302-2303, 2392, 2431 | 97.82% | 20 | 4 |
-| src/io_manager.py | 614 | 22 | 0 | 325, 547, 691, 742, 886, 891, 896, 910, 935, 964, 1040, 1046, 1066, 1088, 1090, 1100, 1154, 1527, 1551, 1555, 1571, 1592 | 96.42% | 27 | 0 |
+| src/io_manager.py | 614 | 22 | 2 | 325, 547, 691, 742, 891, 896, 910, 935, 964, 1040, 1046, 1066, 1088, 1090, 1100, 1154, 1527, 1555, 1571, 1592 | 96.42% | 27 | 2 |
 | src/solver_transport.py | 333 | 5 | 0 | 495, 888, 895, 897, 900 | 98.50% | 6 | 1 |
 | src/turbulence.py | 530 | 4 | 4 | none | 99.25% | 5 | 4 |
 | src/mesh.py | 130 | 3 | 2 | 118 | 97.69% | 3 | 2 |
@@ -286,4 +286,4 @@ Room recovery time (every sensor of every class within spec and staying so): 32.
 | src/staggered.py | 108 | 1 | 1 | none | 99.07% | 1 | 1 |
 | src/pressure.py | 259 | 0 | 0 | none | 100.00% | 2 | 0 |
 | src/scalar_scheme.py | 157 | 0 | 0 | none | 100.00% | 1 | 0 |
-| all of `src/` | 5,805 | 66 | 13 | 53 lines | 98.86% | 76 | 14 |
+| all of `src/` | 5,805 | 66 | 15 | 51 lines | 98.86% | 76 | 16 |

@@ -3,7 +3,7 @@
 **Date:** 2026-11-14
 **Prompt:** 81 (`docs/prompts/cc-prompt-81-cumulative-counting.md`)
 **Branch:** `phase5/cumulative-counting`
-**Status:** built and measured; predictions (a), (b) and (e) hold, (c) and (d) fail (the findings below); no stop condition is met. Review and test (`/cfd-review 81`, `/cfd-test 81`) not yet run.
+**Status:** built and measured; predictions (a), (b) and (e) hold, (c) and (d) fail (the findings below); no stop condition is met. Round 1 of review and test found one Bug, a missing test, and Suggestions; the fixes are in "Round 1's fixes (prompt 81b)", and `/cfd-review 81` and `/cfd-test 81` run again on them.
 
 Alex decided on 2026-11-14, on prompt 80's measurement (`docs/reports/cumulative_counts.md`),
 that thresholds are compared as ISO 14644-1 and a real counter compare them: channel k reads
@@ -152,8 +152,10 @@ latencies from the fields, the recovery times from the readings, the local field
 frame) now rebuild them on the channels, written out in the test as a constant rather than read
 from the code they check.
 
-Each new or strengthened test was run under its planted defect (`docs/reports/probe81/plant81.py`,
-in a git worktree of the code commit, so the queue's runs never imported a planted file).
+T1 records the plants of the tests it names, run with `docs/reports/probe81/plant81.py` in a git
+worktree of the code commit, so the queue's runs never imported a planted file. The other new tests
+and the strengthened ones are shown under their plants in T2, the fix pass's record ("Round 1's
+fixes (prompt 81b)").
 
 <!-- tables81 plants begin -->
 ### T1. The planted defects (docs/reports/probe81/plant81.py, in a worktree of the code commit), the tests run under each, and whether they failed (results/builder81/plants.json)
@@ -237,7 +239,7 @@ What differs, in any run: `/arrival/first_above`, `/arrival@counting`, `/config@
 ## 5. The maps (prediction (b) and the stop condition)
 
 <!-- tables81 probe begin -->
-### B1. The 80x30 cumulative maps of this pass's runs (/arrival/, made by the march) against prompt 80's probe maps (results/builder80/placement/RUN.channels.npz, made by its wrapper on prompt 79's march), bit for bit (prediction (b))
+### B1. The 80x30 cumulative maps of this pass's runs (/arrival/, made by the march) against prompt 80's probe maps (results/builder80/placement/RUN.channels.npz, made by its wrapper on prompt 79's march), bit for bit, after one normalisation: the probe stores NaN for a live cell not reached, which is read as inf, as /arrival/ holds it (prediction (b))
 
 | Run | /arrival/ counting | Maps equal, bit for bit | Probe's per-class maps = prompt 79's /arrival/ | t_final equal |
 |---|---|---|---|---|
@@ -1003,7 +1005,7 @@ cell, old beside new, is in `changes81.md`.
 | tables69 | G1. | 8 | 81 | 1 | 1.530e-01 | 0 |
 | tables69 | P1. | 4 | 15 | 1 | 0.000e+00 | 0 |
 | tables69 | Cv1. | 3 | 20 | 0 | 0.000e+00 | 0 |
-| tables69 | Cv2. | 13 | 112 | 7 | 1.000e+00 | 0 |
+| tables69 | Cv2. | 13 | 112 | 2 | 0.000e+00 | 0 |
 | tables76 | (before the first table) | 0 | 0 | 0 | 0.000e+00 | 0 |
 | tables76 | R1. | 5 | 60 | 11 | 0.000e+00 | 0 |
 | tables76 | F1. | 7 | 56 | 0 | 0.000e+00 | 0 |
@@ -1022,7 +1024,7 @@ cell, old beside new, is in `changes81.md`.
 | tables76 | C2. | 155 | 936 | 324 | 1.034e+01 | 6 |
 | tables76 | C1. | 18 | 76 | 22 | 1.934e-01 | 0 |
 | tables76 | K1. | 8 | 99 | 19 | 4.224e-01 | 1 |
-| tables76 | K2. | 28 | 319 | 73 | 4.861e+00 | 4 |
+| tables76 | K2. | 28 | 319 | 74 | 4.861e+00 | 4 |
 | tables76 | P1. | 3 | 12 | 1 | 0.000e+00 | 0 |
 | tables76 | P2. | 5 | 18 | 3 | 0.000e+00 | 0 |
 | tables76 | P3. | 1 | 6 | 1 | 0.000e+00 | 0 |
@@ -1065,18 +1067,20 @@ cell, old beside new, is in `changes81.md`.
    checkpoint with an alert open across it and another opening before the kill. On the
    channels the release's alerts all open within one step of each other, so no such checkpoint
    exists; the test now also takes a close after the checkpoint, which changes the table past
-   it as an opening did. Both defects it names are still caught.
+   it as an opening did. Both defects it names are still caught (T2: `restart_open_alert_dropped`,
+   `restart_table_end_only`).
 8. **The sweep's D1 on the channels is tables81's** (E2), not `tables72.py`'s: tables72 compares
    each class with its own threshold in its own code, not through `src/`, so re-running it on
    this branch would change nothing. Its re-score of record stays prompt 79's.
 9. **The sweep's clean-out runs are not in E1.** Their initial condition puts every cell at
    100 times every threshold at t = 0, so every channel is above its limit at every sensor by
    construction; prompt 76 also scored no detection on the clean-out.
-10. **Prompt 80's table script no longer runs whole on this branch.** Its `Coarse` calls
-    `placement.arrival_from_frames` without the channels, which the reader now requires; its
-    `Fine` and `Brackets`, which read through its own probe, run unchanged and give C1's
-    brackets. The `--check` modes of `tables76.py`, `tables79.py` and `tables80.py` no longer
-    reproduce their committed outputs on this branch, by construction: the readers changed.
+10. **Prompt 79's and prompt 80's table scripts stopped running whole on this branch.** Their calls
+    of `placement.arrival_from_frames` and `clear_times` lacked the channels, which the readers now
+    require. `tables80.py`'s `Fine` and `Brackets`, which read through its own probe, ran unchanged
+    and gave C1's brackets. Prompt 81b passes both scripts the per-class channels and counting by
+    name; what each `--check` then reproduces, and what it cannot, is in "Round 1's fixes (prompt
+    81b)".
 11. **The plants' first run stopped at the sixth plant.** The worktree's checkout holds CRLF
     line ends and that plant's text holds a newline; `plant81.py` now matches newlines as the
     file's own, and the record is the second, complete run. Every planted file was restored
@@ -1096,11 +1100,181 @@ cell, old beside new, is in `changes81.md`.
     and A1 line up unit by unit with prompt 80's brackets and clear times; the runner lists the
     clean-out first and the dust before the breach.
 
+## Round 1's fixes (prompt 81b)
+
+Review 81 (`docs/prompts/review-81.md`) and test 81 (`docs/prompts/test-81.md`) found one Bug, a
+missing test, and Suggestions. Both read the built computation as right, and no run result
+changes: no scenario was run again. The fixes are a `fix:` commit (code, tests, scripts) and a
+`docs:` commit (this section, the regenerated tables, SYSTEM.md, PROJECT_PLAN.md).
+
+**The Bug (review B1, test B1).** `placement.clear_units` is the one route by which a run file's
+frames become REQ-A07's clear times, and no test failed when it handed `clear_times` each class as
+its own channel. `TestClearUnitsFromRuns` now holds a test on a run file whose frames put channel
+3 at its limit by the sum and by no class alone: class 4 at 29 per cubic metre (its own limit is
+29.3) and class 3 at 803 in one cell and 802 in the rest (its own limit is 832). Channel 3 reads
+832, exactly its limit, in the first cell only; the channels' reading clears there at the next
+frame and everywhere else at t_e, where the per-class reading clears everywhere at t_e. T2 records
+the plant `clear_units_identity` (each class as its own channel) and the test failing on it,
+with `clear_units_smaller` (the sum over the smaller classes) and `clear_units_marked_per_class`.
+T3 sets the room clear times of the three 80x30 runs through `clear_units` beside each class
+alone, the measure test 81 took: its dust row at 0.1 um is the pair test 81 reported (51.08 s
+built, 42.27 s read per class). The plant makes `clear_units` return the second column, which
+is earlier or equal in every row.
+
+<!-- tables81 clear_sum begin -->
+### T3. REQ-A07's room clear times on this pass's 80x30 runs, through placement.clear_units (the channels), beside each class alone as its own channel (what the plant clear_units_identity makes clear_units return; test 81 B1)
+
+| Unit | Room clear, channels (s) | Room clear, each class alone (s) | Earlier read alone |
+|---|---|---|---|
+| door, 0.1 um | 49.1464 | 47.3845 | yes |
+| door, 0.3 um | 49.1464 | 47.3845 | yes |
+| door, 0.5 um | 49.1464 | 47.3845 | yes |
+| door, 1 um | 47.3845 | 47.3845 | no |
+| door, 5 um | 47.3845 | 47.3845 | no |
+| breach, 0.1 um | 103.9500 | 102.1882 | yes |
+| breach, 0.3 um | 103.9500 | 102.1882 | yes |
+| breach, 0.5 um | 103.9500 | 102.1882 | yes |
+| breach, 1 um | 102.1882 | 102.1882 | no |
+| breach, 5 um | 102.1882 | 102.1882 | no |
+| dust, 0.1 um | 51.0837 | 42.2731 | yes |
+| dust, 0.3 um | 61.6564 | 54.6079 | yes |
+| dust, 0.5 um | 66.9427 | 59.8943 | yes |
+| dust, 1 um | 72.2291 | 68.7048 | yes |
+| dust, 5 um | 86.3260 | 86.3260 | no |
+<!-- tables81 clear_sum end -->
+
+**The refusal and the label.** `search_roles` refuses detection and all-clear units of different
+countings and `rank` refuses layouts scored over different ones, as `detection_units` refuses
+maps of two (test S3): no score or search compares the two kinds. `ClearUnits` and `Layout`
+carry the counting for it (`clear_units` marks its units cumulative, `search` and `given_layout`
+mark a layout with its units'). Each check is planted (`search_roles_mix_allowed`,
+`rank_mix_allowed`). No counting is assumed (review S5): `RunArrival` (with `counting` now before
+`fallback`), `Units`, `ClearUnits`, `Layout`, `ArrivalRecord`, `AlertTable` and `RecoveryRecord`
+take it without a default, a test fails on a default restored on any of the seven (the
+`default_*` plants), and every caller says which it holds, the past probes included.
+
+**The past probes.** `tables80.py` asks for the per-class reading by name (`class_alone`, the
+channels `(k,)`, and the counting `c` on each map and unit it builds) and its `--check` matches
+its committed outputs again. `tables79.py` passes the per-class channels to the frames' reader and
+the counting to the maps it rebuilds, and reads the all-clear units of tables76's role search
+through its own `clear_units_per_class`, since `placement.clear_units` has no per-class switch
+(`src/` has none anywhere, section 1). Its `--check` matches in every output but two rows of the
+coverage table of `rescored69.md` and `changes79.md` (Cv2, the uncovered lines of
+`src/config.py` and `src/io_manager.py`): tables69 classifies the uncovered statements by
+reading the current `src/` lines at the coverage file's line numbers (its docstring says `src/`
+is unchanged since the run's commit), and prompt 81 changed both files. No argument of a reader
+changes that, and no committed table was changed. `tables76.py --check` raises on this branch
+(`search_roles` refuses its per-class detection units beside the channels' clear units): it was
+not in the prompt's list and is left as it is; the same stand-in as `tables79.py`'s would
+restore it.
+
+**The Suggestions taken.**
+
+- Review S1 and test S1: `tests/test_io_manager.py`'s `TestCountingMarks` reads the counting of
+  `/arrival/`, `/recovery/` and `/transport/alerts/` back by value, for each counting, from the
+  attribute on the group, and an older group's missing mark as per-class;
+  `test_the_alert_table_records_its_counting` reads the file back and can fail (the field has no
+  default); the same for the recovery record; the shape refusal of `write_sensor_readings` and
+  the counting kept through `exclude_units`, `search` and `given_layout` each have a test.
+- Review S4 and test S2: T1 stays the record of the nine plants of the code commit. T2 records a
+  plant for every new test T1 does not name and for each strengthened run-level test (the alert
+  table from the sensor series, the restart across an open alert with the two defects it names,
+  the clean-out's two, the arrival maps' tests, the hold's start). Section 2's sentence now
+  says what T1 records.
+- Review S2: `docs/SYSTEM.md` (the date, a revision-log row, REQ-A01's wording, the section 3.2
+  rows of the monitor, placement and io_manager, section 4's contracts, REQ-A03's and REQ-A07's
+  Verified By); `docs/PROJECT_PLAN.md` (the deferred row, a change-log row).
+- Review S3: the frames' caveat sits beside K2 in `rescored76.md` (`frames_caveat` in
+  `tables81.py`) and in the Phase 5 report's pointer line.
+- Review S6: the counting paragraph of `io_manager.py`'s module docstring follows the list of the
+  run file's groups.
+- Test S4: B1's title says the probe's NaN for a live cell not reached was read as inf, as
+  `/arrival/` holds it.
+
+**The plants' first run.** The first run of the set had one plant survive: `hold_per_class`
+against the hold test of `tests/test_config.py`. That test does not claim to tell the per-class
+reading from the channels (its fixture puts every channel below its limit under both readings;
+`test_the_hold_reads_the_start_on_the_channels` carries that claim, and T1 has `hold_per_class`
+caught there). The plant was replaced by the two defects the `test_config` test does name
+(`hold_start_not_compared`, `hold_any_channel_below`) and the whole set was run again; T2 is
+that second, complete run. The first run's log is `results/builder81b/plants81b_first_run.txt`.
+
+<!-- tables81 plants81b begin -->
+### T2. Prompt 81b's planted defects (docs/reports/probe81/plant81.py --set fixes, in a worktree of the fix commit), the tests run under each, and whether they failed (results/builder81/plants81b.json)
+
+Commit b842e63; the named tests without a plant: exit 0, 42 passed in 2195.28s (0:36:35).
+
+| Plant | Defect | File | Tests | Exit | pytest's summary | Caught |
+|---|---|---|---|---|---|---|
+| clear_units_identity | clear_units hands clear_times each class as its own channel | src/placement.py | TestClearUnitsFromRuns::test_a_channel_clears_with_its_sum_not_with_its_class_alone | 1 | 1 failed in 1.06s | yes |
+| clear_units_smaller | clear_units sums each class with the smaller classes | src/placement.py | TestClearUnitsFromRuns::test_a_channel_clears_with_its_sum_not_with_its_class_alone | 1 | 1 failed in 1.02s | yes |
+| clear_units_marked_per_class | clear_units marks its units per class | src/placement.py | TestClearUnitsFromRuns::test_a_channel_clears_with_its_sum_not_with_its_class_alone | 1 | 1 failed in 1.07s | yes |
+| search_roles_mix_allowed | search_roles pairs detection and all-clear units of two countings | src/placement.py | TestAddAllClear::test_detection_and_all_clear_units_of_two_countings_are_refused | 1 | 1 failed in 0.84s | yes |
+| rank_mix_allowed | rank orders layouts scored over two countings | src/placement.py | TestRank::test_layouts_scored_over_two_countings_are_not_ranked | 1 | 1 failed in 0.78s | yes |
+| search_layout_marked_cumulative | search marks its layout cumulative whatever the units were | src/placement.py | TestRank::test_layouts_scored_over_two_countings_are_not_ranked, TestRecords::test_the_units_keep_their_counting_through_every_step | 1 | 2 failed in 0.91s | yes |
+| given_layout_marked_cumulative | given_layout marks its layout cumulative whatever the units were | src/placement.py | TestRecords::test_the_units_keep_their_counting_through_every_step | 1 | 1 failed in 0.80s | yes |
+| exclude_drops_counting | exclude_units returns its units marked cumulative whatever they were | src/placement.py | TestRecords::test_the_units_keep_their_counting_through_every_step | 1 | 1 failed in 0.82s | yes |
+| default_RunArrival | RunArrival.counting given a default | src/placement.py | TestRecords::test_no_record_has_a_default_counting | 1 | 1 failed, 6 passed in 0.88s | yes |
+| default_Units | Units.counting given a default | src/placement.py | TestRecords::test_no_record_has_a_default_counting | 1 | 1 failed, 6 passed in 0.77s | yes |
+| default_ClearUnits | ClearUnits.counting given a default | src/placement.py | TestRecords::test_no_record_has_a_default_counting | 1 | 1 failed, 6 passed in 0.77s | yes |
+| default_Layout | Layout.counting given a default | src/placement.py | TestRecords::test_no_record_has_a_default_counting | 1 | 1 failed, 6 passed in 0.79s | yes |
+| default_ArrivalRecord | ArrivalRecord.counting given a default | src/io_manager.py | TestRecords::test_no_record_has_a_default_counting | 1 | 1 failed, 6 passed in 0.85s | yes |
+| default_AlertTable | AlertTable.counting given a default | src/io_manager.py | TestRecords::test_no_record_has_a_default_counting | 1 | 1 failed, 6 passed in 0.78s | yes |
+| default_RecoveryRecord | RecoveryRecord.counting given a default | src/io_manager.py | TestRecords::test_no_record_has_a_default_counting | 1 | 1 failed, 6 passed in 0.82s | yes |
+| recovery_mark_not_written | the recovery writer leaves the counting off | src/io_manager.py | TestCountingMarks, TestMapsAndRecoveryOnTheSum::test_the_recovery_record_says_cumulative_in_the_file | 1 | 4 failed, 6 passed in 1.36s | yes |
+| recovery_mark_constant | the recovery writer writes cumulative whatever it was given | src/io_manager.py | TestCountingMarks | 1 | 1 failed, 8 passed in 1.27s | yes |
+| recovery_unmarked_cumulative | the recovery reader takes a missing mark as cumulative | src/io_manager.py | TestCountingMarks | 1 | 1 failed, 8 passed in 1.19s | yes |
+| recovery_read_constant | the recovery reader returns cumulative whatever the file says | src/io_manager.py | TestCountingMarks | 1 | 2 failed, 7 passed in 1.28s | yes |
+| alerts_mark_not_written | the alerts writer leaves the counting off | src/io_manager.py | TestCountingMarks, TestMonitorOnTheSum::test_the_alert_table_records_its_counting | 1 | 4 failed, 6 passed in 1.38s | yes |
+| alerts_mark_constant | the alerts writer writes cumulative whatever it was given | src/io_manager.py | TestCountingMarks | 1 | 1 failed, 8 passed in 1.18s | yes |
+| alerts_unmarked_cumulative | the alerts reader takes a missing mark as cumulative | src/io_manager.py | TestCountingMarks | 1 | 1 failed, 8 passed in 1.15s | yes |
+| alerts_read_constant | the alerts reader returns cumulative whatever the file says | src/io_manager.py | TestCountingMarks | 1 | 2 failed, 7 passed in 1.19s | yes |
+| arrival_mark_not_written | the arrival writer leaves the counting off | src/io_manager.py | TestCountingMarks | 1 | 3 failed, 6 passed in 1.26s | yes |
+| arrival_mark_constant | the arrival writer writes cumulative whatever it was given | src/io_manager.py | TestCountingMarks | 1 | 1 failed, 8 passed in 1.16s | yes |
+| arrival_unmarked_cumulative | the arrival reader takes a missing mark as cumulative | src/io_manager.py | TestCountingMarks | 1 | 1 failed, 8 passed in 1.21s | yes |
+| arrival_read_constant | the arrival reader returns cumulative whatever the file says | src/io_manager.py | TestCountingMarks | 1 | 2 failed, 7 passed in 1.22s | yes |
+| alert_table_marked_per_class | alert_table marks the table per class | src/time_integration.py | TestMonitorOnTheSum::test_the_alert_table_records_its_counting | 1 | 1 failed in 0.95s | yes |
+| alert_table_counting_left_off | alert_table leaves the counting out | src/time_integration.py | TestMonitorOnTheSum::test_the_alert_table_records_its_counting | 1 | 1 failed in 0.80s | yes |
+| recovery_record_marked_per_class | RecoveryTracker.record marks the record per class | src/time_integration.py | TestMapsAndRecoveryOnTheSum::test_the_recovery_record_says_cumulative_in_the_file | 1 | 1 failed in 0.81s | yes |
+| recovery_record_counting_left_off | RecoveryTracker.record leaves the counting out | src/time_integration.py | TestMapsAndRecoveryOnTheSum::test_the_recovery_record_says_cumulative_in_the_file | 1 | 1 failed in 0.90s | yes |
+| shape_check_removed | write_sensor_readings stores channels of another shape than the readings | src/io_manager.py | TestRecords::test_channels_of_another_shape_than_the_readings_are_refused | 1 | 1 failed in 0.90s | yes |
+| index_order | the channels follow the class index, not the sizes | src/config.py | TestChannels::test_the_channels_follow_the_sizes_not_the_class_order | 1 | 1 failed in 0.90s | yes |
+| checked_channels_off | checked_channels returns without checking | src/monitor.py | TestChannels::test_malformed_channels_are_refused | 1 | 5 failed in 0.93s | yes |
+| restore_without_sum | AlertMonitor.restore does not sum the channels again | src/monitor.py | TestMonitorOnTheSum::test_a_restored_monitor_sums_its_channels_again | 1 | 1 failed in 0.81s | yes |
+| counting_unchecked | checked_counting accepts any str | src/io_manager.py | TestRecords::test_the_counting_is_one_of_two | 1 | 1 failed in 0.83s | yes |
+| series_write_unchecked | write_sensor_readings accepts channels given to a file without them | src/io_manager.py | TestRecords::test_the_sensor_readings_hold_the_channels_beside_the_classes | 1 | 1 failed in 0.86s | yes |
+| series_channels_not_read | read_sensor_readings returns no channels | src/io_manager.py | TestRecords::test_the_sensor_readings_hold_the_channels_beside_the_classes | 1 | 1 failed in 0.82s | yes |
+| tracker_restore_unchecked | ArrivalTracker.restore accepts maps without the channels' mark | src/monitor.py | TestRecords::test_a_per_class_checkpoint_refuses_the_tracker | 1 | 1 failed in 0.86s | yes |
+| alerts_open_per_class | the monitor opens an alert on the class alone | src/monitor.py | TestScenarioRun::test_the_alert_table_is_the_one_the_sensor_series_implies, TestRestart::test_a_restart_across_an_open_alert_writes_the_uninterrupted_table | 1 | 2 failed in 31.98s | yes |
+| alerts_read_per_class | the monitor's channels are the per-class readings | src/monitor.py | TestScenarioRun::test_the_alert_table_is_the_one_the_sensor_series_implies, TestRestart::test_a_restart_across_an_open_alert_writes_the_uninterrupted_table | 1 | 2 failed in 32.91s | yes |
+| restart_open_alert_dropped | the checkpoint carries no open alert | src/monitor.py | TestRestart::test_a_restart_across_an_open_alert_writes_the_uninterrupted_table | 1 | 1 failed in 41.68s | yes |
+| restart_table_end_only | the alert table is written only at the end of the march | src/time_integration.py | TestRestart::test_a_restart_across_an_open_alert_writes_the_uninterrupted_table | 1 | 1 failed in 30.19s | yes |
+| recovery_within_per_class | RecoveryTracker: within spec read on each class alone | src/time_integration.py | TestCleanOut::test_the_recovery_times_are_the_run_files_readings | 1 | 1 failed in 37.22s | yes |
+| recovery_local_per_class | RecoveryTracker: the local field read on each class alone | src/time_integration.py | TestCleanOut::test_the_local_field_and_the_mean_against_the_last_frame | 1 | 1 failed in 38.76s | yes |
+| march_arrival_identity | the march hands ArrivalTracker each class as its own channel | src/time_integration.py | TestArrivalMaps::test_the_maps_are_the_rule_on_every_steps_fields, TestArrivalMaps::test_the_sensors_latencies_from_the_map_equal_the_monitors, TestArrivalMaps::test_the_step_map_against_the_frames_map | 1 | 3 failed in 42.48s | yes |
+| frames_run_identity | arrival_from_run's fallback hands each class as its own channel | src/placement.py | TestArrivalMaps::test_a_phase_4_file_is_read_from_its_frames_and_flagged | 1 | 1 failed in 41.81s | yes |
+| hold_at_limit_within | the hold's start check takes a channel at its limit as within spec | src/config.py | TestScenarioHoldTime::test_the_hold_needs_a_start_above_the_thresholds | 1 | 1 failed in 0.95s | yes |
+| hold_start_not_compared | the hold's start is not compared with the thresholds | src/config.py | TestScenarioHoldTime::test_the_hold_needs_a_start_above_the_thresholds | 1 | 1 failed in 0.76s | yes |
+| hold_any_channel_below | the hold's start check takes any channel below its threshold for within spec | src/config.py | TestScenarioHoldTime::test_the_hold_needs_a_start_above_the_thresholds | 1 | 1 failed in 0.91s | yes |
+
+50 of 50 plants caught.
+<!-- tables81 plants81b end -->
+
+<!-- tables81 suite81b begin -->
+### U2. The whole suite at the fix commit (pytest tests/, results/builder81/suite81b.xml)
+
+| Tests | Failures | Errors | Skipped | Time (s) |
+|---|---|---|---|---|
+| 3,101 | 0 | 0 | 0 | 3420 |
+<!-- tables81 suite81b end -->
+
 ## Records
 
 Untracked, this machine: `results/builder81/` (the queue file and log, each run's file,
 checkpoint, summary and log under `product/` and `placement/`, the configuration copies,
-`standby.json`, `plants.json` and `plants.txt`, `suite.xml` and `suite_full.txt`). Inputs:
+`standby.json`, `plants.json` and `plants.txt`, `suite.xml` and `suite_full.txt`; prompt 81b's
+`plants81b.json` and `suite81b.xml`). Prompt 81b's own scratch is `results/builder81b/` (the
+plants' worktree, the `--check` outputs and the plants' and the suite's logs). Inputs:
 `results/builder79/` (prompt 79's runs, configurations and queue; the sweep not run again) and
 `results/builder80/placement/` (prompt 80's probe maps).
 

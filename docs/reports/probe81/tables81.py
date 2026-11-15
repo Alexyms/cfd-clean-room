@@ -1016,19 +1016,23 @@ def rescore() -> dict[str, str]:
 
 
 FRAMES_CAVEAT = (
-    "Frame-resolved, as every arm run read here: a cell at or above its limit only between "
-    "two stored frames is not seen (prompt 80's caveat that a crossing between frames can "
-    "be missed), so a latency read from the frames is an upper bound on the step's and a "
-    "unit that reads as never detected may be one the steps reach."
+    ". Frame-resolved, as every arm run read here: a crossing between two stored frames "
+    "can be missed (prompt 80's caveat), so a latency is an upper bound on the step's and "
+    "a unit read as never detected may be one the steps reach"
 )
 
 
 def frames_caveat(text: str) -> str:
-    """TEXT with the frames' caveat on the line after K2's heading (review 81 S3)."""
+    """TEXT with the frames' caveat at the end of K2's heading (review 81 S3).
+
+    On the heading line, as the build report's sweep tables carry it, so the
+    line count of the table file, which ``tables79.compare`` aligns by
+    position, is not changed.
+    """
     lines = text.split("\n")
     at = next(i for i, line in enumerate(lines) if line.startswith("### K2."))
-    assert lines[at + 1] == "", "K2's heading is followed by a blank line"
-    return "\n".join([*lines[: at + 2], FRAMES_CAVEAT, "", *lines[at + 2 :]])
+    lines[at] += FRAMES_CAVEAT
+    return "\n".join(lines)
 
 
 def rescore_header(source: str) -> str:

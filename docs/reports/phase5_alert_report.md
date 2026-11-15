@@ -722,7 +722,7 @@ arrival map is t = 0 at every non-SOLID cell (ADR-015 D), so it is not drawn.
 
 *Superseded 2026-11-13: these runs were made again on the budgeted solve (prompt 79). `docs/reports/rerun79.md` (G1, Z1; K1 and K2 re-scored in section 7) gives the new values beside these; the numbers here are left as they were.*
 
-*Superseded 2026-11-14 for every reading of a threshold: thresholds are now compared as ISO 14644-1's cumulative counts, a class and every larger class summed (Alex's decision; ADR-015 C, amended; prompt 81). `docs/reports/cumulative_build.md` (O1; rescored76.md K1 and K2, K2 on the sweep's frames) gives the cumulative values beside prompt 79's; the numbers here are left as they were.*
+*Superseded 2026-11-14 for every reading of a threshold: thresholds are now compared as ISO 14644-1's cumulative counts, a class and every larger class summed (Alex's decision; ADR-015 C, amended; prompt 81). `docs/reports/cumulative_build.md` (O1; rescored76.md K1 and K2, K2 on the sweep's frames, where a crossing between two frames can be missed) gives the cumulative values beside prompt 79's; the numbers here are left as they were.*
 
 Section D's claim is the ranking of layouts, per rule with ties, not an absolute latency. The
 product configuration with stands is read on both grids (K1) and on the sweep's arms (K2), over the
