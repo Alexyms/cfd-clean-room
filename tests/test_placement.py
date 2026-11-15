@@ -31,7 +31,7 @@ tests in tests/test_time_integration.py; REQ-A05's scenarios on 80x30 are
 tests/test_sensor_evaluation.py.
 """
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from itertools import combinations
 from pathlib import Path
 
@@ -40,7 +40,7 @@ import pytest
 import yaml
 
 from src.config import MEAN, MOUNT_FREE, WORST_CASE, SimConfig
-from src.io_manager import RunFile, TransportFrames
+from src.io_manager import CUMULATIVE, PER_CLASS, RunFile, TransportFrames
 from src.mesh import SOLID, Mesh
 from src.placement import (
     ARGMIN,
@@ -86,6 +86,10 @@ CONFIGS = ROOT / "configs"
 LIVE = np.array([[True, True, False], [True, True, True]])
 TIMES = np.array([0.0, 0.5, 1.0, 2.0])
 THRESHOLDS = np.array([1.0, 10.0])
+# The frames readers' rule tests read each of the two classes as its own
+# channel, so the planted frames test the rule alone; how the channels are
+# formed (each class and every larger one) is tests/test_cumulative_counting.py's.
+ONE_CLASS = ((0,), (1,))
 PROVENANCE = {
     "commit": "test",
     "started": "2026-11-01T00:00:00",
@@ -128,12 +132,20 @@ def frames_by_class(series: dict[tuple[int, int], list[float]]) -> TransportFram
     )
 
 
-def units_of(rows: list[list[float]], caps: float | list[float] = 10.0) -> Units:
-    """Units on a 1 x n grid: ROWS[u][c] is unit u's latency at cell (0, c)."""
+def units_of(
+    rows: list[list[float]],
+    caps: float | list[float] = 10.0,
+    counting: str = CUMULATIVE,
+) -> Units:
+    """Units on a 1 x n grid: ROWS[u][c] is unit u's latency at cell (0, c).
+
+    The latencies are planted, so the counting is only a mark; the default is
+    what this code's maps carry, and the refusal tests give the other.
+    """
     latencies = np.array(rows, dtype=np.float64)[:, None, :]
     caps = np.broadcast_to(np.asarray(caps, dtype=np.float64), (len(rows),)).copy()
     labels = tuple(("s", "e", u) for u in range(len(rows)))
-    return Units(latencies, caps, labels, (False,) * len(rows))
+    return Units(latencies, caps, labels, (False,) * len(rows), counting)
 
 
 def row_cells(*columns: int) -> list[tuple[int, int]]:
@@ -162,7 +174,9 @@ class TestArrivalFromFrames:
                 (0, 2): [9.0, 9.0, 9.0, 9.0],
             }
         )
-        maps = arrival_from_frames(frames, THRESHOLDS, LIVE, np.array([0.0, 0.75]))
+        maps = arrival_from_frames(
+            frames, THRESHOLDS, LIVE, np.array([0.0, 0.75]), channels=ONE_CLASS
+        )
         assert maps.shape == (2, 2, 2, 3)
         for k in (0, 1):
             assert maps[0, k].tolist()[0][:2] == [0.5, 0.5]
@@ -182,7 +196,9 @@ class TestArrivalFromFrames:
         for event 0, (0, 1) inf for event 1).
         """
         frames = frames_of({(0, 0): [2.0, 0.0, 0.0, 0.0], (0, 1): [0.0, 0.0, 2.0, 0.0]})
-        maps = arrival_from_frames(frames, THRESHOLDS, LIVE, np.array([0.0, 1.0]))
+        maps = arrival_from_frames(
+            frames, THRESHOLDS, LIVE, np.array([0.0, 1.0]), channels=ONE_CLASS
+        )
         for k in (0, 1):
             assert maps[0, k, 0, 0] == 0.0 and np.isinf(maps[1, k, 0, 0])
             assert maps[0, k, 0, 1] == maps[1, k, 0, 1] == 1.0
@@ -197,7 +213,9 @@ class TestArrivalFromFrames:
         (class 0 never).
         """
         frames = frames_of({(1, 0): [0.0, 0.5, 1.0, 1.0]})
-        maps = arrival_from_frames(frames, np.array([1.0, 20.0]), LIVE, np.array([0.0]))
+        maps = arrival_from_frames(
+            frames, np.array([1.0, 20.0]), LIVE, np.array([0.0]), channels=ONE_CLASS
+        )
         assert maps[0, 0, 1, 0] == 1.0 and np.isinf(maps[0, 1, 1, 0])
 
     @pytest.mark.parametrize(
@@ -219,7 +237,9 @@ class TestArrivalFromFrames:
     ) -> None:
         """One threshold per class of the frames, live of their shape, onsets [events]."""
         with pytest.raises(ValueError, match=match):
-            arrival_from_frames(frames_of({}), thresholds, live, onsets)
+            arrival_from_frames(
+                frames_of({}), thresholds, live, onsets, channels=ONE_CLASS
+            )
 
     @pytest.mark.parametrize(
         ("thresholds", "onsets", "error", "match"),
@@ -246,14 +266,18 @@ class TestArrivalFromFrames:
         with the bad value).
         """
         with pytest.raises(error, match=match):
-            arrival_from_frames(frames_of({}), thresholds, LIVE, np.array(onsets))
+            arrival_from_frames(
+                frames_of({}), thresholds, LIVE, np.array(onsets), channels=ONE_CLASS
+            )
 
     def test_frames_whose_classes_are_not_0_to_n_minus_1_are_refused(self) -> None:
         """A frames object holding classes 0 and 2 has no class 1 to read."""
         frames = frames_of({})
         frames.fields[2] = frames.fields.pop(1)
         with pytest.raises(ValueError, match=r"frames' classes \[0, 2\]"):
-            arrival_from_frames(frames, THRESHOLDS, LIVE, np.array([0.0]))
+            arrival_from_frames(
+                frames, THRESHOLDS, LIVE, np.array([0.0]), channels=ONE_CLASS
+            )
 
 
 @pytest.mark.unit
@@ -290,9 +314,10 @@ def arrival(
     t_final: float,
     names: tuple[str, ...],
     resolution: str = STEP_RESOLVED,
+    counting: str = CUMULATIVE,
 ) -> RunArrival:
-    """A RunArrival from planted maps, step-resolved unless RESOLUTION says otherwise."""
-    return RunArrival(maps, np.array(onsets), resolution, names, t_final)
+    """A RunArrival from planted maps, step-resolved and cumulative unless said."""
+    return RunArrival(maps, np.array(onsets), resolution, names, t_final, counting)
 
 
 @pytest.mark.unit
@@ -533,7 +558,7 @@ def random_units(seed: int) -> tuple[Units, list[tuple[int, int]]]:
     latencies[rng.random(latencies.shape) < 0.5] = INF
     latencies[:, 0, 0] = np.nan
     labels = tuple(("s", "e", u) for u in range(6))
-    units = Units(latencies, np.full(6, 10.0), labels, (False,) * 6)
+    units = Units(latencies, np.full(6, 10.0), labels, (False,) * 6, CUMULATIVE)
     cells = [(j, i) for j in range(4) for i in range(8) if (j, i) != (0, 0)]
     return units, cells
 
@@ -750,7 +775,7 @@ class TestSearch:
         for u in range(10):
             latencies[u, 0, u // 2] = 5.0 - u // 2
         labels = tuple(("s", "e", u) for u in range(10))
-        units = Units(latencies, np.full(10, 10.0), labels, (False,) * 10)
+        units = Units(latencies, np.full(10, 10.0), labels, (False,) * 10, CUMULATIVE)
         cells = row_cells(*range(5))
         found = search(units, cells, count, WORST_CASE)
         by_mean = search(units, cells, count, MEAN)
@@ -776,7 +801,7 @@ class TestSearch:
         for u, (j, i) in enumerate([(1, 1), (0, 0), (1, 0), (0, 1)]):
             latencies[u, j, i] = 1.0 + u
         labels = tuple(("s", "e", u) for u in range(4))
-        units = Units(latencies, np.full(4, 10.0), labels, (False,) * 4)
+        units = Units(latencies, np.full(4, 10.0), labels, (False,) * 4, CUMULATIVE)
         backwards = [(1, 1), (1, 0), (0, 1), (0, 0)]
         for rule in (WORST_CASE, MEAN):
             found = search(units, backwards, 4, rule)
@@ -834,6 +859,27 @@ class TestRank:
         with pytest.raises(ValueError, match="no layout to rank"):
             rank([])
 
+    def test_layouts_scored_over_two_countings_are_not_ranked(self) -> None:
+        """The same labels over cumulative and per-class latencies: refused, either order.
+
+        A per-class and a cumulative set of units carry the same labels, so
+        the check of the units cannot tell them apart; each layout carries
+        its units' counting. Defect caught: the counting check removed in
+        ``rank`` (the layouts are ranked as one set).
+        """
+        rows = [[1.0, 4.0], [3.0, 2.0]]
+        cumulative = given_layout(units_of(rows, counting=CUMULATIVE), row_cells(0))
+        per_class = given_layout(units_of(rows, counting=PER_CLASS), row_cells(1))
+        assert (cumulative.counting, per_class.counting) == (CUMULATIVE, PER_CLASS)
+        for pair in ([cumulative, per_class], [per_class, cumulative]):
+            with pytest.raises(ValueError, match="cumulative and per_class units"):
+                rank(pair)
+        found = search(units_of(rows, counting=PER_CLASS), row_cells(0, 1), 1, MEAN)
+        assert found.counting == PER_CLASS
+        assert [layout.counting for layout in rank([found, per_class])] == [
+            PER_CLASS
+        ] * 2
+
     def test_a_layout_is_a_named_tuple_of_its_parts(self) -> None:
         """The fields the latency report reads, by name."""
         assert Layout._fields == (
@@ -843,6 +889,7 @@ class TestRank:
             "method",
             "exact",
             "units",
+            "counting",
             "uncovered",
             "distinct_masks",
             "maximal_masks",
@@ -1431,10 +1478,14 @@ class TestCandidatesOverScenarios:
 AREAS = np.ones(LIVE.shape)
 
 
-def clear_of(cells: dict[tuple[int, int], list[float]], end: float = 0.0) -> ClearUnits:
+def clear_of(
+    cells: dict[tuple[int, int], list[float]],
+    end: float = 0.0,
+    counting: str = CUMULATIVE,
+) -> ClearUnits:
     """The two classes' all-clear units of frames_of(CELLS), t_e END."""
     clear, times, fractions = clear_times(
-        frames_of(cells), THRESHOLDS, LIVE, AREAS, end
+        frames_of(cells), THRESHOLDS, LIVE, AREAS, end, channels=ONE_CLASS
     )
     return ClearUnits(
         clear=clear,
@@ -1443,6 +1494,7 @@ def clear_of(cells: dict[tuple[int, int], list[float]], end: float = 0.0) -> Cle
         fractions=tuple(fractions),
         spacing=np.full(2, float(np.diff(times).max())),
         labels=(("s", 0), ("s", 1)),
+        counting=counting,
     )
 
 
@@ -1483,6 +1535,7 @@ class TestClearTimes:
             LIVE,
             AREAS,
             0.0,
+            channels=ONE_CLASS,
         )
         assert times.tolist() == TIMES.tolist()
         row0, row1 = clear[0].tolist()
@@ -1521,6 +1574,7 @@ class TestClearTimes:
             LIVE,
             AREAS,
             0.0,
+            channels=ONE_CLASS,
         )
         assert clear[0, 0, 0] == 1.0 and clear[1, 0, 0] == 0.0
         assert clear[0, 0, 1] == 1.0 and clear[1, 0, 1] == 1.0
@@ -1542,6 +1596,7 @@ class TestClearTimes:
             LIVE,
             AREAS,
             0.75,
+            channels=ONE_CLASS,
         )
         assert times.tolist() == [1.0, 2.0]
         assert clear[0, 0, 0] == 2.0 and clear[0, 0, 1] == 0.75
@@ -1553,7 +1608,12 @@ class TestClearTimes:
         areas = np.ones(LIVE.shape)
         areas[0, 0] = 3.0
         _, _, fractions = clear_times(
-            frames_of({(0, 0): [2.0, 0.0, 0.0, 0.0]}), THRESHOLDS, LIVE, areas, 0.0
+            frames_of({(0, 0): [2.0, 0.0, 0.0, 0.0]}),
+            THRESHOLDS,
+            LIVE,
+            areas,
+            0.0,
+            channels=ONE_CLASS,
         )
         assert fractions[0, 0] == pytest.approx(3.0 / 7.0)
 
@@ -1578,12 +1638,19 @@ class TestClearTimes:
     ) -> None:
         """One threshold per class, areas of the grid, t_e finite, from the floor, framed."""
         with pytest.raises(error, match=match):
-            clear_times(frames_of({}), thresholds, LIVE, areas, end)
+            clear_times(frames_of({}), thresholds, LIVE, areas, end, channels=ONE_CLASS)
 
     def test_frames_of_another_grid_are_refused(self) -> None:
         """A class whose frames are not live's [ny, nx]."""
         with pytest.raises(ValueError, match="class 0's frames are"):
-            clear_times(frames_of({}), THRESHOLDS, LIVE[:, :2], AREAS[:, :2], 0.0)
+            clear_times(
+                frames_of({}),
+                THRESHOLDS,
+                LIVE[:, :2],
+                AREAS[:, :2],
+                0.0,
+                channels=ONE_CLASS,
+            )
 
 
 @pytest.mark.unit
@@ -1795,7 +1862,9 @@ class TestClearScore:
 
 
 def line_units(
-    rows: Sequence[Sequence[float]], fractions: Sequence[Sequence[float]]
+    rows: Sequence[Sequence[float]],
+    fractions: Sequence[Sequence[float]],
+    counting: str = CUMULATIVE,
 ) -> ClearUnits:
     """All-clear units on a 1 x n grid: ROWS[u][c] is unit u's clear time at cell c.
 
@@ -1810,6 +1879,7 @@ def line_units(
         fractions=tuple(np.array(f, dtype=np.float64) for f in fractions),
         spacing=np.ones(len(rows)),
         labels=tuple(("s", u) for u in range(len(rows))),
+        counting=counting,
     )
 
 
@@ -1981,6 +2051,31 @@ class TestAddAllClear:
         none = search_roles(detection, units, pool, 1, 0, WORST_CASE)
         assert none.all_clear == () and none.layout.cells == none.detection.cells
 
+    def test_detection_and_all_clear_units_of_two_countings_are_refused(self) -> None:
+        """Per-class detection units beside the channels' clear times: no search.
+
+        ``clear_units`` reads the channels, so an older file's per-class
+        ``/arrival/`` would put one layout's two roles on two readings.
+        Either pairing is refused; the same counting on both sides is
+        searched, per-class included. Defect caught: the check removed in
+        ``search_roles`` (the search runs on unlike units).
+        """
+        clear = line_units(self.ROWS, self.FRACTIONS, CUMULATIVE)
+        rows = [[0.5, 1.0, 9.0, 9.0, 9.0, 9.0], [0.5, 2.0, 9.0, 9.0, 9.0, 1.0]]
+        pool = [(0, c) for c in range(6)]
+        per_class = units_of(rows, counting=PER_CLASS)
+        with pytest.raises(ValueError, match="detection units are per_class"):
+            search_roles(per_class, clear, pool, 2, 1, WORST_CASE)
+        cumulative = units_of(rows, counting=CUMULATIVE)
+        old_clear = line_units(self.ROWS, self.FRACTIONS, PER_CLASS)
+        with pytest.raises(ValueError, match="all-clear units per_class"):
+            search_roles(cumulative, old_clear, pool, 2, 1, WORST_CASE)
+        both = search_roles(per_class, old_clear, pool, 2, 1, WORST_CASE)
+        assert both.detection.counting == PER_CLASS
+        assert search_roles(cumulative, clear, pool, 2, 1, WORST_CASE).all_clear == (
+            (0, 5),
+        )
+
 
 @pytest.mark.unit
 class TestClearUnitsFromRuns:
@@ -1993,11 +2088,14 @@ class TestClearUnitsFromRuns:
         grid: tuple[int, int] = (80, 30),
         frame_times: tuple[float, ...] = (0.0, 10.0, 20.0, 30.0),
         per_class: bool = False,
+        fields_at: Callable[[float, np.ndarray], dict[int, np.ndarray]] | None = None,
     ) -> RunFile:
         """A run file of EVENTS: frames at FRAME_TIMES, every cell above until 25 s.
 
         PER_CLASS gives each class a field of twice its own threshold, the odd
-        classes staying above to the last frame.
+        classes staying above to the last frame. FIELDS_AT, when given,
+        replaces both: it maps a frame's time and the live-cell mask to that
+        frame's class fields.
         """
         mapping = {
             "scenario": {
@@ -2015,7 +2113,9 @@ class TestClearUnitsFromRuns:
         live = mesh.cell_type != SOLID
         thresholds = config.class_thresholds()
         for step, t in enumerate(frame_times):
-            if per_class:
+            if fields_at is not None:
+                fields = fields_at(t, live)
+            elif per_class:
                 # Twice each class's own threshold: above class 0's only for
                 # class 0. Even classes stay above until 25 s, odd ones to the end.
                 fields = {
@@ -2043,17 +2143,21 @@ class TestClearUnitsFromRuns:
         assert units.spacing.tolist() == [15.0] * 5
         assert all(times.tolist() == [20.0, 25.0, 40.0] for times in units.times)
 
-    def test_each_class_of_a_run_is_read_against_its_own_threshold(
+    def test_each_channel_of_a_run_has_its_own_threshold_and_its_own_fractions(
         self, tmp_path: Path
     ) -> None:
-        """Class k holds twice its threshold: even classes clear at 30 s, odd never.
+        """Class k holds twice its threshold: even channels clear at 30 s, odd never.
 
         The thresholds fall from class 0's down, so a field of twice class 1's
-        is below class 0's. Frames at 0, 10, 20 and 30 s, t_e 15 s: the even
-        classes are above at 20 s only (clear 30.0, areas (1, 0)); the odd
-        classes stay above (not clear, areas (1, 1)). Defects caught: class
-        0's threshold for every class (classes 1 to 4 below it, clear at t_e,
-        15.0); class 0's fractions for every class (the odd classes' (1, 0)).
+        is below class 0's. Frames at 0, 10, 20 and 30 s, t_e 15 s. At 20 s
+        every class holds twice its threshold, so every channel is above
+        (clear 30.0 or not, areas starting 1). At 30 s the odd classes hold
+        on: channels 1 and 3 are above (not clear, areas (1, 1)) and the even
+        ones are not (clear 30.0, areas (1, 0)). Defects caught: class 0's
+        threshold for every channel (channels 1 to 4 below it, clear at t_e,
+        15.0); class 0's fractions for every channel (the odd channels'
+        (1, 0)). The fixture cannot tell the cumulative reading from the
+        per-class one, which gives the same answers; the next test does.
         """
         early = [{"name": "a", "start": 5.0, "duration": 10.0, "source": DUST_BOX}]
         run = self._run(tmp_path, "classes", early, 30.0, per_class=True)
@@ -2065,6 +2169,56 @@ class TestClearUnitsFromRuns:
             assert units.fractions[k].tolist() == pytest.approx(
                 [1.0, 1.0 if k % 2 == 1 else 0.0], abs=1e-12
             )
+
+    def test_a_channel_clears_with_its_sum_not_with_its_class_alone(
+        self, tmp_path: Path
+    ) -> None:
+        """Class 4 at 29 and class 3 at 803 or 802: channel 3 is at its limit only by the sum.
+
+        Frames at 0, 10, 20 and 30 s, t_e 15 s; every frame but the one at 20
+        s is clean. At 20 s class 4 holds 29 per cubic metre, below its own
+        29.3, and class 3 holds 803 in the first live cell and 802 in the
+        rest, below its own 832. Channel 3 sums them (0 + 29 + 803 = 832 in
+        floating point, exactly its limit) and is at it in that one cell: not
+        clear until 30 s there, and 15 s (t_e) elsewhere, where the sum is
+        831; its area fractions start at that cell's share. No other channel
+        is at its limit (channel 4 holds 29 against 29.3). Read per class,
+        every unit would clear at t_e with fractions (0, 0). Defects caught:
+        ``clear_units`` handing ``clear_times`` each class as its own channel
+        (channel 3 clear at 15.0 everywhere); the sum over the smaller
+        classes (channel 4 at its limit, not clear until 30 s).
+        """
+        early = [{"name": "a", "start": 5.0, "duration": 10.0, "source": DUST_BOX}]
+        cell = None
+
+        def fields_at(t: float, live: np.ndarray) -> dict[int, np.ndarray]:
+            nonlocal cell
+            cell = tuple(int(v) for v in np.argwhere(live)[0])
+            fields = {k: np.zeros(live.shape) for k in range(5)}
+            if t == 20.0:
+                fields[4][live] = 29.0
+                fields[3][live] = 802.0
+                fields[3][cell] = 803.0
+            return fields
+
+        run = self._run(tmp_path, "sum", early, 30.0, fields_at=fields_at)
+        config = SimConfig.from_dict(run.read_config().mapping)
+        assert config.class_thresholds()[3] == 832.0 < 29.0 + 803.0 + 1.0
+        assert config.class_thresholds()[4] > 29.0
+        mesh = Mesh(config)
+        areas = np.outer(mesh.dy_cell, mesh.dx_cell)
+        share = areas[cell] / areas[mesh.cell_type != SOLID].sum()
+        units = clear_units({"sum": run})
+        assert units.counting == CUMULATIVE
+        live = ~np.isnan(units.clear[0])
+        assert units.clear[3][cell] == 30.0
+        rest = live.copy()
+        rest[cell] = False
+        assert (units.clear[3][rest] == 15.0).all()
+        for k in (0, 1, 2, 4):
+            assert (units.clear[k][live] == 15.0).all(), k
+            assert units.fractions[k].tolist() == [0.0, 0.0], k
+        assert units.fractions[3].tolist() == pytest.approx([share, 0.0], abs=1e-12)
 
     def test_the_units_of_runs_that_end_in_time(self, tmp_path: Path) -> None:
         """A run whose source ends at 15 s gives five units; one ending at t_end none."""

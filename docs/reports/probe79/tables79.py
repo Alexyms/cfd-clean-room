@@ -36,9 +36,11 @@ import argparse
 import importlib.util
 import json
 import math
+import os
 import re
 import shutil
 import sys
+from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
 from types import ModuleType
@@ -53,7 +55,7 @@ sys.path.insert(0, str(HERE))
 import configs79  # noqa: E402 -- follows sys.path.insert
 
 from src.config import SimConfig  # noqa: E402 -- follows sys.path.insert
-from src.io_manager import RunFile  # noqa: E402 -- follows sys.path.insert
+from src.io_manager import PER_CLASS, RunFile  # noqa: E402 -- follows sys.path.insert
 from src.mesh import SOLID, Mesh  # noqa: E402 -- follows sys.path.insert
 from src.monitor import (  # noqa: E402 -- follows sys.path.insert
     contaminating_events,
@@ -61,14 +63,17 @@ from src.monitor import (  # noqa: E402 -- follows sys.path.insert
 )
 from src.placement import (  # noqa: E402 -- follows sys.path.insert
     FRAME_RESOLVED,
+    ClearUnits,
     RunArrival,
     arrival_from_frames,
     arrival_from_run,
     candidates,
+    clear_times,
     detection_units,
     exclude_units,
     given_layout,
     rank,
+    scenario_end,
     search,
 )
 
@@ -727,13 +732,64 @@ def arrival_maps(
             return record.first_above, tuple(record.event_names), "steps"
     config = config_of(path)
     events = contaminating_events(config.scenario)
+    thresholds = config.class_thresholds("the arrival maps")
     maps = arrival_from_frames(
         run.read_frames(),
-        np.array(config.class_thresholds("the arrival maps")),
+        np.array(thresholds),
         Mesh(config).cell_type != SOLID,
         np.array([onset for _, onset in events]),
+        # Prompt 79's reading is each class against its own threshold; since
+        # prompt 81 the frames' reader takes the channels, so ask for it by name.
+        channels=tuple((k,) for k in range(len(thresholds))),
     )
     return maps, tuple(name for name, _ in events), "frames"
+
+
+def clear_units_per_class(
+    runs: Mapping[str, RunFile | str | os.PathLike[str]],
+) -> ClearUnits:
+    """The all-clear units of prompt 79's per-class reading.
+
+    ``placement.clear_units`` reads the channels since prompt 81 and has no
+    per-class switch, so the scripts that re-score prompt 79's runs on its
+    per-class reading build the units here: the same loop, each class asked
+    for as its own channel, and the units marked ``PER_CLASS`` so that
+    ``search_roles`` pairs them with per-class detection units only.
+    """
+    clear, ends, times, fractions, spacing, labels = [], [], [], [], [], []
+    for name, source in runs.items():
+        run = source if isinstance(source, RunFile) else RunFile(source)
+        config = SimConfig.from_dict(run.read_config().mapping)
+        end = scenario_end(config)
+        if end is None:
+            continue
+        mesh = Mesh(config)
+        thresholds = config.class_thresholds("the all-clear units")
+        maps, kept, share = clear_times(
+            run.read_frames(),
+            np.array(thresholds),
+            mesh.cell_type != SOLID,
+            np.outer(mesh.dy_cell, mesh.dx_cell),
+            end,
+            channels=tuple((k,) for k in range(len(thresholds))),
+        )
+        gap = float(np.diff(kept).max()) if kept.size > 1 else 0.0
+        for k in range(maps.shape[0]):
+            clear.append(maps[k])
+            ends.append(end)
+            times.append(kept)
+            fractions.append(share[k])
+            spacing.append(gap)
+            labels.append((name, k))
+    return ClearUnits(
+        np.stack(clear),
+        np.array(ends),
+        tuple(times),
+        tuple(fractions),
+        np.array(spacing),
+        tuple(labels),
+        PER_CLASS,
+    )
 
 
 def cleanout_table(rows: list[dict]) -> tuple[list[str], list[bool]]:
@@ -938,6 +994,7 @@ def rescore() -> dict[str, str]:
     t76 = load_module(probe / "probe76" / "tables76.py", "tables76")
     t76.COARSE, t76.SWEEP = placement, sweep
     t76.COARSE_CLEAN_OUT = sweep / "clean_out_80x30.h5"
+    t76.clear_units = clear_units_per_class
     runs76 = {name: t76.Run(product, name) for name in t76.NAMES}
     analysis = t76.Analysis(runs76)
     out["76"] = t76.render(analysis)[0]
@@ -968,6 +1025,7 @@ def arms_from_frames(t76: object, analysis: object, sweep: Path) -> list[str]:
             FRAME_RESOLVED,
             step.event_names,
             float(RunFile(path).read_frames().times[-1]),
+            PER_CLASS,
             "prompt 79: read from the frames, as the committed K2 read prompt 72's runs",
         )
 

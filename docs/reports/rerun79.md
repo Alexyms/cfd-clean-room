@@ -274,6 +274,8 @@ Before the budget the residual held the leftover (prompt 77); its value at the e
 
 ## 5. Latencies and placement
 
+*Superseded 2026-11-14 for every reading of a threshold: thresholds are now compared as ISO 14644-1's cumulative counts, a class and every larger class summed (Alex's decision; ADR-015 C, amended; prompt 81). `docs/reports/cumulative_build.md` (S1, C1, L1, L2 and O1) gives the cumulative values beside prompt 79's; the numbers here are left as they were.*
+
 <!-- tables79 latency begin -->
 ### L1. The arrival maps against the runs replaced: every event, class and non-SOLID cell (predictions (c), (d))
 
@@ -339,6 +341,8 @@ free: cells the same; worst 0.793 to 0.793 s, mean 0.221 to 0.221 s; ranked firs
 
 ## 6. The sweep and the clean-out
 
+*Superseded 2026-11-14 for every reading of a threshold: thresholds are now compared as ISO 14644-1's cumulative counts, a class and every larger class summed (Alex's decision; ADR-015 C, amended; prompt 81). `docs/reports/cumulative_build.md` (E1, E2 and R1) gives the cumulative values beside prompt 79's; the numbers here are left as they were.*
+
 <!-- tables79 contour begin -->
 ### D1. The sweep's contour distances, re-scored against prompt 72's (tables72 D1; prediction (d))
 
@@ -375,6 +379,8 @@ From each run file's recovery record (ADR-014 C). The 320x120 run replaced is pr
 <!-- tables79 cleanout end -->
 
 ## 7. The superseded tables, old against new
+
+*Superseded 2026-11-14 for every reading of a threshold: thresholds are now compared as ISO 14644-1's cumulative counts, a class and every larger class summed (Alex's decision; ADR-015 C, amended; prompt 81). `docs/reports/cumulative_build.md` (X2; the re-scores of tables69 and tables76 on its runs in rescored69.md and rescored76.md, each moved cell in changes81.md) gives the cumulative values beside prompt 79's; the numbers here are left as they were.*
 
 `docs/reports/probe79/` holds each table script's output on this pass's runs, made by that
 script's own code: `rescored69.md` (tables69, the Phase 4 gate), `rescored72.md` (tables72, the
@@ -482,6 +488,8 @@ Tables are aligned by their order in the file; a cell is compared as text. The l
 <!-- tables79 rescored end -->
 
 ## 8. The gates and the predictions
+
+*Superseded 2026-11-14 for every reading of a threshold: thresholds are now compared as ISO 14644-1's cumulative counts, a class and every larger class summed (Alex's decision; ADR-015 C, amended; prompt 81). `docs/reports/cumulative_build.md` (P1 and section 10) gives the cumulative values beside prompt 79's; the numbers here are left as they were.*
 
 G1 names, for each gate's conclusion, the table it rests on in this pass. P1 scores the
 predictions.

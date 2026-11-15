@@ -100,6 +100,8 @@ Stand cells: 7,101 at 0.1 to 1.2 m, of which 6,378 are not already mountable on 
 
 *Superseded 2026-11-13: these runs were made again on the budgeted solve (prompt 79). `docs/reports/rerun79.md` (F1, A1, B1, W1; the tables re-scored in section 7) gives the new values beside these; the numbers here are left as they were.*
 
+*Superseded 2026-11-14 for every reading of a threshold: thresholds are now compared as ISO 14644-1's cumulative counts, a class and every larger class summed (Alex's decision; ADR-015 C, amended; prompt 81). `docs/reports/cumulative_build.md` (F1 and S1; rescored76.md A1) gives the cumulative values beside prompt 79's; the numbers here are left as they were.*
+
 Step 5's four: the files under `configs/` as they are on `main`, each loaded from a copy that adds
 a checkpoint every 1000 steps (`docs/reports/probe76/configs76.py`), run concurrently, each from
 rest, through `scripts/run_scenario.py`, one BLAS thread each, in 1 h 41 min against an 8 h
@@ -234,6 +236,8 @@ every sensor, class and event (A1), REQ-A04's two instruments on the product gri
 
 *Superseded 2026-11-13: these runs were made again on the budgeted solve (prompt 79). `docs/reports/rerun79.md` (L1 and G1; L1 and L2 re-scored in section 7) gives the new values beside these; the numbers here are left as they were.*
 
+*Superseded 2026-11-14 for every reading of a threshold: thresholds are now compared as ISO 14644-1's cumulative counts, a class and every larger class summed (Alex's decision; ADR-015 C, amended; prompt 81). `docs/reports/cumulative_build.md` (L1, L2 and O1; rescored76.md L1 and L2) gives the cumulative values beside prompt 79's; the numbers here are left as they were.*
+
 The configurations section E and prompts 76b and 76c ask for, over the twenty detection units
 (four scenarios, one event each, five classes): the file's four; the searched four on the mounting
 surfaces without stands; the searched four with stands at the earlier 0.3 m band; the product
@@ -321,6 +325,8 @@ What L1 says:
 ## 4. The latency per unit
 
 *Superseded 2026-11-13: these runs were made again on the budgeted solve (prompt 79). `docs/reports/rerun79.md` (L1 and L2; U1 and U2 re-scored in section 7) gives the new values beside these; the numbers here are left as they were.*
+
+*Superseded 2026-11-14 for every reading of a threshold: thresholds are now compared as ISO 14644-1's cumulative counts, a class and every larger class summed (Alex's decision; ADR-015 C, amended; prompt 81). `docs/reports/cumulative_build.md` (C1; rescored76.md U1 and U2) gives the cumulative values beside prompt 79's; the numbers here are left as they were.*
 
 The counter's sample time is OPEN (ADR-015 C): a counter's sample adds to every latency below
 as an instrument delay, about half the sample time and the same amount for every layout, and
@@ -493,6 +499,8 @@ the scale. The width column says how far the sweep's inputs move the plume on th
 ## 5. The all-clear role
 
 *Superseded 2026-11-13: these runs were made again on the budgeted solve (prompt 79). `docs/reports/rerun79.md` (C0, C1 and C2 re-scored in section 7) gives the new values beside these; the numbers here are left as they were.*
+
+*Superseded 2026-11-14 for every reading of a threshold: thresholds are now compared as ISO 14644-1's cumulative counts, a class and every larger class summed (Alex's decision; ADR-015 C, amended; prompt 81). `docs/reports/cumulative_build.md` (A1 and R1; rescored76.md C0, C1 and C2) gives the cumulative values beside prompt 79's; the numbers here are left as they were.*
 
 Section D's "Two roles" defines a cell's clear time (the frame after its last frame at or above
 threshold, from the end of the scenario's last event), a layout's (its latest cell's), the room's
@@ -693,6 +701,8 @@ What these say:
 
 *Superseded 2026-11-13: these runs were made again on the budgeted solve (prompt 79). `docs/reports/rerun79.md` (L1; the maps were not redrawn) gives the new values beside these; the numbers here are left as they were.*
 
+*Superseded 2026-11-14 for every reading of a threshold: thresholds are now compared as ISO 14644-1's cumulative counts, a class and every larger class summed (Alex's decision; ADR-015 C, amended; prompt 81). `docs/reports/cumulative_build.md` (S1; the maps were not redrawn) gives the cumulative values beside prompt 79's; the numbers here are left as they were.*
+
 Per event scenario, the 0.1 um and 5 um arrival maps with the file's four, the product search, the
 three-plus-one's fourth cell and the free optimum drawn; and the clean-out's clear-time map, with
 the product search and that fourth cell. The clean-out's
@@ -711,6 +721,8 @@ arrival map is t = 0 at every non-SOLID cell (ADR-015 D), so it is not drawn.
 ## 7. What the ranking can claim
 
 *Superseded 2026-11-13: these runs were made again on the budgeted solve (prompt 79). `docs/reports/rerun79.md` (G1, Z1; K1 and K2 re-scored in section 7) gives the new values beside these; the numbers here are left as they were.*
+
+*Superseded 2026-11-14 for every reading of a threshold: thresholds are now compared as ISO 14644-1's cumulative counts, a class and every larger class summed (Alex's decision; ADR-015 C, amended; prompt 81). `docs/reports/cumulative_build.md` (O1; rescored76.md K1 and K2, K2 on the sweep's frames, where a crossing between two frames can be missed) gives the cumulative values beside prompt 79's; the numbers here are left as they were.*
 
 Section D's claim is the ranking of layouts, per rule with ties, not an absolute latency. The
 product configuration with stands is read on both grids (K1) and on the sweep's arms (K2), over the

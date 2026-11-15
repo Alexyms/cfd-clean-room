@@ -2,7 +2,7 @@
 
 **Project:** CFD Clean Room Simulation
 **Status:** ECR-001 closed; the staggered Navier-Stokes solver is built and validated and is the only solver (ADR-010; the collocated solver was retired on 2026-10-02, tag `collocated-final`). ECR-002, the k-epsilon turbulence model (ADR-012), was accepted on 2026-10-04 and closed on 2026-10-15 at step 9 (prompt 58): the model on a face field (`src/scalar_scheme.py`, `src/turbulence.py`), its coupling into the transport solver (`src/solver_transport.py`) and the flow solver (`src/momentum.py`, `src/solver_staggered.py`, `src/stopping.py`), the fixed-flow outlets, the wall functions and stopping condition (e) are built, the product configuration is `configs/clean_room_default.yaml`, and ADR-012's planned-against-built table records the build; section 2 marks each requirement's verification. ECR-003, the pressure correction solver (ADR-013), was accepted on 2026-10-06 and closed on 2026-10-07: its step 1 replaced the weighted Jacobi sweep by Jacobi-preconditioned conjugate gradients (REQ-S08 amended), and its step 2 retook the laminar baseline (REQ-S02, REQ-S03). Phase status is in `docs/PROJECT_PLAN.md`.
-**Last Updated:** 2026-11-08
+**Last Updated:** 2026-11-14
 
 This document is the single reference for system architecture, requirements, module interfaces, and dependency relationships. Review and test, run before each pull request as `/cfd-review` and `/cfd-test` in fresh Claude Code sessions (`.claude/commands/`), check branches against this document under the policy in `docs/REVIEW_POLICY.md`. Keep it current.
 
@@ -82,13 +82,13 @@ Since ECR-001 step 9 (2026-09-30), "the NS solver" in this table is the staggere
 
 | ID | Requirement | Rationale | Verified By |
 |----|-------------|-----------|-------------|
-| REQ-A01 | The alert monitor shall read every sensor after every transport step and raise an alert at the first step whose reading is at or above the class's threshold, so that it adds no delay of its own to the detection latency, whose resolution is the step. | Delayed detection defeats the purpose of monitoring. Reworded 2026-10-30 (ADR-015 G, accepted by Alex): the earlier text, "detect threshold exceedance within one timestep of occurrence", holds by construction when the monitor reads every step, so no test could fail it. VAL-009 tests the alert's step against the first reading at or above threshold (ADR-015 C). | VAL-009 |
+| REQ-A01 | The alert monitor shall read every sensor after every transport step and raise an alert at the first step whose reading is at or above the class's threshold, the reading being the channel's cumulative sum (REQ-A03), so that it adds no delay of its own to the detection latency, whose resolution is the step. | Delayed detection defeats the purpose of monitoring. Reworded 2026-10-30 (ADR-015 G, accepted by Alex): the earlier text, "detect threshold exceedance within one timestep of occurrence", holds by construction when the monitor reads every step, so no test could fail it. VAL-009 tests the alert's step against the first reading at or above threshold (ADR-015 C). Reworded 2026-11-14 (prompt 81b): the reading is the channel's sum of its class and every larger class, as REQ-A03 states and prompt 81 built; the one-step resolution is unchanged. | VAL-009 |
 | REQ-A02 | Sensor locations shall be configurable via the YAML configuration. | Enables comparison of sensor placement strategies without code changes. | Unit test |
-| REQ-A03 | Contamination thresholds shall be configurable per particle size class, either as a mapping by size or as an ISO 14644-1 class number from which the loader computes the limits by the standard's formula rounded to three significant figures; the product file's Class 5 values are the test. | Different size classes have different regulatory limits. Class 5 allows zero 5.0 um particles but 3.52 million 0.5 um particles per cubic meter. Reworded 2026-10-30 (ADR-015 G, accepted by Alex): "following ISO 14644-1 classification limits" is not testable without the formula (ADR-015 C). | Unit test |
+| REQ-A03 | Contamination thresholds shall be configurable per particle size class, either as a mapping by size or as an ISO 14644-1 class number from which the loader computes the limits by the standard's formula rounded to three significant figures; the product file's Class 5 values are the test. Each threshold shall be compared as the standard's cumulative limit, as a counter's channel reads it: the reading against class k's threshold is the sum of class k and every class of a larger diameter (each class standing for the particles nearest its size), so the largest class's channel is that class alone. | Different size classes have different regulatory limits, and the standard's are cumulative: Class 5 allows 3,520 particles per cubic metre at or above 0.5 um and, by the formula, 29.3 at or above 5 um (3.52 million at 0.5 um is Class 8's limit; the earlier rationale gave that figure for Class 5, corrected 2026-11-14). Reworded 2026-10-30 (ADR-015 G, accepted by Alex): "following ISO 14644-1 classification limits" is not testable without the formula (ADR-015 C). Amended 2026-11-14 (Alex's decision on prompt 80's measurement, `docs/reports/cumulative_counts.md`; ADR-015 C's amendment, built in prompt 81): the comparison is the cumulative one, which the code before it did not make. | Unit test: `tests/test_config.py` (the two forms); `tests/test_cumulative_counting.py` (the channels formed, an alert, a map, the recovery and the frames' readers opening on the sum exactly at the limit where no class alone reaches its own); `tests/test_alert_latency.py` TestCumulativeMaps (a run's maps the channels of its own fields, never later than each class's alone); `tests/test_io_manager.py` TestCountingMarks (each group's counting read back by value, an older group's missing mark read as per-class); `tests/test_placement.py` TestRank and TestAddAllClear (no ranking or role search over two countings) |
 | REQ-A04 | The monitor shall report detection latency per sensor per scenario: elapsed time from event onset to first threshold exceedance at each sensor. The onset is the start of the event that carries the contamination (a replacement with a concentration, a set that gives a segment a concentration, a source, or the initial condition at t = 0); a sensor never at or above threshold within the run reports no latency and the run's end. | Core metric for reactive monitoring. Answers "how fast do we know about a contamination event?" | Integration test: `tests/test_time_integration.py` (TestArrivalMaps, ADR-015 step 3: on an 80x30 door opened twice, the run record's latencies from the monitor and from the arrival maps at the sensors' cells agree bitwise and equal the stored sensor series' rule); the rule on planted series in `tests/test_monitor.py` |
 | REQ-A05 | The monitor's placement module shall score any set of sensor layouts over a set of scenario run files by stated rules (worst case, mean, coverage within a stated time), rank them, and search the stated candidate positions for the layout of a stated count that is best under a rule, exact for one and two sensors and, over the units some candidate reaches, for the worst-case rule at any count while some layout of the count detects them all (when none does, the layout returned is the mean rule's and says so), reproducible from the run files alone. | Core value of proactive design mode. Answers "where should sensors go?" Reworded 2026-10-30 (ADR-015 G, accepted by Alex): "optimal" names no rule, so the requirement states the rules and the search (ADR-015 D). Exactness restated as built 2026-11-03 (prompt 75b): the worst-case rule is exact at any count while some layout of the count detects every unit some candidate reaches, and otherwise the layout is the mean rule's. | Integration test: `tests/test_sensor_evaluation.py` (ADR-015 step 4: the door, the breach and the dust release on 80x30, the units from the run files alone, the file's four and the searched four scored over the same units and ranked, the searched no worse under each rule, the free optimum bounding the mountable); the rules, the search against brute force and the candidates on planted maps and a small mesh in `tests/test_placement.py` |
 | REQ-A06 | The alert monitor shall read concentration fields but never modify them. | Separation of concerns. Monitoring is observation, not intervention. | Architecture review; VAL-009's tests (`tests/test_alert_latency.py`: the fields not writeable and bitwise unchanged across every update of a run) |
-| REQ-A07 | The placement module shall report, for a layout, each all-clear unit's layout clear time, the room's clear time with the cell that sets it, and the premature interval between them, frame-resolved with the frame spacing stated. | Added 2026-11-10 (Alex, the Phase 5 gate): a layout placed for detection can declare the room clean while contamination remains elsewhere, by up to about a minute on the product grid (the gate report's table C2). The search half of the gate report's proposal (a stated number of all-clear sensors added to the detection layout) was not adopted: its score counts only clearing early, so a cell that never clears scores perfectly, and the all-clear sensor's position is carried open (ADR-015 D). | `tests/test_placement.py`: TestClearTimes, TestClearScore and TestClearUnitsFromRuns (the per-cell clear times, the layout's and the room's clear times, the premature interval and the area fraction, read from run files) |
+| REQ-A07 | The placement module shall report, for a layout, each all-clear unit's layout clear time, the room's clear time with the cell that sets it, and the premature interval between them, frame-resolved with the frame spacing stated. | Added 2026-11-10 (Alex, the Phase 5 gate): a layout placed for detection can declare the room clean while contamination remains elsewhere, by up to about a minute on the product grid (the gate report's table C2). The search half of the gate report's proposal (a stated number of all-clear sensors added to the detection layout) was not adopted: its score counts only clearing early, so a cell that never clears scores perfectly, and the all-clear sensor's position is carried open (ADR-015 D). | `tests/test_placement.py`: TestClearTimes, TestClearScore and TestClearUnitsFromRuns (the per-cell clear times, the layout's and the room's clear times, the premature interval and the area fraction, read from run files, and, since prompt 81b, a run file whose frames put a channel at its limit by the sum alone, so that `clear_units` reading each class as its own channel fails) |
 
 ### 2.5 Visualization Requirements
 
@@ -198,11 +198,11 @@ When a PR modifies a module, the reviewer verifies impact on downstream modules.
 | solver_transport.py | io_manager (MassBudget, DEPOSIT_SURFACES); time_integration (built at ADR-014 step 4: stable_dt, solve_timestep with sources and eddy_viscosity, restore_budgets, budget, MassBudget.in_domain); the Phase 7 animation (FieldHistory); tests/test_solver_transport.py, tests/test_diffusion.py, tests/test_advection.py, tests/test_constancy.py, tests/test_smith_hutton.py, tests/test_conservation.py, tests/test_sealed_box.py; validation/transport_cases.py hands it stand-ins | solve_timestep takes FaceVelocities, not cell means, a sources rate array and the keyword-only eddy_viscosity field (nu_t per cell, m^2/s, None the laminar path bitwise; the face value is the distance-weighted harmonic mean, so a caller that hands another face rule changes the contract), and returns a new [ny, nx] float64 contiguous field with SOLID cells zero; stable_dt's definition, the sum of the two directional rates, infinite at rest; v_ext a FaceVelocities-shaped per-class drift on the interior faces, None read as zero (REQ-T06); MassBudget field names (initial, inflow, outflow, source, deposited by floor, ceiling, wall, obstacle, current, leftover; leftover None read from a run file written before ADR-016) and that only the solver writes them; ConservationBreachError, a RuntimeError the runner maps to exit 1 (scripts/run_scenario.py); solve_timestep step by step and restore_budgets whole from a checkpoint (ADR-014 step 3, which io_manager's run file round-trips); FieldHistory's record signature and npz keys (steps, times, C_<k>). The solver reads settling_velocity and diffusion_coeff of physics and faces_for of boundary and nothing else of either, so the validation cases hand it ScalarPhysics and FixedConditions (validation/transport_cases.py); a change to what it reads changes that contract. The vents (ADR-014 J, step 0b): ConcentrationFaces' vent_u and vent_v open faces of SOLID cells to the advection and the budget, and a recirculating discharge carries the flux-weighted mean of its intake's room cells in the field the step starts from, times its passed fraction; a configuration without vents runs the earlier lines bit for bit. |
 | particles.py | boundary_concentration, scenarios, solver_transport | Settling velocity, diffusion coefficient and deposition velocity interface unchanged. Return types, units and signs unchanged (settling positive downward, deposition non-negative; the floor value includes settling, which the solver must not add again, ADR-011 D). |
 | scenarios.py | time_integration (built at ADR-014 step 4); tests/test_scenarios.py | Built at ADR-014 step 2. intervals(), flow_states(), sources_at(t), conditions_for(interval), initial_fields() and n_flow_states unchanged in signature and meaning; an event's start and end are interval boundaries, active from its start and expired at its end. The fingerprint reads FLOW_KEYS only, over the segments in configuration order with contiguous pieces of one segment joined, so a transport-only event (TRANSPORT_KEYS) never adds a flow state; every BoundarySpec field is in exactly one of the two tuples, which tests/test_scenarios.py checks, so a new segment key must be classified before it loads. A state joined from pieces is the split state to the rounding of the inflow sums, not bitwise. sources_at returns solve_timestep's sources, one [ny, nx] rate per class, zero in SOLID cells. |
-| monitor.py | time_integration (the march hook, alert_table, the arrival tracker, contaminating_events, the re-exported sensor_cells and SENSOR_FACE_RTOL); placement (contaminating_events, built at ADR-015 step 3); scripts/run_scenario.py (Alert in the summary); tests/test_monitor.py, tests/test_alert_latency.py, tests/test_time_integration.py | Update and query interfaces unchanged: the at-or-above opening and the first-below closing, the alerts' order (closed then open, by step_on, class and the sensor's place), the state's names (distinct from the recovery tracker's, since both ride in one checkpoint mapping) and its columns; sensor_cells' face rule, which the clean-out's recovery outputs read through. Since step 3: `latencies` and `ArrivalTracker` keep one rule (the first reading at or after the onset at or above the threshold, an alert open at the onset counting as the onset, no cut at the next onset), so a change to either is a change to both, and REQ-A04's test pins that they agree; `contaminating_events` is the one list of which events carry contamination and when they start, read by the march and by placement's reader of older files; ArrivalRecord comes from io_manager. |
+| monitor.py | time_integration (the march hook, alert_table, the arrival tracker, contaminating_events, the re-exported sensor_cells and SENSOR_FACE_RTOL); placement (contaminating_events, built at ADR-015 step 3); scripts/run_scenario.py (Alert in the summary); tests/test_monitor.py, tests/test_alert_latency.py, tests/test_time_integration.py | Update and query interfaces unchanged: the at-or-above opening and the first-below closing, the alerts' order (closed then open, by step_on, class and the sensor's place), the state's names (distinct from the recovery tracker's, since both ride in one checkpoint mapping) and its columns; sensor_cells' face rule, which the clean-out's recovery outputs read through. Since step 3: `latencies` and `ArrivalTracker` keep one rule (the first reading at or after the onset at or above the threshold, an alert open at the onset counting as the onset, no cut at the next onset), so a change to either is a change to both, and REQ-A04's test pins that they agree; `contaminating_events` is the one list of which events carry contamination and when they start, read by the march and by placement's reader of older files; ArrivalRecord comes from io_manager. Since prompt 81 the alerts open and close on the channels' sums (`channel_readings`: each class and every larger one), so `Alert.size_class` and the table's column name the channel and `reading_on` and `peak` are the channel's sum, while `readings` stays each class's own; `ArrivalTracker` and `RecoveryTracker` take `channels` as a required keyword, and `ArrivalTracker.restore` refuses maps carried without `COUNTING_STATE`. |
 | csolver/ | solver_staggered (REQ-N03's NumPy reference, ADR-010), solver_transport; both planned, Phase 6 | CUDA kernel signatures match pybind11 declarations. Memory layout assumptions (row-major, contiguous, double precision) unchanged. |
 | time_integration.py | nothing in src/ (ADR-014 G: nothing imports it); scripts/run_scenario.py (built at step 4, the runner step 7's runs go through; RunRecord's latencies, map_latencies and arrival since ADR-015 step 3), tests/test_time_integration.py | Timestep sequence and output trigger logic unchanged: one step for every class, the interval to the next switch divided into equal steps with the last on the switch exactly, the concentration fields and the budget carried across a switch unchanged (ADR-014 A); frames at step 0, every output_interval and the last step, sensor readings every step flushed before each checkpoint, the march checkpoint after its step's frame, so a restart is the uninterrupted run bitwise; the recovery outputs (ADR-014 C) as RecoveryRecord defines them. run_scenario.py reads RunRecord's fields and RecoveryRecord's by name, so a field renamed in either is renamed in its summary. Since step 6b: run dispatches on config.transient to tier 2 (solve_transient, forces.ForceGauge, forces.strouhal, RunFile's /transient/ groups and the transient checkpoint) and returns TransientRunRecord; scripts/run_scenario.py summarises it and scripts/benchmark.py's VAL-022 rows run through it. Since ADR-015 step 4: FLOW_FREE_SECTIONS includes `placement`, which no solve reads. |
-| placement.py | docs/reports/probe76/tables76.py (ADR-015 step 5); tests/test_placement.py, tests/test_time_integration.py, tests/test_sensor_evaluation.py | The unit is (scenario, event, class), so a scenario's second event is scored as its own; a Score's mean caps an undetected unit at its own run's t_final minus its onset, which RunArrival carries; `search` reports the units no candidate reaches and scores over the rest, so a layout given beside it is scored over `exclude_units` of the same units, and `rank` refuses two unit sets; the candidates read every configuration's segments and each scenario interval's through boundary_registry and staggered's obstacle faces, and every scenario's source boxes from config's Source events, so a change to which faces a segment covers, or to the Source dataclass, is a change to which cells are candidates. Since prompt 76b the caller passes every scored scenario's configuration (one configuration still works, and gives that scenario's exclusions only); the all-clear units read the stored frames and EventSpec.end, so a change to the frames' cadence changes the clear times' resolution. |
-| io_manager.py | time_integration (built at ADR-014 step 4); monitor (ArrivalRecord and the three input checks, since ADR-015 step 3); placement (RunFile, TransportFrames and the checks); scripts/run_scenario.py (RecoveryRecord); tests/test_io_manager.py | The run file's groups and dataset names (ADR-014 D) unchanged, so a run file written before a change still restarts after it (two breaks: ADR-015 step 2, a restart of a run with sensors needs the alert monitor's arrays in the march checkpoint; step 3, every restart needs the arrival tracker's; a checkpoint written before either step is refused with a KeyError saying so); /transport/ keeps FieldHistory's keys (steps, times, C_<k>), so Phase 7 reads one format; the checkpoint file's /steady_checkpoint/ holds every field of SteadyCheckpoint and /checkpoint/ the march's step, time, class fields and budgets, all as "<f8", so a restart from them is the uninterrupted run bitwise; the checkpoint file is replaced whole by os.replace and never written in place; RESTART_EXCLUDED_KEYS is the one list of keys a restart may change, and a key added to it widens what a restart accepts. It reads MassBudget's fields by name (BUDGET_TERMS) and SteadyCheckpoint's, so a field added to either is added here; since ADR-016 a file's budget rows are read by the terms the file names, so a file written before the leftover column reads with the leftover None, and its checkpoint does not restart (time_integration refuses it). Since step 6b: /transient/ (frames, the per-step StepSeries) and /transient_checkpoint/ (TransientResume's two levels); discard_after trims the tier-2 frames and rows too, so a tier-2 restart writes them again once. Since the step 3 fix pass (prompt 74b): `real_number`, `checked_thresholds` and `checked_onsets` are public and are the one check of the class thresholds, the onsets and the real numbers that reach the arrival maps (the tracker, ArrivalRecord, AlertMonitor.latencies and placement's frames reader); a change to what they refuse is a change to all four, and `latencies` now refuses a negative onset as the tracker does. Since prompt 75b: RESTART_EXCLUDED_SECTIONS (the placement section) joins RESTART_EXCLUDED_KEYS in the restart hash, so the set of keys a restart may change is the keys and the sections, and the refusal's message names both. |
+| placement.py | docs/reports/probe76/tables76.py (ADR-015 step 5); tests/test_placement.py, tests/test_time_integration.py, tests/test_sensor_evaluation.py | The unit is (scenario, event, channel), channel k the sum of class k and every larger class (class k alone for an older file's maps, flagged by the counting), so a scenario's second event is scored as its own; a Score's mean caps an undetected unit at its own run's t_final minus its onset, which RunArrival carries; `search` reports the units no candidate reaches and scores over the rest, so a layout given beside it is scored over `exclude_units` of the same units, and `rank` refuses two unit sets or layouts of two countings; no score or search compares the two countings (`detection_units` refuses maps of both, `search_roles` refuses detection and all-clear units of different ones), and every record that carries a counting (`RunArrival`, `Units`, `ClearUnits`, `Layout`) takes it without a default; the candidates read every configuration's segments and each scenario interval's through boundary_registry and staggered's obstacle faces, and every scenario's source boxes from config's Source events, so a change to which faces a segment covers, or to the Source dataclass, is a change to which cells are candidates. Since prompt 76b the caller passes every scored scenario's configuration (one configuration still works, and gives that scenario's exclusions only); the all-clear units read the stored frames and EventSpec.end, so a change to the frames' cadence changes the clear times' resolution. |
+| io_manager.py | time_integration (built at ADR-014 step 4); monitor (ArrivalRecord and the three input checks, since ADR-015 step 3); placement (RunFile, TransportFrames and the checks); scripts/run_scenario.py (RecoveryRecord); tests/test_io_manager.py | The run file's groups and dataset names (ADR-014 D) unchanged, so a run file written before a change still restarts after it (three breaks: ADR-015 step 2, a restart of a run with sensors needs the alert monitor's arrays in the march checkpoint; step 3, every restart needs the arrival tracker's; a checkpoint written before either step is refused with a KeyError saying so; prompt 81, a checkpoint whose maps carry no `COUNTING_STATE` was made by the per-class code and is refused with a ValueError, by `run` and by `ArrivalTracker.restore`; the counting of `/arrival/`, `/recovery/` and `/transport/alerts/` is a required field of the record that writes it, and a group written before prompt 81 reads as `PER_CLASS`); /transport/ keeps FieldHistory's keys (steps, times, C_<k>), so Phase 7 reads one format; the checkpoint file's /steady_checkpoint/ holds every field of SteadyCheckpoint and /checkpoint/ the march's step, time, class fields and budgets, all as "<f8", so a restart from them is the uninterrupted run bitwise; the checkpoint file is replaced whole by os.replace and never written in place; RESTART_EXCLUDED_KEYS is the one list of keys a restart may change, and a key added to it widens what a restart accepts. It reads MassBudget's fields by name (BUDGET_TERMS) and SteadyCheckpoint's, so a field added to either is added here; since ADR-016 a file's budget rows are read by the terms the file names, so a file written before the leftover column reads with the leftover None, and its checkpoint does not restart (time_integration refuses it). Since step 6b: /transient/ (frames, the per-step StepSeries) and /transient_checkpoint/ (TransientResume's two levels); discard_after trims the tier-2 frames and rows too, so a tier-2 restart writes them again once. Since the step 3 fix pass (prompt 74b): `real_number`, `checked_thresholds` and `checked_onsets` are public and are the one check of the class thresholds, the onsets and the real numbers that reach the arrival maps (the tracker, ArrivalRecord, AlertMonitor.latencies and placement's frames reader); a change to what they refuse is a change to all four, and `latencies` now refuses a negative onset as the tracker does. Since prompt 75b: RESTART_EXCLUDED_SECTIONS (the placement section) joins RESTART_EXCLUDED_KEYS in the restart hash, so the set of keys a restart may change is the keys and the sections, and the refusal's message names both. |
 | forces.py | time_integration (tier 2, step 6b); tests/test_forces.py | ForceGauge reads the pressure of the live cell beside each face and the shear by the momentum predictor's obstacle wall stencil: a change to either stencil in momentum.py changes what the gauge must read to stay consistent with the discrete equations. ObstacleForces' signs (+x downstream, +y up) and the coefficients' 0.5 rho U^2 D, D the obstacle's height, are what the VAL-022 rows score; strouhal's ten periods and its refusal are VAL-022's instrument. |
 
 ### 3.3 Cross-Cutting Concerns
@@ -226,16 +226,16 @@ Generated. The responsibility and serves columns are editorial and come from `do
 | `src/boundary_registry.py` | 469 | Interprets the configured boundary segments once, answering which segment covers each point along a domain edge and which condition and prescribed velocity hold there, SOLID cells read as walls, for both boundary imposition layers: the staggered velocity layer and the concentration layer. | S12.1 |
 | `src/boundary_staggered.py` | 693 | Writes Dirichlet normal velocities exactly into the staggered domain-face entries and exposes the tangential wall values, wall distances, pressure outlets and wall faces as data for the momentum and pressure steps and the wall functions. | S12 |
 | `src/boundary_vents.py` | 250 | Derives the mesh faces each equipment vent covers on its obstacle face, from the staggered layout's obstacle-face inputs and the registry's first-match coverage, with the face masks the velocity, turbulence and concentration layers read, and refuses a vent that covers no face or a recirculating pair whose flows differ on the faces. | S12.1 |
-| `src/config.py` | 3090 | Loads the YAML configuration into typed dataclasses and rejects missing keys, wrong types and out-of-range values at load time. | A02, A03, C01, C02, C03, S10 |
+| `src/config.py` | 3146 | Loads the YAML configuration into typed dataclasses and rejects missing keys, wrong types and out-of-range values at load time. | A02, A03, C01, C02, C03, S10 |
 | `src/constants.py` | 8 | Holds the physical constants shared by every module so that none of them defines its own copy. | C04 |
 | `src/forces.py` | 350 | Integrates the pressure and shear the staggered fields put on a named obstacle's faces, read where the momentum predictor's stencils put them, into its drag and lift and their coefficients, and reads the Strouhal number of a lift signal from its last ten periods' interpolated zero crossings with the spectrum's peak as the cross-check, refusing fewer than ten. | none |
-| `src/io_manager.py` | 2069 | Writes a run's HDF5 run file by appending (the merged configuration with its restart hash, the flow states, the transport frames, budgets, sensor readings and alert table, a clean-out's recovery outputs and the arrival maps) and its checkpoint file by atomic replacement (the march's checkpoint and the steady solve's), reads each back bitwise, and refuses a restart under a changed configuration, so a killed or capped run continues to what the uninterrupted run reaches. | none |
+| `src/io_manager.py` | 2176 | Writes a run's HDF5 run file by appending (the merged configuration with its restart hash, the flow states, the transport frames, budgets, sensor readings and alert table, a clean-out's recovery outputs and the arrival maps) and its checkpoint file by atomic replacement (the march's checkpoint and the steady solve's), reads each back bitwise, and refuses a restart under a changed configuration, so a killed or capped run continues to what the uninterrupted run reaches. | none |
 | `src/mesh.py` | 465 | Builds the structured grid, uniform, geometrically clustered at the walls or between interior breakpoints the loader derives, with the face, center, width and center-to-center arrays a face-based stencil needs, and classifies each cell as FLUID, SOLID or BOUNDARY. | S11 |
 | `src/momentum.py` | 1191 | Predicts u* and v* on the staggered grid with QUICK advection by deferred correction over an upwind implicit matrix, a configured number of under-relaxed Jacobi sweeps per call, an optional per-cell viscosity field with its face rule and stress source, the domain edge's wall stencil at obstacle faces, and an optional implicit Euler or BDF2 time derivative at the unknown faces, and returns the diagonal coefficients the pressure correction needs. | S07, S09, S14 |
-| `src/monitor.py` | 866 | Reads each sensor's cell of every class field after every step by ADR-014 C's cell rule, opens an alert at the first reading at or above the class's threshold and closes it at the first below, keeping each alert's times, opening reading and peak, gives each sensor's latency from each event onset, keeps the arrival maps (per contaminating event of the plan, class and non-SOLID cell, the first step time at or after the onset at or above the threshold) by the same rule, and carries both states for the checkpoint; it reads the fields and never writes them. | A01, A02, A04, A06 |
+| `src/monitor.py` | 1049 | Reads each sensor's cell of every class field after every step by ADR-014 C's cell rule and sums the counter's channels (each class and every larger one, ISO 14644-1's cumulative counts), opens an alert at the first channel reading at or above its threshold and closes it at the first below, keeping each alert's times, opening reading and peak, gives each sensor's latency from each event onset, keeps the arrival maps (per contaminating event of the plan, channel and non-SOLID cell, the first step time at or after the onset at or above the threshold) by the same rule, and carries both states for the checkpoint; it reads the fields and never writes them. | A01, A02, A04, A06 |
 | `src/multigrid.py` | 384 | Builds an additive-correction multigrid hierarchy from a five-point pressure system by 2x2 aggregation, its coarse operators the exact Galerkin sums with no probing, and applies one symmetric V-cycle with weighted Jacobi smoothing and a dense pseudo-inverse on the coarsest level as the preconditioner of the pressure correction's conjugate gradients. | S08 |
 | `src/particles.py` | 263 | Computes per-size-class transport properties: Cunningham correction, settling velocity, Brownian diffusion, deposition velocity and HEPA efficiency. | T03, T04, T09, T10 |
-| `src/placement.py` | 2007 | Reads a run file's arrival maps for sensor placement (its /arrival/ maps, resolved to the step, or for a file written before them the maps rebuilt from its stored frames at the output cadence by the same rule, flagged as frame-resolved with the reason), stacks runs' latencies into (scenario, event, class) units, scores any layout by lookup under the worst-case, mean and coverage rules, states the candidate cells by mounting surface and standoff or a floor stand's height band, excluding the cells near any scored scenario's openings and source boxes, searches the best layout of a count (exact for one and two sensors and for the worst case at any count by a set cover), ranks layouts, and for the all-clear role reads each cell's clear time after a scenario's last event from the stored frames, a layout's and the room's clear times and the premature interval between them, and adds all-clear sensors to a detection layout one at a time, and marks a latency that falls after an event's end has changed the scenario's flow state. | A04, A05 |
+| `src/placement.py` | 2117 | Reads a run file's arrival maps for sensor placement (its /arrival/ maps, resolved to the step, or for a file written before them the maps rebuilt from its stored frames at the output cadence by the same rule, flagged as frame-resolved with the reason), stacks runs' latencies into (scenario, event, class) units, scores any layout by lookup under the worst-case, mean and coverage rules, states the candidate cells by mounting surface and standoff or a floor stand's height band, excluding the cells near any scored scenario's openings and source boxes, searches the best layout of a count (exact for one and two sensors and for the worst case at any count by a set cover), ranks layouts, and for the all-clear role reads each cell's clear time after a scenario's last event from the stored frames, a layout's and the room's clear times and the premature interval between them, and adds all-clear sensors to a detection layout one at a time, and marks a latency that falls after an event's end has changed the scenario's flow state. | A04, A05 |
 | `src/pressure.py` | 859 | Assembles the staggered pressure correction equation from the momentum diagonals with the discrete divergence of u* as its right-hand side, solves it by conjugate gradients preconditioned with its diagonal or, under the pressure_preconditioner key, with one multigrid V-cycle per iteration, to a relative residual, a rounding floor or a reported iteration cap, corrects the face velocities and updates the pressure. | S04, S08 |
 | `src/scalar_scheme.py` | 686 | Holds the cell-centred scalar scheme the transport solver and the k-epsilon model share: QUICK's face value bounded by the UMIST limiter, the advective flux along one axis with the inflow value or the upwind cell at a domain face, and the backward Euler solve of diffusion with a non-negative cell sink by Jacobi or, for k and eps, by diagonal-preconditioned conjugate gradients that fall back to Jacobi on the cap or a non-positive value, on per-face conductances with one step or a step per cell, with an optional mask of cells held at their value. | S15, T12 |
 | `src/scenarios.py` | 404 | Turns a loaded scenario into its intervals between event boundaries, keys each interval's flow state by a fingerprint of the segment keys the velocity layer reads so transport-only events add no state, and gives the source rate of every class at a time, an interval's concentration boundary and the initial fields on the mesh; it solves and marches nothing. | none |
@@ -243,10 +243,10 @@ Generated. The responsibility and serves columns are editorial and come from `do
 | `src/solver_transport.py` | 1215 | Advances one particle class one explicit step on the staggered face velocities: QUICK's face value bounded by the UMIST limiter under forward Euler at a Courant number the configuration sets, implicit diffusion and deposition by Jacobi on per-face conductances, the Brownian coefficient plus nu_t / Sc_t on interior faces when handed an eddy viscosity field, the settling increment on interior faces, sources added and booked, SOLID cells zero; keeps one MassBudget per class and defines FieldHistory, the output contract for the animation. | N01, T01, T03, T04, T05, T06, T07, T08, T11, T12, T13 |
 | `src/staggered.py` | 443 | Defines the staggered (MAC) field layout: shapes and allocation of face-centered u and v and cell-centered p, the face-to-center averaging the solver applies before returning, and FaceVelocities, the read-only face pair the solver exposes and the transport solver advects with. | S07, S13 |
 | `src/stopping.py` | 408 | Decides when the steady outer iteration has converged, on four conditions: (a) the iteration error estimated from the step and its fitted geometric rate, over a physical velocity scale; (b) the worst per-cell mass imbalance against its own tolerance; (c) the summed imbalance over the through-flow, which shares the tolerance of (a); and (d) the signed imbalance summed over the domain, which shares the tolerance of (b); and with the turbulence model a fifth, (e), the same estimate on the eddy viscosity over the molecular viscosity plus the median eddy viscosity of the FLUID cells, which the solver passes each outer iteration. Also defines IterationState, the snapshot a solver hands its callback once per outer iteration. | S01, S04 |
-| `src/time_integration.py` | 1697 | Runs a scenario under tier 1: solves each distinct flow state once, warm-started from the state before it, or reuses one a run file holds, then marches every particle class at one step through the intervals, dividing each into equal steps under the stable step and carrying the fields and budgets across each switch, writing frames, budgets, sensor readings, the alert monitor's table and checkpoints through the run file, continuing a run from its checkpoint, keeping the arrival maps of every run every step and for a clean-out the recovery outputs, and giving each sensor's latency per contaminating event from the monitor and from the maps; under tier 2 marches the flow itself through solve_transient, writing its frames, per-step counts, lift and drag and two-level checkpoints, restarting bitwise, and reading the Strouhal number and drag coefficient at the end; it discretises nothing. | A04, N01 |
+| `src/time_integration.py` | 1741 | Runs a scenario under tier 1: solves each distinct flow state once, warm-started from the state before it, or reuses one a run file holds, then marches every particle class at one step through the intervals, dividing each into equal steps under the stable step and carrying the fields and budgets across each switch, writing frames, budgets, sensor readings, the alert monitor's table and checkpoints through the run file, continuing a run from its checkpoint, keeping the arrival maps of every run every step and for a clean-out the recovery outputs, and giving each sensor's latency per contaminating event from the monitor and from the maps; under tier 2 marches the flow itself through solve_transient, writing its frames, per-step counts, lift and drag and two-level checkpoints, restarting bitwise, and reading the Strouhal number and drag coefficient at the end; it discretises nothing. | A04, N01 |
 | `src/turbulence.py` | 1622 | Advances the k-epsilon model's k and eps one step on a prescribed face velocity field, standard or RNG with each variant's constants as module data: advection, explicit growth from the strain the faces give and implicit decay and diffusion through the shared scalar scheme, boundary values from a conditions object the caller builds each step, the kinematic eddy viscosity, and an assertion that k and eps are positive and finite after every step; and the scalable wall functions, which build those conditions, the wall viscosity of the momentum wall faces and the inlet values the coupled solve starts from. | S14, S15, S17 |
 
-Total 24 Python files, 21266 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
+Total 24 Python files, 21766 lines. 1 empty `__init__.py` carry no row: a package marker with no code has no responsibility to record.
 
 `Declares it serves` is an EDITORIAL CLAIM read from `docs/system_map_annotations.toml`. It says which requirements a module is meant to satisfy, not that it does. Whether a requirement is met is answered by the tests named in the register's `Verified By` column.
 <!-- END GENERATED: components -->
@@ -271,7 +271,7 @@ Generated. Static import analysis cannot see a function bound into a registry by
 |---|---|
 | Scope | `src/**/*.py` |
 | Files hashed | 24 |
-| Digest | `sha256:fc38536d3d9dddd37d40097b0ef64f4c50a10e70a2418921585edca8f938c87f` |
+| Digest | `sha256:49fa91fc832e3c0623b665d4a6a2f5493239b9cb12c117f28c014ff5ade61869` |
 
 This is what lets the document answer whether it is current, which is the one question a stale table cannot be asked. `python scripts/gen_system_map.py --check` recomputes the whole set of generated regions, this digest included, and exits non-zero on any disagreement.
 
@@ -399,6 +399,12 @@ SimConfig:
         Source(x_start, x_end, y_start, y_end, rate | emission)   # per class
         Initial(values, threshold_factor)     # values per class, resolved at load
     class_thresholds() -> tuple[float, ...]   # each class's threshold by diameter
+    channel_classes() -> tuple[tuple[int, ...], ...]   # prompt 81 (ADR-015 C, amended
+        # 2026-11-14): channel_classes(particle_sizes)
+channel_classes(sizes) -> tuple[tuple[int, ...], ...]   # per class k, the classes whose
+    # diameter is at or above class k's, largest first (ties: the higher index first),
+    # the order every reader adds them in; the largest class's is that class alone.
+    # scenario.hold_time's start check reads the initial levels' channel sums
     # refused at load (ValueError, TypeError for a wrong type): every rule of ADR-014 B
     # (tests/test_config.py, TestScenario*), and every interval's merged mapping must load
     # through from_dict; a recirculating pair of the base whose intake draws while no
@@ -1617,25 +1623,32 @@ sensor_cells(config, mesh) -> tuple[(j, i), ...]   # moved here: ADR-014 C's rul
 Alert: sensor (name), size_class, step_on, t_on, reading_on, step_off, t_off (None while open),
        peak, peak_t; is_open                       # frozen; the peak from step_on to the step
                                                    # before step_off, its first time
-AlertMonitor(config, mesh)                         # the sensors' cells, the names, the class thresholds;
+AlertMonitor(config, mesh)                         # the sensors' cells, the names, the class thresholds,
+                                                   # the channels (config.channel_classes);
                                                    # ValueError with no sensor, no threshold for a
                                                    # class (class_thresholds) or a SOLID sensor cell
-    names -> tuple[str, ...]; thresholds -> np.ndarray [classes] (a copy)
-    update(step, t, fields) -> tuple[Alert, ...]   # reads every sensor of every class; returns the
-                                                   # alerts this step opened or closed, by class then
-                                                   # sensor; opens at a reading at or above the
-                                                   # threshold, closes at the first below; fields
+    names -> tuple[str, ...]; thresholds -> np.ndarray [channels] (a copy; channel k's is
+                                                   # class k's); channels -> the classes each sums
+    update(step, t, fields) -> tuple[Alert, ...]   # reads every sensor of every class and sums the
+                                                   # channels (prompt 81: channel k is class k and
+                                                   # every larger class, ADR-015 C amended
+                                                   # 2026-11-14); returns the alerts this step opened
+                                                   # or closed, by channel then sensor; opens at a
+                                                   # channel reading at or above its threshold,
+                                                   # closes at the first below; Alert.size_class and
+                                                   # reading_on name the channel and its sum; fields
                                                    # read, never written (REQ-A06). TypeError for a
                                                    # non-int step (a bool) or a non-real t;
                                                    # ValueError unless step and t are above the last
                                                    # update's, t finite, the classes 0 to n - 1 on the
                                                    # mesh's shape, every reading finite
-    readings -> np.ndarray                         # [classes, sensors] of the last update (a copy);
-                                                   # NaN before any
+    readings -> np.ndarray                         # [classes, sensors], each class's own reading at
+                                                   # the last update (a copy); NaN before any
+    channel_readings -> np.ndarray                 # [channels, sensors], their channel sums (a copy)
     alerts -> tuple[Alert, ...]                    # every alert so far: closed, then open, each by
                                                    # step_on, class, the sensor's place in the file
-    latencies(onsets) -> np.ndarray                # [events, classes, sensors]: the time of the first
-                                                   # reading at or above threshold at or after each
+    latencies(onsets) -> np.ndarray                # [events, channels, sensors]: the time of the first
+                                                   # channel reading at or above threshold at or after each
                                                    # onset minus the onset, an alert open at the onset
                                                    # counting as the onset; inf if none by the last
                                                    # update (step 3, section D's rule; step 2 cut it at
@@ -1646,7 +1659,8 @@ AlertMonitor(config, mesh)                         # the sensors' cells, the nam
     state() -> dict[str, ndarray]                  # STATE_NAMES: alert_rows [alerts, ALERT_COLUMNS]
                                                    # (every alert, open ones with NaN step_off and
                                                    # t_off), alert_step, alert_t (NaN before any
-                                                   # update), alert_readings
+                                                   # update), alert_readings (per class; restore sums
+                                                   # the channels again)
     restore(state) -> None                         # other names ignored (the tracker's); KeyError for
                                                    # a missing one, saying the checkpoint predates the
                                                    # monitor; ValueError for a shape, a class or sensor
@@ -1664,26 +1678,42 @@ contaminating_events(scenario) -> tuple[(name, onset), ...]
                                                    # onset 0, any other's the start of the first
                                                    # interval it is active over (times(), is_active),
                                                    # a step time; ((RUN_START, 0.0),) when none
-ArrivalTracker(thresholds, live, onsets)           # [classes], [ny, nx] bool, [events] finite,
-                                                   # non-negative, in order, at least one; TypeError
-                                                   # for a non-real or non-bool, ValueError otherwise
-    onsets -> np.ndarray; first_above -> np.ndarray   # copies; first_above [events, classes, ny,
+ArrivalTracker(thresholds, live, onsets, *, channels)
+                                                   # [classes], [ny, nx] bool, [events] finite,
+                                                   # non-negative, in order, at least one; channels
+                                                   # config.channel_classes (checked_channels);
+                                                   # TypeError for a non-real, non-bool or non-int
+                                                   # member, ValueError otherwise
+    onsets -> np.ndarray; first_above -> np.ndarray   # copies; first_above [events, channels, ny,
                                                    # nx], NaN until reached, NaN in SOLID cells
+    channels -> tuple[tuple[int, ...], ...]
     update(t, fields) -> None                      # for each event with onset <= t, first_above = t
-                                                   # where NaN, non-SOLID and at or above; t real,
+                                                   # where NaN, non-SOLID and the channel's sum
+                                                   # (channel_sums) at or above; t real,
                                                    # finite, above the last; the classes 0 to n - 1
                                                    # on the mesh's shape
     state() -> dict[str, ndarray]                  # ARRIVAL_STATE_NAMES: first_above, arrival_onsets,
-                                                   # arrival_t (NaN before any update)
-    restore(state) -> None                         # other names ignored; KeyError for a missing one,
-                                                   # saying the checkpoint predates step 3; ValueError
+                                                   # arrival_t (NaN before any update) and
+                                                   # COUNTING_STATE (1.0, prompt 81's mark)
+    restore(state) -> None                         # other names ignored; KeyError for a missing map
+                                                   # name, saying the checkpoint predates step 3;
+                                                   # ValueError for the maps without COUNTING_STATE
+                                                   # (the per-class code's checkpoint); ValueError
                                                    # for a shape, other onsets, a non-scalar or inf
                                                    # time, a time in the maps with no update, in a
                                                    # SOLID cell, before its onset or after arrival_t
     record(event_names, t_final) -> ArrivalRecord  # inf where a non-SOLID cell was not reached;
                                                    # one name per event, t_final finite, not before
-                                                   # the last update
-ARRIVAL_STATE_NAMES, RUN_START ("run_start"), CONCENTRATION_KEY ("concentration")
+                                                   # the last update; counting CUMULATIVE
+ARRIVAL_STATE_NAMES, COUNTING_STATE ("cumulative_channels"), RUN_START ("run_start"),
+CONCENTRATION_KEY ("concentration")
+checked_channels(channels, n_classes) -> tuple[tuple[int, ...], ...]
+                                                   # one per class, each naming its own class and
+                                                   # others of 0 to n - 1 once; TypeError for a
+                                                   # non-int (a bool), ValueError otherwise
+channel_sums(values, channels) -> dict[int, ndarray]   # channel k: zero, then each named class
+                                                   # added in order; new float64 arrays
+channel_sum(values, members) -> ndarray            # one channel's
 ```
 
 As built, `state()` carries every alert, not only the open ones and their peaks as section C
@@ -1717,9 +1747,12 @@ of every scenario, in every class. Section H's planned `score(latencies, cells, 
 within)` is built without `rule`, since a Score carries every rule; `search` takes the rule.
 
 ```
-arrival_from_frames(frames: TransportFrames, thresholds, live, onsets) -> np.ndarray
-    # [events, classes, ny, nx]: per event, the first stored frame time at or after
-    # its onset at or above the class's threshold; inf where no frame is, NaN in
+arrival_from_frames(frames: TransportFrames, thresholds, live, onsets, *, channels)
+        -> np.ndarray
+    # prompt 81: on the channels (channel_sum of each frame, config.channel_classes,
+    # checked_channels' refusals), CUMULATIVE maps.
+    # [events, channels, ny, nx]: per event, the first stored frame time at or after
+    # its onset at or above the channel's threshold; inf where no frame is, NaN in
     # SOLID cells. Never before the march's map and reaching no cell it does not;
     # misses a cell at or above only between two frames. TypeError for a threshold
     # or an onset that is not a real number; ValueError unless one finite,
@@ -1733,20 +1766,27 @@ arrival_from_run(run_file: RunFile | path) -> RunArrival
     # thresholds, mesh and contaminating_events of the configuration the file
     # records and the last frame's time (FRAME_RESOLVED), fallback naming the
     # exception and its message. KeyError with neither maps nor frames;
-    # ValueError for a recorded configuration without a scenario section
-RunArrival(maps, onsets, resolution, event_names, t_final, fallback=None)   # NamedTuple
+    # ValueError for a recorded configuration without a scenario section.
+    # Prompt 81: the step maps carry /arrival/'s counting (PER_CLASS, the flag,
+    # for a group without one); the frames' maps are CUMULATIVE
+RunArrival(maps, onsets, resolution, event_names, t_final, counting,
+           fallback=None)   # NamedTuple; counting required, no default
 STEP_RESOLVED ("step"), FRAME_RESOLVED ("frame")
 latency(maps, onsets) -> np.ndarray     # [events, classes, ny, nx], arrival minus the
     # event's onset, inf and NaN kept; ValueError unless 4-D with one map per onset
     # and no arrival before its onset
 detection_units(arrivals: Mapping[str, RunArrival]) -> Units
-    # one unit per scenario, event and class, in that order; caps the run's
+    # one unit per scenario, event and channel, in that order (class, for
+    # per-class maps); caps the run's
     # t_final minus the unit's onset. ValueError with no run, maps on two meshes,
     # names not one per event, a resolution that is neither STEP_RESOLVED nor
-    # FRAME_RESOLVED, a t_final not finite or before an onset; TypeError for a
+    # FRAME_RESOLVED, a t_final not finite or before an onset, or (prompt 81)
+    # runs of two countings, cumulative beside per-class; TypeError for a
     # scenario name that is not a str or a t_final that is not a real number
 Units(latencies [units, ny, nx], caps [units], labels ((scenario, event, class), ...),
-      frame_resolved (bool per unit: its run's maps were rebuilt from stored frames))
+      frame_resolved (bool per unit: its run's maps were rebuilt from stored frames),
+      counting (the one counting of the units, required; the label's index is
+      then the channel, or the class for PER_CLASS))
 exclude_units(units, labels) -> Units   # the rest; ValueError for an unknown label
                                         # or none left
 score(units, cells, *, within=None) -> Score
@@ -1793,18 +1833,22 @@ search(units, candidates, count, rule, *, within=None) -> Layout
     # an unknown rule, a count not in 1 to the candidates, a candidate SOLID, off
     # the grid or twice, no candidate reaching any unit, or more than
     # MAX_SET_COVER_UNITS (20) units in the set cover
-Layout(cells, score, rule, method, exact, units, uncovered, distinct_masks,
-       maximal_masks)                   # NamedTuple; the masks the set cover's, at
+Layout(cells, score, rule, method, exact, units, counting, uncovered,
+       distinct_masks, maximal_masks)   # NamedTuple; counting the units' (required);
+                                        # the masks the set cover's, at
                                         # its optimum, None for the other methods;
                                         # .frame_resolved is score.frame_resolved
 GIVEN, ARGMIN, EXHAUSTIVE, SET_COVER, GREEDY    # the methods
 rank(layouts) -> list[Layout]           # by the worst case, then the mean, stable;
-                                        # ValueError for none or two unit sets
+                                        # ValueError for none, two unit sets or
+                                        # two countings (prompt 81b)
 scenario_end(config) -> float | None    # t_e: the latest event end, an initial's its
     # start (0); None without a scenario or when it is not before t_end
-clear_times(frames, thresholds, live, areas, end) -> (clear, times, fractions)
-    # clear [classes, ny, nx]: per cell the earliest stored frame time at or after
-    # `end` from which every stored frame reads below the threshold; `end` where none
+clear_times(frames, thresholds, live, areas, end, *, channels) -> (clear, times,
+        fractions)
+    # prompt 81: on the channels, as arrival_from_frames reads them.
+    # clear [channels, ny, nx]: per cell the earliest stored frame time at or after
+    # `end` from which every stored frame reads the channel below its threshold; `end` where none
     # from `end` on reads at or above; inf ("not clear") where the last frame does;
     # NaN in SOLID cells. times [n] the frames at or after `end`; fractions
     # [classes, n] the live area's fraction at or above. TypeError for a threshold or
@@ -1812,12 +1856,13 @@ clear_times(frames, thresholds, live, areas, end) -> (clear, times, fractions)
     # live or areas not the frames' shape, end not finite and non-negative, or no
     # frame at or after it
 clear_units(runs: Mapping[str, RunFile | path]) -> ClearUnits
-    # one (scenario, class) unit per class of each run whose scenario_end is not
-    # None. ValueError with no run, no such run, two meshes; TypeError for a name
+    # one (scenario, channel) unit per channel of each run whose scenario_end is not
+    # None, read from its frames on the channels whatever its other records hold. ValueError with no run, no such run, two meshes; TypeError for a name
     # that is not a str
 ClearUnits(clear [units, ny, nx], ends [units], times, fractions, spacing [units],
-           labels ((scenario, class), ...))    # NamedTuple; frame-resolved, spacing
-                                               # the largest frame gap from t_e on
+           labels ((scenario, channel), ...), counting)   # NamedTuple; frame-resolved,
+                              # spacing the largest frame gap from t_e on; counting
+                              # required (CUMULATIVE from clear_units)
 clear_score(units: ClearUnits, cells) -> ClearScore
     # ClearScore(layout, room, room_cells, interval, fraction, worst, mean,
     # worst_fraction): per unit the layout's clear time (the latest of its cells'),
@@ -1848,7 +1893,7 @@ search_roles(units, clear, candidates, count, all_clear, rule, *, within=None) -
     # Roles(detection, all_clear, layout, clear): layout the whole as a given layout
     # over the detection search's units, clear its ClearScore. TypeError for a count
     # or all_clear that is not an int; ValueError for all_clear outside 0 to
-    # count - 1 or the two unit sets on two meshes
+    # count - 1, the two unit sets on two meshes, or of two countings (prompt 81b)
 ```
 
 ### scenarios.py --> time_integration, placement; tests/test_scenarios.py
@@ -1943,7 +1988,11 @@ run(config, run_file=None, *, restart=None, flows_from=None, on_step=None,
     # clean-out's beside the tracker's); /arrival/ is written at each
     # checkpoint, by a restart from its checkpoint before it continues, and at
     # the end. ValueError for any run without a threshold for every class;
-    # KeyError for a restart from a checkpoint without the maps.
+    # KeyError for a restart from a checkpoint without the maps. Prompt 81: the
+    # monitor, the tracker and the recovery read the channels; the sensor
+    # readings are stored with their channel sums beside them; a restart from
+    # a checkpoint whose maps carry no COUNTING_STATE (the per-class code's) is
+    # refused with a ValueError before the configuration's check.
 smallest_stable_dt(solver, faces, n_classes) -> float   # min over the classes
 plan_interval(index, interval, stable_dt, t_start=None) -> IntervalPlan
     # the fewest equal steps no larger than stable_dt (one more when the
@@ -1955,7 +2004,7 @@ MarchStep: step, t, dt, interval, fields (read-only), budgets (copies),
 RunRecord: path, intervals, flows, steps, t_final, held, wall_seconds, budgets,
     recovery (RecoveryRecord or None), arrival (ArrivalRecord), restarted_from,
     resumed_plan, alerts (every alert of the run, AlertMonitor.alerts' order; ()),
-    latencies (AlertMonitor.latencies on arrival's onsets, [events, classes,
+    latencies (AlertMonitor.latencies on arrival's onsets, [events, channels,
     sensors]; None without sensors), map_latencies (the maps at the sensors'
     cells; equal to latencies to the step)
 map_latencies(arrival, cells) -> np.ndarray   # first_above at each cell minus the onset
@@ -1967,11 +2016,12 @@ Provenance(commit, started, machine, concurrent); Provenance.here(commit, concur
 FlowNotConvergedError: fingerprint, stop_reason, outer
     # solver_transport's ConservationBreachError passes through run unchanged,
     # the run file and checkpoint file as the last writes left them (ADR-016)
-RecoveryTracker(thresholds, initial, cells, live, hold_time)
+RecoveryTracker(thresholds, initial, cells, live, hold_time, *, channels)
     update(t, fields, means); held() -> bool; state() / restore(state);
-    record(names, rate, held) -> RecoveryRecord
-    # within spec: every sensor below its class's threshold; the local field's
-    # "above" is "not below"; the 100:1 level is C0 / HUNDRED_TO_ONE, defined
+    record(names, rate, held) -> RecoveryRecord   # counting CUMULATIVE
+    # within spec: every sensor's channel sum below its threshold (prompt 81), and
+    # the local field reads the same channels; the local field's
+    # "above" is "not below"; the 100:1 times stay per class; the 100:1 level is C0 / HUNDRED_TO_ONE, defined
     # where C0 >= 100 thresholds to DEFINED_RTOL; recovery: the start of the
     # within-spec stretch that reaches the end, if it lasted the hold
 sensor_cells(config, mesh) -> tuple[(j, i), ...]   # the cell containing each
@@ -2053,13 +2103,18 @@ RunFile(path)
                                     # without the leftover column read with the
                                     # leftover None (and read_checkpoint likewise)
     write_sensor_readings(steps, times, readings [n, classes, sensors],
-                          names) -> None   # appends to /transport/sensors/;
-                                    # the names fixed by the first write
+                          names, channels=None) -> None   # appends to
+                                    # /transport/sensors/; the names fixed by the
+                                    # first write; channels [n, channels, sensors]
+                                    # (prompt 81) beside readings, the first write
+                                    # deciding whether the file holds them
     read_sensor_readings() -> SensorReadings
     write_alerts(table: AlertTable) -> None   # /transport/alerts/, replaced whole
         # (ADR-015 C, step 2): one dataset per ALERT_TABLE_COLUMNS, int64 and
-        # "<f8", the sensor names as an attribute; TypeError for another type
-    read_alerts() -> AlertTable     # KeyError without one
+        # "<f8", the sensor names and (prompt 81) the counting as attributes;
+        # TypeError for another type
+    read_alerts() -> AlertTable     # KeyError without one; PER_CLASS without
+                                    # the counting attribute
     discard_after(step) -> None     # drops the frames and readings after step,
                                     # which a restarted march writes again; and
                                     # the tier-2 frames and step rows (step 6b);
@@ -2080,14 +2135,17 @@ RunFile(path)
         # datasets thresholds, initial, recovery_time, sensor_time, mean_time,
         # ratio, local_recovery, local_recovery_max ("<f8") and defined (int8);
         # attributes sensor_names, held, t_final, air_change_rate,
-        # well_mixed_time, room_recovery_time and hold_time when not None.
+        # well_mixed_time, room_recovery_time, the counting (prompt 81; read
+        # PER_CLASS when absent) and hold_time when not None.
         # Neither discard touches it (review 63 S3)
     read_recovery() -> RecoveryRecord   # KeyError without one
     write_arrival(record: ArrivalRecord) -> None   # /arrival/, replacing any
         # (ADR-015 D, step 3): datasets thresholds, onsets, first_above ("<f8"),
-        # attributes event_names and t_final; TypeError for another type
+        # attributes event_names, t_final and (prompt 81) the counting;
+        # TypeError for another type
     read_arrival() -> ArrivalRecord     # KeyError without one (a file from
-                                    # before step 3)
+                                    # before step 3); PER_CLASS without the
+                                    # counting attribute (before prompt 81)
     checkpoint(step, t, fields, budgets, fingerprint, recovery=None,
                plan_start=None) -> None
         # /checkpoint/ of the checkpoint file: attributes step, t, fingerprint,
@@ -2115,6 +2173,9 @@ RunFile(path)
 real_number(name, value) -> float          # TypeError unless a real number (a bool is not)
 checked_thresholds(thresholds) -> np.ndarray   # [classes] float64, a new array; TypeError for a
                                 # non-real or a bool; ValueError unless 1-D, finite, non-negative
+checked_counting(counting) -> str   # TypeError unless a str, ValueError unless in COUNTINGS
+CUMULATIVE ("cumulative"), PER_CLASS ("per_class"), COUNTINGS, COUNTING_ATTR ("counting"),
+    CHANNELS ("channels")   # prompt 81: how a record compares with the thresholds
 checked_onsets(onsets) -> np.ndarray   # [events] float64, a new array; TypeError for a non-real
                                 # or a bool; ValueError unless 1-D, finite, non-negative, in order
                                 # (equal onsets allowed). The one check of these inputs: the
@@ -2133,15 +2194,15 @@ BUDGET_TERMS = ("initial", "inflow", "outflow", "source", "deposited_floor",
                 "deposited_ceiling", "deposited_wall", "deposited_obstacle",
                 "current", "leftover")   # leftover the last column since ADR-016
 ArrivalRecord: thresholds [classes], event_names, onsets [events],
-    first_above [events, classes, ny, nx] (inf where not reached, NaN in SOLID
-    cells), t_final   # TypeError for a non-str name, or a non-real (a bool is not)
+    first_above [events, channels, ny, nx] (inf where not reached, NaN in SOLID
+    cells), t_final, counting (required, checked_counting)   # TypeError for a non-str name, or a non-real (a bool is not)
                       # threshold, onset or t_final; ValueError for shapes that
                       # disagree, a threshold not finite and non-negative, onsets
                       # not finite, non-negative and in order, or t_final not finite
 CONFIG, FLOW, TRANSPORT, SENSORS, ALERTS, CHECKPOINT, STEADY_CHECKPOINT,
     RECOVERY, ARRIVAL, TRANSIENT, SERIES, TRANSIENT_CHECKPOINT   # group names
 AlertTable(names, step_on, step_off, size_class, sensor, t_on, t_off,
-           reading_on, peak, peak_t)
+           reading_on, peak, peak_t, counting)   # size_class the channel; counting required
     # one row per alert, [n] each: int64 ALERT_TABLE_INTEGERS, float64
     # ALERT_TABLE_REALS; step_off OPEN_STEP (-1) and t_off NaN while open;
     # sensor indexes names. TypeError for a name that is not a str; ValueError
@@ -2154,7 +2215,8 @@ StepSeries(step, outer, pressure_cap_hits, t, worst_imbalance, drag, lift, c_d, 
 TransientFrames: steps, times, u, v, p
 RecoveryRecord: sensor_names, thresholds, initial, hold_time, held, t_final,
     air_change_rate, well_mixed_time, room_recovery_time, recovery_time, defined,
-    sensor_time, mean_time, ratio, local_recovery, local_recovery_max
+    sensor_time, mean_time, ratio, local_recovery, local_recovery_max,
+    counting   # required; recovery_time and local_recovery per channel
     # times in seconds, NaN where not defined or not reached; the shapes are
     # checked against the classes and sensors when it is built
 ```
@@ -2372,3 +2434,4 @@ ADR-008 and ADR-010 to ADR-016 are files in `docs/ADR/`; the others are in the d
 | 2026-11-12 | Phase 4's condition 1 met (Alex): the budget residual is the implicit diffusion solve's unfinished Jacobi iteration (prompt 77, PR 106). Section 2: REQ-T05's rationale replaced by its stated basis (ISO 14644-1 Class 5 counter resolution) and the remedy Alex chose (booked, budgeted per step, refused at the limit; prompt 78). The requirement's text and value are unchanged. No module or interface changed yet. | Claude (orchestrator) |
 | 2026-11-12 | Prompt 78b, round 1's fixes on the conservation budget (same branch). scalar_scheme.py: `implicit_step` refuses a bool `leftover_bound` with a TypeError. Section 3.2's scalar_scheme row now names what the leftover_bound and `ImplicitResult.leftover` mean for turbulence and the transport solver; section 4's `implicit_step` contract states the TypeError and that a per-cell step is not read in a SOLID cell. validation/cases.py: `load_line_source` reads `transport.conservation_limit`, and its `MASS_IMBALANCE_FRACTION` constant is removed. No requirement's text changed. | Claude (builder) |
 | 2026-11-14 | ADR-016 accepted (Alex), the margin of ten included; prompt 79 (PR 109) ran the product grid and the sweep on it, no gate conclusion changed. No module or interface changed. | Claude (orchestrator) |
+| 2026-11-14 | Prompt 81 (cumulative counting) and its fix pass, prompt 81b, on branch phase5/cumulative-counting. Section 2: REQ-A01's reading is the channel's cumulative sum (REQ-A03 states how it is formed); REQ-A03's and REQ-A07's Verified By name the tests of the marks, the refusals and `clear_units` on the sum. Section 3.2: the monitor, placement and io_manager rows (the alerts' reading, the unit's index the channel, the third restart break). Section 4: `counting` is a required field, with no default, of `RunArrival` (now before `fallback`), `Units`, `ArrivalRecord`, `AlertTable` and `RecoveryRecord`; `ClearUnits` and `Layout` gain it; `search_roles` refuses detection and all-clear units of two countings and `rank` layouts of two, as `detection_units` refuses maps of two. | Claude (builder) |

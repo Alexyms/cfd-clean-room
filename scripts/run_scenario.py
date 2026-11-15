@@ -94,7 +94,7 @@ def _time(value: float, missing: str) -> str:
 
 
 def recovery_lines(record: RecoveryRecord, sizes: Sequence[float]) -> list[str]:
-    """The clean-out's outputs (ADR-014 C), one class to a block.
+    """The clean-out's outputs (ADR-014 C), one size to a block.
 
     Parameters
     ----------
@@ -106,7 +106,9 @@ def recovery_lines(record: RecoveryRecord, sizes: Sequence[float]) -> list[str]:
     Returns
     -------
     list[str]
-        The lines, without newlines. A 100:1 time the run ended before is
+        The lines, without newlines. Per size, the recovery time and the
+        local field's maximum of the channel at or above it (ADR-015 C) and
+        the class's own 100:1 times. A 100:1 time the run ended before is
         given with the ratio's lower bound, ``t_final`` over the well-mixed
         time, since the mean was still above its level then.
     """
@@ -125,7 +127,7 @@ def recovery_lines(record: RecoveryRecord, sizes: Sequence[float]) -> list[str]:
     for k, size in enumerate(sizes):
         lines.append(f"  class {k} ({size * 1e6:g} um):")
         lines.append(
-            "    recovery time: "
+            f"    channel at or above {size * 1e6:g} um, recovery time: "
             + _time(float(record.recovery_time[k]), f"not recovered by {end:.4f} s")
         )
         if not record.defined[k]:
@@ -151,7 +153,7 @@ def recovery_lines(record: RecoveryRecord, sizes: Sequence[float]) -> list[str]:
             lines.append(f"    sensor 100:1: {sensors}")
         largest = float(record.local_recovery_max[k])
         lines.append(
-            "    local recovery field maximum: "
+            "    channel's local recovery field maximum: "
             + (
                 "not recovered (a cell still above)"
                 if math.isinf(largest)
@@ -179,8 +181,9 @@ def alert_lines(
     -------
     list[str]
         The lines, without newlines: the count and how many are still open,
-        then each alert's sensor, class, opening step and reading, closing
-        step or "still open", and peak.
+        then each alert's sensor, channel (named by its lower size edge),
+        opening step and channel reading, closing step or "still open", and
+        peak.
     """
     if not monitored:
         return ["alerts (ADR-015 C): no sensors"]
@@ -195,7 +198,7 @@ def alert_lines(
             end = f"below at t = {alert.t_off:.4f} s (step {alert.step_off})"
         size = sizes[alert.size_class] * 1e6
         lines.append(
-            f"  {alert.sensor}, class {alert.size_class} ({size:g} um): at or above "
+            f"  {alert.sensor}, channel {alert.size_class} (>= {size:g} um): at or above "
             f"from t = {alert.t_on:.4f} s (step {alert.step_on}), reading "
             f"{alert.reading_on:.4g}; {end}; peak {alert.peak:.4g} at "
             f"t = {alert.peak_t:.4f} s"
@@ -213,7 +216,7 @@ def _latency(value: float, end: float | None = None) -> str:
 def latency_lines(
     record: RunRecord, sizes: Sequence[float], names: Sequence[str]
 ) -> list[str]:
-    """Each sensor's latency per event and class (REQ-A04, ADR-015 D).
+    """Each sensor's latency per event and channel (REQ-A04, ADR-015 D).
 
     Parameters
     ----------
@@ -228,7 +231,7 @@ def latency_lines(
     Returns
     -------
     list[str]
-        The lines, without newlines: per event its onset, then per class
+        The lines, without newlines: per event its onset, then per channel
         each sensor's latency from the onset, the monitor's then the map's,
         "never by" the run's end where a sensor is not reached. The two
         agree to the step; a sensor where they do not is marked DISAGREES.
@@ -256,7 +259,7 @@ def latency_lines(
                 if monitor != mapped:
                     part += " DISAGREES"
                 parts.append(part)
-            lines.append(f"    class {k} ({size * 1e6:g} um): " + "; ".join(parts))
+            lines.append(f"    channel {k} (>= {size * 1e6:g} um): " + "; ".join(parts))
     return lines
 
 
