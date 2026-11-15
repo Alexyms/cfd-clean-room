@@ -44,10 +44,10 @@ The prompt's stop conditions: the calibration is not bitwise, or the wrappers' o
 | (a) | 320x120: march > 70% of the run; the implicit solve the march's largest stage | march 80.6% of the run (this pass's estimate; 76.2% by prompt 79's record); largest stage: advective fluxes and limiter (40.6%), implicit solve 34.9% | FAILS |
 | (b) | pressure correction > half an outer iteration | 80x30 40.5%, 160x60 39.4%, 320x120 41.1% | FAILS |
 | (c) | cost per cell per step on 80x30 at least 5x that on 320x120 | march step, 9-14 s windows: 2.47x; outer iteration: 2.07x | FAILS |
-| (d) | every stage below 1 op/byte, so every stage memory-bound in FP64 | every stage below 1; the densest, advective fluxes and limiter, 0.94, is memory-bound in FP64 only above a 1675 MHz graphics clock (the boost range is 1230-2175 MHz, T8); kernels at or above 1: assembly, coarsest pseudo-inverse, wall side; the advection with other kernel boundaries: both axes in one kernel 1.07, fused with the divergence update 1.16 | HOLDS IN PART |
+| (d) | every stage below 1 op/byte, so every stage memory-bound in FP64 | at or above 1: advective fluxes and limiter 1.23; against DRAM (0.69 to 1.22 op/byte over the boost range of 1230-2175 MHz, T8) the densest, advective fluxes and limiter, 1.23, is compute-bound at every clock in FP64; stages memory-bound at every clock / changing with the clock / compute-bound at every clock (T9b): DRAM 11 / 0 / 1, L2 at 1 TB/s 3 / 7 / 2, L2 at 2 TB/s 0 / 3 / 9, L2 at 4 TB/s 0 / 0 / 12 (L2 bandwidths assumed, none published); every kernel's data fit the L2 on 320x120 (T9); kernels at or above 1: assembly, coarsest pseudo-inverse, wall side, advective fluxes; the advection with other kernel boundaries: both axes in one kernel 1.44, fused with the divergence update 1.58 | FAILS |
 | (e) | monitor, arrival maps and frame writes < 10% of the march | 320x120 estimate 2.0%; 80x30 whole 7.0%; 160x60 whole 3.9%; 320x120 window 2.1% | HOLDS |
 
-(a) and (e) are scored on T6's whole-run estimate, (c) on the windows, (d) on T7's 320x120 stage counts.
+(a) and (e) are scored on T6's whole-run estimate, (c) on the windows, (d) on T7's 320x120 stage counts and T9b.
 <!-- tables84 predictions end -->
 
 ## The stop condition, and the instrument as run
@@ -112,7 +112,7 @@ Per event, from `overhead84.py` (median of 15 batches of 200,000): a wrapped cal
 | 80x30 | window 9 s to 40.0 s (1760 steps), first, line regions | 20.05 / 20.31 / 20.46 | 22.17 / 22.78 | +10.9% | 2.0% | 146,132 | 79,200 | 1.61% | yes |
 | 320x120 | window 9 s to 10.5 s (414 steps), first, line regions | 28.71 / 26.71 / 25.80 | 27.42 / 27.21 | +0.9% | 10.7% | 34,382 | 18,630 | 0.28% | yes |
 
-The order was unwrapped, wrapped, unwrapped, wrapped, unwrapped. Bitwise: every run's fields and budgets (march) or faces, pressure, k, eps, nu_t and residual history (flow) against the first run's. The region events are the markers per outer iteration (12) or per class step (9) times the calls, an estimate: a marker on a statement spanning lines may fire twice. The lean instrument has no region in the march. The stop rule (a window over 5%) is applied to the lean windows; the first instrument's 80x30 window met it.
+The order was unwrapped, wrapped, unwrapped, wrapped, unwrapped. Bitwise: every run's fields and budgets (march) or faces, pressure, k, eps, nu_t and residual history (flow) against the first run's. The region events are the markers per outer iteration (12) or per class step (9) times the calls, an estimate: a marker on a statement spanning lines may fire twice. The lean instrument has no region in the march. The prompt's 5% stop fired twice: on the 160x60 flow calibration (+6.9%) and on the first instrument's 80x30 march window (+10.2% on the 9 s to 10.5 s window, +10.9% on the 9 s to 40 s one). The lean windows are within 3%. The flow calibrations' means rest on three unwrapped and two wrapped runs whose spread is wider than the difference, so they do not resolve 5%; the paired measurement is in the text.
 
 ### T2b. Which part of the timers costs: 80x30 windows 9 s to 40 s, one process each list, in the order run
 
@@ -235,7 +235,7 @@ with the grid.
 | 160x60 | 15.5 | 15.5 | 70.3% | 8.8% | 81.0% | 17.0 | 0 |
 | 320x120 | 23.5 | 23.5 | 66.1% | 4.0% | 87.5% | 13.8 | 0 |
 
-Stage times are exclusive and sum to the solve's time. The pressure correction holds the p' system's assembly, the hierarchy's build, the CG loop with its V-cycles and the velocity correction; the boundary updates hold the outlet extrapolation, the wall functions' viscosity and the k-epsilon wall conditions; the stopping rule holds the cell-centre velocities, the steps it reads and the rule's update. The 80x30 and 160x60 solves are inside the whole runs of T4, so their wrappers' overhead is those runs'; the 320x120 rows are its first 300 iterations, overhead as calibrated (0.3% by the event estimate).
+Stage times are exclusive and sum to the solve's time. The pressure correction holds the p' system's assembly, the hierarchy's build, the CG loop with its V-cycles and the velocity correction; the boundary updates hold the outlet extrapolation, the wall functions' viscosity and the k-epsilon wall conditions; the stopping rule holds the cell-centre velocities, the steps it reads and the rule's update. The 80x30 and 160x60 solves are inside the whole runs of T4, so their wrappers' overhead is those runs'; the 320x120 rows are its first 300 iterations. The flow timers cost more than the event estimate of T2 says. The calibrations measured +4.9% (80x30), +6.9% (160x60) and +2.4% (320x120) against 1.0%, 0.7% and 0.3% by the estimate; the paired measurement of test 84 (section 'The stop condition') gives more. Most wrapped calls sit in the pressure correction, so its share is inflated most.
 <!-- tables84 flow end -->
 
 ## 2. The march
@@ -424,9 +424,10 @@ Per kernel, per cell per execution (the pseudo-inverse and the coarsest solve pe
 | turbulence update | checks | 9.0 | 57.0 | 0.16 | 1 |
 | turbulence update | pseudo-time step | 10.0 | 26.0 | 0.38 | 1 |
 | turbulence update | source terms | 31.0 | 83.0 | 0.37 | 1 |
-| turbulence update | advection | 69.0 | 74.0 | 0.93 | 2 |
+| turbulence update | advecting fluxes | 2.0 | 34.0 | 0.06 | 1 |
+| turbulence update | advection | 66.0 | 74.0 | 0.89 | 2 |
 | turbulence update | explicit growth | 4.0 | 50.0 | 0.08 | 1 |
-| turbulence update | conductances | 16.0 | 42.0 | 0.38 | 2 |
+| turbulence update | conductances | 16.0 | 27.0 | 0.59 | 2 |
 | turbulence update | implicit setup | 11.0 | 64.0 | 0.17 | 2 |
 | turbulence update | CG iteration | 22.0 | 137.0 | 0.16 | keps_iterations |
 | turbulence update | true residual | 12.0 | 57.0 | 0.21 | keps_checks |
@@ -434,13 +435,13 @@ Per kernel, per cell per execution (the pseudo-inverse and the coarsest solve pe
 | boundary updates | stencil viscosity | 22.0 | 27.0 | 0.81 | 1 |
 | boundary updates | wall viscosity | 0.0 | 32.0 | 0.00 | 1 |
 | boundary updates | tangential means | 4.0 | 18.0 | 0.22 | 1 |
-| boundary updates | wall side | 20.0 | 17.0 | 1.18 | turbulence_sides |
+| boundary updates | wall side | 20.0 | 9.0 | 2.22 | turbulence_sides |
 | boundary updates | held values | 4.0 | 52.0 | 0.08 | 1 |
 | stopping rule | velocity step | 10.0 | 49.0 | 0.20 | 1 |
 | stopping rule | viscosity step and scale | 6.0 | 26.0 | 0.23 | 1 |
 | stopping rule | imbalance summary | 10.0 | 25.0 | 0.40 | imbalance_summaries |
-| remainder (input checks) | input checks | 15.0 | 52.0 | 0.29 | 1 |
-| advective fluxes and limiter | advective fluxes | 65.0 | 69.0 | 0.94 | 1 |
+| remainder (input checks) | input checks | 16.0 | 52.0 | 0.31 | 1 |
+| advective fluxes and limiter | advective fluxes | 65.0 | 53.0 | 1.23 | 1 |
 | divergence update | divergence update | 6.0 | 41.0 | 0.15 | 1 |
 | source | source | 4.0 | 32.0 | 0.12 | source_steps |
 | implicit solve | conductances | 22.0 | 40.0 | 0.55 | 1 |
@@ -455,15 +456,15 @@ Per stage, per cell per call (operations / bytes = intensity), with each grid's 
 |---|---|---|---|
 | momentum predictor | 422 / 1676 = 0.25 | 422 / 1676 = 0.25 | 422 / 1676 = 0.25 |
 | pressure correction | 1036 / 5076 = 0.20 | 971 / 6140 = 0.16 | 1348 / 9064 = 0.15 |
-| turbulence update | 760 / 3728 = 0.20 | 1050 / 5533 = 0.19 | 911 / 4668 = 0.20 |
-| boundary updates | 110 / 197 = 0.56 | 110 / 197 = 0.56 | 110 / 197 = 0.56 |
+| turbulence update | 756 / 3732 = 0.20 | 1046 / 5537 = 0.19 | 907 / 4672 = 0.19 |
+| boundary updates | 110 / 165 = 0.67 | 110 / 165 = 0.67 | 110 / 165 = 0.67 |
 | stopping rule | 16 / 75 = 0.21 | 16 / 75 = 0.21 | 16 / 75 = 0.21 |
-| advective fluxes and limiter | 65 / 69 = 0.94 | 65 / 69 = 0.94 | 65 / 69 = 0.94 |
+| advective fluxes and limiter | 65 / 53 = 1.23 | 65 / 53 = 1.23 | 65 / 53 = 1.23 |
 | divergence update | 6 / 41 = 0.15 | 6 / 41 = 0.15 | 6 / 41 = 0.15 |
 | source | 4 / 32 = 0.12 | 4 / 32 = 0.12 | 4 / 32 = 0.12 |
 | implicit solve | 90 / 299 = 0.30 | 103 / 343 = 0.30 | 117 / 395 = 0.30 |
 | deposition and budget booking | 10 / 41 = 0.24 | 10 / 41 = 0.24 | 10 / 41 = 0.24 |
-| remainder (input checks) | 15 / 52 = 0.29 | 15 / 52 = 0.29 | 15 / 52 = 0.29 |
+| remainder (input checks) | 16 / 52 = 0.31 | 16 / 52 = 0.31 | 16 / 52 = 0.31 |
 | arrival maps | 25 / 121 = 0.21 | 25 / 121 = 0.21 | 25 / 121 = 0.21 |
 
 The repeats (80x30 / 160x60 / 320x120): flow means per correction or per outer iteration from T3's solves, march means per class step from the windows:
@@ -515,23 +516,46 @@ Scalars each stage's call hands back to Python before it can go on:
 <!-- tables84 bounds begin -->
 ### T9. 320x120: each stage's time now against its time at peak bandwidth
 
-| stage | per | now, us | at 256 GB/s, us | at peak FP64 (1230 MHz), us | bound on the speedup (labelled: an upper bound only while every byte is DRAM traffic) |
-|---|---|---|---|---|---|
-| momentum predictor | outer iteration | 37106.5 | 251.37 | 91.49 | 148 |
-| pressure correction | outer iteration | 61339.7 | 1359.44 | 292.19 | 45 |
-| turbulence update | outer iteration | 36161.4 | 700.14 | 197.50 | 52 |
-| boundary updates | outer iteration | 12321.5 | 29.55 | 23.85 | 417 |
-| stopping rule | outer iteration | 2175.5 | 11.25 | 3.47 | 193 |
-| advective fluxes and limiter | class step | 6689.6 | 10.35 | 14.09 | 475 |
-| divergence update | class step | 316.9 | 6.15 | 1.30 | 52 |
-| source | class step | 124.5 | 4.80 | 0.87 | 26 |
-| implicit solve | class step | 4615.6 | 59.25 | 25.46 | 78 |
-| deposition and budget booking | class step | 1811.9 | 6.15 | 2.17 | 295 |
-| remainder (input checks) | class step | 1338.0 | 7.80 | 3.25 | 172 |
-| arrival maps | step after the onset | 1000.4 | 18.15 | 5.42 | 55 |
+| stage | per | now, us | at 256 GB/s, us | at peak FP64 (1230 MHz), us | at peak FP64 (2175 MHz), us | bound, 1230 MHz | bound, 2175 MHz |
+|---|---|---|---|---|---|---|---|
+| momentum predictor | outer iteration | 37106.5 | 251.37 | 91.49 | 51.74 | 148 | 148 |
+| pressure correction | outer iteration | 61339.7 | 1359.44 | 292.19 | 165.24 | 45 | 45 |
+| turbulence update | outer iteration | 36161.4 | 700.74 | 196.63 | 111.20 | 52 | 52 |
+| boundary updates | outer iteration | 12321.5 | 24.75 | 23.85 | 13.49 | 498 | 498 |
+| stopping rule | outer iteration | 2175.5 | 11.25 | 3.47 | 1.96 | 193 | 193 |
+| advective fluxes and limiter | class step | 6689.6 | 7.95 | 14.09 | 7.97 | 475 | 839 |
+| divergence update | class step | 316.9 | 6.15 | 1.30 | 0.74 | 52 | 52 |
+| source | class step | 124.5 | 4.80 | 0.87 | 0.49 | 26 | 26 |
+| implicit solve | class step | 4615.6 | 59.25 | 25.46 | 14.40 | 78 | 78 |
+| deposition and budget booking | class step | 1811.9 | 6.15 | 2.17 | 1.23 | 295 | 295 |
+| remainder (input checks) | class step | 1338.0 | 7.80 | 3.47 | 1.96 | 172 | 172 |
+| arrival maps | step after the onset | 1000.4 | 18.15 | 5.42 | 3.07 | 55 | 55 |
 
-The bandwidth time is T7's bytes per call over the peak bandwidth; the FP64 time its operations over the peak at the bottom of the boost range. The bound is the time now over the larger of the two. It assumes every byte crosses DRAM. Every field of the 320x120 grid is 0.29 MiB and a stage touches at most a few dozen of them, so a stage's working set fits in the 32 MiB L2, where the bandwidth is higher than DRAM's; NVIDIA publishes no L2 bandwidth for this part, so no tighter bound is stated. Nor does the bound count a kernel launch's latency, or the host reads of T7's scalars between kernels.
+The bandwidth time is T7's bytes per call over the peak bandwidth; the FP64 time its operations over the peak at each end of the boost range. A bound is the time now over the larger of the two, and the bound at the top of the range is the most favourable one. Each bound is labelled: it is an upper bound on the speedup only while every byte is DRAM traffic. Every field of the 320x120 grid is 0.29 MiB and the largest kernel of T7 (pressure correction, V-cycle) moves 8.4 MiB per execution, against an L2 of 32 MiB, so each kernel's data stay in the L2 and the DRAM bandwidth is not the one it meets (T9b). Nor does a bound count a kernel launch's latency, or the host reads of T7's scalars between kernels.
 <!-- tables84 bounds end -->
+
+<!-- tables84 balance begin -->
+### T9b. 320x120: each stage's intensity against the FP64 balance of DRAM and of L2
+
+| stage | ops per byte | DRAM, balance 0.69 to 1.22 | L2 at 1 TB/s, balance 0.18 to 0.31 | L2 at 2 TB/s, balance 0.09 to 0.16 | L2 at 4 TB/s, balance 0.04 to 0.08 |
+|---|---|---|---|---|---|
+| momentum predictor | 0.25 | memory-bound at every clock | memory-bound above 1749 MHz | compute-bound at every clock | compute-bound at every clock |
+| pressure correction | 0.15 | memory-bound at every clock | memory-bound at every clock | memory-bound above 2065 MHz | compute-bound at every clock |
+| turbulence update | 0.19 | memory-bound at every clock | memory-bound above 1348 MHz | compute-bound at every clock | compute-bound at every clock |
+| boundary updates | 0.67 | memory-bound at every clock | compute-bound at every clock | compute-bound at every clock | compute-bound at every clock |
+| stopping rule | 0.21 | memory-bound at every clock | memory-bound above 1481 MHz | compute-bound at every clock | compute-bound at every clock |
+| remainder (input checks) | 0.31 | memory-bound at every clock | memory-bound above 2137 MHz | compute-bound at every clock | compute-bound at every clock |
+| advective fluxes and limiter | 1.23 | compute-bound at every clock | compute-bound at every clock | compute-bound at every clock | compute-bound at every clock |
+| divergence update | 0.15 | memory-bound at every clock | memory-bound at every clock | memory-bound above 2033 MHz | compute-bound at every clock |
+| source | 0.12 | memory-bound at every clock | memory-bound at every clock | memory-bound above 1736 MHz | compute-bound at every clock |
+| implicit solve | 0.30 | memory-bound at every clock | memory-bound above 2064 MHz | compute-bound at every clock | compute-bound at every clock |
+| deposition and budget booking | 0.24 | memory-bound at every clock | memory-bound above 1694 MHz | compute-bound at every clock | compute-bound at every clock |
+| arrival maps | 0.21 | memory-bound at every clock | memory-bound above 1435 MHz | compute-bound at every clock | compute-bound at every clock |
+| advection, both axes in one kernel | 1.44 | compute-bound at every clock | compute-bound at every clock | compute-bound at every clock | compute-bound at every clock |
+| advection, fused with the divergence update | 1.58 | compute-bound at every clock | compute-bound at every clock | compute-bound at every clock | compute-bound at every clock |
+
+A stage is memory-bound in FP64 when its operations per byte are below the balance, peak FP64 over the bandwidth it meets; the balance rises with the graphics clock, so the table says whether a stage is on one side at every clock of the boost range (1230 to 2175 MHz) or changes sides at one. The DRAM bandwidth is 256.0 GB/s (T8). NVIDIA publishes no L2 bandwidth for this part, so the L2 columns are assumed, not measured: the only Ada measurement found is the RTX 4090's, about 5 TB/s with all 128 SMs active (Chips and Cheese, 'Microbenchmarking Nvidia's RTX 4090', 2022), which scales by SM count to about 1.4 TB/s for 36 SMs, across dies whose L2 slices differ. 1, 2 and 4 TB/s bracket that. The intensities are T7's per-stage ones for 320x120's repeats.
+<!-- tables84 balance end -->
 
 ## 6. The function-level picture
 
@@ -609,7 +633,7 @@ class step from inputs that are fixed over an interval.
 | 160x60 whole run (T4) | 528.24 | 5.1% | 53.2% | 58.3% | 2.40 |
 | 320x120 whole run (T6 estimate) | 3381.54 | 7.0% | 56.8% | 63.8% | 2.76 |
 
-The plan's kernels (docs/PROJECT_PLAN.md, Phase 6): `pressure_solve.cu`, the CG loop with the multigrid cycles, and `advection_diffusion.cu`, the transport stencil. Everything else stays in Python under such a port: the momentum predictor, the hierarchy's build, the turbulence update, the boundary updates, the stopping rule, the input checks, the source, the conductances, the booking, the monitor, the arrival maps and the writes. The 320x120 row's implicit solve is T6's stage less its conductances, by the window's split.
+The plan's kernels (docs/PROJECT_PLAN.md, Phase 6): `pressure_solve.cu`, the CG loop with the multigrid cycles, and `advection_diffusion.cu`, the transport stencil. Everything else stays in Python under such a port: the momentum predictor, the hierarchy's build, the turbulence update, the boundary updates, the stopping rule, the input checks, the source, the conductances, the booking, the monitor, the arrival maps and the writes. The 320x120 row's implicit solve is T6's stage less its conductances, by the window's split, at the window's share of solve time in that stage; the run averages more sweeps per class step than the window, so that row's share of the run is understated by about a point, and its speedup by about a tenth.
 <!-- tables84 ports end -->
 
 ## Findings

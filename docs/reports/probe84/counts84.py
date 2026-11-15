@@ -6,7 +6,11 @@ The counting rule, applied to every kernel below:
   array the kernel reads is read once and every array it produces for a
   later kernel is written once, 8 bytes per float64 element and 1 per bool.
   Temporaries NumPy forms inside a kernel are not counted (a port fuses
-  them), nor are one-dimensional geometry arrays or scalars. A face array
+  them), nor are one-dimensional geometry arrays or scalars. That holds where
+  the code broadcasts or multiplies a cell size, face distance, area or
+  weight out to a full array (``np.broadcast_to``, ``* np.ones``): a port
+  indexes it by row or column, so it is not a field. A real [ny, nx] array
+  that geometry fills (the cell volumes, ``np.outer``) is one. A face array
   ([ny, nx+1] or [ny+1, nx]) counts as one element per cell. A kernel that
   must finish before the next can start (a sweep, a reduction the stop reads)
   is counted per execution, so an iterative stage's bytes are its sweep's
@@ -14,9 +18,10 @@ The counting rule, applied to every kernel below:
 - **Operations** are floating-point additions, subtractions, multiplications,
   divisions, comparisons of floats, ``abs``, ``max``/``min``, ``sqrt``,
   ``log`` and a power, one each per element; ``x**3`` is two multiplications.
-  Selections (``np.where``), mask logic, copies and integer indexing are not
-  operations. A reduction (``sum``, ``max``, ``vdot``) is one operation per
-  element per term (``vdot`` two).
+  A finiteness test (``isfinite``) counts as one comparison, as it does in
+  every kernel that runs one. Selections (``np.where``), mask logic, copies
+  and integer indexing are not operations. A reduction (``sum``, ``max``,
+  ``vdot``) is one operation per element per term (``vdot`` two).
 
 Counts are per cell per execution of the kernel. ``repeat`` names how many
 times a stage's call executes it: a number, or a key ``tables84.py`` reads
@@ -50,6 +55,14 @@ PEAK_BANDWIDTH = 2 * MEMORY_CLOCK_HZ * BUS_BITS / 8
 # (nvidia.com/en-us/geforce/laptops/40-series/, specs table); the laptop's
 # power limit sets where in it the part runs.
 BOOST_HZ = (1230e6, 2175e6)
+# NVIDIA publishes no L2 bandwidth for this part. The one Ada measurement
+# found is the RTX 4090's, about 5 TB/s with all 128 SMs active (Chips and
+# Cheese, "Microbenchmarking Nvidia's RTX 4090", 2022-11-02, whose text adds
+# that the figure exceeds the theoretical one at high occupancy because
+# duplicate reads are combined). Scaled by SM count that is about 1.4 TB/s
+# for 36 SMs, across dies whose L2 slices differ. These three are assumed,
+# not measured, and bracket it; the report states every L2 verdict at each.
+L2_BANDWIDTHS_ASSUMED = (1.0e12, 2.0e12, 4.0e12)
 # The multigrid's coarsest level on all three grids: 2x2 aggregation with
 # ceiling halves stops at COARSEST_CELLS = 64 (src/multigrid.py), so 80x30,
 # 160x60 and 320x120 all end at 10x4 = 40 cells.
@@ -266,8 +279,9 @@ KERNELS = [
         10,
         26,
         1,
-        "pseudo_time_step via _rate: two abs, two max, two divisions, a sum "
-        "(9) and cfl / rate (1)",
+        "pseudo_time_step: _rate's two abs, two max, two divisions and a sum "
+        "(7), rate > 0 (1), cfl / rate (1) and the max of dt over the moving "
+        "cells (1)",
     ),
     Kernel(
         "flow.turbulence",
@@ -281,12 +295,24 @@ KERNELS = [
     ),
     Kernel(
         "flow.turbulence",
+        "advecting fluxes",
+        2,
+        34,
+        1,
+        "step: flux = velocity x area on both components, once for k and eps "
+        "(2); reads the faces and two masks, writes the two flux arrays. The "
+        "areas are broadcast views of cell sizes, not counted",
+    ),
+    Kernel(
+        "flow.turbulence",
         "advection",
-        69,
+        66,
         74,
         2,
-        "_advect for k and for eps: advective_flux on both axes (2 x 31, as "
-        "the transport's), divergence and q - dt div / V (7)",
+        "_advect for k and for eps: advective_flux on both axes (2 x 30, as "
+        "the transport's), the four-term divergence (3) and q - dt div / V "
+        "(3); reads the two flux arrays, q twice, the solid stencil, V and "
+        "dt_cell, writes adv_u, adv_v and the result",
     ),
     Kernel(
         "flow.turbulence",
@@ -300,10 +326,13 @@ KERNELS = [
         "flow.turbulence",
         "conductances",
         16,
-        42,
+        27,
         2,
         "_conductances for sigma_k and sigma_e: nu + nu_t / sigma (2), the "
-        "weighted harmonic face value on both axes (10), times A / d (4)",
+        "weighted harmonic face value on both axes (10), times A / d (4); "
+        "reads nu_t, the solid mask and the two interior-face masks, writes "
+        "g_u, g_v. The areas, face distances and weights are one-dimensional "
+        "geometry, not counted",
     ),
     Kernel(
         "flow.turbulence",
@@ -372,11 +401,13 @@ KERNELS = [
         "flow.boundary",
         "wall side",
         20,
-        17,
+        9,
         SIDES,
         "conditions, per wall side over the whole field: _wall_cell_values "
         "(sqrt, products, max, log, the two quotients: 18) and the two "
-        "masked sums (2); reads k, the side's mask and distance",
+        "masked sums (2); reads k and the side's mask. The wall distance is "
+        "a row or column of cell sizes that the code multiplies out to "
+        "[ny, nx] (``* ones``), one-dimensional geometry, not counted",
     ),
     Kernel(
         "flow.boundary",
@@ -418,27 +449,31 @@ KERNELS = [
     Kernel(
         "class.remainder",
         "input checks",
-        15,
+        16,
         52,
         1,
         "solve_timestep's checks: the copy and isfinite of C_k (1); "
-        "stable_dt with its own _advecting_velocities (12: one settling "
-        "subtraction, four abs, two max, two divisions, a sum, the max over "
-        "live cells); _check_eddy_viscosity (2)",
+        "stable_dt with its own _advecting_velocities (13: one settling "
+        "subtraction, the finiteness tests of u and v (2), four abs, two "
+        "max, two divisions, a sum, the max over live cells); "
+        "_check_eddy_viscosity (2)",
     ),
     Kernel(
         "class.advection",
         "advective fluxes",
         65,
-        69,
+        53,
         1,
-        "_advecting_velocities (1), flux = velocity x area (2); "
-        "advective_flux on each axis (2 x 31): the face direction (1), "
+        "_advecting_velocities (3: the settling subtraction and the "
+        "finiteness tests of u and v), flux = velocity x area (2); "
+        "advective_flux on each axis (2 x 30): the face direction (1), "
         "quick_face_values' two quadratics (10), limited_face_values' UMIST "
         "clamp (18: d_down, its test, r, psi_quick, 2r, (1 + 3r) / 4, the "
         "four-way minimum, the maximum, c_c + psi d / 2), flux x face (1). "
-        "Reads the faces, the areas, three masks, C (once per axis) and "
-        "the solid stencil; writes adv_u, adv_v",
+        "Without the finiteness tests the count is 63. Reads the faces (16), "
+        "three masks (3), C once per axis (16) and the solid stencil (2); "
+        "writes adv_u, adv_v (16). The areas are broadcast views of the cell "
+        "sizes (solver_transport._area_u, _area_v), not counted",
     ),
     Kernel(
         "class.divergence",
@@ -544,7 +579,7 @@ VARIANTS = [
         "class.advection",
         "both axes in one kernel",
         65,
-        61,
+        45,
         1,
         "as 'advective fluxes', C read once instead of once per axis",
     ),
@@ -552,10 +587,10 @@ VARIANTS = [
         "class.advection",
         "fused with the divergence update",
         71,
-        61,
+        45,
         1,
-        "advection and divergence in one kernel: reads the faces, the areas, "
-        "three masks, C, the solid stencil and V; writes c* only (adv_u, "
-        "adv_v stay on chip)",
+        "advection and divergence in one kernel: reads the faces, three "
+        "masks, C, the solid stencil and V; writes c* only (adv_u, adv_v "
+        "stay on chip)",
     ),
 ]

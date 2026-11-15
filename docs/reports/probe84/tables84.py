@@ -284,8 +284,8 @@ def machine(lines: list[str]) -> None:
     lines += table(["job", "sampled", "top four"], rows)
 
 
-def calibration(lines: list[str]) -> dict[str, float]:
-    """T2; returns the event estimate of the overhead per calibration job."""
+def calibration(lines: list[str]) -> dict[str, dict[str, float]]:
+    """T2; returns the event estimate and the measured overhead per calibration job."""
     cost = json.loads((RESULTS / "overhead.json").read_text())
     call_ns, region_ns = cost["wrapped_call_ns"], cost["region_event_ns"]
     lines += ["### T2. Calibration: wrapped against unwrapped, in one process", ""]
@@ -295,7 +295,8 @@ def calibration(lines: list[str]) -> dict[str, float]:
         "",
     ]
     rows = []
-    estimates = {}
+    estimates: dict[str, float] = {}
+    differences: dict[str, float] = {}
     jobs = [
         (kind, grid, f"calibrate_{kind}_{grid}")
         for kind in ("flow", "march")
@@ -327,6 +328,7 @@ def calibration(lines: list[str]) -> dict[str, float]:
             what = f"window 9 s to {r['t_stop']} s ({w['steps']} steps), {instrument}"
         estimate = (n_calls * call_ns + regions * region_ns) / plain.mean()
         estimates[job] = estimate
+        differences[job] = measured
         bitwise = "yes" if not any(r["differ"]) else f"no: {r['differ']}"
         rows.append(
             [
@@ -363,8 +365,14 @@ def calibration(lines: list[str]) -> dict[str, float]:
         "against the first run's. The region events are the markers per outer iteration "
         f"({MARKERS_PER_OUTER}) or per class step ({MARKERS_PER_CLASS_STEP}) times the calls, "
         "an estimate: a marker on a statement spanning lines may fire twice. The lean "
-        "instrument has no region in the march. The stop rule (a window over 5%) is applied "
-        "to the lean windows; the first instrument's 80x30 window met it.",
+        "instrument has no region in the march. The prompt's 5% stop fired twice: on the "
+        f"160x60 flow calibration ({100 * differences['calibrate_flow_160x60']:+.1f}%) and "
+        "on the first instrument's 80x30 march window "
+        f"({100 * differences['calibrate_march_80x30_short']:+.1f}% on the 9 s to 10.5 s "
+        f"window, {100 * differences['calibrate_march_80x30_regions']:+.1f}% on the 9 s to 40 s "
+        "one). The lean windows are within 3%. The flow calibrations' means rest on three "
+        "unwrapped and two wrapped runs whose spread is wider than the difference, so they "
+        "do not resolve 5%; the paired measurement is in the text.",
         "",
     ]
     rows = []
@@ -407,7 +415,7 @@ def calibration(lines: list[str]) -> dict[str, float]:
         "instrument of T3 to T12; regions: the march's line regions alone.",
         "",
     ]
-    return estimates
+    return {"estimate": estimates, "measured": differences}
 
 
 def flow_records() -> dict[str, dict]:
@@ -424,7 +432,8 @@ def outer_of(record: dict) -> int:
     return record["outer"]
 
 
-def flow_table(lines: list[str], estimates: dict[str, float]) -> dict:
+def flow_table(lines: list[str], calibrated: dict[str, dict[str, float]]) -> dict:
+    """T3 and the CG table; returns each grid's stage times and repeat counts."""
     lines += ["### T3. An outer iteration of the flow solve", ""]
     rows, facts = [], {}
     for grid, r in flow_records().items():
@@ -491,8 +500,16 @@ def flow_table(lines: list[str], estimates: dict[str, float]) -> dict:
         "viscosity and the k-epsilon wall conditions; the stopping rule holds the cell-centre "
         "velocities, the steps it reads and the rule's update. The 80x30 and 160x60 solves are "
         "inside the whole runs of T4, so their wrappers' overhead is those runs'; the 320x120 "
-        f"rows are its first 300 iterations, overhead as calibrated ({pct(estimates['calibrate_flow_320x120'])} "
-        "by the event estimate).",
+        "rows are its first 300 iterations. The flow timers cost more than the event estimate "
+        "of T2 says. The calibrations measured "
+        f"{100 * calibrated['measured']['calibrate_flow_80x30']:+.1f}% (80x30), "
+        f"{100 * calibrated['measured']['calibrate_flow_160x60']:+.1f}% (160x60) and "
+        f"{100 * calibrated['measured']['calibrate_flow_320x120']:+.1f}% (320x120) against "
+        f"{pct(calibrated['estimate']['calibrate_flow_80x30'])}, "
+        f"{pct(calibrated['estimate']['calibrate_flow_160x60'])} and "
+        f"{pct(calibrated['estimate']['calibrate_flow_320x120'])} by the estimate; the paired "
+        "measurement of test 84 (section 'The stop condition') gives more. Most wrapped calls "
+        "sit in the pressure correction, so its share is inflated most.",
         "",
     ]
     return facts
@@ -948,7 +965,7 @@ def bound_table(lines: list[str], flow: dict, march: dict, counted: dict) -> dic
     ]
     cells = probe84.cells_of("320x120")
     bw = counts84.PEAK_BANDWIDTH
-    lo, _hi = counts84.BOOST_HZ
+    lo, hi = counts84.BOOST_HZ
     stages = counted["stages"]["320x120"]
     rows, out = [], {}
     f = flow["320x120"]
@@ -970,40 +987,111 @@ def bound_table(lines: list[str], flow: dict, march: dict, counted: dict) -> dic
             now = w["stages"].get(stage, 0) / steps_after(w["record"])
             per = "step after the onset"
         t_bw = by * cells / bw * 1e9
-        t_fp64 = ops * cells / counts84.peak_fp64(lo) * 1e9
+        t_lo = ops * cells / counts84.peak_fp64(lo) * 1e9
+        t_hi = ops * cells / counts84.peak_fp64(hi) * 1e9
         rows.append(
             [
                 NAMES[stage],
                 per,
                 f"{now / 1e3:.1f}",
                 f"{t_bw / 1e3:.2f}",
-                f"{t_fp64 / 1e3:.2f}",
-                f"{now / max(t_bw, t_fp64):.0f}",
+                f"{t_lo / 1e3:.2f}",
+                f"{t_hi / 1e3:.2f}",
+                f"{now / max(t_bw, t_lo):.0f}",
+                f"{now / max(t_bw, t_hi):.0f}",
             ]
         )
-        out[stage] = now / max(t_bw, t_fp64)
+        out[stage] = now / max(t_bw, t_hi)
     lines += table(
         [
             "stage",
             "per",
             "now, us",
             "at 256 GB/s, us",
-            "at peak FP64 (1230 MHz), us",
-            "bound on the speedup (labelled: an upper bound only while every byte is DRAM traffic)",
+            f"at peak FP64 ({lo / 1e6:.0f} MHz), us",
+            f"at peak FP64 ({hi / 1e6:.0f} MHz), us",
+            f"bound, {lo / 1e6:.0f} MHz",
+            f"bound, {hi / 1e6:.0f} MHz",
         ],
         rows,
     )
+    largest = max(
+        counts84.KERNELS,
+        key=lambda k: value(k.bytes, counted["rep"]["320x120"]),
+    )
+    footprint = value(largest.bytes, counted["rep"]["320x120"]) * cells / 2**20
     lines += [
         "The bandwidth time is T7's bytes per call over the peak bandwidth; the FP64 time its "
-        "operations over the peak at the bottom of the boost range. The bound is the time now over "
-        "the larger of the two. It assumes every byte crosses DRAM. Every field of the 320x120 grid "
-        "is 0.29 MiB and a stage touches at most a few dozen of them, so a stage's working set fits "
-        "in the 32 MiB L2, where the bandwidth is higher than DRAM's; NVIDIA publishes no L2 "
-        "bandwidth for this part, so no tighter bound is stated. Nor does the bound count a kernel "
+        "operations over the peak at each end of the boost range. A bound is the time now over "
+        "the larger of the two, and the bound at the top of the range is the most favourable one. "
+        "Each bound is labelled: it is an upper bound on the speedup only while every byte is DRAM "
+        "traffic. Every field of the 320x120 grid is 0.29 MiB and the largest kernel of T7 "
+        f"({NAMES.get(largest.stage, largest.stage)}, {largest.name}) moves {footprint:.1f} MiB per execution, "
+        f"against an L2 of {counts84.L2_BYTES // 2**20} MiB, so each kernel's data stay in the L2 "
+        "and the DRAM bandwidth is not the one it meets (T9b). Nor does a bound count a kernel "
         "launch's latency, or the host reads of T7's scalars between kernels.",
         "",
     ]
     return out
+
+
+def side_of(intensity: float, bandwidth: float) -> str:
+    """Which side of the FP64 balance INTENSITY falls on, over the boost range.
+
+    A kernel is memory-bound when its operations per byte are below peak FP64
+    over BANDWIDTH, and peak FP64 grows with the graphics clock, so the answer
+    is one side at every clock or changes at one clock.
+    """
+    lo, hi = counts84.BOOST_HZ
+    crossover = intensity * bandwidth / counts84.peak_fp64(1.0)
+    if crossover <= lo:
+        return "memory-bound at every clock"
+    if crossover >= hi:
+        return "compute-bound at every clock"
+    return f"memory-bound above {crossover / 1e6:.0f} MHz"
+
+
+def balance_table(lines: list[str], counted: dict) -> dict:
+    """T9b: each stage's intensity against the FP64 balance of DRAM and of L2."""
+    lo, hi = counts84.BOOST_HZ
+    bw = counts84.PEAK_BANDWIDTH
+    bandwidths = [
+        ("DRAM", bw),
+        *[(f"L2 at {b / 1e12:g} TB/s", b) for b in counts84.L2_BANDWIDTHS_ASSUMED],
+    ]
+    header = ["stage", "ops per byte"] + [
+        f"{name}, balance {counts84.peak_fp64(lo) / b:.2f} to {counts84.peak_fp64(hi) / b:.2f}"
+        for name, b in bandwidths
+    ]
+    stages = counted["stages"]["320x120"]
+    rows = []
+    sides: dict[str, list[str]] = {}
+    items = [(NAMES[k], v[0] / v[1]) for k, v in stages.items()]
+    variants = [(f"advection, {v.name}", v.ops / v.bytes) for v in counts84.VARIANTS]
+    for name, intensity in [*items, *variants]:
+        row = [side_of(intensity, b) for _n, b in bandwidths]
+        if (name, intensity) not in variants:
+            sides[name] = row
+        rows.append([name, f"{intensity:.2f}", *row])
+    lines += [
+        "### T9b. 320x120: each stage's intensity against the FP64 balance of DRAM and of L2",
+        "",
+    ]
+    lines += table(header, rows)
+    lines += [
+        "A stage is memory-bound in FP64 when its operations per byte are below the balance, "
+        "peak FP64 over the bandwidth it meets; the balance rises with the graphics clock, so "
+        "the table says whether a stage is on one side at every clock of the boost range "
+        f"({lo / 1e6:.0f} to {hi / 1e6:.0f} MHz) or changes sides at one. The DRAM bandwidth is "
+        f"{bw / 1e9:.1f} GB/s (T8). NVIDIA publishes no L2 bandwidth for this part, so the L2 "
+        "columns are assumed, not measured: the only Ada measurement found is the RTX 4090's, "
+        "about 5 TB/s with all 128 SMs active (Chips and Cheese, 'Microbenchmarking Nvidia's "
+        "RTX 4090', 2022), which scales by SM count to about 1.4 TB/s for 36 SMs, across dies "
+        "whose L2 slices differ. 1, 2 and 4 TB/s bracket that. The intensities are T7's "
+        "per-stage ones for 320x120's repeats.",
+        "",
+    ]
+    return sides
 
 
 def cprofile_table(lines: list[str]) -> None:
@@ -1041,9 +1129,24 @@ def cprofile_table(lines: list[str]) -> None:
     ]
 
 
+def tally(sides: dict[str, list[str]], column: int) -> str:
+    """Stages by side in COLUMN of T9b: memory / depends on the clock / compute."""
+    cells = [row[column] for row in sides.values()]
+    memory = sum(c.startswith("memory-bound at") for c in cells)
+    compute = sum(c.startswith("compute-bound") for c in cells)
+    return f"{memory} / {len(cells) - memory - compute} / {compute}"
+
+
 def predictions(
-    lines: list[str], flow: dict, march: dict, scaling: dict, full: dict, counted: dict
+    lines: list[str],
+    flow: dict,
+    march: dict,
+    scaling: dict,
+    full: dict,
+    counted: dict,
+    sides: dict[str, list[str]],
 ) -> dict:
+    """T11; returns the measured values the verdicts rest on."""
     lines += ["### T11. The predictions, scored", ""]
     est = full["estimate"]
     march_share = full["march"] / (full["march"] + full["flow"])
@@ -1059,7 +1162,7 @@ def predictions(
     c = c_window >= 5.0
     stages320 = counted["stages"]["320x120"]
     intens = {k: v[0] / v[1] for k, v in stages320.items()}
-    over = [NAMES[k] for k, v in intens.items() if v >= 1.0]
+    over = [f"{NAMES[k]} {v:.2f}" for k, v in intens.items() if v >= 1.0]
     kernels_over = [
         k.name
         for k in counts84.KERNELS
@@ -1070,17 +1173,27 @@ def predictions(
     d = not over
     densest = max(intens, key=intens.get)
     bw = counts84.PEAK_BANDWIDTH
-    # The graphics clock at which the FP64 balance equals the densest stage's
-    # intensity: above it the stage is memory-bound, below it compute-bound.
-    crossover = intens[densest] * bw / counts84.peak_fp64(1.0)
     lo, hi = counts84.BOOST_HZ
     fused = [(v.name, v.ops / v.bytes) for v in counts84.VARIANTS]
-    if d and crossover <= lo:
-        d_verdict = "HOLDS"
-    elif d:
-        d_verdict = "HOLDS IN PART"
-    else:
+    # The clause "so every stage is memory-bound" holds only if every stage is
+    # on the memory side at every clock, against DRAM and against each assumed
+    # L2 bandwidth; the first clause (below 1 op/byte) decides on its own when
+    # it fails.
+    memory_everywhere = all(
+        row[col].startswith("memory-bound at")
+        for row in sides.values()
+        for col in range(4)
+    )
+    if not d:
         d_verdict = "FAILS"
+    elif memory_everywhere:
+        d_verdict = "HOLDS"
+    else:
+        d_verdict = "HOLDS IN PART"
+    l2_columns = ", ".join(
+        f"L2 at {b / 1e12:g} TB/s {tally(sides, col)}"
+        for col, b in enumerate(counts84.L2_BANDWIDTHS_ASSUMED, start=1)
+    )
     e_parts = {}
     for name in ("320x120 estimate", "80x30 whole", "160x60 whole", "320x120 window"):
         if name == "320x120 estimate":
@@ -1116,9 +1229,13 @@ def predictions(
             "(d)",
             "every stage below 1 op/byte, so every stage memory-bound in FP64",
             ("every stage below 1" if d else "at or above 1: " + ", ".join(over))
-            + f"; the densest, {NAMES[densest]}, {intens[densest]:.2f}, is memory-bound in "
-            f"FP64 only above a {crossover / 1e6:.0f} MHz graphics clock (the boost range "
-            f"is {lo / 1e6:.0f}-{hi / 1e6:.0f} MHz, T8)"
+            + f"; against DRAM ({counts84.peak_fp64(lo) / bw:.2f} to "
+            f"{counts84.peak_fp64(hi) / bw:.2f} op/byte over the boost range of "
+            f"{lo / 1e6:.0f}-{hi / 1e6:.0f} MHz, T8) the densest, {NAMES[densest]}, "
+            f"{intens[densest]:.2f}, is {side_of(intens[densest], bw)} in FP64"
+            "; stages memory-bound at every clock / changing with the clock / compute-bound "
+            f"at every clock (T9b): DRAM {tally(sides, 0)}, {l2_columns} (L2 bandwidths assumed, "
+            "none published); every kernel's data fit the L2 on 320x120 (T9)"
             + (
                 f"; kernels at or above 1: {', '.join(kernels_over)}"
                 if kernels_over
@@ -1137,7 +1254,7 @@ def predictions(
     ]
     lines += table(["", "prediction", "measured", "verdict"], rows)
     lines += [
-        "(a) and (e) are scored on T6's whole-run estimate, (c) on the windows, (d) on T7's 320x120 stage counts.",
+        "(a) and (e) are scored on T6's whole-run estimate, (c) on the windows, (d) on T7's 320x120 stage counts and T9b.",
         "",
     ]
     return {"pressure": pressure_shares, "e": e_parts, "march_share": march_share}
@@ -1216,7 +1333,10 @@ def ports(lines: list[str], flow: dict, march: dict, full: dict) -> None:
         "stays in Python under such a port: the momentum predictor, the hierarchy's build, the "
         "turbulence update, the boundary updates, the stopping rule, the input checks, the source, "
         "the conductances, the booking, the monitor, the arrival maps and the writes. The 320x120 "
-        "row's implicit solve is T6's stage less its conductances, by the window's split.",
+        "row's implicit solve is T6's stage less its conductances, by the window's split, at the "
+        "window's share of solve time in that stage; the run averages more sweeps per class step "
+        "than the window, so that row's share of the run is understated by about a point, and its "
+        "speedup by about a tenth.",
         "",
     ]
 
@@ -1232,8 +1352,8 @@ def build() -> dict[str, list[str]]:
         return result
 
     block("machine", machine)
-    estimates = block("calibration", calibration)
-    flow = block("flow", flow_table, estimates)
+    calibrated = block("calibration", calibration)
+    flow = block("flow", flow_table, calibrated)
     march = block("march", march_table)
     block("frames", frames_check)
     scaling = block("scaling", per_cell, flow, march)
@@ -1241,8 +1361,9 @@ def build() -> dict[str, list[str]]:
     counted = block("counts", counts_tables, flow, march)
     block("gpu", gpu_table)
     block("bounds", bound_table, flow, march, counted)
+    sides = block("balance", balance_table, counted)
     block("cprofile", cprofile_table)
-    block("predictions", predictions, flow, march, scaling, full, counted)
+    block("predictions", predictions, flow, march, scaling, full, counted, sides)
     block("ports", ports, flow, march, full)
     return blocks
 
