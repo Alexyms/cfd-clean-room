@@ -167,6 +167,15 @@ counts do: no Phase 5 conclusion changes, single channels alarm up to 42% sooner
 and the room clears later or at the same time. Alex decided on 2026-11-14 to build
 cumulative counting (prompt 81) and to re-score the sweep from its stored frames rather than
 run it again.
+Prompt 81 (PR 113, `docs/reports/cumulative_build.md`) built it: the monitor, the arrival
+maps, the clear times and the room recovery read the channels, every record says which
+counting it holds, and placement refuses to mix the two. No Phase 5 conclusion changed.
+Prompt 82 (PR 114, `docs/reports/search_scaling.md`) measured the exact placement search:
+as built it reaches 27 units; an enumeration of combinations of maximal masks reaches 63,
+about nine dust release positions, on tables too easy to show which method real positions
+need. On 2026-11-15 Alex approved nine release positions and deferred their runs, with the
+other exploration runs on this room, until after the Phase 6 port: they ask product
+questions that the port answers in minutes, not hours, and that are better asked in 3D.
 Phases 6 and 7 have not begun.
 
 The product room itself has never been solved, and on 2026-10-04 it was found that the laminar
