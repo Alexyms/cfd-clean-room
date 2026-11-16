@@ -361,17 +361,12 @@ def runs_table(results: dict) -> list[str]:
             f"{a['stop_reason']} / {b['stop_reason']}"
             for a, b in zip(win.summary["flows"], lin.summary["flows"], strict=True)
         ]
-        readings = max(
-            _reading_difference(a.rule_readings, b.rule_readings)
-            for a, b in zip(_records(win), _records(lin), strict=True)
-        )
         rows.append(
             [
                 scenario,
                 " / ".join(str(o) for o in c["ref_outers"]),
                 " / ".join(str(o) for o in c["outers"]),
                 "; ".join(reasons),
-                e(readings),
                 f"{win.summary['steps']} / {lin.summary['steps']}",
                 yes(c["flow_bitwise"]),
                 yes(c["fields_bitwise"]),
@@ -390,7 +385,6 @@ def runs_table(results: dict) -> list[str]:
                 "outer per state, Windows",
                 "Linux",
                 "stop reasons, Windows / Linux",
-                "rule readings, largest relative difference",
                 "steps, Windows / Linux",
                 "flow states bitwise",
                 "class frames",
@@ -402,26 +396,52 @@ def runs_table(results: dict) -> list[str]:
             rows,
         ),
         "",
-        "Bitwise as `tables85.compare_run` defines it (prompt 85's P1). The rule readings are each flow state's stopping-rule readings at its stop, from the run file. The run files record the outer count of each flow state and its stop reason, not the pressure CG's or the implicit solves' counts.",
+        "Bitwise as `tables85.compare_run` defines it (prompt 85's P1). The run files record the outer count of each flow state and its stop reason, not the pressure CG's or the implicit solves' counts (T4c counts those).",
     ]
 
 
-def _reading_difference(a: dict[str, float], b: dict[str, float]) -> float:
-    """The largest |b - a| / |a| over the stopping rule's readings; 0 where both are 0.
-
-    Raises
-    ------
-    ValueError
-        If the two runs' rules recorded different readings.
-    """
-    if a.keys() != b.keys():
-        raise ValueError(f"the rule readings differ in kind: {sorted(a)} {sorted(b)}")
-    out = 0.0
-    for name, x in a.items():
-        y = b[name]
-        if x != y:
-            out = max(out, abs(y - x) / abs(x) if x != 0.0 else float("inf"))
-    return out
+def readings_table() -> list[str]:
+    """T4d: the readings each flow state's run file records at its stop, on both platforms."""
+    rows = []
+    for scenario in SCENARIOS:
+        win, lin = RunAt(WINDOWS, scenario, GRID), RunAt(LINUX, scenario, GRID)
+        tol = win.config.mass_imbalance_tol
+        pairs = zip(_records(win), _records(lin), strict=True)
+        for state, (a, b) in enumerate(pairs):
+            if a.rule_readings.keys() != b.rule_readings.keys():
+                raise ValueError(f"{scenario}: the two runs record different readings")
+            for name, x in a.rule_readings.items():
+                y = b.rule_readings[name]
+                scale = e(tol) if name.endswith("imbalance") else "-"
+                rows.append(
+                    [
+                        scenario,
+                        str(state),
+                        name,
+                        f"{x:.6e}",
+                        f"{y:.6e}",
+                        e(abs(y - x)),
+                        scale,
+                    ]
+                )
+    return [
+        "### T4d. The readings at each flow state's stop, Windows against Linux",
+        "",
+        *tables85.table(
+            [
+                "scenario",
+                "flow state",
+                "reading",
+                "Windows",
+                "Linux",
+                "|difference|",
+                "the stop's tolerance for it",
+            ],
+            rows,
+        ),
+        "",
+        "The readings `time_integration` records with each flow state: the last outer residual, the largest per-cell mass imbalance, the imbalance's signed sum over the cells and the corrections that reached the CG's cap. The two imbalances are tested against `mass_imbalance_tol` (`stopping.py`, conditions (b) and (d)). Each is a small quantity at a converged stop, the signed sum a cancelling one of rounding size, so its difference is read against its tolerance, not against itself (ADR-017 G).",
+    ]
 
 
 def repeats_table(repeats: dict) -> list[str]:
@@ -861,7 +881,15 @@ def build() -> tuple[str, dict[str, str]]:
         "environment": "\n".join(environment_table()),
         "core": "\n".join(core_table(parity, ctest)),
         "runs": "\n".join(
-            [*runs_table(results), "", *repeats_table(repeats), "", *counts_table()]
+            [
+                *runs_table(results),
+                "",
+                *repeats_table(repeats),
+                "",
+                *counts_table(),
+                "",
+                *readings_table(),
+            ]
         ),
         "fields": "\n".join(field_lines),
         "decisions": "\n".join(decision_lines),
