@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Computational Fluid Dynamics engine built from scratch in Python (with compiled C inner loops) simulating clean room airflow and contamination transport. Finite Volume discretization, incompressible laminar Navier-Stokes, Eulerian multi-class particle transport with gravitational settling. Alert monitoring layer for contamination detection and sensor placement analysis.
+Computational Fluid Dynamics engine built from scratch in Python (with a compiled C++ core) simulating clean room airflow and contamination transport. Finite Volume discretization, incompressible laminar Navier-Stokes, Eulerian multi-class particle transport with gravitational settling. Alert monitoring layer for contamination detection and sensor placement analysis.
 
 **This is a portfolio project. Code quality, readability, and professional engineering practices matter as much as functionality.**
 
@@ -11,8 +11,8 @@ Computational Fluid Dynamics engine built from scratch in Python (with compiled 
 ## Language & Runtime
 
 - **Primary language:** Python 3.12+
-- **Performance-critical code:** C (compiled to shared library, called via ctypes)
-- **Virtual environment:** `.venv/` in project root. Always activate before running or installing anything.
+- **Performance-critical code:** C++20 (the core library, `core/`), called through a nanobind module; CUDA C++ at the Phase 6 CUDA step (ADR-017)
+- **Virtual environment:** `.venv/` in project root on Windows; `.venv-linux/` under WSL2 for the compiled core (ADR-017 A). Always activate before running or installing anything.
 - **Package management:** pip with `requirements.txt` for runtime dependencies, `requirements-dev.txt` for dev/test dependencies.
 
 ---
@@ -22,7 +22,7 @@ Computational Fluid Dynamics engine built from scratch in Python (with compiled 
 ```
 cfd_clean_room/
 ├── src/                    # All Python source modules
-├── csolver/                # C source files, header, Makefile
+├── core/                   # C++ core library, its tests and its binding; CMake
 ├── configs/                # YAML configuration files
 ├── tests/                  # Validation and unit tests
 ├── scripts/                # Simulation runners, visualization
@@ -246,49 +246,44 @@ def settling_velocity(self, size_class: int) -> float:
 
 ---
 
-## C Coding Standards
+## C++ Coding Standards
 
 ### Files
 
-- All C source lives in `csolver/`.
-- Shared header `csolver.h` defines all function signatures exposed to Python.
-- `Makefile` compiles to a shared library (`libcsolver.so` on Linux, `libcsolver.dylib` on macOS).
+- All compiled sources live in `core/` (ADR-017 A): one header per module in `core/include/cfdcore/`, one source per module in `core/src/`, the module's GoogleTest file in `core/tests/`, and the nanobind module alone in `core/python/`. The CUDA step's kernels go in `core/cuda/`.
+- CMake builds the library `cfdcore` (no Python dependency), the binding `_cfdcore` and the tests. Builds go out of source, never into the checkout.
 
 ### Style
 
-- Function names: `snake_case`, prefixed with module context. Example: `ns_pressure_correction_step`, `transport_advection_diffusion_step`.
-- No dynamic memory allocation inside hot loops. All arrays allocated in Python and passed as pointers.
-- Every function documents its parameters with a comment block above the signature.
-- Compile with `-Wall -Wextra -O2`. Fix all warnings.
+- C++20. Function and type names `snake_case` inside a namespace per module. Example: `cfdcore::pressure`, `cfdcore::scalar`.
+- No allocation inside a step: every array is allocated when a run or an interval is set up.
+- Every public function documents its parameters, units and array shapes in a comment above it.
+- Compile with `-Wall -Wextra -Wpedantic -O2 -ffp-contract=off`. Fix all warnings.
 
 ### Interface Contract
 
-C functions receive raw pointers and dimensions. They have no knowledge of:
-- Boundary conditions (applied in Python before/after C call)
-- Configuration (parameters passed as individual arguments)
-- File I/O, logging, or error reporting to the user
+The core receives arrays and scalars. It has no knowledge of:
+- The configuration file (parameters arrive in setup structs and as scalars)
+- The boundary segments' names or types: their per-face data are derived in Python and handed in, and the core applies them inside the step, since the step is resident (ADR-017 decision 2)
+- File I/O, logging, or error reporting to the user (an error returns a status the binding turns into the exception the reference raises)
 
-```c
-/*
- * Perform one pressure correction step (SIMPLE algorithm).
- *
- * u, v:       velocity field arrays [ny x nx], row-major
- * p:          pressure field array [ny x nx], row-major
- * nx, ny:     grid dimensions
- * dx, dy:     cell spacing
- * dt:         time step
- * rho, mu:    fluid density and viscosity
- * alpha_p:    pressure under-relaxation factor
- *
- * Modifies u, v, p in-place.
- */
-void ns_pressure_correction_step(
-    double *u, double *v, double *p,
-    int nx, int ny,
-    double dx, double dy, double dt,
-    double rho, double mu,
-    double alpha_p
-);
+An illustration of the form, not a signature of record:
+
+```cpp
+namespace cfdcore::scalar {
+
+// Advective flux of one particle class through the faces normal to one direction:
+// QUICK's face value bounded by the UMIST limiter (ADR-011 C).
+//
+// dir:    the direction, 0 to D - 1
+// c:      the class field, one value per cell, row-major, particles per m^3
+// u_face: the velocity normal to the faces, m/s, one value per face in `dir`
+// area:   the face areas per unit depth, m, one value per face in `dir`
+// flux:   output, particles per s per unit depth, one value per face in `dir`
+void advective_flux(int dir, std::span<const double> c, std::span<const double> u_face,
+                    std::span<const double> area, std::span<double> flux);
+
+}  // namespace cfdcore::scalar
 ```
 
 ---
@@ -590,13 +585,13 @@ project rule.
 - Source code, tests, configs, documentation
 - `requirements.txt`, `requirements-dev.txt`, `pyproject.toml`
 - CI workflow files
-- C source files, header, Makefile
+- C++ and CUDA sources, headers and CMake files (`core/`)
 
 **Never committed (add to `.gitignore`):**
-- `.venv/`
+- `.venv/`, `.venv-linux/`
 - `results/` (simulation output)
 - `__pycache__/`, `*.pyc`
-- `*.so`, `*.dylib`, `*.o` (compiled artifacts -- built locally or in CI)
+- `*.so`, `*.dylib`, `*.o`, `*.pyd` and build trees (compiled artifacts -- built locally or in CI)
 - `.DS_Store`
 - IDE-specific files (`.vscode/` settings, but `.vscode/extensions.json` is ok)
 

@@ -1,6 +1,6 @@
 # CFD Clean Room Simulation
 
-A from-scratch Computational Fluid Dynamics engine simulating clean room airflow and contamination transport. Built in Python with a NumPy reference solver for validation and CUDA C++ acceleration via pybind11 for production runs.
+A from-scratch Computational Fluid Dynamics engine simulating clean room airflow and contamination transport. Built in Python with a NumPy reference solver for validation and a compiled C++ core, then its CUDA port, for production runs (ADR-017).
 
 The simulation models a vertical cross-section of a semiconductor clean room, solving incompressible Navier-Stokes for the velocity field using the Finite Volume method, then solving advection-diffusion equations for particle contamination transport across five size classes. An alert monitoring layer tracks contamination against ISO 14644 thresholds for detection and sensor placement analysis.
 
@@ -11,7 +11,7 @@ The simulation models a vertical cross-section of a semiconductor clean room, so
 - **Solver:** Finite Volume discretization, SIMPLE algorithm for pressure-velocity coupling
 - **Transport:** Eulerian multi-class particle transport with gravitational settling and Cunningham slip correction
 - **Particle sizes:** 0.1, 0.3, 0.5, 1.0, 5.0 um (spanning diffusion-dominated to settling-dominated regimes)
-- **Implementation:** Python orchestration with NumPy reference solver; CUDA C++ acceleration via pybind11 for production runs
+- **Implementation:** Python orchestration with NumPy reference solver; a C++ core through nanobind, then CUDA, for production runs (Phase 6, ADR-017)
 - **Alert system:** Configurable sensor placement, ISO 14644-1 threshold monitoring, detection latency analysis
 
 ## Development Approach
