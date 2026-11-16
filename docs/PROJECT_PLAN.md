@@ -1,8 +1,8 @@
 # Project Plan
 
 **Project:** CFD Clean Room Simulation
-**Last Updated:** 2026-11-15
-**Current Phase:** Phase 6 IN PROGRESS (the design pass, prompt 85, ADR-017 Proposed); Phase 5 (Alert Monitoring System) COMPLETE (CONDITIONAL PASS, Alex, 2026-11-10; Phase 4's condition 1 carried, met 2026-11-12 (prompt 77, PR 106); ADR-015's six steps merged as PRs 99 to 104); Phase 4 COMPLETE (CONDITIONAL PASS, Alex, 2026-10-29, three conditions in `docs/reports/phase4_scenarios_report.md`, conditions 2 and 3 met by step 1); Phase 3 COMPLETE (CONDITIONAL PASS, Alex, 2026-10-16); ECR-002 closed 2026-10-15 and ECR-003 2026-10-07
+**Last Updated:** 2026-11-16
+**Current Phase:** Phase 6 IN PROGRESS (step 0, the design pass, done: ADR-017 Accepted 2026-11-16; step 1, the toolchain, next); Phase 5 (Alert Monitoring System) COMPLETE (CONDITIONAL PASS, Alex, 2026-11-10; Phase 4's condition 1 carried, met 2026-11-12 (prompt 77, PR 106); ADR-015's six steps merged as PRs 99 to 104); Phase 4 COMPLETE (CONDITIONAL PASS, Alex, 2026-10-29, three conditions in `docs/reports/phase4_scenarios_report.md`, conditions 2 and 3 met by step 1); Phase 3 COMPLETE (CONDITIONAL PASS, Alex, 2026-10-16); ECR-002 closed 2026-10-15 and ECR-003 2026-10-07
 
 This document tracks development progress by phase. Code review reads this document to determine the current phase and verify that PRs are in scope; the policy is `docs/REVIEW_POLICY.md`. Update this document as work progresses.
 
@@ -18,8 +18,9 @@ This document tracks development progress by phase. Code review reads this docum
 | 3 | Transport Solver | COMPLETE | CONDITIONAL PASS | phase3_transport_report.md |
 | 4 | Scenarios & Time Integration | COMPLETE | CONDITIONAL PASS (Alex, 2026-10-29; three conditions, the report's "The decision"; conditions 2 and 3 met by Phase 5 step 1, 2026-10-31) | phase4_scenarios_report.md |
 | 5 | Alert Monitoring System | COMPLETE | CONDITIONAL PASS (Alex, 2026-11-10; Phase 4's condition 1 carried, met 2026-11-12 (prompt 77), the report's "The decision") | phase5_alert_system_report.md |
-| 6 | The Compiled Core, then CUDA, then 3D (renamed 2026-11-15, ADR-017) | IN PROGRESS (design pass, prompt 85; ADR-017 Proposed) | -- | -- |
+| 6 | The Compiled Core and CUDA (renamed 2026-11-15, ADR-017; the 3D model moved to Phase 8, Alex 2026-11-16) | IN PROGRESS (step 0 done: ADR-017 Accepted 2026-11-16; step 1, the toolchain, next) | -- | -- |
 | 7 | Visualization & Portfolio | NOT STARTED | -- | -- |
+| 8 | The 3D Model (added 2026-11-16, Alex; opened by an ECR after Phase 7) | NOT STARTED | -- | -- |
 
 Status values: NOT STARTED, IN PROGRESS, GATE REVIEW, COMPLETE
 
@@ -360,15 +361,15 @@ The gate's conditions (Alex, 2026-10-29; the gate report's "The decision"):
 
 ---
 
-## Phase 6: The Compiled Core, then CUDA, then 3D
+## Phase 6: The Compiled Core and CUDA
 
 **Goal:** Move the whole step, the flow solve's outer iteration and the transport march's step,
 into a C++ core with the fields resident for a run, matched to the NumPy reference block by
-block and run by run; then port the same 2D core to CUDA, measuring where single precision pays;
-then open the true 3D model as a Phase 6 ECR. Revised 2026-11-15 (prompt 85) by Alex's six
-decisions of that date and ADR-017 (Proposed), which replace the plan's two CUDA kernels. The
-evidence is the run profile (`docs/reports/profile84.md`) and the noise band probe
-(`docs/reports/phase6_design.md`).
+block and run by run; then port the same 2D core to CUDA, measuring where single precision pays.
+Revised 2026-11-15 (prompt 85) by Alex's six decisions of that date and ADR-017, which replace
+the plan's two CUDA kernels. ADR-017 was accepted by Alex on 2026-11-16, with the true 3D model
+moved to its own phase, Phase 8. The evidence is the run profile (`docs/reports/profile84.md`)
+and the noise band probe (`docs/reports/phase6_design.md`).
 
 **Branch prefix:** `phase6/`
 
@@ -380,25 +381,24 @@ on the budgeted, cumulative code).
 Each step is one pull request, reviewed and tested as the project's other steps are. The order
 is ADR-017 decision 3's: the CPU core stage by stage, the march's stages first since they hold
 about four fifths of a product run (profile T6), then the flow solve's, then the run end to end,
-then CUDA, then 3D.
+then CUDA. Phase 6's gate follows step 7.
 
 | Step | Work | Gate |
 |------|------|------|
-| 0. Design | ADR-017 and the noise band probe (prompt 85) | ADR-017 accepted by Alex; the band accepted as the end-to-end criterion |
+| 0. Design (DONE 2026-11-16) | ADR-017 and the noise band probe (prompt 85) | Met: ADR-017 accepted by Alex on 2026-11-16, the band accepted as the end-to-end criterion with its three tiers |
 | 1. Toolchain | Ubuntu 24.04 under WSL2, `.venv-linux/`, `core/` with its CMake, GoogleTest and the nanobind module building one trivial block; CI builds the core on `ubuntu-latest` and runs CTest; `.gitattributes` keeps shell scripts LF; the versions recorded | CTest passes on WSL2 and in CI; the Python reference under WSL2 makes the probe's 80x30 runs with every decision equal to the Windows records and every field inside the band (`docs/reports/phase6_design.md`, section H of ADR-017); a reference run's wall time with its run file on `/mnt/c` and on the Linux file system recorded |
-| 2. The scalar scheme | `grid`, `layout`, `reduce`, `scalar` (QUICK with the UMIST limiter, the advective flux per direction, `implicit_step` by Jacobi and CG with ADR-016's acceptance) | Each block's parity test passes (REQ-N03 level 1): 1e-12 relative, or bitwise where the order is copied; the implicit solve compared for the reference's sweep count, the differing stop tests counted |
+| 2. The scalar scheme | `grid`, `layout`, `reduce`, `scalar` (QUICK with the UMIST limiter, the advective flux per direction, `implicit_step` by Jacobi and CG with ADR-016's acceptance) | Each block's parity test passes (REQ-N03 level 1): 1e-12 relative (a sum's relative to its terms' magnitudes), or bitwise where the order is copied, the copied orders of ADR-017 G confirmed against NumPy on the reference's arrays first; the implicit solve compared for the reference's sweep count, the differing stop tests counted |
 | 3. The march | `transport` (one class step, the booking and the breach test), `channels`, `arrival`, `recovery`, `march` | Blocks as step 2; and the march alone on the reference's stored flow states (the probe's 80x30 runs): every decision inside the band, the budget closing as ADR-016 states |
 | 4. The pressure correction | `momentum`, `pressure`, `multigrid` | Blocks as step 2; the CG and the V-cycle compared for the reference's iteration count (ADR-013 C) |
 | 5. The outer iteration | `turbulence`, `walls`, `stopping`, `flow` | Blocks as step 2; a steady solve from rest on 80x30 and 160x60: the outer count and the stop's reason the reference's, the flow fields inside the band |
-| 6. End to end | `solver.backend` (`reference`, `core`), `time_integration` calling the core, `AlertMonitor`'s update from readings; the benchmark and the timing | The band first measured on 320x120 by the two stop variants (`diffusion_tol` x 0.99, `outer_one_later`) on the dust release; then REQ-N03 level 2: the probe's runs and the five product scenarios on 320x120, with the placement, inside the band; the validation rows rerun on the core with their verdicts unchanged (ADR-017 F, option 1); the wall time against the reference on the three grids |
-| 7. CUDA | The same stages as kernels behind `CFD_CORE_CUDA`, double precision first; then single precision stage by stage where a measurement shows it pays, the advective flux and its limiter first, running totals, residuals, stops and the budget in double (decision 5); the L2 bandwidth measured | Blocks on the device as step 2; the end-to-end benchmark of step 6 inside the band in every precision used; each stage's FP32 decision recorded with its speed and its band reading |
-| 8. ECR: the 3D model | A design pass for the true 3D model on the per-direction core (decision 4), its validation rows (VAL-021's measurement among them) and its scope change | Opened as an ECR after step 7; its own steps and gates |
+| 6. End to end | `solver.backend` (`reference`, `core`), `time_integration` calling the core, `AlertMonitor`'s update from readings; the benchmark and the timing, its comparators taken from the probe with planted-defect tests of their signs, straddling moves and failing verdicts (test 85 S1) | The band first measured on 320x120 by the two stop variants (`diffusion_tol` x 0.99, `outer_one_later`) on the dust release and the door leak, the door leak for its two flow states (the 160x60 band has no flow switch, review 85 S13); then REQ-N03 level 2 in its three tiers: the probe's runs and the five product scenarios on 320x120, with the placement, inside the band; the validation rows rerun on the core with their verdicts unchanged (ADR-017 F, option 1); the wall time against the reference on the three grids |
+| 7. CUDA | The same stages as kernels behind `CFD_CORE_CUDA`, double precision first; then single precision stage by stage where a measurement shows it pays, the advective flux and its limiter first, running totals, residuals, stops and the budget in double (decision 5); the L2 bandwidth measured | Blocks on the device as step 2; the end-to-end benchmark of step 6 inside the band in every precision used, single precision held to the same limits and tiers (Alex, 2026-11-16) and a stage that misses them kept in double; each stage's FP32 decision recorded with its speed and its band reading |
 
 ### Deliverables
 
 | Deliverable | Status | Notes |
 |-------------|--------|-------|
-| docs/ADR/ADR-017-phase6-compiled-core.md | PROPOSED (prompt 85) | The six decisions recorded as Alex's; the toolchain, binding, modules, tests, scope, threads, the band, REQ-N03 and REQ-S06 restated, CLAUDE.md's compiled-code rules |
+| docs/ADR/ADR-017-phase6-compiled-core.md | ACCEPTED (Alex, 2026-11-16; prompt 85) | The six decisions recorded as Alex's; the toolchain, binding, modules, tests, scope, threads, the band, REQ-N03 and REQ-S06 restated, CLAUDE.md's compiled-code rules |
 | docs/reports/phase6_design.md, docs/reports/probe85/ | DONE (prompt 85) | The noise band probe and its tables (`tables85.py --check`) |
 | core/ (CMakeLists.txt, include/cfdcore/, src/, tests/, python/) | NOT STARTED | Steps 1 to 5; one module per profile stage (ADR-017 C) |
 | src/core_backend.py | NOT STARTED | Step 6: the setup built from SimConfig, Mesh and the boundary layers; the solvers' contracts over the core |
@@ -411,8 +411,8 @@ then CUDA, then 3D.
 
 | Test ID | Description | Criterion | Status |
 |---------|-------------|-----------|--------|
-| REQ-N03 (1) | Building-block parity, CPU core and CUDA | Each block of ADR-017 C within 1e-12 relative of the reference's output, or bitwise where the order is copied; iterative blocks at the reference's count, differing stops counted | NOT RUN |
-| REQ-N03 (2) | End-to-end benchmark | Every decision output and field inside the band of ADR-017 H, on the probe's runs and the five 320x120 product scenarios with the placement, for the CPU core and for every precision CUDA uses | NOT RUN |
+| REQ-N03 (1) | Building-block parity, CPU core and CUDA | Each block of ADR-017 C within 1e-12 relative of the reference's output (a sum's relative to its terms' magnitudes), or bitwise where the order is copied; iterative blocks at the reference's count, differing stops counted | NOT RUN |
+| REQ-N03 (2) | End-to-end benchmark | Every decision output and field inside the band of ADR-017 H, in its three tiers, on the probe's runs and the five 320x120 product scenarios with the placement, for the CPU core and for every precision CUDA uses | NOT RUN |
 | Toolchain | The reference under WSL2 | The probe's 80x30 runs inside the band of the Windows records | NOT RUN |
 | Validation on the core | Every validation row of record but tier 2's | The same verdicts as on the reference, the measured values inside the band | NOT RUN |
 
@@ -425,7 +425,7 @@ then CUDA, then 3D.
 | CRLF working-tree line endings break shell scripts under Linux | `*.sh text eol=lf` in `.gitattributes`; git run from Windows only |
 | A stop that reads a reduction ends one iteration apart between the core and the reference (ADR-013 C, ADR-016) | Iterative blocks compared at the reference's count, the differing stops counted; the run judged by the band, not bitwise |
 | GPU not available in CI | CUDA tests marked `cuda` and run locally; CI builds and tests the CPU core |
-| The 3D model's scope grows into the 2D steps | Decision 4: per-direction code, 2D only implemented and tested; 3D enters through its ECR after step 7 |
+| The 3D model's scope grows into the 2D steps | Decision 4: per-direction code, 2D only implemented and tested; the 3D model is Phase 8, entered by an ECR after Phase 7 |
 
 ---
 
@@ -457,6 +457,31 @@ Note (issue 53 D5, 2026-10-07): `FieldHistory.record` keeps frames at `step % ev
 - All phase completion reports committed
 - All validation tests pass
 - README complete with setup instructions and results
+
+---
+
+## Phase 8: The 3D Model
+
+**Goal:** The true three-dimensional room on the per-direction core (ADR-017 decision 4), with
+the validation a 2D slice could not have, VAL-021's turbulent spreading against a published
+measurement first among it. Added 2026-11-16 by Alex's answer to ADR-017's question 11. 3D
+simulation is outside v1's scope (`docs/SYSTEM.md`, section 5), so the phase opens with an ECR
+that changes the scope, with its own design pass, steps and gates.
+
+**Branch prefix:** `phase8/`
+
+**Depends on:** Phase 6 complete (the C++ core and its CUDA port matched to the reference);
+opened after Phase 7.
+
+### Deliverables
+
+| Deliverable | Status | Notes |
+|-------------|--------|-------|
+| The 3D ECR and its design record | NOT STARTED | The scope change; the third dimension of the room, its grids and their cost on the GPU; the 3D validation rows, VAL-021's measurement among them; the exploration runs deferred to after the port that are better asked in 3D |
+
+### Gate Criteria
+
+Set by its ECR.
 
 ---
 
@@ -584,3 +609,4 @@ Phase 3 completion is the minimum viable portfolio artifact. A working, validate
 | 2026-11-14 | Cumulative counting built (prompt 81, branch phase5/cumulative-counting): the monitor, the arrival maps, the clear times and the recovery read channel k as the sum of class k and every larger class (ADR-015 C amended, REQ-A03 corrected). The five 320x120 scenarios and three 80x30 placement runs were made again and the sweep re-scored from its frames: no field, budget or flow state changed. `docs/reports/cumulative_build.md` scores the predictions. Prompt 81b, round 1's fixes: the clear times pinned to the channels, no score or search over two countings, no default counting, the past probes run again. |
 | 2026-11-15 | Phase 6 replanned (prompt 85, branch phase6/design): Alex's six decisions of 2026-11-15 and ADR-017 (Proposed) replace the two CUDA kernels with the whole step in a C++ core, then CUDA on the same 2D problem, then the 3D model through a Phase 6 ECR; the noise band probe (`docs/reports/phase6_design.md`) gives the end-to-end criterion. Phase 6 IN PROGRESS. No code changed in this commit. |
 | 2026-11-15 | Prompts 81 and 82 recorded in STATUS. The dust over several release positions deferred until after the Phase 6 port (Alex): nine positions approved and listed. A converted-office room type added to the deferred table. No code changed in this commit. |
+| 2026-11-16 | ADR-017 accepted (Alex), his answers to its twelve questions recorded in its Status: Phase 6 ends with its gate after the CUDA step, and the 3D model is its own phase, Phase 8, opened by an ECR after Phase 7 (step 8 removed from Phase 6); the band's limits read in three tiers; single precision held to the same bar; step 6's 320x120 re-measure adds the door leak. Step 0's gate met. Review 85's and test 85's corrections recorded (the MSVC fact, 89.8, the band's argument, the reduction orders). CLAUDE.md's compiled-code rules applied (ADR-017 K). No code changed. |

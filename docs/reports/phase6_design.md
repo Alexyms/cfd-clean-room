@@ -415,7 +415,7 @@ No variant moved a decision. P3b says what the zero moves of P3 and P5 are read 
 tenth of the arrival times are reached in each reference, and thousands of cells' clear times
 fall after their event's end, so the comparisons are over thousands of informative times on each
 grid. The file's four sensors are reached by no event on either grid, so their latencies are
-never, unchanged, and say nothing; the searched layouts' latencies, two thirds of them reached,
+never, unchanged, and say nothing; the searched layouts' latencies, three quarters of them reached,
 carry the sensor-level comparison.
 
 ### The band
@@ -516,6 +516,8 @@ restatement in ADR-017 I.
     step with the 3D model opened after it?
 12. **The deviation:** the door leak on 80x30 only, and the filter breach added on both grids?
 
+Alex answered them on 2026-11-16; ADR-017's Status records each answer.
+
 ## Deviations and limits
 
 - The door leak was not run on 160x60 (the deviation above); the breach was added on both grids.
@@ -530,6 +532,40 @@ restatement in ADR-017 I.
   tolerance changed.
 - The full test suite was not run: nothing under `src/` or `tests/` changed. The probe's own
   tests (`docs/reports/probe85/test_probe85.py`) pass.
+
+## Round 1's review and test (2026-11-16)
+
+Review 85 (`docs/prompts/review-85.md`) approved, with fourteen Suggestions; test 85
+(`docs/prompts/test-85.md`) passed 43 of 49 checks, with one Bug. The orchestrator recorded
+them on this branch with Alex's acceptance of ADR-017; no table and no code changed.
+
+Taken in ADR-017 and the records:
+
+- test B1: MSVC 14.38 and 14.43 are installed; ADR-017 A corrected, its recommendation kept;
+- review S1: which sums copy NumPy's order, and level 1's scale for a sum (ADR-017 G and I);
+- review S2 and S3: the factor of ten's argument restated to what the probe perturbed, and the
+  flow limit's dependence on the added variant stated (ADR-017 H);
+- review S4 and test S3: "ninety" is 89.8;
+- review S5: the sensor channels' limit comes from P2, as ADR-017 H now says;
+- review S10: "two thirds" is three quarters (section 2, above), and ADR-017 B's call
+  is about 117 microseconds of work;
+- review S11: README.md and SYSTEM.md's ADR-005 row changed with the acceptance;
+- review S13: step 6's 320x120 re-measure adds the door leak, for a flow switch in the band;
+- test S4 (ii): under a stop one apart the class fields moved by up to 5.8e-8 and the flow by
+  7.8e-10 (ADR-017's summary of H).
+
+Recorded as limits and not changed here, since no verdict turns on them; the probe's tools are
+fixed when step 6 reuses them:
+
+- review S6: P7's counts include the k and eps leftovers, which nothing reads;
+- review S7 and test S2: (a)'s code allows 1.5 steps where the rule says one; every move is 0;
+- review S8: `tables85.py --check` passes when a marker pair is missing;
+- review S9 and test S1: the probe's tests pin which keys change, not the values written or the
+  comparators' signs, and `compare_run` and the scorers have no test;
+- review S12: P4 does not mark ties;
+- review S14: the probes' `# noqa: E402` lines after the first carry no reason;
+- test S4 (i): the grid-scaled `mass_imbalance_tol` of the base is stated in `probe85.py`'s
+  docstring, not in this report.
 
 ## Files
 

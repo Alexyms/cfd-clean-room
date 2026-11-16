@@ -168,4 +168,8 @@ R1), and at `kappa` 0.84 the share cannot fall to the floor below about 5e9 step
   the leftover in another order can stop on another sweep and differ by a whole sweep's
   change. The port has to reproduce this stop exactly: the max-norm test, then the leftover
   formed from the same residual, scalar `dt` times the sum, and the share
-  `f * L * S * dt / T` evaluated in that order.
+  `f * L * S * dt / T` evaluated in that order. *Annotated 2026-11-16 (ADR-017 G, accepted):*
+  the core copies this sum's order, so given the reference's inputs it reproduces the stop bit
+  for bit (REQ-N03 level 1); in a whole run the inputs carry upstream rounding and the stop may
+  land one sweep apart, which REQ-N03 level 2 admits and no more. REQ-N03's 1e-10 is replaced
+  by its two levels.
