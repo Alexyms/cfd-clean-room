@@ -50,4 +50,5 @@ markers = [
     "unit: Unit tests -- isolated function and class behavior",
     "integration: Integration tests -- module interaction and data flow",
     "validation: Validation tests -- physics verification against analytical solutions",
+    "parity: Compiled core against the NumPy reference (REQ-N03 level 1); skipped when _cfdcore is not built",
 ]
