@@ -36,6 +36,9 @@ SHAPES = [(30, 80), (60, 160), (120, 320)]
 # Ten to a power in [-DECADES, DECADES] times a standard normal: both signs and
 # many magnitudes, so the order of the additions shows in the last bits.
 DECADES = 6.0
+# Longer than NumPy's buffer (np.getbufsize(), 8,192 terms), which is where an
+# unaligned array's sum is taken in chunks and its order parts from an aligned one's.
+UNALIGNED_LENGTH = 20_001
 
 
 def _values(rng: np.random.Generator, shape: int | tuple[int, int]) -> np.ndarray:
@@ -44,7 +47,7 @@ def _values(rng: np.random.Generator, shape: int | tuple[int, int]) -> np.ndarra
 
 
 def _bits(x: float) -> int:
-    """X's 64-bit pattern, so that 0.0 and -0.0 differ."""
+    """Return the 64-bit pattern of x, so that 0.0 and -0.0 differ."""
     return int(np.array([x], dtype=np.float64).view(np.uint64)[0])
 
 
@@ -75,7 +78,7 @@ def test_pairwise_sum_equals_np_sum_on_grid_shaped_arrays() -> None:
         assert _bits(_cfdcore.pairwise_sum(flat)) == _bits(np.sum(field)), shape
 
 
-def test_pairwise_sum_of_negative_zeros_is_np_sum_s() -> None:
+def test_pairwise_sum_of_negative_zeros_matches_np_sum() -> None:
     """A sum of -0.0 terms is +0.0 in both, as np.sum starts from its identity."""
     for n in (1, 7, 8, 200):
         zeros = np.full(n, -0.0)
@@ -87,6 +90,33 @@ def test_pairwise_sum_accepts_a_read_only_array() -> None:
     values = np.arange(10.0)
     values.flags.writeable = False
     assert _cfdcore.pairwise_sum(values) == 45.0
+
+
+def _unaligned(rng: np.random.Generator, n: int) -> np.ndarray:
+    """Return n random float64 values whose data pointer is one byte past a multiple of eight."""
+    raw = np.zeros(8 * n + 16, dtype=np.uint8)
+    start = (1 - raw.ctypes.data) % 8
+    values = raw[start : start + 8 * n].view(np.float64)
+    values[:] = _values(rng, n)
+    assert not values.flags.aligned
+    return values
+
+
+def test_pairwise_sum_refuses_an_unaligned_array() -> None:
+    """An unaligned array is a TypeError, since np.sum sums it in another order."""
+    rng = np.random.default_rng(SEED + 2)
+    order_changes = 0
+    for _ in range(10):
+        values = _unaligned(rng, UNALIGNED_LENGTH)
+        with pytest.raises(TypeError, match="aligned"):
+            _cfdcore.pairwise_sum(values)
+        # The same terms in aligned memory are summed, and bit for bit as np.sum sums them.
+        aligned = values.copy()
+        assert aligned.flags.aligned
+        assert _bits(_cfdcore.pairwise_sum(aligned)) == _bits(np.sum(aligned))
+        order_changes += _bits(np.sum(values)) != _bits(np.sum(aligned))
+    # The refusal is warranted only if np.sum's own value moves with the alignment.
+    assert order_changes > 0
 
 
 @pytest.mark.parametrize(

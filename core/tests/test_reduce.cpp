@@ -75,6 +75,45 @@ TEST(PairwiseSum, EightAccumulatorsKeepTermsBelowTheLastPlace) {
     EXPECT_EQ(pairwise_sum(values), 1.0 + 7.0 * ulp_one);
 }
 
+TEST(PairwiseSum, EightTermsAreCombinedNotAddedInOrder) {
+    // A one and seven terms of half its last place. Eight terms are the
+    // smallest array the accumulators take, one term each; a plain sum is for
+    // fewer than eight. Left to right every addition ties and rounds back to
+    // one. The accumulators combine pairwise: r0 + r1 ties back to one, and
+    // the other six terms make 3 ulp between them: 1 + 3 ulp (np.sum's value).
+    std::vector<double> values(8, half_ulp_one);
+    values[0] = 1.0;
+    EXPECT_EQ(sequential(values), 1.0);
+    EXPECT_EQ(pairwise_sum(values), 1.0 + 3.0 * ulp_one);
+}
+
+TEST(PairwiseSum, ABlockOfExactly128TermsIsNotSplit) {
+    // A one and 127 terms of half its last place: 128 terms are one block of
+    // eight accumulators, 16 terms each. The one's accumulator rounds every
+    // tie back to one and the other seven hold 8 ulp each, giving 1 + 56 ulp
+    // (np.sum's value). Split into 64 and 64, as blocks of 64 or a block that
+    // ends below 128 terms would, the halves give 1 + 28 ulp and 32 ulp:
+    // 1 + 60 ulp.
+    std::vector<double> values(128, half_ulp_one);
+    values[0] = 1.0;
+    EXPECT_EQ(pairwise_sum(values), 1.0 + 56.0 * ulp_one);
+    std::span<const double> all(values);
+    double halves = pairwise_sum(all.first(64)) + pairwise_sum(all.subspan(64));
+    EXPECT_EQ(halves, 1.0 + 60.0 * ulp_one);
+}
+
+TEST(PairwiseSum, BlocksOf128NotOf64SplitAboveAndBelowThem) {
+    // A one and 191 terms of half its last place: 192 terms split into 96 and
+    // 96, each a block of 128 or fewer. The first 96 give 1 + 42 ulp (12
+    // terms to an accumulator: 6 ulp in each but the one's) and the last 96
+    // give 48 ulp exactly: 1 + 90 ulp, np.sum's value. With blocks of 64 each
+    // half splits again, the first 96 into two 48s (1 + 21 ulp and 24 ulp)
+    // and the last into 24 ulp and 24 ulp: 1 + 93 ulp.
+    std::vector<double> values(192, half_ulp_one);
+    values[0] = 1.0;
+    EXPECT_EQ(pairwise_sum(values), 1.0 + 90.0 * ulp_one);
+}
+
 TEST(PairwiseSum, TermsBeyondTheLastBlockAreAddedAfter) {
     // Ten terms: the eight accumulators give 1 + 3 ulp, and the two left over
     // are added one at a time, each a tie rounding to the even 1 + 4 ulp.
