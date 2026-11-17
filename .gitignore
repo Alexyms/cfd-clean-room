@@ -9,10 +9,11 @@ __pycache__/
 dist/
 build/
 
-# Compiled C artifacts
+# Compiled artifacts (the core builds out of source, ~/build/cfd-core)
 *.so
 *.dylib
 *.o
+*.pyd
 
 # Simulation output
 results/

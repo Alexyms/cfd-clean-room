@@ -50,14 +50,6 @@ jobs:
           pip install -r requirements.txt
           pip install -r requirements-dev.txt
 
-      - name: Build C solver
-        run: |
-          if [ -d "csolver" ] && [ -f "csolver/Makefile" ]; then
-            cd csolver && make
-          else
-            echo "No C solver to build yet. Skipping."
-          fi
-
       - name: Ensure test directories exist
         run: mkdir -p tests reports
 
@@ -81,3 +73,41 @@ jobs:
         with:
           name: test-reports
           path: reports/
+
+  core:
+    name: Build and Test the Core
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Ninja
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+      - name: Create virtual environment
+        run: python -m venv .venv
+
+      - name: Install dependencies
+        run: |
+          source .venv/bin/activate
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      # The same script builds the core under WSL2 (ADR-017 A): CMake out of
+      # source, CTest, then pip install --no-build-isolation ./core.
+      - name: Build the core, run CTest and install the binding
+        run: |
+          source .venv/bin/activate
+          CFD_CORE_BUILD="$RUNNER_TEMP/cfd-core" bash scripts/build_core.sh "$(command -v python)"
+
+      # The parity tests skip when _cfdcore cannot be imported; here a missing
+      # module is an error instead (CFD_CORE_REQUIRED).
+      - name: Run the parity tests
+        run: |
+          source .venv/bin/activate
+          CFD_CORE_REQUIRED=1 pytest tests/test_core_parity.py -v -m parity

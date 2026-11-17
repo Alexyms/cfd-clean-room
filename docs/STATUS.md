@@ -176,7 +176,7 @@ about nine dust release positions, on tables too easy to show which method real 
 need. On 2026-11-15 Alex approved nine release positions and deferred their runs, with the
 other exploration runs on this room, until after the Phase 6 port: they ask product
 questions that the port answers in minutes, not hours, and that are better asked in 3D.
-Phases 6 and 7 have not begun.
+Phase 6 opened with its design pass (prompt 85, ADR-017 accepted on 2026-11-16), and its first build step, the toolchain (prompt 86, `docs/reports/phase6_toolchain.md`), set up WSL2 and `core/` with one block and showed the Python reference under Linux making every decision of the Windows records, inside the noise band's first tier. Phase 7 has not begun.
 
 The product room itself has never been solved, and on 2026-10-04 it was found that the laminar
 flow solver does not solve it. Its Reynolds number on the room height is

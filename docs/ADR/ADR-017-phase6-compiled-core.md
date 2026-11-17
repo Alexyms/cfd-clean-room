@@ -245,19 +245,28 @@ need. Ninja as the generator. The versions are recorded by the toolchain step in
 `/mnt/c/Users/tomat/Projects/cfd_clean_room`. Two things follow from the 9P share:
 
 - file access across it is slower than on the Linux file system, so the build tree is out of
-  source on the Linux side (`cmake -S core -B ~/build/cfd-core -G Ninja`), and the toolchain
-  step measures a reference run's wall time with its run file on `/mnt/c` and on the Linux file
-  system, to decide where `results/` goes for WSL2 runs;
+  source on the Linux side (`cmake -S core -B ~/build/cfd-core -G Ninja`). The toolchain step
+  measured a reference run's wall time with its run file on `/mnt/c` and on the Linux file
+  system (`docs/reports/phase6_toolchain.md`, T7): the 80x30 dust release took about a fifth
+  longer with its run file on `/mnt/c`, all of it outside the flow solve. Alex decided
+  (2026-11-16) that WSL2 runs write their run files on the Linux file system and copy each
+  finished file into `results/`, where the reports read it. No runner does this yet; step 6's
+  does;
 - the working tree has CRLF line endings on Windows (`.gitattributes`: `* text=auto`,
   `core.autocrlf` true). C++, CMake and Python accept CRLF; a shell script does not. The step
   adds `*.sh text eol=lf` to `.gitattributes`, and git is run from Windows only, so the two
   sides do not disagree on modes and line endings.
 
-**Python under WSL2.** A Linux virtual environment, `.venv-linux/`, gitignored, from the same
-`requirements.txt` and `requirements-dev.txt`, at Python 3.13 (the Windows environment's minor,
-`profile84.md` T1) from the deadsnakes archive or `uv`, with `nanobind` and `scikit-build-core`
-added to `requirements-dev.txt` when the core is built. The Windows environment stays as it is
-for the reference work of record.
+**Python under WSL2.** A Linux virtual environment at `~/.venvs/cfd_clean_room` (`CFD_LINUX_VENV`
+overrides the path), on the Linux file system and not in the checkout. `scripts/setup_linux_env.sh`
+builds it with `uv` from the Windows environment's `pip freeze`, so the interpreter is Windows'
+Python 3.13.3 and every package is at Windows' version, with `nanobind` and `scikit-build-core`
+added to `requirements-dev.txt` for the core's build. The environment is outside the checkout
+because this machine's WSL mounts `C:` through 9P with `uid=0;gid=0` and no `metadata` option:
+no file there can change its mode, so pip cannot install into an environment in the checkout.
+Mounting with `metadata` would need a change to `/etc/wsl.conf`, which is not made (Alex,
+2026-11-16, on the toolchain step's question 1). The Windows environment stays as it is for the
+reference work of record.
 
 **CUDA.** At the CUDA step, NVIDIA's CUDA toolkit for WSL-Ubuntu (the toolkit only: the Windows
 driver provides the GPU to WSL2), at a release the driver supports (13.5 or below), with the
@@ -618,7 +627,8 @@ module; CUDA C++ at the Phase 6 CUDA step." "C Coding Standards" becomes "C++ Co
   are derived in Python and handed in; the core applies them inside the step, since the step is
   resident (ADR-017 decision 2).
 
-The "What Gets Committed" list keeps `*.so` and build trees out, and adds `.venv-linux/`.
+The "What Gets Committed" list keeps `*.so` and build trees out. The Linux environment is outside
+the checkout, so it needs no entry there.
 
 ## Consequences
 

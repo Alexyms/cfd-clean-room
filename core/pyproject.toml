@@ -1,0 +1,28 @@
+# The core's Python module, _cfdcore, built by scikit-build-core through
+# core/CMakeLists.txt (ADR-017 A and B). Installed, locally under WSL2 and in
+# CI alike, with the build dependencies of requirements-dev.txt:
+#
+#   pip install --no-build-isolation ./core
+#
+# The GoogleTest tests are not built here; CTest runs them from a CMake build
+# of the same file (core/CMakeLists.txt).
+
+[build-system]
+requires = ["scikit-build-core~=1.1.2", "nanobind~=3.1.0"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "cfdcore"
+version = "0.1.0"
+description = "The compiled core of the clean room simulation (ADR-017)"
+requires-python = ">=3.12"
+
+[tool.scikit-build]
+minimum-version = "build-system.requires"
+cmake.version = ">=3.26"
+cmake.build-type = "Release"
+wheel.packages = []
+
+[tool.scikit-build.cmake.define]
+CFD_CORE_TESTS = "OFF"
+CFD_CORE_PYTHON = "ON"

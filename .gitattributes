@@ -2,6 +2,9 @@
 # This fixes phantom diffs on Windows clones regardless of core.autocrlf.
 * text=auto
 
+# Shell scripts run under WSL2 and in CI, where a CR breaks them (ADR-017 A).
+*.sh text eol=lf
+
 # Binary types. None are tracked today; these cover simulation output and
 # figures that later phases may commit.
 *.png binary
