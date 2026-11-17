@@ -10,10 +10,19 @@ has not been run), so the rest of the suite runs as before. With
 that cannot be imported is an error instead of a skip.
 """
 
+import copy
+import functools
 import os
 
 import numpy as np
 import pytest
+import yaml
+
+from src.boundary_registry import BoundaryRegistry
+from src.boundary_vents import vent_face_masks, vent_runs
+from src.config import SimConfig
+from src.mesh import SOLID, Mesh
+from src.scalar_scheme import mesh_axes
 
 if os.environ.get("CFD_CORE_REQUIRED") == "1":
     import _cfdcore
@@ -134,3 +143,139 @@ def test_pairwise_sum_refuses_other_arrays(values: object) -> None:
     """A wrong dtype, layout or dimension is a TypeError, not a silent copy."""
     with pytest.raises(TypeError):
         _cfdcore.pairwise_sum(values)
+
+
+# The meshes of prompt 87's parity tests, each (config file, nx, ny, x and y
+# stretch ratios, obstacles kept). The three product grids are built as the
+# default file builds them: uniform, with the tools' SOLID cells. A stretched
+# 160x60 and an obstacle-free uniform grid add the non-uniform weights and a
+# field with no SOLID cell.
+DEFAULT = "configs/clean_room_default.yaml"
+VENTS = "configs/clean_room_vents.yaml"
+MESHES = {
+    "80x30": (DEFAULT, 80, 30, 1.0, 1.0, True),
+    "160x60": (DEFAULT, 160, 60, 1.0, 1.0, True),
+    "320x120": (DEFAULT, 320, 120, 1.0, 1.0, True),
+    "160x60-stretched": (DEFAULT, 160, 60, 1.02, 1.03, True),
+    "40x15-uniform-open": (DEFAULT, 40, 15, 1.0, 1.0, False),
+}
+# The product grids with the vents file's equipment vents (ADR-014 J); the
+# default file has none.
+VENT_MESHES = {
+    "80x30-vents": (VENTS, 80, 30, 1.0, 1.0, True),
+    "160x60-vents": (VENTS, 160, 60, 1.0, 1.0, True),
+    "320x120-vents": (VENTS, 320, 120, 1.0, 1.0, True),
+}
+
+
+@functools.cache
+def _config(name: str) -> SimConfig:
+    """The configuration of one of MESHES or VENT_MESHES."""
+    path, nx, ny, sx, sy, obstacles = {**MESHES, **VENT_MESHES}[name]
+    with open(path, encoding="utf-8") as stream:
+        raw = yaml.safe_load(stream)
+    raw = copy.deepcopy(raw)
+    raw["domain"]["nx"] = nx
+    raw["domain"]["ny"] = ny
+    raw["mesh"]["x"] = {"stretch_ratio": sx}
+    raw["mesh"]["y"] = {"stretch_ratio": sy}
+    if not obstacles:
+        raw["obstacles"] = []
+    return SimConfig.from_dict(raw, "configs")
+
+
+@functools.cache
+def _mesh(name: str) -> Mesh:
+    """The mesh of one of MESHES or VENT_MESHES."""
+    return Mesh(_config(name))
+
+
+def _grid(mesh: Mesh) -> "_cfdcore.Grid2":
+    """The core's grid of a mesh, built from the arrays the mesh holds."""
+    return _cfdcore.Grid2(mesh.x, mesh.xc, mesh.y, mesh.yc, mesh.cell_type, SOLID)
+
+
+def _same_bits(a: np.ndarray, b: np.ndarray) -> bool:
+    """Whether two float64 arrays have one shape and equal 64-bit patterns."""
+    a = np.ascontiguousarray(a, dtype=np.float64)
+    b = np.ascontiguousarray(b, dtype=np.float64)
+    return a.shape == b.shape and bool(
+        np.array_equal(a.view(np.uint64), b.view(np.uint64))
+    )
+
+
+@pytest.mark.parametrize("name", list(MESHES))
+def test_grid_nodes_and_faces_are_mesh_axes(name: str) -> None:
+    """Grid2's nodes and interior faces per direction are mesh_axes' bit for bit."""
+    mesh = _mesh(name)
+    grid = _grid(mesh)
+    assert grid.shape == mesh.cell_type.shape
+    for d, axis in enumerate(mesh_axes(mesh)):
+        assert _same_bits(grid.nodes(d), axis.nodes), (name, d)
+        assert _same_bits(grid.interior_faces(d), axis.faces), (name, d)
+
+
+def test_the_meshes_are_what_their_names_say() -> None:
+    """The product grids have SOLID cells; the stretched one is not uniform."""
+    for name in ("80x30", "160x60", "320x120", "160x60-stretched"):
+        assert (_mesh(name).cell_type == SOLID).any(), name
+    assert not (_mesh("40x15-uniform-open").cell_type == SOLID).any()
+    widths = np.diff(_mesh("160x60-stretched").x)
+    assert widths.max() / widths.min() > 1.5
+    for name in VENT_MESHES:
+        mesh = _mesh(name)
+        vents = vent_face_masks(
+            mesh, vent_runs(mesh, _config(name), BoundaryRegistry(_config(name)))
+        )
+        assert vents.normal_u.any() and vents.normal_v.any(), name
+
+
+def _grid_arrays() -> dict[str, object]:
+    """A small consistent set of Grid2's arguments, [ny, nx] = [3, 4]."""
+    return {
+        "x": np.array([0.0, 1.0, 2.0, 3.0, 4.0]),
+        "xc": np.array([0.5, 1.5, 2.5, 3.5]),
+        "y": np.array([0.0, 1.0, 2.0, 3.0]),
+        "yc": np.array([0.5, 1.5, 2.5]),
+        "cell_type": np.zeros((3, 4), dtype=np.int32),
+        "solid": SOLID,
+    }
+
+
+def test_grid_accepts_consistent_arrays() -> None:
+    """The arrays _grid_arrays builds make a grid, so each refusal below is its change's."""
+    grid = _cfdcore.Grid2(**_grid_arrays())
+    assert grid.shape == (3, 4)
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        pytest.param("x", np.arange(6.0), id="faces-too-long"),
+        pytest.param("yc", np.array([0.5, 1.5]), id="centres-not-cell-type"),
+        pytest.param("xc", np.zeros(0), id="no-cell"),
+        pytest.param(
+            "cell_type", np.zeros((3, 4), dtype=np.int64), id="cell-type-int64"
+        ),
+        pytest.param("cell_type", np.zeros((3, 4)), id="cell-type-float"),
+        pytest.param(
+            "cell_type", np.zeros((4, 3), dtype=np.int32), id="cell-type-transposed"
+        ),
+        pytest.param("cell_type", np.zeros(12, dtype=np.int32), id="cell-type-flat"),
+        pytest.param("x", np.arange(10.0)[::2], id="faces-non-contiguous"),
+        pytest.param("x", np.arange(5, dtype=np.float32), id="faces-float32"),
+    ],
+)
+def test_grid_refuses_wrong_arrays(key: str, value: np.ndarray) -> None:
+    """A wrong shape, dtype or layout is a TypeError at the binding."""
+    arrays = _grid_arrays()
+    arrays[key] = value
+    with pytest.raises(TypeError):
+        _cfdcore.Grid2(**arrays)
+
+
+def test_grid_refuses_a_direction_it_does_not_have() -> None:
+    """A direction other than 0 or 1 is a ValueError."""
+    grid = _cfdcore.Grid2(**_grid_arrays())
+    with pytest.raises(ValueError):
+        grid.nodes(2)
