@@ -12,7 +12,7 @@ Computational Fluid Dynamics engine built from scratch in Python (with a compile
 
 - **Primary language:** Python 3.12+
 - **Performance-critical code:** C++20 (the core library, `core/`), called through a nanobind module; CUDA C++ at the Phase 6 CUDA step (ADR-017)
-- **Virtual environment:** `.venv/` in project root on Windows; `.venv-linux/` under WSL2 for the compiled core (ADR-017 A). Always activate before running or installing anything.
+- **Virtual environment:** `.venv/` in project root on Windows; under WSL2 for the compiled core, `~/.venvs/cfd_clean_room` on the Linux file system (`CFD_LINUX_VENV` overrides it), built by `scripts/setup_linux_env.sh`, because the `C:` mount has no file modes (ADR-017 A). WSL2 runs write their run files on the Linux file system and copy each finished file into `results/`, where the reports read it. Always activate before running or installing anything.
 - **Package management:** pip with `requirements.txt` for runtime dependencies, `requirements-dev.txt` for dev/test dependencies.
 
 ---
@@ -588,7 +588,7 @@ project rule.
 - C++ and CUDA sources, headers and CMake files (`core/`)
 
 **Never committed (add to `.gitignore`):**
-- `.venv/`, `.venv-linux/`
+- `.venv/` (the WSL2 environment is outside the checkout)
 - `results/` (simulation output)
 - `__pycache__/`, `*.pyc`
 - `*.so`, `*.dylib`, `*.o`, `*.pyd` and build trees (compiled artifacts -- built locally or in CI)

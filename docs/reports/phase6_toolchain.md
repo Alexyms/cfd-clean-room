@@ -3,8 +3,10 @@
 **Date:** 2026-11-16
 **Prompt:** 86 (`docs/prompts/cc-prompt-86-toolchain.md`)
 **Branch:** `phase6/toolchain`
-**Status:** done. The gate's rows are met on WSL2; CTest in CI is the pull request's to show.
-Predictions (a), (b) and (d) hold; (c) fails. Two questions for Alex are at the end.
+**Status:** done, with round 1's fixes (prompt 86b, 2026-11-16). The gate's rows are met: on WSL2,
+and in CI after the first run of the core job failed on an include order (section 4). Predictions
+(a), (b) and (d) hold; (c) fails. Alex answered the two questions the first report put to him
+("Alex's answers", below).
 
 This is Phase 6's first build step (`docs/PROJECT_PLAN.md`, Phase 6, step 1; ADR-017 A, B, D, G
 and H). It sets up Ubuntu 24.04 under WSL2 with a Python environment matching Windows', builds
@@ -131,18 +133,20 @@ Windows environment's `pip freeze` (`results/builder86/windows-freeze.txt`); the
 Linux wheel at the Windows version, so no stop. `scripts/setup_linux_env.sh` does all of it from
 a freeze. Nothing ran as root, nothing was installed system-wide, and no process listens.
 
-**Where it lives (a deviation).** The environment is at `~/.venvs/cfd_clean_room`, on the Linux
-file system, not at `.venv-linux/` in the checkout as CLAUDE.md and ADR-017 A have it. This
-machine's WSL mounts `C:` with `uid=0` and no `metadata` option (`mount`: `C:\ on /mnt/c type 9p
-(rw,noatime,aname=drvfs;path=C:\;uid=0;gid=0;...)`), so every file there belongs to root and the
-user `tomat` cannot change a file's mode: `chmod` fails with "Operation not permitted", and so
-does pip's install into an environment in the checkout. A link `.venv-linux` in the checkout
-pointing at the Linux side worked under Linux but broke the Windows suite: Windows cannot open a
-WSL link, and pytest's collection failed on it (`WinError 1920`). The link was removed. The fix
-that would allow the environment in the checkout is a change to WSL's configuration
-(`/etc/wsl.conf`, `[automount] options = "metadata,uid=1000,gid=1000"`), which needs root and is
-Alex's to make (question 1). The ignore rule is `.venv-linux` without a trailing slash, so it
-covers a link as well as a directory.
+**Where it lives (a deviation, decided by Alex).** The environment is at
+`~/.venvs/cfd_clean_room`, on the Linux file system, not at `.venv-linux/` in the checkout as
+CLAUDE.md and ADR-017 A first had it (the predictions' text above, committed before the
+environment existed, calls it `.venv-linux/`). This machine's WSL mounts `C:` with `uid=0` and no
+`metadata` option (`mount`: `C:\ on /mnt/c type 9p (rw,noatime,aname=drvfs;path=C:\;uid=0;gid=0;...)`),
+so every file there belongs to root and the user `tomat` cannot change a file's mode: `chmod`
+fails with "Operation not permitted", and so does pip's install into an environment in the
+checkout. A link `.venv-linux` in the checkout pointing at the Linux side worked under Linux but
+broke the Windows suite: Windows cannot open a WSL link, and pytest's collection failed on it
+(`WinError 1920`). The link was removed. The fix that would allow the environment in the checkout
+is a change to WSL's configuration (`/etc/wsl.conf`, `[automount] options =
+"metadata,uid=1000,gid=1000"`), which needs root. Alex decided on 2026-11-16 to keep the
+environment on the Linux file system and not to change `/etc/wsl.conf` ("Alex's answers",
+below); CLAUDE.md and ADR-017 A say so, and `.gitignore` has no rule for it.
 
 <!-- tables86 environment begin -->
 ### T2. The Linux environment, and the whole suite on each platform
@@ -152,14 +156,20 @@ covers a link as well as a directory.
 | the Windows environment's packages | 47 |
 | installed under Linux at the same version | 47 |
 | at another version, or missing | 0 |
-| added under Linux for the core's build, and the core | nanobind 3.1.0, pathspec 1.1.1, scikit-build-core 1.1.2 |
+| added under Linux for the core's build, and the core | cfdcore (the checkout's core/), nanobind 3.1.0, pathspec 1.1.1, scikit-build-core 1.1.2 |
 
 | environment | tests | passed | failed | errors | skipped | wall, s |
 |---|---|---|---|---|---|---|
-| Windows | 3,102 | 3,101 | 0 | 0 | 1 | 1461 |
-| Linux | 3,111 | 3,111 | 0 | 0 | 0 | 1496 |
+| Windows | 3,102 | 3,101 | 0 | 0 | 1 | 1454 |
+| Linux | 3,112 | 3,112 | 0 | 0 | 0 | 1526 |
 
-Packages: `results/builder86/windows-freeze.txt` (the Windows `.venv`), `linux-freeze.txt` (the Linux environment as installed from it) and `linux-freeze-core.txt` (after `requirements-dev.txt`'s build dependencies and `pip install --no-build-isolation ./core`). Suites: `pytest tests/ -q -p no:cacheprovider` with its JUnit file, each run alone with the default BLAS threads; the time is pytest's.
+| the lint job's check | exit code | its last line |
+|---|---|---|
+| `ruff format --check .` | 0 | 286 files already formatted |
+| `ruff check .` | 0 | All checks passed! |
+| `python scripts/gen_system_map.py --check` | 0 | SYSTEM.md matches the source tree. |
+
+Packages: `results/builder86/windows-freeze.txt` (the Windows `.venv`), `linux-freeze.txt` (the Linux environment as installed from it) and `linux-freeze-core.txt` (after `requirements-dev.txt`'s build dependencies and `pip install --no-build-isolation ./core`). Suites: `pytest tests/ -q -p no:cacheprovider` with its JUnit file, at the default BLAS threads, one after the other; the time is pytest's. The suites and the three checks ran on commit 14038cc, with 10 files edited that the next commit holds (`checks86.py`, `results/builder86/checks.json`). `tables86.py --check` compares this report with its records, so it is not a row here.
 <!-- tables86 environment end -->
 
 ## 3. The core
@@ -199,15 +209,20 @@ accumulators over blocks of eight, combined as ((r0 + r1) + (r2 + r3)) + ((r4 + 
 the terms past the last whole block added after; above 128 the sum of the first n2 terms plus the
 rest, n2 being n / 2 rounded down to a multiple of 8; and the whole added to 0.0, NumPy's identity
 for the reduction, which is why a sum of negative zeros is +0.0. Before the C++ was written, a
-pure-Python model of that order matched `np.sum` bit for bit on every length from 0 to 299 and on
-lengths to 100,000, with no chunking of a contiguous array. ADR-017 G gave this order "as the
-builder knows it, not read again"; for contiguous arrays it is confirmed here. Strided slices and
-the reference's own arrays are step 2's first test, as ADR-017 G says.
+pure-Python model of that order was checked against `np.sum` over lengths up to 100,000; that
+model and its run were not kept, so the statement is not recorded here, and T3's comparison of
+the built block stands in its place. ADR-017 G gave this order "as the builder knows it, not read
+again"; for aligned contiguous arrays it is confirmed here. Strided slices and the reference's
+own arrays are step 2's first test, as ADR-017 G says.
 
 **The binding.** `_cfdcore.pairwise_sum` takes
 `nb::ndarray<const double, nb::ndim<1>, nb::c_contig, nb::device::cpu>` with `noconvert`, so a
 float32 or int64 array, a strided view, a 0-D or 2-D array and a list are each refused with a
 `TypeError` at the call (ADR-017 B), not copied into a new array. A read-only array is accepted.
+An unaligned array (a data pointer that is not a multiple of eight) is refused with a
+`TypeError` in the binding's own check: `np.sum` adds an unaligned array through a buffer, in
+chunks of `np.getbufsize()` terms, which changes its pairwise order once the array is longer
+than the buffer, so the bit-for-bit contract holds for aligned arrays only (test 86, D11).
 
 **How Python finds `_cfdcore`.** `pip install --no-build-isolation ./core`: scikit-build-core runs
 `core/CMakeLists.txt` with the tests off and installs `_cfdcore` as a top-level extension module
@@ -216,29 +231,50 @@ scikit-build-core from `requirements-dev.txt`. The same command runs in CI, thro
 script. Nothing is put on `sys.path` by hand and nothing is built into the checkout.
 
 **The tests.** GoogleTest checks what needs no reference: the empty sum, one element, negative
-zeros, integer sums that every order gives exactly at every length to 1,000, and three
-hand-computed sums whose value depends on the order (a one with terms of half its last place,
-which a left-to-right sum loses and the accumulators keep: 16 terms, 10 terms with two past the
-block, and 136 terms across the split). `tests/test_core_parity.py` compares the block with
-`np.sum` on prediction (b)'s arrays, checks that the comparison could see a wrong order (a
-left-to-right sum differs from `np.sum` on most of them, T3's last column), and checks the
-refusals. Five wrong orders were planted in a copy of the core
-(`docs/reports/probe86/mutants86.sh`, `results/builder86/mutants86.txt`): a left-to-right sum, the
-split not rounded to eight, blocks of 64, the accumulators combined left to right, and no leading
-0.0. The parity tests caught all five and GoogleTest four; blocks of 64 changes none of
-GoogleTest's hand results, and the parity tests catch it.
+zeros, integer sums that every order gives exactly at every length to 1,000, and hand-computed
+sums whose value depends on the order (a one with terms of half its last place, which a
+left-to-right sum loses and the accumulators keep). The first build had three: 16 terms, 10
+terms with two past the block, and 136 terms across the split. Round 1 added three that pin
+the boundaries the parity tests cannot: exactly eight terms (the first length the
+accumulators take; the parity tests draw one array per length, and its array at length 8 gives
+the same bits in both orders), exactly 128 terms (one block, not two), and 192 terms (blocks
+of 128, not 64). `tests/test_core_parity.py` compares the block with `np.sum` on prediction
+(b)'s arrays, checks that the comparison could see a wrong order (a left-to-right sum differs
+from `np.sum` on most of them, T3's last column), and checks the refusals, the unaligned array
+among them. Wrong orders and the missing refusal were planted in copies of the core
+(`docs/reports/probe86/mutants86.sh`, `results/builder86/mutants86.txt`; T3b gives each plant
+and the tests that catch it, with a control that plants nothing). The first build had five
+plants, and blocks of 64 changed none of GoogleTest's hand results (review 86 S3, test 86 S1);
+round 1's cases catch it, and catch the two plants added with them, the plain sum at eight
+terms and the block that ends below 128 terms.
 
 <!-- tables86 core begin -->
 ### T3. The core's tests: CTest, and `pairwise_sum` against `np.sum`
 
-CTest under WSL2: 7 tests, 7 passed, 0 failed.
+CTest under WSL2: 10 tests, 10 passed, 0 failed.
 
 | arrays | compared | differing from np.sum (64-bit pattern) | where a left-to-right sum differs from np.sum |
 |---|---|---|---|
 | 1-D, lengths 0 to 1,000 and 2,400, 9,600, 38,400 | 1,004 | 0 | 901 |
 | 2-D, 30x80, 60x160, 120x320, summed whole | 3 | 0 | 3 |
 
-From `probe86.py parity` (`results/builder86/parity86.json`), which repeats `tests/test_core_parity.py`'s comparison on the same seeded values, and CTest's JUnit file (`results/builder86/ctest.xml`). The last column says how many arrays the comparison could catch a wrong order on.
+From `probe86.py parity` (`results/builder86/parity86.json`), which repeats `tests/test_core_parity.py`'s comparison on the same seeded values, and CTest's JUnit file (`results/builder86/ctest.xml`). The last column says how many arrays the comparison could catch a wrong order on. The parity module in the Linux suite's JUnit file: 11 tests, 11 passed.
+
+### T3b. The planted wrong orders and the missing refusal: which tests catch each
+
+| plant | what it changes | GoogleTest failing | the GoogleTest tests that fail | parity tests failing | verdict |
+|---|---|---|---|---|---|
+| control | The unchanged source (a sed that changes nothing) | 0 of 10 |  | 0 of 11 | passes |
+| sequential | A plain left-to-right sum | 6 of 10 | EightAccumulatorsKeepTermsBelowTheLastPlace, EightTermsAreCombinedNotAddedInOrder, ABlockOfExactly128TermsIsNotSplit, BlocksOf128NotOf64SplitAboveAndBelowThem, TermsBeyondTheLastBlockAreAddedAfter, AboveABlockSplitsAtHalfRoundedDownToEight | 3 of 11 | caught by both |
+| split_unrounded | The split at n / 2 without rounding it down to a multiple of eight | 1 of 10 | AboveABlockSplitsAtHalfRoundedDownToEight | 3 of 11 | caught by both |
+| block64 | Blocks of 64 in place of NumPy's 128 | 2 of 10 | ABlockOfExactly128TermsIsNotSplit, BlocksOf128NotOf64SplitAboveAndBelowThem | 3 of 11 | caught by both |
+| combine_linear | The eight accumulators combined left to right in place of pairwise | 2 of 10 | EightTermsAreCombinedNotAddedInOrder, TermsBeyondTheLastBlockAreAddedAfter | 3 of 11 | caught by both |
+| no_identity | No leading 0.0, so a sum of negative zeros stays -0.0 | 1 of 10 | NegativeZerosSumToPositiveZero | 1 of 11 | caught by both |
+| unroll_le | A plain sum at exactly eight terms, the first length the accumulators take | 1 of 10 | EightTermsAreCombinedNotAddedInOrder | 0 of 11 | caught by GoogleTest only |
+| block_lt | A block that ends below 128 terms, so exactly 128 terms are split in two | 1 of 10 | ABlockOfExactly128TermsIsNotSplit | 1 of 11 | caught by both |
+| no_alignment_check | The binding without its refusal of an unaligned array | 0 of 10 |  | 1 of 11 | caught by the parity tests only |
+
+From `mutants86.sh` (`results/builder86/mutants86.txt`): each plant is `core/src/reduce.cpp` (the last is `core/python/bindings.cpp`) with one change, built out of source in a copy of `core/`, CTest run on it, and `tests/test_core_parity.py` run against its module with `CFD_CORE_REQUIRED=1`; the control is the source unchanged. The parity run's module path is checked to be the plant's own.
 <!-- tables86 core end -->
 
 ## 4. CI
@@ -250,10 +286,21 @@ import of `_cfdcore`), then the parity tests with `CFD_CORE_REQUIRED=1`, which m
 cannot be imported an error instead of a skip, so the job cannot pass by skipping. The test job's
 "Build C solver" step, which looked for the retired `csolver/`, is removed; in that job the
 parity tests skip with their reason. Locally the lint job's three checks pass: `ruff format
---check .`, `ruff check .` and `scripts/gen_system_map.py --check`. The core job was rehearsed
-under WSL2 in a fresh Python 3.12 environment resolving the requirements as CI does (it drew
-NumPy 2.5.5, a release newer than Windows' 2.4.4): the build, CTest and the ten parity tests
-passed, so `pairwise_sum` also matches that release's `np.sum`. The rehearsal is not CI's run.
+--check .`, `ruff check .` and `scripts/gen_system_map.py --check`.
+
+**The first run failed, and why.** The core job was rehearsed under WSL2 in a fresh Python 3.12
+environment before the first push; the rehearsal passed and was not recorded (test 86 repeated
+it, E2). The pull request's first run of the job failed at the build (T8b): `bindings.cpp`
+included `cfdcore/reduce.hpp`, and so `<span>` and glibc's `features.h`, before nanobind's
+headers reached `Python.h`. GitHub's runner compiles with GCC 15 against a glibc whose
+`features.h` defines `_POSIX_C_SOURCE` as `202405L` and `_XOPEN_SOURCE` as `800`; `pyconfig.h`
+defines both again, as `200809L` and `700`, and `-Werror` made the redefinition an error. On
+WSL2's glibc 2.39 the two headers give the same values, the redefinition is identical and
+silent, and neither the local build nor the rehearsal could show it. Round 1 includes the
+nanobind headers first in `bindings.cpp`, as Python's C API documentation requires of
+`Python.h`; the compiler flags and the include directories are as they were, and `-Werror`
+stays. The pull request's next run passed (T8b), with CTest and the parity tests, in an
+environment whose NumPy is 2.5.5, a release newer than Windows' 2.4.4.
 
 ## 5. The reference under Linux
 
@@ -304,7 +351,7 @@ From the counted runs (`probe86.py`, `StopCounts`): the three references again o
 
 ### T4d. The readings at each flow state's stop, Windows against Linux
 
-| scenario | flow state | reading | Windows | Linux | |difference| | the stop's tolerance for it |
+| scenario | flow state | reading | Windows | Linux | abs difference | the stop's tolerance for it |
 |---|---|---|---|---|---|---|
 | dust | 0 | pressure_cap_hits | 0.000000e+00 | 0.000000e+00 | 0 | - |
 | dust | 0 | residual | 2.759008e-12 | 2.759008e-12 | 8.3e-19 | - |
@@ -425,12 +472,15 @@ The run file's placement, (c): |W(/mnt/c) - W(Linux)| / W(Linux) = 0.207 (the re
 <!-- tables86 walls end -->
 
 The flow solve takes the same time wherever the run file is; the difference is the rest of the
-run, the march with its frames, sensor readings and checkpoints written through the 9P share. The
-repeated pair, an addition to the prompt's one run each, shows the same difference, so it is the
-file's place and not the run-to-run noise. Prediction (c) fails. The Linux reference, writing to
+run, the march with its frames, sensor readings and checkpoints written through the 9P share.
+That is the evidence that the gap is the file's place: the flow-solve column of T7 is nearly the
+same in both places in each of the two pairs, and the rest column carries the whole difference
+in both. Both pairs ran in one order, `/mnt/c` first, so the runs themselves do not exclude a
+drift from a pair's first run to its second; the flow-solve column is what does. Prediction (c)
+fails. The Linux reference, writing to
 `/mnt/c` with three runs at once, is inside 10% of the Windows run made the same way, and (d)
-holds. The run files of WSL2 runs are better on the Linux file system, with what the reports
-read copied into `results/` as `probe86.py` copies the summaries; that is question 2.
+holds. The run files of WSL2 runs go on the Linux file system, with what the reports read
+copied into `results/` as `probe86.py` copies the summaries ("Alex's answers", below).
 
 ## 7. The gate
 
@@ -439,17 +489,27 @@ read copied into `results/` as `probe86.py` copies the summaries; that is questi
 
 | criterion | measured | verdict |
 |---|---|---|
-| CTest passes on WSL2 | 7 of 7 | MET |
-| CTest passes in CI | the core job of `.github/workflows/ci.yml`, on the pull request | on the pull request's CI |
+| CTest passes on WSL2 | 10 of 10 | MET |
+| CTest passes in CI | T8b: the core job of `.github/workflows/ci.yml` on the pull request, its latest recorded run (commit 4dbbe5f): CTest 7 of 7; 10 parity tests passed | MET |
 | the reference under WSL2: every decision equal to the Windows records | yes | MET |
 | the reference under WSL2: every field inside the band | the worst field is inside the spread | MET |
 | a reference run's wall time with its run file on /mnt/c and on the Linux file system recorded | T7; their difference 0.207 of the Linux file system's | MET |
+
+### T8b. The core job on the pull request, by push
+
+| commit | run | core job | its log shows |
+|---|---|---|---|
+| 251bbf7 | 43978500817 | FAILED | the build stopped at `'_POSIX_C_SOURCE' redefined [-Werror]`; CTest did not run |
+| 4dbbe5f | 43987922932 | passed | CTest 7 of 7; 10 parity tests passed |
+
+From the jobs' logs (`results/builder86/ci_core_jobs.json`, `ci_core_job_<commit>.log`). The runs are those of the pull request's checks on each push; the run on the head of this report's own commit is read from the pull request.
 <!-- tables86 gate end -->
 
 The step's gate (`docs/PROJECT_PLAN.md`, Phase 6, step 1) is met on WSL2: CTest passes, the
 reference under WSL2 makes the probe's 80x30 runs with every decision equal to the Windows
 records and every field inside the band, in its first tier, and the run file's two places are
-timed. CTest in CI is shown by the pull request's run of the core job. The Windows records stay
+timed. CTest in CI is shown by the pull request's runs of the core job: the first failed on the
+include order, and the run after round 1's fix passed (T8, T8b). The Windows records stay
 the reference of record (ADR-017, Consequences); the Linux reference is now shown inside the band
 of them, so later steps may compare a core result with either.
 
@@ -461,30 +521,33 @@ of them, so later steps may compare a core result with either.
    compiler. The outer counts and stop reasons are the Windows records', and so is every inner
    solve's iteration count (T4c): the difference is rounding carried through identical stops.
 2. **`pairwise_sum` is NumPy's order bit for bit** on every array tested, 1-D and 2-D (T3), and
-   the tests see a wrong order: five planted, five caught.
+   the tests see a wrong order: T3b lists every plant and every one is caught.
 3. **A run file on `/mnt/c` costs about a fifth of the 80x30 dust run** (T7), all of it outside
-   the flow solve, so prediction (c) fails; where WSL2 runs write is question 2.
+   the flow solve, so prediction (c) fails; WSL2 runs write on the Linux file system ("Alex's answers").
 4. **The Linux reference is a little faster than Windows'** made the same way (T7), and (d)
    holds.
 5. **The environment cannot live in the checkout on this machine's mount** without a change to
    WSL's configuration (section 2); it lives on the Linux file system instead, with the same
-   interpreter and every package at Windows' version (T2).
+   interpreter and every package at Windows' version (T2), which Alex confirmed.
 6. **The whole suite passes on both platforms** (T2), the parity tests included under Linux and
    skipped with their reason under Windows.
+7. **The core job failed on GitHub's runner at its first push**, on an include order that WSL2's
+   glibc could not show (section 4), and passes with the nanobind headers first (T8b).
 
-## Questions for Alex
+## Alex's answers (2026-11-16)
 
-1. **The environment's place.** Keep the Linux environment on the Linux file system
-   (`~/.venvs/cfd_clean_room`, `scripts/setup_linux_env.sh`), with CLAUDE.md's ".venv-linux/
-   under WSL2" read as that environment; or change `/etc/wsl.conf` (`[automount] options =
-   "metadata,uid=1000,gid=1000"`, then `wsl --shutdown`) so that it can sit in the checkout? The
-   builder recommends the first: imports from the Linux file system are faster, and the mount
-   stays as it is. Either way CLAUDE.md's line should say which.
-2. **Where WSL2 runs write.** Run files on the Linux file system (`~/cfd-runs/`), with the
-   summaries and whatever a report reads copied into `results/`; or in `results/` on `/mnt/c` at
-   about a fifth more wall time on 80x30? The builder recommends the first for the long runs of
-   steps 3 to 6, whose files are larger, and `/mnt/c` for short runs whose records Windows reads
-   directly.
+The first version of this report put two questions to Alex.
+
+1. **The environment's place.** The Linux environment stays on the Linux file system, at
+   `~/.venvs/cfd_clean_room` (`CFD_LINUX_VENV` overrides the path), built by
+   `scripts/setup_linux_env.sh`. `/etc/wsl.conf` is not changed. The reason is the mount: `C:`
+   is mounted without metadata (section 2), so no file in the checkout can have its mode
+   changed. ADR-017 A's "Python under WSL2" paragraph and CLAUDE.md's virtual-environment line
+   say so, and the `.venv-linux` rule and its comment are removed from `.gitignore`.
+2. **Where WSL2 runs write.** WSL runs write their run files on the Linux file system and copy
+   each finished file into `results/`, where the reports read it. ADR-017 A records it beside
+   the measurement (T7), and CLAUDE.md's virtual-environment line says so. No runner implements
+   it yet; step 6's does.
 
 ## Deviations and limits
 
@@ -501,15 +564,32 @@ of them, so later steps may compare a core result with either.
   Windows does not read that file system (T4b compares the `/mnt/c` ones).
 - The run-file timings are one run each, plus the repeat; the Windows wall time is prompt 85's
   record, made with three runs at once, which the Linux reference copies.
-- The suites ran with the default BLAS threads, each alone; their times are pytest's.
+- The suites ran with the default BLAS threads, one after the other; their times are pytest's.
+- WSL2's `time.perf_counter` ran 2% to 3% fast against the host here (test 86, F14: Windows'
+  clock and WSL's own real-time clock agree with each other and not with it), and every Linux
+  wall time in this report is in that clock. Prediction (c) is a ratio of two Linux times and is
+  unaffected. Prediction (d) compares a Linux time with a Windows one: its margin is smaller
+  than T0 prints (0.091 to 0.100 at the measured ratios, against 0.10) and its verdict stands.
+  T7's "over Windows'" column is about 0.03 high on the Linux rows. Round 1's Linux suite read
+  the same way: 1526 s by pytest and 1477 s by `date` around the process (`suite_linux.log`).
+  A comparison with a Windows time needs the Linux time taken on a clock checked against the
+  host (the plan's Phase 6 risks, steps 6 and 7).
 - Both platforms run Python 3.13 on one checkout, so they share `__pycache__/`. The interpreter
   corrects a cached module's file name on import, but pytest's cached rewrite of a test module
   keeps the path of the platform that wrote it: the Windows suite's skip line names the parity
   module as `\mnt\c\...`. Nothing computed changes; `PYTHONPYCACHEPREFIX` set on the Linux side
   would keep the two caches apart.
-- `pairwise_sum` is confirmed on contiguous arrays only; strided slices and the reference's own
-  arrays are step 2's first test (ADR-017 G).
-- CTest in CI is not run by this pass; the pull request's run shows it.
+- `pairwise_sum` is confirmed on aligned, contiguous arrays only; strided slices and the
+  reference's own arrays are step 2's first test (ADR-017 G).
+- The suites and the lint checks (T2) ran on the tree the third commit of round 1 holds, before
+  this report's tables were regenerated and before one cell of SYSTEM.md's history table (a
+  date) was corrected; `gen_system_map.py --check` and `tests/test_system_map.py` were run again
+  after that and pass. The core job's run on the third commit is read from the pull request,
+  not recorded here (T8b ends at the fix).
+- Two statements of the first version rested on work that was not kept and are marked or
+  removed: the pure-Python model's run (section 3) and the rehearsal (section 4). A third, that
+  imports are faster from the Linux file system, was the reason for a recommendation that Alex's
+  answer replaced; it is removed.
 
 ## Files
 
@@ -519,10 +599,11 @@ of them, so later steps may compare a core result with either.
   and install, locally and in CI.
 - `tests/test_core_parity.py`: the parity tests, marker `parity` (`pyproject.toml`).
 - `.github/workflows/ci.yml`: the core job; the C solver step removed.
-- `.gitignore`, `.gitattributes`: `.venv-linux`, `*.pyd`; `*.sh text eol=lf`.
+- `.gitignore`, `.gitattributes`: `*.pyd`; `*.sh text eol=lf`.
 - `docs/reports/probe86/probe86.py`: the configurations, the runs, the counted runs, the parity
   counts.
 - `docs/reports/probe86/run86.py`: the queues, at most three processes, one BLAS thread each.
 - `docs/reports/probe86/versions86.py`: the versions, from Windows.
-- `docs/reports/probe86/mutants86.sh`: the planted wrong orders.
+- `docs/reports/probe86/mutants86.sh`: the planted wrong orders and the missing refusal.
+- `docs/reports/probe86/checks86.py`: the lint job's checks and the tree the suites ran on.
 - `docs/reports/probe86/tables86.py`, `tables86.md`: the tables.

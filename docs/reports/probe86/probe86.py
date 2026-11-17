@@ -4,7 +4,7 @@
     python docs/reports/probe86/probe86.py run <location> <scenario>
     python docs/reports/probe86/probe86.py parity
 
-Run under ``.venv-linux`` (the WSL2 environment, ``scripts/setup_linux_env.sh``).
+Run under the WSL2 environment (``scripts/setup_linux_env.sh``).
 The runs are prompt 85's three 80x30 references (``probe85.py``): the dust
 release, the door leak and the filter breach, from main's scenario files with
 the grid and ``mass_imbalance_tol`` written as ``probe85.variant_mapping``

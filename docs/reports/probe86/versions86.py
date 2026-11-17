@@ -6,11 +6,14 @@ Run with Windows' ``.venv``. It asks Windows for its build and WSL's version,
 then asks the WSL2 distribution for the kernel, GCC, CMake, Ninja, uv, the
 Linux environment's Python, NumPy and its BLAS (``np.show_config``), nanobind
 and scikit-build-core, and reads the GoogleTest release pinned in
-``core/CMakeLists.txt``. Everything goes to ``results/builder86/versions.json``,
-which ``tables86.py`` reads. It starts no process beyond the commands named.
+``core/CMakeLists.txt``. ``CFD_LINUX_VENV`` in its environment names another
+Linux environment, as it does for the Linux scripts. Everything goes to
+``results/builder86/versions.json``, which ``tables86.py`` reads. It starts no
+process beyond the commands named.
 """
 
 import json
+import os
 import platform
 import re
 import subprocess
@@ -23,7 +26,11 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
 OUT = ROOT / "results" / "builder86" / "versions.json"
 DISTRO = "Ubuntu-24.04"
-LINUX_PYTHON = "$HOME/.venvs/cfd_clean_room/bin/python"
+# The Linux environment as the distribution reads the path (it may hold $HOME).
+# CFD_LINUX_VENV in this Windows process overrides it, as it does in the Linux
+# scripts, so the record describes the environment the core was built in.
+LINUX_VENV = os.environ.get("CFD_LINUX_VENV", "$HOME/.venvs/cfd_clean_room")
+LINUX_PYTHON = f"{LINUX_VENV}/bin/python"
 # The commands asked of the distribution, name to shell text.
 LINUX = {
     "kernel": "uname -r",

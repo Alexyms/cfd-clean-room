@@ -5,7 +5,7 @@
     python docs/reports/probe86/run86.py repeats      # the same pair again
     python docs/reports/probe86/run86.py counted      # the three, counted, here
 
-Run with ``.venv-linux``'s interpreter, which each run inherits. The three
+Run with the WSL2 environment's interpreter, which each run inherits. The three
 references start together, as prompt 85's Windows references ran three at once;
 the two runs of the run file's placement run one after the other with no other
 solver process, so that their wall times differ only by where the file is.

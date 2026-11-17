@@ -44,25 +44,47 @@ From `versions86.py` (`results/builder86/versions.json`): Windows' `ver` and `ws
 | the Windows environment's packages | 47 |
 | installed under Linux at the same version | 47 |
 | at another version, or missing | 0 |
-| added under Linux for the core's build, and the core | nanobind 3.1.0, pathspec 1.1.1, scikit-build-core 1.1.2 |
+| added under Linux for the core's build, and the core | cfdcore (the checkout's core/), nanobind 3.1.0, pathspec 1.1.1, scikit-build-core 1.1.2 |
 
 | environment | tests | passed | failed | errors | skipped | wall, s |
 |---|---|---|---|---|---|---|
-| Windows | 3,102 | 3,101 | 0 | 0 | 1 | 1461 |
-| Linux | 3,111 | 3,111 | 0 | 0 | 0 | 1496 |
+| Windows | 3,102 | 3,101 | 0 | 0 | 1 | 1454 |
+| Linux | 3,112 | 3,112 | 0 | 0 | 0 | 1526 |
 
-Packages: `results/builder86/windows-freeze.txt` (the Windows `.venv`), `linux-freeze.txt` (the Linux environment as installed from it) and `linux-freeze-core.txt` (after `requirements-dev.txt`'s build dependencies and `pip install --no-build-isolation ./core`). Suites: `pytest tests/ -q -p no:cacheprovider` with its JUnit file, each run alone with the default BLAS threads; the time is pytest's.
+| the lint job's check | exit code | its last line |
+|---|---|---|
+| `ruff format --check .` | 0 | 286 files already formatted |
+| `ruff check .` | 0 | All checks passed! |
+| `python scripts/gen_system_map.py --check` | 0 | SYSTEM.md matches the source tree. |
+
+Packages: `results/builder86/windows-freeze.txt` (the Windows `.venv`), `linux-freeze.txt` (the Linux environment as installed from it) and `linux-freeze-core.txt` (after `requirements-dev.txt`'s build dependencies and `pip install --no-build-isolation ./core`). Suites: `pytest tests/ -q -p no:cacheprovider` with its JUnit file, at the default BLAS threads, one after the other; the time is pytest's. The suites and the three checks ran on commit 14038cc, with 10 files edited that the next commit holds (`checks86.py`, `results/builder86/checks.json`). `tables86.py --check` compares this report with its records, so it is not a row here.
 
 ### T3. The core's tests: CTest, and `pairwise_sum` against `np.sum`
 
-CTest under WSL2: 7 tests, 7 passed, 0 failed.
+CTest under WSL2: 10 tests, 10 passed, 0 failed.
 
 | arrays | compared | differing from np.sum (64-bit pattern) | where a left-to-right sum differs from np.sum |
 |---|---|---|---|
 | 1-D, lengths 0 to 1,000 and 2,400, 9,600, 38,400 | 1,004 | 0 | 901 |
 | 2-D, 30x80, 60x160, 120x320, summed whole | 3 | 0 | 3 |
 
-From `probe86.py parity` (`results/builder86/parity86.json`), which repeats `tests/test_core_parity.py`'s comparison on the same seeded values, and CTest's JUnit file (`results/builder86/ctest.xml`). The last column says how many arrays the comparison could catch a wrong order on.
+From `probe86.py parity` (`results/builder86/parity86.json`), which repeats `tests/test_core_parity.py`'s comparison on the same seeded values, and CTest's JUnit file (`results/builder86/ctest.xml`). The last column says how many arrays the comparison could catch a wrong order on. The parity module in the Linux suite's JUnit file: 11 tests, 11 passed.
+
+### T3b. The planted wrong orders and the missing refusal: which tests catch each
+
+| plant | what it changes | GoogleTest failing | the GoogleTest tests that fail | parity tests failing | verdict |
+|---|---|---|---|---|---|
+| control | The unchanged source (a sed that changes nothing) | 0 of 10 |  | 0 of 11 | passes |
+| sequential | A plain left-to-right sum | 6 of 10 | EightAccumulatorsKeepTermsBelowTheLastPlace, EightTermsAreCombinedNotAddedInOrder, ABlockOfExactly128TermsIsNotSplit, BlocksOf128NotOf64SplitAboveAndBelowThem, TermsBeyondTheLastBlockAreAddedAfter, AboveABlockSplitsAtHalfRoundedDownToEight | 3 of 11 | caught by both |
+| split_unrounded | The split at n / 2 without rounding it down to a multiple of eight | 1 of 10 | AboveABlockSplitsAtHalfRoundedDownToEight | 3 of 11 | caught by both |
+| block64 | Blocks of 64 in place of NumPy's 128 | 2 of 10 | ABlockOfExactly128TermsIsNotSplit, BlocksOf128NotOf64SplitAboveAndBelowThem | 3 of 11 | caught by both |
+| combine_linear | The eight accumulators combined left to right in place of pairwise | 2 of 10 | EightTermsAreCombinedNotAddedInOrder, TermsBeyondTheLastBlockAreAddedAfter | 3 of 11 | caught by both |
+| no_identity | No leading 0.0, so a sum of negative zeros stays -0.0 | 1 of 10 | NegativeZerosSumToPositiveZero | 1 of 11 | caught by both |
+| unroll_le | A plain sum at exactly eight terms, the first length the accumulators take | 1 of 10 | EightTermsAreCombinedNotAddedInOrder | 0 of 11 | caught by GoogleTest only |
+| block_lt | A block that ends below 128 terms, so exactly 128 terms are split in two | 1 of 10 | ABlockOfExactly128TermsIsNotSplit | 1 of 11 | caught by both |
+| no_alignment_check | The binding without its refusal of an unaligned array | 0 of 10 |  | 1 of 11 | caught by the parity tests only |
+
+From `mutants86.sh` (`results/builder86/mutants86.txt`): each plant is `core/src/reduce.cpp` (the last is `core/python/bindings.cpp`) with one change, built out of source in a copy of `core/`, CTest run on it, and `tests/test_core_parity.py` run against its module with `CFD_CORE_REQUIRED=1`; the control is the source unchanged. The parity run's module path is checked to be the plant's own.
 
 ### T4. The runs: the stops, and whether each Linux run is bitwise the Windows record
 
@@ -110,7 +132,7 @@ From the counted runs (`probe86.py`, `StopCounts`): the three references again o
 
 ### T4d. The readings at each flow state's stop, Windows against Linux
 
-| scenario | flow state | reading | Windows | Linux | |difference| | the stop's tolerance for it |
+| scenario | flow state | reading | Windows | Linux | abs difference | the stop's tolerance for it |
 |---|---|---|---|---|---|---|
 | dust | 0 | pressure_cap_hits | 0.000000e+00 | 0.000000e+00 | 0 | - |
 | dust | 0 | residual | 2.759008e-12 | 2.759008e-12 | 8.3e-19 | - |
@@ -211,8 +233,17 @@ The run file's placement, (c): |W(/mnt/c) - W(Linux)| / W(Linux) = 0.207 (the re
 
 | criterion | measured | verdict |
 |---|---|---|
-| CTest passes on WSL2 | 7 of 7 | MET |
-| CTest passes in CI | the core job of `.github/workflows/ci.yml`, on the pull request | on the pull request's CI |
+| CTest passes on WSL2 | 10 of 10 | MET |
+| CTest passes in CI | T8b: the core job of `.github/workflows/ci.yml` on the pull request, its latest recorded run (commit 4dbbe5f): CTest 7 of 7; 10 parity tests passed | MET |
 | the reference under WSL2: every decision equal to the Windows records | yes | MET |
 | the reference under WSL2: every field inside the band | the worst field is inside the spread | MET |
 | a reference run's wall time with its run file on /mnt/c and on the Linux file system recorded | T7; their difference 0.207 of the Linux file system's | MET |
+
+### T8b. The core job on the pull request, by push
+
+| commit | run | core job | its log shows |
+|---|---|---|---|
+| 251bbf7 | 43978500817 | FAILED | the build stopped at `'_POSIX_C_SOURCE' redefined [-Werror]`; CTest did not run |
+| 4dbbe5f | 43987922932 | passed | CTest 7 of 7; 10 parity tests passed |
+
+From the jobs' logs (`results/builder86/ci_core_jobs.json`, `ci_core_job_<commit>.log`). The runs are those of the pull request's checks on each push; the run on the head of this report's own commit is read from the pull request.

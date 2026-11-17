@@ -21,6 +21,7 @@ checkout, so this process reads either form as the local one
 
 import argparse
 import json
+import re
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -186,12 +187,22 @@ def junit(path: Path) -> dict:
 
 
 def freeze(path: Path) -> dict[str, str]:
-    """A pip freeze as name to version, names lower-cased."""
+    """A pip freeze as name to version, names lower-cased.
+
+    A package installed from a directory has no version in a freeze ("name @
+    file:///..."); it is listed as built from the checkout's directory, so the
+    machine's own path stays out of the report.
+    """
     out = {}
     for line in path.read_text(encoding="utf-8-sig").splitlines():
         if "==" in line:
             name, version = line.strip().split("==", 1)
-            out[name.lower().replace("_", "-")] = version
+        elif " @ " in line:
+            name, _, url = line.strip().partition(" @ ")
+            version = f"(the checkout's {url.rstrip('/').rsplit('/', 1)[-1]}/)"
+        else:
+            continue
+        out[name.lower().replace("_", "-")] = version
     return out
 
 
@@ -291,6 +302,15 @@ def environment_table() -> list[str]:
                 f"{c['seconds']:.0f}",
             ]
         )
+    record = json.loads((RESULTS / "checks.json").read_text(encoding="utf-8"))
+    checks = [
+        [f"`{name}`", str(r["returncode"]), r["last_line"]]
+        for name, r in record["checks"].items()
+    ]
+    edited = len(record["uncommitted"])
+    tree = f"commit {record['head'][:7]}" + (
+        f", with {edited} files edited that the next commit holds" if edited else ""
+    )
     return [
         "### T2. The Linux environment, and the whole suite on each platform",
         "",
@@ -309,12 +329,98 @@ def environment_table() -> list[str]:
             suites,
         ),
         "",
-        "Packages: `results/builder86/windows-freeze.txt` (the Windows `.venv`), `linux-freeze.txt` (the Linux environment as installed from it) and `linux-freeze-core.txt` (after `requirements-dev.txt`'s build dependencies and `pip install --no-build-isolation ./core`). Suites: `pytest tests/ -q -p no:cacheprovider` with its JUnit file, each run alone with the default BLAS threads; the time is pytest's.",
+        *tables85.table(["the lint job's check", "exit code", "its last line"], checks),
+        "",
+        "Packages: `results/builder86/windows-freeze.txt` (the Windows `.venv`), `linux-freeze.txt` (the Linux environment as installed from it) and `linux-freeze-core.txt` (after `requirements-dev.txt`'s build dependencies and `pip install --no-build-isolation ./core`). Suites: `pytest tests/ -q -p no:cacheprovider` with its JUnit file, at the default BLAS threads, one after the other; the time is pytest's. "
+        f"The suites and the three checks ran on {tree} (`checks86.py`, `results/builder86/checks.json`). `tables86.py --check` compares this report with its records, so it is not a row here.",
+    ]
+
+
+def parity_module_counts() -> tuple[int, int]:
+    """The parity module's tests and how many passed, from the Linux suite's JUnit file."""
+    root = ET.parse(RESULTS / "suite_linux.xml").getroot()
+    cases = [
+        c
+        for c in root.iter("testcase")
+        if c.get("classname") == "tests.test_core_parity"
+    ]
+    failed = [
+        c
+        for c in cases
+        if any(c.find(kind) is not None for kind in ("failure", "error", "skipped"))
+    ]
+    return len(cases), len(cases) - len(failed)
+
+
+def plants_table() -> list[str]:
+    """T3b: each planted defect of mutants86.sh and the tests that caught it."""
+    changes: dict[str, str] = {}
+    note = ""
+    for line in (HERE / "mutants86.sh").read_text(encoding="utf-8").splitlines():
+        if line.startswith("# "):
+            note = line[2:].rstrip(".")
+        match = re.match(r"MUTANT\[(\w+)\]=", line)
+        if match:
+            changes[match.group(1)] = note
+    rows = []
+    for line in (RESULTS / "mutants86.txt").read_text(encoding="utf-8").splitlines():
+        name, *parts = [part.strip() for part in line.split(" | ")]
+        if len(parts) != 3:
+            rows.append([name, changes[name], parts[0], "", "", "NOT CAUGHT"])
+            continue
+        gtest, parity, module = parts
+        if f"/{name}/build/" not in module:
+            raise ValueError(f"{name}: the parity tests did not load its module")
+        g_failed, g_total = (
+            int(n)
+            for n in re.search(r"(\d+) tests failed out of (\d+)", gtest).groups()
+        )
+        names = re.search(r"\[failed: (.*)\]", gtest)
+        p_failed = int(m.group(1)) if (m := re.search(r"(\d+) failed", parity)) else 0
+        p_total = p_failed + int(re.search(r"(\d+) passed", parity).group(1))
+        if name == "control":
+            verdict = "passes" if g_failed == p_failed == 0 else "FAILS"
+        else:
+            verdict = {
+                (True, True): "caught by both",
+                (True, False): "caught by GoogleTest only",
+                (False, True): "caught by the parity tests only",
+                (False, False): "NOT CAUGHT",
+            }[(g_failed > 0, p_failed > 0)]
+        rows.append(
+            [
+                name,
+                changes[name],
+                f"{g_failed} of {g_total}",
+                names.group(1).replace("PairwiseSum.", "").replace(",", ", ")
+                if names
+                else "",
+                f"{p_failed} of {p_total}",
+                verdict,
+            ]
+        )
+    return [
+        "### T3b. The planted wrong orders and the missing refusal: which tests catch each",
+        "",
+        *tables85.table(
+            [
+                "plant",
+                "what it changes",
+                "GoogleTest failing",
+                "the GoogleTest tests that fail",
+                "parity tests failing",
+                "verdict",
+            ],
+            rows,
+        ),
+        "",
+        "From `mutants86.sh` (`results/builder86/mutants86.txt`): each plant is `core/src/reduce.cpp` (the last is `core/python/bindings.cpp`) with one change, built out of source in a copy of `core/`, CTest run on it, and `tests/test_core_parity.py` run against its module with `CFD_CORE_REQUIRED=1`; the control is the source unchanged. The parity run's module path is checked to be the plant's own.",
     ]
 
 
 def core_table(parity: dict, ctest: dict) -> list[str]:
     """T3: CTest and prediction (b)'s comparison."""
+    parity_tests, parity_passed = parity_module_counts()
     v, f = parity["vectors"], parity["fields"]
     rows = [
         [
@@ -347,7 +453,10 @@ def core_table(parity: dict, ctest: dict) -> list[str]:
             rows,
         ),
         "",
-        "From `probe86.py parity` (`results/builder86/parity86.json`), which repeats `tests/test_core_parity.py`'s comparison on the same seeded values, and CTest's JUnit file (`results/builder86/ctest.xml`). The last column says how many arrays the comparison could catch a wrong order on.",
+        "From `probe86.py parity` (`results/builder86/parity86.json`), which repeats `tests/test_core_parity.py`'s comparison on the same seeded values, and CTest's JUnit file (`results/builder86/ctest.xml`). The last column says how many arrays the comparison could catch a wrong order on. "
+        f"The parity module in the Linux suite's JUnit file: {parity_tests} tests, {parity_passed} passed.",
+        "",
+        *plants_table(),
     ]
 
 
@@ -434,7 +543,7 @@ def readings_table() -> list[str]:
                 "reading",
                 "Windows",
                 "Linux",
-                "|difference|",
+                "abs difference",
                 "the stop's tolerance for it",
             ],
             rows,
@@ -790,10 +899,65 @@ def predictions_table(
     )
 
 
+# U+2018 and U+2019, which GCC puts around a name in its messages.
+CURLY_QUOTES = {0x2018: "'", 0x2019: "'"}
+
+
+def ci_runs() -> list[dict]:
+    """The core job's recorded runs, with what each log shows.
+
+    Each record names a commit, a run and a job, and keeps the job's log
+    (``results/builder86/ci_core_jobs.json``). A build that stopped shows its
+    first compiler error; a build that finished shows CTest's and the parity
+    tests' counts.
+    """
+    runs = json.loads((RESULTS / "ci_core_jobs.json").read_text(encoding="utf-8"))
+    for run in runs:
+        log = (RESULTS / run["log"]).read_text(encoding="utf-8", errors="replace")
+        ctest = re.search(r"(\d+)% tests passed.*?out of (\d+)", log)
+        parity = re.search(r"=+ (\d+) passed in", log)
+        error = re.search(r"error: (.*?\[-Werror\])", log)
+        if run["conclusion"] == "success":
+            if not (ctest and ctest.group(1) == "100" and parity):
+                raise ValueError(f"{run['log']}: a success without CTest and parity")
+            run["shows"] = (
+                f"CTest {ctest.group(2)} of {ctest.group(2)}; "
+                f"{parity.group(1)} parity tests passed"
+            )
+        else:
+            if not error:
+                raise ValueError(f"{run['log']}: a failure without a compiler error")
+            # The compiler quotes names with curly quotes; the report is ASCII.
+            text = error.group(1).translate(CURLY_QUOTES)
+            run["shows"] = f"the build stopped at `{text}`; CTest did not run"
+    return runs
+
+
+def ci_table(runs: list[dict]) -> list[str]:
+    """T8b: the core job's runs on the pull request, one per push."""
+    rows = [
+        [
+            r["commit"][:7],
+            str(r["run"]),
+            "passed" if r["conclusion"] == "success" else "FAILED",
+            r["shows"],
+        ]
+        for r in runs
+    ]
+    return [
+        "### T8b. The core job on the pull request, by push",
+        "",
+        *tables85.table(["commit", "run", "core job", "its log shows"], rows),
+        "",
+        "From the jobs' logs (`results/builder86/ci_core_jobs.json`, `ci_core_job_<commit>.log`). The runs are those of the pull request's checks on each push; the run on the head of this report's own commit is read from the pull request.",
+    ]
+
+
 def gate_table(
-    fields: dict, decisions_equal: bool, ctest: dict, walls: dict
+    fields: dict, decisions_equal: bool, ctest: dict, walls: dict, ci: list[dict]
 ) -> list[str]:
     """T8: Phase 6 step 1's gate, row by row."""
+    last = ci[-1]
     worst = {INSIDE: 0, BETWEEN: 1, BEYOND: 2}
     tiers = list(fields["tiers"].values())
     worst_tier = max(tiers, key=lambda t: worst[t])
@@ -808,8 +972,8 @@ def gate_table(
         ],
         [
             "CTest passes in CI",
-            "the core job of `.github/workflows/ci.yml`, on the pull request",
-            "on the pull request's CI",
+            f"T8b: the core job of `.github/workflows/ci.yml` on the pull request, its latest recorded run (commit {last['commit'][:7]}): {last['shows']}",
+            "MET" if last["conclusion"] == "success" else "NOT MET",
         ],
         [
             "the reference under WSL2: every decision equal to the Windows records",
@@ -833,6 +997,8 @@ def gate_table(
         "### T8. Phase 6 step 1's gate (`docs/PROJECT_PLAN.md`), row by row",
         "",
         *tables85.table(["criterion", "measured", "verdict"], rows),
+        "",
+        *ci_table(ci),
     ]
 
 
@@ -894,7 +1060,7 @@ def build() -> tuple[str, dict[str, str]]:
         "fields": "\n".join(field_lines),
         "decisions": "\n".join(decision_lines),
         "walls": "\n".join(wall_lines),
-        "gate": "\n".join(gate_table(fields, decisions_equal, ctest, walls)),
+        "gate": "\n".join(gate_table(fields, decisions_equal, ctest, walls, ci_runs())),
     }
     text = "# Prompt 86's tables\n\nGenerated by `tables86.py` from `results/builder86/` and `results/builder85/`.\n\n"
     text += "\n\n".join(blocks[k] for k in MARKERS)

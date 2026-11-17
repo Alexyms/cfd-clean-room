@@ -1,8 +1,5 @@
-# Virtual environments. .venv-linux is the WSL2 environment (ADR-017 A). On this
-# machine it is a link to the Linux file system, which Windows sees as a file, so
-# its pattern has no trailing slash.
+# Virtual environment
 .venv/
-.venv-linux
 
 # Python
 __pycache__/
