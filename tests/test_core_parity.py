@@ -511,7 +511,11 @@ def test_quick_face_values_equal_the_reference_bit_for_bit(
     assert np.isnan(ends).all()
 
 
-@pytest.mark.parametrize("shape", [(1,), (7,), (1000,), (30, 79), (119, 320)])
+@pytest.mark.parametrize(
+    "shape",
+    [(1,), (7,), (1000,), (30, 79), (119, 320)],
+    ids=lambda shape: "x".join(map(str, shape)),
+)
 def test_limited_face_values_equal_the_reference_bit_for_bit(
     shape: tuple[int, ...],
 ) -> None:
