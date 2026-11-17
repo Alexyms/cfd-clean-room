@@ -3,10 +3,11 @@
 // arrays of a stated dimension; `noconvert` makes a wrong dtype, layout or
 // dimension a TypeError at the call instead of a silent copy.
 
-#include "cfdcore/reduce.hpp"
-
+// First, as Python.h requires: after a standard header its pyconfig.h redefines feature macros.
 #include <nanobind/nanobind.h>
 #include <nanobind/ndarray.h>
+
+#include "cfdcore/reduce.hpp"
 
 #include <span>
 
