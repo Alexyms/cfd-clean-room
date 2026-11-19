@@ -1,8 +1,20 @@
 #include "cfdcore/grid.hpp"
 
+#include <cmath>
+
 namespace cfdcore::grid {
 
 namespace {
+
+// Whether each value is below the next. A NaN anywhere gives false.
+bool strictly_increasing(std::span<const double> values) {
+    for (std::size_t i = 0; i + 1 < values.size(); ++i) {
+        if (!(values[i] < values[i + 1])) {
+            return false;
+        }
+    }
+    return true;
+}
 
 template <int D>
 std::array<std::size_t, D> cell_counts(const grid_input<D>& input) {
@@ -32,6 +44,29 @@ std::string_view grid<D>::check(const grid_input<D>& input) {
         return "cell_type does not hold one type per cell";
     }
     return {};
+}
+
+template <int D>
+    requires(D >= 1)
+int grid<D>::first_bad_direction(const grid_input<D>& input) {
+    for (int d = 0; d < D; ++d) {
+        const auto faces = input.faces[d];
+        const auto centres = input.centres[d];
+        for (const double face : faces) {
+            if (!std::isfinite(face)) {
+                return d;
+            }
+        }
+        if (!strictly_increasing(faces)) {
+            return d;
+        }
+        // The nodes are faces.front(), the centres and faces.back().
+        if (!(faces.front() < centres.front()) || !strictly_increasing(centres) ||
+            !(centres.back() < faces.back())) {
+            return d;
+        }
+    }
+    return -1;
 }
 
 template <int D>

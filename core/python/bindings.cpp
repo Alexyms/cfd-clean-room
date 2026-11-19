@@ -93,6 +93,14 @@ Grid2 make_grid(const Vector& x, const Vector& xc, const Vector& y, const Vector
     if (!reason.empty()) {
         throw nb::type_error((std::string("Grid2: ") + std::string(reason)).c_str());
     }
+    // Shapes are right, so a bad coordinate is a bad value, not a bad array.
+    const int bad = Grid2::first_bad_direction(input);
+    if (bad >= 0) {
+        throw nb::value_error((std::string("Grid2: the face or node coordinates along ") +
+                               (bad == 0 ? "x" : "y") + " (direction " + std::to_string(bad) +
+                               ") are not finite and strictly increasing")
+                                  .c_str());
+    }
     return Grid2(input);
 }
 
@@ -134,10 +142,10 @@ void require_apart(const void* out, std::size_t out_bytes, const void* in, std::
     }
 }
 
-template <typename T>
-std::span<const T> span_of(
-    const nb::ndarray<const T, nb::ndim<2>, nb::c_contig, nb::device::cpu>& a) {
-    return std::span<const T>(a.data(), a.size());
+// The elements of a two-dimensional array of any of the aliases above, as one span.
+template <typename A>
+std::span<const typename A::Scalar> span_of(const A& a) {
+    return std::span<const typename A::Scalar>(a.data(), a.size());
 }
 
 // What advective_flux reads and writes, once its checks have passed.
@@ -251,7 +259,9 @@ NB_MODULE(_cfdcore, m) {
                       "Grid2(x, xc, y, yc, cell_type, solid): the face and centre\n"
                       "coordinates per direction (float64, 1-D), the cell types (int32,\n"
                       "[ny, nx]) and the type of a SOLID cell. Inconsistent shapes, a\n"
-                      "wrong dtype or an unaligned array raise TypeError.")
+                      "wrong dtype or an unaligned array raise TypeError; faces or nodes\n"
+                      "that are not finite and strictly increasing along a direction raise\n"
+                      "ValueError naming it.")
         .def("__init__",
              [](Grid2* self, const Vector& x, const Vector& xc, const Vector& y, const Vector& yc,
                 const IntMatrix& cell_type, std::int32_t solid) {

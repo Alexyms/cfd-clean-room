@@ -27,6 +27,13 @@ namespace cfdcore::grid {
 //            `Mesh.cell_type` [ny, nx] for D = 2
 // solid:     the type of a SOLID cell (`mesh.SOLID`), so the core holds no
 //            copy of the mesh's codes
+//
+// Along each direction the faces must be finite and strictly increasing, and
+// so must the nodes (the low boundary face, the centres, the high boundary
+// face): the weights divide by differences of nodes. `check` and
+// `first_bad_direction` refuse what is not. That a centre lies between its
+// cell's two faces is the caller's contract (`Mesh` puts it at the midpoint);
+// the flux needs only the nodes' order.
 template <int D>
 struct grid_input {
     std::array<std::span<const double>, D> faces;
@@ -42,10 +49,21 @@ public:
     // Why `input` cannot make a grid, or an empty view when it can: a
     // direction without a cell, a faces array that is not one longer than
     // its centres, or a cell_type array that is not one per cell. The binding
-    // turns a reason into the exception it raises.
+    // turns a reason into the exception it raises (a shape is a TypeError).
     static std::string_view check(const grid_input<D>& input);
 
-    // Builds the grid from an input `check` accepts, copying every array.
+    // The first direction along which the faces are not finite and strictly
+    // increasing, or the nodes are not strictly increasing; -1 when every
+    // direction's are. Reads an input `check` accepts. The binding turns a
+    // direction into a ValueError naming it.
+    //
+    // The nodes' two ends are the end faces, so finite faces in order make
+    // every node finite once the nodes are in order: a NaN fails the order
+    // test, since every comparison with one is false.
+    static int first_bad_direction(const grid_input<D>& input);
+
+    // Builds the grid from an input `check` accepts and `first_bad_direction`
+    // clears, copying every array.
     explicit grid(const grid_input<D>& input);
 
     // The layout of the grid's cell and face fields.

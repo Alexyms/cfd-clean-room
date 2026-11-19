@@ -10,6 +10,8 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
+#include <limits>
 #include <vector>
 
 namespace {
@@ -196,6 +198,60 @@ TEST(Grid, CheckRefusesInconsistentArrays) {
     std::vector<std::int32_t> five(5, 0);
     few_types.cell_type = five;
     EXPECT_EQ(grid<2>::check(few_types), "cell_type does not hold one type per cell");
+}
+
+TEST(Grid, ConsistentCoordinatesHaveNoBadDirection) {
+    grid_arrays a;
+    EXPECT_EQ(grid<2>::first_bad_direction(a.input()), -1);
+    // One cell along a direction: the nodes are the two faces and the centre.
+    std::vector<double> x{0.0, 2.0};
+    std::vector<double> xc{1.0};
+    std::vector<std::int32_t> types{0};
+    grid_input<1> one{.faces = {x}, .centres = {xc}, .cell_type = types, .solid = 1};
+    EXPECT_EQ(grid<1>::first_bad_direction(one), -1);
+}
+
+TEST(Grid, EachKindOfBadCoordinateNamesItsDirection) {
+    using arrays = std::vector<double>;
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    const double inf = std::numeric_limits<double>::infinity();
+    // Each change breaks one thing along a direction, given its faces and
+    // centres: a face that repeats or decreases, a NaN face, an infinite end
+    // face (which keeps the order, so only the finiteness test refuses it), a
+    // centre that repeats, decreases or is NaN, a centre at or beyond an end face.
+    struct bad_case {
+        const char* what;
+        std::function<void(arrays& faces, arrays& centres)> change;
+    };
+    const bad_case cases[] = {
+        {"a face repeats", [](arrays& f, arrays&) { f[1] = f[0]; }},
+        {"a face decreases", [](arrays& f, arrays&) { f[1] = f[0] - 1.0; }},
+        {"a NaN face", [&](arrays& f, arrays&) { f[1] = nan; }},
+        {"an infinite last face", [&](arrays& f, arrays&) { f.back() = inf; }},
+        {"an infinite first face", [&](arrays& f, arrays&) { f.front() = -inf; }},
+        {"a centre repeats", [](arrays&, arrays& c) { c[1] = c[0]; }},
+        {"a centre decreases", [](arrays&, arrays& c) { c[1] = c[0] - 0.1; }},
+        {"a NaN centre", [&](arrays&, arrays& c) { c[0] = nan; }},
+        {"a centre at the low face", [](arrays& f, arrays& c) { c[0] = f[0]; }},
+        {"a centre at the high face", [](arrays& f, arrays& c) { c.back() = f.back(); }},
+        {"a centre below the low face", [](arrays& f, arrays& c) { c[0] = f[0] - 1.0; }},
+        {"a centre past the high face", [](arrays& f, arrays& c) { c.back() = f.back() + 1.0; }},
+    };
+    for (int d = 0; d < 2; ++d) {
+        for (const auto& bad : cases) {
+            grid_arrays a;
+            bad.change(d == 0 ? a.x : a.y, d == 0 ? a.xc : a.yc);
+            EXPECT_TRUE(grid<2>::check(a.input()).empty()) << bad.what << " " << d;
+            EXPECT_EQ(grid<2>::first_bad_direction(a.input()), d) << bad.what << " " << d;
+        }
+    }
+}
+
+TEST(Grid, TheFirstBadDirectionIsTheLowest) {
+    grid_arrays a;
+    a.x[1] = 5.0;
+    a.y[1] = -1.0;
+    EXPECT_EQ(grid<2>::first_bad_direction(a.input()), 0);
 }
 
 }  // namespace

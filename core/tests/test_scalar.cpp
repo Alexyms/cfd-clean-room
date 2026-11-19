@@ -335,6 +335,31 @@ TEST(AdvectiveFlux, AFarNodeInASolidCellIsReadAsTheUpstreamValue) {
     EXPECT_EQ(lc2.run(c2, back, inflow, false)[3], -4.0);
 }
 
+TEST(AdvectiveFlux, TheFarSolidRuleReadsQuickAsTheUpstreamValueToo) {
+    // The rule sets c_up and quick to c_c. With only c_up set, r is zero but
+    // psi_quick still holds the quadratic's own value, and it decides the sign
+    // of a zero psi: here c_c = -0.0 with a negative downstream difference and
+    // a positive quick - c_c, so psi_quick is negative and psi = max(0.0, that)
+    // is +0.0 where the rule gives -0.0 (its psi_quick is -0.0, a tie that
+    // keeps the second argument's sign). The face value is c_c + 0.5 psi d:
+    // +0.0 with the rule, -0.0 without it. The SOLID cell holds -40, which
+    // makes quick 4.625 from the weights -1/8, 3/4 and 3/8.
+    //
+    // Flow toward +x through face 3 (cells 2 to 3), far node cell 1.
+    line_case with_flow;
+    with_flow.types[1] = solid;
+    const std::vector<double> c{0.0, -40.0, -0.0, -1.0, 5.0, 6.0, 7.0, 8.0};
+    const std::vector<double> inflow(9, 0.0);
+    EXPECT_EQ(bits(with_flow.run(c, std::vector<double>(9, 1.0), inflow, false)[3]), bits(0.0));
+    // Against the flow, through the same face, the upstream cell is 3 and the
+    // far node cell 4: the flux's sign flips the product's.
+    line_case against;
+    against.types[4] = solid;
+    const std::vector<double> c_back{1.0, 2.0, -1.0, -0.0, -40.0, 6.0, 7.0, 8.0};
+    EXPECT_EQ(bits(against.run(c_back, std::vector<double>(9, -1.0), inflow, false)[3]),
+              bits(-0.0));
+}
+
 TEST(AdvectiveFlux, AVentTakesTheInflowEnteringAndTheRoomCellLeaving) {
     // Cells 0-2 SOLID; face 3 (cells 2 and 3) a vent.
     line_case lc;
