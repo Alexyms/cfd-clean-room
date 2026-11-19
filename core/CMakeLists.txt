@@ -46,7 +46,10 @@ if(CFD_CORE_WERROR)
 endif()
 
 add_library(cfdcore STATIC
-    src/reduce.cpp)
+    src/grid.cpp
+    src/layout.cpp
+    src/reduce.cpp
+    src/scalar.cpp)
 target_include_directories(cfdcore PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
 target_link_libraries(cfdcore PRIVATE cfdcore_flags)
@@ -65,7 +68,9 @@ if(CFD_CORE_TESTS)
     enable_testing()
     include(GoogleTest)
     add_executable(cfdcore_tests
-        tests/test_reduce.cpp)
+        tests/test_grid.cpp
+        tests/test_reduce.cpp
+        tests/test_scalar.cpp)
     target_link_libraries(cfdcore_tests PRIVATE cfdcore cfdcore_flags GTest::gtest_main)
     gtest_discover_tests(cfdcore_tests)
 endif()
