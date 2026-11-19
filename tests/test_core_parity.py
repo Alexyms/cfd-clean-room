@@ -1813,6 +1813,27 @@ def test_implicit_system_equals_the_references_set_up(
     assert _same_bits(scratch.rhs(), np.ravel(seen["b"]))
 
 
+@pytest.mark.parametrize("name", ["80x30", "160x60-stretched"])
+def test_implicit_stop_reads_b_in_every_cell(name: str) -> None:
+    """The stop is tol times the largest |b| over every cell, SOLID cells included.
+
+    C* is a thousand times its largest value elsewhere in the SOLID cells,
+    where the callers keep it zero. Under the conductances the solvers form, a
+    SOLID value reaches no neighbour, so it changes the stop alone: the
+    reference stops sooner than with those cells at zero, and the core with
+    it, bit for bit.
+    """
+    rng = np.random.default_rng([SEED, MESH_SEEDS[name], 55])
+    quiet = _jacobi_arguments(name, "decades", "scalar", "none", rng)
+    loud = quiet.replaced(
+        c_star=np.where(quiet.solid, 1e3 * quiet.c_star.max(), quiet.c_star)
+    )
+    assert loud.reference().iterations < quiet.reference().iterations
+    reference, counts = _reference_counted(loud)
+    out, core = loud.core(_implicit_scratch(name))
+    _assert_bit_for_bit(loud, reference, counts, out, core)
+
+
 def test_row_dot_is_the_row_partition_and_differs_from_vdot_in_rounding_only() -> None:
     """row_dot sums each row pairwise and adds the rows to 0.0 in order; np.vdot is another order."""
     rng = np.random.default_rng([SEED, 60])
