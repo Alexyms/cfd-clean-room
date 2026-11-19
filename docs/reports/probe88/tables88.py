@@ -30,9 +30,11 @@ MARKERS = (
     "tests",
     "jacobi",
     "cg",
+    "cgbound",
     "fallbacks",
     "replay",
     "replaycg",
+    "replaycgsolves",
     "plants",
     "timing",
     "parts",
@@ -48,11 +50,21 @@ BOUNDS = ["none", "binds", "infinite", "zero"]
 HOLDS = ["none", "held"]
 CG_FIELDS = ["positive-decades", "eps-like", "tight"]
 CG_STEPS = ["scalar", "per-cell", "per-cell-inf-solid"]
+CG_BOUND_FIELDS = ["positive-decades", "tight"]
+CG_BOUND_STOPS = ["tol", "loose"]
+CG_BOUNDS = ["binds", "infinite", "zero"]
 CG_FIELD_RTOL = 1e-12
+# The commit the suites, CTest, the parity run and the planted defects were run
+# at: the last commit that changes the code or its tests (T7 and T5 name it).
+RECORDS_AT = "9e47d21"
 JACOBI_TEST = "test_implicit_jacobi_equals_the_reference_bit_for_bit"
 CG_RULE_TEST = "test_implicit_cg_meets_prompt_88s_rule"
 CG_DOT_TEST = "test_implicit_cg_with_the_cores_dot_products_is_bit_for_bit"
 FALLBACK_TEST = "test_implicit_cg_fallback_is_the_jacobi_solve_bit_for_bit"
+CG_BOUND_RULE_TEST = "test_implicit_cg_with_a_leftover_bound_meets_prompt_88s_rule"
+CG_BOUND_DOT_TEST = (
+    "test_implicit_cg_with_a_leftover_bound_and_the_cores_dot_products_is_bit_for_bit"
+)
 
 
 def alternatives(names: list[str]) -> str:
@@ -69,6 +81,10 @@ CG_ID = re.compile(
     rf"-({alternatives(HOLDS)})$"
 )
 FALLBACK_ID = re.compile(rf"^({alternatives(MESHES)})-(cap|non-positive)$")
+CG_BOUND_ID = re.compile(
+    rf"^({alternatives(MESHES)})-({alternatives(CG_BOUND_FIELDS)})"
+    rf"-({alternatives(CG_BOUND_STOPS)})-({alternatives(CG_BOUNDS)})$"
+)
 
 
 class Case:
@@ -260,6 +276,72 @@ def cg_table() -> list[str]:
     return lines
 
 
+def cgbound_table() -> list[str]:
+    """T3c: the planted CG solves with a leftover bound, by field, stop and bound."""
+    rule = parity_cases(CG_BOUND_RULE_TEST, CG_BOUND_ID)
+    dot = parity_cases(CG_BOUND_DOT_TEST, CG_BOUND_ID)
+    by: dict[tuple[str, str, str], list[tuple[str, Case]]] = defaultdict(list)
+    for (mesh, field, stop, bound), case in rule:
+        by[(field, stop, bound)].append((mesh, case))
+    dot_by: dict[tuple[str, str, str], list[str]] = defaultdict(list)
+    for (_mesh, field, stop, bound), case in dot:
+        dot_by[(field, stop, bound)].append(case.outcome)
+    lines = [
+        "### T3c. Planted CG solves with a leftover bound",
+        "",
+        "Five meshes per row, a per-cell step, no held cells. `binds`: an eighth of the",
+        "unbound leftover; `infinite`; `zero`, with the cap at 30 iterations. `loose`: a",
+        "stop of 1e3, which the start residual already meets. The rule column counts the",
+        "cases that pass prompt 88's rule and the bound's contract (a converged result's",
+        "leftover is inside the bound, the core's and the reference's). Same count and the",
+        "difference are as in T3; differing counts are listed as mesh, reference to core.",
+        "The last column is the reference's CG with `np.vdot` replaced by `row_dot`, every",
+        "output bit for bit.",
+        "",
+        "| Field | Stop | Bound | Rule | Same count | Largest difference, same count "
+        "| Counts differing | Restarts (core) | Converged (core) | Fallbacks (core) "
+        "| With the core's dot, bit for bit |",
+        "|---|---|---|---|---|---|---|---|---|---|---|",
+    ]
+    for field in CG_BOUND_FIELDS:
+        for stop in CG_BOUND_STOPS:
+            for bound in CG_BOUNDS:
+                group = by.get((field, stop, bound))
+                if not group:
+                    continue
+                members = [c for _m, c in group]
+                same = [
+                    c
+                    for c in members
+                    if c.properties["reference_iterations"]
+                    == c.properties["core_iterations"]
+                ]
+                largest = max(
+                    (float(c.properties["relative_difference"]) for c in same),
+                    default=0.0,
+                )
+                differing = [
+                    f"{m} {c.properties['reference_iterations']} to "
+                    f"{c.properties['core_iterations']}"
+                    for m, c in group
+                    if c.properties["reference_iterations"]
+                    != c.properties["core_iterations"]
+                ]
+                restarts = [int(c.properties["restarts"]) for c in members]
+                converged = sum(c.properties["converged"] == "True" for c in members)
+                fallbacks = sum(c.properties["core_fallbacks"] != "0" for c in members)
+                lines.append(
+                    f"| `{field}` | {stop} | {bound} "
+                    f"| {passed([c.outcome for c in members])} "
+                    f"| {len(same)} of {len(members)} | {largest:.2e} "
+                    f"| {'; '.join(differing) if differing else 'none'} "
+                    f"| {span(restarts)} | {converged} of {len(members)} "
+                    f"| {fallbacks} of {len(members)} "
+                    f"| {passed(dot_by[(field, stop, bound)])} |"
+                )
+    return lines
+
+
 def fallbacks_table() -> list[str]:
     """T3b: the forced fallbacks, bit for bit."""
     rows = parity_cases(FALLBACK_TEST, FALLBACK_ID)
@@ -369,6 +451,36 @@ def replaycg_table() -> list[str]:
             f"{sum(r['core_fallbacks'] for r in group)} | {leftover:.1e} "
             f"| {sum(r['with_cores_dot_bits_differ'] for r in group)} "
             f"| {span([r['held_cells'] for r in group])} |"
+        )
+    return lines
+
+
+def replaycgsolves_table() -> list[str]:
+    """T4c: each captured k and eps solve, its counts and its largest difference."""
+    rows = [r for r in replay_rows() if r["method"] == "cg"]
+    lines = [
+        "### T4c. Each captured k and eps solve",
+        "",
+        "One row per solve of T4b, in the order the flow solve made them: the outer",
+        "iteration, the field (k or eps), the reference's and the core's iteration counts,",
+        "the core's restarts, the field's largest difference over the reference's largest",
+        "magnitude, the leftover's difference over its rounding scale (as in T4b) and the",
+        "number of held cells.",
+        "",
+        "| Outer iteration | Field | Reference iterations | Core iterations | Restarts "
+        "| Largest difference | Leftover difference over its scale | Held cells |",
+        "|---|---|---|---|---|---|---|---|",
+    ]
+    for r in rows:
+        field = "k" if r["label"]["field"] == 0 else "eps"
+        leftover = (
+            abs(r["core_leftover"] - r["reference_leftover"]) / r["leftover_scale"]
+        )
+        lines.append(
+            f"| {r['label']['outer']} | {field} | {r['reference_iterations']} "
+            f"| {r['core_iterations']} | {r['core_restarts']} "
+            f"| {r['field_relative_difference']:.2e} | {leftover:.1e} "
+            f"| {r['held_cells']} |"
         )
     return lines
 
@@ -506,7 +618,7 @@ def suite_counts(path: Path) -> dict[str, float]:
 def suites_table() -> list[str]:
     """T7: the whole suite on each platform, from pytest's JUnit records."""
     lines = [
-        "### T7. The whole suite at 6345f63, the last commit that changes the code or its tests",
+        f"### T7. The whole suite at {RECORDS_AT}, the last commit that changes the code or its tests",
         "",
         "The two suites ran at the same time, one BLAS thread each, beside the planted",
         "defects, so the wall times are not those of a suite alone.",
@@ -569,9 +681,11 @@ def build() -> tuple[str, dict[str, str]]:
         "tests": tests_table,
         "jacobi": jacobi_table,
         "cg": cg_table,
+        "cgbound": cgbound_table,
         "fallbacks": fallbacks_table,
         "replay": replay_table,
         "replaycg": replaycg_table,
+        "replaycgsolves": replaycgsolves_table,
         "plants": plants_table,
         "timing": timing_table,
         "parts": parts_table,

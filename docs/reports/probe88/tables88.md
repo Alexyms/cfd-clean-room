@@ -18,7 +18,7 @@ run again.
 | GoogleTest `Layout` | 6 | 6 |
 | GoogleTest `Grid` | 8 | 8 |
 | GoogleTest `PairwiseSum` | 10 | 10 |
-| GoogleTest `BlockedDot` | 4 | 4 |
+| GoogleTest `BlockedDot` | 6 | 6 |
 | GoogleTest `NumpyMinMax` | 2 | 2 |
 | GoogleTest `LimitedFaceValue` | 3 | 3 |
 | GoogleTest `LagrangeWeights` | 1 | 1 |
@@ -26,8 +26,10 @@ run again.
 | GoogleTest `Scheme` | 1 | 1 |
 | GoogleTest `ImplicitStep` | 10 | 10 |
 | GoogleTest `ImplicitSystem` | 2 | 2 |
+| GoogleTest `Jacobi` | 4 | 4 |
+| GoogleTest `ConjugateGradient` | 4 | 4 |
 | GoogleTest `Acceptance` | 3 | 3 |
-| **CTest, all** | 58 | 58 |
+| **CTest, all** | 68 | 68 |
 | `test_pairwise_sum_equals_np_sum_on_every_length` | 1 | 1 |
 | `test_pairwise_sum_equals_np_sum_on_grid_shaped_arrays` | 1 | 1 |
 | `test_pairwise_sum_of_negative_zeros_matches_np_sum` | 1 | 1 |
@@ -68,16 +70,23 @@ run again.
 | `test_implicit_cg_with_the_cores_dot_products_is_bit_for_bit` | 90 | 90 |
 | `test_the_planted_cg_inputs_reach_every_rule` | 1 | 1 |
 | `test_implicit_cg_fallback_is_the_jacobi_solve_bit_for_bit` | 10 | 10 |
+| `test_implicit_cg_with_a_leftover_bound_meets_prompt_88s_rule` | 45 | 45 |
+| `test_implicit_cg_with_a_leftover_bound_and_the_cores_dot_products_is_bit_for_bit` | 45 | 45 |
+| `test_the_planted_cg_bound_inputs_reach_every_rule` | 2 | 2 |
+| `test_implicit_cg_positivity_is_read_in_the_cells_it_solves_for_only` | 5 | 5 |
+| `test_implicit_cg_iterations_under_a_fallback_are_the_cgs_own` | 5 | 5 |
+| `test_implicit_a_zero_field_meets_the_stop_and_a_zero_bound_with_equality` | 20 | 20 |
 | `test_implicit_nothing_to_solve_returns_c_star` | 8 | 8 |
 | `test_implicit_system_equals_the_references_set_up` | 10 | 10 |
 | `test_implicit_stop_reads_b_in_every_cell` | 2 | 2 |
 | `test_row_dot_is_the_row_partition_and_differs_from_vdot_in_rounding_only` | 1 | 1 |
+| `test_row_dot_of_arrays_with_no_terms_is_zero` | 3 | 3 |
 | `test_row_dot_refuses_wrong_arrays` | 4 | 4 |
 | `test_implicit_step_refuses_what_the_reference_refuses` | 9 | 9 |
 | `test_implicit_step_accepts_consistent_arguments` | 1 | 1 |
 | `test_implicit_step_refuses_wrong_arrays` | 52 | 52 |
 | `test_implicit_step_refuses_an_out_that_overlaps_an_input` | 16 | 16 |
-| **parity, all** | 1279 | 1279 |
+| **parity, all** | 1404 | 1404 |
 
 ### T2. Planted Jacobi solves against the reference, every output bit for bit
 
@@ -123,6 +132,29 @@ every output bit for bit.
 | 40x15-uniform-open | `eps-like` | 6 of 6 | 1.88e-16 | none | 0 | 6 of 6 |
 | 40x15-uniform-open | `tight` | 5 of 6 | 3.20e-16 | 32 to 33 (restarts 1) | 0 to 1 | 6 of 6 |
 
+### T3c. Planted CG solves with a leftover bound
+
+Five meshes per row, a per-cell step, no held cells. `binds`: an eighth of the
+unbound leftover; `infinite`; `zero`, with the cap at 30 iterations. `loose`: a
+stop of 1e3, which the start residual already meets. The rule column counts the
+cases that pass prompt 88's rule and the bound's contract (a converged result's
+leftover is inside the bound, the core's and the reference's). Same count and the
+difference are as in T3; differing counts are listed as mesh, reference to core.
+The last column is the reference's CG with `np.vdot` replaced by `row_dot`, every
+output bit for bit.
+
+| Field | Stop | Bound | Rule | Same count | Largest difference, same count | Counts differing | Restarts (core) | Converged (core) | Fallbacks (core) | With the core's dot, bit for bit |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `positive-decades` | tol | binds | 5 of 5 | 5 of 5 | 1.45e-16 | none | 1 | 5 of 5 | 0 of 5 | 5 of 5 |
+| `positive-decades` | tol | infinite | 5 of 5 | 5 of 5 | 2.86e-16 | none | 0 | 5 of 5 | 0 of 5 | 5 of 5 |
+| `positive-decades` | tol | zero | 5 of 5 | 5 of 5 | 0.00e+00 | none | 18 to 27 | 0 of 5 | 5 of 5 | 5 of 5 |
+| `positive-decades` | loose | binds | 5 of 5 | 5 of 5 | 2.85e-16 | none | 0 | 5 of 5 | 0 of 5 | 5 of 5 |
+| `positive-decades` | loose | infinite | 5 of 5 | 5 of 5 | 0.00e+00 | none | 0 | 5 of 5 | 0 of 5 | 5 of 5 |
+| `positive-decades` | loose | zero | 5 of 5 | 5 of 5 | 0.00e+00 | none | 29 | 0 of 5 | 5 of 5 | 5 of 5 |
+| `tight` | tol | binds | 5 of 5 | 1 of 5 | 0.00e+00 | 80x30 116 to 125; 160x60 146 to 150; 160x60-stretched 182 to 177; 40x15-uniform-open 49 to 52 | 8 to 272 | 4 of 5 | 1 of 5 | 5 of 5 |
+| `tight` | tol | infinite | 5 of 5 | 4 of 5 | 1.51e-15 | 320x120 231 to 233 | 0 to 5 | 5 of 5 | 0 of 5 | 5 of 5 |
+| `tight` | tol | zero | 5 of 5 | 5 of 5 | 0.00e+00 | none | 0 | 0 of 5 | 5 of 5 | 5 of 5 |
+
 ### T3b. Forced fallbacks: the Jacobi solve from C* bit for bit
 
 `cap`: one CG iteration at 1e-15; `non-positive`: one cell cut off with C* zero,
@@ -167,35 +199,101 @@ last bits differ by about that much). With the core's dot: the reference's CG wi
 | k | 20 | 20 of 20 | 12 | 1.86e-16 | 0 and 0 | 1.3e-17 | 0 | 0 |
 | eps | 20 | 20 of 20 | 10 | 1.16e-16 | 0 and 0 | 1.3e-17 | 0 | 245 |
 
+### T4c. Each captured k and eps solve
+
+One row per solve of T4b, in the order the flow solve made them: the outer
+iteration, the field (k or eps), the reference's and the core's iteration counts,
+the core's restarts, the field's largest difference over the reference's largest
+magnitude, the leftover's difference over its rounding scale (as in T4b) and the
+number of held cells.
+
+| Outer iteration | Field | Reference iterations | Core iterations | Restarts | Largest difference | Leftover difference over its scale | Held cells |
+|---|---|---|---|---|---|---|---|
+| 0 | k | 12 | 12 | 0 | 9.29e-17 | 4.6e-18 | 0 |
+| 0 | eps | 10 | 10 | 0 | 5.80e-17 | 7.3e-19 | 245 |
+| 1 | k | 12 | 12 | 0 | 1.86e-16 | 3.7e-18 | 0 |
+| 1 | eps | 10 | 10 | 0 | 5.80e-17 | 4.3e-18 | 245 |
+| 2 | k | 12 | 12 | 0 | 9.29e-17 | 5.4e-18 | 0 |
+| 2 | eps | 10 | 10 | 0 | 5.80e-17 | 2.6e-18 | 245 |
+| 3 | k | 12 | 12 | 0 | 1.86e-16 | 7.0e-18 | 0 |
+| 3 | eps | 10 | 10 | 0 | 1.16e-16 | 9.2e-19 | 245 |
+| 4 | k | 12 | 12 | 0 | 1.86e-16 | 6.5e-18 | 0 |
+| 4 | eps | 10 | 10 | 0 | 1.16e-16 | 4.1e-18 | 245 |
+| 5 | k | 12 | 12 | 0 | 9.29e-17 | 2.5e-19 | 0 |
+| 5 | eps | 10 | 10 | 0 | 1.16e-16 | 6.3e-19 | 245 |
+| 6 | k | 12 | 12 | 0 | 1.86e-16 | 8.0e-18 | 0 |
+| 6 | eps | 10 | 10 | 0 | 5.80e-17 | 2.9e-18 | 245 |
+| 7 | k | 12 | 12 | 0 | 1.86e-16 | 1.3e-17 | 0 |
+| 7 | eps | 10 | 10 | 0 | 1.16e-16 | 4.9e-18 | 245 |
+| 8 | k | 12 | 12 | 0 | 1.86e-16 | 8.4e-18 | 0 |
+| 8 | eps | 10 | 10 | 0 | 1.16e-16 | 4.2e-18 | 245 |
+| 9 | k | 12 | 12 | 0 | 1.86e-16 | 1.1e-17 | 0 |
+| 9 | eps | 10 | 10 | 0 | 1.16e-16 | 5.5e-18 | 245 |
+| 10 | k | 12 | 12 | 0 | 1.86e-16 | 2.9e-18 | 0 |
+| 10 | eps | 10 | 10 | 0 | 1.16e-16 | 1.3e-17 | 245 |
+| 11 | k | 12 | 12 | 0 | 1.86e-16 | 1.3e-18 | 0 |
+| 11 | eps | 10 | 10 | 0 | 1.16e-16 | 2.6e-18 | 245 |
+| 12 | k | 12 | 12 | 0 | 9.29e-17 | 1.2e-18 | 0 |
+| 12 | eps | 10 | 10 | 0 | 5.80e-17 | 3.0e-18 | 245 |
+| 13 | k | 12 | 12 | 0 | 1.86e-16 | 6.2e-18 | 0 |
+| 13 | eps | 10 | 10 | 0 | 1.16e-16 | 1.3e-18 | 245 |
+| 14 | k | 12 | 12 | 0 | 9.29e-17 | 3.5e-18 | 0 |
+| 14 | eps | 10 | 10 | 0 | 1.16e-16 | 1.3e-17 | 245 |
+| 15 | k | 12 | 12 | 0 | 9.29e-17 | 1.2e-18 | 0 |
+| 15 | eps | 10 | 10 | 0 | 1.16e-16 | 5.3e-18 | 245 |
+| 16 | k | 12 | 12 | 0 | 1.86e-16 | 2.1e-19 | 0 |
+| 16 | eps | 10 | 10 | 0 | 1.16e-16 | 3.7e-18 | 245 |
+| 17 | k | 12 | 12 | 0 | 1.86e-16 | 1.0e-17 | 0 |
+| 17 | eps | 10 | 10 | 0 | 1.16e-16 | 4.5e-18 | 245 |
+| 18 | k | 12 | 12 | 0 | 9.29e-17 | 6.9e-18 | 0 |
+| 18 | eps | 10 | 10 | 0 | 1.16e-16 | 2.8e-18 | 245 |
+| 19 | k | 12 | 12 | 0 | 1.86e-16 | 1.5e-18 | 0 |
+| 19 | eps | 10 | 10 | 0 | 1.16e-16 | 5.4e-18 | 245 |
+
 ### T5. The planted defects: which tests catch each
 
 | Defect | What it changes | GoogleTest (CTest) | Parity (pytest) |
 |---|---|---|---|
-| `control` | the unchanged source | 100% tests passed, 0 tests failed out of 58 | 1279 passed in 29.82s |
-| `diagonal_order` | the diagonal's terms along y taken north before south | 98% tests passed, 1 tests failed out of 58 [failed: ImplicitSystem.TheDiagonalIsWestEastSouthNorthThenTheSink] | 412 failed, 867 passed in 85.48s (0:01:25) [failed: test_implicit_cg_fallback_is_the_jacobi_solve_bit_for_bit 6, test_implicit_cg_with_the_cores_dot_products_is_bit_for_bit 74, test_implicit_jacobi_equals_the_reference_bit_for_bit 320, test_implicit_stop_reads_b_in_every_cell 2, test_implicit_system_equals_the_references_set_up 10] |
-| `neighbour_order` | the neighbour sum's terms along y taken south before north | 98% tests passed, 1 tests failed out of 58 [failed: ImplicitStep.TheNeighbourSumIsEastWestNorthSouth] | 422 failed, 857 passed in 90.10s (0:01:30) [failed: test_implicit_cg_fallback_is_the_jacobi_solve_bit_for_bit 10, test_implicit_cg_with_the_cores_dot_products_is_bit_for_bit 90, test_implicit_jacobi_equals_the_reference_bit_for_bit 320, test_implicit_stop_reads_b_in_every_cell 2] |
-| `leftover_before_stop` | Jacobi's acceptance reads the residual of the sweep before the stop's | 100% tests passed, 0 tests failed out of 58 | 240 failed, 1039 passed in 65.71s (0:01:05) [failed: test_implicit_jacobi_equals_the_reference_bit_for_bit 240] |
-| `final_twice` | final forms the leftover again from the residual the test formed it from | 97% tests passed, 2 tests failed out of 58 [failed: Acceptance.WithoutABoundTheTestFormsNothingAndFinalFormsOnce, Acceptance.WithABoundTheTestFormsTheLeftoverAndFinalDoesNotFormItAgain] | 240 failed, 1039 passed in 64.39s (0:01:04) [failed: test_implicit_jacobi_equals_the_reference_bit_for_bit 240] |
-| `fallback_from_cg` | the fallback's Jacobi solve starts from the CG iterate | 97% tests passed, 2 tests failed out of 58 [failed: ImplicitStep.AZeroLeftByConjugateGradientsFallsBackToJacobiFromCStar, ImplicitStep.ConjugateGradientsAtTheCapFallBackToJacobi] | 21 failed, 1258 passed in 33.93s [failed: test_implicit_cg_fallback_is_the_jacobi_solve_bit_for_bit 10, test_implicit_cg_meets_prompt_88s_rule 5, test_implicit_cg_with_the_cores_dot_products_is_bit_for_bit 6] |
-| `restart_skipped` | a failed confirmation goes on with the old direction instead of restarting | 100% tests passed, 0 tests failed out of 58 | 23 failed, 1256 passed in 39.25s [failed: test_implicit_cg_with_the_cores_dot_products_is_bit_for_bit 23] |
-| `p_as_z_plus_beta_p` | the direction updated as p = z + beta p, one expression | 100% tests passed, 0 tests failed out of 58 | 1279 passed in 32.19s |
-| `p_fused` | the direction updated as fma(beta, p, z), the contraction -ffp-contract=off forbids | 100% tests passed, 0 tests failed out of 58 | 65 failed, 1214 passed in 42.33s [failed: test_implicit_cg_with_the_cores_dot_products_is_bit_for_bit 65] |
-| `held_residual_jacobi` | a held cell's Jacobi residual not zeroed | 97% tests passed, 2 tests failed out of 58 [failed: ImplicitStep.TheNeighbourSumIsEastWestNorthSouth, ImplicitStep.HeldAndSolidCellsKeepTheirValues] | 176 failed, 1103 passed in 54.96s [failed: test_implicit_cg_fallback_is_the_jacobi_solve_bit_for_bit 10, test_implicit_cg_meets_prompt_88s_rule 3, test_implicit_cg_with_the_cores_dot_products_is_bit_for_bit 3, test_implicit_jacobi_equals_the_reference_bit_for_bit 160] |
-| `held_residual_cg` | a held cell's CG true residual not zeroed | 100% tests passed, 0 tests failed out of 58 | 45 failed, 1234 passed in 45.75s [failed: test_implicit_cg_with_the_cores_dot_products_is_bit_for_bit 45] |
-| `stop_skips_solid` | the stop's largest \|b\| taken over the non-SOLID cells only | 100% tests passed, 0 tests failed out of 58 | 2 failed, 1277 passed in 20.60s [failed: test_implicit_stop_reads_b_in_every_cell 2] |
-| `bound_strict` | the bound accepts a leftover strictly inside it only | 98% tests passed, 1 tests failed out of 58 [failed: Acceptance.WithABoundTheTestFormsTheLeftoverAndFinalDoesNotFormItAgain] | 1279 passed in 12.64s |
-| `scalar_leftover_as_sum_of_dt_r` | a scalar step's leftover summed as dt r per cell, not dt times the sum | 100% tests passed, 0 tests failed out of 58 | 168 failed, 1111 passed in 25.66s [failed: test_implicit_cg_with_the_cores_dot_products_is_bit_for_bit 21, test_implicit_jacobi_equals_the_reference_bit_for_bit 145, test_implicit_stop_reads_b_in_every_cell 2] |
-| `solid_step_unmasked` | a per-cell step read in SOLID cells too | 98% tests passed, 1 tests failed out of 58 [failed: Acceptance.APerCellStepIsReadAsZeroInSolidCells] | 152 failed, 1127 passed in 25.34s [failed: test_implicit_cg_with_the_cores_dot_products_is_bit_for_bit 24, test_implicit_jacobi_equals_the_reference_bit_for_bit 128] |
-| `positivity_admits_zero` | the fallback's test admits a zero | 98% tests passed, 1 tests failed out of 58 [failed: ImplicitStep.AZeroLeftByConjugateGradientsFallsBackToJacobiFromCStar] | 5 failed, 1274 passed in 14.67s [failed: test_implicit_cg_fallback_is_the_jacobi_solve_bit_for_bit 5] |
-| `cg_start_keeps_solid` | the CG start keeps C*'s SOLID values | 98% tests passed, 1 tests failed out of 58 [failed: ImplicitStep.HeldAndSolidCellsKeepTheirValues] | 1279 passed in 15.03s |
-| `jacobi_solid_kept` | Jacobi's update does not zero the SOLID cells | 98% tests passed, 1 tests failed out of 58 [failed: ImplicitStep.HeldAndSolidCellsKeepTheirValues] | 162 failed, 1117 passed in 28.35s [failed: test_implicit_jacobi_equals_the_reference_bit_for_bit 160, test_implicit_stop_reads_b_in_every_cell 2] |
-| `negative_zero_diffuses` | a diagonal term of -0.0 counted as something to solve | 98% tests passed, 1 tests failed out of 58 [failed: ImplicitStep.NothingToSolveReturnsCStar] | 4 failed, 1275 passed in 15.21s [failed: test_implicit_nothing_to_solve_returns_c_star 4] |
-| `cap_one_more` | Jacobi's cap allows one sweep more | 95% tests passed, 3 tests failed out of 58 [failed: ImplicitStep.TheHandSystemsLeftoverIsTheChangeTheSinkDoesNotAccountFor, ImplicitStep.ANonNegativeStarGivesNonNegativeJacobiIterates, ImplicitStep.ConjugateGradientsAtTheCapFallBackToJacobi] | 96 failed, 1183 passed in 24.84s [failed: test_implicit_cg_fallback_is_the_jacobi_solve_bit_for_bit 5, test_implicit_cg_meets_prompt_88s_rule 5, test_implicit_cg_with_the_cores_dot_products_is_bit_for_bit 6, test_implicit_jacobi_equals_the_reference_bit_for_bit 80] |
-| `one_block` | the CG's dot products summed as one block, not a block per row | 100% tests passed, 0 tests failed out of 58 | 86 failed, 1193 passed in 23.22s [failed: test_implicit_cg_with_the_cores_dot_products_is_bit_for_bit 86] |
-| `bind_bool_bound_accepted` | the binding reads a bool bound as a number | 100% tests passed, 0 tests failed out of 58 | 3 failed, 1276 passed in 16.21s [failed: test_implicit_step_refuses_what_the_reference_refuses 3] |
-| `bind_dt_shape_unchecked` | the binding does not check a per-cell step's shape | 100% tests passed, 0 tests failed out of 58 | 3 failed, 1276 passed in 16.25s [failed: test_implicit_step_refuses_wrong_arrays 3] |
-| `bind_out_apart_unchecked` | the binding lets out share memory with an input array | 100% tests passed, 0 tests failed out of 58 | 12 failed, 1267 passed in 16.14s [failed: test_implicit_step_refuses_an_out_that_overlaps_an_input 12] |
-| `control_end` | the unchanged source, after every plant | 100% tests passed, 0 tests failed out of 58 | 1279 passed in 15.34s |
+| `control` | the unchanged source | 100% tests passed, 0 tests failed out of 68 | 1404 passed in 15.77s |
+| `diagonal_order` | the diagonal's terms along y taken north before south | 99% tests passed, 1 tests failed out of 68 [failed: ImplicitSystem.TheDiagonalIsWestEastSouthNorthThenTheSink] | 453 failed, 951 passed in 74.55s (0:01:14) [failed: test_implicit_cg_fallback_is_the_jacobi_solve_bit_for_bit 6, test_implicit_cg_iterations_under_a_fallback_are_the_cgs_own 5, test_implicit_cg_positivity_is_read_in_the_cells_it_solves_for_only 3, test_implicit_cg_with_a_leftover_bound_and_the_cores_dot_products_is_bit_for_bit 33, test_implicit_cg_with_the_cores_dot_products_is_bit_for_bit 74, test_implicit_jacobi_equals_the_reference_bit_for_bit 320, test_implicit_stop_reads_b_in_every_cell 2, test_implicit_system_equals_the_references_set_up 10] |
+| `neighbour_order` | the neighbour sum's terms along y taken south before north | 99% tests passed, 1 tests failed out of 68 [failed: ImplicitStep.TheNeighbourSumIsEastWestNorthSouth] | 472 failed, 932 passed in 70.10s (0:01:10) [failed: test_implicit_cg_fallback_is_the_jacobi_solve_bit_for_bit 10, test_implicit_cg_iterations_under_a_fallback_are_the_cgs_own 5, test_implicit_cg_positivity_is_read_in_the_cells_it_solves_for_only 5, test_implicit_cg_with_a_leftover_bound_and_the_cores_dot_products_is_bit_for_bit 40, test_implicit_cg_with_the_cores_dot_products_is_bit_for_bit 90, test_implicit_jacobi_equals_the_reference_bit_for_bit 320, test_implicit_stop_reads_b_in_every_cell 2] |
+| `leftover_before_stop` | Jacobi's acceptance reads the residual of the sweep before the stop's | 99% tests passed, 1 tests failed out of 68 [failed: Jacobi.ABoundSweepsOnUntilTheLeftoverIsInsideIt] | 255 failed, 1149 passed in 39.06s [failed: test_implicit_a_zero_field_meets_the_stop_and_a_zero_bound_with_equality 5, test_implicit_cg_with_a_leftover_bound_and_the_cores_dot_products_is_bit_for_bit 10, test_implicit_jacobi_equals_the_reference_bit_for_bit 240] |
+| `final_twice` | final forms the leftover again from the residual the test formed it from | 94% tests passed, 4 tests failed out of 68 [failed: Jacobi.ABoundSweepsOnUntilTheLeftoverIsInsideIt, ConjugateGradient.ABoundRestartsFromTheTrueResidualUntilTheLeftoverIsInsideIt, Acceptance.WithoutABoundTheTestFormsNothingAndFinalFormsOnce, Acceptance.WithABoundTheTestFormsTheLeftoverAndFinalDoesNotFormItAgain] | 300 failed, 1104 passed in 40.46s [failed: test_implicit_a_zero_field_meets_the_stop_and_a_zero_bound_with_equality 20, test_implicit_cg_with_a_leftover_bound_and_the_cores_dot_products_is_bit_for_bit 40, test_implicit_jacobi_equals_the_reference_bit_for_bit 240] |
+| `fallback_from_cg` | the fallback's Jacobi solve starts from the CG iterate | 97% tests passed, 2 tests failed out of 68 [failed: ImplicitStep.AZeroLeftByConjugateGradientsFallsBackToJacobiFromCStar, ImplicitStep.ConjugateGradientsAtTheCapFallBackToJacobi] | 48 failed, 1356 passed in 19.66s [failed: test_implicit_cg_fallback_is_the_jacobi_solve_bit_for_bit 10, test_implicit_cg_iterations_under_a_fallback_are_the_cgs_own 5, test_implicit_cg_meets_prompt_88s_rule 5, test_implicit_cg_with_a_leftover_bound_and_the_cores_dot_products_is_bit_for_bit 16, test_implicit_cg_with_a_leftover_bound_meets_prompt_88s_rule 6, test_implicit_cg_with_the_cores_dot_products_is_bit_for_bit 6] |
+| `restart_skipped` | a failed confirmation goes on with the old direction instead of restarting | 99% tests passed, 1 tests failed out of 68 [failed: ConjugateGradient.ABoundRestartsFromTheTrueResidualUntilTheLeftoverIsInsideIt] | 41 failed, 1363 passed in 22.91s [failed: test_implicit_cg_with_a_leftover_bound_and_the_cores_dot_products_is_bit_for_bit 18, test_implicit_cg_with_the_cores_dot_products_is_bit_for_bit 23] |
+| `p_as_z_plus_beta_p` | the direction updated as p = z + beta p, one expression | 100% tests passed, 0 tests failed out of 68 | 1404 passed in 15.96s |
+| `p_fused` | the direction updated as fma(beta, p, z), the contraction -ffp-contract=off forbids | 100% tests passed, 0 tests failed out of 68 | 84 failed, 1320 passed in 39.40s [failed: test_implicit_cg_positivity_is_read_in_the_cells_it_solves_for_only 3, test_implicit_cg_with_a_leftover_bound_and_the_cores_dot_products_is_bit_for_bit 16, test_implicit_cg_with_the_cores_dot_products_is_bit_for_bit 65] |
+| `held_residual_jacobi` | a held cell's Jacobi residual not zeroed | 97% tests passed, 2 tests failed out of 68 [failed: ImplicitStep.TheNeighbourSumIsEastWestNorthSouth, ImplicitStep.HeldAndSolidCellsKeepTheirValues] | 181 failed, 1223 passed in 67.64s (0:01:07) [failed: test_implicit_cg_fallback_is_the_jacobi_solve_bit_for_bit 10, test_implicit_cg_iterations_under_a_fallback_are_the_cgs_own 5, test_implicit_cg_meets_prompt_88s_rule 3, test_implicit_cg_with_the_cores_dot_products_is_bit_for_bit 3, test_implicit_jacobi_equals_the_reference_bit_for_bit 160] |
+| `held_residual_cg` | a held cell's CG true residual not zeroed | 100% tests passed, 0 tests failed out of 68 | 55 failed, 1349 passed in 54.92s [failed: test_implicit_cg_iterations_under_a_fallback_are_the_cgs_own 5, test_implicit_cg_positivity_is_read_in_the_cells_it_solves_for_only 5, test_implicit_cg_with_the_cores_dot_products_is_bit_for_bit 45] |
+| `stop_skips_solid` | the stop's largest \|b\| taken over the non-SOLID cells only | 100% tests passed, 0 tests failed out of 68 | 2 failed, 1402 passed in 39.32s [failed: test_implicit_stop_reads_b_in_every_cell 2] |
+| `bound_strict` | the bound accepts a leftover strictly inside it only | 97% tests passed, 2 tests failed out of 68 [failed: Jacobi.ABoundSweepsOnUntilTheLeftoverIsInsideIt, Acceptance.WithABoundTheTestFormsTheLeftoverAndFinalDoesNotFormItAgain] | 20 failed, 1384 passed in 44.11s [failed: test_implicit_a_zero_field_meets_the_stop_and_a_zero_bound_with_equality 20] |
+| `scalar_leftover_as_sum_of_dt_r` | a scalar step's leftover summed as dt r per cell, not dt times the sum | 100% tests passed, 0 tests failed out of 68 | 166 failed, 1238 passed in 67.37s (0:01:07) [failed: test_implicit_cg_with_the_cores_dot_products_is_bit_for_bit 21, test_implicit_jacobi_equals_the_reference_bit_for_bit 143, test_implicit_stop_reads_b_in_every_cell 2] |
+| `solid_step_unmasked` | a per-cell step read in SOLID cells too | 99% tests passed, 1 tests failed out of 68 [failed: Acceptance.APerCellStepIsReadAsZeroInSolidCells] | 156 failed, 1248 passed in 64.81s (0:01:04) [failed: test_implicit_a_zero_field_meets_the_stop_and_a_zero_bound_with_equality 4, test_implicit_cg_with_the_cores_dot_products_is_bit_for_bit 24, test_implicit_jacobi_equals_the_reference_bit_for_bit 128] |
+| `positivity_admits_zero` | the fallback's test admits a zero | 99% tests passed, 1 tests failed out of 68 [failed: ImplicitStep.AZeroLeftByConjugateGradientsFallsBackToJacobiFromCStar] | 20 failed, 1384 passed in 41.87s [failed: test_implicit_a_zero_field_meets_the_stop_and_a_zero_bound_with_equality 10, test_implicit_cg_fallback_is_the_jacobi_solve_bit_for_bit 5, test_implicit_cg_iterations_under_a_fallback_are_the_cgs_own 5] |
+| `cg_start_keeps_solid` | the CG start keeps C*'s SOLID values | 99% tests passed, 1 tests failed out of 68 [failed: ImplicitStep.HeldAndSolidCellsKeepTheirValues] | 1404 passed in 30.92s |
+| `jacobi_solid_kept` | Jacobi's update does not zero the SOLID cells | 99% tests passed, 1 tests failed out of 68 [failed: ImplicitStep.HeldAndSolidCellsKeepTheirValues] | 162 failed, 1242 passed in 29.31s [failed: test_implicit_jacobi_equals_the_reference_bit_for_bit 160, test_implicit_stop_reads_b_in_every_cell 2] |
+| `negative_zero_diffuses` | a diagonal term of -0.0 counted as something to solve | 99% tests passed, 1 tests failed out of 68 [failed: ImplicitStep.NothingToSolveReturnsCStar] | 4 failed, 1400 passed in 16.99s [failed: test_implicit_nothing_to_solve_returns_c_star 4] |
+| `cap_one_more` | Jacobi's cap allows one sweep more | 93% tests passed, 5 tests failed out of 68 [failed: ImplicitStep.TheHandSystemsLeftoverIsTheChangeTheSinkDoesNotAccountFor, ImplicitStep.ANonNegativeStarGivesNonNegativeJacobiIterates, ImplicitStep.ConjugateGradientsAtTheCapFallBackToJacobi, Jacobi.OneSweepFromCStarIsTheHandSystemsFirstIterate, Jacobi.ABoundSweepsOnUntilTheLeftoverIsInsideIt] | 121 failed, 1283 passed in 25.29s [failed: test_implicit_cg_fallback_is_the_jacobi_solve_bit_for_bit 5, test_implicit_cg_iterations_under_a_fallback_are_the_cgs_own 3, test_implicit_cg_meets_prompt_88s_rule 5, test_implicit_cg_with_a_leftover_bound_and_the_cores_dot_products_is_bit_for_bit 16, test_implicit_cg_with_a_leftover_bound_meets_prompt_88s_rule 6, test_implicit_cg_with_the_cores_dot_products_is_bit_for_bit 6, test_implicit_jacobi_equals_the_reference_bit_for_bit 80] |
+| `one_block` | the CG's dot products summed as one block, not a block per row | 100% tests passed, 0 tests failed out of 68 | 116 failed, 1288 passed in 44.24s [failed: test_implicit_cg_positivity_is_read_in_the_cells_it_solves_for_only 5, test_implicit_cg_with_a_leftover_bound_and_the_cores_dot_products_is_bit_for_bit 25, test_implicit_cg_with_the_cores_dot_products_is_bit_for_bit 86] |
+| `bind_bool_bound_accepted` | the binding reads a bool bound as a number | 100% tests passed, 0 tests failed out of 68 | 3 failed, 1401 passed in 38.94s [failed: test_implicit_step_refuses_what_the_reference_refuses 3] |
+| `bind_dt_shape_unchecked` | the binding does not check a per-cell step's shape | 100% tests passed, 0 tests failed out of 68 | 3 failed, 1401 passed in 38.14s [failed: test_implicit_step_refuses_wrong_arrays 3] |
+| `bind_out_apart_unchecked` | the binding lets out share memory with an input array | 100% tests passed, 0 tests failed out of 68 | 12 failed, 1392 passed in 38.91s [failed: test_implicit_step_refuses_an_out_that_overlaps_an_input 12] |
+| `cg_start_test_dropped` | the CG's acceptance dropped where the start residual meets the stop | 99% tests passed, 1 tests failed out of 68 [failed: ConjugateGradient.ABoundRestartsFromTheTrueResidualUntilTheLeftoverIsInsideIt] | 20 failed, 1384 passed in 25.12s [failed: test_implicit_cg_with_a_leftover_bound_and_the_cores_dot_products_is_bit_for_bit 10, test_implicit_cg_with_a_leftover_bound_meets_prompt_88s_rule 10] |
+| `cg_confirmation_test_dropped` | the CG's acceptance dropped where a confirmed residual meets the stop | 99% tests passed, 1 tests failed out of 68 [failed: ConjugateGradient.ABoundRestartsFromTheTrueResidualUntilTheLeftoverIsInsideIt] | 40 failed, 1364 passed in 17.81s [failed: test_implicit_cg_with_a_leftover_bound_and_the_cores_dot_products_is_bit_for_bit 20, test_implicit_cg_with_a_leftover_bound_meets_prompt_88s_rule 20] |
+| `padding_east_as_cell` | the zero read beyond a row's east end taken as the cell's own value | 100% tests passed, 0 tests failed out of 68 | 80 failed, 1324 passed in 21.69s [failed: test_implicit_jacobi_equals_the_reference_bit_for_bit 80] |
+| `padding_west_as_cell` | the zero read beyond a row's west end taken as the cell's own value | 100% tests passed, 0 tests failed out of 68 | 80 failed, 1324 passed in 45.07s [failed: test_implicit_jacobi_equals_the_reference_bit_for_bit 80] |
+| `padding_north_as_cell` | the zero read beyond a column's north end taken as the cell's own value | 100% tests passed, 0 tests failed out of 68 | 80 failed, 1324 passed in 49.90s [failed: test_implicit_jacobi_equals_the_reference_bit_for_bit 80] |
+| `padding_south_as_cell` | the zero read beyond a column's south end taken as the cell's own value | 100% tests passed, 0 tests failed out of 68 | 80 failed, 1324 passed in 50.28s [failed: test_implicit_jacobi_equals_the_reference_bit_for_bit 80] |
+| `positivity_reads_held` | the fallback's positivity test read in held cells too | 100% tests passed, 0 tests failed out of 68 | 5 failed, 1399 passed in 37.82s [failed: test_implicit_cg_positivity_is_read_in_the_cells_it_solves_for_only 5] |
+| `fallback_iterations_are_jacobis` | a fallback's result.iterations set to the Jacobi sweeps, not the CG's count | 100% tests passed, 0 tests failed out of 68 | 5 failed, 1399 passed in 17.87s [failed: test_implicit_cg_iterations_under_a_fallback_are_the_cgs_own 5] |
+| `stop_strict` | the max-norm stop met strictly below the stop, not at it | 93% tests passed, 5 tests failed out of 68 [failed: ImplicitStep.TheNeighbourSumIsEastWestNorthSouth, Jacobi.TheStopHoldsWithEqualityAndNotBelowIt, Jacobi.ABoundSweepsOnUntilTheLeftoverIsInsideIt, ConjugateGradient.TheStopHoldsWithEqualityAtTheStart, ConjugateGradient.ABoundRestartsFromTheTrueResidualUntilTheLeftoverIsInsideIt] | 20 failed, 1384 passed in 29.60s [failed: test_implicit_a_zero_field_meets_the_stop_and_a_zero_bound_with_equality 20] |
+| `jacobi_test_dropped` | Jacobi's acceptance dropped where its residual meets the stop | 99% tests passed, 1 tests failed out of 68 [failed: Jacobi.ABoundSweepsOnUntilTheLeftoverIsInsideIt] | 180 failed, 1224 passed in 62.34s (0:01:02) [failed: test_implicit_cg_with_a_leftover_bound_and_the_cores_dot_products_is_bit_for_bit 10, test_implicit_cg_with_a_leftover_bound_meets_prompt_88s_rule 10, test_implicit_jacobi_equals_the_reference_bit_for_bit 160] |
+| `jacobi_update_halved` | Jacobi's update takes half the residual's step | 94% tests passed, 4 tests failed out of 68 [failed: ImplicitStep.TheHandSystemsLeftoverIsTheChangeTheSinkDoesNotAccountFor, Jacobi.OneSweepFromCStarIsTheHandSystemsFirstIterate, Jacobi.ConvergesToTheHandSystemsSolution, Jacobi.ABoundSweepsOnUntilTheLeftoverIsInsideIt] | 380 failed, 1024 passed in 55.96s [failed: test_implicit_cg_fallback_is_the_jacobi_solve_bit_for_bit 10, test_implicit_cg_iterations_under_a_fallback_are_the_cgs_own 5, test_implicit_cg_meets_prompt_88s_rule 5, test_implicit_cg_with_a_leftover_bound_and_the_cores_dot_products_is_bit_for_bit 16, test_implicit_cg_with_a_leftover_bound_meets_prompt_88s_rule 16, test_implicit_cg_with_the_cores_dot_products_is_bit_for_bit 6, test_implicit_jacobi_equals_the_reference_bit_for_bit 320, test_implicit_stop_reads_b_in_every_cell 2] |
+| `cg_alpha_from_pp` | the CG's step length divides by p.p, not p.A p | 94% tests passed, 4 tests failed out of 68 [failed: ImplicitStep.ConjugateGradientsReachTheDenseSolution, ConjugateGradient.OneIterationIsTheHandSystemsClosedForm, ConjugateGradient.ConvergesToTheHandSystemsSolutionInTwoOrThreeIterations, ConjugateGradient.ABoundRestartsFromTheTrueResidualUntilTheLeftoverIsInsideIt] | 132 failed, 1272 passed in 29.72s [failed: test_implicit_cg_iterations_under_a_fallback_are_the_cgs_own 5, test_implicit_cg_positivity_is_read_in_the_cells_it_solves_for_only 5, test_implicit_cg_with_a_leftover_bound_and_the_cores_dot_products_is_bit_for_bit 31, test_implicit_cg_with_a_leftover_bound_meets_prompt_88s_rule 1, test_implicit_cg_with_the_cores_dot_products_is_bit_for_bit 90] |
+| `blocked_dot_zero_block_returns_zero` | blocked_dot returns 0.0 for a block of zero instead of refusing it | 97% tests passed, 2 tests failed out of 68 [failed: BlockedDot.ABlockOfZeroIsRefusedAtTheCall, BlockedDot.ArraysOfDifferentLengthsAreRefusedWhicheverIsShorter] | 1404 passed in 14.25s |
+| `blocked_dot_unequal_lengths_returns_zero` | blocked_dot returns 0.0 for arrays of different lengths instead of refusing them | 99% tests passed, 1 tests failed out of 68 [failed: BlockedDot.ArraysOfDifferentLengthsAreRefusedWhicheverIsShorter] | 1404 passed in 14.36s |
+| `bind_row_dot_block_unclamped` | the binding hands row_dot's row length as the block, zero for an array with no columns | 100% tests passed, 0 tests failed out of 68 | 2 failed, 1402 passed in 14.16s [failed: test_row_dot_of_arrays_with_no_terms_is_zero 2] |
+| `control_end` | the unchanged source, after every plant | 100% tests passed, 0 tests failed out of 68 | 1404 passed in 14.07s |
 
 ### T6. The Jacobi solve per call on the stored 320x120 run's last frame, one thread
 
@@ -239,12 +337,12 @@ copy of C*. A sweep is the difference of the first two over the sweeps.
 | 3 | nothing to solve | 0.080 | 0.281 | 3.51 |
 | 3 | one sweep | 0.266 | 0.458 | 1.72 |
 
-### T7. The whole suite at 6345f63, the last commit that changes the code or its tests
+### T7. The whole suite at 9e47d21, the last commit that changes the code or its tests
 
 The two suites ran at the same time, one BLAS thread each, beside the planted
 defects, so the wall times are not those of a suite alone.
 
 | Platform | Tests | Passed | Failed | Errors | Skipped | Wall time, s |
 |---|---|---|---|---|---|---|
-| Windows, `.venv`, the core not built | 3,102 | 3,101 | 0 | 0 | 1 | 1,330 |
-| WSL2, the core built, `CFD_CORE_REQUIRED=1` | 4,380 | 4,380 | 0 | 0 | 0 | 908 |
+| Windows, `.venv`, the core not built | 3,102 | 3,101 | 0 | 0 | 1 | 1,522 |
+| WSL2, the core built, `CFD_CORE_REQUIRED=1` | 4,505 | 4,505 | 0 | 0 | 0 | 906 |
