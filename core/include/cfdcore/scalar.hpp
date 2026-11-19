@@ -3,13 +3,15 @@
 //
 // A port of `src/scalar_scheme.py`'s `limited_face_values` and
 // `advective_flux` and of `src/momentum.py`'s `quick_face_values` with its
-// Lagrange weights, written to equal them bit for bit (REQ-N03 level 1,
-// ADR-017 G): every value is formed by the reference's operations in the
-// reference's order, one rounding each (the build's -ffp-contract=off), and
-// nothing is reassociated. The reference advects along its last axis and
-// transposes for y; the core walks its own layout along the direction's
-// stride instead (layout.hpp), and line m along y is row m of the
-// reference's transposed call.
+// Lagrange weights, written to equal them bit for bit on finite inputs
+// (REQ-N03 level 1, ADR-017 G): every value is formed by the reference's
+// operations in the reference's order, one rounding each (the build's
+// -ffp-contract=off), and nothing is reassociated. With a NaN in an input both
+// give NaNs at the same faces, but a NaN's sign or payload may differ; the
+// transport solver refuses a non-finite field before the flux runs. The
+// reference advects along its last axis and transposes for y; the core walks
+// its own layout along the direction's stride instead (layout.hpp), and line
+// m along y is row m of the reference's transposed call.
 //
 // The face flux is elementwise over the faces: no sum and no iteration.
 
@@ -26,9 +28,11 @@ namespace cfdcore::scalar {
 
 // NumPy's np.minimum and np.maximum on two doubles: a NaN in either gives a
 // NaN, and where the two compare equal (0.0 and -0.0 among them) the second
-// is returned, as NumPy 2.4's loops return it on every length (prompt 87,
-// results/builder87/zeros.py). The sign of a zero psi reaches the face value
-// when the upstream value is -0.0, so the tie matters for bit equality.
+// is returned, as NumPy 2.4's loops return it. The rule is pinned by
+// tests/test_core_parity.py::test_numpy_min_and_max_return_the_second_of_a_tie
+// and measured on every length from 1 to 1,000 by docs/reports/probe87/ties87.py.
+// The sign of a zero psi reaches the face value when the upstream value is
+// -0.0, so the tie matters for bit equality.
 inline double np_minimum(double a, double b) { return (a < b || std::isnan(a)) ? a : b; }
 inline double np_maximum(double a, double b) { return (a > b || std::isnan(a)) ? a : b; }
 
@@ -51,7 +55,9 @@ inline double limited_face_value(double c_up, double c_c, double c_d, double qui
     }
     const double r = (c_c - c_up) / d_down;
     const double psi_quick = 2.0 * (quick - c_c) / d_down;
-    // np.minimum.reduce over [2r, (1 + 3r) / 4, psi_quick, 2] folds from the first.
+    // np.minimum.reduce over [2r, (1 + 3r) / 4, psi_quick, 2] is taken as a fold
+    // from the first. The evidence is a measurement of the reduce against that
+    // fold (docs/reports/probe87/ties87.py), not an argument from the tie rule.
     double low = np_minimum(2.0 * r, (1.0 + 3.0 * r) / 4.0);
     low = np_minimum(low, psi_quick);
     low = np_minimum(low, 2.0);
@@ -98,7 +104,13 @@ class scheme {
 public:
     explicit scheme(const grid::grid<D>& g);
 
+    // The grid the scheme was built on: the caller's own, not a copy, so it is
+    // valid as long as that grid is.
     const grid::grid<D>& mesh() const { return *grid_; }
+
+    // The QUICK weights of direction d, 0 to D - 1: each of the six arrays
+    // holds one entry per interior face along d (n_d - 1 of them, dimensionless),
+    // entry f for the face between cells f and f + 1.
     const quick_weights& weights(int d) const { return weights_[d]; }
 
 private:

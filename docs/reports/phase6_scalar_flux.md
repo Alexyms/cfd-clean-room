@@ -4,7 +4,8 @@
 **Prompt:** 87 (`docs/prompts/cc-prompt-87-scalar-flux.md`)
 **Branch:** `phase6/scalar-flux`
 **Status:** built. Predictions (a) and (c) hold; (b) fails in y (T0). No stop was met: every
-ported function is bitwise the reference without a change to `src/`.
+ported function is bitwise the reference without a change to `src/`. Round 1 (prompt 87b,
+2026-11-18) answered review 87 and test 87; its record is the last section.
 
 This is the first half of Phase 6 step 2 (`docs/PROJECT_PLAN.md`, Phase 6, the steps table;
 ADR-017 C, D, F and G, decision 4). It builds the core's `grid` and `layout` as far as the
@@ -65,8 +66,8 @@ as stretched, and they are not (Findings, F2), so a stretched 160x60 was added b
 
 | Prediction | Measured | Verdict |
 |---|---|---|
-| (a) every ported function bit for bit, planted and captured | planted: `advective_flux` 260 of 260 cases, `quick_face_values` and the clamp 35 of 35; captured: 120 calls, 2,102,850 faces, 0 differing | holds |
-| (b) the core at least ten times faster per call on 320x120 | x 12.14 times, y 9.71 times (T6, run 1) | FAILS |
+| (a) every ported function bit for bit, planted and captured | planted: `advective_flux` 312 of 312 cases, `quick_face_values` and the clamp 35 of 35; captured: 120 calls, 2,102,850 faces, 0 differing | holds |
+| (b) the core at least ten times faster per call on 320x120 | x 12.14 times, y 9.71 times (T6, run 1); on the stored run's developed fields, x 7.20 to 9.28 times, y 6.91 to 8.66 times (T6b, run 1, not scored) | FAILS |
 | (c) the weights at set-up equal the per-call weights | 10 of 10 mesh and direction cases, six arrays each | holds |
 <!-- tables87 predictions end -->
 
@@ -102,9 +103,15 @@ interior face coordinates; the cell types as given; and a SOLID mask made from t
 SOLID code handed in (`mesh.SOLID`), so the core keeps no copy of the mesh's codes. `check`
 returns the reason an input cannot make a grid (a direction with no cell, faces not one more
 than centres, cell types not one per cell), which the binding raises as `TypeError` (ADR-017 B:
-a wrong shape is refused at the call). Both are templates on `D`, instantiated at 1 and 2
-(`core/src/grid.cpp`, `core/src/layout.cpp`); the binding builds `Grid2` from `x`, `xc`, `y`,
-`yc`, `cell_type` and the SOLID code.
+a wrong shape is refused at the call). `first_bad_direction` names the first direction whose
+faces are not finite and strictly increasing, or whose nodes are not strictly increasing, which
+the binding raises as a `ValueError` naming the direction (the weights divide by differences of
+nodes: a repeated or NaN node would store infinities or NaNs, and a decreasing one weights that
+mean nothing). That each centre lies between its cell's faces is the caller's contract, stated in
+`grid.hpp`: `Mesh` puts it at the midpoint and the flux needs only the nodes' order. `layout` and
+`grid` are templates on `D`, instantiated at 1 and 2 (`core/src/grid.cpp`,
+`core/src/layout.cpp`); the binding builds `Grid2` from `x`, `xc`, `y`, `yc`, `cell_type` and
+the SOLID code.
 
 **Considered and not built**, because the flux does not read them:
 
@@ -145,11 +152,15 @@ reassociated.
   `(1 + 3r) / 4`, `psi_quick` and `2` folded from the first, `psi = max(0, that)`, and
   `c_c + (0.5 psi) d`. `np.minimum` and `np.maximum` are copied with NumPy 2.4's rules
   (`np_minimum`, `np_maximum`): a NaN in either gives a NaN, and a tie returns the second
-  argument, so `max(0.0, -0.0)` is `-0.0` (measured on every length from 1 to 1,000,
-  `results/builder87/zeros.py`; pinned by `test_numpy_min_and_max_return_the_second_of_a_tie`).
-  The sign of a zero psi reaches the face value when the upstream value is `-0.0`. A fold from
-  the first and a pairwise tree give the same result under that tie rule, so the order of
-  `np.minimum.reduce` over its four arrays cannot change a bit.
+  argument, so `max(0.0, -0.0)` is `-0.0`. `docs/reports/probe87/ties87.py` measures the rules
+  at every length from 1 to 1,000 and on three 2-D shapes (T7), and
+  `test_numpy_min_and_max_return_the_second_of_a_tie` pins the tie in the parity tests. The sign
+  of a zero psi reaches the face value when the upstream value is `-0.0`. The clamp takes
+  `np.minimum.reduce` over its four arrays as a fold from the first. That is a measurement of
+  this NumPy, not an argument from the tie rule: a SIMD reduction that paired lanes could
+  resolve a tie between zeros of opposite sign differently from a fold, so T7 measures the
+  reduce against the fold with every pattern of signed zeros across the four rows, each
+  pattern alone and all of them mixed along the array.
 - **`advective_flux`.** Per line along the direction: the two boundary nodes by the sign of the
   flux at the boundary faces (`> 0` at the low face, `< 0` at the high one, so a zero flux reads
   the cell); at each interior face the upstream value, and without `upwind` the clamp of the
@@ -167,17 +178,31 @@ reassociated.
 own layout ([ny, nx] cells, [ny, nx + 1] and [ny + 1, nx] faces), read-only, C-contiguous and
 aligned; the output is handed in, so a call allocates nothing. A wrong dtype, dimension, layout
 or shape, an unaligned array, a read-only `out` or an `out` sharing memory with an input is a
-`TypeError`; a direction other than 0 or 1 a `ValueError`. `advective_flux_overhead` takes the
+`TypeError`; a direction other than 0 or 1, or `Grid2` coordinates that are not finite and
+strictly increasing along a direction, a `ValueError`. `advective_flux_overhead` takes the
 same arguments and makes the same checks without the flux, for the timing.
+
+Each refusal has its own test, built so that the case is wrong in exactly one way and the test
+names the refusal it expects by the message, so a case that another check refuses first fails
+instead of passing for the wrong reason: a C-contiguous array of the wrong shape (a row fewer,
+a column fewer) for every input that has a shape check; a right-shaped array that is not
+C-contiguous (a step of two, and Fortran order); the right shape and layout in the wrong dtype;
+an unaligned array; and an `out` that overlaps one input by one element at either end, one input
+at a time. Prompt 87's tests used `a[:, :-1]`, which is not C-contiguous, so nanobind refused
+it for its layout before the shape check ran (review 87 S1, test 87 S2). Section 5's second
+table removes each of these checks from the binding in turn and records which tests fail.
 
 **The tests.** GoogleTest (`core/tests/test_grid.cpp`, `core/tests/test_scalar.cpp`) checks what
 needs no reference: the layout's strides, faces and lines against the multi-index at D = 1 and
-D = 2; the grid's nodes, faces and SOLID mask; NumPy's tie and NaN rules; the clamp's hand values
-on each branch and its bound between the two cells; the uniform grid's interior weights
+D = 2; the grid's nodes, faces and SOLID mask and its refusal of coordinates that are not
+finite and strictly increasing, each kind in each direction; NumPy's tie and NaN rules; the clamp's
+hand values on each branch and its bound between the two cells; the uniform grid's interior weights
 (-1/8, 6/8, 3/8 exactly); a uniform field giving the flux times its value exactly on a stretched
 grid with SOLID cells and a flux of both signs; a monotone field giving no new extremum; D = 1
 against D = 2 on a field constant across y; the boundary, far-solid and vent rules on a line of
-eight cells. The parity tests (`tests/test_core_parity.py`, run by CI's core job) call each port
+eight cells, with a case for the far-solid rule's `quick = c_c` line (a `-0.0` upstream value
+beside a negative downstream one, where leaving `quick` alone flips the sign of a zero). The
+parity tests (`tests/test_core_parity.py`, run by CI's core job) call each port
 and its reference on the same inputs (section 3).
 
 <!-- tables87 tests begin -->
@@ -186,14 +211,14 @@ and its reference on the same inputs (section 3).
 | Suite or test function | Cases | Passed |
 |---|---|---|
 | GoogleTest `Layout` | 6 | 6 |
-| GoogleTest `Grid` | 5 | 5 |
+| GoogleTest `Grid` | 8 | 8 |
 | GoogleTest `PairwiseSum` | 10 | 10 |
 | GoogleTest `NumpyMinMax` | 2 | 2 |
 | GoogleTest `LimitedFaceValue` | 3 | 3 |
 | GoogleTest `LagrangeWeights` | 1 | 1 |
-| GoogleTest `AdvectiveFlux` | 7 | 7 |
+| GoogleTest `AdvectiveFlux` | 8 | 8 |
 | GoogleTest `Scheme` | 1 | 1 |
-| **CTest, all** | 35 | 35 |
+| **CTest, all** | 39 | 39 |
 | `test_pairwise_sum_equals_np_sum_on_every_length` | 1 | 1 |
 | `test_pairwise_sum_equals_np_sum_on_grid_shaped_arrays` | 1 | 1 |
 | `test_pairwise_sum_of_negative_zeros_matches_np_sum` | 1 | 1 |
@@ -203,21 +228,49 @@ and its reference on the same inputs (section 3).
 | `test_grid_nodes_and_faces_are_mesh_axes` | 5 | 5 |
 | `test_the_meshes_are_what_their_names_say` | 1 | 1 |
 | `test_grid_accepts_consistent_arrays` | 1 | 1 |
-| `test_grid_refuses_wrong_arrays` | 9 | 9 |
+| `test_grid_refuses_wrong_arrays` | 20 | 20 |
+| `test_grid_refuses_a_direction_without_a_cell` | 1 | 1 |
+| `test_grid_refuses_coordinates_that_are_not_finite_and_increasing` | 24 | 24 |
+| `test_grid_names_the_lower_direction_when_both_are_bad` | 1 | 1 |
 | `test_grid_refuses_a_direction_it_does_not_have` | 1 | 1 |
-| `test_advective_flux_equals_the_reference_bit_for_bit` | 260 | 260 |
+| `test_advective_flux_equals_the_reference_bit_for_bit` | 312 | 312 |
 | `test_the_planted_inputs_reach_every_rule` | 1 | 1 |
 | `test_quick_weights_at_setup_equal_the_per_call_weights` | 10 | 10 |
 | `test_quick_face_values_equal_the_reference_bit_for_bit` | 30 | 30 |
 | `test_limited_face_values_equal_the_reference_bit_for_bit` | 5 | 5 |
 | `test_numpy_min_and_max_return_the_second_of_a_tie` | 1 | 1 |
 | `test_advective_flux_accepts_consistent_arguments` | 1 | 1 |
-| `test_advective_flux_refuses_wrong_arrays` | 11 | 11 |
-| `test_advective_flux_refuses_an_out_that_is_an_input` | 1 | 1 |
+| `test_advective_flux_refuses_wrong_arrays` | 120 | 120 |
+| `test_advective_flux_refuses_a_read_only_out` | 1 | 1 |
+| `test_advective_flux_refuses_an_out_that_overlaps_an_input` | 8 | 8 |
+| `test_advective_flux_refuses_an_out_that_is_an_input` | 2 | 2 |
+| `test_advective_flux_accepts_an_out_that_touches_no_input` | 2 | 2 |
 | `test_advective_flux_refuses_a_direction_it_does_not_have` | 1 | 1 |
-| `test_quick_and_limited_refuse_wrong_arrays` | 1 | 1 |
-| **parity, all** | 350 | 350 |
+| `test_quick_face_values_accepts_consistent_arguments` | 1 | 1 |
+| `test_quick_face_values_refuses_wrong_arrays` | 52 | 52 |
+| `test_quick_face_values_refuses_an_out_that_overlaps_an_input` | 8 | 8 |
+| `test_quick_face_values_refuses_a_direction_it_does_not_have` | 1 | 1 |
+| `test_limited_face_values_accepts_consistent_arguments` | 1 | 1 |
+| `test_limited_face_values_refuses_wrong_arrays` | 30 | 30 |
+| `test_limited_face_values_refuses_an_out_that_overlaps_an_input` | 12 | 12 |
+| **parity, all** | 664 | 664 |
 <!-- tables87 tests end -->
+
+<!-- tables87 ties begin -->
+### T7. NumPy's tie and NaN rules, measured by `ties87.py`
+
+NumPy 2.4.4. Each check runs at every length from 1 to 1,000 and on the shapes 30x79, 119x320, 120x319.
+
+| Check | Shapes run | Departing from the rule |
+|---|---|---|
+| np.minimum returns the second of a tie | 1,003 | 0 |
+| np.maximum returns the second of a tie | 1,003 | 0 |
+| np.maximum(0.0, x) returns the second of a tie | 1,003 | 0 |
+| a NaN in either argument gives a NaN | 1,003 | 0 |
+| np.minimum.reduce equals the fold, each pattern alone | 1,003 | 0 |
+| np.minimum.reduce equals the fold, patterns mixed along the array | 1,003 | 0 |
+| np.minimum.reduce of four arrays with a NaN row gives NaN | 1,003 | 0 |
+<!-- tables87 ties end -->
 
 ## 3. The parity results
 
@@ -230,32 +283,36 @@ random mask on a fifth of the faces, which the reference's contract does not ask
 arithmetic serves the same on any face. The planted fields: random values of both signs over
 twelve decades; a uniform field; four levels, so that many downstream differences are zero; a
 smooth field with steps, with the SOLID cells at 1e9, the cells beside them at -3e5 and spikes
-of 7e7 on 2% of the cells; and values drawn from 0.0, -0.0, 1e-300, -2e-310 and 5, where r
-overflows to an infinity and zero signs reach the face. The flux is random over twelve decades
-with 10% of the faces 0.0 and 3% -0.0; the inflow random. `test_the_planted_inputs_reach_every_rule`
-counts that the far-solid rule, both vent cases and the zero branches are reached.
+of 7e7 on 2% of the cells; values drawn from 0.0, -0.0, 1e-300, -2e-310 and 5, where r
+overflows to an infinity and zero signs reach the face; and (prompt 87b) values drawn from
+-0.0, -1, -3 and 2, where the far-solid rule's `quick = c_c` line decides the sign of a zero face
+value, which the signed-zeros field does not reach (test 87 S3). The flux is random over twelve
+decades with 10% of the faces 0.0 and 3% -0.0; the inflow random.
+`test_the_planted_inputs_reach_every_rule` counts that the far-solid rule, both vent cases and the
+zero branches are reached, and that the last field changes a bit if the rule's `quick` line is
+left out, formed from the reference's own pieces.
 
 <!-- tables87 parity begin -->
 ### T2. `advective_flux` bit for bit against the reference, planted inputs
 
-Each cell counts the planted fields (random, uniform, levels, steps-spikes, signed-zeros) that equal the
+Each cell counts the planted fields (random, uniform, levels, steps-spikes, signed-zeros, negatives-and-zeros) that equal the
 reference bit for bit on every face, of those run.
 
 | Mesh | Vents | x, QUICK | x, upwind | y, QUICK | y, upwind |
 |---|---|---|---|---|---|
-| 80x30 | absent | 5 of 5 | 5 of 5 | 5 of 5 | 5 of 5 |
-| 80x30 | a random mask | 5 of 5 | 5 of 5 | 5 of 5 | 5 of 5 |
-| 160x60 | absent | 5 of 5 | 5 of 5 | 5 of 5 | 5 of 5 |
-| 320x120 | absent | 5 of 5 | 5 of 5 | 5 of 5 | 5 of 5 |
-| 160x60-stretched | absent | 5 of 5 | 5 of 5 | 5 of 5 | 5 of 5 |
-| 160x60-stretched | a random mask | 5 of 5 | 5 of 5 | 5 of 5 | 5 of 5 |
-| 40x15-uniform-open | absent | 5 of 5 | 5 of 5 | 5 of 5 | 5 of 5 |
-| 80x30-vents | absent | 5 of 5 | 5 of 5 | 5 of 5 | 5 of 5 |
-| 80x30-vents | the vents file's | 5 of 5 | 5 of 5 | 5 of 5 | 5 of 5 |
-| 160x60-vents | absent | 5 of 5 | 5 of 5 | 5 of 5 | 5 of 5 |
-| 160x60-vents | the vents file's | 5 of 5 | 5 of 5 | 5 of 5 | 5 of 5 |
-| 320x120-vents | absent | 5 of 5 | 5 of 5 | 5 of 5 | 5 of 5 |
-| 320x120-vents | the vents file's | 5 of 5 | 5 of 5 | 5 of 5 | 5 of 5 |
+| 80x30 | absent | 6 of 6 | 6 of 6 | 6 of 6 | 6 of 6 |
+| 80x30 | a random mask | 6 of 6 | 6 of 6 | 6 of 6 | 6 of 6 |
+| 160x60 | absent | 6 of 6 | 6 of 6 | 6 of 6 | 6 of 6 |
+| 320x120 | absent | 6 of 6 | 6 of 6 | 6 of 6 | 6 of 6 |
+| 160x60-stretched | absent | 6 of 6 | 6 of 6 | 6 of 6 | 6 of 6 |
+| 160x60-stretched | a random mask | 6 of 6 | 6 of 6 | 6 of 6 | 6 of 6 |
+| 40x15-uniform-open | absent | 6 of 6 | 6 of 6 | 6 of 6 | 6 of 6 |
+| 80x30-vents | absent | 6 of 6 | 6 of 6 | 6 of 6 | 6 of 6 |
+| 80x30-vents | the vents file's | 6 of 6 | 6 of 6 | 6 of 6 | 6 of 6 |
+| 160x60-vents | absent | 6 of 6 | 6 of 6 | 6 of 6 | 6 of 6 |
+| 160x60-vents | the vents file's | 6 of 6 | 6 of 6 | 6 of 6 | 6 of 6 |
+| 320x120-vents | absent | 6 of 6 | 6 of 6 | 6 of 6 | 6 of 6 |
+| 320x120-vents | the vents file's | 6 of 6 | 6 of 6 | 6 of 6 | 6 of 6 |
 <!-- tables87 parity end -->
 
 <!-- tables87 weights begin -->
@@ -318,30 +375,111 @@ product's setting is upwind): those paths are covered by the planted inputs only
 ## 5. The planted defects
 
 `docs/reports/probe87/mutants87.sh` plants each defect in a copy of `core/`, builds it out of
-source, and runs CTest and the parity tests against its module. The five the prompt names (a
+source, and runs CTest and the parity tests against its module; the build is shared, and the
+previous plant's file is restored from the checkout before the next is planted, so each plant
+starts from the unchanged source (`control_end`, the last line, is the unchanged source built
+again after the last restore). T5 holds the scalar module's rules. The five the prompt names (a
 swapped weight, the far-solid rule dropped, the clamp's 2 changed, here both up and down, the
-vent rule reversed, a reassociated QUICK sum), and three more: np.minimum's tie returning the
-first argument, and a zero flux at the low boundary face read as inward.
+vent rule reversed, a reassociated QUICK sum), three more: np.minimum's tie returning the
+first argument, and a zero flux at the low boundary face read as inward; and, since prompt 87b,
+the far-solid rule's `quick = c_c` line deleted.
 
 <!-- tables87 plants begin -->
 ### T5. The planted defects: which tests catch each
 
 | Defect | GoogleTest (CTest) | Parity (pytest) |
 |---|---|---|
-| `control` | 100% tests passed, 0 tests failed out of 35 | 350 passed |
-| `swapped_weight` | 97% tests passed, 1 tests failed out of 35 [failed: AdvectiveFlux.AFarNodeInASolidCellIsReadAsTheUpstreamValue] | 134 failed, 216 passed [failed: test_advective_flux_equals_the_reference_bit_for_bit 104,test_quick_face_values_equal_the_reference_bit_for_bit 30] |
-| `far_solid_dropped` | 97% tests passed, 1 tests failed out of 35 [failed: AdvectiveFlux.AFarNodeInASolidCellIsReadAsTheUpstreamValue] | 92 failed, 258 passed [failed: test_advective_flux_equals_the_reference_bit_for_bit 92] |
-| `clamp_two_raised` | 91% tests passed, 3 tests failed out of 35 [failed: LimitedFaceValue.HandValuesOfEachBranch,LimitedFaceValue.TheFaceValueLiesBetweenTheUpstreamAndDownstreamCells,AdvectiveFlux.AMonotoneFieldGivesNoNewExtremum] | 107 failed, 243 passed [failed: test_advective_flux_equals_the_reference_bit_for_bit 104,test_limited_face_values_equal_the_reference_bit_for_bit 3] |
-| `clamp_two_lowered` | 97% tests passed, 1 tests failed out of 35 [failed: LimitedFaceValue.HandValuesOfEachBranch] | 108 failed, 242 passed [failed: test_advective_flux_equals_the_reference_bit_for_bit 104,test_limited_face_values_equal_the_reference_bit_for_bit 4] |
-| `vent_reversed` | 97% tests passed, 1 tests failed out of 35 [failed: AdvectiveFlux.AVentTakesTheInflowEnteringAndTheRoomCellLeaving] | 100 failed, 250 passed [failed: test_advective_flux_equals_the_reference_bit_for_bit 100] |
-| `quick_reassociated` | 100% tests passed, 0 tests failed out of 35 | 82 failed, 268 passed [failed: test_advective_flux_equals_the_reference_bit_for_bit 52,test_quick_face_values_equal_the_reference_bit_for_bit 30] |
-| `tie_first` | 97% tests passed, 1 tests failed out of 35 [failed: NumpyMinMax.TiesReturnTheSecondArgument] | 3 failed, 347 passed [failed: test_limited_face_values_equal_the_reference_bit_for_bit 3] |
-| `boundary_zero_flux` | 100% tests passed, 0 tests failed out of 35 | 249 failed, 101 passed [failed: test_advective_flux_equals_the_reference_bit_for_bit 249] |
+| `control` | 100% tests passed, 0 tests failed out of 39 | 664 passed |
+| `swapped_weight` | 97% tests passed, 1 tests failed out of 39 [failed: AdvectiveFlux.AFarNodeInASolidCellIsReadAsTheUpstreamValue] | 160 failed, 504 passed [failed: test_advective_flux_equals_the_reference_bit_for_bit 130,test_quick_face_values_equal_the_reference_bit_for_bit 30] |
+| `far_solid_dropped` | 95% tests passed, 2 tests failed out of 39 [failed: AdvectiveFlux.AFarNodeInASolidCellIsReadAsTheUpstreamValue,AdvectiveFlux.TheFarSolidRuleReadsQuickAsTheUpstreamValueToo] | 116 failed, 548 passed [failed: test_advective_flux_equals_the_reference_bit_for_bit 116] |
+| `far_solid_quick_deleted` | 97% tests passed, 1 tests failed out of 39 [failed: AdvectiveFlux.TheFarSolidRuleReadsQuickAsTheUpstreamValueToo] | 24 failed, 640 passed [failed: test_advective_flux_equals_the_reference_bit_for_bit 24] |
+| `clamp_two_raised` | 92% tests passed, 3 tests failed out of 39 [failed: LimitedFaceValue.HandValuesOfEachBranch,LimitedFaceValue.TheFaceValueLiesBetweenTheUpstreamAndDownstreamCells,AdvectiveFlux.AMonotoneFieldGivesNoNewExtremum] | 133 failed, 531 passed [failed: test_advective_flux_equals_the_reference_bit_for_bit 130,test_limited_face_values_equal_the_reference_bit_for_bit 3] |
+| `clamp_two_lowered` | 97% tests passed, 1 tests failed out of 39 [failed: LimitedFaceValue.HandValuesOfEachBranch] | 134 failed, 530 passed [failed: test_advective_flux_equals_the_reference_bit_for_bit 130,test_limited_face_values_equal_the_reference_bit_for_bit 4] |
+| `vent_reversed` | 97% tests passed, 1 tests failed out of 39 [failed: AdvectiveFlux.AVentTakesTheInflowEnteringAndTheRoomCellLeaving] | 120 failed, 544 passed [failed: test_advective_flux_equals_the_reference_bit_for_bit 120] |
+| `quick_reassociated` | 100% tests passed, 0 tests failed out of 39 | 91 failed, 573 passed [failed: test_advective_flux_equals_the_reference_bit_for_bit 61,test_quick_face_values_equal_the_reference_bit_for_bit 30] |
+| `tie_first` | 97% tests passed, 1 tests failed out of 39 [failed: NumpyMinMax.TiesReturnTheSecondArgument] | 3 failed, 661 passed [failed: test_limited_face_values_equal_the_reference_bit_for_bit 3] |
+| `boundary_zero_flux` | 100% tests passed, 0 tests failed out of 39 | 301 failed, 363 passed [failed: test_advective_flux_equals_the_reference_bit_for_bit 301] |
 <!-- tables87 plants end -->
 
-Every defect fails the parity tests. GoogleTest catches six of the eight: the reassociated sum
-and the zero-flux boundary change only last bits and the sign of a zero, which no hand result
-pins without the reference.
+Every defect in T5 fails a parity test. Which GoogleTest cases also catch each is in the table:
+the reassociated sum and the zero-flux boundary change only last bits and the sign of a zero,
+which no hand result pins without the reference.
+
+T5b holds the binding's and the grid's checks (prompt 87b), each removed from a copy of the
+source: every `require_shape` call of `advective_flux` and `quick_face_values`, replaced by its
+alignment check alone so that the shape comparison is the only thing lost; the line count of
+`c_low` and `c_high`; the shape agreement of `limited_face_values`' arrays; `nb::c_contig` of each
+of the seven array aliases in turn; `.noconvert()`, from every argument and from `out` alone (a
+converted `out` would be a copy the caller never sees written); each alignment test; each
+`require_apart` call, and each half of its overlap test; the grid's `cell_type` shape check, its
+faces-count and no-cell checks, each clause of the coordinate check, the direction it names, and
+the binding's turning it into a `ValueError`.
+
+<!-- tables87 refusals begin -->
+### T5b. The binding's and the grid's checks, each removed: which tests catch it
+
+Each `bind_` and `grid_` defect removes one check (a shape comparison, `nb::c_contig` of one array alias, an alignment test, an aliasing test, a clause of the coordinate check). `control_end` is the unchanged source built again after the last plant.
+
+| Defect | GoogleTest (CTest) | Parity (pytest) |
+|---|---|---|
+| `bind_flux_shape_c` | 100% tests passed, 0 tests failed out of 39 | 8 failed, 656 passed [failed: test_advective_flux_refuses_wrong_arrays 8] |
+| `bind_flux_shape_flux` | 100% tests passed, 0 tests failed out of 39 | 8 failed, 656 passed [failed: test_advective_flux_refuses_wrong_arrays 8] |
+| `bind_flux_shape_inflow` | 100% tests passed, 0 tests failed out of 39 | 8 failed, 656 passed [failed: test_advective_flux_refuses_wrong_arrays 8] |
+| `bind_flux_shape_out` | 100% tests passed, 0 tests failed out of 39 | 8 failed, 656 passed [failed: test_advective_flux_refuses_wrong_arrays 8] |
+| `bind_flux_shape_vents` | 100% tests passed, 0 tests failed out of 39 | 8 failed, 656 passed [failed: test_advective_flux_refuses_wrong_arrays 8] |
+| `bind_quick_shape_c` | 100% tests passed, 0 tests failed out of 39 | 4 failed, 660 passed [failed: test_quick_face_values_refuses_wrong_arrays 4] |
+| `bind_quick_shape_positive` | 100% tests passed, 0 tests failed out of 39 | 4 failed, 660 passed [failed: test_quick_face_values_refuses_wrong_arrays 4] |
+| `bind_quick_shape_out` | 100% tests passed, 0 tests failed out of 39 | 4 failed, 660 passed [failed: test_quick_face_values_refuses_wrong_arrays 4] |
+| `bind_quick_lines_unchecked` | 100% tests passed, 0 tests failed out of 39 | 4 failed, 660 passed [failed: test_quick_face_values_refuses_wrong_arrays 4] |
+| `bind_quick_lines_skip_c_high` | 100% tests passed, 0 tests failed out of 39 | 4 failed, 660 passed [failed: test_quick_face_values_refuses_wrong_arrays 4] |
+| `bind_quick_lines_skip_c_low` | 100% tests passed, 0 tests failed out of 39 | 4 failed, 660 passed [failed: test_quick_face_values_refuses_wrong_arrays 4] |
+| `bind_limited_shapes_unchecked` | 100% tests passed, 0 tests failed out of 39 | 10 failed, 654 passed [failed: test_limited_face_values_refuses_wrong_arrays 10] |
+| `bind_contig_vector` | 100% tests passed, 0 tests failed out of 39 | 9 failed, 655 passed [failed: test_grid_refuses_wrong_arrays 4,test_pairwise_sum_refuses_other_arrays 1,test_quick_face_values_refuses_wrong_arrays 4] |
+| `bind_contig_int_matrix` | 100% tests passed, 0 tests failed out of 39 | 2 failed, 662 passed [failed: test_grid_refuses_wrong_arrays 2] |
+| `bind_contig_matrix` | 100% tests passed, 0 tests failed out of 39 | 28 failed, 636 passed [failed: test_advective_flux_refuses_wrong_arrays 24,test_quick_face_values_refuses_wrong_arrays 4] |
+| `bind_contig_bool_matrix` | 100% tests passed, 0 tests failed out of 39 | 12 failed, 652 passed [failed: test_advective_flux_refuses_wrong_arrays 8,test_quick_face_values_refuses_wrong_arrays 4] |
+| `bind_contig_out_matrix` | 100% tests passed, 0 tests failed out of 39 | 12 failed, 652 passed [failed: test_advective_flux_refuses_wrong_arrays 8,test_quick_face_values_refuses_wrong_arrays 4] |
+| `bind_contig_array` | 100% tests passed, 0 tests failed out of 39 | 8 failed, 656 passed [failed: test_limited_face_values_refuses_wrong_arrays 8] |
+| `bind_contig_out_array` | 100% tests passed, 0 tests failed out of 39 | 2 failed, 662 passed [failed: test_limited_face_values_refuses_wrong_arrays 2] |
+| `bind_noconvert_all` | 100% tests passed, 0 tests failed out of 39 | 116 failed, 548 passed [failed: test_advective_flux_refuses_wrong_arrays 60,test_grid_refuses_wrong_arrays 12,test_limited_face_values_refuses_wrong_arrays 15,test_pairwise_sum_refuses_other_arrays 3,test_quick_face_values_refuses_wrong_arrays 26] |
+| `bind_noconvert_out` | 100% tests passed, 0 tests failed out of 39 | 21 failed, 643 passed [failed: test_advective_flux_refuses_wrong_arrays 12,test_limited_face_values_refuses_wrong_arrays 3,test_quick_face_values_refuses_wrong_arrays 6] |
+| `bind_aligned_matrix` | 100% tests passed, 0 tests failed out of 39 | 20 failed, 644 passed [failed: test_advective_flux_refuses_wrong_arrays 16,test_quick_face_values_refuses_wrong_arrays 4] |
+| `bind_aligned_quick_lines` | 100% tests passed, 0 tests failed out of 39 | 4 failed, 660 passed [failed: test_quick_face_values_refuses_wrong_arrays 4] |
+| `bind_aligned_grid_arrays` | 100% tests passed, 0 tests failed out of 39 | 4 failed, 660 passed [failed: test_grid_refuses_wrong_arrays 4] |
+| `bind_aligned_cell_type` | 100% tests passed, 0 tests failed out of 39 | 1 failed, 663 passed [failed: test_grid_refuses_wrong_arrays 1] |
+| `bind_aligned_limited_operands` | 100% tests passed, 0 tests failed out of 39 | 4 failed, 660 passed [failed: test_limited_face_values_refuses_wrong_arrays 4] |
+| `bind_aligned_limited_out` | 100% tests passed, 0 tests failed out of 39 | 1 failed, 663 passed [failed: test_limited_face_values_refuses_wrong_arrays 1] |
+| `bind_apart_flux_c` | 100% tests passed, 0 tests failed out of 39 | 2 failed, 662 passed [failed: test_advective_flux_refuses_an_out_that_overlaps_an_input 2] |
+| `bind_apart_flux_flux` | 100% tests passed, 0 tests failed out of 39 | 3 failed, 661 passed [failed: test_advective_flux_refuses_an_out_that_is_an_input 1,test_advective_flux_refuses_an_out_that_overlaps_an_input 2] |
+| `bind_apart_flux_inflow` | 100% tests passed, 0 tests failed out of 39 | 3 failed, 661 passed [failed: test_advective_flux_refuses_an_out_that_is_an_input 1,test_advective_flux_refuses_an_out_that_overlaps_an_input 2] |
+| `bind_apart_flux_vents` | 100% tests passed, 0 tests failed out of 39 | 2 failed, 662 passed [failed: test_advective_flux_refuses_an_out_that_overlaps_an_input 2] |
+| `bind_apart_quick_c` | 100% tests passed, 0 tests failed out of 39 | 2 failed, 662 passed [failed: test_quick_face_values_refuses_an_out_that_overlaps_an_input 2] |
+| `bind_apart_quick_c_low` | 100% tests passed, 0 tests failed out of 39 | 2 failed, 662 passed [failed: test_quick_face_values_refuses_an_out_that_overlaps_an_input 2] |
+| `bind_apart_quick_c_high` | 100% tests passed, 0 tests failed out of 39 | 2 failed, 662 passed [failed: test_quick_face_values_refuses_an_out_that_overlaps_an_input 2] |
+| `bind_apart_quick_positive` | 100% tests passed, 0 tests failed out of 39 | 2 failed, 662 passed [failed: test_quick_face_values_refuses_an_out_that_overlaps_an_input 2] |
+| `bind_apart_limited` | 100% tests passed, 0 tests failed out of 39 | 12 failed, 652 passed [failed: test_limited_face_values_refuses_an_out_that_overlaps_an_input 12] |
+| `bind_apart_first_half` | 100% tests passed, 0 tests failed out of 39 | 182 failed, 482 passed [failed: test_advective_flux_accepts_an_out_that_touches_no_input 1,test_advective_flux_equals_the_reference_bit_for_bit 165,test_advective_flux_refuses_wrong_arrays 2,test_limited_face_values_accepts_consistent_arguments 1,test_limited_face_values_equal_the_reference_bit_for_bit 3,test_limited_face_values_refuses_wrong_arrays 6,test_quick_face_values_accepts_consistent_arguments 1,test_quick_face_values_equal_the_reference_bit_for_bit 3] |
+| `bind_apart_second_half` | 100% tests passed, 0 tests failed out of 39 | 284 failed, 380 passed [failed: test_advective_flux_accepts_an_out_that_touches_no_input 1,test_advective_flux_accepts_consistent_arguments 1,test_advective_flux_equals_the_reference_bit_for_bit 234,test_advective_flux_refuses_wrong_arrays 8,test_limited_face_values_equal_the_reference_bit_for_bit 5,test_limited_face_values_refuses_wrong_arrays 7,test_quick_face_values_accepts_consistent_arguments 1,test_quick_face_values_equal_the_reference_bit_for_bit 27] |
+| `grid_cell_type_shape` | 100% tests passed, 0 tests failed out of 39 | 1 failed, 663 passed [failed: test_grid_refuses_wrong_arrays 1] |
+| `grid_faces_count` | 97% tests passed, 1 tests failed out of 39 [failed: Grid.CheckRefusesInconsistentArrays] | 1 failed, 663 passed [failed: test_grid_refuses_wrong_arrays 1] |
+| `grid_no_cell` | 97% tests passed, 1 tests failed out of 39 [failed: Grid.CheckRefusesInconsistentArrays] | 1 failed, 663 passed [failed: test_grid_refuses_a_direction_without_a_cell 1] |
+| `grid_coords_finite` | 97% tests passed, 1 tests failed out of 39 [failed: Grid.EachKindOfBadCoordinateNamesItsDirection] | 4 failed, 660 passed [failed: test_grid_refuses_coordinates_that_are_not_finite_and_increasing 4] |
+| `grid_coords_faces_order` | 95% tests passed, 2 tests failed out of 39 [failed: Grid.EachKindOfBadCoordinateNamesItsDirection,Grid.TheFirstBadDirectionIsTheLowest] | 5 failed, 659 passed [failed: test_grid_names_the_lower_direction_when_both_are_bad 1,test_grid_refuses_coordinates_that_are_not_finite_and_increasing 4] |
+| `grid_coords_centres_order` | 97% tests passed, 1 tests failed out of 39 [failed: Grid.EachKindOfBadCoordinateNamesItsDirection] | 4 failed, 660 passed [failed: test_grid_refuses_coordinates_that_are_not_finite_and_increasing 4] |
+| `grid_coords_low_end` | 97% tests passed, 1 tests failed out of 39 [failed: Grid.EachKindOfBadCoordinateNamesItsDirection] | 4 failed, 660 passed [failed: test_grid_refuses_coordinates_that_are_not_finite_and_increasing 4] |
+| `grid_coords_high_end` | 97% tests passed, 1 tests failed out of 39 [failed: Grid.EachKindOfBadCoordinateNamesItsDirection] | 4 failed, 660 passed [failed: test_grid_refuses_coordinates_that_are_not_finite_and_increasing 4] |
+| `grid_coords_direction` | 97% tests passed, 1 tests failed out of 39 [failed: Grid.EachKindOfBadCoordinateNamesItsDirection] | 12 failed, 652 passed [failed: test_grid_refuses_coordinates_that_are_not_finite_and_increasing 12] |
+| `grid_coords_unchecked` | 100% tests passed, 0 tests failed out of 39 | 25 failed, 639 passed [failed: test_grid_names_the_lower_direction_when_both_are_bad 1,test_grid_refuses_coordinates_that_are_not_finite_and_increasing 24] |
+| `grid_coords_type_error` | 100% tests passed, 0 tests failed out of 39 | 25 failed, 639 passed [failed: test_grid_names_the_lower_direction_when_both_are_bad 1,test_grid_refuses_coordinates_that_are_not_finite_and_increasing 24] |
+| `control_end` | 100% tests passed, 0 tests failed out of 39 | 664 passed |
+<!-- tables87 refusals end -->
+
+Every plant in T5b fails at least one test and none ends the run early, and `control_end` passes
+them all. A first run of the plants ended in a crash for the two that remove an `out` shape
+check: a short `out` was written past its end. The wrong-shape cases for `out` and the other
+arrays are therefore cut from a buffer with room behind them (`_fewer_columns`, and a row fewer
+as a view of the original array), so that a missing check is a failed test and not a corrupted
+heap.
 
 ## 6. The timing
 
@@ -366,20 +504,61 @@ one scored; runs 2 and 3 repeat it.
 Repeats: the core 400, the reference 60, after five unrecorded calls; OPENBLAS_NUM_THREADS=1, Python 3.13.3, NumPy 2.4.4.
 <!-- tables87 timing end -->
 
-The empty call is under 1% of the core's. The y direction is about 15% slower than x in the
-core and slightly faster in the reference. The likely cause: the core walks a y line with a
-stride of nx cells, so each step along it touches a new cache line, where the reference
-transposes first and walks contiguous rows. Nothing here was tuned: the per-face loop reads its nodes through a bounds test
-at each end of the line. For information only, not a gate.
+The empty call is a small part of the core's time. On the captured field the core takes longer
+along y than along x, and the reference takes slightly less. Nothing here was tuned: the
+per-face loop reads its nodes through a bounds test at each end of the line. For information
+only, not a gate; prediction (b) is scored on T6, run 1, as committed.
+
+T6's field is nearly empty. T4's last column gives the captured calls' non-zero cells, at most
+461 of 38,400 on 320x120, so almost every face returns from the clamp at `d_down == 0.0`
+(`c_c`, before `r` and `psi` are formed). Test 87 (S1) timed the stored run's last frame, which
+is non-zero in every cell outside the obstacles, and round 1 repeats that for every class, in
+both directions, under that class's last captured flux and inflow.
+
+<!-- tables87 developed begin -->
+### T6b. `advective_flux` per call on the stored run's last frame, one thread
+
+The field is the stored 320x120 run's last frame of each class (`results/builder81/product/equipment_dust.h5`), under that class's last captured flux and inflow. The captured rows are the scored call, timed again in the same session. Medians of repeated calls under Linux, as in T6; times are run 1's, the ratio (reference / core) is given for each run.
+
+| Field | Class | Direction | Non-zero cells | Core, us | Empty call, us | Reference, us | Ratio, run 1 | Ratio, run 2 | Ratio, run 3 |
+|---|---|---|---|---|---|---|---|---|---|
+| captured | 4 | x | 461 | 345.0 | 2.23 | 4670 | 13.54 | 14.41 | 14.29 |
+| stored last frame | 0 | x | 28,032 | 529.1 | 2.23 | 4911 | 9.28 | 7.51 | 7.91 |
+| stored last frame | 1 | x | 28,032 | 516.1 | 2.09 | 3715 | 7.20 | 8.98 | 8.55 |
+| stored last frame | 2 | x | 28,032 | 429.7 | 2.08 | 3398 | 7.91 | 8.03 | 8.30 |
+| stored last frame | 3 | x | 28,032 | 433.4 | 2.08 | 3642 | 8.40 | 8.70 | 8.15 |
+| stored last frame | 4 | x | 28,032 | 473.0 | 2.09 | 3752 | 7.93 | 7.63 | 10.31 |
+| captured | 4 | y | 461 | 400.8 | 2.16 | 3131 | 7.81 | 10.25 | 12.84 |
+| stored last frame | 0 | y | 28,032 | 447.6 | 2.10 | 3470 | 7.75 | 7.30 | 6.93 |
+| stored last frame | 1 | y | 28,032 | 436.6 | 2.16 | 3229 | 7.40 | 7.60 | 7.02 |
+| stored last frame | 2 | y | 28,032 | 428.6 | 2.09 | 3713 | 8.66 | 7.68 | 7.27 |
+| stored last frame | 3 | y | 28,032 | 461.3 | 3.18 | 3539 | 7.67 | 8.58 | 7.04 |
+| stored last frame | 4 | y | 28,032 | 474.6 | 2.17 | 3277 | 6.91 | 8.18 | 6.67 |
+<!-- tables87 developed end -->
+
+On the developed fields the core takes longer than on the captured field, in both directions
+and in every run, and the ratio to the reference is lower along x in every run. The core's y
+call is no slower than its x call there: over the five classes the median time along y is below
+the median along x in every run. The captured y ratio sits near the line (b) draws and moves from run to
+run, in T6 and in T6b's captured rows alike, so its verdict is the scored run's and nothing
+more. T6b's captured rows are timed in T6b's own session and differ from T6's by the machine's
+state; the comparison with the developed rows is within T6b. The speed to expect of the
+explicit flux in a march is T6b's, not T6's.
 
 ## Findings
 
-- **F1, prediction (b) fails in y.** The core is 12.1 times faster than the reference along x
-  and 9.7 times along y on the run scored (T6, run 1); the two repeats give 11.8 and 12.0 along
-  x, 9.1 and 9.4 along y. The y walk's stride is the likely cause (section 6), so the layout
-  prompt 87 set (no transposes, a stride per direction) is what costs it; a y pass that walked
-  rows, sweeping every column's face at once, would read the field contiguously with the same
-  operations per face, and is the change to try if a later step's timing needs it.
+- **F1, prediction (b) fails in y on the captured inputs, and the timing does not show why.**
+  (b) is scored on the captured 320x120 inputs by the rule committed with it (T0, T6, run 1),
+  and fails in y. Round 0 named the y walk's stride as the cause and proposed a y pass over
+  rows. T6b does not support that: on the stored run's developed fields the core's y call is no
+  slower than its x call, so the stride is not shown to cost the y direction. What the
+  measurements do show is the clamp's early return on empty faces. On the captured field almost
+  every face returns at `d_down == 0.0` before `r` and `psi` are formed, and the reference does
+  the same array operations whatever the field holds; on a field that is non-zero everywhere the
+  core takes longer, and its ratio to the reference falls along x (T0 gives the
+  developed-field ratios beside the verdict, T6b the rows). The row-wise y pass is withdrawn:
+  nothing here asks for it. Prompt 88 and the march should take T6b's times, not
+  T6's, for the explicit flux.
 - **F2, the prompt's premise: the product meshes are uniform.** The prompt lists the 80x30,
   160x60 and 320x120 product meshes as "stretched". `configs/clean_room_default.yaml` sets
   `stretch_ratio: 1.0` on both axes, so all three are uniform (cell widths equal to within
@@ -404,11 +583,35 @@ at each end of the line. For information only, not a gate.
 - The captures are not committed (`results/builder87/captures/`, 120 calls, about 65 MB).
 - The weights were read back through the binding and compared in pytest; the GoogleTest test
   checks the uniform grid's exact eighths.
-- The parity tests take about 5 s on WSL2 (350 cases). CI's core job runs them with the rest of
-  `tests/test_core_parity.py`; nothing in `.github/` changed.
-- The whole suite at the probe's commit with this report's tests (4a5b872): on Windows 3,101
-  passed and 1 skipped (`tests/test_core_parity.py`, which needs the core); under WSL2 with the
-  core built, 3,451 passed (`results/builder87/suite_windows.xml`, `suite_linux.xml`).
+- **Bit for bit is a claim about finite inputs.** No planted or captured input holds a NaN. With
+  NaNs of both signs in one field the core's and the reference's outputs can differ in a NaN's
+  sign or payload, never in a value (test 87, S5). The solvers refuse a non-finite field before
+  the flux runs: `TransportSolver.solve_timestep` refuses a `C_k` that is not finite,
+  `_check_pair` a face velocity that is not finite and `_check_conditions` an inflow value that
+  is not finite and non-negative (`src/solver_transport.py`); `KEpsilonModel._check_state` and
+  `_cell_field` refuse k and eps that are not positive and finite in every non-SOLID cell
+  (`src/turbulence.py`). A NaN reaches the flux only from a caller that skips those checks.
+- The parity tests take a few seconds on WSL2 (T1 has the case count). CI's core job runs them
+  with the rest of `tests/test_core_parity.py`; nothing in `.github/` changed.
+- The subject of commit `9149a01`, `feat: port the scalar scheme's face values and advective
+  flux to the core`, is 73 characters; CLAUDE.md asks for under 72 (review 87 S6). It is not
+  fixed: the branch is pushed (pull request 118), and a reword would rewrite its history.
+- The whole suite on each platform at the round 1 head is T8. The parity module skips on Windows,
+  which has no core; `tables87.py --check`, `ruff format --check`, `ruff check` and
+  `gen_system_map.py --check` pass there too (round 1's run records are in
+  `results/builder87/round1_checks.txt`).
+
+<!-- tables87 suites begin -->
+### T8. The whole suite at the round 1 head
+
+The two suites ran at the same time, one BLAS thread each, so the wall times
+are not those of a suite alone.
+
+| Platform | Tests | Passed | Failed | Errors | Skipped | Wall time, s |
+|---|---|---|---|---|---|---|
+| Windows, `.venv`, the core not built | 3,102 | 3,101 | 0 | 0 | 1 | 1,539 |
+| WSL2, the core built, `CFD_CORE_REQUIRED=1` | 3,765 | 3,765 | 0 | 0 | 0 | 1,330 |
+<!-- tables87 suites end -->
 
 ## Files
 
@@ -420,6 +623,28 @@ at each end of the line. For information only, not a gate.
 - `core/python/bindings.cpp`: `Grid2`, `ScalarScheme2` and the three functions.
 - `core/CMakeLists.txt`: the new sources and tests.
 - `tests/test_core_parity.py`: the grid's and the scalar functions' parity and refusal tests.
-- `docs/reports/probe87/`: `probe87.py` (captures, replay, timing, the parity record),
-  `mutants87.sh` (the planted defects), `tables87.py` and `tables87.md`.
+- `docs/reports/probe87/`: `probe87.py` (captures, replay, timing, the developed-field timing,
+  the parity record), `mutants87.sh` (the planted defects), `ties87.py` (NumPy's tie and NaN
+  rules), `tables87.py` and `tables87.md`.
 - `docs/PROJECT_PLAN.md`, `docs/SYSTEM.md`, `docs/STATUS.md`: step 2a's status.
+
+## Round 1: review 87 and test 87 (prompt 87b)
+
+Review 87 (APPROVE, S1 to S7) and test 87 (S1 to S5) found no Critical and no Bug. Every
+finding was a Suggestion; this pass took them all but one. The numbers are in the tables the
+rows point to.
+
+| Finding | What was done |
+|---|---|
+| Review S1, test S2: the refusal tests did not isolate the layout check or the shape checks, and an `out` aliasing `c`, `inflow` or `vents` was unpinned | Section 2, the binding: every case wrong in one way and matched by its message, a case for each input and each check, the overlap tests one input at a time. T5b removes each check and records the tests that fail |
+| Test S3: the far-solid rule's `quick = c_c` line was not pinned | A sixth planted field (`negatives-and-zeros`), a GoogleTest case with a hand result, and the plant `far_solid_quick_deleted` (T5) |
+| Review S4: `Grid2` accepted coordinates the weights cannot use | `first_bad_direction`, a `ValueError` naming the direction, GoogleTest and parity tests of each kind in each direction, the plants `grid_coords_*` (T5b). The centres' lying inside their faces is stated as the caller's contract in `grid.hpp` |
+| Test S1, review S5: the timed field was nearly empty and F1 named a cause no timing separated | T6b times the stored run's last frame of every class, both directions, with the captured call in the same session. (b) stays scored on the captured inputs; F1 is rewritten |
+| Test S4, review S2: the tie rule's record covered five lengths, and the reduce's wording went past the evidence | `ties87.py` and T7: every length from 1 to 1,000 and three 2-D shapes, and the reduce against the fold with signed zeros mixed along the array. The header cites the script and the pinning test, and "cannot change a bit" is gone |
+| Review S3: no comment above `scheme::mesh()` and `scheme::weights()` | Added |
+| Review S7: a callable typed `object` in the parity tests | `Refusal.change` is a `Callable[[np.ndarray], np.ndarray]` and the arguments are in dataclasses |
+| Test S5: bit for bit does not extend to a NaN's pattern | A limit under "Deviations and limits", with the solvers' checks that keep a NaN from the flux; the header says finite inputs |
+| Review S6: a commit subject of 73 characters | Not fixed: the branch is pushed, and a reword would rewrite its history |
+| The march step | `docs/PROJECT_PLAN.md`, step 3's row: no captured call has vents or k and eps under QUICK |
+
+Round 1's tests, plants and suites ran at the head (T1, T5, T5b, T7, T8).

@@ -5,6 +5,7 @@
     python docs/reports/probe87/probe87.py capture-flow
     python docs/reports/probe87/probe87.py replay
     python docs/reports/probe87/probe87.py timing
+    python docs/reports/probe87/probe87.py timing-developed --run 1
     python docs/reports/probe87/probe87.py parity
 
 Run under WSL2 with the Linux environment (``~/.venvs/cfd_clean_room``) from
@@ -28,6 +29,11 @@ core's layout (the y call's transposed arrays transposed back).
 - ``timing``: the core's and the reference's ``advective_flux`` on one
   captured 320x120 call per direction, the median of repeated calls, and the
   binding's overhead on an empty call (``advective_flux_overhead``).
+- ``timing-developed``: the same timing with a developed field: the stored
+  320x120 run's last frame of each class (non-zero in every cell outside the
+  obstacles), under that class's last captured flux and inflow, both directions,
+  with the captured call timed in the same session for comparison (prompt 87b).
+  ``--run N`` names the record, ``developed_N.json``.
 - ``parity``: the parity tests with a JUnit record, for the report's tables.
 
 The captures stay in ``results/builder87/captures/`` (not committed).
@@ -83,6 +89,8 @@ CONFIGS = {
     / "configs"
     / "scenario_equipment_dust.yaml",
 }
+# The 320x120 run the captures start from, whose last frames are the developed fields.
+STORED_RUN = SOURCES["dust320"].with_suffix(".h5")
 # The release's onset in both scenario files, s, and the steps kept after it.
 ONSET = 10.0
 STEPS_AFTER_ONSET = 5
@@ -426,6 +434,71 @@ def timing() -> None:
     )
 
 
+def developed_fields(classes: int) -> list[np.ndarray]:
+    """The stored 320x120 run's last frame of each class's concentration, [ny, nx]."""
+    import h5py
+
+    with h5py.File(STORED_RUN, "r") as stored:
+        return [
+            np.ascontiguousarray(stored[f"transport/C_{k}"][-1], dtype=np.float64)
+            for k in range(classes)
+        ]
+
+
+def timing_developed(run: int) -> None:
+    """The core against the reference on developed fields, and on the captured call beside them.
+
+    For each direction the last captured call of each class (the fifth step)
+    supplies the flux, the inflow and the face-value option, and the stored
+    run's last frame of that class supplies the field. The captured field is
+    timed in the same session, the last class's call as ``timing`` times it,
+    so the two are compared under one machine state.
+    """
+    import _cfdcore
+
+    calls, _ = load("dust320")
+    mesh, scheme = core_scheme("dust320")
+    axes = mesh_axes(mesh)
+    classes = 1 + max(int(c["class"]) for c in calls)
+    frames = developed_fields(classes)
+    rows = []
+    for d, axis in enumerate(axes):
+        in_direction = [c for c in calls if int(c["d"]) == d]
+        last = in_direction[-1]
+        captured = _time_direction(_cfdcore, scheme, axis, last)
+        rows.append(
+            {
+                "field": "captured",
+                "class": int(last["class"]),
+                "nonzero_cells": int(np.count_nonzero(last["c"])),
+                **captured,
+            }
+        )
+        print(rows[-1])
+        for k, frame in enumerate(frames):
+            call = [c for c in in_direction if int(c["class"]) == k][-1]
+            row = _time_direction(_cfdcore, scheme, axis, {**call, "c": frame})
+            rows.append(
+                {
+                    "field": "stored last frame",
+                    "class": k,
+                    "nonzero_cells": int(np.count_nonzero(frame)),
+                    **row,
+                }
+            )
+            print(rows[-1])
+    record = {
+        "rows": rows,
+        "stored_run": str(STORED_RUN.relative_to(ROOT)),
+        "openblas_num_threads": os.environ.get("OPENBLAS_NUM_THREADS"),
+        "python": sys.version.split()[0],
+        "numpy": np.__version__,
+    }
+    (RESULTS / f"developed_{run}.json").write_text(
+        json.dumps(record, indent=1) + "\n", encoding="utf-8"
+    )
+
+
 def _time_direction(
     core: object, scheme: object, axis: object, call: dict[str, np.ndarray]
 ) -> dict[str, object]:
@@ -488,9 +561,17 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
         "command",
-        choices=["capture-march", "capture-flow", "replay", "timing", "parity"],
+        choices=[
+            "capture-march",
+            "capture-flow",
+            "replay",
+            "timing",
+            "timing-developed",
+            "parity",
+        ],
     )
     parser.add_argument("name", nargs="?", choices=list(SOURCES))
+    parser.add_argument("--run", type=int, default=1, help="timing-developed's record")
     args = parser.parse_args(argv)
     if args.command == "capture-march":
         if args.name is None:
@@ -502,6 +583,8 @@ def main(argv: list[str] | None = None) -> int:
         replay()
     elif args.command == "timing":
         timing()
+    elif args.command == "timing-developed":
+        timing_developed(args.run)
     else:
         parity()
     return 0

@@ -4,8 +4,8 @@
 
 | Prediction | Measured | Verdict |
 |---|---|---|
-| (a) every ported function bit for bit, planted and captured | planted: `advective_flux` 260 of 260 cases, `quick_face_values` and the clamp 35 of 35; captured: 120 calls, 2,102,850 faces, 0 differing | holds |
-| (b) the core at least ten times faster per call on 320x120 | x 12.14 times, y 9.71 times (T6, run 1) | FAILS |
+| (a) every ported function bit for bit, planted and captured | planted: `advective_flux` 312 of 312 cases, `quick_face_values` and the clamp 35 of 35; captured: 120 calls, 2,102,850 faces, 0 differing | holds |
+| (b) the core at least ten times faster per call on 320x120 | x 12.14 times, y 9.71 times (T6, run 1); on the stored run's developed fields, x 7.20 to 9.28 times, y 6.91 to 8.66 times (T6b, run 1, not scored) | FAILS |
 | (c) the weights at set-up equal the per-call weights | 10 of 10 mesh and direction cases, six arrays each | holds |
 
 ### T1. The tests: CTest by GoogleTest suite, and the parity tests by function
@@ -13,14 +13,14 @@
 | Suite or test function | Cases | Passed |
 |---|---|---|
 | GoogleTest `Layout` | 6 | 6 |
-| GoogleTest `Grid` | 5 | 5 |
+| GoogleTest `Grid` | 8 | 8 |
 | GoogleTest `PairwiseSum` | 10 | 10 |
 | GoogleTest `NumpyMinMax` | 2 | 2 |
 | GoogleTest `LimitedFaceValue` | 3 | 3 |
 | GoogleTest `LagrangeWeights` | 1 | 1 |
-| GoogleTest `AdvectiveFlux` | 7 | 7 |
+| GoogleTest `AdvectiveFlux` | 8 | 8 |
 | GoogleTest `Scheme` | 1 | 1 |
-| **CTest, all** | 35 | 35 |
+| **CTest, all** | 39 | 39 |
 | `test_pairwise_sum_equals_np_sum_on_every_length` | 1 | 1 |
 | `test_pairwise_sum_equals_np_sum_on_grid_shaped_arrays` | 1 | 1 |
 | `test_pairwise_sum_of_negative_zeros_matches_np_sum` | 1 | 1 |
@@ -30,41 +30,67 @@
 | `test_grid_nodes_and_faces_are_mesh_axes` | 5 | 5 |
 | `test_the_meshes_are_what_their_names_say` | 1 | 1 |
 | `test_grid_accepts_consistent_arrays` | 1 | 1 |
-| `test_grid_refuses_wrong_arrays` | 9 | 9 |
+| `test_grid_refuses_wrong_arrays` | 20 | 20 |
+| `test_grid_refuses_a_direction_without_a_cell` | 1 | 1 |
+| `test_grid_refuses_coordinates_that_are_not_finite_and_increasing` | 24 | 24 |
+| `test_grid_names_the_lower_direction_when_both_are_bad` | 1 | 1 |
 | `test_grid_refuses_a_direction_it_does_not_have` | 1 | 1 |
-| `test_advective_flux_equals_the_reference_bit_for_bit` | 260 | 260 |
+| `test_advective_flux_equals_the_reference_bit_for_bit` | 312 | 312 |
 | `test_the_planted_inputs_reach_every_rule` | 1 | 1 |
 | `test_quick_weights_at_setup_equal_the_per_call_weights` | 10 | 10 |
 | `test_quick_face_values_equal_the_reference_bit_for_bit` | 30 | 30 |
 | `test_limited_face_values_equal_the_reference_bit_for_bit` | 5 | 5 |
 | `test_numpy_min_and_max_return_the_second_of_a_tie` | 1 | 1 |
 | `test_advective_flux_accepts_consistent_arguments` | 1 | 1 |
-| `test_advective_flux_refuses_wrong_arrays` | 11 | 11 |
-| `test_advective_flux_refuses_an_out_that_is_an_input` | 1 | 1 |
+| `test_advective_flux_refuses_wrong_arrays` | 120 | 120 |
+| `test_advective_flux_refuses_a_read_only_out` | 1 | 1 |
+| `test_advective_flux_refuses_an_out_that_overlaps_an_input` | 8 | 8 |
+| `test_advective_flux_refuses_an_out_that_is_an_input` | 2 | 2 |
+| `test_advective_flux_accepts_an_out_that_touches_no_input` | 2 | 2 |
 | `test_advective_flux_refuses_a_direction_it_does_not_have` | 1 | 1 |
-| `test_quick_and_limited_refuse_wrong_arrays` | 1 | 1 |
-| **parity, all** | 350 | 350 |
+| `test_quick_face_values_accepts_consistent_arguments` | 1 | 1 |
+| `test_quick_face_values_refuses_wrong_arrays` | 52 | 52 |
+| `test_quick_face_values_refuses_an_out_that_overlaps_an_input` | 8 | 8 |
+| `test_quick_face_values_refuses_a_direction_it_does_not_have` | 1 | 1 |
+| `test_limited_face_values_accepts_consistent_arguments` | 1 | 1 |
+| `test_limited_face_values_refuses_wrong_arrays` | 30 | 30 |
+| `test_limited_face_values_refuses_an_out_that_overlaps_an_input` | 12 | 12 |
+| **parity, all** | 664 | 664 |
+
+### T7. NumPy's tie and NaN rules, measured by `ties87.py`
+
+NumPy 2.4.4. Each check runs at every length from 1 to 1,000 and on the shapes 30x79, 119x320, 120x319.
+
+| Check | Shapes run | Departing from the rule |
+|---|---|---|
+| np.minimum returns the second of a tie | 1,003 | 0 |
+| np.maximum returns the second of a tie | 1,003 | 0 |
+| np.maximum(0.0, x) returns the second of a tie | 1,003 | 0 |
+| a NaN in either argument gives a NaN | 1,003 | 0 |
+| np.minimum.reduce equals the fold, each pattern alone | 1,003 | 0 |
+| np.minimum.reduce equals the fold, patterns mixed along the array | 1,003 | 0 |
+| np.minimum.reduce of four arrays with a NaN row gives NaN | 1,003 | 0 |
 
 ### T2. `advective_flux` bit for bit against the reference, planted inputs
 
-Each cell counts the planted fields (random, uniform, levels, steps-spikes, signed-zeros) that equal the
+Each cell counts the planted fields (random, uniform, levels, steps-spikes, signed-zeros, negatives-and-zeros) that equal the
 reference bit for bit on every face, of those run.
 
 | Mesh | Vents | x, QUICK | x, upwind | y, QUICK | y, upwind |
 |---|---|---|---|---|---|
-| 80x30 | absent | 5 of 5 | 5 of 5 | 5 of 5 | 5 of 5 |
-| 80x30 | a random mask | 5 of 5 | 5 of 5 | 5 of 5 | 5 of 5 |
-| 160x60 | absent | 5 of 5 | 5 of 5 | 5 of 5 | 5 of 5 |
-| 320x120 | absent | 5 of 5 | 5 of 5 | 5 of 5 | 5 of 5 |
-| 160x60-stretched | absent | 5 of 5 | 5 of 5 | 5 of 5 | 5 of 5 |
-| 160x60-stretched | a random mask | 5 of 5 | 5 of 5 | 5 of 5 | 5 of 5 |
-| 40x15-uniform-open | absent | 5 of 5 | 5 of 5 | 5 of 5 | 5 of 5 |
-| 80x30-vents | absent | 5 of 5 | 5 of 5 | 5 of 5 | 5 of 5 |
-| 80x30-vents | the vents file's | 5 of 5 | 5 of 5 | 5 of 5 | 5 of 5 |
-| 160x60-vents | absent | 5 of 5 | 5 of 5 | 5 of 5 | 5 of 5 |
-| 160x60-vents | the vents file's | 5 of 5 | 5 of 5 | 5 of 5 | 5 of 5 |
-| 320x120-vents | absent | 5 of 5 | 5 of 5 | 5 of 5 | 5 of 5 |
-| 320x120-vents | the vents file's | 5 of 5 | 5 of 5 | 5 of 5 | 5 of 5 |
+| 80x30 | absent | 6 of 6 | 6 of 6 | 6 of 6 | 6 of 6 |
+| 80x30 | a random mask | 6 of 6 | 6 of 6 | 6 of 6 | 6 of 6 |
+| 160x60 | absent | 6 of 6 | 6 of 6 | 6 of 6 | 6 of 6 |
+| 320x120 | absent | 6 of 6 | 6 of 6 | 6 of 6 | 6 of 6 |
+| 160x60-stretched | absent | 6 of 6 | 6 of 6 | 6 of 6 | 6 of 6 |
+| 160x60-stretched | a random mask | 6 of 6 | 6 of 6 | 6 of 6 | 6 of 6 |
+| 40x15-uniform-open | absent | 6 of 6 | 6 of 6 | 6 of 6 | 6 of 6 |
+| 80x30-vents | absent | 6 of 6 | 6 of 6 | 6 of 6 | 6 of 6 |
+| 80x30-vents | the vents file's | 6 of 6 | 6 of 6 | 6 of 6 | 6 of 6 |
+| 160x60-vents | absent | 6 of 6 | 6 of 6 | 6 of 6 | 6 of 6 |
+| 160x60-vents | the vents file's | 6 of 6 | 6 of 6 | 6 of 6 | 6 of 6 |
+| 320x120-vents | absent | 6 of 6 | 6 of 6 | 6 of 6 | 6 of 6 |
+| 320x120-vents | the vents file's | 6 of 6 | 6 of 6 | 6 of 6 | 6 of 6 |
 
 ### T3. The QUICK weights at set-up, `quick_face_values` and the clamp
 
@@ -99,15 +125,73 @@ the levels -1, -0.0, 0.0, 2 and 1e-300), by shape: 1: 1 of 1; 7: 1 of 1; 1000: 1
 
 | Defect | GoogleTest (CTest) | Parity (pytest) |
 |---|---|---|
-| `control` | 100% tests passed, 0 tests failed out of 35 | 350 passed |
-| `swapped_weight` | 97% tests passed, 1 tests failed out of 35 [failed: AdvectiveFlux.AFarNodeInASolidCellIsReadAsTheUpstreamValue] | 134 failed, 216 passed [failed: test_advective_flux_equals_the_reference_bit_for_bit 104,test_quick_face_values_equal_the_reference_bit_for_bit 30] |
-| `far_solid_dropped` | 97% tests passed, 1 tests failed out of 35 [failed: AdvectiveFlux.AFarNodeInASolidCellIsReadAsTheUpstreamValue] | 92 failed, 258 passed [failed: test_advective_flux_equals_the_reference_bit_for_bit 92] |
-| `clamp_two_raised` | 91% tests passed, 3 tests failed out of 35 [failed: LimitedFaceValue.HandValuesOfEachBranch,LimitedFaceValue.TheFaceValueLiesBetweenTheUpstreamAndDownstreamCells,AdvectiveFlux.AMonotoneFieldGivesNoNewExtremum] | 107 failed, 243 passed [failed: test_advective_flux_equals_the_reference_bit_for_bit 104,test_limited_face_values_equal_the_reference_bit_for_bit 3] |
-| `clamp_two_lowered` | 97% tests passed, 1 tests failed out of 35 [failed: LimitedFaceValue.HandValuesOfEachBranch] | 108 failed, 242 passed [failed: test_advective_flux_equals_the_reference_bit_for_bit 104,test_limited_face_values_equal_the_reference_bit_for_bit 4] |
-| `vent_reversed` | 97% tests passed, 1 tests failed out of 35 [failed: AdvectiveFlux.AVentTakesTheInflowEnteringAndTheRoomCellLeaving] | 100 failed, 250 passed [failed: test_advective_flux_equals_the_reference_bit_for_bit 100] |
-| `quick_reassociated` | 100% tests passed, 0 tests failed out of 35 | 82 failed, 268 passed [failed: test_advective_flux_equals_the_reference_bit_for_bit 52,test_quick_face_values_equal_the_reference_bit_for_bit 30] |
-| `tie_first` | 97% tests passed, 1 tests failed out of 35 [failed: NumpyMinMax.TiesReturnTheSecondArgument] | 3 failed, 347 passed [failed: test_limited_face_values_equal_the_reference_bit_for_bit 3] |
-| `boundary_zero_flux` | 100% tests passed, 0 tests failed out of 35 | 249 failed, 101 passed [failed: test_advective_flux_equals_the_reference_bit_for_bit 249] |
+| `control` | 100% tests passed, 0 tests failed out of 39 | 664 passed |
+| `swapped_weight` | 97% tests passed, 1 tests failed out of 39 [failed: AdvectiveFlux.AFarNodeInASolidCellIsReadAsTheUpstreamValue] | 160 failed, 504 passed [failed: test_advective_flux_equals_the_reference_bit_for_bit 130,test_quick_face_values_equal_the_reference_bit_for_bit 30] |
+| `far_solid_dropped` | 95% tests passed, 2 tests failed out of 39 [failed: AdvectiveFlux.AFarNodeInASolidCellIsReadAsTheUpstreamValue,AdvectiveFlux.TheFarSolidRuleReadsQuickAsTheUpstreamValueToo] | 116 failed, 548 passed [failed: test_advective_flux_equals_the_reference_bit_for_bit 116] |
+| `far_solid_quick_deleted` | 97% tests passed, 1 tests failed out of 39 [failed: AdvectiveFlux.TheFarSolidRuleReadsQuickAsTheUpstreamValueToo] | 24 failed, 640 passed [failed: test_advective_flux_equals_the_reference_bit_for_bit 24] |
+| `clamp_two_raised` | 92% tests passed, 3 tests failed out of 39 [failed: LimitedFaceValue.HandValuesOfEachBranch,LimitedFaceValue.TheFaceValueLiesBetweenTheUpstreamAndDownstreamCells,AdvectiveFlux.AMonotoneFieldGivesNoNewExtremum] | 133 failed, 531 passed [failed: test_advective_flux_equals_the_reference_bit_for_bit 130,test_limited_face_values_equal_the_reference_bit_for_bit 3] |
+| `clamp_two_lowered` | 97% tests passed, 1 tests failed out of 39 [failed: LimitedFaceValue.HandValuesOfEachBranch] | 134 failed, 530 passed [failed: test_advective_flux_equals_the_reference_bit_for_bit 130,test_limited_face_values_equal_the_reference_bit_for_bit 4] |
+| `vent_reversed` | 97% tests passed, 1 tests failed out of 39 [failed: AdvectiveFlux.AVentTakesTheInflowEnteringAndTheRoomCellLeaving] | 120 failed, 544 passed [failed: test_advective_flux_equals_the_reference_bit_for_bit 120] |
+| `quick_reassociated` | 100% tests passed, 0 tests failed out of 39 | 91 failed, 573 passed [failed: test_advective_flux_equals_the_reference_bit_for_bit 61,test_quick_face_values_equal_the_reference_bit_for_bit 30] |
+| `tie_first` | 97% tests passed, 1 tests failed out of 39 [failed: NumpyMinMax.TiesReturnTheSecondArgument] | 3 failed, 661 passed [failed: test_limited_face_values_equal_the_reference_bit_for_bit 3] |
+| `boundary_zero_flux` | 100% tests passed, 0 tests failed out of 39 | 301 failed, 363 passed [failed: test_advective_flux_equals_the_reference_bit_for_bit 301] |
+
+### T5b. The binding's and the grid's checks, each removed: which tests catch it
+
+Each `bind_` and `grid_` defect removes one check (a shape comparison, `nb::c_contig` of one array alias, an alignment test, an aliasing test, a clause of the coordinate check). `control_end` is the unchanged source built again after the last plant.
+
+| Defect | GoogleTest (CTest) | Parity (pytest) |
+|---|---|---|
+| `bind_flux_shape_c` | 100% tests passed, 0 tests failed out of 39 | 8 failed, 656 passed [failed: test_advective_flux_refuses_wrong_arrays 8] |
+| `bind_flux_shape_flux` | 100% tests passed, 0 tests failed out of 39 | 8 failed, 656 passed [failed: test_advective_flux_refuses_wrong_arrays 8] |
+| `bind_flux_shape_inflow` | 100% tests passed, 0 tests failed out of 39 | 8 failed, 656 passed [failed: test_advective_flux_refuses_wrong_arrays 8] |
+| `bind_flux_shape_out` | 100% tests passed, 0 tests failed out of 39 | 8 failed, 656 passed [failed: test_advective_flux_refuses_wrong_arrays 8] |
+| `bind_flux_shape_vents` | 100% tests passed, 0 tests failed out of 39 | 8 failed, 656 passed [failed: test_advective_flux_refuses_wrong_arrays 8] |
+| `bind_quick_shape_c` | 100% tests passed, 0 tests failed out of 39 | 4 failed, 660 passed [failed: test_quick_face_values_refuses_wrong_arrays 4] |
+| `bind_quick_shape_positive` | 100% tests passed, 0 tests failed out of 39 | 4 failed, 660 passed [failed: test_quick_face_values_refuses_wrong_arrays 4] |
+| `bind_quick_shape_out` | 100% tests passed, 0 tests failed out of 39 | 4 failed, 660 passed [failed: test_quick_face_values_refuses_wrong_arrays 4] |
+| `bind_quick_lines_unchecked` | 100% tests passed, 0 tests failed out of 39 | 4 failed, 660 passed [failed: test_quick_face_values_refuses_wrong_arrays 4] |
+| `bind_quick_lines_skip_c_high` | 100% tests passed, 0 tests failed out of 39 | 4 failed, 660 passed [failed: test_quick_face_values_refuses_wrong_arrays 4] |
+| `bind_quick_lines_skip_c_low` | 100% tests passed, 0 tests failed out of 39 | 4 failed, 660 passed [failed: test_quick_face_values_refuses_wrong_arrays 4] |
+| `bind_limited_shapes_unchecked` | 100% tests passed, 0 tests failed out of 39 | 10 failed, 654 passed [failed: test_limited_face_values_refuses_wrong_arrays 10] |
+| `bind_contig_vector` | 100% tests passed, 0 tests failed out of 39 | 9 failed, 655 passed [failed: test_grid_refuses_wrong_arrays 4,test_pairwise_sum_refuses_other_arrays 1,test_quick_face_values_refuses_wrong_arrays 4] |
+| `bind_contig_int_matrix` | 100% tests passed, 0 tests failed out of 39 | 2 failed, 662 passed [failed: test_grid_refuses_wrong_arrays 2] |
+| `bind_contig_matrix` | 100% tests passed, 0 tests failed out of 39 | 28 failed, 636 passed [failed: test_advective_flux_refuses_wrong_arrays 24,test_quick_face_values_refuses_wrong_arrays 4] |
+| `bind_contig_bool_matrix` | 100% tests passed, 0 tests failed out of 39 | 12 failed, 652 passed [failed: test_advective_flux_refuses_wrong_arrays 8,test_quick_face_values_refuses_wrong_arrays 4] |
+| `bind_contig_out_matrix` | 100% tests passed, 0 tests failed out of 39 | 12 failed, 652 passed [failed: test_advective_flux_refuses_wrong_arrays 8,test_quick_face_values_refuses_wrong_arrays 4] |
+| `bind_contig_array` | 100% tests passed, 0 tests failed out of 39 | 8 failed, 656 passed [failed: test_limited_face_values_refuses_wrong_arrays 8] |
+| `bind_contig_out_array` | 100% tests passed, 0 tests failed out of 39 | 2 failed, 662 passed [failed: test_limited_face_values_refuses_wrong_arrays 2] |
+| `bind_noconvert_all` | 100% tests passed, 0 tests failed out of 39 | 116 failed, 548 passed [failed: test_advective_flux_refuses_wrong_arrays 60,test_grid_refuses_wrong_arrays 12,test_limited_face_values_refuses_wrong_arrays 15,test_pairwise_sum_refuses_other_arrays 3,test_quick_face_values_refuses_wrong_arrays 26] |
+| `bind_noconvert_out` | 100% tests passed, 0 tests failed out of 39 | 21 failed, 643 passed [failed: test_advective_flux_refuses_wrong_arrays 12,test_limited_face_values_refuses_wrong_arrays 3,test_quick_face_values_refuses_wrong_arrays 6] |
+| `bind_aligned_matrix` | 100% tests passed, 0 tests failed out of 39 | 20 failed, 644 passed [failed: test_advective_flux_refuses_wrong_arrays 16,test_quick_face_values_refuses_wrong_arrays 4] |
+| `bind_aligned_quick_lines` | 100% tests passed, 0 tests failed out of 39 | 4 failed, 660 passed [failed: test_quick_face_values_refuses_wrong_arrays 4] |
+| `bind_aligned_grid_arrays` | 100% tests passed, 0 tests failed out of 39 | 4 failed, 660 passed [failed: test_grid_refuses_wrong_arrays 4] |
+| `bind_aligned_cell_type` | 100% tests passed, 0 tests failed out of 39 | 1 failed, 663 passed [failed: test_grid_refuses_wrong_arrays 1] |
+| `bind_aligned_limited_operands` | 100% tests passed, 0 tests failed out of 39 | 4 failed, 660 passed [failed: test_limited_face_values_refuses_wrong_arrays 4] |
+| `bind_aligned_limited_out` | 100% tests passed, 0 tests failed out of 39 | 1 failed, 663 passed [failed: test_limited_face_values_refuses_wrong_arrays 1] |
+| `bind_apart_flux_c` | 100% tests passed, 0 tests failed out of 39 | 2 failed, 662 passed [failed: test_advective_flux_refuses_an_out_that_overlaps_an_input 2] |
+| `bind_apart_flux_flux` | 100% tests passed, 0 tests failed out of 39 | 3 failed, 661 passed [failed: test_advective_flux_refuses_an_out_that_is_an_input 1,test_advective_flux_refuses_an_out_that_overlaps_an_input 2] |
+| `bind_apart_flux_inflow` | 100% tests passed, 0 tests failed out of 39 | 3 failed, 661 passed [failed: test_advective_flux_refuses_an_out_that_is_an_input 1,test_advective_flux_refuses_an_out_that_overlaps_an_input 2] |
+| `bind_apart_flux_vents` | 100% tests passed, 0 tests failed out of 39 | 2 failed, 662 passed [failed: test_advective_flux_refuses_an_out_that_overlaps_an_input 2] |
+| `bind_apart_quick_c` | 100% tests passed, 0 tests failed out of 39 | 2 failed, 662 passed [failed: test_quick_face_values_refuses_an_out_that_overlaps_an_input 2] |
+| `bind_apart_quick_c_low` | 100% tests passed, 0 tests failed out of 39 | 2 failed, 662 passed [failed: test_quick_face_values_refuses_an_out_that_overlaps_an_input 2] |
+| `bind_apart_quick_c_high` | 100% tests passed, 0 tests failed out of 39 | 2 failed, 662 passed [failed: test_quick_face_values_refuses_an_out_that_overlaps_an_input 2] |
+| `bind_apart_quick_positive` | 100% tests passed, 0 tests failed out of 39 | 2 failed, 662 passed [failed: test_quick_face_values_refuses_an_out_that_overlaps_an_input 2] |
+| `bind_apart_limited` | 100% tests passed, 0 tests failed out of 39 | 12 failed, 652 passed [failed: test_limited_face_values_refuses_an_out_that_overlaps_an_input 12] |
+| `bind_apart_first_half` | 100% tests passed, 0 tests failed out of 39 | 182 failed, 482 passed [failed: test_advective_flux_accepts_an_out_that_touches_no_input 1,test_advective_flux_equals_the_reference_bit_for_bit 165,test_advective_flux_refuses_wrong_arrays 2,test_limited_face_values_accepts_consistent_arguments 1,test_limited_face_values_equal_the_reference_bit_for_bit 3,test_limited_face_values_refuses_wrong_arrays 6,test_quick_face_values_accepts_consistent_arguments 1,test_quick_face_values_equal_the_reference_bit_for_bit 3] |
+| `bind_apart_second_half` | 100% tests passed, 0 tests failed out of 39 | 284 failed, 380 passed [failed: test_advective_flux_accepts_an_out_that_touches_no_input 1,test_advective_flux_accepts_consistent_arguments 1,test_advective_flux_equals_the_reference_bit_for_bit 234,test_advective_flux_refuses_wrong_arrays 8,test_limited_face_values_equal_the_reference_bit_for_bit 5,test_limited_face_values_refuses_wrong_arrays 7,test_quick_face_values_accepts_consistent_arguments 1,test_quick_face_values_equal_the_reference_bit_for_bit 27] |
+| `grid_cell_type_shape` | 100% tests passed, 0 tests failed out of 39 | 1 failed, 663 passed [failed: test_grid_refuses_wrong_arrays 1] |
+| `grid_faces_count` | 97% tests passed, 1 tests failed out of 39 [failed: Grid.CheckRefusesInconsistentArrays] | 1 failed, 663 passed [failed: test_grid_refuses_wrong_arrays 1] |
+| `grid_no_cell` | 97% tests passed, 1 tests failed out of 39 [failed: Grid.CheckRefusesInconsistentArrays] | 1 failed, 663 passed [failed: test_grid_refuses_a_direction_without_a_cell 1] |
+| `grid_coords_finite` | 97% tests passed, 1 tests failed out of 39 [failed: Grid.EachKindOfBadCoordinateNamesItsDirection] | 4 failed, 660 passed [failed: test_grid_refuses_coordinates_that_are_not_finite_and_increasing 4] |
+| `grid_coords_faces_order` | 95% tests passed, 2 tests failed out of 39 [failed: Grid.EachKindOfBadCoordinateNamesItsDirection,Grid.TheFirstBadDirectionIsTheLowest] | 5 failed, 659 passed [failed: test_grid_names_the_lower_direction_when_both_are_bad 1,test_grid_refuses_coordinates_that_are_not_finite_and_increasing 4] |
+| `grid_coords_centres_order` | 97% tests passed, 1 tests failed out of 39 [failed: Grid.EachKindOfBadCoordinateNamesItsDirection] | 4 failed, 660 passed [failed: test_grid_refuses_coordinates_that_are_not_finite_and_increasing 4] |
+| `grid_coords_low_end` | 97% tests passed, 1 tests failed out of 39 [failed: Grid.EachKindOfBadCoordinateNamesItsDirection] | 4 failed, 660 passed [failed: test_grid_refuses_coordinates_that_are_not_finite_and_increasing 4] |
+| `grid_coords_high_end` | 97% tests passed, 1 tests failed out of 39 [failed: Grid.EachKindOfBadCoordinateNamesItsDirection] | 4 failed, 660 passed [failed: test_grid_refuses_coordinates_that_are_not_finite_and_increasing 4] |
+| `grid_coords_direction` | 97% tests passed, 1 tests failed out of 39 [failed: Grid.EachKindOfBadCoordinateNamesItsDirection] | 12 failed, 652 passed [failed: test_grid_refuses_coordinates_that_are_not_finite_and_increasing 12] |
+| `grid_coords_unchecked` | 100% tests passed, 0 tests failed out of 39 | 25 failed, 639 passed [failed: test_grid_names_the_lower_direction_when_both_are_bad 1,test_grid_refuses_coordinates_that_are_not_finite_and_increasing 24] |
+| `grid_coords_type_error` | 100% tests passed, 0 tests failed out of 39 | 25 failed, 639 passed [failed: test_grid_names_the_lower_direction_when_both_are_bad 1,test_grid_refuses_coordinates_that_are_not_finite_and_increasing 24] |
+| `control_end` | 100% tests passed, 0 tests failed out of 39 | 664 passed |
 
 ### T6. `advective_flux` per call on captured 320x120 inputs, one thread
 
@@ -127,3 +211,32 @@ one scored; runs 2 and 3 repeat it.
 | 3 | y | 38,720 | 320.4 | 2.38 | 3013 | 9.40 |
 
 Repeats: the core 400, the reference 60, after five unrecorded calls; OPENBLAS_NUM_THREADS=1, Python 3.13.3, NumPy 2.4.4.
+
+### T6b. `advective_flux` per call on the stored run's last frame, one thread
+
+The field is the stored 320x120 run's last frame of each class (`results/builder81/product/equipment_dust.h5`), under that class's last captured flux and inflow. The captured rows are the scored call, timed again in the same session. Medians of repeated calls under Linux, as in T6; times are run 1's, the ratio (reference / core) is given for each run.
+
+| Field | Class | Direction | Non-zero cells | Core, us | Empty call, us | Reference, us | Ratio, run 1 | Ratio, run 2 | Ratio, run 3 |
+|---|---|---|---|---|---|---|---|---|---|
+| captured | 4 | x | 461 | 345.0 | 2.23 | 4670 | 13.54 | 14.41 | 14.29 |
+| stored last frame | 0 | x | 28,032 | 529.1 | 2.23 | 4911 | 9.28 | 7.51 | 7.91 |
+| stored last frame | 1 | x | 28,032 | 516.1 | 2.09 | 3715 | 7.20 | 8.98 | 8.55 |
+| stored last frame | 2 | x | 28,032 | 429.7 | 2.08 | 3398 | 7.91 | 8.03 | 8.30 |
+| stored last frame | 3 | x | 28,032 | 433.4 | 2.08 | 3642 | 8.40 | 8.70 | 8.15 |
+| stored last frame | 4 | x | 28,032 | 473.0 | 2.09 | 3752 | 7.93 | 7.63 | 10.31 |
+| captured | 4 | y | 461 | 400.8 | 2.16 | 3131 | 7.81 | 10.25 | 12.84 |
+| stored last frame | 0 | y | 28,032 | 447.6 | 2.10 | 3470 | 7.75 | 7.30 | 6.93 |
+| stored last frame | 1 | y | 28,032 | 436.6 | 2.16 | 3229 | 7.40 | 7.60 | 7.02 |
+| stored last frame | 2 | y | 28,032 | 428.6 | 2.09 | 3713 | 8.66 | 7.68 | 7.27 |
+| stored last frame | 3 | y | 28,032 | 461.3 | 3.18 | 3539 | 7.67 | 8.58 | 7.04 |
+| stored last frame | 4 | y | 28,032 | 474.6 | 2.17 | 3277 | 6.91 | 8.18 | 6.67 |
+
+### T8. The whole suite at the round 1 head
+
+The two suites ran at the same time, one BLAS thread each, so the wall times
+are not those of a suite alone.
+
+| Platform | Tests | Passed | Failed | Errors | Skipped | Wall time, s |
+|---|---|---|---|---|---|---|
+| Windows, `.venv`, the core not built | 3,102 | 3,101 | 0 | 0 | 1 | 1,539 |
+| WSL2, the core built, `CFD_CORE_REQUIRED=1` | 3,765 | 3,765 | 0 | 0 | 0 | 1,330 |

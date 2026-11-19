@@ -1,5 +1,9 @@
 """The tables of prompt 87's report, from the records in results/builder87/.
 
+Prompt 87b added the developed-field timing (``developed_N.json``), the
+binding's and the grid's planted refusals, and the tie-rule measurement
+(``ties87.json``). The round-0 records are in ``results/builder87/round0/``.
+
     python docs/reports/probe87/tables87.py           # write tables87.md, splice the report
     python docs/reports/probe87/tables87.py --check   # regenerate and compare, write nothing
 
@@ -24,7 +28,19 @@ ROOT = HERE.parents[2]
 RESULTS = ROOT / "results" / "builder87"
 TABLES = HERE / "tables87.md"
 REPORT = ROOT / "docs" / "reports" / "phase6_scalar_flux.md"
-MARKERS = ("predictions", "tests", "parity", "weights", "replay", "plants", "timing")
+MARKERS = (
+    "predictions",
+    "tests",
+    "ties",
+    "parity",
+    "weights",
+    "replay",
+    "plants",
+    "refusals",
+    "timing",
+    "developed",
+    "suites",
+)
 # The parity tests' meshes and options, in the order the tables list them
 # (tests/test_core_parity.py, MESHES and VENT_MESHES).
 MESHES = [
@@ -37,14 +53,22 @@ MESHES = [
     "160x60-vents",
     "320x120-vents",
 ]
-FIELDS = ["random", "uniform", "levels", "steps-spikes", "signed-zeros"]
+FIELDS = [
+    "random",
+    "uniform",
+    "levels",
+    "steps-spikes",
+    "signed-zeros",
+    "negatives-and-zeros",
+]
 VENT_OPTIONS = {
     "none": "absent",
     "random-mask": "a random mask",
     "vents": "the vents file's",
 }
 FLUX_ID = re.compile(
-    r"^(random|uniform|levels|steps-spikes|signed-zeros)-(True|False)-([01])-(.+)-"
+    r"^(random|uniform|levels|steps-spikes|signed-zeros|negatives-and-zeros)"
+    r"-(True|False)-([01])-(.+)-"
     r"(none|random-mask|vents)$"
 )
 TIMING_RUNS = (1, 2, 3)
@@ -252,20 +276,46 @@ def plants() -> list[dict[str, str]]:
     return out
 
 
+def is_refusal(name: str) -> bool:
+    """Whether a plant removes one of the binding's or the grid's checks."""
+    return name.startswith(("bind_", "grid_")) or name == "control_end"
+
+
+def plant_rows(refusals: bool) -> list[str]:
+    """The table rows of the planted defects of one group, in the script's order."""
+    return [
+        f"| `{entry['name']}` | {entry.get('GoogleTest', entry.get('not planted', ''))} "
+        f"| {entry.get('parity', '')} |"
+        for entry in plants()
+        if is_refusal(entry["name"]) == refusals
+    ]
+
+
 def plants_table() -> list[str]:
-    """T5: the planted defects and which tests catch each."""
-    lines = [
+    """T5: the scalar module's planted defects and which tests catch each."""
+    return [
         "### T5. The planted defects: which tests catch each",
         "",
         "| Defect | GoogleTest (CTest) | Parity (pytest) |",
         "|---|---|---|",
+        *plant_rows(refusals=False),
     ]
-    for entry in plants():
-        lines.append(
-            f"| `{entry['name']}` | {entry.get('GoogleTest', entry.get('not planted', ''))} "
-            f"| {entry.get('parity', '')} |"
-        )
-    return lines
+
+
+def refusals_table() -> list[str]:
+    """T5b: the binding's and the grid's planted refusals and which tests catch each."""
+    return [
+        "### T5b. The binding's and the grid's checks, each removed: which tests catch it",
+        "",
+        "Each `bind_` and `grid_` defect removes one check (a shape comparison, "
+        "`nb::c_contig` of one array alias, an alignment test, an aliasing test, "
+        "a clause of the coordinate check). `control_end` is the unchanged source "
+        "built again after the last plant.",
+        "",
+        "| Defect | GoogleTest (CTest) | Parity (pytest) |",
+        "|---|---|---|",
+        *plant_rows(refusals=True),
+    ]
 
 
 def timings() -> dict[int, dict]:
@@ -308,6 +358,102 @@ def timing_table() -> list[str]:
     return lines
 
 
+def suite_counts(path: Path) -> dict[str, float]:
+    """The totals of a pytest JUnit record: tests, failures, errors, skipped and seconds."""
+    suite = ET.parse(path).getroot().find("testsuite")
+    return {
+        key: float(suite.get(key, 0))
+        for key in ("tests", "failures", "errors", "skipped", "time")
+    }
+
+
+def suites_table() -> list[str]:
+    """T8: the whole suite on each platform, from pytest's JUnit records."""
+    lines = [
+        "### T8. The whole suite at the round 1 head",
+        "",
+        "The two suites ran at the same time, one BLAS thread each, so the wall times",
+        "are not those of a suite alone.",
+        "",
+        "| Platform | Tests | Passed | Failed | Errors | Skipped | Wall time, s |",
+        "|---|---|---|---|---|---|---|",
+    ]
+    for label, name in (
+        ("Windows, `.venv`, the core not built", "suite_windows.xml"),
+        ("WSL2, the core built, `CFD_CORE_REQUIRED=1`", "suite_linux.xml"),
+    ):
+        c = suite_counts(RESULTS / name)
+        passed = c["tests"] - c["failures"] - c["errors"] - c["skipped"]
+        lines.append(
+            f"| {label} | {c['tests']:,.0f} | {passed:,.0f} | {c['failures']:.0f} "
+            f"| {c['errors']:.0f} | {c['skipped']:.0f} | {c['time']:,.0f} |"
+        )
+    return lines
+
+
+def developed_records() -> dict[int, dict]:
+    """The three developed-field timing runs' records."""
+    return {
+        n: json.loads((RESULTS / f"developed_{n}.json").read_text(encoding="utf-8"))
+        for n in TIMING_RUNS
+    }
+
+
+def developed_table() -> list[str]:
+    """T6b: the core against the reference on developed fields, beside the captured one."""
+    runs = developed_records()
+    first = runs[1]
+    lines = [
+        "### T6b. `advective_flux` per call on the stored run's last frame, one thread",
+        "",
+        "The field is the stored 320x120 run's last frame of each class "
+        f"(`{first['stored_run']}`), under that class's last captured flux and inflow. "
+        "The captured rows are the scored call, timed again in the same session. Medians "
+        "of repeated calls under Linux, as in T6; times are run 1's, the ratio "
+        "(reference / core) is given for each run.",
+        "",
+        "| Field | Class | Direction | Non-zero cells | Core, us | Empty call, us "
+        "| Reference, us | Ratio, run 1 | Ratio, run 2 | Ratio, run 3 |",
+        "|---|---|---|---|---|---|---|---|---|---|",
+    ]
+    for i, row in enumerate(first["rows"]):
+        ratios = " | ".join(f"{runs[n]['rows'][i]['ratio']:.2f}" for n in TIMING_RUNS)
+        lines.append(
+            f"| {row['field']} | {row['class']} | {'xy'[row['d']]} | {row['nonzero_cells']:,} "
+            f"| {row['core_median_s'] * 1e6:.1f} | {row['overhead_median_s'] * 1e6:.2f} "
+            f"| {row['reference_median_s'] * 1e6:.0f} | {ratios} |"
+        )
+    return lines
+
+
+def developed_range(d: int, run: int = 1) -> tuple[float, float]:
+    """The least and greatest reference / core ratio over the developed rows of a direction."""
+    ratios = [
+        row["ratio"]
+        for row in developed_records()[run]["rows"]
+        if row["field"] == "stored last frame" and row["d"] == d
+    ]
+    return min(ratios), max(ratios)
+
+
+def ties_table() -> list[str]:
+    """T7: NumPy's tie and NaN rules at every length, from ties87.py's record."""
+    record = json.loads((RESULTS / "ties87.json").read_text(encoding="utf-8"))
+    first, last = record["lengths"]
+    lines = [
+        "### T7. NumPy's tie and NaN rules, measured by `ties87.py`",
+        "",
+        f"NumPy {record['numpy']}. Each check runs at every length from {first} to "
+        f"{last:,} and on the shapes {', '.join('x'.join(map(str, s)) for s in record['shapes'])}.",
+        "",
+        "| Check | Shapes run | Departing from the rule |",
+        "|---|---|---|",
+    ]
+    for row in record["rows"]:
+        lines.append(f"| {row['check']} | {row['cases']:,} | {row['departures']} |")
+    return lines
+
+
 def predictions_table() -> list[str]:
     """T0: the predictions, scored by the rule committed with them."""
     flux = [o for outcomes in flux_outcomes().values() for o in outcomes]
@@ -331,6 +477,7 @@ def predictions_table() -> list[str]:
     ratios = {row["d"]: row["ratio"] for row in timings()[1]["rows"]}
     b_holds = all(r >= SPEEDUP for r in ratios.values())
     c_holds = all(o == "passed" for o in weights)
+    x_dev, y_dev = developed_range(0), developed_range(1)
     return [
         "### T0. The predictions, scored by the rule committed with them",
         "",
@@ -342,7 +489,9 @@ def predictions_table() -> list[str]:
         f"{sum(r['faces'] for r in rows):,} faces, {replay_differ} differing "
         f"| {'holds' if a_holds else 'FAILS'} |",
         f"| (b) the core at least ten times faster per call on 320x120 "
-        f"| x {ratios[0]:.2f} times, y {ratios[1]:.2f} times (T6, run 1) "
+        f"| x {ratios[0]:.2f} times, y {ratios[1]:.2f} times (T6, run 1); "
+        f"on the stored run's developed fields, x {x_dev[0]:.2f} to {x_dev[1]:.2f} times, "
+        f"y {y_dev[0]:.2f} to {y_dev[1]:.2f} times (T6b, run 1, not scored) "
         f"| {'holds' if b_holds else 'FAILS'} |",
         f"| (c) the weights at set-up equal the per-call weights "
         f"| {passed(weights)} mesh and direction cases, six arrays each "
@@ -359,7 +508,11 @@ def build() -> tuple[str, dict[str, str]]:
         "weights": weights_table,
         "replay": replay_table,
         "plants": plants_table,
+        "refusals": refusals_table,
+        "ties": ties_table,
         "timing": timing_table,
+        "developed": developed_table,
+        "suites": suites_table,
     }
     blocks = {name: "\n".join(builders[name]()) for name in MARKERS}
     text = "# Prompt 87's tables (generated by tables87.py; do not edit)\n\n"
