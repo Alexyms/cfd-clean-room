@@ -36,6 +36,7 @@ GTEST_SRC = (
 )
 OUT = ROOT / "results" / "builder88" / "mutants88.json"
 SRC = "src/scalar.cpp"
+REDUCE = "src/reduce.cpp"
 BIND = "python/bindings.cpp"
 
 # Each plant: a name, what it changes, and its replacements (file, old, new).
@@ -321,6 +322,185 @@ PLANTS: list[tuple[str, str, list[tuple[str, str, str]]]] = [
                 BIND,
                 "        require_apart(out.data(), out_bytes, a.data(), a.size_bytes(), who);\n",
                 "",
+            )
+        ],
+    ),
+    # Round 1's plants (prompt 88b): one for each gap review 88 and test 88 found.
+    (
+        "cg_start_test_dropped",
+        "the CG's acceptance dropped where the start residual meets the stop",
+        [
+            (
+                SRC,
+                "    if (true_residual() && accept.test(r_span, id)) {\n"
+                "        accept.final(r_span, id);\n"
+                "        return {0, true, 0};\n",
+                "    if (true_residual()) {\n"
+                "        accept.final(r_span, id);\n"
+                "        return {0, true, 0};\n",
+            )
+        ],
+    ),
+    (
+        "cg_confirmation_test_dropped",
+        "the CG's acceptance dropped where a confirmed residual meets the stop",
+        [
+            (
+                SRC,
+                "            if (true_residual() && accept.test(r_span, id)) {\n"
+                "                accept.final(r_span, id);\n"
+                "                return {iterations, true, restarts};\n",
+                "            if (true_residual()) {\n"
+                "                accept.final(r_span, id);\n"
+                "                return {iterations, true, restarts};\n",
+            )
+        ],
+    ),
+    (
+        "padding_east_as_cell",
+        "the zero read beyond a row's east end taken as the cell's own value",
+        [
+            (
+                SRC,
+                "    const double east = m + 1 < s.n0 ? x[i + 1] : 0.0;\n",
+                "    const double east = m + 1 < s.n0 ? x[i + 1] : x[i];\n",
+            )
+        ],
+    ),
+    (
+        "padding_west_as_cell",
+        "the zero read beyond a row's west end taken as the cell's own value",
+        [
+            (
+                SRC,
+                "    const double west = m > 0 ? x[i - 1] : 0.0;\n",
+                "    const double west = m > 0 ? x[i - 1] : x[i];\n",
+            )
+        ],
+    ),
+    (
+        "padding_north_as_cell",
+        "the zero read beyond a column's north end taken as the cell's own value",
+        [
+            (
+                SRC,
+                "        const double high_value = s.has_high[d] ? x[i + s.stride[d]] : 0.0;\n",
+                "        const double high_value = s.has_high[d] ? x[i + s.stride[d]] : x[i];\n",
+            )
+        ],
+    ),
+    (
+        "padding_south_as_cell",
+        "the zero read beyond a column's south end taken as the cell's own value",
+        [
+            (
+                SRC,
+                "        const double low_value = s.has_low[d] ? x[i - s.stride[d]] : 0.0;\n",
+                "        const double low_value = s.has_low[d] ? x[i - s.stride[d]] : x[i];\n",
+            )
+        ],
+    ),
+    (
+        "positivity_reads_held",
+        "the fallback's positivity test read in held cells too",
+        [
+            (
+                SRC,
+                "        positive = is_fixed(in.solid, in.held, i) || scratch.c[i] > 0.0;\n",
+                "        positive = in.solid[i] || scratch.c[i] > 0.0;\n",
+            )
+        ],
+    ),
+    (
+        "fallback_iterations_are_jacobis",
+        "a fallback's result.iterations set to the Jacobi sweeps, not the CG's count",
+        [
+            (
+                SRC,
+                "    result.fallback_sweeps = j.iterations;\n",
+                "    result.fallback_sweeps = j.iterations;\n"
+                "    result.iterations = j.iterations;\n",
+            )
+        ],
+    ),
+    (
+        "stop_strict",
+        "the max-norm stop met strictly below the stop, not at it",
+        [
+            (
+                SRC,
+                "    bool within(double stop) const { return !nan_ && largest_ <= stop; }\n",
+                "    bool within(double stop) const { return !nan_ && largest_ < stop; }\n",
+            )
+        ],
+    ),
+    (
+        "jacobi_test_dropped",
+        "Jacobi's acceptance dropped where its residual meets the stop",
+        [
+            (
+                SRC,
+                "        if (largest.within(stop) && accept.test(residual, id)) {\n",
+                "        if (largest.within(stop)) {\n",
+            )
+        ],
+    ),
+    (
+        "jacobi_update_halved",
+        "Jacobi's update takes half the residual's step",
+        [
+            (
+                SRC,
+                "                next[i] = in.solid[i] ? 0.0 : c[i] + ri / a_p[i];\n",
+                "                next[i] = in.solid[i] ? 0.0 : c[i] + 0.5 * ri / a_p[i];\n",
+            )
+        ],
+    ),
+    (
+        "cg_alpha_from_pp",
+        "the CG's step length divides by p.p, not p.A p",
+        [
+            (
+                SRC,
+                "        const double alpha = rz / reduce::blocked_dot(p_span, q_span, block);\n",
+                "        const double alpha = rz / reduce::blocked_dot(p_span, p_span, block);\n",
+            )
+        ],
+    ),
+    (
+        "blocked_dot_zero_block_returns_zero",
+        "blocked_dot returns 0.0 for a block of zero instead of refusing it",
+        [
+            (
+                REDUCE,
+                "    if (block == 0) {\n"
+                '        throw std::invalid_argument("blocked_dot: the block length is at least 1");\n'
+                "    }\n",
+                "    if (block == 0) {\n        return 0.0;\n    }\n",
+            )
+        ],
+    ),
+    (
+        "blocked_dot_unequal_lengths_returns_zero",
+        "blocked_dot returns 0.0 for arrays of different lengths instead of refusing them",
+        [
+            (
+                REDUCE,
+                "    if (a.size() != b.size()) {\n"
+                '        throw std::invalid_argument("blocked_dot: the two arrays differ in length");\n'
+                "    }\n",
+                "    if (a.size() != b.size()) {\n        return 0.0;\n    }\n",
+            )
+        ],
+    ),
+    (
+        "bind_row_dot_block_unclamped",
+        "the binding hands row_dot's row length as the block, zero for an array with no columns",
+        [
+            (
+                BIND,
+                "    const std::size_t block = std::max<std::size_t>(a.shape(1), 1);\n",
+                "    const std::size_t block = a.shape(1);\n",
             )
         ],
     ),

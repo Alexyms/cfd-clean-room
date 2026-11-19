@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <stdexcept>
 
 namespace cfdcore::reduce {
 
@@ -57,6 +58,14 @@ double pairwise_sum(std::span<const double> values) {
 }
 
 double blocked_dot(std::span<const double> a, std::span<const double> b, std::size_t block) {
+    // A block of zero never advances the loop below, and a shorter b is read
+    // past its end; neither is a result, so both are refused at the call.
+    if (block == 0) {
+        throw std::invalid_argument("blocked_dot: the block length is at least 1");
+    }
+    if (a.size() != b.size()) {
+        throw std::invalid_argument("blocked_dot: the two arrays differ in length");
+    }
     const double* pa = a.data();
     const double* pb = b.data();
     const auto product = [pa, pb](std::size_t i) { return pa[i] * pb[i]; };

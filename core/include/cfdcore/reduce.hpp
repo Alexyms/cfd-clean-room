@@ -35,7 +35,12 @@ double pairwise_sum(std::span<const double> values);
 // a, b:  the two arrays, equal lengths, contiguous, in any units; the result
 //        is in the product of the two
 // block: the block length, at least 1; the arrays are cut into blocks of this
-//        many terms from the first, the last block holding what remains
+//        many terms from the first, the last block holding what remains, so a
+//        length need not be a whole number of blocks
+//
+// Throws std::invalid_argument for a block of 0 (the partition is undefined)
+// and for arrays of different lengths (the shorter would be read past its end),
+// in every build, not only a debug one.
 //
 // Each term a[i] * b[i] is one rounded product. Each block's terms are summed
 // in `pairwise_sum`'s order (without its leading 0.0), and the block sums are

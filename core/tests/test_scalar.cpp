@@ -635,9 +635,11 @@ TEST(ImplicitStep, AUniformFieldWithNoSinkIsUnchanged) {
 }
 
 TEST(ImplicitStep, ANonNegativeStarGivesNonNegativeJacobiIterates) {
-    // Strong diffusion (dt G / V up to about 50) over a field of many decades
-    // with zeros beside large values: every iterate, read by capping the solve
-    // at each sweep in turn with a stop that never holds, is non-negative.
+    // Strong diffusion (dt G / V from about 21 to 680 over the faces, with
+    // dt = 4, V of 0.010 to 0.012 and G of 0.0625 to 1.7) over a field of many
+    // decades with zeros beside large values: every iterate, read by capping
+    // the solve at each sweep in turn with a stop that never holds, is
+    // non-negative.
     system2 s = planted_system();
     s.dt = 4.0;
     for (std::size_t k = 0; k < s.c_star.size(); ++k) {
@@ -880,6 +882,254 @@ TEST(ImplicitStep, ANegativeOrNanBoundIsRefusedAndNothingIsWritten) {
     EXPECT_EQ(implicit_step(in, scratch, out, result), implicit_status::bound_negative_or_nan);
     EXPECT_EQ(result.iterations, 99);
     EXPECT_EQ(out, std::vector<double>(s.c_star.size(), -1.0));
+}
+
+// ---- The two solvers called directly ---------------------------------------
+//
+// The hand system of the leftover test above: three cells in a line, V = dt = 1,
+// conductance 1 across both interior faces, a sink of 1 in the middle cell,
+// a_P = [2, 4, 2], C* = [0, 2, 0] = b. Its residual at C* is [2, -6, 2]. The
+// exact solution of A C = b is [1/3, 2/3, 1/3]: the sum of C changes by
+// 4/3 - 2 = -2/3 and the sink takes 2/3, so the leftover of the solution is 0.
+//
+// Jacobi from C*, each iterate with its residual (the leftover is dt times the
+// residual's sum):
+//   C0 = [0, 2, 0]         r0 = [2, -6, 2]         leftover -2
+//   C1 = [1, 0.5, 1]       r1 = [-1.5, 2, -1.5]    leftover -1
+//   C2 = [0.25, 1, 0.25]   r2 = [0.5, -1.5, 0.5]   leftover -0.5
+// CG from C*, with the diagonal preconditioner: z = [1, -1.5, 1], p = z,
+// r.z = 13, A p = [3.5, -8, 3.5], p.A p = 19, so alpha = 13/19 and
+//   C1 = [13/19, 37/38, 13/19]   r1 = [-15/38, -10/19, -15/38]   leftover -25/19.
+// Restarted from r1 (the true residual), the second iteration gives
+//   C2 = [0.31767.., 0.72932.., 0.31767..]   leftover -25/266.
+// The stop is tol times max |b| = 2 tol, so tol 3 makes it 6, the largest |r0|:
+// the stop met with equality at the start.
+
+struct direct_solve {
+    cfdcore::scalar::solve_outcome outcome;
+    std::vector<double> field;
+    double leftover;
+    std::int64_t sums;
+};
+
+enum class solver { jacobi, conjugate_gradient };
+
+// Sets the system up and calls the one solver, without `implicit_step`'s
+// early return or fallback.
+template <int D>
+direct_solve solve_directly(const implicit_input<D>& in, const layout<D>& fields, solver which) {
+    implicit_scratch<D> scratch(fields);
+    const auto setup = implicit_system(in, scratch);
+    EXPECT_TRUE(setup.diffuses);
+    acceptance accept(in.dt, in.dt_cells, in.solid, in.leftover_bound, scratch.dt_masked,
+                      scratch.terms);
+    direct_solve result{};
+    if (which == solver::jacobi) {
+        result.field.assign(fields.cell_count(), -1.0);
+        result.outcome = cfdcore::scalar::jacobi(in, setup.stop, accept, scratch, result.field);
+    } else {
+        result.outcome = cfdcore::scalar::conjugate_gradient(in, setup.stop, accept, scratch);
+        result.field = scratch.c;
+    }
+    result.leftover = accept.leftover();
+    result.sums = accept.sums();
+    return result;
+}
+
+// The hand system as a 1D line, and as a line along each direction of a 2D
+// layout (an x line of 3 by 1 cells and a y line of 1 by 3). `check` is called
+// with each one's input and layout, and a label.
+template <typename Check>
+void for_each_hand_layout(double tol, std::int64_t max_iter, std::optional<double> bound,
+                          Check check) {
+    const std::vector<double> c_star{0.0, 2.0, 0.0};
+    const std::vector<double> volume{1.0, 1.0, 1.0};
+    const std::vector<double> sink{0.0, 1.0, 0.0};
+    {
+        const std::vector<double> g{0.0, 1.0, 1.0, 0.0};
+        bool_field not_solid(3);
+        layout<1> fields({3});
+        implicit_input<1> in{};
+        in.c_star = c_star;
+        in.volume = volume;
+        in.dt = 1.0;
+        in.conductance = {std::span<const double>(g)};
+        in.sink = sink;
+        in.solid = not_solid.span();
+        in.tol = tol;
+        in.max_iter = max_iter;
+        in.leftover_bound = bound;
+        check(in, fields, "1D line");
+    }
+    {
+        system2 along_x(3, 1);
+        along_x.c_star = c_star;
+        along_x.sink = sink;
+        along_x.east(0, 0) = 1.0;
+        along_x.east(1, 0) = 1.0;
+        auto in = along_x.input(implicit_method::jacobi, tol, max_iter);
+        in.leftover_bound = bound;
+        check(in, along_x.fields, "2D line along x");
+    }
+    {
+        system2 along_y(1, 3);
+        along_y.c_star = c_star;
+        along_y.sink = sink;
+        along_y.north(0, 0) = 1.0;
+        along_y.north(0, 1) = 1.0;
+        auto in = along_y.input(implicit_method::jacobi, tol, max_iter);
+        in.leftover_bound = bound;
+        check(in, along_y.fields, "2D line along y");
+    }
+}
+
+TEST(Jacobi, OneSweepFromCStarIsTheHandSystemsFirstIterate) {
+    for_each_hand_layout(0.0, 1, std::nullopt, [](const auto& in, const auto& fields, auto label) {
+        const direct_solve s = solve_directly(in, fields, solver::jacobi);
+        EXPECT_EQ(s.field, (std::vector<double>{1.0, 0.5, 1.0})) << label;
+        EXPECT_EQ(s.outcome.iterations, 1) << label;
+        EXPECT_FALSE(s.outcome.converged) << label;
+        EXPECT_EQ(s.leftover, -1.0) << label;
+        EXPECT_EQ(s.sums, 1) << label;
+    });
+}
+
+TEST(Jacobi, ConvergesToTheHandSystemsSolution) {
+    for_each_hand_layout(1e-14, 500, std::nullopt, [](const auto& in, const auto& f, auto label) {
+        const direct_solve s = solve_directly(in, f, solver::jacobi);
+        EXPECT_TRUE(s.outcome.converged) << label;
+        // The residual halves each sweep, from 6 to 2e-14: about 48 sweeps.
+        EXPECT_GT(s.outcome.iterations, 40) << label;
+        EXPECT_LT(s.outcome.iterations, 60) << label;
+        EXPECT_NEAR(s.field[0], 1.0 / 3.0, 1e-13) << label;
+        EXPECT_NEAR(s.field[1], 2.0 / 3.0, 1e-13) << label;
+        EXPECT_NEAR(s.field[2], 1.0 / 3.0, 1e-13) << label;
+        EXPECT_NEAR(s.leftover, 0.0, 1e-13) << label;
+    });
+}
+
+TEST(Jacobi, TheStopHoldsWithEqualityAndNotBelowIt) {
+    // Tol 3 makes the stop 6, the largest |r0|: met at the start, so no sweep.
+    for_each_hand_layout(3.0, 10, std::nullopt, [](const auto& in, const auto& fields, auto label) {
+        const direct_solve s = solve_directly(in, fields, solver::jacobi);
+        EXPECT_EQ(s.outcome.iterations, 0) << label;
+        EXPECT_TRUE(s.outcome.converged) << label;
+        EXPECT_EQ(s.field, (std::vector<double>{0.0, 2.0, 0.0})) << label;
+        EXPECT_EQ(s.leftover, -2.0) << label;
+    });
+    // One step below 3: the stop is just under 6, so C0 does not meet it, and
+    // C1 (largest |r1| = 2) does.
+    for_each_hand_layout(std::nextafter(3.0, 0.0), 10, std::nullopt,
+                         [](const auto& in, const auto& fields, auto label) {
+                             const direct_solve s = solve_directly(in, fields, solver::jacobi);
+                             EXPECT_EQ(s.outcome.iterations, 1) << label;
+                             EXPECT_TRUE(s.outcome.converged) << label;
+                         });
+}
+
+TEST(Jacobi, ABoundSweepsOnUntilTheLeftoverIsInsideIt) {
+    // The stop holds at every iterate (tol 3), so the bound decides. At C0 the
+    // leftover is -2, at C1 -1, at C2 -0.5, each formed once by the test.
+    struct row {
+        double bound;
+        std::int64_t sweeps;
+        double leftover;
+        std::int64_t sums;
+    };
+    for (const row& expected : {row{1.5, 1, -1.0, 2}, row{1.0, 1, -1.0, 2}, row{0.5, 2, -0.5, 3}}) {
+        for_each_hand_layout(3.0, 10, expected.bound, [&](const auto& in, const auto& f, auto lab) {
+            const char* label = lab;
+            const direct_solve s = solve_directly(in, f, solver::jacobi);
+            EXPECT_EQ(s.outcome.iterations, expected.sweeps) << label << " " << expected.bound;
+            EXPECT_TRUE(s.outcome.converged) << label << " " << expected.bound;
+            EXPECT_EQ(s.leftover, expected.leftover) << label << " " << expected.bound;
+            EXPECT_EQ(s.sums, expected.sums) << label << " " << expected.bound;
+        });
+    }
+    // A zero bound is never met by these leftovers: the cap ends the solve,
+    // and its last iterate's leftover, formed by the test, is not formed again.
+    for_each_hand_layout(3.0, 2, 0.0, [](const auto& in, const auto& fields, auto label) {
+        const direct_solve s = solve_directly(in, fields, solver::jacobi);
+        EXPECT_EQ(s.outcome.iterations, 2) << label;
+        EXPECT_FALSE(s.outcome.converged) << label;
+        EXPECT_EQ(s.leftover, -0.5) << label;
+        EXPECT_EQ(s.sums, 3) << label;
+    });
+}
+
+TEST(ConjugateGradient, OneIterationIsTheHandSystemsClosedForm) {
+    for_each_hand_layout(0.0, 1, std::nullopt, [](const auto& in, const auto& fields, auto label) {
+        const direct_solve s = solve_directly(in, fields, solver::conjugate_gradient);
+        EXPECT_EQ(s.outcome.iterations, 1) << label;
+        EXPECT_FALSE(s.outcome.converged) << label;
+        EXPECT_EQ(s.outcome.restarts, 0) << label;
+        EXPECT_NEAR(s.field[0], 13.0 / 19.0, 1e-15) << label;
+        EXPECT_NEAR(s.field[1], 37.0 / 38.0, 1e-15) << label;
+        EXPECT_NEAR(s.field[2], 13.0 / 19.0, 1e-15) << label;
+        EXPECT_NEAR(s.leftover, -25.0 / 19.0, 1e-14) << label;
+        EXPECT_EQ(s.sums, 1) << label;
+    });
+}
+
+TEST(ConjugateGradient, ConvergesToTheHandSystemsSolutionInTwoOrThreeIterations) {
+    // The Krylov space of a start symmetric about the middle cell has two
+    // dimensions, so the second iterate is the solution up to rounding.
+    for_each_hand_layout(1e-12, 50, std::nullopt, [](const auto& in, const auto& f, auto label) {
+        const direct_solve s = solve_directly(in, f, solver::conjugate_gradient);
+        EXPECT_TRUE(s.outcome.converged) << label;
+        EXPECT_GE(s.outcome.iterations, 2) << label;
+        EXPECT_LE(s.outcome.iterations, 3) << label;
+        EXPECT_EQ(s.outcome.restarts, 0) << label;
+        EXPECT_NEAR(s.field[0], 1.0 / 3.0, 1e-13) << label;
+        EXPECT_NEAR(s.field[1], 2.0 / 3.0, 1e-13) << label;
+        EXPECT_NEAR(s.field[2], 1.0 / 3.0, 1e-13) << label;
+        EXPECT_NEAR(s.leftover, 0.0, 1e-13) << label;
+    });
+}
+
+TEST(ConjugateGradient, TheStopHoldsWithEqualityAtTheStart) {
+    // Tol 3: the stop is 6, the largest |r0|, so no iteration is made.
+    for_each_hand_layout(3.0, 10, std::nullopt, [](const auto& in, const auto& fields, auto label) {
+        const direct_solve s = solve_directly(in, fields, solver::conjugate_gradient);
+        EXPECT_EQ(s.outcome.iterations, 0) << label;
+        EXPECT_TRUE(s.outcome.converged) << label;
+        EXPECT_EQ(s.field, (std::vector<double>{0.0, 2.0, 0.0})) << label;
+        EXPECT_EQ(s.leftover, -2.0) << label;
+        EXPECT_EQ(s.sums, 1) << label;
+    });
+}
+
+TEST(ConjugateGradient, ABoundRestartsFromTheTrueResidualUntilTheLeftoverIsInsideIt) {
+    // The max-norm stop holds throughout (tol 3), so the bound decides.
+    // 1.5 takes the first iterate (leftover -25/19). 1.0 refuses it, the solve
+    // restarts from its true residual and the second iterate (leftover
+    // -25/266) is taken. A zero bound refuses both, and the cap ends the solve.
+    for_each_hand_layout(3.0, 10, 1.5, [](const auto& in, const auto& fields, auto label) {
+        const direct_solve s = solve_directly(in, fields, solver::conjugate_gradient);
+        EXPECT_EQ(s.outcome.iterations, 1) << label;
+        EXPECT_TRUE(s.outcome.converged) << label;
+        EXPECT_EQ(s.outcome.restarts, 0) << label;
+        EXPECT_NEAR(s.leftover, -25.0 / 19.0, 1e-14) << label;
+        EXPECT_EQ(s.sums, 2) << label;
+    });
+    for_each_hand_layout(3.0, 10, 1.0, [](const auto& in, const auto& fields, auto label) {
+        const direct_solve s = solve_directly(in, fields, solver::conjugate_gradient);
+        EXPECT_EQ(s.outcome.iterations, 2) << label;
+        EXPECT_TRUE(s.outcome.converged) << label;
+        EXPECT_EQ(s.outcome.restarts, 1) << label;
+        EXPECT_NEAR(s.field[0], 0.3176691729323308, 1e-14) << label;
+        EXPECT_NEAR(s.field[1], 0.7293233082706767, 1e-14) << label;
+        EXPECT_NEAR(s.leftover, -25.0 / 266.0, 1e-14) << label;
+        EXPECT_EQ(s.sums, 3) << label;
+    });
+    for_each_hand_layout(3.0, 2, 0.0, [](const auto& in, const auto& fields, auto label) {
+        const direct_solve s = solve_directly(in, fields, solver::conjugate_gradient);
+        EXPECT_EQ(s.outcome.iterations, 2) << label;
+        EXPECT_FALSE(s.outcome.converged) << label;
+        EXPECT_EQ(s.outcome.restarts, 1) << label;
+        EXPECT_NEAR(s.leftover, -25.0 / 266.0, 1e-14) << label;
+        EXPECT_EQ(s.sums, 3) << label;
+    });
 }
 
 TEST(Acceptance, WithoutABoundTheTestFormsNothingAndFinalFormsOnce) {

@@ -14,6 +14,7 @@
 #include "cfdcore/reduce.hpp"
 #include "cfdcore/scalar.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -253,7 +254,10 @@ double row_dot(const Matrix& a, const Matrix& b) {
     }
     require_aligned(a.data(), alignof(double), who);
     require_aligned(b.data(), alignof(double), who);
-    return cfdcore::reduce::blocked_dot(span_of(a), span_of(b), a.shape(1));
+    // A block is at least 1; an array with no columns has no terms, so its
+    // block is never read and the dot product is 0.0, as np.vdot's is.
+    const std::size_t block = std::max<std::size_t>(a.shape(1), 1);
+    return cfdcore::reduce::blocked_dot(span_of(a), span_of(b), block);
 }
 
 using Scratch2 = cfdcore::scalar::implicit_scratch<2>;

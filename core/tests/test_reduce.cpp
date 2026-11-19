@@ -8,6 +8,8 @@
 #include <bit>
 #include <cstdint>
 #include <span>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace {
@@ -180,6 +182,43 @@ TEST(BlockedDot, ALastShortBlockHoldsWhatRemains) {
     std::vector<double> b{7.0, 6.0, 5.0, 4.0, 3.0, 2.0, 1.0};
     EXPECT_EQ(blocked_dot(a, b, 3), 84.0);
     EXPECT_EQ(blocked_dot(a, b, 1), 84.0);
+}
+
+// What blocked_dot refuses with, or an empty string when it returns.
+std::string refusal(std::span<const double> a, std::span<const double> b, std::size_t block) {
+    try {
+        blocked_dot(a, b, block);
+    } catch (const std::invalid_argument& error) {
+        return error.what();
+    }
+    return "";
+}
+
+TEST(BlockedDot, ABlockOfZeroIsRefusedAtTheCall) {
+    // With a zero block the loop never advances, so a non-empty array would
+    // hang the caller; an empty one is refused too, since a block is at least 1.
+    std::vector<double> a{1.0, 2.0, 3.0};
+    std::vector<double> b{4.0, 5.0, 6.0};
+    EXPECT_THROW(blocked_dot(a, b, 0), std::invalid_argument);
+    std::vector<double> none;
+    EXPECT_THROW(blocked_dot(none, none, 0), std::invalid_argument);
+    EXPECT_NE(refusal(a, b, 0).find("block length"), std::string::npos);
+    // A block of 1 is the least that is accepted.
+    EXPECT_EQ(blocked_dot(a, b, 1), 32.0);
+}
+
+TEST(BlockedDot, ArraysOfDifferentLengthsAreRefusedWhicheverIsShorter) {
+    std::vector<double> three{1.0, 2.0, 3.0};
+    std::vector<double> two{4.0, 5.0};
+    EXPECT_THROW(blocked_dot(three, two, 2), std::invalid_argument);
+    EXPECT_THROW(blocked_dot(two, three, 2), std::invalid_argument);
+    std::vector<double> none;
+    EXPECT_THROW(blocked_dot(none, two, 2), std::invalid_argument);
+    EXPECT_NE(refusal(three, two, 2).find("differ in length"), std::string::npos);
+    // The block is checked first: a zero block names itself, not the lengths.
+    EXPECT_NE(refusal(three, two, 0).find("block length"), std::string::npos);
+    // Equal lengths that are not a whole number of blocks are not refused.
+    EXPECT_EQ(refusal(three, three, 2), "");
 }
 
 }  // namespace
