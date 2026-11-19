@@ -2,6 +2,7 @@
 // reference. The comparison with scalar_scheme.py is tests/test_core_parity.py's.
 
 #include "cfdcore/grid.hpp"
+#include "cfdcore/layout.hpp"
 #include "cfdcore/scalar.hpp"
 
 #include <gtest/gtest.h>
@@ -13,6 +14,7 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -426,6 +428,507 @@ TEST(Scheme, InteriorWeightsOfAUniformGridAreQuicksEighths) {
     }
     EXPECT_NE(w.positive[0][0], -0.125);
     EXPECT_NE(w.negative[0][6], -0.125);
+}
+
+// ---- The implicit solve ----------------------------------------------------
+
+using cfdcore::layout::layout;
+using cfdcore::scalar::acceptance;
+using cfdcore::scalar::check_leftover_bound;
+using cfdcore::scalar::implicit_input;
+using cfdcore::scalar::implicit_method;
+using cfdcore::scalar::implicit_result;
+using cfdcore::scalar::implicit_scratch;
+using cfdcore::scalar::implicit_status;
+using cfdcore::scalar::implicit_system;
+using cfdcore::scalar::implicit_step;
+
+// A bool cell field: std::vector<bool> has no contiguous storage to span.
+class bool_field {
+public:
+    explicit bool_field(std::size_t n, bool value = false) : data_(new bool[n]), n_(n) {
+        std::fill(data_.get(), data_.get() + n, value);
+    }
+    bool& operator[](std::size_t i) { return data_[i]; }
+    std::span<const bool> span() const { return {data_.get(), n_}; }
+
+private:
+    std::unique_ptr<bool[]> data_;
+    std::size_t n_;
+};
+
+// A two-dimensional system of [ny, nx] cells with every array it needs, held so
+// the input's spans stay valid.
+struct system2 {
+    system2(std::size_t nx_, std::size_t ny_)
+        : nx(nx_),
+          ny(ny_),
+          fields({nx_, ny_}),
+          c_star(nx_ * ny_, 0.0),
+          volume(nx_ * ny_, 1.0),
+          dt_cells(),
+          g_u(ny_ * (nx_ + 1), 0.0),
+          g_v((ny_ + 1) * nx_, 0.0),
+          sink(nx_ * ny_, 0.0),
+          solid(nx_ * ny_),
+          held(nx_ * ny_) {}
+
+    // The u face east of cell (i, j) and the v face north of it.
+    double& east(std::size_t i, std::size_t j) { return g_u[j * (nx + 1) + i + 1]; }
+    double& north(std::size_t i, std::size_t j) { return g_v[(j + 1) * nx + i]; }
+
+    // Interior conductances between two non-SOLID cells, `value(i, j)` each,
+    // and zero on the domain faces, as the transport solver forms them.
+    template <typename F>
+    void conduct(F value) {
+        for (std::size_t j = 0; j < ny; ++j) {
+            for (std::size_t i = 0; i < nx; ++i) {
+                const bool here = solid[j * nx + i];
+                if (i + 1 < nx && !here && !solid[j * nx + i + 1]) {
+                    east(i, j) = value(i, j);
+                }
+                if (j + 1 < ny && !here && !solid[(j + 1) * nx + i]) {
+                    north(i, j) = 0.5 * value(i, j);
+                }
+            }
+        }
+    }
+
+    implicit_input<2> input(implicit_method method, double tol, std::int64_t max_iter,
+                            bool with_held = false) const {
+        implicit_input<2> in{};
+        in.c_star = c_star;
+        in.volume = volume;
+        in.dt = dt;
+        in.dt_cells = dt_cells;
+        in.conductance = {std::span<const double>(g_u), std::span<const double>(g_v)};
+        in.sink = sink;
+        in.solid = solid.span();
+        if (with_held) {
+            in.held = held.span();
+        }
+        in.tol = tol;
+        in.max_iter = max_iter;
+        in.method = method;
+        return in;
+    }
+
+    std::size_t nx;
+    std::size_t ny;
+    layout<2> fields;
+    std::vector<double> c_star;
+    std::vector<double> volume;
+    double dt = 1.0;
+    std::vector<double> dt_cells;
+    std::vector<double> g_u;
+    std::vector<double> g_v;
+    std::vector<double> sink;
+    bool_field solid;
+    bool_field held;
+};
+
+// Solves a system and returns the field; the result goes to `result`.
+std::vector<double> solve(const implicit_input<2>& in, const layout<2>& fields,
+                          implicit_result& result) {
+    implicit_scratch<2> scratch(fields);
+    std::vector<double> out(fields.cell_count(), -1.0);
+    EXPECT_EQ(implicit_step(in, scratch, out, result), implicit_status::ok);
+    return out;
+}
+
+// A system of 9 by 7 cells with a SOLID block, conductances over three decades
+// and a sink in half the cells; C* over many decades, zero in the SOLID cells.
+system2 planted_system() {
+    system2 s(9, 7);
+    for (std::size_t j = 2; j < 4; ++j) {
+        for (std::size_t i = 3; i < 5; ++i) {
+            s.solid[j * s.nx + i] = true;
+        }
+    }
+    s.conduct([](std::size_t i, std::size_t j) {
+        return std::ldexp(1.0 + 0.1 * static_cast<double>(i), static_cast<int>(j % 4) - 3);
+    });
+    for (std::size_t k = 0; k < s.c_star.size(); ++k) {
+        s.volume[k] = 0.01 * (1.0 + 0.05 * static_cast<double>(k % 5));
+        s.sink[k] = (k % 2 == 0) ? 0.003 * static_cast<double>(k % 7) : 0.0;
+        s.c_star[k] = s.solid[k] ? 0.0 : std::pow(10.0, static_cast<double>(k % 13) - 9.0);
+    }
+    s.dt = 0.25;
+    return s;
+}
+
+TEST(ImplicitStep, TheHandSystemsLeftoverIsTheChangeTheSinkDoesNotAccountFor) {
+    // Three cells in a line, V = 1 and dt = 1, so V / dt = 1; conductance 1
+    // across both interior faces and none at the ends; a sink of 1 in the
+    // middle cell: a_P = [2, 4, 2]. C* = [0, 2, 0], b = C*. With tol 0 the
+    // stop never holds and the cap ends the solve.
+    // One sweep: r = b + sum G C_N - a_P C = [2, -6, 2], C = [1, 0.5, 1].
+    //   Its residual: [0 + 0.5 - 2, 2 + 2 - 2, 0 + 0.5 - 2] = [-1.5, 2, -1.5],
+    //   leftover -1. The total changed by 2.5 - 2 = 0.5; the sink took
+    //   dt D C = 0.5; -(0.5 + 0.5) = -1.
+    // Two sweeps: C = [0.25, 1, 0.25], residual [0.5, -1.5, 0.5], leftover
+    //   -0.5. The total changed by -0.5, the sink took 1: -(-0.5 + 1) = -0.5.
+    layout<1> fields({3});
+    const std::vector<double> c_star{0.0, 2.0, 0.0};
+    const std::vector<double> volume{1.0, 1.0, 1.0};
+    const std::vector<double> g{0.0, 1.0, 1.0, 0.0};
+    const std::vector<double> sink{0.0, 1.0, 0.0};
+    bool_field solid(3);
+    const std::vector<std::vector<double>> fields_after{{1.0, 0.5, 1.0}, {0.25, 1.0, 0.25}};
+    const std::vector<double> leftovers{-1.0, -0.5};
+    for (std::int64_t sweeps = 1; sweeps <= 2; ++sweeps) {
+        implicit_input<1> in{};
+        in.c_star = c_star;
+        in.volume = volume;
+        in.dt = 1.0;
+        in.conductance = {std::span<const double>(g)};
+        in.sink = sink;
+        in.solid = solid.span();
+        in.tol = 0.0;
+        in.max_iter = sweeps;
+        in.method = implicit_method::jacobi;
+        implicit_scratch<1> scratch(fields);
+        std::vector<double> out(3, -1.0);
+        implicit_result result;
+        ASSERT_EQ(implicit_step(in, scratch, out, result), implicit_status::ok);
+        EXPECT_EQ(out, fields_after[sweeps - 1]) << sweeps;
+        EXPECT_EQ(result.iterations, sweeps);
+        EXPECT_FALSE(result.converged);
+        EXPECT_EQ(result.leftover, leftovers[sweeps - 1]) << sweeps;
+        double change = 0.0;
+        double sunk = 0.0;
+        for (std::size_t i = 0; i < 3; ++i) {
+            change += volume[i] * (out[i] - c_star[i]);
+            sunk += in.dt * sink[i] * out[i];
+        }
+        EXPECT_EQ(result.leftover, -(change + sunk)) << sweeps;
+    }
+}
+
+TEST(ImplicitStep, AUniformFieldWithNoSinkIsUnchanged) {
+    // Conductances only between non-SOLID cells and none at the domain faces,
+    // as the callers form them: on a uniform field every diffusion term
+    // cancels, so the residual is rounding alone and the stop holds at once.
+    for (const bool per_cell : {false, true}) {
+        system2 s = planted_system();
+        std::fill(s.sink.begin(), s.sink.end(), 0.0);
+        for (std::size_t k = 0; k < s.c_star.size(); ++k) {
+            s.c_star[k] = s.solid[k] ? 0.0 : 3.7e5;
+        }
+        if (per_cell) {
+            s.dt_cells.resize(s.c_star.size());
+            for (std::size_t k = 0; k < s.dt_cells.size(); ++k) {
+                s.dt_cells[k] = 0.01 * (1.0 + static_cast<double>(k % 3));
+            }
+        }
+        for (const auto method : {implicit_method::jacobi, implicit_method::conjugate_gradient}) {
+            implicit_result result;
+            const auto out = solve(s.input(method, 1e-12, 50), s.fields, result);
+            for (std::size_t k = 0; k < out.size(); ++k) {
+                EXPECT_EQ(bits(out[k]), bits(s.c_star[k])) << k;
+            }
+            EXPECT_EQ(result.iterations, 0);
+            EXPECT_TRUE(result.converged);
+            EXPECT_EQ(result.fallbacks, 0);
+        }
+    }
+}
+
+TEST(ImplicitStep, ANonNegativeStarGivesNonNegativeJacobiIterates) {
+    // Strong diffusion (dt G / V up to about 50) over a field of many decades
+    // with zeros beside large values: every iterate, read by capping the solve
+    // at each sweep in turn with a stop that never holds, is non-negative.
+    system2 s = planted_system();
+    s.dt = 4.0;
+    for (std::size_t k = 0; k < s.c_star.size(); ++k) {
+        if (k % 4 == 1 && !s.solid[k]) {
+            s.c_star[k] = 0.0;
+        }
+        if (k % 11 == 0 && !s.solid[k]) {
+            s.c_star[k] = 1e-300;
+        }
+    }
+    for (std::int64_t cap = 0; cap <= 40; ++cap) {
+        implicit_result result;
+        const auto out = solve(s.input(implicit_method::jacobi, 0.0, cap), s.fields, result);
+        EXPECT_EQ(result.iterations, cap);
+        for (std::size_t k = 0; k < out.size(); ++k) {
+            EXPECT_GE(out[k], 0.0) << cap << " " << k;
+        }
+    }
+}
+
+TEST(ImplicitStep, NothingToSolveReturnsCStar) {
+    // No conductance and no sink, written as -0.0 too (`.any()` reads it as
+    // zero): C* comes back as it was, SOLID values included, with no solve.
+    for (const double zero : {0.0, -0.0}) {
+        system2 s = planted_system();
+        std::fill(s.g_u.begin(), s.g_u.end(), zero);
+        std::fill(s.g_v.begin(), s.g_v.end(), zero);
+        std::fill(s.sink.begin(), s.sink.end(), zero);
+        s.c_star[3 * s.nx + 3] = 5.0;
+        implicit_result result;
+        const auto out = solve(s.input(implicit_method::jacobi, 1e-8, 10), s.fields, result);
+        EXPECT_EQ(out, s.c_star);
+        EXPECT_EQ(result.iterations, 0);
+        EXPECT_TRUE(result.converged);
+        EXPECT_EQ(bits(result.leftover), bits(0.0));
+        EXPECT_EQ(result.leftover_sums, 0);
+    }
+}
+
+TEST(ImplicitSystem, TheDiagonalIsWestEastSouthNorthThenTheSink) {
+    // One cell: W = 2^53, E = 1, S = 1, N = -2^53, sink 1, V / dt = 1. In the
+    // reference's order ((((W + E) + S) + N) + sink) = ((2^53 + 1) - 2^53) + 1
+    // = 1 (2^53 + 1 is a tie that rounds to 2^53), so a_P = 2; north before
+    // south would give 2^53 - 2^53 + 1 + 1 = 2 and a_P = 3.
+    system2 s(1, 1);
+    s.g_u = {0x1p53, 1.0};
+    s.g_v = {1.0, -0x1p53};
+    s.sink = {1.0};
+    s.c_star = {3.0};
+    implicit_scratch<2> scratch(s.fields);
+    const auto setup = implicit_system(s.input(implicit_method::jacobi, 0.5, 1), scratch);
+    EXPECT_TRUE(setup.diffuses);
+    EXPECT_EQ(scratch.a_p[0], 2.0);
+    EXPECT_EQ(scratch.b[0], 3.0);
+    EXPECT_EQ(setup.stop, 1.5);
+}
+
+TEST(ImplicitSystem, ANanIsSomethingToSolveAndMakesTheStopNan) {
+    system2 s(2, 1);
+    s.sink = {0.0, std::numeric_limits<double>::quiet_NaN()};
+    s.c_star = {1.0, 1.0};
+    implicit_scratch<2> scratch(s.fields);
+    const auto setup = implicit_system(s.input(implicit_method::jacobi, 1e-8, 1), scratch);
+    EXPECT_TRUE(setup.diffuses);
+    EXPECT_FALSE(std::isnan(setup.stop));
+    s.c_star = {1.0, std::numeric_limits<double>::quiet_NaN()};
+    const auto with_nan = implicit_system(s.input(implicit_method::jacobi, 1e-8, 1), scratch);
+    EXPECT_TRUE(std::isnan(with_nan.stop));
+}
+
+TEST(ImplicitStep, TheNeighbourSumIsEastWestNorthSouth) {
+    // The centre of 3 by 3 cells at C* = 0, its eight neighbours held at 1:
+    // its residual is its neighbour sum, ((E + W) + N) + S with E = 2^53,
+    // W = 1, N = 1, S = -2^53, which is (2^53 + 1) - 2^53 = 0, since
+    // 2^53 + 1 + 1 rounds to 2^53 twice. Every other residual is held at zero,
+    // so the stop holds at once with tol 0 and the leftover is 0. South before
+    // north would give 1, and the cap of no sweeps would leave the leftover 1.
+    system2 s(3, 3);
+    std::fill(s.c_star.begin(), s.c_star.end(), 1.0);
+    s.c_star[4] = 0.0;
+    for (std::size_t k = 0; k < 9; ++k) {
+        s.held[k] = k != 4;
+    }
+    s.east(1, 1) = 0x1p53;  // east of the centre
+    s.east(0, 1) = 1.0;     // west of the centre
+    s.north(1, 1) = 1.0;    // north of the centre
+    s.north(1, 0) = -0x1p53;  // south of the centre
+    implicit_result result;
+    const auto out = solve(s.input(implicit_method::jacobi, 0.0, 0, true), s.fields, result);
+    EXPECT_TRUE(result.converged);
+    EXPECT_EQ(result.iterations, 0);
+    EXPECT_EQ(bits(result.leftover), bits(0.0));
+    EXPECT_EQ(out, s.c_star);
+}
+
+TEST(ImplicitStep, HeldAndSolidCellsKeepTheirValues) {
+    // Held cells keep C* bit for bit and SOLID cells end at zero, under both
+    // methods, from a C* that is not zero in its SOLID cells.
+    system2 s = planted_system();
+    for (std::size_t k = 0; k < s.c_star.size(); ++k) {
+        s.held[k] = !s.solid[k] && k % 6 == 0;
+        if (s.solid[k]) {
+            s.c_star[k] = 7.0;
+        }
+    }
+    for (const auto method : {implicit_method::jacobi, implicit_method::conjugate_gradient}) {
+        implicit_result result;
+        const auto out = solve(s.input(method, 1e-10, 500, true), s.fields, result);
+        EXPECT_TRUE(result.converged);
+        for (std::size_t k = 0; k < out.size(); ++k) {
+            if (s.solid[k]) {
+                EXPECT_EQ(bits(out[k]), bits(0.0)) << k;
+            } else if (s.held[k]) {
+                EXPECT_EQ(bits(out[k]), bits(s.c_star[k])) << k;
+            }
+        }
+    }
+}
+
+TEST(ImplicitStep, ConjugateGradientsReachTheDenseSolution) {
+    // The system solved densely by Gaussian elimination with partial pivoting,
+    // against CG at a tight tolerance with a per-cell step.
+    system2 s = planted_system();
+    s.dt_cells.resize(s.c_star.size());
+    for (std::size_t k = 0; k < s.dt_cells.size(); ++k) {
+        s.dt_cells[k] = 0.1 * (1.0 + static_cast<double>(k % 4));
+    }
+    implicit_result result;
+    const auto out =
+        solve(s.input(implicit_method::conjugate_gradient, 1e-14, 500), s.fields, result);
+    EXPECT_TRUE(result.converged);
+    EXPECT_EQ(result.fallbacks, 0);
+    EXPECT_GT(result.iterations, 0);
+    const std::size_t n = s.c_star.size();
+    std::vector<double> a(n * n, 0.0);
+    std::vector<double> rhs(n, 0.0);
+    for (std::size_t j = 0; j < s.ny; ++j) {
+        for (std::size_t i = 0; i < s.nx; ++i) {
+            const std::size_t k = j * s.nx + i;
+            if (s.solid[k]) {
+                a[k * n + k] = 1.0;
+                continue;
+            }
+            const double w = s.g_u[j * (s.nx + 1) + i];
+            const double e = s.g_u[j * (s.nx + 1) + i + 1];
+            const double so = s.g_v[j * s.nx + i];
+            const double no = s.g_v[(j + 1) * s.nx + i];
+            const double over_dt = s.volume[k] / s.dt_cells[k];
+            a[k * n + k] = over_dt + w + e + so + no + s.sink[k];
+            if (i > 0) a[k * n + k - 1] = -w;
+            if (i + 1 < s.nx) a[k * n + k + 1] = -e;
+            if (j > 0) a[k * n + k - s.nx] = -so;
+            if (j + 1 < s.ny) a[k * n + k + s.nx] = -no;
+            rhs[k] = over_dt * s.c_star[k];
+        }
+    }
+    for (std::size_t col = 0; col < n; ++col) {
+        std::size_t pivot = col;
+        for (std::size_t r = col + 1; r < n; ++r) {
+            if (std::fabs(a[r * n + col]) > std::fabs(a[pivot * n + col])) pivot = r;
+        }
+        for (std::size_t c = 0; c < n; ++c) std::swap(a[col * n + c], a[pivot * n + c]);
+        std::swap(rhs[col], rhs[pivot]);
+        for (std::size_t r = col + 1; r < n; ++r) {
+            const double f = a[r * n + col] / a[col * n + col];
+            for (std::size_t c = col; c < n; ++c) a[r * n + c] -= f * a[col * n + c];
+            rhs[r] -= f * rhs[col];
+        }
+    }
+    std::vector<double> exact(n, 0.0);
+    for (std::size_t r = n; r-- > 0;) {
+        double sum = rhs[r];
+        for (std::size_t c = r + 1; c < n; ++c) sum -= a[r * n + c] * exact[c];
+        exact[r] = sum / a[r * n + r];
+    }
+    double largest = 0.0;
+    for (double v : exact) largest = std::max(largest, std::fabs(v));
+    for (std::size_t k = 0; k < n; ++k) {
+        EXPECT_NEAR(out[k], exact[k], 1e-11 * largest) << k;
+    }
+}
+
+TEST(ImplicitStep, AZeroLeftByConjugateGradientsFallsBackToJacobiFromCStar) {
+    // A cell with no conductance, no sink and C* = 0 keeps the value 0 under
+    // CG, which is not positive: the CG solve is discarded and Jacobi solves
+    // from C*, so the field, the converged flag and the leftover are the
+    // Jacobi solve's bit for bit.
+    system2 s = planted_system();
+    const std::size_t lone = 5 * s.nx + 7;
+    s.c_star[lone] = 0.0;
+    s.sink[lone] = 0.0;
+    s.east(7, 5) = 0.0;
+    s.east(6, 5) = 0.0;
+    s.north(7, 5) = 0.0;
+    s.north(7, 4) = 0.0;
+    implicit_result cg;
+    const auto out = solve(s.input(implicit_method::conjugate_gradient, 1e-10, 500), s.fields, cg);
+    implicit_result jacobi;
+    const auto alone = solve(s.input(implicit_method::jacobi, 1e-10, 500), s.fields, jacobi);
+    EXPECT_EQ(cg.fallbacks, 1);
+    EXPECT_GT(cg.iterations, 0);
+    EXPECT_EQ(cg.fallback_sweeps, jacobi.iterations);
+    EXPECT_EQ(cg.converged, jacobi.converged);
+    EXPECT_EQ(bits(cg.leftover), bits(jacobi.leftover));
+    for (std::size_t k = 0; k < out.size(); ++k) {
+        EXPECT_EQ(bits(out[k]), bits(alone[k])) << k;
+    }
+}
+
+TEST(ImplicitStep, ConjugateGradientsAtTheCapFallBackToJacobi) {
+    system2 s = planted_system();
+    implicit_result cg;
+    const auto out = solve(s.input(implicit_method::conjugate_gradient, 1e-12, 2), s.fields, cg);
+    implicit_result jacobi;
+    const auto alone = solve(s.input(implicit_method::jacobi, 1e-12, 2), s.fields, jacobi);
+    EXPECT_EQ(cg.iterations, 2);
+    EXPECT_EQ(cg.fallbacks, 1);
+    EXPECT_EQ(cg.fallback_sweeps, 2);
+    EXPECT_FALSE(cg.converged);
+    EXPECT_EQ(bits(cg.leftover), bits(jacobi.leftover));
+    for (std::size_t k = 0; k < out.size(); ++k) {
+        EXPECT_EQ(bits(out[k]), bits(alone[k])) << k;
+    }
+}
+
+TEST(ImplicitStep, ANegativeOrNanBoundIsRefusedAndNothingIsWritten) {
+    EXPECT_EQ(check_leftover_bound(std::nullopt), implicit_status::ok);
+    EXPECT_EQ(check_leftover_bound(0.0), implicit_status::ok);
+    EXPECT_EQ(check_leftover_bound(std::numeric_limits<double>::infinity()), implicit_status::ok);
+    EXPECT_EQ(check_leftover_bound(-1e-300), implicit_status::bound_negative_or_nan);
+    EXPECT_EQ(check_leftover_bound(std::numeric_limits<double>::quiet_NaN()),
+              implicit_status::bound_negative_or_nan);
+    system2 s = planted_system();
+    auto in = s.input(implicit_method::jacobi, 1e-8, 10);
+    in.leftover_bound = -1.0;
+    implicit_scratch<2> scratch(s.fields);
+    std::vector<double> out(s.c_star.size(), -1.0);
+    implicit_result result;
+    result.iterations = 99;
+    EXPECT_EQ(implicit_step(in, scratch, out, result), implicit_status::bound_negative_or_nan);
+    EXPECT_EQ(result.iterations, 99);
+    EXPECT_EQ(out, std::vector<double>(s.c_star.size(), -1.0));
+}
+
+TEST(Acceptance, WithoutABoundTheTestFormsNothingAndFinalFormsOnce) {
+    bool_field solid(4);
+    std::vector<double> masked(4);
+    std::vector<double> terms(4);
+    acceptance accept(0.5, {}, solid.span(), std::nullopt, masked, terms);
+    const std::vector<double> residual{1.0, -0.25, 2.0, 0.25};
+    EXPECT_TRUE(accept.test(residual, 1));
+    EXPECT_EQ(accept.sums(), 0);
+    accept.final(residual, 1);
+    EXPECT_EQ(accept.sums(), 1);
+    EXPECT_EQ(accept.leftover(), 0.5 * 3.0);
+    accept.final(residual, 1);
+    EXPECT_EQ(accept.sums(), 1);
+}
+
+TEST(Acceptance, WithABoundTheTestFormsTheLeftoverAndFinalDoesNotFormItAgain) {
+    bool_field solid(4);
+    std::vector<double> masked(4);
+    std::vector<double> terms(4);
+    const std::vector<double> residual{1.0, -0.25, 2.0, 0.25};
+    // dt 0.5 times the sum 3: a leftover of 1.5, at the bound and inside it.
+    acceptance at(0.5, {}, solid.span(), 1.5, masked, terms);
+    EXPECT_TRUE(at.test(residual, 1));
+    acceptance beyond(0.5, {}, solid.span(), 1.4999, masked, terms);
+    EXPECT_FALSE(beyond.test(residual, 1));
+    EXPECT_EQ(beyond.sums(), 1);
+    beyond.final(residual, 1);
+    EXPECT_EQ(beyond.sums(), 1);
+    // A new residual is formed again.
+    const std::vector<double> next{0.5, 0.0, 0.0, 0.0};
+    beyond.final(next, 2);
+    EXPECT_EQ(beyond.sums(), 2);
+    EXPECT_EQ(beyond.leftover(), 0.25);
+}
+
+TEST(Acceptance, APerCellStepIsReadAsZeroInSolidCells) {
+    // An infinite step in a SOLID cell, whose residual is zero: inf * 0 would
+    // be NaN, and the masked step gives 1 * 1 + 0 * 0 + 2 * 1 = 3.
+    bool_field solid(3);
+    solid[1] = true;
+    const std::vector<double> dt{1.0, std::numeric_limits<double>::infinity(), 2.0};
+    std::vector<double> masked(3);
+    std::vector<double> terms(3);
+    acceptance accept(0.0, dt, solid.span(), std::nullopt, masked, terms);
+    const std::vector<double> residual{1.0, 0.0, 1.0};
+    accept.final(residual, 1);
+    EXPECT_EQ(accept.leftover(), 3.0);
 }
 
 }  // namespace

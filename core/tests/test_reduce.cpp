@@ -137,4 +137,49 @@ TEST(PairwiseSum, AboveABlockSplitsAtHalfRoundedDownToEight) {
     EXPECT_EQ(bits(pairwise_sum(all)), bits(halves));
 }
 
+// ---- The blocked dot product (the second kind, ADR-017 G) -------------------
+
+using cfdcore::reduce::blocked_dot;
+
+TEST(BlockedDot, EmptyIsPositiveZero) {
+    std::vector<double> none;
+    EXPECT_EQ(bits(blocked_dot(none, none, 4)), bits(0.0));
+}
+
+TEST(BlockedDot, OneBlockIsThePairwiseSumOfTheProducts) {
+    // A block as long as the arrays: the products summed in pairwise_sum's order.
+    std::vector<double> a(300);
+    std::vector<double> b(300);
+    std::vector<double> products(300);
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        a[i] = 1.0 + static_cast<double>(i) * 0x1p-20;
+        b[i] = (i % 3 == 0 ? -1.0 : 1.0) * (0.5 + static_cast<double>(i) * 0x1p-11);
+        products[i] = a[i] * b[i];
+    }
+    EXPECT_EQ(bits(blocked_dot(a, b, 300)), bits(pairwise_sum(products)));
+    EXPECT_EQ(bits(blocked_dot(a, b, 1000)), bits(pairwise_sum(products)));
+}
+
+TEST(BlockedDot, BlocksAreSummedApartAndAddedInOrder) {
+    // [2^53, 1, 1, 1, 1, 1, 1, 1] against ones. In blocks of 4 the first block
+    // is 2^53 (each 2^53 + 1 is a tie that rounds back to the even 2^53) and
+    // the second 4, added to 0.0 in order: 2^53 + 4. As one block of 8 the
+    // eight accumulators hold a term each and give
+    // ((2^53 + 1) + (1 + 1)) + ((1 + 1) + (1 + 1)) = (2^53 + 2) + 4 = 2^53 + 6.
+    const double big = 0x1p53;
+    std::vector<double> a{big, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0};
+    std::vector<double> ones(a.size(), 1.0);
+    EXPECT_EQ(blocked_dot(a, ones, 4), big + 4.0);
+    EXPECT_EQ(blocked_dot(a, ones, 8), big + 6.0);
+    EXPECT_EQ(bits(blocked_dot(a, ones, 8)), bits(pairwise_sum(a)));
+}
+
+TEST(BlockedDot, ALastShortBlockHoldsWhatRemains) {
+    // Seven terms in blocks of 3: [0, 1, 2], [3, 4, 5], [6]; integers, so exact.
+    std::vector<double> a{1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0};
+    std::vector<double> b{7.0, 6.0, 5.0, 4.0, 3.0, 2.0, 1.0};
+    EXPECT_EQ(blocked_dot(a, b, 3), 84.0);
+    EXPECT_EQ(blocked_dot(a, b, 1), 84.0);
+}
+
 }  // namespace

@@ -8,6 +8,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/ndarray.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/string.h>
 
 #include "cfdcore/grid.hpp"
 #include "cfdcore/reduce.hpp"
@@ -243,6 +244,171 @@ void limited_face_values(const Array& c_up, const Array& c_c, const Array& c_d,
                                          std::span<double>(out.data(), out.size()));
 }
 
+// --- The implicit solve -----------------------------------------------------
+
+double row_dot(const Matrix& a, const Matrix& b) {
+    constexpr std::string_view who = "row_dot";
+    if (a.shape(0) != b.shape(0) || a.shape(1) != b.shape(1)) {
+        throw nb::type_error("row_dot: a and b differ in shape");
+    }
+    require_aligned(a.data(), alignof(double), who);
+    require_aligned(b.data(), alignof(double), who);
+    return cfdcore::reduce::blocked_dot(span_of(a), span_of(b), a.shape(1));
+}
+
+using Scratch2 = cfdcore::scalar::implicit_scratch<2>;
+using Input2 = cfdcore::scalar::implicit_input<2>;
+using cfdcore::scalar::implicit_method;
+using cfdcore::scalar::implicit_result;
+
+// The scratch with the grid it was sized on, which the binding checks shapes against.
+struct ImplicitScratch2 {
+    explicit ImplicitScratch2(const Grid2& g) : grid(&g), scratch(g.fields()) {}
+    const Grid2* grid;
+    Scratch2 scratch;
+};
+
+// The arrays of one call kept alive while the core reads them.
+struct implicit_arrays {
+    std::optional<Matrix> dt_cells;
+};
+
+// The step: a number (a Python float, a NumPy scalar or a 0-d array, as
+// np.ndim(dt) == 0 reads it), or a float64 array of the cell field's shape.
+void read_step(nb::handle dt, const Grid2& g, Input2& in, implicit_arrays& keep) {
+    constexpr std::string_view who = "implicit_step";
+    const nb::object ndim = nb::getattr(dt, "ndim", nb::none());
+    if (ndim.is_none() || nb::cast<long>(ndim) == 0) {
+        double value = 0.0;
+        if (!nb::try_cast<double>(dt, value)) {
+            throw nb::type_error("implicit_step: dt is a number or a float64 cell field");
+        }
+        in.dt = value;
+        return;
+    }
+    Matrix cells;
+    if (!nb::try_cast<Matrix>(dt, cells, false)) {
+        throw nb::type_error(
+            "implicit_step: dt is a number or a C-contiguous float64 cell field");
+    }
+    require_shape(cells, {g.cells(1), g.cells(0)}, who, "dt");
+    keep.dt_cells = cells;
+    in.dt_cells = span_of(*keep.dt_cells);
+}
+
+// The method by its reference name; ValueError otherwise, as the reference raises it.
+implicit_method read_method(nb::handle method) {
+    if (nb::isinstance<nb::str>(method)) {
+        const std::string name = nb::cast<std::string>(method);
+        if (name == "jacobi") {
+            return implicit_method::jacobi;
+        }
+        if (name == "cg") {
+            return implicit_method::conjugate_gradient;
+        }
+    }
+    throw nb::value_error(("method must be one of ('jacobi', 'cg'), got " +
+                           nb::cast<std::string>(nb::repr(method)))
+                              .c_str());
+}
+
+// The bound: None, or a number; a bool (Python's or NumPy's) is a TypeError,
+// as the reference refuses it, since it would read as 1.0 or 0.0.
+std::optional<double> read_bound(nb::handle bound) {
+    if (bound.is_none()) {
+        return std::nullopt;
+    }
+    const nb::object numpy_bool = nb::module_::import_("numpy").attr("bool_");
+    if (nb::isinstance<bool>(bound) || PyObject_IsInstance(bound.ptr(), numpy_bool.ptr()) == 1) {
+        throw nb::type_error(("leftover_bound must be a number or None, not a bool, got " +
+                              nb::cast<std::string>(nb::repr(bound)))
+                                 .c_str());
+    }
+    double value = 0.0;
+    if (!nb::try_cast<double>(bound, value)) {
+        throw nb::type_error("leftover_bound must be a number or None");
+    }
+    return value;
+}
+
+// The checks and the input of implicit_step and implicit_system.
+Input2 check_implicit(const ImplicitScratch2& s, const Matrix& c_star, const Matrix& volume,
+                      nb::handle dt, const Matrix& g_u, const Matrix& g_v,
+                      const Matrix& diagonal, implicit_arrays& keep) {
+    constexpr std::string_view who = "implicit_step";
+    const Grid2& g = *s.grid;
+    const std::array<std::size_t, 2> cells{g.cells(1), g.cells(0)};
+    require_shape(c_star, cells, who, "c_star");
+    require_shape(volume, cells, who, "volume");
+    require_shape(g_u, face_shape(g, 0), who, "g_u");
+    require_shape(g_v, face_shape(g, 1), who, "g_v");
+    require_shape(diagonal, cells, who, "diagonal");
+    Input2 in{};
+    in.c_star = span_of(c_star);
+    in.volume = span_of(volume);
+    read_step(dt, g, in, keep);
+    in.conductance = {span_of(g_u), span_of(g_v)};
+    in.sink = span_of(diagonal);
+    return in;
+}
+
+nb::tuple implicit_system(ImplicitScratch2& s, const Matrix& c_star, const Matrix& volume,
+                          nb::handle dt, const Matrix& g_u, const Matrix& g_v,
+                          const Matrix& diagonal, double tol) {
+    implicit_arrays keep;
+    Input2 in = check_implicit(s, c_star, volume, dt, g_u, g_v, diagonal, keep);
+    in.tol = tol;
+    const auto setup = cfdcore::scalar::implicit_system(in, s.scratch);
+    return nb::make_tuple(setup.diffuses, setup.stop);
+}
+
+implicit_result implicit_step(ImplicitScratch2& s, const Matrix& c_star, const Matrix& volume,
+                              nb::handle dt, const Matrix& g_u, const Matrix& g_v,
+                              const Matrix& diagonal, const BoolMatrix& solid, double tol,
+                              std::int64_t max_iter, OutMatrix& out,
+                              const std::optional<BoolMatrix>& held, nb::handle method,
+                              nb::handle leftover_bound) {
+    constexpr std::string_view who = "implicit_step";
+    // The reference's order: the method, then the bound's type, then its value.
+    const implicit_method chosen = read_method(method);
+    const std::optional<double> bound = read_bound(leftover_bound);
+    implicit_arrays keep;
+    Input2 in = check_implicit(s, c_star, volume, dt, g_u, g_v, diagonal, keep);
+    const Grid2& g = *s.grid;
+    const std::array<std::size_t, 2> cells{g.cells(1), g.cells(0)};
+    require_shape(solid, cells, who, "solid");
+    require_shape(out, cells, who, "out");
+    in.solid = span_of(solid);
+    if (held) {
+        require_shape(*held, cells, who, "held");
+        in.held = span_of(*held);
+    }
+    const std::size_t out_bytes = out.size() * sizeof(double);
+    for (const auto& a : {in.c_star, in.volume, in.dt_cells, in.conductance[0],
+                          in.conductance[1], in.sink}) {
+        require_apart(out.data(), out_bytes, a.data(), a.size_bytes(), who);
+    }
+    require_apart(out.data(), out_bytes, in.solid.data(), in.solid.size_bytes(), who);
+    require_apart(out.data(), out_bytes, in.held.data(), in.held.size_bytes(), who);
+    in.tol = tol;
+    in.max_iter = max_iter;
+    in.method = chosen;
+    in.leftover_bound = bound;
+    implicit_result result;
+    const auto status = cfdcore::scalar::implicit_step(
+        in, s.scratch, std::span<double>(out.data(), out.size()), result);
+    if (status == cfdcore::scalar::implicit_status::bound_negative_or_nan) {
+        throw nb::value_error(("leftover_bound must be non-negative or None, got " +
+                               nb::cast<std::string>(nb::repr(leftover_bound)))
+                                  .c_str());
+    }
+    return result;
+}
+
+const char* method_name(implicit_method m) {
+    return m == implicit_method::jacobi ? "jacobi" : "cg";
+}
+
 }  // namespace
 
 NB_MODULE(_cfdcore, m) {
@@ -324,4 +490,50 @@ NB_MODULE(_cfdcore, m) {
           nb::arg("vents").noconvert().none() = nb::none(),
           "advective_flux's argument conversion and checks without the flux: the\n"
           "binding's cost per call, for timing (prompt 87).");
+
+    m.def("row_dot", &row_dot, nb::arg("a").noconvert(), nb::arg("b").noconvert(),
+          "The dot product of two float64 arrays of one 2-D shape, a block per row\n"
+          "(reduce.blocked_dot): the conjugate gradient's dot product (ADR-017 G).");
+
+    nb::class_<ImplicitScratch2>(m, "ImplicitScratch2",
+                                 "The implicit solve's scratch on a Grid2, allocated once, so a\n"
+                                 "solve allocates nothing. Keeps its grid alive.")
+        .def(nb::init<const Grid2&>(), nb::arg("grid"), nb::keep_alive<1, 2>())
+        .def(
+            "diagonal", [](const ImplicitScratch2& s) { return to_numpy(s.scratch.a_p); },
+            "a_P as implicit_system last formed it, flattened (a copy).")
+        .def(
+            "rhs", [](const ImplicitScratch2& s) { return to_numpy(s.scratch.b); },
+            "b as implicit_system last formed it, flattened (a copy).");
+
+    nb::class_<implicit_result>(m, "ImplicitResult2",
+                                "What implicit_step returns beside the field it writes to out:\n"
+                                "ImplicitResult's fields, and leftover_sums and restarts.")
+        .def_prop_ro("method", [](const implicit_result& r) { return method_name(r.method); })
+        .def_ro("iterations", &implicit_result::iterations)
+        .def_ro("converged", &implicit_result::converged)
+        .def_ro("fallbacks", &implicit_result::fallbacks)
+        .def_ro("fallback_sweeps", &implicit_result::fallback_sweeps)
+        .def_ro("leftover", &implicit_result::leftover)
+        .def_ro("leftover_sums", &implicit_result::leftover_sums)
+        .def_ro("restarts", &implicit_result::restarts);
+
+    m.def("implicit_system", &implicit_system, nb::arg("scratch"), nb::arg("c_star").noconvert(),
+          nb::arg("volume").noconvert(), nb::arg("dt"), nb::arg("g_u").noconvert(),
+          nb::arg("g_v").noconvert(), nb::arg("diagonal").noconvert(), nb::arg("tol"),
+          "implicit_step's set-up alone: returns (diffuses, stop) and leaves a_P and b in\n"
+          "the scratch (ImplicitScratch2.diagonal and rhs).");
+    m.def("implicit_step", &implicit_step, nb::arg("scratch"), nb::arg("c_star").noconvert(),
+          nb::arg("volume").noconvert(), nb::arg("dt"), nb::arg("g_u").noconvert(),
+          nb::arg("g_v").noconvert(), nb::arg("diagonal").noconvert(),
+          nb::arg("solid").noconvert(), nb::arg("tol"), nb::arg("max_iter"),
+          nb::arg("out").noconvert(), nb::arg("held").noconvert().none() = nb::none(),
+          nb::arg("method").none() = "jacobi", nb::arg("leftover_bound").none() = nb::none(),
+          "scalar_scheme.implicit_step: the field into out [ny, nx], the rest returned.\n\n"
+          "c_star, volume, diagonal, solid and held (bool, or None) [ny, nx]; g_u\n"
+          "[ny, nx + 1]; g_v [ny + 1, nx]; dt a number or a float64 [ny, nx]. A wrong\n"
+          "shape, dtype or layout, an unaligned array, an out sharing memory with an\n"
+          "input, or a bool leftover_bound raises TypeError; an unknown method, or a\n"
+          "negative or NaN leftover_bound, ValueError, as the reference raises them.");
 }
+
