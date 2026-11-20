@@ -178,8 +178,8 @@ namespace {
 // of its cells needs along every direction: the row's first cell and low face
 // normal to direction 0, and for each direction d >= 1 the stride, the offset
 // from a cell to its low face normal to d, and whether the row has a
-// neighbouring row below and above. Formed once per row, so the per-cell loop
-// does no division.
+// neighbouring row below and above. Formed once per row, so no cell's
+// arithmetic holds a division for an index.
 template <int D>
 struct row_stencil {
     std::size_t cell = 0;
@@ -208,45 +208,6 @@ row_stencil<D> stencil_of(const layout::layout<D>& fields, const layout::line& r
     }
     return s;
 }
-
-// `_neighbour_sum` at cell m of a row: sum_f G_f x_N, a missing neighbour read
-// as zero, as the reference's zero padding reads it. The terms are added east,
-// west (direction 0's high then low face), then each further direction's high
-// then low face: north, south for D = 2.
-template <int D, typename Conductances>
-double neighbour_sum(const row_stencil<D>& s, std::size_t m,
-                     const Conductances& g, const double* x) {
-    const std::size_t i = s.cell + m;
-    const double east = m + 1 < s.n0 ? x[i + 1] : 0.0;
-    const double west = m > 0 ? x[i - 1] : 0.0;
-    double sum = g[0][s.face0 + m + 1] * east + g[0][s.face0 + m] * west;
-    for (int d = 1; d < D; ++d) {
-        const std::size_t low = i + s.face_offset[d];
-        const double high_value = s.has_high[d] ? x[i + s.stride[d]] : 0.0;
-        const double low_value = s.has_low[d] ? x[i - s.stride[d]] : 0.0;
-        sum = sum + g[d][low + s.stride[d]] * high_value;
-        sum = sum + g[d][low] * low_value;
-    }
-    return sum;
-}
-
-// The largest |x| seen so far, as np.abs(x).max() forms it: a NaN anywhere
-// makes the maximum NaN, which no stop accepts.
-class max_abs {
-public:
-    void add(double x) {
-        const double a = std::fabs(x);
-        nan_ = nan_ || std::isnan(a);
-        largest_ = a > largest_ ? a : largest_;
-    }
-    // Whether the maximum is at most `stop`: false when it is NaN or `stop` is.
-    bool within(double stop) const { return !nan_ && largest_ <= stop; }
-    double value() const { return nan_ ? std::numeric_limits<double>::quiet_NaN() : largest_; }
-
-private:
-    double largest_ = 0.0;
-    bool nan_ = false;
-};
 
 // Whether a cell is not an unknown of the CG solve: SOLID or held.
 inline bool is_fixed(std::span<const bool> solid, std::span<const bool> held, std::size_t i) {
@@ -358,13 +319,14 @@ CFDCORE_INLINE lanes::mask outside_stop(double r, double stop) {
     return lanes::mask_of(!(std::fabs(r) <= stop));
 }
 
-// One Jacobi sweep over N cells from element `first` (lanes.hpp): the
+// One Jacobi sweep over the N cells from element `first` (lanes.hpp): the
 // residual into r, the next iterate x + r / a_P into next with SOLID cells at
 // zero. Returns the cells' `outside_stop` masks, ORed. r and next overlap
 // nothing the operands point to.
 template <std::size_t N, int D>
-inline lanes::mask sweep_cells(const stencil_row<D>& in, std::size_t first, double stop,
-                               double* CFDCORE_RESTRICT r, double* CFDCORE_RESTRICT next) {
+inline lanes::mask sweep_cells(lanes::cells<N>, const stencil_row<D>& in, std::size_t first,
+                               double stop, double* CFDCORE_RESTRICT r,
+                               double* CFDCORE_RESTRICT next) {
     lanes::mask outside = lanes::none;
     for (std::size_t k = 0; k < N; ++k) {
         const std::size_t i = first + k;
@@ -376,28 +338,142 @@ inline lanes::mask sweep_cells(const stencil_row<D>& in, std::size_t first, doub
     return outside;
 }
 
-// One Jacobi sweep over a row of n cells: its two end cells apart, the cells
-// between in blocks. r and next are at the row's first cell. The operands
-// arrive by value: a copy that nothing else can reach, so the compiler holds
-// its pointers in registers through the blocks.
+// Walks the n cells of a row for a kernel that reads each cell's neighbours
+// along direction 0: the two end cells apart, each on a window holding the
+// zero beyond the row, and the cells between in blocks. `block` is called as
+// block(count, operands, first, shift): `count` cells from element `first` of
+// `operands`, whose outputs lie `shift` cells beyond the row's first.
+template <int D, typename Block>
+CFDCORE_INLINE void for_each_stencil_block(const stencil_row<D>& row, std::size_t n,
+                                           Block&& block) {
+    std::array<double, 3> window{};
+    block(lanes::cells<1>{}, end_cell(row, 0, n, window), 0, 0);
+    lanes::for_each_block(1, n - 1, [&](auto count, std::size_t m) { block(count, row, m, 0); });
+    if (n > 1) {
+        block(lanes::cells<1>{}, end_cell(row, n - 1, n, window), 0, n - 1);
+    }
+}
+
+// One Jacobi sweep over a row of n cells; r and next are at the row's first
+// cell. The operands arrive by value: a copy that nothing else can reach, so
+// the compiler holds its pointers in registers through the blocks.
 template <int D>
 lanes::mask sweep_row(const stencil_row<D> row, std::size_t n, double stop, double* r,
                       double* next) {
-    std::array<double, 3> window{};
-    lanes::mask outside = sweep_cells<1>(end_cell(row, 0, n, window), 0, stop, r, next);
-    std::size_t m = 1;
-    for (; m + lanes::width < n; m += lanes::width) {
-        outside |= sweep_cells<lanes::width>(row, m, stop, r, next);
-    }
-    for (; m + 1 < n; ++m) {
-        outside |= sweep_cells<1>(row, m, stop, r, next);
-    }
-    if (n > 1) {
-        const std::size_t last = n - 1;
-        outside |=
-            sweep_cells<1>(end_cell(row, last, n, window), 0, stop, r + last, next + last);
+    lanes::mask outside = lanes::none;
+    for_each_stencil_block(row, n,
+                           [&](auto count, const stencil_row<D>& in, std::size_t first,
+                               std::size_t shift) {
+                               outside |= sweep_cells(count, in, first, stop, r + shift,
+                                                      next + shift);
+                           });
+    return outside;
+}
+
+// The residual alone over N cells from element `first`, as `sweep_cells`
+// forms it: the conjugate gradient's true residual.
+template <std::size_t N, int D>
+inline lanes::mask residual_cells(lanes::cells<N>, const stencil_row<D>& in, std::size_t first,
+                                  double stop, double* CFDCORE_RESTRICT r) {
+    lanes::mask outside = lanes::none;
+    for (std::size_t k = 0; k < N; ++k) {
+        const std::size_t i = first + k;
+        const double ri = residual_at(in, i);
+        r[i] = ri;
+        outside |= outside_stop(ri, stop);
     }
     return outside;
+}
+
+template <int D>
+lanes::mask residual_row(const stencil_row<D> row, std::size_t n, double stop, double* r) {
+    lanes::mask outside = lanes::none;
+    for_each_stencil_block(row, n,
+                           [&](auto count, const stencil_row<D>& in, std::size_t first,
+                               std::size_t shift) {
+                               outside |= residual_cells(count, in, first, stop, r + shift);
+                           });
+    return outside;
+}
+
+// The matrix product q = a_P x - sum_f G_f x_N over N cells from element
+// `first`, zero where the cell is not an unknown.
+template <std::size_t N, int D>
+inline void product_cells(lanes::cells<N>, const stencil_row<D>& in, std::size_t first,
+                          double* CFDCORE_RESTRICT q) {
+    for (std::size_t k = 0; k < N; ++k) {
+        const std::size_t i = first + k;
+        q[i] = lanes::keep(in.free[i], in.a_p[i] * in.x[i] - neighbour_sum(in, i));
+    }
+}
+
+template <int D>
+void product_row(const stencil_row<D> row, std::size_t n, double* q) {
+    for_each_stencil_block(row, n,
+                           [&](auto count, const stencil_row<D>& in, std::size_t first,
+                               std::size_t shift) {
+                               product_cells(count, in, first, q + shift);
+                           });
+}
+
+// The conjugate gradient's elementwise steps over N cells of a row from
+// element `first`. Every output is restrict-qualified and overlaps no other
+// array of its call; an array updated in place is read through its output.
+
+// The start: c = C* with the SOLID cells at zero, and the preconditioner
+// 1 / a_P, zero where the cell is not an unknown.
+template <std::size_t N>
+inline void start_cells(lanes::cells<N>, std::size_t first, const double* c_star,
+                        const double* a_p, const lanes::mask* free, const lanes::mask* fluid,
+                        double* CFDCORE_RESTRICT c, double* CFDCORE_RESTRICT inverse) {
+    for (std::size_t k = 0; k < N; ++k) {
+        const std::size_t i = first + k;
+        c[i] = lanes::keep(fluid[i], c_star[i]);
+        inverse[i] = lanes::keep(free[i], 1.0 / a_p[i]);
+    }
+}
+
+// A restart: z = inverse * r and p = z.
+template <std::size_t N>
+inline void restart_cells(lanes::cells<N>, std::size_t first, const double* inverse,
+                          const double* r, double* CFDCORE_RESTRICT z,
+                          double* CFDCORE_RESTRICT p) {
+    for (std::size_t k = 0; k < N; ++k) {
+        const std::size_t i = first + k;
+        const double zi = inverse[i] * r[i];
+        z[i] = zi;
+        p[i] = zi;
+    }
+}
+
+// An iteration's update: c <- c + alpha p and r <- r - alpha q, and beside
+// them z = inverse * r, which the next direction reads unless this residual
+// ends the iteration. Returns the residuals' `outside_stop` masks, ORed.
+template <std::size_t N>
+inline lanes::mask update_cells(lanes::cells<N>, std::size_t first, double alpha, double stop,
+                                const double* p, const double* q, const double* inverse,
+                                double* CFDCORE_RESTRICT c, double* CFDCORE_RESTRICT r,
+                                double* CFDCORE_RESTRICT z) {
+    lanes::mask outside = lanes::none;
+    for (std::size_t k = 0; k < N; ++k) {
+        const std::size_t i = first + k;
+        c[i] = c[i] + alpha * p[i];
+        const double ri = r[i] - alpha * q[i];
+        r[i] = ri;
+        outside |= outside_stop(ri, stop);
+        z[i] = inverse[i] * ri;
+    }
+    return outside;
+}
+
+// The next direction: p <- p * beta, then p <- p + z.
+template <std::size_t N>
+inline void direction_cells(lanes::cells<N>, std::size_t first, double beta, const double* z,
+                            double* CFDCORE_RESTRICT p) {
+    for (std::size_t k = 0; k < N; ++k) {
+        const std::size_t i = first + k;
+        p[i] = p[i] * beta + z[i];
+    }
 }
 
 // What the set-up of one row's cells reads, each pointer at the row's first
@@ -435,10 +511,10 @@ struct setup_flags {
 // block, lanes::width of them: a maximum is the same in any order, and a NaN
 // is left out of it and flagged. PerCell reads the step per cell, else `dt`.
 // a_p, b and largest overlap nothing the operands point to.
-template <std::size_t N, bool PerCell, int D>
-inline setup_flags setup_cells(const setup_row<D>& in, std::size_t first, double dt,
-                               double* CFDCORE_RESTRICT a_p, double* CFDCORE_RESTRICT b,
-                               double* CFDCORE_RESTRICT largest) {
+template <bool PerCell, std::size_t N, int D>
+inline setup_flags setup_cells(lanes::cells<N>, const setup_row<D>& in, std::size_t first,
+                               double dt, double* CFDCORE_RESTRICT a_p,
+                               double* CFDCORE_RESTRICT b, double* CFDCORE_RESTRICT largest) {
     lanes::mask any = lanes::none;
     lanes::mask nan = lanes::none;
     for (std::size_t k = 0; k < N; ++k) {
@@ -467,17 +543,11 @@ template <bool PerCell, int D>
 setup_flags setup_row_cells(const setup_row<D> row, std::size_t n, double dt, double* a_p,
                             double* b, double* largest) {
     setup_flags flags;
-    std::size_t m = 0;
-    for (; m + lanes::width <= n; m += lanes::width) {
-        const setup_flags f = setup_cells<lanes::width, PerCell>(row, m, dt, a_p, b, largest);
+    lanes::for_each_block(0, n, [&](auto count, std::size_t m) {
+        const setup_flags f = setup_cells<PerCell>(count, row, m, dt, a_p, b, largest);
         flags.any |= f.any;
         flags.nan |= f.nan;
-    }
-    for (; m < n; ++m) {
-        const setup_flags f = setup_cells<1, PerCell>(row, m, dt, a_p, b, largest);
-        flags.any |= f.any;
-        flags.nan |= f.nan;
-    }
+    });
     return flags;
 }
 
@@ -662,10 +732,10 @@ solve_outcome conjugate_gradient(const implicit_input<D>& in, double stop, accep
                                  implicit_scratch<D>& scratch) {
     const auto& fields = *scratch.fields;
     const std::size_t n = fields.cell_count();
-    // The dot products' blocks: one row of the cell field each.
-    const std::size_t block = fields.cells(0);
+    // A row of the cell field: a block of the walks and of the dot products.
+    const std::size_t n0 = fields.cells(0);
+    const auto rows = fields.lines(0);
     const double* a_p = scratch.a_p.data();
-    const double* b = scratch.b.data();
     double* c = scratch.c.data();
     double* r = scratch.residual.data();
     double* inverse = scratch.inverse.data();
@@ -673,50 +743,53 @@ solve_outcome conjugate_gradient(const implicit_input<D>& in, double stop, accep
     double* p = scratch.p.data();
     double* q = scratch.q.data();
     const std::span<const double> r_span(r, n);
-    const std::span<const double> z_span(z, n);
-    const std::span<const double> p_span(p, n);
-    const std::span<const double> q_span(q, n);
-    for (std::size_t i = 0; i < n; ++i) {
-        c[i] = in.solid[i] ? 0.0 : in.c_star[i];
-        inverse[i] = is_fixed(in.solid, in.held, i) ? 0.0 : 1.0 / a_p[i];
+    const lanes::mask* free = set_masks(in, scratch);
+    const lanes::mask* fluid = scratch.fluid.data();
+    const auto row_of = [n0](const double* field, const layout::line& line) {
+        return std::span<const double>(field + line.cell, n0);
+    };
+    for (const auto& line : rows) {
+        const std::size_t at = line.cell;
+        lanes::for_each_block(0, n0, [&](auto count, std::size_t m) {
+            start_cells(count, m, in.c_star.data() + at, a_p + at, free + at, fluid + at, c + at,
+                        inverse + at);
+        });
     }
     std::uint64_t id = 0;
     // r = b + sum_f G_f C_N - a_P C, zero at the fixed cells; whether it meets the stop.
     const auto true_residual = [&]() {
-        max_abs largest;
-        for (const auto& row : fields.lines(0)) {
-            const auto s = stencil_of(fields, row);
-            for (std::size_t m = 0; m < s.n0; ++m) {
-                const std::size_t i = s.cell + m;
-                double ri = (b[i] + neighbour_sum(s, m, in.conductance, c)) - a_p[i] * c[i];
-                if (is_fixed(in.solid, in.held, i)) {
-                    ri = 0.0;
-                }
-                r[i] = ri;
-                largest.add(ri);
-            }
+        lanes::mask outside = lanes::none;
+        for (const auto& line : rows) {
+            const auto row =
+                operands<D>(stencil_of(fields, line), in.conductance, c, scratch, free);
+            outside |= residual_row(row, n0, stop, r + line.cell);
         }
         ++id;
-        return largest.within(stop);
+        return outside == lanes::none;
     };
-    // q = a_P p - sum_f G_f p_N, zero at the fixed cells.
-    const auto product = [&]() {
-        for (const auto& row : fields.lines(0)) {
-            const auto s = stencil_of(fields, row);
-            for (std::size_t m = 0; m < s.n0; ++m) {
-                const std::size_t i = s.cell + m;
-                const double qi = a_p[i] * p[i] - neighbour_sum(s, m, in.conductance, p);
-                q[i] = is_fixed(in.solid, in.held, i) ? 0.0 : qi;
-            }
+    // q = a_P p - sum_f G_f p_N, zero at the fixed cells, and p . q: each
+    // row's dot product is taken as soon as the row's product is formed.
+    const auto product_dot = [&]() {
+        double total = 0.0;
+        for (const auto& line : rows) {
+            const auto row =
+                operands<D>(stencil_of(fields, line), in.conductance, p, scratch, free);
+            product_row(row, n0, q + line.cell);
+            total += reduce::block_dot(row_of(p, line), row_of(q, line));
         }
+        return total;
     };
-    // z = inverse * r and p = z: the start, and each restart.
+    // z = inverse * r and p = z, and r . z: the start, and each restart.
     const auto restart = [&]() {
-        for (std::size_t i = 0; i < n; ++i) {
-            z[i] = inverse[i] * r[i];
-            p[i] = z[i];
+        double total = 0.0;
+        for (const auto& line : rows) {
+            const std::size_t at = line.cell;
+            lanes::for_each_block(0, n0, [&](auto count, std::size_t m) {
+                restart_cells(count, m, inverse + at, r + at, z + at, p + at);
+            });
+            total += reduce::block_dot(row_of(r, line), row_of(z, line));
         }
-        return reduce::blocked_dot(r_span, z_span, block);
+        return total;
     };
 
     if (true_residual() && accept.test(r_span, id)) {
@@ -727,16 +800,21 @@ solve_outcome conjugate_gradient(const implicit_input<D>& in, double stop, accep
     std::int64_t iterations = 0;
     std::int64_t restarts = 0;
     while (iterations < in.max_iter) {
-        product();
-        const double alpha = rz / reduce::blocked_dot(p_span, q_span, block);
-        max_abs largest;
-        for (std::size_t i = 0; i < n; ++i) {
-            c[i] = c[i] + alpha * p[i];
-            r[i] = r[i] - alpha * q[i];
-            largest.add(r[i]);
+        const double alpha = rz / product_dot();
+        // c, r, the stop's test on r, and with them z and r . z for the next
+        // direction, which only an iteration that goes on reads.
+        lanes::mask outside = lanes::none;
+        double rz_new = 0.0;
+        for (const auto& line : rows) {
+            const std::size_t at = line.cell;
+            lanes::for_each_block(0, n0, [&](auto count, std::size_t m) {
+                outside |= update_cells(count, m, alpha, stop, p + at, q + at, inverse + at,
+                                        c + at, r + at, z + at);
+            });
+            rz_new += reduce::block_dot(row_of(r, line), row_of(z, line));
         }
         ++iterations;
-        if (largest.within(stop) || iterations == in.max_iter) {
+        if (outside == lanes::none || iterations == in.max_iter) {
             // The recursion drifts from the true residual: confirm on it.
             if (true_residual() && accept.test(r_span, id)) {
                 accept.final(r_span, id);
@@ -749,14 +827,12 @@ solve_outcome conjugate_gradient(const implicit_input<D>& in, double stop, accep
             ++restarts;
             continue;
         }
-        for (std::size_t i = 0; i < n; ++i) {
-            z[i] = inverse[i] * r[i];
-        }
-        const double rz_new = reduce::blocked_dot(r_span, z_span, block);
         const double beta = rz_new / rz;
-        for (std::size_t i = 0; i < n; ++i) {
-            p[i] = p[i] * beta;
-            p[i] = p[i] + z[i];
+        for (const auto& line : rows) {
+            const std::size_t at = line.cell;
+            lanes::for_each_block(0, n0, [&](auto count, std::size_t m) {
+                direction_cells(count, m, beta, z + at, p + at);
+            });
         }
         rz = rz_new;
     }

@@ -76,4 +76,14 @@ double blocked_dot(std::span<const double> a, std::span<const double> b, std::si
     return total;
 }
 
+double block_dot(std::span<const double> a, std::span<const double> b) {
+    // A shorter b would be read past its end.
+    if (a.size() != b.size()) {
+        throw std::invalid_argument("block_dot: the two arrays differ in length");
+    }
+    const double* pa = a.data();
+    const double* pb = b.data();
+    return pairwise([pa, pb](std::size_t i) { return pa[i] * pb[i]; }, 0, a.size());
+}
+
 }  // namespace cfdcore::reduce

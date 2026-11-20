@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -81,6 +82,35 @@ TEST(Lanes, MasksWhereNotWithoutFlagsSetEveryCell) {
     std::vector<mask> out(4, none);
     masks_where_not({}, out);
     EXPECT_EQ(out, std::vector<mask>(4, all));
+}
+
+// The cells a walk visits, each with the count of the block it came in.
+std::vector<std::pair<std::size_t, std::size_t>> walked(std::size_t first, std::size_t last) {
+    std::vector<std::pair<std::size_t, std::size_t>> cells;
+    cfdcore::lanes::for_each_block(first, last,
+                                   [&]<std::size_t N>(cfdcore::lanes::cells<N>, std::size_t m) {
+                                       for (std::size_t k = 0; k < N; ++k) {
+                                           cells.emplace_back(m + k, N);
+                                       }
+                                   });
+    return cells;
+}
+
+TEST(Lanes, AWalkVisitsEveryCellOnceInOrder) {
+    const std::size_t width = cfdcore::lanes::width;
+    for (std::size_t first = 0; first < 3; ++first) {
+        for (std::size_t last = 0; last < 4 * width; ++last) {
+            const auto cells = walked(first, last);
+            const std::size_t count = last > first ? last - first : 0;
+            ASSERT_EQ(cells.size(), count) << first << " to " << last;
+            for (std::size_t i = 0; i < count; ++i) {
+                EXPECT_EQ(cells[i].first, first + i) << first << " to " << last;
+                // Whole blocks first, then the cells left one at a time.
+                EXPECT_EQ(cells[i].second, i < count - count % width ? width : 1u)
+                    << first << " to " << last << ", cell " << i;
+            }
+        }
+    }
 }
 
 TEST(Lanes, ABlockIsAWholeNumberOfVectorsAtEveryWidth) {

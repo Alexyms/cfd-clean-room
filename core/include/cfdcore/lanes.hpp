@@ -6,10 +6,10 @@
 // A kernel walks its field by rows, the lines along direction 0, which are
 // contiguous in memory (layout.hpp). The arithmetic of a row is written once,
 // as a block function: a template on a cell count N whose loop runs exactly N
-// times. It is called with N = `width` over the row's whole blocks and with
-// N = 1 over the cells left, so both run the same expressions. GCC at -O2
-// vectorises a loop only when its trip count is a constant, which a block of
-// `width` cells gives it and a loop to a row's length does not.
+// times. `for_each_block` calls it with N = `width` over the row's whole
+// blocks and with N = 1 over the cells left, so both run the same expressions.
+// GCC at -O2 vectorises a loop only when its trip count is a constant, which
+// a block of `width` cells gives it and a loop to a row's length does not.
 //
 // A block function reads its inputs through a struct of pointers and writes
 // through parameters qualified CFDCORE_RESTRICT: a promise that no input
@@ -65,6 +65,26 @@ namespace cfdcore::lanes {
 // or four 128-bit ones, so a block is a whole number of vectors at every
 // width the compiler may be given.
 inline constexpr std::size_t width = 8;
+
+// A cell count as a type, a block function's first parameter: the count
+// reaches the function as a template argument, so its loop's trip count is a
+// constant, and a callable can pass it on.
+template <std::size_t N>
+struct cells {};
+
+// Walks the cells from `first` up to, not including, `last`: block(cells<width>{}, m)
+// for each whole block starting at cell m, then block(cells<1>{}, m) for each
+// cell left. Does nothing when `last` is at or below `first`.
+template <typename Block>
+CFDCORE_INLINE void for_each_block(std::size_t first, std::size_t last, Block&& block) {
+    std::size_t m = first;
+    for (; m + width <= last; m += width) {
+        block(cells<width>{}, m);
+    }
+    for (; m < last; ++m) {
+        block(cells<1>{}, m);
+    }
+}
 
 // A condition on one cell: every bit set where it holds, none where it does not.
 using mask = std::uint64_t;
