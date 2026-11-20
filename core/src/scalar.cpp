@@ -1,5 +1,6 @@
 #include "cfdcore/scalar.hpp"
 
+#include "cfdcore/lanes.hpp"
 #include "cfdcore/reduce.hpp"
 
 #include <algorithm>
@@ -269,6 +270,168 @@ inline bool is_fixed(std::span<const bool> solid, std::span<const bool> held, st
     return solid[i] || (!held.empty() && held[i]);
 }
 
+// What the stencil of one row's cells reads, each pointer at the row's first
+// cell, so that cell m of the row is element m of every array.
+//
+// x:      the field whose neighbours are summed; x[m - 1] and x[m + 1] are
+//         read, so only the cells that have both neighbours in the row are
+//         reached through it (the two end cells go through `end_cell`)
+// g:      direction 0's conductances, g[m] on cell m's low face and g[m + 1]
+//         on its high one
+// x_low, x_high, g_low, g_high: for each direction d >= 1, the rows of x on
+//         the low and the high side (a row of zeros where the field ends, the
+//         reference's padding) and the conductances on the cells' low and
+//         high faces normal to d; entry 0 is not used
+// b, a_p: the system's right-hand side and diagonal
+// free:   set where the cell is an unknown (not SOLID, not held)
+// fluid:  set where the cell is not SOLID
+template <int D>
+struct stencil_row {
+    const double* x = nullptr;
+    const double* g = nullptr;
+    const double* x_low[D] = {};
+    const double* x_high[D] = {};
+    const double* g_low[D] = {};
+    const double* g_high[D] = {};
+    const double* b = nullptr;
+    const double* a_p = nullptr;
+    const lanes::mask* free = nullptr;
+    const lanes::mask* fluid = nullptr;
+};
+
+// The operands of a row for the field `x`, on a system `implicit_system` set
+// up, with the masks `set_masks` formed and the `free` array it returned.
+template <int D>
+stencil_row<D> operands(const row_stencil<D>& s,
+                        const std::array<std::span<const double>, D>& conductance,
+                        const double* x, const implicit_scratch<D>& scratch,
+                        const lanes::mask* free) {
+    stencil_row<D> row;
+    row.x = x + s.cell;
+    row.g = conductance[0].data() + s.face0;
+    for (int d = 1; d < D; ++d) {
+        const std::size_t low = s.cell + s.face_offset[d];
+        row.g_low[d] = conductance[d].data() + low;
+        row.g_high[d] = conductance[d].data() + low + s.stride[d];
+        row.x_low[d] = s.has_low[d] ? x + s.cell - s.stride[d] : scratch.zeros.data();
+        row.x_high[d] = s.has_high[d] ? x + s.cell + s.stride[d] : scratch.zeros.data();
+    }
+    row.b = scratch.b.data() + s.cell;
+    row.a_p = scratch.a_p.data() + s.cell;
+    row.free = free + s.cell;
+    row.fluid = scratch.fluid.data() + s.cell;
+    return row;
+}
+
+// The operands of cell m of an n-cell row alone, as element 0. Its neighbours
+// along direction 0 are read from `window`, which is filled with the cell's
+// value between its two neighbours', a zero standing for a neighbour beyond
+// the row's end as the reference's padding does. The window must outlive the
+// operands.
+template <int D>
+stencil_row<D> end_cell(const stencil_row<D>& row, std::size_t m, std::size_t n,
+                        std::array<double, 3>& window) {
+    window = {m > 0 ? row.x[m - 1] : 0.0, row.x[m], m + 1 < n ? row.x[m + 1] : 0.0};
+    stencil_row<D> cell = row;
+    cell.x = window.data() + 1;
+    cell.g = row.g + m;
+    for (int d = 1; d < D; ++d) {
+        cell.x_low[d] = row.x_low[d] + m;
+        cell.x_high[d] = row.x_high[d] + m;
+        cell.g_low[d] = row.g_low[d] + m;
+        cell.g_high[d] = row.g_high[d] + m;
+    }
+    cell.b = row.b + m;
+    cell.a_p = row.a_p + m;
+    cell.free = row.free + m;
+    cell.fluid = row.fluid + m;
+    return cell;
+}
+
+// `_neighbour_sum` at element i: sum_f G_f x_N, the terms added east, west
+// (direction 0's high then low face), then each further direction's high then
+// low face: north, south for D = 2.
+template <int D>
+CFDCORE_INLINE double neighbour_sum(const stencil_row<D>& in, std::size_t i) {
+    double sum = in.g[i + 1] * in.x[i + 1] + in.g[i] * in.x[i - 1];
+    for (int d = 1; d < D; ++d) {
+        sum = sum + in.g_high[d][i] * in.x_high[d][i];
+        sum = sum + in.g_low[d][i] * in.x_low[d][i];
+    }
+    return sum;
+}
+
+// The residual r = (b + sum_f G_f x_N) - a_P x at element i, zero where the
+// cell is not an unknown.
+template <int D>
+CFDCORE_INLINE double residual_at(const stencil_row<D>& in, std::size_t i) {
+    return lanes::keep(in.free[i], (in.b[i] + neighbour_sum(in, i)) - in.a_p[i] * in.x[i]);
+}
+
+// Whether a residual fails the stop: the reference's `np.abs(r).max() <= stop`
+// holds exactly when no cell's mask is set (a NaN residual, or a NaN stop,
+// sets it).
+CFDCORE_INLINE lanes::mask outside_stop(double r, double stop) {
+    return lanes::mask_of(!(std::fabs(r) <= stop));
+}
+
+// One Jacobi sweep over N cells from element `first` (lanes.hpp): the
+// residual into r, the next iterate x + r / a_P into next with SOLID cells at
+// zero. Returns the cells' `outside_stop` masks, ORed. r and next overlap
+// nothing the operands point to.
+template <std::size_t N, int D>
+inline lanes::mask sweep_cells(const stencil_row<D>& in, std::size_t first, double stop,
+                               double* CFDCORE_RESTRICT r, double* CFDCORE_RESTRICT next) {
+    lanes::mask outside = lanes::none;
+    for (std::size_t k = 0; k < N; ++k) {
+        const std::size_t i = first + k;
+        const double ri = residual_at(in, i);
+        r[i] = ri;
+        outside |= outside_stop(ri, stop);
+        next[i] = lanes::keep(in.fluid[i], in.x[i] + ri / in.a_p[i]);
+    }
+    return outside;
+}
+
+// One Jacobi sweep over a row of n cells: its two end cells apart, the cells
+// between in blocks. r and next are at the row's first cell. The operands
+// arrive by value: a copy that nothing else can reach, so the compiler holds
+// its pointers in registers through the blocks.
+template <int D>
+lanes::mask sweep_row(const stencil_row<D> row, std::size_t n, double stop, double* r,
+                      double* next) {
+    std::array<double, 3> window{};
+    lanes::mask outside = sweep_cells<1>(end_cell(row, 0, n, window), 0, stop, r, next);
+    std::size_t m = 1;
+    for (; m + lanes::width < n; m += lanes::width) {
+        outside |= sweep_cells<lanes::width>(row, m, stop, r, next);
+    }
+    for (; m + 1 < n; ++m) {
+        outside |= sweep_cells<1>(row, m, stop, r, next);
+    }
+    if (n > 1) {
+        const std::size_t last = n - 1;
+        outside |=
+            sweep_cells<1>(end_cell(row, last, n, window), 0, stop, r + last, next + last);
+    }
+    return outside;
+}
+
+// Forms the masks of a solve's cells in the scratch, `fluid` where not SOLID
+// and `free` where neither SOLID nor held, and returns the `free` array to
+// read: with no held cell the two are one array, so a block reads one.
+template <int D>
+const lanes::mask* set_masks(const implicit_input<D>& in, implicit_scratch<D>& scratch) {
+    lanes::masks_where_not(in.solid, scratch.fluid);
+    if (in.held.empty()) {
+        return scratch.fluid.data();
+    }
+    for (std::size_t i = 0; i < scratch.free.size(); ++i) {
+        scratch.free[i] = scratch.fluid[i] & lanes::mask_of(!in.held[i]);
+    }
+    return scratch.free.data();
+}
+
 }  // namespace
 
 template <int D>
@@ -285,7 +448,10 @@ implicit_scratch<D>::implicit_scratch(const layout::layout<D>& f)
       p(f.cell_count(), 0.0),
       q(f.cell_count(), 0.0),
       dt_masked(f.cell_count(), 0.0),
-      terms(f.cell_count(), 0.0) {}
+      terms(f.cell_count(), 0.0),
+      free(f.cell_count(), lanes::all),
+      fluid(f.cell_count(), lanes::all),
+      zeros(f.cells(0), 0.0) {}
 
 implicit_status check_leftover_bound(std::optional<double> bound) {
     // Written as "not >= 0" so that a NaN bound is refused as well.
@@ -370,48 +536,43 @@ solve_outcome jacobi(const implicit_input<D>& in, double stop, acceptance& accep
                      implicit_scratch<D>& scratch, std::span<double> out) {
     const auto& fields = *scratch.fields;
     const std::size_t n = fields.cell_count();
-    const double* a_p = scratch.a_p.data();
-    const double* b = scratch.b.data();
+    const std::size_t n0 = fields.cells(0);
     double* r = scratch.residual.data();
-    // The iterate and the next one swap buffers each sweep.
-    double* c = scratch.c.data();
-    double* next = scratch.next.data();
-    std::copy(in.c_star.begin(), in.c_star.end(), c);
     const std::span<const double> residual(r, n);
-    const bool with_held = !in.held.empty();
+    const lanes::mask* free = set_masks(in, scratch);
+    // The iterate is C* itself until the first update. The next iterate is
+    // written to `out` and to the scratch in turn, so no sweep copies a field.
+    const double* x = in.c_star.data();
+    double* next = out.data();
+    double* spare = scratch.next.data();
     std::int64_t sweeps = 0;
     std::uint64_t id = 0;
     bool converged = false;
     while (true) {
-        max_abs largest;
-        for (const auto& row : fields.lines(0)) {
-            const auto s = stencil_of(fields, row);
-            for (std::size_t m = 0; m < s.n0; ++m) {
-                const std::size_t i = s.cell + m;
-                double ri = (b[i] + neighbour_sum(s, m, in.conductance, c)) - a_p[i] * c[i];
-                if (in.solid[i] || (with_held && in.held[i])) {
-                    ri = 0.0;
-                }
-                r[i] = ri;
-                largest.add(ri);
-                // c + r / a_P, then the SOLID cells set to zero; used only if
-                // this sweep's residual does not stop the solve.
-                next[i] = in.solid[i] ? 0.0 : c[i] + ri / a_p[i];
-            }
+        // The residual of x, and x + r / a_P with the SOLID cells at zero,
+        // used only if this residual does not stop the solve.
+        lanes::mask outside = lanes::none;
+        for (const auto& line : fields.lines(0)) {
+            const auto row =
+                operands<D>(stencil_of(fields, line), in.conductance, x, scratch, free);
+            outside |= sweep_row(row, n0, stop, r + line.cell, next + line.cell);
         }
         ++id;
-        if (largest.within(stop) && accept.test(residual, id)) {
+        if (outside == lanes::none && accept.test(residual, id)) {
             converged = true;
             break;
         }
         if (sweeps >= in.max_iter) {
             break;
         }
-        std::swap(c, next);
+        x = next;
+        std::swap(next, spare);
         ++sweeps;
     }
     accept.final(residual, id);
-    std::copy(c, c + n, out.begin());
+    if (x != out.data()) {
+        std::copy(x, x + n, out.begin());
+    }
     return {sweeps, converged, 0};
 }
 

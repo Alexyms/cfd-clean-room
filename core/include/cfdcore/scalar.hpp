@@ -285,6 +285,14 @@ struct implicit_scratch {
     std::vector<double> q;          // CG's product A p
     std::vector<double> dt_masked;  // a per-cell dt with SOLID cells at zero
     std::vector<double> terms;      // the leftover's terms dt r per cell
+    // Set where a cell is an unknown (neither SOLID nor held) and where it is
+    // not SOLID (lanes.hpp), formed from a solve's masks at its start; `free`
+    // is formed only when a cell is held, `fluid` standing for it otherwise.
+    std::vector<std::uint64_t> free;
+    std::vector<std::uint64_t> fluid;
+    // One row of zeros, cells(0) long: the neighbours of a row beyond the
+    // field's end, as the reference's zero padding reads them.
+    std::vector<double> zeros;
 };
 
 // The leftover bound's refusal: negative or NaN (an infinite bound accepts
@@ -362,7 +370,8 @@ struct solve_outcome {
 // sum taken east, west, north, south, a missing neighbour read as zero), zero
 // in SOLID and held cells; stops when the largest |r| is at most `stop` and
 // `accept` takes the iterate, or at the cap; else C <- C + r / a_P with SOLID
-// cells set to zero. The returned field is written to `out` (a cell field);
+// cells set to zero. The returned field is written to `out` (a cell field),
+// which also holds iterates while the solve runs and must overlap no input;
 // `accept.final` is called with the last residual. A non-negative C* gives
 // non-negative iterates throughout.
 template <int D>

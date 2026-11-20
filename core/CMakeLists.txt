@@ -69,6 +69,7 @@ if(CFD_CORE_TESTS)
     include(GoogleTest)
     add_executable(cfdcore_tests
         tests/test_grid.cpp
+        tests/test_lanes.cpp
         tests/test_reduce.cpp
         tests/test_scalar.cpp)
     target_link_libraries(cfdcore_tests PRIVATE cfdcore cfdcore_flags GTest::gtest_main)
