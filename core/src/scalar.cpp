@@ -230,23 +230,6 @@ double neighbour_sum(const row_stencil<D>& s, std::size_t m,
     return sum;
 }
 
-// The diagonal's extra terms at cell m of a row: west, east (direction 0's
-// low then high face), each further direction's low then high face (south,
-// north for D = 2), then the sink. The transport gate's bits depend on this
-// order.
-template <int D, typename Conductances>
-double diagonal_extra(const row_stencil<D>& s, std::size_t m,
-                      const Conductances& g, const double* sink) {
-    const std::size_t i = s.cell + m;
-    double extra = g[0][s.face0 + m] + g[0][s.face0 + m + 1];
-    for (int d = 1; d < D; ++d) {
-        const std::size_t low = i + s.face_offset[d];
-        extra = extra + g[d][low];
-        extra = extra + g[d][low + s.stride[d]];
-    }
-    return extra + sink[i];
-}
-
 // The largest |x| seen so far, as np.abs(x).max() forms it: a NaN anywhere
 // makes the maximum NaN, which no stop accepts.
 class max_abs {
@@ -417,6 +400,87 @@ lanes::mask sweep_row(const stencil_row<D> row, std::size_t n, double stop, doub
     return outside;
 }
 
+// What the set-up of one row's cells reads, each pointer at the row's first
+// cell.
+//
+// g:              direction 0's conductances, g[m] on cell m's low face and
+//                 g[m + 1] on its high one
+// g_low, g_high:  for each direction d >= 1, the conductances on the cells'
+//                 low and high faces normal to d; entry 0 is not used
+// sink, volume, c_star: the solve's inputs of those names
+// dt_cells:       the per-cell step, read only by the per-cell set-up
+template <int D>
+struct setup_row {
+    const double* g = nullptr;
+    const double* g_low[D] = {};
+    const double* g_high[D] = {};
+    const double* sink = nullptr;
+    const double* volume = nullptr;
+    const double* c_star = nullptr;
+    const double* dt_cells = nullptr;
+};
+
+// What a set-up pass found: `any` set if a cell's diagonal has a non-zero
+// extra term (the reference's `diag_extra.any()`: a NaN counts, a -0.0 does
+// not), `nan` set if a |b| is NaN.
+struct setup_flags {
+    lanes::mask any = lanes::none;
+    lanes::mask nan = lanes::none;
+};
+
+// The set-up of N cells from element `first` (lanes.hpp): the diagonal's extra
+// terms west, east (direction 0's low then high face), each further
+// direction's low then high face, then the sink; a_P = V / dt + that;
+// b = (V / dt) C*. `largest` holds one running maximum of |b| per cell of a
+// block, lanes::width of them: a maximum is the same in any order, and a NaN
+// is left out of it and flagged. PerCell reads the step per cell, else `dt`.
+// a_p, b and largest overlap nothing the operands point to.
+template <std::size_t N, bool PerCell, int D>
+inline setup_flags setup_cells(const setup_row<D>& in, std::size_t first, double dt,
+                               double* CFDCORE_RESTRICT a_p, double* CFDCORE_RESTRICT b,
+                               double* CFDCORE_RESTRICT largest) {
+    lanes::mask any = lanes::none;
+    lanes::mask nan = lanes::none;
+    for (std::size_t k = 0; k < N; ++k) {
+        const std::size_t i = first + k;
+        double extra = in.g[i] + in.g[i + 1];
+        for (int d = 1; d < D; ++d) {
+            extra = extra + in.g_low[d][i];
+            extra = extra + in.g_high[d][i];
+        }
+        extra = extra + in.sink[i];
+        any |= lanes::mask_of(extra != 0.0);
+        const double over_dt = PerCell ? in.volume[i] / in.dt_cells[i] : in.volume[i] / dt;
+        a_p[i] = over_dt + extra;
+        const double bi = over_dt * in.c_star[i];
+        b[i] = bi;
+        const double magnitude = std::fabs(bi);
+        nan |= lanes::mask_of(magnitude != magnitude);
+        largest[k] = magnitude > largest[k] ? magnitude : largest[k];
+    }
+    return {any, nan};
+}
+
+// The set-up of a row of n cells, in blocks and then the cells left. a_p and
+// b are at the row's first cell.
+template <bool PerCell, int D>
+setup_flags setup_row_cells(const setup_row<D> row, std::size_t n, double dt, double* a_p,
+                            double* b, double* largest) {
+    setup_flags flags;
+    std::size_t m = 0;
+    for (; m + lanes::width <= n; m += lanes::width) {
+        const setup_flags f = setup_cells<lanes::width, PerCell>(row, m, dt, a_p, b, largest);
+        flags.any |= f.any;
+        flags.nan |= f.nan;
+    }
+    for (; m < n; ++m) {
+        const setup_flags f = setup_cells<1, PerCell>(row, m, dt, a_p, b, largest);
+        flags.any |= f.any;
+        flags.nan |= f.nan;
+    }
+    return flags;
+}
+
 // Forms the masks of a solve's cells in the scratch, `fluid` where not SOLID
 // and `free` where neither SOLID nor held, and returns the `free` array to
 // read: with no held cell the two are one array, so a block reads one.
@@ -464,29 +528,46 @@ implicit_status check_leftover_bound(std::optional<double> bound) {
 template <int D>
 implicit_setup implicit_system(const implicit_input<D>& in, implicit_scratch<D>& scratch) {
     const auto& fields = *scratch.fields;
+    const std::size_t n0 = fields.cells(0);
+    const bool per_cell = !in.dt_cells.empty();
     double* a_p = scratch.a_p.data();
-    bool any = false;
-    for (const auto& row : fields.lines(0)) {
-        const auto s = stencil_of(fields, row);
-        for (std::size_t m = 0; m < s.n0; ++m) {
-            const double extra = diagonal_extra(s, m, in.conductance, in.sink.data());
-            a_p[s.cell + m] = extra;
-            // `.any()`: a NaN is true, a -0.0 false.
-            any = any || extra != 0.0;
+    double* b = scratch.b.data();
+    // One pass: the diagonal, the right-hand side and what the stop reads.
+    std::array<double, lanes::width> largest{};
+    setup_flags flags;
+    for (const auto& line : fields.lines(0)) {
+        const auto s = stencil_of(fields, line);
+        setup_row<D> row;
+        row.g = in.conductance[0].data() + s.face0;
+        for (int d = 1; d < D; ++d) {
+            const std::size_t low = s.cell + s.face_offset[d];
+            row.g_low[d] = in.conductance[d].data() + low;
+            row.g_high[d] = in.conductance[d].data() + low + s.stride[d];
         }
+        row.sink = in.sink.data() + s.cell;
+        row.volume = in.volume.data() + s.cell;
+        row.c_star = in.c_star.data() + s.cell;
+        row.dt_cells = per_cell ? in.dt_cells.data() + s.cell : nullptr;
+        const setup_flags f =
+            per_cell ? setup_row_cells<true>(row, n0, in.dt, a_p + s.cell, b + s.cell,
+                                             largest.data())
+                     : setup_row_cells<false>(row, n0, in.dt, a_p + s.cell, b + s.cell,
+                                              largest.data());
+        flags.any |= f.any;
+        flags.nan |= f.nan;
     }
-    if (!any) {
+    if (flags.any == lanes::none) {
         return {false, 0.0};
     }
-    const bool scalar = in.dt_cells.empty();
-    max_abs largest;
-    for (std::size_t i = 0; i < fields.cell_count(); ++i) {
-        const double over_dt = scalar ? in.volume[i] / in.dt : in.volume[i] / in.dt_cells[i];
-        a_p[i] = over_dt + a_p[i];
-        scratch.b[i] = over_dt * in.c_star[i];
-        largest.add(scratch.b[i]);
+    // `np.abs(b).max()`: NaN if any |b| is.
+    double value = 0.0;
+    for (const double lane : largest) {
+        value = lane > value ? lane : value;
     }
-    return {true, in.tol * largest.value()};
+    if (flags.nan != lanes::none) {
+        value = std::numeric_limits<double>::quiet_NaN();
+    }
+    return {true, in.tol * value};
 }
 
 acceptance::acceptance(double dt, std::span<const double> dt_cells, std::span<const bool> solid,

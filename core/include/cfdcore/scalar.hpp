@@ -306,7 +306,8 @@ implicit_status check_leftover_bound(std::optional<double> bound);
 // extra terms are summed west, east, south, north (low then high face of
 // each direction), then the sink; a_P = V / dt + that; b = (V / dt) C*; the
 // stop is tol times the largest |b| over every cell, NaN if any |b| is NaN.
-// When nothing diffuses or sinks, a_P and b are not formed and the stop is 0.
+// When nothing diffuses or sinks the stop is 0, and a_P and b hold what the
+// one pass wrote, which no caller reads.
 struct implicit_setup {
     bool diffuses;
     double stop;
