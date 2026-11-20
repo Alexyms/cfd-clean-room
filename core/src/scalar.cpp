@@ -551,8 +551,8 @@ stencil_row<D> at_cell(const stencil_row<D>& row, std::size_t m, std::size_t n) 
 // they are the elements either side of the cell's own: one pointer for three
 // loads, which is what lets the compiler keep every pointer of a block in a
 // register (with a pointer per neighbour it ran out, reloaded two from the
-// stack every iteration, and the sweep took a sixth longer: prompt 89's
-// report, T6). At a row's end they are `west` and `east`.
+// stack every iteration, and the sweep ran slower: prompt 89's report, T6).
+// At a row's end they are `west` and `east`.
 struct row_between {};
 struct row_end {};
 
