@@ -158,6 +158,27 @@ TEST(Grid, SolidIsTheHandedCode) {
     EXPECT_FALSE(g2.solid(1));
 }
 
+TEST(Grid, SolidFlagsAreMasksOfTheSolidCells) {
+    // One mask per cell in the cell field's layout, every bit set where the
+    // cell is SOLID and none where it is not, which is what a kernel's block
+    // reads as a value.
+    grid_arrays a;
+    grid<2> g(a.input());
+    const auto flags = g.solid_flags();
+    ASSERT_EQ(flags.size(), 6u);
+    const std::array<bool, 6> solid{false, true, false, false, false, true};
+    for (std::size_t cell = 0; cell < 6; ++cell) {
+        EXPECT_EQ(flags[cell], solid[cell] ? ~std::uint64_t{0} : std::uint64_t{0}) << cell;
+        EXPECT_EQ(g.solid(cell), solid[cell]) << cell;
+    }
+    // Another code for SOLID moves the flags with it.
+    auto other = a.input();
+    other.solid = 2;
+    grid<2> g2(other);
+    EXPECT_EQ(g2.solid_flags()[0], ~std::uint64_t{0});
+    EXPECT_EQ(g2.solid_flags()[1], std::uint64_t{0});
+}
+
 TEST(Grid, TheGridCopiesItsInputs) {
     grid_arrays a;
     grid<2> g(a.input());

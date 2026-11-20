@@ -18,9 +18,9 @@ namespace {
 template <int D>
 class line_view {
 public:
-    line_view(const grid::grid<D>& g, std::span<const double> c, const layout::line& line,
-              std::size_t stride, std::size_t n, double low, double high)
-        : g_(g), c_(c), cell_(line.cell), stride_(stride), n_(n), low_(low), high_(high) {}
+    line_view(std::span<const double> c, const layout::line& line, std::size_t stride,
+              std::size_t n, double low, double high)
+        : c_(c), cell_(line.cell), stride_(stride), n_(n), low_(low), high_(high) {}
 
     double node(std::size_t m) const {
         if (m == 0) {
@@ -32,16 +32,7 @@ public:
         return c_[cell_ + (m - 1) * stride_];
     }
 
-    // mesh_axes pads the SOLID mask with one False on each side.
-    bool solid_node(std::size_t m) const {
-        if (m == 0 || m == n_ + 1) {
-            return false;
-        }
-        return g_.solid(cell_ + (m - 1) * stride_);
-    }
-
 private:
-    const grid::grid<D>& g_;
     std::span<const double> c_;
     std::size_t cell_;
     std::size_t stride_;
@@ -322,7 +313,7 @@ void quick_face_values(const scheme<D>& s, int d, std::span<const double> c,
     const auto& w = s.weights(d);
     const auto lines = fields.lines(d);
     for (std::size_t l = 0; l < lines.size(); ++l) {
-        const line_view<D> line(g, c, lines[l], stride, n, c_low[l], c_high[l]);
+        const line_view<D> line(c, lines[l], stride, n, c_low[l], c_high[l]);
         for (std::size_t f = 0; f + 1 < n; ++f) {
             const std::size_t face = lines[l].face + (f + 1) * stride;
             out[face] = quick_at(w, f, positive[face], line);

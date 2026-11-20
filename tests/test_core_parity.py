@@ -2532,3 +2532,88 @@ def test_advective_flux_is_bit_for_bit_at_every_row_length(
         reference.flat[differ[:3]],
         out.flat[differ[:3]],
     )
+
+
+@REFERENCE_DIVIDES_BY_ZERO
+@pytest.mark.parametrize("where", ["c_star", "volume"])
+@pytest.mark.parametrize("method", ["jacobi", "cg"])
+def test_implicit_a_nan_input_keeps_the_solve_running_to_its_cap(
+    method: str, where: str
+) -> None:
+    """A NaN in C* or in a volume: a NaN residual and a NaN stop never meet the stop.
+
+    The reference's ``np.abs(r).max() <= stop`` is false for a NaN, so the solve
+    runs to its cap unconverged (under CG after a fallback to Jacobi). A stop
+    written as ``abs(r) > stop`` is false for a NaN and would end the solve at
+    its first residual, converged. The transport solver refuses a non-finite
+    field before the solve, so no run meets this; a direct caller of the binding
+    can. A NaN's payload is not claimed, so the fields are compared by where they
+    are NaN and, elsewhere, bit for bit.
+    """
+    ny, nx = 5, 11
+    rng = np.random.default_rng([SEED, 89, ny, nx, 60, int(method == "cg")])
+    grid = _row_grid(ny, nx, rng)
+    arguments = _row_system(grid, method, "scalar", "none", rng)
+    nan_cell = (2, 4)
+    while grid.solid[nan_cell]:
+        nan_cell = (nan_cell[0], nan_cell[1] + 1)
+    c_star = arguments.c_star.copy()
+    volume = arguments.volume.copy()
+    (c_star if where == "c_star" else volume)[nan_cell] = np.nan
+    arguments = arguments.replaced(c_star=c_star, volume=volume)
+    with np.errstate(all="ignore"):
+        reference = arguments.reference()
+    out, core = arguments.core(_cfdcore.ImplicitScratch2(grid.core()))
+    assert reference.iterations == arguments.max_iter
+    assert not reference.converged
+    assert core.iterations == reference.iterations
+    assert core.converged == reference.converged
+    assert core.fallbacks == reference.fallbacks
+    assert np.array_equal(np.isnan(out), np.isnan(reference.field))
+    finite = ~np.isnan(reference.field)
+    assert _same_bits(out[finite], reference.field[finite])
+
+
+@pytest.mark.parametrize("upwind", [False, True])
+@pytest.mark.parametrize("d", [0, 1])
+@pytest.mark.parametrize(
+    "cell", [(2, 5), (0, 0), (4, 10)], ids=["inside", "corner-low", "corner-high"]
+)
+def test_advective_flux_puts_nans_at_the_references_faces(
+    cell: tuple[int, int], d: int, upwind: bool
+) -> None:
+    """A NaN in the field: the core has a NaN at the faces the reference does, and the same bits elsewhere.
+
+    The header of ``scalar.hpp`` claims the faces and not the NaN's sign or
+    payload. A face whose downstream difference is NaN takes the clamp's
+    limited value, which is NaN, so an upwind-free face next to the NaN cell is
+    NaN; a clamp that read a NaN difference as zero would give such a face the
+    upstream value instead. The transport solver refuses a non-finite field
+    before the flux runs, so no run meets this; a direct caller of the binding can.
+    """
+    ny, nx = 5, 11
+    rng = np.random.default_rng(
+        [SEED, 89, ny, nx, 70, d, int(upwind), cell[0], cell[1]]
+    )
+    grid = _row_grid(ny, nx, rng)
+    shape = (ny, nx + 1) if d == 0 else (ny + 1, nx)
+    c = _values(rng, (ny, nx))
+    c[cell] = np.nan
+    # The reference's face values at the NaN cell's neighbours must be read, so the
+    # cell is not SOLID: a SOLID cell's value is replaced where the far-cell rule reads it.
+    flux = _planted_flux(shape, rng)
+    inflow = _values(rng, shape)
+    axis_x, axis_y = grid.axes()
+    with np.errstate(all="ignore"):
+        if d == 0:
+            reference = advective_flux(c, flux, inflow, axis_x, upwind, None)
+        else:
+            reference = advective_flux(c.T, flux.T, inflow.T, axis_y, upwind, None).T
+    out = np.full(shape, 0.0)
+    scheme = _cfdcore.ScalarScheme2(grid.core())
+    _cfdcore.advective_flux(scheme, d, c, flux, inflow, upwind, out, None)
+    reference = np.ascontiguousarray(reference)
+    assert np.array_equal(np.isnan(out), np.isnan(reference))
+    finite = ~np.isnan(reference)
+    assert _same_bits(out[finite], reference[finite])
+    assert np.isnan(reference).any()

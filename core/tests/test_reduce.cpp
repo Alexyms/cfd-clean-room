@@ -229,7 +229,7 @@ using cfdcore::reduce::block_dot;
 TEST(BlockDot, TheBlocksAddedInOrderAreBlockedDot) {
     // Lengths below, at and above a block of 128, and a block length that
     // leaves a short last block: each block's term added to 0.0 in block
-    // order is blocked_dot's value bit for bit.
+    // order is blocked_dot's value bit for bit, compared as bits.
     for (const std::size_t n : {std::size_t{1}, std::size_t{7}, std::size_t{128},
                                 std::size_t{300}, std::size_t{1000}}) {
         std::vector<double> a(n);
@@ -246,7 +246,8 @@ TEST(BlockDot, TheBlocksAddedInOrderAreBlockedDot) {
                 total += block_dot(std::span<const double>(a).subspan(first, count),
                                    std::span<const double>(b).subspan(first, count));
             }
-            EXPECT_EQ(total, blocked_dot(a, b, block)) << n << " terms, blocks of " << block;
+            EXPECT_EQ(bits(total), bits(blocked_dot(a, b, block)))
+                << n << " terms, blocks of " << block;
         }
     }
 }

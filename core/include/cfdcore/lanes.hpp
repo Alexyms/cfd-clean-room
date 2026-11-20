@@ -39,6 +39,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <stdexcept>
 
 // `restrict` as the compiler spells it: the pointer is the only way the
 // function reaches what it points to.
@@ -112,12 +113,18 @@ CFDCORE_INLINE double select(mask m, double if_set, double otherwise) {
 //
 // flags: one bool per cell, or empty for none set
 // out:   output, one mask per cell; its length is the cell count
+//
+// Throws std::invalid_argument for a non-empty `flags` whose length is not
+// `out`'s (a shorter one would be read past its end), in every build.
 inline void masks_where_not(std::span<const bool> flags, std::span<mask> out) {
     if (flags.empty()) {
         for (mask& m : out) {
             m = all;
         }
         return;
+    }
+    if (flags.size() != out.size()) {
+        throw std::invalid_argument("masks_where_not: the flags and the masks differ in length");
     }
     for (std::size_t i = 0; i < out.size(); ++i) {
         out[i] = mask_of(!flags[i]);

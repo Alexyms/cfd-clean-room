@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 
@@ -82,6 +83,22 @@ TEST(Lanes, MasksWhereNotWithoutFlagsSetEveryCell) {
     std::vector<mask> out(4, none);
     masks_where_not({}, out);
     EXPECT_EQ(out, std::vector<mask>(4, all));
+}
+
+TEST(Lanes, MasksWhereNotRefuseFlagsOfAnotherLength) {
+    // A shorter flags array would be read past its end, a longer one is not
+    // the cell field's: both are refused, and nothing is written.
+    const bool flags[3] = {false, true, false};
+    std::vector<mask> longer(4, std::uint64_t{0x1234});
+    EXPECT_THROW(masks_where_not(flags, longer), std::invalid_argument);
+    EXPECT_EQ(longer, std::vector<mask>(4, std::uint64_t{0x1234}));
+    std::vector<mask> shorter(2, std::uint64_t{0x1234});
+    EXPECT_THROW(masks_where_not(flags, shorter), std::invalid_argument);
+    EXPECT_EQ(shorter, std::vector<mask>(2, std::uint64_t{0x1234}));
+    // The same length is accepted, and so is no flags at any length.
+    std::vector<mask> same(3, none);
+    EXPECT_NO_THROW(masks_where_not(flags, same));
+    EXPECT_NO_THROW(masks_where_not({}, longer));
 }
 
 // The cells a walk visits, each with the count of the block it came in.
