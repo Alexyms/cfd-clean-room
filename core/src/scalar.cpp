@@ -462,9 +462,10 @@ inline bool is_fixed(std::span<const bool> solid, std::span<const bool> held, st
 // What the stencil of one row's cells reads, each pointer at the row's first
 // cell, so that cell m of the row is element m of every array.
 //
-// x:      the field whose neighbours are summed; x[m - 1] and x[m + 1] are
-//         read, so only the cells that have both neighbours in the row are
-//         reached through it (the two end cells go through `end_cell`)
+// x:      the field whose neighbours are summed; the elements either side
+//         of cell m are read, so only the cells that have both neighbours in
+//         the row are reached through it (the two end cells go through
+//         `end_cell`)
 // g:      direction 0's conductances, g[m] on cell m's low face and g[m + 1]
 //         on its high one
 // x_low, x_high, g_low, g_high: for each direction d >= 1, the rows of x on
@@ -539,10 +540,13 @@ stencil_row<D> end_cell(const stencil_row<D>& row, std::size_t m, std::size_t n,
 
 // `_neighbour_sum` at element i: sum_f G_f x_N, the terms added east, west
 // (direction 0's high then low face), then each further direction's high then
-// low face: north, south for D = 2.
+// low face: north, south for D = 2. The two neighbours along direction 0 are
+// read one element either side of the cell's own, which for an end cell's
+// operands is the window's first and last value.
 template <int D>
 CFDCORE_INLINE double neighbour_sum(const stencil_row<D>& in, std::size_t i) {
-    double sum = in.g[i + 1] * in.x[i + 1] + in.g[i] * in.x[i - 1];
+    const double* cell = in.x + i;
+    double sum = in.g[i + 1] * cell[1] + in.g[i] * cell[-1];
     for (int d = 1; d < D; ++d) {
         sum = sum + in.g_high[d][i] * in.x_high[d][i];
         sum = sum + in.g_low[d][i] * in.x_low[d][i];
