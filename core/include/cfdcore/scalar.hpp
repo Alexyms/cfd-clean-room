@@ -411,6 +411,11 @@ solve_outcome conjugate_gradient(const implicit_input<D>& in, double stop, accep
 // below zero in a cell it solves for is discarded and Jacobi solves from C*
 // with a fresh acceptance. The field is written to `out` (a cell field) and
 // the rest to `result`; on a refusal neither is written.
+//
+// `out` must overlap no array of `in`, `C*` included: every Jacobi path,
+// the CG's fallback among them, holds its iterates in `out` while it runs, and
+// the kernels are compiled to assume no output overlaps an input (the binding
+// refuses an `out` that shares memory with one).
 template <int D>
 implicit_status implicit_step(const implicit_input<D>& in, implicit_scratch<D>& scratch,
                               std::span<double> out, implicit_result& result);

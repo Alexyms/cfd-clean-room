@@ -2,6 +2,10 @@
 
 Read by ``probe89.py``. Each variant is a list of edits to a copy of the
 checkout's ``core/`` on the Linux file system; the checkout is not changed.
+The edits are written against ``core/`` as it was at eacc71c, round 0's head
+(prompt 89b changed the flux and the flags: ``variants89b.py`` holds the plants
+written against the core after it, and ``probe89.py`` builds a candidate of this
+file on a commit's sources, ``results/builder89*/src_<commit>.tar``, as well).
 An edit is ``(file, old, new)``, the exact text ``old`` replaced by ``new``,
 or ``(file, start, end, new)``, the text from ``start`` up to ``end`` replaced
 by ``new``. A text that is not found exactly once refuses the variant instead

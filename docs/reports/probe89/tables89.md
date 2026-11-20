@@ -205,24 +205,24 @@ The limited QUICK flux in its block form (`flux_blocks` of T6) under each set, a
 
 ### T8. The loops GCC vectorises: its report before and after
 
-`g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0`, `-fopt-info-vec-optimized`, per source file: the number of loops vectorised whole, and of straight-line parts (which are not loops).
+`g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0`, `-fopt-info-vec-optimized`, per source file: the number of loops vectorised whole, and of straight-line parts (which are not loops). A loop or a part is counted once for its place in the source, however many vector widths GCC vectorised it at.
 
 | Source | Build | Loops vectorised | Vector width, bytes | Straight-line parts |
 |---|---|---|---|---|
 | `src/scalar.cpp` | before (3c8d1ec), `-O2` | 0 | none | 3 |
 | `src/scalar.cpp` | `-O2` (the project's) | 10 | 16 | 6 |
-| `src/scalar.cpp` | `-O3` | 7 | 16 | 10 |
+| `src/scalar.cpp` | `-O3` | 7 | 16 | 7 |
 | `src/scalar.cpp` | `-O2 -march=native` | 10 | 64 | 5 |
-| `src/scalar.cpp` | `-O3 -march=native` | 10 | 32, 64 | 11 |
+| `src/scalar.cpp` | `-O3 -march=native` | 7 | 32, 64 | 8 |
 | `src/scalar.cpp` | `-O2 -march=x86-64-v3` | 10 | 32 | 5 |
 | `src/reduce.cpp` | before (3c8d1ec), `-O2` | 2 | 16 | 0 |
 | `src/reduce.cpp` | `-O2` (the project's) | 2 | 16 | 0 |
 | `src/reduce.cpp` | `-O3` | 4 | 16 | 1 |
 | `src/reduce.cpp` | `-O2 -march=native` | 2 | 64 | 0 |
-| `src/reduce.cpp` | `-O3 -march=native` | 5 | 32, 64 | 1 |
+| `src/reduce.cpp` | `-O3 -march=native` | 4 | 32, 64 | 1 |
 | `src/reduce.cpp` | `-O2 -march=x86-64-v3` | 2 | 32 | 0 |
 
-The head's loops vectorised under the project's flags, by the block function each is in: `boundary_cells`, `upwind_cells`, `sweep_cells`, `residual_cells`, `product_cells`, `start_cells`, `restart_cells`, `update_cells`, `direction_cells`, `setup_cells`. Every block function of the file is among them; the limited QUICK flux is not a block (section 3.4).
+The loops vectorised at eacc71c, round 0's head, under that pass's flags, by the block function each is in: `boundary_cells`, `upwind_cells`, `sweep_cells`, `residual_cells`, `product_cells`, `start_cells`, `restart_cells`, `update_cells`, `direction_cells`, `setup_cells`. Every block function of the file is among them; the limited QUICK flux was not a block (section 3.4). Round 1 made it one (T14).
 
 ### T9. The tests at 6a13cfc, under the project's flags
 

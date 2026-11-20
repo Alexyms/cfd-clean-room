@@ -72,6 +72,10 @@ import numpy as np
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
+# The script this process was started as: probe89b.py configures this module
+# and runs it, and the children that `check` and `session` start must be that
+# script too, not this one.
+SELF = Path(sys.argv[0]).resolve()
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parent / "probe87"))
@@ -131,6 +135,11 @@ BUILDS: dict[str, dict[str, str]] = {
     },
 }
 SOURCE_DIRECTORIES = ("src", "python", "include/cfdcore", "tests")
+# The flags of core/CMakeLists.txt's `cfdcore_flags`, whatever they are, so that
+# a source whose flags line has gained a flag builds as it did before it did.
+CORE_FLAGS_LINE = re.compile(
+    r"(target_compile_options\(cfdcore_flags INTERFACE\n\s+)(-Wall[^)\n]*)(\))"
+)
 # The timing's repeats: the median of these many calls, after WARMUP unrecorded.
 IMPLICIT_REPEATS = 200
 FLUX_REPEATS = 400
@@ -189,11 +198,11 @@ def _source_files(name: str) -> dict[str, str]:
                         raise SystemExit(f"{member.name}: not readable in the tar")
                     text = handle.read().decode("utf-8").replace("\r\n", "\n")
                     files[member.name.removeprefix("core/")] = text
-        return files
-    for path in sorted((ROOT / "core").rglob("*")):
-        if path.is_file():
-            relative = path.relative_to(ROOT / "core").as_posix()
-            files[relative] = path.read_text(encoding="utf-8").replace("\r\n", "\n")
+    else:
+        for path in sorted((ROOT / "core").rglob("*")):
+            if path.is_file():
+                relative = path.relative_to(ROOT / "core").as_posix()
+                files[relative] = path.read_text(encoding="utf-8").replace("\r\n", "\n")
     candidate = BUILDS[name]["candidate"]
     if candidate:
         apply_edits(files, variants89.CANDIDATES[candidate]["edits"])
@@ -205,11 +214,11 @@ def build(name: str) -> None:
     spec = BUILDS[name]
     files = _source_files(name)
     cmake = files["CMakeLists.txt"]
-    if cmake.count(PROJECT_FLAGS) != 1:
-        raise SystemExit(
-            "CMakeLists.txt: the project's flags are not found exactly once"
-        )
-    files["CMakeLists.txt"] = cmake.replace(PROJECT_FLAGS, spec["flags"])
+    if len(CORE_FLAGS_LINE.findall(cmake)) != 1:
+        raise SystemExit("CMakeLists.txt: the core's flags are not found exactly once")
+    files["CMakeLists.txt"] = CORE_FLAGS_LINE.sub(
+        lambda found: found.group(1) + spec["flags"] + found.group(3), cmake
+    )
     source = WORK / name / "core"
     for relative, text in files.items():
         target = source / relative
@@ -331,7 +340,7 @@ def check(name: str) -> None:
         sorted(Counter(case.split("[")[0] for case in failed).items())
     )
     replayed = run_command(
-        [sys.executable, str(Path(__file__).resolve()), "replay", name],
+        [sys.executable, str(SELF), "replay", name],
         cwd=ROOT,
         env=_build_environment(name),
     )
@@ -739,7 +748,7 @@ def session(run_number: int, names: list[str]) -> None:
         done = subprocess.run(
             [
                 sys.executable,
-                str(Path(__file__).resolve()),
+                str(SELF),
                 "time",
                 name,
                 "--run",

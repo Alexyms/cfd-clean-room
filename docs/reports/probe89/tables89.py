@@ -601,6 +601,36 @@ def flags_table() -> list[str]:
     return out
 
 
+def vectorised_places(lines: list[str]) -> tuple[list[str], list[str], list[int]]:
+    """A vectorisation report's loops and straight-line parts, each place in the source once.
+
+    GCC reports a loop once for each vector width it vectorises it at (a main
+    loop and its epilogue at 32 and 64 bytes under -O3 -march=native), so the
+    report's lines are not the loops: a loop is a place, ``file:line:column``,
+    that has a "loop vectorized" line. Returns the loops' places, the places of
+    straight-line parts ("basic block part vectorized"), and the vector widths
+    in bytes the loops were vectorised at.
+    """
+    loops = sorted(
+        {line.split(": optimized")[0] for line in lines if "loop vectorized" in line}
+    )
+    parts = sorted(
+        {
+            line.split(": optimized")[0]
+            for line in lines
+            if "basic block part vectorized" in line
+        }
+    )
+    widths = sorted(
+        {
+            int(line.split("using ")[1].split()[0])
+            for line in lines
+            if "loop vectorized" in line
+        }
+    )
+    return loops, parts, widths
+
+
 def vectorised_table() -> list[str]:
     """Which loops GCC vectorises, before and after."""
     report = load("vecinfo.json")
@@ -609,29 +639,29 @@ def vectorised_table() -> list[str]:
         "",
         f"`{report['compiler']}`, `-fopt-info-vec-optimized`, per source file: the"
         " number of loops vectorised whole, and of straight-line parts (which are not"
-        " loops).",
+        " loops). A loop or a part is counted once for its place in the source,"
+        " however many vector widths GCC vectorised it at.",
         "",
         "| Source | Build | Loops vectorised | Vector width, bytes | Straight-line parts |",
         "|---|---|---|---|---|",
     ]
     for file in ("src/scalar.cpp", "src/reduce.cpp"):
         for build in ("base", *ALL_FLAG_BUILDS):
-            lines = report["reports"][build][file]
-            loops = [line for line in lines if "loop vectorized" in line]
-            widths = sorted({int(line.split("using ")[1].split()[0]) for line in loops})
+            loops, parts, widths = vectorised_places(report["reports"][build][file])
             label = "before (3c8d1ec), `-O2`" if build == "base" else FLAG_LABELS[build]
             out.append(
                 f"| `{file}` | {label} | {len(loops)} |"
                 f" {', '.join(map(str, widths)) or 'none'} |"
-                f" {len(lines) - len(loops)} |"
+                f" {len(parts)} |"
             )
     head = [
         line
         for line in report["reports"]["o2"]["src/scalar.cpp"]
         if "loop vectorized" in line
     ]
-    # A block function is named by the declaration nearest above its loop.
-    source = (ROOT / "core" / "src" / "scalar.cpp").read_text(encoding="utf-8")
+    # A block function is named by the declaration nearest above its loop, in
+    # the sources the report was made on (the head of round 0, eacc71c).
+    source = (RESULTS / "src_eacc71c_scalar.cpp").read_text(encoding="utf-8")
     declared = [
         (number, re.search(r"(\w+)\(lanes::cells<N>", line))
         for number, line in enumerate(source.splitlines(), 1)
@@ -644,9 +674,10 @@ def vectorised_table() -> list[str]:
         names.append(f"`{above[-1]}`" if above else f"line {at}")
     out += [
         "",
-        "The head's loops vectorised under the project's flags, by the block function"
-        " each is in: " + ", ".join(names) + ". Every block function of the file is"
-        " among them; the limited QUICK flux is not a block (section 3.4).",
+        "The loops vectorised at eacc71c, round 0's head, under that pass's flags, by"
+        " the block function each is in: " + ", ".join(names) + ". Every block"
+        " function of the file is among them; the limited QUICK flux was not a block"
+        " (section 3.4). Round 1 made it one (T14).",
     ]
     return out
 

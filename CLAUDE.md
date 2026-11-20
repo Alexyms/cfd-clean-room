@@ -258,7 +258,50 @@ def settling_velocity(self, size_class: int) -> float:
 - C++20. Function and type names `snake_case` inside a namespace per module. Example: `cfdcore::pressure`, `cfdcore::scalar`.
 - No allocation inside a step: every array is allocated when a run or an interval is set up.
 - Every public function documents its parameters, units and array shapes in a comment above it.
-- Compile with `-Wall -Wextra -Wpedantic -O2 -ffp-contract=off`. Fix all warnings.
+- Compile with `-Wall -Wextra -Wpedantic -O2 -ffp-contract=off -march=x86-64-v3`. Fix all warnings.
+  `-march=x86-64-v3` (2026-11-20) is AVX2 by a name every compiler reads the same, so the build
+  runs on any x86-64 processor from about 2015 on, where `-march=native` would tie it to the
+  processor it was built on. `-march=native` is not used, and `-ffp-contract=off` stays, so no
+  multiply and add fuse.
+
+### Kernels
+
+A kernel is the arithmetic of one pass over a field. Its form was fixed by measurement
+(`docs/reports/phase6_scalar_perf.md`); `core/include/cfdcore/lanes.hpp` holds its parts. The
+block is eight cells, a whole number of vectors at every width (four doubles under
+`-march=x86-64-v3`).
+
+- Walk a field by its rows, the lines along direction 0. Another direction enters as pointers
+  to other rows, never as a stride in the inner loop or a transposed copy.
+- Write a row's arithmetic once, as a block function: a template on a cell count N whose loop
+  runs N times, taking `lanes::cells<N>` first, called through `lanes::for_each_block`. Inputs
+  arrive in a struct of pointers that the row's walker receives by value; outputs are parameters
+  qualified `CFDCORE_RESTRICT`; a helper a block calls is `CFDCORE_INLINE`. An output overlaps no
+  input, and the header of every function that writes one says so.
+- No test of position and no branch on a cell's data inside a block. A row's end cells and a
+  field's edge rows run the same block function on operands that hold the boundary's value. A
+  condition is a `lanes::mask` and a choice is `lanes::select` or `lanes::keep`; a SOLID or held
+  cell is computed and masked.
+- Keep a block's pointers few: read a cell's neighbours along the row either side of the cell's
+  own pointer, not through a pointer each.
+- A flag a stop reads is the OR of the cells' masks; a maximum is kept per cell of a block and
+  combined after the walk; a sum a stop or a budget reads goes through `reduce` in the
+  reference's order.
+- A kernel that is mostly choices (the limited QUICK face value) is a block when a choice is
+  one instruction, as under `-march=x86-64-v3`, and was a loop of one element at a time under
+  the x86-64 baseline, where a choice is three. Measure both forms under the project's flags,
+  keep the faster, say in the kernel's comment which and why, and time the kernel again after
+  any change of flags.
+- Each element's operations and their order are the reference's. Passes are fused only where
+  each element's operations keep their order.
+- A kernel copies into its output once per call at most. It copies no field to pad it, per sweep
+  or per iteration, or to hand it from one pass to the next. No allocation in a step: scratch is
+  allocated once on a layout.
+- An exception (`std::invalid_argument`) for a caller's programming error that no run can meet,
+  such as a block of zero or two arrays of different lengths; a status for a condition a run can
+  meet, which the binding turns into the reference's exception.
+- After changing a kernel, read the compiler's vectorisation report (count loops, not report
+  lines), run the parity tests and time the kernel against the build of the commit before.
 
 ### Interface Contract
 

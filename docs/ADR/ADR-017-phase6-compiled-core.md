@@ -294,6 +294,22 @@ this CPU) does not fuse a multiply and an add into one rounding where the refere
 twice: a fused operation is a legitimate change, but a block meant to be bitwise cannot have
 it, and a block that allows it says so.
 
+Two decisions of Alex's on the measurements of prompt 89 (2026-11-20, prompt 89b;
+`docs/reports/phase6_scalar_perf.md`, F4 and F9), recorded as his:
+
+- The flags also carry `-march=x86-64-v3`, for the library, the binding and the tests alike. It is
+  AVX2 (with FMA and BMI) by a name every compiler reads the same, so the build is portable
+  across every x86-64 processor from about 2015 on, this machine and GitHub's runners among them;
+  `-march=native` would tie the module to the processor it was built on and is not used. A
+  processor without AVX2 cannot run the module. `-ffp-contract=off` stays, so the FMA the target
+  has fuses no multiply and add and every value is the reference's bit for bit. Under this
+  target the limited QUICK flux is a block of `lanes.hpp`, where under the baseline x86-64 a loop
+  of one face at a time was the faster form.
+- `std::experimental::simd` is not adopted. The core keeps the block style of `lanes.hpp`, and
+  revisits the choice when C++26's `std::simd` is in the toolchain's library. Every step's report
+  keeps timing its kernels, so that a change that silently loses vectorisation (the report's F8)
+  shows.
+
 ## B. The binding and the exchange
 
 The binding module `_cfdcore` exposes three things: the setup types (plain structs of arrays and
@@ -621,7 +637,8 @@ module; CUDA C++ at the Phase 6 CUDA step." "C Coding Standards" becomes "C++ Co
 - Function and type names `snake_case` inside a namespace per module (`cfdcore::pressure`).
 - No allocation inside a step: every array is allocated when a run or an interval is set up.
 - Every public function documents its parameters, units and array shapes in a comment above it.
-- Compiled with `-Wall -Wextra -Wpedantic -O2 -ffp-contract=off`; warnings fixed.
+- Compiled with `-Wall -Wextra -Wpedantic -O2 -ffp-contract=off`; warnings fixed. (From
+  2026-11-20 also `-march=x86-64-v3`, section A.)
 - The core receives arrays and scalars; it has no knowledge of the configuration file, the
   boundary segments' names or types, file I/O, logging or the user. The boundary's per-face data
   are derived in Python and handed in; the core applies them inside the step, since the step is
