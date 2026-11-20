@@ -10,9 +10,11 @@
 // -ffp-contract=off), and nothing is reassociated. With a NaN in an input both
 // give NaNs at the same faces, but a NaN's sign or payload may differ; the
 // transport solver refuses a non-finite field before the flux runs. The
-// reference advects along its last axis and transposes for y; the core walks
-// its own layout along the direction's stride instead (layout.hpp), and line
-// m along y is row m of the reference's transposed call.
+// reference advects along its last axis and transposes for y; the core
+// transposes nothing and walks every field by its rows, the lines along
+// direction 0, which are contiguous in memory (layout.hpp): for the faces
+// normal to another direction a row of faces lies between two rows of cells,
+// and line m along y is row m of the reference's transposed call.
 //
 // The face flux is elementwise over the faces: no sum and no iteration. The
 // implicit solve, `implicit_step` and its parts, is the second half of this
@@ -159,7 +161,8 @@ void quick_face_values(const scheme<D>& s, int d, std::span<const double> c,
 //         J), read at interior faces only; empty for none, which runs the
 //         arithmetic without vents bit for bit
 // out:    output, one per face normal to d: flux times the face value, the
-//         scalar's unit times m^2/s
+//         scalar's unit times m^2/s; it must overlap no input, which the
+//         kernels are compiled to assume (the binding refuses one that does)
 //
 // The face value: at a boundary face the inflow value where the flux enters
 // and the adjacent cell's otherwise; at an interior face the upstream value

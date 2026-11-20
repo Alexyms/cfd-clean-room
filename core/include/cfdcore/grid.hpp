@@ -85,6 +85,10 @@ public:
     // Whether a cell is SOLID; cell indexes the cell field.
     bool solid(std::size_t cell) const { return solid_[cell] != 0; }
 
+    // The SOLID flags, one per cell in the cell field's layout: 1 where the
+    // cell is SOLID, 0 where it is not.
+    std::span<const std::uint8_t> solid_flags() const { return solid_; }
+
 private:
     layout::layout<D> layout_;
     std::array<std::vector<double>, D> nodes_;

@@ -62,6 +62,213 @@ double quick_at(const quick_weights& w, std::size_t f, bool positive, const line
            w.negative[2][f] * line.node(f + 1);
 }
 
+// What a run of interior faces reads: faces normal to one direction that are
+// consecutive in memory, each pointer at the run's first face. A face lies
+// between two cells of its line, the low and the high one (the reference's
+// nodes k and k + 1), with the far cells beyond them (nodes k - 1 and k + 2).
+//
+// flux:           the faces' volume flux
+// far_low, low, high, far_high: the cell values at nodes k - 1, k, k + 1, k + 2
+// solid_far_low, solid_far_high: the SOLID flags of the two far cells
+// end_flux_low, end_inflow_low:  the flux and the inflow value on the low
+//                 boundary faces of the faces' lines
+// end_flux_high, end_inflow_high: the same on the high boundary faces
+// w_pos, w_neg:   the QUICK weights of the faces (`quick_weights`), per face
+//                 along the run or, for a run that crosses its lines, the one
+//                 set its faces share, at element 0
+//
+// A run at its lines' low end has no cell at node k - 1: the far pointers of
+// that side are not read, and the node is the boundary node, the inflow value
+// where the boundary face's flux enters and the low cell's otherwise, never
+// SOLID. The high end mirrors it.
+struct face_row {
+    const double* flux = nullptr;
+    const double* far_low = nullptr;
+    const double* low = nullptr;
+    const double* high = nullptr;
+    const double* far_high = nullptr;
+    const std::uint8_t* solid_far_low = nullptr;
+    const std::uint8_t* solid_far_high = nullptr;
+    const double* end_flux_low = nullptr;
+    const double* end_inflow_low = nullptr;
+    const double* end_flux_high = nullptr;
+    const double* end_inflow_high = nullptr;
+    const double* w_pos[3] = {};
+    const double* w_neg[3] = {};
+};
+
+// Which ends of its lines a run of interior faces is at.
+enum class line_end { none, low, high, both };
+
+// Interior face f of a line of n cells lies between cells f and f + 1.
+inline line_end end_of(std::size_t f, std::size_t n) {
+    const bool low = f == 0;
+    const bool high = f + 2 == n;
+    if (low) {
+        return high ? line_end::both : line_end::low;
+    }
+    return high ? line_end::high : line_end::none;
+}
+
+// A line's boundary node: the inflow value where the boundary face's flux
+// enters the domain, the adjacent cell's value otherwise.
+CFDCORE_INLINE double low_boundary_node(double flux, double inflow, double cell) {
+    return lanes::select(lanes::mask_of(flux > 0.0), inflow, cell);
+}
+CFDCORE_INLINE double high_boundary_node(double flux, double inflow, double cell) {
+    return lanes::select(lanes::mask_of(flux < 0.0), inflow, cell);
+}
+
+// The flux through N boundary faces from element `first`: the flux times the
+// boundary node. `High` takes the lines' high end. out overlaps no input.
+template <bool High, std::size_t N>
+inline void boundary_cells(lanes::cells<N>, std::size_t first, const double* flux,
+                           const double* inflow, const double* cell,
+                           double* CFDCORE_RESTRICT out) {
+    for (std::size_t k = 0; k < N; ++k) {
+        const std::size_t i = first + k;
+        const double node = High ? high_boundary_node(flux[i], inflow[i], cell[i])
+                                 : low_boundary_node(flux[i], inflow[i], cell[i]);
+        out[i] = flux[i] * node;
+    }
+}
+
+// The upwind flux through N interior faces from element `first`: the flux
+// times the upstream cell's value.
+template <std::size_t N>
+inline void upwind_cells(lanes::cells<N>, const face_row& in, std::size_t first,
+                         double* CFDCORE_RESTRICT out) {
+    for (std::size_t k = 0; k < N; ++k) {
+        const std::size_t i = first + k;
+        const double f = in.flux[i];
+        out[i] = f * lanes::select(lanes::mask_of(f > 0.0), in.low[i], in.high[i]);
+    }
+}
+
+// The limited QUICK flux through a run of `count` interior faces
+// (`advective_flux` without `upwind`), one face at a time. The upstream,
+// downstream and far nodes are chosen by the flux's sign; QUICK's value is
+// three products added left to right, the far node's first
+// (`quick_face_values`); a far node inside a SOLID cell is read as the
+// upstream value, for the far node and for QUICK's value alike; the clamp is
+// `limited_face_value`. `End` says which boundary nodes stand for far cells;
+// `PerFace` reads the weights per face. out is at the run's first face and
+// overlaps no input; the operands arrive by value, a copy nothing else can
+// reach.
+//
+// This kernel is not a block of lanes.hpp, and that is measured (prompt 89's
+// report): a face's value is mostly choices, by the flux's sign, by the far
+// cell and by the clamp's zero difference. Under the project's flags a choice
+// between two values costs three instructions on a vector of two faces, and
+// the block form of this loop ran slower than this one, whose branches a flow
+// that keeps its direction over many faces lets the processor predict.
+template <line_end End, bool PerFace>
+void quick_run(const face_row run, std::size_t count, double* CFDCORE_RESTRICT out) {
+    constexpr bool at_low = End == line_end::low || End == line_end::both;
+    constexpr bool at_high = End == line_end::high || End == line_end::both;
+    for (std::size_t i = 0; i < count; ++i) {
+        const double f = run.flux[i];
+        const std::size_t w = PerFace ? i : 0;
+        const double low = run.low[i];
+        const double high = run.high[i];
+        double c_c = 0.0;
+        double c_d = 0.0;
+        double c_up = 0.0;
+        double quick = 0.0;
+        bool far_solid = false;
+        if (f > 0.0) {
+            c_c = low;
+            c_d = high;
+            c_up = at_low ? low_boundary_node(run.end_flux_low[i], run.end_inflow_low[i], low)
+                          : run.far_low[i];
+            far_solid = !at_low && run.solid_far_low[i] != 0;
+            quick = run.w_pos[0][w] * c_up + run.w_pos[1][w] * c_c + run.w_pos[2][w] * c_d;
+        } else {
+            c_c = high;
+            c_d = low;
+            c_up = at_high
+                       ? high_boundary_node(run.end_flux_high[i], run.end_inflow_high[i], high)
+                       : run.far_high[i];
+            far_solid = !at_high && run.solid_far_high[i] != 0;
+            quick = run.w_neg[0][w] * c_up + run.w_neg[1][w] * c_c + run.w_neg[2][w] * c_d;
+        }
+        // A far node inside an obstacle is read as the upstream value, the
+        // zero-gradient rule a domain wall gets.
+        if (far_solid) {
+            c_up = c_c;
+            quick = c_c;
+        }
+        out[i] = f * limited_face_value(c_up, c_c, c_d, quick);
+    }
+}
+
+// The flux through a run of `count` interior faces, by the scheme asked for
+// and the ends the run is at. out is at the run's first face.
+template <bool PerFace>
+void interior_run(const face_row run, line_end end, bool upwind, std::size_t count,
+                  double* out) {
+    if (upwind) {
+        lanes::for_each_block(0, count, [&](auto cells, std::size_t m) {
+            upwind_cells(cells, run, m, out);
+        });
+        return;
+    }
+    switch (end) {
+    case line_end::none:
+        quick_run<line_end::none, PerFace>(run, count, out);
+        break;
+    case line_end::low:
+        quick_run<line_end::low, PerFace>(run, count, out);
+        break;
+    case line_end::high:
+        quick_run<line_end::high, PerFace>(run, count, out);
+        break;
+    case line_end::both:
+        quick_run<line_end::both, PerFace>(run, count, out);
+        break;
+    }
+}
+
+// The operands of a run of interior faces normal to d whose first face is
+// interior face f of its line (between that line's cells f and f + 1).
+//
+// low_cell: the index of cell f of the first face's line
+// face:     the index of the first face in the face field normal to d
+// c, flux, inflow: `advective_flux`'s arrays
+template <int D>
+face_row face_run(const scheme<D>& s, int d, std::size_t f, std::size_t low_cell,
+                  std::size_t face, const double* c, const double* flux, const double* inflow) {
+    const auto& g = s.mesh();
+    const std::size_t stride = g.fields().cell_stride(d);
+    const std::size_t n = g.fields().cells(d);
+    const std::uint8_t* solid = g.solid_flags().data();
+    const auto& w = s.weights(d);
+    face_row run;
+    run.flux = flux + face;
+    run.low = c + low_cell;
+    run.high = c + low_cell + stride;
+    if (f > 0) {
+        run.far_low = c + low_cell - stride;
+        run.solid_far_low = solid + low_cell - stride;
+    }
+    if (f + 2 < n) {
+        run.far_high = c + low_cell + 2 * stride;
+        run.solid_far_high = solid + low_cell + 2 * stride;
+    }
+    // The lines' boundary faces lie f + 1 faces below and n - f - 1 above.
+    const std::size_t low_end = face - (f + 1) * stride;
+    const std::size_t high_end = face + (n - f - 1) * stride;
+    run.end_flux_low = flux + low_end;
+    run.end_inflow_low = inflow + low_end;
+    run.end_flux_high = flux + high_end;
+    run.end_inflow_high = inflow + high_end;
+    for (int j = 0; j < 3; ++j) {
+        run.w_pos[j] = w.positive[j].data() + f;
+        run.w_neg[j] = w.negative[j].data() + f;
+    }
+    return run;
+}
+
 }  // namespace
 
 void limited_face_values(std::span<const double> c_up, std::span<const double> c_c,
@@ -123,49 +330,87 @@ void advective_flux(const scheme<D>& s, int d, std::span<const double> c,
     const auto& g = s.mesh();
     const auto& fields = g.fields();
     const std::size_t n = fields.cells(d);
+    const std::size_t n0 = fields.cells(0);
     const std::size_t stride = fields.cell_stride(d);
-    const auto& w = s.weights(d);
-    const bool with_vents = !vents.empty();
+    const double* cell = c.data();
+    const double* vol = flux.data();
+    const double* in = inflow.data();
+    double* face_out = out.data();
+    // The faces are walked by rows of the field, the lines along direction 0,
+    // whatever the direction they are normal to: a row is contiguous in
+    // memory, and the direction enters as the offsets between a face's nodes.
+    for (const auto& row : fields.lines(0)) {
+        if (d == 0) {
+            // The row is one line: its two boundary faces, then its n - 1
+            // interior faces, the first and the last apart from those between.
+            const std::size_t low_face = row.face;
+            const std::size_t high_face = row.face + n;
+            const std::size_t last_cell = row.cell + n - 1;
+            boundary_cells<false>(lanes::cells<1>{}, 0, vol + low_face, in + low_face,
+                                  cell + row.cell, face_out + low_face);
+            boundary_cells<true>(lanes::cells<1>{}, 0, vol + high_face, in + high_face,
+                                 cell + last_cell, face_out + high_face);
+            const auto run = [&](std::size_t f, std::size_t count) {
+                const std::size_t face = low_face + 1 + f;
+                interior_run<true>(face_run(s, d, f, row.cell + f, face, cell, vol, in),
+                                   end_of(f, n), upwind, count, face_out + face);
+            };
+            if (n >= 2) {
+                run(0, 1);
+            }
+            if (n >= 4) {
+                run(1, n - 3);
+            }
+            if (n >= 3) {
+                run(n - 2, 1);
+            }
+            continue;
+        }
+        // The row's cells are cell q of n0 lines along d. Their low faces are
+        // the lines' boundary faces for q = 0 and interior face q - 1
+        // otherwise; the last row's high faces are the other boundary faces.
+        const std::size_t q = (row.cell / stride) % n;
+        const std::size_t low_face = fields.low_face(d, row.cell);
+        if (q == 0) {
+            lanes::for_each_block(0, n0, [&](auto cells, std::size_t m) {
+                boundary_cells<false>(cells, m, vol + low_face, in + low_face, cell + row.cell,
+                                      face_out + low_face);
+            });
+        } else {
+            const std::size_t f = q - 1;
+            interior_run<false>(face_run(s, d, f, row.cell - stride, low_face, cell, vol, in),
+                                end_of(f, n), upwind, n0, face_out + low_face);
+        }
+        if (q + 1 == n) {
+            const std::size_t high_face = low_face + stride;
+            lanes::for_each_block(0, n0, [&](auto cells, std::size_t m) {
+                boundary_cells<true>(cells, m, vol + high_face, in + high_face, cell + row.cell,
+                                     face_out + high_face);
+            });
+        }
+    }
+    if (vents.empty()) {
+        return;
+    }
+    // The vents (ADR-014 J) are few, so they are a second pass over the
+    // faces' flags: a vent face carries the inflow value where the flux
+    // enters the room from the SOLID side and the room cell's where it
+    // leaves, in place of the value the scheme gave it.
     for (const auto& ln : fields.lines(d)) {
-        const std::size_t low_face = ln.face;
-        const std::size_t high_face = ln.face + n * stride;
-        const double c_low = flux[low_face] > 0.0 ? inflow[low_face] : c[ln.cell];
-        const double c_high =
-            flux[high_face] < 0.0 ? inflow[high_face] : c[ln.cell + (n - 1) * stride];
-        const line_view<D> line(g, c, ln, stride, n, c_low, c_high);
-        out[low_face] = flux[low_face] * c_low;
-        // Interior face f lies between nodes k = f + 1 and k + 1, cells f and f + 1.
         for (std::size_t f = 0; f + 1 < n; ++f) {
             const std::size_t face = ln.face + (f + 1) * stride;
-            const std::size_t k = f + 1;
+            if (!vents[face]) {
+                continue;
+            }
+            const std::size_t low = ln.cell + f * stride;
+            const std::size_t high = low + stride;
             const double interior = flux[face];
-            const bool positive = interior > 0.0;
-            const double c_c = positive ? line.node(k) : line.node(k + 1);
-            double value = c_c;
-            if (!upwind) {
-                const double c_d = positive ? line.node(k + 1) : line.node(k);
-                double c_up = positive ? line.node(k - 1) : line.node(k + 2);
-                double quick = quick_at(w, f, positive, line);
-                // A far node inside an obstacle is read as the upstream value,
-                // the zero-gradient rule a domain wall gets.
-                const bool far_solid = positive ? line.solid_node(k - 1) : line.solid_node(k + 2);
-                if (far_solid) {
-                    c_up = c_c;
-                    quick = c_c;
-                }
-                value = limited_face_value(c_up, c_c, c_d, quick);
-            }
-            if (with_vents && vents[face]) {
-                const bool solid_low = line.solid_node(k);
-                const bool solid_high = line.solid_node(k + 1);
-                const bool entering =
-                    (solid_low && interior > 0.0) || (solid_high && interior < 0.0);
-                const double room = solid_low ? line.node(k + 1) : line.node(k);
-                value = entering ? inflow[face] : room;
-            }
-            out[face] = interior * value;
+            const bool solid_low = g.solid(low);
+            const bool solid_high = g.solid(high);
+            const bool entering = (solid_low && interior > 0.0) || (solid_high && interior < 0.0);
+            const double room = solid_low ? c[high] : c[low];
+            out[face] = interior * (entering ? inflow[face] : room);
         }
-        out[high_face] = flux[high_face] * c_high;
     }
 }
 
