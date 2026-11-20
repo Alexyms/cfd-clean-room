@@ -1,5 +1,6 @@
-// The cell-centred scalar scheme's explicit face flux (ADR-017 C, module
-// `scalar`; ADR-011 B and E, ADR-014 J).
+// The cell-centred scalar scheme: the explicit face flux and the implicit
+// solve (ADR-017 C, module `scalar`; ADR-011 B, C and E, ADR-012 C, ADR-014 J,
+// ADR-016).
 //
 // A port of `src/scalar_scheme.py`'s `limited_face_values` and
 // `advective_flux` and of `src/momentum.py`'s `quick_face_values` with its
@@ -13,14 +14,19 @@
 // its own layout along the direction's stride instead (layout.hpp), and line
 // m along y is row m of the reference's transposed call.
 //
-// The face flux is elementwise over the faces: no sum and no iteration.
+// The face flux is elementwise over the faces: no sum and no iteration. The
+// implicit solve, `implicit_step` and its parts, is the second half of this
+// header (prompt 88).
 
 #pragma once
 
 #include "cfdcore/grid.hpp"
+#include "cfdcore/layout.hpp"
 
 #include <array>
 #include <cmath>
+#include <cstdint>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -168,5 +174,226 @@ void advective_flux(const scheme<D>& s, int d, std::span<const double> c,
 
 extern template class scheme<1>;
 extern template class scheme<2>;
+
+// ---------------------------------------------------------------------------
+// The implicit solve (`implicit_step`; ADR-011 C, ADR-012 C, ADR-016).
+//
+// Backward Euler for diffusion and a non-negative cell sink:
+// a_P C_P - sum_f G_f C_N = (V / dt) C*, a_P = V / dt + sum_f G_f + D_P, by
+// Jacobi or by diagonal-preconditioned conjugate gradients, with the CG's
+// fallback to Jacobi from C*. Every elementwise value is formed by the
+// reference's operations in the reference's order, one rounding each, and the
+// leftover's sum in NumPy's pairwise order, so the Jacobi path equals the
+// reference bit for bit (REQ-N03 level 1). The CG's two dot products per
+// iteration are the one departure: the reference's go to OpenBLAS's ddot,
+// whose order is the library's, and the core's go through
+// `reduce::blocked_dot` with a block per row of the cell field (ADR-017 G,
+// the second kind), so a CG solve is compared for the reference's iteration
+// count with its field within 1e-12 (prompt 88).
+//
+// A cell field is one value per cell in layout.hpp's order ([ny, nx] for
+// D = 2); a face field normal to d one value per face normal to d.
+
+// The two methods (`JACOBI` and `CONJUGATE_GRADIENT`).
+enum class implicit_method { jacobi, conjugate_gradient };
+
+// Whether a solve's inputs can be solved: the one refusal the core makes, the
+// reference's ValueError for a leftover bound that is negative or NaN. The
+// method's name and a bool bound are the binding's to refuse.
+enum class implicit_status { ok, bound_negative_or_nan };
+
+// The inputs of one solve.
+//
+// c_star:          the explicit field C*, a cell field in the scalar's unit
+//                  (particles per m^3, or k and eps); zero in SOLID cells by
+//                  the callers' contract, though the solve reads what it is given
+// volume:          cell volumes per metre of depth, m^2, a cell field
+// dt:              the step, s, when dt_cells is empty
+// dt_cells:        the step per cell, s, a cell field, or empty for `dt`
+// conductance:     per direction d, G_f = Gamma_f A_f / d_f per face normal
+//                  to d, m^2/s per metre of depth; zero where nothing diffuses
+// sink:            the non-negative sink per cell in the diagonal (the
+//                  reference's `diagonal`), in the units of V / dt
+// solid:           the SOLID mask, a cell field; those cells are held at zero
+// held:            non-SOLID cells held at their value of C*, a cell field, or
+//                  empty for none
+// tol:             the stop: the largest residual at most tol times the
+//                  largest |b|, dimensionless
+// max_iter:        the cap, Jacobi sweeps or CG iterations; zero or negative
+//                  allows none
+// method:          Jacobi, or CG with the fallback
+// leftover_bound:  ADR-016's bound on |leftover|, in the units of V C, or none
+template <int D>
+struct implicit_input {
+    std::span<const double> c_star;
+    std::span<const double> volume;
+    double dt;
+    std::span<const double> dt_cells;
+    std::array<std::span<const double>, D> conductance;
+    std::span<const double> sink;
+    std::span<const bool> solid;
+    std::span<const bool> held;
+    double tol;
+    std::int64_t max_iter;
+    implicit_method method;
+    std::optional<double> leftover_bound;
+};
+
+// What one solve returns beside its field (`ImplicitResult`), and two counts
+// the reference does not return.
+//
+// method:          the method asked for
+// iterations:      Jacobi sweeps, or CG iterations (one matrix product each)
+// converged:       whether the returned field met the stop within the cap,
+//                  the fallback's when there was one
+// fallbacks:       1 when a CG solve fell back to Jacobi from C*, else 0
+// fallback_sweeps: the fallback's Jacobi sweeps, 0 without one
+// leftover:        dt times the sum of the returned field's residual (with a
+//                  per-cell dt, the sum of dt r), in the units of V C
+// leftover_sums:   how many times a leftover was summed over the cells, by
+//                  every acceptance of the solve: the stop's cost (ADR-016,
+//                  "formed only after the max-norm test holds")
+// restarts:        CG restarts from the true residual after the recursion met
+//                  the stop and the true residual did not
+struct implicit_result {
+    implicit_method method = implicit_method::jacobi;
+    std::int64_t iterations = 0;
+    bool converged = true;
+    int fallbacks = 0;
+    std::int64_t fallback_sweeps = 0;
+    double leftover = 0.0;
+    std::int64_t leftover_sums = 0;
+    std::int64_t restarts = 0;
+};
+
+// The scratch of the implicit solve on one layout, allocated once at set-up
+// so that a solve allocates nothing. Every array is a cell field.
+template <int D>
+    requires(D >= 1)
+struct implicit_scratch {
+    explicit implicit_scratch(const layout::layout<D>& fields);
+
+    const layout::layout<D>* fields;
+    std::vector<double> a_p;        // the diagonal
+    std::vector<double> b;          // the right-hand side (V / dt) C*
+    std::vector<double> c;          // the iterate
+    std::vector<double> next;       // Jacobi's next iterate
+    std::vector<double> residual;   // Jacobi's residual, CG's r
+    std::vector<double> inverse;    // CG's preconditioner, 1 / a_P off the fixed cells
+    std::vector<double> z;          // CG's preconditioned residual
+    std::vector<double> p;          // CG's direction
+    std::vector<double> q;          // CG's product A p
+    std::vector<double> dt_masked;  // a per-cell dt with SOLID cells at zero
+    std::vector<double> terms;      // the leftover's terms dt r per cell
+};
+
+// The leftover bound's refusal: negative or NaN (an infinite bound accepts
+// every finite leftover). None is accepted.
+implicit_status check_leftover_bound(std::optional<double> bound);
+
+// The system's set-up (`implicit_step` before the solve).
+//
+// Writes a_P and b into the scratch and returns whether anything diffuses or
+// sinks (the reference's `diag_extra.any()`) and the stop. The diagonal's
+// extra terms are summed west, east, south, north (low then high face of
+// each direction), then the sink; a_P = V / dt + that; b = (V / dt) C*; the
+// stop is tol times the largest |b| over every cell, NaN if any |b| is NaN.
+// When nothing diffuses or sinks, a_P and b are not formed and the stop is 0.
+struct implicit_setup {
+    bool diffuses;
+    double stop;
+};
+template <int D>
+implicit_setup implicit_system(const implicit_input<D>& in, implicit_scratch<D>& scratch);
+
+// ADR-016's acceptance (`_Acceptance`): the stop's second clause, and the
+// leftover of the field a solve returns.
+//
+// `test` is called with the residual of an iterate that met the max-norm stop:
+// it forms the leftover from that residual and accepts the iterate when there
+// is no bound or |leftover| <= bound; with no bound it forms nothing. `final`
+// is called with the residual of the iterate the solve returns and forms its
+// leftover, unless the last formation was from that same residual. A residual
+// is named by an id its solver gives each new residual it forms, so a
+// residual updated in place keeps its id, as the reference's array keeps its
+// identity. The leftover is dt times the pairwise sum of the residual (scalar
+// dt), or the pairwise sum of dt_masked times the residual (per-cell dt, with
+// dt_masked zero in SOLID cells, where a per-cell dt need not be finite).
+class acceptance {
+public:
+    // dt, dt_cells: the step as implicit_input holds it; solid: the SOLID mask;
+    // bound: the leftover bound or none; dt_masked, terms: scratch cell fields,
+    // unused with a scalar dt.
+    acceptance(double dt, std::span<const double> dt_cells, std::span<const bool> solid,
+               std::optional<double> bound, std::span<double> dt_masked,
+               std::span<double> terms);
+
+    bool test(std::span<const double> residual, std::uint64_t residual_id);
+    void final(std::span<const double> residual, std::uint64_t residual_id);
+
+    // The leftover last formed, 0.0 before any.
+    double leftover() const { return leftover_; }
+    // How many times a leftover was formed.
+    std::int64_t sums() const { return sums_; }
+
+private:
+    double form(std::span<const double> residual, std::uint64_t residual_id);
+
+    bool scalar_;
+    double dt_;
+    std::span<const double> dt_masked_;
+    std::span<double> terms_;
+    std::optional<double> bound_;
+    std::uint64_t formed_ = 0;
+    double leftover_ = 0.0;
+    std::int64_t sums_ = 0;
+};
+
+// The outcome of one Jacobi or CG solve inside `implicit_step`.
+struct solve_outcome {
+    std::int64_t iterations;
+    bool converged;
+    std::int64_t restarts;
+};
+
+// Jacobi sweeps from C* (`_jacobi`), on a system `implicit_system` set up.
+//
+// Each sweep forms the residual r = b + sum_f G_f C_N - a_P C (the neighbour
+// sum taken east, west, north, south, a missing neighbour read as zero), zero
+// in SOLID and held cells; stops when the largest |r| is at most `stop` and
+// `accept` takes the iterate, or at the cap; else C <- C + r / a_P with SOLID
+// cells set to zero. The returned field is written to `out` (a cell field);
+// `accept.final` is called with the last residual. A non-negative C* gives
+// non-negative iterates throughout.
+template <int D>
+solve_outcome jacobi(const implicit_input<D>& in, double stop, acceptance& accept,
+                     implicit_scratch<D>& scratch, std::span<double> out);
+
+// Diagonal-preconditioned conjugate gradients (`_conjugate_gradient`), on a
+// system `implicit_system` set up, from C* with SOLID cells at zero. SOLID and
+// held cells are not unknowns: their residual and product are zero and their
+// values never change. The iteration is Hestenes and Stiefel's with the
+// residual recursion; when the recursion meets the stop, or at the cap, the
+// true residual is formed, and the solve ends converged only if it meets the
+// stop and `accept` takes it, else restarts from it (or, at the cap, ends).
+// The direction is updated as p <- p * beta, then p <- p + z. The dot
+// products are `reduce::blocked_dot` with a block per row. The field is left
+// in `scratch.c`; `accept.final` is called with the last residual.
+template <int D>
+solve_outcome conjugate_gradient(const implicit_input<D>& in, double stop, acceptance& accept,
+                                 implicit_scratch<D>& scratch);
+
+// The implicit solve (`implicit_step`): the bound's refusal, the set-up, the
+// early return when nothing diffuses or sinks (the field is C*), then the
+// method; under CG, a solve that reaches its cap or leaves a value at or
+// below zero in a cell it solves for is discarded and Jacobi solves from C*
+// with a fresh acceptance. The field is written to `out` (a cell field) and
+// the rest to `result`; on a refusal neither is written.
+template <int D>
+implicit_status implicit_step(const implicit_input<D>& in, implicit_scratch<D>& scratch,
+                              std::span<double> out, implicit_result& result);
+
+extern template struct implicit_scratch<1>;
+extern template struct implicit_scratch<2>;
 
 }  // namespace cfdcore::scalar

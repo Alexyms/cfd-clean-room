@@ -1,11 +1,16 @@
 // The core's reductions (ADR-017 C, module `reduce`; ADR-017 G).
 //
-// A sum that a stop, a refusal or a budget reads is formed in the reference's
-// order, so that the core's value equals NumPy's bit for bit given the same
-// array. Phase 6 step 1 builds the first of them, NumPy's pairwise sum.
+// Two kinds (ADR-017 G). A sum that a stop, a refusal or a budget reads is
+// formed in the reference's order, so that the core's value equals NumPy's
+// bit for bit given the same array: `pairwise_sum`, NumPy's pairwise sum.
+// Every other reduction is formed in fixed blocks combined in block order, so
+// that it does not depend on how many threads compute the blocks:
+// `blocked_dot`, the conjugate gradient's dot product (step 2b), whose
+// reference is OpenBLAS's ddot, an order the core cannot copy.
 
 #pragma once
 
+#include <cstddef>
 #include <span>
 
 namespace cfdcore::reduce {
@@ -24,5 +29,26 @@ namespace cfdcore::reduce {
 // plus the sum of the rest, n2 being n / 2 rounded down to a multiple of 8.
 // The leading 0.0 turns a sum of negative zeros into 0.0, as NumPy's does.
 double pairwise_sum(std::span<const double> values);
+
+// The dot product of two arrays in fixed blocks (ADR-017 G, the second kind).
+//
+// a, b:  the two arrays, equal lengths, contiguous, in any units; the result
+//        is in the product of the two
+// block: the block length, at least 1; the arrays are cut into blocks of this
+//        many terms from the first, the last block holding what remains, so a
+//        length need not be a whole number of blocks
+//
+// Throws std::invalid_argument for a block of 0 (the partition is undefined)
+// and for arrays of different lengths (the shorter would be read past its end),
+// in every build, not only a debug one.
+//
+// Each term a[i] * b[i] is one rounded product. Each block's terms are summed
+// in `pairwise_sum`'s order (without its leading 0.0), and the block sums are
+// added to 0.0 in block order. The partition is fixed by the length and the
+// block, never by a thread count, so a parallel build that computes the
+// blocks apart and adds them in order gives the same bits. The implicit solve
+// takes a block as one row of the cell field, a line along direction 0.
+// Returns 0.0 for empty arrays.
+double blocked_dot(std::span<const double> a, std::span<const double> b, std::size_t block);
 
 }  // namespace cfdcore::reduce

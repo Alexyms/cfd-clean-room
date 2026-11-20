@@ -8,6 +8,8 @@
 #include <bit>
 #include <cstdint>
 #include <span>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace {
@@ -135,6 +137,88 @@ TEST(PairwiseSum, AboveABlockSplitsAtHalfRoundedDownToEight) {
     std::span<const double> all(values);
     double halves = pairwise_sum(all.first(64)) + pairwise_sum(all.subspan(64));
     EXPECT_EQ(bits(pairwise_sum(all)), bits(halves));
+}
+
+// ---- The blocked dot product (the second kind, ADR-017 G) -------------------
+
+using cfdcore::reduce::blocked_dot;
+
+TEST(BlockedDot, EmptyIsPositiveZero) {
+    std::vector<double> none;
+    EXPECT_EQ(bits(blocked_dot(none, none, 4)), bits(0.0));
+}
+
+TEST(BlockedDot, OneBlockIsThePairwiseSumOfTheProducts) {
+    // A block as long as the arrays: the products summed in pairwise_sum's order.
+    std::vector<double> a(300);
+    std::vector<double> b(300);
+    std::vector<double> products(300);
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        a[i] = 1.0 + static_cast<double>(i) * 0x1p-20;
+        b[i] = (i % 3 == 0 ? -1.0 : 1.0) * (0.5 + static_cast<double>(i) * 0x1p-11);
+        products[i] = a[i] * b[i];
+    }
+    EXPECT_EQ(bits(blocked_dot(a, b, 300)), bits(pairwise_sum(products)));
+    EXPECT_EQ(bits(blocked_dot(a, b, 1000)), bits(pairwise_sum(products)));
+}
+
+TEST(BlockedDot, BlocksAreSummedApartAndAddedInOrder) {
+    // [2^53, 1, 1, 1, 1, 1, 1, 1] against ones. In blocks of 4 the first block
+    // is 2^53 (each 2^53 + 1 is a tie that rounds back to the even 2^53) and
+    // the second 4, added to 0.0 in order: 2^53 + 4. As one block of 8 the
+    // eight accumulators hold a term each and give
+    // ((2^53 + 1) + (1 + 1)) + ((1 + 1) + (1 + 1)) = (2^53 + 2) + 4 = 2^53 + 6.
+    const double big = 0x1p53;
+    std::vector<double> a{big, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0};
+    std::vector<double> ones(a.size(), 1.0);
+    EXPECT_EQ(blocked_dot(a, ones, 4), big + 4.0);
+    EXPECT_EQ(blocked_dot(a, ones, 8), big + 6.0);
+    EXPECT_EQ(bits(blocked_dot(a, ones, 8)), bits(pairwise_sum(a)));
+}
+
+TEST(BlockedDot, ALastShortBlockHoldsWhatRemains) {
+    // Seven terms in blocks of 3: [0, 1, 2], [3, 4, 5], [6]; integers, so exact.
+    std::vector<double> a{1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0};
+    std::vector<double> b{7.0, 6.0, 5.0, 4.0, 3.0, 2.0, 1.0};
+    EXPECT_EQ(blocked_dot(a, b, 3), 84.0);
+    EXPECT_EQ(blocked_dot(a, b, 1), 84.0);
+}
+
+// What blocked_dot refuses with, or an empty string when it returns.
+std::string refusal(std::span<const double> a, std::span<const double> b, std::size_t block) {
+    try {
+        blocked_dot(a, b, block);
+    } catch (const std::invalid_argument& error) {
+        return error.what();
+    }
+    return "";
+}
+
+TEST(BlockedDot, ABlockOfZeroIsRefusedAtTheCall) {
+    // With a zero block the loop never advances, so a non-empty array would
+    // hang the caller; an empty one is refused too, since a block is at least 1.
+    std::vector<double> a{1.0, 2.0, 3.0};
+    std::vector<double> b{4.0, 5.0, 6.0};
+    EXPECT_THROW(blocked_dot(a, b, 0), std::invalid_argument);
+    std::vector<double> none;
+    EXPECT_THROW(blocked_dot(none, none, 0), std::invalid_argument);
+    EXPECT_NE(refusal(a, b, 0).find("block length"), std::string::npos);
+    // A block of 1 is the least that is accepted.
+    EXPECT_EQ(blocked_dot(a, b, 1), 32.0);
+}
+
+TEST(BlockedDot, ArraysOfDifferentLengthsAreRefusedWhicheverIsShorter) {
+    std::vector<double> three{1.0, 2.0, 3.0};
+    std::vector<double> two{4.0, 5.0};
+    EXPECT_THROW(blocked_dot(three, two, 2), std::invalid_argument);
+    EXPECT_THROW(blocked_dot(two, three, 2), std::invalid_argument);
+    std::vector<double> none;
+    EXPECT_THROW(blocked_dot(none, two, 2), std::invalid_argument);
+    EXPECT_NE(refusal(three, two, 2).find("differ in length"), std::string::npos);
+    // The block is checked first: a zero block names itself, not the lengths.
+    EXPECT_NE(refusal(three, two, 0).find("block length"), std::string::npos);
+    // Equal lengths that are not a whole number of blocks are not refused.
+    EXPECT_EQ(refusal(three, three, 2), "");
 }
 
 }  // namespace

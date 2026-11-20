@@ -10,23 +10,31 @@ has not been run), so the rest of the suite runs as before. With
 that cannot be imported is an error instead of a skip.
 """
 
+import contextlib
 import copy
 import dataclasses
 import functools
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from typing import NamedTuple, Self
 
 import numpy as np
 import pytest
 import yaml
 
+import src.scalar_scheme as scalar_scheme
 from src.boundary_registry import BoundaryRegistry
 from src.boundary_vents import vent_face_masks, vent_runs
 from src.config import SimConfig
 from src.mesh import SOLID, Mesh
 from src.momentum import _lagrange_weights, quick_face_values
-from src.scalar_scheme import advective_flux, limited_face_values, mesh_axes
+from src.scalar_scheme import (
+    ImplicitResult,
+    advective_flux,
+    implicit_step,
+    limited_face_values,
+    mesh_axes,
+)
 
 if os.environ.get("CFD_CORE_REQUIRED") == "1":
     import _cfdcore
@@ -1145,3 +1153,1106 @@ def test_limited_face_values_refuses_an_out_that_overlaps_an_input(
         wrong = arguments.replaced(out=out, **{operand: shared})
     with pytest.raises(TypeError, match=SHARED_REFUSAL):
         wrong.invoke(_cfdcore.limited_face_values)
+
+
+# ---------------------------------------------------------------------------
+# The implicit solve (prompt 88): ``implicit_step`` against scalar_scheme's.
+#
+# A Jacobi solve copies the reference's order everywhere, so every output is
+# compared bit for bit: the field, the sweeps, converged, the leftover, and the
+# number of times the leftover was summed (the reference's ``_Acceptance._form``
+# calls, counted). A CG solve's dot products are the reference's OpenBLAS ddot
+# and the core's row-blocked sum (ADR-017 G, the second kind), so it is
+# compared by prompt 88's rule: the reference's iteration count, and where the
+# counts agree the field within 1e-12 of the reference's largest magnitude,
+# with differing counts reported apart (in the JUnit record's properties). The
+# reference's CG with its ``np.vdot`` replaced by the core's ``row_dot`` must
+# then be the core's CG bit for bit, which pins every other operation of the
+# core's CG to the reference's order.
+
+IMPLICIT_TOL = 1e-10
+IMPLICIT_CAP = 200
+# The CG cases' tolerance and cap, as `turbulence.tol` and `max_iter` are in
+# configs/clean_room_default.yaml; "tight" cases go to 1e-15, where the
+# recursion meets the stop before the true residual does and the solve restarts.
+CG_TOL = 1e-10
+CG_TIGHT_TOL = 1e-15
+CG_CAP = 500
+# Prompt 88's rule for a CG solve whose count matches the reference's.
+CG_FIELD_RTOL = 1e-12
+JACOBI_FIELDS = ["decades", "signed", "plume", "every-face"]
+CG_FIELDS = ["positive-decades", "eps-like", "tight"]
+STEPS = ["scalar", "per-cell"]
+BOUNDS = ["none", "binds", "infinite", "zero"]
+HOLDS = ["none", "held"]
+CG_STEPS = ["scalar", "per-cell", "per-cell-inf-solid"]
+# The CG cases with a leftover bound (review 88 B1): a field, a stop and a bound.
+# At the "loose" stop the start residual already meets the max-norm test, so
+# the acceptance at the start decides whether the solve ends there; at the
+# field's own stop the acceptance at a confirmation does. The "tight" field is
+# at its tolerance near rounding, so it is run at that stop only.
+CG_BOUNDS = ["binds", "infinite", "zero"]
+CG_BOUND_STOPS = ["tol", "loose"]
+CG_BOUND_CASES = [
+    (field, stop, bound)
+    for field in ["positive-decades", "tight"]
+    for stop in CG_BOUND_STOPS
+    for bound in CG_BOUNDS
+    if not (field == "tight" and stop == "loose")
+]
+CG_BOUND_IDS = ["-".join(case) for case in CG_BOUND_CASES]
+# A tolerance that the planted systems' start residuals meet (the reach test
+# checks it: the unbounded solve ends at the start).
+CG_LOOSE_TOL = 1e3
+# No leftover is exactly zero, so a zero bound runs a CG solve to its cap and
+# then the fallback's Jacobi solve to its cap; a short cap keeps the case cheap.
+CG_ZERO_BOUND_CAP = 30
+# One seed per mesh, so the cases of one mesh do not repeat another's draws.
+MESH_SEEDS = {name: i for i, name in enumerate(MESHES)}
+
+
+# The reference divides by a_P in every cell, SOLID ones included, before it
+# zeroes them; with an infinite step in a SOLID cell a_P is 0 there and the
+# quotient 0 / 0 warns. The value is discarded, so the warning is not a finding.
+REFERENCE_DIVIDES_BY_ZERO = pytest.mark.filterwarnings(
+    "ignore:invalid value encountered in divide:RuntimeWarning"
+)
+
+
+@functools.cache
+def _implicit_scratch(name: str) -> "_cfdcore.ImplicitScratch2":
+    """The core's implicit scratch on a mesh (it keeps its grid alive)."""
+    return _cfdcore.ImplicitScratch2(_grid(_mesh(name)))
+
+
+@dataclasses.dataclass(frozen=True, eq=False)
+class ImplicitArguments(Call):
+    """The arguments of ``implicit_step``, in the reference's order."""
+
+    c_star: np.ndarray
+    volume: np.ndarray
+    dt: float | np.ndarray
+    g_u: np.ndarray
+    g_v: np.ndarray
+    diagonal: np.ndarray
+    solid: np.ndarray
+    tol: float
+    max_iter: int
+    held: np.ndarray | None = None
+    method: str = "jacobi"
+    leftover_bound: float | None = None
+
+    def reference(self) -> ImplicitResult:
+        """The reference's solve on these arguments."""
+        return implicit_step(
+            self.c_star,
+            self.volume,
+            self.dt,
+            self.g_u,
+            self.g_v,
+            self.diagonal,
+            self.solid,
+            self.tol,
+            self.max_iter,
+            held=self.held,
+            method=self.method,
+            leftover_bound=self.leftover_bound,
+        )
+
+    def core(self, scratch: "_cfdcore.ImplicitScratch2") -> tuple[np.ndarray, object]:
+        """The core's solve on these arguments: its field and its result."""
+        out = np.full(self.c_star.shape, np.nan)
+        result = _cfdcore.implicit_step(
+            scratch,
+            self.c_star,
+            self.volume,
+            self.dt,
+            self.g_u,
+            self.g_v,
+            self.diagonal,
+            self.solid,
+            self.tol,
+            self.max_iter,
+            out,
+            held=self.held,
+            method=self.method,
+            leftover_bound=self.leftover_bound,
+        )
+        return out, result
+
+
+def _conductances(
+    mesh: Mesh,
+    solid: np.ndarray,
+    rng: np.random.Generator,
+    scale: np.ndarray,
+    every_face: bool = False,
+) -> tuple[np.ndarray, np.ndarray]:
+    """``G_f = Gamma_f A_f / d_f`` on the faces between two non-SOLID cells, as the solvers form them.
+
+    ``Gamma_f`` is ``scale`` (one value per cell, the face taking its west or
+    south cell's) times a random factor over two decades; every domain face
+    and every face beside a SOLID cell has no conductance. With
+    ``every_face`` every face has one, the first and the last of each row and
+    column included: no caller hands that in, but the reference's arithmetic
+    serves it, and it is where a SOLID cell's value of C* and the zero read
+    beyond each end of a line reach a sum (a face with no conductance
+    multiplies that value by zero).
+    """
+    ny, nx = solid.shape
+    inner_u = np.zeros((ny, nx + 1), dtype=bool)
+    inner_u[:, 1:-1] = ~solid[:, :-1] & ~solid[:, 1:]
+    inner_v = np.zeros((ny + 1, nx), dtype=bool)
+    inner_v[1:-1, :] = ~solid[:-1, :] & ~solid[1:, :]
+    if every_face:
+        inner_u[:, :] = True
+        inner_v[:, :] = True
+    gamma_u = np.zeros((ny, nx + 1))
+    gamma_u[:, 1:] = scale
+    gamma_v = np.zeros((ny + 1, nx))
+    gamma_v[1:, :] = scale
+    if every_face:
+        # The first face of a line has no west or south cell to take a value
+        # from, so it takes the east or north cell's.
+        gamma_u[:, 0] = scale[:, 0]
+        gamma_v[0, :] = scale[0, :]
+    gamma_u *= 10.0 ** rng.uniform(-2.0, 0.0, gamma_u.shape)
+    gamma_v *= 10.0 ** rng.uniform(-2.0, 0.0, gamma_v.shape)
+    area_u = np.broadcast_to(mesh.dy_cell[:, None], (ny, nx + 1))
+    area_v = np.broadcast_to(mesh.dx_cell[None, :], (ny + 1, nx))
+    g_u = np.where(inner_u, gamma_u * area_u / mesh.dx_face[None, :], 0.0)
+    g_v = np.where(inner_v, gamma_v * area_v / mesh.dy_face[:, None], 0.0)
+    return g_u, g_v
+
+
+def _plume(mesh: Mesh, solid: np.ndarray) -> np.ndarray:
+    """A release's plume: 1e6 at its centre, falling to underflow and zero far from it."""
+    xc, yc = np.meshgrid(mesh.xc, mesh.yc)
+    x0, y0 = mesh.xc[len(mesh.xc) // 3], mesh.yc[len(mesh.yc) // 2]
+    width = 0.04 * (mesh.x[-1] - mesh.x[0])
+    field = 1e6 * np.exp(-(((xc - x0) ** 2 + (yc - y0) ** 2) / width**2))
+    return np.where(solid, 0.0, field)
+
+
+def _jacobi_arguments(
+    name: str, field: str, step: str, hold: str, rng: np.random.Generator
+) -> ImplicitArguments:
+    """A planted transport-like system: a class's field, its diffusion and its deposition sink."""
+    mesh = _mesh(name)
+    solid = mesh.cell_type == SOLID
+    volume = np.outer(mesh.dy_cell, mesh.dx_cell)
+    shape = solid.shape
+    dt_scalar = 0.05
+    # dt G / V from about 1e-6 to 0.5, the transport solver's range and below
+    # (ADR-016 measured kappa up to 0.42 on 320x120).
+    scale = (volume / dt_scalar) * 10.0 ** rng.uniform(-4.0, -0.3, shape)
+    scale *= mesh.dx_face[1:][None, :] / mesh.dy_cell[:, None]
+    g_u, g_v = _conductances(mesh, solid, rng, scale, every_face=field == "every-face")
+    sink = np.where(
+        (rng.uniform(size=shape) < 0.3) & ~solid,
+        (volume / dt_scalar) * 10.0 ** rng.uniform(-6.0, -1.0, shape),
+        0.0,
+    )
+    if field == "decades":
+        c_star = 10.0 ** rng.uniform(-12.0, 4.0, shape)
+        c_star[rng.uniform(size=shape) < 0.1] = 0.0
+    elif field == "signed":
+        c_star = _values(rng, shape)
+    elif field == "plume":
+        c_star = _plume(mesh, solid)
+    else:
+        c_star = 10.0 ** rng.uniform(-12.0, 4.0, shape)
+    if field != "every-face":
+        c_star = np.where(solid, 0.0, c_star)
+    else:
+        # Jacobi's first residual reads C* as given, SOLID cells included.
+        c_star = np.where(solid, 5.0, c_star)
+    dt: float | np.ndarray = dt_scalar
+    if step == "per-cell":
+        dt = dt_scalar * 10.0 ** rng.uniform(-0.5, 0.5, shape)
+        # Not read in a SOLID cell: an infinity there must not reach the sum.
+        dt[solid] = np.inf
+    held = None
+    if hold == "held":
+        held = (rng.uniform(size=shape) < 0.05) & ~solid
+    return ImplicitArguments(
+        c_star=np.ascontiguousarray(c_star),
+        volume=volume,
+        dt=dt,
+        g_u=g_u,
+        g_v=g_v,
+        diagonal=sink,
+        solid=solid,
+        tol=IMPLICIT_TOL,
+        max_iter=IMPLICIT_CAP,
+        held=held,
+    )
+
+
+# The planted CG systems' ranges, as powers of ten: the decay rate eps / k (or
+# eps / k times C_2 for eps), the pseudo-time step, nu_t, and C*. The "tight"
+# system has a weak sink and a long step, so it is conditioned far worse, and
+# at CG_TIGHT_TOL its recursion meets the stop before its true residual does
+# (results/builder88/tight.py measured the ranges that restart).
+CG_RANGES = {
+    "positive-decades": {
+        "rate": (-2.0, 2.0),
+        "dt": (-3.0, -1.0),
+        "nu_t": (-5.0, -2.0),
+        "c": (-6.0, 2.0),
+    },
+    "eps-like": {
+        "rate": (-1.0, 3.0),
+        "dt": (-3.0, -1.0),
+        "nu_t": (-5.0, -2.0),
+        "c": (-4.0, 4.0),
+    },
+    "tight": {
+        "rate": (-6.0, -2.0),
+        "dt": (-1.0, 1.0),
+        "nu_t": (-3.0, -1.0),
+        "c": (-6.0, 2.0),
+    },
+}
+
+
+def _cg_arguments(
+    name: str, field: str, step: str, hold: str, rng: np.random.Generator
+) -> ImplicitArguments:
+    """A planted k-or-eps-like system: positive in every cell it solves for, a per-cell step."""
+    mesh = _mesh(name)
+    solid = mesh.cell_type == SOLID
+    volume = np.outer(mesh.dy_cell, mesh.dx_cell)
+    shape = solid.shape
+    ranges = CG_RANGES[field]
+    # The local pseudo-time step of ADR-012 C, the largest finite value in SOLID cells.
+    dt_cells = 10.0 ** rng.uniform(*ranges["dt"], shape)
+    dt_cells[solid] = dt_cells[~solid].max()
+    if step == "scalar":
+        dt: float | np.ndarray = float(np.median(dt_cells))
+    elif step == "per-cell":
+        dt = dt_cells
+    else:
+        dt = np.where(solid, np.inf, dt_cells)
+    nu_t = 10.0 ** rng.uniform(*ranges["nu_t"], shape)
+    g_u, g_v = _conductances(mesh, solid, rng, nu_t)
+    c_star = np.where(solid, 0.0, 10.0 ** rng.uniform(*ranges["c"], shape))
+    sink = np.where(solid, 0.0, volume * 10.0 ** rng.uniform(*ranges["rate"], shape))
+    held = None
+    if hold == "held":
+        held = (rng.uniform(size=shape) < 0.05) & ~solid
+    return ImplicitArguments(
+        c_star=c_star,
+        volume=volume,
+        dt=dt,
+        g_u=g_u,
+        g_v=g_v,
+        diagonal=sink,
+        solid=solid,
+        tol=CG_TIGHT_TOL if field == "tight" else CG_TOL,
+        max_iter=CG_CAP,
+        held=held,
+        method="cg",
+    )
+
+
+@dataclasses.dataclass
+class _Counts:
+    """How often the reference summed a leftover and formed a neighbour sum."""
+
+    forms: int = 0
+    neighbour_sums: int = 0
+
+
+@contextlib.contextmanager
+def _counting() -> Iterator[_Counts]:
+    """Count the reference's leftover sums and neighbour sums while the block runs."""
+    counts = _Counts()
+    form = scalar_scheme._Acceptance._form
+    neighbour_sum = scalar_scheme._neighbour_sum
+
+    def counted_form(self: object, residual: np.ndarray) -> float:
+        counts.forms += 1
+        return form(self, residual)
+
+    def counted_neighbour_sum(*args: np.ndarray) -> np.ndarray:
+        counts.neighbour_sums += 1
+        return neighbour_sum(*args)
+
+    scalar_scheme._Acceptance._form = counted_form
+    scalar_scheme._neighbour_sum = counted_neighbour_sum
+    try:
+        yield counts
+    finally:
+        scalar_scheme._Acceptance._form = form
+        scalar_scheme._neighbour_sum = neighbour_sum
+
+
+def _reference_restarts(result: ImplicitResult, counts: _Counts) -> int:
+    """The reference CG's restarts, from its neighbour sums.
+
+    Each CG iteration forms one product; the start forms one true residual and
+    every confirmation another, the last confirmation (a stop or the cap) ending
+    the solve and every other one restarting it; a fallback's Jacobi forms one
+    residual per sweep and one more.
+    """
+    if result.iterations == 0:
+        return 0
+    fallback = result.fallback_sweeps + 1 if result.fallbacks else 0
+    return counts.neighbour_sums - result.iterations - 2 - fallback
+
+
+def _reference_counted(
+    arguments: ImplicitArguments,
+) -> tuple[ImplicitResult, _Counts]:
+    """The reference's solve with its counts."""
+    with _counting() as counts:
+        result = arguments.reference()
+    return result, counts
+
+
+def _assert_bit_for_bit(
+    arguments: ImplicitArguments,
+    reference: ImplicitResult,
+    counts: _Counts,
+    out: np.ndarray,
+    core: object,
+) -> None:
+    """Every output of the core's solve equals the reference's, the leftover's sums counted."""
+    assert _same_bits(out, reference.field)
+    assert core.method == reference.method
+    assert core.iterations == reference.iterations
+    assert core.converged == reference.converged
+    assert core.fallbacks == reference.fallbacks
+    assert core.fallback_sweeps == reference.fallback_sweeps
+    assert _bits(core.leftover) == _bits(reference.leftover)
+    assert core.leftover_sums == counts.forms
+
+
+def _bound(arguments: ImplicitArguments, kind: str) -> float | None:
+    """The leftover bound of a case: none, one that binds, an infinite one or zero.
+
+    The binding bound is an eighth of the reference's leftover without a
+    bound, so the stop takes more sweeps wherever that leftover is not zero.
+    """
+    if kind == "none":
+        return None
+    if kind == "infinite":
+        return np.inf
+    if kind == "zero":
+        return 0.0
+    return abs(arguments.reference().leftover) / 8.0
+
+
+@REFERENCE_DIVIDES_BY_ZERO
+@pytest.mark.parametrize("hold", HOLDS)
+@pytest.mark.parametrize("bound", BOUNDS)
+@pytest.mark.parametrize("step", STEPS)
+@pytest.mark.parametrize("field", JACOBI_FIELDS)
+@pytest.mark.parametrize("name", list(MESHES))
+def test_implicit_jacobi_equals_the_reference_bit_for_bit(
+    name: str,
+    field: str,
+    step: str,
+    bound: str,
+    hold: str,
+    record_property: Callable[[str, object], None],
+) -> None:
+    """A Jacobi solve: field, sweeps, converged, leftover and its sums, bit for bit (prediction (a))."""
+    rng = np.random.default_rng(
+        [
+            SEED,
+            MESH_SEEDS[name],
+            JACOBI_FIELDS.index(field),
+            STEPS.index(step),
+            HOLDS.index(hold),
+        ]
+    )
+    arguments = _jacobi_arguments(name, field, step, hold, rng)
+    unbound = arguments.reference()
+    arguments = arguments.replaced(leftover_bound=_bound(arguments, bound))
+    reference, counts = _reference_counted(arguments)
+    out, core = arguments.core(_implicit_scratch(name))
+    record_property("sweeps", reference.iterations)
+    record_property("sweeps_unbound", unbound.iterations)
+    record_property("converged", reference.converged)
+    record_property("leftover", reference.leftover)
+    record_property("leftover_sums", counts.forms)
+    _assert_bit_for_bit(arguments, reference, counts, out, core)
+
+
+@REFERENCE_DIVIDES_BY_ZERO
+def test_the_planted_jacobi_inputs_reach_every_rule() -> None:
+    """The planted cases reach what the bit-for-bit test claims to pin.
+
+    On 80x30: a binding bound adds sweeps; a zero bound runs to the cap; a held
+    cell keeps C* and changes its neighbours; with conductances on every face,
+    the first and last of every line included, C*'s SOLID values change the
+    result, since Jacobi's first residual reads them; and an infinite per-cell
+    step in the SOLID cells leaves the leftover finite.
+    """
+    name = "80x30"
+    rng = np.random.default_rng([SEED, 88])
+    base = _jacobi_arguments(name, "decades", "scalar", "none", rng)
+    free = base.reference()
+    bound = base.replaced(leftover_bound=abs(free.leftover) / 8.0).reference()
+    assert free.converged and bound.converged and bound.iterations > free.iterations
+    zero = base.replaced(leftover_bound=0.0).reference()
+    assert zero.iterations == IMPLICIT_CAP and not zero.converged
+    held = base.replaced(
+        held=(rng.uniform(size=base.c_star.shape) < 0.05) & ~base.solid
+    )
+    held_result = held.reference()
+    assert _same_bits(held_result.field[held.held], base.c_star[held.held])
+    assert not _same_bits(held_result.field, free.field)
+    every = _jacobi_arguments(name, "every-face", "scalar", "none", rng)
+    # The first and the last face of every row and column carry conductance, so
+    # the zero read beyond each end of a line is multiplied by something.
+    assert (every.g_u[:, 0] > 0).all() and (every.g_u[:, -1] > 0).all()
+    assert (every.g_v[0, :] > 0).all() and (every.g_v[-1, :] > 0).all()
+    zeroed = every.replaced(c_star=np.where(every.solid, 0.0, every.c_star)).reference()
+    assert not _same_bits(every.reference().field, zeroed.field)
+    per_cell = _jacobi_arguments(name, "decades", "per-cell", "none", rng)
+    assert np.isinf(per_cell.dt[per_cell.solid]).all()
+    assert np.isfinite(per_cell.reference().leftover)
+
+
+@REFERENCE_DIVIDES_BY_ZERO
+@pytest.mark.parametrize("hold", HOLDS)
+@pytest.mark.parametrize("step", CG_STEPS)
+@pytest.mark.parametrize("field", CG_FIELDS)
+@pytest.mark.parametrize("name", list(MESHES))
+def test_implicit_cg_meets_prompt_88s_rule(
+    name: str,
+    field: str,
+    step: str,
+    hold: str,
+    record_property: Callable[[str, object], None],
+) -> None:
+    """A CG solve: the reference's count, and where it agrees the field within 1e-12."""
+    rng = np.random.default_rng(
+        [
+            SEED,
+            MESH_SEEDS[name],
+            10 + CG_FIELDS.index(field),
+            CG_STEPS.index(step),
+            HOLDS.index(hold),
+        ]
+    )
+    arguments = _cg_arguments(name, field, step, hold, rng)
+    reference = arguments.reference()
+    out, core = arguments.core(_implicit_scratch(name))
+    largest = float(np.abs(reference.field).max())
+    difference = float(np.abs(out - reference.field).max()) / largest
+    record_property("reference_iterations", reference.iterations)
+    record_property("core_iterations", core.iterations)
+    record_property("relative_difference", difference)
+    record_property("reference_fallbacks", reference.fallbacks)
+    record_property("core_fallbacks", core.fallbacks)
+    record_property("restarts", core.restarts)
+    if core.iterations == reference.iterations:
+        assert difference <= CG_FIELD_RTOL
+
+
+class _NumpyWithTheCoresDot:
+    """NumPy, with ``vdot`` the core's row-blocked dot product (``_cfdcore.row_dot``)."""
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(np, name)
+
+    @staticmethod
+    def vdot(a: np.ndarray, b: np.ndarray) -> float:
+        """The core's dot product of two [ny, nx] arrays, a block per row."""
+        return _cfdcore.row_dot(a, b)
+
+
+@REFERENCE_DIVIDES_BY_ZERO
+@pytest.mark.parametrize("hold", HOLDS)
+@pytest.mark.parametrize("step", CG_STEPS)
+@pytest.mark.parametrize("field", CG_FIELDS)
+@pytest.mark.parametrize("name", list(MESHES))
+def test_implicit_cg_with_the_cores_dot_products_is_bit_for_bit(
+    name: str,
+    field: str,
+    step: str,
+    hold: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The reference's CG with the core's dot products is the core's CG bit for bit.
+
+    Everything but the two dot products is elementwise and copied in the
+    reference's order, so with the same dot products the two must agree in
+    every bit: the field, the count, converged, the fallback, the leftover and
+    its sums, and the restarts.
+    """
+    rng = np.random.default_rng(
+        [
+            SEED,
+            MESH_SEEDS[name],
+            10 + CG_FIELDS.index(field),
+            CG_STEPS.index(step),
+            HOLDS.index(hold),
+        ]
+    )
+    arguments = _cg_arguments(name, field, step, hold, rng)
+    monkeypatch.setattr(scalar_scheme, "np", _NumpyWithTheCoresDot())
+    reference, counts = _reference_counted(arguments)
+    out, core = arguments.core(_implicit_scratch(name))
+    _assert_bit_for_bit(arguments, reference, counts, out, core)
+    assert core.restarts == _reference_restarts(reference, counts)
+
+
+@REFERENCE_DIVIDES_BY_ZERO
+def test_the_planted_cg_inputs_reach_every_rule(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The tight cases restart, and the held cells keep C*, so the bit-for-bit test pins both."""
+    monkeypatch.setattr(scalar_scheme, "np", _NumpyWithTheCoresDot())
+    restarted = 0
+    for name in MESHES:
+        for step in CG_STEPS:
+            rng = np.random.default_rng(
+                [
+                    SEED,
+                    MESH_SEEDS[name],
+                    10 + CG_FIELDS.index("tight"),
+                    CG_STEPS.index(step),
+                    1,
+                ]
+            )
+            arguments = _cg_arguments(name, "tight", step, "held", rng)
+            result, counts = _reference_counted(arguments)
+            restarted += _reference_restarts(result, counts) > 0
+            assert _same_bits(
+                result.field[arguments.held], arguments.c_star[arguments.held]
+            )
+    assert restarted >= 3
+
+
+def _isolated_zero(arguments: ImplicitArguments) -> ImplicitArguments:
+    """The arguments with one non-SOLID cell cut off: no conductance, no sink, C* zero.
+
+    CG leaves that cell at zero, which is not positive, so the solve falls back.
+    """
+    solid = arguments.solid
+    j, i = np.argwhere(~solid)[len(np.argwhere(~solid)) // 2]
+    g_u, g_v = arguments.g_u.copy(), arguments.g_v.copy()
+    g_u[j, i] = g_u[j, i + 1] = 0.0
+    g_v[j, i] = g_v[j + 1, i] = 0.0
+    sink = arguments.diagonal.copy()
+    sink[j, i] = 0.0
+    c_star = arguments.c_star.copy()
+    c_star[j, i] = 0.0
+    held = None if arguments.held is None else arguments.held.copy()
+    if held is not None:
+        held[j, i] = False
+    return arguments.replaced(g_u=g_u, g_v=g_v, diagonal=sink, c_star=c_star, held=held)
+
+
+@REFERENCE_DIVIDES_BY_ZERO
+@pytest.mark.parametrize("cause", ["cap", "non-positive"])
+@pytest.mark.parametrize("name", list(MESHES))
+def test_implicit_cg_fallback_is_the_jacobi_solve_bit_for_bit(
+    name: str, cause: str, record_property: Callable[[str, object], None]
+) -> None:
+    """A CG solve at its cap, or leaving a zero, falls back to Jacobi from C* as the reference does.
+
+    The fallback's Jacobi solve does not read the CG iterate, so its field,
+    sweeps, converged flag and leftover are compared bit for bit even though
+    the CG before it is compared by the rule.
+    """
+    rng = np.random.default_rng([SEED, MESH_SEEDS[name], 30])
+    arguments = _cg_arguments(name, "positive-decades", "per-cell", "held", rng)
+    if cause == "cap":
+        # One iteration at the tight tolerance: no planted system converges in it.
+        arguments = arguments.replaced(max_iter=1, tol=CG_TIGHT_TOL)
+    else:
+        arguments = _isolated_zero(arguments)
+    reference, counts = _reference_counted(arguments)
+    out, core = arguments.core(_implicit_scratch(name))
+    record_property("reference_iterations", reference.iterations)
+    record_property("core_iterations", core.iterations)
+    assert reference.fallbacks == core.fallbacks == 1
+    assert _same_bits(out, reference.field)
+    assert core.fallback_sweeps == reference.fallback_sweeps
+    assert core.converged == reference.converged
+    assert _bits(core.leftover) == _bits(reference.leftover)
+    if cause == "cap":
+        assert core.iterations == reference.iterations == 1
+        assert core.leftover_sums == counts.forms
+    # The fallback starts from C*, not from the CG iterate: a Jacobi solve alone
+    # gives the same field.
+    jacobi = arguments.replaced(method="jacobi").reference()
+    assert _same_bits(out, jacobi.field)
+
+
+def _cg_bound_arguments(
+    name: str, field: str, stop: str, bound: str
+) -> ImplicitArguments:
+    """A CG system with its leftover bound: the stop, the cap and the bound by case.
+
+    The three bounds of a field and a stop share one system, so that they can
+    be compared. The binding bound is an eighth of the reference's leftover
+    without one, computed on the arguments' reference as the caller has set it
+    up, the dot product included.
+    """
+    rng = np.random.default_rng(
+        [
+            SEED,
+            MESH_SEEDS[name],
+            20 + CG_FIELDS.index(field),
+            CG_BOUND_STOPS.index(stop),
+        ]
+    )
+    arguments = _cg_arguments(name, field, "per-cell", "none", rng)
+    if stop == "loose":
+        arguments = arguments.replaced(tol=CG_LOOSE_TOL)
+    if bound == "zero":
+        arguments = arguments.replaced(max_iter=CG_ZERO_BOUND_CAP)
+    return arguments.replaced(leftover_bound=_bound(arguments, bound))
+
+
+@REFERENCE_DIVIDES_BY_ZERO
+@pytest.mark.parametrize("case", CG_BOUND_CASES, ids=CG_BOUND_IDS)
+@pytest.mark.parametrize("name", list(MESHES))
+def test_implicit_cg_with_a_leftover_bound_meets_prompt_88s_rule(
+    name: str,
+    case: tuple[str, str, str],
+    record_property: Callable[[str, object], None],
+) -> None:
+    """A CG solve with a bound: the reference's count, the field within 1e-12, the bound kept.
+
+    The rule is the unbounded CG cases': where the counts agree the field is
+    within 1e-12 of the reference's largest magnitude, and differing counts are
+    recorded. A bound adds one more thing the reference does not decide: the
+    leftover of a field the solve accepts is inside the bound (ADR-016), so a
+    converged result, the core's or the reference's, must show it. The bound's
+    test reads a cancelling sum, so counts can differ at ordinary tolerances
+    here, where the unbounded cases' do not.
+    """
+    field, stop, kind = case
+    arguments = _cg_bound_arguments(name, field, stop, kind)
+    bound = arguments.leftover_bound
+    reference = arguments.reference()
+    out, core = arguments.core(_implicit_scratch(name))
+    largest = float(np.abs(reference.field).max())
+    difference = float(np.abs(out - reference.field).max()) / largest
+    record_property("reference_iterations", reference.iterations)
+    record_property("core_iterations", core.iterations)
+    record_property("relative_difference", difference)
+    record_property("reference_fallbacks", reference.fallbacks)
+    record_property("core_fallbacks", core.fallbacks)
+    record_property("restarts", core.restarts)
+    record_property("converged", core.converged)
+    if core.iterations == reference.iterations:
+        assert difference <= CG_FIELD_RTOL
+    for result in (reference, core):
+        if result.converged:
+            assert abs(result.leftover) <= bound
+
+
+@REFERENCE_DIVIDES_BY_ZERO
+@pytest.mark.parametrize("case", CG_BOUND_CASES, ids=CG_BOUND_IDS)
+@pytest.mark.parametrize("name", list(MESHES))
+def test_implicit_cg_with_a_leftover_bound_and_the_cores_dot_products_is_bit_for_bit(
+    name: str,
+    case: tuple[str, str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With the core's dot products the reference's bounded CG is the core's bit for bit.
+
+    The acceptance at the start, at each confirmation and at the cap, the
+    restarts on the bound's account and the fallback's own acceptance all show
+    in the field, the counts, the leftover and the number of times it was
+    summed.
+    """
+    field, stop, kind = case
+    monkeypatch.setattr(scalar_scheme, "np", _NumpyWithTheCoresDot())
+    arguments = _cg_bound_arguments(name, field, stop, kind)
+    reference, counts = _reference_counted(arguments)
+    out, core = arguments.core(_implicit_scratch(name))
+    _assert_bit_for_bit(arguments, reference, counts, out, core)
+    assert core.restarts == _reference_restarts(reference, counts)
+
+
+@REFERENCE_DIVIDES_BY_ZERO
+@pytest.mark.parametrize("name", ["80x30", "160x60-stretched"])
+def test_the_planted_cg_bound_inputs_reach_every_rule(
+    name: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each bound does something to the planted CG solve: the bit-for-bit test pins what it reaches.
+
+    A binding bound adds iterations and restarts to the unbounded solve, whose
+    confirmation it refuses; an infinite bound changes neither; a zero bound
+    runs the solve to its cap and the fallback after it, converged nowhere; at
+    the loose stop the unbounded solve ends at the start and a binding bound
+    refuses that, so the solve goes on.
+    """
+    monkeypatch.setattr(scalar_scheme, "np", _NumpyWithTheCoresDot())
+
+    def solved(field: str, stop: str, kind: str) -> tuple[ImplicitResult, int]:
+        arguments = _cg_bound_arguments(name, field, stop, kind)
+        result, counts = _reference_counted(arguments)
+        return result, _reference_restarts(result, counts)
+
+    free, free_restarts = solved("positive-decades", "tol", "infinite")
+    binds, binds_restarts = solved("positive-decades", "tol", "binds")
+    assert free.converged and binds.converged
+    assert binds.iterations > free.iterations
+    assert binds_restarts > free_restarts
+    zero, _ = solved("positive-decades", "tol", "zero")
+    assert not zero.converged and zero.fallbacks == 1
+    assert zero.iterations == zero.fallback_sweeps == CG_ZERO_BOUND_CAP
+    loose, _ = solved("positive-decades", "loose", "infinite")
+    refused, _ = solved("positive-decades", "loose", "binds")
+    assert loose.iterations == 0 and loose.converged
+    assert refused.iterations > 0 and refused.converged
+    tight, _ = solved("tight", "tol", "binds")
+    assert tight.iterations > 0
+
+
+@REFERENCE_DIVIDES_BY_ZERO
+@pytest.mark.parametrize("name", list(MESHES))
+def test_implicit_cg_positivity_is_read_in_the_cells_it_solves_for_only(
+    name: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A held cell at zero is no reason to fall back: the test is over the unknowns only.
+
+    CG never changes a held cell, so it stays at C*; the reference's test,
+    ``c[~fixed] > 0``, leaves it out, and a core that read it would fall back
+    from a solve that converged.
+    """
+    rng = np.random.default_rng([SEED, MESH_SEEDS[name], 31])
+    arguments = _cg_arguments(name, "positive-decades", "per-cell", "held", rng)
+    assert arguments.held.any()
+    arguments = arguments.replaced(
+        c_star=np.where(arguments.held, 0.0, arguments.c_star)
+    )
+    monkeypatch.setattr(scalar_scheme, "np", _NumpyWithTheCoresDot())
+    reference, counts = _reference_counted(arguments)
+    out, core = arguments.core(_implicit_scratch(name))
+    assert reference.fallbacks == core.fallbacks == 0 and reference.converged
+    assert _same_bits(out[arguments.held], np.zeros(int(arguments.held.sum())))
+    _assert_bit_for_bit(arguments, reference, counts, out, core)
+
+
+@REFERENCE_DIVIDES_BY_ZERO
+@pytest.mark.parametrize("name", list(MESHES))
+def test_implicit_cg_iterations_under_a_fallback_are_the_cgs_own(
+    name: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A fallback keeps the CG's iteration count and records the Jacobi sweeps apart.
+
+    One cell left at zero fails the positivity test after the CG converged, so
+    Jacobi solves from C*. The two counts must differ here for the case to tell
+    them apart, and with the core's dot products the CG's count is the
+    reference's.
+    """
+    rng = np.random.default_rng([SEED, MESH_SEEDS[name], 32])
+    # The tight field is conditioned far worse than the others, so at the
+    # ordinary tolerance Jacobi needs many more sweeps than CG iterations (at
+    # its own 1e-15 both reach the cap).
+    arguments = _isolated_zero(
+        _cg_arguments(name, "tight", "per-cell", "held", rng)
+    ).replaced(tol=CG_TOL)
+    monkeypatch.setattr(scalar_scheme, "np", _NumpyWithTheCoresDot())
+    reference, counts = _reference_counted(arguments)
+    out, core = arguments.core(_implicit_scratch(name))
+    assert reference.fallbacks == core.fallbacks == 1
+    assert reference.iterations != reference.fallback_sweeps
+    _assert_bit_for_bit(arguments, reference, counts, out, core)
+    assert core.iterations != core.fallback_sweeps
+    assert core.restarts == _reference_restarts(reference, counts)
+
+
+@REFERENCE_DIVIDES_BY_ZERO
+@pytest.mark.parametrize("step", STEPS)
+@pytest.mark.parametrize("method", ["jacobi", "cg"])
+@pytest.mark.parametrize("name", list(MESHES))
+def test_implicit_a_zero_field_meets_the_stop_and_a_zero_bound_with_equality(
+    name: str, method: str, step: str
+) -> None:
+    """C* all zero with a zero bound: the stop, 0 <= 0, and the bound, 0 <= 0, both hold.
+
+    The state of every class's solve before a release: b is zero, so the stop is
+    zero and so is the residual, and the leftover is zero against ADR-016's bound
+    of zero. A strict comparison in either place makes the solve run on. Under
+    CG the all-zero iterate is not positive, so the solve falls back to Jacobi,
+    which meets both at once as well.
+    """
+    rng = np.random.default_rng([SEED, MESH_SEEDS[name], 80, STEPS.index(step)])
+    if method == "jacobi":
+        arguments = _jacobi_arguments(name, "decades", step, "none", rng)
+    else:
+        arguments = _cg_arguments(name, "positive-decades", step, "none", rng)
+    arguments = arguments.replaced(
+        c_star=np.zeros_like(arguments.c_star), leftover_bound=0.0
+    )
+    reference, counts = _reference_counted(arguments)
+    out, core = arguments.core(_implicit_scratch(name))
+    assert reference.iterations == 0 and reference.converged
+    assert reference.fallback_sweeps == 0
+    assert reference.fallbacks == (1 if method == "cg" else 0)
+    _assert_bit_for_bit(arguments, reference, counts, out, core)
+
+
+@pytest.mark.parametrize("method", ["jacobi", "cg"])
+@pytest.mark.parametrize("zero", [0.0, -0.0])
+@pytest.mark.parametrize("name", ["80x30", "160x60-stretched"])
+def test_implicit_nothing_to_solve_returns_c_star(
+    name: str, zero: float, method: str
+) -> None:
+    """No conductance and no sink (zeros of either sign): C* as given, with no solve."""
+    rng = np.random.default_rng([SEED, MESH_SEEDS[name], 40])
+    arguments = _jacobi_arguments(name, "every-face", "scalar", "none", rng)
+    arguments = arguments.replaced(
+        g_u=np.full_like(arguments.g_u, zero),
+        g_v=np.full_like(arguments.g_v, zero),
+        diagonal=np.full_like(arguments.diagonal, zero),
+        method=method,
+    )
+    reference, counts = _reference_counted(arguments)
+    out, core = arguments.core(_implicit_scratch(name))
+    assert reference.field is arguments.c_star
+    _assert_bit_for_bit(arguments, reference, counts, out, core)
+    assert core.iterations == 0 and core.leftover_sums == 0
+
+
+@REFERENCE_DIVIDES_BY_ZERO
+@pytest.mark.parametrize("step", STEPS)
+@pytest.mark.parametrize("name", list(MESHES))
+def test_implicit_system_equals_the_references_set_up(
+    name: str, step: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """a_P, b and the stop are the values the reference hands its Jacobi solve, bit for bit."""
+    rng = np.random.default_rng([SEED, MESH_SEEDS[name], 50, STEPS.index(step)])
+    arguments = _jacobi_arguments(name, "signed", step, "none", rng)
+    seen: dict[str, object] = {}
+    original = scalar_scheme._jacobi
+
+    def recording(
+        c_star: np.ndarray, a_p: np.ndarray, b: np.ndarray, *rest: object
+    ) -> object:
+        seen.update(a_p=a_p, b=b, stop=rest[4])
+        return original(c_star, a_p, b, *rest)
+
+    monkeypatch.setattr(scalar_scheme, "_jacobi", recording)
+    arguments.reference()
+    scratch = _implicit_scratch(name)
+    diffuses, stop = _cfdcore.implicit_system(
+        scratch,
+        arguments.c_star,
+        arguments.volume,
+        arguments.dt,
+        arguments.g_u,
+        arguments.g_v,
+        arguments.diagonal,
+        arguments.tol,
+    )
+    assert diffuses
+    assert _bits(stop) == _bits(seen["stop"])
+    assert _same_bits(scratch.diagonal(), np.ravel(seen["a_p"]))
+    assert _same_bits(scratch.rhs(), np.ravel(seen["b"]))
+
+
+@pytest.mark.parametrize("name", ["80x30", "160x60-stretched"])
+def test_implicit_stop_reads_b_in_every_cell(name: str) -> None:
+    """The stop is tol times the largest |b| over every cell, SOLID cells included.
+
+    C* is a thousand times its largest value elsewhere in the SOLID cells,
+    where the callers keep it zero. Under the conductances the solvers form, a
+    SOLID value reaches no neighbour, so it changes the stop alone: the
+    reference stops sooner than with those cells at zero, and the core with
+    it, bit for bit.
+    """
+    rng = np.random.default_rng([SEED, MESH_SEEDS[name], 55])
+    quiet = _jacobi_arguments(name, "decades", "scalar", "none", rng)
+    loud = quiet.replaced(
+        c_star=np.where(quiet.solid, 1e3 * quiet.c_star.max(), quiet.c_star)
+    )
+    assert loud.reference().iterations < quiet.reference().iterations
+    reference, counts = _reference_counted(loud)
+    out, core = loud.core(_implicit_scratch(name))
+    _assert_bit_for_bit(loud, reference, counts, out, core)
+
+
+def test_row_dot_is_the_row_partition_and_differs_from_vdot_in_rounding_only() -> None:
+    """row_dot sums each row pairwise and adds the rows to 0.0 in order; np.vdot is another order."""
+    rng = np.random.default_rng([SEED, 60])
+    departs = 0
+    for shape in SHAPES:
+        a, b = _values(rng, shape), _values(rng, shape)
+        expected = 0.0
+        for row_a, row_b in zip(a, b, strict=True):
+            expected += _cfdcore.pairwise_sum(np.ascontiguousarray(row_a * row_b))
+        assert _bits(_cfdcore.row_dot(a, b)) == _bits(expected), shape
+        magnitude = float(np.sum(np.abs(a * b)))
+        assert abs(_cfdcore.row_dot(a, b) - float(np.vdot(a, b))) <= 1e-13 * magnitude
+        departs += _bits(_cfdcore.row_dot(a, b)) != _bits(float(np.vdot(a, b)))
+    # The comparison with ddot is the second kind's: the bits are not np.vdot's.
+    assert departs > 0
+
+
+@pytest.mark.parametrize("shape", [(3, 0), (0, 4), (0, 0)])
+def test_row_dot_of_arrays_with_no_terms_is_zero(shape: tuple[int, int]) -> None:
+    """An array with no rows or no columns has no terms: 0.0, as np.vdot gives.
+
+    blocked_dot refuses a block of zero, and an array with no columns has a row
+    length of zero, so the binding hands it a block of 1, which is never read.
+    """
+    a = np.zeros(shape)
+    assert float(np.vdot(a, a)) == 0.0
+    assert _bits(_cfdcore.row_dot(a, a)) == _bits(0.0)
+
+
+@pytest.mark.parametrize(
+    "a, b, message",
+    [
+        pytest.param(np.ones((3, 4)), np.ones((3, 5)), "differ in shape", id="shapes"),
+        pytest.param(
+            np.ones((3, 4)), np.ones((3, 4), np.float32), NANOBIND_REFUSAL, id="dtype"
+        ),
+        pytest.param(
+            np.ones((3, 4)), _strided(np.ones((3, 4))), NANOBIND_REFUSAL, id="strided"
+        ),
+        pytest.param(
+            np.ones((3, 4)),
+            _unaligned_like(np.ones((3, 4))),
+            UNALIGNED_REFUSAL,
+            id="unaligned",
+        ),
+    ],
+)
+def test_row_dot_refuses_wrong_arrays(
+    a: np.ndarray, b: np.ndarray, message: str
+) -> None:
+    """row_dot refuses arrays of two shapes, another dtype or layout, and an unaligned one."""
+    with pytest.raises(TypeError, match=message):
+        _cfdcore.row_dot(a, b)
+
+
+def _small_implicit_arguments() -> ImplicitArguments:
+    """A consistent planted system on the 40x15 mesh, for the refusal tests."""
+    rng = np.random.default_rng([SEED, 70])
+    return _jacobi_arguments("40x15-uniform-open", "decades", "per-cell", "held", rng)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        pytest.param({"method": "gauss"}, id="method-unknown"),
+        pytest.param({"method": "JACOBI"}, id="method-case"),
+        pytest.param({"method": None}, id="method-none"),
+        pytest.param({"leftover_bound": True}, id="bound-python-bool"),
+        pytest.param({"leftover_bound": np.True_}, id="bound-numpy-bool"),
+        pytest.param({"leftover_bound": False}, id="bound-false"),
+        pytest.param({"leftover_bound": -1e-300}, id="bound-negative"),
+        pytest.param({"leftover_bound": np.nan}, id="bound-nan"),
+        pytest.param(
+            {"method": "gauss", "leftover_bound": True}, id="method-before-bound"
+        ),
+    ],
+)
+def test_implicit_step_refuses_what_the_reference_refuses(
+    change: dict[str, object],
+) -> None:
+    """The reference's refusals, with its exception type and message, in its order."""
+    arguments = _small_implicit_arguments().replaced(**change)
+    with pytest.raises((TypeError, ValueError)) as expected:
+        arguments.reference()
+    with pytest.raises(type(expected.value)) as raised:
+        arguments.core(_implicit_scratch("40x15-uniform-open"))
+    assert str(raised.value) == str(expected.value)
+
+
+def test_implicit_step_accepts_consistent_arguments() -> None:
+    """The arguments _small_implicit_arguments builds are accepted, so each refusal is its change's."""
+    arguments = _small_implicit_arguments()
+    arguments.core(_implicit_scratch("40x15-uniform-open"))
+    arguments.replaced(dt=0.05, held=None).core(_implicit_scratch("40x15-uniform-open"))
+
+
+IMPLICIT_ARRAYS = [
+    "c_star",
+    "volume",
+    "dt",
+    "g_u",
+    "g_v",
+    "diagonal",
+    "solid",
+    "held",
+    "out",
+]
+IMPLICIT_REFUSALS = [
+    Refusal(key, change, message, f"{key.replace('_', '-')}-{label}")
+    for key in IMPLICIT_ARRAYS
+    for label, change, message in (
+        ("fewer-rows", _fewer_rows, "is not \\["),
+        ("fewer-columns", _fewer_columns, "is not \\["),
+        ("non-contiguous", _strided, NANOBIND_REFUSAL),
+        ("fortran-order", _fortran, NANOBIND_REFUSAL),
+        ("wrong-dtype", _wrong_dtype, NANOBIND_REFUSAL),
+        ("unaligned", _unaligned_like, UNALIGNED_REFUSAL),
+    )
+    # A bool is one byte, so no bool array is unaligned.
+    if not (label == "unaligned" and key in ("solid", "held"))
+]
+
+
+def _implicit_with(
+    arguments: ImplicitArguments, key: str, value: np.ndarray
+) -> Callable[[], object]:
+    """A call of the core's implicit_step with one argument (or out) replaced."""
+    scratch = _implicit_scratch("40x15-uniform-open")
+    out = np.zeros(arguments.c_star.shape)
+    if key == "out":
+        out = value
+    else:
+        arguments = arguments.replaced(**{key: value})
+    return lambda: _cfdcore.implicit_step(
+        scratch,
+        arguments.c_star,
+        arguments.volume,
+        arguments.dt,
+        arguments.g_u,
+        arguments.g_v,
+        arguments.diagonal,
+        arguments.solid,
+        arguments.tol,
+        arguments.max_iter,
+        out,
+        held=arguments.held,
+        method=arguments.method,
+        leftover_bound=arguments.leftover_bound,
+    )
+
+
+@refusals(IMPLICIT_REFUSALS)
+def test_implicit_step_refuses_wrong_arrays(
+    key: str, change: Callable[[np.ndarray], np.ndarray], message: str
+) -> None:
+    """A wrong shape, dtype, layout or alignment of any array is a TypeError at the binding."""
+    arguments = _small_implicit_arguments()
+    original = (
+        np.zeros(arguments.c_star.shape) if key == "out" else getattr(arguments, key)
+    )
+    call = _implicit_with(arguments, key, change(original))
+    if key == "dt" and message == NANOBIND_REFUSAL:
+        # dt is read as a number or an array: an array it cannot take is named.
+        message = "dt is a number or a C-contiguous float64 cell field"
+    with pytest.raises(TypeError, match=message):
+        call()
+
+
+@pytest.mark.parametrize("end", ["tail", "head"])
+@pytest.mark.parametrize("operand", [k for k in IMPLICIT_ARRAYS if k != "out"])
+def test_implicit_step_refuses_an_out_that_overlaps_an_input(
+    operand: str, end: str
+) -> None:
+    """An out sharing memory with one input, at either end, is a TypeError."""
+    arguments = _small_implicit_arguments()
+    out, shared = _overlapping(arguments.c_star.shape, getattr(arguments, operand), end)
+    arguments = arguments.replaced(**{operand: shared})
+    call = _implicit_with(arguments, "out", out)
+    with pytest.raises(TypeError, match=SHARED_REFUSAL):
+        call()
