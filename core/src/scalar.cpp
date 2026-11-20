@@ -4,6 +4,7 @@
 #include "cfdcore/reduce.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <limits>
 
@@ -87,8 +88,8 @@ struct face_row {
     const double* low = nullptr;
     const double* high = nullptr;
     const double* far_high = nullptr;
-    const std::uint8_t* solid_far_low = nullptr;
-    const std::uint8_t* solid_far_high = nullptr;
+    const lanes::mask* solid_far_low = nullptr;
+    const lanes::mask* solid_far_high = nullptr;
     const double* end_flux_low = nullptr;
     const double* end_inflow_low = nullptr;
     const double* end_flux_high = nullptr;
@@ -145,61 +146,67 @@ inline void upwind_cells(lanes::cells<N>, const face_row& in, std::size_t first,
     }
 }
 
-// The limited QUICK flux through a run of `count` interior faces
-// (`advective_flux` without `upwind`), one face at a time. The upstream,
-// downstream and far nodes are chosen by the flux's sign; QUICK's value is
-// three products added left to right, the far node's first
-// (`quick_face_values`); a far node inside a SOLID cell is read as the
-// upstream value, for the far node and for QUICK's value alike; the clamp is
-// `limited_face_value`. `End` says which boundary nodes stand for far cells;
-// `PerFace` reads the weights per face. out is at the run's first face and
-// overlaps no input; the operands arrive by value, a copy nothing else can
-// reach.
+// The limited QUICK flux through N interior faces from element `first`
+// (`advective_flux` without `upwind`). The upstream, downstream and far nodes
+// are chosen by the flux's sign; QUICK's value is three products added left to
+// right, the far node's first (`quick_face_values`); a far node inside a
+// SOLID cell is read as the upstream value, for the far node and for QUICK's
+// value alike; the clamp is `limited_face_value`. `End` says which boundary
+// nodes stand for far cells; `PerFace` reads the weights per face. out
+// overlaps no input.
 //
-// This kernel is not a block of lanes.hpp, and that is measured (prompt 89's
-// report): a face's value is mostly choices, by the flux's sign, by the far
-// cell and by the clamp's zero difference. Under the project's flags a choice
-// between two values costs three instructions on a vector of two faces, and
-// the block form of this loop ran slower than this one, whose branches a flow
-// that keeps its direction over many faces lets the processor predict.
-template <line_end End, bool PerFace>
-void quick_run(const face_row run, std::size_t count, double* CFDCORE_RESTRICT out) {
+// A face's value is mostly choices, by the flux's sign, by the far cell and by
+// the clamp's zero difference, so every one is a select (lanes.hpp) and the
+// block has no branch. Under the project's flags (-march=x86-64-v3) a select is
+// one instruction on a vector of four faces. Under the x86-64 baseline it is
+// three on a vector of two, and a loop of one face at a time with a branch per
+// choice was the faster form there (prompt 89's report, T6 and T7): the flags
+// decide which form a kernel of this kind takes, so a change of flags is
+// timed again.
+template <line_end End, bool PerFace, std::size_t N>
+inline void quick_cells(lanes::cells<N>, const face_row& in, std::size_t first,
+                        double* CFDCORE_RESTRICT out) {
     constexpr bool at_low = End == line_end::low || End == line_end::both;
     constexpr bool at_high = End == line_end::high || End == line_end::both;
-    for (std::size_t i = 0; i < count; ++i) {
-        const double f = run.flux[i];
+    for (std::size_t k = 0; k < N; ++k) {
+        const std::size_t i = first + k;
+        const double f = in.flux[i];
+        const lanes::mask positive = lanes::mask_of(f > 0.0);
+        const double low = in.low[i];
+        const double high = in.high[i];
+        // The far pointers of a run at an end of its lines are null and are
+        // not read: the boundary node stands for the far cell there.
+        const double below =
+            at_low ? low_boundary_node(in.end_flux_low[i], in.end_inflow_low[i], low)
+                   : in.far_low[i];
+        const double above =
+            at_high ? high_boundary_node(in.end_flux_high[i], in.end_inflow_high[i], high)
+                    : in.far_high[i];
+        const lanes::mask solid_below = at_low ? lanes::none : in.solid_far_low[i];
+        const lanes::mask solid_above = at_high ? lanes::none : in.solid_far_high[i];
+        const double c_c = lanes::select(positive, low, high);
+        const double c_d = lanes::select(positive, high, low);
+        const double far = lanes::select(positive, below, above);
         const std::size_t w = PerFace ? i : 0;
-        const double low = run.low[i];
-        const double high = run.high[i];
-        double c_c = 0.0;
-        double c_d = 0.0;
-        double c_up = 0.0;
-        double quick = 0.0;
-        bool far_solid = false;
-        if (f > 0.0) {
-            c_c = low;
-            c_d = high;
-            c_up = at_low ? low_boundary_node(run.end_flux_low[i], run.end_inflow_low[i], low)
-                          : run.far_low[i];
-            far_solid = !at_low && run.solid_far_low[i] != 0;
-            quick = run.w_pos[0][w] * c_up + run.w_pos[1][w] * c_c + run.w_pos[2][w] * c_d;
-        } else {
-            c_c = high;
-            c_d = low;
-            c_up = at_high
-                       ? high_boundary_node(run.end_flux_high[i], run.end_inflow_high[i], high)
-                       : run.far_high[i];
-            far_solid = !at_high && run.solid_far_high[i] != 0;
-            quick = run.w_neg[0][w] * c_up + run.w_neg[1][w] * c_c + run.w_neg[2][w] * c_d;
-        }
+        const double unlimited = lanes::select(positive, in.w_pos[0][w], in.w_neg[0][w]) * far +
+                                 lanes::select(positive, in.w_pos[1][w], in.w_neg[1][w]) * c_c +
+                                 lanes::select(positive, in.w_pos[2][w], in.w_neg[2][w]) * c_d;
         // A far node inside an obstacle is read as the upstream value, the
         // zero-gradient rule a domain wall gets.
-        if (far_solid) {
-            c_up = c_c;
-            quick = c_c;
-        }
+        const lanes::mask far_solid = (positive & solid_below) | (~positive & solid_above);
+        const double c_up = lanes::select(far_solid, c_c, far);
+        const double quick = lanes::select(far_solid, c_c, unlimited);
         out[i] = f * limited_face_value(c_up, c_c, c_d, quick);
     }
+}
+
+// `quick_cells` over a run of `count` faces. The operands arrive by value: a
+// copy nothing else can reach, so the compiler holds its pointers in registers.
+template <line_end End, bool PerFace>
+void quick_run(const face_row run, std::size_t count, double* CFDCORE_RESTRICT out) {
+    lanes::for_each_block(0, count, [&](auto cells, std::size_t m) {
+        quick_cells<End, PerFace>(cells, run, m, out);
+    });
 }
 
 // The flux through a run of `count` interior faces, by the scheme asked for
@@ -241,7 +248,7 @@ face_row face_run(const scheme<D>& s, int d, std::size_t f, std::size_t low_cell
     const auto& g = s.mesh();
     const std::size_t stride = g.fields().cell_stride(d);
     const std::size_t n = g.fields().cells(d);
-    const std::uint8_t* solid = g.solid_flags().data();
+    const lanes::mask* solid = g.solid_flags().data();
     const auto& w = s.weights(d);
     face_row run;
     run.flux = flux + face;

@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include "cfdcore/lanes.hpp"
 #include "cfdcore/layout.hpp"
 
 #include <array>
@@ -83,18 +84,20 @@ public:
     std::span<const std::int32_t> cell_types() const { return cell_type_; }
 
     // Whether a cell is SOLID; cell indexes the cell field.
-    bool solid(std::size_t cell) const { return solid_[cell] != 0; }
+    bool solid(std::size_t cell) const { return solid_[cell] != lanes::none; }
 
-    // The SOLID flags, one per cell in the cell field's layout: 1 where the
-    // cell is SOLID, 0 where it is not.
-    std::span<const std::uint8_t> solid_flags() const { return solid_; }
+    // The SOLID flags as masks (lanes.hpp), one per cell in the cell field's
+    // layout: every bit set where the cell is SOLID, none where it is not. A
+    // kernel's block reads a flag as it reads a value, so a SOLID cell needs
+    // no branch.
+    std::span<const lanes::mask> solid_flags() const { return solid_; }
 
 private:
     layout::layout<D> layout_;
     std::array<std::vector<double>, D> nodes_;
     std::array<std::vector<double>, D> interior_faces_;
     std::vector<std::int32_t> cell_type_;
-    std::vector<std::uint8_t> solid_;
+    std::vector<lanes::mask> solid_;
 };
 
 extern template class grid<1>;

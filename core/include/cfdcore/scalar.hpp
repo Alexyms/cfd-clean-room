@@ -23,10 +23,10 @@
 #pragma once
 
 #include "cfdcore/grid.hpp"
+#include "cfdcore/lanes.hpp"
 #include "cfdcore/layout.hpp"
 
 #include <array>
-#include <cmath>
 #include <cstdint>
 #include <optional>
 #include <span>
@@ -41,8 +41,15 @@ namespace cfdcore::scalar {
 // and measured on every length from 1 to 1,000 by docs/reports/probe87/ties87.py.
 // The sign of a zero psi reaches the face value when the upstream value is
 // -0.0, so the tie matters for bit equality.
-inline double np_minimum(double a, double b) { return (a < b || std::isnan(a)) ? a : b; }
-inline double np_maximum(double a, double b) { return (a > b || std::isnan(a)) ? a : b; }
+//
+// Written with masks (lanes.hpp) and no branch, so that a kernel's block can
+// hold them: `a != a` is the NaN test.
+CFDCORE_INLINE double np_minimum(double a, double b) {
+    return lanes::select(lanes::mask_of(a < b) | lanes::mask_of(a != a), a, b);
+}
+CFDCORE_INLINE double np_maximum(double a, double b) {
+    return lanes::select(lanes::mask_of(a > b) | lanes::mask_of(a != a), a, b);
+}
 
 // The UMIST clamp of a QUICK face value at one face (`limited_face_values`).
 //
@@ -55,12 +62,14 @@ inline double np_maximum(double a, double b) { return (a > b || std::isnan(a)) ?
 // Returns c_c + 0.5 psi (c_d - c_c) with psi = max(0, min(2r, (1 + 3r) / 4,
 // psi_quick, 2)), r = (c_c - c_up) / (c_d - c_c) and
 // psi_quick = 2 (quick - c_c) / (c_d - c_c); c_c where c_d - c_c is zero.
-inline double limited_face_value(double c_up, double c_c, double c_d, double quick) {
+//
+// The limited value is formed whatever the difference is and discarded where it
+// is zero, so that the function has no branch: the quotients are then 0 / 0 or
+// x / 0, which round to a NaN or an infinity and are never read.
+CFDCORE_INLINE double limited_face_value(double c_up, double c_c, double c_d, double quick) {
     const double d_down = c_d - c_c;
     // The reference's `d_down != 0.0`: a NaN difference takes the limited branch.
-    if (d_down == 0.0) {
-        return c_c;
-    }
+    const lanes::mask defined = lanes::mask_of(d_down != 0.0);
     const double r = (c_c - c_up) / d_down;
     const double psi_quick = 2.0 * (quick - c_c) / d_down;
     // np.minimum.reduce over [2r, (1 + 3r) / 4, psi_quick, 2] is taken as a fold
@@ -70,7 +79,7 @@ inline double limited_face_value(double c_up, double c_c, double c_d, double qui
     low = np_minimum(low, psi_quick);
     low = np_minimum(low, 2.0);
     const double psi = np_maximum(0.0, low);
-    return c_c + 0.5 * psi * d_down;
+    return lanes::select(defined, c_c + 0.5 * psi * d_down, c_c);
 }
 
 // The UMIST clamp elementwise over equal-length arrays (`limited_face_values`).

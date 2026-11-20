@@ -86,7 +86,7 @@ grid<D>::grid(const grid_input<D>& input)
         interior_faces_[d].assign(faces.begin() + 1, faces.end() - 1);
     }
     for (std::size_t cell = 0; cell < cell_type_.size(); ++cell) {
-        solid_[cell] = cell_type_[cell] == input.solid ? 1 : 0;
+        solid_[cell] = lanes::mask_of(cell_type_[cell] == input.solid);
     }
 }
 
