@@ -459,25 +459,32 @@ inline bool is_fixed(std::span<const bool> solid, std::span<const bool> held, st
     return solid[i] || (!held.empty() && held[i]);
 }
 
-// What the stencil of one row's cells reads, each pointer at the row's first
-// cell, so that cell m of the row is element m of every array.
+// What the stencil of a run of one row's cells reads, each pointer at the
+// run's first cell, so that the run's cell k is element k of every array.
 //
-// x:      the field whose neighbours are summed; the elements either side
-//         of cell m are read, so only the cells that have both neighbours in
-//         the row are reached through it (the two end cells go through
-//         `end_cell`)
-// g:      direction 0's conductances, g[m] on cell m's low face and g[m + 1]
+// x:      the field whose neighbours are summed. A run of cells that all
+//         have both neighbours in the row (`row_between`) reads them either
+//         side of the cell itself, x[k - 1] and x[k + 1], so such a run's
+//         operands are those at the row's first cell and its first element
+//         is at least 1
+// west, east: read for a row's first or last cell alone (`row_end`): the
+//         field one cell to either side, or a row of zeros beyond the row's
+//         end (the reference's padding)
+// g:      direction 0's conductances, g[k] on cell k's low face and g[k + 1]
 //         on its high one
 // x_low, x_high, g_low, g_high: for each direction d >= 1, the rows of x on
-//         the low and the high side (a row of zeros where the field ends, the
-//         reference's padding) and the conductances on the cells' low and
-//         high faces normal to d; entry 0 is not used
+//         the low and the high side (a row of zeros where the field ends) and
+//         the conductances on the cells' low and high faces normal to d;
+//         entry 0 is not used
 // b, a_p: the system's right-hand side and diagonal
 // free:   set where the cell is an unknown (not SOLID, not held)
 // fluid:  set where the cell is not SOLID
+// zeros:  the row of zeros, as long as a row
 template <int D>
 struct stencil_row {
     const double* x = nullptr;
+    const double* west = nullptr;
+    const double* east = nullptr;
     const double* g = nullptr;
     const double* x_low[D] = {};
     const double* x_high[D] = {};
@@ -487,24 +494,27 @@ struct stencil_row {
     const double* a_p = nullptr;
     const lanes::mask* free = nullptr;
     const lanes::mask* fluid = nullptr;
+    const double* zeros = nullptr;
 };
 
-// The operands of a row for the field `x`, on a system `implicit_system` set
-// up, with the masks `set_masks` formed and the `free` array it returned.
+// The operands at a row's first cell for the field `x`, on a system
+// `implicit_system` set up, with the masks `set_masks` formed and the `free`
+// array it returned. `west` and `east` are set by `at_cell`.
 template <int D>
 stencil_row<D> operands(const row_stencil<D>& s,
                         const std::array<std::span<const double>, D>& conductance,
                         const double* x, const implicit_scratch<D>& scratch,
                         const lanes::mask* free) {
     stencil_row<D> row;
+    row.zeros = scratch.zeros.data();
     row.x = x + s.cell;
     row.g = conductance[0].data() + s.face0;
     for (int d = 1; d < D; ++d) {
         const std::size_t low = s.cell + s.face_offset[d];
         row.g_low[d] = conductance[d].data() + low;
         row.g_high[d] = conductance[d].data() + low + s.stride[d];
-        row.x_low[d] = s.has_low[d] ? x + s.cell - s.stride[d] : scratch.zeros.data();
-        row.x_high[d] = s.has_high[d] ? x + s.cell + s.stride[d] : scratch.zeros.data();
+        row.x_low[d] = s.has_low[d] ? x + s.cell - s.stride[d] : row.zeros;
+        row.x_high[d] = s.has_high[d] ? x + s.cell + s.stride[d] : row.zeros;
     }
     row.b = scratch.b.data() + s.cell;
     row.a_p = scratch.a_p.data() + s.cell;
@@ -513,17 +523,16 @@ stencil_row<D> operands(const row_stencil<D>& s,
     return row;
 }
 
-// The operands of cell m of an n-cell row alone, as element 0. Its neighbours
-// along direction 0 are read from `window`, which is filled with the cell's
-// value between its two neighbours', a zero standing for a neighbour beyond
-// the row's end as the reference's padding does. The window must outlive the
-// operands.
+// The operands at cell m of an n-cell row, from the operands at its first
+// cell: for the one cell at an end of the row, whose missing neighbour is
+// read from the row of zeros, or for a run of cells that all have both
+// neighbours in the row.
 template <int D>
-stencil_row<D> end_cell(const stencil_row<D>& row, std::size_t m, std::size_t n,
-                        std::array<double, 3>& window) {
-    window = {m > 0 ? row.x[m - 1] : 0.0, row.x[m], m + 1 < n ? row.x[m + 1] : 0.0};
+stencil_row<D> at_cell(const stencil_row<D>& row, std::size_t m, std::size_t n) {
     stencil_row<D> cell = row;
-    cell.x = window.data() + 1;
+    cell.x = row.x + m;
+    cell.west = m > 0 ? row.x + m - 1 : row.zeros;
+    cell.east = m + 1 < n ? row.x + m + 1 : row.zeros;
     cell.g = row.g + m;
     for (int d = 1; d < D; ++d) {
         cell.x_low[d] = row.x_low[d] + m;
@@ -538,15 +547,38 @@ stencil_row<D> end_cell(const stencil_row<D>& row, std::size_t m, std::size_t n,
     return cell;
 }
 
+// Where a cell's neighbours along direction 0 are read. Between a row's ends
+// they are the elements either side of the cell's own: one pointer for three
+// loads, which is what lets the compiler keep every pointer of a block in a
+// register (with a pointer per neighbour it ran out, reloaded two from the
+// stack every iteration, and the sweep took a sixth longer: prompt 89's
+// report, T6). At a row's end they are `west` and `east`.
+struct row_between {};
+struct row_end {};
+
+template <int D>
+CFDCORE_INLINE double west_of(row_between, const stencil_row<D>& in, std::size_t i) {
+    return in.x[i - 1];
+}
+template <int D>
+CFDCORE_INLINE double east_of(row_between, const stencil_row<D>& in, std::size_t i) {
+    return in.x[i + 1];
+}
+template <int D>
+CFDCORE_INLINE double west_of(row_end, const stencil_row<D>& in, std::size_t i) {
+    return in.west[i];
+}
+template <int D>
+CFDCORE_INLINE double east_of(row_end, const stencil_row<D>& in, std::size_t i) {
+    return in.east[i];
+}
+
 // `_neighbour_sum` at element i: sum_f G_f x_N, the terms added east, west
 // (direction 0's high then low face), then each further direction's high then
-// low face: north, south for D = 2. The two neighbours along direction 0 are
-// read one element either side of the cell's own, which for an end cell's
-// operands is the window's first and last value.
-template <int D>
-CFDCORE_INLINE double neighbour_sum(const stencil_row<D>& in, std::size_t i) {
-    const double* cell = in.x + i;
-    double sum = in.g[i + 1] * cell[1] + in.g[i] * cell[-1];
+// low face: north, south for D = 2.
+template <typename Where, int D>
+CFDCORE_INLINE double neighbour_sum(Where where, const stencil_row<D>& in, std::size_t i) {
+    double sum = in.g[i + 1] * east_of(where, in, i) + in.g[i] * west_of(where, in, i);
     for (int d = 1; d < D; ++d) {
         sum = sum + in.g_high[d][i] * in.x_high[d][i];
         sum = sum + in.g_low[d][i] * in.x_low[d][i];
@@ -556,9 +588,10 @@ CFDCORE_INLINE double neighbour_sum(const stencil_row<D>& in, std::size_t i) {
 
 // The residual r = (b + sum_f G_f x_N) - a_P x at element i, zero where the
 // cell is not an unknown.
-template <int D>
-CFDCORE_INLINE double residual_at(const stencil_row<D>& in, std::size_t i) {
-    return lanes::keep(in.free[i], (in.b[i] + neighbour_sum(in, i)) - in.a_p[i] * in.x[i]);
+template <typename Where, int D>
+CFDCORE_INLINE double residual_at(Where where, const stencil_row<D>& in, std::size_t i) {
+    return lanes::keep(in.free[i],
+                       (in.b[i] + neighbour_sum(where, in, i)) - in.a_p[i] * in.x[i]);
 }
 
 // Whether a residual fails the stop: the reference's `np.abs(r).max() <= stop`
@@ -572,14 +605,14 @@ CFDCORE_INLINE lanes::mask outside_stop(double r, double stop) {
 // residual into r, the next iterate x + r / a_P into next with SOLID cells at
 // zero. Returns the cells' `outside_stop` masks, ORed. r and next overlap
 // nothing the operands point to.
-template <std::size_t N, int D>
-inline lanes::mask sweep_cells(lanes::cells<N>, const stencil_row<D>& in, std::size_t first,
-                               double stop, double* CFDCORE_RESTRICT r,
+template <std::size_t N, typename Where, int D>
+inline lanes::mask sweep_cells(lanes::cells<N>, Where where, const stencil_row<D>& in,
+                               std::size_t first, double stop, double* CFDCORE_RESTRICT r,
                                double* CFDCORE_RESTRICT next) {
     lanes::mask outside = lanes::none;
     for (std::size_t k = 0; k < N; ++k) {
         const std::size_t i = first + k;
-        const double ri = residual_at(in, i);
+        const double ri = residual_at(where, in, i);
         r[i] = ri;
         outside |= outside_stop(ri, stop);
         next[i] = lanes::keep(in.fluid[i], in.x[i] + ri / in.a_p[i]);
@@ -588,18 +621,21 @@ inline lanes::mask sweep_cells(lanes::cells<N>, const stencil_row<D>& in, std::s
 }
 
 // Walks the n cells of a row for a kernel that reads each cell's neighbours
-// along direction 0: the two end cells apart, each on a window holding the
-// zero beyond the row, and the cells between in blocks. `block` is called as
-// block(count, operands, first, shift): `count` cells from element `first` of
-// `operands`, whose outputs lie `shift` cells beyond the row's first.
+// along direction 0: the two end cells apart, each on operands whose missing
+// neighbour is the row of zeros, and the cells between in blocks, on the
+// operands at the row's first cell. `block` is called as
+// block(count, where, operands, first, at): `count` cells from element
+// `first` of `operands`, which are at cell `at` of the row, so that its
+// outputs start `at` cells beyond the row's first.
 template <int D, typename Block>
 CFDCORE_INLINE void for_each_stencil_block(const stencil_row<D>& row, std::size_t n,
                                            Block&& block) {
-    std::array<double, 3> window{};
-    block(lanes::cells<1>{}, end_cell(row, 0, n, window), 0, 0);
-    lanes::for_each_block(1, n - 1, [&](auto count, std::size_t m) { block(count, row, m, 0); });
+    block(lanes::cells<1>{}, row_end{}, at_cell(row, 0, n), 0, 0);
+    lanes::for_each_block(1, n - 1, [&](auto count, std::size_t m) {
+        block(count, row_between{}, row, m, 0);
+    });
     if (n > 1) {
-        block(lanes::cells<1>{}, end_cell(row, n - 1, n, window), 0, n - 1);
+        block(lanes::cells<1>{}, row_end{}, at_cell(row, n - 1, n), 0, n - 1);
     }
 }
 
@@ -611,23 +647,23 @@ lanes::mask sweep_row(const stencil_row<D> row, std::size_t n, double stop, doub
                       double* next) {
     lanes::mask outside = lanes::none;
     for_each_stencil_block(row, n,
-                           [&](auto count, const stencil_row<D>& in, std::size_t first,
-                               std::size_t shift) {
-                               outside |= sweep_cells(count, in, first, stop, r + shift,
-                                                      next + shift);
+                           [&](auto count, auto where, const stencil_row<D>& in,
+                               std::size_t first, std::size_t at) {
+                               outside |= sweep_cells(count, where, in, first, stop, r + at,
+                                                      next + at);
                            });
     return outside;
 }
 
 // The residual alone over N cells from element `first`, as `sweep_cells`
 // forms it: the conjugate gradient's true residual.
-template <std::size_t N, int D>
-inline lanes::mask residual_cells(lanes::cells<N>, const stencil_row<D>& in, std::size_t first,
-                                  double stop, double* CFDCORE_RESTRICT r) {
+template <std::size_t N, typename Where, int D>
+inline lanes::mask residual_cells(lanes::cells<N>, Where where, const stencil_row<D>& in,
+                                  std::size_t first, double stop, double* CFDCORE_RESTRICT r) {
     lanes::mask outside = lanes::none;
     for (std::size_t k = 0; k < N; ++k) {
         const std::size_t i = first + k;
-        const double ri = residual_at(in, i);
+        const double ri = residual_at(where, in, i);
         r[i] = ri;
         outside |= outside_stop(ri, stop);
     }
@@ -638,30 +674,30 @@ template <int D>
 lanes::mask residual_row(const stencil_row<D> row, std::size_t n, double stop, double* r) {
     lanes::mask outside = lanes::none;
     for_each_stencil_block(row, n,
-                           [&](auto count, const stencil_row<D>& in, std::size_t first,
-                               std::size_t shift) {
-                               outside |= residual_cells(count, in, first, stop, r + shift);
+                           [&](auto count, auto where, const stencil_row<D>& in,
+                               std::size_t first, std::size_t at) {
+                               outside |= residual_cells(count, where, in, first, stop, r + at);
                            });
     return outside;
 }
 
 // The matrix product q = a_P x - sum_f G_f x_N over N cells from element
 // `first`, zero where the cell is not an unknown.
-template <std::size_t N, int D>
-inline void product_cells(lanes::cells<N>, const stencil_row<D>& in, std::size_t first,
-                          double* CFDCORE_RESTRICT q) {
+template <std::size_t N, typename Where, int D>
+inline void product_cells(lanes::cells<N>, Where where, const stencil_row<D>& in,
+                          std::size_t first, double* CFDCORE_RESTRICT q) {
     for (std::size_t k = 0; k < N; ++k) {
         const std::size_t i = first + k;
-        q[i] = lanes::keep(in.free[i], in.a_p[i] * in.x[i] - neighbour_sum(in, i));
+        q[i] = lanes::keep(in.free[i], in.a_p[i] * in.x[i] - neighbour_sum(where, in, i));
     }
 }
 
 template <int D>
 void product_row(const stencil_row<D> row, std::size_t n, double* q) {
     for_each_stencil_block(row, n,
-                           [&](auto count, const stencil_row<D>& in, std::size_t first,
-                               std::size_t shift) {
-                               product_cells(count, in, first, q + shift);
+                           [&](auto count, auto where, const stencil_row<D>& in,
+                               std::size_t first, std::size_t at) {
+                               product_cells(count, where, in, first, q + at);
                            });
 }
 
