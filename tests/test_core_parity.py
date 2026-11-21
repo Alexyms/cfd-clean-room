@@ -2929,8 +2929,11 @@ def _step_inputs(case: StepCase, dt_share: float = 0.9) -> StepInputs:
         nu_t = np.where(
             rng.random(shape) < 0.1, 0.0, 10.0 ** rng.uniform(-6.0, -2.0, shape)
         )
-        # Not read in a SOLID cell: a value there that would be refused elsewhere.
-        nu_t = np.where(solid, -1.0, nu_t)
+        # Not read in a SOLID cell. A large positive value there is the one that shows it:
+        # read, it gives a face value beside the cell where the masked field gives zero. A
+        # negative value or a NaN would not, since the harmonic mean is zero wherever its
+        # denominator is not above zero (prompt 90's plants).
+        nu_t = np.where(solid, 1.0e3, nu_t)
     sources: list[np.ndarray | None] = [None] * STEP_CLASSES
     if case.sources:
         for k in (0, 2):
