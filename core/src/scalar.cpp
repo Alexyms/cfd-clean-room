@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstddef>
 #include <limits>
+#include <stdexcept>
 
 namespace cfdcore::scalar {
 
@@ -836,12 +837,18 @@ setup_flags setup_row_cells(const setup_row<D> row, std::size_t n, double dt, do
 
 // Forms the masks of a solve's cells in the scratch, `fluid` where not SOLID
 // and `free` where neither SOLID nor held, and returns the `free` array to
-// read: with no held cell the two are one array, so a block reads one.
+// read: with no held cell the two are one array, so a block reads one. Throws
+// std::invalid_argument for a `held` that is neither empty nor one flag per
+// cell (a shorter one would be read past its end), in every build, as
+// `masks_where_not` throws for `solid`.
 template <int D>
 const lanes::mask* set_masks(const implicit_input<D>& in, implicit_scratch<D>& scratch) {
     lanes::masks_where_not(in.solid, scratch.fluid);
     if (in.held.empty()) {
         return scratch.fluid.data();
+    }
+    if (in.held.size() != scratch.free.size()) {
+        throw std::invalid_argument("implicit_step: the held flags and the cells differ in length");
     }
     for (std::size_t i = 0; i < scratch.free.size(); ++i) {
         scratch.free[i] = scratch.fluid[i] & lanes::mask_of(!in.held[i]);

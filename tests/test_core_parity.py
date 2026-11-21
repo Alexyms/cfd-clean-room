@@ -23,11 +23,21 @@ import pytest
 import yaml
 
 import src.scalar_scheme as scalar_scheme
+from src.boundary_concentration import (
+    SURFACE_CEILING,
+    SURFACE_FLOOR,
+    SURFACE_NONE,
+    SURFACE_WALL,
+    ConcentrationBoundary,
+    ConcentrationFaces,
+    Recirculation,
+)
 from src.boundary_registry import BoundaryRegistry
 from src.boundary_vents import vent_face_masks, vent_runs
-from src.config import SimConfig
+from src.config import UPWIND, SimConfig
 from src.mesh import SOLID, Mesh
 from src.momentum import _lagrange_weights, quick_face_values
+from src.particles import ParticlePhysics
 from src.scalar_scheme import (
     ImplicitResult,
     advective_flux,
@@ -35,6 +45,13 @@ from src.scalar_scheme import (
     limited_face_values,
     mesh_axes,
 )
+from src.solver_transport import (
+    DEPOSIT_SURFACES,
+    ConservationBreachError,
+    MassBudget,
+    TransportSolver,
+)
+from src.staggered import FaceVelocities
 
 if os.environ.get("CFD_CORE_REQUIRED") == "1":
     import _cfdcore
@@ -2617,3 +2634,1038 @@ def test_advective_flux_puts_nans_at_the_references_faces(
     finite = ~np.isnan(reference)
     assert _same_bits(out[finite], reference[finite])
     assert np.isnan(reference).any()
+
+
+# --- One class step (prompt 90) ---------------------------------------------
+#
+# ``_cfdcore.TransportSolver2`` against ``TransportSolver.solve_timestep`` on
+# the same inputs: the field, every budget term, the step's records, and the
+# exception where the reference raises one, each compared bit for bit, step by
+# step. The interval's quantities the core computes once (prediction (b)) are
+# compared with the values the reference forms inside the step, read from it by
+# wrapping its helpers for the call.
+
+STEP_CLASSES = 3
+STEP_STEPS = 3
+STEP_SETTLING = (0.0, 3.0e-4, 2.5e-3)
+STEP_DIFFUSION = (2.0e-5, 6.0e-6, 1.1e-7)
+# The default keys, and the ones that make ADR-016's bound decide each solve: a
+# max-norm stop no solve reaches before its share does, the share a millionth.
+STEP_KEYS = {"conservation_limit": 1.0e-4, "leftover_share": 0.1}
+BINDING_KEYS = {
+    "conservation_limit": 1.0e-4,
+    "leftover_share": 1.0e-6,
+    "diffusion_tol": 1.0e-4,
+}
+# A solve stopped by a cap of two sweeps, its share never met: the breach cases.
+BREACH_KEYS = {
+    "conservation_limit": 1.0e-300,
+    "leftover_share": 1.0e-300,
+    "max_diffusion_iter": 2,
+}
+
+
+class _StepPhysics:
+    """A ParticleProperties stand-in: each class's settling and diffusion fixed."""
+
+    def __init__(
+        self, settling: tuple[float, ...], diffusion: tuple[float, ...]
+    ) -> None:
+        self.settling = settling
+        self.diffusion = diffusion
+
+    def settling_velocity(self, size_class: int) -> float:
+        """The class's settling velocity, m/s."""
+        return self.settling[size_class]
+
+    def diffusion_coeff(self, size_class: int) -> float:
+        """The class's diffusion coefficient, m^2/s."""
+        return self.diffusion[size_class]
+
+
+class _StepConditions:
+    """A ScalarConditions stand-in that hands out one ConcentrationFaces per class."""
+
+    def __init__(self, faces: list[ConcentrationFaces]) -> None:
+        self.faces = faces
+
+    def faces_for(self, size_class: int) -> ConcentrationFaces:
+        """The class's planted conditions."""
+        return self.faces[size_class]
+
+
+@functools.cache
+def _step_config(
+    name: str, scheme: str, keys: tuple[tuple[str, float], ...]
+) -> SimConfig:
+    """One of MESHES or VENT_MESHES with the transport keys replaced."""
+    path, nx, ny, sx, sy, obstacles = {**MESHES, **VENT_MESHES}[name]
+    with open(path, encoding="utf-8") as stream:
+        raw = copy.deepcopy(yaml.safe_load(stream))
+    raw["domain"]["nx"] = nx
+    raw["domain"]["ny"] = ny
+    raw["mesh"]["x"] = {"stretch_ratio": sx}
+    raw["mesh"]["y"] = {"stretch_ratio": sy}
+    if not obstacles:
+        raw["obstacles"] = []
+    raw["transport"]["advection_scheme"] = scheme
+    raw["transport"].update(dict(keys))
+    raw["particles"]["sizes"] = raw["particles"]["sizes"][:STEP_CLASSES]
+    return SimConfig.from_dict(raw, "configs")
+
+
+@functools.cache
+def _boundary_faces(name: str) -> tuple[ConcentrationFaces, ...]:
+    """The configuration's own conditions per class: vents and recirculation on a vent mesh."""
+    config = _step_config(name, "umist", tuple(STEP_KEYS.items()))
+    mesh = _mesh(name)
+    boundary = ConcentrationBoundary(
+        mesh, config, ParticlePhysics(config), BoundaryRegistry(config)
+    )
+    return tuple(boundary.faces_for(k) for k in range(STEP_CLASSES))
+
+
+def _planted_conditions(
+    name: str, kind: str, rng: np.random.Generator
+) -> list[ConcentrationFaces]:
+    """Each class's conditions: the configuration's, or planted on every face kind.
+
+    ``planted`` keeps the vents and their recirculation and replaces the rest:
+    inflow values on a third of the faces; a deposition velocity on every face
+    the configuration deposits on, scaled, and on a tenth of the others; a
+    surface code drawn from the four on every domain face; and settling marked
+    on a random half of the y faces, domain faces included.
+    """
+    base = _boundary_faces(name)
+    if kind == "boundary":
+        return list(base)
+    out = []
+    for faces in base:
+        changes: dict[str, np.ndarray] = {}
+        for c in ("u", "v"):
+            shape = getattr(faces, f"inflow_{c}").shape
+            changes[f"inflow_{c}"] = np.where(
+                rng.random(shape) < 0.3, 10.0 ** rng.uniform(-2.0, 7.0, shape), 0.0
+            )
+            deposition = getattr(faces, f"deposition_{c}")
+            extra = rng.random(shape) < 0.1
+            changes[f"deposition_{c}"] = np.where(
+                deposition > 0.0,
+                deposition * rng.uniform(0.5, 4.0, shape),
+                np.where(extra, 10.0 ** rng.uniform(-5.0, -2.0, shape), 0.0),
+            )
+            codes = np.array(getattr(faces, f"surface_{c}"))
+            edge = np.zeros(shape, dtype=bool)
+            if c == "u":
+                edge[:, [0, -1]] = True
+            else:
+                edge[[0, -1], :] = True
+            drawn = rng.choice(
+                np.array(
+                    [SURFACE_NONE, SURFACE_FLOOR, SURFACE_CEILING, SURFACE_WALL],
+                    np.int32,
+                ),
+                size=shape,
+            )
+            changes[f"surface_{c}"] = np.where(edge, drawn, codes).astype(np.int32)
+        changes["settling_v"] = rng.random(faces.settling_v.shape) < 0.5
+        out.append(dataclasses.replace(faces, **changes))
+    return out
+
+
+@dataclasses.dataclass(frozen=True)
+class StepCase:
+    """A planted class-step case: what is handed to both solvers."""
+
+    name: str
+    scheme: str
+    field: str
+    conditions: str
+    sources: bool
+    v_ext: bool
+    eddy: bool
+    keys: tuple[tuple[str, float], ...]
+
+
+STEP_VARIANTS = {
+    # The configuration's conditions, a positive field and nothing else.
+    "plain": dict(
+        field="positive",
+        conditions="boundary",
+        sources=False,
+        v_ext=False,
+        eddy=False,
+        keys=STEP_KEYS,
+    ),
+    # Every input at once, the bound deciding every solve.
+    "everything": dict(
+        field="positive",
+        conditions="planted",
+        sources=True,
+        v_ext=True,
+        eddy=True,
+        keys=BINDING_KEYS,
+    ),
+    # A field of both signs, so a supply can be negative: a refused bound is compared too.
+    "signed": dict(
+        field="signed",
+        conditions="planted",
+        sources=False,
+        v_ext=False,
+        eddy=True,
+        keys=STEP_KEYS,
+    ),
+    # The configuration's conditions with sources and an eddy viscosity, the bound deciding.
+    "sources-bound": dict(
+        field="positive",
+        conditions="boundary",
+        sources=True,
+        v_ext=False,
+        eddy=True,
+        keys=BINDING_KEYS,
+    ),
+}
+STEP_CASES = [
+    pytest.param(
+        StepCase(name, scheme, keys=tuple(v.pop("keys").items()), **v),
+        id=f"{name}-{scheme}-{variant}",
+    )
+    for name in [*MESHES, *VENT_MESHES]
+    for scheme in ("umist", "upwind")
+    for variant, spec in STEP_VARIANTS.items()
+    for v in [dict(spec)]
+]
+
+
+def _step_field(kind: str, mesh: Mesh, rng: np.random.Generator) -> np.ndarray:
+    """A planted class field: positive over nine decades, or of both signs."""
+    shape = mesh.cell_type.shape
+    solid = mesh.cell_type == SOLID
+    if kind == "positive":
+        field = 10.0 ** rng.uniform(-3.0, 6.0, shape)
+    else:
+        field = _values(rng, shape)
+    # A value in a SOLID cell is zeroed by the step, so it must not matter.
+    return np.where(solid, rng.uniform(-1e9, 1e9, shape), field)
+
+
+def _step_flow(mesh: Mesh, rng: np.random.Generator, scale: float) -> FaceVelocities:
+    """Face velocities of both signs over four decades, zero on a tenth of the faces."""
+    arrays = []
+    for d in (0, 1):
+        shape = _face_shape(mesh, d)
+        values = (
+            rng.standard_normal(shape) * scale * 10.0 ** rng.uniform(-3.0, 0.0, shape)
+        )
+        values[rng.random(shape) < 0.1] = 0.0
+        arrays.append(values)
+    return FaceVelocities.copy_of(*arrays)
+
+
+@dataclasses.dataclass
+class StepInputs:
+    """The two solvers and what each step hands them."""
+
+    mesh: Mesh
+    config: SimConfig
+    reference: TransportSolver
+    core: "_cfdcore.TransportSolver2"
+    faces: FaceVelocities
+    v_ext: list[FaceVelocities | None]
+    nu_t: np.ndarray | None
+    sources: list[np.ndarray | None]
+    fields: list[np.ndarray]
+    dt: float
+
+
+def _core_transport(
+    mesh: Mesh, config: SimConfig, physics: _StepPhysics
+) -> "_cfdcore.TransportSolver2":
+    """The core's solver on a mesh with a configuration's keys and the classes' physics."""
+    spec = config.transport
+    assert spec is not None
+    n = len(config.particle_sizes)
+    return _cfdcore.TransportSolver2(
+        _cfdcore.ScalarScheme2(_grid(mesh)),
+        mesh.dx_cell,
+        mesh.dy_cell,
+        mesh.dx_face,
+        mesh.dy_face,
+        spec.cfl_number,
+        spec.advection_scheme == UPWIND,
+        spec.max_diffusion_iter,
+        spec.diffusion_tol,
+        spec.conservation_limit,
+        spec.leftover_share,
+        config.t_end,
+        spec.turbulent_schmidt,
+        [physics.settling_velocity(k) for k in range(n)],
+        [physics.diffusion_coeff(k) for k in range(n)],
+        (SURFACE_FLOOR, SURFACE_CEILING, SURFACE_WALL),
+    )
+
+
+def _step_inputs(case: StepCase, dt_share: float = 0.9) -> StepInputs:
+    """Both solvers on a case's mesh and conditions, with the planted inputs."""
+    # The keys are not in the seed: a case with other keys has the same inputs.
+    rng = np.random.default_rng(
+        [SEED, 90, *map(ord, repr(dataclasses.replace(case, keys=())))]
+    )
+    mesh = _mesh(case.name)
+    config = _step_config(case.name, case.scheme, case.keys)
+    physics = _StepPhysics(STEP_SETTLING, STEP_DIFFUSION)
+    conditions = _planted_conditions(case.name, case.conditions, rng)
+    reference = TransportSolver(mesh, config, physics, _StepConditions(conditions))
+    solid = mesh.cell_type == SOLID
+    shape = mesh.cell_type.shape
+    faces = _step_flow(mesh, rng, 0.4)
+    v_ext: list[FaceVelocities | None] = [None] * STEP_CLASSES
+    if case.v_ext:
+        v_ext = [
+            _step_flow(mesh, rng, 0.05) if k != 1 else None for k in range(STEP_CLASSES)
+        ]
+    nu_t = None
+    if case.eddy:
+        nu_t = np.where(
+            rng.random(shape) < 0.1, 0.0, 10.0 ** rng.uniform(-6.0, -2.0, shape)
+        )
+        # Not read in a SOLID cell: a value there that would be refused elsewhere.
+        nu_t = np.where(solid, -1.0, nu_t)
+    sources: list[np.ndarray | None] = [None] * STEP_CLASSES
+    if case.sources:
+        for k in (0, 2):
+            rate = np.where(
+                rng.random(shape) < 0.05, 10.0 ** rng.uniform(1.0, 6.0, shape), 0.0
+            )
+            sources[k] = np.where(solid, 0.0, rate)
+    stable = min(reference.stable_dt(faces, k, v_ext[k]) for k in range(STEP_CLASSES))
+    core = _core_transport(mesh, config, physics)
+    core.set_interval(conditions, faces.u, faces.v, v_ext, nu_t, sources)
+    dt = dt_share * stable
+    core.set_step(dt)
+    fields = [_step_field(case.field, mesh, rng) for _ in range(STEP_CLASSES)]
+    return StepInputs(
+        mesh, config, reference, core, faces, v_ext, nu_t, sources, fields, dt
+    )
+
+
+def _budget_bits(budget: MassBudget) -> tuple[object, ...]:
+    """A budget's ten terms as 64-bit patterns, None as None."""
+
+    def pattern(x: float | None) -> int | None:
+        return None if x is None else _bits(float(x))
+
+    return (
+        pattern(budget.initial),
+        pattern(budget.inflow),
+        pattern(budget.outflow),
+        pattern(budget.source),
+        *(pattern(budget.deposited[s]) for s in DEPOSIT_SURFACES),
+        pattern(budget.current),
+        pattern(budget.leftover),
+    )
+
+
+def _outcome(call: Callable[[], object]) -> tuple[str, object]:
+    """What a call returned, or the exception it raised by type and arguments."""
+    try:
+        return "ok", call()
+    except ConservationBreachError as breach:
+        return "ConservationBreachError", (
+            breach.size_class,
+            _bits(breach.leftover),
+            _bits(breach.supplied),
+            _bits(breach.limit),
+            str(breach),
+        )
+    except (ValueError, TypeError, IndexError) as error:
+        return type(error).__name__, str(error)
+
+
+class StepComparison(NamedTuple):
+    """One class step taken by both solvers, and what differs."""
+
+    reference: tuple[str, object]
+    core: tuple[str, object]
+    differences: list[str]
+
+
+def _compare_step(inputs: StepInputs, k: int) -> StepComparison:
+    """Step class k in both solvers from its current field and compare every output."""
+    c = inputs.fields[k]
+    ref = _outcome(
+        lambda: inputs.reference.solve_timestep(
+            c,
+            inputs.faces,
+            k,
+            inputs.dt,
+            inputs.v_ext[k],
+            inputs.sources[k],
+            eddy_viscosity=inputs.nu_t,
+        )
+    )
+    out = np.full(c.shape, np.nan)
+    core = _outcome(lambda: inputs.core.step(k, c, out))
+    differences = []
+    if ref[0] != core[0] or (ref[0] != "ok" and ref[1] != core[1]):
+        differences.append(f"outcome {ref} != {core}")
+    if ref[0] == "ok" and core[0] == "ok":
+        if not _same_bits(ref[1], out):
+            differences.append("field")
+        record = core[1]
+        expected = (
+            inputs.reference.last_diffusion_sweeps,
+            inputs.reference.diffusion_converged,
+            _bits(inputs.reference.last_leftover),
+            _bits(inputs.reference.last_leftover_bound),
+        )
+        got = (
+            record.sweeps,
+            record.converged,
+            _bits(record.leftover),
+            _bits(record.bound),
+        )
+        if expected != got:
+            differences.append(f"records {expected} != {got}")
+        inputs.fields[k] = np.array(ref[1])
+    for j, (a, b) in enumerate(
+        zip(inputs.reference.budget, inputs.core.budgets(), strict=True)
+    ):
+        if _budget_bits(a) != _budget_bits(b):
+            differences.append(
+                f"budget of class {j}: {_budget_bits(a)} != {_budget_bits(b)}"
+            )
+    return StepComparison(ref, core, differences)
+
+
+@REFERENCE_DIVIDES_BY_ZERO
+@pytest.mark.filterwarnings("ignore:implicit diffusion solve stopped")
+@pytest.mark.parametrize("case", STEP_CASES)
+def test_class_step_equals_the_reference_bit_for_bit(case: StepCase) -> None:
+    """Every class's steps equal solve_timestep's: field, budget, records, raise (prediction (a))."""
+    inputs = _step_inputs(case)
+    for n in range(STEP_STEPS):
+        for k in range(STEP_CLASSES):
+            comparison = _compare_step(inputs, k)
+            assert comparison.differences == [], (n, k, comparison.differences)
+
+
+def test_the_planted_class_steps_reach_every_rule() -> None:
+    """The planted cases book every term, bind the bound, recirculate and raise.
+
+    The comparisons above are sharp only if their inputs reach each rule the
+    port could get wrong: inflow and outflow at domain faces and vents, a
+    recirculated value that is not zero, deposition in all four slots, a
+    source, a bound that binds (more sweeps than the max-norm stop alone takes),
+    and a supply below zero, whose bound both solvers refuse.
+    """
+    seen: dict[str, bool] = dict.fromkeys(
+        [
+            "inflow",
+            "outflow",
+            "vent inflow",
+            "recirculated",
+            *DEPOSIT_SURFACES,
+            "source",
+            "bound binds",
+            "bound refused",
+        ],
+        False,
+    )
+    for name in ("80x30", "80x30-vents"):
+        for variant in ("everything", "signed", "sources-bound"):
+            spec = dict(STEP_VARIANTS[variant])
+            case = StepCase(name, "umist", keys=tuple(spec.pop("keys").items()), **spec)
+            inputs = _step_inputs(case)
+            for k in range(STEP_CLASSES):
+                comparison = _compare_step(inputs, k)
+                if comparison.reference[0] == "ValueError":
+                    seen["bound refused"] |= "leftover_bound" in str(
+                        comparison.reference[1]
+                    )
+                    continue
+                budget = inputs.reference.budget[k]
+                seen["inflow"] |= budget.inflow != 0.0
+                seen["outflow"] |= budget.outflow != 0.0
+                seen["source"] |= budget.source != 0.0
+                for s in DEPOSIT_SURFACES:
+                    seen[s] |= budget.deposited[s] > 0.0
+                if inputs.reference._vents:
+                    flux_u = (
+                        inputs.reference._advecting_velocities(
+                            inputs.faces, k, inputs.v_ext[k]
+                        )[0]
+                        * inputs.reference._area_u
+                    )
+                    seen["vent inflow"] |= bool(
+                        np.any(inputs.reference._vent_u & (flux_u != 0.0))
+                    )
+                    c = np.where(inputs.mesh.cell_type == SOLID, 0.0, inputs.fields[k])
+                    flux_v = (
+                        inputs.reference._advecting_velocities(
+                            inputs.faces, k, inputs.v_ext[k]
+                        )[1]
+                        * inputs.reference._area_v
+                    )
+                    conditions = inputs.reference._faces[k]
+                    inflow_u, inflow_v = inputs.reference._recirculated(
+                        c, flux_u, flux_v, conditions
+                    )
+                    pair = conditions.recirculation[0]
+                    seen["recirculated"] |= bool(
+                        np.any(inflow_u[pair.discharge_u] > 0.0)
+                        or np.any(inflow_v[pair.discharge_v] > 0.0)
+                    )
+    # The bound binds: the same step with a share no solve can miss takes fewer sweeps.
+    spec = dict(STEP_VARIANTS["everything"])
+    case = StepCase("80x30", "umist", keys=tuple(spec.pop("keys").items()), **spec)
+    loose = dataclasses.replace(
+        case,
+        keys=tuple(
+            {
+                **dict(case.keys),
+                "leftover_share": 1.0,
+                "conservation_limit": 0.5,
+            }.items()
+        ),
+    )
+    sweeps = []
+    for c in (case, loose):
+        inputs = _step_inputs(c)
+        assert _compare_step(inputs, 0).differences == []
+        sweeps.append(inputs.reference.last_diffusion_sweeps)
+    seen["bound binds"] = sweeps[0] > sweeps[1]
+    assert all(seen.values()), seen
+
+
+@REFERENCE_DIVIDES_BY_ZERO
+@pytest.mark.parametrize("name", ["80x30", "160x60-stretched", "80x30-vents"])
+def test_class_step_continues_a_restored_budget_bit_for_bit(name: str) -> None:
+    """Budgets set whole mid-run, as a restart sets them, are stepped on alike."""
+    spec = dict(STEP_VARIANTS["everything"])
+    case = StepCase(name, "umist", keys=tuple(spec.pop("keys").items()), **spec)
+    inputs = _step_inputs(case)
+    for k in range(STEP_CLASSES):
+        assert _compare_step(inputs, k).differences == []
+    rng = np.random.default_rng([SEED, 90, 7])
+    restored = []
+    for budget in inputs.reference.budget:
+        restored.append(
+            MassBudget(
+                initial=budget.initial * 1.5,
+                inflow=budget.inflow + 3.0,
+                outflow=budget.outflow + 1.0,
+                source=budget.source + 2.0,
+                deposited={
+                    s: v + float(rng.uniform()) for s, v in budget.deposited.items()
+                },
+                current=budget.current,
+                leftover=budget.leftover - 1e-3,
+            )
+        )
+    inputs.reference.restore_budgets(restored)
+    inputs.core.restore_budgets(restored)
+    for budget in restored:
+        budget.inflow = -99.0  # a later change to an argument reaches neither
+    for _ in range(2):
+        for k in range(STEP_CLASSES):
+            assert _compare_step(inputs, k).differences == []
+
+
+def test_class_step_reads_and_sets_budgets_whole() -> None:
+    """budgets() returns new MassBudgets; restore_budgets refuses what the reference refuses."""
+    spec = dict(STEP_VARIANTS["plain"])
+    inputs = _step_inputs(
+        StepCase("80x30", "umist", keys=tuple(spec.pop("keys").items()), **spec)
+    )
+    fresh = inputs.core.budgets()
+    assert all(isinstance(b, MassBudget) for b in fresh)
+    assert [_budget_bits(b) for b in fresh] == [
+        _budget_bits(MassBudget())
+    ] * STEP_CLASSES
+    assert inputs.core.budgets()[0] is not fresh[0]
+    good = [MassBudget() for _ in range(STEP_CLASSES)]
+    wrong_keys = MassBudget(deposited={"floor": 0.0})
+    unknown = MassBudget(leftover=None)
+    for budgets in (
+        good[:2],
+        [*good[:2], object()],
+        [*good[:2], wrong_keys],
+        [*good[:2], unknown],
+    ):
+        expected = _outcome(lambda b=budgets: inputs.reference.restore_budgets(b))
+        got = _outcome(lambda b=budgets: inputs.core.restore_budgets(b))
+        assert expected[0] != "ok"
+        assert got == expected
+
+
+@REFERENCE_DIVIDES_BY_ZERO
+@pytest.mark.filterwarnings("ignore:implicit diffusion solve stopped")
+@pytest.mark.parametrize(
+    "name", ["80x30", "160x60-stretched", "40x15-uniform-open", "80x30-vents"]
+)
+def test_class_step_raises_the_references_breach(name: str) -> None:
+    """A solve its cap stops before its share holds breaches alike: arguments and budget."""
+    spec = dict(STEP_VARIANTS["plain"])
+    spec["keys"] = BREACH_KEYS
+    case = StepCase(name, "umist", keys=tuple(spec.pop("keys").items()), **spec)
+    inputs = _step_inputs(case)
+    raised = 0
+    for k in range(STEP_CLASSES):
+        comparison = _compare_step(inputs, k)
+        assert comparison.differences == []
+        raised += comparison.reference[0] == "ConservationBreachError"
+    assert raised == STEP_CLASSES
+
+
+def _limit_at_equality(leftover: float, supplied: float) -> float | None:
+    """A limit L with L * supplied == |leftover| exactly, near |leftover| / supplied."""
+    guess = abs(leftover) / supplied
+    for candidate in (guess, *np.nextafter(guess, [0.0, 1.0])):
+        for step in range(6):
+            x = float(candidate)
+            for _ in range(step):
+                x = float(np.nextafter(x, 1.0 if step % 2 else 0.0))
+            if x * supplied == abs(leftover) and 0.0 < x < 1.0:
+                return x
+    return None
+
+
+@REFERENCE_DIVIDES_BY_ZERO
+@pytest.mark.filterwarnings("ignore:implicit diffusion solve stopped")
+def test_class_step_breaches_at_equality_with_the_limit() -> None:
+    """The breach test is ``>=``: an accumulated leftover equal to the limit times the supply breaches.
+
+    The solve is stopped by its cap of two sweeps with a share it never meets,
+    so its leftover does not depend on the limit; the limit is then chosen so
+    that it times the supply equals the leftover's magnitude exactly.
+    """
+    spec = dict(STEP_VARIANTS["plain"])
+    found = 0
+    for name in ("80x30", "160x60", "40x15-uniform-open"):
+        keys = {**BREACH_KEYS, "conservation_limit": 0.5}
+        case = StepCase(
+            name,
+            "umist",
+            keys=tuple(keys.items()),
+            **{k: v for k, v in spec.items() if k != "keys"},
+        )
+        probe = _step_inputs(case)
+        _compare_step(probe, 0)
+        budget = probe.reference.budget[0]
+        supplied = budget.initial + budget.inflow + budget.source
+        limit = _limit_at_equality(budget.leftover, supplied)
+        if limit is None:
+            continue
+        found += 1
+        case = dataclasses.replace(
+            case, keys=tuple({**keys, "conservation_limit": limit}.items())
+        )
+        inputs = _step_inputs(case)
+        comparison = _compare_step(inputs, 0)
+        assert comparison.reference[0] == "ConservationBreachError"
+        assert comparison.differences == []
+    assert found > 0
+
+
+def _reference_interval_values(inputs: StepInputs, k: int) -> dict[str, object]:
+    """What the reference forms inside one solve_timestep call that the core fixes per interval."""
+    reference = inputs.reference
+    seen: dict[str, object] = {}
+    originals = {
+        name: getattr(TransportSolver, name)
+        for name in (
+            "_advecting_velocities",
+            "_face_eddy_viscosity",
+            "_implicit_step",
+            "stable_dt",
+        )
+    }
+
+    def advecting(self: TransportSolver, *args: object) -> object:
+        seen["advecting"] = originals["_advecting_velocities"](self, *args)
+        return seen["advecting"]
+
+    def eddy(self: TransportSolver, *args: object) -> object:
+        seen["eddy"] = originals["_face_eddy_viscosity"](self, *args)
+        return seen["eddy"]
+
+    def implicit(
+        self: TransportSolver,
+        c_star: np.ndarray,
+        dt: float,
+        g_u: np.ndarray,
+        g_v: np.ndarray,
+        kk: int,
+        bound: float,
+    ) -> object:
+        seen["conductance"] = (g_u, g_v)
+        return originals["_implicit_step"](self, c_star, dt, g_u, g_v, kk, bound)
+
+    def stable(self: TransportSolver, *args: object) -> float:
+        seen["stable_dt"] = originals["stable_dt"](self, *args)
+        return seen["stable_dt"]
+
+    with contextlib.ExitStack() as stack:
+        for name, wrapper in (
+            ("_advecting_velocities", advecting),
+            ("_face_eddy_viscosity", eddy),
+            ("_implicit_step", implicit),
+            ("stable_dt", stable),
+        ):
+            stack.enter_context(pytest.MonkeyPatch.context()).setattr(
+                TransportSolver, name, wrapper
+            )
+        budgets = [
+            dataclasses.replace(b, deposited=dict(b.deposited))
+            for b in reference.budget
+        ]
+        _outcome(
+            lambda: reference.solve_timestep(
+                inputs.fields[k],
+                inputs.faces,
+                k,
+                inputs.dt,
+                inputs.v_ext[k],
+                inputs.sources[k],
+                eddy_viscosity=inputs.nu_t,
+            )
+        )
+        reference.restore_budgets(budgets)
+    u_adv, v_adv = seen["advecting"]
+    flux_u = u_adv * reference._area_u
+    flux_v = v_adv * reference._area_v
+    values: dict[str, object] = {
+        "advecting_velocity": (u_adv, v_adv),
+        "volume_flux": (flux_u, flux_v),
+        "conductance": seen["conductance"],
+        "deposition_step": (
+            reference._deposit_u[k] * inputs.dt,
+            reference._deposit_v[k] * inputs.dt,
+        ),
+        "deposition_cell": reference._deposit_cell[k],
+        "unit_conductance": (reference._conductance_u, reference._conductance_v),
+        "stable_dt": seen["stable_dt"],
+        "domain": (
+            (
+                flux_u[:, 0] > 0.0,
+                flux_u[:, 0] < 0.0,
+                flux_u[:, -1] < 0.0,
+                flux_u[:, -1] > 0.0,
+            ),
+            (
+                flux_v[0, :] > 0.0,
+                flux_v[0, :] < 0.0,
+                flux_v[-1, :] < 0.0,
+                flux_v[-1, :] > 0.0,
+            ),
+        ),
+    }
+    if "eddy" in seen:
+        values["face_eddy_viscosity"] = seen["eddy"]
+    rate = inputs.sources[k]
+    if rate is not None:
+        values["source_step"] = inputs.dt * rate
+        values["source_total"] = float(np.sum(rate * reference._volume))
+    if reference._vents:
+        conditions = reference._faces[k]
+        values["drawn"] = [
+            float(np.abs(flux_u[p.intake_u]).sum() + np.abs(flux_v[p.intake_v]).sum())
+            for p in conditions.recirculation
+        ]
+        vu, vv = reference._vent_u, reference._vent_v
+        values["vent"] = (
+            tuple(
+                (vu & side & sign).reshape(-1)
+                for side, sign in (
+                    (reference._solid_low_u, flux_u > 0.0),
+                    (reference._solid_high_u, flux_u < 0.0),
+                    (reference._solid_high_u, flux_u > 0.0),
+                    (reference._solid_low_u, flux_u < 0.0),
+                )
+            ),
+            tuple(
+                (vv & side & sign).reshape(-1)
+                for side, sign in (
+                    (reference._solid_low_v, flux_v > 0.0),
+                    (reference._solid_high_v, flux_v < 0.0),
+                    (reference._solid_high_v, flux_v > 0.0),
+                    (reference._solid_low_v, flux_v < 0.0),
+                )
+            ),
+        )
+    return values
+
+
+def _interval_differences(inputs: StepInputs, k: int) -> list[str]:
+    """The core's interval quantities of class k that differ from the reference's per-step values."""
+    expected = _reference_interval_values(inputs, k)
+    core = inputs.core
+    differ = []
+    for name in (
+        "advecting_velocity",
+        "volume_flux",
+        "conductance",
+        "deposition_step",
+        "unit_conductance",
+        "face_eddy_viscosity",
+    ):
+        if name not in expected:
+            assert (
+                name != "face_eddy_viscosity"
+                or core.interval_quantity(name, k, 0) is None
+            )
+            continue
+        for d in (0, 1):
+            got = core.interval_quantity(name, k, d)
+            if not _same_bits(got, expected[name][d]):
+                differ.append(f"{name} {d}")
+    for name in ("deposition_cell", "source_step"):
+        got = core.interval_quantity(name, k, 0)
+        if name not in expected:
+            if got is not None:
+                differ.append(f"{name} present")
+        elif not _same_bits(got, expected[name]):
+            differ.append(name)
+    if _bits(core.stable_dt(k)) != _bits(expected["stable_dt"]):
+        differ.append("stable_dt")
+    if _bits(core.source_total(k)) != _bits(expected.get("source_total", 0.0)):
+        differ.append("source_total")
+    for d in (0, 1):
+        if [m.tolist() for m in core.masks("domain", k, d)] != [
+            m.tolist() for m in expected["domain"][d]
+        ]:
+            differ.append(f"domain masks {d}")
+    if "vent" in expected:
+        for d in (0, 1):
+            if [m.tolist() for m in core.masks("vent", k, d)] != [
+                m.tolist() for m in expected["vent"][d]
+            ]:
+                differ.append(f"vent masks {d}")
+        if [_bits(x) for x in core.drawn(k)] != [_bits(x) for x in expected["drawn"]]:
+            differ.append("drawn")
+    else:
+        if any(m.size for m in core.masks("vent", k, 0)) or core.drawn(k):
+            differ.append("vents present")
+    return differ
+
+
+@REFERENCE_DIVIDES_BY_ZERO
+@pytest.mark.parametrize("variant", ["plain", "everything"])
+@pytest.mark.parametrize("name", [*MESHES, *VENT_MESHES])
+def test_class_step_interval_quantities_equal_the_per_step_values(
+    name: str, variant: str
+) -> None:
+    """Each quantity the core fixes per interval is the one the reference forms every step (prediction (b))."""
+    spec = dict(STEP_VARIANTS[variant])
+    inputs = _step_inputs(
+        StepCase(name, "umist", keys=tuple(spec.pop("keys").items()), **spec)
+    )
+    for k in range(STEP_CLASSES):
+        assert _interval_differences(inputs, k) == [], k
+
+
+# The refusals: each input the reference refuses, handed to both, one at a time.
+def _with_nan(a: np.ndarray, at: tuple[int, int] = (3, 4)) -> np.ndarray:
+    out = np.array(a, dtype=np.float64)
+    out[at] = np.nan
+    return out
+
+
+def _refusal_inputs() -> StepInputs:
+    spec = dict(STEP_VARIANTS["everything"])
+    return _step_inputs(
+        StepCase(
+            "40x15-uniform-open", "umist", keys=tuple(spec.pop("keys").items()), **spec
+        )
+    )
+
+
+def _first_solid(name: str) -> tuple[int, int]:
+    j, i = np.argwhere(_mesh(name).cell_type == SOLID)[0]
+    return int(j), int(i)
+
+
+STEP_REFUSALS = [
+    "field-nan",
+    "field-inf-in-solid",
+    "dt-nan",
+    "dt-zero",
+    "dt-negative",
+    "dt-bool",
+    "dt-above-stable",
+    "faces-nan",
+    "v_ext-nan",
+    "sources-nan",
+    "sources-negative",
+    "source-in-solid",
+    "eddy-nan",
+    "eddy-negative",
+    "eddy-without-schmidt",
+    "class-bool",
+    "class-numpy-int",
+    "class-out-of-range",
+    "inflow-negative",
+    "deposition-nan",
+    "recirculation-without-vents",
+    "passed-out-of-range",
+    "vents-differ",
+    "vents-alone",
+]
+
+
+@pytest.mark.parametrize("kind", STEP_REFUSALS)
+def test_class_step_refuses_what_the_reference_refuses(kind: str) -> None:
+    """Each refusal raises the reference's exception and message, and books nothing."""
+    name = (
+        "80x30-vents"
+        if kind
+        in (
+            "passed-out-of-range",
+            "vents-differ",
+            "source-in-solid",
+            "field-inf-in-solid",
+        )
+        else "40x15-uniform-open"
+    )
+    spec = dict(STEP_VARIANTS["everything"])
+    case = StepCase(name, "umist", keys=tuple(spec.pop("keys").items()), **spec)
+    inputs = _step_inputs(case)
+    mesh = inputs.mesh
+    physics = _StepPhysics(STEP_SETTLING, STEP_DIFFUSION)
+    conditions = [inputs.reference._faces[k] for k in range(STEP_CLASSES)]
+    faces, v_ext, nu_t, sources = (
+        inputs.faces,
+        list(inputs.v_ext),
+        inputs.nu_t,
+        list(inputs.sources),
+    )
+    c, k, dt, config = inputs.fields[0], 0, inputs.dt, inputs.config
+    solid = _first_solid(name) if (mesh.cell_type == SOLID).any() else (0, 0)
+    if kind == "field-nan":
+        c = _with_nan(c)
+    elif kind == "field-inf-in-solid":
+        c = np.array(c)
+        c[solid] = np.inf
+    elif kind == "dt-nan":
+        dt = float("nan")
+    elif kind == "dt-zero":
+        dt = 0.0
+    elif kind == "dt-negative":
+        dt = -1e-3
+    elif kind == "dt-bool":
+        dt = np.True_
+    elif kind == "dt-above-stable":
+        dt = float(np.nextafter(inputs.reference.stable_dt(faces, 0, v_ext[0]), np.inf))
+    elif kind == "faces-nan":
+        faces = FaceVelocities.copy_of(_with_nan(faces.u), np.array(faces.v))
+    elif kind == "v_ext-nan":
+        v_ext[0] = FaceVelocities.copy_of(np.array(v_ext[0].u), _with_nan(v_ext[0].v))
+    elif kind == "sources-nan":
+        sources[0] = _with_nan(sources[0])
+    elif kind == "sources-negative":
+        sources[0] = np.array(sources[0])
+        sources[0][2, 2] = -1.0
+    elif kind == "source-in-solid":
+        sources[0] = np.array(sources[0])
+        sources[0][solid] = 5.0
+    elif kind == "eddy-nan":
+        nu_t = _with_nan(nu_t)
+    elif kind == "eddy-negative":
+        nu_t = np.array(nu_t)
+        nu_t[3, 3] = -1e-9
+    elif kind == "eddy-without-schmidt":
+        raw_keys = dict(case.keys)
+        config = _step_config(name, "umist", tuple(raw_keys.items()))
+        config = copy.copy(config)
+        config.transport = dataclasses.replace(config.transport, turbulent_schmidt=None)
+    elif kind == "class-bool":
+        k = True
+    elif kind == "class-numpy-int":
+        k = np.int64(0)
+    elif kind == "class-out-of-range":
+        k = STEP_CLASSES
+    elif kind == "inflow-negative":
+        bad = np.array(conditions[1].inflow_v)
+        bad[0, 0] = -1.0
+        conditions[1] = dataclasses.replace(conditions[1], inflow_v=bad)
+    elif kind == "deposition-nan":
+        conditions[2] = dataclasses.replace(
+            conditions[2], deposition_u=_with_nan(conditions[2].deposition_u, (0, 0))
+        )
+    elif kind == "recirculation-without-vents":
+        pair = _boundary_faces("80x30-vents")[0].recirculation[0]
+        shrunk = Recirculation(
+            *(
+                np.zeros(getattr(conditions[0], f"inflow_{c_}").shape, dtype=bool)
+                for c_ in "uvuv"
+            ),
+            pair.passed,
+        )
+        conditions[0] = dataclasses.replace(conditions[0], recirculation=(shrunk,))
+    elif kind == "passed-out-of-range":
+        pair = conditions[1].recirculation[0]
+        conditions[1] = dataclasses.replace(
+            conditions[1], recirculation=(dataclasses.replace(pair, passed=1.5),)
+        )
+    elif kind == "vents-differ":
+        other = np.array(conditions[2].vent_u)
+        other[np.argwhere(other)[0][0], np.argwhere(other)[0][1]] = False
+        conditions[2] = dataclasses.replace(conditions[2], vent_u=other)
+    elif kind == "vents-alone":
+        conditions[0] = dataclasses.replace(
+            conditions[0], vent_u=np.zeros(conditions[0].inflow_u.shape, dtype=bool)
+        )
+
+    def reference() -> object:
+        solver = TransportSolver(mesh, config, physics, _StepConditions(conditions))
+        return solver.solve_timestep(
+            c,
+            faces,
+            k,
+            dt,
+            v_ext[0] if k == 0 else None,
+            sources[0],
+            eddy_viscosity=nu_t,
+        )
+
+    def core() -> object:
+        solver = _core_transport(mesh, config, physics)
+        solver.set_interval(conditions, faces.u, faces.v, v_ext, nu_t, sources)
+        solver.set_step(dt)
+        out = np.zeros(c.shape)
+        try:
+            return solver.step(k, c, out)
+        finally:
+            assert [_budget_bits(b) for b in solver.budgets()] == [
+                _budget_bits(MassBudget())
+            ] * STEP_CLASSES
+
+    expected = _outcome(reference)
+    assert expected[0] != "ok", kind
+    assert _outcome(core) == expected
+
+
+@pytest.mark.parametrize("rows", [1, 2, 7, 60, 300, 9000])
+@pytest.mark.parametrize(
+    "width", [1, 2, 3, 39, 79, 159, 319, 4095, 4097, 8191, 8192, 8193]
+)
+def test_buffered_sum_equals_np_sum_on_strided_slices(rows: int, width: int) -> None:
+    """buffered_sum is np.sum of a [rows, width] slice of a wider array, bit for bit.
+
+    The slice ``a[:, 1:-1]`` is the shape the deposition's interior x faces
+    take: not contiguous, so NumPy sums it through its iterator's buffer, which
+    is filled with whole rows, and a column of one element is read as one
+    strided line.
+    """
+    if rows * width > 300_000:
+        pytest.skip("larger than any slice the budget sums")
+    rng = np.random.default_rng([SEED, 90, rows, width])
+    wide = _values(rng, (rows, width + 2))
+    piece = wide[:, 1:-1]
+    assert not piece.flags.c_contiguous or rows == 1
+    terms = np.ascontiguousarray(piece).reshape(-1)
+    assert _bits(_cfdcore.buffered_sum(terms, width)) == _bits(np.sum(piece))
+    # The rule is not the pairwise sum of the terms once the buffer fills twice.
+    if rows * width > 2 * np.getbufsize() and width > 1:
+        assert np.getbufsize() == 8192
