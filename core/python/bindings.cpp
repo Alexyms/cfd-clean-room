@@ -690,18 +690,22 @@ void transport_set_interval(TransportSolver2& t, nb::handle conditions, nb::hand
 }
 
 // `dt` as the reference reads it: a bool (Python's, NumPy's or a 0-d bool
-// array) is a TypeError, anything else a number.
+// array) is a TypeError, anything else a number converted as `math.isfinite`
+// converts it (a 0-d float array and an np.float64 are numbers).
 double read_dt(nb::handle dt) {
     const nb::module_ numpy = nb::module_::import_("numpy");
+    // A 0-d bool array is neither a bool nor an np.bool_, and would step with
+    // dt = 1.0, so the array's dtype kind decides.
     const bool is_bool =
         nb::isinstance<bool>(dt) || PyObject_IsInstance(dt.ptr(), numpy.attr("bool_").ptr()) == 1 ||
         (PyObject_IsInstance(dt.ptr(), numpy.attr("ndarray").ptr()) == 1 &&
-         nb::cast<bool>(nb::getattr(dt, "dtype").equal(numpy.attr("bool_"))));
+         nb::cast<std::string>(nb::getattr(nb::getattr(dt, "dtype"), "kind")) == "b");
     if (is_bool) {
         throw nb::type_error("dt must be a number, not a bool");
     }
-    double value = 0.0;
-    if (!nb::try_cast<double>(dt, value)) {
+    const double value = PyFloat_AsDouble(dt.ptr());
+    if (value == -1.0 && PyErr_Occurred() != nullptr) {
+        PyErr_Clear();
         throw nb::type_error("dt must be a number");
     }
     return value;
@@ -714,7 +718,8 @@ void transport_set_step(TransportSolver2& t, nb::handle dt) {
     }
 }
 
-// `size_class` as the reference reads it (`_check_class`).
+// `size_class` as the reference reads it (`_check_class`): an int that is not a
+// bool, in [0, n). Every entry point that takes a class reads it here.
 std::size_t read_class(nb::handle size_class, std::size_t n) {
     if (nb::isinstance<bool>(size_class) || !PyLong_Check(size_class.ptr())) {
         const nb::handle type(reinterpret_cast<PyObject*>(Py_TYPE(size_class.ptr())));
@@ -722,10 +727,13 @@ std::size_t read_class(nb::handle size_class, std::size_t n) {
                               nb::cast<std::string>(nb::getattr(type, "__name__")))
                                  .c_str());
     }
-    const long long k = nb::cast<long long>(size_class);
+    // An int too large for a long long reads as -1, which is out of range, and is
+    // named as Python prints it; the overflow flag is not needed to tell.
+    int overflow = 0;
+    const long long k = PyLong_AsLongLongAndOverflow(size_class.ptr(), &overflow);
     if (k < 0 || static_cast<std::size_t>(k) >= n) {
-        throw nb::index_error(("size_class " + std::to_string(k) + " out of range [0, " +
-                               std::to_string(n - 1) + "]")
+        throw nb::index_error(("size_class " + nb::cast<std::string>(nb::str(size_class)) +
+                               " out of range [0, " + std::to_string(n - 1) + "]")
                                   .c_str());
     }
     return static_cast<std::size_t>(k);
@@ -862,23 +870,16 @@ nb::ndarray<nb::numpy, bool, nb::ndim<1>> masks_to_numpy(std::span<const cfdcore
     return nb::ndarray<nb::numpy, bool, nb::ndim<1>>(copy, {m.size()}, owner);
 }
 
-std::size_t class_index(const TransportSolver2& t, std::size_t k) {
-    if (k >= t.solver.classes()) {
-        throw nb::index_error("the class is out of range");
-    }
-    return k;
-}
-
 // The interval's quantities by name (prediction (b)): a face field per class
 // and direction, a cell field per class, or a face field per direction.
-nb::object transport_quantity(const TransportSolver2& t, const std::string& name, std::size_t k,
-                              int d) {
+nb::object transport_quantity(const TransportSolver2& t, const std::string& name,
+                              nb::handle size_class, int d) {
     const Grid2& g = t.scheme->mesh();
     const std::array<std::size_t, 2> cells{g.cells(1), g.cells(0)};
     const auto& s = t.solver;
     if (name == "deposition_cell" || name == "source_step") {
-        const auto values = name == "deposition_cell" ? s.deposition_cell(class_index(t, k))
-                                                      : s.source_step(class_index(t, k));
+        const std::size_t k = read_class(size_class, s.classes());
+        const auto values = name == "deposition_cell" ? s.deposition_cell(k) : s.source_step(k);
         if (values.empty()) {
             return nb::none();
         }
@@ -894,7 +895,7 @@ nb::object transport_quantity(const TransportSolver2& t, const std::string& name
         }
         return nb::cast(to_numpy2(values, faces));
     }
-    class_index(t, k);
+    const std::size_t k = read_class(size_class, s.classes());
     if (name == "advecting_velocity") {
         return nb::cast(to_numpy2(s.advecting_velocity(k, d), faces));
     }
@@ -910,11 +911,11 @@ nb::object transport_quantity(const TransportSolver2& t, const std::string& name
     throw nb::value_error(("no interval quantity named " + name).c_str());
 }
 
-nb::tuple transport_masks(const TransportSolver2& t, const std::string& which, std::size_t k,
-                          int d) {
+nb::tuple transport_masks(const TransportSolver2& t, const std::string& which,
+                          nb::handle size_class, int d) {
     direction(d);
-    class_index(t, k);
     const auto& s = t.solver;
+    const std::size_t k = read_class(size_class, s.classes());
     if (which == "domain") {
         return nb::make_tuple(masks_to_numpy(s.domain_mask(k, d, 0)),
                               masks_to_numpy(s.domain_mask(k, d, 1)),
@@ -1110,8 +1111,8 @@ NB_MODULE(_cfdcore, m) {
              "Fix the interval's step, s: finite and positive (a bool is a TypeError).")
         .def(
             "stable_dt",
-            [](const TransportSolver2& t, std::size_t k) {
-                return t.solver.stable_dt(class_index(t, k));
+            [](const TransportSolver2& t, nb::handle size_class) {
+                return t.solver.stable_dt(read_class(size_class, t.solver.classes()));
             },
             nb::arg("size_class"), "The class's stable_dt on the interval set up.")
         .def("step", &transport_step, nb::arg("size_class"), nb::arg("c").noconvert(),
@@ -1133,14 +1134,14 @@ NB_MODULE(_cfdcore, m) {
              "the laminar path) or unit_conductance (per direction).")
         .def(
             "source_total",
-            [](const TransportSolver2& t, std::size_t k) {
-                return t.solver.source_total(class_index(t, k));
+            [](const TransportSolver2& t, nb::handle size_class) {
+                return t.solver.source_total(read_class(size_class, t.solver.classes()));
             },
             nb::arg("size_class"), "np.sum(rate * volume) of the class's source, 0.0 without one.")
         .def(
             "drawn",
-            [](const TransportSolver2& t, std::size_t k) {
-                const auto d = t.solver.drawn(class_index(t, k));
+            [](const TransportSolver2& t, nb::handle size_class) {
+                const auto d = t.solver.drawn(read_class(size_class, t.solver.classes()));
                 return std::vector<double>(d.begin(), d.end());
             },
             nb::arg("size_class"), "Each recirculating intake's drawn flux, in order.")

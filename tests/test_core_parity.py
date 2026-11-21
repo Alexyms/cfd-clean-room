@@ -4136,6 +4136,93 @@ def test_class_step_refuses_what_the_reference_refuses(kind: str) -> None:
     assert _outcome(core) == expected
 
 
+# `dt` as a Python bool, a NumPy bool, a 0-d bool array, a 0-d float array, a
+# NumPy float and a Python float: each is the number or the TypeError the
+# reference reads it as. A 0-d bool array is neither a bool nor an np.bool_ and
+# would step with dt = 1.0; a 0-d float array is a number.
+DT_FORMS: dict[str, Callable[[float], object]] = {
+    "python-bool": lambda dt: True,
+    "numpy-bool": lambda dt: np.True_,
+    "0d-bool-array": lambda dt: np.array(True),
+    "0d-float-array": lambda dt: np.array(dt),
+    "numpy-float64": np.float64,
+    "python-float": float,
+}
+
+
+@REFERENCE_DIVIDES_BY_ZERO
+@pytest.mark.filterwarnings("ignore:implicit diffusion solve stopped")
+@pytest.mark.parametrize("form", DT_FORMS)
+def test_class_step_dt_in_every_form_is_read_as_the_reference_reads_it(
+    form: str,
+) -> None:
+    """A bool in any form is a TypeError and a number in any form steps, as in solve_timestep (review 90 S3, test 90 S4)."""
+    spec = dict(STEP_VARIANTS["plain"])
+    inputs = _step_inputs(
+        StepCase("80x30", "umist", keys=tuple(spec.pop("keys").items()), **spec)
+    )
+    dt = DT_FORMS[form](inputs.dt)
+    c = inputs.fields[0]
+    expected = _outcome(
+        lambda: inputs.reference.solve_timestep(c, inputs.faces, 0, dt, None, None)
+    )
+    got = _outcome(lambda: inputs.core.set_step(dt))
+    if form.endswith("bool") or form.endswith("bool-array"):
+        assert expected[0] == "TypeError"
+        assert got == expected
+        return
+    assert expected[0] == got[0] == "ok"
+    out = np.full(c.shape, np.nan)
+    inputs.core.step(0, c, out)
+    assert _same_bits(expected[1], out)
+    assert [_budget_bits(b) for b in inputs.core.budgets()] == [
+        _budget_bits(b) for b in inputs.reference.budget
+    ]
+
+
+# Every entry point that takes a class: the reference's `_check_class` refuses a
+# bool, any other type that is not an int, and a class out of range, with its
+# messages (test 90's findings were stable_dt(True), and 2**70).
+CLASS_ENTRY_POINTS: dict[str, Callable[[object, object], object]] = {
+    "stable_dt": lambda core, k: core.stable_dt(k),
+    "source_total": lambda core, k: core.source_total(k),
+    "drawn": lambda core, k: core.drawn(k),
+    "interval_quantity": lambda core, k: core.interval_quantity("volume_flux", k, 0),
+    "masks": lambda core, k: core.masks("domain", k, 0),
+    "step": lambda core, k: core.step(k, np.ones((30, 80)), np.zeros((30, 80))),
+}
+BAD_CLASSES = {
+    "python-bool": True,
+    "python-false": False,
+    "numpy-bool": np.True_,
+    "numpy-int": np.int64(1),
+    "float": 1.0,
+    "string": "1",
+    "negative": -1,
+    "above": STEP_CLASSES,
+    "huge": 2**70,
+}
+
+
+@pytest.mark.parametrize("size_class", BAD_CLASSES.values(), ids=list(BAD_CLASSES))
+@pytest.mark.parametrize("entry", CLASS_ENTRY_POINTS)
+def test_class_step_every_entry_point_reads_size_class_as_the_reference_does(
+    entry: str, size_class: object
+) -> None:
+    """A class that is not an int, or is out of range, is refused as TransportSolver._check_class refuses it (review 90 S4)."""
+    spec = dict(STEP_VARIANTS["plain"])
+    inputs = _step_inputs(
+        StepCase("80x30", "umist", keys=tuple(spec.pop("keys").items()), **spec)
+    )
+    expected = _outcome(
+        lambda: inputs.reference.stable_dt(inputs.faces, size_class, None)
+    )
+    assert expected[0] in ("TypeError", "IndexError")
+    assert (
+        _outcome(lambda: CLASS_ENTRY_POINTS[entry](inputs.core, size_class)) == expected
+    )
+
+
 @pytest.mark.parametrize("rows", [1, 2, 7, 60, 300, 9000])
 @pytest.mark.parametrize(
     "width", [1, 2, 3, 39, 79, 159, 319, 4095, 4097, 8191, 8192, 8193]

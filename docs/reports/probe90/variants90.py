@@ -406,6 +406,63 @@ PLANTS: list[tuple[str, str, list[Edit]]] = [
             )
         ],
     ),
+    # --- dt and size_class read as the reference reads them (review 90 S3 and S4, test 90 S4) ---
+    (
+        "dt_python_bool_unchecked",
+        "a Python bool dt read as a number, 1.0",
+        [
+            (
+                BINDING,
+                '        nb::isinstance<bool>(dt) || PyObject_IsInstance(dt.ptr(), numpy.attr("bool_").ptr()) == 1 ||\n',
+                '        PyObject_IsInstance(dt.ptr(), numpy.attr("bool_").ptr()) == 1 ||\n',
+            )
+        ],
+    ),
+    (
+        "dt_numpy_bool_unchecked",
+        "a NumPy bool dt read as a number, 1.0",
+        [
+            (
+                BINDING,
+                '        nb::isinstance<bool>(dt) || PyObject_IsInstance(dt.ptr(), numpy.attr("bool_").ptr()) == 1 ||\n',
+                "        nb::isinstance<bool>(dt) ||\n",
+            )
+        ],
+    ),
+    (
+        "dt_bool_array_unchecked",
+        "a 0-d bool array dt read as a number, 1.0",
+        [
+            (
+                BINDING,
+                '        (PyObject_IsInstance(dt.ptr(), numpy.attr("ndarray").ptr()) == 1 &&\n'
+                '         nb::cast<std::string>(nb::getattr(nb::getattr(dt, "dtype"), "kind")) == "b");\n',
+                "        false;\n",
+            )
+        ],
+    ),
+    (
+        "dt_any_array_refused_as_bool",
+        "every ndarray dt refused as a bool, a 0-d float array included (test 90 S4)",
+        [
+            (
+                BINDING,
+                'nb::cast<std::string>(nb::getattr(nb::getattr(dt, "dtype"), "kind")) == "b");',
+                'nb::cast<std::string>(nb::getattr(nb::getattr(dt, "dtype"), "kind")) != "");',
+            )
+        ],
+    ),
+    (
+        "stable_dt_class_unchecked",
+        "stable_dt takes any class that converts to an index, a bool included (review 90 S4)",
+        [
+            (
+                BINDING,
+                "                return t.solver.stable_dt(read_class(size_class, t.solver.classes()));",
+                "                return t.solver.stable_dt(nb::cast<std::size_t>(size_class));",
+            )
+        ],
+    ),
     (
         "buffered_sum_partial_rows_allowed",
         "buffered_sum takes terms that are not a whole number of rows",
