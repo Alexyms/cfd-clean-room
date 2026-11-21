@@ -57,6 +57,28 @@ double pairwise_sum(std::span<const double> values) {
     return 0.0 + pairwise([v](std::size_t i) { return v[i]; }, 0, values.size());
 }
 
+double buffered_sum(std::span<const double> values, std::size_t row) {
+    if (values.empty()) {
+        return 0.0;
+    }
+    if (row == 0 || values.size() % row != 0) {
+        throw std::invalid_argument("buffered_sum: the terms are not a whole number of rows");
+    }
+    // A slice of one column is one strided line to NumPy: no buffer.
+    if (row == 1) {
+        return pairwise_sum(values);
+    }
+    const double* v = values.data();
+    const auto term = [v](std::size_t i) { return v[i]; };
+    // Each fill of the buffer holds as many whole rows as fit, and at least one.
+    const std::size_t fill = std::max<std::size_t>(1, buffer_size / row) * row;
+    double total = 0.0;
+    for (std::size_t first = 0; first < values.size(); first += fill) {
+        total += pairwise(term, first, std::min(fill, values.size() - first));
+    }
+    return total;
+}
+
 double blocked_dot(std::span<const double> a, std::span<const double> b, std::size_t block) {
     // A block of zero never advances the loop below, and a shorter b is read
     // past its end; neither is a result, so both are refused at the call.

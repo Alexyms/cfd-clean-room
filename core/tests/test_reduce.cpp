@@ -265,4 +265,105 @@ TEST(BlockDot, ArraysOfDifferentLengthsAreRefused) {
     EXPECT_THROW(block_dot(two, three), std::invalid_argument);
 }
 
+// ---- The sum over a strided slice (NumPy's buffered order, prompt 90) -------
+
+using cfdcore::reduce::buffered_sum;
+
+// A deterministic value in [0, 1) for index i, so the terms need no generator.
+double hashed(std::uint64_t i) {
+    std::uint64_t z = 0x9e3779b97f4a7c15ULL * (i + 1);
+    z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
+    z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
+    z ^= z >> 31;
+    return static_cast<double>(z >> 11) * 0x1.0p-53;
+}
+
+// Terms of both signs over three decades, so that how the sum is grouped shows in
+// its last place (a wider spread lets a few large terms decide the sum).
+std::vector<double> mixed(std::size_t n) {
+    std::vector<double> values(n);
+    for (std::size_t i = 0; i < n; ++i) {
+        values[i] = (hashed(2 * i) - 0.5) * std::pow(10.0, 3.0 * hashed(2 * i + 1));
+    }
+    return values;
+}
+
+// What buffered_sum refuses with, or an empty string when it returns.
+std::string buffered_refusal(std::span<const double> values, std::size_t row) {
+    try {
+        buffered_sum(values, row);
+    } catch (const std::invalid_argument& error) {
+        return error.what();
+    }
+    return "";
+}
+
+// The sum of a slice cut into fills of `fill` terms: each fill's pairwise sum
+// added to 0.0 in order.
+double summed_in_fills(std::span<const double> values, std::size_t fill) {
+    double total = 0.0;
+    for (std::size_t first = 0; first < values.size(); first += fill) {
+        total += pairwise_sum(values.subspan(first, std::min(fill, values.size() - first)));
+    }
+    return total;
+}
+
+TEST(BufferedSum, NoTermsSumToPositiveZeroWhateverTheRow) {
+    // np.sum of an empty slice is +0.0 whatever its width, and a row of 0 with no
+    // terms has nothing to divide.
+    std::vector<double> none;
+    for (const std::size_t row : {std::size_t{0}, std::size_t{1}, std::size_t{5}}) {
+        EXPECT_EQ(bits(buffered_sum(none, row)), bits(0.0)) << "row " << row;
+    }
+}
+
+TEST(BufferedSum, ARowOfZeroWithTermsIsRefused) {
+    // A row of 0 cannot cut the terms into rows, and dividing by it would not
+    // return, so it is refused at the call; a row of 1 is the least accepted.
+    std::vector<double> values{1.0, 2.0, 3.0};
+    EXPECT_THROW(buffered_sum(values, 0), std::invalid_argument);
+    EXPECT_NE(buffered_refusal(values, 0).find("whole number of rows"), std::string::npos);
+    EXPECT_EQ(buffered_sum(values, 1), 6.0);
+}
+
+TEST(BufferedSum, TermsThatAreNotWholeRowsAreRefused) {
+    std::vector<double> values(10, 1.0);
+    for (const std::size_t row : {std::size_t{3}, std::size_t{4}, std::size_t{11}}) {
+        EXPECT_THROW(buffered_sum(values, row), std::invalid_argument) << "row " << row;
+        EXPECT_NE(buffered_refusal(values, row).find("whole number of rows"), std::string::npos);
+    }
+    // The rows that divide the terms are summed.
+    EXPECT_EQ(buffered_sum(values, 5), 10.0);
+    EXPECT_EQ(buffered_sum(values, 10), 10.0);
+}
+
+TEST(BufferedSum, ARowOfOneIsThePairwiseSumOfAllTheTerms) {
+    // NumPy reads a slice one element wide as one strided line, without the
+    // buffer. Above two fills the fills' sum is another value (the control).
+    const auto values = mixed(20000);
+    EXPECT_EQ(bits(buffered_sum(values, 1)), bits(pairwise_sum(values)));
+    EXPECT_NE(bits(summed_in_fills(values, 8192)), bits(pairwise_sum(values)));
+}
+
+TEST(BufferedSum, EachFillHoldsWholeRowsAndTheFillsAreAddedInOrder) {
+    // Rows of 3000: a fill of the 8192-element buffer holds two whole rows (6000
+    // terms), not 8192 terms, so five rows are fills of 6000, 6000 and 3000.
+    const auto values = mixed(5 * 3000);
+    EXPECT_EQ(bits(buffered_sum(values, 3000)), bits(summed_in_fills(values, 6000)));
+    // The controls: the buffer cut at 8192 terms, and no buffer at all.
+    EXPECT_NE(bits(buffered_sum(values, 3000)), bits(summed_in_fills(values, 8192)));
+    EXPECT_NE(bits(buffered_sum(values, 3000)), bits(pairwise_sum(values)));
+    // Rows of 4096 tile the buffer: two to a fill, so three rows are 8192 and 4096.
+    const auto tiled = mixed(3 * 4096);
+    EXPECT_EQ(bits(buffered_sum(tiled, 4096)), bits(summed_in_fills(tiled, 8192)));
+    EXPECT_NE(bits(buffered_sum(tiled, 4096)), bits(pairwise_sum(tiled)));
+}
+
+TEST(BufferedSum, ARowLongerThanTheBufferIsAFillOfItsOwn) {
+    // A fill holds at least one row, so rows of 9000 are three fills.
+    const auto values = mixed(3 * 9000);
+    EXPECT_EQ(bits(buffered_sum(values, 9000)), bits(summed_in_fills(values, 9000)));
+    EXPECT_NE(bits(buffered_sum(values, 9000)), bits(pairwise_sum(values)));
+}
+
 }  // namespace

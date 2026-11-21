@@ -16,6 +16,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <stdexcept>
 #include <vector>
 
 namespace {
@@ -882,6 +883,30 @@ TEST(ImplicitStep, ANegativeOrNanBoundIsRefusedAndNothingIsWritten) {
     EXPECT_EQ(implicit_step(in, scratch, out, result), implicit_status::bound_negative_or_nan);
     EXPECT_EQ(result.iterations, 99);
     EXPECT_EQ(out, std::vector<double>(s.c_star.size(), -1.0));
+}
+
+TEST(ImplicitStep, AHeldArrayOfAnotherLengthThrows) {
+    // set_masks reads held[i] for every cell: a shorter array would be read
+    // past its end, a longer one is not one flag per cell. Both methods form
+    // the masks, so both refuse (review 89 S9's pattern, for `held`).
+    system2 s = planted_system();
+    for (const auto method : {implicit_method::jacobi, implicit_method::conjugate_gradient}) {
+        for (const std::size_t n : {s.c_star.size() - 1, s.c_star.size() + 1}) {
+            bool_field wrong(n);
+            auto in = s.input(method, 1e-8, 10);
+            in.held = wrong.span();
+            implicit_scratch<2> scratch(s.fields);
+            std::vector<double> out(s.c_star.size(), -1.0);
+            implicit_result result;
+            EXPECT_THROW(implicit_step(in, scratch, out, result), std::invalid_argument);
+        }
+        // One flag per cell is accepted.
+        auto in = s.input(method, 1e-8, 10, true);
+        implicit_scratch<2> scratch(s.fields);
+        std::vector<double> out(s.c_star.size(), -1.0);
+        implicit_result result;
+        EXPECT_EQ(implicit_step(in, scratch, out, result), implicit_status::ok);
+    }
 }
 
 // ---- The two solvers called directly ---------------------------------------
