@@ -36,8 +36,9 @@ SCENARIO_NAMES = {
     "dust320": "320x120 dust release",
 }
 MARKERS = ("predictions", "captures", "replay", "tests", "plants", "timing", "loops")
-# The records were taken at this commit: the last that changes core/ or the tests.
-RECORDS_AT = "969dca9"
+# The records were taken at this commit: the last that changes code in core/ or the
+# tests (the report's commit after it changes comments and text only).
+RECORDS_AT = "cd2aec1"
 RATIO_REQUIRED = 5.0
 
 
@@ -76,10 +77,13 @@ def captures_table() -> list[str]:
         record = json.loads(flow.read_text(encoding="utf-8"))
         lines += [
             "",
-            f"The vents run's flow state, solved from rest with `max_simple_iter` raised to "
-            f"{record['max_simple_iter']:,}: stopped by `{record['stop_reason']}` after "
-            f"{record['outer']:,} outer iterations in {record['wall_seconds']:.0f} s "
-            f"(`results/builder90/vents80_flow.json`); the base file's cap is 15,000.",
+            "The vents run's flow state, solved from rest at 80x30 with the iteration cap raised "
+            "(the base file's `max_simple_iter` is 15,000), from `results/builder90/vents80_flow.json`:",
+            "",
+            "| Cap raised to | Stopped by | Outer iterations | Wall time, s |",
+            "|---|---|---|---|",
+            f"| {record['max_simple_iter']:,} | `{record['stop_reason']}` | "
+            f"{record['outer']:,} | {record['wall_seconds']:.0f} |",
         ]
     return lines
 
@@ -181,12 +185,22 @@ PARITY_GROUPS = {
     "test_class_step_equals_the_reference_bit_for_bit": "planted class steps: field, budget, records, raise",
     "test_the_planted_class_steps_reach_every_rule": "the planted inputs reach every rule",
     "test_class_step_continues_a_restored_budget_bit_for_bit": "a budget restored mid-run",
-    "test_class_step_reads_and_sets_budgets_whole": "budgets read and set whole, restore's refusals",
+    "test_class_step_hands_out_its_budgets_as_plain_data": "budgets as a dict of ten terms by name",
+    "test_class_step_restores_budgets_as_the_reference_does": "restore_budgets' refusals, through the mapping",
+    "test_class_step_refuses_budgets_it_cannot_read": "the binding's own refusals of a budget",
     "test_class_step_raises_the_references_breach": "the breach raised",
+    "test_class_step_raises_a_breach_of_its_own": "the core's breach and its four attributes",
     "test_class_step_breaches_at_equality_with_the_limit": "the breach at equality with the limit",
+    "test_class_step_an_empty_room_does_not_breach": "the breach test's zero guard",
     "test_class_step_interval_quantities_equal_the_per_step_values": "interval quantities against the per-step values",
+    "test_class_step_one_solver_through_intervals_equals_the_reference": "one solver through thirteen intervals",
+    "test_class_step_recirculates_on_every_kind_of_face": "recirculating pairs on every kind of face",
     "test_class_step_refuses_what_the_reference_refuses": "the refusals",
+    "test_class_step_dt_in_every_form_is_read_as_the_reference_reads_it": "dt in six forms",
+    "test_class_step_every_entry_point_reads_size_class_as_the_reference_does": "size_class at six entry points",
+    "test_class_step_binding_imports_nothing_from_src": "every src module unimportable",
     "test_buffered_sum_equals_np_sum_on_strided_slices": "NumPy's buffered order on strided slices",
+    "test_buffered_sum_refuses_what_it_cannot_sum": "buffered_sum's refusals",
 }
 
 
@@ -215,13 +229,15 @@ def tests_table() -> list[str]:
     ctest = junit(RESULTS / "ctest.xml")
     ctest_total = Counter(outcome for _, outcome in ctest)
     transport = [n for n, _ in ctest if n.startswith("TransportStep.")]
+    buffered = [n for n, _ in ctest if n.startswith("BufferedSum.")]
     held = [n for n, _ in ctest if "Held" in n and "Length" in n]
     lines += [
         f"| the whole parity module | {len(cases)} | {total['passed']} | {total['failed']} | {total['skipped']} |",
         f"| CTest | {len(ctest)} | {ctest_total['passed']} | {ctest_total['failed']} | {ctest_total['skipped']} |",
         "",
         f"New: {new} parity cases; {len(transport)} GoogleTest cases of `TransportStep` "
-        f"({', '.join(n.split('.', 1)[1] for n in transport)}) and {len(held)} for `held`'s "
+        f"({', '.join(n.split('.', 1)[1] for n in transport)}), {len(buffered)} of `BufferedSum` "
+        f"({', '.join(n.split('.', 1)[1] for n in buffered)}) and {len(held)} for `held`'s "
         f"length ({', '.join(held)}).",
     ]
     for label, log in (("Linux", "suite_linux.log"), ("Windows", "suite_windows.log")):
@@ -313,30 +329,45 @@ def timing_table() -> list[str]:
         "of each class, stepped under its last interval's captured conditions, faces and eddy "
         "viscosity. Medians of repeated calls in one process after warm-up calls: the reference's "
         "whole `solve_timestep`, and the core's `step` with the interval set up beforehand. The "
-        "two steps were checked equal bit for bit before each was timed.",
+        "two steps were checked equal bit for bit before each was timed. Only ratios taken "
+        "within one session are given: the times themselves move with the machine's state from "
+        "day to day (prompt 89, F5) and stay in `results/builder90/timing_N.json`.",
         "",
-        "| Run | Class | Sweeps | Reference, ms | Core, ms | Reference over core |",
-        "|---|---|---|---|---|---|",
+        "| Run | Class | Sweeps | Reference over core |",
+        "|---|---|---|---|",
     ]
     sessions = timing_rows()
     for record in sessions:
         for row in record["rows"]:
             lines.append(
-                f"| {record['run']} | {row['class']} | {row['sweeps']} | "
-                f"{row['reference']['median_s'] * 1e3:.3f} | {row['core']['median_s'] * 1e3:.3f} | "
-                f"{row['ratio']:.2f} |"
+                f"| {record['run']} | {row['class']} | {row['sweeps']} | {row['ratio']:.2f} |"
             )
+    first = sessions[0] if sessions else None
     lines += [
         "",
-        "| Run | Started | Calibration before and after, us | The core's interval set-up, ms | Windows before | Windows after |",
-        "|---|---|---|---|---|---|",
+        "The session's state: the interval set-up (`set_interval`) in the core's class steps of "
+        "the same session, the NumPy calibration's median over the first session's and, within "
+        "the session, after over before, and what Windows was running before and after.",
+        "",
+        "| Run | Started | Interval set-up, in class steps | Calibration over run 1's | Calibration, after over before | Windows before | Windows after |",
+        "|---|---|---|---|---|---|---|",
     ]
     for record in sessions:
+        step = statistics.median(row["core"]["median_s"] for row in record["rows"])
+        before, after = (
+            record["calibration_before"]["median_s"],
+            record["calibration_after"]["median_s"],
+        )
+        base = (
+            first["calibration_before"]["median_s"]
+            + first["calibration_after"]["median_s"]
+            if first
+            else float("nan")
+        )
         lines.append(
             f"| {record['run']} | {record['started']} | "
-            f"{record['calibration_before']['median_s'] * 1e6:.2f}, "
-            f"{record['calibration_after']['median_s'] * 1e6:.2f} | "
-            f"{record['set_interval']['median_s'] * 1e3:.2f} | "
+            f"{record['set_interval']['median_s'] / step:.1f} | "
+            f"{(before + after) / base:.2f} | {after / before:.2f} | "
             f"{load_line(record['windows_before'])} | {load_line(record['windows_after'])} |"
         )
     return lines

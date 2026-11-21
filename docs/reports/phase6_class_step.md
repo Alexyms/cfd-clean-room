@@ -1,13 +1,14 @@
 # Phase 6 Step 3a: One Class Step in the Core (prompt 90)
 
-**Date:** 2026-11-20
-**Prompt:** 90 (`docs/prompts/cc-prompt-90-class-step.md`)
+**Date:** 2026-11-20; round 1, 2026-11-21
+**Prompt:** 90 (`docs/prompts/cc-prompt-90-class-step.md`); round 1, 90b (`docs/prompts/cc-prompt-90b-round1-fixes.md`)
 **Branch:** `phase6/class-step`
 **Status:** built. Predictions (a), (b) and (c) hold (T0). The prompt's stop condition, a sum
 or an expression that cannot be made bitwise without changing `src/`, was not met: every sum is
 the reference's bit for bit, one of them (a strided slice) by a NumPy rule found on the way
 (F1). The vents room's flow state needs a raised iteration cap at 80x30 (F2). Review and test
-90 come before the pull request.
+90 found no defect in the port and two tests missing; round 1 (section 8) added them, made the
+binding return plain data and answered the rest of their findings.
 
 This is the first half of Phase 6 step 3 (`docs/PROJECT_PLAN.md`, Phase 6, the steps table;
 ADR-017 B, C, E, F and G): one particle class advanced one time step in the core's `transport`
@@ -68,7 +69,7 @@ A failed prediction is a finding, not a stop.
 
 | Prediction | Measured | Verdict |
 |---|---|---|
-| (a) every captured and planted class step equals the reference's bit for bit | 200 of 200 captured calls with no differing bit in the field, the ten budget terms or the records, 40 of them with vents and a discharge recirculating (T2); 114 of 114 planted class-step parity cases pass (T3) | holds |
+| (a) every captured and planted class step equals the reference's bit for bit | 200 of 200 captured calls with no differing bit in the field, the ten budget terms or the records, 40 of them with vents and a discharge recirculating (T2); 202 of 202 planted class-step parity cases pass (T3) | holds |
 | (b) the interval set-up's quantities equal the reference's per-step values on every mesh | 200 of 200 captured calls with every quantity equal; 16 of 16 parity cases (eight meshes, two variants) pass (T2, T3) | holds |
 | (c) a class step at least five times faster on the developed 320x120 frame | 6.81 to 8.68 times over the five classes in run 1, median 7.48 (run 2: 7.50 to 8.36; run 3: 7.77 to 8.77) (T5) | holds |
 <!-- tables90 predictions end -->
@@ -135,9 +136,12 @@ pairwise without the buffer. The rule was found on NumPy 2.4.4 by comparing `np.
 candidate orders on random slices of the budget's shapes and is ported as
 `reduce::buffered_sum(values, row)`; `test_buffered_sum_equals_np_sum_on_strided_slices` pins
 it on slices of six row counts by twelve widths (one element to 8,193, either side of a whole
-fill), those larger than any slice the budget sums skipped. On the product grids the slice holds 2,370 terms at 80x30, one fill, and
-38,280 at 320x120, five fills, so the rule decides the obstacle deposition's last bits on the
-finer grids only (`obstacle_slice_flat` in T4).
+fill), those larger than any slice the budget sums skipped. Whether the rule decides a result
+depends on the grid: the slice fits one fill on the 80x30 and 40x15 grids and takes more on
+160x60 and 320x120, so it decides the obstacle deposition's last bits on those two only
+(`obstacle_slice_flat` in T4 changes a result on them alone). The rule is NumPy's at its default
+buffer size, `np.getbufsize()`, 8,192 elements, which `reduce::buffer_size` holds; a program that
+changes the size changes the reference's order, and the core's no longer equals it (F1).
 
 **The binding.** `TransportSolver2(scheme, dx_cell, dy_cell, dx_face, dy_face, cfl, upwind,
 max_sweeps, tol, limit, share, horizon, schmidt, settling, diffusion, surface_codes)`;
@@ -145,13 +149,27 @@ max_sweeps, tol, limit, share, horizon, schmidt, settling, diffusion, surface_co
 class's `ConcentrationFaces` as the boundary layer builds it; `set_step(dt)`;
 `step(size_class, c, out)` returns the step's records (`TransportStep2`: sweeps, converged,
 leftover, bound) and may write `out` over `c`. A refusal raises the reference's exception with
-its message: `ValueError` for a value, `TypeError` for a bool `dt` or `size_class`,
-`IndexError` for a class out of range, and the reference's own `ConservationBreachError`
-(imported from `src.solver_transport`) with its four arguments, after the step, the budget
-holding it as the reference's does. A wrong shape, dtype or layout is a `TypeError` at the
-call, as ADR-017 B says of every array. `budgets()` returns new `MassBudget` objects;
-`restore_budgets(budgets)` sets them whole with `restore_budgets`'s refusals and messages, so a
-checkpoint's budgets cross both ways.
+its message: `ValueError` for a value, `TypeError` for a bool `dt` or `size_class` (`dt` read as
+`math.isfinite` reads it, so a 0-d float array is a number; `size_class` read the same way by
+every entry point that takes a class), `IndexError` for a class out of range. A breach raises
+the core's own `_cfdcore.ConservationBreach`, after the step, the budget holding it as the
+reference's does; it carries `size_class`, `leftover`, `supplied` and `limit`, the four
+arguments of the reference's `ConservationBreachError`. A wrong shape, dtype or layout is a
+`TypeError` at the call, as ADR-017 B says of every array.
+
+**Plain data (ADR-017 B, round 1).** The binding is handed data and returns data, and imports
+nothing from `src`. `budgets()` returns each class's budget as a new dict of its ten terms by
+name: `initial`, `inflow`, `outflow`, `source`, `floor`, `ceiling`, `wall`, `obstacle`,
+`current` and `leftover`. The four deposition names are the core's (`transport::slot_names`),
+and the parity module checks them against `DEPOSIT_SURFACES`, in its order. `restore_budgets`
+takes the same dicts back and refuses what it cannot read as data: a count other than the
+classes', a budget that is not a dict, a missing or unknown term, a term that is not a number
+(a Python bool is not one). The reference's types are made of the data on the Python side,
+`tests/core_mapping.py`: `MassBudget` from the ten terms, `ConservationBreachError` from the
+breach's attributes, and `restore_budgets`' refusals of a `MassBudget` (not a `MassBudget`,
+other deposition keys, an unknown leftover), which concern the reference's type and are
+compared with the reference's own. Step 6's `src/core_backend.py` will hold the mapping, and
+the parity module and the probe share it until then.
 
 **Carried from prompt 89b.** `set_masks` (`core/src/scalar.cpp`) now refuses a `held` of
 another length than the cells with a `std::invalid_argument`, as `masks_where_not` refuses one
@@ -219,7 +237,11 @@ Each run from its stored flow state (prompt 81's runs; the vents run solved from
 | 80x30 vents dust release | 80x30 | `solved from rest` | 183 | 40 | 3 | yes | 399 |
 | 320x120 dust release | 320x120 | `results/builder81/product/equipment_dust.h5` | 33,119 | 40 | 3 | no | 2139 |
 
-The vents run's flow state, solved from rest with `max_simple_iter` raised to 60,000: stopped by `error_estimate_and_continuity` after 24,767 outer iterations in 403 s (`results/builder90/vents80_flow.json`); the base file's cap is 15,000.
+The vents run's flow state, solved from rest at 80x30 with the iteration cap raised (the base file's `max_simple_iter` is 15,000), from `results/builder90/vents80_flow.json`:
+
+| Cap raised to | Stopped by | Outer iterations | Wall time, s |
+|---|---|---|---|
+| 60,000 | `error_estimate_and_continuity` | 24,767 | 403 |
 <!-- tables90 captures end -->
 
 <!-- tables90 replay begin -->
@@ -295,25 +317,35 @@ file's rule for this 3 s run); the scenario file raises the cap and says why. Th
 <!-- tables90 tests begin -->
 ### T3. The tests
 
-At 969dca9, under the project's flags. The parity module's new cases by test function, then the totals.
+At cd2aec1, under the project's flags. The parity module's new cases by test function, then the totals.
 
 | Test | Cases | Passed | Failed | Skipped |
 |---|---|---|---|---|
 | `test_class_step_equals_the_reference_bit_for_bit` (planted class steps: field, budget, records, raise) | 64 | 64 | 0 | 0 |
 | `test_the_planted_class_steps_reach_every_rule` (the planted inputs reach every rule) | 1 | 1 | 0 | 0 |
 | `test_class_step_continues_a_restored_budget_bit_for_bit` (a budget restored mid-run) | 3 | 3 | 0 | 0 |
-| `test_class_step_reads_and_sets_budgets_whole` (budgets read and set whole, restore's refusals) | 1 | 1 | 0 | 0 |
+| `test_class_step_hands_out_its_budgets_as_plain_data` (budgets as a dict of ten terms by name) | 1 | 1 | 0 | 0 |
+| `test_class_step_restores_budgets_as_the_reference_does` (restore_budgets' refusals, through the mapping) | 1 | 1 | 0 | 0 |
+| `test_class_step_refuses_budgets_it_cannot_read` (the binding's own refusals of a budget) | 1 | 1 | 0 | 0 |
 | `test_class_step_raises_the_references_breach` (the breach raised) | 4 | 4 | 0 | 0 |
+| `test_class_step_raises_a_breach_of_its_own` (the core's breach and its four attributes) | 1 | 1 | 0 | 0 |
 | `test_class_step_breaches_at_equality_with_the_limit` (the breach at equality with the limit) | 1 | 1 | 0 | 0 |
+| `test_class_step_an_empty_room_does_not_breach` (the breach test's zero guard) | 2 | 2 | 0 | 0 |
 | `test_class_step_interval_quantities_equal_the_per_step_values` (interval quantities against the per-step values) | 16 | 16 | 0 | 0 |
+| `test_class_step_one_solver_through_intervals_equals_the_reference` (one solver through thirteen intervals) | 4 | 4 | 0 | 0 |
+| `test_class_step_recirculates_on_every_kind_of_face` (recirculating pairs on every kind of face) | 18 | 18 | 0 | 0 |
 | `test_class_step_refuses_what_the_reference_refuses` (the refusals) | 24 | 24 | 0 | 0 |
+| `test_class_step_dt_in_every_form_is_read_as_the_reference_reads_it` (dt in six forms) | 6 | 6 | 0 | 0 |
+| `test_class_step_every_entry_point_reads_size_class_as_the_reference_does` (size_class at six entry points) | 54 | 54 | 0 | 0 |
+| `test_class_step_binding_imports_nothing_from_src` (every src module unimportable) | 1 | 1 | 0 | 0 |
 | `test_buffered_sum_equals_np_sum_on_strided_slices` (NumPy's buffered order on strided slices) | 72 | 55 | 0 | 17 |
-| the whole parity module | 3287 | 3270 | 0 | 17 |
-| CTest | 91 | 91 | 0 | 0 |
+| `test_buffered_sum_refuses_what_it_cannot_sum` (buffered_sum's refusals) | 1 | 1 | 0 | 0 |
+| the whole parity module | 3376 | 3359 | 0 | 17 |
+| CTest | 99 | 99 | 0 | 0 |
 
-New: 186 parity cases; 9 GoogleTest cases of `TransportStep` (AUniformFieldInAClosedBoxWithNoSettlingChangesByNothing, SettlingInTheSameBoxMovesTheUniformField, AUniformLineWithDiffusionChangesByNothing, AClosedBoxsBudgetClosesToRounding, OutMayBeTheFieldItself, AFieldThatIsNotFiniteIsRefusedBeforeAnythingIsBooked, AStepAboveTheStableStepIsRefusedBeforeAnythingIsBooked, ABreachIsRefusedAfterTheStepWithTheBudgetHoldingIt, ProgrammingErrorsThrow) and 1 for `held`'s length (ImplicitStep.AHeldArrayOfAnotherLengthThrows).
-- The whole suite under Linux: 6371 passed, 17 skipped in 1281.06s (0:21:21).
-- The whole suite under Windows: 3101 passed, 1 skipped in 1587.82s (0:26:27).
+New: 275 parity cases; 11 GoogleTest cases of `TransportStep` (AUniformFieldInAClosedBoxWithNoSettlingChangesByNothing, SettlingInTheSameBoxMovesTheUniformField, AUniformLineWithDiffusionChangesByNothing, AClosedBoxsBudgetClosesToRounding, OutMayBeTheFieldItself, AFieldThatIsNotFiniteIsRefusedBeforeAnythingIsBooked, AStepAboveTheStableStepIsRefusedBeforeAnythingIsBooked, ABreachIsRefusedAfterTheStepWithTheBudgetHoldingIt, ASecondIntervalKeepsTheBudgetsAndEqualsAFreshSolverGivenThem, ASecondStepSizeInOneIntervalEqualsAFreshSolverSetToIt, ProgrammingErrorsThrow), 6 of `BufferedSum` (NoTermsSumToPositiveZeroWhateverTheRow, ARowOfZeroWithTermsIsRefused, TermsThatAreNotWholeRowsAreRefused, ARowOfOneIsThePairwiseSumOfAllTheTerms, EachFillHoldsWholeRowsAndTheFillsAreAddedInOrder, ARowLongerThanTheBufferIsAFillOfItsOwn) and 1 for `held`'s length (ImplicitStep.AHeldArrayOfAnotherLengthThrows).
+- The whole suite under Linux: 6460 passed, 17 skipped in 1371.93s (0:22:51).
+- The whole suite under Windows: 3101 passed, 1 skipped in 1486.82s (0:24:46).
 <!-- tables90 tests end -->
 
 The Windows suite was run at 30b69f5: the one file changed since, `tests/test_core_parity.py`,
@@ -357,24 +389,53 @@ Each built alone from the checkout's `core/` with one edit (`docs/reports/probe9
 
 | Plant | What it changes | CTest | Parity cases failing (by test) | Replay: calls differing |
 |---|---|---|---|---|
-| `control` | no edit: every test passes | 100% passed, 0 tests failed out of 91 | none | dust80 0/40, door80 0/40, breach80 0/40, dust320 0/40, vents80 0/40 |
-| `boundary_sum_order` | a domain boundary's column summed left to right, not in NumPy's pairwise order | 100% passed, 0 tests failed out of 91 | `test_class_step_continues_a_restored_budget_bit_for_bit` 3, `test_class_step_equals_the_reference_bit_for_bit` 63, `test_class_step_raises_the_references_breach` 3 | dust80 0/40, door80 4/40, breach80 0/40, dust320 0/40, vents80 4/40 |
-| `vents_into_out_swapped` | the vents' flow into the room booked as outflow and their flow out as inflow | 100% passed, 0 tests failed out of 91 | `test_class_step_continues_a_restored_budget_bit_for_bit` 1, `test_class_step_equals_the_reference_bit_for_bit` 24, `test_class_step_raises_the_references_breach` 1 | dust80 0/40, door80 0/40, breach80 0/40, dust320 0/40, vents80 15/40 |
-| `recirculated_from_new_field` | a discharge's value from the field the step returns, not the one it starts from | 100% passed, 0 tests failed out of 91 | `test_class_step_continues_a_restored_budget_bit_for_bit` 1, `test_class_step_equals_the_reference_bit_for_bit` 23 | dust80 0/40, door80 0/40, breach80 0/40, dust320 0/40, vents80 5/40 |
-| `deposition_wrong_surface` | each domain surface's deposition booked to the next slot (floor to ceiling, and so on) | 100% passed, 0 tests failed out of 91 | `test_class_step_breaches_at_equality_with_the_limit` 1, `test_class_step_continues_a_restored_budget_bit_for_bit` 3, `test_class_step_equals_the_reference_bit_for_bit` 60, `test_class_step_raises_the_references_breach` 4, `test_the_planted_class_steps_reach_every_rule` 1 | dust80 15/40, door80 30/40, breach80 15/40, dust320 15/40, vents80 15/40 |
-| `content_with_solid` | the content summed over every cell, SOLID ones included | 100% passed, 0 tests failed out of 91 | `test_class_step_continues_a_restored_budget_bit_for_bit` 3, `test_class_step_equals_the_reference_bit_for_bit` 56, `test_class_step_raises_the_references_breach` 3, `test_the_planted_class_steps_reach_every_rule` 1 | dust80 20/40, door80 16/40, breach80 12/40, dust320 14/40, vents80 16/40 |
-| `breach_strict` | the breach test's comparison strict: the leftover must exceed the limit times the supply | 100% passed, 0 tests failed out of 91 | `test_class_step_breaches_at_equality_with_the_limit` 1 | dust80 0/40, door80 0/40, breach80 0/40, dust320 0/40, vents80 0/40 |
-| `bound_before_source` | the step's bound from the supply before the step's source is booked | 99% passed, 1 tests failed out of 91: `TransportStep.ABreachIsRefusedAfterTheStepWithTheBudgetHoldingIt` | `test_class_step_continues_a_restored_budget_bit_for_bit` 3, `test_class_step_equals_the_reference_bit_for_bit` 32, `test_the_planted_class_steps_reach_every_rule` 1 | dust80 15/40, door80 0/40, breach80 0/40, dust320 15/40, vents80 15/40 |
-| `eddy_viscosity_unmasked` | the face eddy viscosity from the field as handed in, SOLID cells not zeroed | 100% passed, 0 tests failed out of 91 | `test_class_step_interval_quantities_equal_the_per_step_values` 7 | dust80 0/40, door80 0/40, breach80 0/40, dust320 0/40, vents80 0/40 |
-| `deposition_without_area` | the deposition per face from the deposition velocity alone, without the face's area | 100% passed, 0 tests failed out of 91 | `test_class_step_breaches_at_equality_with_the_limit` 1, `test_class_step_continues_a_restored_budget_bit_for_bit` 3, `test_class_step_equals_the_reference_bit_for_bit` 60, `test_class_step_interval_quantities_equal_the_per_step_values` 16, `test_class_step_raises_the_references_breach` 4, `test_the_planted_class_steps_reach_every_rule` 1 | dust80 40/40, door80 40/40, breach80 40/40, dust320 40/40, vents80 40/40 |
-| `stable_dt_from_the_air` | stable_dt from the air's face velocities, without the settling and the drift | 100% passed, 0 tests failed out of 91 | `test_class_step_equals_the_reference_bit_for_bit` 1, `test_class_step_interval_quantities_equal_the_per_step_values` 16, `test_class_step_refuses_what_the_reference_refuses` 1 | dust80 0/40, door80 0/40, breach80 0/40, dust320 0/40, vents80 40/40 |
-| `divergence_low_first` | the divergence's further directions taken low face first, then high | 100% passed, 0 tests failed out of 91 | `test_class_step_breaches_at_equality_with_the_limit` 1, `test_class_step_continues_a_restored_budget_bit_for_bit` 3, `test_class_step_equals_the_reference_bit_for_bit` 60, `test_class_step_raises_the_references_breach` 4, `test_the_planted_class_steps_reach_every_rule` 1 | dust80 17/40, door80 24/40, breach80 24/40, dust320 18/40, vents80 16/40 |
-| `obstacle_slice_flat` | the interior x faces' deposition summed pairwise over the slice, not through NumPy's buffer | 100% passed, 0 tests failed out of 91 | `test_class_step_breaches_at_equality_with_the_limit` 1, `test_class_step_continues_a_restored_budget_bit_for_bit` 1, `test_class_step_equals_the_reference_bit_for_bit` 25 | dust80 0/40, door80 0/40, breach80 0/40, dust320 0/40, vents80 0/40 |
-| `leftover_not_booked` | the step's leftover not added to the budget | 98% passed, 2 tests failed out of 91: `TransportStep.AClosedBoxsBudgetClosesToRounding`, `TransportStep.ABreachIsRefusedAfterTheStepWithTheBudgetHoldingIt` | `test_class_step_breaches_at_equality_with_the_limit` 1, `test_class_step_continues_a_restored_budget_bit_for_bit` 3, `test_class_step_equals_the_reference_bit_for_bit` 60, `test_class_step_raises_the_references_breach` 4, `test_the_planted_class_steps_reach_every_rule` 1 | dust80 30/40, door80 30/40, breach80 30/40, dust320 30/40, vents80 30/40 |
-| `drift_on_every_face` | v_ext added on every face, not only the interior faces between two non-SOLID cells | 100% passed, 0 tests failed out of 91 | `test_class_step_continues_a_restored_budget_bit_for_bit` 3, `test_class_step_equals_the_reference_bit_for_bit` 16, `test_class_step_interval_quantities_equal_the_per_step_values` 8, `test_the_planted_class_steps_reach_every_rule` 1 | dust80 0/40, door80 0/40, breach80 0/40, dust320 0/40, vents80 0/40 |
-| `held_length_unchecked` | set_masks reads held without checking its length | 99% passed, 1 tests failed out of 91: `ImplicitStep.AHeldArrayOfAnotherLengthThrows` | none | dust80 0/40, door80 0/40, breach80 0/40, dust320 0/40, vents80 0/40 |
+| `control` | no edit: every test passes | 100% passed, 0 tests failed out of 99 | none | dust80 0/40, door80 0/40, breach80 0/40, dust320 0/40, vents80 0/40 |
+| `boundary_sum_order` | a domain boundary's column summed left to right, not in NumPy's pairwise order | 100% passed, 0 tests failed out of 99 | `test_class_step_continues_a_restored_budget_bit_for_bit` 3, `test_class_step_equals_the_reference_bit_for_bit` 63, `test_class_step_one_solver_through_intervals_equals_the_reference` 4, `test_class_step_raises_the_references_breach` 3, `test_class_step_recirculates_on_every_kind_of_face` 17 | dust80 0/40, door80 4/40, breach80 0/40, dust320 0/40, vents80 4/40 |
+| `vents_into_out_swapped` | the vents' flow into the room booked as outflow and their flow out as inflow | 100% passed, 0 tests failed out of 99 | `test_class_step_continues_a_restored_budget_bit_for_bit` 1, `test_class_step_equals_the_reference_bit_for_bit` 24, `test_class_step_one_solver_through_intervals_equals_the_reference` 4, `test_class_step_raises_the_references_breach` 1, `test_class_step_recirculates_on_every_kind_of_face` 18 | dust80 0/40, door80 0/40, breach80 0/40, dust320 0/40, vents80 15/40 |
+| `recirculated_from_new_field` | a discharge's value from the field the step returns, not the one it starts from | 100% passed, 0 tests failed out of 99 | `test_class_step_continues_a_restored_budget_bit_for_bit` 1, `test_class_step_equals_the_reference_bit_for_bit` 23, `test_class_step_one_solver_through_intervals_equals_the_reference` 4, `test_class_step_recirculates_on_every_kind_of_face` 18 | dust80 0/40, door80 0/40, breach80 0/40, dust320 0/40, vents80 5/40 |
+| `deposition_wrong_surface` | each domain surface's deposition booked to the next slot (floor to ceiling, and so on) | 100% passed, 0 tests failed out of 99 | `test_class_step_breaches_at_equality_with_the_limit` 1, `test_class_step_continues_a_restored_budget_bit_for_bit` 3, `test_class_step_dt_in_every_form_is_read_as_the_reference_reads_it` 3, `test_class_step_equals_the_reference_bit_for_bit` 60, `test_class_step_hands_out_its_budgets_as_plain_data` 1, `test_class_step_one_solver_through_intervals_equals_the_reference` 4, `test_class_step_raises_the_references_breach` 4, `test_class_step_recirculates_on_every_kind_of_face` 18, `test_class_step_refuses_budgets_it_cannot_read` 1, `test_class_step_restores_budgets_as_the_reference_does` 1, `test_the_planted_class_steps_reach_every_rule` 1 | dust80 15/40, door80 30/40, breach80 15/40, dust320 15/40, vents80 15/40 |
+| `content_with_solid` | the content summed over every cell, SOLID ones included | 100% passed, 0 tests failed out of 99 | `test_class_step_continues_a_restored_budget_bit_for_bit` 3, `test_class_step_equals_the_reference_bit_for_bit` 56, `test_class_step_one_solver_through_intervals_equals_the_reference` 4, `test_class_step_raises_a_breach_of_its_own` 1, `test_class_step_raises_the_references_breach` 3, `test_class_step_recirculates_on_every_kind_of_face` 18, `test_the_planted_class_steps_reach_every_rule` 1 | dust80 20/40, door80 16/40, breach80 12/40, dust320 14/40, vents80 16/40 |
+| `breach_strict` | the breach test's comparison strict: the leftover must exceed the limit times the supply | 100% passed, 0 tests failed out of 99 | `test_class_step_breaches_at_equality_with_the_limit` 1 | dust80 0/40, door80 0/40, breach80 0/40, dust320 0/40, vents80 0/40 |
+| `bound_before_source` | the step's bound from the supply before the step's source is booked | 99% passed, 1 tests failed out of 99: `TransportStep.ABreachIsRefusedAfterTheStepWithTheBudgetHoldingIt` | `test_class_step_continues_a_restored_budget_bit_for_bit` 3, `test_class_step_equals_the_reference_bit_for_bit` 32, `test_class_step_one_solver_through_intervals_equals_the_reference` 4, `test_the_planted_class_steps_reach_every_rule` 1 | dust80 15/40, door80 0/40, breach80 0/40, dust320 15/40, vents80 15/40 |
+| `eddy_viscosity_unmasked` | the face eddy viscosity from the field as handed in, SOLID cells not zeroed | 100% passed, 0 tests failed out of 99 | `test_class_step_interval_quantities_equal_the_per_step_values` 7, `test_class_step_one_solver_through_intervals_equals_the_reference` 4 | dust80 0/40, door80 0/40, breach80 0/40, dust320 0/40, vents80 0/40 |
+| `deposition_without_area` | the deposition per face from the deposition velocity alone, without the face's area | 100% passed, 0 tests failed out of 99 | `test_class_step_breaches_at_equality_with_the_limit` 1, `test_class_step_continues_a_restored_budget_bit_for_bit` 3, `test_class_step_dt_in_every_form_is_read_as_the_reference_reads_it` 3, `test_class_step_equals_the_reference_bit_for_bit` 60, `test_class_step_hands_out_its_budgets_as_plain_data` 1, `test_class_step_interval_quantities_equal_the_per_step_values` 16, `test_class_step_one_solver_through_intervals_equals_the_reference` 4, `test_class_step_raises_a_breach_of_its_own` 1, `test_class_step_raises_the_references_breach` 4, `test_class_step_recirculates_on_every_kind_of_face` 18, `test_class_step_refuses_budgets_it_cannot_read` 1, `test_class_step_restores_budgets_as_the_reference_does` 1, `test_the_planted_class_steps_reach_every_rule` 1 | dust80 40/40, door80 40/40, breach80 40/40, dust320 40/40, vents80 40/40 |
+| `stable_dt_from_the_air` | stable_dt from the air's face velocities, without the settling and the drift | 100% passed, 0 tests failed out of 99 | `test_class_step_equals_the_reference_bit_for_bit` 1, `test_class_step_interval_quantities_equal_the_per_step_values` 16, `test_class_step_one_solver_through_intervals_equals_the_reference` 4, `test_class_step_recirculates_on_every_kind_of_face` 1, `test_class_step_refuses_what_the_reference_refuses` 1 | dust80 0/40, door80 0/40, breach80 0/40, dust320 0/40, vents80 40/40 |
+| `divergence_low_first` | the divergence's further directions taken low face first, then high | 100% passed, 0 tests failed out of 99 | `test_class_step_breaches_at_equality_with_the_limit` 1, `test_class_step_continues_a_restored_budget_bit_for_bit` 3, `test_class_step_dt_in_every_form_is_read_as_the_reference_reads_it` 3, `test_class_step_equals_the_reference_bit_for_bit` 60, `test_class_step_hands_out_its_budgets_as_plain_data` 1, `test_class_step_one_solver_through_intervals_equals_the_reference` 4, `test_class_step_raises_a_breach_of_its_own` 1, `test_class_step_raises_the_references_breach` 4, `test_class_step_recirculates_on_every_kind_of_face` 18, `test_class_step_refuses_budgets_it_cannot_read` 1, `test_class_step_restores_budgets_as_the_reference_does` 1, `test_the_planted_class_steps_reach_every_rule` 1 | dust80 17/40, door80 24/40, breach80 24/40, dust320 18/40, vents80 16/40 |
+| `obstacle_slice_flat` | the interior x faces' deposition summed pairwise over the slice, not through NumPy's buffer | 100% passed, 0 tests failed out of 99 | `test_class_step_breaches_at_equality_with_the_limit` 1, `test_class_step_continues_a_restored_budget_bit_for_bit` 1, `test_class_step_equals_the_reference_bit_for_bit` 25, `test_class_step_one_solver_through_intervals_equals_the_reference` 1 | dust80 0/40, door80 0/40, breach80 0/40, dust320 0/40, vents80 0/40 |
+| `leftover_not_booked` | the step's leftover not added to the budget | 98% passed, 2 tests failed out of 99: `TransportStep.AClosedBoxsBudgetClosesToRounding`, `TransportStep.ABreachIsRefusedAfterTheStepWithTheBudgetHoldingIt` | `test_class_step_binding_imports_nothing_from_src` 1, `test_class_step_breaches_at_equality_with_the_limit` 1, `test_class_step_continues_a_restored_budget_bit_for_bit` 3, `test_class_step_dt_in_every_form_is_read_as_the_reference_reads_it` 3, `test_class_step_equals_the_reference_bit_for_bit` 60, `test_class_step_hands_out_its_budgets_as_plain_data` 1, `test_class_step_one_solver_through_intervals_equals_the_reference` 4, `test_class_step_raises_a_breach_of_its_own` 1, `test_class_step_raises_the_references_breach` 4, `test_class_step_recirculates_on_every_kind_of_face` 18, `test_class_step_refuses_budgets_it_cannot_read` 1, `test_class_step_restores_budgets_as_the_reference_does` 1, `test_the_planted_class_steps_reach_every_rule` 1 | dust80 30/40, door80 30/40, breach80 30/40, dust320 30/40, vents80 30/40 |
+| `drift_on_every_face` | v_ext added on every face, not only the interior faces between two non-SOLID cells | 100% passed, 0 tests failed out of 99 | `test_class_step_continues_a_restored_budget_bit_for_bit` 3, `test_class_step_equals_the_reference_bit_for_bit` 16, `test_class_step_interval_quantities_equal_the_per_step_values` 8, `test_class_step_one_solver_through_intervals_equals_the_reference` 4, `test_the_planted_class_steps_reach_every_rule` 1 | dust80 0/40, door80 0/40, breach80 0/40, dust320 0/40, vents80 0/40 |
+| `held_length_unchecked` | set_masks reads held without checking its length | 99% passed, 1 tests failed out of 99: `ImplicitStep.AHeldArrayOfAnotherLengthThrows` | none | dust80 0/40, door80 0/40, breach80 0/40, dust320 0/40, vents80 0/40 |
+| `deposit_step_stale` | a second set_step keeps the first step's deposition per face | 99% passed, 1 tests failed out of 99: `TransportStep.ASecondStepSizeInOneIntervalEqualsAFreshSolverSetToIt` | `test_class_step_one_solver_through_intervals_equals_the_reference` 4 | dust80 0/40, door80 0/40, breach80 0/40, dust320 0/40, vents80 0/40 |
+| `source_kept_across_intervals` | a class's source of an earlier interval kept when the next has none | 99% passed, 1 tests failed out of 99: `TransportStep.ASecondIntervalKeepsTheBudgetsAndEqualsAFreshSolverGivenThem` | `test_class_step_one_solver_through_intervals_equals_the_reference` 4 | dust80 0/40, door80 0/40, breach80 0/40, dust320 0/40, vents80 0/40 |
+| `budgets_zeroed_by_interval` | set_interval zeroes the budgets | 99% passed, 1 tests failed out of 99: `TransportStep.ASecondIntervalKeepsTheBudgetsAndEqualsAFreshSolverGivenThem` | `test_class_step_one_solver_through_intervals_equals_the_reference` 4 | dust80 0/40, door80 0/40, breach80 0/40, dust320 0/40, vents80 0/40 |
+| `interval_leaves_stepped_set` | set_interval leaves the last interval's step in force, so a step runs on zeroed per-step arrays | 99% passed, 1 tests failed out of 99: `TransportStep.ASecondIntervalKeepsTheBudgetsAndEqualsAFreshSolverGivenThem` | `test_class_step_one_solver_through_intervals_equals_the_reference` 4 | dust80 0/40, door80 0/40, breach80 0/40, dust320 0/40, vents80 0/40 |
+| `interval_keeps_old_vents` | a second interval without vents keeps the first interval's vent faces | 100% passed, 0 tests failed out of 99 | `test_class_step_one_solver_through_intervals_equals_the_reference` 4 | dust80 0/40, door80 0/40, breach80 0/40, dust320 0/40, vents80 0/40 |
+| `inflow_kept_across_intervals` | the first interval's inflow values kept by the next | 100% passed, 0 tests failed out of 99 | `test_class_step_one_solver_through_intervals_equals_the_reference` 4 | dust80 0/40, door80 0/40, breach80 0/40, dust320 0/40, vents80 0/40 |
+| `eddy_kept_across_intervals` | the face eddy viscosity of an earlier interval kept on a laminar one | 100% passed, 0 tests failed out of 99 | `test_class_step_one_solver_through_intervals_equals_the_reference` 4 | dust80 0/40, door80 0/40, breach80 0/40, dust320 0/40, vents80 0/40 |
+| `recirculated_low_cell_only` | the room value of an intake face read from its low side only | 100% passed, 0 tests failed out of 99 | `test_class_step_one_solver_through_intervals_equals_the_reference` 4, `test_class_step_recirculates_on_every_kind_of_face` 8 | dust80 0/40, door80 0/40, breach80 0/40, dust320 0/40, vents80 0/40 |
+| `recirculated_high_cell_only` | the room value of an intake face read from its high side only | 100% passed, 0 tests failed out of 99 | `test_class_step_continues_a_restored_budget_bit_for_bit` 1, `test_class_step_equals_the_reference_bit_for_bit` 23, `test_class_step_one_solver_through_intervals_equals_the_reference` 4, `test_class_step_recirculates_on_every_kind_of_face` 8 | dust80 0/40, door80 0/40, breach80 0/40, dust320 0/40, vents80 15/40 |
+| `recirculated_passes_all` | the fraction a discharge passes dropped: it carries the whole drawn value | 100% passed, 0 tests failed out of 99 | `test_class_step_one_solver_through_intervals_equals_the_reference` 4, `test_class_step_recirculates_on_every_kind_of_face` 6 | dust80 0/40, door80 0/40, breach80 0/40, dust320 0/40, vents80 0/40 |
+| `drawn_zero_divides` | the guard for an intake that draws nothing broken: zero is divided by zero | 100% passed, 0 tests failed out of 99 | `test_class_step_recirculates_on_every_kind_of_face` 4 | dust80 0/40, door80 0/40, breach80 0/40, dust320 0/40, vents80 0/40 |
+| `recirculated_y_dropped` | the intake's y faces left out of the weighted sum, though its drawn flux counts them | 100% passed, 0 tests failed out of 99 | `test_class_step_recirculates_on_every_kind_of_face` 12 | dust80 0/40, door80 0/40, breach80 0/40, dust320 0/40, vents80 0/40 |
+| `drawn_ignores_y` | the intake's drawn flux without its y faces | 100% passed, 0 tests failed out of 99 | `test_class_step_recirculates_on_every_kind_of_face` 12 | dust80 0/40, door80 0/40, breach80 0/40, dust320 0/40, vents80 0/40 |
+| `breach_without_zero_guard` | the breach test without its leftover != 0 clause: an empty room breaches at its first step | 100% passed, 0 tests failed out of 99 | `test_class_step_an_empty_room_does_not_breach` 2 | dust80 10/40, door80 10/40, breach80 10/40, dust320 10/40, vents80 10/40 |
+| `binding_imports_the_reference` | budgets() imports the reference's module, as the first binding did to make a MassBudget | 100% passed, 0 tests failed out of 99 | `test_class_step_binding_imports_nothing_from_src` 1 | dust80 0/40, door80 0/40, breach80 0/40, dust320 0/40, vents80 0/40 |
+| `budgets_slots_reversed` | the four deposition terms handed out in the reverse order of the slots | 100% passed, 0 tests failed out of 99 | `test_class_step_breaches_at_equality_with_the_limit` 1, `test_class_step_continues_a_restored_budget_bit_for_bit` 3, `test_class_step_dt_in_every_form_is_read_as_the_reference_reads_it` 3, `test_class_step_equals_the_reference_bit_for_bit` 60, `test_class_step_hands_out_its_budgets_as_plain_data` 1, `test_class_step_one_solver_through_intervals_equals_the_reference` 4, `test_class_step_raises_the_references_breach` 4, `test_class_step_recirculates_on_every_kind_of_face` 18, `test_class_step_refuses_budgets_it_cannot_read` 1, `test_class_step_restores_budgets_as_the_reference_does` 1, `test_the_planted_class_steps_reach_every_rule` 1 | dust80 30/40, door80 30/40, breach80 15/40, dust320 30/40, vents80 30/40 |
+| `restore_drops_current` | restore_budgets does not set the current content | 100% passed, 0 tests failed out of 99 | `test_class_step_continues_a_restored_budget_bit_for_bit` 3, `test_class_step_refuses_budgets_it_cannot_read` 1 | dust80 0/40, door80 0/40, breach80 0/40, dust320 0/40, vents80 0/40 |
+| `restore_drops_outflow` | restore_budgets does not set the outflow | 100% passed, 0 tests failed out of 99 | `test_class_step_continues_a_restored_budget_bit_for_bit` 3 | dust80 15/40, door80 20/40, breach80 15/40, dust320 15/40, vents80 15/40 |
+| `restore_accepts_bool_term` | restore_budgets reads a Python bool as a number | 100% passed, 0 tests failed out of 99 | `test_class_step_refuses_budgets_it_cannot_read` 1 | dust80 0/40, door80 0/40, breach80 0/40, dust320 0/40, vents80 0/40 |
+| `restore_accepts_unknown_term` | restore_budgets takes a budget with a term it does not know, beside the ten | 100% passed, 0 tests failed out of 99 | `test_class_step_refuses_budgets_it_cannot_read` 1 | dust80 0/40, door80 0/40, breach80 0/40, dust320 0/40, vents80 0/40 |
+| `breach_leftover_is_supplied` | the breach's leftover attribute carries the particles supplied | 100% passed, 0 tests failed out of 99 | `test_class_step_breaches_at_equality_with_the_limit` 1, `test_class_step_raises_a_breach_of_its_own` 1, `test_class_step_raises_the_references_breach` 4 | dust80 0/40, door80 0/40, breach80 0/40, dust320 0/40, vents80 0/40 |
+| `record_bound_is_leftover` | the step's record gives the leftover as its bound | 100% passed, 0 tests failed out of 99 | `test_class_step_continues_a_restored_budget_bit_for_bit` 3, `test_class_step_equals_the_reference_bit_for_bit` 60, `test_class_step_hands_out_its_budgets_as_plain_data` 1, `test_class_step_one_solver_through_intervals_equals_the_reference` 4, `test_class_step_recirculates_on_every_kind_of_face` 18, `test_class_step_refuses_budgets_it_cannot_read` 1, `test_class_step_restores_budgets_as_the_reference_does` 1, `test_the_planted_class_steps_reach_every_rule` 1 | dust80 30/40, door80 30/40, breach80 30/40, dust320 30/40, vents80 30/40 |
+| `dt_python_bool_unchecked` | a Python bool dt read as a number, 1.0 | 100% passed, 0 tests failed out of 99 | `test_class_step_dt_in_every_form_is_read_as_the_reference_reads_it` 1 | dust80 0/40, door80 0/40, breach80 0/40, dust320 0/40, vents80 0/40 |
+| `dt_numpy_bool_unchecked` | a NumPy bool dt read as a number, 1.0 | 100% passed, 0 tests failed out of 99 | `test_class_step_dt_in_every_form_is_read_as_the_reference_reads_it` 1, `test_class_step_refuses_what_the_reference_refuses` 1 | dust80 0/40, door80 0/40, breach80 0/40, dust320 0/40, vents80 0/40 |
+| `dt_bool_array_unchecked` | a 0-d bool array dt read as a number, 1.0 | 100% passed, 0 tests failed out of 99 | `test_class_step_dt_in_every_form_is_read_as_the_reference_reads_it` 1 | dust80 0/40, door80 0/40, breach80 0/40, dust320 0/40, vents80 0/40 |
+| `dt_any_array_refused_as_bool` | every ndarray dt refused as a bool, a 0-d float array included (test 90 S4) | 100% passed, 0 tests failed out of 99 | `test_class_step_dt_in_every_form_is_read_as_the_reference_reads_it` 1 | dust80 0/40, door80 0/40, breach80 0/40, dust320 0/40, vents80 0/40 |
+| `stable_dt_class_unchecked` | stable_dt takes any class that converts to an index, a bool included (review 90 S4) | 100% passed, 0 tests failed out of 99 | `test_class_step_every_entry_point_reads_size_class_as_the_reference_does` 9 | dust80 0/40, door80 0/40, breach80 0/40, dust320 0/40, vents80 0/40 |
+| `buffered_sum_partial_rows_allowed` | buffered_sum takes terms that are not a whole number of rows | 99% passed, 1 tests failed out of 99: `BufferedSum.TermsThatAreNotWholeRowsAreRefused` | `test_buffered_sum_refuses_what_it_cannot_sum` 1 | dust80 0/40, door80 0/40, breach80 0/40, dust320 0/40, vents80 0/40 |
+| `buffered_sum_zero_row_unchecked` | buffered_sum divides by a row of zero | 99% passed, 1 tests failed out of 99: `BufferedSum.ARowOfZeroWithTermsIsRefused` | none | dust80 0/40, door80 0/40, breach80 0/40, dust320 0/40, vents80 0/40 |
 
-15 of 15 plants fail at least one test.
+44 of 44 plants fail at least one test.
 <!-- tables90 plants end -->
 
 The prompt's eight are the first eight after the control; `eddy_viscosity_unmasked` is its
@@ -401,40 +462,45 @@ The prompt's eight are the first eight after the control; `eddy_viscosity_unmask
 ## 6. The timing
 
 `probe90.py timing --run N`, three sessions one after another, each its own process, with the
-machine on mains power and no other solver or test process running; each session's state is in
-the second table. The processor ran without boost throughout (its performance counter at 85 to
-94), Windows Defender's scanner took about a third of one processor, and the NumPy calibration
-read the same in all three sessions, so the three are comparable with one another; as prompt 89
-found (its F5), they are not with another day's numbers.
+machine on mains power and no other solver or test process of the project running; each
+session's state is in the second table. The load seen at run 1 was Edge and Windows Defender's
+scanner, both busy (the table's "Windows before" and "after"), where the prompt asked for
+nothing heavy running. A ratio is taken within one session, so a load falls on both of its
+sides, and the calibration's ratios in the table show the three sessions comparable with one
+another. As prompt 89 found (its F5), they are not with another day's numbers, so the report
+gives ratios only and the times themselves stay in the records
+(`results/builder90/timing_N.json`).
 
 <!-- tables90 timing begin -->
 ### T5. A class step on the developed 320x120 frame: the core against `solve_timestep`
 
-The stored 320x120 dust release's last frame (`results/builder81/product/equipment_dust.h5`) of each class, stepped under its last interval's captured conditions, faces and eddy viscosity. Medians of repeated calls in one process after warm-up calls: the reference's whole `solve_timestep`, and the core's `step` with the interval set up beforehand. The two steps were checked equal bit for bit before each was timed.
+The stored 320x120 dust release's last frame (`results/builder81/product/equipment_dust.h5`) of each class, stepped under its last interval's captured conditions, faces and eddy viscosity. Medians of repeated calls in one process after warm-up calls: the reference's whole `solve_timestep`, and the core's `step` with the interval set up beforehand. The two steps were checked equal bit for bit before each was timed. Only ratios taken within one session are given: the times themselves move with the machine's state from day to day (prompt 89, F5) and stay in `results/builder90/timing_N.json`.
 
-| Run | Class | Sweeps | Reference, ms | Core, ms | Reference over core |
-|---|---|---|---|---|---|
-| 1 | 0 | 10 | 11.979 | 1.758 | 6.81 |
-| 1 | 1 | 10 | 12.912 | 1.742 | 7.41 |
-| 1 | 2 | 10 | 12.726 | 1.701 | 7.48 |
-| 1 | 3 | 10 | 13.545 | 1.561 | 8.68 |
-| 1 | 4 | 10 | 12.639 | 1.616 | 7.82 |
-| 2 | 0 | 10 | 12.177 | 1.503 | 8.10 |
-| 2 | 1 | 10 | 12.372 | 1.636 | 7.56 |
-| 2 | 2 | 10 | 12.603 | 1.507 | 8.36 |
-| 2 | 3 | 10 | 11.739 | 1.511 | 7.77 |
-| 2 | 4 | 10 | 11.651 | 1.554 | 7.50 |
-| 3 | 0 | 10 | 12.392 | 1.596 | 7.77 |
-| 3 | 1 | 10 | 12.410 | 1.561 | 7.95 |
-| 3 | 2 | 10 | 12.544 | 1.610 | 7.79 |
-| 3 | 3 | 10 | 13.278 | 1.513 | 8.77 |
-| 3 | 4 | 10 | 12.885 | 1.560 | 8.26 |
+| Run | Class | Sweeps | Reference over core |
+|---|---|---|---|
+| 1 | 0 | 10 | 6.81 |
+| 1 | 1 | 10 | 7.41 |
+| 1 | 2 | 10 | 7.48 |
+| 1 | 3 | 10 | 8.68 |
+| 1 | 4 | 10 | 7.82 |
+| 2 | 0 | 10 | 8.10 |
+| 2 | 1 | 10 | 7.56 |
+| 2 | 2 | 10 | 8.36 |
+| 2 | 3 | 10 | 7.77 |
+| 2 | 4 | 10 | 7.50 |
+| 3 | 0 | 10 | 7.77 |
+| 3 | 1 | 10 | 7.95 |
+| 3 | 2 | 10 | 7.79 |
+| 3 | 3 | 10 | 8.77 |
+| 3 | 4 | 10 | 8.26 |
 
-| Run | Started | Calibration before and after, us | The core's interval set-up, ms | Windows before | Windows after |
-|---|---|---|---|---|---|
-| 1 | 2026-11-20 18:05:42 | 8.23, 8.34 | 5.12 | msedge 51; msmpeng 36; msedge 29; on mains True; processor performance 94 | msedge 61; msmpeng 32; msedge 26; on mains True; processor performance 86 |
-| 2 | 2026-11-20 18:05:59 | 8.34, 8.04 | 5.01 | msmpeng 35; msedge 28; msedge 24; on mains True; processor performance 87 | msmpeng 34; msedge 23; code 21; on mains True; processor performance 85 |
-| 3 | 2026-11-20 18:06:16 | 8.29, 8.34 | 4.54 | msmpeng 37; msedge 19; msedge 18; on mains True; processor performance 85 | msmpeng 37; msedge 21; msedge 18; on mains True; processor performance 85 |
+The session's state: the interval set-up (`set_interval`) in the core's class steps of the same session, the NumPy calibration's median over the first session's and, within the session, after over before, and what Windows was running before and after.
+
+| Run | Started | Interval set-up, in class steps | Calibration over run 1's | Calibration, after over before | Windows before | Windows after |
+|---|---|---|---|---|---|---|
+| 1 | 2026-11-20 18:05:42 | 3.0 | 1.00 | 1.01 | msedge 51; msmpeng 36; msedge 29; on mains True; processor performance 94 | msedge 61; msmpeng 32; msedge 26; on mains True; processor performance 86 |
+| 2 | 2026-11-20 18:05:59 | 3.3 | 0.99 | 0.96 | msmpeng 35; msedge 28; msedge 24; on mains True; processor performance 87 | msmpeng 34; msedge 23; code 21; on mains True; processor performance 85 |
+| 3 | 2026-11-20 18:06:16 | 2.9 | 1.00 | 1.01 | msmpeng 37; msedge 19; msedge 18; on mains True; processor performance 85 | msmpeng 37; msedge 21; msedge 18; on mains True; processor performance 85 |
 <!-- tables90 timing end -->
 
 ## 7. The vectorisation report
@@ -456,15 +522,46 @@ The block functions of `transport.cpp` whose loop is vectorised: `copy_cells`, `
 `scalar.cpp`'s count is prompt 89b's (T15 of `docs/reports/probe89/tables89b.md`): the
 length check added to `set_masks` is outside every loop.
 
+## 8. Round 1: review 90 and test 90
+
+Review 90 approved the branch with eight Suggestions. Test 90 found no Critical and no defect in
+the port, which it stepped through its own differential fuzz without a differing bit, and two
+Bugs, both tests missing for rules the code has right (B1, B2), with seven Suggestions. Prompt
+90b is the fix pass. T3 and T4 list every case and every plant by name, taken at the round's last
+commit that changes code or tests.
+
+Every new case passed on the code as reviewed, before any change to it. The two changes to the
+binding that fix a behaviour (`dt` and `size_class`) were made after cases that failed on them.
+
+| Finding | What was done |
+|---|---|
+| Test B1, review S1: nothing took one solver through a second interval or a second step size | `test_class_step_one_solver_through_intervals_equals_the_reference` takes one core solver through thirteen intervals, on two vents meshes and both schemes, the reference rebuilt for each with the budgets carried: a source that starts and stops, a flow switch, an eddy viscosity that starts, changes and stops, other steps inside an interval, a drift, other conditions, the vents taken away, other vents opened and the first vents returned. Fields, budgets and records are compared after every step and the interval's quantities after every step size, and a step before the interval's own `set_step` must be refused. Two GoogleTests check a second interval and a second step size against a fresh solver handed the budgets. The tester's five plants and review S1's three are in T4, each caught. |
+| Test B2: the recirculation pinned in one orientation, with one fraction, on an intake that always draws | `test_class_step_recirculates_on_every_kind_of_face` plants nine cases on the vents room with a shelf, a SOLID block clear of the floor, so that a y face has the SOLID cell on its high side as well as its low: an intake on x faces and on y faces with the SOLID cell on either side, both directions in one intake, fractions other than one for each class, an intake that draws nothing, two pairs at once, and one of two drawing nothing. The cases assert that the planted inputs reach what they are planted for. The three plants the prompt names and three beside them (the high side alone, the y faces dropped from the weighted sum and from the drawn flux) are in T4, each caught. |
+| Review S2: `buffered_sum`'s refusals | Six GoogleTests (no terms, a row of 0, terms that are not whole rows, a row of 1, fills of whole rows, a row longer than the buffer) and a parity case. The binding no longer repeats the core's refusals, so the parity case tests them through nanobind's `ValueError`. |
+| Review S3, test S4: the forms of `dt` | One parity case per form, compared with the reference's outcome and message. The binding refuses an array as a bool by its dtype kind, so a 0-d float array steps. Plants: each of the three bool clauses removed, and every array refused. |
+| Review S4: `size_class` guarded on `step` only | Every entry point reads the class through `read_class`; a parity case per entry point and bad class, compared with the reference's. Plant: `stable_dt` unchecked. |
+| Test S1: the breach test's zero guard pinned by the replay only | `test_class_step_an_empty_room_does_not_breach`, a zero field with nothing supplied, and its plant. |
+| Section 3 of the prompt: the binding knows nothing of the reference | Plain data and `_cfdcore.ConservationBreach` (section 1), `tests/core_mapping.py`, a case that runs a step, a restore and a breach with every `src` module unimportable, and eight plants. Every comparison of the earlier cases is unchanged and bit for bit. |
+| Review S5 | The cascade and stability cells of `docs/SYSTEM.md` name what the binding reads (`ConcentrationFaces`, `Recirculation`, a drift's `u` and `v`) and what makes the reference's types of its data. |
+| Review S6 | `_refusal_inputs` and `raise_refusal`'s unused `limit` removed. |
+| Review S7, S8 | T5 gives ratios taken within a session, and section 6 states the load seen at run 1. Prose that restated a number points to a table, and T1's note on the vents flow state is a table. |
+| F1's limit, F2's record | F1 and section 1 state the default buffer size; the deferred table of `docs/PROJECT_PLAN.md` lists the vents room's flow state beside the two already there. |
+
+What the plants showed: `recirculated_high_cell_only` was caught by cases the branch already had,
+since the vents file's intake has the SOLID cell on its high side and so its room cell on the
+low, and `recirculated_low_cell_only` by none of them. The earlier cases could tell one direction
+of the mistake and not the other, which is what the new cases are for.
+
 ## Findings
 
 - **F1, NumPy sums a strided slice through its buffer, in whole rows.** Section 1. A port that
   sums `flux_u[:, 1:-1]` pairwise over its terms is the same computation as NumPy's where the
   slice fits one fill (80x30, 40x15) and not where it takes more (160x60, 320x120): the plant
   `obstacle_slice_flat` fails only cases on those grids, since on the others it changes nothing.
-  `reduce::buffered_sum` copies the rule, and its parity test pins it. The rule depends on
-  NumPy's default buffer size, so a run that changes `np.setbufsize` would part from the core on
-  these grids; nothing in the project does.
+  `reduce::buffered_sum` copies the rule, and its parity test pins it. The limit: it copies
+  NumPy's order at the default buffer size, `np.getbufsize()` (8,192). A program that changes
+  the size changes the reference's order, and the core's no longer equals it on these grids;
+  nothing in the project does.
 - **F2, the vents room's flow state needs more than the base file's cap from rest at 80x30.**
   Section 3 and T1. It stops by the error estimate and continuity well beyond 15,000 outer
   iterations. Its residual history, read every thousand iterations, falls by about a decade per
@@ -476,12 +573,11 @@ length check added to `set_masks` is outside every loop.
   conductances, face eddy viscosity and deposition are formed once (section 1), each equal to the
   per-step value. The one per-step pass left that an interval fixes is the implicit solve's
   expansion of its `bool` masks (section 2).
-- **F4, a class step on the developed 320x120 frame is between six and nine times faster in the
-  core (T5)**, in every class and every session, each step taking the reference's ten Jacobi
-  sweeps. Prediction (c) holds on run 1 (T0). How the core's time divides between the flux, the
-  solve and the booking was not measured; the solve still expands its masks at every call
-  (section 2), and the interval's set-up, once per interval, costs about three of the core's
-  class steps.
+- **F4, a class step on the developed 320x120 frame is faster in the core in every class and
+  every session (T5)**, each step taking the reference's ten Jacobi sweeps. Prediction (c) holds
+  on run 1 (T0). How the core's time divides between the flux, the solve and the booking was not
+  measured; the solve still expands its masks at every call (section 2), and the interval's
+  set-up, once per interval, is given in class steps in T5.
 
 ## Deviations and limits
 
@@ -492,11 +588,17 @@ length check added to `set_masks` is outside every loop.
   another first. A wrong shape, dtype or layout is a `TypeError` where the reference raises a
   `ValueError`, as ADR-017 B says of every array the binding takes; `sources` of another dtype are
   converted to float64, as the reference's `np.asarray` converts them, and a field `c` is not.
-- **The binding imports `src.solver_transport`** for `ConservationBreachError`, `MassBudget` and
-  `DEPOSIT_SURFACES`, so that the exception and the budgets it returns are the reference's own
-  types. The core library itself knows nothing of it. The reference logs a warning when a solve
-  stops at its cap; the binding returns `converged` and logs nothing, which is step 6's adapter's
-  to do.
+- **The binding imports nothing from `src`** (round 1; the first build imported
+  `src.solver_transport` for the exception and the budget type). It returns data and raises its
+  own exception, and `tests/core_mapping.py` makes the reference's types of them (section 1). The
+  refusals of `restore_budgets` that concern `MassBudget` are the mapping's now, not the
+  binding's, and the parity module compares them with the reference's through the mapping. The
+  reference logs a warning when a solve stops at its cap; the binding returns `converged` and
+  logs nothing, which is step 6's adapter's to do.
+- **What round 1 left as it was.** Test 90's S2, S3, S5 (the `dt` of an int zero is reported as
+  a float in the binding's message), S6 and S7 are Suggestions the prompt did not take up. A
+  class too large for a long long is an `IndexError` as the reference's, since `read_class` is
+  read for every entry point.
 - **`transport` is a template on D, built at 1 and 2**, the vertical direction D - 1. The
   strided-slice rule (F1) is measured on two-dimensional slices only; a three-dimensional
   reference does not exist yet (Phase 8).
@@ -519,12 +621,17 @@ length check added to `set_masks` is outside every loop.
 - `core/include/cfdcore/transport.hpp`, `core/src/transport.cpp`: the module.
 - `core/include/cfdcore/reduce.hpp`, `core/src/reduce.cpp`: `buffered_sum`.
 - `core/src/scalar.cpp`: `set_masks`' length check on `held`.
-- `core/python/bindings.cpp`: `TransportSolver2`, `TransportStep2`, `buffered_sum`.
+- `core/python/bindings.cpp`: `TransportSolver2`, `TransportStep2`, `buffered_sum`, and
+  `ConservationBreach`.
 - `core/tests/test_transport.cpp` (new), `core/tests/test_scalar.cpp` (one case),
   `core/CMakeLists.txt`.
-- `tests/test_core_parity.py`: the section "One class step".
+- `tests/test_core_parity.py`: the section "One class step"; `tests/core_mapping.py`: the core's
+  plain data made into the reference's types.
 - `docs/reports/probe90/`: `probe90.py` (capture, vents-flow, replay, timing, plants, vecinfo),
-  `variants90.py` (the planted defects), `scenario_vents80.yaml`, `tables90.py` and `tables90.md`.
+  `variants90.py` (the planted defects, round 1's included), `scenario_vents80.yaml`,
+  `tables90.py` and `tables90.md`.
 - Records in `results/builder90/` (untracked): the captures, `replay.json`, `plants.json` and
   `plants/`, `timing_1.json` to `timing_3.json`, `vecinfo.json`, `vents80_flow.json`,
-  `parity.xml`, `ctest.xml`, the two suites' logs, and the run files in `runs/`.
+  `parity.xml`, `ctest.xml`, the two suites' logs, and the run files in `runs/`; the records
+  that round 1 replaced are in `results/builder90/round0/`, and round 1's scripts and logs in
+  `results/builder90b/`.

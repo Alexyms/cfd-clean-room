@@ -45,9 +45,11 @@ double pairwise_sum(std::span<const double> values);
 // that slice as one strided line and sums it pairwise without the buffer. The
 // rule was measured on NumPy 2.4.4 against `np.sum` on slices of every kind the
 // transport budget sums (prompt 90), and is pinned by the parity module
-// (`test_buffered_sum_equals_np_sum_on_strided_slices`). Throws
-// std::invalid_argument for a row of 0 with terms, or a length that is not a
-// whole number of rows.
+// (`test_buffered_sum_equals_np_sum_on_strided_slices`). The limit: this is
+// NumPy's order at its default buffer size. A program that changes the size
+// (np.setbufsize) changes `np.sum`'s order, and the result here no longer
+// equals it. Throws std::invalid_argument for a row of 0 with terms, or a
+// length that is not a whole number of rows.
 inline constexpr std::size_t buffer_size = 8192;
 double buffered_sum(std::span<const double> values, std::size_t row);
 
