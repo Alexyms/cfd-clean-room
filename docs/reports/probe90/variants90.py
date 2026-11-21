@@ -406,6 +406,86 @@ PLANTS: list[tuple[str, str, list[Edit]]] = [
             )
         ],
     ),
+    # --- the binding's plain data (prompt 90b, section 3) ---
+    (
+        "binding_imports_the_reference",
+        "budgets() imports the reference's module, as the first binding did to make a MassBudget",
+        [
+            (
+                BINDING,
+                "nb::list transport_budgets(const TransportSolver2& t) {\n    nb::list out;\n",
+                "nb::list transport_budgets(const TransportSolver2& t) {\n"
+                '    nb::module_::import_("src.solver_transport");\n'
+                "    nb::list out;\n",
+            )
+        ],
+    ),
+    (
+        "budgets_slots_reversed",
+        "the four deposition terms handed out in the reverse order of the slots",
+        [
+            (
+                BINDING,
+                "= nb::float_(b.deposited[slot]);",
+                "= nb::float_(b.deposited[cfdcore::transport::slots - 1 - slot]);",
+            )
+        ],
+    ),
+    (
+        "restore_drops_current",
+        "restore_budgets does not set the current content",
+        [(BINDING, '        c.current = term("current", true);\n', "")],
+    ),
+    (
+        "restore_drops_outflow",
+        "restore_budgets does not set the outflow",
+        [(BINDING, '        c.outflow = *term("outflow", false);\n', "")],
+    ),
+    (
+        "restore_accepts_bool_term",
+        "restore_budgets reads a Python bool as a number",
+        [
+            (
+                BINDING,
+                "            if (value.is_none() || nb::isinstance<bool>(value) || "
+                "!nb::try_cast<double>(value, x)) {",
+                "            if (value.is_none() || !nb::try_cast<double>(value, x)) {",
+            )
+        ],
+    ),
+    (
+        "restore_accepts_unknown_term",
+        "restore_budgets takes a budget with a term it does not know, beside the ten",
+        [
+            (
+                BINDING,
+                "        bool exact = terms.size() == names.size();",
+                "        bool exact = true;",
+            )
+        ],
+    ),
+    (
+        "breach_leftover_is_supplied",
+        "the breach's leftover attribute carries the particles supplied",
+        [
+            (
+                BINDING,
+                '        error.attr("leftover") = breach.leftover;',
+                '        error.attr("leftover") = breach.supplied;',
+            )
+        ],
+    ),
+    (
+        "record_bound_is_leftover",
+        "the step's record gives the leftover as its bound",
+        [
+            (
+                BINDING,
+                '.def_ro("bound", &cfdcore::transport::step_record::bound)',
+                '.def_ro("bound", &cfdcore::transport::step_record::leftover)',
+            )
+        ],
+    ),
     # --- dt and size_class read as the reference reads them (review 90 S3 and S4, test 90 S4) ---
     (
         "dt_python_bool_unchecked",

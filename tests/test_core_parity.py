@@ -15,6 +15,7 @@ import copy
 import dataclasses
 import functools
 import os
+import sys
 from collections.abc import Callable, Iterator
 from typing import NamedTuple, Self
 
@@ -52,6 +53,7 @@ from src.solver_transport import (
     TransportSolver,
 )
 from src.staggered import FaceVelocities
+from tests import core_mapping
 
 if os.environ.get("CFD_CORE_REQUIRED") == "1":
     import _cfdcore
@@ -3050,7 +3052,7 @@ def _compare_step(inputs: StepInputs, k: int) -> StepComparison:
         )
     )
     out = np.full(c.shape, np.nan)
-    core = _outcome(lambda: inputs.core.step(k, c, out))
+    core = _outcome(lambda: core_mapping.step(inputs.core, k, c, out))
     differences = []
     if ref[0] != core[0] or (ref[0] != "ok" and ref[1] != core[1]):
         differences.append(f"outcome {ref} != {core}")
@@ -3074,7 +3076,7 @@ def _compare_step(inputs: StepInputs, k: int) -> StepComparison:
             differences.append(f"records {expected} != {got}")
         inputs.fields[k] = np.array(ref[1])
     for j, (a, b) in enumerate(
-        zip(inputs.reference.budget, inputs.core.budgets(), strict=True)
+        zip(inputs.reference.budget, core_mapping.budgets_of(inputs.core), strict=True)
     ):
         if _budget_bits(a) != _budget_bits(b):
             differences.append(
@@ -3209,7 +3211,7 @@ def test_class_step_continues_a_restored_budget_bit_for_bit(name: str) -> None:
             )
         )
     inputs.reference.restore_budgets(restored)
-    inputs.core.restore_budgets(restored)
+    core_mapping.restore_budgets(inputs.core, restored)
     for budget in restored:
         budget.inflow = -99.0  # a later change to an argument reaches neither
     for _ in range(2):
@@ -3217,18 +3219,45 @@ def test_class_step_continues_a_restored_budget_bit_for_bit(name: str) -> None:
             assert _compare_step(inputs, k).differences == []
 
 
-def test_class_step_reads_and_sets_budgets_whole() -> None:
-    """budgets() returns new MassBudgets; restore_budgets refuses what the reference refuses."""
+def _plain_inputs() -> StepInputs:
+    """Both solvers on the 80x30 room with the configuration's own conditions."""
     spec = dict(STEP_VARIANTS["plain"])
-    inputs = _step_inputs(
+    return _step_inputs(
         StepCase("80x30", "umist", keys=tuple(spec.pop("keys").items()), **spec)
     )
+
+
+def test_class_step_hands_out_its_budgets_as_plain_data() -> None:
+    """budgets() is one new dict of ten terms by name per class, in MassBudget's order (ADR-017 B)."""
+    inputs = _plain_inputs()
+    names = [
+        "initial",
+        "inflow",
+        "outflow",
+        "source",
+        *DEPOSIT_SURFACES,
+        "current",
+        "leftover",
+    ]
     fresh = inputs.core.budgets()
-    assert all(isinstance(b, MassBudget) for b in fresh)
-    assert [_budget_bits(b) for b in fresh] == [
+    assert all(type(terms) is dict for terms in fresh)
+    # The core's slot names are the reference's DEPOSIT_SURFACES, in its order.
+    assert [list(terms) for terms in fresh] == [names] * STEP_CLASSES
+    assert [_budget_bits(core_mapping.budget_from_terms(t)) for t in fresh] == [
         _budget_bits(MassBudget())
     ] * STEP_CLASSES
     assert inputs.core.budgets()[0] is not fresh[0]
+    # After a step every term is a number, and a change to a dict does not reach the solver.
+    assert _compare_step(inputs, 0).differences == []
+    stepped = inputs.core.budgets()[0]
+    assert all(type(value) is float for value in stepped.values())
+    stepped["inflow"] = -99.0
+    assert inputs.core.budgets()[0]["inflow"] != -99.0
+
+
+def test_class_step_restores_budgets_as_the_reference_does() -> None:
+    """The mapping's restore_budgets refuses what the reference's does, with its messages, and sets None terms."""
+    inputs = _plain_inputs()
     good = [MassBudget() for _ in range(STEP_CLASSES)]
     wrong_keys = MassBudget(deposited={"floor": 0.0})
     unknown = MassBudget(leftover=None)
@@ -3239,9 +3268,114 @@ def test_class_step_reads_and_sets_budgets_whole() -> None:
         [*good[:2], unknown],
     ):
         expected = _outcome(lambda b=budgets: inputs.reference.restore_budgets(b))
-        got = _outcome(lambda b=budgets: inputs.core.restore_budgets(b))
+        got = _outcome(lambda b=budgets: core_mapping.restore_budgets(inputs.core, b))
         assert expected[0] != "ok"
         assert got == expected
+    # A budget with no field yet (initial and current None) is set whole, Nones kept.
+    assert _compare_step(inputs, 0).differences == []
+    core_mapping.restore_budgets(inputs.core, good)
+    assert [_budget_bits(b) for b in core_mapping.budgets_of(inputs.core)] == [
+        _budget_bits(MassBudget())
+    ] * STEP_CLASSES
+
+
+def test_class_step_refuses_budgets_it_cannot_read() -> None:
+    """The binding's restore_budgets takes ten numbers by name per class, and sets nothing it refuses."""
+    inputs = _plain_inputs()
+    core = inputs.core
+    assert _compare_step(inputs, 0).differences == []
+    kept = core.budgets()
+    whole = core.budgets()
+    missing = {k: v for k, v in whole[0].items() if k != "floor"}
+    refused: list[tuple[list[object], type[Exception], str]] = [
+        (whole[:2], ValueError, "needs one budget per class"),
+        ([*whole[:2], object()], TypeError, "must be a dict"),
+        ([*whole[:2], missing], ValueError, "exactly the terms"),
+        ([*whole[:2], {**whole[2], "ice": 0.0}], ValueError, "exactly the terms"),
+        (
+            [*whole[:2], {**whole[2], "inflow": None}],
+            TypeError,
+            "inflow must be a number",
+        ),
+        ([*whole[:2], {**whole[2], "wall": True}], TypeError, "wall must be a number"),
+        (
+            [*whole[:2], {**whole[2], "source": "1"}],
+            TypeError,
+            "source must be a number",
+        ),
+        (
+            [*whole[:2], {**whole[2], "current": "1"}],
+            TypeError,
+            "current must be a number or None",
+        ),
+    ]
+    for budgets, error, message in refused:
+        with pytest.raises(error, match=message):
+            core.restore_budgets(budgets)
+        assert core.budgets() == kept, message
+    # The two terms that may be None, and a number that is an int, are read.
+    core.restore_budgets(
+        [{**t, "initial": None, "current": None, "inflow": 3} for t in whole]
+    )
+    assert [(t["initial"], t["current"], t["inflow"]) for t in core.budgets()] == [
+        (None, None, 3.0)
+    ] * STEP_CLASSES
+
+
+def test_class_step_binding_imports_nothing_from_src(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Budgets, a restore and a breach go through the binding with every src module unimportable (ADR-017 B).
+
+    A module that is handed data and returns data does not reach into the
+    reference for its types; ``core_mapping`` makes them on this side.
+    """
+    spec = dict(STEP_VARIANTS["plain"], keys=BREACH_KEYS)
+    inputs = _step_inputs(
+        StepCase("80x30", "umist", keys=tuple(spec.pop("keys").items()), **spec)
+    )
+    # A None in sys.modules makes `import name` raise ImportError, and the names
+    # already bound here stay as they are.
+    for name in [n for n in sys.modules if n == "src" or n.startswith("src.")]:
+        monkeypatch.setitem(sys.modules, name, None)
+    core = inputs.core
+    before = core.budgets()
+    with pytest.raises(_cfdcore.ConservationBreach):
+        core.step(0, inputs.fields[0], np.zeros_like(inputs.fields[0]))
+    core.restore_budgets(before)
+    assert core.budgets() == before
+
+
+@REFERENCE_DIVIDES_BY_ZERO
+@pytest.mark.filterwarnings("ignore:implicit diffusion solve stopped")
+def test_class_step_raises_a_breach_of_its_own() -> None:
+    """_cfdcore.ConservationBreach carries the four values the reference's error is made of (ADR-016)."""
+    spec = dict(STEP_VARIANTS["plain"], keys=BREACH_KEYS)
+    inputs = _step_inputs(
+        StepCase("80x30", "umist", keys=tuple(spec.pop("keys").items()), **spec)
+    )
+    c = inputs.fields[1]
+    expected = _outcome(
+        lambda: inputs.reference.solve_timestep(
+            c, inputs.faces, 1, inputs.dt, None, None
+        )
+    )
+    assert expected[0] == "ConservationBreachError"
+    with pytest.raises(_cfdcore.ConservationBreach) as raised:
+        inputs.core.step(1, c, np.zeros_like(c))
+    breach = raised.value
+    assert isinstance(breach, RuntimeError)
+    assert not isinstance(breach, ConservationBreachError)
+    got = (
+        breach.size_class,
+        _bits(breach.leftover),
+        _bits(breach.supplied),
+        _bits(breach.limit),
+    )
+    assert got == expected[1][:4]
+    assert "class 1" in str(breach)
+    # The budget holds the step.
+    assert _bits(inputs.core.budgets()[1]["leftover"]) == _bits(breach.leftover)
 
 
 @REFERENCE_DIVIDES_BY_ZERO
@@ -3924,7 +4058,7 @@ def test_class_step_one_solver_through_intervals_equals_the_reference(
         else:
             inputs = _next_interval(inputs, conditions, faces, v_ext, nu_t, sources)
             # The budgets are what the last interval left, and the step is the new one's own.
-            assert [_budget_bits(b) for b in inputs.core.budgets()] == [
+            assert [_budget_bits(b) for b in core_mapping.budgets_of(inputs.core)] == [
                 _budget_bits(b) for b in inputs.reference.budget
             ], plan.label
             with pytest.raises(ValueError, match="before set_step"):
@@ -4127,7 +4261,7 @@ def test_class_step_refuses_what_the_reference_refuses(kind: str) -> None:
         try:
             return solver.step(k, c, out)
         finally:
-            assert [_budget_bits(b) for b in solver.budgets()] == [
+            assert [_budget_bits(b) for b in core_mapping.budgets_of(solver)] == [
                 _budget_bits(MassBudget())
             ] * STEP_CLASSES
 
@@ -4175,7 +4309,7 @@ def test_class_step_dt_in_every_form_is_read_as_the_reference_reads_it(
     out = np.full(c.shape, np.nan)
     inputs.core.step(0, c, out)
     assert _same_bits(expected[1], out)
-    assert [_budget_bits(b) for b in inputs.core.budgets()] == [
+    assert [_budget_bits(b) for b in core_mapping.budgets_of(inputs.core)] == [
         _budget_bits(b) for b in inputs.reference.budget
     ]
 

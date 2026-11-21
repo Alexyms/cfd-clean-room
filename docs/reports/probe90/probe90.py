@@ -69,6 +69,7 @@ from src.solver_transport import (  # noqa: E402 -- after sys.path
     TransportSolver,
 )
 from src.time_integration import MarchStep, run  # noqa: E402 -- after sys.path
+from tests import core_mapping  # noqa: E402 -- after sys.path
 
 RESULTS = ROOT / "results" / "builder90"
 CAPTURES = RESULTS / "captures"
@@ -877,14 +878,14 @@ def replay(out_name: str = "replay") -> None:
             core.set_step(dt)
             budgets = [MassBudget() for _ in range(core.classes)]
             budgets[k] = budget_from(call["before"])
-            core.restore_budgets(budgets)
+            core_mapping.restore_budgets(core, budgets)
             reference.restore_budgets(budgets)
             c_in = arrays[f"call{i}/c_in"]
             expected = arrays.get(f"call{i}/c_out")
             out = np.full(c_in.shape, np.nan)
             breach = None
             try:
-                record = core.step(k, c_in, out)
+                record = core_mapping.step(core, k, c_in, out)
             except ConservationBreachError as error:
                 record = None
                 breach = [
@@ -893,7 +894,7 @@ def replay(out_name: str = "replay") -> None:
                     hexed(error.supplied),
                     hexed(error.limit),
                 ]
-            after = budget_terms(core.budgets()[k])
+            after = budget_terms(core_mapping.budgets_of(core)[k])
             wanted = budget_terms(budget_from(call["after"]))
             terms_differ = [term for term in after if after[term] != wanted[term]]
             records_differ = []

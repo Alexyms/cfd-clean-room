@@ -39,6 +39,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <string_view>
 #include <vector>
 
 namespace cfdcore::transport {
@@ -49,6 +50,11 @@ inline constexpr std::size_t ceiling_slot = 1;
 inline constexpr std::size_t wall_slot = 2;
 inline constexpr std::size_t obstacle_slot = 3;
 inline constexpr std::size_t slots = 4;
+// The slots' names, MassBudget's `deposited` keys: the names a budget's terms
+// are handed out and taken in by, so that the binding knows nothing of the
+// reference's module. The parity module checks them against DEPOSIT_SURFACES.
+inline constexpr std::array<std::string_view, slots> slot_names = {"floor", "ceiling", "wall",
+                                                                    "obstacle"};
 
 // The solver's keys (the configuration's `transport` section and `t_end`).
 //

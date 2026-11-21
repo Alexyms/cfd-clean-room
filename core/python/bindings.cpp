@@ -21,6 +21,8 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <exception>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -425,15 +427,12 @@ using Transport2 = cfdcore::transport::solver<2>;
 using cfdcore::transport::refusal;
 using cfdcore::transport::status;
 
-// The reference's module, for the exception and the budget it defines.
-nb::module_ reference_module() { return nb::module_::import_("src.solver_transport"); }
-
 // A Python float's str, as an f-string formats it.
 std::string float_str(double x) { return nb::cast<std::string>(nb::str(nb::float_(x))); }
 std::string float_repr(double x) { return nb::cast<std::string>(nb::repr(nb::float_(x))); }
 
 // Raises the exception the reference raises for a refusal.
-[[noreturn]] void raise_refusal(const refusal& r, double limit) {
+[[noreturn]] void raise_refusal(const refusal& r) {
     const std::string k = std::to_string(r.size_class);
     switch (r.code) {
         case status::condition_not_finite_or_negative:
@@ -490,7 +489,6 @@ std::string float_repr(double x) { return nb::cast<std::string>(nb::repr(nb::flo
         case status::ok:
             break;
     }
-    (void)limit;
     throw std::logic_error("raise_refusal: not a refusal the binding raises");
 }
 
@@ -685,7 +683,7 @@ void transport_set_interval(TransportSolver2& t, nb::handle conditions, nb::hand
     }
     const refusal r = t.solver.set_interval(each, input);
     if (!r.ok()) {
-        raise_refusal(r, t.limit);
+        raise_refusal(r);
     }
 }
 
@@ -714,18 +712,22 @@ double read_dt(nb::handle dt) {
 void transport_set_step(TransportSolver2& t, nb::handle dt) {
     const refusal r = t.solver.set_step(read_dt(dt));
     if (!r.ok()) {
-        raise_refusal(r, t.limit);
+        raise_refusal(r);
     }
+}
+
+// The name of a value's type, as `type(value).__name__`.
+std::string python_type_name(nb::handle value) {
+    const nb::handle type(reinterpret_cast<PyObject*>(Py_TYPE(value.ptr())));
+    return nb::cast<std::string>(nb::getattr(type, "__name__"));
 }
 
 // `size_class` as the reference reads it (`_check_class`): an int that is not a
 // bool, in [0, n). Every entry point that takes a class reads it here.
 std::size_t read_class(nb::handle size_class, std::size_t n) {
     if (nb::isinstance<bool>(size_class) || !PyLong_Check(size_class.ptr())) {
-        const nb::handle type(reinterpret_cast<PyObject*>(Py_TYPE(size_class.ptr())));
-        throw nb::type_error(("size_class must be an int, got " +
-                              nb::cast<std::string>(nb::getattr(type, "__name__")))
-                                 .c_str());
+        throw nb::type_error(
+            ("size_class must be an int, got " + python_type_name(size_class)).c_str());
     }
     // An int too large for a long long reads as -1, which is out of range, and is
     // named as Python prints it; the overflow flag is not needed to tell.
@@ -739,6 +741,42 @@ std::size_t read_class(nb::handle size_class, std::size_t n) {
     return static_cast<std::size_t>(k);
 }
 
+// A class's accumulated leftover reached the limit (ADR-016). `step` throws it
+// and the module raises it as `_cfdcore.ConservationBreach`, which carries the
+// four values as attributes; the Python side makes the reference's error of it.
+struct conservation_breach : std::exception {
+    conservation_breach(std::size_t k, double accumulated, double particles, double bound)
+        : size_class(k), leftover(accumulated), supplied(particles), limit(bound) {}
+    const char* what() const noexcept override {
+        return "the accumulated leftover reached the conservation limit";
+    }
+    std::size_t size_class;
+    double leftover;
+    double supplied;
+    double limit;
+};
+
+// Raises a conservation_breach as the exception type the payload holds, with the
+// class, the leftover, the particles supplied and the limit as its attributes.
+void translate_breach(const std::exception_ptr& pending, void* payload) {
+    try {
+        std::rethrow_exception(pending);
+    } catch (const conservation_breach& breach) {
+        const nb::object type = nb::borrow(static_cast<PyObject*>(payload));
+        char message[256];
+        std::snprintf(message, sizeof message,
+                      "class %zu: the accumulated leftover %.6g reached the conservation limit "
+                      "(%g) of the %.6g particles supplied",
+                      breach.size_class, breach.leftover, breach.limit, breach.supplied);
+        nb::object error = type(message);
+        error.attr("size_class") = breach.size_class;
+        error.attr("leftover") = breach.leftover;
+        error.attr("supplied") = breach.supplied;
+        error.attr("limit") = breach.limit;
+        PyErr_SetObject(type.ptr(), error.ptr());
+    }
+}
+
 cfdcore::transport::step_record transport_step(TransportSolver2& t, nb::handle size_class,
                                                const Matrix& c, OutMatrix& out) {
     constexpr std::string_view who = "TransportSolver2.step";
@@ -750,14 +788,10 @@ cfdcore::transport::step_record transport_step(TransportSolver2& t, nb::handle s
     const refusal r =
         t.solver.step(k, span_of(c), std::span<double>(out.data(), out.size()), record);
     if (r.code == status::breach) {
-        // The reference's ConservationBreachError with its four arguments.
-        const nb::object error = reference_module().attr("ConservationBreachError")(
-            static_cast<long long>(k), record.accumulated, record.supplied, t.limit);
-        PyErr_SetObject(reinterpret_cast<PyObject*>(Py_TYPE(error.ptr())), error.ptr());
-        throw nb::python_error();
+        throw conservation_breach(k, record.accumulated, record.supplied, t.limit);
     }
     if (!r.ok()) {
-        raise_refusal(r, t.limit);
+        raise_refusal(r);
     }
     return record;
 }
@@ -766,40 +800,44 @@ nb::object optional_float(const std::optional<double>& value) {
     return value.has_value() ? nb::object(nb::float_(*value)) : nb::none();
 }
 
-// Every class's budget as the reference's MassBudget, a new object each.
+// Every class's budget as plain data: a new dict of its ten terms by name,
+// `initial` and `current` None before the first step, the deposition by the
+// slots' names (floor, ceiling, wall, obstacle).
 nb::list transport_budgets(const TransportSolver2& t) {
-    const nb::module_ ref = reference_module();
-    const nb::object surfaces = ref.attr("DEPOSIT_SURFACES");
-    const nb::object mass_budget = ref.attr("MassBudget");
     nb::list out;
     for (std::size_t k = 0; k < t.solver.classes(); ++k) {
         const auto& b = t.solver.budget_of(k);
-        nb::dict deposited;
-        std::size_t slot = 0;
-        for (nb::handle name : surfaces) {
-            deposited[name] = nb::float_(b.deposited[slot++]);
+        nb::dict terms;
+        terms["initial"] = optional_float(b.initial);
+        terms["inflow"] = nb::float_(b.inflow);
+        terms["outflow"] = nb::float_(b.outflow);
+        terms["source"] = nb::float_(b.source);
+        for (std::size_t slot = 0; slot < cfdcore::transport::slots; ++slot) {
+            const std::string_view name = cfdcore::transport::slot_names[slot];
+            terms[nb::str(name.data(), name.size())] = nb::float_(b.deposited[slot]);
         }
-        out.append(mass_budget(nb::arg("initial") = optional_float(b.initial),
-                               nb::arg("inflow") = b.inflow, nb::arg("outflow") = b.outflow,
-                               nb::arg("source") = b.source, nb::arg("deposited") = deposited,
-                               nb::arg("current") = optional_float(b.current),
-                               nb::arg("leftover") = b.leftover));
+        terms["current"] = optional_float(b.current);
+        terms["leftover"] = nb::float_(b.leftover);
+        out.append(terms);
     }
     return out;
 }
 
-std::optional<double> read_optional(nb::handle value) {
-    if (value.is_none()) {
-        return std::nullopt;
+// The names of a budget's ten terms, in the order `budgets` returns them.
+std::vector<std::string> budget_term_names() {
+    std::vector<std::string> names = {"initial", "inflow", "outflow", "source"};
+    for (const std::string_view name : cfdcore::transport::slot_names) {
+        names.emplace_back(name);
     }
-    return nb::cast<double>(value);
+    names.insert(names.end(), {"current", "leftover"});
+    return names;
 }
 
-// `restore_budgets`: the reference's refusals and messages, then the budgets set whole.
+// `restore_budgets`: every class's budget set whole from its ten terms by name,
+// as `budgets` returns them. What a budget is made of in Python (the reference's
+// MassBudget, a checkpoint's unknown leftover) is the caller's to check before
+// it hands the terms over.
 void transport_restore_budgets(TransportSolver2& t, nb::handle budgets) {
-    const nb::module_ ref = reference_module();
-    const nb::object surfaces = ref.attr("DEPOSIT_SURFACES");
-    const nb::object mass_budget = ref.attr("MassBudget");
     const std::size_t n = t.solver.classes();
     const std::size_t given = nb::len(budgets);
     if (given != n) {
@@ -807,45 +845,52 @@ void transport_restore_budgets(TransportSolver2& t, nb::handle budgets) {
                                "), got " + std::to_string(given))
                                   .c_str());
     }
-    const nb::object builtins = nb::module_::import_("builtins");
+    const std::vector<std::string> names = budget_term_names();
     std::vector<cfdcore::transport::budget> out;
     std::size_t k = 0;
-    for (nb::handle b : budgets) {
+    for (nb::handle each : budgets) {
         const std::string index = std::to_string(k);
-        if (PyObject_IsInstance(b.ptr(), mass_budget.ptr()) != 1) {
-            throw nb::type_error(
-                ("budget " + index + " must be a MassBudget, got " +
-                 nb::cast<std::string>(nb::getattr(builtins.attr("type")(b), "__name__")))
-                    .c_str());
+        if (!nb::isinstance<nb::dict>(each)) {
+            throw nb::type_error(("budget " + index + " must be a dict of its ten terms, got " +
+                                  python_type_name(each))
+                                     .c_str());
         }
-        const nb::object deposited = nb::getattr(b, "deposited");
-        const nb::object keys = builtins.attr("tuple")(deposited);
-        if (!keys.equal(surfaces)) {
-            const nb::object list = builtins.attr("list");
-            throw nb::value_error(("budget " + index + " books deposition to " +
-                                   nb::cast<std::string>(nb::repr(list(deposited))) +
-                                   ", not " + nb::cast<std::string>(nb::repr(list(surfaces))))
+        const nb::dict terms = nb::borrow<nb::dict>(each);
+        bool exact = terms.size() == names.size();
+        for (const std::string& name : names) {
+            exact = exact && terms.contains(name.c_str());
+        }
+        if (!exact) {
+            throw nb::value_error(("budget " + index +
+                                   " must hold exactly the terms initial, inflow, outflow, "
+                                   "source, floor, ceiling, wall, obstacle, current and leftover")
                                       .c_str());
         }
-        if (nb::getattr(b, "leftover").is_none()) {
-            throw nb::value_error(
-                ("budget " + index +
-                 "'s leftover is unknown: it was written before the implicit solve's leftover "
-                 "was booked (prompt 78), so the accumulated leftover before the restart is "
-                 "unknown and REQ-T05's bound cannot be carried across it (ADR-016)")
-                    .c_str());
-        }
+        // A term is a number (a Python bool is not one); initial and current may be None.
+        const auto term = [&](const std::string& name, bool may_be_none) -> std::optional<double> {
+            const nb::object value = terms[name.c_str()];
+            if (value.is_none() && may_be_none) {
+                return std::nullopt;
+            }
+            double x = 0.0;
+            if (value.is_none() || nb::isinstance<bool>(value) || !nb::try_cast<double>(value, x)) {
+                throw nb::type_error(
+                    ("budget " + index + ": " + name + " must be a number" +
+                     (may_be_none ? " or None" : ""))
+                        .c_str());
+            }
+            return x;
+        };
         cfdcore::transport::budget c;
-        c.initial = read_optional(nb::getattr(b, "initial"));
-        c.inflow = nb::cast<double>(nb::getattr(b, "inflow"));
-        c.outflow = nb::cast<double>(nb::getattr(b, "outflow"));
-        c.source = nb::cast<double>(nb::getattr(b, "source"));
-        std::size_t slot = 0;
-        for (nb::handle name : surfaces) {
-            c.deposited[slot++] = nb::cast<double>(deposited[name]);
+        c.initial = term("initial", true);
+        c.inflow = *term("inflow", false);
+        c.outflow = *term("outflow", false);
+        c.source = *term("source", false);
+        for (std::size_t slot = 0; slot < cfdcore::transport::slots; ++slot) {
+            c.deposited[slot] = *term(std::string(cfdcore::transport::slot_names[slot]), false);
         }
-        c.current = read_optional(nb::getattr(b, "current"));
-        c.leftover = nb::cast<double>(nb::getattr(b, "leftover"));
+        c.current = term("current", true);
+        c.leftover = *term("leftover", false);
         out.push_back(c);
         ++k;
     }
@@ -931,11 +976,10 @@ nb::tuple transport_masks(const TransportSolver2& t, const std::string& which,
     throw nb::value_error("the masks are 'domain' or 'vent'");
 }
 
+// The core refuses a row of zero with terms, and terms that are not whole rows,
+// with a std::invalid_argument, which nanobind raises as a ValueError.
 double buffered_sum(const Vector& values, std::size_t row) {
     require_aligned(values.data(), alignof(double), "buffered_sum");
-    if (row == 0 ? values.shape(0) != 0 : values.shape(0) % row != 0) {
-        throw nb::value_error("buffered_sum: the terms are not a whole number of rows");
-    }
     return cfdcore::reduce::buffered_sum(as_span(values), row);
 }
 
@@ -1068,7 +1112,25 @@ NB_MODULE(_cfdcore, m) {
 
     m.def("buffered_sum", &buffered_sum, nb::arg("values").noconvert(), nb::arg("row"),
           "np.sum of a strided 2-D slice whose rows of `row` terms lie one after another\n"
-          "in `values`: NumPy's buffered order (reduce.buffered_sum, prompt 90).");
+          "in `values`: NumPy's buffered order (reduce.buffered_sum, prompt 90). The order\n"
+          "is NumPy's at its default buffer size, np.getbufsize() = 8,192; a program that\n"
+          "changes the size changes np.sum's order and no longer equals this. A row of 0 with\n"
+          "terms, or terms that are not a whole number of rows, raises ValueError.");
+
+    // The breach a step raises (ADR-016): an exception of the core's own, carrying
+    // the class, the leftover, the particles supplied and the limit as attributes.
+    // The reference's ConservationBreachError is made of it on the Python side.
+    PyObject* breach_type = PyErr_NewExceptionWithDoc(
+        "_cfdcore.ConservationBreach",
+        "A class's accumulated leftover reached the conservation limit (ADR-016).\n\n"
+        "Attributes: size_class, leftover, supplied and limit.",
+        PyExc_RuntimeError, nullptr);
+    if (breach_type == nullptr) {
+        throw nb::python_error();
+    }
+    m.attr("ConservationBreach") = nb::steal(breach_type);
+    // The payload is the type, kept alive by the module's attribute.
+    nb::register_exception_translator(translate_breach, breach_type);
 
     nb::class_<cfdcore::transport::step_record>(
         m, "TransportStep2",
@@ -1090,7 +1152,8 @@ NB_MODULE(_cfdcore, m) {
         "settling velocity and diffusion coefficient, and the floor, ceiling and wall\n"
         "surface codes. Keeps its scheme alive. set_interval and set_step fix what an\n"
         "interval and its step fix; step advances a class; budgets and restore_budgets\n"
-        "read and set every class's MassBudget whole.")
+        "read and set every class's budget whole, as plain data: a dict of its ten terms\n"
+        "by name. The module imports nothing from the reference.")
         .def("__init__", &transport_init, nb::arg("scheme"), nb::arg("dx_cell").noconvert(),
              nb::arg("dy_cell").noconvert(), nb::arg("dx_face").noconvert(),
              nb::arg("dy_face").noconvert(), nb::arg("cfl"), nb::arg("upwind"),
@@ -1120,12 +1183,19 @@ NB_MODULE(_cfdcore, m) {
              "Advance class size_class one step: c [ny, nx] into out [ny, nx] (out may be\n"
              "c), the budget booked. Returns the step's records. Raises what\n"
              "solve_timestep raises: ValueError for a field that is not finite or a step\n"
-             "above stable_dt (nothing booked), ConservationBreachError after a step that\n"
-             "breaches (the budget holds it, out the field).")
-        .def("budgets", &transport_budgets, "Every class's budget, as new MassBudget objects.")
+             "above stable_dt (nothing booked), and after a step that breaches (the budget\n"
+             "holds it, out the field) _cfdcore.ConservationBreach, whose attributes are\n"
+             "the class, the leftover, the particles supplied and the limit.")
+        .def("budgets", &transport_budgets,
+             "Every class's budget as a new dict of its ten terms by name: initial, inflow,\n"
+             "outflow, source, floor, ceiling, wall, obstacle, current and leftover; initial\n"
+             "and current are None before the first step.")
         .def("restore_budgets", &transport_restore_budgets, nb::arg("budgets"),
-             "Set every class's budget whole from MassBudget objects, as restore_budgets\n"
-             "does, with its refusals.")
+             "Set every class's budget whole from one dict of its ten terms per class, as\n"
+             "budgets returns them (initial and current may be None). A count other than\n"
+             "the classes' is a ValueError, a budget that is not a dict or holds a term that\n"
+             "is not a number a TypeError, and one that lacks a term or holds another a\n"
+             "ValueError.")
         .def("interval_quantity", &transport_quantity, nb::arg("name"), nb::arg("size_class") = 0,
              nb::arg("direction") = 0,
              "A copy of one of the interval's quantities: advecting_velocity, volume_flux,\n"
