@@ -3,11 +3,16 @@
 Read by ``probe90.py plants``. An edit is ``(file, old, new)``: the exact text
 ``old`` replaced by ``new``, found exactly once, or the plant is refused. The
 first eight are the prompt's; the rest are planted against the other rules the
-port copies.
+port copies. Prompt 90b's round 1 adds the plants test 90 found no test could
+see (one solver through several intervals, the recirculation in each
+orientation, the breach test's guard) and review 90's three for a second
+``set_interval``; the later ones are planted against the refusals it asked for.
 """
 
 TRANSPORT = "src/transport.cpp"
 SCALAR = "src/scalar.cpp"
+REDUCE = "src/reduce.cpp"
+BINDING = "python/bindings.cpp"
 
 Edit = tuple[str, str, str]
 
@@ -209,6 +214,217 @@ PLANTS: list[tuple[str, str, list[Edit]]] = [
                 '        throw std::invalid_argument("implicit_step: the held flags and the cells differ in length");\n'
                 "    }\n",
                 "",
+            )
+        ],
+    ),
+    # --- one solver through several intervals and steps (test 90 B1, review 90 S1) ---
+    (
+        "deposit_step_stale",
+        "a second set_step keeps the first step's deposition per face",
+        [
+            (
+                TRANSPORT,
+                "                q.deposit_dt[d][f] = q.deposit[d][f] * dt;",
+                "                if (q.deposit_dt[d][f] == 0.0) {\n"
+                "                    q.deposit_dt[d][f] = q.deposit[d][f] * dt;\n"
+                "                }",
+            )
+        ],
+    ),
+    (
+        "source_kept_across_intervals",
+        "a class's source of an earlier interval kept when the next has none",
+        [
+            (
+                TRANSPORT,
+                "        q.has_source = !input.sources.empty() && !input.sources[k].empty();\n"
+                "        q.rate.clear();\n"
+                "        q.dt_rate.clear();\n"
+                "        q.source_total = 0.0;\n"
+                "        if (q.has_source) {",
+                "        const bool given = !input.sources.empty() && !input.sources[k].empty();\n"
+                "        if (given || !q.has_source) {\n"
+                "            q.rate.clear();\n"
+                "            q.dt_rate.clear();\n"
+                "            q.source_total = 0.0;\n"
+                "        }\n"
+                "        q.has_source = q.has_source || given;\n"
+                "        if (given) {",
+            )
+        ],
+    ),
+    (
+        "budgets_zeroed_by_interval",
+        "set_interval zeroes the budgets",
+        [
+            (
+                TRANSPORT,
+                "    interval_ = true;\n    stepped_ = false;\n",
+                "    interval_ = true;\n    stepped_ = false;\n"
+                "    budgets_.assign(budgets_.size(), budget{});\n",
+            )
+        ],
+    ),
+    (
+        "interval_leaves_stepped_set",
+        "set_interval leaves the last interval's step in force, so a step runs on zeroed per-step arrays",
+        [
+            (
+                TRANSPORT,
+                "    interval_ = true;\n    stepped_ = false;\n",
+                "    interval_ = true;\n",
+            )
+        ],
+    ),
+    (
+        "interval_keeps_old_vents",
+        "a second interval without vents keeps the first interval's vent faces",
+        [
+            (
+                TRANSPORT,
+                "    vents_ = !each[0].vents[0].empty();\n",
+                "    vents_ = vents_ || !each[0].vents[0].empty();\n",
+            ),
+            (
+                TRANSPORT,
+                "            vent_flags_[d][f] = vents_ && each[0].vents[d][f];\n",
+                "            if (!each[0].vents[d].empty()) {\n"
+                "                vent_flags_[d][f] = each[0].vents[d][f];\n"
+                "            }\n",
+            ),
+        ],
+    ),
+    (
+        "inflow_kept_across_intervals",
+        "the first interval's inflow values kept by the next",
+        [
+            (
+                TRANSPORT,
+                "            q.inflow[d].assign(c.inflow[d].begin(), c.inflow[d].end());",
+                "            if (q.inflow[d].empty()) {\n"
+                "                q.inflow[d].assign(c.inflow[d].begin(), c.inflow[d].end());\n"
+                "            }",
+            )
+        ],
+    ),
+    (
+        "eddy_kept_across_intervals",
+        "the face eddy viscosity of an earlier interval kept on a laminar one",
+        [
+            (
+                TRANSPORT,
+                "    nu_cells_.clear();\n"
+                "    for (int d = 0; d < D; ++d) {\n"
+                "        nu_faces_[d].clear();\n"
+                "    }\n"
+                "    if (turbulent) {",
+                "    if (turbulent) {",
+            ),
+            (
+                TRANSPORT,
+                "                q.conductance[d][f] = turbulent ? (diffusion",
+                "                q.conductance[d][f] = !nu_faces_[d].empty() ? (diffusion",
+            ),
+        ],
+    ),
+    # --- the recirculation in every orientation (test 90 B2) ---
+    (
+        "recirculated_low_cell_only",
+        "the room value of an intake face read from its low side only",
+        [
+            (
+                TRANSPORT,
+                "(low == no_cell ? 0.0 : c_[low]) + (high == no_cell ? 0.0 : c_[high]);",
+                "(low == no_cell ? 0.0 : c_[low]);",
+            )
+        ],
+    ),
+    (
+        "recirculated_high_cell_only",
+        "the room value of an intake face read from its high side only",
+        [
+            (
+                TRANSPORT,
+                "(low == no_cell ? 0.0 : c_[low]) + (high == no_cell ? 0.0 : c_[high]);",
+                "(high == no_cell ? 0.0 : c_[high]);",
+            )
+        ],
+    ),
+    (
+        "recirculated_passes_all",
+        "the fraction a discharge passes dropped: it carries the whole drawn value",
+        [
+            (
+                TRANSPORT,
+                "        const double value = air.passed * carried;",
+                "        const double value = carried;",
+            )
+        ],
+    ),
+    (
+        "drawn_zero_divides",
+        "the guard for an intake that draws nothing broken: zero is divided by zero",
+        [
+            (
+                TRANSPORT,
+                "        if (air.drawn > 0.0) {",
+                "        if (air.drawn >= 0.0) {",
+            )
+        ],
+    ),
+    (
+        "recirculated_y_dropped",
+        "the intake's y faces left out of the weighted sum, though its drawn flux counts them",
+        [
+            (
+                TRANSPORT,
+                "                total = d == 0 ? sum : total + sum;",
+                "                total = d == 0 ? sum : total;",
+            )
+        ],
+    ),
+    (
+        "drawn_ignores_y",
+        "the intake's drawn flux without its y faces",
+        [
+            (
+                TRANSPORT,
+                "                    drawn = drawn + reduce::pairwise_sum(air.weight[d]);",
+                "                    drawn = drawn + 0.0;",
+            )
+        ],
+    ),
+    # --- the breach test's guard and the refusal of buffered_sum (review 90 S2, test 90 S1) ---
+    (
+        "breach_without_zero_guard",
+        "the breach test without its leftover != 0 clause: an empty room breaches at its first step",
+        [
+            (
+                TRANSPORT,
+                "    if (b.leftover != 0.0 && std::fabs(b.leftover) >= keys_.limit * supplied) {",
+                "    if (std::fabs(b.leftover) >= keys_.limit * supplied) {",
+            )
+        ],
+    ),
+    (
+        "buffered_sum_partial_rows_allowed",
+        "buffered_sum takes terms that are not a whole number of rows",
+        [
+            (
+                REDUCE,
+                "    if (row == 0 || values.size() % row != 0) {",
+                "    if (row == 0) {",
+            )
+        ],
+    ),
+    (
+        "buffered_sum_zero_row_unchecked",
+        "buffered_sum divides by a row of zero",
+        [
+            (
+                REDUCE,
+                "    if (row == 0 || values.size() % row != 0) {",
+                "    if (values.size() % row != 0) {",
             )
         ],
     ),

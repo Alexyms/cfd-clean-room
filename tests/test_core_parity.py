@@ -195,27 +195,40 @@ VENT_MESHES = {
     "160x60-vents": (VENTS, 160, 60, 1.0, 1.0, True),
     "320x120-vents": (VENTS, 320, 120, 1.0, 1.0, True),
 }
+# The vents room at 80x30 with a shelf: a SOLID block clear of the floor and the
+# ceiling, so that its underside is a y face with the SOLID cell on its high
+# side, which no block standing on the floor has (prompt 90b's recirculation
+# cases plant intakes on every kind of face).
+SHELF = {"name": "shelf", "x_start": 2.5, "x_end": 3.0, "y_start": 1.2, "y_end": 1.8}
+SHELF_MESHES = {"80x30-vents-shelf": (VENTS, 80, 30, 1.0, 1.0, True)}
+ALL_MESHES = {**MESHES, **VENT_MESHES, **SHELF_MESHES}
 
 
-@functools.cache
-def _config(name: str) -> SimConfig:
-    """The configuration of one of MESHES or VENT_MESHES."""
-    path, nx, ny, sx, sy, obstacles = {**MESHES, **VENT_MESHES}[name]
+def _raw_config(name: str) -> dict:
+    """The mapping of one of ALL_MESHES' configurations, before validation."""
+    path, nx, ny, sx, sy, obstacles = ALL_MESHES[name]
     with open(path, encoding="utf-8") as stream:
-        raw = yaml.safe_load(stream)
-    raw = copy.deepcopy(raw)
+        raw = copy.deepcopy(yaml.safe_load(stream))
     raw["domain"]["nx"] = nx
     raw["domain"]["ny"] = ny
     raw["mesh"]["x"] = {"stretch_ratio": sx}
     raw["mesh"]["y"] = {"stretch_ratio": sy}
     if not obstacles:
         raw["obstacles"] = []
-    return SimConfig.from_dict(raw, "configs")
+    if name in SHELF_MESHES:
+        raw["obstacles"] = [*raw["obstacles"], SHELF]
+    return raw
+
+
+@functools.cache
+def _config(name: str) -> SimConfig:
+    """The configuration of one of ALL_MESHES."""
+    return SimConfig.from_dict(_raw_config(name), "configs")
 
 
 @functools.cache
 def _mesh(name: str) -> Mesh:
-    """The mesh of one of MESHES or VENT_MESHES."""
+    """The mesh of one of ALL_MESHES."""
     return Mesh(_config(name))
 
 
@@ -2698,16 +2711,8 @@ class _StepConditions:
 def _step_config(
     name: str, scheme: str, keys: tuple[tuple[str, float], ...]
 ) -> SimConfig:
-    """One of MESHES or VENT_MESHES with the transport keys replaced."""
-    path, nx, ny, sx, sy, obstacles = {**MESHES, **VENT_MESHES}[name]
-    with open(path, encoding="utf-8") as stream:
-        raw = copy.deepcopy(yaml.safe_load(stream))
-    raw["domain"]["nx"] = nx
-    raw["domain"]["ny"] = ny
-    raw["mesh"]["x"] = {"stretch_ratio": sx}
-    raw["mesh"]["y"] = {"stretch_ratio": sy}
-    if not obstacles:
-        raw["obstacles"] = []
+    """One of ALL_MESHES with the transport keys replaced."""
+    raw = _raw_config(name)
     raw["transport"]["advection_scheme"] = scheme
     raw["transport"].update(dict(keys))
     raw["particles"]["sizes"] = raw["particles"]["sizes"][:STEP_CLASSES]
@@ -2838,11 +2843,13 @@ STEP_CASES = [
 
 
 def _step_field(kind: str, mesh: Mesh, rng: np.random.Generator) -> np.ndarray:
-    """A planted class field: positive over nine decades, or of both signs."""
+    """A planted class field: positive over nine decades, of both signs, or zero."""
     shape = mesh.cell_type.shape
     solid = mesh.cell_type == SOLID
     if kind == "positive":
         field = 10.0 ** rng.uniform(-3.0, 6.0, shape)
+    elif kind == "zero":
+        field = np.zeros(shape)
     else:
         field = _values(rng, shape)
     # A value in a SOLID cell is zeroed by the step, so it must not matter.
@@ -2905,6 +2912,65 @@ def _core_transport(
     )
 
 
+def _step_drift(mesh: Mesh, rng: np.random.Generator) -> list[FaceVelocities | None]:
+    """A drift on classes 0 and 2, none on class 1."""
+    return [
+        _step_flow(mesh, rng, 0.05) if k != 1 else None for k in range(STEP_CLASSES)
+    ]
+
+
+def _step_eddy(mesh: Mesh, rng: np.random.Generator) -> np.ndarray:
+    """An eddy viscosity with zeros, and a large value in every SOLID cell.
+
+    Not read in a SOLID cell. A large positive value there is the one that shows
+    it: read, it gives a face value beside the cell where the masked field gives
+    zero. A negative value or a NaN would not, since the harmonic mean is zero
+    wherever its denominator is not above zero (prompt 90's plants).
+    """
+    shape = mesh.cell_type.shape
+    nu_t = np.where(
+        rng.random(shape) < 0.1, 0.0, 10.0 ** rng.uniform(-6.0, -2.0, shape)
+    )
+    return np.where(mesh.cell_type == SOLID, 1.0e3, nu_t)
+
+
+def _step_sources(mesh: Mesh, rng: np.random.Generator) -> list[np.ndarray | None]:
+    """A source on classes 0 and 2, none on class 1, zero in the SOLID cells."""
+    shape = mesh.cell_type.shape
+    solid = mesh.cell_type == SOLID
+    sources: list[np.ndarray | None] = [None] * STEP_CLASSES
+    for k in (0, 2):
+        rate = np.where(
+            rng.random(shape) < 0.05, 10.0 ** rng.uniform(1.0, 6.0, shape), 0.0
+        )
+        sources[k] = np.where(solid, 0.0, rate)
+    return sources
+
+
+def _assemble(
+    mesh: Mesh,
+    config: SimConfig,
+    conditions: list[ConcentrationFaces],
+    faces: FaceVelocities,
+    v_ext: list[FaceVelocities | None],
+    nu_t: np.ndarray | None,
+    sources: list[np.ndarray | None],
+    fields: list[np.ndarray],
+    dt_share: float,
+) -> StepInputs:
+    """Both solvers on one interval's inputs, the core's interval and step set up."""
+    physics = _StepPhysics(STEP_SETTLING, STEP_DIFFUSION)
+    reference = TransportSolver(mesh, config, physics, _StepConditions(conditions))
+    stable = min(reference.stable_dt(faces, k, v_ext[k]) for k in range(STEP_CLASSES))
+    core = _core_transport(mesh, config, physics)
+    core.set_interval(conditions, faces.u, faces.v, v_ext, nu_t, sources)
+    dt = dt_share * stable
+    core.set_step(dt)
+    return StepInputs(
+        mesh, config, reference, core, faces, v_ext, nu_t, sources, fields, dt
+    )
+
+
 def _step_inputs(case: StepCase, dt_share: float = 0.9) -> StepInputs:
     """Both solvers on a case's mesh and conditions, with the planted inputs."""
     # The keys are not in the seed: a case with other keys has the same inputs.
@@ -2913,42 +2979,18 @@ def _step_inputs(case: StepCase, dt_share: float = 0.9) -> StepInputs:
     )
     mesh = _mesh(case.name)
     config = _step_config(case.name, case.scheme, case.keys)
-    physics = _StepPhysics(STEP_SETTLING, STEP_DIFFUSION)
     conditions = _planted_conditions(case.name, case.conditions, rng)
-    reference = TransportSolver(mesh, config, physics, _StepConditions(conditions))
-    solid = mesh.cell_type == SOLID
-    shape = mesh.cell_type.shape
     faces = _step_flow(mesh, rng, 0.4)
     v_ext: list[FaceVelocities | None] = [None] * STEP_CLASSES
     if case.v_ext:
-        v_ext = [
-            _step_flow(mesh, rng, 0.05) if k != 1 else None for k in range(STEP_CLASSES)
-        ]
-    nu_t = None
-    if case.eddy:
-        nu_t = np.where(
-            rng.random(shape) < 0.1, 0.0, 10.0 ** rng.uniform(-6.0, -2.0, shape)
-        )
-        # Not read in a SOLID cell. A large positive value there is the one that shows it:
-        # read, it gives a face value beside the cell where the masked field gives zero. A
-        # negative value or a NaN would not, since the harmonic mean is zero wherever its
-        # denominator is not above zero (prompt 90's plants).
-        nu_t = np.where(solid, 1.0e3, nu_t)
+        v_ext = _step_drift(mesh, rng)
+    nu_t = _step_eddy(mesh, rng) if case.eddy else None
     sources: list[np.ndarray | None] = [None] * STEP_CLASSES
     if case.sources:
-        for k in (0, 2):
-            rate = np.where(
-                rng.random(shape) < 0.05, 10.0 ** rng.uniform(1.0, 6.0, shape), 0.0
-            )
-            sources[k] = np.where(solid, 0.0, rate)
-    stable = min(reference.stable_dt(faces, k, v_ext[k]) for k in range(STEP_CLASSES))
-    core = _core_transport(mesh, config, physics)
-    core.set_interval(conditions, faces.u, faces.v, v_ext, nu_t, sources)
-    dt = dt_share * stable
-    core.set_step(dt)
+        sources = _step_sources(mesh, rng)
     fields = [_step_field(case.field, mesh, rng) for _ in range(STEP_CLASSES)]
-    return StepInputs(
-        mesh, config, reference, core, faces, v_ext, nu_t, sources, fields, dt
+    return _assemble(
+        mesh, config, conditions, faces, v_ext, nu_t, sources, fields, dt_share
     )
 
 
@@ -3468,20 +3510,465 @@ def test_class_step_interval_quantities_equal_the_per_step_values(
         assert _interval_differences(inputs, k) == [], k
 
 
+# --- A recirculation on every kind of face (prompt 90b) -----------------------
+#
+# The vents file's one pair has its intake on x faces with the SOLID cell on the
+# high side, a fraction of one, and an intake that always draws. Each rule of
+# `recirculate` that has a second form is planted in it here: the room cell on
+# either side of the face and in either direction, a fraction other than one, an
+# intake that draws nothing, and two pairs at once. The faces are those of the
+# vents room's tools and of a shelf clear of the floor, so that a y face has the
+# SOLID cell on its high side as well as on its low.
+
+# Each name: the direction of the faces, the side of the face the SOLID cell is
+# on, and the window of the face array it is cut from.
+SHELF_FACES = {
+    "rack-left": (0, "high", np.s_[0:20, 15:16]),
+    "rack-right": (0, "low", np.s_[0:20, 23:24]),
+    "rack-top": (1, "low", np.s_[20:21, 15:23]),
+    "litho-left": (0, "high", np.s_[0:20, 32:33]),
+    "litho-right": (0, "low", np.s_[0:20, 45:46]),
+    "litho-top": (1, "low", np.s_[20:21, 32:45]),
+    "etch-top": (1, "low", np.s_[20:21, 50:56]),
+    "shelf-left": (0, "high", np.s_[12:18, 25:26]),
+    "shelf-right": (0, "low", np.s_[12:18, 30:31]),
+    "shelf-under": (1, "high", np.s_[12:13, 25:30]),
+    "shelf-top": (1, "low", np.s_[18:19, 25:30]),
+}
+
+
+def _faces_beside_solid(
+    mesh: Mesh,
+    d: int,
+    side: str,
+    window: tuple[slice, slice] = (slice(None), slice(None)),
+) -> np.ndarray:
+    """The interior faces normal to d with a SOLID cell on one side and a room cell on the other.
+
+    Parameters
+    ----------
+    mesh : Mesh
+        The mesh whose cell types decide.
+    d : int
+        0 for the x faces [ny, nx + 1], 1 for the y faces [ny + 1, nx].
+    side : str
+        "low" or "high": the side of the face the SOLID cell is on.
+    window : tuple of slice
+        The part of the face array the faces are taken from.
+
+    Returns
+    -------
+    np.ndarray
+        bool, the face field's shape.
+    """
+    solid = mesh.cell_type == SOLID
+    beside = np.zeros(_face_shape(mesh, d), dtype=bool)
+    below, above = (solid[:, :-1], solid[:, 1:]) if d == 0 else (solid[:-1], solid[1:])
+    found = below & ~above if side == "low" else ~below & above
+    if d == 0:
+        beside[:, 1:-1] = found
+    else:
+        beside[1:-1, :] = found
+    cut = np.zeros_like(beside)
+    cut[window] = True
+    return beside & cut
+
+
+@dataclasses.dataclass(frozen=True, eq=False)
+class PlantedPair:
+    """A recirculating pair on planted faces, with one passed fraction per class."""
+
+    intake_u: np.ndarray
+    intake_v: np.ndarray
+    discharge_u: np.ndarray
+    discharge_v: np.ndarray
+    passed: tuple[float, ...]
+
+
+def _named_pair(
+    mesh: Mesh,
+    intake: tuple[str, ...],
+    discharge: tuple[str, ...],
+    passed: tuple[float, ...],
+) -> PlantedPair:
+    """A pair whose intake and discharge are the named SHELF_FACES."""
+    arrays: list[np.ndarray] = []
+    for names in (intake, discharge):
+        by_direction = [np.zeros(_face_shape(mesh, d), dtype=bool) for d in (0, 1)]
+        for name in names:
+            d, side, window = SHELF_FACES[name]
+            taken = _faces_beside_solid(mesh, d, side, window)
+            assert taken.any(), name
+            by_direction[d] |= taken
+        arrays.extend(by_direction)
+    return PlantedPair(*arrays, passed)
+
+
+def _with_pairs(
+    conditions: list[ConcentrationFaces], pairs: list[PlantedPair]
+) -> list[ConcentrationFaces]:
+    """Each class's conditions with the room's vents and recirculating pairs replaced.
+
+    The vents are every pair's faces together, the same for every class, as the
+    reference requires; a pair's fraction is the class's own.
+    """
+    shape_u, shape_v = conditions[0].inflow_u.shape, conditions[0].inflow_v.shape
+    vent_u, vent_v = np.zeros(shape_u, dtype=bool), np.zeros(shape_v, dtype=bool)
+    for pair in pairs:
+        vent_u |= pair.intake_u | pair.discharge_u
+        vent_v |= pair.intake_v | pair.discharge_v
+    return [
+        dataclasses.replace(
+            faces,
+            vent_u=vent_u,
+            vent_v=vent_v,
+            recirculation=tuple(
+                Recirculation(
+                    p.intake_u, p.intake_v, p.discharge_u, p.discharge_v, p.passed[k]
+                )
+                for p in pairs
+            ),
+        )
+        for k, faces in enumerate(conditions)
+    ]
+
+
+@dataclasses.dataclass(frozen=True)
+class PairCase:
+    """Pairs planted on named faces, each (intake, discharge, fraction per class); some faces held still."""
+
+    label: str
+    pairs: tuple[tuple[tuple[str, ...], tuple[str, ...], tuple[float, ...]], ...]
+    still: tuple[str, ...] = ()
+
+
+PAIR_CASES = (
+    PairCase("x-faces-solid-high", ((("shelf-left",), ("rack-top",), (1.0,) * 3),)),
+    PairCase("x-faces-solid-low", ((("shelf-right",), ("litho-top",), (1.0,) * 3),)),
+    PairCase("y-faces-solid-low", ((("etch-top",), ("rack-left",), (1.0,) * 3),)),
+    PairCase("y-faces-solid-high", ((("shelf-under",), ("litho-left",), (1.0,) * 3),)),
+    PairCase(
+        "x-and-y-faces",
+        ((("rack-right", "rack-top"), ("shelf-left", "shelf-under"), (1.0,) * 3),),
+    ),
+    PairCase(
+        "fractions",
+        (
+            (
+                ("rack-right", "rack-top"),
+                ("shelf-left", "shelf-under"),
+                (1.0, 0.37, 0.05),
+            ),
+        ),
+    ),
+    PairCase(
+        "draws-nothing",
+        ((("litho-left",), ("shelf-top",), (1.0, 0.5, 0.2)),),
+        still=("litho-left",),
+    ),
+    PairCase(
+        "two-pairs",
+        (
+            (("shelf-left",), ("rack-top",), (1.0, 0.4, 0.9)),
+            (("shelf-under",), ("litho-right",), (0.6, 1.0, 0.2)),
+        ),
+    ),
+    PairCase(
+        "one-of-two-draws-nothing",
+        (
+            (("litho-left",), ("rack-top",), (1.0, 1.0, 1.0)),
+            (("shelf-under",), ("litho-right",), (0.5, 0.5, 0.5)),
+        ),
+        still=("litho-left",),
+    ),
+)
+
+
+def _pair_inputs(case: PairCase, scheme: str) -> StepInputs:
+    """Both solvers on the shelf room with a case's pairs planted, every other condition planted too."""
+    name = "80x30-vents-shelf"
+    rng = np.random.default_rng([SEED, 90, 3, *map(ord, case.label + scheme)])
+    mesh = _mesh(name)
+    config = _step_config(name, scheme, tuple(BINDING_KEYS.items()))
+    pairs = [_named_pair(mesh, *spec) for spec in case.pairs]
+    conditions = _with_pairs(_planted_conditions(name, "planted", rng), pairs)
+    faces = _step_flow(mesh, rng, 0.4)
+    if case.still:
+        u, v = np.array(faces.u), np.array(faces.v)
+        for held in case.still:
+            d, side, window = SHELF_FACES[held]
+            (u if d == 0 else v)[_faces_beside_solid(mesh, d, side, window)] = 0.0
+        faces = FaceVelocities.copy_of(u, v)
+    fields = [_step_field("positive", mesh, rng) for _ in range(STEP_CLASSES)]
+    no_drift: list[FaceVelocities | None] = [None] * STEP_CLASSES
+    no_source: list[np.ndarray | None] = [None] * STEP_CLASSES
+    return _assemble(
+        mesh, config, conditions, faces, no_drift, None, no_source, fields, 0.9
+    )
+
+
+def _discharge_values(inputs: StepInputs, k: int) -> list[tuple[float, float]]:
+    """Per pair of class k: the flux its intake draws and the value its discharge carries."""
+    reference = inputs.reference
+    u_adv, v_adv = reference._advecting_velocities(inputs.faces, k, None)
+    flux_u, flux_v = u_adv * reference._area_u, v_adv * reference._area_v
+    c = np.where(inputs.mesh.cell_type == SOLID, 0.0, inputs.fields[k])
+    conditions = reference._faces[k]
+    inflow_u, inflow_v = reference._recirculated(c, flux_u, flux_v, conditions)
+    values = []
+    for pair in conditions.recirculation:
+        drawn = (
+            np.abs(flux_u[pair.intake_u]).sum() + np.abs(flux_v[pair.intake_v]).sum()
+        )
+        carried = np.concatenate(
+            (inflow_u[pair.discharge_u], inflow_v[pair.discharge_v])
+        )
+        assert np.unique(carried).size == 1
+        values.append((float(drawn), float(carried[0])))
+    return values
+
+
+@REFERENCE_DIVIDES_BY_ZERO
+@pytest.mark.filterwarnings("ignore:implicit diffusion solve stopped")
+@pytest.mark.parametrize("scheme", ["umist", "upwind"])
+@pytest.mark.parametrize("case", PAIR_CASES, ids=lambda case: case.label)
+def test_class_step_recirculates_on_every_kind_of_face(
+    case: PairCase, scheme: str
+) -> None:
+    """A pair planted on any face of a SOLID cell recirculates as the reference does (REQ-T05's inflow)."""
+    inputs = _pair_inputs(case, scheme)
+    # The planted pairs reach the rules they are planted for: every intake that is
+    # not held still draws, a discharge carries a value where its fraction passes
+    # one, and a held-still intake draws nothing and its discharge carries zero.
+    for k in range(STEP_CLASSES):
+        for (intake, _, passed), (drawn, value) in zip(
+            case.pairs, _discharge_values(inputs, k), strict=True
+        ):
+            if all(name in case.still for name in intake):
+                assert (drawn, value) == (0.0, 0.0)
+            else:
+                assert drawn > 0.0
+                assert (value > 0.0) == (passed[k] > 0.0)
+    for n in range(STEP_STEPS):
+        for k in range(STEP_CLASSES):
+            comparison = _compare_step(inputs, k)
+            assert comparison.differences == [], (n, k, comparison.differences)
+
+
+# --- One solver through several intervals (prompt 90b) -----------------------
+#
+# The march drives one core solver through interval after interval, where the
+# reference builds a TransportSolver per interval and restores the budgets into
+# it (`time_integration`). Each interval of a plan changes one thing from the
+# one before, and both solvers are compared after every step of it.
+
+
+@dataclasses.dataclass(frozen=True)
+class IntervalPlan:
+    """What one interval holds: which flow, conditions, drift, eddy viscosity and sources, and its steps."""
+
+    label: str
+    flow: int = 0
+    conditions: str = "planted-a"
+    v_ext: bool = False
+    eddy: int | None = None
+    sources: bool = False
+    shares: tuple[float, ...] = (0.9,)
+
+
+INTERVAL_PLANS = (
+    IntervalPlan("the first interval"),
+    IntervalPlan("a source starts", sources=True),
+    IntervalPlan("the source stops"),
+    IntervalPlan("the air switches", flow=1),
+    IntervalPlan("an eddy viscosity starts", flow=1, eddy=0),
+    IntervalPlan("the eddy viscosity changes", flow=1, eddy=1),
+    IntervalPlan("the eddy viscosity stops", flow=1),
+    IntervalPlan(
+        "the step changes inside the interval", flow=1, shares=(0.9, 0.35, 0.6)
+    ),
+    IntervalPlan("a drift starts", flow=1, v_ext=True),
+    IntervalPlan("the conditions change", flow=1, conditions="planted-b"),
+    IntervalPlan("the vents are taken away", flow=1, conditions="no-vents"),
+    IntervalPlan("other vents open", flow=1, conditions="other-vents"),
+    IntervalPlan("the first vents return", flow=1, conditions="planted-b"),
+)
+
+
+@dataclasses.dataclass
+class IntervalWorld:
+    """Everything the intervals of a plan draw from, planted once."""
+
+    mesh: Mesh
+    config: SimConfig
+    flows: list[FaceVelocities]
+    drift: list[FaceVelocities | None]
+    eddies: list[np.ndarray]
+    rates: list[np.ndarray | None]
+    conditions: dict[str, list[ConcentrationFaces]]
+    fields: list[np.ndarray]
+
+
+def _interval_world(name: str, scheme: str) -> IntervalWorld:
+    """Two flows, two eddy viscosities, a drift, sources and four sets of conditions on a vents mesh."""
+    rng = np.random.default_rng([SEED, 90, 2, *map(ord, name + scheme)])
+    mesh = _mesh(name)
+    config = _step_config(name, scheme, tuple(BINDING_KEYS.items()))
+    planted_a = _planted_conditions(name, "planted", rng)
+    planted_b = _planted_conditions(name, "planted", rng)
+    # The other vents: every block's right-hand side drawn from and every block's
+    # top discharged to, where the first vents are the rack's left side and top
+    # and the hood's exhaust.
+    other = PlantedPair(
+        _faces_beside_solid(mesh, 0, "low"),
+        np.zeros(_face_shape(mesh, 1), dtype=bool),
+        np.zeros(_face_shape(mesh, 0), dtype=bool),
+        _faces_beside_solid(mesh, 1, "low"),
+        (0.6, 0.85, 1.0),
+    )
+    conditions = {
+        "planted-a": planted_a,
+        "planted-b": planted_b,
+        "no-vents": [
+            dataclasses.replace(f, vent_u=None, vent_v=None, recirculation=())
+            for f in planted_b
+        ],
+        "other-vents": _with_pairs(planted_b, [other]),
+    }
+    return IntervalWorld(
+        mesh,
+        config,
+        [_step_flow(mesh, rng, 0.4) for _ in range(2)],
+        _step_drift(mesh, rng),
+        [_step_eddy(mesh, rng) for _ in range(2)],
+        _step_sources(mesh, rng),
+        conditions,
+        [_step_field("positive", mesh, rng) for _ in range(STEP_CLASSES)],
+    )
+
+
+def _next_interval(
+    inputs: StepInputs,
+    conditions: list[ConcentrationFaces],
+    faces: FaceVelocities,
+    v_ext: list[FaceVelocities | None],
+    nu_t: np.ndarray | None,
+    sources: list[np.ndarray | None],
+) -> StepInputs:
+    """The same core solver on a new interval, the reference rebuilt with the budgets carried.
+
+    The march builds a TransportSolver per interval and restores the last one's
+    budgets into it. The core's step is left unset: a new interval fixes its own.
+    """
+    physics = _StepPhysics(STEP_SETTLING, STEP_DIFFUSION)
+    reference = TransportSolver(
+        inputs.mesh, inputs.config, physics, _StepConditions(conditions)
+    )
+    reference.restore_budgets(inputs.reference.budget)
+    inputs.core.set_interval(conditions, faces.u, faces.v, v_ext, nu_t, sources)
+    return dataclasses.replace(
+        inputs,
+        reference=reference,
+        faces=faces,
+        v_ext=v_ext,
+        nu_t=nu_t,
+        sources=sources,
+    )
+
+
+def _with_step(inputs: StepInputs, share: float) -> StepInputs:
+    """The core's step set to a share of the interval's stable step, and the reference's handed it."""
+    stable = min(
+        inputs.reference.stable_dt(inputs.faces, k, inputs.v_ext[k])
+        for k in range(STEP_CLASSES)
+    )
+    inputs.core.set_step(share * stable)
+    return dataclasses.replace(inputs, dt=share * stable)
+
+
+@REFERENCE_DIVIDES_BY_ZERO
+@pytest.mark.filterwarnings("ignore:implicit diffusion solve stopped")
+@pytest.mark.parametrize("scheme", ["umist", "upwind"])
+@pytest.mark.parametrize("name", ["80x30-vents", "160x60-vents"])
+def test_class_step_one_solver_through_intervals_equals_the_reference(
+    name: str, scheme: str
+) -> None:
+    """One core solver through a source that starts and stops, a flow switch, an eddy viscosity, other steps and other vents.
+
+    Every interval is the reference rebuilt with the budgets carried; the fields,
+    budgets and records are compared after every step, and the interval's
+    quantities after every step size.
+    """
+    world = _interval_world(name, scheme)
+    no_drift: list[FaceVelocities | None] = [None] * STEP_CLASSES
+    no_source: list[np.ndarray | None] = [None] * STEP_CLASSES
+    inputs: StepInputs | None = None
+    for plan in INTERVAL_PLANS:
+        conditions = world.conditions[plan.conditions]
+        faces = world.flows[plan.flow]
+        v_ext = world.drift if plan.v_ext else no_drift
+        nu_t = world.eddies[plan.eddy] if plan.eddy is not None else None
+        sources = world.rates if plan.sources else no_source
+        if inputs is None:
+            inputs = _assemble(
+                world.mesh,
+                world.config,
+                conditions,
+                faces,
+                v_ext,
+                nu_t,
+                sources,
+                world.fields,
+                plan.shares[0],
+            )
+        else:
+            inputs = _next_interval(inputs, conditions, faces, v_ext, nu_t, sources)
+            # The budgets are what the last interval left, and the step is the new one's own.
+            assert [_budget_bits(b) for b in inputs.core.budgets()] == [
+                _budget_bits(b) for b in inputs.reference.budget
+            ], plan.label
+            with pytest.raises(ValueError, match="before set_step"):
+                inputs.core.step(0, inputs.fields[0], np.zeros_like(inputs.fields[0]))
+        for share in plan.shares:
+            inputs = _with_step(inputs, share)
+            for k in range(STEP_CLASSES):
+                assert _interval_differences(inputs, k) == [], (plan.label, share, k)
+            for k in range(STEP_CLASSES):
+                comparison = _compare_step(inputs, k)
+                assert comparison.differences == [], (
+                    plan.label,
+                    share,
+                    k,
+                    comparison.differences,
+                )
+
+
+@REFERENCE_DIVIDES_BY_ZERO
+@pytest.mark.parametrize("scheme", ["umist", "upwind"])
+def test_class_step_an_empty_room_does_not_breach(scheme: str) -> None:
+    """A zero field with nothing supplied has a leftover of zero and does not breach.
+
+    Without the test's ``leftover != 0.0`` clause the empty room reads
+    ``0 >= limit * 0`` as true and breaches at its first step (ADR-016).
+    """
+    spec = dict(STEP_VARIANTS["plain"], field="zero")
+    inputs = _step_inputs(
+        StepCase("80x30", scheme, keys=tuple(spec.pop("keys").items()), **spec)
+    )
+    for n in range(STEP_STEPS):
+        for k in range(STEP_CLASSES):
+            comparison = _compare_step(inputs, k)
+            assert comparison.differences == [], (n, k, comparison.differences)
+            assert comparison.reference[0] == comparison.core[0] == "ok"
+    for budget in inputs.reference.budget:
+        assert budget.leftover == 0.0 and budget.supplied() == 0.0
+
+
 # The refusals: each input the reference refuses, handed to both, one at a time.
 def _with_nan(a: np.ndarray, at: tuple[int, int] = (3, 4)) -> np.ndarray:
     out = np.array(a, dtype=np.float64)
     out[at] = np.nan
     return out
-
-
-def _refusal_inputs() -> StepInputs:
-    spec = dict(STEP_VARIANTS["everything"])
-    return _step_inputs(
-        StepCase(
-            "40x15-uniform-open", "umist", keys=tuple(spec.pop("keys").items()), **spec
-        )
-    )
 
 
 def _first_solid(name: str) -> tuple[int, int]:
@@ -3672,3 +4159,18 @@ def test_buffered_sum_equals_np_sum_on_strided_slices(rows: int, width: int) -> 
     # The rule is not the pairwise sum of the terms once the buffer fills twice.
     if rows * width > 2 * np.getbufsize() and width > 1:
         assert np.getbufsize() == 8192
+
+
+def test_buffered_sum_refuses_what_it_cannot_sum() -> None:
+    """A row of zero with terms, or terms that are not whole rows, is a ValueError; no terms sum to +0.0."""
+    terms = np.arange(6.0)
+    for row in (0, 4, 7):
+        with pytest.raises(ValueError, match="whole number of rows"):
+            _cfdcore.buffered_sum(terms, row)
+    # np.sum of an empty slice is +0.0 whatever its width.
+    assert _bits(np.sum(np.empty((0, 3)))) == _bits(0.0)
+    for row in (0, 1, 5):
+        assert _bits(_cfdcore.buffered_sum(np.empty(0), row)) == _bits(0.0)
+    # The rows that do divide the terms are summed.
+    for row in (1, 2, 3, 6):
+        assert _bits(_cfdcore.buffered_sum(terms, row)) == _bits(15.0)

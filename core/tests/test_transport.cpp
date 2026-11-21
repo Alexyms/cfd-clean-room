@@ -7,6 +7,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <cmath>
@@ -14,6 +15,7 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <vector>
@@ -502,6 +504,106 @@ TEST(TransportStep, ABreachIsRefusedAfterTheStepWithTheBudgetHoldingIt) {
     EXPECT_EQ(bits(record.accumulated), bits(b.leftover));
     EXPECT_EQ(bits(record.supplied), bits(*b.initial + b.inflow + b.source));
     EXPECT_GE(std::fabs(b.leftover), 1e-300 * record.supplied);
+}
+
+// Whether two budgets hold the same bits in every term.
+bool same_bits(const budget& a, const budget& b) {
+    const auto same = [](const std::optional<double>& x, const std::optional<double>& y) {
+        return x.has_value() == y.has_value() && (!x.has_value() || bits(*x) == bits(*y));
+    };
+    bool equal = same(a.initial, b.initial) && same(a.current, b.current) &&
+                 bits(a.inflow) == bits(b.inflow) && bits(a.outflow) == bits(b.outflow) &&
+                 bits(a.source) == bits(b.source) && bits(a.leftover) == bits(b.leftover);
+    for (std::size_t s = 0; s < a.deposited.size(); ++s) {
+        equal = equal && bits(a.deposited[s]) == bits(b.deposited[s]);
+    }
+    return equal;
+}
+
+TEST(TransportStep, ASecondIntervalKeepsTheBudgetsAndEqualsAFreshSolverGivenThem) {
+    // The march sets up interval after interval on one solver. A second interval
+    // keeps what the first booked, needs a step of its own, and is then the
+    // solver a fresh one is on the second interval's inputs once handed those
+    // budgets: nothing of the first interval (its source, its circulation) stays.
+    stepped_box run(keys(1e-4, 1e-6));
+    stepped_box fresh(keys(1e-4, 1e-6));
+    auto& t = run.transport;
+    ASSERT_TRUE(t.set_interval({run.box.faces(), run.box.faces()}, run.air()).ok());
+    ASSERT_TRUE(t.set_step(0.9 * std::min(t.stable_dt(0), t.stable_dt(1))).ok());
+    std::array<std::vector<double>, 2> c = {run.field, run.field};
+    std::vector<double> out(run.field.size());
+    step_record record;
+    for (int n = 0; n < 4; ++n) {
+        for (std::size_t k = 0; k < 2; ++k) {
+            ASSERT_TRUE(t.step(k, c[k], out, record).ok());
+            c[k] = out;
+        }
+    }
+    const std::vector<budget> carried = {t.budget_of(0), t.budget_of(1)};
+    ASSERT_GT(carried[0].source, 0.0);
+    // The second interval: another circulation, and no source.
+    run.box.circulate(0.04);
+    fresh.box.circulate(0.04);
+    ASSERT_TRUE(t.set_interval({run.box.faces(), run.box.faces()}, run.box.air()).ok());
+    for (std::size_t k = 0; k < 2; ++k) {
+        EXPECT_TRUE(same_bits(t.budget_of(k), carried[k])) << "class " << k;
+    }
+    EXPECT_THROW(t.step(0, c[0], out, record), std::invalid_argument);
+    fresh.transport.set_budgets(carried);
+    ASSERT_TRUE(
+        fresh.transport.set_interval({fresh.box.faces(), fresh.box.faces()}, fresh.box.air())
+            .ok());
+    const double dt = 0.6 * std::min(t.stable_dt(0), t.stable_dt(1));
+    ASSERT_TRUE(t.set_step(dt).ok());
+    ASSERT_TRUE(fresh.transport.set_step(dt).ok());
+    std::array<std::vector<double>, 2> other = c;
+    std::vector<double> other_out(out.size());
+    for (int n = 0; n < 3; ++n) {
+        for (std::size_t k = 0; k < 2; ++k) {
+            ASSERT_TRUE(t.step(k, c[k], out, record).ok());
+            ASSERT_TRUE(fresh.transport.step(k, other[k], other_out, record).ok());
+            for (std::size_t i = 0; i < out.size(); ++i) {
+                ASSERT_EQ(bits(out[i]), bits(other_out[i])) << "cell " << i << " step " << n;
+            }
+            EXPECT_TRUE(same_bits(t.budget_of(k), fresh.transport.budget_of(k)))
+                << "class " << k << " step " << n;
+            c[k] = out;
+            other[k] = other_out;
+        }
+    }
+}
+
+TEST(TransportStep, ASecondStepSizeInOneIntervalEqualsAFreshSolverSetToIt) {
+    // set_step again replaces what the first fixed, the deposition per face and
+    // the source rate, each times dt.
+    stepped_box run(keys(1e-4, 1e-6));
+    stepped_box fresh(keys(1e-4, 1e-6));
+    for (auto* box : {&run, &fresh}) {
+        ASSERT_TRUE(
+            box->transport.set_interval({box->box.faces(), box->box.faces()}, box->air()).ok());
+    }
+    const double stable = std::min(run.transport.stable_dt(0), run.transport.stable_dt(1));
+    ASSERT_TRUE(run.transport.set_step(0.4 * stable).ok());
+    std::array<std::vector<double>, 2> c = {run.field, run.field};
+    std::vector<double> out(run.field.size());
+    step_record record;
+    for (std::size_t k = 0; k < 2; ++k) {
+        ASSERT_TRUE(run.transport.step(k, c[k], out, record).ok());
+        c[k] = out;
+    }
+    fresh.transport.set_budgets({run.transport.budget_of(0), run.transport.budget_of(1)});
+    ASSERT_TRUE(run.transport.set_step(0.8 * stable).ok());
+    ASSERT_TRUE(fresh.transport.set_step(0.8 * stable).ok());
+    std::vector<double> other_out(out.size());
+    for (std::size_t k = 0; k < 2; ++k) {
+        ASSERT_TRUE(run.transport.step(k, c[k], out, record).ok());
+        ASSERT_TRUE(fresh.transport.step(k, c[k], other_out, record).ok());
+        for (std::size_t i = 0; i < out.size(); ++i) {
+            ASSERT_EQ(bits(out[i]), bits(other_out[i])) << "cell " << i << " class " << k;
+        }
+        EXPECT_TRUE(same_bits(run.transport.budget_of(k), fresh.transport.budget_of(k)))
+            << "class " << k;
+    }
 }
 
 TEST(TransportStep, ProgrammingErrorsThrow) {

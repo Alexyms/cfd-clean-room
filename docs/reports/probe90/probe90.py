@@ -1271,7 +1271,8 @@ def plants() -> None:
         )
         summary = [line for line in ctest.stdout.splitlines() if "tests passed" in line]
         record["ctest"] = summary[0].strip() if summary else ctest.stdout[-300:]
-        record["ctest_failed"] = re.findall(r" - (\S+) \(Failed\)", ctest.stdout)
+        # A test that crashes is listed as (SEGFAULT) or (Subprocess aborted), not (Failed).
+        record["ctest_failed"] = re.findall(r"\d+ - (\S+) \([^)]+\)", ctest.stdout)
         env = {
             **__import__("os").environ,
             "PYTHONPATH": str(build),
