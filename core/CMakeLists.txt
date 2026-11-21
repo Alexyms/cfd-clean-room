@@ -38,9 +38,13 @@ set(CMAKE_CXX_FLAGS_RELEASE "-DNDEBUG")
 
 # The project's flags (CLAUDE.md, C++ Coding Standards). -ffp-contract=off keeps
 # a multiply and an add two roundings, as the reference rounds them (ADR-017 A).
+# -march=x86-64-v3 (2026-11-20, ADR-017 A) is AVX2 by a name every compiler reads
+# the same, so the build runs on any x86-64 processor from about 2015 on, where
+# -march=native would tie it to the processor it was built on. A processor
+# without AVX2 cannot run the module.
 add_library(cfdcore_flags INTERFACE)
 target_compile_options(cfdcore_flags INTERFACE
-    -Wall -Wextra -Wpedantic -O2 -ffp-contract=off)
+    -Wall -Wextra -Wpedantic -O2 -ffp-contract=off -march=x86-64-v3)
 if(CFD_CORE_WERROR)
     target_compile_options(cfdcore_flags INTERFACE -Werror)
 endif()
@@ -69,6 +73,7 @@ if(CFD_CORE_TESTS)
     include(GoogleTest)
     add_executable(cfdcore_tests
         tests/test_grid.cpp
+        tests/test_lanes.cpp
         tests/test_reduce.cpp
         tests/test_scalar.cpp)
     target_link_libraries(cfdcore_tests PRIVATE cfdcore cfdcore_flags GTest::gtest_main)

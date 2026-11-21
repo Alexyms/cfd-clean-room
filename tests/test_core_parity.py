@@ -2256,3 +2256,364 @@ def test_implicit_step_refuses_an_out_that_overlaps_an_input(
     call = _implicit_with(arguments, "out", out)
     with pytest.raises(TypeError, match=SHARED_REFUSAL):
         call()
+
+
+# --- The block walk at every row length (prompt 89) -------------------------
+#
+# The core's kernels walk a row of cells in blocks of eight and take the cells
+# that are left one at a time, the row's end cells apart
+# (core/include/cfdcore/lanes.hpp). Every mesh above is a multiple of eight
+# cells wide, so each leaves the same number of cells and none is shorter than
+# a block. The cases below run the bit-for-bit comparisons on small grids of
+# every width from one cell to past two blocks and of one row and more, so a
+# block that starts or ends one cell out of place reads a wrong neighbour in
+# some case. The grids are built here, not from a configuration: the reference
+# takes arrays and an ``Axis``, the core a ``Grid2``.
+
+ROW_WIDTHS = [*range(1, 20), 26, 33]
+ROW_HEIGHTS = [1, 2, 3, 5]
+ROW_SHAPES = [(ny, nx) for nx in ROW_WIDTHS for ny in ROW_HEIGHTS]
+ROW_IDS = [f"{nx}x{ny}" for ny, nx in ROW_SHAPES]
+ROW_SOLID_SHARE = 0.2
+ROW_CAP = 40
+ROW_CG_CAP = 200
+
+
+@dataclasses.dataclass(frozen=True, eq=False)
+class RowGrid:
+    """A small stretched grid with SOLID cells: the arrays ``Mesh`` would hold."""
+
+    x: np.ndarray
+    xc: np.ndarray
+    y: np.ndarray
+    yc: np.ndarray
+    cell_type: np.ndarray
+
+    @property
+    def solid(self) -> np.ndarray:
+        """The SOLID mask, [ny, nx]."""
+        return self.cell_type == SOLID
+
+    @property
+    def volume(self) -> np.ndarray:
+        """Cell volumes per metre of depth, [ny, nx]."""
+        return np.outer(np.diff(self.y), np.diff(self.x))
+
+    def core(self) -> "_cfdcore.Grid2":
+        """The core's grid on these arrays."""
+        return _cfdcore.Grid2(self.x, self.xc, self.y, self.yc, self.cell_type, SOLID)
+
+    def axes(self) -> tuple[scalar_scheme.Axis, scalar_scheme.Axis]:
+        """The reference's two axes, as ``mesh_axes`` builds them from a mesh."""
+        ny, nx = self.cell_type.shape
+        return (
+            scalar_scheme.Axis(
+                nodes=np.concatenate(([self.x[0]], self.xc, [self.x[-1]])),
+                faces=self.x[1:-1],
+                left=np.arange(1, nx),
+                solid_ext=np.pad(self.solid, ((0, 0), (1, 1))),
+            ),
+            scalar_scheme.Axis(
+                nodes=np.concatenate(([self.y[0]], self.yc, [self.y[-1]])),
+                faces=self.y[1:-1],
+                left=np.arange(1, ny),
+                solid_ext=np.ascontiguousarray(np.pad(self.solid, ((1, 1), (0, 0))).T),
+            ),
+        )
+
+
+def _row_grid(ny: int, nx: int, rng: np.random.Generator) -> RowGrid:
+    """A grid of unequal cells with about a fifth of them SOLID, one cell at least not."""
+    x = np.concatenate(([0.0], np.cumsum(rng.uniform(0.5, 1.5, nx))))
+    y = np.concatenate(([0.0], np.cumsum(rng.uniform(0.5, 1.5, ny))))
+    solid = rng.uniform(size=(ny, nx)) < ROW_SOLID_SHARE
+    solid.flat[rng.integers(solid.size)] = False
+    return RowGrid(
+        x=x,
+        xc=0.5 * (x[:-1] + x[1:]),
+        y=y,
+        yc=0.5 * (y[:-1] + y[1:]),
+        cell_type=np.where(solid, SOLID, 0).astype(np.int32),
+    )
+
+
+def _row_system(
+    grid: RowGrid, method: str, step: str, hold: str, rng: np.random.Generator
+) -> ImplicitArguments:
+    """A system with conductance on every face, the first and last of each line included.
+
+    Under Jacobi C* spans sixteen decades with zeros, and is 5 in the SOLID
+    cells, which the first residual reads; under CG it is positive in every
+    cell it solves for and zero in the SOLID ones, as the callers hand it.
+    """
+    solid = grid.solid
+    shape = solid.shape
+    ny, nx = shape
+    volume = grid.volume
+    dt_scalar = 0.05
+    g_u = (volume.mean() / dt_scalar) * 10.0 ** rng.uniform(-3.0, -0.3, (ny, nx + 1))
+    g_v = (volume.mean() / dt_scalar) * 10.0 ** rng.uniform(-3.0, -0.3, (ny + 1, nx))
+    sink = np.where(
+        rng.uniform(size=shape) < 0.3,
+        (volume / dt_scalar) * 10.0 ** rng.uniform(-6.0, -1.0, shape),
+        0.0,
+    )
+    if method == "jacobi":
+        c_star = 10.0 ** rng.uniform(-12.0, 4.0, shape)
+        c_star[rng.uniform(size=shape) < 0.1] = 0.0
+        c_star = np.where(solid, 5.0, c_star)
+    else:
+        c_star = np.where(solid, 0.0, 10.0 ** rng.uniform(-6.0, 2.0, shape))
+    dt: float | np.ndarray = dt_scalar
+    if step == "per-cell":
+        dt = dt_scalar * 10.0 ** rng.uniform(-0.5, 0.5, shape)
+        if method == "jacobi":
+            # Not read in a SOLID cell: an infinity there must not reach the sum.
+            dt[solid] = np.inf
+    held = None
+    if hold == "held":
+        held = (rng.uniform(size=shape) < 0.2) & ~solid
+    return ImplicitArguments(
+        c_star=np.ascontiguousarray(c_star),
+        volume=volume,
+        dt=dt,
+        g_u=g_u,
+        g_v=g_v,
+        diagonal=sink,
+        solid=solid,
+        tol=IMPLICIT_TOL,
+        max_iter=ROW_CAP if method == "jacobi" else ROW_CG_CAP,
+        held=held,
+        method=method,
+    )
+
+
+def test_the_row_widths_leave_every_number_of_cells_after_the_blocks() -> None:
+    """The widths cover each count of cells a block walk can leave, and two blocks.
+
+    A stencil's walk takes a row's two end cells apart and the nx - 2 between
+    in blocks; the flux's takes the first and the last interior face apart and
+    the nx - 3 between; an elementwise walk takes all nx.
+    """
+    block = 8
+    for apart in (0, 2, 3):
+        left = {(nx - apart) % block for nx in ROW_WIDTHS if nx >= apart}
+        assert left == set(range(block)), apart
+        assert any(nx - apart >= 2 * block for nx in ROW_WIDTHS), apart
+    assert any(nx < block for nx in ROW_WIDTHS)
+
+
+@REFERENCE_DIVIDES_BY_ZERO
+@pytest.mark.parametrize("hold", HOLDS)
+@pytest.mark.parametrize("step", STEPS)
+@pytest.mark.parametrize(("ny", "nx"), ROW_SHAPES, ids=ROW_IDS)
+def test_implicit_jacobi_is_bit_for_bit_at_every_row_length(
+    ny: int, nx: int, step: str, hold: str
+) -> None:
+    """A Jacobi solve on a grid of any width: every output the reference's bit for bit."""
+    rng = np.random.default_rng(
+        [SEED, 89, ny, nx, STEPS.index(step), HOLDS.index(hold)]
+    )
+    grid = _row_grid(ny, nx, rng)
+    arguments = _row_system(grid, "jacobi", step, hold, rng)
+    reference, counts = _reference_counted(arguments)
+    out, core = arguments.core(_cfdcore.ImplicitScratch2(grid.core()))
+    _assert_bit_for_bit(arguments, reference, counts, out, core)
+
+
+@pytest.mark.parametrize("bound", ["binds", "zero"])
+@pytest.mark.parametrize(("ny", "nx"), ROW_SHAPES, ids=ROW_IDS)
+def test_implicit_jacobi_with_a_bound_is_bit_for_bit_at_every_row_length(
+    ny: int, nx: int, bound: str
+) -> None:
+    """The same with ADR-016's bound: the leftover's sums and the sweeps it adds."""
+    rng = np.random.default_rng([SEED, 89, ny, nx, 7, BOUNDS.index(bound)])
+    grid = _row_grid(ny, nx, rng)
+    arguments = _row_system(grid, "jacobi", "scalar", "none", rng)
+    arguments = arguments.replaced(leftover_bound=_bound(arguments, bound))
+    reference, counts = _reference_counted(arguments)
+    out, core = arguments.core(_cfdcore.ImplicitScratch2(grid.core()))
+    _assert_bit_for_bit(arguments, reference, counts, out, core)
+
+
+@pytest.mark.parametrize("hold", HOLDS)
+@pytest.mark.parametrize("step", STEPS)
+@pytest.mark.parametrize(("ny", "nx"), ROW_SHAPES, ids=ROW_IDS)
+def test_implicit_cg_with_the_cores_dot_products_is_bit_for_bit_at_every_row_length(
+    ny: int, nx: int, step: str, hold: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A CG solve on a grid of any width, the reference with the core's dot products."""
+    rng = np.random.default_rng(
+        [SEED, 89, ny, nx, 10 + STEPS.index(step), HOLDS.index(hold)]
+    )
+    grid = _row_grid(ny, nx, rng)
+    arguments = _row_system(grid, "cg", step, hold, rng)
+    monkeypatch.setattr(scalar_scheme, "np", _NumpyWithTheCoresDot())
+    reference, counts = _reference_counted(arguments)
+    out, core = arguments.core(_cfdcore.ImplicitScratch2(grid.core()))
+    _assert_bit_for_bit(arguments, reference, counts, out, core)
+    assert core.restarts == _reference_restarts(reference, counts)
+
+
+@pytest.mark.parametrize("step", STEPS)
+@pytest.mark.parametrize(("ny", "nx"), ROW_SHAPES, ids=ROW_IDS)
+def test_implicit_system_is_the_references_set_up_at_every_row_length(
+    ny: int, nx: int, step: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """a_P, b and the stop on a grid of any width are what the reference hands its solve."""
+    rng = np.random.default_rng([SEED, 89, ny, nx, 20 + STEPS.index(step)])
+    grid = _row_grid(ny, nx, rng)
+    arguments = _row_system(grid, "cg", step, "none", rng)
+    seen: dict[str, object] = {}
+    original = scalar_scheme._jacobi
+
+    def recording(
+        c_star: np.ndarray, a_p: np.ndarray, b: np.ndarray, *rest: object
+    ) -> object:
+        seen.update(a_p=a_p, b=b, stop=rest[4])
+        return original(c_star, a_p, b, *rest)
+
+    monkeypatch.setattr(scalar_scheme, "_jacobi", recording)
+    arguments.replaced(method="jacobi", max_iter=0).reference()
+    scratch = _cfdcore.ImplicitScratch2(grid.core())
+    diffuses, stop = _cfdcore.implicit_system(
+        scratch,
+        arguments.c_star,
+        arguments.volume,
+        arguments.dt,
+        arguments.g_u,
+        arguments.g_v,
+        arguments.diagonal,
+        arguments.tol,
+    )
+    assert diffuses
+    assert _bits(stop) == _bits(seen["stop"])
+    assert _same_bits(scratch.diagonal(), np.ravel(seen["a_p"]))
+    assert _same_bits(scratch.rhs(), np.ravel(seen["b"]))
+
+
+@pytest.mark.parametrize("vents", ["none", "random-mask"])
+@pytest.mark.parametrize("upwind", [False, True])
+@pytest.mark.parametrize("d", [0, 1])
+@pytest.mark.parametrize(("ny", "nx"), ROW_SHAPES, ids=ROW_IDS)
+def test_advective_flux_is_bit_for_bit_at_every_row_length(
+    ny: int, nx: int, d: int, upwind: bool, vents: str
+) -> None:
+    """The flux on a grid of any width and height, both directions, bit for bit."""
+    rng = np.random.default_rng(
+        [SEED, 89, ny, nx, 30 + d, int(upwind), int(vents == "none")]
+    )
+    grid = _row_grid(ny, nx, rng)
+    shape = (ny, nx + 1) if d == 0 else (ny + 1, nx)
+    # Random values, or a few levels, where many downstream differences are zero.
+    c = (
+        _values(rng, (ny, nx))
+        if rng.uniform() < 0.5
+        else rng.choice(np.array([-2.5, 0.0, -0.0, 1.0, 1.0e3]), size=(ny, nx))
+    )
+    flux = _planted_flux(shape, rng)
+    inflow = _values(rng, shape)
+    mask = None if vents == "none" else rng.random(shape) < 0.2
+    axis_x, axis_y = grid.axes()
+    with np.errstate(over="ignore"):
+        if d == 0:
+            reference = advective_flux(c, flux, inflow, axis_x, upwind, mask)
+        else:
+            v = None if mask is None else np.ascontiguousarray(mask.T)
+            reference = advective_flux(c.T, flux.T, inflow.T, axis_y, upwind, v).T
+    out = np.full(shape, np.nan)
+    scheme = _cfdcore.ScalarScheme2(grid.core())
+    _cfdcore.advective_flux(scheme, d, c, flux, inflow, upwind, out, mask)
+    differ = np.flatnonzero(
+        np.ascontiguousarray(reference).view(np.uint64) != out.view(np.uint64)
+    )
+    assert differ.size == 0, (
+        differ[:10],
+        reference.flat[differ[:3]],
+        out.flat[differ[:3]],
+    )
+
+
+@REFERENCE_DIVIDES_BY_ZERO
+@pytest.mark.parametrize("where", ["c_star", "volume"])
+@pytest.mark.parametrize("method", ["jacobi", "cg"])
+def test_implicit_a_nan_input_keeps_the_solve_running_to_its_cap(
+    method: str, where: str
+) -> None:
+    """A NaN in C* or in a volume: a NaN residual and a NaN stop never meet the stop.
+
+    The reference's ``np.abs(r).max() <= stop`` is false for a NaN, so the solve
+    runs to its cap unconverged (under CG after a fallback to Jacobi). A stop
+    written as ``abs(r) > stop`` is false for a NaN and would end the solve at
+    its first residual, converged. The transport solver refuses a non-finite
+    field before the solve, so no run meets this; a direct caller of the binding
+    can. A NaN's payload is not claimed, so the fields are compared by where they
+    are NaN and, elsewhere, bit for bit.
+    """
+    ny, nx = 5, 11
+    rng = np.random.default_rng([SEED, 89, ny, nx, 60, int(method == "cg")])
+    grid = _row_grid(ny, nx, rng)
+    arguments = _row_system(grid, method, "scalar", "none", rng)
+    nan_cell = (2, 4)
+    while grid.solid[nan_cell]:
+        nan_cell = (nan_cell[0], nan_cell[1] + 1)
+    c_star = arguments.c_star.copy()
+    volume = arguments.volume.copy()
+    (c_star if where == "c_star" else volume)[nan_cell] = np.nan
+    arguments = arguments.replaced(c_star=c_star, volume=volume)
+    with np.errstate(all="ignore"):
+        reference = arguments.reference()
+    out, core = arguments.core(_cfdcore.ImplicitScratch2(grid.core()))
+    assert reference.iterations == arguments.max_iter
+    assert not reference.converged
+    assert core.iterations == reference.iterations
+    assert core.converged == reference.converged
+    assert core.fallbacks == reference.fallbacks
+    assert np.array_equal(np.isnan(out), np.isnan(reference.field))
+    finite = ~np.isnan(reference.field)
+    assert _same_bits(out[finite], reference.field[finite])
+
+
+@pytest.mark.parametrize("upwind", [False, True])
+@pytest.mark.parametrize("d", [0, 1])
+@pytest.mark.parametrize(
+    "cell", [(2, 5), (0, 0), (4, 10)], ids=["inside", "corner-low", "corner-high"]
+)
+def test_advective_flux_puts_nans_at_the_references_faces(
+    cell: tuple[int, int], d: int, upwind: bool
+) -> None:
+    """A NaN in the field: the core has a NaN at the faces the reference does, and the same bits elsewhere.
+
+    The header of ``scalar.hpp`` claims the faces and not the NaN's sign or
+    payload. A face whose downstream difference is NaN takes the clamp's
+    limited value, which is NaN, so an upwind-free face next to the NaN cell is
+    NaN; a clamp that read a NaN difference as zero would give such a face the
+    upstream value instead. The transport solver refuses a non-finite field
+    before the flux runs, so no run meets this; a direct caller of the binding can.
+    """
+    ny, nx = 5, 11
+    rng = np.random.default_rng(
+        [SEED, 89, ny, nx, 70, d, int(upwind), cell[0], cell[1]]
+    )
+    grid = _row_grid(ny, nx, rng)
+    shape = (ny, nx + 1) if d == 0 else (ny + 1, nx)
+    c = _values(rng, (ny, nx))
+    c[cell] = np.nan
+    # The reference's face values at the NaN cell's neighbours must be read, so the
+    # cell is not SOLID: a SOLID cell's value is replaced where the far-cell rule reads it.
+    flux = _planted_flux(shape, rng)
+    inflow = _values(rng, shape)
+    axis_x, axis_y = grid.axes()
+    with np.errstate(all="ignore"):
+        if d == 0:
+            reference = advective_flux(c, flux, inflow, axis_x, upwind, None)
+        else:
+            reference = advective_flux(c.T, flux.T, inflow.T, axis_y, upwind, None).T
+    out = np.full(shape, 0.0)
+    scheme = _cfdcore.ScalarScheme2(grid.core())
+    _cfdcore.advective_flux(scheme, d, c, flux, inflow, upwind, out, None)
+    reference = np.ascontiguousarray(reference)
+    assert np.array_equal(np.isnan(out), np.isnan(reference))
+    finite = ~np.isnan(reference)
+    assert _same_bits(out[finite], reference[finite])
+    assert np.isnan(reference).any()

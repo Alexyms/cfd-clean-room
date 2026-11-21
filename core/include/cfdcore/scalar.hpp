@@ -10,9 +10,11 @@
 // -ffp-contract=off), and nothing is reassociated. With a NaN in an input both
 // give NaNs at the same faces, but a NaN's sign or payload may differ; the
 // transport solver refuses a non-finite field before the flux runs. The
-// reference advects along its last axis and transposes for y; the core walks
-// its own layout along the direction's stride instead (layout.hpp), and line
-// m along y is row m of the reference's transposed call.
+// reference advects along its last axis and transposes for y; the core
+// transposes nothing and walks every field by its rows, the lines along
+// direction 0, which are contiguous in memory (layout.hpp): for the faces
+// normal to another direction a row of faces lies between two rows of cells,
+// and line m along y is row m of the reference's transposed call.
 //
 // The face flux is elementwise over the faces: no sum and no iteration. The
 // implicit solve, `implicit_step` and its parts, is the second half of this
@@ -21,10 +23,10 @@
 #pragma once
 
 #include "cfdcore/grid.hpp"
+#include "cfdcore/lanes.hpp"
 #include "cfdcore/layout.hpp"
 
 #include <array>
-#include <cmath>
 #include <cstdint>
 #include <optional>
 #include <span>
@@ -39,8 +41,15 @@ namespace cfdcore::scalar {
 // and measured on every length from 1 to 1,000 by docs/reports/probe87/ties87.py.
 // The sign of a zero psi reaches the face value when the upstream value is
 // -0.0, so the tie matters for bit equality.
-inline double np_minimum(double a, double b) { return (a < b || std::isnan(a)) ? a : b; }
-inline double np_maximum(double a, double b) { return (a > b || std::isnan(a)) ? a : b; }
+//
+// Written with masks (lanes.hpp) and no branch, so that a kernel's block can
+// hold them: `a != a` is the NaN test.
+CFDCORE_INLINE double np_minimum(double a, double b) {
+    return lanes::select(lanes::mask_of(a < b) | lanes::mask_of(a != a), a, b);
+}
+CFDCORE_INLINE double np_maximum(double a, double b) {
+    return lanes::select(lanes::mask_of(a > b) | lanes::mask_of(a != a), a, b);
+}
 
 // The UMIST clamp of a QUICK face value at one face (`limited_face_values`).
 //
@@ -53,12 +62,14 @@ inline double np_maximum(double a, double b) { return (a > b || std::isnan(a)) ?
 // Returns c_c + 0.5 psi (c_d - c_c) with psi = max(0, min(2r, (1 + 3r) / 4,
 // psi_quick, 2)), r = (c_c - c_up) / (c_d - c_c) and
 // psi_quick = 2 (quick - c_c) / (c_d - c_c); c_c where c_d - c_c is zero.
-inline double limited_face_value(double c_up, double c_c, double c_d, double quick) {
+//
+// The limited value is formed whatever the difference is and discarded where it
+// is zero, so that the function has no branch: the quotients are then 0 / 0 or
+// x / 0, which round to a NaN or an infinity and are never read.
+CFDCORE_INLINE double limited_face_value(double c_up, double c_c, double c_d, double quick) {
     const double d_down = c_d - c_c;
     // The reference's `d_down != 0.0`: a NaN difference takes the limited branch.
-    if (d_down == 0.0) {
-        return c_c;
-    }
+    const lanes::mask defined = lanes::mask_of(d_down != 0.0);
     const double r = (c_c - c_up) / d_down;
     const double psi_quick = 2.0 * (quick - c_c) / d_down;
     // np.minimum.reduce over [2r, (1 + 3r) / 4, psi_quick, 2] is taken as a fold
@@ -68,7 +79,7 @@ inline double limited_face_value(double c_up, double c_c, double c_d, double qui
     low = np_minimum(low, psi_quick);
     low = np_minimum(low, 2.0);
     const double psi = np_maximum(0.0, low);
-    return c_c + 0.5 * psi * d_down;
+    return lanes::select(defined, c_c + 0.5 * psi * d_down, c_c);
 }
 
 // The UMIST clamp elementwise over equal-length arrays (`limited_face_values`).
@@ -159,7 +170,8 @@ void quick_face_values(const scheme<D>& s, int d, std::span<const double> c,
 //         J), read at interior faces only; empty for none, which runs the
 //         arithmetic without vents bit for bit
 // out:    output, one per face normal to d: flux times the face value, the
-//         scalar's unit times m^2/s
+//         scalar's unit times m^2/s; it must overlap no input, which the
+//         kernels are compiled to assume (the binding refuses one that does)
 //
 // The face value: at a boundary face the inflow value where the flux enters
 // and the adjacent cell's otherwise; at an interior face the upstream value
@@ -285,6 +297,14 @@ struct implicit_scratch {
     std::vector<double> q;          // CG's product A p
     std::vector<double> dt_masked;  // a per-cell dt with SOLID cells at zero
     std::vector<double> terms;      // the leftover's terms dt r per cell
+    // Set where a cell is an unknown (neither SOLID nor held) and where it is
+    // not SOLID (lanes.hpp), formed from a solve's masks at its start; `free`
+    // is formed only when a cell is held, `fluid` standing for it otherwise.
+    std::vector<std::uint64_t> free;
+    std::vector<std::uint64_t> fluid;
+    // One row of zeros, cells(0) long: the neighbours of a row beyond the
+    // field's end, as the reference's zero padding reads them.
+    std::vector<double> zeros;
 };
 
 // The leftover bound's refusal: negative or NaN (an infinite bound accepts
@@ -298,7 +318,8 @@ implicit_status check_leftover_bound(std::optional<double> bound);
 // extra terms are summed west, east, south, north (low then high face of
 // each direction), then the sink; a_P = V / dt + that; b = (V / dt) C*; the
 // stop is tol times the largest |b| over every cell, NaN if any |b| is NaN.
-// When nothing diffuses or sinks, a_P and b are not formed and the stop is 0.
+// When nothing diffuses or sinks the stop is 0, and a_P and b hold what the
+// one pass wrote, which no caller reads.
 struct implicit_setup {
     bool diffuses;
     double stop;
@@ -362,7 +383,8 @@ struct solve_outcome {
 // sum taken east, west, north, south, a missing neighbour read as zero), zero
 // in SOLID and held cells; stops when the largest |r| is at most `stop` and
 // `accept` takes the iterate, or at the cap; else C <- C + r / a_P with SOLID
-// cells set to zero. The returned field is written to `out` (a cell field);
+// cells set to zero. The returned field is written to `out` (a cell field),
+// which also holds iterates while the solve runs and must overlap no input;
 // `accept.final` is called with the last residual. A non-negative C* gives
 // non-negative iterates throughout.
 template <int D>
@@ -389,6 +411,11 @@ solve_outcome conjugate_gradient(const implicit_input<D>& in, double stop, accep
 // below zero in a cell it solves for is discarded and Jacobi solves from C*
 // with a fresh acceptance. The field is written to `out` (a cell field) and
 // the rest to `result`; on a refusal neither is written.
+//
+// `out` must overlap no array of `in`, `C*` included: every Jacobi path,
+// the CG's fallback among them, holds its iterates in `out` while it runs, and
+// the kernels are compiled to assume no output overlaps an input (the binding
+// refuses an `out` that shares memory with one).
 template <int D>
 implicit_status implicit_step(const implicit_input<D>& in, implicit_scratch<D>& scratch,
                               std::span<double> out, implicit_result& result);

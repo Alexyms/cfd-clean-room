@@ -51,4 +51,17 @@ double pairwise_sum(std::span<const double> values);
 // Returns 0.0 for empty arrays.
 double blocked_dot(std::span<const double> a, std::span<const double> b, std::size_t block);
 
+// One block's term of `blocked_dot`: the products a[i] * b[i], one rounding
+// each, summed in `pairwise_sum`'s order without its leading 0.0.
+//
+// a, b: the block's two arrays, equal lengths, contiguous, in any units; the
+//       result is in the product of the two
+//
+// Adding the blocks' results to 0.0 in block order gives `blocked_dot`'s value
+// bit for bit, so a caller that forms its arrays block by block can take each
+// block's dot product while the block is in the cache. Throws
+// std::invalid_argument for arrays of different lengths. Returns 0.0 for empty
+// arrays.
+double block_dot(std::span<const double> a, std::span<const double> b);
+
 }  // namespace cfdcore::reduce

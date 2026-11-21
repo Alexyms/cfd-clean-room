@@ -5,7 +5,10 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <bit>
+#include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <span>
 #include <stdexcept>
@@ -219,6 +222,47 @@ TEST(BlockedDot, ArraysOfDifferentLengthsAreRefusedWhicheverIsShorter) {
     EXPECT_NE(refusal(three, two, 0).find("block length"), std::string::npos);
     // Equal lengths that are not a whole number of blocks are not refused.
     EXPECT_EQ(refusal(three, three, 2), "");
+}
+
+using cfdcore::reduce::block_dot;
+
+TEST(BlockDot, TheBlocksAddedInOrderAreBlockedDot) {
+    // Lengths below, at and above a block of 128, and a block length that
+    // leaves a short last block: each block's term added to 0.0 in block
+    // order is blocked_dot's value bit for bit, compared as bits.
+    for (const std::size_t n : {std::size_t{1}, std::size_t{7}, std::size_t{128},
+                                std::size_t{300}, std::size_t{1000}}) {
+        std::vector<double> a(n);
+        std::vector<double> b(n);
+        for (std::size_t i = 0; i < n; ++i) {
+            a[i] = 1.0 + 1e-7 * static_cast<double>((i * 37) % 101);
+            b[i] = (i % 3 == 0 ? -1.0 : 1.0) / static_cast<double>(i + 1);
+        }
+        for (const std::size_t block : {std::size_t{1}, std::size_t{9}, std::size_t{128},
+                                        std::size_t{320}}) {
+            double total = 0.0;
+            for (std::size_t first = 0; first < n; first += block) {
+                const std::size_t count = std::min(block, n - first);
+                total += block_dot(std::span<const double>(a).subspan(first, count),
+                                   std::span<const double>(b).subspan(first, count));
+            }
+            EXPECT_EQ(bits(total), bits(blocked_dot(a, b, block)))
+                << n << " terms, blocks of " << block;
+        }
+    }
+}
+
+TEST(BlockDot, EmptyIsPositiveZero) {
+    std::vector<double> none;
+    EXPECT_EQ(block_dot(none, none), 0.0);
+    EXPECT_FALSE(std::signbit(block_dot(none, none)));
+}
+
+TEST(BlockDot, ArraysOfDifferentLengthsAreRefused) {
+    std::vector<double> three{1.0, 2.0, 3.0};
+    std::vector<double> two{4.0, 5.0};
+    EXPECT_THROW(block_dot(three, two), std::invalid_argument);
+    EXPECT_THROW(block_dot(two, three), std::invalid_argument);
 }
 
 }  // namespace
