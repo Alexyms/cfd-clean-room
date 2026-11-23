@@ -400,10 +400,11 @@ def _case(name: str, tmp: Path) -> Case:
 
     Across the dust release's onset; across the door leak's two flow switches;
     the clean-out from fields around its thresholds; the clean-out within spec
-    from the start, held at its fifth step.
+    from the start, held at its fifth step; the door leak's last interval to its
+    end, whose last step's time is ``t_end`` and not ``t_start + steps dt``.
     """
     rng = np.random.default_rng([SEED, 4, len(name)])
-    probe = _scenario({"held": "clean"}.get(name, name))
+    probe = _scenario({"held": "clean", "door_end": "door"}.get(name, name))
     world = _World(probe, tmp)
     plans = world.state.plans()
     thresholds = np.array(probe.class_thresholds("the test"), dtype=np.float64)
@@ -413,6 +414,8 @@ def _case(name: str, tmp: Path) -> Case:
         keep = [(0, plans[0].steps - 3, plans[0].steps), (1, 0, 4), (2, 0, 2)]
     elif name == "door":
         keep = [(0, plans[0].steps - 2, plans[0].steps), (1, 0, 3), (2, 0, 2)]
+    elif name == "door_end":
+        keep = [(2, plans[2].steps - 3, plans[2].steps)]
     else:
         keep = [(0, 0, 8)]
     if name == "held":
@@ -440,7 +443,7 @@ class _World:
         self.state = _world(Case("probe", config, [], (0, 0), {}), tmp, _Run, "probe")
 
 
-MARCH_CASES = ["dust", "door", "clean", "held"]
+MARCH_CASES = ["dust", "door", "clean", "held", "door_end"]
 
 
 @dataclasses.dataclass
@@ -603,6 +606,11 @@ def test_march_equals_run_march_after_every_step(name: str, tmp_path: Path) -> N
         assert reference.end[4] is True and len(reference.steps) == 5
     else:
         assert reference.end[4] is False and len(reference.steps) == steps
+    if name == "door_end":
+        # The plan's last step is at t_end, which t_start + steps dt is not.
+        plan = case.plans[0]
+        assert plan.t_start + plan.steps * plan.dt != plan.t_end
+        assert reference.steps[-1][1] == plan.t_end
     if name in ("dust", "door"):
         assert len(case.plans) == 3
         assert len({p.fingerprint for p in case.plans}) == (2 if name == "door" else 1)

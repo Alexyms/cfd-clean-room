@@ -473,8 +473,10 @@ struct world {
     std::unique_ptr<run<2>> make(bool with_recovery, std::optional<double> hold = std::nullopt) {
         std::optional<cfdcore::recovery::keys> rec;
         if (with_recovery) {
-            rec = cfdcore::recovery::keys{{3.0, 2.0, 1.0}, {5.0, 5.0, 5.0}, {true, true, false},
-                                          hold};
+            // Targets inside the planted fields' range, so some sensors reach theirs
+            // at the first step and a restore that dropped the times would show.
+            rec = cfdcore::recovery::keys{
+                {3.0, 2.0, 1.0}, {1.5e3, 1.5e3, 1.5e3}, {true, true, false}, hold};
         }
         auto r = std::make_unique<run<2>>(s, b.spacing(), keys(), physics(), setup(b, rec));
         r->restore(fresh(fields, 3, maps, with_recovery ? &cells : nullptr, &sensor_nan,
@@ -535,6 +537,37 @@ TEST(March, AMarchTakesTheStepsAskedForAndStopsAtTheIntervalsEnd) {
     EXPECT_EQ(r->march(1, out.view()).steps, 0u);
 }
 
+TEST(March, TheIntervalsLastStepIsAtItsEndExactly) {
+    world w;
+    auto r = w.make(false);
+    // An interval whose end is not t_start + steps dt in floating point, its
+    // step below the box's stable step.
+    const double t_start = 0.1;
+    double t_end = 0.0;
+    std::int64_t steps = 0;
+    for (std::int64_t n = 3; n <= 20 && steps == 0; ++n) {
+        for (int k = 1; k < 200; ++k) {
+            const double end = t_start + 0.001 * k;
+            const double dt = (end - t_start) / static_cast<double>(n);
+            if (dt <= 0.01 && t_start + static_cast<double>(n) * dt != end) {
+                t_end = end;
+                steps = n;
+                break;
+            }
+        }
+    }
+    ASSERT_GT(steps, 0);
+    const double dt = (t_end - t_start) / static_cast<double>(steps);
+    const plan p{t_start, t_end, dt, steps, 0};
+    ASSERT_TRUE(r->interval({w.b.faces(), w.b.faces(), w.b.faces()}, w.b.air(), p).ok());
+    const auto n = static_cast<std::size_t>(steps);
+    row_store out(n, 3, 3);
+    ASSERT_EQ(r->march(n, out.view()).steps, n);
+    EXPECT_EQ(bits(out.t[n - 2]), bits(t_start + static_cast<double>(steps - 1) * dt));
+    EXPECT_EQ(bits(out.t[n - 1]), bits(t_end));
+    EXPECT_NE(bits(out.t[n - 1]), bits(t_start + static_cast<double>(steps) * dt));
+}
+
 TEST(March, StepsInBatchesEqualStepsOneAtATime) {
     world w;
     auto a = w.make(true);
@@ -577,6 +610,13 @@ TEST(March, ARunRestoredFromAnothersStateContinuesItBitForBit) {
     ASSERT_TRUE(b->interval(faces, w.b.air(), w.interval(9, 0.0, 4)).ok());
     ASSERT_EQ(b->march(5, out.view()).steps, 5u);
     expect_same_state(*a, *b);
+    // The state handed over held 100:1 times already, which the steps after
+    // could not set again: a restore that dropped them would differ here.
+    bool reached = false;
+    for (const double x : mid.sensor_time) {
+        reached = reached || x == x;
+    }
+    EXPECT_TRUE(reached);
 }
 
 TEST(March, TheHoldStopsTheMarchAtTheStepItHolds) {
