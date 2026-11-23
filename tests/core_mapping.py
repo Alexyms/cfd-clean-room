@@ -13,7 +13,8 @@ its mesh, its resident state set from the reference's fields, budgets and
 trackers, an interval handed over from the reference's plan and boundary, a
 step's budget row read as ``MassBudget`` objects, and the reference's trackers
 set from the core's maps and recovery fields (``ArrivalTracker.restore`` and
-``RecoveryTracker.restore``, whose checks then read the core's state).
+``RecoveryTracker.restore``, whose checks then read the core's state). Prompt 92
+adds the momentum predictor's construction.
 """
 
 from collections.abc import Mapping, Sequence
@@ -27,6 +28,7 @@ from src.boundary_concentration import (
     SURFACE_WALL,
     ConcentrationBoundary,
 )
+from src.boundary_staggered import StaggeredBoundary
 from src.config import UPWIND, SimConfig
 from src.mesh import SOLID, Mesh
 from src.monitor import COUNTING_STATE, ArrivalTracker
@@ -515,3 +517,46 @@ def sync_trackers(
         state = core.recovery()
         assert state is not None
         tracker.restore(state)
+
+
+def momentum_predictor(
+    mesh: Mesh, config: SimConfig, boundary: StaggeredBoundary
+) -> "_cfdcore.MomentumPredictor2":
+    """The core's momentum predictor from ``MomentumPredictor``'s own arguments (prompt 92).
+
+    Parameters
+    ----------
+    mesh : Mesh
+        The mesh.
+    config : SimConfig
+        Supplies rho, mu, alpha_velocity and momentum_sweeps.
+    boundary : StaggeredBoundary
+        Supplies the edges' tangential conditions and the vent faces, which
+        are handed over only where there are any, as the reference holds them.
+
+    Returns
+    -------
+    _cfdcore.MomentumPredictor2
+        The predictor; its set-up is fixed, and its grid lives as long.
+    """
+    import _cfdcore
+
+    edges = boundary.tangential_conditions()
+    vents = boundary.vent_faces()
+    return _cfdcore.MomentumPredictor2(
+        _cfdcore.Grid2(mesh.x, mesh.xc, mesh.y, mesh.yc, mesh.cell_type, SOLID),
+        mesh.dx_cell,
+        mesh.dy_cell,
+        mesh.dx_face,
+        mesh.dy_face,
+        config.rho,
+        config.mu,
+        config.alpha_velocity,
+        config.momentum_sweeps,
+        [
+            (edges[e].is_dirichlet, edges[e].value, edges[e].wall_distance)
+            for e in ("bottom", "top", "left", "right")
+        ],
+        vents.normal_u if vents.any else None,
+        vents.normal_v if vents.any else None,
+    )

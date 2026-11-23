@@ -17,6 +17,7 @@
 #include "cfdcore/channels.hpp"
 #include "cfdcore/grid.hpp"
 #include "cfdcore/march.hpp"
+#include "cfdcore/momentum.hpp"
 #include "cfdcore/recovery.hpp"
 #include "cfdcore/reduce.hpp"
 #include "cfdcore/scalar.hpp"
@@ -1478,6 +1479,386 @@ nb::object march_recovery(const March2& m) {
     return r == nullptr ? nb::none() : nb::object(recovery_state(*r, m.scheme->mesh()));
 }
 
+// --- The momentum predictor --------------------------------------------------
+
+using Predictor2 = cfdcore::momentum::predictor<2>;
+using cfdcore::momentum::component_setup;
+using cfdcore::momentum::viscosity_status;
+
+// A read-only, C-contiguous, one-dimensional bool array on the CPU.
+using BoolVector = nb::ndarray<const bool, nb::ndim<1>, nb::c_contig, nb::device::cpu>;
+
+[[noreturn]] void refuse_type(const std::string& message) { throw nb::type_error(message.c_str()); }
+[[noreturn]] void refuse_value(const std::string& message) {
+    throw nb::value_error(message.c_str());
+}
+
+// A shape as Python prints it: "(30, 81)".
+std::string shape_text(std::array<std::size_t, 2> shape) {
+    return "(" + std::to_string(shape[0]) + ", " + std::to_string(shape[1]) + ")";
+}
+std::string shape_text(const Array& a) {
+    nb::list sizes;
+    for (std::size_t i = 0; i < a.ndim(); ++i) {
+        sizes.append(a.shape(i));
+    }
+    return nb::cast<std::string>(nb::str(nb::tuple(sizes)));
+}
+
+bool has_shape(const Array& a, std::array<std::size_t, 2> shape) {
+    return a.ndim() == 2 && a.shape(0) == shape[0] && a.shape(1) == shape[1];
+}
+
+// A float64 array argument as the reference reads it (`_check_mu_eff`,
+// `_check_wall_mu`): anything but a float64 ndarray is a TypeError naming what
+// it is, another shape a ValueError naming both.
+Array read_viscosity(nb::handle value, const std::string& name,
+                     std::array<std::size_t, 2> shape) {
+    const nb::module_ numpy = nb::module_::import_("numpy");
+    if (!nb::isinstance(value, numpy.attr("ndarray"))) {
+        refuse_type(name + " must be a float64 ndarray, got " + python_type_name(value));
+    }
+    const nb::object dtype = value.attr("dtype");
+    if (!dtype.equal(numpy.attr("float64"))) {
+        refuse_type(name + " must be a float64 ndarray, got " +
+                    nb::cast<std::string>(nb::str(dtype)));
+    }
+    Array array;
+    // A non-contiguous array, which the reference reads, the core does not.
+    if (!nb::try_cast<Array>(value, array, false)) {
+        refuse_type(name + " must be a C-contiguous float64 ndarray");
+    }
+    if (!has_shape(array, shape)) {
+        refuse_value("expected " + name + " of shape " + shape_text(shape) + ", got " +
+                     shape_text(array));
+    }
+    require_aligned(array.data(), alignof(double), "MomentumPredictor2");
+    return array;
+}
+
+// One edge's tangential condition: (is_dirichlet, value, wall_distance).
+cfdcore::momentum::edge_condition read_edge(nb::handle edge, std::size_t n, const char* name,
+                                            std::vector<BoolVector>& flags,
+                                            std::vector<Vector>& values) {
+    const std::string who = std::string("MomentumPredictor2: ") + name;
+    BoolVector known;
+    Vector value;
+    cfdcore::momentum::edge_condition condition;
+    if (!nb::try_cast<BoolVector>(edge[0], known, false) || known.shape(0) != n ||
+        !nb::try_cast<Vector>(edge[1], value, false) || value.shape(0) != n) {
+        refuse_type(who + " is not (is_dirichlet, value, wall_distance) with bool and float64 "
+                          "arrays of " +
+                    std::to_string(n) + " entries");
+    }
+    require_aligned(value.data(), alignof(double), who);
+    condition.wall_distance = nb::cast<double>(edge[2]);
+    flags.push_back(known);
+    values.push_back(value);
+    condition.is_dirichlet = std::span<const bool>(flags.back().data(), n);
+    condition.value = as_span(values.back());
+    return condition;
+}
+
+void momentum_init(Predictor2* self, const Grid2& g, const Vector& dx_cell, const Vector& dy_cell,
+                   const Vector& dx_face, const Vector& dy_face, double rho, double mu,
+                   double alpha, std::int64_t sweeps, nb::handle tangential,
+                   const std::optional<BoolMatrix>& held_u,
+                   const std::optional<BoolMatrix>& held_v) {
+    constexpr std::string_view who = "MomentumPredictor2";
+    for (const Vector* v : {&dx_cell, &dy_cell, &dx_face, &dy_face}) {
+        require_aligned(v->data(), alignof(double), who);
+    }
+    if (nb::len(tangential) != 4) {
+        refuse_type("MomentumPredictor2: tangential holds the bottom, top, left and right edges");
+    }
+    std::vector<BoolVector> flags;
+    std::vector<Vector> values;
+    flags.reserve(4);
+    values.reserve(4);
+    cfdcore::momentum::predictor_input<2> input;
+    input.cell_widths = {as_span(dx_cell), as_span(dy_cell)};
+    input.face_widths = {as_span(dx_face), as_span(dy_face)};
+    const std::size_t along_x = g.cells(0) + 1;
+    const std::size_t along_y = g.cells(1) + 1;
+    input.low = {read_edge(tangential[0], along_x, "bottom", flags, values),
+                 read_edge(tangential[2], along_y, "left", flags, values)};
+    input.high = {read_edge(tangential[1], along_x, "top", flags, values),
+                  read_edge(tangential[3], along_y, "right", flags, values)};
+    const std::array<const std::optional<BoolMatrix>*, 2> held{&held_u, &held_v};
+    for (int c = 0; c < 2; ++c) {
+        if (*held[c]) {
+            require_shape(**held[c], face_shape(g, c), who, c == 0 ? "held_u" : "held_v");
+            input.held[c] = span_of(**held[c]);
+        }
+    }
+    input.rho = rho;
+    input.mu = mu;
+    input.alpha = alpha;
+    input.sweeps = sweeps;
+    // The core's reason, the reference's message among them, is a ValueError.
+    new (self) Predictor2(g, input);
+}
+
+// The field's refusals in the reference's order (`_check_mu_eff`), or its span.
+std::span<const double> read_mu_eff(const Predictor2& m, nb::handle value, Array& keep) {
+    const Grid2& g = m.mesh();
+    keep = read_viscosity(value, "mu_eff", {g.cells(1), g.cells(0)});
+    const std::span<const double> field = span_of_array(keep);
+    switch (m.check_viscosity(field)) {
+        case viscosity_status::not_finite:
+            refuse_value("mu_eff must be finite in every non-SOLID cell");
+        case viscosity_status::not_positive:
+            refuse_value("mu_eff must be positive in every non-SOLID cell");
+        case viscosity_status::ok:
+            break;
+    }
+    return field;
+}
+
+// `wall_mu`'s refusals in the reference's order (`_check_wall_mu`), or its spans.
+std::array<std::span<const double>, 2> read_wall_mu(const Predictor2& m, nb::handle value,
+                                                    std::array<Array, 2>& keep) {
+    if (!nb::isinstance<nb::dict>(value)) {
+        refuse_type("wall_mu must be a dict with keys 'u' and 'v', got " +
+                    python_type_name(value));
+    }
+    const nb::dict fields = nb::borrow<nb::dict>(value);
+    if (nb::len(fields) != 2 || !fields.contains("u") || !fields.contains("v")) {
+        const nb::object names = nb::module_::import_("builtins").attr("sorted")(fields);
+        refuse_value("wall_mu must have keys 'u' and 'v', got " +
+                     nb::cast<std::string>(nb::str(names)));
+    }
+    const Grid2& g = m.mesh();
+    std::array<std::span<const double>, 2> spans;
+    for (int c = 0; c < 2; ++c) {
+        const char* key = c == 0 ? "u" : "v";
+        const std::string name = std::string("wall_mu['") + key + "']";
+        keep[c] = read_viscosity(fields[key], name, {g.cells(1) + 1, g.cells(0) + 1});
+        spans[c] = span_of_array(keep[c]);
+        switch (m.check_wall_viscosity(c, spans[c])) {
+            case viscosity_status::not_finite:
+                refuse_value(name + " must be finite at every wall face");
+            case viscosity_status::not_positive:
+                refuse_value(name + " must be positive at every wall face");
+            case viscosity_status::ok:
+                break;
+        }
+    }
+    return spans;
+}
+
+// The viscosities of one call, empty where not given, and the arrays they
+// view, kept alive while the core reads them.
+struct viscosity_arrays {
+    Array field;
+    std::array<Array, 2> walls;
+};
+struct viscosities {
+    std::span<const double> field;
+    std::array<std::span<const double>, 2> walls;
+};
+
+viscosities read_viscosities(const Predictor2& m, nb::handle mu_eff, nb::handle wall_mu,
+                             viscosity_arrays& arrays) {
+    viscosities mu;
+    if (!mu_eff.is_none()) {
+        mu.field = read_mu_eff(m, mu_eff, arrays.field);
+    }
+    if (!wall_mu.is_none()) {
+        mu.walls = read_wall_mu(m, wall_mu, arrays.walls);
+    }
+    return mu;
+}
+
+// A new [rows, columns] float64 NumPy array for an output, its values not set.
+nb::ndarray<nb::numpy, double> new_matrix(std::array<std::size_t, 2> shape) {
+    auto* data = new double[shape[0] * shape[1]];
+    nb::capsule owner(data, [](void* p) noexcept { delete[] static_cast<double*>(p); });
+    return nb::ndarray<nb::numpy, double>(data, 2, shape.data(), owner);
+}
+
+// The fields' shapes, refused as the reference refuses them (`_check_shapes`, `predict`).
+void check_fields(const Predictor2& m, const Array& u, const Array& v, const Array& p) {
+    const Grid2& g = m.mesh();
+    const auto u_shape = face_shape(g, 0);
+    const auto v_shape = face_shape(g, 1);
+    const std::array<std::size_t, 2> p_shape{g.cells(1), g.cells(0)};
+    if (!has_shape(u, u_shape) || !has_shape(v, v_shape)) {
+        refuse_value("expected staggered shapes u " + shape_text(u_shape) + " and v " +
+                     shape_text(v_shape) + ", got u " + shape_text(u) + " and v " +
+                     shape_text(v));
+    }
+    if (!has_shape(p, p_shape)) {
+        refuse_value("expected p of shape " + shape_text(p_shape) + ", got " + shape_text(p));
+    }
+    for (const Array* a : {&u, &v, &p}) {
+        require_aligned(a->data(), alignof(double), "MomentumPredictor2");
+    }
+}
+
+nb::tuple momentum_predict(Predictor2& m, const Array& u, const Array& v, const Array& p,
+                           nb::handle mu_eff, nb::handle wall_mu, nb::handle transient) {
+    check_fields(m, u, v, p);
+    const auto u_shape = face_shape(m.mesh(), 0);
+    const auto v_shape = face_shape(m.mesh(), 1);
+    viscosity_arrays arrays;
+    const viscosities mu = read_viscosities(m, mu_eff, wall_mu, arrays);
+    if (!transient.is_none()) {
+        PyErr_SetString(PyExc_NotImplementedError,
+                        "the core's predictor is the steady path: a transient prediction stays "
+                        "on the reference (ADR-017 F)");
+        throw nb::python_error();
+    }
+    auto u_star = new_matrix(u_shape);
+    auto v_star = new_matrix(v_shape);
+    auto a_p_u = new_matrix(u_shape);
+    auto a_p_v = new_matrix(v_shape);
+    const auto out = [](nb::ndarray<nb::numpy, double>& a) {
+        return std::span<double>(a.data(), a.size());
+    };
+    m.predict({span_of_array(u), span_of_array(v)}, span_of_array(p), mu.field, mu.walls,
+              {out(u_star), out(v_star)}, {out(a_p_u), out(a_p_v)});
+    return nb::make_tuple(u_star, v_star, a_p_u, a_p_v);
+}
+
+nb::dict momentum_stencil_viscosity(Predictor2& m, nb::handle mu_eff) {
+    Array keep;
+    const std::span<const double> field = read_mu_eff(m, mu_eff, keep);
+    const Grid2& g = m.mesh();
+    auto u = new_matrix({g.cells(1) + 1, g.cells(0) + 1});
+    auto v = new_matrix({g.cells(1) + 1, g.cells(0) + 1});
+    m.stencil_viscosity(field, {std::span<double>(u.data(), u.size()),
+                                std::span<double>(v.data(), v.size())});
+    nb::dict out;
+    out["u"] = u;
+    out["v"] = v;
+    return out;
+}
+
+nb::dict momentum_coefficients(Predictor2& m, int component, const Array& u, const Array& v,
+                               const Array& p, nb::handle mu_eff, nb::handle wall_mu) {
+    const int c = direction(component);
+    check_fields(m, u, v, p);
+    viscosity_arrays arrays;
+    const viscosities mu = read_viscosities(m, mu_eff, wall_mu, arrays);
+    const auto shape = face_shape(m.mesh(), c);
+    const std::vector<std::size_t> sizes{shape[0], shape[1]};
+    auto a_p = new_matrix(shape);
+    const std::span<double> diagonal(a_p.data(), a_p.size());
+    m.equations(c, {span_of_array(u), span_of_array(v)}, span_of_array(p), mu.field, mu.walls,
+                diagonal);
+    nb::dict out;
+    const std::array<const char*, 4> names{"a_s_plus", "a_s_minus", "a_t_plus", "a_t_minus"};
+    for (int which = 0; which < 4; ++which) {
+        out[names[which]] = shaped_copy<double>(m.neighbour(which).first(a_p.size()), sizes);
+    }
+    out["a_p"] = a_p;
+    return out;
+}
+
+// A mask field as 0 and 1; a 2 is a mask that is neither all ones nor none,
+// which no set-up should leave.
+nb::object mask_field(const std::vector<cfdcore::lanes::mask>& masks,
+                      const std::vector<std::size_t>& shape) {
+    std::vector<std::uint8_t> bytes(masks.size());
+    for (std::size_t i = 0; i < masks.size(); ++i) {
+        bytes[i] = masks[i] == cfdcore::lanes::all ? 1 : 2;
+        if (masks[i] == cfdcore::lanes::none) {
+            bytes[i] = 0;
+        }
+    }
+    return nb::cast(shaped_copy<std::uint8_t>(bytes, shape));
+}
+
+// The value a (name, pointer) table holds under a name, null for none.
+template <typename Table>
+auto found(const Table& table, const std::string& name) -> decltype(table[0].second) {
+    for (const auto& [key, value] : table) {
+        if (name == key) {
+            return value;
+        }
+    }
+    return nullptr;
+}
+
+// A quantity of one component's set-up by its name in `component_setup`: a set of
+// weights as a list of 1-D arrays, a field as a matrix.
+nb::object momentum_fixed(const Predictor2& m, const std::string& name, int component) {
+    const int c = direction(component);
+    const component_setup& o = m.setup(c);
+    const Grid2& g = m.mesh();
+    const std::vector<std::size_t> cells{g.cells(1), g.cells(0)};
+    const std::vector<std::size_t> corners{g.cells(1) + 1, g.cells(0) + 1};
+    const auto face = face_shape(g, c);
+    const std::vector<std::size_t> faces{face[0], face[1]};
+    const auto list_of = [](const auto& arrays) {
+        nb::list out;
+        for (const auto& a : arrays) {
+            out.append(to_numpy(a));
+        }
+        return out;
+    };
+    using three = std::array<std::vector<double>, 3>;
+    using two = std::array<std::vector<double>, 2>;
+    using line = std::vector<double>;
+    using masks = std::vector<cfdcore::lanes::mask>;
+    const std::array<std::pair<const char*, const three*>, 6> threes{
+        {{"std_pos", &o.std_pos},
+         {"std_neg", &o.std_neg},
+         {"alt_pos", &o.alt_pos},
+         {"alt_neg", &o.alt_neg},
+         {"t_pos", &o.t_pos},
+         {"t_neg", &o.t_neg}}};
+    const std::array<std::pair<const char*, const two*>, 2> twos{
+        {{"wall_pos", &o.wall_pos}, {"wall_neg", &o.wall_neg}}};
+    const std::array<std::pair<const char*, const line*>, 3> lines{
+        {{"harmonic_low", &o.harmonic_low},
+         {"harmonic_high", &o.harmonic_high},
+         {"mean_high", &o.mean_high}}};
+    const std::array<std::pair<const char*, const line*>, 1> cell_fields{
+        {{"conductance_s", &o.conductance_s}}};
+    const std::array<std::pair<const char*, const line*>, 2> corner_fields{
+        {{"conductance_t", &o.conductance_t}, {"reach", &o.reach}}};
+    const std::array<std::pair<const char*, const masks*>, 2> cell_masks{
+        {{"blocked_pos", &o.blocked_pos}, {"blocked_neg", &o.blocked_neg}}};
+    const std::array<std::pair<const char*, const masks*>, 6> corner_masks{
+        {{"wall_face", &o.wall_face},
+         {"takes_wall", &o.takes_wall},
+         {"conducts", &o.conducts},
+         {"far_wall_low", &o.far_wall_low},
+         {"far_wall_high", &o.far_wall_high},
+         {"wall_read", &o.wall_read}}};
+    const std::array<std::pair<const char*, const masks*>, 3> face_masks{
+        {{"unknown", &o.unknown},
+         {"couples_high", &o.couples_high},
+         {"couples_low", &o.couples_low}}};
+    if (const auto* a = found(threes, name)) {
+        return list_of(*a);
+    }
+    if (const auto* a = found(twos, name)) {
+        return list_of(*a);
+    }
+    if (const auto* a = found(lines, name)) {
+        return nb::cast(to_numpy(*a));
+    }
+    if (const auto* a = found(cell_fields, name)) {
+        return nb::cast(shaped_copy<double>(*a, cells));
+    }
+    if (const auto* a = found(corner_fields, name)) {
+        return nb::cast(shaped_copy<double>(*a, corners));
+    }
+    if (const auto* a = found(cell_masks, name)) {
+        return mask_field(*a, cells);
+    }
+    if (const auto* a = found(corner_masks, name)) {
+        return mask_field(*a, corners);
+    }
+    if (const auto* a = found(face_masks, name)) {
+        return mask_field(*a, faces);
+    }
+    refuse_value("MomentumPredictor2.fixed: no quantity is named " + name);
+}
+
 }  // namespace
 
 NB_MODULE(_cfdcore, m) {
@@ -1842,6 +2223,38 @@ NB_MODULE(_cfdcore, m) {
         .def(
             "held", [](const March2& m) { return m.run->held(); },
             "Whether the clean-out's hold holds.");
+    nb::class_<Predictor2>(
+        m, "MomentumPredictor2",
+        "The staggered momentum predictor on a grid (MomentumPredictor's steady path).\n\n"
+        "MomentumPredictor2(grid, dx_cell, dy_cell, dx_face, dy_face, rho, mu, alpha, sweeps,\n"
+        "tangential, held_u=None, held_v=None): the mesh's widths, air's density and\n"
+        "viscosity, solver.alpha_velocity and momentum_sweeps, the bottom, top, left and\n"
+        "right edges' conditions as (is_dirichlet, value, wall_distance) tuples, and the vent\n"
+        "faces the sweeps keep (VentFaces.normal_u, normal_v). Fewer than two cells along an\n"
+        "axis, a width of another length or fewer than one sweep raise ValueError; an edge or a\n"
+        "vent mask of another shape TypeError.")
+        .def("__init__", &momentum_init, nb::arg("grid"), nb::arg("dx_cell").noconvert(),
+             nb::arg("dy_cell").noconvert(), nb::arg("dx_face").noconvert(),
+             nb::arg("dy_face").noconvert(), nb::arg("rho"), nb::arg("mu"), nb::arg("alpha"),
+             nb::arg("sweeps"), nb::arg("tangential"), nb::arg("held_u").noconvert() = nb::none(),
+             nb::arg("held_v").noconvert() = nb::none(), nb::keep_alive<1, 2>())
+        .def("predict", &momentum_predict, nb::arg("u").noconvert(), nb::arg("v").noconvert(),
+             nb::arg("p").noconvert(), nb::arg("mu_eff") = nb::none(),
+             nb::arg("wall_mu") = nb::none(), nb::arg("transient") = nb::none(),
+             "MomentumPredictor.predict on the steady path, bit for bit: (u_star, v_star, a_p_u,\n"
+             "a_p_v), new arrays. The reference's refusals are raised with its types and\n"
+             "messages; an array that is not C-contiguous float64 is a TypeError, and a\n"
+             "transient argument a NotImplementedError (ADR-017 F).")
+        .def("stencil_viscosity", &momentum_stencil_viscosity, nb::arg("mu_eff").none(),
+             "MomentumPredictor.stencil_viscosity, bit for bit: the dict of \"u\" and \"v\".")
+        .def("coefficients", &momentum_coefficients, nb::arg("component"),
+             nb::arg("u").noconvert(), nb::arg("v").noconvert(), nb::arg("p").noconvert(),
+             nb::arg("mu_eff") = nb::none(), nb::arg("wall_mu") = nb::none(),
+             "The neighbour coefficients and the diagonal of component 0 (u) or 1 (v), named as\n"
+             "MomentumCoefficients names them, for the parity tests.")
+        .def("fixed", &momentum_fixed, nb::arg("name"), nb::arg("component"),
+             "A quantity computed once at construction, for the parity tests: the weights, the\n"
+             "means' fractions, the scalar conductances, the distances and the masks (0 or 1).");
     m.attr("budget_terms") = [] {
         nb::list names;
         for (const std::string_view name : cfdcore::march::budget_term_names) {

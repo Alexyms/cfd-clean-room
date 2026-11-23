@@ -110,4 +110,4 @@ jobs:
       - name: Run the parity tests
         run: |
           source .venv/bin/activate
-          CFD_CORE_REQUIRED=1 pytest tests/test_core_parity.py tests/test_core_march.py -v -m parity
+          CFD_CORE_REQUIRED=1 pytest tests/test_core_parity.py tests/test_core_march.py tests/test_core_momentum.py -v -m parity
