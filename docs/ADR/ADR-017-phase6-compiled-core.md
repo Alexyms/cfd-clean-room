@@ -319,9 +319,12 @@ of a stated shape, so a wrong dtype, layout or shape is refused at the call with
 which is what REQ-N03's rationale ("memory layout, dtype, or indexing errors") asked a test to
 catch. Arrays leave as new NumPy arrays (copies) when Python asks: at a frame, a checkpoint and
 the end. A core error (a non-finite value, a breach of ADR-016's limit, a solve at its cap)
-returns a status the Python side turns into the exception the reference raises
-(`ConservationBreachError`, `FlowNotConvergedError`, `PositivityError`), so
-`scripts/run_scenario.py` exits as it does today.
+returns a status, which the binding raises as an exception of the core's own, carrying its
+numbers (`_cfdcore.ConservationBreach`; amended 2026-11-22, fix pass 90b); the Python side
+maps it to the exception the reference raises (`ConservationBreachError`,
+`FlowNotConvergedError`, `PositivityError`), in `tests/core_mapping.py` until step 6's
+`src/core_backend.py`, so `scripts/run_scenario.py` exits as it does today. The binding
+imports nothing from `src`.
 
 **The per-call exchange, a run.**
 
