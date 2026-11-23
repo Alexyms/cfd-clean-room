@@ -72,8 +72,8 @@ enum class stop {
     count,         // it took the steps asked for
     interval_end,  // it reached the interval's last step
     held,          // the clean-out's hold (at entry, or after its last step)
-    breach,        // a class's step breached ADR-016's limit (the step not counted)
-    refused,       // a class's step refused its input (the step not counted)
+    breach,        // a class's step breached ADR-016's limit (the step half taken, not counted)
+    refused,       // a class's step refused its input (the step half taken, not counted)
 };
 
 // Where a march writes its steps, row r for its r-th step: the run's step count,
@@ -81,7 +81,8 @@ enum class stop {
 // term not yet set), each class's reading and each channel's at each sensor
 // [classes, sensors], each class's free-area mean [classes] (empty without a
 // recovery), and each class's sweeps and whether its solve converged [classes].
-// Each span holds at least as many rows as steps asked for.
+// A march of n steps writes one row per step it counts and no other row, and needs
+// every span to hold min(n, the interval's steps left) rows.
 struct rows {
     std::span<std::int64_t> step;
     std::span<double> t;
@@ -166,10 +167,21 @@ public:
     // At most n steps of the interval, each written to `out`'s next row: every
     // class's step, the step count and time, the readings and channels, the maps
     // and, with a recovery, the means, the recovery fields and the hold. Stops at
-    // n steps, at the interval's end, after a step that holds, or before counting
-    // a step a class breaches or refuses. Returns at once, with no step, when the
+    // n steps, at the interval's end, after a step that holds, or at a step in
+    // which a class breaches or refuses. Returns at once, with no step, when the
     // run holds already or no steps remain. Throws std::invalid_argument without
-    // an interval, or rows shorter than the steps asked for.
+    // an interval, or when a span of `out` holds fewer than min(n, remaining())
+    // rows.
+    //
+    // The steps counted are the rows written (`result::steps`), and the step
+    // count and time are the last row's. A breach or a refusal is returned, not
+    // thrown; the step it stops in is neither counted nor written, but it is half
+    // taken: the classes before the failing one have advanced their fields in place
+    // and booked the step, and so has the failing class on a breach (a breach is
+    // refused after the step, `transport.hpp`), while the classes after it have
+    // not. So after either stop `fields()`, `field(k)` and `budget_of(k)` are no
+    // run's state at a step boundary and do not match `step()` and `time()`. The
+    // run is finished: only `restore` makes it a run at a step boundary again.
     result march(std::size_t n, const rows& out);
 
     // The resident state, read-only: class k's field (a cell field), the budgets,

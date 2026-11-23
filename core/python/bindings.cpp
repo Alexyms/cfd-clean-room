@@ -24,6 +24,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -706,26 +707,59 @@ void transport_set_interval(TransportSolver2& t, nb::handle conditions, nb::hand
     }
 }
 
-// `dt` as the reference reads it: a bool (Python's, NumPy's or a 0-d bool
-// array) is a TypeError, anything else a number converted as `math.isfinite`
-// converts it (a 0-d float array and an np.float64 are numbers).
-double read_dt(nb::handle dt) {
+// Whether a value is a bool of any kind: Python's, NumPy's or a 0-d bool array.
+bool is_bool(nb::handle value) {
     const nb::module_ numpy = nb::module_::import_("numpy");
     // A 0-d bool array is neither a bool nor an np.bool_, and would step with
     // dt = 1.0, so the array's dtype kind decides.
-    const bool is_bool =
-        nb::isinstance<bool>(dt) || PyObject_IsInstance(dt.ptr(), numpy.attr("bool_").ptr()) == 1 ||
-        (PyObject_IsInstance(dt.ptr(), numpy.attr("ndarray").ptr()) == 1 &&
-         nb::cast<std::string>(nb::getattr(nb::getattr(dt, "dtype"), "kind")) == "b");
-    if (is_bool) {
-        throw nb::type_error("dt must be a number, not a bool");
+    return nb::isinstance<bool>(value) ||
+           PyObject_IsInstance(value.ptr(), numpy.attr("bool_").ptr()) == 1 ||
+           (PyObject_IsInstance(value.ptr(), numpy.attr("ndarray").ptr()) == 1 &&
+            nb::cast<std::string>(nb::getattr(nb::getattr(value, "dtype"), "kind")) == "b");
+}
+
+// A number as the reference reads `dt`: a bool of any kind is a TypeError,
+// anything else a number converted as `math.isfinite` converts it (a 0-d float
+// array and an np.float64 are numbers). `what` names the argument in the refusal.
+double read_number(nb::handle value, const char* what) {
+    if (is_bool(value)) {
+        throw nb::type_error((std::string(what) + " must be a number, not a bool").c_str());
     }
-    const double value = PyFloat_AsDouble(dt.ptr());
-    if (value == -1.0 && PyErr_Occurred() != nullptr) {
+    const double number = PyFloat_AsDouble(value.ptr());
+    if (number == -1.0 && PyErr_Occurred() != nullptr) {
         PyErr_Clear();
-        throw nb::type_error("dt must be a number");
+        throw nb::type_error((std::string(what) + " must be a number").c_str());
     }
-    return value;
+    return number;
+}
+
+double read_dt(nb::handle dt) { return read_number(dt, "dt"); }
+
+// A time, s: a number that is finite, or NaN where `nan_ok` (a time not yet set).
+double read_time(nb::handle value, const char* what, bool nan_ok = false) {
+    const double t = read_number(value, what);
+    if (!std::isfinite(t) && !(nan_ok && std::isnan(t))) {
+        throw nb::value_error((std::string(what) + " must be finite, got " + float_str(t)).c_str());
+    }
+    return t;
+}
+
+// A count: an int (NumPy's integers too) that is not a bool and fits 64 bits.
+std::int64_t read_count(nb::handle value, const char* what) {
+    if (is_bool(value)) {
+        throw nb::type_error((std::string(what) + " must be an int, not a bool").c_str());
+    }
+    const nb::object index = nb::steal(PyNumber_Index(value.ptr()));
+    if (!index.is_valid()) {
+        PyErr_Clear();
+        throw nb::type_error((std::string(what) + " must be an int").c_str());
+    }
+    int overflow = 0;
+    const long long count = PyLong_AsLongLongAndOverflow(index.ptr(), &overflow);
+    if (overflow != 0) {
+        throw nb::value_error((std::string(what) + " is out of range").c_str());
+    }
+    return static_cast<std::int64_t>(count);
 }
 
 void transport_set_step(TransportSolver2& t, nb::handle dt) {
@@ -1293,8 +1327,9 @@ void march_init(March2* self, const Scheme2& s, const Vector& dx_cell, const Vec
                       limit};
 }
 
-void march_restore(March2& m, const Cube& fields, nb::handle budgets, std::int64_t step,
-                   double t, const Maps& first_above, double arrival_t, nb::handle recovery) {
+void march_restore(March2& m, const Cube& fields, nb::handle budgets, nb::handle step,
+                   nb::handle t, const Maps& first_above, nb::handle arrival_t,
+                   nb::handle recovery) {
     constexpr std::string_view who = "March2.restore";
     const Grid2& g = m.scheme->mesh();
     auto& r = *m.run;
@@ -1303,10 +1338,14 @@ void march_restore(March2& m, const Cube& fields, nb::handle budgets, std::int64
     cfdcore::march::resident state;
     state.fields = span_of3(fields);
     state.budgets = read_budgets(budgets, r.classes());
-    state.step = step;
-    state.t = t;
+    state.step = read_count(step, "step");
+    if (state.step < 0) {
+        throw nb::value_error("March2.restore: step is negative");
+    }
+    state.t = read_time(t, "t");
     state.first_above = std::span<const double>(first_above.data(), first_above.size());
-    state.arrival_t = arrival_t;
+    // NaN before the maps' first update.
+    state.arrival_t = read_time(arrival_t, "arrival_t", true);
     std::optional<recovery_arrays> kept;
     if (r.has_recovery()) {
         if (recovery.is_none()) {
@@ -1327,15 +1366,19 @@ void march_restore(March2& m, const Cube& fields, nb::handle budgets, std::int64
 
 void march_interval(March2& m, nb::handle conditions, nb::handle u, nb::handle v,
                     nb::handle v_ext, nb::handle eddy_viscosity, nb::handle sources,
-                    nb::handle dt, std::int64_t steps, double t_start, double t_end,
-                    std::int64_t first) {
-    if (steps < 1 || first < 0 || first >= steps) {
+                    nb::handle dt, nb::handle steps, nb::handle t_start, nb::handle t_end,
+                    nb::handle first) {
+    const std::int64_t n_steps = read_count(steps, "steps");
+    const std::int64_t first_step = read_count(first, "first");
+    const double start = read_time(t_start, "t_start");
+    const double end = read_time(t_end, "t_end");
+    if (n_steps < 1 || first_step < 0 || first_step >= n_steps) {
         throw nb::value_error("March2.interval: the first step is not in [0, steps)");
     }
     interval_arrays arrays;
     const interval_read read = read_interval(m.scheme->mesh(), m.run->classes(), conditions, u,
                                              v, v_ext, eddy_viscosity, sources, arrays);
-    const cfdcore::march::plan p{t_start, t_end, read_dt(dt), steps, first};
+    const cfdcore::march::plan p{start, end, read_dt(dt), n_steps, first_step};
     const refusal r = m.run->interval(read.each, read.input, p);
     if (!r.ok()) {
         raise_refusal(r);
@@ -1358,7 +1401,8 @@ const char* stop_name(cfdcore::march::stop s) {
     return "count";
 }
 
-nb::dict march_steps(March2& m, std::int64_t n) {
+nb::dict march_steps(March2& m, nb::handle steps_asked) {
+    const std::int64_t n = read_count(steps_asked, "n");
     if (n < 1) {
         throw nb::value_error("March2.march: n is at least 1");
     }
@@ -1767,15 +1811,19 @@ NB_MODULE(_cfdcore, m) {
              nb::arg("arrival_t"), nb::arg("recovery").none() = nb::none(),
              "Set the resident state: the class fields [classes, ny, nx], every class's\n"
              "budget (TransportSolver2.budgets' dicts), the run's step count and time, the\n"
-             "arrival maps [events, channels, ny, nx] and their last update's time, and with\n"
-             "a recovery its state (Recovery2.state's dict). Clears the interval.")
+             "arrival maps [events, channels, ny, nx] and their last update's time (NaN\n"
+             "before the first), and with a recovery its state (Recovery2.state's dict).\n"
+             "Clears the interval. A bool or a float where a count is read, a negative step\n"
+             "or a time that is not finite is refused.")
         .def("interval", &march_interval, nb::arg("conditions"), nb::arg("u"), nb::arg("v"),
              nb::arg("v_ext").none() = nb::none(), nb::arg("eddy_viscosity").none() = nb::none(),
              nb::arg("sources").none() = nb::none(), nb::kw_only(), nb::arg("dt"),
              nb::arg("steps"), nb::arg("t_start"), nb::arg("t_end"), nb::arg("first") = 0,
              "Set an interval: TransportSolver2.set_interval's arguments, then its plan\n"
              "(IntervalPlan's dt, steps, t_start and t_end) and the step within it the\n"
-             "march continues from. Refuses what set_interval and set_step refuse.")
+             "march continues from. Refuses what set_interval and set_step refuse; a bool,\n"
+             "a float where a count is read or a time that is not finite is refused (a\n"
+             "TypeError and a ValueError), as is a first step outside [0, steps).")
         .def("march", &march_steps, nb::arg("n"),
              "At most n steps of the interval (fewer at its end, after the step that holds,\n"
              "or before a step that breaches). Returns a dict: step and t [m]; budgets\n"

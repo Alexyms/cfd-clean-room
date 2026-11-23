@@ -1227,6 +1227,96 @@ def test_march_stops_as_run_march_does_on_a_step_above_the_stable_step(
 # the driver
 
 
+class _Stub:
+    """A core whose march is the real one's with its result altered, the rest passed through."""
+
+    def __init__(self, core: "_cfdcore.March2", alter: object) -> None:
+        self._core = core
+        self._alter = alter
+        self.calls = 0
+
+    def march(self, n: int) -> dict:
+        self.calls += 1
+        if self.calls > 3:
+            raise RuntimeError("the driver asked again")
+        return self._alter(self._core, n)  # type: ignore[operator]
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._core, name)
+
+
+def _empty(core: "_cfdcore.March2", n: int) -> dict:
+    """A march that took no step and says it counted."""
+    return {
+        "step": np.zeros(0, dtype=np.int64),
+        "t": np.zeros(0),
+        "stopped": "count",
+        "breach": None,
+    }
+
+
+def test_driver_refuses_a_march_that_returns_no_step_without_holding(
+    tmp_path: Path,
+) -> None:
+    """A march of no step that neither held nor breached is an error, not a loop."""
+    case = _case("clean", tmp_path)
+    state = _world(case, tmp_path, core_driver.CoreRun, "empty")
+    assert isinstance(state, core_driver.CoreRun)
+    state.core = _Stub(state.core, _empty)  # type: ignore[assignment]
+    fields, budgets, step, t = _start(state, case)
+    with pytest.raises(AssertionError, match="no step"):
+        state.march(case.plans, case.start, fields, budgets, step, t)
+    assert state.core.calls == 1
+
+
+@pytest.mark.parametrize(
+    ("claim", "match"),
+    [
+        ("interval", "stopped as 'interval' with"),
+        ("held", "stopped as 'held' with"),
+        ("breach", "stopped as 'breach' with"),
+        ("something else", "stopped as 'something else' with"),
+    ],
+)
+def test_driver_refuses_a_stop_reason_the_cores_state_does_not_bear_out(
+    claim: str, match: str, tmp_path: Path
+) -> None:
+    """The driver reads the core's stop reason and refuses one the core's own state contradicts.
+
+    After the first step of a march the interval has steps left, the run does
+    not hold and there is no breach record; the core's reason is a count.
+    """
+    case = _case("clean", tmp_path)
+    state = _world(case, tmp_path, core_driver.CoreRun, "claims")
+    assert isinstance(state, core_driver.CoreRun)
+
+    def lie(core: "_cfdcore.March2", n: int) -> dict:
+        result = core.march(n)
+        return {**result, "stopped": claim}
+
+    state.core = _Stub(state.core, lie)  # type: ignore[assignment]
+    fields, budgets, step, t = _start(state, case)
+    with pytest.raises(AssertionError, match=match):
+        state.march(case.plans, case.start, fields, budgets, step, t)
+
+
+def test_driver_refuses_a_count_at_the_intervals_end(tmp_path: Path) -> None:
+    """A march that reaches the interval's last step and reports a count is refused."""
+    case = _case("clean", tmp_path)
+    state = _world(case, tmp_path, core_driver.CoreRun, "count")
+    assert isinstance(state, core_driver.CoreRun)
+
+    def count(core: "_cfdcore.March2", n: int) -> dict:
+        result = core.march(core.remaining)
+        assert result["stopped"] == "interval"
+        return {**result, "stopped": "count"}
+
+    state.core = _Stub(state.core, count)  # type: ignore[assignment]
+    fields, budgets, step, t = _start(state, case)
+    with pytest.raises(AssertionError, match="stopped as 'count' with 0"):
+        state.march(case.plans, case.start, fields, budgets, step, t)
+
+
 def test_driver_refuses_an_interval_the_core_was_not_built_for(tmp_path: Path) -> None:
     """An interval whose transport keys, particles or t_end are not the core's is refused.
 
@@ -1322,6 +1412,174 @@ def _ready(tmp: Path) -> Ready:
         np.ascontiguousarray(state.arrival.state()["first_above"]),
         {k: np.ascontiguousarray(v) for k, v in state.tracker.state().items()},
     )
+
+
+GUARDS = {
+    "restore: step True": (
+        "restore",
+        {"step": True},
+        TypeError,
+        r"^step must be an int, not a bool",
+    ),
+    "restore: step a float": (
+        "restore",
+        {"step": 2.0},
+        TypeError,
+        r"^step must be an int$",
+    ),
+    "restore: step negative": ("restore", {"step": -1}, ValueError, "step is negative"),
+    "restore: step beyond 64 bits": (
+        "restore",
+        {"step": 2**70},
+        ValueError,
+        r"^step is out of range",
+    ),
+    "restore: t True": (
+        "restore",
+        {"t": True},
+        TypeError,
+        r"^t must be a number, not a bool",
+    ),
+    "restore: t NaN": (
+        "restore",
+        {"t": float("nan")},
+        ValueError,
+        r"^t must be finite",
+    ),
+    "restore: t inf": (
+        "restore",
+        {"t": float("inf")},
+        ValueError,
+        r"^t must be finite",
+    ),
+    "restore: arrival_t True": (
+        "restore",
+        {"arrival_t": True},
+        TypeError,
+        r"^arrival_t must be a number, not a bool",
+    ),
+    "restore: arrival_t inf": (
+        "restore",
+        {"arrival_t": float("inf")},
+        ValueError,
+        r"^arrival_t must be finite",
+    ),
+    "interval: steps True": (
+        "interval",
+        {"steps": True},
+        TypeError,
+        r"^steps must be an int, not a bool",
+    ),
+    "interval: steps a float": (
+        "interval",
+        {"steps": 5.0},
+        TypeError,
+        r"^steps must be an int$",
+    ),
+    "interval: first True": (
+        "interval",
+        {"first": True},
+        TypeError,
+        r"^first must be an int, not a bool",
+    ),
+    "interval: first a float": (
+        "interval",
+        {"first": 1.0},
+        TypeError,
+        r"^first must be an int$",
+    ),
+    "interval: t_start True": (
+        "interval",
+        {"t_start": True},
+        TypeError,
+        r"^t_start must be a number, not a bool",
+    ),
+    "interval: t_start NaN": (
+        "interval",
+        {"t_start": float("nan")},
+        ValueError,
+        r"^t_start must be finite",
+    ),
+    "interval: t_start inf": (
+        "interval",
+        {"t_start": float("inf")},
+        ValueError,
+        r"^t_start must be finite",
+    ),
+    "interval: t_end True": (
+        "interval",
+        {"t_end": True},
+        TypeError,
+        r"^t_end must be a number, not a bool",
+    ),
+    "interval: t_end NaN": (
+        "interval",
+        {"t_end": float("nan")},
+        ValueError,
+        r"^t_end must be finite",
+    ),
+    "interval: t_end inf": (
+        "interval",
+        {"t_end": float("inf")},
+        ValueError,
+        r"^t_end must be finite",
+    ),
+    "interval: first beyond the steps": (
+        "interval",
+        {"first": 99999},
+        ValueError,
+        r"^March2\.interval: the first step is not in",
+    ),
+}
+
+
+@pytest.mark.parametrize("label", list(GUARDS))
+def test_march_refuses_a_bool_a_float_count_and_a_time_that_is_not_finite(
+    label: str, tmp_path: Path
+) -> None:
+    """The plan, time and count a restore and an interval read are refused when they are not numbers.
+
+    A bool is a TypeError (as ``dt=True`` is), a float where a count is read is
+    one, and a time that is NaN or infinite, a negative step count and a first
+    step outside the interval are ValueErrors.
+    """
+    ready = _ready(tmp_path)
+    call, changes, exception, match = GUARDS[label]
+    ready.restore()
+    with pytest.raises(exception, match=match):
+        getattr(ready, call)(**changes)
+
+
+def test_march_refuses_a_bool_or_a_float_for_the_steps_asked(tmp_path: Path) -> None:
+    """march(n) reads n as a count: a bool, a float and a number past 64 bits are refused."""
+    ready = _ready(tmp_path)
+    ready.restore()
+    ready.interval()
+    core = ready.state.core
+    with pytest.raises(TypeError, match=r"^n must be an int, not a bool"):
+        core.march(True)
+    with pytest.raises(TypeError, match=r"^n must be an int$"):
+        core.march(2.0)
+    with pytest.raises(ValueError, match=r"^n is out of range"):
+        core.march(2**70)
+    assert core.step == 0 and core.remaining == ready.plan.steps
+
+
+def test_march_reads_numpy_numbers_and_a_nan_arrival_time(tmp_path: Path) -> None:
+    """The guards refuse no number the driver or a checkpoint hands over.
+
+    NumPy's integers and floats are numbers, and the maps' last update's time is
+    NaN before the first update.
+    """
+    ready = _ready(tmp_path)
+    ready.restore(step=np.int64(2), t=np.float64(0.25), arrival_t=np.nan)
+    core = ready.state.core
+    assert core.step == 2 and core.t == 0.25
+    ready.interval(steps=np.int64(ready.plan.steps), first=np.int64(1))
+    assert core.remaining == ready.plan.steps - 1
+    assert len(core.march(np.int64(2))["step"]) == 2
+    ready.restore(t=3, arrival_t=0.5)
+    assert core.t == 3.0 and core.arrival()["arrival_t"] == 0.5
 
 
 @functools.cache

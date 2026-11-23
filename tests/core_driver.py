@@ -18,6 +18,7 @@ it here, and nothing under ``src/`` changes.
 
 import os
 from collections.abc import Callable, Mapping, Sequence
+from typing import TYPE_CHECKING
 from unittest import mock
 
 import numpy as np
@@ -36,6 +37,9 @@ from src.time_integration import (
     _Run,
 )
 from tests import core_mapping
+
+if TYPE_CHECKING:
+    import _cfdcore
 
 
 class CoreRun(_Run):
@@ -99,6 +103,58 @@ class CoreRun(_Run):
                 f"interval {plan.index}'s transport keys, particles or t_end are not "
                 "the run's, which the core was built with"
             )
+
+    @staticmethod
+    def _stop_of(
+        core: "_cfdcore.March2", result: Mapping[str, object], rows: int
+    ) -> str:
+        """The reason a core march returned, checked against the core's own state.
+
+        The reason is the core's claim, so the driver reads it and refuses one
+        the state does not bear out: the interval's end when no step is left and
+        a count when some are, a hold the core holds, a breach that carries its
+        record. A march that took no step must have held or breached, or the
+        driver would ask it again for the same.
+
+        Parameters
+        ----------
+        core : _cfdcore.March2
+            The run, after the march.
+        result : Mapping[str, object]
+            The march's returned dict.
+        rows : int
+            The steps it returned.
+
+        Returns
+        -------
+        str
+            ``result["stopped"]``.
+
+        Raises
+        ------
+        AssertionError
+            If the reason is not one the core's state allows.
+        """
+        stopped = result["stopped"]
+        bears_out = {
+            "interval": core.remaining == 0,
+            "count": core.remaining > 0,
+            "held": core.held(),
+            "breach": result["breach"] is not None,
+        }
+        if not isinstance(stopped, str) or not bears_out.get(stopped, False):
+            raise AssertionError(
+                f"the core's march stopped as {stopped!r} with {core.remaining} "
+                f"steps left, held {core.held()}"
+            )
+        if (result["breach"] is not None) != (stopped == "breach"):
+            raise AssertionError(f"a breach record with the stop {stopped!r}")
+        if rows == 0 and stopped not in ("held", "breach"):
+            raise AssertionError(
+                f"a march that returned no step stopped as {stopped!r}, "
+                "neither held nor breached"
+            )
+        return stopped
 
     def _readings_fields(self, readings: np.ndarray) -> dict[int, np.ndarray]:
         """Fields holding the core's readings at the sensors' cells and zero elsewhere."""
@@ -193,10 +249,11 @@ class CoreRun(_Run):
                 result = core.march(n)
                 self.core_calls += 1
                 rows = len(result["step"])
+                stopped = self._stop_of(core, result, rows)
                 for r in range(rows):
                     step, t = int(result["step"][r]), float(result["t"][r])
                     current = tuple(core_mapping.budgets_of_row(result["budgets"][r]))
-                    held = result["stopped"] == "held" and r == rows - 1
+                    held = stopped == "held" and r == rows - 1
                     last = held or (
                         p == len(plans) - 1 and core.remaining == 0 and r == rows - 1
                     )
@@ -247,6 +304,8 @@ class CoreRun(_Run):
                 error = core_mapping.breach_error(result)
                 if error is not None:
                     raise error
+                # Read once per call: a march that took no step and held ends the loop.
+                held = stopped == "held"
         fields = core_mapping.unstacked(core.class_fields())
         current = tuple(core_mapping.budgets_of(core))
         core_mapping.sync_trackers(core, self.arrival, self.tracker)
