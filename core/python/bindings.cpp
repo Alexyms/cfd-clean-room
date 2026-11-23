@@ -8,20 +8,28 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/ndarray.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/array.h>
 #include <nanobind/stl/string.h>
+#include <nanobind/stl/vector.h>
 
 #include "cfdcore/grid.hpp"
 #include "cfdcore/reduce.hpp"
 #include "cfdcore/scalar.hpp"
+#include "cfdcore/transport.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <exception>
 #include <optional>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 namespace nb = nanobind;
 
@@ -413,6 +421,568 @@ const char* method_name(implicit_method m) {
     return m == implicit_method::jacobi ? "jacobi" : "cg";
 }
 
+// --- One class step (prompt 90) ---------------------------------------------
+
+using Transport2 = cfdcore::transport::solver<2>;
+using cfdcore::transport::refusal;
+using cfdcore::transport::status;
+
+// A Python float's str, as an f-string formats it.
+std::string float_str(double x) { return nb::cast<std::string>(nb::str(nb::float_(x))); }
+std::string float_repr(double x) { return nb::cast<std::string>(nb::repr(nb::float_(x))); }
+
+// Raises the exception the reference raises for a refusal.
+[[noreturn]] void raise_refusal(const refusal& r) {
+    const std::string k = std::to_string(r.size_class);
+    switch (r.code) {
+        case status::condition_not_finite_or_negative:
+            throw nb::value_error(
+                ("class " + k + ": " + r.name + " must be finite and non-negative").c_str());
+        case status::recirculation_without_vents:
+            throw nb::value_error(
+                ("class " + k + ": a recirculation needs the vent faces").c_str());
+        case status::passed_out_of_range:
+            throw nb::value_error(
+                ("class " + k + ": a recirculation passes a fraction in [0, 1], got " +
+                 float_str(r.value))
+                    .c_str());
+        case status::vents_differ:
+            throw nb::value_error(("class " + k +
+                                   " names other vent faces than class 0; the vents are the "
+                                   "room's, the same for every class")
+                                      .c_str());
+        case status::faces_not_finite:
+            throw nb::value_error("faces must be finite");
+        case status::drift_not_finite:
+            throw nb::value_error("v_ext must be finite");
+        case status::sources_not_finite:
+            throw nb::value_error("sources must be finite");
+        case status::sources_negative:
+            throw nb::value_error("sources must be non-negative (ADR-011 B)");
+        case status::source_in_solid:
+            throw nb::value_error("a source sits in a SOLID cell");
+        case status::eddy_viscosity_without_schmidt:
+            throw nb::value_error(
+                "an eddy_viscosity field needs transport.turbulent_schmidt in the configuration "
+                "(REQ-T13)");
+        case status::eddy_viscosity_not_finite:
+            throw nb::value_error("eddy_viscosity must be finite in every non-SOLID cell");
+        case status::eddy_viscosity_negative:
+            throw nb::value_error("eddy_viscosity must be non-negative (ADR-012 F)");
+        case status::dt_not_finite:
+            throw nb::value_error(("dt must be finite, got " + float_str(r.value)).c_str());
+        case status::dt_not_positive:
+            throw nb::value_error(("dt must be positive, got " + float_str(r.value)).c_str());
+        case status::field_not_finite:
+            throw nb::value_error("C_k must be finite");
+        case status::dt_above_stable:
+            throw nb::value_error(("dt " + float_str(r.value) + " exceeds stable_dt " +
+                                   float_str(r.other) + " for class " + k +
+                                   "; the explicit advection step is a convex combination "
+                                   "only below it")
+                                      .c_str());
+        case status::bound_negative_or_nan:
+            throw nb::value_error(
+                ("leftover_bound must be non-negative or None, got " + float_repr(r.value))
+                    .c_str());
+        case status::breach:
+        case status::ok:
+            break;
+    }
+    throw std::logic_error("raise_refusal: not a refusal the binding raises");
+}
+
+// The solver with the scheme it was built on (kept alive by the binding).
+struct TransportSolver2 {
+    TransportSolver2(const Scheme2& s, const cfdcore::transport::geometry<2>& spacing,
+                     const cfdcore::transport::settings& keys,
+                     std::vector<cfdcore::transport::class_physics> physics)
+        : scheme(&s), solver(s, spacing, keys, std::move(physics)), limit(keys.limit) {}
+    const Scheme2* scheme;
+    Transport2 solver;
+    double limit;
+};
+
+void transport_init(TransportSolver2* self, const Scheme2& s, const Vector& dx_cell,
+                    const Vector& dy_cell, const Vector& dx_face, const Vector& dy_face,
+                    double cfl, bool upwind, std::int64_t max_sweeps, double tol, double limit,
+                    double share, double horizon, std::optional<double> schmidt,
+                    const std::vector<double>& settling, const std::vector<double>& diffusion,
+                    const std::array<std::int32_t, 3>& surface_codes) {
+    constexpr std::string_view who = "TransportSolver2";
+    const Grid2& g = s.mesh();
+    const std::array<std::pair<const Vector*, std::size_t>, 4> spacings{
+        {{&dx_cell, g.cells(0)}, {&dy_cell, g.cells(1)}, {&dx_face, g.cells(0) + 1},
+         {&dy_face, g.cells(1) + 1}}};
+    for (const auto& [v, n] : spacings) {
+        if (v->shape(0) != n) {
+            throw nb::type_error(
+                "TransportSolver2: dx_cell, dy_cell, dx_face and dy_face are nx, ny, nx + 1 "
+                "and ny + 1 long");
+        }
+        require_aligned(v->data(), alignof(double), who);
+    }
+    if (settling.empty() || settling.size() != diffusion.size()) {
+        throw nb::value_error("TransportSolver2: settling and diffusion hold one value per class");
+    }
+    cfdcore::transport::settings keys;
+    keys.cfl = cfl;
+    keys.upwind = upwind;
+    keys.max_sweeps = max_sweeps;
+    keys.tol = tol;
+    keys.limit = limit;
+    keys.share = share;
+    keys.horizon = horizon;
+    keys.schmidt = schmidt;
+    keys.surface_codes = surface_codes;
+    std::vector<cfdcore::transport::class_physics> physics;
+    for (std::size_t k = 0; k < settling.size(); ++k) {
+        physics.push_back({settling[k], diffusion[k]});
+    }
+    const cfdcore::transport::geometry<2> spacing{
+        .widths = {as_span(dx_cell), as_span(dy_cell)},
+        .face_distances = {as_span(dx_face), as_span(dy_face)}};
+    new (self) TransportSolver2(s, spacing, keys, std::move(physics));
+}
+
+// A face field's array of one of the conditions' attributes, refused unless
+// it is a C-contiguous array of the dtype and shape the contract names.
+template <typename A>
+A face_array(nb::handle owner, const char* name, std::array<std::size_t, 2> shape, int k,
+             const char* dtype) {
+    A array;
+    const nb::object value = nb::getattr(owner, name);
+    if (!nb::try_cast<A>(value, array, false) || array.shape(0) != shape[0] ||
+        array.shape(1) != shape[1]) {
+        throw nb::type_error(("class " + std::to_string(k) + ": " + name +
+                              " must be a C-contiguous " + dtype + " array of shape (" +
+                              std::to_string(shape[0]) + ", " + std::to_string(shape[1]) + ")")
+                                 .c_str());
+    }
+    require_aligned(array.data(), alignof(std::remove_cv_t<typename A::Scalar>), "set_interval");
+    return array;
+}
+
+// The arrays of one call to set_interval, kept alive while the core reads them.
+struct interval_arrays {
+    std::vector<Matrix> doubles;
+    std::vector<IntMatrix> ints;
+    std::vector<BoolMatrix> bools;
+};
+
+std::span<const double> keep(interval_arrays& keep, Matrix a) {
+    keep.doubles.push_back(a);
+    return span_of(keep.doubles.back());
+}
+std::span<const std::int32_t> keep(interval_arrays& keep, IntMatrix a) {
+    keep.ints.push_back(a);
+    return span_of(keep.ints.back());
+}
+std::span<const bool> keep(interval_arrays& keep, BoolMatrix a) {
+    keep.bools.push_back(a);
+    return span_of(keep.bools.back());
+}
+
+cfdcore::transport::conditions<2> read_conditions(nb::handle faces, int k, const Grid2& g,
+                                                  interval_arrays& arrays) {
+    const auto u = face_shape(g, 0);
+    const auto v = face_shape(g, 1);
+    cfdcore::transport::conditions<2> c;
+    c.inflow = {keep(arrays, face_array<Matrix>(faces, "inflow_u", u, k, "float64")),
+                keep(arrays, face_array<Matrix>(faces, "inflow_v", v, k, "float64"))};
+    c.deposition = {keep(arrays, face_array<Matrix>(faces, "deposition_u", u, k, "float64")),
+                    keep(arrays, face_array<Matrix>(faces, "deposition_v", v, k, "float64"))};
+    c.surface = {keep(arrays, face_array<IntMatrix>(faces, "surface_u", u, k, "int32")),
+                 keep(arrays, face_array<IntMatrix>(faces, "surface_v", v, k, "int32"))};
+    c.settling = keep(arrays, face_array<BoolMatrix>(faces, "settling_v", v, k, "bool"));
+    const nb::object vent_u = nb::getattr(faces, "vent_u");
+    const nb::object vent_v = nb::getattr(faces, "vent_v");
+    if (vent_u.is_none() != vent_v.is_none()) {
+        throw nb::value_error(
+            ("class " + std::to_string(k) + ": vent_u and vent_v are given together or not")
+                .c_str());
+    }
+    if (!vent_u.is_none()) {
+        c.vents = {keep(arrays, face_array<BoolMatrix>(faces, "vent_u", u, k, "bool")),
+                   keep(arrays, face_array<BoolMatrix>(faces, "vent_v", v, k, "bool"))};
+    }
+    for (nb::handle pair : nb::getattr(faces, "recirculation")) {
+        cfdcore::transport::recirculation<2> r;
+        r.intake = {keep(arrays, face_array<BoolMatrix>(pair, "intake_u", u, k, "bool")),
+                    keep(arrays, face_array<BoolMatrix>(pair, "intake_v", v, k, "bool"))};
+        r.discharge = {keep(arrays, face_array<BoolMatrix>(pair, "discharge_u", u, k, "bool")),
+                       keep(arrays, face_array<BoolMatrix>(pair, "discharge_v", v, k, "bool"))};
+        r.passed = nb::cast<double>(nb::getattr(pair, "passed"));
+        c.recirculations.push_back(r);
+    }
+    return c;
+}
+
+// A two-dimensional float64 array of a stated shape, refused as a TypeError otherwise.
+Matrix shaped(nb::handle value, std::array<std::size_t, 2> shape, const std::string& what,
+              bool convert) {
+    Matrix array;
+    if (!nb::try_cast<Matrix>(value, array, convert) || array.shape(0) != shape[0] ||
+        array.shape(1) != shape[1]) {
+        throw nb::type_error((what + " must be a C-contiguous float64 array of shape (" +
+                              std::to_string(shape[0]) + ", " + std::to_string(shape[1]) + ")")
+                                 .c_str());
+    }
+    require_aligned(array.data(), alignof(double), "set_interval");
+    return array;
+}
+
+void transport_set_interval(TransportSolver2& t, nb::handle conditions, nb::handle u,
+                            nb::handle v, nb::handle v_ext, nb::handle eddy_viscosity,
+                            nb::handle sources) {
+    const Grid2& g = t.scheme->mesh();
+    const std::size_t n = t.solver.classes();
+    const std::array<std::size_t, 2> cells{g.cells(1), g.cells(0)};
+    interval_arrays arrays;
+    std::vector<cfdcore::transport::conditions<2>> each;
+    for (nb::handle faces : conditions) {
+        each.push_back(read_conditions(faces, static_cast<int>(each.size()), g, arrays));
+    }
+    if (each.size() != n) {
+        throw nb::value_error("set_interval: the conditions are not one per class");
+    }
+    cfdcore::transport::interval_input<2> input;
+    input.faces = {keep(arrays, shaped(u, face_shape(g, 0), "faces.u", false)),
+                   keep(arrays, shaped(v, face_shape(g, 1), "faces.v", false))};
+    if (!v_ext.is_none()) {
+        for (nb::handle drift : v_ext) {
+            if (drift.is_none()) {
+                input.drift.push_back({});
+                continue;
+            }
+            input.drift.push_back(
+                {keep(arrays,
+                      shaped(nb::getattr(drift, "u"), face_shape(g, 0), "v_ext.u", false)),
+                 keep(arrays,
+                      shaped(nb::getattr(drift, "v"), face_shape(g, 1), "v_ext.v", false))});
+        }
+        if (input.drift.size() != n) {
+            throw nb::value_error("set_interval: v_ext holds one drift (or None) per class");
+        }
+    }
+    if (!eddy_viscosity.is_none()) {
+        input.eddy_viscosity = keep(arrays, shaped(eddy_viscosity, cells, "eddy_viscosity", false));
+    }
+    if (!sources.is_none()) {
+        for (nb::handle rate : sources) {
+            if (rate.is_none()) {
+                input.sources.push_back({});
+                continue;
+            }
+            // `np.asarray(sources, dtype=np.float64)`: another dtype is converted.
+            input.sources.push_back(keep(arrays, shaped(rate, cells, "sources", true)));
+        }
+        if (input.sources.size() != n) {
+            throw nb::value_error("set_interval: sources holds one array (or None) per class");
+        }
+    }
+    const refusal r = t.solver.set_interval(each, input);
+    if (!r.ok()) {
+        raise_refusal(r);
+    }
+}
+
+// `dt` as the reference reads it: a bool (Python's, NumPy's or a 0-d bool
+// array) is a TypeError, anything else a number converted as `math.isfinite`
+// converts it (a 0-d float array and an np.float64 are numbers).
+double read_dt(nb::handle dt) {
+    const nb::module_ numpy = nb::module_::import_("numpy");
+    // A 0-d bool array is neither a bool nor an np.bool_, and would step with
+    // dt = 1.0, so the array's dtype kind decides.
+    const bool is_bool =
+        nb::isinstance<bool>(dt) || PyObject_IsInstance(dt.ptr(), numpy.attr("bool_").ptr()) == 1 ||
+        (PyObject_IsInstance(dt.ptr(), numpy.attr("ndarray").ptr()) == 1 &&
+         nb::cast<std::string>(nb::getattr(nb::getattr(dt, "dtype"), "kind")) == "b");
+    if (is_bool) {
+        throw nb::type_error("dt must be a number, not a bool");
+    }
+    const double value = PyFloat_AsDouble(dt.ptr());
+    if (value == -1.0 && PyErr_Occurred() != nullptr) {
+        PyErr_Clear();
+        throw nb::type_error("dt must be a number");
+    }
+    return value;
+}
+
+void transport_set_step(TransportSolver2& t, nb::handle dt) {
+    const refusal r = t.solver.set_step(read_dt(dt));
+    if (!r.ok()) {
+        raise_refusal(r);
+    }
+}
+
+// The name of a value's type, as `type(value).__name__`.
+std::string python_type_name(nb::handle value) {
+    const nb::handle type(reinterpret_cast<PyObject*>(Py_TYPE(value.ptr())));
+    return nb::cast<std::string>(nb::getattr(type, "__name__"));
+}
+
+// `size_class` as the reference reads it (`_check_class`): an int that is not a
+// bool, in [0, n). Every entry point that takes a class reads it here.
+std::size_t read_class(nb::handle size_class, std::size_t n) {
+    if (nb::isinstance<bool>(size_class) || !PyLong_Check(size_class.ptr())) {
+        throw nb::type_error(
+            ("size_class must be an int, got " + python_type_name(size_class)).c_str());
+    }
+    // An int too large for a long long reads as -1, which is out of range, and is
+    // named as Python prints it; the overflow flag is not needed to tell.
+    int overflow = 0;
+    const long long k = PyLong_AsLongLongAndOverflow(size_class.ptr(), &overflow);
+    if (k < 0 || static_cast<std::size_t>(k) >= n) {
+        throw nb::index_error(("size_class " + nb::cast<std::string>(nb::str(size_class)) +
+                               " out of range [0, " + std::to_string(n - 1) + "]")
+                                  .c_str());
+    }
+    return static_cast<std::size_t>(k);
+}
+
+// A class's accumulated leftover reached the limit (ADR-016). `step` throws it
+// and the module raises it as `_cfdcore.ConservationBreach`, which carries the
+// four values as attributes; the Python side makes the reference's error of it.
+struct conservation_breach : std::exception {
+    conservation_breach(std::size_t k, double accumulated, double particles, double bound)
+        : size_class(k), leftover(accumulated), supplied(particles), limit(bound) {}
+    const char* what() const noexcept override {
+        return "the accumulated leftover reached the conservation limit";
+    }
+    std::size_t size_class;
+    double leftover;
+    double supplied;
+    double limit;
+};
+
+// Raises a conservation_breach as the exception type the payload holds, with the
+// class, the leftover, the particles supplied and the limit as its attributes.
+void translate_breach(const std::exception_ptr& pending, void* payload) {
+    try {
+        std::rethrow_exception(pending);
+    } catch (const conservation_breach& breach) {
+        const nb::object type = nb::borrow(static_cast<PyObject*>(payload));
+        char message[256];
+        std::snprintf(message, sizeof message,
+                      "class %zu: the accumulated leftover %.6g reached the conservation limit "
+                      "(%g) of the %.6g particles supplied",
+                      breach.size_class, breach.leftover, breach.limit, breach.supplied);
+        nb::object error = type(message);
+        error.attr("size_class") = breach.size_class;
+        error.attr("leftover") = breach.leftover;
+        error.attr("supplied") = breach.supplied;
+        error.attr("limit") = breach.limit;
+        PyErr_SetObject(type.ptr(), error.ptr());
+    }
+}
+
+cfdcore::transport::step_record transport_step(TransportSolver2& t, nb::handle size_class,
+                                               const Matrix& c, OutMatrix& out) {
+    constexpr std::string_view who = "TransportSolver2.step";
+    const Grid2& g = t.scheme->mesh();
+    const std::size_t k = read_class(size_class, t.solver.classes());
+    require_shape(c, {g.cells(1), g.cells(0)}, who, "c");
+    require_shape(out, {g.cells(1), g.cells(0)}, who, "out");
+    cfdcore::transport::step_record record;
+    const refusal r =
+        t.solver.step(k, span_of(c), std::span<double>(out.data(), out.size()), record);
+    if (r.code == status::breach) {
+        throw conservation_breach(k, record.accumulated, record.supplied, t.limit);
+    }
+    if (!r.ok()) {
+        raise_refusal(r);
+    }
+    return record;
+}
+
+nb::object optional_float(const std::optional<double>& value) {
+    return value.has_value() ? nb::object(nb::float_(*value)) : nb::none();
+}
+
+// Every class's budget as plain data: a new dict of its ten terms by name,
+// `initial` and `current` None before the first step, the deposition by the
+// slots' names (floor, ceiling, wall, obstacle).
+nb::list transport_budgets(const TransportSolver2& t) {
+    nb::list out;
+    for (std::size_t k = 0; k < t.solver.classes(); ++k) {
+        const auto& b = t.solver.budget_of(k);
+        nb::dict terms;
+        terms["initial"] = optional_float(b.initial);
+        terms["inflow"] = nb::float_(b.inflow);
+        terms["outflow"] = nb::float_(b.outflow);
+        terms["source"] = nb::float_(b.source);
+        for (std::size_t slot = 0; slot < cfdcore::transport::slots; ++slot) {
+            const std::string_view name = cfdcore::transport::slot_names[slot];
+            terms[nb::str(name.data(), name.size())] = nb::float_(b.deposited[slot]);
+        }
+        terms["current"] = optional_float(b.current);
+        terms["leftover"] = nb::float_(b.leftover);
+        out.append(terms);
+    }
+    return out;
+}
+
+// The names of a budget's ten terms, in the order `budgets` returns them.
+std::vector<std::string> budget_term_names() {
+    std::vector<std::string> names = {"initial", "inflow", "outflow", "source"};
+    for (const std::string_view name : cfdcore::transport::slot_names) {
+        names.emplace_back(name);
+    }
+    names.insert(names.end(), {"current", "leftover"});
+    return names;
+}
+
+// `restore_budgets`: every class's budget set whole from its ten terms by name,
+// as `budgets` returns them. What a budget is made of in Python (the reference's
+// MassBudget, a checkpoint's unknown leftover) is the caller's to check before
+// it hands the terms over.
+void transport_restore_budgets(TransportSolver2& t, nb::handle budgets) {
+    const std::size_t n = t.solver.classes();
+    const std::size_t given = nb::len(budgets);
+    if (given != n) {
+        throw nb::value_error(("restore_budgets needs one budget per class (" + std::to_string(n) +
+                               "), got " + std::to_string(given))
+                                  .c_str());
+    }
+    const std::vector<std::string> names = budget_term_names();
+    std::vector<cfdcore::transport::budget> out;
+    std::size_t k = 0;
+    for (nb::handle each : budgets) {
+        const std::string index = std::to_string(k);
+        if (!nb::isinstance<nb::dict>(each)) {
+            throw nb::type_error(("budget " + index + " must be a dict of its ten terms, got " +
+                                  python_type_name(each))
+                                     .c_str());
+        }
+        const nb::dict terms = nb::borrow<nb::dict>(each);
+        bool exact = terms.size() == names.size();
+        for (const std::string& name : names) {
+            exact = exact && terms.contains(name.c_str());
+        }
+        if (!exact) {
+            throw nb::value_error(("budget " + index +
+                                   " must hold exactly the terms initial, inflow, outflow, "
+                                   "source, floor, ceiling, wall, obstacle, current and leftover")
+                                      .c_str());
+        }
+        // A term is a number (a Python bool is not one); initial and current may be None.
+        const auto term = [&](const std::string& name, bool may_be_none) -> std::optional<double> {
+            const nb::object value = terms[name.c_str()];
+            if (value.is_none() && may_be_none) {
+                return std::nullopt;
+            }
+            double x = 0.0;
+            if (value.is_none() || nb::isinstance<bool>(value) || !nb::try_cast<double>(value, x)) {
+                throw nb::type_error(
+                    ("budget " + index + ": " + name + " must be a number" +
+                     (may_be_none ? " or None" : ""))
+                        .c_str());
+            }
+            return x;
+        };
+        cfdcore::transport::budget c;
+        c.initial = term("initial", true);
+        c.inflow = *term("inflow", false);
+        c.outflow = *term("outflow", false);
+        c.source = *term("source", false);
+        for (std::size_t slot = 0; slot < cfdcore::transport::slots; ++slot) {
+            c.deposited[slot] = *term(std::string(cfdcore::transport::slot_names[slot]), false);
+        }
+        c.current = term("current", true);
+        c.leftover = *term("leftover", false);
+        out.push_back(c);
+        ++k;
+    }
+    t.solver.set_budgets(out);
+}
+
+// A face field of the interval's, as a new array of the face field's shape.
+nb::ndarray<nb::numpy, double, nb::ndim<2>> to_numpy2(std::span<const double> values,
+                                                       std::array<std::size_t, 2> shape) {
+    auto* copy = new double[values.size()];
+    std::copy(values.begin(), values.end(), copy);
+    nb::capsule owner(copy, [](void* p) noexcept { delete[] static_cast<double*>(p); });
+    return nb::ndarray<nb::numpy, double, nb::ndim<2>>(copy, {shape[0], shape[1]}, owner);
+}
+
+nb::ndarray<nb::numpy, bool, nb::ndim<1>> masks_to_numpy(std::span<const cfdcore::lanes::mask> m) {
+    auto* copy = new bool[m.size()];
+    for (std::size_t i = 0; i < m.size(); ++i) {
+        copy[i] = m[i] != cfdcore::lanes::none;
+    }
+    nb::capsule owner(copy, [](void* p) noexcept { delete[] static_cast<bool*>(p); });
+    return nb::ndarray<nb::numpy, bool, nb::ndim<1>>(copy, {m.size()}, owner);
+}
+
+// The interval's quantities by name (prediction (b)): a face field per class
+// and direction, a cell field per class, or a face field per direction.
+nb::object transport_quantity(const TransportSolver2& t, const std::string& name,
+                              nb::handle size_class, int d) {
+    const Grid2& g = t.scheme->mesh();
+    const std::array<std::size_t, 2> cells{g.cells(1), g.cells(0)};
+    const auto& s = t.solver;
+    if (name == "deposition_cell" || name == "source_step") {
+        const std::size_t k = read_class(size_class, s.classes());
+        const auto values = name == "deposition_cell" ? s.deposition_cell(k) : s.source_step(k);
+        if (values.empty()) {
+            return nb::none();
+        }
+        return nb::cast(to_numpy2(values, cells));
+    }
+    direction(d);
+    const auto faces = face_shape(g, d);
+    if (name == "face_eddy_viscosity" || name == "unit_conductance") {
+        const auto values =
+            name == "face_eddy_viscosity" ? s.face_eddy_viscosity(d) : s.unit_conductance(d);
+        if (values.empty()) {
+            return nb::none();
+        }
+        return nb::cast(to_numpy2(values, faces));
+    }
+    const std::size_t k = read_class(size_class, s.classes());
+    if (name == "advecting_velocity") {
+        return nb::cast(to_numpy2(s.advecting_velocity(k, d), faces));
+    }
+    if (name == "volume_flux") {
+        return nb::cast(to_numpy2(s.volume_flux(k, d), faces));
+    }
+    if (name == "conductance") {
+        return nb::cast(to_numpy2(s.conductance(k, d), faces));
+    }
+    if (name == "deposition_step") {
+        return nb::cast(to_numpy2(s.deposition_step(k, d), faces));
+    }
+    throw nb::value_error(("no interval quantity named " + name).c_str());
+}
+
+nb::tuple transport_masks(const TransportSolver2& t, const std::string& which,
+                          nb::handle size_class, int d) {
+    direction(d);
+    const auto& s = t.solver;
+    const std::size_t k = read_class(size_class, s.classes());
+    if (which == "domain") {
+        return nb::make_tuple(masks_to_numpy(s.domain_mask(k, d, 0)),
+                              masks_to_numpy(s.domain_mask(k, d, 1)),
+                              masks_to_numpy(s.domain_mask(k, d, 2)),
+                              masks_to_numpy(s.domain_mask(k, d, 3)));
+    }
+    if (which == "vent") {
+        return nb::make_tuple(masks_to_numpy(s.vent_mask(k, d, 0)),
+                              masks_to_numpy(s.vent_mask(k, d, 1)),
+                              masks_to_numpy(s.vent_mask(k, d, 2)),
+                              masks_to_numpy(s.vent_mask(k, d, 3)));
+    }
+    throw nb::value_error("the masks are 'domain' or 'vent'");
+}
+
+// The core refuses a row of zero with terms, and terms that are not whole rows,
+// with a std::invalid_argument, which nanobind raises as a ValueError.
+double buffered_sum(const Vector& values, std::size_t row) {
+    require_aligned(values.data(), alignof(double), "buffered_sum");
+    return cfdcore::reduce::buffered_sum(as_span(values), row);
+}
+
 }  // namespace
 
 NB_MODULE(_cfdcore, m) {
@@ -539,5 +1109,116 @@ NB_MODULE(_cfdcore, m) {
           "shape, dtype or layout, an unaligned array, an out sharing memory with an\n"
           "input, or a bool leftover_bound raises TypeError; an unknown method, or a\n"
           "negative or NaN leftover_bound, ValueError, as the reference raises them.");
-}
 
+    m.def("buffered_sum", &buffered_sum, nb::arg("values").noconvert(), nb::arg("row"),
+          "np.sum of a strided 2-D slice whose rows of `row` terms lie one after another\n"
+          "in `values`: NumPy's buffered order (reduce.buffered_sum, prompt 90). The order\n"
+          "is NumPy's at its default buffer size, np.getbufsize() = 8,192; a program that\n"
+          "changes the size changes np.sum's order and no longer equals this. A row of 0 with\n"
+          "terms, or terms that are not a whole number of rows, raises ValueError.");
+
+    // The breach a step raises (ADR-016): an exception of the core's own, carrying
+    // the class, the leftover, the particles supplied and the limit as attributes.
+    // The reference's ConservationBreachError is made of it on the Python side.
+    PyObject* breach_type = PyErr_NewExceptionWithDoc(
+        "_cfdcore.ConservationBreach",
+        "A class's accumulated leftover reached the conservation limit (ADR-016).\n\n"
+        "Attributes: size_class, leftover, supplied and limit.",
+        PyExc_RuntimeError, nullptr);
+    if (breach_type == nullptr) {
+        throw nb::python_error();
+    }
+    m.attr("ConservationBreach") = nb::steal(breach_type);
+    // The payload is the type, kept alive by the module's attribute.
+    nb::register_exception_translator(translate_breach, breach_type);
+
+    nb::class_<cfdcore::transport::step_record>(
+        m, "TransportStep2",
+        "What one class step records beside its field and budget: TransportSolver's\n"
+        "last_diffusion_sweeps (sweeps), diffusion_converged (converged), last_leftover\n"
+        "(leftover) and last_leftover_bound (bound).")
+        .def_ro("sweeps", &cfdcore::transport::step_record::sweeps)
+        .def_ro("converged", &cfdcore::transport::step_record::converged)
+        .def_ro("leftover", &cfdcore::transport::step_record::leftover)
+        .def_ro("bound", &cfdcore::transport::step_record::bound);
+
+    nb::class_<TransportSolver2>(
+        m, "TransportSolver2",
+        "One particle class advanced one step, and its budget (prompt 90): the core's\n"
+        "TransportSolver.solve_timestep, bit for bit.\n\n"
+        "TransportSolver2(scheme, dx_cell, dy_cell, dx_face, dy_face, cfl, upwind,\n"
+        "max_sweeps, tol, limit, share, horizon, schmidt, settling, diffusion,\n"
+        "surface_codes): the mesh's spacings, the transport keys and t_end, each class's\n"
+        "settling velocity and diffusion coefficient, and the floor, ceiling and wall\n"
+        "surface codes. Keeps its scheme alive. set_interval and set_step fix what an\n"
+        "interval and its step fix; step advances a class; budgets and restore_budgets\n"
+        "read and set every class's budget whole, as plain data: a dict of its ten terms\n"
+        "by name. The module imports nothing from the reference.")
+        .def("__init__", &transport_init, nb::arg("scheme"), nb::arg("dx_cell").noconvert(),
+             nb::arg("dy_cell").noconvert(), nb::arg("dx_face").noconvert(),
+             nb::arg("dy_face").noconvert(), nb::arg("cfl"), nb::arg("upwind"),
+             nb::arg("max_sweeps"), nb::arg("tol"), nb::arg("limit"), nb::arg("share"),
+             nb::arg("horizon"), nb::arg("schmidt").none(), nb::arg("settling"),
+             nb::arg("diffusion"), nb::arg("surface_codes"), nb::keep_alive<1, 2>())
+        .def_prop_ro("classes", [](const TransportSolver2& t) { return t.solver.classes(); })
+        .def("set_interval", &transport_set_interval, nb::arg("conditions"), nb::arg("u"),
+             nb::arg("v"), nb::arg("v_ext").none() = nb::none(),
+             nb::arg("eddy_viscosity").none() = nb::none(), nb::arg("sources").none() = nb::none(),
+             "Fix an interval: each class's ConcentrationFaces (in class order), the air's\n"
+             "face velocities u [ny, nx + 1] and v [ny + 1, nx], v_ext (None, or one\n"
+             "FaceVelocities or None per class), the eddy viscosity [ny, nx] or None, and\n"
+             "sources (None, or one rate [ny, nx] or None per class). Refuses what\n"
+             "TransportSolver and solve_timestep refuse, with their ValueError; a wrong\n"
+             "shape, dtype or layout is a TypeError.")
+        .def("set_step", &transport_set_step, nb::arg("dt"),
+             "Fix the interval's step, s: finite and positive (a bool is a TypeError).")
+        .def(
+            "stable_dt",
+            [](const TransportSolver2& t, nb::handle size_class) {
+                return t.solver.stable_dt(read_class(size_class, t.solver.classes()));
+            },
+            nb::arg("size_class"), "The class's stable_dt on the interval set up.")
+        .def("step", &transport_step, nb::arg("size_class"), nb::arg("c").noconvert(),
+             nb::arg("out").noconvert(),
+             "Advance class size_class one step: c [ny, nx] into out [ny, nx] (out may be\n"
+             "c), the budget booked. Returns the step's records. Raises what\n"
+             "solve_timestep raises: ValueError for a field that is not finite or a step\n"
+             "above stable_dt (nothing booked), and after a step that breaches (the budget\n"
+             "holds it, out the field) _cfdcore.ConservationBreach, whose attributes are\n"
+             "the class, the leftover, the particles supplied and the limit.")
+        .def("budgets", &transport_budgets,
+             "Every class's budget as a new dict of its ten terms by name: initial, inflow,\n"
+             "outflow, source, floor, ceiling, wall, obstacle, current and leftover; initial\n"
+             "and current are None before the first step.")
+        .def("restore_budgets", &transport_restore_budgets, nb::arg("budgets"),
+             "Set every class's budget whole from one dict of its ten terms per class, as\n"
+             "budgets returns them (initial and current may be None). A count other than\n"
+             "the classes' is a ValueError, a budget that is not a dict or holds a term that\n"
+             "is not a number a TypeError, and one that lacks a term or holds another a\n"
+             "ValueError.")
+        .def("interval_quantity", &transport_quantity, nb::arg("name"), nb::arg("size_class") = 0,
+             nb::arg("direction") = 0,
+             "A copy of one of the interval's quantities: advecting_velocity, volume_flux,\n"
+             "conductance or deposition_step (per class and direction), deposition_cell or\n"
+             "source_step (per class; None without a source), face_eddy_viscosity (None on\n"
+             "the laminar path) or unit_conductance (per direction).")
+        .def(
+            "source_total",
+            [](const TransportSolver2& t, nb::handle size_class) {
+                return t.solver.source_total(read_class(size_class, t.solver.classes()));
+            },
+            nb::arg("size_class"), "np.sum(rate * volume) of the class's source, 0.0 without one.")
+        .def(
+            "drawn",
+            [](const TransportSolver2& t, nb::handle size_class) {
+                const auto d = t.solver.drawn(read_class(size_class, t.solver.classes()));
+                return std::vector<double>(d.begin(), d.end());
+            },
+            nb::arg("size_class"), "Each recirculating intake's drawn flux, in order.")
+        .def("masks", &transport_masks, nb::arg("which"), nb::arg("size_class"),
+             nb::arg("direction"),
+             "The masks the booking reads: 'domain', four bool arrays along the lines of\n"
+             "the direction (low face inward, outward, high face inward, outward); or\n"
+             "'vent', four bool arrays on the faces (entering from the low side, from the\n"
+             "high side, leaving to the high side, to the low side), empty without vents.");
+}

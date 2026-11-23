@@ -299,7 +299,8 @@ block is eight cells, a whole number of vectors at every width (four doubles und
   allocated once on a layout.
 - An exception (`std::invalid_argument`) for a caller's programming error that no run can meet,
   such as a block of zero or two arrays of different lengths; a status for a condition a run can
-  meet, which the binding turns into the reference's exception.
+  meet, which the binding raises as an exception of the core's own, carrying its numbers;
+  the Python side maps it to the reference's exception (ADR-017 B).
 - After changing a kernel, read the compiler's vectorisation report (count loops, not report
   lines), run the parity tests and time the kernel against the build of the commit before.
 
@@ -308,7 +309,7 @@ block is eight cells, a whole number of vectors at every width (four doubles und
 The core receives arrays and scalars. It has no knowledge of:
 - The configuration file (parameters arrive in setup structs and as scalars)
 - The boundary segments' names or types: their per-face data are derived in Python and handed in, and the core applies them inside the step, since the step is resident (ADR-017 decision 2)
-- File I/O, logging, or error reporting to the user (an error returns a status the binding turns into the exception the reference raises)
+- File I/O, logging, or error reporting to the user (an error returns a status, which the binding raises as a core exception and the Python side maps to the reference's; the binding imports nothing from `src`)
 
 An illustration of the form, not a signature of record:
 

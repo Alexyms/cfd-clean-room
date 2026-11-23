@@ -1,0 +1,37 @@
+# Prompt 90's vents capture: a short dust release in the vents file's room
+# (ADR-014 J; the rack's discharge recirculates its intake) at 80x30, its flow
+# state solved from rest. The release and the Courant number are the placement
+# runs' (results/builder81/placement/configs/scenario_dust.yaml); the onset is
+# at 1 s and the run ends at 3 s, so both windows are short. mass_imbalance_tol
+# is the base file's rule, L rho V_min / t_end = 1e-4 * 1.2 * 0.01 / 3 s: the
+# placement runs' 2e-8 (set for t_end 120 s) capped the solve from rest at
+# max_simple_iter (prompt 90's first capture). max_simple_iter is raised from the
+# base file's 15000: from rest at 80x30 this state stops at 24,767 outer
+# iterations (results/builder90/vents80_flow.json).
+scenario:
+  base: C:\Users\tomat\Projects\cfd_clean_room\configs\clean_room_vents.yaml
+  events:
+  - name: litho_dust
+    start: 1.0
+    duration: 1.0
+    source:
+      x_start: 3.8
+      x_end: 3.9
+      y_start: 2.0
+      y_end: 2.1
+      emission:
+      - 10000.0
+      - 10000.0
+      - 10000.0
+      - 10000.0
+      - 10000.0
+solver:
+  t_end: 3.0
+  output_interval: 100
+  mass_imbalance_tol: 4.0e-07
+  max_simple_iter: 60000
+transport:
+  cfl_number: 0.4
+domain:
+  nx: 80
+  ny: 30
