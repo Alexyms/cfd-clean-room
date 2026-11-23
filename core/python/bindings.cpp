@@ -510,27 +510,39 @@ struct TransportSolver2 {
     double limit;
 };
 
-void transport_init(TransportSolver2* self, const Scheme2& s, const Vector& dx_cell,
-                    const Vector& dy_cell, const Vector& dx_face, const Vector& dy_face,
-                    double cfl, bool upwind, std::int64_t max_sweeps, double tol, double limit,
-                    double share, double horizon, std::optional<double> schmidt,
-                    const std::vector<double>& settling, const std::vector<double>& diffusion,
-                    const std::array<std::int32_t, 3>& surface_codes) {
-    constexpr std::string_view who = "TransportSolver2";
+// What a solver is built from, read and checked once for the two classes that
+// build one (`TransportSolver2` and `March2`): the keys, each class's physics and
+// the mesh's spacings, which are views of the caller's arrays.
+struct solver_setup {
+    cfdcore::transport::settings keys;
+    std::vector<cfdcore::transport::class_physics> physics;
+    cfdcore::transport::geometry<2> spacing;
+};
+
+solver_setup read_solver_setup(std::string_view who, const Scheme2& s, const Vector& dx_cell,
+                               const Vector& dy_cell, const Vector& dx_face,
+                               const Vector& dy_face, double cfl, bool upwind,
+                               std::int64_t max_sweeps, double tol, double limit, double share,
+                               double horizon, std::optional<double> schmidt,
+                               const std::vector<double>& settling,
+                               const std::vector<double>& diffusion,
+                               const std::array<std::int32_t, 3>& surface_codes) {
     const Grid2& g = s.mesh();
     const std::array<std::pair<const Vector*, std::size_t>, 4> spacings{
         {{&dx_cell, g.cells(0)}, {&dy_cell, g.cells(1)}, {&dx_face, g.cells(0) + 1},
          {&dy_face, g.cells(1) + 1}}};
     for (const auto& [v, n] : spacings) {
         if (v->shape(0) != n) {
-            throw nb::type_error(
-                "TransportSolver2: dx_cell, dy_cell, dx_face and dy_face are nx, ny, nx + 1 "
-                "and ny + 1 long");
+            throw nb::type_error((std::string(who) +
+                                  ": dx_cell, dy_cell, dx_face and dy_face are nx, ny, nx + 1 "
+                                  "and ny + 1 long")
+                                     .c_str());
         }
         require_aligned(v->data(), alignof(double), who);
     }
     if (settling.empty() || settling.size() != diffusion.size()) {
-        throw nb::value_error("TransportSolver2: settling and diffusion hold one value per class");
+        throw nb::value_error(
+            (std::string(who) + ": settling and diffusion hold one value per class").c_str());
     }
     cfdcore::transport::settings keys;
     keys.cfl = cfl;
@@ -546,10 +558,22 @@ void transport_init(TransportSolver2* self, const Scheme2& s, const Vector& dx_c
     for (std::size_t k = 0; k < settling.size(); ++k) {
         physics.push_back({settling[k], diffusion[k]});
     }
-    const cfdcore::transport::geometry<2> spacing{
+    cfdcore::transport::geometry<2> spacing{
         .widths = {as_span(dx_cell), as_span(dy_cell)},
         .face_distances = {as_span(dx_face), as_span(dy_face)}};
-    new (self) TransportSolver2(s, spacing, keys, std::move(physics));
+    return {keys, std::move(physics), spacing};
+}
+
+void transport_init(TransportSolver2* self, const Scheme2& s, const Vector& dx_cell,
+                    const Vector& dy_cell, const Vector& dx_face, const Vector& dy_face,
+                    double cfl, bool upwind, std::int64_t max_sweeps, double tol, double limit,
+                    double share, double horizon, std::optional<double> schmidt,
+                    const std::vector<double>& settling, const std::vector<double>& diffusion,
+                    const std::array<std::int32_t, 3>& surface_codes) {
+    solver_setup setup = read_solver_setup("TransportSolver2", s, dx_cell, dy_cell, dx_face,
+                                           dy_face, cfl, upwind, max_sweeps, tol, limit, share,
+                                           horizon, schmidt, settling, diffusion, surface_codes);
+    new (self) TransportSolver2(s, setup.spacing, setup.keys, std::move(setup.physics));
 }
 
 // A face field's array of one of the conditions' attributes, refused unless
@@ -1283,36 +1307,9 @@ void march_init(March2* self, const Scheme2& s, const Vector& dx_cell, const Vec
                 const std::vector<double>& onsets, nb::handle recovery) {
     constexpr std::string_view who = "March2";
     const Grid2& g = s.mesh();
-    const std::array<std::pair<const Vector*, std::size_t>, 4> spacings{
-        {{&dx_cell, g.cells(0)}, {&dy_cell, g.cells(1)}, {&dx_face, g.cells(0) + 1},
-         {&dy_face, g.cells(1) + 1}}};
-    for (const auto& [v, n] : spacings) {
-        if (v->shape(0) != n) {
-            throw nb::type_error(
-                "March2: dx_cell, dy_cell, dx_face and dy_face are nx, ny, nx + 1 and ny + 1 long");
-        }
-        require_aligned(v->data(), alignof(double), who);
-    }
-    if (settling.empty() || settling.size() != diffusion.size()) {
-        throw nb::value_error("March2: settling and diffusion hold one value per class");
-    }
-    cfdcore::transport::settings keys;
-    keys.cfl = cfl;
-    keys.upwind = upwind;
-    keys.max_sweeps = max_sweeps;
-    keys.tol = tol;
-    keys.limit = limit;
-    keys.share = share;
-    keys.horizon = horizon;
-    keys.schmidt = schmidt;
-    keys.surface_codes = surface_codes;
-    std::vector<cfdcore::transport::class_physics> physics;
-    for (std::size_t k = 0; k < settling.size(); ++k) {
-        physics.push_back({settling[k], diffusion[k]});
-    }
-    const cfdcore::transport::geometry<2> spacing{
-        .widths = {as_span(dx_cell), as_span(dy_cell)},
-        .face_distances = {as_span(dx_face), as_span(dy_face)}};
+    solver_setup setup = read_solver_setup(who, s, dx_cell, dy_cell, dx_face, dy_face, cfl,
+                                           upwind, max_sweeps, tol, limit, share, horizon,
+                                           schmidt, settling, diffusion, surface_codes);
     cfdcore::march::monitor_setup monitor;
     monitor.channels = channels;
     monitor.thresholds = thresholds;
@@ -1322,8 +1319,8 @@ void march_init(March2* self, const Scheme2& s, const Vector& dx_cell, const Vec
         monitor.recovery = recovery_keys(thresholds, recovery);
     }
     new (self) March2{&s,
-                      std::make_unique<March2Run>(s, spacing, keys, std::move(physics),
-                                                  std::move(monitor)),
+                      std::make_unique<March2Run>(s, setup.spacing, setup.keys,
+                                                  std::move(setup.physics), std::move(monitor)),
                       limit};
 }
 
