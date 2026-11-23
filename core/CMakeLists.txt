@@ -50,8 +50,12 @@ if(CFD_CORE_WERROR)
 endif()
 
 add_library(cfdcore STATIC
+    src/arrival.cpp
+    src/channels.cpp
     src/grid.cpp
     src/layout.cpp
+    src/march.cpp
+    src/recovery.cpp
     src/reduce.cpp
     src/scalar.cpp
     src/transport.cpp)
@@ -75,6 +79,7 @@ if(CFD_CORE_TESTS)
     add_executable(cfdcore_tests
         tests/test_grid.cpp
         tests/test_lanes.cpp
+        tests/test_march.cpp
         tests/test_reduce.cpp
         tests/test_scalar.cpp
         tests/test_transport.cpp)

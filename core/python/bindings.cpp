@@ -9,20 +9,27 @@
 #include <nanobind/ndarray.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/array.h>
+#include <nanobind/stl/pair.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
 
+#include "cfdcore/arrival.hpp"
+#include "cfdcore/channels.hpp"
 #include "cfdcore/grid.hpp"
+#include "cfdcore/march.hpp"
+#include "cfdcore/recovery.hpp"
 #include "cfdcore/reduce.hpp"
 #include "cfdcore/scalar.hpp"
 #include "cfdcore/transport.hpp"
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <exception>
+#include <memory>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -503,27 +510,39 @@ struct TransportSolver2 {
     double limit;
 };
 
-void transport_init(TransportSolver2* self, const Scheme2& s, const Vector& dx_cell,
-                    const Vector& dy_cell, const Vector& dx_face, const Vector& dy_face,
-                    double cfl, bool upwind, std::int64_t max_sweeps, double tol, double limit,
-                    double share, double horizon, std::optional<double> schmidt,
-                    const std::vector<double>& settling, const std::vector<double>& diffusion,
-                    const std::array<std::int32_t, 3>& surface_codes) {
-    constexpr std::string_view who = "TransportSolver2";
+// What a solver is built from, read and checked once for the two classes that
+// build one (`TransportSolver2` and `March2`): the keys, each class's physics and
+// the mesh's spacings, which are views of the caller's arrays.
+struct solver_setup {
+    cfdcore::transport::settings keys;
+    std::vector<cfdcore::transport::class_physics> physics;
+    cfdcore::transport::geometry<2> spacing;
+};
+
+solver_setup read_solver_setup(std::string_view who, const Scheme2& s, const Vector& dx_cell,
+                               const Vector& dy_cell, const Vector& dx_face,
+                               const Vector& dy_face, double cfl, bool upwind,
+                               std::int64_t max_sweeps, double tol, double limit, double share,
+                               double horizon, std::optional<double> schmidt,
+                               const std::vector<double>& settling,
+                               const std::vector<double>& diffusion,
+                               const std::array<std::int32_t, 3>& surface_codes) {
     const Grid2& g = s.mesh();
     const std::array<std::pair<const Vector*, std::size_t>, 4> spacings{
         {{&dx_cell, g.cells(0)}, {&dy_cell, g.cells(1)}, {&dx_face, g.cells(0) + 1},
          {&dy_face, g.cells(1) + 1}}};
     for (const auto& [v, n] : spacings) {
         if (v->shape(0) != n) {
-            throw nb::type_error(
-                "TransportSolver2: dx_cell, dy_cell, dx_face and dy_face are nx, ny, nx + 1 "
-                "and ny + 1 long");
+            throw nb::type_error((std::string(who) +
+                                  ": dx_cell, dy_cell, dx_face and dy_face are nx, ny, nx + 1 "
+                                  "and ny + 1 long")
+                                     .c_str());
         }
         require_aligned(v->data(), alignof(double), who);
     }
     if (settling.empty() || settling.size() != diffusion.size()) {
-        throw nb::value_error("TransportSolver2: settling and diffusion hold one value per class");
+        throw nb::value_error(
+            (std::string(who) + ": settling and diffusion hold one value per class").c_str());
     }
     cfdcore::transport::settings keys;
     keys.cfl = cfl;
@@ -539,10 +558,22 @@ void transport_init(TransportSolver2* self, const Scheme2& s, const Vector& dx_c
     for (std::size_t k = 0; k < settling.size(); ++k) {
         physics.push_back({settling[k], diffusion[k]});
     }
-    const cfdcore::transport::geometry<2> spacing{
+    cfdcore::transport::geometry<2> spacing{
         .widths = {as_span(dx_cell), as_span(dy_cell)},
         .face_distances = {as_span(dx_face), as_span(dy_face)}};
-    new (self) TransportSolver2(s, spacing, keys, std::move(physics));
+    return {keys, std::move(physics), spacing};
+}
+
+void transport_init(TransportSolver2* self, const Scheme2& s, const Vector& dx_cell,
+                    const Vector& dy_cell, const Vector& dx_face, const Vector& dy_face,
+                    double cfl, bool upwind, std::int64_t max_sweeps, double tol, double limit,
+                    double share, double horizon, std::optional<double> schmidt,
+                    const std::vector<double>& settling, const std::vector<double>& diffusion,
+                    const std::array<std::int32_t, 3>& surface_codes) {
+    solver_setup setup = read_solver_setup("TransportSolver2", s, dx_cell, dy_cell, dx_face,
+                                           dy_face, cfl, upwind, max_sweeps, tol, limit, share,
+                                           horizon, schmidt, settling, diffusion, surface_codes);
+    new (self) TransportSolver2(s, setup.spacing, setup.keys, std::move(setup.physics));
 }
 
 // A face field's array of one of the conditions' attributes, refused unless
@@ -632,13 +663,17 @@ Matrix shaped(nb::handle value, std::array<std::size_t, 2> shape, const std::str
     return array;
 }
 
-void transport_set_interval(TransportSolver2& t, nb::handle conditions, nb::handle u,
+// An interval's conditions and fixed inputs, read as set_interval takes them,
+// their arrays kept alive in `arrays` while the core reads them.
+struct interval_read {
+    std::vector<cfdcore::transport::conditions<2>> each;
+    cfdcore::transport::interval_input<2> input;
+};
+
+interval_read read_interval(const Grid2& g, std::size_t n, nb::handle conditions, nb::handle u,
                             nb::handle v, nb::handle v_ext, nb::handle eddy_viscosity,
-                            nb::handle sources) {
-    const Grid2& g = t.scheme->mesh();
-    const std::size_t n = t.solver.classes();
+                            nb::handle sources, interval_arrays& arrays) {
     const std::array<std::size_t, 2> cells{g.cells(1), g.cells(0)};
-    interval_arrays arrays;
     std::vector<cfdcore::transport::conditions<2>> each;
     for (nb::handle faces : conditions) {
         each.push_back(read_conditions(faces, static_cast<int>(each.size()), g, arrays));
@@ -681,32 +716,74 @@ void transport_set_interval(TransportSolver2& t, nb::handle conditions, nb::hand
             throw nb::value_error("set_interval: sources holds one array (or None) per class");
         }
     }
-    const refusal r = t.solver.set_interval(each, input);
+    return {std::move(each), std::move(input)};
+}
+
+void transport_set_interval(TransportSolver2& t, nb::handle conditions, nb::handle u,
+                            nb::handle v, nb::handle v_ext, nb::handle eddy_viscosity,
+                            nb::handle sources) {
+    interval_arrays arrays;
+    const interval_read read = read_interval(t.scheme->mesh(), t.solver.classes(), conditions, u,
+                                             v, v_ext, eddy_viscosity, sources, arrays);
+    const refusal r = t.solver.set_interval(read.each, read.input);
     if (!r.ok()) {
         raise_refusal(r);
     }
 }
 
-// `dt` as the reference reads it: a bool (Python's, NumPy's or a 0-d bool
-// array) is a TypeError, anything else a number converted as `math.isfinite`
-// converts it (a 0-d float array and an np.float64 are numbers).
-double read_dt(nb::handle dt) {
+// Whether a value is a bool of any kind: Python's, NumPy's or a 0-d bool array.
+bool is_bool(nb::handle value) {
     const nb::module_ numpy = nb::module_::import_("numpy");
     // A 0-d bool array is neither a bool nor an np.bool_, and would step with
     // dt = 1.0, so the array's dtype kind decides.
-    const bool is_bool =
-        nb::isinstance<bool>(dt) || PyObject_IsInstance(dt.ptr(), numpy.attr("bool_").ptr()) == 1 ||
-        (PyObject_IsInstance(dt.ptr(), numpy.attr("ndarray").ptr()) == 1 &&
-         nb::cast<std::string>(nb::getattr(nb::getattr(dt, "dtype"), "kind")) == "b");
-    if (is_bool) {
-        throw nb::type_error("dt must be a number, not a bool");
+    return nb::isinstance<bool>(value) ||
+           PyObject_IsInstance(value.ptr(), numpy.attr("bool_").ptr()) == 1 ||
+           (PyObject_IsInstance(value.ptr(), numpy.attr("ndarray").ptr()) == 1 &&
+            nb::cast<std::string>(nb::getattr(nb::getattr(value, "dtype"), "kind")) == "b");
+}
+
+// A number as the reference reads `dt`: a bool of any kind is a TypeError,
+// anything else a number converted as `math.isfinite` converts it (a 0-d float
+// array and an np.float64 are numbers). `what` names the argument in the refusal.
+double read_number(nb::handle value, const char* what) {
+    if (is_bool(value)) {
+        throw nb::type_error((std::string(what) + " must be a number, not a bool").c_str());
     }
-    const double value = PyFloat_AsDouble(dt.ptr());
-    if (value == -1.0 && PyErr_Occurred() != nullptr) {
+    const double number = PyFloat_AsDouble(value.ptr());
+    if (number == -1.0 && PyErr_Occurred() != nullptr) {
         PyErr_Clear();
-        throw nb::type_error("dt must be a number");
+        throw nb::type_error((std::string(what) + " must be a number").c_str());
     }
-    return value;
+    return number;
+}
+
+double read_dt(nb::handle dt) { return read_number(dt, "dt"); }
+
+// A time, s: a number that is finite, or NaN where `nan_ok` (a time not yet set).
+double read_time(nb::handle value, const char* what, bool nan_ok = false) {
+    const double t = read_number(value, what);
+    if (!std::isfinite(t) && !(nan_ok && std::isnan(t))) {
+        throw nb::value_error((std::string(what) + " must be finite, got " + float_str(t)).c_str());
+    }
+    return t;
+}
+
+// A count: an int (NumPy's integers too) that is not a bool and fits 64 bits.
+std::int64_t read_count(nb::handle value, const char* what) {
+    if (is_bool(value)) {
+        throw nb::type_error((std::string(what) + " must be an int, not a bool").c_str());
+    }
+    const nb::object index = nb::steal(PyNumber_Index(value.ptr()));
+    if (!index.is_valid()) {
+        PyErr_Clear();
+        throw nb::type_error((std::string(what) + " must be an int").c_str());
+    }
+    int overflow = 0;
+    const long long count = PyLong_AsLongLongAndOverflow(index.ptr(), &overflow);
+    if (overflow != 0) {
+        throw nb::value_error((std::string(what) + " is out of range").c_str());
+    }
+    return static_cast<std::int64_t>(count);
 }
 
 void transport_set_step(TransportSolver2& t, nb::handle dt) {
@@ -800,25 +877,29 @@ nb::object optional_float(const std::optional<double>& value) {
     return value.has_value() ? nb::object(nb::float_(*value)) : nb::none();
 }
 
-// Every class's budget as plain data: a new dict of its ten terms by name,
+// A class's budget as plain data: a new dict of its ten terms by name,
 // `initial` and `current` None before the first step, the deposition by the
 // slots' names (floor, ceiling, wall, obstacle).
+nb::dict budget_terms(const cfdcore::transport::budget& b) {
+    nb::dict terms;
+    terms["initial"] = optional_float(b.initial);
+    terms["inflow"] = nb::float_(b.inflow);
+    terms["outflow"] = nb::float_(b.outflow);
+    terms["source"] = nb::float_(b.source);
+    for (std::size_t slot = 0; slot < cfdcore::transport::slots; ++slot) {
+        const std::string_view name = cfdcore::transport::slot_names[slot];
+        terms[nb::str(name.data(), name.size())] = nb::float_(b.deposited[slot]);
+    }
+    terms["current"] = optional_float(b.current);
+    terms["leftover"] = nb::float_(b.leftover);
+    return terms;
+}
+
+// Every class's budget, in class order.
 nb::list transport_budgets(const TransportSolver2& t) {
     nb::list out;
     for (std::size_t k = 0; k < t.solver.classes(); ++k) {
-        const auto& b = t.solver.budget_of(k);
-        nb::dict terms;
-        terms["initial"] = optional_float(b.initial);
-        terms["inflow"] = nb::float_(b.inflow);
-        terms["outflow"] = nb::float_(b.outflow);
-        terms["source"] = nb::float_(b.source);
-        for (std::size_t slot = 0; slot < cfdcore::transport::slots; ++slot) {
-            const std::string_view name = cfdcore::transport::slot_names[slot];
-            terms[nb::str(name.data(), name.size())] = nb::float_(b.deposited[slot]);
-        }
-        terms["current"] = optional_float(b.current);
-        terms["leftover"] = nb::float_(b.leftover);
-        out.append(terms);
+        out.append(budget_terms(t.solver.budget_of(k)));
     }
     return out;
 }
@@ -833,12 +914,11 @@ std::vector<std::string> budget_term_names() {
     return names;
 }
 
-// `restore_budgets`: every class's budget set whole from its ten terms by name,
-// as `budgets` returns them. What a budget is made of in Python (the reference's
+// Every class's budget read whole from its ten terms by name, as `budgets`
+// returns them (`restore_budgets`). What a budget is made of in Python (the reference's
 // MassBudget, a checkpoint's unknown leftover) is the caller's to check before
 // it hands the terms over.
-void transport_restore_budgets(TransportSolver2& t, nb::handle budgets) {
-    const std::size_t n = t.solver.classes();
+std::vector<cfdcore::transport::budget> read_budgets(nb::handle budgets, std::size_t n) {
     const std::size_t given = nb::len(budgets);
     if (given != n) {
         throw nb::value_error(("restore_budgets needs one budget per class (" + std::to_string(n) +
@@ -894,7 +974,11 @@ void transport_restore_budgets(TransportSolver2& t, nb::handle budgets) {
         out.push_back(c);
         ++k;
     }
-    t.solver.set_budgets(out);
+    return out;
+}
+
+void transport_restore_budgets(TransportSolver2& t, nb::handle budgets) {
+    t.solver.set_budgets(read_budgets(budgets, t.solver.classes()));
 }
 
 // A face field of the interval's, as a new array of the face field's shape.
@@ -981,6 +1065,417 @@ nb::tuple transport_masks(const TransportSolver2& t, const std::string& which,
 double buffered_sum(const Vector& values, std::size_t row) {
     require_aligned(values.data(), alignof(double), "buffered_sum");
     return cfdcore::reduce::buffered_sum(as_span(values), row);
+}
+
+// --- The march (prompt 91) ---------------------------------------------------
+
+// A read-only, C-contiguous three-dimensional float64 array on the CPU: one cell
+// field per class, [classes, ny, nx].
+using Cube = nb::ndarray<const double, nb::ndim<3>, nb::c_contig, nb::device::cpu>;
+// A read-only, C-contiguous four-dimensional float64 array on the CPU: the
+// arrival maps, [events, channels, ny, nx].
+using Maps = nb::ndarray<const double, nb::ndim<4>, nb::c_contig, nb::device::cpu>;
+
+// A copy of core values as a new NumPy array of the given shape.
+template <typename T>
+nb::ndarray<nb::numpy, T> shaped_copy(std::span<const T> values,
+                                      const std::vector<std::size_t>& shape) {
+    auto* copy = new T[std::max<std::size_t>(values.size(), 1)];
+    std::copy(values.begin(), values.end(), copy);
+    nb::capsule owner(copy, [](void* p) noexcept { delete[] static_cast<T*>(p); });
+    return nb::ndarray<nb::numpy, T>(copy, shape.size(), shape.data(), owner);
+}
+
+// Refuses a cube that is not [classes, ny, nx], or an unaligned one.
+void require_cube(const Cube& c, std::size_t classes, const Grid2& g, std::string_view who,
+                  std::string_view name) {
+    if (c.shape(0) != classes || c.shape(1) != g.cells(1) || c.shape(2) != g.cells(0)) {
+        throw nb::type_error((std::string(who) + ": " + std::string(name) + " is not [" +
+                              std::to_string(classes) + ", " + std::to_string(g.cells(1)) + ", " +
+                              std::to_string(g.cells(0)) + "]")
+                                 .c_str());
+    }
+    require_aligned(c.data(), alignof(double), who);
+}
+
+std::span<const double> span_of3(const Cube& c) {
+    return std::span<const double>(c.data(), c.size());
+}
+
+// The sensors' (j, i) cells as cell field indices, refused outside the grid.
+std::vector<std::size_t> sensor_indices(const Grid2& g,
+                                        const std::vector<std::pair<std::size_t, std::size_t>>& at,
+                                        std::string_view who) {
+    std::vector<std::size_t> out;
+    for (const auto& [j, i] : at) {
+        if (j >= g.cells(1) || i >= g.cells(0)) {
+            throw nb::value_error((std::string(who) + ": a sensor's cell (" + std::to_string(j) +
+                                   ", " + std::to_string(i) + ") is outside the grid")
+                                      .c_str());
+        }
+        out.push_back(j * g.cells(0) + i);
+    }
+    return out;
+}
+
+nb::ndarray<nb::numpy, double> channel_fields(
+    const Grid2& g, const Cube& fields, const std::vector<std::vector<std::size_t>>& channels) {
+    const cfdcore::channels::set set(channels);
+    require_cube(fields, set.size(), g, "channel_fields", "fields");
+    std::vector<double> out(fields.size());
+    cfdcore::channels::channel_fields(g.fields(), span_of3(fields), set, out);
+    return shaped_copy<double>(out, {set.size(), g.cells(1), g.cells(0)});
+}
+
+nb::ndarray<nb::numpy, double> sensor_channels(
+    const Matrix& readings, const std::vector<std::vector<std::size_t>>& channels) {
+    const cfdcore::channels::set set(channels);
+    if (readings.shape(0) != set.size()) {
+        throw nb::type_error("sensor_channels: readings is not [classes, sensors]");
+    }
+    require_aligned(readings.data(), alignof(double), "sensor_channels");
+    std::vector<double> out(readings.size());
+    cfdcore::channels::sensor_channels(span_of(readings), readings.shape(1), set, out);
+    return shaped_copy<double>(out, {readings.shape(0), readings.shape(1)});
+}
+
+// The arrival maps on a grid, with the channels they read (`ArrivalTracker`).
+struct ArrivalMaps2 {
+    ArrivalMaps2(const Grid2& g, std::vector<double> thresholds, std::vector<double> onsets,
+                 const std::vector<std::vector<std::size_t>>& members)
+        : grid(&g),
+          channels(members),
+          maps(g, std::move(thresholds), std::move(onsets)),
+          sums(channels.size() * g.fields().cell_count(), 0.0) {
+        if (maps.channels() != channels.size()) {
+            throw nb::value_error("ArrivalMaps2: one threshold per channel");
+        }
+    }
+    const Grid2* grid;
+    cfdcore::channels::set channels;
+    cfdcore::arrival::maps<2> maps;
+    std::vector<double> sums;
+};
+
+void arrival_update(ArrivalMaps2& a, double t, const Cube& fields) {
+    require_cube(fields, a.channels.size(), *a.grid, "ArrivalMaps2.update", "fields");
+    if (a.maps.started(t)) {
+        cfdcore::channels::channel_fields(a.grid->fields(), span_of3(fields), a.channels, a.sums);
+    }
+    a.maps.update(t, a.sums);
+}
+
+nb::ndarray<nb::numpy, double> arrival_maps(const cfdcore::arrival::maps<2>& m, const Grid2& g) {
+    return shaped_copy<double>(m.first_above(), {m.events(), m.channels(), g.cells(1), g.cells(0)});
+}
+
+void require_maps(const Maps& first, const cfdcore::arrival::maps<2>& m, const Grid2& g,
+                  std::string_view who) {
+    if (first.shape(0) != m.events() || first.shape(1) != m.channels() ||
+        first.shape(2) != g.cells(1) || first.shape(3) != g.cells(0)) {
+        throw nb::type_error((std::string(who) + ": first_above is not [events, channels, ny, nx]")
+                                 .c_str());
+    }
+    require_aligned(first.data(), alignof(double), who);
+}
+
+// The recovery's keys from Python: the thresholds, and a dict of the target, the
+// defined flags and the hold (None for none).
+cfdcore::recovery::keys recovery_keys(const std::vector<double>& thresholds, nb::handle spec) {
+    cfdcore::recovery::keys k;
+    k.thresholds = thresholds;
+    k.target = nb::cast<std::vector<double>>(spec["target"]);
+    k.defined = nb::cast<std::vector<bool>>(spec["defined"]);
+    const nb::object hold = spec["hold"];
+    if (!hold.is_none()) {
+        k.hold = nb::cast<double>(hold);
+    }
+    return k;
+}
+
+// A recovery tracker's state as `RecoveryTracker.state` names and shapes it.
+nb::dict recovery_state(const cfdcore::recovery::tracker<2>& r, const Grid2& g) {
+    nb::dict out;
+    const std::size_t c = r.classes();
+    out["last_above"] = shaped_copy<double>(r.last_above(), {c, g.cells(1), g.cells(0)});
+    out["sensor_time"] = shaped_copy<double>(r.sensor_time(), {c, r.sensors()});
+    out["mean_time"] = shaped_copy<double>(r.mean_time(), {c});
+    out["class_since"] = shaped_copy<double>(r.class_since(), {c});
+    const double room = r.room_since();
+    const double t = r.time();
+    out["room_since"] = shaped_copy<double>(std::span<const double>(&room, 1), {});
+    out["t"] = shaped_copy<double>(std::span<const double>(&t, 1), {});
+    return out;
+}
+
+// One array of a recovery state dict, of the length the tracker holds.
+Array state_array(nb::handle state, const char* name, std::size_t length, std::string_view who) {
+    Array a;
+    if (!nb::try_cast<Array>(state[name], a, false) || a.size() != length) {
+        throw nb::type_error((std::string(who) + ": the recovery state's " + name +
+                              " is not a C-contiguous float64 array of " +
+                              std::to_string(length) + " values")
+                                 .c_str());
+    }
+    require_aligned(a.data(), alignof(double), who);
+    return a;
+}
+
+struct recovery_arrays {
+    Array last_above, sensor_time, mean_time, class_since, room_since, t;
+};
+
+recovery_arrays read_recovery(nb::handle state, const cfdcore::recovery::tracker<2>& r,
+                              const Grid2& g, std::string_view who) {
+    const std::size_t c = r.classes();
+    return {state_array(state, "last_above", c * g.fields().cell_count(), who),
+            state_array(state, "sensor_time", c * r.sensors(), who),
+            state_array(state, "mean_time", c, who),
+            state_array(state, "class_since", c, who),
+            state_array(state, "room_since", 1, who),
+            state_array(state, "t", 1, who)};
+}
+
+std::span<const double> span_of_array(const Array& a) {
+    return std::span<const double>(a.data(), a.size());
+}
+
+// The recovery tracker on a grid, with the channels and sensors it reads
+// (`RecoveryTracker`).
+struct Recovery2 {
+    Recovery2(const Grid2& g, const std::vector<double>& thresholds, nb::handle spec,
+              const std::vector<std::pair<std::size_t, std::size_t>>& cells,
+              const std::vector<std::vector<std::size_t>>& members)
+        : grid(&g),
+          channels(members),
+          sensors(sensor_indices(g, cells, "Recovery2")),
+          tracker(g, recovery_keys(thresholds, spec), sensors.size()),
+          sums(channels.size() * g.fields().cell_count(), 0.0),
+          readings(channels.size() * sensors.size(), 0.0),
+          channel_readings(channels.size() * sensors.size(), 0.0) {
+        if (tracker.classes() != channels.size()) {
+            throw nb::value_error("Recovery2: one threshold per channel");
+        }
+    }
+    const Grid2* grid;
+    cfdcore::channels::set channels;
+    std::vector<std::size_t> sensors;
+    cfdcore::recovery::tracker<2> tracker;
+    std::vector<double> sums;
+    std::vector<double> readings;
+    std::vector<double> channel_readings;
+};
+
+void recovery_update(Recovery2& r, double t, const Cube& fields, const std::vector<double>& means) {
+    require_cube(fields, r.channels.size(), *r.grid, "Recovery2.update", "fields");
+    if (means.size() != r.channels.size()) {
+        throw nb::value_error("Recovery2.update: means hold one value per class");
+    }
+    const auto all = span_of3(fields);
+    cfdcore::channels::channel_fields(r.grid->fields(), all, r.channels, r.sums);
+    cfdcore::channels::sensor_readings(all, r.grid->fields().cell_count(), r.sensors, r.readings);
+    cfdcore::channels::sensor_channels(r.readings, r.sensors.size(), r.channels,
+                                       r.channel_readings);
+    r.tracker.update(t, r.sums, r.readings, r.channel_readings, means);
+}
+
+void recovery_restore(Recovery2& r, nb::handle state) {
+    const recovery_arrays a = read_recovery(state, r.tracker, *r.grid, "Recovery2.restore");
+    r.tracker.restore(span_of_array(a.last_above), span_of_array(a.sensor_time),
+                      span_of_array(a.mean_time), span_of_array(a.class_since),
+                      a.room_since.data()[0], a.t.data()[0]);
+}
+
+using March2Run = cfdcore::march::run<2>;
+
+// The run with the scheme it was built on (kept alive by the binding).
+struct March2 {
+    const Scheme2* scheme;
+    std::unique_ptr<March2Run> run;
+    double limit;
+};
+
+void march_init(March2* self, const Scheme2& s, const Vector& dx_cell, const Vector& dy_cell,
+                const Vector& dx_face, const Vector& dy_face, double cfl, bool upwind,
+                std::int64_t max_sweeps, double tol, double limit, double share, double horizon,
+                std::optional<double> schmidt, const std::vector<double>& settling,
+                const std::vector<double>& diffusion,
+                const std::array<std::int32_t, 3>& surface_codes,
+                const std::vector<std::vector<std::size_t>>& channels,
+                const std::vector<double>& thresholds,
+                const std::vector<std::pair<std::size_t, std::size_t>>& sensors,
+                const std::vector<double>& onsets, nb::handle recovery) {
+    constexpr std::string_view who = "March2";
+    const Grid2& g = s.mesh();
+    solver_setup setup = read_solver_setup(who, s, dx_cell, dy_cell, dx_face, dy_face, cfl,
+                                           upwind, max_sweeps, tol, limit, share, horizon,
+                                           schmidt, settling, diffusion, surface_codes);
+    cfdcore::march::monitor_setup monitor;
+    monitor.channels = channels;
+    monitor.thresholds = thresholds;
+    monitor.sensors = sensor_indices(g, sensors, who);
+    monitor.onsets = onsets;
+    if (!recovery.is_none()) {
+        monitor.recovery = recovery_keys(thresholds, recovery);
+    }
+    new (self) March2{&s,
+                      std::make_unique<March2Run>(s, setup.spacing, setup.keys,
+                                                  std::move(setup.physics), std::move(monitor)),
+                      limit};
+}
+
+void march_restore(March2& m, const Cube& fields, nb::handle budgets, nb::handle step,
+                   nb::handle t, const Maps& first_above, nb::handle arrival_t,
+                   nb::handle recovery) {
+    constexpr std::string_view who = "March2.restore";
+    const Grid2& g = m.scheme->mesh();
+    auto& r = *m.run;
+    require_cube(fields, r.classes(), g, who, "fields");
+    require_maps(first_above, r.maps(), g, who);
+    cfdcore::march::resident state;
+    state.fields = span_of3(fields);
+    state.budgets = read_budgets(budgets, r.classes());
+    state.step = read_count(step, "step");
+    if (state.step < 0) {
+        throw nb::value_error("March2.restore: step is negative");
+    }
+    state.t = read_time(t, "t");
+    state.first_above = std::span<const double>(first_above.data(), first_above.size());
+    // NaN before the maps' first update.
+    state.arrival_t = read_time(arrival_t, "arrival_t", true);
+    std::optional<recovery_arrays> kept;
+    if (r.has_recovery()) {
+        if (recovery.is_none()) {
+            throw nb::value_error("March2.restore: a run with a recovery needs its state");
+        }
+        kept = read_recovery(recovery, *r.tracker(), g, who);
+        state.last_above = span_of_array(kept->last_above);
+        state.sensor_time = span_of_array(kept->sensor_time);
+        state.mean_time = span_of_array(kept->mean_time);
+        state.class_since = span_of_array(kept->class_since);
+        state.room_since = kept->room_since.data()[0];
+        state.recovery_t = kept->t.data()[0];
+    } else if (!recovery.is_none()) {
+        throw nb::value_error("March2.restore: recovery state given to a run without a recovery");
+    }
+    r.restore(state);
+}
+
+void march_interval(March2& m, nb::handle conditions, nb::handle u, nb::handle v,
+                    nb::handle v_ext, nb::handle eddy_viscosity, nb::handle sources,
+                    nb::handle dt, nb::handle steps, nb::handle t_start, nb::handle t_end,
+                    nb::handle first) {
+    const std::int64_t n_steps = read_count(steps, "steps");
+    const std::int64_t first_step = read_count(first, "first");
+    const double start = read_time(t_start, "t_start");
+    const double end = read_time(t_end, "t_end");
+    if (n_steps < 1 || first_step < 0 || first_step >= n_steps) {
+        throw nb::value_error("March2.interval: the first step is not in [0, steps)");
+    }
+    interval_arrays arrays;
+    const interval_read read = read_interval(m.scheme->mesh(), m.run->classes(), conditions, u,
+                                             v, v_ext, eddy_viscosity, sources, arrays);
+    const cfdcore::march::plan p{start, end, read_dt(dt), n_steps, first_step};
+    const refusal r = m.run->interval(read.each, read.input, p);
+    if (!r.ok()) {
+        raise_refusal(r);
+    }
+}
+
+const char* stop_name(cfdcore::march::stop s) {
+    switch (s) {
+        case cfdcore::march::stop::count:
+            return "count";
+        case cfdcore::march::stop::interval_end:
+            return "interval";
+        case cfdcore::march::stop::held:
+            return "held";
+        case cfdcore::march::stop::breach:
+            return "breach";
+        case cfdcore::march::stop::refused:
+            return "refused";
+    }
+    return "count";
+}
+
+nb::dict march_steps(March2& m, nb::handle steps_asked) {
+    const std::int64_t n = read_count(steps_asked, "n");
+    if (n < 1) {
+        throw nb::value_error("March2.march: n is at least 1");
+    }
+    auto& r = *m.run;
+    const std::size_t rows_n = std::min(static_cast<std::size_t>(n), r.remaining());
+    const std::size_t c = r.classes();
+    const std::size_t s = r.sensors();
+    std::vector<std::int64_t> step(rows_n);
+    std::vector<double> t(rows_n);
+    std::vector<double> budgets(rows_n * c * cfdcore::march::budget_terms);
+    std::vector<double> readings(rows_n * c * s);
+    std::vector<double> channels(rows_n * c * s);
+    std::vector<double> means(r.has_recovery() ? rows_n * c : 0);
+    std::vector<std::int64_t> sweeps(rows_n * c);
+    std::vector<std::uint8_t> converged(rows_n * c);
+    const cfdcore::march::rows out{step, t, budgets, readings, channels, means, sweeps, converged};
+    const cfdcore::march::result done = r.march(static_cast<std::size_t>(n), out);
+    if (done.reason == cfdcore::march::stop::refused) {
+        raise_refusal(done.refusal);
+    }
+    const std::size_t m_rows = done.steps;
+    nb::dict result;
+    result["step"] = shaped_copy<std::int64_t>(std::span<const std::int64_t>(step).first(m_rows),
+                                               {m_rows});
+    result["t"] = shaped_copy<double>(std::span<const double>(t).first(m_rows), {m_rows});
+    result["budgets"] = shaped_copy<double>(
+        std::span<const double>(budgets).first(m_rows * c * cfdcore::march::budget_terms),
+        {m_rows, c, cfdcore::march::budget_terms});
+    result["readings"] = shaped_copy<double>(
+        std::span<const double>(readings).first(m_rows * c * s), {m_rows, c, s});
+    result["channels"] = shaped_copy<double>(
+        std::span<const double>(channels).first(m_rows * c * s), {m_rows, c, s});
+    result["means"] = r.has_recovery()
+                          ? nb::cast(shaped_copy<double>(
+                                std::span<const double>(means).first(m_rows * c), {m_rows, c}))
+                          : nb::none();
+    result["sweeps"] = shaped_copy<std::int64_t>(
+        std::span<const std::int64_t>(sweeps).first(m_rows * c), {m_rows, c});
+    std::vector<bool> flags(converged.begin(), converged.begin() + m_rows * c);
+    auto* copy = new bool[std::max<std::size_t>(flags.size(), 1)];
+    std::copy(flags.begin(), flags.end(), copy);
+    nb::capsule owner(copy, [](void* p) noexcept { delete[] static_cast<bool*>(p); });
+    const std::array<std::size_t, 2> shape{m_rows, c};
+    result["converged"] = nb::ndarray<nb::numpy, bool>(copy, 2, shape.data(), owner);
+    result["stopped"] = stop_name(done.reason);
+    if (done.reason == cfdcore::march::stop::breach) {
+        nb::dict breach;
+        breach["size_class"] = done.refusal.size_class;
+        breach["leftover"] = done.record.accumulated;
+        breach["supplied"] = done.record.supplied;
+        breach["limit"] = m.limit;
+        result["breach"] = breach;
+    } else {
+        result["breach"] = nb::none();
+    }
+    return result;
+}
+
+nb::list march_budgets(const March2& m) {
+    nb::list out;
+    for (std::size_t k = 0; k < m.run->classes(); ++k) {
+        out.append(budget_terms(m.run->budget_of(k)));
+    }
+    return out;
+}
+
+nb::dict march_arrival(const March2& m) {
+    nb::dict out;
+    out["first_above"] = arrival_maps(m.run->maps(), m.scheme->mesh());
+    out["arrival_t"] = m.run->maps().time();
+    return out;
+}
+
+nb::object march_recovery(const March2& m) {
+    const auto* r = m.run->tracker();
+    return r == nullptr ? nb::none() : nb::object(recovery_state(*r, m.scheme->mesh()));
 }
 
 }  // namespace
@@ -1221,4 +1716,137 @@ NB_MODULE(_cfdcore, m) {
              "the direction (low face inward, outward, high face inward, outward); or\n"
              "'vent', four bool arrays on the faces (entering from the low side, from the\n"
              "high side, leaving to the high side, to the low side), empty without vents.");
+
+    // --- The march (prompt 91) ----------------------------------------------
+
+    m.def("channel_fields", &channel_fields, nb::arg("grid"), nb::arg("fields").noconvert(),
+          nb::arg("channels"),
+          "Every channel's field (monitor.channel_sums): fields [classes, ny, nx], channels\n"
+          "one list of classes per class; each channel zero, then each member added in\n"
+          "turn. Returns a new [classes, ny, nx] array.");
+    m.def("sensor_channels", &sensor_channels, nb::arg("readings").noconvert(),
+          nb::arg("channels"),
+          "Each channel's reading at each sensor (AlertMonitor._sums): readings\n"
+          "[classes, sensors] summed as channel_fields sums the fields.");
+
+    nb::class_<ArrivalMaps2>(m, "ArrivalMaps2",
+                             "The arrival maps (ArrivalTracker) on a Grid2: ArrivalMaps2(grid,\n"
+                             "thresholds, onsets, channels). Keeps its grid alive.")
+        .def(nb::init<const Grid2&, std::vector<double>, std::vector<double>,
+                      const std::vector<std::vector<std::size_t>>&>(),
+             nb::arg("grid"), nb::arg("thresholds"), nb::arg("onsets"), nb::arg("channels"),
+             nb::keep_alive<1, 2>())
+        .def("update", &arrival_update, nb::arg("t"), nb::arg("fields").noconvert(),
+             "ArrivalTracker.update: fields [classes, ny, nx].")
+        .def_prop_ro(
+            "first_above",
+            [](const ArrivalMaps2& a) { return nb::cast(arrival_maps(a.maps, *a.grid)); },
+            "[events, channels, ny, nx], the first time at or above (a copy).")
+        .def_prop_ro(
+            "t", [](const ArrivalMaps2& a) { return a.maps.time(); },
+            "The last update's time, NaN before any.")
+        .def(
+            "restore",
+            [](ArrivalMaps2& a, const Maps& first, double t) {
+                require_maps(first, a.maps, *a.grid, "ArrivalMaps2.restore");
+                a.maps.restore(std::span<const double>(first.data(), first.size()), t);
+            },
+            nb::arg("first_above").noconvert(), nb::arg("t"),
+            "Set the maps and the last update's time (copied).");
+
+    nb::class_<Recovery2>(m, "Recovery2",
+                          "The clean-out's recovery tracker (RecoveryTracker) on a Grid2:\n"
+                          "Recovery2(grid, thresholds, keys, cells, channels), keys a dict of\n"
+                          "target, defined and hold (None for none), cells the sensors' (j, i).\n"
+                          "Keeps its grid alive.")
+        .def(nb::init<const Grid2&, const std::vector<double>&, nb::handle,
+                      const std::vector<std::pair<std::size_t, std::size_t>>&,
+                      const std::vector<std::vector<std::size_t>>&>(),
+             nb::arg("grid"), nb::arg("thresholds"), nb::arg("keys"), nb::arg("cells"),
+             nb::arg("channels"), nb::keep_alive<1, 2>())
+        .def("update", &recovery_update, nb::arg("t"), nb::arg("fields").noconvert(),
+             nb::arg("means"), "RecoveryTracker.update: fields [classes, ny, nx], the means.")
+        .def(
+            "held", [](const Recovery2& r) { return r.tracker.held(); },
+            "RecoveryTracker.held.")
+        .def(
+            "state", [](const Recovery2& r) { return recovery_state(r.tracker, *r.grid); },
+            "The state as RecoveryTracker.state names and shapes it (new arrays).")
+        .def("restore", &recovery_restore, nb::arg("state"),
+             "Set the state from a dict of RecoveryTracker.state's arrays (copied).");
+
+    nb::class_<March2>(
+        m, "March2",
+        "The march with the fields resident (prompt 91; ADR-017 B's run): every class's\n"
+        "step in class order, then the readings and channels, the arrival maps and the\n"
+        "recovery, as _Run.march steps them, bit for bit.\n\n"
+        "March2(scheme, dx_cell, dy_cell, dx_face, dy_face, cfl, upwind, max_sweeps, tol,\n"
+        "limit, share, horizon, schmidt, settling, diffusion, surface_codes, channels,\n"
+        "thresholds, sensors, onsets, recovery): TransportSolver2's arguments, then the\n"
+        "channels (one list of classes per class), the thresholds per class, the sensors'\n"
+        "(j, i) cells, the contaminating events' onsets and the recovery's keys (a dict of\n"
+        "target, defined and hold, or None). Keeps its scheme alive. restore sets the whole\n"
+        "resident state, interval sets an interval and its plan, march steps it. Plain\n"
+        "data only; the module imports nothing from the reference.")
+        .def("__init__", &march_init, nb::arg("scheme"), nb::arg("dx_cell").noconvert(),
+             nb::arg("dy_cell").noconvert(), nb::arg("dx_face").noconvert(),
+             nb::arg("dy_face").noconvert(), nb::arg("cfl"), nb::arg("upwind"),
+             nb::arg("max_sweeps"), nb::arg("tol"), nb::arg("limit"), nb::arg("share"),
+             nb::arg("horizon"), nb::arg("schmidt").none(), nb::arg("settling"),
+             nb::arg("diffusion"), nb::arg("surface_codes"), nb::arg("channels"),
+             nb::arg("thresholds"), nb::arg("sensors"), nb::arg("onsets"),
+             nb::arg("recovery").none(), nb::keep_alive<1, 2>())
+        .def_prop_ro("classes", [](const March2& m) { return m.run->classes(); })
+        .def_prop_ro("free_area", [](const March2& m) { return m.run->free_area(); },
+                     "The non-SOLID cells' area, summed as the reference sums it.")
+        .def_prop_ro("step", [](const March2& m) { return m.run->step(); })
+        .def_prop_ro("t", [](const March2& m) { return m.run->time(); })
+        .def_prop_ro("remaining", [](const March2& m) { return m.run->remaining(); },
+                     "The steps left in the interval, 0 without one.")
+        .def("restore", &march_restore, nb::arg("fields").noconvert(), nb::arg("budgets"),
+             nb::arg("step"), nb::arg("t"), nb::arg("first_above").noconvert(),
+             nb::arg("arrival_t"), nb::arg("recovery").none() = nb::none(),
+             "Set the resident state: the class fields [classes, ny, nx], every class's\n"
+             "budget (TransportSolver2.budgets' dicts), the run's step count and time, the\n"
+             "arrival maps [events, channels, ny, nx] and their last update's time (NaN\n"
+             "before the first), and with a recovery its state (Recovery2.state's dict).\n"
+             "Clears the interval. A bool or a float where a count is read, a negative step\n"
+             "or a time that is not finite is refused.")
+        .def("interval", &march_interval, nb::arg("conditions"), nb::arg("u"), nb::arg("v"),
+             nb::arg("v_ext").none() = nb::none(), nb::arg("eddy_viscosity").none() = nb::none(),
+             nb::arg("sources").none() = nb::none(), nb::kw_only(), nb::arg("dt"),
+             nb::arg("steps"), nb::arg("t_start"), nb::arg("t_end"), nb::arg("first") = 0,
+             "Set an interval: TransportSolver2.set_interval's arguments, then its plan\n"
+             "(IntervalPlan's dt, steps, t_start and t_end) and the step within it the\n"
+             "march continues from. Refuses what set_interval and set_step refuse; a bool,\n"
+             "a float where a count is read or a time that is not finite is refused (a\n"
+             "TypeError and a ValueError), as is a first step outside [0, steps).")
+        .def("march", &march_steps, nb::arg("n"),
+             "At most n steps of the interval (fewer at its end, after the step that holds,\n"
+             "or before a step that breaches). Returns a dict: step and t [m]; budgets\n"
+             "[m, classes, 10] in budget_terms' order (NaN for a term not set); readings and\n"
+             "channels [m, classes, sensors]; means [m, classes] (None without a recovery);\n"
+             "sweeps and converged [m, classes]; stopped ('count', 'interval', 'held' or\n"
+             "'breach'); breach (None, or a dict of size_class, leftover, supplied and limit).")
+        .def(
+            "class_fields",
+            [](const March2& m) {
+                const Grid2& g = m.scheme->mesh();
+                return shaped_copy<double>(m.run->fields(),
+                                           {m.run->classes(), g.cells(1), g.cells(0)});
+            },
+            "The class fields, [classes, ny, nx] (a copy).")
+        .def("budgets", &march_budgets, "Every class's budget, as TransportSolver2.budgets.")
+        .def("arrival", &march_arrival, "A dict of first_above (a copy) and arrival_t.")
+        .def("recovery", &march_recovery, "The recovery state (Recovery2.state), or None.")
+        .def(
+            "held", [](const March2& m) { return m.run->held(); },
+            "Whether the clean-out's hold holds.");
+    m.attr("budget_terms") = [] {
+        nb::list names;
+        for (const std::string_view name : cfdcore::march::budget_term_names) {
+            names.append(nb::str(name.data(), name.size()));
+        }
+        return names;
+    }();
 }
