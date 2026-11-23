@@ -3,9 +3,11 @@
     python docs/reports/probe91/probe91.py configs
     python docs/reports/probe91/probe91.py run <scenario> <side>
     python docs/reports/probe91/probe91.py restart
+    python docs/reports/probe91/probe91.py restart-clean
     python docs/reports/probe91/probe91.py compare
     python docs/reports/probe91/probe91.py timing --run N
     python docs/reports/probe91/probe91.py plants
+    python docs/reports/probe91/probe91.py plants-round1 [--tree NAME] [--only NAME...]
     python docs/reports/probe91/probe91.py vecinfo
 
 Run under WSL2 with the Linux environment (``~/.venvs/cfd_clean_room``) from the
@@ -27,6 +29,13 @@ in ``src/`` changes.
 - ``restart``: the 80x30 dust release with a checkpoint every 1,000 steps,
   through the core, stopped by an exception from ``on_step`` after step 1,500
   and restarted through the core from its checkpoint.
+- ``restart-clean``: the 80x30 held clean-out with a checkpoint every
+  CLEAN_CADENCE steps, run through the core to its hold (``hold80r``), and twice
+  more, each stopped after a step and restarted through the core: stopped after
+  step 1,650 (checkpoint at 1,600, before the room's within-spec stretch, which
+  begins at step 1,660) and after step 1,850 (checkpoint at 1,800, inside it). The
+  state each restart carries is recorded with it (``room_since`` and the classes'
+  starts).
 - ``compare``: every pair of runs, bit for bit: the frames, the sensor table,
   the alert table, the arrival maps and the recovery record at the end, the
   digests at every frame, and the decisions; ``results/builder91/compare.json``.
@@ -35,6 +44,12 @@ in ``src/`` changes.
   the monitor's per-step field reads, in one process, with the machine's state.
 - ``plants``: each planted defect of ``variants91.py`` built in turn, with CTest,
   the march's parity module and two whole 80x30 runs against the reference's.
+- ``plants-round1``: round 1's planted defects (``variants91b.py``), each built
+  in turn in the tree ``--tree`` names, with CTest and the march's parity module
+  (no whole runs: a whole run of the dust release and the held clean-out cannot
+  see a breach, a refusal or a restore). ``--check`` applies every plant's edits
+  to the sources and reports one whose text is not found exactly once; the
+  records go to ``results/builder91/plants_round1_<tree>.json``.
 - ``vecinfo``: GCC's vectorisation report on the new modules.
 """
 
@@ -91,6 +106,12 @@ HOLD = 5.562
 # The restart: a checkpoint every RESTART_CADENCE steps, stopped after STOP_AT.
 RESTART_CADENCE = 1000
 STOP_AT = 1500
+# The core-driven runs round 0 made, which round 1 makes again and compares with them.
+ROUND0_RUNS = ("dust80", "door80", "breach80", "clean80", "hold80", "dust320")
+# The clean-out's restarts: a checkpoint every CLEAN_CADENCE steps, stopped after
+# each of CLEAN_STOPS (the within-spec stretch of the held run begins at step 1,660).
+CLEAN_CADENCE = 100
+CLEAN_STOPS = {"before_restart": 1650, "inside_restart": 1850}
 # The timing's window: 200 steps from the frame at step 2,700 of the 320x120
 # dust release (about 9.8 s), across the release at 10 s.
 WINDOW_FROM, WINDOW_STEPS = 2700, 200
@@ -125,17 +146,29 @@ SCENARIOS = {
     "hold80": Scenario("hold80", B86 / "runs/reference/dust_80x30.h5"),
     "dust320": Scenario("dust320", B81 / "product/equipment_dust.h5"),
     "dust80r": Scenario("dust80r", B86 / "runs/reference/dust_80x30.h5"),
+    "hold80r": Scenario("hold80r", B86 / "runs/reference/dust_80x30.h5"),
 }
 # The pairs compare compares: (label, side and run of each).
 PAIRS = [
     *[
         (name, ("reference", name), ("core", name))
         for name in SCENARIOS
-        if name != "dust80r"
+        if name not in ("dust80r", "hold80r")
     ],
     ("restart", ("core", "dust80r"), ("core", "dust80r_restart")),
     # The restart's runs checkpoint every 1,000 steps; the dust release does not.
     ("checkpoints", ("core", "dust80"), ("core", "dust80r")),
+    # The held clean-out, checkpointed every CLEAN_CADENCE steps, and restarted from
+    # before and from inside its within-spec stretch.
+    ("clean checkpoints", ("core", "hold80"), ("core", "hold80r")),
+    ("clean restart before", ("core", "hold80r"), ("core", "hold80r_before_restart")),
+    ("clean restart inside", ("core", "hold80r"), ("core", "hold80r_inside_restart")),
+    # Round 1's remade core runs against round 0's, kept in runs_round0/ (made at e152bbd,
+    # before the binding's guards and its shared setup).
+    *[
+        (f"round 0 {name}", ("../runs_round0/core", name), ("core", name))
+        for name in ROUND0_RUNS
+    ],
 ]
 
 
@@ -179,6 +212,9 @@ def write_configs() -> None:
     restart = json.loads(json.dumps(mappings["dust80"]))
     restart["solver"]["checkpoint_interval"] = RESTART_CADENCE
     mappings["dust80r"] = restart
+    clean_restart = json.loads(json.dumps(held))
+    clean_restart["solver"]["checkpoint_interval"] = CLEAN_CADENCE
+    mappings["hold80r"] = clean_restart
     for name, mapping in mappings.items():
         path = config_path(name)
         path.write_text(yaml.safe_dump(mapping, sort_keys=False), encoding="utf-8")
@@ -362,25 +398,37 @@ class StopError(RuntimeError):
     """The crash the restart continues from."""
 
 
-def restart() -> None:
-    """The dust release through the core, stopped after STOP_AT, restarted through the core."""
-    name = "dust80r_restart"
+def restart(
+    scenario: str = "dust80r", stop_at: int = STOP_AT, tag: str = "restart"
+) -> None:
+    """A scenario through the core, stopped after a step, restarted through the core.
+
+    Parameters
+    ----------
+    scenario : str
+        A key of SCENARIOS whose configuration checkpoints.
+    stop_at : int
+        The step an exception from ``on_step`` ends the first run after.
+    tag : str
+        The restarted run's name is ``<scenario>_<tag>``.
+    """
+    name = f"{scenario}_{tag}"
     hook = FrameHook()
     hook.install()
-    config = SimConfig(config_path("dust80r"))
+    config = SimConfig(config_path(scenario))
     path, copy_to = paths("core", name)
     fresh(path)
 
     def crash(step: object) -> None:
-        if step.step == STOP_AT:
-            raise StopError(f"stopped after step {STOP_AT}")
+        if step.step == stop_at:
+            raise StopError(f"stopped after step {stop_at}")
 
     started = time.perf_counter()
     try:
         core_driver.run(
             config,
             path,
-            flows_from=SCENARIOS["dust80r"].flows_from,
+            flows_from=SCENARIOS[scenario].flows_from,
             on_step=crash,
             provenance=Provenance.here(commit(), 0),
         )
@@ -389,6 +437,13 @@ def restart() -> None:
     else:
         raise SystemExit("the run was not stopped")
     stopped_at = time.perf_counter() - started
+    # What the checkpoint carries: the recovery state a restart must hand back.
+    carried = RunFile(path).read_checkpoint()
+    recovery = {
+        key: carried.recovery[key].tolist()
+        for key in ("room_since", "class_since", "mean_time")
+        if key in carried.recovery
+    }
     hook.frames.clear()
     started = time.perf_counter()
     record = core_driver.run(config, restart=path)
@@ -398,10 +453,23 @@ def restart() -> None:
         wall,
         "core",
         name,
-        {"stopped_after": STOP_AT, "stopped_wall_seconds": stopped_at},
+        {
+            "stopped_after": stop_at,
+            "stopped_wall_seconds": stopped_at,
+            "checkpoint_step": carried.step,
+            "checkpoint_t": carried.t,
+            "checkpoint_recovery": recovery,
+        },
     )
     finish(path, copy_to, summary, hook, name)
     print(name, record.steps, "restarted from", record.restarted_from, f"{wall:.1f} s")
+
+
+def restart_clean() -> None:
+    """The held clean-out checkpointed, and restarted from before and from inside its stretch."""
+    run_one("hold80r", "core")
+    for tag, stop_at in CLEAN_STOPS.items():
+        restart("hold80r", stop_at, tag)
 
 
 # ---------------------------------------------------------------------------
@@ -800,92 +868,128 @@ def whole_run_differences(name: str) -> str:
     return "differs: " + ", ".join(parts)
 
 
-def plants() -> None:
-    """Each planted defect built in turn: CTest, the march's parity module, two whole runs."""
+def test_plant(
+    name: str, what: str, edits: list, tree: Path, run_dir: Path = ROOT
+) -> dict[str, object]:
+    """One planted defect built in ``tree``, with CTest and the march's parity module.
+
+    Parameters
+    ----------
+    name, what : str
+        The plant's name and what it changes.
+    edits : list
+        ``(file, old, new)`` edits to the checkout's ``core/``.
+    tree : Path
+        The scratch tree: its ``core/`` is rewritten where it differs (so ninja
+        rebuilds only what changed) and built in its ``build/``.
+    run_dir : Path
+        The checkout whose tests run.
+
+    Returns
+    -------
+    dict[str, object]
+        The record: ``ctest``, ``ctest_failed``, ``pytest`` and
+        ``parity_failed_by_test``, or ``build`` when the build failed.
+    """
     import re
     from collections import Counter
 
+    source = tree / "core"
+    build = tree / "build"
+    files = probe90.plant_sources(edits)
+    for relative, text in files.items():
+        target = source / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        # Written only when it differs, so ninja rebuilds what changed (a copy
+        # keeps old file times and ninja would not: prompt 88's lesson).
+        if not target.exists() or target.read_text(encoding="utf-8") != text:
+            target.write_text(text, encoding="utf-8", newline="\n")
+    record: dict[str, object] = {"name": name, "what": what}
+    configure = subprocess.run(
+        [
+            "cmake",
+            "-S",
+            str(source),
+            "-B",
+            str(build),
+            "-G",
+            "Ninja",
+            f"-DPython_EXECUTABLE={sys.executable}",
+            f"-DFETCHCONTENT_SOURCE_DIR_GOOGLETEST={probe90.GTEST_SRC}",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    made = subprocess.run(["ninja", "-C", str(build)], capture_output=True, text=True)
+    if configure.returncode or made.returncode:
+        record["build"] = "failed: " + (made.stdout + made.stderr)[-1500:]
+        return record
+    ctest = subprocess.run(
+        ["ctest", "--test-dir", str(build)], capture_output=True, text=True
+    )
+    summary = [line for line in ctest.stdout.splitlines() if "tests passed" in line]
+    record["ctest"] = summary[0].strip() if summary else ctest.stdout[-300:]
+    record["ctest_failed"] = re.findall(r"\d+ - (\S+) \([^)]+\)", ctest.stdout)
+    env = {**os.environ, "PYTHONPATH": str(build), "CFD_CORE_REQUIRED": "1"}
+    pytest = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "tests/test_core_march.py",
+            "-q",
+            "-rf",
+            "--tb=no",
+            "-p",
+            "no:cacheprovider",
+        ],
+        capture_output=True,
+        text=True,
+        cwd=run_dir,
+        env=env,
+    )
+    lines = pytest.stdout.splitlines()
+    # A run that died (a plant that makes the binding crash) has no summary line.
+    record["pytest_returncode"] = pytest.returncode
+    record["pytest"] = next(
+        (
+            line.strip("= ")
+            for line in reversed(lines)
+            if re.search(r" in [0-9.]+s", line)
+        ),
+        lines[-1] if lines else "no output",
+    )
+    failed = [
+        line.split("::", 1)[1].split(" ")[0]
+        for line in lines
+        if line.startswith("FAILED tests/test_core_march.py::")
+    ]
+    record["parity_failed_by_test"] = dict(
+        sorted(Counter(case.split("[")[0] for case in failed).items())
+    )
+    return record
+
+
+def plants() -> None:
+    """Each planted defect built in turn: CTest, the march's parity module, two whole runs."""
     sys.path.insert(0, str(HERE))
     import variants91
 
-    source = PLANT_WORK / "core"
-    build = PLANT_WORK / "build"
     records = []
     only = sys.argv[sys.argv.index("--only") + 1 :] if "--only" in sys.argv else None
     for name, what, edits in variants91.PLANTS:
         if only and name not in only:
             continue
-        files = probe90.plant_sources(edits)
-        for relative, text in files.items():
-            target = source / relative
-            target.parent.mkdir(parents=True, exist_ok=True)
-            if not target.exists() or target.read_text(encoding="utf-8") != text:
-                target.write_text(text, encoding="utf-8")
-        record: dict[str, object] = {"name": name, "what": what}
-        configure = subprocess.run(
-            [
-                "cmake",
-                "-S",
-                str(source),
-                "-B",
-                str(build),
-                "-G",
-                "Ninja",
-                f"-DPython_EXECUTABLE={sys.executable}",
-                f"-DFETCHCONTENT_SOURCE_DIR_GOOGLETEST={probe90.GTEST_SRC}",
-            ],
-            capture_output=True,
-            text=True,
-        )
-        made = subprocess.run(
-            ["ninja", "-C", str(build)], capture_output=True, text=True
-        )
-        if configure.returncode or made.returncode:
-            record["build"] = "failed: " + (made.stdout + made.stderr)[-1500:]
+        record = test_plant(name, what, edits, PLANT_WORK)
+        if "build" in record:
             records.append(record)
             print(name, "build failed")
             continue
-        ctest = subprocess.run(
-            ["ctest", "--test-dir", str(build)], capture_output=True, text=True
-        )
-        summary = [line for line in ctest.stdout.splitlines() if "tests passed" in line]
-        record["ctest"] = summary[0].strip() if summary else ctest.stdout[-300:]
-        record["ctest_failed"] = re.findall(r"\d+ - (\S+) \([^)]+\)", ctest.stdout)
-        env = {**os.environ, "PYTHONPATH": str(build), "CFD_CORE_REQUIRED": "1"}
-        pytest = subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "pytest",
-                "tests/test_core_march.py",
-                "-q",
-                "-rf",
-                "--tb=no",
-                "-p",
-                "no:cacheprovider",
-            ],
-            capture_output=True,
-            text=True,
-            cwd=ROOT,
-            env=env,
-        )
-        lines = pytest.stdout.splitlines()
-        record["pytest"] = next(
-            (
-                line.strip("= ")
-                for line in reversed(lines)
-                if re.search(r" in [0-9.]+s", line)
-            ),
-            lines[-1] if lines else "no output",
-        )
-        failed = [
-            line.split("::", 1)[1].split(" ")[0]
-            for line in lines
-            if line.startswith("FAILED tests/test_core_march.py::")
-        ]
-        record["parity_failed_by_test"] = dict(
-            sorted(Counter(case.split("[")[0] for case in failed).items())
-        )
+        env = {
+            **os.environ,
+            "PYTHONPATH": str(PLANT_WORK / "build"),
+            "CFD_CORE_REQUIRED": "1",
+        }
         whole = subprocess.run(
             [sys.executable, "-u", str(Path(__file__).resolve()), "plant-runs"],
             capture_output=True,
@@ -904,6 +1008,52 @@ def plants() -> None:
         )
         out = RESULTS / ("plants.json" if not only else f"plants_{only[0]}.json")
         out.write_text(json.dumps(records, indent=1) + "\n", encoding="utf-8")
+
+
+def plants_round1(args: argparse.Namespace) -> None:
+    """Round 1's planted defects: CTest and the march's parity module on each."""
+    sys.path.insert(0, str(HERE))
+    import variants91b
+
+    chosen = [p for p in variants91b.PLANTS if not args.only or p[0] in args.only]
+    if args.check:
+        bad = 0
+        for name, _what, edits in chosen:
+            try:
+                probe90.plant_sources(edits)
+            except SystemExit as refused:
+                bad += 1
+                print(name, "REFUSED:", refused)
+        print(f"{len(chosen)} plants, {bad} refused")
+        if bad:
+            raise SystemExit(1)
+        return
+    tree = Path.home() / "scratch91" / args.tree
+    out = args.out or RESULTS / f"plants_round1_{args.tree}.json"
+    records = []
+    # The control first and last: the unplanted core passes everything.
+    for name, what, edits in [("control", "no edit: every test passes", []), *chosen]:
+        record = test_plant(name, what, edits, tree)
+        records.append(record)
+        print(
+            name,
+            "|",
+            record.get("ctest", record.get("build")),
+            "|",
+            record.get("pytest"),
+            "|",
+            record.get("ctest_failed"),
+            record.get("parity_failed_by_test"),
+            flush=True,
+        )
+        Path(out).write_text(json.dumps(records, indent=1) + "\n", encoding="utf-8")
+    record = test_plant("control", "no edit: every test passes", [], tree)
+    record["name"] = "control (after)"
+    records.append(record)
+    Path(out).write_text(json.dumps(records, indent=1) + "\n", encoding="utf-8")
+    print(
+        record["name"], "|", record.get("ctest"), "|", record.get("pytest"), flush=True
+    )
 
 
 def plant_runs() -> None:
@@ -975,11 +1125,17 @@ def main(argv: list[str] | None = None) -> int:
     one.add_argument("scenario", choices=list(SCENARIOS))
     one.add_argument("side", choices=SIDES)
     commands.add_parser("restart")
+    commands.add_parser("restart-clean")
     commands.add_parser("compare")
     timed = commands.add_parser("timing")
     timed.add_argument("--run", type=int, required=True)
     planted = commands.add_parser("plants")
     planted.add_argument("--only", nargs="*")
+    round_one = commands.add_parser("plants-round1")
+    round_one.add_argument("--tree", default="round1")
+    round_one.add_argument("--only", nargs="*")
+    round_one.add_argument("--out")
+    round_one.add_argument("--check", action="store_true")
     commands.add_parser("plant-runs")
     commands.add_parser("vecinfo")
     args = parser.parse_args(argv)
@@ -989,12 +1145,16 @@ def main(argv: list[str] | None = None) -> int:
         run_one(args.scenario, args.side)
     elif args.command == "restart":
         restart()
+    elif args.command == "restart-clean":
+        restart_clean()
     elif args.command == "compare":
         compare()
     elif args.command == "timing":
         timing(args.run)
     elif args.command == "plants":
         plants()
+    elif args.command == "plants-round1":
+        plants_round1(args)
     elif args.command == "plant-runs":
         plant_runs()
     elif args.command == "vecinfo":

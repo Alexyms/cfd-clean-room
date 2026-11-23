@@ -2,8 +2,9 @@
 
 Read by ``probe91.py plants``. An edit is ``(file, old, new)``: the exact text
 ``old`` replaced by ``new``, found exactly once, or the plant is refused
-(``probe90.plant_sources``). The first nine after the control are the prompt's;
-the rest are planted against the other rules the port copies.
+(``probe90.plant_sources``). The first eight after the control are the prompt's;
+the rest are planted against the other rules the port copies. Round 1's are in
+``variants91b.py``.
 """
 
 CHANNELS = "src/channels.cpp"

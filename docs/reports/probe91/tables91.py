@@ -16,6 +16,7 @@ fails when one of the report's marker pairs is missing.
 import argparse
 import json
 import math
+import re
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -47,6 +48,11 @@ LABELS = {
     "dust320": "320x120 dust release",
     "restart": "80x30 dust release, restarted at its checkpoint",
 }
+# The clean-out's restarts: the pair's label in compare.json, the run's name, what it is.
+CLEAN_RESTARTS = (
+    ("clean restart before", "hold80r_before_restart", "before the stretch"),
+    ("clean restart inside", "hold80r_inside_restart", "inside the stretch"),
+)
 RUN_ORDER = ("dust80", "door80", "breach80", "clean80", "hold80", "dust320")
 REQ_T05 = 1.0e-4
 SPEED = 5.0
@@ -56,9 +62,12 @@ MARKERS = (
     "march",
     "decisions",
     "restart",
+    "cleanrestart",
+    "round0",
     "windows",
     "tests",
     "plants",
+    "plantsround1",
     "timing",
     "loops",
 )
@@ -492,6 +501,123 @@ def restart_table(compare: dict) -> tuple[list[str], bool]:
     return lines, c["bitwise"]
 
 
+def _set_count(values: object) -> str:
+    """How many of a checkpoint's array hold a time (are not NaN), as 'k of n'."""
+    flat = [float(x) for x in _leaves(values)]
+    return f"{sum(1 for x in flat if not math.isnan(x))} of {len(flat)}"
+
+
+def clean_restart_table(compare: dict) -> tuple[list[str], bool]:
+    """T4b: the held clean-out restarted from before and from inside its within-spec stretch."""
+    rows = []
+    bitwise = True
+    for label, run, where in CLEAN_RESTARTS:
+        c = compare["pairs"][label]
+        restarted = summary("core", run)
+        carried = restarted["checkpoint_recovery"]
+        room = float(carried["room_since"])
+        digests = c["digests"]
+        bitwise = bitwise and c["bitwise"]
+        rows.append(
+            [
+                where,
+                restarted["stopped_after"],
+                restarted["restarted_from"],
+                "no" if math.isnan(room) else f"yes, since t = {room:.5g} s",
+                _set_count(carried["class_since"]),
+                _set_count(carried["mean_time"]),
+                f"{c['frames']}; {c['fields_frames_differing']} and {c['budgets_frames_differing']}",
+                f"{c['sensor_rows']}; {c['sensor_rows_differing']}",
+                f"{c['digest_frames']}; {sum(v['frames_differing'] for v in digests.values())}",
+                ", ".join(
+                    c["alerts_differing"]
+                    + c["arrival_differing"]
+                    + c["recovery_differing"]
+                )
+                or "none",
+                yes(all(c["decisions_equal"].values())),
+            ]
+        )
+    held = summary("core", "hold80r")
+    checkpoints = compare["pairs"]["clean checkpoints"]
+    start = float(
+        summary("core", "hold80r_inside_restart")["checkpoint_recovery"]["room_since"]
+    )
+    begins = round(start / held["intervals"][0]["dt"])
+    return (
+        [
+            "### T4b. The clean-out's restarts: the 80x30 held clean-out stopped after a step and continued through the core, from before and from inside its within-spec stretch, against the run without a stop",
+            "",
+            *table(
+                [
+                    "Restarted",
+                    "Stopped after step",
+                    "From step",
+                    "Room within spec at the checkpoint",
+                    "Classes' starts set",
+                    "Mean times set",
+                    "Frames; differing (fields and budgets)",
+                    "Sensor rows; differing",
+                    "Frames after the restart with tracker digests; differing",
+                    "Record, recovery and map differing",
+                    "Decisions equal",
+                ],
+                rows,
+            ),
+            "",
+            f"The held clean-out writes a checkpoint every 100 steps and holds at step {held['steps']} (t = {held['t_final']:.5g} s); its within-spec stretch begins at step {begins} (t = {start:.5g} s), read from the checkpoint inside it. Each restart's file against the uninterrupted run's (`hold80r`), bit for bit in every frame, sensor row, tracker digest, end record and decision; the checkpointed run against the core-driven held clean-out of T2, which writes none: {yes(checkpoints['bitwise'])}. The checkpoint's recovery state is read from the file before the restart. The free-area means do not reach their 100:1 targets within the held run, so the means' times are unset at both checkpoints: the restarts pin the room's start and the classes' starts, and the decay case of section 4 pins the means' times.",
+        ],
+        bitwise,
+    )
+
+
+def round0_table(compare: dict) -> tuple[list[str], bool]:
+    """T4c: round 1's core-driven runs against round 0's, made before the binding's changes."""
+    rows = []
+    bitwise = True
+    for name in RUN_ORDER:
+        c = compare["pairs"][f"round 0 {name}"]
+        digests = c["digests"]
+        bitwise = bitwise and c["bitwise"]
+        rows.append(
+            [
+                LABELS[name],
+                c["steps"],
+                f"{c['frames']}; {c['fields_frames_differing']} and {c['budgets_frames_differing']}",
+                f"{c['sensor_rows']}; {c['sensor_rows_differing']}",
+                f"{c['digest_frames']}; {sum(v['frames_differing'] for v in digests.values())}",
+                ", ".join(
+                    c["alerts_differing"]
+                    + c["arrival_differing"]
+                    + c["recovery_differing"]
+                )
+                or "none",
+                yes(all(c["decisions_equal"].values())),
+            ]
+        )
+    return (
+        [
+            "### T4c. Round 1's core-driven runs against round 0's: the binding changed under them, the arithmetic did not",
+            "",
+            *table(
+                [
+                    "Run",
+                    "Steps",
+                    "Frames; differing (fields and budgets)",
+                    "Sensor rows; differing",
+                    "Frames with tracker digests; differing",
+                    "Record, recovery and map differing",
+                    "Decisions equal",
+                ],
+                rows,
+            ),
+            "",
+            "Round 0's files were made at e152bbd, round 1's at the commit its summaries name, each from the same flow states and the same configuration; the six runs of T2 and T3 are round 1's.",
+        ],
+        bitwise,
+    )
+
+
 def junit_cases(path: Path) -> list[tuple[str, str, str]]:
     """(class name, test name, outcome) for every case of a JUnit file."""
     root = ET.parse(path).getroot()
@@ -595,10 +721,96 @@ def plants_table() -> tuple[list[str], int, int]:
                 rows,
             ),
             "",
-            f"{caught} of {planted} plants fail at least one test. In the last column a count of frames is of the frames whose class fields or budget terms differ, then what else differs (the sensor table, `/arrival/`, `/recovery/`); `raised` is a run the driver stopped, its check of the core's readings against the monitor's, or of a march's rows against the frames, failing.",
+            f"{caught} of {planted} plants fail at least one test. In the last column a count of frames is of the frames whose class fields or budget terms differ, then what else differs (the sensor table, `/arrival/`, `/recovery/`); `raised` is a run the driver stopped, its check of the core's readings against the monitor's, or of a march's rows against the frames, failing. The whole-run column cannot see a breach, a refusal or a restore: neither run breaches, is refused or restarts, so a plant in those rules reads `equal` there whatever it changes; they are T8b's, which are not run on whole runs, and T4b's whole restarts.",
         ],
         caught,
         planted,
+    )
+
+
+def plants_round1_table() -> tuple[list[str], int, int, list[str]]:
+    """T8b: round 1's planted defects, which tests catch each (CTest and the march's parity module)."""
+    sys.path.insert(0, str(HERE))
+    import variants91b
+
+    records: dict[str, dict] = {}
+    controls = []
+    for path in sorted(RESULTS.glob("plants_round1_s*.json")):
+        for r in json.loads(path.read_text(encoding="utf-8")):
+            if r["name"].startswith("control"):
+                controls.append(r)
+            else:
+                records[r["name"]] = r
+    rows = []
+    survivors = []
+    for name, _what, _edits in variants91b.PLANTS:
+        r = records.get(name)
+        if r is None:
+            rows.append([f"`{name}`", "not run", "", ""])
+            survivors.append(name)
+            continue
+        if "build" in r:
+            rows.append([f"`{name}`", r["build"][:200], "", ""])
+            survivors.append(name)
+            continue
+        failed = r["ctest_failed"]
+        parity = r["parity_failed_by_test"]
+        # A run of the module that died before its summary: the plant crashes the binding.
+        crashed = r.get("pytest_returncode", 0) not in (0, 1) or not re.search(
+            r" in [0-9.]+s", r["pytest"]
+        )
+        ctest = f"{len(failed)}" + (
+            ": " + ", ".join(f"`{n}`" for n in failed) if failed else ""
+        )
+        by_test = ", ".join(f"`{k}` {v}" for k, v in parity.items()) or "none"
+        if crashed:
+            by_test = "the module crashed" + (
+                "" if by_test == "none" else f"; {by_test}"
+            )
+        missed = not (failed or parity or crashed)
+        verdict = "NO" if missed else "yes"
+        if missed and name in variants91b.EQUIVALENT:
+            verdict = "no: an equivalent mutant"
+        rows.append([f"`{name}`", ctest, by_test, verdict])
+        if missed:
+            survivors.append(name)
+    planted = len(variants91b.PLANTS)
+    equivalent = [n for n in survivors if n in variants91b.EQUIVALENT]
+    survivors = [n for n in survivors if n not in variants91b.EQUIVALENT]
+    caught = planted - len(survivors) - len(equivalent)
+    clean = all(
+        c.get("ctest", "").startswith("100%")
+        and re.search(r" in [0-9.]+s", c.get("pytest", ""))
+        and " failed" not in c.get("pytest", "")
+        for c in controls
+    )
+    return (
+        [
+            "### T8b. Round 1's planted defects: which tests catch each",
+            "",
+            "Each built alone from the checkout's `core/` with its edits (`docs/reports/probe91/variants91b.py`), then CTest and the march's parity module (`tests/test_core_march.py`); no whole runs. The plants are the tester's of test 91 (`results/tester91/plant.py`, its anchors updated where the binding changed), the plants of round 1's new tests, one plant per refusal of the binding and one per guard of the plan, time and count inputs. Each stream builds the unplanted core first and last.",
+            "",
+            *table(
+                [
+                    "Plant",
+                    "CTest cases failing",
+                    "Parity cases failing (by test)",
+                    "Caught",
+                ],
+                rows,
+            ),
+            "",
+            f"{caught} of {planted} plants fail at least one test"
+            + "".join(
+                f"; `{n}` is an equivalent mutant, as {variants91b.EQUIVALENT[n]}"
+                for n in equivalent
+            )
+            + (f"; not caught: {', '.join(survivors)}" if survivors else "")
+            + f". A plant that makes the module crash instead of fail is counted as caught. The controls ({len(controls)} runs, at the start and the end of each stream) pass every test: {yes(clean)}.",
+        ],
+        caught,
+        planted,
+        survivors,
     )
 
 
@@ -746,6 +958,9 @@ def build() -> tuple[str, dict[str, str]]:
     windows_lines, windows_equal = windows_decisions(results, place)
     restart_lines, restart_bitwise = restart_table(compare)
     plant_lines, _caught, _planted = plants_table()
+    round1_lines, _caught1, _planted1, _survivors = plants_round1_table()
+    clean_restart_lines, _clean_bitwise = clean_restart_table(compare)
+    round0_lines, _round0_bitwise = round0_table(compare)
     timing_lines, ratios = timing_table()
     blocks = {
         "predictions": "\n".join(
@@ -763,8 +978,11 @@ def build() -> tuple[str, dict[str, str]]:
         "decisions": "\n".join(decision_lines),
         "windows": "\n".join([*field_lines, "", *windows_lines]),
         "restart": "\n".join(restart_lines),
+        "cleanrestart": "\n".join(clean_restart_lines),
+        "round0": "\n".join(round0_lines),
         "tests": "\n".join(tests_table()),
         "plants": "\n".join(plant_lines),
+        "plantsround1": "\n".join(round1_lines),
         "timing": "\n".join(timing_lines),
         "loops": "\n".join(loops_table()),
     }

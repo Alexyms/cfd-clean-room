@@ -1,14 +1,17 @@
 # Phase 6 Step 3b: The March in the Core (prompt 91)
 
-**Date:** 2026-11-22
-**Prompt:** 91 (`docs/prompts/cc-prompt-91-march.md`)
+**Date:** 2026-11-22 (round 1, prompt 91b: 2026-11-23)
+**Prompt:** 91 (`docs/prompts/cc-prompt-91-march.md`); round 1: 91b (`docs/prompts/cc-prompt-91b-round1-fixes.md`)
 **Branch:** `phase6/march`
 **Status:** built. Predictions (a), (b), (c) and (d) hold (T0). Six whole scenario runs stepped
 through the core, the 320x120 dust release among them, equal the Linux reference bit for bit at
 every output step and in every decision, and the restart continues the uninterrupted run bit for
 bit; against the Windows records every decision is equal and every field inside the band's
 first tier, which meets step 3's gate. The prompt's stop, a whole-march difference, was not met.
-The first plant run found two rules no test could see; both are tested now (F2).
+The first plant run found two rules no test could see; both are tested now (F2). Round 1
+(prompt 91b, after review and test 91) adds the tests the port was missing for the march's
+breach and refused step, the within-spec rule and the restore of the recovery state (F5), and
+pins the binding's refusals and guards one by one (section 4).
 
 This is the second half of Phase 6 step 3 (`docs/PROJECT_PLAN.md`, Phase 6, the steps table;
 ADR-017 B, C, E and F): the step loop in the core. Every class's step in class order, then the
@@ -213,12 +216,12 @@ then; `probe91.py compare` reads the pairs and writes `results/builder91/compare
 
 | Run | Steps | Frames | Intervals | Flow states (core-driven run) | Held | Reference wall, s | Core-driven wall, s |
 |---|---|---|---|---|---|---|---|
-| 80x30 dust release | 6811 | 70 | 3 | kept | no | 87 | 8 |
+| 80x30 dust release | 6811 | 70 | 3 | kept | no | 87 | 9 |
 | 80x30 door leak | 3416 | 36 | 3 | kept, kept | no | 42 | 4 |
 | 80x30 filter breach | 6811 | 70 | 3 | kept | no | 89 | 8 |
-| 80x30 clean-out, to t_end | 13620 | 138 | 1 | kept | no | 162 | 12 |
-| 80x30 clean-out, with a hold | 1976 | 21 | 1 | kept | yes | 24 | 2 |
-| 320x120 dust release | 33119 | 333 | 3 | kept | no | 1344 | 355 |
+| 80x30 clean-out, to t_end | 13620 | 138 | 1 | kept | no | 162 | 16 |
+| 80x30 clean-out, with a hold | 1976 | 21 | 1 | kept | yes | 24 | 3 |
+| 320x120 dust release | 33119 | 333 | 3 | kept | no | 1344 | 370 |
 
 Each from its stored flow states (`flows_from`): the 80x30 runs from step 1's Linux reference (`results/builder86/runs/reference/`), the clean-out's from the dust release's (its flow inputs are the dust release's), the 320x120 run from `results/builder81/product/equipment_dust.h5`. `kept` is a state copied from that file. The wall times are the whole calls, flow states read and files written included, under Linux, with two 320x120 runs and one 80x30 run at a time; they are for information only. The core-driven march hands the monitor the fields at every step, as the reference does (section 1).
 
@@ -268,6 +271,44 @@ The latencies are the monitor's per event, channel and sensor (`RunRecord.latenc
 
 Stopped by an exception from `on_step` after step 1500, restarted from its checkpoint at step 1000 (`RunFile.discard_after` keeps the frames and sensor rows up to it), continued to step 6811. End records differing: none; decisions equal: yes. Both runs write a checkpoint every 1,000 steps; the uninterrupted one against the core-driven dust release of T2, which writes none, bit for bit in every frame, sensor row, tracker digest, end record and decision: yes.
 <!-- tables91 restart end -->
+
+**The clean-out's restarts** (round 1, test 91 B3). The dust release has no recovery, so T4 does
+not restart the one thing a clean-out carries that it does not: the room's within-spec start,
+the classes' starts, the means' times and the sensors' 100:1 times. The held 80x30 clean-out,
+checkpointed every 100 steps, is stopped after a step and restarted through the core twice:
+from a checkpoint before the room's within-spec stretch begins, and from one inside it.
+
+<!-- tables91 cleanrestart begin -->
+### T4b. The clean-out's restarts: the 80x30 held clean-out stopped after a step and continued through the core, from before and from inside its within-spec stretch, against the run without a stop
+
+| Restarted | Stopped after step | From step | Room within spec at the checkpoint | Classes' starts set | Mean times set | Frames; differing (fields and budgets) | Sensor rows; differing | Frames after the restart with tracker digests; differing | Record, recovery and map differing | Decisions equal |
+|---|---|---|---|---|---|---|---|---|---|---|
+| before the stretch | 1650 | 1600 | no | 4 of 5 | 0 of 5 | 21; 0 and 0 | 1977; 0 | 4; 0 | none | yes |
+| inside the stretch | 1850 | 1800 | yes, since t = 29.251 s | 5 of 5 | 0 of 5 | 21; 0 and 0 | 1977; 0 | 2; 0 | none | yes |
+
+The held clean-out writes a checkpoint every 100 steps and holds at step 1976 (t = 34.819 s); its within-spec stretch begins at step 1660 (t = 29.251 s), read from the checkpoint inside it. Each restart's file against the uninterrupted run's (`hold80r`), bit for bit in every frame, sensor row, tracker digest, end record and decision; the checkpointed run against the core-driven held clean-out of T2, which writes none: yes. The checkpoint's recovery state is read from the file before the restart. The free-area means do not reach their 100:1 targets within the held run, so the means' times are unset at both checkpoints: the restarts pin the room's start and the classes' starts, and the decay case of section 4 pins the means' times.
+<!-- tables91 cleanrestart end -->
+
+**Round 1's runs against round 0's.** The binding changed after the runs of record (the guards
+on the plan, time and count arguments, and one reader of the solver's arguments for
+`TransportSolver2` and `March2`), and no source under `core/src/` or `core/include/` changed but
+comments. Each core-driven run of T2 is round 1's, made again at the head, and each equals round
+0's bit for bit:
+
+<!-- tables91 round0 begin -->
+### T4c. Round 1's core-driven runs against round 0's: the binding changed under them, the arithmetic did not
+
+| Run | Steps | Frames; differing (fields and budgets) | Sensor rows; differing | Frames with tracker digests; differing | Record, recovery and map differing | Decisions equal |
+|---|---|---|---|---|---|---|
+| 80x30 dust release | 6811 | 70; 0 and 0 | 6812; 0 | 70; 0 | none | yes |
+| 80x30 door leak | 3416 | 36; 0 and 0 | 3417; 0 | 36; 0 | none | yes |
+| 80x30 filter breach | 6811 | 70; 0 and 0 | 6812; 0 | 70; 0 | none | yes |
+| 80x30 clean-out, to t_end | 13620 | 138; 0 and 0 | 13621; 0 | 138; 0 | none | yes |
+| 80x30 clean-out, with a hold | 1976 | 21; 0 and 0 | 1977; 0 | 21; 0 | none | yes |
+| 320x120 dust release | 33119 | 333; 0 and 0 | 33120; 0 | 333; 0 | none | yes |
+
+Round 0's files were made at e152bbd, round 1's at the commit its summaries name, each from the same flow states and the same configuration; the six runs of T2 and T3 are round 1's.
+<!-- tables91 round0 end -->
 
 **Against the Windows records** (step 3's gate, `docs/PROJECT_PLAN.md`: the march alone on the
 reference's stored flow states, every decision inside the band and the budget closing as
@@ -349,18 +390,39 @@ Prompt 85's P3 to P6 measures (`tables85.Placement`, `compare_run`), the Windows
 | `test_sensor_channels_equal_the_monitors_and_the_fields_at_the_sensors` | 1 | 1 | 0 | 0 |
 | `test_arrival_maps_equal_the_trackers` | 2 | 2 | 0 | 0 |
 | `test_recovery_equals_the_tracker` | 2 | 2 | 0 | 0 |
-| `test_march_equals_run_march_after_every_step` | 5 | 5 | 0 | 0 |
-| `test_march_in_batches_equals_run_march` | 5 | 5 | 0 | 0 |
+| `test_march_equals_run_march_after_every_step` | 6 | 6 | 0 | 0 |
+| `test_march_in_batches_equals_run_march` | 6 | 6 | 0 | 0 |
 | `test_march_restored_mid_interval_continues_bit_for_bit` | 2 | 2 | 0 | 0 |
 | `test_march_takes_the_steps_asked_for_and_stops_at_the_hold` | 1 | 1 | 0 | 0 |
 | `test_march_refuses_what_it_cannot_read` | 1 | 1 | 0 | 0 |
+| `test_march_restored_recovery_continues_bit_for_bit` | 2 | 2 | 0 | 0 |
+| `test_recovery_within_spec_is_every_sensor_below_its_channels_threshold` | 2 | 2 | 0 | 0 |
+| `test_march_breach_stops_as_run_march_stops` | 6 | 6 | 0 | 0 |
+| `test_march_stops_as_run_march_does_on_a_field_that_is_not_finite` | 1 | 1 | 0 | 0 |
+| `test_march_stops_as_run_march_does_on_a_step_above_the_stable_step` | 1 | 1 | 0 | 0 |
+| `test_driver_refuses_a_march_that_returns_no_step_without_holding` | 1 | 1 | 0 | 0 |
+| `test_driver_refuses_a_stop_reason_the_cores_state_does_not_bear_out` | 4 | 4 | 0 | 0 |
+| `test_driver_refuses_a_count_at_the_intervals_end` | 1 | 1 | 0 | 0 |
+| `test_driver_refuses_an_interval_the_core_was_not_built_for` | 1 | 1 | 0 | 0 |
+| `test_march_refuses_a_bool_a_float_count_and_a_time_that_is_not_finite` | 20 | 20 | 0 | 0 |
+| `test_march_refuses_a_bool_or_a_float_for_the_steps_asked` | 1 | 1 | 0 | 0 |
+| `test_march_reads_numpy_numbers_and_a_nan_arrival_time` | 1 | 1 | 0 | 0 |
+| `test_march2_refuses_what_it_is_built_from_when_it_cannot_read_it` | 16 | 16 | 0 | 0 |
+| `test_march_restore_refuses_a_recovery_state_it_has_no_recovery_for` | 1 | 1 | 0 | 0 |
+| `test_march_restore_refuses_an_unaligned_array` | 2 | 2 | 0 | 0 |
+| `test_march_restore_refuses_an_unaligned_or_short_recovery_array` | 4 | 4 | 0 | 0 |
+| `test_blocks_refuse_what_they_cannot_read` | 14 | 14 | 0 | 0 |
+| `test_march_restore_refuses_a_cube_of_another_shape` | 3 | 3 | 0 | 0 |
+| `test_march_restore_refuses_maps_of_another_shape` | 4 | 4 | 0 | 0 |
+| `test_blocks_refuse_a_cube_of_another_shape` | 9 | 9 | 0 | 0 |
+| `test_arrival_maps_refuse_maps_of_another_shape` | 4 | 4 | 0 | 0 |
 | `test_march_binding_imports_nothing_from_src` | 1 | 1 | 0 | 0 |
-| the parity modules (`test_core_parity.py` and `test_core_march.py`) | 3400 | 3383 | 0 | 17 |
-| CTest | 115 | 115 | 0 | 0 |
+| the parity modules (`test_core_parity.py` and `test_core_march.py`) | 3500 | 3483 | 0 | 17 |
+| CTest | 122 | 122 | 0 | 0 |
 
-New GoogleTest cases (16): Channels.AChannelIsZeroThenEachMemberAddedInTurn, Channels.ASensorsChannelIsTheChannelFieldReadAtItsCell, Channels.ASetThatIsNotOneChannelPerClassThrows, Arrival.ACellExactlyAtItsThresholdIsReachedAndOneBelowIsNot, Arrival.AnEventIsMappedFromItsOnsetAndATimeOnceSetIsKept, Arrival.ARestoreCopiesTheMapsAndTheTimeAndRefusesAnotherLength, Recovery.ACellOrASensorExactlyAtItsThresholdHasNotRecovered, Recovery.TheHoldHoldsAtEqualityAndTheTargetsWhereDefined, Recovery.ProgrammingErrorsThrow, March.AMarchTakesTheStepsAskedForAndStopsAtTheIntervalsEnd, March.TheIntervalsLastStepIsAtItsEndExactly, March.StepsInBatchesEqualStepsOneAtATime, March.ARunRestoredFromAnothersStateContinuesItBitForBit, March.TheHoldStopsTheMarchAtTheStepItHolds, March.TheMeansAreTheContentOverTheFreeArea, March.ProgrammingErrorsThrow.
-- The whole suite under Linux: 6484 passed, 0 failed, 17 skipped in 1399 s.
-- The whole suite under Windows: 3101 passed, 0 failed, 2 skipped in 1378 s.
+New GoogleTest cases (23): Channels.AChannelIsZeroThenEachMemberAddedInTurn, Channels.ASensorsChannelIsTheChannelFieldReadAtItsCell, Channels.ASetThatIsNotOneChannelPerClassThrows, Arrival.ACellExactlyAtItsThresholdIsReachedAndOneBelowIsNot, Arrival.AnEventIsMappedFromItsOnsetAndATimeOnceSetIsKept, Arrival.ARestoreCopiesTheMapsAndTheTimeAndRefusesAnotherLength, Recovery.ACellOrASensorExactlyAtItsThresholdHasNotRecovered, Recovery.TheHoldHoldsAtEqualityAndTheTargetsWhereDefined, Recovery.ProgrammingErrorsThrow, Recovery.WithinSpecIsEverySensorBelowItsChannelsThreshold, Recovery.ARestoreCopiesEveryStartAndTimeToItsOwnArray, March.AMarchTakesTheStepsAskedForAndStopsAtTheIntervalsEnd, March.TheIntervalsLastStepIsAtItsEndExactly, March.StepsInBatchesEqualStepsOneAtATime, March.ARunRestoredFromAnothersStateContinuesItBitForBit, March.TheHoldStopsTheMarchAtTheStepItHolds, March.TheMeansAreTheContentOverTheFreeArea, March.ProgrammingErrorsThrow, March.ABreachBeforeAnyStepReturnsNoRowsAndCountsNoStep, March.ABreachAfterStepsReturnsTheRowsBeforeItAndNotItsStep, March.ANonFiniteFieldIsRefusedAtItsClassWithTheClassesBeforeItAdvanced, March.AStepAboveTheStableStepIsRefusedAtTheFirstClass, March.ARunRestoredInsideItsWithinSpecStretchKeepsItsStartsAndTimes.
+- The whole suite under Linux: 6584 passed, 0 failed, 17 skipped in 1549 s.
+- The whole suite under Windows: 3101 passed, 0 failed, 2 skipped in 1631 s.
 <!-- tables91 tests end -->
 
 **The parity cases** (`tests/test_core_march.py`, marker `parity`, run by CI's core job beside
@@ -376,14 +438,29 @@ at 1e30 and a cell that is reached, falls below and rises again; the recovery ag
 `RecoveryTracker` after each of eight updates, `held()` included, with cells and sensors exactly
 at a threshold, readings and means exactly at the 100:1 target, a class whose target is not
 defined, a within-spec stretch whose length is the hold exactly and a sensor at its threshold
-after it. Each asserts that its planted inputs reach the rule they are planted for.
+after it. Each asserts that its planted inputs reach the rule they are planted for. Round 1 adds
+one for the within-spec rule itself: updates that tip each channel in turn at each sensor in turn
+by its class alone, at its threshold exactly, and others that tip a channel by a class below its
+own threshold whose channel is not, each followed by updates back below, on each room; the core's
+state equals the tracker's after every one, a within-spec decision made from the readings alone
+equals the tracker's, and the planted updates are shown to separate the rule from the three wrong
+ones (the first sensor alone, each class on its own reading, the room within spec when any channel
+is). A GoogleTest does the same on three sensors and two channels with the classes' own readings
+below their thresholds throughout, so that only a channel's reading can leave spec. The recovery
+case also drives class 3's mean under its own target, which is not defined, so that no time is set
+for it.
 
 The march against `_Run.march` on the 80x30 product mesh with planted flows (faces of both signs
-about 0.2 m/s, a positive eddy viscosity), in four cases: across the dust release's onset; across
+about 0.2 m/s, a positive eddy viscosity), in six cases: across the dust release's onset; across
 the door leak's two flow switches; the clean-out from fields around its thresholds; the clean-out
-within spec from the start, held at its fifth step by a hold equal to that step's time. Both are
-driven the same way from the same start (`_Run` and `CoreRun` on the same configuration, plans
-cut to a few steps of each interval, the trackers updated at the start as `run` does at t = 0),
+within spec from the start, held at its fifth step by a hold equal to that step's time; the door
+leak's last interval to its end, whose last step is at `t_end` and not at `t_start + steps dt`
+(added by 03030b9); and the clean-out from the third step of its first interval with fields that
+are zero but at the sensors' cells, where the first three classes start above their thresholds,
+so that the channels fall within spec at different steps (the room's at the eleventh) and the
+hold ends the march at the fifteenth (round 1). Each is driven the same way from the same
+start (`_Run` and `CoreRun` on the same configuration, plans cut to a few steps of each
+interval, the trackers updated at the start as `run` does at t = 0),
 and after every step the fields, the budget terms, the maps, the recovery fields, the readings,
 the channels and the means are compared bit for bit; at the end the fields, budgets, step count,
 time and the hold. Each case again with the march in batches and the monitor on the readings. A
@@ -391,6 +468,45 @@ second core run restored from the first's state mid-interval continues it bit fo
 clean-out, with its recovery fields, and the dust release); `march(3)` takes three steps; the
 held clean-out stops at the reference's step and a later march takes none; the binding's own
 refusals; and a restore, a march and every read with every `src` module unimportable.
+
+**The stops a march ends in** (round 1, review 91 B1, test 91 B1). Six scenario cases each place
+a breach of ADR-016's limit with a limit between two consecutive leftover ratios (under a solve
+capped at two sweeps with no share of the limit, so that a step's leftover is the same whatever
+the limit): in class 0, 1 and 4, before any step, after one and after three, three of them in
+the first or second step of a second interval. The reference's `_Run.march` and the core's
+march, every step and in batches, raise `ConservationBreachError` with the same class,
+leftover, supplied and limit in every bit and the same message, after the same steps with the
+same fields and budgets, leaving the same run file (the frames and the checkpoint written before
+the breach, the readings not yet flushed dropped). A field with a NaN in class 2, and a plan
+whose step is twice the stable step, are refused by both with the same `ValueError`. The
+GoogleTests place a breach by the same means in class 0 before any step and in class 1 after
+two, with the rows before it equal to those of a run no limit reaches and the rows after it
+unwritten, the step and time those of the last counted step, the step half taken (the budgets
+of the classes up to the failing one booked it, the ones after it did not), and a restore from
+the clean run's state breaching again at the same place with the same numbers; and a refused
+field and a refused step, with the classes before the failing one advanced.
+
+**The restore of the recovery state** (round 1, test 91 B3). The decay case, restored from the
+first core run's state at step 8 (before the room's stretch, which begins at step 11) and at
+step 13 (inside it), reaches the hold at step 15 with every array of the state the first run
+reaches, the room's start, the classes' starts, the means' times and the sensors' times, each a
+different array; the state handed over is asserted to hold what a restore must not lose or mix
+up. A GoogleTest restores a run inside a stretch whose hold it must reach at the same step, and
+`expect_same_state` compares the means' times as well. `tracker::restore` has a case that gives
+every array its own time. The whole clean-out's restarts are T4b.
+
+**The driver and the binding** (round 1, test 91 S1 to S3, review 91 S4, S5, S8). The driver
+reads the core's stop reason and refuses one its state does not bear out (the interval's end
+with steps left, a count with none, a hold the run does not hold, a breach without its
+record), and a march that returned no step and neither held nor breached is an error where it
+was a loop; a stand-in core shows each. An interval whose transport keys, particles or `t_end`
+are not the run's is refused. The plan, time and count a restore, an interval or a march reads
+are refused when they are a bool, a float where a count is read, a time that is not finite or a
+negative step count; numbers NumPy hands over and a NaN arrival time (before the maps' first
+update) are not. Each
+refusal of `March2`'s construction, `ArrivalMaps2`, `Recovery2`, `channel_fields`,
+`sensor_channels` and `March2.restore` has a case that reaches it, and a plant removing it
+(T8b).
 
 **The GoogleTests** (`core/tests/test_march.cpp`) need no reference: a channel is zero and then
 each member in turn (an order of 1, 1e16 and -1e16 that gives 0 one way and 1 another, and a
@@ -411,26 +527,148 @@ Each built alone from the checkout's `core/` with its edits (`docs/reports/probe
 
 | Plant | What it changes | CTest | Parity cases failing (by test) | Whole runs against the reference |
 |---|---|---|---|---|
-| `control` | no edit: every test passes | 100% tests passed, 0 tests failed out of 115 | none | dust80 equal, hold80 equal |
-| `channel_order_reversed` | a channel's field summed over its members last to first | 98% tests passed, 2 tests failed out of 115: `Channels.AChannelIsZeroThenEachMemberAddedInTurn`, `Channels.ASensorsChannelIsTheChannelFieldReadAtItsCell` | `test_channel_fields_equal_channel_sums` 4, `test_sensor_channels_equal_the_monitors_and_the_fields_at_the_sensors` 1 | dust80 equal, hold80 equal |
-| `threshold_cell_recovered` | a cell exactly at its threshold read as recovered: the local field set only above it | 99% tests passed, 1 tests failed out of 115: `Recovery.ACellOrASensorExactlyAtItsThresholdHasNotRecovered` | `test_recovery_equals_the_tracker` 2 | dust80 equal, hold80 equal |
-| `arrival_before_onset` | every event's map updated at every step, before its onset too | 98% tests passed, 2 tests failed out of 115: `Arrival.AnEventIsMappedFromItsOnsetAndATimeOnceSetIsKept`, `March.StepsInBatchesEqualStepsOneAtATime` | `test_arrival_maps_equal_the_trackers` 2 | dust80 equal, hold80 equal |
-| `arrival_overwritten` | a cell's arrival time overwritten by every later step at or above the threshold | 99% tests passed, 1 tests failed out of 115: `Arrival.AnEventIsMappedFromItsOnsetAndATimeOnceSetIsKept` | `test_arrival_maps_equal_the_trackers` 2, `test_march_equals_run_march_after_every_step` 4 | dust80 differs: 0/70 frames, arrival, hold80 differs: 0/21 frames, arrival |
-| `hold_strict` | the hold compared strictly: the stretch must exceed the hold time | 98% tests passed, 2 tests failed out of 115: `Recovery.TheHoldHoldsAtEqualityAndTheTargetsWhereDefined`, `March.TheHoldStopsTheMarchAtTheStepItHolds` | `test_march_equals_run_march_after_every_step` 1, `test_march_in_batches_equals_run_march` 1, `test_march_takes_the_steps_asked_for_and_stops_at_the_hold` 1, `test_recovery_equals_the_tracker` 2 | dust80 equal, hold80 equal |
-| `free_area_whole` | the free-area mean over the whole domain's area, SOLID cells included | 99% tests passed, 1 tests failed out of 115: `March.TheMeansAreTheContentOverTheFreeArea` | `test_march_equals_run_march_after_every_step` 5 | dust80 equal, hold80 equal |
-| `restore_drops_recovery` | a restore that sets the fields, budgets and maps and drops the recovery fields | 99% tests passed, 1 tests failed out of 115: `March.ARunRestoredFromAnothersStateContinuesItBitForBit` | `test_march_equals_run_march_after_every_step` 2, `test_march_in_batches_equals_run_march` 1, `test_march_restored_mid_interval_continues_bit_for_bit` 1, `test_march_takes_the_steps_asked_for_and_stops_at_the_hold` 1 | dust80 equal, hold80 equal |
-| `march_one_too_many` | march(n) steps n + 1 steps, its rows sized for them | 97% tests passed, 3 tests failed out of 115: `March.AMarchTakesTheStepsAskedForAndStopsAtTheIntervalsEnd`, `March.StepsInBatchesEqualStepsOneAtATime`, `March.ARunRestoredFromAnothersStateContinuesItBitForBit` | `test_march_equals_run_march_after_every_step` 5, `test_march_restored_mid_interval_continues_bit_for_bit` 2, `test_march_takes_the_steps_asked_for_and_stops_at_the_hold` 1 | dust80 raised AssertionError, hold80 raised AssertionError |
-| `sensor_channel_order_reversed` | a channel's reading at a sensor summed over its members last to first | 99% tests passed, 1 tests failed out of 115: `Channels.ASensorsChannelIsTheChannelFieldReadAtItsCell` | `test_march_equals_run_march_after_every_step` 5, `test_sensor_channels_equal_the_monitors_and_the_fields_at_the_sensors` 1 | dust80 raised AssertionError, hold80 raised AssertionError |
-| `channel_not_from_zero` | a channel started from its first member's value, not from zero (-0.0 kept) | 99% tests passed, 1 tests failed out of 115: `Channels.AChannelIsZeroThenEachMemberAddedInTurn` | `test_channel_fields_equal_channel_sums` 4 | dust80 equal, hold80 equal |
-| `threshold_sensor_within` | a sensor exactly at its threshold read as within spec | 98% tests passed, 2 tests failed out of 115: `Recovery.ACellOrASensorExactlyAtItsThresholdHasNotRecovered`, `Recovery.TheHoldHoldsAtEqualityAndTheTargetsWhereDefined` | `test_recovery_equals_the_tracker` 2 | dust80 equal, hold80 equal |
-| `arrival_in_solid` | the arrival maps set in SOLID cells too | 99% tests passed, 1 tests failed out of 115: `Arrival.AnEventIsMappedFromItsOnsetAndATimeOnceSetIsKept` | `test_arrival_maps_equal_the_trackers` 2 | dust80 equal, hold80 equal |
-| `room_since_kept` | the room's within-spec start kept when a sensor rises above its threshold again | 99% tests passed, 1 tests failed out of 115: `Recovery.TheHoldHoldsAtEqualityAndTheTargetsWhereDefined` | `test_recovery_equals_the_tracker` 2 | dust80 equal, hold80 equal |
-| `sensor_time_overwritten` | a sensor's 100:1 time overwritten by every later reading at or below the target | 99% tests passed, 1 tests failed out of 115: `Recovery.TheHoldHoldsAtEqualityAndTheTargetsWhereDefined` | `test_march_equals_run_march_after_every_step` 2, `test_recovery_equals_the_tracker` 2 | dust80 equal, hold80 differs: 0/21 frames, recovery |
-| `held_not_checked_at_entry` | a march that starts on a held run steps on | 99% tests passed, 1 tests failed out of 115: `March.TheHoldStopsTheMarchAtTheStepItHolds` | `test_march_takes_the_steps_asked_for_and_stops_at_the_hold` 1 | dust80 equal, hold80 equal |
-| `last_time_not_t_end` | the interval's last step at t_start + steps dt, not at t_end exactly | 99% tests passed, 1 tests failed out of 115: `March.TheIntervalsLastStepIsAtItsEndExactly` | `test_march_equals_run_march_after_every_step` 1, `test_march_in_batches_equals_run_march` 1 | dust80 differs: 0/70 frames, arrival, hold80 equal |
+| `control` | no edit: every test passes | 100% tests passed, 0 tests failed out of 122 | none | dust80 equal, hold80 equal |
+| `channel_order_reversed` | a channel's field summed over its members last to first | 98% tests passed, 2 tests failed out of 122: `Channels.AChannelIsZeroThenEachMemberAddedInTurn`, `Channels.ASensorsChannelIsTheChannelFieldReadAtItsCell` | `test_channel_fields_equal_channel_sums` 4, `test_sensor_channels_equal_the_monitors_and_the_fields_at_the_sensors` 1 | dust80 equal, hold80 equal |
+| `threshold_cell_recovered` | a cell exactly at its threshold read as recovered: the local field set only above it | 99% tests passed, 1 tests failed out of 122: `Recovery.ACellOrASensorExactlyAtItsThresholdHasNotRecovered` | `test_recovery_equals_the_tracker` 2, `test_recovery_within_spec_is_every_sensor_below_its_channels_threshold` 2 | dust80 equal, hold80 equal |
+| `arrival_before_onset` | every event's map updated at every step, before its onset too | 98% tests passed, 2 tests failed out of 122: `Arrival.AnEventIsMappedFromItsOnsetAndATimeOnceSetIsKept`, `March.StepsInBatchesEqualStepsOneAtATime` | `test_arrival_maps_equal_the_trackers` 2 | dust80 equal, hold80 equal |
+| `arrival_overwritten` | a cell's arrival time overwritten by every later step at or above the threshold | 99% tests passed, 1 tests failed out of 122: `Arrival.AnEventIsMappedFromItsOnsetAndATimeOnceSetIsKept` | `test_arrival_maps_equal_the_trackers` 2, `test_march_equals_run_march_after_every_step` 5 | dust80 differs: 0/70 frames, arrival, hold80 differs: 0/21 frames, arrival |
+| `hold_strict` | the hold compared strictly: the stretch must exceed the hold time | 98% tests passed, 3 tests failed out of 122: `Recovery.TheHoldHoldsAtEqualityAndTheTargetsWhereDefined`, `March.TheHoldStopsTheMarchAtTheStepItHolds`, `March.ARunRestoredInsideItsWithinSpecStretchKeepsItsStartsAndTimes` | `test_march_equals_run_march_after_every_step` 2, `test_march_in_batches_equals_run_march` 2, `test_march_restored_recovery_continues_bit_for_bit` 2, `test_march_takes_the_steps_asked_for_and_stops_at_the_hold` 1, `test_recovery_equals_the_tracker` 2, `test_recovery_within_spec_is_every_sensor_below_its_channels_threshold` 2 | dust80 equal, hold80 equal |
+| `free_area_whole` | the free-area mean over the whole domain's area, SOLID cells included | 99% tests passed, 1 tests failed out of 122: `March.TheMeansAreTheContentOverTheFreeArea` | `test_march_equals_run_march_after_every_step` 6 | dust80 equal, hold80 equal |
+| `restore_drops_recovery` | a restore that sets the fields, budgets and maps and drops the recovery fields | 98% tests passed, 2 tests failed out of 122: `March.ARunRestoredFromAnothersStateContinuesItBitForBit`, `March.ARunRestoredInsideItsWithinSpecStretchKeepsItsStartsAndTimes` | `test_march_equals_run_march_after_every_step` 3, `test_march_in_batches_equals_run_march` 1, `test_march_restored_mid_interval_continues_bit_for_bit` 1, `test_march_restored_recovery_continues_bit_for_bit` 2, `test_march_takes_the_steps_asked_for_and_stops_at_the_hold` 1 | dust80 equal, hold80 equal |
+| `march_one_too_many` | march(n) steps n + 1 steps, its rows sized for them | 96% tests passed, 5 tests failed out of 122: `March.AMarchTakesTheStepsAskedForAndStopsAtTheIntervalsEnd`, `March.StepsInBatchesEqualStepsOneAtATime`, `March.ARunRestoredFromAnothersStateContinuesItBitForBit`, `March.ABreachAfterStepsReturnsTheRowsBeforeItAndNotItsStep`, `March.ARunRestoredInsideItsWithinSpecStretchKeepsItsStartsAndTimes` | `test_march_breach_stops_as_run_march_stops` 4, `test_march_equals_run_march_after_every_step` 6, `test_march_reads_numpy_numbers_and_a_nan_arrival_time` 1, `test_march_restored_mid_interval_continues_bit_for_bit` 2, `test_march_restored_recovery_continues_bit_for_bit` 2, `test_march_takes_the_steps_asked_for_and_stops_at_the_hold` 1 | dust80 raised AssertionError, hold80 raised AssertionError |
+| `sensor_channel_order_reversed` | a channel's reading at a sensor summed over its members last to first | 99% tests passed, 1 tests failed out of 122: `Channels.ASensorsChannelIsTheChannelFieldReadAtItsCell` | `test_march_breach_stops_as_run_march_stops` 4, `test_march_equals_run_march_after_every_step` 6, `test_sensor_channels_equal_the_monitors_and_the_fields_at_the_sensors` 1 | dust80 raised AssertionError, hold80 raised AssertionError |
+| `channel_not_from_zero` | a channel started from its first member's value, not from zero (-0.0 kept) | 99% tests passed, 1 tests failed out of 122: `Channels.AChannelIsZeroThenEachMemberAddedInTurn` | `test_channel_fields_equal_channel_sums` 4 | dust80 equal, hold80 equal |
+| `threshold_sensor_within` | a sensor exactly at its threshold read as within spec | 98% tests passed, 3 tests failed out of 122: `Recovery.ACellOrASensorExactlyAtItsThresholdHasNotRecovered`, `Recovery.TheHoldHoldsAtEqualityAndTheTargetsWhereDefined`, `Recovery.WithinSpecIsEverySensorBelowItsChannelsThreshold` | `test_recovery_equals_the_tracker` 2, `test_recovery_within_spec_is_every_sensor_below_its_channels_threshold` 2 | dust80 equal, hold80 equal |
+| `arrival_in_solid` | the arrival maps set in SOLID cells too | 99% tests passed, 1 tests failed out of 122: `Arrival.AnEventIsMappedFromItsOnsetAndATimeOnceSetIsKept` | `test_arrival_maps_equal_the_trackers` 2 | dust80 equal, hold80 equal |
+| `room_since_kept` | the room's within-spec start kept when a sensor rises above its threshold again | 98% tests passed, 2 tests failed out of 122: `Recovery.TheHoldHoldsAtEqualityAndTheTargetsWhereDefined`, `Recovery.WithinSpecIsEverySensorBelowItsChannelsThreshold` | `test_recovery_equals_the_tracker` 2, `test_recovery_within_spec_is_every_sensor_below_its_channels_threshold` 2 | dust80 equal, hold80 equal |
+| `sensor_time_overwritten` | a sensor's 100:1 time overwritten by every later reading at or below the target | 98% tests passed, 2 tests failed out of 122: `Recovery.TheHoldHoldsAtEqualityAndTheTargetsWhereDefined`, `Recovery.ARestoreCopiesEveryStartAndTimeToItsOwnArray` | `test_march_equals_run_march_after_every_step` 3, `test_recovery_equals_the_tracker` 2, `test_recovery_within_spec_is_every_sensor_below_its_channels_threshold` 2 | dust80 equal, hold80 differs: 0/21 frames, recovery |
+| `held_not_checked_at_entry` | a march that starts on a held run steps on | 99% tests passed, 1 tests failed out of 122: `March.TheHoldStopsTheMarchAtTheStepItHolds` | `test_march_takes_the_steps_asked_for_and_stops_at_the_hold` 1 | dust80 equal, hold80 equal |
+| `last_time_not_t_end` | the interval's last step at t_start + steps dt, not at t_end exactly | 99% tests passed, 1 tests failed out of 122: `March.TheIntervalsLastStepIsAtItsEndExactly` | `test_march_equals_run_march_after_every_step` 1, `test_march_in_batches_equals_run_march` 1 | dust80 differs: 0/70 frames, arrival, hold80 equal |
 
-16 of 16 plants fail at least one test. In the last column a count of frames is of the frames whose class fields or budget terms differ, then what else differs (the sensor table, `/arrival/`, `/recovery/`); `raised` is a run the driver stopped, its check of the core's readings against the monitor's, or of a march's rows against the frames, failing.
+16 of 16 plants fail at least one test. In the last column a count of frames is of the frames whose class fields or budget terms differ, then what else differs (the sensor table, `/arrival/`, `/recovery/`); `raised` is a run the driver stopped, its check of the core's readings against the monitor's, or of a march's rows against the frames, failing. The whole-run column cannot see a breach, a refusal or a restore: neither run breaches, is refused or restarts, so a plant in those rules reads `equal` there whatever it changes; they are T8b's, which are not run on whole runs, and T4b's whole restarts.
 <!-- tables91 plants end -->
+
+**Round 1's plants** (`docs/reports/probe91/variants91b.py`). The tester's plants of test 91, run
+again, the plants for each rule round 1's tests pin, and one plant per refusal and guard of the
+binding, each removing it. They are not run on whole runs: the two whole runs of T8 breach
+nowhere, refuse nothing and restart nowhere, so the column cannot see these rules whatever a
+plant changes in them (test 91 S4). The whole restarts are T4b.
+
+<!-- tables91 plantsround1 begin -->
+### T8b. Round 1's planted defects: which tests catch each
+
+Each built alone from the checkout's `core/` with its edits (`docs/reports/probe91/variants91b.py`), then CTest and the march's parity module (`tests/test_core_march.py`); no whole runs. The plants are the tester's of test 91 (`results/tester91/plant.py`, its anchors updated where the binding changed), the plants of round 1's new tests, one plant per refusal of the binding and one per guard of the plan, time and count inputs. Each stream builds the unplanted core first and last.
+
+| Plant | CTest cases failing | Parity cases failing (by test) | Caught |
+|---|---|---|---|
+| `breach_ignored` | 2: `March.ABreachBeforeAnyStepReturnsNoRowsAndCountsNoStep`, `March.ABreachAfterStepsReturnsTheRowsBeforeItAndNotItsStep` | `test_march_breach_stops_as_run_march_stops` 6 | yes |
+| `refusal_ignored` | 2: `March.ANonFiniteFieldIsRefusedAtItsClassWithTheClassesBeforeItAdvanced`, `March.AStepAboveTheStableStepIsRefusedAtTheFirstClass` | `test_march_stops_as_run_march_does_on_a_field_that_is_not_finite` 1, `test_march_stops_as_run_march_does_on_a_step_above_the_stable_step` 1 | yes |
+| `breach_step_counted` | 2: `March.ABreachBeforeAnyStepReturnsNoRowsAndCountsNoStep`, `March.ABreachAfterStepsReturnsTheRowsBeforeItAndNotItsStep` | `test_march_breach_stops_as_run_march_stops` 6 | yes |
+| `breach_step_advanced` | 2: `March.ABreachBeforeAnyStepReturnsNoRowsAndCountsNoStep`, `March.ABreachAfterStepsReturnsTheRowsBeforeItAndNotItsStep` | none | yes |
+| `refused_step_advanced` | 2: `March.ANonFiniteFieldIsRefusedAtItsClassWithTheClassesBeforeItAdvanced`, `March.AStepAboveTheStableStepIsRefusedAtTheFirstClass` | none | yes |
+| `breach_leftover_is_the_steps` | 0 | `test_march_breach_stops_as_run_march_stops` 4 | yes |
+| `breach_leftover_supplied_swapped` | 0 | `test_march_breach_stops_as_run_march_stops` 6 | yes |
+| `breach_supplied_and_limit_swapped` | 0 | `test_march_breach_stops_as_run_march_stops` 6 | yes |
+| `breach_limit_wrong` | 0 | `test_march_breach_stops_as_run_march_stops` 6 | yes |
+| `breach_class_zero` | 0 | `test_march_breach_stops_as_run_march_stops` 3 | yes |
+| `breach_raised_as_refusal` | 0 | `test_march_breach_stops_as_run_march_stops` 6 | yes |
+| `refusal_returned_not_raised` | 0 | `test_march_stops_as_run_march_does_on_a_field_that_is_not_finite` 1, `test_march_stops_as_run_march_does_on_a_step_above_the_stable_step` 1 | yes |
+| `breach_without_record` | 0 | `test_march_breach_stops_as_run_march_stops` 6 | yes |
+| `within_first_sensor_only` | 1: `Recovery.WithinSpecIsEverySensorBelowItsChannelsThreshold` | `test_recovery_equals_the_tracker` 2, `test_recovery_within_spec_is_every_sensor_below_its_channels_threshold` 2 | yes |
+| `within_reads_the_class_not_the_channel` | 1: `Recovery.WithinSpecIsEverySensorBelowItsChannelsThreshold` | `test_march_equals_run_march_after_every_step` 1, `test_march_in_batches_equals_run_march` 1, `test_march_restored_recovery_continues_bit_for_bit` 2, `test_recovery_within_spec_is_every_sensor_below_its_channels_threshold` 2 | yes |
+| `within_reads_the_first_class_channel` | 2: `Recovery.TheHoldHoldsAtEqualityAndTheTargetsWhereDefined`, `Recovery.WithinSpecIsEverySensorBelowItsChannelsThreshold` | `test_march_equals_run_march_after_every_step` 2, `test_march_in_batches_equals_run_march` 2, `test_march_restored_recovery_continues_bit_for_bit` 2, `test_march_takes_the_steps_asked_for_and_stops_at_the_hold` 1, `test_recovery_within_spec_is_every_sensor_below_its_channels_threshold` 2 | yes |
+| `room_within_when_any_class_is` | 2: `Recovery.TheHoldHoldsAtEqualityAndTheTargetsWhereDefined`, `Recovery.WithinSpecIsEverySensorBelowItsChannelsThreshold` | `test_march_equals_run_march_after_every_step` 1, `test_march_in_batches_equals_run_march` 1, `test_march_restored_recovery_continues_bit_for_bit` 2, `test_recovery_within_spec_is_every_sensor_below_its_channels_threshold` 2 | yes |
+| `mean_time_where_undefined` | 2: `Recovery.TheHoldHoldsAtEqualityAndTheTargetsWhereDefined`, `March.ARunRestoredInsideItsWithinSpecStretchKeepsItsStartsAndTimes` | `test_recovery_equals_the_tracker` 2, `test_recovery_within_spec_is_every_sensor_below_its_channels_threshold` 2 | yes |
+| `sensor_time_where_undefined` | 2: `Recovery.TheHoldHoldsAtEqualityAndTheTargetsWhereDefined`, `March.ARunRestoredInsideItsWithinSpecStretchKeepsItsStartsAndTimes` | `test_recovery_equals_the_tracker` 2, `test_recovery_within_spec_is_every_sensor_below_its_channels_threshold` 2 | yes |
+| `mean_time_overwritten` | 0 | `test_march_equals_run_march_after_every_step` 2, `test_recovery_equals_the_tracker` 2, `test_recovery_within_spec_is_every_sensor_below_its_channels_threshold` 2 | yes |
+| `mean_at_target_not_reached` | 1: `Recovery.TheHoldHoldsAtEqualityAndTheTargetsWhereDefined` | `test_recovery_equals_the_tracker` 2 | yes |
+| `reading_at_target_not_reached` | 1: `Recovery.TheHoldHoldsAtEqualityAndTheTargetsWhereDefined` | `test_recovery_equals_the_tracker` 2 | yes |
+| `target_reads_the_channel_not_the_class` | 1: `March.ARunRestoredFromAnothersStateContinuesItBitForBit` | `test_march_equals_run_march_after_every_step` 1, `test_recovery_equals_the_tracker` 2 | yes |
+| `class_since_kept` | 2: `Recovery.TheHoldHoldsAtEqualityAndTheTargetsWhereDefined`, `Recovery.WithinSpecIsEverySensorBelowItsChannelsThreshold` | `test_recovery_equals_the_tracker` 2, `test_recovery_within_spec_is_every_sensor_below_its_channels_threshold` 2 | yes |
+| `class_since_restarted_every_step` | 3: `Recovery.TheHoldHoldsAtEqualityAndTheTargetsWhereDefined`, `Recovery.ARestoreCopiesEveryStartAndTimeToItsOwnArray`, `March.ARunRestoredInsideItsWithinSpecStretchKeepsItsStartsAndTimes` | `test_march_equals_run_march_after_every_step` 2, `test_recovery_equals_the_tracker` 2, `test_recovery_within_spec_is_every_sensor_below_its_channels_threshold` 2 | yes |
+| `room_since_restarted_every_step` | 4: `Recovery.TheHoldHoldsAtEqualityAndTheTargetsWhereDefined`, `Recovery.ARestoreCopiesEveryStartAndTimeToItsOwnArray`, `March.TheHoldStopsTheMarchAtTheStepItHolds`, `March.ARunRestoredInsideItsWithinSpecStretchKeepsItsStartsAndTimes` | `test_march_equals_run_march_after_every_step` 2, `test_march_in_batches_equals_run_march` 2, `test_march_restored_recovery_continues_bit_for_bit` 2, `test_march_takes_the_steps_asked_for_and_stops_at_the_hold` 1, `test_recovery_equals_the_tracker` 2, `test_recovery_within_spec_is_every_sensor_below_its_channels_threshold` 2 | yes |
+| `local_field_in_solid` | 0 | `test_recovery_equals_the_tracker` 2 | yes |
+| `tracker_restore_swaps_mean_and_class` | 2: `Recovery.ARestoreCopiesEveryStartAndTimeToItsOwnArray`, `March.ARunRestoredInsideItsWithinSpecStretchKeepsItsStartsAndTimes` | `test_march_equals_run_march_after_every_step` 1, `test_march_restored_recovery_continues_bit_for_bit` 2, `test_recovery_equals_the_tracker` 2 | yes |
+| `march_restore_room_since_zero` | 2: `March.TheHoldStopsTheMarchAtTheStepItHolds`, `March.ARunRestoredInsideItsWithinSpecStretchKeepsItsStartsAndTimes` | `test_march_restored_recovery_continues_bit_for_bit` 2 | yes |
+| `march_restore_swaps_mean_and_class` | 1: `March.ARunRestoredInsideItsWithinSpecStretchKeepsItsStartsAndTimes` | `test_march_equals_run_march_after_every_step` 1, `test_march_restored_recovery_continues_bit_for_bit` 2 | yes |
+| `binding_restore_room_since_zero` | 0 | `test_march_restored_recovery_continues_bit_for_bit` 2 | yes |
+| `binding_restore_room_since_nan` | 0 | `test_march_equals_run_march_after_every_step` 1, `test_march_in_batches_equals_run_march` 1, `test_march_restored_recovery_continues_bit_for_bit` 1, `test_march_takes_the_steps_asked_for_and_stops_at_the_hold` 1 | yes |
+| `binding_restore_class_since_is_mean_time` | 0 | `test_march_restored_recovery_continues_bit_for_bit` 2 | yes |
+| `binding_restore_mean_time_is_class_since` | 0 | `test_march_equals_run_march_after_every_step` 1, `test_march_restored_recovery_continues_bit_for_bit` 2 | yes |
+| `restore_drops_step_and_time` | 2: `March.ARunRestoredFromAnothersStateContinuesItBitForBit`, `March.ARunRestoredInsideItsWithinSpecStretchKeepsItsStartsAndTimes` | `test_march_breach_stops_as_run_march_stops` 3, `test_march_equals_run_march_after_every_step` 4, `test_march_in_batches_equals_run_march` 4, `test_march_reads_numpy_numbers_and_a_nan_arrival_time` 1, `test_march_restored_mid_interval_continues_bit_for_bit` 2, `test_march_restored_recovery_continues_bit_for_bit` 2 | yes |
+| `restore_drops_maps` | 1: `March.ARunRestoredFromAnothersStateContinuesItBitForBit` | `test_march_equals_run_march_after_every_step` 3, `test_march_reads_numpy_numbers_and_a_nan_arrival_time` 1, `test_march_restored_mid_interval_continues_bit_for_bit` 2, `test_march_restored_recovery_continues_bit_for_bit` 2 | yes |
+| `restore_drops_budgets` | 4: `March.ARunRestoredFromAnothersStateContinuesItBitForBit`, `March.ABreachBeforeAnyStepReturnsNoRowsAndCountsNoStep`, `March.ABreachAfterStepsReturnsTheRowsBeforeItAndNotItsStep`, `March.ARunRestoredInsideItsWithinSpecStretchKeepsItsStartsAndTimes` | `test_march_restored_mid_interval_continues_bit_for_bit` 2, `test_march_restored_recovery_continues_bit_for_bit` 2 | yes |
+| `restore_drops_fields` | 4: `March.StepsInBatchesEqualStepsOneAtATime`, `March.ABreachBeforeAnyStepReturnsNoRowsAndCountsNoStep`, `March.ABreachAfterStepsReturnsTheRowsBeforeItAndNotItsStep`, `March.ANonFiniteFieldIsRefusedAtItsClassWithTheClassesBeforeItAdvanced` | `test_march_breach_stops_as_run_march_stops` 6, `test_march_equals_run_march_after_every_step` 6, `test_march_in_batches_equals_run_march` 6, `test_march_restored_recovery_continues_bit_for_bit` 2, `test_march_stops_as_run_march_does_on_a_field_that_is_not_finite` 1 | yes |
+| `hold_not_checked_after_a_step` | 2: `March.TheHoldStopsTheMarchAtTheStepItHolds`, `March.ARunRestoredInsideItsWithinSpecStretchKeepsItsStartsAndTimes` | `test_march_in_batches_equals_run_march` 2, `test_march_restored_recovery_continues_bit_for_bit` 2, `test_march_takes_the_steps_asked_for_and_stops_at_the_hold` 1 | yes |
+| `interval_end_reported_as_count` | 1: `March.AMarchTakesTheStepsAskedForAndStopsAtTheIntervalsEnd` | `test_driver_refuses_a_count_at_the_intervals_end` 1, `test_march_breach_stops_as_run_march_stops` 3, `test_march_equals_run_march_after_every_step` 4, `test_march_in_batches_equals_run_march` 4 | yes |
+| `count_reported_as_interval` | 1: `March.AMarchTakesTheStepsAskedForAndStopsAtTheIntervalsEnd` | `test_march_binding_imports_nothing_from_src` 1, `test_march_breach_stops_as_run_march_stops` 4, `test_march_equals_run_march_after_every_step` 6, `test_march_takes_the_steps_asked_for_and_stops_at_the_hold` 1 | yes |
+| `channels_only_with_recovery` | 0 | `test_march_equals_run_march_after_every_step` 3 | yes |
+| `means_from_class_zero` | 1: `March.TheMeansAreTheContentOverTheFreeArea` | `test_march_equals_run_march_after_every_step` 3 | yes |
+| `time_accumulated` | 2: `March.AMarchTakesTheStepsAskedForAndStopsAtTheIntervalsEnd`, `March.TheIntervalsLastStepIsAtItsEndExactly` | `test_march_equals_run_march_after_every_step` 4 | yes |
+| `interval_first_ignored` | 2: `March.ARunRestoredFromAnothersStateContinuesItBitForBit`, `March.ARunRestoredInsideItsWithinSpecStretchKeepsItsStartsAndTimes` | `test_march_breach_stops_as_run_march_stops` 3, `test_march_equals_run_march_after_every_step` 4, `test_march_in_batches_equals_run_march` 4, `test_march_reads_numpy_numbers_and_a_nan_arrival_time` 1, `test_march_restored_mid_interval_continues_bit_for_bit` 2, `test_march_restored_recovery_continues_bit_for_bit` 2 | yes |
+| `row_inflow_outflow_swapped` | 0 | `test_march_breach_stops_as_run_march_stops` 4, `test_march_equals_run_march_after_every_step` 6 | yes |
+| `row_deposition_slots_reversed` | 0 | `test_march_breach_stops_as_run_march_stops` 4, `test_march_equals_run_march_after_every_step` 6 | yes |
+| `row_current_is_initial` | 2: `March.ABreachBeforeAnyStepReturnsNoRowsAndCountsNoStep`, `March.ABreachAfterStepsReturnsTheRowsBeforeItAndNotItsStep` | `test_march_breach_stops_as_run_march_stops` 4, `test_march_equals_run_march_after_every_step` 6 | yes |
+| `recovery_before_the_maps_mean_stale` | 1: `March.StepsInBatchesEqualStepsOneAtATime` | `test_march_breach_stops_as_run_march_stops` 3, `test_march_equals_run_march_after_every_step` 4 | yes |
+| `onset_strict` | 1: `Arrival.AnEventIsMappedFromItsOnsetAndATimeOnceSetIsKept` | `test_arrival_maps_equal_the_trackers` 2, `test_march_equals_run_march_after_every_step` 2 | yes |
+| `arrival_threshold_strict` | 1: `Arrival.ACellExactlyAtItsThresholdIsReachedAndOneBelowIsNot` | `test_arrival_maps_equal_the_trackers` 2 | yes |
+| `every_event_writes_the_first_map` | 1: `Arrival.AnEventIsMappedFromItsOnsetAndATimeOnceSetIsKept` | `test_arrival_maps_equal_the_trackers` 2 | yes |
+| `started_strict` | 1: `Arrival.AnEventIsMappedFromItsOnsetAndATimeOnceSetIsKept` | `test_march_equals_run_march_after_every_step` 2 | yes |
+| `sensor_order_reversed` | 1: `Channels.ASensorsChannelIsTheChannelFieldReadAtItsCell` | `test_march_breach_stops_as_run_march_stops` 4, `test_march_equals_run_march_after_every_step` 6, `test_recovery_equals_the_tracker` 2 | yes |
+| `binding_interval_first_zero` | 0 | `test_march_breach_stops_as_run_march_stops` 3, `test_march_equals_run_march_after_every_step` 4, `test_march_in_batches_equals_run_march` 4, `test_march_reads_numpy_numbers_and_a_nan_arrival_time` 1, `test_march_restored_mid_interval_continues_bit_for_bit` 2, `test_march_restored_recovery_continues_bit_for_bit` 2 | yes |
+| `binding_channels_are_readings` | 0 | `test_march_breach_stops_as_run_march_stops` 4, `test_march_equals_run_march_after_every_step` 6 | yes |
+| `refusal_spacing_shape` | 0 | `test_march2_refuses_what_it_is_built_from_when_it_cannot_read_it` 4 | yes |
+| `refusal_spacing_dx_cell_length` | 0 | `test_march2_refuses_what_it_is_built_from_when_it_cannot_read_it` 1 | yes |
+| `refusal_spacing_dy_cell_length` | 0 | `test_march2_refuses_what_it_is_built_from_when_it_cannot_read_it` 1 | yes |
+| `refusal_spacing_dx_face_length` | 0 | `test_march2_refuses_what_it_is_built_from_when_it_cannot_read_it` 1 | yes |
+| `refusal_spacing_dy_face_length` | 0 | `test_march2_refuses_what_it_is_built_from_when_it_cannot_read_it` 1 | yes |
+| `refusal_spacing_aligned` | 0 | `test_march2_refuses_what_it_is_built_from_when_it_cannot_read_it` 4 | yes |
+| `refusal_no_class` | 0 | `test_march2_refuses_what_it_is_built_from_when_it_cannot_read_it` 1 | yes |
+| `refusal_physics_lengths_differ` | 0 | `test_march2_refuses_what_it_is_built_from_when_it_cannot_read_it` 2 | yes |
+| `refusal_sensor_row_outside` | 0 | `test_march2_refuses_what_it_is_built_from_when_it_cannot_read_it` 1, `test_march_refuses_what_it_cannot_read` 1 | yes |
+| `refusal_sensor_column_outside` | 0 | `test_march2_refuses_what_it_is_built_from_when_it_cannot_read_it` 1 | yes |
+| `refusal_recovery_state_without_recovery` | 0 | `test_march_restore_refuses_a_recovery_state_it_has_no_recovery_for` 1 | yes |
+| `refusal_recovery_state_missing` | 0 | the module crashed | yes |
+| `refusal_arrival_thresholds` | 0 | `test_blocks_refuse_what_they_cannot_read` 1 | yes |
+| `refusal_recovery_thresholds` | 0 | `test_blocks_refuse_what_they_cannot_read` 1 | yes |
+| `refusal_cube_classes` | 0 | `test_blocks_refuse_a_cube_of_another_shape` 3, `test_blocks_refuse_what_they_cannot_read` 3, `test_march_restore_refuses_a_cube_of_another_shape` 1 | yes |
+| `refusal_cube_rows` | 0 | `test_blocks_refuse_a_cube_of_another_shape` 3, `test_march_restore_refuses_a_cube_of_another_shape` 1 | yes |
+| `refusal_cube_columns` | 0 | `test_blocks_refuse_a_cube_of_another_shape` 3, `test_march_refuses_what_it_cannot_read` 1, `test_march_restore_refuses_a_cube_of_another_shape` 1 | yes |
+| `refusal_cube_aligned` | 0 | `test_blocks_refuse_what_they_cannot_read` 3, `test_march_restore_refuses_an_unaligned_array` 1 | yes |
+| `refusal_channel_fields_cube` | 0 | `test_blocks_refuse_a_cube_of_another_shape` 3, `test_blocks_refuse_what_they_cannot_read` 2 | yes |
+| `refusal_arrival_update_cube` | 0 | `test_blocks_refuse_a_cube_of_another_shape` 3, `test_blocks_refuse_what_they_cannot_read` 2 | yes |
+| `refusal_recovery_update_cube` | 0 | `test_blocks_refuse_a_cube_of_another_shape` 3, `test_blocks_refuse_what_they_cannot_read` 2 | yes |
+| `refusal_march_restore_cube` | 0 | `test_march_refuses_what_it_cannot_read` 1, `test_march_restore_refuses_a_cube_of_another_shape` 3, `test_march_restore_refuses_an_unaligned_array` 1 | yes |
+| `refusal_recovery_update_means` | 0 | `test_blocks_refuse_what_they_cannot_read` 1 | yes |
+| `refusal_sensor_channels_shape` | 0 | `test_blocks_refuse_what_they_cannot_read` 1 | yes |
+| `refusal_sensor_channels_aligned` | 0 | `test_blocks_refuse_what_they_cannot_read` 1 | yes |
+| `refusal_maps_shape` | 0 | `test_arrival_maps_refuse_maps_of_another_shape` 4, `test_blocks_refuse_what_they_cannot_read` 1, `test_march_refuses_what_it_cannot_read` 1, `test_march_restore_refuses_maps_of_another_shape` 4 | yes |
+| `refusal_maps_aligned` | 0 | `test_blocks_refuse_what_they_cannot_read` 1, `test_march_restore_refuses_an_unaligned_array` 1 | yes |
+| `refusal_arrival_restore_maps` | 0 | `test_arrival_maps_refuse_maps_of_another_shape` 4, `test_blocks_refuse_what_they_cannot_read` 2 | yes |
+| `refusal_march_restore_maps` | 0 | `test_march_refuses_what_it_cannot_read` 1, `test_march_restore_refuses_an_unaligned_array` 1, `test_march_restore_refuses_maps_of_another_shape` 4 | yes |
+| `refusal_recovery_array_length` | 0 | `test_march_refuses_what_it_cannot_read` 1, `test_march_restore_refuses_an_unaligned_or_short_recovery_array` 4 | yes |
+| `refusal_recovery_array_aligned` | 0 | `test_march_restore_refuses_an_unaligned_or_short_recovery_array` 4 | yes |
+| `refusal_maps_events` | 0 | `test_arrival_maps_refuse_maps_of_another_shape` 1, `test_march_restore_refuses_maps_of_another_shape` 1 | yes |
+| `refusal_maps_channels` | 0 | `test_arrival_maps_refuse_maps_of_another_shape` 1, `test_blocks_refuse_what_they_cannot_read` 1, `test_march_restore_refuses_maps_of_another_shape` 1 | yes |
+| `refusal_maps_rows` | 0 | `test_arrival_maps_refuse_maps_of_another_shape` 1, `test_march_refuses_what_it_cannot_read` 1, `test_march_restore_refuses_maps_of_another_shape` 1 | yes |
+| `refusal_maps_columns` | 0 | `test_arrival_maps_refuse_maps_of_another_shape` 1, `test_march_restore_refuses_maps_of_another_shape` 1 | yes |
+| `guard_bool_number` | 0 | `test_march_refuses_a_bool_a_float_count_and_a_time_that_is_not_finite` 4, `test_march_refuses_what_it_cannot_read` 1 | yes |
+| `guard_bool_count` | 0 | `test_march_refuses_a_bool_a_float_count_and_a_time_that_is_not_finite` 3, `test_march_refuses_a_bool_or_a_float_for_the_steps_asked` 1 | yes |
+| `guard_float_count` | 0 | `test_march_refuses_a_bool_a_float_count_and_a_time_that_is_not_finite` 3, `test_march_refuses_a_bool_or_a_float_for_the_steps_asked` 1 | yes |
+| `guard_count_overflow` | 0 | `test_march_refuses_a_bool_a_float_count_and_a_time_that_is_not_finite` 1, `test_march_refuses_a_bool_or_a_float_for_the_steps_asked` 1 | yes |
+| `guard_time_finite` | 0 | `test_march_refuses_a_bool_a_float_count_and_a_time_that_is_not_finite` 7 | yes |
+| `guard_time_nan_always_ok` | 0 | `test_march_refuses_a_bool_a_float_count_and_a_time_that_is_not_finite` 3 | yes |
+| `guard_arrival_time_nan_refused` | 0 | `test_march_binding_imports_nothing_from_src` 1, `test_march_reads_numpy_numbers_and_a_nan_arrival_time` 1, `test_march_refuses_a_bool_a_float_count_and_a_time_that_is_not_finite` 20, `test_march_refuses_a_bool_or_a_float_for_the_steps_asked` 1, `test_march_refuses_what_it_cannot_read` 1, `test_march_restore_refuses_a_recovery_state_it_has_no_recovery_for` 1, `test_march_restore_refuses_an_unaligned_or_short_recovery_array` 4 | yes |
+| `guard_restore_step_negative` | 0 | `test_march_refuses_a_bool_a_float_count_and_a_time_that_is_not_finite` 1 | yes |
+| `guard_interval_first_range` | 0 | `test_march_refuses_a_bool_a_float_count_and_a_time_that_is_not_finite` 1, `test_march_refuses_what_it_cannot_read` 1 | yes |
+| `guard_interval_steps_positive` | 0 | none | no: an equivalent mutant |
+| `guard_march_n_positive` | 0 | `test_march_refuses_what_it_cannot_read` 1 | yes |
+| `march_recovery_channel_readings_are_readings` | 0 | `test_march_equals_run_march_after_every_step` 1, `test_march_in_batches_equals_run_march` 1, `test_march_restored_recovery_continues_bit_for_bit` 2 | yes |
+| `march_recovery_readings_are_channel_readings` | 1: `March.ARunRestoredFromAnothersStateContinuesItBitForBit` | `test_march_equals_run_march_after_every_step` 1 | yes |
+| `breach_drops_the_rows_before_it` | 1: `March.ABreachAfterStepsReturnsTheRowsBeforeItAndNotItsStep` | none | yes |
+
+104 of 105 plants fail at least one test; `guard_interval_steps_positive` is an equivalent mutant, as the clause `steps < 1` is implied by `0 <= first < steps`, which the same check tests, so a plan it would refuse is refused by the others. A plant that makes the module crash instead of fail is counted as caught. The controls (14 runs, at the start and the end of each stream) pass every test: yes.
+<!-- tables91 plantsround1 end -->
 
 ## 6. The timing
 
@@ -491,7 +729,11 @@ Each march from the Linux reference's frame at step 2,700 (about 9.8 s) of the 3
   and no 100:1 time yet. Commit 03030b9 adds a march case on the door leak's last interval to its
   end, a GoogleTest on a plan whose end is not `t_start + steps dt`, and targets that some
   sensors reach early; the second plant run (T8) catches all sixteen. The first run is kept in
-  `results/builder91/round0/`.
+  `results/builder91/round0/`. What 03030b9 pinned of the restore was the sensors' 100:1 times
+  and a restore that drops all of the recovery state; the room's within-spec start, the
+  classes' starts and the means' times, restored one array at a time, were not (test 91 B3),
+  and are now: by a clean-out restored before and inside its within-spec stretch, by a
+  GoogleTest on a restore inside it, and by whole restarts (F5, T4b).
 - **F3, the gate.** Against the Windows records the three 80x30 core-driven runs make every
   decision the Windows runs make and every field is inside the band's measured spread, the
   budget closing far inside 1e-12 of the supply (T5, T6). These are step 1's readings of the
@@ -503,6 +745,26 @@ Each march from the Linux reference's frame at step 2,700 (about 9.8 s) of the 3
   which step 6's update from readings removes. Windows' busiest processes during the sessions
   were Defender's scanner and Edge, where the prompt asked for nothing heavy running (T9's second
   table); a ratio is taken within one session, so a load falls on both its sides.
+- **F5, round 1: three rules of the port nothing tested.** Review 91 B1 and test 91 B1 to B3 found
+  no defect in the port. They found that the march's stop on a breach and on a refused step, the
+  within-spec rule (every sensor, on the channel's reading) and the restore of the room's start,
+  the classes' starts and the means' times each passed every test with a plant in it. The first
+  plant run's lesson (F2) applied again: a plant in a rule is caught by a test only if its inputs
+  separate the rule from the plant, and the cases planted for the other rules left these three
+  with equal answers: the six whole runs never breach and no whole run restarted a clean-out,
+  the within-spec cases moved every sensor and every class together, and the one mid-march
+  restore of a clean-out held a room that is never within spec, so its start, its classes' starts
+  and its means' times were NaN on both sides of the restore. The tests of section 4 separate
+  them, T8b shows each plant failing one, and T4b restarts the clean-out whole. Three rules were
+  caught by GoogleTest alone and are now caught by a parity case too (test 91 S2): a mean's time
+  set where its target is not defined, the room within spec when any channel is, and a restore
+  handing a zero room start. Round 1's own first plant run (T8b) left two plants uncaught, both
+  in the binding's refusals: a cube whose row count is another's, which no test handed any entry
+  point, and the binding's check of an interval's first step, which the core's own check refuses
+  in nearly the same words under another prefix. Each is pinned now, dimension by dimension and
+  by the binding's own message. A plant that removes the check that stops `March2.restore`
+  reading a missing recovery state crashes the module instead of raising, and T8b counts a
+  crash as caught.
 
 ## Deviations and limits
 
@@ -510,11 +772,19 @@ Each march from the Linux reference's frame at step 2,700 (about 9.8 s) of the 3
   commit after the first plant run (03030b9, F2), kept apart because the runs of record were
   made at e152bbd and the commit changes no code under `core/src/`, `core/include/` or the
   binding; the probe; the report and records.
+- **Round 1 (prompt 91b) is four commits, not three.** A `test:` commit for the tests of the
+  breach, the within-spec rule, the restore and the binding's refusals (506e800); a `fix:` commit
+  for the binding's guards, the driver's loop and the header comments, with their tests
+  (b028332); a `refactor:` commit for the shared solver setup, which changes no behaviour and so
+  is not in the `fix:` commit (f20ae23); and the records. Each of the first three builds under
+  `-Werror` and passes CTest and the march's parity module on its own, built apart from the
+  working tree.
 - **The interface departs from ADR-017 B's table in three places**, all because the flow solve
   is still Python's (section 1): the faces and the eddy viscosity cross with each interval; every
   march starts with a `restore` from the reference's state, at t = 0 or at a checkpoint; a breach
   is returned with the steps before it and raised by the Python side. Steps 4 and 5 bring the
-  flow state into the run and change the first.
+  flow state into the run and change the first. SYSTEM.md's core/ row records the three and
+  its history row of 2026-11-23 says so; ADR-017 B is not amended.
 - **The driver patches `time_integration._Run` for the call.** `core_driver.run` replaces the
   module's `_Run` with `CoreRun` while `time_integration.run` runs, so the orchestration is the
   reference's own code and nothing under `src/` changes. It is test infrastructure, in `tests/`;
@@ -534,9 +804,19 @@ Each march from the Linux reference's frame at step 2,700 (about 9.8 s) of the 3
 - **The probe was edited after the runs began**, in its `compare` command (`MassBudget.residual`
   called as the method it is, a pair skipped while either of its runs is missing, the pair of
   the checkpointed and uncheckpointed runs added) and its `timing` command (the 320x120 frame
-  read once per session); its `configs`, `run` and `restart` commands are as they ran.
-- **The Windows suite was run at e152bbd** (T7): the one file changed since that it would read,
-  `tests/test_core_march.py`, is skipped on Windows as a module, where `_cfdcore` is not built.
+  read once per session); its `configs`, `run` and `restart` commands are as they ran. Round 1
+  edited it again: `plants` runs through `test_plant`, which `plants-round1` shares and which
+  takes the scratch tree as a parameter so that streams can run side by side; `restart` takes a
+  scenario, a stop step and a tag, `restart-clean` is new, `configs` also writes the clean-out's
+  checkpointed configuration, and `compare` pairs the held clean-out's restarts and each remade
+  core run with round 0's; `tables91.py` has T4b, T4c and T8b.
+- **The runs of T2 and T3 are round 1's**, made again at the head because the binding changed
+  under them, and equal to round 0's bit for bit (T4c); round 0's files are in
+  `results/builder91/runs_round0/`. The reference runs are not remade: nothing under `src/`
+  changed. Nothing the driver, a checkpoint or the tests hand the binding is refused by the
+  guards (T2, T4, T4b).
+- **The suites were run at round 1's head** (T7); `tests/test_core_march.py` is skipped on
+  Windows as a module, where `_cfdcore` is not built.
 - **Not taken up.** The vents room and the RNG and QUICK k and eps options are not among the
   whole runs (the prompt's scenarios do not use them); prompt 90's replay covers a vented class
   step, and step 6's end-to-end benchmark reruns the validation rows. The 160x60 runs of the band
@@ -550,12 +830,18 @@ Each march from the Linux reference's frame at step 2,700 (about 9.8 s) of the 3
 - `core/python/bindings.cpp`: `March2`, `ArrivalMaps2`, `Recovery2`, `channel_fields`,
   `sensor_channels`, `budget_terms`; `set_interval`'s and `restore_budgets`' readers shared.
 - `core/tests/test_march.cpp` (new), `core/CMakeLists.txt`.
-- `tests/test_core_march.py` (new), `tests/core_mapping.py` (the march's mapping),
+- `tests/test_core_march.py` (new), `tests/core_mapping.py` (the march's mapping, and
+  `march_arguments`, the arguments `March2` is built from by name),
   `tests/core_driver.py` (new), `.github/workflows/ci.yml` (the core job runs the new module).
 - `docs/reports/probe91/`: `probe91.py` (configs, run, restart, compare, timing, plants,
-  plant-runs, vecinfo), `variants91.py` (the planted defects), `tables91.py` and `tables91.md`.
+  plant-runs, vecinfo), `variants91.py` (the planted defects) and `variants91b.py` (round 1's, with plants-round1 and
+  restart-clean), `tables91.py` and `tables91.md`.
 - Records in `results/builder91/` (untracked): the configurations, the run files with their
-  summaries and frame digests in `runs/`, `compare.json`, `plants.json` (and the first plant
-  run in `round0/`), `timing_1.json` to `timing_3.json`, `vecinfo.json`, `parity.xml`,
+  summaries and frame digests in `runs/` (round 0's core runs in `runs_round0/`),
+  `compare.json`, `plants.json` and `plants_round1_s*.json` (and the first plant run in
+  `round0/`, round 0's comparison and plants in `round1_before/`), `timing_1.json` to
+  `timing_3.json`, `vecinfo.json`, `parity.xml`,
   `ctest.xml`, the two suites' JUnit files and the logs in `logs/`; the wrappers that run them
-  under WSL2 (`probe.sh`, `bg.sh`, `pytest.sh`, `install.sh`).
+  under WSL2 (`probe.sh`, `bg.sh`, `pytest.sh`, `install.sh`), and round 1's in
+  `results/builder91b/` (the scripts that build, run the plant streams and make the records,
+  and the exploratory scripts that placed the breaches and the decay case).
