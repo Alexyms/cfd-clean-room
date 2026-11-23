@@ -270,6 +270,10 @@ public:
     refusal step(std::size_t k, std::span<const double> c, std::span<double> out,
                  step_record& record);
 
+    // The cell volumes per unit depth, m^2 for D = 2 (`np.outer(dy_cell,
+    // dx_cell)`), a cell field.
+    std::span<const double> volumes() const { return volume_; }
+
     // A class's budget, and every class's set whole (`restore_budgets`).
     const budget& budget_of(std::size_t k) const;
     // Throws std::invalid_argument for a count other than the class count.
