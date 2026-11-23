@@ -242,6 +242,67 @@ def recovery_keys(
     }
 
 
+def march_arguments(
+    config: SimConfig,
+    mesh: Mesh,
+    cells: Sequence[tuple[int, int]],
+    onsets: Sequence[float],
+    recovery: Mapping[str, object] | None,
+) -> dict[str, object]:
+    """The arguments ``_cfdcore.March2`` is built from, by the binding's names.
+
+    Parameters
+    ----------
+    config : SimConfig
+        Supplies the transport section, ``t_end``, the particles, the
+        thresholds and the channels.
+    mesh : Mesh
+        The run's mesh.
+    cells : Sequence[tuple[int, int]]
+        The (j, i) each sensor reads (``sensor_cells``), possibly none.
+    onsets : Sequence[float]
+        The contaminating events' onsets (``contaminating_events``).
+    recovery : Mapping[str, object] or None
+        ``recovery_keys``' dict for a clean-out, None otherwise.
+
+    Returns
+    -------
+    dict[str, object]
+        Keyword arguments for ``_cfdcore.March2``, in its order, so a test can
+        change one and build the run.
+    """
+    import _cfdcore
+
+    spec = config.transport
+    assert spec is not None
+    physics = ParticlePhysics(config)
+    n = len(config.particle_sizes)
+    grid = _cfdcore.Grid2(mesh.x, mesh.xc, mesh.y, mesh.yc, mesh.cell_type, SOLID)
+    return {
+        "scheme": _cfdcore.ScalarScheme2(grid),
+        "dx_cell": mesh.dx_cell,
+        "dy_cell": mesh.dy_cell,
+        "dx_face": mesh.dx_face,
+        "dy_face": mesh.dy_face,
+        "cfl": spec.cfl_number,
+        "upwind": spec.advection_scheme == UPWIND,
+        "max_sweeps": spec.max_diffusion_iter,
+        "tol": spec.diffusion_tol,
+        "limit": spec.conservation_limit,
+        "share": spec.leftover_share,
+        "horizon": config.t_end,
+        "schmidt": spec.turbulent_schmidt,
+        "settling": [physics.settling_velocity(k) for k in range(n)],
+        "diffusion": [physics.diffusion_coeff(k) for k in range(n)],
+        "surface_codes": (SURFACE_FLOOR, SURFACE_CEILING, SURFACE_WALL),
+        "channels": [list(members) for members in config.channel_classes()],
+        "thresholds": list(config.class_thresholds("the core's march")),
+        "sensors": [(int(j), int(i)) for j, i in cells],
+        "onsets": [float(t) for t in onsets],
+        "recovery": None if recovery is None else dict(recovery),
+    }
+
+
 def core_march(
     config: SimConfig,
     mesh: Mesh,
@@ -272,34 +333,7 @@ def core_march(
     """
     import _cfdcore
 
-    spec = config.transport
-    assert spec is not None
-    physics = ParticlePhysics(config)
-    n = len(config.particle_sizes)
-    grid = _cfdcore.Grid2(mesh.x, mesh.xc, mesh.y, mesh.yc, mesh.cell_type, SOLID)
-    return _cfdcore.March2(
-        _cfdcore.ScalarScheme2(grid),
-        mesh.dx_cell,
-        mesh.dy_cell,
-        mesh.dx_face,
-        mesh.dy_face,
-        spec.cfl_number,
-        spec.advection_scheme == UPWIND,
-        spec.max_diffusion_iter,
-        spec.diffusion_tol,
-        spec.conservation_limit,
-        spec.leftover_share,
-        config.t_end,
-        spec.turbulent_schmidt,
-        [physics.settling_velocity(k) for k in range(n)],
-        [physics.diffusion_coeff(k) for k in range(n)],
-        (SURFACE_FLOOR, SURFACE_CEILING, SURFACE_WALL),
-        [list(members) for members in config.channel_classes()],
-        list(config.class_thresholds("the core's march")),
-        [(int(j), int(i)) for j, i in cells],
-        [float(t) for t in onsets],
-        None if recovery is None else dict(recovery),
-    )
+    return _cfdcore.March2(**march_arguments(config, mesh, cells, onsets, recovery))
 
 
 def stacked(fields: Mapping[int, np.ndarray]) -> np.ndarray:

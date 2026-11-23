@@ -4,8 +4,12 @@ The step loop's blocks (``channels``, ``arrival``, ``recovery``) against the
 reference's functions on planted fields, and the march itself (``_cfdcore.March2``
 driven by ``tests.core_driver.CoreRun``) against ``time_integration._Run.march``
 on the 80x30 product mesh with planted flows, every output compared bit for bit
-after every step. Skipped with its reason when ``_cfdcore`` cannot be imported,
-an error instead with ``CFD_CORE_REQUIRED=1``, as ``tests/test_core_parity.py``.
+after every step: the steps, a restore from the middle of a march (a clean-out
+before and inside its within-spec stretch among them), and the stops a march
+ends in, a hold, a breach of ADR-016's limit and a refused step, with the error,
+the steps before it and the run file. Then the binding's own refusals, one by
+one. Skipped with its reason when ``_cfdcore`` cannot be imported, an error
+instead with ``CFD_CORE_REQUIRED=1``, as ``tests/test_core_parity.py``.
 """
 
 import dataclasses
@@ -14,6 +18,7 @@ import os
 import sys
 from pathlib import Path
 
+import h5py
 import numpy as np
 import pytest
 import yaml
@@ -23,7 +28,7 @@ from src.io_manager import RunFile
 from src.mesh import SOLID, Mesh
 from src.monitor import AlertMonitor, ArrivalTracker, channel_sums
 from src.solver_staggered import FlowState
-from src.solver_transport import MassBudget
+from src.solver_transport import ConservationBreachError, MassBudget
 from src.time_integration import (
     IntervalPlan,
     MarchStep,
@@ -244,6 +249,17 @@ def test_arrival_maps_equal_the_trackers(room: str) -> None:
 # recovery
 
 
+def _initial_levels(thresholds: np.ndarray) -> np.ndarray:
+    """Initial levels at which class 3's 100:1 target is not defined.
+
+    A hundred times each threshold exactly, except class 3's, which is its
+    threshold: a hundredth of a hundred times it, so its target is not defined.
+    """
+    initial = 100.0 * thresholds
+    initial[3] = thresholds[3]
+    return initial
+
+
 def _recovery_pair(
     room: str, hold: float | None
 ) -> tuple[RecoveryTracker, "_cfdcore.Recovery2", SimConfig, Mesh, np.ndarray]:
@@ -252,10 +268,7 @@ def _recovery_pair(
     thresholds = np.array(config.class_thresholds("the test"), dtype=np.float64)
     channels = [list(m) for m in config.channel_classes()]
     cells = list(core_mapping_cells(config, mesh))
-    # Class 3's initial level a hundredth of a hundred times its threshold, so its
-    # 100:1 target is not defined; the others' at a hundred times exactly.
-    initial = 100.0 * thresholds
-    initial[3] = thresholds[3]
+    initial = _initial_levels(thresholds)
     live = mesh.cell_type != SOLID
     reference = RecoveryTracker(
         thresholds, initial, cells, live, hold, channels=channels
@@ -281,7 +294,11 @@ def test_recovery_equals_the_tracker(room: str) -> None:
     live = mesh.cell_type != SOLID
     cells = list(core_mapping_cells(config, mesh))
     rng = np.random.default_rng([SEED, 3, len(room)])
-    target = core_mapping.recovery_keys(thresholds, 100.0 * thresholds, None)["target"]
+    # The tracker's own targets: class 3's is a hundredth of its threshold, which
+    # its readings and means sit above unless a plant puts them there.
+    target = core_mapping.recovery_keys(thresholds, _initial_levels(thresholds), None)[
+        "target"
+    ]
     held = []
     for u, t in enumerate(times):
         fields = _near(rng, thresholds, (n, *live.shape))
@@ -302,6 +319,9 @@ def test_recovery_equals_the_tracker(room: str) -> None:
         means = [float(x) for x in rng.uniform(0.5, 2.0, n) * np.asarray(target)]
         if u == 3:
             means = [float(x) for x in target]
+        if u == 4:
+            # Under class 3's own target, which is not defined: no time is set.
+            means[3] = 0.5 * float(target[3])
         reference.update(t, {k: fields[k] for k in range(n)}, means)
         core.update(t, np.ascontiguousarray(fields), means)
         state = core.state()
@@ -311,7 +331,8 @@ def test_recovery_equals_the_tracker(room: str) -> None:
         held.append(reference.held())
     # The planted inputs reach the rules: the hold holds at equality and ends
     # when a sensor reads its threshold; a reading at its target sets its time;
-    # the class without a defined target never does.
+    # the class without a defined target never does, whether a reading or its mean
+    # is under it.
     assert held[held_at] and not held[held_at - 1] and not held[held_at + 2]
     record = reference.state()
     assert record["sensor_time"][0, 0] == times[1]
@@ -320,7 +341,7 @@ def test_recovery_equals_the_tracker(room: str) -> None:
     again = _cfdcore.Recovery2(
         _grid(mesh),
         list(thresholds),
-        core_mapping.recovery_keys(thresholds, 100.0 * thresholds, hold),
+        core_mapping.recovery_keys(thresholds, _initial_levels(thresholds), hold),
         cells,
         [list(m) for m in config.channel_classes()],
     )
@@ -395,16 +416,40 @@ def _sliced(
     return out, (0, keep[0][1])
 
 
+# The decay case's levels at the sensors' cells, as fractions of the classes'
+# thresholds (zero elsewhere): the first three classes start above theirs, the other
+# two below, so the classes are within spec at different steps.
+DECAY_LEVELS = (1.4, 1.2, 1.1, 0.0, 0.0)
+# The decay case's step at which the room is within spec, and at which it holds.
+DECAY_WITHIN, DECAY_HELD = 11, 15
+
+
+def _sensor_blobs(
+    config: SimConfig, mesh: Mesh, thresholds: np.ndarray
+) -> dict[int, np.ndarray]:
+    """Fields that are zero but at the sensors' cells, which hold DECAY_LEVELS of the thresholds."""
+    fields = {k: np.zeros(mesh.cell_type.shape) for k in range(thresholds.size)}
+    for j, i in core_mapping_cells(config, mesh):
+        for k, level in enumerate(DECAY_LEVELS):
+            fields[k][j, i] = level * thresholds[k]
+    return fields
+
+
 def _case(name: str, tmp: Path) -> Case:
     """One of the planted marches.
 
     Across the dust release's onset; across the door leak's two flow switches;
     the clean-out from fields around its thresholds; the clean-out within spec
     from the start, held at its fifth step; the door leak's last interval to its
-    end, whose last step's time is ``t_end`` and not ``t_start + steps dt``.
+    end, whose last step's time is ``t_end`` and not ``t_start + steps dt``; and
+    the clean-out from the third step of its first interval with the sensors
+    above their thresholds, which they fall below at different steps (the
+    channels one after another, the room's last), held four steps later.
     """
     rng = np.random.default_rng([SEED, 4, len(name)])
-    probe = _scenario({"held": "clean", "door_end": "door"}.get(name, name))
+    probe = _scenario(
+        {"held": "clean", "door_end": "door", "decay": "clean"}.get(name, name)
+    )
     world = _World(probe, tmp)
     plans = world.state.plans()
     thresholds = np.array(probe.class_thresholds("the test"), dtype=np.float64)
@@ -416,11 +461,15 @@ def _case(name: str, tmp: Path) -> Case:
         keep = [(0, plans[0].steps - 2, plans[0].steps), (1, 0, 3), (2, 0, 2)]
     elif name == "door_end":
         keep = [(2, plans[2].steps - 3, plans[2].steps)]
+    elif name == "decay":
+        keep = [(0, 3, 20)]
     else:
         keep = [(0, 0, 8)]
     if name == "held":
         fields = world.state.manager.initial_fields()
         fields = {k: f * 1e-3 for k, f in fields.items()}
+    elif name == "decay":
+        fields = _sensor_blobs(probe, world.state.mesh, thresholds)
     elif name == "clean":
         initial = world.state.manager.initial_fields()
         fields = {k: f * rng.uniform(0.003, 0.03, shape) for k, f in initial.items()}
@@ -435,6 +484,10 @@ def _case(name: str, tmp: Path) -> Case:
         # Within spec from t = 0, so the hold ends the march at the step whose
         # time is the hold exactly.
         config = _scenario("clean", hold=cut[0].time(5))
+    if name == "decay":
+        # The stretch from the step the room is within spec to the step it holds.
+        hold = cut[0].time(DECAY_HELD) - cut[0].time(DECAY_WITHIN)
+        config = _scenario("clean", hold=hold)
     return Case(name, config, cut, start, fields)
 
 
@@ -443,7 +496,7 @@ class _World:
         self.state = _world(Case("probe", config, [], (0, 0), {}), tmp, _Run, "probe")
 
 
-MARCH_CASES = ["dust", "door", "clean", "held", "door_end"]
+MARCH_CASES = ["dust", "door", "clean", "held", "door_end", "decay"]
 
 
 @dataclasses.dataclass
@@ -604,6 +657,9 @@ def test_march_equals_run_march_after_every_step(name: str, tmp_path: Path) -> N
     steps = sum(p.steps for p in case.plans) - case.start[1]
     if name == "held":
         assert reference.end[4] is True and len(reference.steps) == 5
+    elif name == "decay":
+        assert reference.end[4] is True
+        assert len(reference.steps) == DECAY_HELD - case.start[1]
     else:
         assert reference.end[4] is False and len(reference.steps) == steps
     if name == "door_end":
@@ -614,17 +670,28 @@ def test_march_equals_run_march_after_every_step(name: str, tmp_path: Path) -> N
     if name in ("dust", "door"):
         assert len(case.plans) == 3
         assert len({p.fingerprint for p in case.plans}) == (2 if name == "door" else 1)
-    if name in ("clean", "held"):
+    if name in ("clean", "held", "decay"):
         final = reference.final_recovery
         assert final is not None
         live = state.mesh.cell_type != SOLID
         local = final["last_above"][:, live]
-        if name == "clean":
+        if name == "held":
+            assert np.isnan(local).all() and final["room_since"] == 0.0
+        else:
             # Cells at and below their thresholds both: the local field is set
             # in some and not in others.
             assert np.isfinite(local).any() and np.isnan(local).any()
-        else:
-            assert np.isnan(local).all() and final["room_since"] == 0.0
+    if name == "decay":
+        # The classes are within spec at different steps, the room at the last of
+        # them, the means from the start: every array of the state is its own.
+        plan = case.plans[0]
+        assert final["room_since"] == plan.time(DECAY_WITHIN)
+        assert final["class_since"][0] == plan.time(DECAY_WITHIN)
+        assert final["class_since"][3] == plan.time(case.start[1])
+        assert 0.0 < final["class_since"][2] < final["room_since"]
+        assert (final["mean_time"] == plan.time(case.start[1])).all()
+        assert np.isfinite(final["sensor_time"]).all()
+        assert not np.array_equal(final["class_since"], final["mean_time"])
 
 
 @pytest.mark.parametrize("name", MARCH_CASES)
@@ -684,6 +751,21 @@ def _same(a: dict[str, object], b: dict[str, object]) -> bool:
     )
 
 
+def _hand(state: core_driver.CoreRun, plan: IntervalPlan, at: int) -> None:
+    """Hand a core run the plan's interval, to march from step AT within it."""
+    interval = state.intervals[plan.index]
+    rates = state.manager.sources_at(interval.t_start)
+    core_mapping.set_interval(
+        state.core,
+        state.manager.conditions_for(interval),
+        state.faces(plan.fingerprint),
+        state.states[plan.fingerprint].nu_t,
+        [rates[k] if rates[k].any() else None for k in range(state.n_classes)],
+        plan,
+        at,
+    )
+
+
 @pytest.mark.parametrize("name", ["clean", "dust"])
 def test_march_restored_mid_interval_continues_bit_for_bit(
     name: str, tmp_path: Path
@@ -703,23 +785,8 @@ def test_march_restored_mid_interval_continues_bit_for_bit(
     core_mapping.restore_march(
         first.core, fields, budgets, step, t, first.arrival, first.tracker
     )
-    p = len(case.plans) - 1
-    plan = case.plans[p]
-    interval = first.intervals[plan.index]
-
-    def hand(state: core_driver.CoreRun, at: int) -> None:
-        rates = state.manager.sources_at(interval.t_start)
-        core_mapping.set_interval(
-            state.core,
-            state.manager.conditions_for(interval),
-            state.faces(plan.fingerprint),
-            state.states[plan.fingerprint].nu_t,
-            [rates[k] if rates[k].any() else None for k in range(state.n_classes)],
-            plan,
-            at,
-        )
-
-    hand(first, 0)
+    plan = case.plans[-1]
+    _hand(first, plan, 0)
     middle = plan.steps // 2
     assert len(first.core.march(middle)["step"]) == middle
     kept = _snapshot(first.core)
@@ -733,7 +800,7 @@ def test_march_restored_mid_interval_continues_bit_for_bit(
         kept["arrival"]["arrival_t"],
         kept["recovery"],
     )
-    hand(second, middle)
+    _hand(second, plan, middle)
     second.core.march(plan.steps)
     assert _same(_snapshot(first.core), _snapshot(second.core))
     if name == "clean":
@@ -806,7 +873,7 @@ def test_march_refuses_what_it_cannot_read(tmp_path: Path) -> None:
     core.restore(cube, terms, 0, 0.0, maps, np.nan, recovery)
     plan = case.plans[0]
     interval = state.intervals[plan.index]
-    with pytest.raises(ValueError, match="first step"):
+    with pytest.raises(ValueError, match=r"March2\.interval: the first step is not in"):
         core_mapping.set_interval(
             core,
             state.manager.conditions_for(interval),
@@ -848,6 +915,781 @@ def test_march_refuses_what_it_cannot_read(tmp_path: Path) -> None:
     )
     with pytest.raises(ValueError, match="at least 1"):
         core.march(0)
+
+
+@pytest.mark.parametrize(
+    "at", [8, 13], ids=["before the stretch", "inside the stretch"]
+)
+def test_march_restored_recovery_continues_bit_for_bit(at: int, tmp_path: Path) -> None:
+    """A clean-out restored before and inside its within-spec stretch continues bit for bit.
+
+    The decay case: the room is within spec from step 11 (the channels one after
+    another from step 5) and holds at step 15. A second core run restored from the
+    first's state at step 8 or 13 reaches the same hold with every array of the
+    recovery state the first reaches: the room's start, the classes' starts, the
+    means' times and the sensors' 100:1 times, each different from the others.
+    """
+    case = _case("decay", tmp_path)
+    first = _world(case, tmp_path, core_driver.CoreRun, "first")
+    second = _world(case, tmp_path, core_driver.CoreRun, "second")
+    assert isinstance(first, core_driver.CoreRun)
+    assert isinstance(second, core_driver.CoreRun)
+    fields, budgets, step, t = _start(first, case)
+    core_mapping.restore_march(
+        first.core, fields, budgets, step, t, first.arrival, first.tracker
+    )
+    plan = case.plans[0]
+    _hand(first, plan, case.start[1])
+    assert len(first.core.march(at - case.start[1])["step"]) == at - case.start[1]
+    kept = _snapshot(first.core)
+    state = kept["recovery"]
+    assert state is not None
+    # The state handed over holds what the restore must not lose or mix up.
+    assert (
+        np.isfinite(state["mean_time"]).all()
+        and np.isfinite(state["sensor_time"]).any()
+    )
+    if at < DECAY_WITHIN:
+        assert np.isnan(state["room_since"])
+        assert np.isnan(state["class_since"]).any()
+        assert np.isfinite(state["class_since"]).any()
+        assert not np.isfinite(state["sensor_time"]).all()
+    else:
+        assert state["room_since"] == plan.time(DECAY_WITHIN) > 0.0
+        assert np.isfinite(state["class_since"]).all()
+        assert np.isfinite(state["sensor_time"]).all()
+    assert not np.array_equal(state["class_since"], state["mean_time"])
+    rest = first.core.march(plan.steps)
+    assert rest["stopped"] == "held" and int(rest["step"][-1]) == DECAY_HELD
+    second.core.restore(
+        kept["fields"],
+        kept["budgets"],
+        kept["step"],
+        kept["t"],
+        kept["arrival"]["first_above"],
+        kept["arrival"]["arrival_t"],
+        kept["recovery"],
+    )
+    _hand(second, plan, at)
+    again = second.core.march(plan.steps)
+    assert again["stopped"] == "held"
+    assert again["step"].tolist() == rest["step"].tolist()
+    assert _same(_snapshot(first.core), _snapshot(second.core))
+
+
+@pytest.mark.parametrize("room", list(ROOMS))
+def test_recovery_within_spec_is_every_sensor_below_its_channels_threshold(
+    room: str,
+) -> None:
+    """Within spec is every sensor below every channel's threshold, on the channel's reading.
+
+    Planted on the sensors' cells, after each of which the fields go back
+    below: each channel in turn tipped at each sensor in turn by its class
+    alone, at its threshold exactly; then each channel tipped by a class below
+    its own threshold whose channel (it and the next class) is not. The
+    core's state equals the tracker's after every update, and the planted
+    updates are shown to separate the rule from the three wrong ones: the first
+    sensor alone, each class on its own reading, and the room within when any
+    channel is.
+    """
+    reference, core, config, mesh, thresholds = _recovery_pair(room, 0.5)
+    n = thresholds.size
+    channels = [list(m) for m in config.channel_classes()]
+    cells = list(core_mapping_cells(config, mesh))
+    sensors = len(cells)
+    zero = np.zeros((n, *mesh.cell_type.shape))
+    script: list[dict[tuple[int, int], float]] = [{}]
+    for k in range(n):
+        for m in range(sensors):
+            script += [{(k, m): thresholds[k]}, {}, {}, {}]
+    for k in range(n - 1):
+        m = 1 + k % (sensors - 1)
+        script += [{(k, m): 0.5 * thresholds[k], (k + 1, m): thresholds[k]}, {}, {}, {}]
+    separated = {"first sensor": False, "class": False, "room": False}
+    held = []
+    for u, planted in enumerate(script):
+        t = 0.25 * (u + 1)
+        fields = zero.copy()
+        for (k, m), value in planted.items():
+            j, i = cells[m]
+            fields[k, j, i] = value
+        means = [1.0] * n
+        reference.update(t, {k: fields[k] for k in range(n)}, means)
+        core.update(t, np.ascontiguousarray(fields), means)
+        state = core.state()
+        for name, array in reference.state().items():
+            assert _bits(state[name]) == _bits(array), (t, name)
+        assert core.held() == reference.held(), t
+        held.append(reference.held())
+        # The rule, from the readings: every sensor on the channel's reading.
+        readings = np.array([[fields[k, j, i] for j, i in cells] for k in range(n)])
+        sums = _cfdcore.sensor_channels(readings, channels)
+        within = (sums < thresholds[:, None]).all(axis=1)
+        assert (np.isfinite(reference.state()["class_since"]) == within).all(), t
+        assert np.isfinite(reference.state()["room_since"]) == within.all(), t
+        separated["first sensor"] |= bool((within != (sums[:, 0] < thresholds)).any())
+        separated["class"] |= bool(
+            (within != (readings < thresholds[:, None]).all(axis=1)).any()
+        )
+        separated["room"] |= bool(0 < within.sum() < n)
+    assert all(separated.values()), separated
+    assert any(held) and not all(held)
+
+
+# ---------------------------------------------------------------------------
+# the breach and the refusals of a step, through the march
+
+# Each case: scenario, ADR-016 limit, the class that breaches, the steps before it.
+# The limits sit between consecutive leftover ratios with a margin of at least 13 %
+# either side (explore the ratios with a limit of 0.5); the dust and door cases
+# breach in the first or second step of their second interval.
+BREACHES = {
+    "class 0 before any step": ("clean", 1e-300, 0, 0),
+    "class 0 after one step": ("clean", 9e-8, 0, 1),
+    "class 1 before any step": ("dust", 1.2e-8, 1, 0),
+    "class 1 at the interval switch": ("dust", 8.8e-8, 1, 3),
+    "class 4 at the interval switch": ("dust", 3.2e-7, 4, 3),
+    "class 0 inside the second interval": ("door", 1e-7, 0, 3),
+}
+
+
+def _capped(name: str, limit: float) -> SimConfig:
+    """A scenario whose solve stops at two sweeps with no share of the limit to hold.
+
+    Each step then leaves the leftover its cap leaves whatever the limit is, so a
+    limit places a breach (ADR-016). Frames every second step and a checkpoint
+    every third leave something in the run file to compare.
+    """
+    raw = yaml.safe_load((CONFIGS / SCENARIOS[name]).read_text(encoding="utf-8"))
+    raw["domain"] = {"nx": 80, "ny": 30}
+    raw["transport"] = {
+        **raw.get("transport", {}),
+        "conservation_limit": limit,
+        "leftover_share": 1e-300,
+        "max_diffusion_iter": 2,
+    }
+    raw["solver"] = {
+        **raw.get("solver", {}),
+        "output_interval": 2,
+        "checkpoint_interval": 3,
+    }
+    return SimConfig.from_dict(raw, CONFIGS)
+
+
+FileState = dict[str, tuple[str, tuple[int, ...], bytes]]
+
+
+def _file_state(run: RunFile) -> FileState:
+    """Every dataset of a run file and its checkpoint file but the configuration's.
+
+    By name, with its dtype, shape and bytes, so that two runs' files compare by
+    what they hold and not by what they were written with.
+    """
+    out: FileState = {}
+    for label, path in (("run", run.path), ("checkpoint", run.checkpoint_path)):
+        if not path.exists():
+            continue
+        with h5py.File(path, "r") as f:
+
+            def visit(name: str, item: object, label: str = label) -> None:
+                if isinstance(item, h5py.Dataset) and not name.startswith("config"):
+                    out[f"{label}/{name}"] = (
+                        str(item.dtype),
+                        item.shape,
+                        np.asarray(item[()]).tobytes(),
+                    )
+
+            f.visititems(visit)
+    return out
+
+
+@dataclasses.dataclass
+class Outcome:
+    """What a march did to its end or its error: each step, the error, the run file."""
+
+    seen: list[tuple[int, str, bytes, tuple[object, ...]]]
+    error: tuple[object, ...] | None
+    file: FileState
+    calls: int | None
+
+
+def _outcome(
+    kind: type[_Run], case: Case, tmp: Path, tag: str, every_step: bool
+) -> Outcome:
+    """One march of a case on a kind of run, the error it raises kept as plain values."""
+    state = _world(case, tmp, kind, tag)
+    seen: list[tuple[int, str, bytes, tuple[object, ...]]] = []
+
+    def record(s: MarchStep) -> None:
+        seen.append(
+            (
+                s.step,
+                float(s.t).hex(),
+                _bits(core_mapping.stacked(s.fields)),
+                tuple(_budget_bits(b) for b in s.budgets),
+            )
+        )
+
+    if every_step:
+        state.on_step = record
+    fields, budgets, step, t = _start(state, case)
+    error: tuple[object, ...] | None = None
+    try:
+        state.march(case.plans, case.start, fields, budgets, step, t)
+    except ConservationBreachError as breach:
+        error = (
+            "ConservationBreachError",
+            breach.size_class,
+            float(breach.leftover).hex(),
+            float(breach.supplied).hex(),
+            float(breach.limit).hex(),
+            str(breach),
+        )
+    except ValueError as refused:
+        error = ("ValueError", str(refused))
+    return Outcome(
+        seen, error, _file_state(state.run), getattr(state, "core_calls", None)
+    )
+
+
+def _outcomes(case: Case, tmp: Path) -> tuple[Outcome, Outcome, Outcome]:
+    """The reference's march, the core's every step and the core's in batches, equal.
+
+    Asserts what every route shares: the error, the steps before it, the run
+    file. Returns the three.
+    """
+    reference = _outcome(_Run, case, tmp, "reference", True)
+    core = _outcome(core_driver.CoreRun, case, tmp, "core", True)
+    batched_kind = type(
+        "Batched", (core_driver.CoreRun,), {"monitor_reads_fields": False}
+    )
+    batched = _outcome(batched_kind, case, tmp, "batched", False)
+    assert core.error == reference.error
+    assert core.seen == reference.seen
+    assert core.file == reference.file
+    assert batched.error == reference.error
+    assert batched.file == reference.file
+    return reference, core, batched
+
+
+@pytest.mark.parametrize("label", list(BREACHES))
+def test_march_breach_stops_as_run_march_stops(label: str, tmp_path: Path) -> None:
+    """A step that breaches ADR-016's limit stops the core's march where it stops the reference's.
+
+    The error carries the reference's class, leftover, supplied and limit in every
+    bit and its message; the steps before it are the reference's, as is the run
+    file they leave (the frames and checkpoint written before it, the readings not
+    yet flushed dropped); in batches the same error and file. Each case places the
+    breach: in class 0, 1 or 4, before any step, after one, and after the interval
+    switch.
+    """
+    name, limit, size_class, before = BREACHES[label]
+    case = dataclasses.replace(_case(name, tmp_path), config=_capped(name, limit))
+    reference, _core, _batched = _outcomes(case, tmp_path)
+    error = reference.error
+    assert error is not None and error[:2] == ("ConservationBreachError", size_class)
+    assert error[4] == float(limit).hex()
+    assert len(reference.seen) == before
+    if before >= 3:
+        # A frame and a checkpoint were written before the breach.
+        assert any(key.startswith("run/transport/sensors") for key in reference.file)
+        assert any(key.startswith("checkpoint/") for key in reference.file)
+
+
+def test_march_stops_as_run_march_does_on_a_field_that_is_not_finite(
+    tmp_path: Path,
+) -> None:
+    """A NaN in class 2's field is refused by the core's march as the reference refuses it."""
+    base = _case("clean", tmp_path)
+    bad = {k: np.array(f) for k, f in base.fields.items()}
+    live = np.argwhere(Mesh(base.config).cell_type != SOLID)
+    bad[2][tuple(live[len(live) // 2])] = np.nan
+    case = dataclasses.replace(base, fields=bad)
+    reference, _core, _batched = _outcomes(case, tmp_path)
+    assert reference.error == ("ValueError", "C_k must be finite")
+    assert reference.seen == []
+
+
+def test_march_stops_as_run_march_does_on_a_step_above_the_stable_step(
+    tmp_path: Path,
+) -> None:
+    """A plan whose step is above the stable step is refused by the core as the reference refuses it."""
+    base = _case("clean", tmp_path)
+    plans = [dataclasses.replace(p, dt=2.0 * p.stable_dt) for p in base.plans]
+    case = dataclasses.replace(base, plans=plans)
+    reference, _core, _batched = _outcomes(case, tmp_path)
+    assert reference.error is not None and reference.error[0] == "ValueError"
+    assert "exceeds stable_dt" in str(reference.error[1])
+    assert reference.seen == []
+
+
+# ---------------------------------------------------------------------------
+# the driver
+
+
+def test_driver_refuses_an_interval_the_core_was_not_built_for(tmp_path: Path) -> None:
+    """An interval whose transport keys, particles or t_end are not the core's is refused.
+
+    The core is built from the run's configuration once, where the reference
+    builds a solver per interval, so every whole-run claim rests on this check.
+    """
+    case = _case("clean", tmp_path)
+    state = _world(case, tmp_path, core_driver.CoreRun, "built")
+    assert isinstance(state, core_driver.CoreRun)
+    other = _scenario("dust")
+    assert other.t_end != case.config.t_end
+    state.config = other
+    with pytest.raises(
+        ValueError, match="not the run's, which the core was built with"
+    ):
+        state._check_interval(case.plans[0])
+    state.config = case.config
+    state._check_interval(case.plans[0])
+
+
+# ---------------------------------------------------------------------------
+# the binding's refusals, one by one
+
+
+def _unaligned(a: np.ndarray) -> np.ndarray:
+    """A copy of an array whose data pointer is one byte past a multiple of eight."""
+    raw = np.zeros(a.nbytes + 16, dtype=np.uint8)
+    start = (1 - raw.ctypes.data) % 8
+    out = raw[start : start + a.nbytes].view(a.dtype).reshape(a.shape)
+    out[...] = a
+    assert not out.flags.aligned
+    return out
+
+
+@dataclasses.dataclass
+class Ready:
+    """A clean-out core run with everything its restore and interval take, to change one thing at a time."""
+
+    state: core_driver.CoreRun
+    plan: IntervalPlan
+    cube: np.ndarray
+    terms: list[dict[str, float | None]]
+    maps: np.ndarray
+    recovery: dict[str, np.ndarray]
+
+    def restore(self, **changes: object) -> None:
+        """``March2.restore`` with the run's own arguments, those named changed."""
+        args: dict[str, object] = {
+            "fields": self.cube,
+            "budgets": self.terms,
+            "step": 0,
+            "t": 0.0,
+            "first_above": self.maps,
+            "arrival_t": np.nan,
+            "recovery": self.recovery,
+        }
+        args.update(changes)
+        self.state.core.restore(**args)
+
+    def interval(self, **changes: object) -> None:
+        """``March2.interval`` with the clean-out's first interval, those named changed."""
+        state, plan = self.state, self.plan
+        interval = state.intervals[plan.index]
+        args: dict[str, object] = {
+            "conditions": [
+                state.manager.conditions_for(interval).faces_for(k)
+                for k in range(state.n_classes)
+            ],
+            "u": state.faces(plan.fingerprint).u,
+            "v": state.faces(plan.fingerprint).v,
+            "eddy_viscosity": state.states[plan.fingerprint].nu_t,
+            "dt": plan.dt,
+            "steps": plan.steps,
+            "t_start": plan.t_start,
+            "t_end": plan.t_end,
+            "first": 0,
+        }
+        args.update(changes)
+        state.core.interval(**args)
+
+
+def _ready(tmp: Path) -> Ready:
+    case = _case("clean", tmp)
+    state = _world(case, tmp, core_driver.CoreRun, "ready")
+    assert isinstance(state, core_driver.CoreRun)
+    fields, budgets, _step, _t = _start(state, case)
+    assert state.tracker is not None
+    return Ready(
+        state,
+        case.plans[0],
+        core_mapping.stacked(fields),
+        [core_mapping.terms_of(b) for b in budgets],
+        np.ascontiguousarray(state.arrival.state()["first_above"]),
+        {k: np.ascontiguousarray(v) for k, v in state.tracker.state().items()},
+    )
+
+
+@functools.cache
+def _clean_room() -> tuple[SimConfig, Mesh]:
+    """The 80x30 clean-out's configuration and mesh."""
+    config = _scenario("clean")
+    return config, Mesh(config)
+
+
+def _march_args(**changes: object) -> dict[str, object]:
+    """March2's arguments for the 80x30 clean-out, some changed."""
+    config, mesh = _clean_room()
+    thresholds = np.array(config.class_thresholds("the test"), dtype=np.float64)
+    keys = core_mapping.recovery_keys(thresholds, _initial_levels(thresholds), None)
+    args = core_mapping.march_arguments(
+        config, mesh, list(core_mapping_cells(config, mesh)), [0.0], keys
+    )
+    args.update(changes)
+    return args
+
+
+_SPACINGS = "dx_cell, dy_cell, dx_face and dy_face are"
+_ALIGNED = "March2: an array is not aligned"
+_ONE_PER_CLASS = "settling and diffusion hold one value per class"
+_NO_RECOVERY_SENSOR = {"target": [1.0] * 5, "defined": [True] * 5, "hold": None}
+# Each: the arguments changed, as a function of the mesh; the exception; its message.
+CONSTRUCTION = {
+    "dx_cell one short": (
+        lambda m: {"dx_cell": m.dx_cell[:-1].copy()},
+        TypeError,
+        _SPACINGS,
+    ),
+    "dy_cell one short": (
+        lambda m: {"dy_cell": m.dy_cell[:-1].copy()},
+        TypeError,
+        _SPACINGS,
+    ),
+    "dx_face one long": (
+        lambda m: {"dx_face": np.append(m.dx_face, 1.0)},
+        TypeError,
+        _SPACINGS,
+    ),
+    "dy_face one long": (
+        lambda m: {"dy_face": np.append(m.dy_face, 1.0)},
+        TypeError,
+        _SPACINGS,
+    ),
+    "dx_cell unaligned": (
+        lambda m: {"dx_cell": _unaligned(m.dx_cell)},
+        TypeError,
+        _ALIGNED,
+    ),
+    "dy_cell unaligned": (
+        lambda m: {"dy_cell": _unaligned(m.dy_cell)},
+        TypeError,
+        _ALIGNED,
+    ),
+    "dx_face unaligned": (
+        lambda m: {"dx_face": _unaligned(m.dx_face)},
+        TypeError,
+        _ALIGNED,
+    ),
+    "dy_face unaligned": (
+        lambda m: {"dy_face": _unaligned(m.dy_face)},
+        TypeError,
+        _ALIGNED,
+    ),
+    "no class": (
+        lambda m: {"settling": [], "diffusion": []},
+        ValueError,
+        _ONE_PER_CLASS,
+    ),
+    "one settling velocity short": (
+        lambda m: {"settling": [1e-5] * 4},
+        ValueError,
+        _ONE_PER_CLASS,
+    ),
+    "one diffusion coefficient short": (
+        lambda m: {"diffusion": [1e-5] * 4},
+        ValueError,
+        _ONE_PER_CLASS,
+    ),
+    "a sensor below the grid": (
+        lambda m: {"sensors": [(30, 0)]},
+        ValueError,
+        r"March2: a sensor's cell \(30, 0\) is outside the grid",
+    ),
+    "a sensor beyond the grid": (
+        lambda m: {"sensors": [(0, 80)]},
+        ValueError,
+        r"March2: a sensor's cell \(0, 80\) is outside the grid",
+    ),
+    "a recovery without a sensor": (
+        lambda m: {"sensors": [], "recovery": _NO_RECOVERY_SENSOR},
+        ValueError,
+        "needs at least one sensor",
+    ),
+    "a threshold short": (
+        lambda m: {"thresholds": [1.0] * 4},
+        ValueError,
+        "channels and thresholds are not one per class",
+    ),
+    "a channel short": (
+        lambda m: {"channels": [[k] for k in range(4)]},
+        ValueError,
+        "channels and thresholds are not one per class",
+    ),
+}
+
+
+@pytest.mark.parametrize("label", list(CONSTRUCTION))
+def test_march2_refuses_what_it_is_built_from_when_it_cannot_read_it(
+    label: str,
+) -> None:
+    """March2's construction refuses a spacing, a class count, a sensor or a monitor list that does not agree."""
+    changes, exception, match = CONSTRUCTION[label]
+    with pytest.raises(exception, match=match):
+        _cfdcore.March2(**_march_args(**changes(_clean_room()[1])))
+    _cfdcore.March2(**_march_args())
+
+
+def test_march_restore_refuses_a_recovery_state_it_has_no_recovery_for(
+    tmp_path: Path,
+) -> None:
+    """A run built without a recovery refuses a recovery state; with one it takes it."""
+    ready = _ready(tmp_path)
+    config = ready.state.config
+    bare = core_mapping.core_march(
+        config,
+        ready.state.mesh,
+        ready.state.cells,
+        [onset for _, onset in ready.state.events],
+        None,
+    )
+    with pytest.raises(
+        ValueError, match="recovery state given to a run without a recovery"
+    ):
+        bare.restore(
+            ready.cube, ready.terms, 0, 0.0, ready.maps, np.nan, ready.recovery
+        )
+    bare.restore(ready.cube, ready.terms, 0, 0.0, ready.maps, np.nan, None)
+    ready.restore()
+
+
+@pytest.mark.parametrize("what", ["fields", "first_above"])
+def test_march_restore_refuses_an_unaligned_array(what: str, tmp_path: Path) -> None:
+    """The fields and the maps a restore reads must be aligned, as the reference's sums need."""
+    ready = _ready(tmp_path)
+    array = {"fields": ready.cube, "first_above": ready.maps}[what]
+    with pytest.raises(TypeError, match=r"March2.restore: an array is not aligned"):
+        ready.restore(**{what: _unaligned(array)})
+
+
+@pytest.mark.parametrize(
+    "name", ["last_above", "sensor_time", "mean_time", "class_since"]
+)
+def test_march_restore_refuses_an_unaligned_or_short_recovery_array(
+    name: str, tmp_path: Path
+) -> None:
+    """Each array of the recovery state is refused short and unaligned, by its name."""
+    ready = _ready(tmp_path)
+    state = ready.recovery
+    with pytest.raises(TypeError, match=f"recovery state's {name} is not"):
+        ready.restore(recovery={**state, name: state[name].reshape(-1)[1:].copy()})
+    with pytest.raises(TypeError, match=r"March2.restore: an array is not aligned"):
+        ready.restore(recovery={**state, name: _unaligned(state[name])})
+
+
+def _blocks() -> dict[str, object]:
+    """The blocks' construction arguments for the 80x30 clean-out room."""
+    config, mesh = _clean_room()
+    thresholds = list(config.class_thresholds("the test"))
+    levels = _initial_levels(np.array(thresholds))
+    keys = core_mapping.recovery_keys(np.array(thresholds), levels, None)
+    return {
+        "grid": _grid(mesh),
+        "thresholds": thresholds,
+        "channels": [list(m) for m in config.channel_classes()],
+        "cube": np.zeros((len(thresholds), *mesh.cell_type.shape)),
+        "cells": list(core_mapping_cells(config, mesh)),
+        "keys": keys,
+        # One class fewer in every list, for a tracker that agrees with itself and
+        # not with the channels.
+        "keys_short": {
+            "target": keys["target"][:-1],
+            "defined": keys["defined"][:-1],
+            "hold": None,
+        },
+        "maps": np.full((1, len(thresholds), *mesh.cell_type.shape), np.nan),
+    }
+
+
+BLOCKS = {
+    "ArrivalMaps2: a threshold short": lambda b: _cfdcore.ArrivalMaps2(
+        b["grid"], b["thresholds"][:-1], [0.0], b["channels"]
+    ),
+    "Recovery2: a threshold short": lambda b: _cfdcore.Recovery2(
+        b["grid"], b["thresholds"][:-1], b["keys_short"], b["cells"], b["channels"]
+    ),
+    "ArrivalMaps2.update: a class short": lambda b: _cfdcore.ArrivalMaps2(
+        b["grid"], b["thresholds"], [0.0], b["channels"]
+    ).update(0.5, b["cube"][:-1].copy()),
+    "ArrivalMaps2.update: unaligned": lambda b: _cfdcore.ArrivalMaps2(
+        b["grid"], b["thresholds"], [0.0], b["channels"]
+    ).update(0.5, _unaligned(b["cube"])),
+    "ArrivalMaps2.restore: a map short": lambda b: _cfdcore.ArrivalMaps2(
+        b["grid"], b["thresholds"], [0.0], b["channels"]
+    ).restore(b["maps"][:, :-1].copy(), 0.5),
+    "ArrivalMaps2.restore: unaligned": lambda b: _cfdcore.ArrivalMaps2(
+        b["grid"], b["thresholds"], [0.0], b["channels"]
+    ).restore(_unaligned(b["maps"]), 0.5),
+    "Recovery2.update: a class short": lambda b: _cfdcore.Recovery2(
+        b["grid"], b["thresholds"], b["keys"], b["cells"], b["channels"]
+    ).update(0.5, b["cube"][:-1].copy(), [0.0] * 5),
+    "Recovery2.update: unaligned": lambda b: _cfdcore.Recovery2(
+        b["grid"], b["thresholds"], b["keys"], b["cells"], b["channels"]
+    ).update(0.5, _unaligned(b["cube"]), [0.0] * 5),
+    "Recovery2.update: a mean short": lambda b: _cfdcore.Recovery2(
+        b["grid"], b["thresholds"], b["keys"], b["cells"], b["channels"]
+    ).update(0.5, b["cube"], [0.0] * 4),
+    "channel_fields: a class short": lambda b: _cfdcore.channel_fields(
+        b["grid"], b["cube"][:-1].copy(), b["channels"]
+    ),
+    "channel_fields: unaligned": lambda b: _cfdcore.channel_fields(
+        b["grid"], _unaligned(b["cube"]), b["channels"]
+    ),
+    "channel_fields: a channel left out": lambda b: _cfdcore.channel_fields(
+        b["grid"], b["cube"], [[0], [0], [2], [3], [4]]
+    ),
+    "sensor_channels: a class short": lambda b: _cfdcore.sensor_channels(
+        np.zeros((4, 4)), b["channels"]
+    ),
+    "sensor_channels: unaligned": lambda b: _cfdcore.sensor_channels(
+        _unaligned(np.zeros((5, 4))), b["channels"]
+    ),
+}
+BLOCK_REFUSALS = {
+    "ArrivalMaps2: a threshold short": (
+        ValueError,
+        "ArrivalMaps2: one threshold per channel",
+    ),
+    "Recovery2: a threshold short": (
+        ValueError,
+        "Recovery2: one threshold per channel",
+    ),
+    "ArrivalMaps2.update: a class short": (
+        TypeError,
+        r"ArrivalMaps2.update: fields is not \[5, 30, 80\]",
+    ),
+    "ArrivalMaps2.update: unaligned": (
+        TypeError,
+        "ArrivalMaps2.update: an array is not aligned",
+    ),
+    "ArrivalMaps2.restore: a map short": (
+        TypeError,
+        "ArrivalMaps2.restore: first_above is not",
+    ),
+    "ArrivalMaps2.restore: unaligned": (
+        TypeError,
+        "ArrivalMaps2.restore: an array is not aligned",
+    ),
+    "Recovery2.update: a class short": (
+        TypeError,
+        r"Recovery2.update: fields is not \[5, 30, 80\]",
+    ),
+    "Recovery2.update: unaligned": (
+        TypeError,
+        "Recovery2.update: an array is not aligned",
+    ),
+    "Recovery2.update: a mean short": (
+        ValueError,
+        "Recovery2.update: means hold one value per class",
+    ),
+    "channel_fields: a class short": (
+        TypeError,
+        r"channel_fields: fields is not \[5, 30, 80\]",
+    ),
+    "channel_fields: unaligned": (TypeError, "channel_fields: an array is not aligned"),
+    "channel_fields: a channel left out": (
+        ValueError,
+        "channel 1 leaves out its own class",
+    ),
+    "sensor_channels: a class short": (
+        TypeError,
+        r"sensor_channels: readings is not \[classes, sensors\]",
+    ),
+    "sensor_channels: unaligned": (
+        TypeError,
+        "sensor_channels: an array is not aligned",
+    ),
+}
+
+
+@pytest.mark.parametrize("label", list(BLOCKS))
+def test_blocks_refuse_what_they_cannot_read(label: str) -> None:
+    """Each block's binding refuses a wrong shape, an unaligned array and a list that does not agree."""
+    exception, match = BLOCK_REFUSALS[label]
+    with pytest.raises(exception, match=match):
+        BLOCKS[label](_blocks())
+
+
+# Another cube or maps array in each dimension in turn, copied so that it stays C-contiguous
+# (a sliced view is refused for its layout before any shape is read).
+CUBE_SHAPES = {
+    "a class short": lambda a: a[:-1].copy(),
+    "a row short": lambda a: a[:, 1:].copy(),
+    "a column short": lambda a: a[:, :, 1:].copy(),
+}
+MAPS_SHAPES = {
+    "an event too many": lambda a: np.concatenate([a, a]),
+    "a channel short": lambda a: a[:, :-1].copy(),
+    "a row short": lambda a: a[:, :, 1:].copy(),
+    "a column short": lambda a: a[:, :, :, 1:].copy(),
+}
+
+
+@pytest.mark.parametrize("shape", list(CUBE_SHAPES))
+def test_march_restore_refuses_a_cube_of_another_shape(
+    shape: str, tmp_path: Path
+) -> None:
+    """March2.restore reads the class fields as [classes, ny, nx], each dimension checked."""
+    ready = _ready(tmp_path)
+    with pytest.raises(
+        TypeError, match=r"March2\.restore: fields is not \[5, 30, 80\]"
+    ):
+        ready.restore(fields=CUBE_SHAPES[shape](ready.cube))
+
+
+@pytest.mark.parametrize("shape", list(MAPS_SHAPES))
+def test_march_restore_refuses_maps_of_another_shape(
+    shape: str, tmp_path: Path
+) -> None:
+    """March2.restore reads the maps as [events, channels, ny, nx], each dimension checked."""
+    ready = _ready(tmp_path)
+    with pytest.raises(TypeError, match=r"March2\.restore: first_above is not"):
+        ready.restore(first_above=MAPS_SHAPES[shape](ready.maps))
+
+
+@pytest.mark.parametrize("shape", list(CUBE_SHAPES))
+@pytest.mark.parametrize(
+    "entry", ["ArrivalMaps2.update", "Recovery2.update", "channel_fields"]
+)
+def test_blocks_refuse_a_cube_of_another_shape(entry: str, shape: str) -> None:
+    """Each block that reads a cube of fields checks every dimension of it."""
+    b = _blocks()
+    cube = CUBE_SHAPES[shape](b["cube"])
+    calls = {
+        "ArrivalMaps2.update": lambda: _cfdcore.ArrivalMaps2(
+            b["grid"], b["thresholds"], [0.0], b["channels"]
+        ).update(0.5, cube),
+        "Recovery2.update": lambda: _cfdcore.Recovery2(
+            b["grid"], b["thresholds"], b["keys"], b["cells"], b["channels"]
+        ).update(0.5, cube, [0.0] * 5),
+        "channel_fields": lambda: _cfdcore.channel_fields(
+            b["grid"], cube, b["channels"]
+        ),
+    }
+    with pytest.raises(TypeError, match=rf"{entry}: fields is not \[5, 30, 80\]"):
+        calls[entry]()
+
+
+@pytest.mark.parametrize("shape", list(MAPS_SHAPES))
+def test_arrival_maps_refuse_maps_of_another_shape(shape: str) -> None:
+    """ArrivalMaps2.restore checks every dimension of the maps it is handed."""
+    b = _blocks()
+    arrival = _cfdcore.ArrivalMaps2(b["grid"], b["thresholds"], [0.0], b["channels"])
+    with pytest.raises(TypeError, match=r"ArrivalMaps2\.restore: first_above is not"):
+        arrival.restore(MAPS_SHAPES[shape](b["maps"]), 0.5)
 
 
 def test_march_binding_imports_nothing_from_src(

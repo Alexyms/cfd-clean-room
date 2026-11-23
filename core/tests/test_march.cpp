@@ -12,6 +12,8 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <array>
 #include <bit>
 #include <cmath>
 #include <cstddef>
@@ -188,11 +190,15 @@ std::vector<cfdcore::transport::class_physics> physics() {
 }
 
 // The rows of n steps of a run, held so their spans stay valid.
+//
+// With a fill, every value starts as it, so a row a march did not write shows.
 struct row_store {
-    row_store(std::size_t n, std::size_t classes, std::size_t sensors)
-        : step(n), t(n), budgets(n * classes * cfdcore::march::budget_terms),
-          readings(n * classes * sensors), channels(n * classes * sensors), means(n * classes),
-          sweeps(n * classes), converged(n * classes) {}
+    row_store(std::size_t n, std::size_t classes, std::size_t sensors, double fill = 0.0)
+        : step(n, static_cast<std::int64_t>(fill)), t(n, fill),
+          budgets(n * classes * cfdcore::march::budget_terms, fill),
+          readings(n * classes * sensors, fill), channels(n * classes * sensors, fill),
+          means(n * classes, fill), sweeps(n * classes, static_cast<std::int64_t>(fill)),
+          converged(n * classes, static_cast<std::uint8_t>(fill)) {}
     rows view() {
         return {step, t, budgets, readings, channels, means, sweeps, converged};
     }
@@ -462,6 +468,72 @@ TEST(Recovery, ProgrammingErrorsThrow) {
     EXPECT_THROW(r.restore(one, one, one, one, 0.0, 0.0), std::invalid_argument);
 }
 
+TEST(Recovery, WithinSpecIsEverySensorBelowItsChannelsThreshold) {
+    const box b(8, 6, 0.25);
+    const cfdcore::grid::grid<2> g(b.grid_input());
+    // Two channels, three sensors; the classes' own readings stay below their
+    // thresholds throughout, so only a channel's reading can leave spec.
+    cfdcore::recovery::tracker<2> r(g, {{2.0, 1.0}, {0.5, 0.5}, {true, true}, std::nullopt}, 3);
+    const std::vector<double> sum(2 * b.cells(), 0.0);
+    const std::vector<double> means = {1.0, 1.0};
+    const std::vector<double> low(6, 0.1);
+    double t = 0.25;
+    r.update(t, sum, low, low, means);
+    EXPECT_EQ(r.class_since()[0], t);
+    EXPECT_EQ(r.class_since()[1], t);
+    EXPECT_EQ(r.room_since(), t);
+    const std::array<double, 2> thresholds = {2.0, 1.0};
+    for (std::size_t k = 0; k < 2; ++k) {
+        for (std::size_t m = 0; m < 3; ++m) {
+            // One sensor, the one channel, exactly at its threshold: not within spec,
+            // whichever sensor it is and whatever the other channel reads.
+            std::vector<double> channels = low;
+            channels[k * 3 + m] = thresholds[k];
+            t += 0.25;
+            r.update(t, sum, low, channels, means);
+            EXPECT_TRUE(std::isnan(r.class_since()[k])) << "channel " << k << " sensor " << m;
+            EXPECT_FALSE(std::isnan(r.class_since()[1 - k]));
+            EXPECT_TRUE(std::isnan(r.room_since())) << "the room needs every channel within";
+            // Back below: a new stretch for that channel alone, the room's with it.
+            t += 0.25;
+            r.update(t, sum, low, low, means);
+            EXPECT_EQ(r.class_since()[k], t);
+            EXPECT_EQ(r.room_since(), t);
+        }
+    }
+}
+
+TEST(Recovery, ARestoreCopiesEveryStartAndTimeToItsOwnArray) {
+    const box b(8, 6, 0.25);
+    const cfdcore::grid::grid<2> g(b.grid_input());
+    const cfdcore::recovery::keys k = {{2.0, 1.0}, {0.5, 0.5}, {true, true}, 0.5};
+    cfdcore::recovery::tracker<2> r(g, k, 2);
+    const std::vector<double> sum(2 * b.cells(), 0.0);
+    // The classes are within spec from the first update, the sensors reach their
+    // targets at the second and the means at the third: three different times.
+    const std::vector<double> high = {0.9, 0.9, 0.9, 0.9};
+    const std::vector<double> low = {0.1, 0.1, 0.1, 0.1};
+    const std::vector<double> inside = {0.4, 0.4};
+    const std::vector<double> outside = {1.0, 1.0};
+    r.update(0.25, sum, high, high, outside);
+    r.update(0.5, sum, low, low, outside);
+    r.update(0.75, sum, low, low, inside);
+    EXPECT_EQ(r.class_since()[0], 0.25);
+    EXPECT_EQ(r.sensor_time()[0], 0.5);
+    EXPECT_EQ(r.mean_time()[0], 0.75);
+    EXPECT_EQ(r.room_since(), 0.25);
+    cfdcore::recovery::tracker<2> again(g, k, 2);
+    again.restore(r.last_above(), r.sensor_time(), r.mean_time(), r.class_since(), r.room_since(),
+                  r.time());
+    EXPECT_TRUE(same_bits(again.last_above(), r.last_above()));
+    EXPECT_TRUE(same_bits(again.sensor_time(), r.sensor_time()));
+    EXPECT_TRUE(same_bits(again.mean_time(), r.mean_time()));
+    EXPECT_TRUE(same_bits(again.class_since(), r.class_since()));
+    EXPECT_EQ(bits(again.room_since()), bits(r.room_since()));
+    EXPECT_EQ(bits(again.time()), bits(r.time()));
+    EXPECT_EQ(again.held(), r.held());
+}
+
 // --- march ------------------------------------------------------------------
 
 struct world {
@@ -470,7 +542,9 @@ struct world {
           maps(2 * 3 * b.cells(), nan), cells(3 * b.cells(), nan), sensor_nan(9, nan),
           class_nan(3, nan) {}
 
-    std::unique_ptr<run<2>> make(bool with_recovery, std::optional<double> hold = std::nullopt) {
+    std::unique_ptr<run<2>> make(bool with_recovery, std::optional<double> hold = std::nullopt,
+                                 const cfdcore::transport::settings& transport_keys = keys(),
+                                 std::vector<cfdcore::transport::class_physics> classes = physics()) {
         std::optional<cfdcore::recovery::keys> rec;
         if (with_recovery) {
             // Targets inside the planted fields' range, so some sensors reach theirs
@@ -478,7 +552,8 @@ struct world {
             rec = cfdcore::recovery::keys{
                 {3.0, 2.0, 1.0}, {1.5e3, 1.5e3, 1.5e3}, {true, true, false}, hold};
         }
-        auto r = std::make_unique<run<2>>(s, b.spacing(), keys(), physics(), setup(b, rec));
+        auto r = std::make_unique<run<2>>(s, b.spacing(), transport_keys, std::move(classes),
+                                          setup(b, rec));
         r->restore(fresh(fields, 3, maps, with_recovery ? &cells : nullptr, &sensor_nan,
                          &class_nan));
         return r;
@@ -510,6 +585,7 @@ void expect_same_state(const run<2>& a, const run<2>& b) {
         ASSERT_NE(b.tracker(), nullptr);
         EXPECT_TRUE(same_bits(a.tracker()->last_above(), b.tracker()->last_above()));
         EXPECT_TRUE(same_bits(a.tracker()->class_since(), b.tracker()->class_since()));
+        EXPECT_TRUE(same_bits(a.tracker()->mean_time(), b.tracker()->mean_time()));
         EXPECT_TRUE(same_bits(a.tracker()->sensor_time(), b.tracker()->sensor_time()));
         EXPECT_EQ(bits(a.tracker()->room_since()), bits(b.tracker()->room_since()));
     }
@@ -680,6 +756,226 @@ TEST(March, ProgrammingErrorsThrow) {
     auto setup_bad = setup(w.b, std::nullopt);
     setup_bad.sensors.push_back(w.b.cells());
     EXPECT_THROW(run<2>(w.s, w.b.spacing(), keys(), physics(), setup_bad), std::invalid_argument);
+}
+
+
+
+// --- the march's stops on a breach and a refusal ------------------------------
+
+// A value no march writes: a row that still holds it was not written.
+constexpr double untouched = 77.0;
+
+// Keys that stop every step's solve at its cap of two sweeps, with a share of the
+// limit so small that no step's bound is met: each class's accumulated leftover is
+// then the same whatever the limit, so a limit can be chosen to breach at a place.
+cfdcore::transport::settings capped(double limit) {
+    auto s = keys();
+    s.max_sweeps = 2;
+    s.share = 1e-300;
+    s.limit = limit;
+    return s;
+}
+
+// Class 1 the most diffusive, so its accumulated leftover over its supply is the
+// largest of the three and a breach can fall on a class other than the first.
+std::vector<cfdcore::transport::class_physics> diffusive_middle() {
+    return {{1e-5, 1e-7}, {1e-4, 1e-5}, {1e-3, 1e-6}};
+}
+
+// The terms of class k's budget in row r of a march's rows.
+const double* terms_of(const row_store& rows, std::size_t r, std::size_t k) {
+    return rows.budgets.data() + (r * 3 + k) * cfdcore::march::budget_terms;
+}
+
+// The supply a step's breach test reads: initial + inflow + source, left to right.
+double supplied_by(const double* terms) { return terms[0] + terms[1] + terms[3]; }
+
+// A march whose breach is placed at class `which` of step `before` + 1: the run
+// stops there, returns the `before` rows ahead of it, and does not count the step.
+void expect_breach_after(std::size_t before, std::size_t which) {
+    constexpr std::size_t steps = 6;
+    world w;
+    const auto faces = std::vector{w.b.faces(), w.b.faces(), w.b.faces()};
+    // The same steps under a limit nothing reaches, for the numbers.
+    auto clean = w.make(false, std::nullopt, capped(1.0), diffusive_middle());
+    ASSERT_TRUE(clean->interval(faces, w.b.air(), w.interval(steps)).ok());
+    row_store reference(steps, 3, 3, untouched);
+    ASSERT_EQ(clean->march(steps, reference.view()).steps, steps);
+    // A limit between the largest ratio before the place and the place's own.
+    double earlier = 0.0;
+    for (std::size_t r = 0; r <= before; ++r) {
+        for (std::size_t k = 0; k < 3 && (r < before || k < which); ++k) {
+            const double* t = terms_of(reference, r, k);
+            earlier = std::max(earlier, std::fabs(t[9]) / supplied_by(t));
+        }
+    }
+    const double* at = terms_of(reference, before, which);
+    const double target = std::fabs(at[9]) / supplied_by(at);
+    ASSERT_GT(target, 1.2 * earlier) << "the place is not where the ratios first reach a limit";
+    const double limit = earlier == 0.0 ? 1e-300 : std::sqrt(earlier * target);
+
+    auto r = w.make(false, std::nullopt, capped(limit), diffusive_middle());
+    ASSERT_TRUE(r->interval(faces, w.b.air(), w.interval(steps)).ok());
+    row_store out(steps, 3, 3, untouched);
+    const auto done = r->march(steps, out.view());
+    EXPECT_EQ(done.reason, stop::breach);
+    EXPECT_EQ(done.steps, before);
+    EXPECT_EQ(done.refusal.code, cfdcore::transport::status::breach);
+    EXPECT_EQ(done.refusal.size_class, static_cast<int>(which));
+    // The error's two numbers are the class's budget at the step, as the clean run books them.
+    EXPECT_EQ(bits(done.record.accumulated), bits(at[9]));
+    EXPECT_EQ(bits(done.record.supplied), bits(supplied_by(at)));
+    EXPECT_NE(done.record.accumulated, done.record.supplied);
+    // The rows before the breach are the clean run's, bit for bit; the rest are not written.
+    for (std::size_t row = 0; row < steps; ++row) {
+        const bool written = row < before;
+        const auto same = [&](const auto& a, const auto& b, std::size_t per) {
+            return std::equal(a.begin() + row * per, a.begin() + (row + 1) * per,
+                              b.begin() + row * per);
+        };
+        EXPECT_EQ(same(out.step, reference.step, 1), written) << "row " << row;
+        EXPECT_EQ(same(out.t, reference.t, 1), written);
+        EXPECT_EQ(same(out.budgets, reference.budgets, 30), written);
+        EXPECT_EQ(same(out.readings, reference.readings, 9), written);
+        EXPECT_EQ(same(out.channels, reference.channels, 9), written);
+        EXPECT_EQ(same(out.sweeps, reference.sweeps, 3), written);
+        EXPECT_EQ(same(out.converged, reference.converged, 3), written);
+        if (!written) {
+            EXPECT_EQ(out.step[row], static_cast<std::int64_t>(untouched));
+            EXPECT_EQ(out.t[row], untouched);
+        }
+    }
+    // The step is not counted: the run's step and time are the last counted step's.
+    EXPECT_EQ(r->step(), static_cast<std::int64_t>(before));
+    EXPECT_EQ(bits(r->time()), bits(before == 0 ? 0.0 : reference.t[before - 1]));
+    // The step itself stays half taken (march.hpp): classes up to the failing one
+    // have booked it, the ones after it have not.
+    for (std::size_t k = 0; k < 3; ++k) {
+        if (before == 0 && k > which) {
+            EXPECT_FALSE(r->budget_of(k).initial.has_value());
+            continue;
+        }
+        const std::size_t row = k <= which ? before : before - 1;
+        EXPECT_EQ(bits(r->budget_of(k).leftover), bits(terms_of(reference, row, k)[9]));
+        EXPECT_EQ(bits(*r->budget_of(k).current), bits(terms_of(reference, row, k)[8]));
+    }
+
+    // A restore makes the run one at a step boundary again: from the clean run's
+    // state after the same steps it breaches at the same place with the same numbers.
+    auto mid_run = w.make(false, std::nullopt, capped(1.0), diffusive_middle());
+    ASSERT_TRUE(mid_run->interval(faces, w.b.air(), w.interval(steps)).ok());
+    row_store mid_rows(steps, 3, 3);
+    if (before > 0) {
+        ASSERT_EQ(mid_run->march(before, mid_rows.view()).steps, before);
+    }
+    const snapshot mid(*mid_run);
+    r->restore(mid.view());
+    const auto first = static_cast<std::int64_t>(before);
+    ASSERT_TRUE(r->interval(faces, w.b.air(), w.interval(steps, 0.0, first)).ok());
+    row_store again(steps, 3, 3, untouched);
+    const auto second = r->march(steps - before, again.view());
+    EXPECT_EQ(second.reason, stop::breach);
+    EXPECT_EQ(second.steps, 0u);
+    EXPECT_EQ(second.refusal.size_class, static_cast<int>(which));
+    EXPECT_EQ(bits(second.record.accumulated), bits(done.record.accumulated));
+    EXPECT_EQ(bits(second.record.supplied), bits(done.record.supplied));
+    EXPECT_EQ(r->step(), first);
+}
+
+TEST(March, ABreachBeforeAnyStepReturnsNoRowsAndCountsNoStep) {
+    ASSERT_NO_FATAL_FAILURE(expect_breach_after(0, 0));
+}
+
+TEST(March, ABreachAfterStepsReturnsTheRowsBeforeItAndNotItsStep) {
+    ASSERT_NO_FATAL_FAILURE(expect_breach_after(2, 1));
+}
+
+TEST(March, ANonFiniteFieldIsRefusedAtItsClassWithTheClassesBeforeItAdvanced) {
+    world w;
+    // A NaN in a fluid cell of class 2: the first two classes step before it is read.
+    const std::size_t fluid = w.b.nx + 1;
+    ASSERT_EQ(w.b.types[fluid], fluid_type);
+    w.fields[2 * w.b.cells() + fluid] = nan;
+    auto r = w.make(false);
+    ASSERT_TRUE(
+        r->interval({w.b.faces(), w.b.faces(), w.b.faces()}, w.b.air(), w.interval(3)).ok());
+    row_store out(3, 3, 3, untouched);
+    const auto done = r->march(3, out.view());
+    EXPECT_EQ(done.reason, stop::refused);
+    EXPECT_EQ(done.steps, 0u);
+    EXPECT_EQ(done.refusal.code, cfdcore::transport::status::field_not_finite);
+    EXPECT_EQ(done.refusal.size_class, 2);
+    EXPECT_EQ(r->step(), 0);
+    EXPECT_EQ(bits(r->time()), bits(0.0));
+    for (const double t : out.t) {
+        EXPECT_EQ(t, untouched);
+    }
+    // Classes 0 and 1 booked the step, class 2 booked nothing (nothing is booked
+    // before the field is read).
+    EXPECT_TRUE(r->budget_of(0).current.has_value());
+    EXPECT_TRUE(r->budget_of(1).current.has_value());
+    EXPECT_FALSE(r->budget_of(2).initial.has_value());
+    EXPECT_TRUE(std::isnan(r->field(2)[fluid]));
+}
+
+TEST(March, AStepAboveTheStableStepIsRefusedAtTheFirstClass) {
+    world w;
+    auto r = w.make(false);
+    // A step of a second, far above any class's stable step on this box.
+    const plan p{0.0, 3.0, 1.0, 3, 0};
+    ASSERT_TRUE(r->interval({w.b.faces(), w.b.faces(), w.b.faces()}, w.b.air(), p).ok());
+    row_store out(3, 3, 3, untouched);
+    const auto done = r->march(3, out.view());
+    EXPECT_EQ(done.reason, stop::refused);
+    EXPECT_EQ(done.steps, 0u);
+    EXPECT_EQ(done.refusal.code, cfdcore::transport::status::dt_above_stable);
+    EXPECT_EQ(done.refusal.size_class, 0);
+    EXPECT_EQ(done.refusal.value, 1.0);
+    EXPECT_EQ(r->step(), 0);
+    EXPECT_EQ(out.step[0], static_cast<std::int64_t>(untouched));
+    EXPECT_FALSE(r->budget_of(0).initial.has_value());
+}
+
+TEST(March, ARunRestoredInsideItsWithinSpecStretchKeepsItsStartsAndTimes) {
+    world w;
+    // Every reading far below its threshold from the first update: the room is
+    // within spec from step 1 (time dt), and the defined classes' means and
+    // sensors are at their targets at once.
+    for (double& x : w.fields) {
+        x *= 1e-6;
+    }
+    const double dt = 1.0 / 64.0;
+    const auto faces = std::vector{w.b.faces(), w.b.faces(), w.b.faces()};
+    auto a = w.make(true, 6.0 * dt);
+    ASSERT_TRUE(a->interval(faces, w.b.air(), w.interval(9)).ok());
+    row_store out(9, 3, 3);
+    ASSERT_EQ(a->march(4, out.view()).steps, 4u);
+    const snapshot mid(*a);
+    // What the state handed over holds, which a restore that dropped or mixed up
+    // an array would lose: the room's start and the classes' (neither is 0.0 or
+    // NaN), the means' times (NaN for the class whose target is not defined, so
+    // that they are not the classes' starts) and the sensors'.
+    EXPECT_EQ(mid.room_since, dt);
+    for (std::size_t k = 0; k < 3; ++k) {
+        EXPECT_EQ(mid.class_since[k], dt);
+        EXPECT_EQ(mid.mean_time[k] == mid.mean_time[k], k < 2);
+        for (std::size_t m = 0; m < 3; ++m) {
+            EXPECT_EQ(mid.sensor_time[k * 3 + m] == mid.sensor_time[k * 3 + m], k < 2);
+        }
+    }
+    // Uninterrupted, the stretch dt to 7 dt is the hold (6 dt) at step 7.
+    const auto whole = a->march(5, out.view());
+    EXPECT_EQ(whole.reason, stop::held);
+    EXPECT_EQ(whole.steps, 3u);
+    EXPECT_EQ(a->step(), 7);
+
+    auto b = w.make(true, 6.0 * dt);
+    b->restore(mid.view());
+    ASSERT_TRUE(b->interval(faces, w.b.air(), w.interval(9, 0.0, 4)).ok());
+    const auto rest = b->march(5, out.view());
+    EXPECT_EQ(rest.reason, stop::held);
+    EXPECT_EQ(rest.steps, 3u);
+    expect_same_state(*a, *b);
 }
 
 }  // namespace
