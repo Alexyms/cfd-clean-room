@@ -72,6 +72,12 @@ The twelve questions at the end of the report (`docs/reports/phase6_design.md`),
 4. **Written per direction.** The core's grid, fields and stencils take the number of directions
    as a parameter, so the true 3D model reuses the arithmetic; only 2D is implemented and tested
    now. No 3D feature is built early.
+   *Alex, 2026-11-23 (prompt 92b):* the momentum module, which step 4a built for two directions
+   only because its stencil has one transverse direction, takes the number of directions as a
+   parameter too, so that it is ready to generalise to the true 3D model, where each component has
+   two. What needs a pair of directions is written per ordered pair of a component and a transverse
+   direction (`docs/reports/phase6_momentum.md`, section 7, with what the 3D model would add and
+   where).
 5. **Precision.** The CPU core is double precision throughout. In the CUDA step single precision
    may be used stage by stage where a measurement shows it pays, the advective flux and its
    limiter first, with running totals, residuals, stopping tests and the particle budget kept in

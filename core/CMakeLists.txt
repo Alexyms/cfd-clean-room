@@ -55,6 +55,7 @@ add_library(cfdcore STATIC
     src/grid.cpp
     src/layout.cpp
     src/march.cpp
+    src/momentum.cpp
     src/recovery.cpp
     src/reduce.cpp
     src/scalar.cpp
@@ -80,6 +81,7 @@ if(CFD_CORE_TESTS)
         tests/test_grid.cpp
         tests/test_lanes.cpp
         tests/test_march.cpp
+        tests/test_momentum.cpp
         tests/test_reduce.cpp
         tests/test_scalar.cpp
         tests/test_transport.cpp)
