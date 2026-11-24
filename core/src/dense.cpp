@@ -79,10 +79,11 @@ semidefinite::semidefinite(std::size_t n)
     : n_(n), work_(n * n, 0.0), factor_(n * n, 0.0), values_(n, 0.0), order_(n, 0) {}
 
 // Cholesky with the largest remaining diagonal as each step's pivot:
-// A = sum over k of factor_k factor_k^T, the rows of `factor_` as long as the
-// pivots stand clear of the rounding of the diagonal they are taken from. The
-// remainder that rounding leaves is no larger than that, below any eigenvalue
-// the pseudo-inverse's cutoff keeps.
+// A = sum over k of factor_k^T factor_k, with factor_k the rows of `factor_`, for
+// as long as the pivots stand clear of the rounding of the largest diagonal. What
+// is left then is that rounding's, and so is whether a cutoff would keep it: an
+// eigenvalue the pseudo-inverse's keeps (above 1e-15 of the largest) is several
+// times the pivot the factor stops at.
 void semidefinite::factorise(std::span<const double> matrix) {
     const std::size_t n = n_;
     for (std::size_t i = 0; i < n; ++i) {

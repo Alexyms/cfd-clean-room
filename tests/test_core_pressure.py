@@ -780,6 +780,70 @@ def test_the_loop_is_the_references_bit_for_bit_given_the_cores_parts(
             )
 
 
+@pytest.mark.parametrize("preconditioner", [PRESSURE_JACOBI, MULTIGRID])
+def test_the_stop_is_read_at_its_boundary(preconditioner: str) -> None:
+    """A floor at each iteration's own residual norm, and one place either side of it.
+
+    The norm is the square root of the core's dot product of the recursion's
+    residual, so the stop holds at it exactly (it is inclusive) and a norm in
+    another order of summation, a place away, would stop at another count.
+    """
+    rng = np.random.default_rng([SEED, 10, len(preconditioner)])
+    for opened in (False, True):
+        room = _small_room(14, 37, rng, opened)
+        inputs = _planted(room, rng)
+        c, five = _system(room, inputs)
+        f = _handed(room, inputs)
+        precondition = _core_preconditioner(five, preconditioner, not opened)
+        norms: list[float] = []
+
+        class Norms:
+            """Keeps every norm the loop takes; its dot product is the core's."""
+
+            vdot = staticmethod(_cfdcore.row_dot)
+
+            def sqrt(self, x: float, kept: list[float] = norms) -> float:
+                kept.append(float(np.sqrt(x)))
+                return kept[-1]
+
+            def __getattr__(self, name: str) -> object:
+                return getattr(np, name)
+
+        def solve(
+            floor: float,
+            names: object,
+            c: PressureCoefficients = c,
+            f: np.ndarray = f,
+            precondition: Callable[[np.ndarray], np.ndarray] = precondition,
+        ) -> pressure.ConjugateGradientResult:
+            with pytest.MonkeyPatch.context() as patch:
+                patch.setattr(pressure, "np", names)
+                return pressure.conjugate_gradient(
+                    lambda x: pressure.apply_operator(c, x),
+                    precondition,
+                    f,
+                    0.0,
+                    floor,
+                    25,
+                )
+
+        solve(0.0, Norms())
+        # The first norm is the right-hand side's; the rest are the iterations'.
+        read = norms[1:21]
+        stops = set()
+        for norm in read:
+            for floor in (np.nextafter(norm, 0.0), norm, np.nextafter(norm, np.inf)):
+                expected = solve(float(floor), Norms())
+                got = _cfdcore.pressure_cg(
+                    *five, f, 0.0, float(floor), 25, preconditioner, not opened, LEVELS
+                )
+                assert _differ(expected.x, got["x"]) == 0
+                counts = (expected.iterations, expected.products)
+                assert counts == (got["iterations"], got["products"])
+                stops.add(expected.iterations)
+        assert len(stops) > 10
+
+
 def test_the_loops_cases_reach_a_restart_the_floor_and_the_cap() -> None:
     """The cases above restart, stop on the floor and stop at the cap, so they can tell."""
     rng = np.random.default_rng([SEED, 0, 5])

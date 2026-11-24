@@ -196,9 +196,9 @@ TEST(PseudoInverse, TheCutoffIsAgainstTheLargestAndExclusive) {
         EXPECT_NEAR(out[3] * small, 1.0, 1e-14) << small;
         EXPECT_NEAR(out[0], 0.125, 1e-16);
     }
-    for (const double small : {0x1.0p-50, 7.9e-15, 2.0e-15, 1.0e-18}) {
-        // With the cutoff's own power of two the smallest lands on it exactly.
-        const double cut = small == 0x1.0p-50 ? 0x1.0p-53 : rcond;
+    for (const double small : {0x1.0p-37, 7.9e-15, 2.0e-15, 1.0e-18}) {
+        // With a cutoff that is a power of two the smallest lands on it exactly.
+        const double cut = small == 0x1.0p-37 ? 0x1.0p-40 : rcond;
         ASSERT_EQ(eigen.pseudo_inverse(std::vector<double>{8.0, 0.0, 0.0, small}, cut, out),
                   eigen_status::ok);
         EXPECT_EQ(out[3], 0.0) << small;
@@ -539,7 +539,10 @@ TEST(MultigridHierarchy, RefusesASystemThatIsNotWeaklyDominant) {
         const layout<2> fields({nx, 5});
         system<2> s(fields);
         fill(s, 2, false);
-        hierarchy<2> h(fields, default_keys());
+        keys k = default_keys();
+        k.coarsest_cells = 10;
+        hierarchy<2> h(fields, k);
+        EXPECT_EQ(h.levels() == 1, nx == 2);
         ASSERT_EQ(h.build(s), build_status::ok);
         for (const std::size_t at : {std::size_t{0}, fields.cell_count() - 1, nx + 1}) {
             if (!(s.centre[at] > 0.0)) {

@@ -55,7 +55,8 @@ public:
     // `rcond` times the largest is inverted, the rest are dropped.
     //
     // matrix: as `decompose` reads it
-    // rcond:  the cutoff relative to the largest (`pinv`'s default is 1e-15)
+    // rcond:  the cutoff relative to the largest (`pinv`'s default is 1e-15). Below
+    //         the machine's epsilon it is as epsilon, where the factor stops
     // out:    output, n * n values, row-major, symmetric bit for bit; may be
     //         `matrix` itself. Not written after `not_converged`
     //

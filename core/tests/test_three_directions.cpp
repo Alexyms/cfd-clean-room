@@ -594,6 +594,36 @@ TEST(PressureThreeDirections, TheGalerkinOperatorIsTheTripleProduct) {
     }
 }
 
+// A face's area is the product of the widths along its two other directions.
+TEST(PressureThreeDirections, AFacesAreaIsTheProductOfItsWidths) {
+    const box3 b({5, 4, 3}, false);
+    const auto g = b.make_grid();
+    corrector<3> c(g, b.input());
+    c.assemble({b.diagonal[0], b.diagonal[1], b.diagonal[2]});
+    for (int d = 0; d < 3; ++d) {
+        auto counts = b.n;
+        ++counts[d];
+        const layout::layout<3> faces(counts);
+        std::size_t compared = 0;
+        for (std::size_t f = 0; f < faces.cell_count(); ++f) {
+            if (!(b.diagonal[d][f] > 0.0)) {
+                EXPECT_EQ(c.face_d(d)[f], 0.0);
+                continue;
+            }
+            double area = 1.0;
+            for (int t = 0; t < 3; ++t) {
+                if (t != d) {
+                    const std::size_t at = (f / faces.cell_stride(t)) % faces.cells(t);
+                    area *= b.axes[static_cast<std::size_t>(t)].widths[at];
+                }
+            }
+            EXPECT_NEAR(c.face_d(d)[f], area / b.diagonal[d][f], 1e-14);
+            ++compared;
+        }
+        EXPECT_GT(compared, 10u);
+    }
+}
+
 TEST(PressureThreeDirections, TheCycleIsSymmetric) {
     for (const auto& n : boxes) {
         const box3 b(n, true);
