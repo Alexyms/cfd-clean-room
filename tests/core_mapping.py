@@ -14,7 +14,9 @@ trackers, an interval handed over from the reference's plan and boundary, a
 step's budget row read as ``MassBudget`` objects, and the reference's trackers
 set from the core's maps and recovery fields (``ArrivalTracker.restore`` and
 ``RecoveryTracker.restore``, whose checks then read the core's state). Prompt 92
-adds the momentum predictor's construction.
+adds the momentum predictor's construction, and prompt 93 the pressure correction's:
+its construction, the multigrid's keys, its result as ``PressureCorrection`` and its
+breakdown as the error the reference's own arithmetic raises.
 """
 
 from collections.abc import Mapping, Sequence
@@ -30,9 +32,16 @@ from src.boundary_concentration import (
 )
 from src.boundary_staggered import StaggeredBoundary
 from src.config import UPWIND, SimConfig
-from src.mesh import SOLID, Mesh
+from src.mesh import FLUID, SOLID, Mesh
 from src.monitor import COUNTING_STATE, ArrivalTracker
+from src.multigrid import (
+    COARSEST_CELLS,
+    DOMINANCE_TOLERANCE,
+    SMOOTHER_FACTOR,
+    SMOOTHING_SWEEPS,
+)
 from src.particles import ParticlePhysics
+from src.pressure import RESIDUAL_FLOOR, PressureCorrection, PressureCorrector
 from src.solver_transport import DEPOSIT_SURFACES, ConservationBreachError, MassBudget
 from src.staggered import FaceVelocities
 from src.time_integration import (
@@ -560,3 +569,97 @@ def momentum_predictor(
         vents.normal_u if vents.any else None,
         vents.normal_v if vents.any else None,
     )
+
+
+# np.linalg.pinv's default cutoff, relative to the largest eigenvalue's magnitude.
+PINV_RCOND = 1e-15
+
+# The keys of the core's multigrid, from the reference's constants: the coarsest
+# level's cells, the sweeps, their weight, the dominance test's tolerance and the
+# pseudo-inverse's cutoff.
+MULTIGRID_LEVELS = (
+    COARSEST_CELLS,
+    SMOOTHING_SWEEPS,
+    SMOOTHER_FACTOR / 2.0,
+    DOMINANCE_TOLERANCE,
+    PINV_RCOND,
+)
+
+
+def pressure_corrector(
+    mesh: Mesh,
+    config: SimConfig,
+    boundary: StaggeredBoundary,
+    reference: PressureCorrector,
+) -> "_cfdcore.PressureCorrector2":
+    """The core's pressure correction from ``PressureCorrector``'s own arguments (prompt 93).
+
+    Parameters
+    ----------
+    mesh : Mesh
+        The mesh.
+    config : SimConfig
+        Supplies rho, alpha_pressure, pressure_rtol, max_pressure_iter and
+        pressure_preconditioner.
+    boundary : StaggeredBoundary
+        Supplies the pressure outlets.
+    reference : PressureCorrector
+        Supplies the flux scale, which the boundary's inflow makes and which
+        stays in Python (ADR-017 E).
+
+    Returns
+    -------
+    _cfdcore.PressureCorrector2
+        The corrector; its set-up is fixed, and its grid lives as long.
+    """
+    import _cfdcore
+
+    outlets = boundary.pressure_outlets()
+    return _cfdcore.PressureCorrector2(
+        _cfdcore.Grid2(mesh.x, mesh.xc, mesh.y, mesh.yc, mesh.cell_type, SOLID),
+        mesh.dx_cell,
+        mesh.dy_cell,
+        [outlets[edge].is_outlet for edge in ("left", "right", "bottom", "top")],
+        FLUID,
+        config.rho,
+        config.alpha_pressure,
+        config.pressure_rtol,
+        RESIDUAL_FLOOR * reference.flux_scale,
+        config.max_pressure_iter,
+        config.pressure_preconditioner,
+        MULTIGRID_LEVELS,
+    )
+
+
+def correction_from(
+    core: Mapping[str, np.ndarray | int | bool | float],
+) -> PressureCorrection:
+    """A correction of the core's, by name, as the reference's ``PressureCorrection``."""
+    return PressureCorrection(
+        u=core["u"],
+        v=core["v"],
+        p=core["p"],
+        p_prime=core["p_prime"],
+        iterations=core["iterations"],
+        reached_cap=core["reached_cap"],
+        products=core["products"],
+    )
+
+
+def breakdown_error(breakdown: "_cfdcore.PressureBreakdown") -> Exception:
+    """The error the reference's arithmetic raises where a core solve broke down.
+
+    Parameters
+    ----------
+    breakdown : _cfdcore.PressureBreakdown
+        What the core raised.
+
+    Returns
+    -------
+    Exception
+        A ZeroDivisionError, which Python's float division raises, or the
+        LinAlgError of an eigenproblem that does not converge.
+    """
+    if breakdown.reason == "division_by_zero":
+        return ZeroDivisionError("division by zero in the conjugate gradients")
+    return np.linalg.LinAlgError("Eigenvalues did not converge")

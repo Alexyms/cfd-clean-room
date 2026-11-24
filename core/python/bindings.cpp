@@ -15,9 +15,12 @@
 
 #include "cfdcore/arrival.hpp"
 #include "cfdcore/channels.hpp"
+#include "cfdcore/dense.hpp"
 #include "cfdcore/grid.hpp"
 #include "cfdcore/march.hpp"
 #include "cfdcore/momentum.hpp"
+#include "cfdcore/multigrid.hpp"
+#include "cfdcore/pressure.hpp"
 #include "cfdcore/recovery.hpp"
 #include "cfdcore/reduce.hpp"
 #include "cfdcore/scalar.hpp"
@@ -30,6 +33,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <exception>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <span>
@@ -1863,6 +1867,573 @@ nb::object momentum_fixed(const Predictor2& m, const std::string& name, int comp
     refuse_value("MomentumPredictor2.fixed: no quantity is named " + name);
 }
 
+// --- The pressure correction ------------------------------------------------
+
+using Corrector2 = cfdcore::pressure::corrector<2>;
+using System2 = cfdcore::multigrid::system<2>;
+using Hierarchy2 = cfdcore::multigrid::hierarchy<2>;
+using Layout2 = cfdcore::layout::layout<2>;
+using cfdcore::pressure::preconditioner;
+using cfdcore::pressure::solve_keys;
+using cfdcore::pressure::solve_result;
+using cfdcore::pressure::solve_status;
+using NewArray = nb::ndarray<nb::numpy, double>;
+
+// A pressure solve that ended where the reference's own arithmetic raises: a
+// coarsest level whose eigenvalues do not converge (LAPACK's error) or a
+// division by zero in the conjugate gradients. The module raises it as
+// `_cfdcore.PressureBreakdown`, which the Python side maps.
+struct pressure_breakdown : std::exception {
+    pressure_breakdown(const char* why, std::int64_t done) : reason(why), iterations(done) {}
+    const char* what() const noexcept override { return reason; }
+    const char* reason;
+    std::int64_t iterations;
+};
+
+void translate_breakdown(const std::exception_ptr& pending, void* payload) {
+    try {
+        std::rethrow_exception(pending);
+    } catch (const pressure_breakdown& breakdown) {
+        const nb::object type = nb::borrow(static_cast<PyObject*>(payload));
+        nb::object error = type((std::string("the pressure solve ended: ") + breakdown.reason +
+                                 " after " + std::to_string(breakdown.iterations) + " iterations")
+                                    .c_str());
+        error.attr("reason") = breakdown.reason;
+        error.attr("iterations") = breakdown.iterations;
+        PyErr_SetObject(type.ptr(), error.ptr());
+    }
+}
+
+constexpr const char* not_dominant_message =
+    "the finest system is not weakly diagonally dominant: a diagonal is below the sum of its "
+    "couplings";
+
+void require_solved(solve_status status, std::int64_t iterations) {
+    switch (status) {
+        case solve_status::ok:
+            return;
+        case solve_status::not_dominant:
+            throw nb::value_error(not_dominant_message);
+        case solve_status::not_converged:
+            throw pressure_breakdown("not_converged", iterations);
+        case solve_status::division_by_zero:
+            throw pressure_breakdown("division_by_zero", iterations);
+    }
+}
+
+preconditioner read_preconditioner(nb::handle value) {
+    std::string name;
+    if (nb::try_cast<std::string>(value, name)) {
+        if (name == "jacobi") {
+            return preconditioner::jacobi;
+        }
+        if (name == "multigrid") {
+            return preconditioner::multigrid;
+        }
+    }
+    refuse_value("preconditioner must be 'jacobi' or 'multigrid', got " +
+                 nb::cast<std::string>(nb::repr(value)));
+}
+
+// The multigrid's keys: (coarsest_cells, sweeps, weight, dominance_tolerance, rcond).
+cfdcore::multigrid::keys read_levels(nb::handle levels) {
+    if (nb::len(levels) != 5) {
+        refuse_type("levels is not (coarsest_cells, sweeps, weight, dominance_tolerance, rcond)");
+    }
+    cfdcore::multigrid::keys k;
+    k.coarsest_cells = read_count(levels[0], "coarsest_cells");
+    k.sweeps = read_count(levels[1], "sweeps");
+    k.weight = read_number(levels[2], "weight");
+    k.dominance_tolerance = read_number(levels[3], "dominance_tolerance");
+    k.rcond = read_number(levels[4], "rcond");
+    return k;
+}
+
+// The conjugate gradients' numbers, refused as `_check_solve_arguments` refuses
+// them: a number is a Python int or float (np.float64 is one), a bool is not.
+void read_solve_arguments(nb::handle rtol, nb::handle floor, nb::handle max_iter, solve_keys& k) {
+    const auto number = [](nb::handle value) {
+        return !PyBool_Check(value.ptr()) &&
+               (PyLong_Check(value.ptr()) || PyFloat_Check(value.ptr()));
+    };
+    const auto text = [](nb::handle value) { return nb::cast<std::string>(nb::repr(value)); };
+    // An int too large for a double is above rtol's range, as Python compares it,
+    // and an OverflowError as floor, which the reference asks `math.isfinite` of.
+    const auto as_double = [](nb::handle value, bool overflows) {
+        const double x = PyFloat_AsDouble(value.ptr());
+        if (x == -1.0 && PyErr_Occurred() != nullptr) {
+            if (overflows) {
+                throw nb::python_error();
+            }
+            PyErr_Clear();
+            return std::numeric_limits<double>::infinity();
+        }
+        return x;
+    };
+    k.rtol = number(rtol) ? as_double(rtol, false) : -1.0;
+    if (!(k.rtol >= 0.0 && k.rtol < 1.0)) {
+        refuse_value("rtol must be a number in [0, 1), got " + text(rtol));
+    }
+    k.floor = number(floor) ? as_double(floor, true) : -1.0;
+    if (!(std::isfinite(k.floor) && k.floor >= 0.0)) {
+        refuse_value("floor must be a finite number of at least 0, got " + text(floor));
+    }
+    int overflow = 0;
+    k.max_iter = PyLong_Check(max_iter.ptr()) && !PyBool_Check(max_iter.ptr())
+                     ? PyLong_AsLongLongAndOverflow(max_iter.ptr(), &overflow)
+                     : 0;
+    if (overflow > 0) {
+        // A cap beyond 64 bits is one no solve reaches.
+        k.max_iter = std::numeric_limits<std::int64_t>::max();
+    }
+    if (k.max_iter < 1) {
+        refuse_value("max_iter must be a positive integer, got " + text(max_iter));
+    }
+}
+
+// The five coefficient arrays of a system, refused as `Multigrid` refuses them:
+// the diagonal, then the couplings toward east, west, north and south.
+struct FivePoint {
+    explicit FivePoint(const std::array<const Array*, 5>& arrays)
+        : fields(checked(arrays)), system(fields) {
+        const std::array<std::vector<double>*, 5> to{&system.centre, &system.high[0],
+                                                     &system.low[0], &system.high[1],
+                                                     &system.low[1]};
+        for (std::size_t a = 0; a < to.size(); ++a) {
+            const auto from = span_of_array(*arrays[a]);
+            std::copy(from.begin(), from.end(), to[a]->begin());
+        }
+        zeros.assign(fields.cells(0), 0.0);
+    }
+    // The system points at the layout beside it.
+    FivePoint(const FivePoint&) = delete;
+    FivePoint& operator=(const FivePoint&) = delete;
+    static Layout2 checked(const std::array<const Array*, 5>& arrays) {
+        bool same = arrays[0]->ndim() == 2;
+        for (const Array* a : arrays) {
+            same = same && has_shape(*a, {arrays[0]->shape(0), arrays[0]->shape(1)});
+        }
+        if (!same) {
+            std::string shapes;
+            for (const Array* a : arrays) {
+                shapes += (shapes.empty() ? "" : ", ") + shape_text(*a);
+            }
+            refuse_value("expected five two-dimensional coefficient arrays of one shape, got [" +
+                         shapes + "]");
+        }
+        for (const Array* a : arrays) {
+            require_aligned(a->data(), alignof(double), "five-point system");
+        }
+        if (arrays[0]->size() == 0) {
+            refuse_value("a system has at least one cell");
+        }
+        return Layout2({arrays[0]->shape(1), arrays[0]->shape(0)});
+    }
+    std::vector<std::size_t> shape() const { return {fields.cells(1), fields.cells(0)}; }
+    Layout2 fields;
+    System2 system;
+    std::vector<double> zeros;
+};
+
+std::span<double> out_span(NewArray& a) { return std::span<double>(a.data(), a.size()); }
+
+NewArray new_field(const Layout2& fields) { return new_matrix({fields.cells(1), fields.cells(0)}); }
+
+// A field argument of a layout's shape.
+std::span<const double> read_field(const Array& a, const Layout2& fields, const char* name) {
+    if (!has_shape(a, {fields.cells(1), fields.cells(0)})) {
+        refuse_value(std::string("expected ") + name + " of shape " +
+                     shape_text({fields.cells(1), fields.cells(0)}) + ", got " + shape_text(a));
+    }
+    require_aligned(a.data(), alignof(double), name);
+    return span_of_array(a);
+}
+
+nb::dict system_arrays(const System2& s) {
+    const std::vector<std::size_t> shape{s.fields->cells(1), s.fields->cells(0)};
+    nb::dict out;
+    const auto field = [&](const std::vector<double>& v) {
+        return shaped_copy<double>(std::span<const double>(v), shape);
+    };
+    out["a_p"] = field(s.centre);
+    out["a_e"] = field(s.high[0]);
+    out["a_w"] = field(s.low[0]);
+    out["a_n"] = field(s.high[1]);
+    out["a_s"] = field(s.low[1]);
+    return out;
+}
+
+// A hierarchy with the finest system it was built from.
+struct Multigrid2 {
+    Multigrid2(const std::array<const Array*, 5>& arrays, const cfdcore::multigrid::keys& k)
+        : finest(arrays), hierarchy(finest.fields, k) {
+        switch (hierarchy.build(finest.system)) {
+            case cfdcore::multigrid::build_status::not_dominant:
+                throw nb::value_error(not_dominant_message);
+            case cfdcore::multigrid::build_status::not_converged:
+                throw pressure_breakdown("not_converged", 0);
+            case cfdcore::multigrid::build_status::ok:
+                break;
+        }
+    }
+    FivePoint finest;
+    Hierarchy2 hierarchy;
+};
+
+nb::list multigrid_levels(const Multigrid2& m) {
+    nb::list out;
+    for (std::size_t l = 0; l < m.hierarchy.levels(); ++l) {
+        const System2& s = m.hierarchy.level_system(l);
+        nb::dict level = system_arrays(s);
+        // The coarsest level is solved: it has no smoother.
+        level["smoother"] = m.hierarchy.smoother(l).empty()
+                                ? nb::none()
+                                : nb::cast(shaped_copy<double>(
+                                      m.hierarchy.smoother(l),
+                                      {s.fields->cells(1), s.fields->cells(0)}));
+        out.append(level);
+    }
+    return out;
+}
+
+nb::object square(std::span<const double> values) {
+    const auto n = static_cast<std::size_t>(std::llround(std::sqrt(values.size())));
+    return nb::cast(shaped_copy<double>(values, {n, n}));
+}
+
+NewArray five_point_apply(const Array& a_p, const Array& a_e, const Array& a_w, const Array& a_n,
+                          const Array& a_s, const Array& x) {
+    const FivePoint s({&a_p, &a_e, &a_w, &a_n, &a_s});
+    const auto field = read_field(x, s.fields, "x");
+    NewArray out = new_field(s.fields);
+    cfdcore::multigrid::apply_operator<2>(s.system, s.zeros, field, out_span(out));
+    return out;
+}
+
+NewArray five_point_smooth(const Array& a_p, const Array& a_e, const Array& a_w, const Array& a_n,
+                           const Array& a_s, const Array& smoother, const Array& x,
+                           const Array& r) {
+    const FivePoint s({&a_p, &a_e, &a_w, &a_n, &a_s});
+    const auto by = read_field(smoother, s.fields, "smoother");
+    const auto field = read_field(x, s.fields, "x");
+    const auto residual = read_field(r, s.fields, "r");
+    NewArray out = new_field(s.fields);
+    cfdcore::multigrid::smooth<2>(s.system, s.zeros, by, field, residual, out_span(out));
+    return out;
+}
+
+nb::dict five_point_coarsen(const Array& a_p, const Array& a_e, const Array& a_w, const Array& a_n,
+                            const Array& a_s) {
+    const FivePoint s({&a_p, &a_e, &a_w, &a_n, &a_s});
+    const Layout2 fields = cfdcore::multigrid::coarser(s.fields);
+    System2 out(fields);
+    cfdcore::multigrid::coarsen<2>(s.system, s.zeros, out);
+    return system_arrays(out);
+}
+
+NewArray restrict_field(const Matrix& r) {
+    require_aligned(r.data(), alignof(double), "restrict");
+    if (r.size() == 0) {
+        refuse_value("restrict: r has at least one value");
+    }
+    const Layout2 fine({r.shape(1), r.shape(0)});
+    const Layout2 coarse = cfdcore::multigrid::coarser(fine);
+    NewArray out = new_field(coarse);
+    cfdcore::multigrid::restrict_to<2>(fine, coarse, span_of(r), out_span(out));
+    return out;
+}
+
+void add_prolonged(OutMatrix& x, const Matrix& z) {
+    constexpr std::string_view who = "add_prolonged";
+    require_aligned(x.data(), alignof(double), who);
+    require_aligned(z.data(), alignof(double), who);
+    if (x.size() == 0) {
+        refuse_value("add_prolonged: x has at least one value");
+    }
+    const Layout2 fine({x.shape(1), x.shape(0)});
+    const Layout2 coarse = cfdcore::multigrid::coarser(fine);
+    require_shape(z, {coarse.cells(1), coarse.cells(0)}, who, "z");
+    require_apart(x.data(), x.size() * sizeof(double), z.data(), z.size() * sizeof(double), who);
+    cfdcore::multigrid::add_prolonged<2>(fine, coarse, span_of(z),
+                                         std::span<double>(x.data(), x.size()));
+}
+
+// A square matrix argument's side.
+std::size_t read_square(const Matrix& matrix, std::string_view who) {
+    require_aligned(matrix.data(), alignof(double), who);
+    if (matrix.shape(0) != matrix.shape(1)) {
+        refuse_type(std::string(who) + ": the matrix is not square");
+    }
+    return matrix.shape(0);
+}
+
+NewArray pseudo_inverse(const Matrix& matrix, nb::handle rcond) {
+    const std::size_t n = read_square(matrix, "pseudo_inverse");
+    cfdcore::dense::semidefinite eigen(n);
+    NewArray out = new_matrix({n, n});
+    if (eigen.pseudo_inverse(span_of(matrix), read_number(rcond, "rcond"), out_span(out)) !=
+        cfdcore::dense::eigen_status::ok) {
+        throw pressure_breakdown("not_converged", 0);
+    }
+    return out;
+}
+
+OutVector symmetric_eigenvalues(const Matrix& matrix) {
+    cfdcore::dense::semidefinite eigen(read_square(matrix, "symmetric_eigenvalues"));
+    if (eigen.decompose(span_of(matrix)) != cfdcore::dense::eigen_status::ok) {
+        throw pressure_breakdown("not_converged", 0);
+    }
+    return to_numpy(eigen.eigenvalues());
+}
+
+nb::dict solve_numbers(const solve_result& r) {
+    nb::dict out;
+    out["iterations"] = r.iterations;
+    out["reached_cap"] = r.reached_cap;
+    out["residual_norm"] = r.residual_norm;
+    out["products"] = r.products;
+    return out;
+}
+
+nb::dict five_point_cg(const Array& a_p, const Array& a_e, const Array& a_w, const Array& a_n,
+                       const Array& a_s, const Array& f, nb::handle rtol, nb::handle floor,
+                       nb::handle max_iter, nb::handle method, bool project, nb::handle levels) {
+    const FivePoint s({&a_p, &a_e, &a_w, &a_n, &a_s});
+    const auto right = read_field(f, s.fields, "f");
+    solve_keys k;
+    read_solve_arguments(rtol, floor, max_iter, k);
+    k.method = read_preconditioner(method);
+    std::vector<std::size_t> cells(project ? s.fields.cell_count() : 0);
+    if (project) {
+        k.project = cfdcore::pressure::cells_with_equation(s.system.centre, cells);
+    }
+    cfdcore::pressure::solver<2> solver(s.fields, k.method == preconditioner::multigrid,
+                                        read_levels(levels));
+    NewArray x = new_field(s.fields);
+    const solve_result result = solver.solve(s.system, right, k, out_span(x));
+    require_solved(result.status, result.iterations);
+    nb::dict out = solve_numbers(result);
+    out["x"] = x;
+    return out;
+}
+
+NewArray five_point_precondition(const Array& a_p, const Array& a_e, const Array& a_w,
+                                 const Array& a_n, const Array& a_s, const Array& r,
+                                 nb::handle method, bool project, nb::handle levels) {
+    const FivePoint s({&a_p, &a_e, &a_w, &a_n, &a_s});
+    const auto residual = read_field(r, s.fields, "r");
+    solve_keys k;
+    k.max_iter = 1;
+    k.method = read_preconditioner(method);
+    std::vector<std::size_t> cells(project ? s.fields.cell_count() : 0);
+    if (project) {
+        k.project = cfdcore::pressure::cells_with_equation(s.system.centre, cells);
+    }
+    cfdcore::pressure::solver<2> solver(s.fields, k.method == preconditioner::multigrid,
+                                        read_levels(levels));
+    require_solved(solver.prepare(s.system, k), 0);
+    NewArray z = new_field(s.fields);
+    solver.precondition(residual, out_span(z));
+    return z;
+}
+
+// The mean of the cells where `mask` holds removed from them: the closed
+// domain's projection on its own, for the parity tests.
+NewArray project_mean(const Matrix& x, const BoolMatrix& mask) {
+    require_shape(mask, {x.shape(0), x.shape(1)}, "project_mean", "mask");
+    require_aligned(x.data(), alignof(double), "project_mean");
+    const auto values = span_of(x);
+    std::vector<std::size_t> cells;
+    for (std::size_t i = 0; i < mask.size(); ++i) {
+        if (mask.data()[i]) {
+            cells.push_back(i);
+        }
+    }
+    NewArray out = new_matrix({x.shape(0), x.shape(1)});
+    std::copy(values.begin(), values.end(), out.data());
+    if (!cells.empty()) {
+        const double mean = cfdcore::pressure::mean_over(values, cells);
+        for (const std::size_t i : cells) {
+            out.data()[i] -= mean;
+        }
+    }
+    return out;
+}
+
+void corrector_init(Corrector2* self, const Grid2& g, const Vector& dx_cell, const Vector& dy_cell,
+                    nb::handle outlets, nb::handle fluid, nb::handle rho, nb::handle alpha,
+                    nb::handle rtol, nb::handle floor, nb::handle max_iter, nb::handle method,
+                    nb::handle levels) {
+    constexpr std::string_view who = "PressureCorrector2";
+    for (const Vector* v : {&dx_cell, &dy_cell}) {
+        require_aligned(v->data(), alignof(double), who);
+    }
+    if (nb::len(outlets) != 4) {
+        refuse_type("PressureCorrector2: outlets holds the left, right, bottom and top edges");
+    }
+    std::array<BoolVector, 4> flags;
+    const std::array<const char*, 4> names{"left", "right", "bottom", "top"};
+    cfdcore::pressure::corrector_input<2> input;
+    for (std::size_t e = 0; e < 4; ++e) {
+        const std::size_t n = g.cells(e < 2 ? 1 : 0);
+        if (!nb::try_cast<BoolVector>(outlets[e], flags[e], false) || flags[e].shape(0) != n) {
+            refuse_type(std::string(who) + ": " + names[e] +
+                        " outlets are not a bool array of " + std::to_string(n) + " entries");
+        }
+        const std::span<const bool> edge(flags[e].data(), n);
+        (e % 2 == 0 ? input.outlet_low : input.outlet_high)[e / 2] = edge;
+    }
+    input.cell_widths = {as_span(dx_cell), as_span(dy_cell)};
+    input.fluid = static_cast<std::int32_t>(read_count(fluid, "fluid"));
+    input.rho = read_number(rho, "rho");
+    input.alpha = read_number(alpha, "alpha");
+    solve_keys k;
+    read_solve_arguments(rtol, floor, max_iter, k);
+    input.rtol = k.rtol;
+    input.floor = k.floor;
+    input.max_iter = k.max_iter;
+    input.method = read_preconditioner(method);
+    input.levels = read_levels(levels);
+    const std::string_view reason = Corrector2::check(g, input);
+    if (!reason.empty()) {
+        refuse_value(std::string(who) + ": " + std::string(reason));
+    }
+    // The components no correction can solve, refused as `_check_components` does.
+    const auto count = Corrector2::count_components(g, input);
+    bool closed = true;
+    for (const BoolVector& edge : flags) {
+        closed = closed && std::none_of(edge.data(), edge.data() + edge.shape(0),
+                                        [](bool outlet) { return outlet; });
+    }
+    if (closed && count.components > 1) {
+        refuse_value("closed domain: the cells with a pressure equation form " +
+                     std::to_string(count.components) +
+                     " connected components; the pressure correction projects one mean and pins "
+                     "one cell, so it solves one component only (ADR-013 D)");
+    }
+    if (!closed && count.stranded > 0) {
+        refuse_value("open domain: " + std::to_string(count.stranded) + " of the " +
+                     std::to_string(count.components) +
+                     " connected components of the cells with a pressure equation reach no "
+                     "pressure outlet; with no p' = 0 face their block of the pressure correction "
+                     "is singular. A component an inlet feeds has no outflow to balance its "
+                     "supply, so the correction cannot converge; one with no supply converges to a "
+                     "level nothing fixes");
+    }
+    new (self) Corrector2(g, input);
+}
+
+// Refuses velocities of another shape, as `_check_shapes` does.
+void check_velocities(const Corrector2& c, const Array& u, const Array& v) {
+    const auto u_shape = face_shape(c.mesh(), 0);
+    const auto v_shape = face_shape(c.mesh(), 1);
+    if (!has_shape(u, u_shape) || !has_shape(v, v_shape)) {
+        refuse_value("expected staggered shapes u " + shape_text(u_shape) + " and v " +
+                     shape_text(v_shape) + ", got u " + shape_text(u) + " and v " +
+                     shape_text(v));
+    }
+    require_aligned(u.data(), alignof(double), "PressureCorrector2");
+    require_aligned(v.data(), alignof(double), "PressureCorrector2");
+}
+
+// And diagonals, as `coefficients` does.
+void check_diagonals(const Corrector2& c, const Array& a_p_u, const Array& a_p_v) {
+    const auto u_shape = face_shape(c.mesh(), 0);
+    const auto v_shape = face_shape(c.mesh(), 1);
+    if (!has_shape(a_p_u, u_shape) || !has_shape(a_p_v, v_shape)) {
+        refuse_value("expected diagonals of shapes " + shape_text(u_shape) + " and " +
+                     shape_text(v_shape) + ", got " + shape_text(a_p_u) + " and " +
+                     shape_text(a_p_v));
+    }
+    require_aligned(a_p_u.data(), alignof(double), "PressureCorrector2");
+    require_aligned(a_p_v.data(), alignof(double), "PressureCorrector2");
+}
+
+nb::dict corrector_coefficients(Corrector2& c, const Array& a_p_u, const Array& a_p_v) {
+    check_diagonals(c, a_p_u, a_p_v);
+    c.assemble({span_of_array(a_p_u), span_of_array(a_p_v)});
+    return system_arrays(c.equation());
+}
+
+nb::tuple corrector_face_d(Corrector2& c, const Array& a_p_u, const Array& a_p_v) {
+    check_diagonals(c, a_p_u, a_p_v);
+    c.assemble({span_of_array(a_p_u), span_of_array(a_p_v)});
+    const auto faces = [&](int d) {
+        const auto shape = face_shape(c.mesh(), d);
+        return shaped_copy<double>(c.face_d(d), {shape[0], shape[1]});
+    };
+    return nb::make_tuple(faces(0), faces(1));
+}
+
+NewArray corrector_imbalance(const Corrector2& c, const Array& u, const Array& v) {
+    check_velocities(c, u, v);
+    NewArray out = new_field(c.mesh().fields());
+    c.mass_imbalance({span_of_array(u), span_of_array(v)}, out_span(out));
+    return out;
+}
+
+NewArray corrector_right_hand_side(Corrector2& c, const Array& u_star, const Array& v_star,
+                                   const Array& a_p_u, const Array& a_p_v) {
+    check_velocities(c, u_star, v_star);
+    check_diagonals(c, a_p_u, a_p_v);
+    c.assemble({span_of_array(a_p_u), span_of_array(a_p_v)});
+    NewArray out = new_field(c.mesh().fields());
+    c.right_hand_side({span_of_array(u_star), span_of_array(v_star)}, out_span(out));
+    return out;
+}
+
+// The arrays a correction returns, u, v, p and p_prime by name.
+struct corrected {
+    explicit corrected(const Grid2& g)
+        : u(new_matrix(face_shape(g, 0))),
+          v(new_matrix(face_shape(g, 1))),
+          p(new_matrix({g.cells(1), g.cells(0)})),
+          p_prime(new_matrix({g.cells(1), g.cells(0)})) {}
+    nb::dict named() const {
+        nb::dict out;
+        out["u"] = u;
+        out["v"] = v;
+        out["p"] = p;
+        out["p_prime"] = p_prime;
+        return out;
+    }
+    NewArray u;
+    NewArray v;
+    NewArray p;
+    NewArray p_prime;
+};
+
+nb::dict corrector_correct(Corrector2& c, const Array& u_star, const Array& v_star,
+                           const Array& a_p_u, const Array& a_p_v, const Array& p) {
+    check_velocities(c, u_star, v_star);
+    const auto pressure = read_field(p, c.mesh().fields(), "p");
+    check_diagonals(c, a_p_u, a_p_v);
+    corrected out(c.mesh());
+    const solve_result result =
+        c.correct({span_of_array(u_star), span_of_array(v_star)},
+                  {span_of_array(a_p_u), span_of_array(a_p_v)}, pressure,
+                  {out_span(out.u), out_span(out.v)}, out_span(out.p), out_span(out.p_prime));
+    require_solved(result.status, result.iterations);
+    nb::dict named = out.named();
+    named.update(solve_numbers(result));
+    return named;
+}
+
+nb::dict corrector_apply(Corrector2& c, const Array& u_star, const Array& v_star,
+                         const Array& a_p_u, const Array& a_p_v, const Array& p,
+                         const Array& p_prime) {
+    check_velocities(c, u_star, v_star);
+    const auto pressure = read_field(p, c.mesh().fields(), "p");
+    const auto solved = read_field(p_prime, c.mesh().fields(), "p_prime");
+    check_diagonals(c, a_p_u, a_p_v);
+    c.assemble({span_of_array(a_p_u), span_of_array(a_p_v)});
+    corrected out(c.mesh());
+    std::copy(solved.begin(), solved.end(), out.p_prime.data());
+    c.apply({span_of_array(u_star), span_of_array(v_star)}, pressure, out_span(out.p_prime),
+            {out_span(out.u), out_span(out.v)}, out_span(out.p));
+    return out.named();
+}
+
 }  // namespace
 
 NB_MODULE(_cfdcore, m) {
@@ -2261,6 +2832,138 @@ NB_MODULE(_cfdcore, m) {
         .def("fixed", &momentum_fixed, nb::arg("name"), nb::arg("component"),
              "A quantity computed once at construction, for the parity tests: the weights, the\n"
              "means' fractions, the scalar conductances, the distances and the masks (0 or 1).");
+    // A pressure solve that cannot go on, where the reference's own arithmetic
+    // raises; its ZeroDivisionError or LinAlgError is made of it on the Python side.
+    PyObject* breakdown_type = PyErr_NewExceptionWithDoc(
+        "_cfdcore.PressureBreakdown",
+        "A pressure solve ended where the reference's arithmetic raises.\n\n"
+        "Attributes: reason, \"division_by_zero\" or \"not_converged\" (the coarsest level's\n"
+        "eigenvalues), and iterations.",
+        PyExc_RuntimeError, nullptr);
+    if (breakdown_type == nullptr) {
+        throw nb::python_error();
+    }
+    m.attr("PressureBreakdown") = nb::steal(breakdown_type);
+    nb::register_exception_translator(translate_breakdown, breakdown_type);
+
+    nb::class_<Multigrid2>(
+        m, "Multigrid2",
+        "The additive-correction multigrid of a five-point system (Multigrid).\n\n"
+        "Multigrid2(a_p, a_e, a_w, a_n, a_s, levels): the five [ny, nx] arrays and the keys\n"
+        "(coarsest_cells, sweeps, weight, dominance_tolerance, rcond). The reference's\n"
+        "refusals are raised with its types and messages; keys outside their ranges are a\n"
+        "ValueError.")
+        .def("__init__",
+             [](Multigrid2* self, const Array& a_p, const Array& a_e, const Array& a_w,
+                const Array& a_n, const Array& a_s, nb::handle levels) {
+                 new (self) Multigrid2({&a_p, &a_e, &a_w, &a_n, &a_s}, read_levels(levels));
+             },
+             nb::arg("a_p").noconvert(), nb::arg("a_e").noconvert(), nb::arg("a_w").noconvert(),
+             nb::arg("a_n").noconvert(), nb::arg("a_s").noconvert(), nb::arg("levels"))
+        .def("cycle",
+             [](Multigrid2& self, const Array& r) {
+                 const auto residual = read_field(r, self.finest.fields, "r");
+                 NewArray z = new_field(self.finest.fields);
+                 self.hierarchy.cycle(residual, out_span(z));
+                 return z;
+             },
+             nb::arg("r").noconvert(), "One V-cycle from zero (Multigrid.cycle), to 1e-12.")
+        .def("rebuild",
+             [](Multigrid2& self) { (void)self.hierarchy.build(self.finest.system); },
+             "Builds the levels again from the same system, as a correction builds its own: for\n"
+             "timing.")
+        .def("levels", &multigrid_levels,
+             "The levels, finest first: the five arrays by name and the smoother (None on the\n"
+             "coarsest), bit for bit the reference's.")
+        .def("coarsest_matrix",
+             [](const Multigrid2& self) { return square(self.hierarchy.coarsest_matrix()); },
+             "The coarsest operator as a dense matrix, bit for bit the reference's.")
+        .def("coarsest_inverse",
+             [](const Multigrid2& self) { return square(self.hierarchy.coarsest_inverse()); },
+             "Its pseudo-inverse, to 1e-12 of NumPy's largest magnitude.");
+    m.def("apply_operator", &five_point_apply, nb::arg("a_p").noconvert(),
+          nb::arg("a_e").noconvert(), nb::arg("a_w").noconvert(), nb::arg("a_n").noconvert(),
+          nb::arg("a_s").noconvert(), nb::arg("x").noconvert(),
+          "The p' operator (pressure.apply_operator), bit for bit: a new array.");
+    m.def("smooth", &five_point_smooth, nb::arg("a_p").noconvert(), nb::arg("a_e").noconvert(),
+          nb::arg("a_w").noconvert(), nb::arg("a_n").noconvert(), nb::arg("a_s").noconvert(),
+          nb::arg("smoother").noconvert(), nb::arg("x").noconvert(), nb::arg("r").noconvert(),
+          "A weighted Jacobi sweep, x + smoother (r - A x), bit for bit: a new array.");
+    m.def("coarsen", &five_point_coarsen, nb::arg("a_p").noconvert(), nb::arg("a_e").noconvert(),
+          nb::arg("a_w").noconvert(), nb::arg("a_n").noconvert(), nb::arg("a_s").noconvert(),
+          "The Galerkin operator of 2x2 aggregation (multigrid.coarsen), bit for bit: the five\n"
+          "arrays by name.");
+    m.def("restrict", &restrict_field, nb::arg("r").noconvert(),
+          "The group sums (multigrid.restrict), bit for bit: a new array.");
+    m.def("add_prolonged", &add_prolonged, nb::arg("x").noconvert(), nb::arg("z").noconvert(),
+          "x += P z in place (multigrid.add_prolonged), bit for bit.");
+    m.def("pseudo_inverse", &pseudo_inverse, nb::arg("matrix").noconvert(), nb::arg("rcond"),
+          "The pseudo-inverse of a symmetric matrix by NumPy's cutoff rule, to 1e-12 of\n"
+          "np.linalg.pinv(matrix, hermitian=True).");
+    m.def("symmetric_eigenvalues", &symmetric_eigenvalues, nb::arg("matrix").noconvert(),
+          "The eigenvalues pseudo_inverse reads, in no order.");
+    m.def("project_mean", &project_mean, nb::arg("x").noconvert(), nb::arg("mask").noconvert(),
+          "x with the mean of its masked cells removed from them, bit for bit: a new array.");
+    m.def("pressure_cg", &five_point_cg, nb::arg("a_p").noconvert(), nb::arg("a_e").noconvert(),
+          nb::arg("a_w").noconvert(), nb::arg("a_n").noconvert(), nb::arg("a_s").noconvert(),
+          nb::arg("f").noconvert(), nb::arg("rtol").none(), nb::arg("floor").none(),
+          nb::arg("max_iter").none(), nb::arg("preconditioner").none(), nb::arg("project"),
+          nb::arg("levels"),
+          "pressure.conjugate_gradient on a five-point system, with the reference's\n"
+          "preconditioner of that name: x, iterations, reached_cap, residual_norm and products\n"
+          "by name. Refuses its numbers as the reference does.");
+    m.def("pressure_precondition", &five_point_precondition, nb::arg("a_p").noconvert(),
+          nb::arg("a_e").noconvert(), nb::arg("a_w").noconvert(), nb::arg("a_n").noconvert(),
+          nb::arg("a_s").noconvert(), nb::arg("r").noconvert(), nb::arg("preconditioner"),
+          nb::arg("project"), nb::arg("levels"),
+          "One application of the preconditioner pressure_cg uses: a new array.");
+    nb::class_<Corrector2>(
+        m, "PressureCorrector2",
+        "The staggered pressure correction on a grid (PressureCorrector).\n\n"
+        "PressureCorrector2(grid, dx_cell, dy_cell, outlets, fluid, rho, alpha, rtol, floor,\n"
+        "max_iter, preconditioner, levels): the mesh's widths, the left, right, bottom and top\n"
+        "edges' outlet faces (pressure_outlets()[edge].is_outlet), the type of a FLUID cell,\n"
+        "air's density, solver.alpha_pressure, pressure_rtol, RESIDUAL_FLOOR times the flux\n"
+        "scale, max_pressure_iter and pressure_preconditioner, and the multigrid's keys as\n"
+        "Multigrid2 takes them. The reference's refusals are raised with its types and\n"
+        "messages; a width, rho or alpha that is not finite and positive is a ValueError, an\n"
+        "outlet array of another kind a TypeError.")
+        .def("__init__", &corrector_init, nb::arg("grid"), nb::arg("dx_cell").noconvert(),
+             nb::arg("dy_cell").noconvert(), nb::arg("outlets"), nb::arg("fluid"), nb::arg("rho"),
+             nb::arg("alpha"), nb::arg("rtol").none(), nb::arg("floor").none(),
+             nb::arg("max_iter").none(), nb::arg("preconditioner").none(), nb::arg("levels"),
+             nb::keep_alive<1, 2>())
+        .def_prop_ro("needs_pin", &Corrector2::needs_pin)
+        .def_prop_ro("pin_cell",
+                     [](const Corrector2& c) {
+                         const std::size_t nx = c.mesh().cells(0);
+                         return nb::make_tuple(c.pin_cell() / nx, c.pin_cell() % nx);
+                     })
+        .def("coefficients", &corrector_coefficients, nb::arg("a_p_u").noconvert(),
+             nb::arg("a_p_v").noconvert(),
+             "PressureCorrector.coefficients, bit for bit: the five arrays by name.")
+        .def("face_d", &corrector_face_d, nb::arg("a_p_u").noconvert(),
+             nb::arg("a_p_v").noconvert(),
+             "d = A_face / a_P on u's and on v's faces, bit for bit.")
+        .def("mass_imbalance", &corrector_imbalance, nb::arg("u").noconvert(),
+             nb::arg("v").noconvert(),
+             "PressureCorrector.mass_imbalance, bit for bit: a new array.")
+        .def("right_hand_side", &corrector_right_hand_side, nb::arg("u_star").noconvert(),
+             nb::arg("v_star").noconvert(), nb::arg("a_p_u").noconvert(),
+             nb::arg("a_p_v").noconvert(),
+             "The right-hand side correct solves for, projected on a closed domain, bit for bit.")
+        .def("correct", &corrector_correct, nb::arg("u_star").noconvert(),
+             nb::arg("v_star").noconvert(), nb::arg("a_p_u").noconvert(),
+             nb::arg("a_p_v").noconvert(), nb::arg("p").noconvert(),
+             "PressureCorrector.correct: u, v, p, p_prime, iterations, reached_cap, products and\n"
+             "the residual's norm by name.")
+        .def("apply", &corrector_apply, nb::arg("u_star").noconvert(),
+             nb::arg("v_star").noconvert(), nb::arg("a_p_u").noconvert(),
+             nb::arg("a_p_v").noconvert(), nb::arg("p").noconvert(),
+             nb::arg("p_prime").noconvert(),
+             "The correction by a given solution of the equation, bit for bit: u, v, p and the\n"
+             "pinned p_prime by name.");
+
     m.attr("budget_terms") = [] {
         nb::list names;
         for (const std::string_view name : cfdcore::march::budget_term_names) {

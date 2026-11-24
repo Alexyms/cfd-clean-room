@@ -52,10 +52,13 @@ endif()
 add_library(cfdcore STATIC
     src/arrival.cpp
     src/channels.cpp
+    src/dense.cpp
     src/grid.cpp
     src/layout.cpp
     src/march.cpp
     src/momentum.cpp
+    src/multigrid.cpp
+    src/pressure.cpp
     src/recovery.cpp
     src/reduce.cpp
     src/scalar.cpp
@@ -82,6 +85,8 @@ if(CFD_CORE_TESTS)
         tests/test_lanes.cpp
         tests/test_march.cpp
         tests/test_momentum.cpp
+        tests/test_multigrid.cpp
+        tests/test_pressure.cpp
         tests/test_reduce.cpp
         tests/test_scalar.cpp
         tests/test_transport.cpp)

@@ -57,6 +57,13 @@ double pairwise_sum(std::span<const double> values) {
     return 0.0 + pairwise([v](std::size_t i) { return v[i]; }, 0, values.size());
 }
 
+double pairwise_sum_at(std::span<const double> values,
+                       std::span<const std::size_t> indices) {
+    const double* v = values.data();
+    const std::size_t* at = indices.data();
+    return 0.0 + pairwise([v, at](std::size_t i) { return v[at[i]]; }, 0, indices.size());
+}
+
 double buffered_sum(std::span<const double> values, std::size_t row) {
     if (values.empty()) {
         return 0.0;

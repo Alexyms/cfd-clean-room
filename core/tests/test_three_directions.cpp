@@ -13,6 +13,8 @@
 #include "../src/grid.cpp"
 #include "../src/layout.cpp"
 #include "../src/momentum.cpp"
+#include "../src/multigrid.cpp"
+#include "../src/pressure.cpp"
 
 #include <gtest/gtest.h>
 
@@ -31,6 +33,9 @@
 template class cfdcore::layout::layout<3>;
 template class cfdcore::grid::grid<3>;
 template class cfdcore::momentum::predictor<3>;
+template struct cfdcore::multigrid::system<3>;
+template class cfdcore::multigrid::hierarchy<3>;
+template class cfdcore::pressure::corrector<3>;
 
 // In the module's namespace, so the position helpers of momentum.cpp are in scope.
 namespace cfdcore::momentum {
@@ -211,7 +216,9 @@ struct room3 {
 
     std::size_t corner(const position3& at) const { return at[b] * (from->n[0] + 1) + at[a]; }
 
-    const axis& axis_of(int d) const { return d == a ? from->axes[0] : d == b ? from->axes[1] : unit; }
+    const axis& axis_of(int d) const {
+        return d == a ? from->axes[0] : d == b ? from->axes[1] : unit;
+    }
 
     std::array<std::size_t, 3> counts() {
         n[a] = from->n[0];
@@ -448,3 +455,198 @@ TEST(MomentumThreeDirections, TheSweepsWriteEveryFaceAndEveryPlaneAlike) {
 
 }  // namespace
 }  // namespace cfdcore::momentum
+
+// The pressure correction at three directions: the Galerkin operator formed
+// densely, the cycle's symmetry and a corrected field without imbalance.
+namespace cfdcore::pressure {
+namespace {
+
+// A box of nx by ny by nz cells with SOLID ones, random widths, velocities and
+// diagonals at the faces two open cells share, and with `open` one outlet.
+struct box3 {
+    box3(const std::array<std::size_t, 3>& n_, bool open_) : n(n_), open(open_), cells(n_) {
+        momentum::draws draw(n[0] + 17 * n[1] + 289 * n[2] + (open ? 1 : 0));
+        for (int d = 0; d < 3; ++d) {
+            axes.push_back(momentum::make_axis(draw.field(n[d], 0.5)));
+            const std::size_t edge = cells.cell_count() / n[d];
+            for (int side = 0; side < 2; ++side) {
+                outlets.emplace_back(edge);
+            }
+        }
+        outlets[3].known[0] = open;  // the high edge along y
+        types.assign(cells.cell_count(), 0);
+        types[cells.cell_count() / 2 + 1] = 1;
+        for (int c = 0; c < 3; ++c) {
+            auto faces = n;
+            ++faces[c];
+            const layout::layout<3> at(faces);
+            star[c].assign(at.cell_count(), 0.0);
+            diagonal[c].assign(at.cell_count(), 0.0);
+            const std::size_t stride = cells.cell_stride(c);
+            for (std::size_t f = 0; f < at.cell_count(); ++f) {
+                const std::size_t position = (f / stride) % faces[c];
+                if (position == 0 || position == n[c]) {
+                    continue;
+                }
+                const std::size_t block = f / (stride * faces[c]);
+                const std::size_t high = block * stride * n[c] + position * stride + f % stride;
+                if (types[high] == 0 && types[high - stride] == 0) {
+                    star[c][f] = draw() - 0.5;
+                    diagonal[c][f] = 0.5 + draw();
+                }
+            }
+        }
+        pressure = draw.field(cells.cell_count(), 0.0);
+    }
+
+    grid::grid<3> make_grid() const {
+        grid::grid_input<3> in{};
+        for (int d = 0; d < 3; ++d) {
+            in.faces[d] = axes[static_cast<std::size_t>(d)].faces;
+            in.centres[d] = axes[static_cast<std::size_t>(d)].centres;
+        }
+        in.cell_type = types;
+        in.solid = 1;
+        return grid::grid<3>(in);
+    }
+
+    corrector_input<3> input() const {
+        corrector_input<3> in{};
+        for (int d = 0; d < 3; ++d) {
+            const std::size_t e = static_cast<std::size_t>(2 * d);
+            in.cell_widths[d] = axes[static_cast<std::size_t>(d)].widths;
+            in.outlet_low[d] = {outlets[e].known.get(), outlets[e].value.size()};
+            in.outlet_high[d] = {outlets[e + 1].known.get(), outlets[e + 1].value.size()};
+        }
+        in.fluid = 0;
+        in.rho = 1.2;
+        in.alpha = 0.3;
+        in.rtol = 1e-12;
+        in.max_iter = 300;
+        in.method = preconditioner::multigrid;
+        in.levels = {.coarsest_cells = 8,
+                     .sweeps = 1,
+                     .weight = 2.0 / 3.0,
+                     .dominance_tolerance = 1e-12,
+                     .rcond = 1e-15};
+        return in;
+    }
+
+    std::array<std::size_t, 3> n;
+    bool open;
+    layout::layout<3> cells;
+    std::vector<momentum::axis> axes;
+    std::deque<momentum::edge> outlets;
+    std::vector<std::int32_t> types;
+    std::array<std::vector<double>, 3> star, diagonal;
+    std::vector<double> pressure;
+};
+
+constexpr std::array<std::array<std::size_t, 3>, 5> boxes{
+    {{4, 4, 4}, {5, 3, 4}, {9, 5, 3}, {8, 7, 6}, {3, 9, 10}}};
+
+template <typename Visit>
+void for_each_coupling(const multigrid::system<3>& s, Visit&& visit) {
+    const auto& fields = *s.fields;
+    for (std::size_t i = 0; i < fields.cell_count(); ++i) {
+        visit(i, i, s.centre[i]);
+        for (int d = 0; d < 3; ++d) {
+            const std::size_t stride = fields.cell_stride(d);
+            const std::size_t at = (i / stride) % fields.cells(d);
+            if (at + 1 < fields.cells(d)) {
+                visit(i, i + stride, -s.high[d][i]);
+            }
+            if (at > 0) {
+                visit(i, i - stride, -s.low[d][i]);
+            }
+        }
+    }
+}
+
+TEST(PressureThreeDirections, TheGalerkinOperatorIsTheTripleProduct) {
+    for (const auto& n : boxes) {
+        const box3 b(n, true);
+        const auto g = b.make_grid();
+        corrector<3> c(g, b.input());
+        c.assemble({b.diagonal[0], b.diagonal[1], b.diagonal[2]});
+        const auto coarse = multigrid::coarser(b.cells);
+        multigrid::system<3> to(coarse);
+        multigrid::coarsen<3>(c.equation(), std::vector<double>(n[0], 0.0), to);
+        const auto group = [&](std::size_t cell) {
+            std::size_t index = 0;
+            for (int d = 0; d < 3; ++d) {
+                index +=
+                    (cell / b.cells.cell_stride(d)) % n[d] / 2 * coarse.cell_stride(d);
+            }
+            return index;
+        };
+        const std::size_t m = coarse.cell_count();
+        std::vector<double> expected(m * m, 0.0), got(m * m, 0.0);
+        for_each_coupling(c.equation(), [&](std::size_t i, std::size_t j, double a) {
+            expected[group(i) * m + group(j)] += a;
+        });
+        for_each_coupling(to, [&](std::size_t i, std::size_t j, double a) {
+            got[i * m + j] += a;
+        });
+        for (std::size_t i = 0; i < m * m; ++i) {
+            EXPECT_NEAR(got[i], expected[i], 1e-12);
+        }
+    }
+}
+
+TEST(PressureThreeDirections, TheCycleIsSymmetric) {
+    for (const auto& n : boxes) {
+        const box3 b(n, true);
+        const auto g = b.make_grid();
+        corrector<3> c(g, b.input());
+        c.assemble({b.diagonal[0], b.diagonal[1], b.diagonal[2]});
+        multigrid::hierarchy<3> h(b.cells, b.input().levels);
+        ASSERT_EQ(h.build(c.equation()), multigrid::build_status::ok);
+        momentum::draws draw(5);
+        std::vector<double> r1 = draw.field(b.cells.cell_count(), -0.5);
+        std::vector<double> r2 = draw.field(b.cells.cell_count(), -0.5);
+        for (std::size_t i = 0; i < r1.size(); ++i) {
+            if (!(c.equation().centre[i] > 0.0)) {
+                r1[i] = r2[i] = 0.0;
+            }
+        }
+        std::vector<double> z1(r1.size()), z2(r1.size());
+        h.cycle(r1, z1);
+        h.cycle(r2, z2);
+        double a = 0.0, across = 0.0, scale = 0.0;
+        for (std::size_t i = 0; i < r1.size(); ++i) {
+            a += z1[i] * r2[i];
+            across += r1[i] * z2[i];
+            scale += std::fabs(z1[i] * r2[i]);
+        }
+        EXPECT_NEAR(a, across, 1e-12 * scale);
+    }
+}
+
+TEST(PressureThreeDirections, ACorrectionLeavesNoImbalance) {
+    for (const bool open : {true, false}) {
+        for (const auto& n : boxes) {
+            const box3 b(n, open);
+            const auto g = b.make_grid();
+            const auto count = corrector<3>::count_components(g, b.input());
+            ASSERT_EQ(count.components, 1);
+            EXPECT_EQ(count.stranded, open ? 0 : 1);
+            corrector<3> c(g, b.input());
+            std::array<std::vector<double>, 3> out = b.star;
+            std::vector<double> next(b.pressure.size()), p_prime(b.pressure.size());
+            const solve_result result = c.correct(
+                {b.star[0], b.star[1], b.star[2]}, {b.diagonal[0], b.diagonal[1], b.diagonal[2]},
+                b.pressure, {out[0], out[1], out[2]}, next, p_prime);
+            ASSERT_EQ(result.status, solve_status::ok);
+            EXPECT_FALSE(result.reached_cap);
+            std::vector<double> imbalance(b.pressure.size());
+            c.mass_imbalance({out[0], out[1], out[2]}, imbalance);
+            for (const double value : imbalance) {
+                EXPECT_NEAR(value, 0.0, 1e-10);
+            }
+        }
+    }
+}
+
+}  // namespace
+}  // namespace cfdcore::pressure
