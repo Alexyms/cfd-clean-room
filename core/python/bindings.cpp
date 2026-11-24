@@ -1545,8 +1545,9 @@ cfdcore::momentum::edge_condition read_edge(nb::handle edge, std::size_t n, cons
     BoolVector known;
     Vector value;
     cfdcore::momentum::edge_condition condition;
-    if (nb::len(edge) != 3 || !nb::try_cast<BoolVector>(edge[0], known, false) || known.shape(0) != n ||
-        !nb::try_cast<Vector>(edge[1], value, false) || value.shape(0) != n) {
+    if (nb::len(edge) != 3 || !nb::try_cast<BoolVector>(edge[0], known, false) ||
+        known.shape(0) != n || !nb::try_cast<Vector>(edge[1], value, false) ||
+        value.shape(0) != n) {
         refuse_type(who + " is not (is_dirichlet, value, wall_distance) with bool and float64 "
                           "arrays of " +
                     std::to_string(n) + " entries");
@@ -2234,10 +2235,10 @@ NB_MODULE(_cfdcore, m) {
         "viscosity, solver.alpha_velocity and momentum_sweeps, the bottom, top, left and\n"
         "right edges' conditions as (is_dirichlet, value, wall_distance) tuples, and the vent\n"
         "faces the sweeps keep (VentFaces.normal_u, normal_v). Fewer than two cells along an\n"
-        "axis, widths of another length, a width, a wall distance, rho or mu that is not finite\n"
-        "and positive, alpha outside (0, 1] or fewer than one sweep raise ValueError; an edge or a\n"
-        "vent mask of another shape, and a bool or another type where a number is read,\n"
-        "TypeError.")
+        "axis, widths of another length, a width, a wall distance, rho or mu that is not\n"
+        "finite and positive, alpha outside (0, 1] or fewer than one sweep raise ValueError; an\n"
+        "edge or a vent mask of another shape, and a bool or another type where a number is\n"
+        "read, TypeError.")
         .def("__init__", &momentum_init, nb::arg("grid"), nb::arg("dx_cell").noconvert(),
              nb::arg("dy_cell").noconvert(), nb::arg("dx_face").noconvert(),
              nb::arg("dy_face").noconvert(), nb::arg("rho"), nb::arg("mu"), nb::arg("alpha"),

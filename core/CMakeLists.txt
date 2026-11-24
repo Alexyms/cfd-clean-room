@@ -87,6 +87,14 @@ if(CFD_CORE_TESTS)
         tests/test_transport.cpp)
     target_link_libraries(cfdcore_tests PRIVATE cfdcore cfdcore_flags GTest::gtest_main)
     gtest_discover_tests(cfdcore_tests)
+    # The modules at three directions, which no library build instantiates: the
+    # program compiles their sources itself (review 92 S4).
+    add_executable(cfdcore_three_directions_tests tests/test_three_directions.cpp)
+    target_link_libraries(
+        cfdcore_three_directions_tests PRIVATE cfdcore cfdcore_flags GTest::gtest_main)
+    # GCC warns of an included file's anonymous namespace as it would of a header's.
+    target_compile_options(cfdcore_three_directions_tests PRIVATE -Wno-subobject-linkage)
+    gtest_discover_tests(cfdcore_three_directions_tests)
 endif()
 
 if(CFD_CORE_PYTHON)

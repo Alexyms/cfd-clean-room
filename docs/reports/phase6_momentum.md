@@ -63,7 +63,7 @@ A failed prediction is a finding, not a stop.
 
 | Prediction | Measured | Verdict |
 |---|---|---|
-| (a) every planted and captured `predict` call equals the reference's bit for bit | 40 of 40 captured `predict` calls with no differing bit in the four outputs (T3, with 30 `stencil_viscosity` calls beside them); 756 of 756 planted `predict` cases pass, each holding one call or several (T1) | holds |
+| (a) every planted and captured `predict` call equals the reference's bit for bit | 40 of 40 captured `predict` calls with no differing bit in the four outputs (T3, with 30 `stencil_viscosity` calls beside them); 788 of 788 planted `predict` cases pass, each holding one call or several (T1) | holds |
 | (b) the set-up's fixed quantities equal the reference's per-call values on every mesh | 118 of 118 cases pass, nine meshes under two boundaries and the small grids of every row length (T1) | holds |
 | (c) `predict` on the 320x120 state at least five times faster per call | 11.06 times in run 1 (run 2: 11.03; run 3: 10.41) (T5) | holds |
 <!-- tables92 predictions end -->
@@ -695,8 +695,9 @@ called in place again.
 | Timings | a pass whose two directions both cross the rows exists in 3D only; the sweep reads two streams more |
 | Tests | a 3D reference, or analytical cases, per pair |
 
-**The claim, checked.** A scratch program (`results/builder92b/d3check.cpp`, not committed, built
-with the address and undefined-behaviour sanitizers) instantiates the module at three directions
+**The claim, checked.** A scratch program (`results/builder92b/d3check.cpp`, built
+with the address and undefined-behaviour sanitizers, and since prompt 93 the GoogleTest program
+`core/tests/test_three_directions.cpp`) instantiates the module at three directions
 from the sources as they are, extrudes 60 random 2D rooms (stretched widths, SOLID cells, edges part
 Dirichlet and part open, air's viscosity, a field, a wall viscosity) over three cells of unit width
 along each direction in turn, the room's two axes on the other two in both orders, and compares
