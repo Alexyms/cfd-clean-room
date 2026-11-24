@@ -760,11 +760,111 @@ TEST(MomentumPairs, ASlotsDirectionAndADirectionsSlotAreInverse) {
     }
 }
 
+TEST(MomentumSetup, EveryCallRefusesAnArrayOfAnotherLength) {
+    box b(5, 4, 1.0);
+    b.types[1 * b.nx + 2] = solid_type;
+    b.build(0.5, 2);
+    // An array of each of the calls' lengths, and one a value longer or shorter.
+    const std::size_t corners = (b.nx + 1) * (b.ny + 1);
+    const std::vector<double> ones(corners + 1, 1.0);
+    std::vector<double> room(corners + 1, 0.0);
+    const auto given = [&](std::size_t n) { return std::span<const double>(ones).first(n); };
+    const std::size_t cells = b.nx * b.ny;
+    const std::array<std::size_t, 2> faces{b.u.size(), b.v.size()};
+    struct call {
+        std::array<std::size_t, 2> velocity, star, diagonal, wall, stencil;
+        std::size_t p, mu;
+    };
+    const call good{faces, faces, faces, {corners, corners}, {corners, corners}, cells, cells};
+    // Each output its own array, so that none overlaps another.
+    std::array<std::array<std::vector<double>, 2>, 3> out;
+    for (auto& pair : out) {
+        for (auto& a : pair) {
+            a.assign(corners + 1, 0.0);
+        }
+    }
+    const auto taken = [&](int which, int c, std::size_t n) {
+        return std::span<double>(out[which][c]).first(n);
+    };
+    const auto predict = [&](const call& k) {
+        b.made->predict({given(k.velocity[0]), given(k.velocity[1])}, given(k.p), given(k.mu),
+                        {{{given(k.wall[0])}, {given(k.wall[1])}}},
+                        {taken(0, 0, k.star[0]), taken(0, 1, k.star[1])},
+                        {taken(1, 0, k.diagonal[0]), taken(1, 1, k.diagonal[1])});
+    };
+    const auto equations = [&](int c, const call& k) {
+        b.made->equations(c, {given(k.velocity[0]), given(k.velocity[1])}, given(k.p),
+                          given(k.mu), {{{given(k.wall[0])}, {given(k.wall[1])}}},
+                          taken(1, 0, k.diagonal[c == 1 ? 1 : 0]));
+    };
+    const auto stencil = [&](const call& k) {
+        b.made->stencil_viscosity(
+            given(k.mu), {{{taken(2, 0, k.stencil[0])}, {taken(2, 1, k.stencil[1])}}});
+    };
+    EXPECT_NO_THROW(predict(good));
+    EXPECT_NO_THROW(equations(0, good));
+    EXPECT_NO_THROW(equations(1, good));
+    EXPECT_NO_THROW(stencil(good));
+    for (const int by : {-1, 1}) {
+        const auto off = [&](std::size_t n) { return by < 0 ? n - 1 : n + 1; };
+        const auto changed = [&](auto change) {
+            call k = good;
+            change(k);
+            return k;
+        };
+        for (int c = 0; c < 2; ++c) {
+            const call velocity = changed([&](call& k) { k.velocity[c] = off(faces[c]); });
+            const call wall = changed([&](call& k) { k.wall[c] = off(corners); });
+            const call diagonal = changed([&](call& k) { k.diagonal[c] = off(faces[c]); });
+            EXPECT_THROW(predict(velocity), std::invalid_argument);
+            EXPECT_THROW(predict(wall), std::invalid_argument);
+            EXPECT_THROW(predict(diagonal), std::invalid_argument);
+            EXPECT_THROW(predict(changed([&](call& k) { k.star[c] = off(faces[c]); })),
+                         std::invalid_argument);
+            for (int of = 0; of < 2; ++of) {
+                EXPECT_THROW(equations(of, velocity), std::invalid_argument);
+                EXPECT_THROW(equations(of, wall), std::invalid_argument);
+            }
+            EXPECT_THROW(equations(c, diagonal), std::invalid_argument);
+            EXPECT_THROW(stencil(changed([&](call& k) { k.stencil[c] = off(corners); })),
+                         std::invalid_argument);
+            EXPECT_THROW(b.made->check_wall_viscosity(c, 0, given(off(corners))),
+                         std::invalid_argument);
+        }
+        const call p = changed([&](call& k) { k.p = off(cells); });
+        const call mu = changed([&](call& k) { k.mu = off(cells); });
+        EXPECT_THROW(predict(p), std::invalid_argument);
+        EXPECT_THROW(predict(mu), std::invalid_argument);
+        EXPECT_THROW(equations(0, p), std::invalid_argument);
+        EXPECT_THROW(equations(0, mu), std::invalid_argument);
+        EXPECT_THROW(stencil(mu), std::invalid_argument);
+        EXPECT_THROW(b.made->check_viscosity(given(off(cells))), std::invalid_argument);
+    }
+    // An empty viscosity is air's for an equation and no field for the rest.
+    EXPECT_THROW(b.made->check_viscosity({}), std::invalid_argument);
+    EXPECT_THROW(b.made->check_wall_viscosity(0, 0, {}), std::invalid_argument);
+    EXPECT_THROW(stencil([&] {
+                     call k = good;
+                     k.mu = 0;
+                     return k;
+                 }()),
+                 std::invalid_argument);
+    // A component or a slot there is not.
+    for (const int c : {-1, 2}) {
+        EXPECT_THROW(equations(c, good), std::invalid_argument);
+        EXPECT_THROW(b.made->check_wall_viscosity(c, 0, given(corners)), std::invalid_argument);
+    }
+    for (const int q : {-1, 1}) {
+        EXPECT_THROW(b.made->check_wall_viscosity(0, q, given(corners)), std::invalid_argument);
+    }
+}
+
 TEST(MomentumSetup, ProgrammingErrorsThrow) {
     box b(4, 5, 1.0);
     b.build(0.5, 1);
     const std::vector<double> three(3, 1.0);
     const flags three_flags(3);
+    std::vector<double> spoiled;
     const auto refused = [&](auto change) {
         predictor_input<2> input = b.input;
         change(input);
@@ -782,6 +882,35 @@ TEST(MomentumSetup, ProgrammingErrorsThrow) {
         refused([&](auto& in) { in.held[d] = three_flags.span(); });
     }
     refused([](auto& in) { in.sweeps = 0; });
+    // The numbers: each alone, by each way of not being finite and positive.
+    const double nan = std::nan("");
+    const double inf = std::numeric_limits<double>::infinity();
+    for (const double bad : {0.0, -0.0, -1.0, nan, inf, -inf}) {
+        refused([&](auto& in) { in.rho = bad; });
+        refused([&](auto& in) { in.mu = bad; });
+        refused([&](auto& in) { in.alpha = bad; });
+        for (int d = 0; d < 2; ++d) {
+            refused([&](auto& in) { in.low[d][0].wall_distance = bad; });
+            refused([&](auto& in) { in.high[d][0].wall_distance = bad; });
+            // The last entry, so that a check of the first alone shows.
+            for (const bool faces : {false, true}) {
+                refused([&](auto& in) {
+                    auto& widths = faces ? in.face_widths[d] : in.cell_widths[d];
+                    spoiled.assign(widths.begin(), widths.end());
+                    spoiled.back() = bad;
+                    widths = spoiled;
+                });
+            }
+        }
+    }
+    refused([](auto& in) { in.alpha = std::nextafter(1.0, 2.0); });
+    // The ends of the ranges are inside them.
+    predictor_input<2> ends = b.input;
+    ends.alpha = 1.0;
+    ends.rho = ends.mu = std::numeric_limits<double>::denorm_min();
+    EXPECT_TRUE(predictor<2>::check(*b.mesh, ends).empty());
+    ends.rho = ends.mu = std::numeric_limits<double>::max();
+    EXPECT_TRUE(predictor<2>::check(*b.mesh, ends).empty());
     for (const auto& [nx, ny] : {std::pair{1, 4}, std::pair{4, 1}}) {
         box thin(nx, ny, 1.0);
         EXPECT_THROW(thin.build(0.5, 1), std::invalid_argument);

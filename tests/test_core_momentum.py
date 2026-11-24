@@ -467,6 +467,63 @@ def test_a_nan_lands_where_the_references_does() -> None:
                 assert not all(np.isfinite(expected[out]).all() for out in OUTPUTS)
 
 
+def _clear_cell(room: Room, reach: int) -> tuple[int, int]:
+    """A cell with no SOLID cell and no domain edge within ``reach`` cells of it."""
+    solid = room.mesh.cell_type == SOLID
+    ny, nx = solid.shape
+    for j in range(reach, ny - reach):
+        for i in range(reach, nx - reach):
+            if not solid[j - reach : j + reach + 1, i - reach : i + reach + 1].any():
+                return j, i
+    raise AssertionError("no clear cell")
+
+
+@pytest.mark.parametrize("zero", [0.0, -0.0])
+@pytest.mark.parametrize("side", ["low", "high"])
+@pytest.mark.parametrize("direction", ["streamwise", "transverse"])
+@pytest.mark.parametrize("component", [0, 1])
+@pytest.mark.parametrize("viscosity", ["air", "field-wall"])
+def test_a_face_without_a_flux_takes_the_references_stencil(
+    viscosity: str, component: int, direction: str, side: str, zero: float
+) -> None:
+    """A face of exactly zero mass flux takes the stencil of a flow toward the low side.
+
+    The flux difference is multiplied by the zero, so the choice shows only
+    where one stencil holds a NaN and the other does not. The NaN stands two
+    nodes from the unknown watched, across the face: on the low side the
+    reference's stencil does not read it and the unknown is finite, on the high
+    side it does and the unknown is a NaN.
+    """
+    name = "80x30"
+    rng = np.random.default_rng([SEED, 12, component, len(direction), len(side)])
+    room = _room(_mesh(name), _solver_config(name, 1), _boundary(name))
+    inputs = _planted(room, "smooth", viscosity, rng)
+    own = (inputs.u, inputs.v)[component]
+    j, i = _clear_cell(room, 4)
+    # The axis the face is normal to, and the nodes on its two sides.
+    axis = 1 - component if direction == "streamwise" else component
+    step = (1, 0) if axis == 0 else (0, 1)
+
+    def node(n: int) -> tuple[int, int]:
+        return j + n * step[0], i + n * step[1]
+
+    if direction == "streamwise":
+        own[node(0)] = own[node(1)] = zero
+    elif component == 0:
+        inputs.v[j + 1, i - 1] = inputs.v[j + 1, i] = zero
+    else:
+        inputs.u[j - 1, i + 1] = inputs.u[j, i + 1] = zero
+    own[node(-1) if side == "low" else node(2)] = np.nan
+    watched = node(1) if side == "low" else node(0)
+    expected, got = _reference(room, inputs), _core(room, inputs)
+    star = OUTPUTS[component]
+    assert np.isfinite(expected[star][watched]) == (side == "low")
+    for out in OUTPUTS:
+        nan = np.isnan(expected[out])
+        assert np.array_equal(nan, np.isnan(got[out])), out
+        assert _differ(expected[out][~nan], got[out][~nan]) == 0
+
+
 # ---- What is fixed at construction -------------------------------------------
 
 
@@ -871,15 +928,19 @@ def test_stencil_viscosity_refuses_what_the_reference_refuses(case: str) -> None
 
 
 @pytest.mark.parametrize("levels", [1, 2])
-def test_predict_refuses_a_transient_argument(levels: int) -> None:
+@pytest.mark.parametrize("viscosity", VISCOSITIES)
+def test_predict_refuses_a_transient_argument(viscosity: str, levels: int) -> None:
     """The transient prediction stays on the reference (ADR-017 F), which accepts this one."""
     room = _refusal_room()
     inputs = _good()
+    mu_eff = inputs.mu_eff if "field" in viscosity else None
+    wall_mu = inputs.wall_mu if "wall" in viscosity else None
     old = (inputs.u, inputs.v) if levels == 1 else ((inputs.u,) * 2, (inputs.v,) * 2)
     transient = (0.01, *old)
-    room.reference.predict(inputs.u, inputs.v, inputs.p, transient=transient)
+    arguments = (inputs.u, inputs.v, inputs.p, mu_eff, wall_mu)
+    room.reference.predict(*arguments, transient=transient)
     with pytest.raises(NotImplementedError, match="steady path"):
-        room.core.predict(inputs.u, inputs.v, inputs.p, transient=transient)
+        room.core.predict(*arguments, transient=transient)
 
 
 BINDING_REFUSALS: dict[str, tuple[Callable[[np.ndarray], np.ndarray], str]] = {
@@ -960,6 +1021,20 @@ def _spoil_edge(
     arguments["tangential"] = edges
 
 
+def _spoil_edge_length(edge: int, parts: int, arguments: dict[str, object]) -> None:
+    """Give one edge's condition another number of parts."""
+    edges = copy.copy(arguments["tangential"])
+    edges[edge] = (*edges[edge], 1.0)[:parts]
+    arguments["tangential"] = edges
+
+
+def _spoil_last(name: str, value: float, arguments: dict[str, object]) -> None:
+    """Set the last entry of an array argument, so a check of the first alone shows."""
+    array = arguments[name].copy()
+    array[-1] = value
+    arguments[name] = array
+
+
 CONSTRUCTOR_REFUSALS: dict[str, tuple[Callable, type[Exception], str]] = {
     **{
         f"{name}-{what}": (
@@ -995,6 +1070,77 @@ CONSTRUCTOR_REFUSALS: dict[str, tuple[Callable, type[Exception], str]] = {
         ValueError,
         "sweeps is below 1",
     ),
+    # The numbers: a bool of either kind, another type, and each way of being
+    # out of range.
+    **{
+        f"{name}-{what}": (
+            functools.partial(lambda n, v, a: a.__setitem__(n, v), name, value),
+            TypeError,
+            f"{name} must be {kind}",
+        )
+        for name, kind in (
+            ("rho", "a number"),
+            ("mu", "a number"),
+            ("alpha", "a number"),
+            ("sweeps", "an int"),
+        )
+        for what, value in (
+            ("bool", True),
+            ("numpy-bool", np.True_),
+            ("string", "1.0"),
+            *((("float", 2.0),) if name == "sweeps" else ()),
+        )
+    },
+    **{
+        f"{name}-{what}": (
+            functools.partial(lambda n, v, a: a.__setitem__(n, v), name, value),
+            ValueError,
+            message,
+        )
+        for name, message in (
+            ("rho", "rho is not finite and positive"),
+            ("mu", "mu is not finite and positive"),
+            ("alpha", "alpha is not above 0 and at most 1"),
+        )
+        for what, value in (
+            ("zero", 0.0),
+            ("negative", -1.0),
+            ("nan", np.nan),
+            ("inf", np.inf),
+        )
+    },
+    **{
+        f"{name}-none": (
+            functools.partial(lambda n, a: a.__setitem__(n, None), name),
+            TypeError,
+            "incompatible function arguments",
+        )
+        for name in ("rho", "mu", "alpha", "sweeps")
+    },
+    "alpha-above-one": (
+        lambda a: a.__setitem__("alpha", np.nextafter(1.0, 2.0)),
+        ValueError,
+        "alpha is not above 0 and at most 1",
+    ),
+    "sweeps-negative": (
+        lambda a: a.__setitem__("sweeps", -1),
+        ValueError,
+        "sweeps is below 1",
+    ),
+    **{
+        f"{name}-{what}": (
+            functools.partial(_spoil_last, name, value),
+            ValueError,
+            f"{name[3:]} widths are not all finite and positive",
+        )
+        for name in ("dx_cell", "dy_cell", "dx_face", "dy_face")
+        for what, value in (
+            ("zero", 0.0),
+            ("negative", -1.0),
+            ("nan", np.nan),
+            ("inf", np.inf),
+        )
+    },
     "three-edges": (
         lambda a: a.__setitem__("tangential", a["tangential"][:3]),
         TypeError,
@@ -1023,6 +1169,35 @@ CONSTRUCTOR_REFUSALS: dict[str, tuple[Callable, type[Exception], str]] = {
         )
     },
     **{
+        f"edge-{edge}-distance-{what}": (
+            functools.partial(
+                lambda e, v, a: _spoil_edge(a, e, 2, lambda _old: v), edge, value
+            ),
+            error,
+            message,
+        )
+        for edge, name in enumerate(("bottom", "top", "left", "right"))
+        for what, value, error, message in (
+            ("bool", True, TypeError, f"{name} wall_distance must be a number, not"),
+            ("numpy-bool", np.True_, TypeError, f"{name} wall_distance must be a"),
+            ("none", None, TypeError, f"{name} wall_distance must be a number"),
+            ("string", "1.0", TypeError, f"{name} wall_distance must be a number"),
+            ("zero", 0.0, ValueError, "wall distance is not finite and positive"),
+            ("negative", -0.1, ValueError, "wall distance is not finite and positive"),
+            ("nan", np.nan, ValueError, "wall distance is not finite and positive"),
+            ("inf", np.inf, ValueError, "wall distance is not finite and positive"),
+        )
+    },
+    **{
+        f"edge-{edge}-{what}": (
+            functools.partial(_spoil_edge_length, edge, parts),
+            TypeError,
+            f"{name} is not",
+        )
+        for edge, name in enumerate(("bottom", "top", "left", "right"))
+        for what, parts in (("two-parts", 2), ("four-parts", 4))
+    },
+    **{
         f"{name}-{what}": (
             functools.partial(lambda n, f, a: a.__setitem__(n, f(a[n])), name, change),
             TypeError,
@@ -1039,7 +1214,7 @@ CONSTRUCTOR_REFUSALS: dict[str, tuple[Callable, type[Exception], str]] = {
 
 @pytest.mark.parametrize("case", list(CONSTRUCTOR_REFUSALS))
 def test_the_constructor_refuses_wrong_arguments(case: str) -> None:
-    """A wrong length, dtype, shape or count is refused when the predictor is built."""
+    """A wrong length, dtype, shape or number is refused when the predictor is built."""
     change, error, message = CONSTRUCTOR_REFUSALS[case]
     arguments = _arguments()
     change(arguments)
@@ -1050,6 +1225,10 @@ def test_the_constructor_refuses_wrong_arguments(case: str) -> None:
 def test_the_constructor_accepts_the_arguments_the_refusals_spoil() -> None:
     """The arguments of _arguments make a predictor, so each refusal is its own change's."""
     _cfdcore.MomentumPredictor2(**_arguments())
+    # The ends of the ranges, and NumPy's numbers, are inside.
+    _cfdcore.MomentumPredictor2(
+        **{**_arguments(), "alpha": 1.0, "sweeps": np.int64(2), "rho": np.float64(1.2)}
+    )
 
 
 @pytest.mark.parametrize(("ny", "nx"), [(1, 3), (3, 1), (1, 1)])

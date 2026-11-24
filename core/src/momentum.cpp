@@ -280,6 +280,10 @@ struct cross_run {
 // T. `Inner` reads the nodes of a row along T off one pointer. `Obstacles`
 // takes the wall as the far node beside an obstacle face and adds nothing at
 // one (`_obstacle_transverse`).
+//
+// Mostly choices too, and timed in both forms with `cell_deferred` (section 3
+// of the report, the form `quick_loops`): the block with a select per choice was
+// the faster in every round of every part that assembles, and is kept.
 template <int T, bool Inner, bool Obstacles, std::size_t N>
 inline void corner_deferred(lanes::cells<N>, const cross_run& in, std::size_t first,
                             double* CFDCORE_RESTRICT out) {
@@ -805,6 +809,32 @@ void corner_conductance_row(const corner_conductance_run run, std::size_t count,
 }
 
 // ---------------------------------------------------------------------------
+// The checks of an argument
+
+void require_length(std::size_t got, std::size_t expected, const char* what) {
+    if (got != expected) {
+        throw std::invalid_argument(std::string("momentum: ") + what +
+                                    " does not have the length the grid needs");
+    }
+}
+
+void require_index(int got, int count, const char* what) {
+    if (got < 0 || got >= count) {
+        throw std::invalid_argument(std::string("momentum: there is no such ") + what);
+    }
+}
+
+// Whether a value is finite and positive: false for a NaN.
+bool finite_and_positive(double x) {
+    return x > 0.0 && x <= std::numeric_limits<double>::max();
+}
+
+bool finite_and_positive(std::span<const double> values) {
+    return std::all_of(values.begin(), values.end(),
+                       [](double x) { return finite_and_positive(x); });
+}
+
+// ---------------------------------------------------------------------------
 // The checks of a viscosity
 
 struct verdicts {
@@ -1211,6 +1241,30 @@ std::string_view predictor<D>::check(const grid::grid<D>& g, const predictor_inp
             return "the held faces are not one flag per face";
         }
     }
+    for (int d = 0; d < D; ++d) {
+        if (!finite_and_positive(in.cell_widths[d])) {
+            return "a direction's cell widths are not all finite and positive";
+        }
+        if (!finite_and_positive(in.face_widths[d])) {
+            return "a direction's face widths are not all finite and positive";
+        }
+        for (int q = 0; q < D - 1; ++q) {
+            for (const edge_condition* e : {&in.low[d][q], &in.high[d][q]}) {
+                if (!finite_and_positive(e->wall_distance)) {
+                    return "an edge's wall distance is not finite and positive";
+                }
+            }
+        }
+    }
+    if (!finite_and_positive(in.rho)) {
+        return "rho is not finite and positive";
+    }
+    if (!finite_and_positive(in.mu)) {
+        return "mu is not finite and positive";
+    }
+    if (!(in.alpha > 0.0 && in.alpha <= 1.0)) {
+        return "alpha is not above 0 and at most 1";
+    }
     if (in.sweeps < 1) {
         return "sweeps is below 1";
     }
@@ -1271,7 +1325,30 @@ predictor<D>::predictor(const grid::grid<D>& g, const predictor_input<D>& in)
 
 template <int D>
     requires(D >= 1)
+void predictor<D>::require_fields(
+    const std::array<std::span<const double>, D>& velocity, std::span<const double> p,
+    std::span<const double> mu_eff,
+    [[maybe_unused]] const per_pair<std::span<const double>, D>& wall_mu) const {
+    const std::size_t cells = grid_->fields().cell_count();
+    require_length(p.size(), cells, "the pressure");
+    if (!mu_eff.empty()) {
+        require_length(mu_eff.size(), cells, "mu_eff");
+    }
+    for (int c = 0; c < D; ++c) {
+        require_length(velocity[c].size(), setup_[c].faces.cell_count(), "a velocity component");
+        for (int q = 0; q < D - 1; ++q) {
+            if (!wall_mu[c][q].empty()) {
+                require_length(wall_mu[c][q].size(), setup_[c].pairs[q].corners.cell_count(),
+                               "wall_mu");
+            }
+        }
+    }
+}
+
+template <int D>
+    requires(D >= 1)
 viscosity_status predictor<D>::check_viscosity(std::span<const double> mu_eff) const {
+    require_length(mu_eff.size(), grid_->fields().cell_count(), "mu_eff");
     return verdict_of(mu_eff, grid_->solid_flags(), lanes::all);
 }
 
@@ -1279,6 +1356,9 @@ template <int D>
     requires(D >= 1)
 viscosity_status predictor<D>::check_wall_viscosity(int c, int q,
                                                     std::span<const double> wall_mu) const {
+    require_index(c, D, "component");
+    require_index(q, D - 1, "slot");
+    require_length(wall_mu.size(), setup_[c].pairs[q].corners.cell_count(), "wall_mu");
     return verdict_of(wall_mu, setup_[c].pairs[q].wall_read, lanes::none);
 }
 
@@ -1865,6 +1945,11 @@ void predictor<D>::predict(const std::array<std::span<const double>, D>& velocit
                            const per_pair<std::span<const double>, D>& wall_mu,
                            const std::array<std::span<double>, D>& star,
                            const std::array<std::span<double>, D>& diagonal) {
+    require_fields(velocity, p, mu_eff, wall_mu);
+    for (int c = 0; c < D; ++c) {
+        require_length(star[c].size(), setup_[c].faces.cell_count(), "star");
+        require_length(diagonal[c].size(), setup_[c].faces.cell_count(), "a diagonal");
+    }
     const auto component = [&]<int C> {
         assemble<C>(velocity, p, mu_eff, wall_mu, diagonal[C].data());
         sweep<C>(velocity[C].data(), diagonal[C].data(), star[C].data());
@@ -1880,6 +1965,9 @@ void predictor<D>::equations(int c, const std::array<std::span<const double>, D>
                              std::span<const double> p, std::span<const double> mu_eff,
                              const per_pair<std::span<const double>, D>& wall_mu,
                              std::span<double> diagonal) {
+    require_index(c, D, "component");
+    require_fields(velocity, p, mu_eff, wall_mu);
+    require_length(diagonal.size(), setup_[c].faces.cell_count(), "the diagonal");
     const auto component = [&]<int C> {
         if (c == C) {
             assemble<C>(velocity, p, mu_eff, wall_mu, diagonal.data());
@@ -1894,6 +1982,13 @@ template <int D>
     requires(D >= 1)
 void predictor<D>::stencil_viscosity(std::span<const double> mu_eff,
                                      [[maybe_unused]] const per_pair<std::span<double>, D>& out) {
+    require_length(mu_eff.size(), grid_->fields().cell_count(), "mu_eff");
+    for (int c = 0; c < D; ++c) {
+        for (int q = 0; q < D - 1; ++q) {
+            require_length(out[c][q].size(), setup_[c].pairs[q].corners.cell_count(),
+                           "a stencil's viscosity");
+        }
+    }
     const auto pair = [&]<int C, int T> {
         const pair_setup<D>& w = setup_[C].pairs[slot_of(C, T)];
         const std::span<double> to = out[C][slot_of(C, T)];

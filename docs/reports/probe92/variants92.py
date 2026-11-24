@@ -938,6 +938,232 @@ PLANTS: list[tuple[str, str, list[Edit]]] = [
             )
         ],
     ),
+    # Round 1 (prompt 92b): a face of exactly zero flux beside a NaN (test 92 S2).
+    (
+        "zero_flux_positive_s",
+        "a streamwise face of exactly zero flux takes the positive direction's stencil",
+        [
+            momentum(
+                "        const mask positive = lanes::mask_of(f > 0.0);\n"
+                "        const double q_pos = along<C>(in.std_pos[0], i) * below +",
+                "        const mask positive = lanes::mask_of(f >= 0.0);\n"
+                "        const double q_pos = along<C>(in.std_pos[0], i) * below +",
+            )
+        ],
+    ),
+    (
+        "zero_flux_positive_t",
+        "a transverse face of exactly zero flux takes the positive direction's stencil",
+        [
+            momentum(
+                "        const mask positive = lanes::mask_of(f > 0.0);\n"
+                "        const double q_pos = along<T>(in.pos[0], i) * below",
+                "        const mask positive = lanes::mask_of(f >= 0.0);\n"
+                "        const double q_pos = along<T>(in.pos[0], i) * below",
+            )
+        ],
+    ),
+    # The numbers the constructor is given (review 92 S3).
+    *[
+        (f"number_{name}", f"the core's check: {what}", [momentum(old, new)])
+        for name, what, old, new in (
+            (
+                "zero",
+                "a zero taken for positive",
+                "    return x > 0.0 && x <= std::numeric_limits<double>::max();",
+                "    return x >= 0.0 && x <= std::numeric_limits<double>::max();",
+            ),
+            (
+                "infinite",
+                "an infinity taken for finite",
+                "    return x > 0.0 && x <= std::numeric_limits<double>::max();",
+                "    return x > 0.0;",
+            ),
+            (
+                "last_width",
+                "the last width of a direction not checked",
+                "    return std::all_of(values.begin(), values.end(),",
+                "    return std::all_of(values.begin(), values.end() - 1,",
+            ),
+            (
+                "cell_widths",
+                "the cell widths' values removed",
+                "        if (!finite_and_positive(in.cell_widths[d])) {",
+                "        if (false) {",
+            ),
+            (
+                "face_widths",
+                "the face widths' values removed",
+                "        if (!finite_and_positive(in.face_widths[d])) {",
+                "        if (false) {",
+            ),
+            (
+                "wall_distance",
+                "the wall distances removed",
+                "                if (!finite_and_positive(e->wall_distance)) {",
+                "                if (false) {",
+            ),
+            (
+                "wall_distance_high",
+                "the high edges' wall distances not checked",
+                "            for (const edge_condition* e : {&in.low[d][q], &in.high[d][q]}) {\n"
+                "                if (!finite",
+                "            for (const edge_condition* e : {&in.low[d][q], &in.low[d][q]}) {\n"
+                "                if (!finite",
+            ),
+            (
+                "rho",
+                "rho removed",
+                "    if (!finite_and_positive(in.rho)) {",
+                "    if (false) {",
+            ),
+            (
+                "mu",
+                "mu removed",
+                "    if (!finite_and_positive(in.mu)) {",
+                "    if (false) {",
+            ),
+            (
+                "alpha",
+                "alpha's lower end removed",
+                "    if (!(in.alpha > 0.0 && in.alpha <= 1.0)) {",
+                "    if (!(in.alpha <= 1.0)) {",
+            ),
+            (
+                "alpha_zero",
+                "an alpha of zero accepted",
+                "    if (!(in.alpha > 0.0 && in.alpha <= 1.0)) {",
+                "    if (!(in.alpha >= 0.0 && in.alpha <= 1.0)) {",
+            ),
+            (
+                "alpha_above",
+                "alpha's upper end removed",
+                "    if (!(in.alpha > 0.0 && in.alpha <= 1.0)) {",
+                "    if (!(finite_and_positive(in.alpha))) {",
+            ),
+            (
+                "alpha_one",
+                "an alpha of one refused",
+                "    if (!(in.alpha > 0.0 && in.alpha <= 1.0)) {",
+                "    if (!(in.alpha > 0.0 && in.alpha < 1.0)) {",
+            ),
+        )
+    ],
+    # The lengths of the spans a call is handed (review 92 S4).
+    *[
+        (f"length_{name}", f"the core's check removed: {what}", [momentum(old, new)])
+        for name, what, old, new in (
+            (
+                "longer",
+                "a longer array accepted",
+                "    if (got != expected) {\n        throw",
+                "    if (got < expected) {\n        throw",
+            ),
+            (
+                "pressure",
+                "the pressure's length",
+                '    require_length(p.size(), cells, "the pressure");\n',
+                "    (void)p;\n",
+            ),
+            (
+                "mu_eff",
+                "mu_eff's length in predict and equations",
+                "    if (!mu_eff.empty()) {\n        require_length(",
+                "    if (mu_eff.size() > 2 * cells) {\n        require_length(",
+            ),
+            (
+                "velocity",
+                "the velocities' lengths",
+                '        require_length(velocity[c].size(), setup_[c].faces.cell_count(), "a velocity component");\n',
+                "        (void)velocity;\n",
+            ),
+            (
+                "velocity_first",
+                "the velocities' lengths but the first",
+                '        require_length(velocity[c].size(), setup_[c].faces.cell_count(), "a velocity component");\n',
+                '        require_length(velocity[0].size(), setup_[0].faces.cell_count(), "a velocity component");\n',
+            ),
+            (
+                "wall_mu",
+                "wall_mu's lengths in predict and equations",
+                "            if (!wall_mu[c][q].empty()) {\n",
+                "            if (false) {\n",
+            ),
+            (
+                "fields_of_predict",
+                "the inputs' lengths in predict",
+                "    require_fields(velocity, p, mu_eff, wall_mu);\n    for (int c",
+                "    for (int c",
+            ),
+            (
+                "fields_of_equations",
+                "the inputs' lengths in equations",
+                "    require_fields(velocity, p, mu_eff, wall_mu);\n    require_length",
+                "    require_length",
+            ),
+            (
+                "star",
+                "star's lengths",
+                '        require_length(star[c].size(), setup_[c].faces.cell_count(), "star");\n',
+                "",
+            ),
+            (
+                "diagonal",
+                "the diagonals' lengths in predict",
+                '        require_length(diagonal[c].size(), setup_[c].faces.cell_count(), "a diagonal");\n',
+                "",
+            ),
+            (
+                "equations_diagonal",
+                "the diagonal's length in equations",
+                '    require_length(diagonal.size(), setup_[c].faces.cell_count(), "the diagonal");\n',
+                "",
+            ),
+            (
+                "equations_component",
+                "the component of equations",
+                '    require_index(c, D, "component");\n    require_fields',
+                "    if (c < 0 || c >= D) {\n        return;\n    }\n    require_fields",
+            ),
+            (
+                "stencil_mu",
+                "mu_eff's length in stencil_viscosity",
+                '    require_length(mu_eff.size(), grid_->fields().cell_count(), "mu_eff");\n    for',
+                "    for",
+            ),
+            (
+                "stencil_out",
+                "the outputs' lengths in stencil_viscosity",
+                "            require_length(out[c][q].size(), setup_[c].pairs[q].corners.cell_count(),\n"
+                '                           "a stencil\'s viscosity");\n',
+                "",
+            ),
+            (
+                "check_viscosity",
+                "mu_eff's length in check_viscosity",
+                '    require_length(mu_eff.size(), grid_->fields().cell_count(), "mu_eff");\n    return',
+                "    return",
+            ),
+            (
+                "check_wall",
+                "wall_mu's length in check_wall_viscosity",
+                '    require_length(wall_mu.size(), setup_[c].pairs[q].corners.cell_count(), "wall_mu");\n    return',
+                "    return",
+            ),
+            (
+                "check_wall_component",
+                "the component of check_wall_viscosity",
+                '    require_index(c, D, "component");\n    require_index(q',
+                "    if (c < 0 || c >= D) {\n        return viscosity_status::ok;\n    }\n    require_index(q",
+            ),
+            (
+                "check_wall_slot",
+                "the slot of check_wall_viscosity",
+                '    require_index(q, D - 1, "slot");\n',
+                "    if (q < 0 || q >= D - 1) {\n        return viscosity_status::ok;\n    }\n",
+            ),
+        )
+    ],
     # The core's checks.
     (
         "check_not_finite",
@@ -1203,6 +1429,54 @@ PLANTS: list[tuple[str, str, list[Edit]]] = [
                 "a transient argument ignored",
                 "    if (!transient.is_none()) {",
                 "    if (false) {",
+            ),
+            (
+                "transient_with_a_field",
+                "a transient argument ignored with a viscosity field (test 92 S1)",
+                "    if (!transient.is_none()) {",
+                "    if (!transient.is_none() && mu_eff.is_none()) {",
+            ),
+            (
+                "transient_with_a_wall",
+                "a transient argument ignored with a wall viscosity (test 92 S1)",
+                "    if (!transient.is_none()) {",
+                "    if (!transient.is_none() && wall_mu.is_none()) {",
+            ),
+            (
+                "rho_bool",
+                "a bool rho accepted",
+                '    input.rho = read_number(rho, "rho");',
+                "    input.rho = PyFloat_AsDouble(rho.ptr());",
+            ),
+            (
+                "mu_bool",
+                "a bool mu accepted",
+                '    input.mu = read_number(mu, "mu");',
+                "    input.mu = PyFloat_AsDouble(mu.ptr());",
+            ),
+            (
+                "alpha_bool",
+                "a bool alpha accepted",
+                '    input.alpha = read_number(alpha, "alpha");',
+                "    input.alpha = PyFloat_AsDouble(alpha.ptr());",
+            ),
+            (
+                "sweeps_bool",
+                "a bool or a float sweeps accepted",
+                '    input.sweeps = read_count(sweeps, "sweeps");',
+                "    input.sweeps = static_cast<std::int64_t>(PyFloat_AsDouble(sweeps.ptr()));",
+            ),
+            (
+                "distance_bool",
+                "a bool wall distance accepted",
+                'read_number(edge[2], (who + " wall_distance").c_str());',
+                "PyFloat_AsDouble(nb::object(edge[2]).ptr());",
+            ),
+            (
+                "edge_parts",
+                "an edge of another number of parts accepted",
+                "    if (nb::len(edge) != 3 || !nb::try_cast",
+                "    if (nb::len(edge) < 1 || !nb::try_cast",
             ),
             (
                 "wall_ignored",

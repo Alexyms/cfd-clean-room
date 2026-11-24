@@ -224,11 +224,16 @@ class predictor {
 public:
     // Why `input` cannot make a predictor on `g`, or an empty view when it
     // can: fewer than two cells along a direction, an array whose length is
-    // not the grid's, or fewer than one sweep.
+    // not the grid's, a width, a wall distance, rho or mu that is not finite
+    // and positive, alpha outside (0, 1] (the configuration's range), or fewer
+    // than one sweep.
     static std::string_view check(const grid::grid<D>& g, const predictor_input<D>& input);
 
     // Builds the predictor from an input `check` accepts, copying every array.
     // Throws std::invalid_argument for one it does not.
+    //
+    // Every call below throws std::invalid_argument for an array whose length
+    // is not the grid's and for a component or slot there is not.
     predictor(const grid::grid<D>& g, const predictor_input<D>& input);
 
     // The checks of `predict`'s viscosities. `mu_eff`: cells, Pa s, finite and
@@ -325,6 +330,11 @@ private:
         const flux_row* low = nullptr;
         const flux_row* high = nullptr;
     };
+
+    // The length checks of the arguments `predict` and `equations` share.
+    void require_fields(const std::array<std::span<const double>, D>& velocity,
+                        std::span<const double> p, std::span<const double> mu_eff,
+                        const per_pair<std::span<const double>, D>& wall_mu) const;
 
     template <int C>
     void assemble(const std::array<std::span<const double>, D>& velocity,

@@ -1545,14 +1545,14 @@ cfdcore::momentum::edge_condition read_edge(nb::handle edge, std::size_t n, cons
     BoolVector known;
     Vector value;
     cfdcore::momentum::edge_condition condition;
-    if (!nb::try_cast<BoolVector>(edge[0], known, false) || known.shape(0) != n ||
+    if (nb::len(edge) != 3 || !nb::try_cast<BoolVector>(edge[0], known, false) || known.shape(0) != n ||
         !nb::try_cast<Vector>(edge[1], value, false) || value.shape(0) != n) {
         refuse_type(who + " is not (is_dirichlet, value, wall_distance) with bool and float64 "
                           "arrays of " +
                     std::to_string(n) + " entries");
     }
     require_aligned(value.data(), alignof(double), who);
-    condition.wall_distance = nb::cast<double>(edge[2]);
+    condition.wall_distance = read_number(edge[2], (who + " wall_distance").c_str());
     flags.push_back(known);
     values.push_back(value);
     condition.is_dirichlet = std::span<const bool>(flags.back().data(), n);
@@ -1561,8 +1561,8 @@ cfdcore::momentum::edge_condition read_edge(nb::handle edge, std::size_t n, cons
 }
 
 void momentum_init(Predictor2* self, const Grid2& g, const Vector& dx_cell, const Vector& dy_cell,
-                   const Vector& dx_face, const Vector& dy_face, double rho, double mu,
-                   double alpha, std::int64_t sweeps, nb::handle tangential,
+                   const Vector& dx_face, const Vector& dy_face, nb::handle rho, nb::handle mu,
+                   nb::handle alpha, nb::handle sweeps, nb::handle tangential,
                    const std::optional<BoolMatrix>& held_u,
                    const std::optional<BoolMatrix>& held_v) {
     constexpr std::string_view who = "MomentumPredictor2";
@@ -1593,10 +1593,10 @@ void momentum_init(Predictor2* self, const Grid2& g, const Vector& dx_cell, cons
             input.held[c] = span_of(**held[c]);
         }
     }
-    input.rho = rho;
-    input.mu = mu;
-    input.alpha = alpha;
-    input.sweeps = sweeps;
+    input.rho = read_number(rho, "rho");
+    input.mu = read_number(mu, "mu");
+    input.alpha = read_number(alpha, "alpha");
+    input.sweeps = read_count(sweeps, "sweeps");
     // The core's reason, the reference's message among them, is a ValueError.
     new (self) Predictor2(g, input);
 }
@@ -2234,8 +2234,10 @@ NB_MODULE(_cfdcore, m) {
         "viscosity, solver.alpha_velocity and momentum_sweeps, the bottom, top, left and\n"
         "right edges' conditions as (is_dirichlet, value, wall_distance) tuples, and the vent\n"
         "faces the sweeps keep (VentFaces.normal_u, normal_v). Fewer than two cells along an\n"
-        "axis, a width of another length or fewer than one sweep raise ValueError; an edge or a\n"
-        "vent mask of another shape TypeError.")
+        "axis, widths of another length, a width, a wall distance, rho or mu that is not finite\n"
+        "and positive, alpha outside (0, 1] or fewer than one sweep raise ValueError; an edge or a\n"
+        "vent mask of another shape, and a bool or another type where a number is read,\n"
+        "TypeError.")
         .def("__init__", &momentum_init, nb::arg("grid"), nb::arg("dx_cell").noconvert(),
              nb::arg("dy_cell").noconvert(), nb::arg("dx_face").noconvert(),
              nb::arg("dy_face").noconvert(), nb::arg("rho"), nb::arg("mu"), nb::arg("alpha"),
