@@ -1,9 +1,11 @@
-"""The tables of prompt 92's momentum report, from the records in results/builder92/.
+"""The tables of prompt 92's momentum report, from results/builder92/ and builder92b/.
 
     python docs/reports/probe92/tables92.py           # write tables92.md, splice the report
     python docs/reports/probe92/tables92.py --check   # regenerate and compare, write nothing
 
-Run with Windows' ``.venv``: every record it reads is in the checkout.
+Run with Windows' ``.venv``: every record it reads is in the checkout. T2, T5, T5b and T6
+are prompt 92's records, of 6ca02d7; T1, T1b, T3, T4, T7 and T8 are prompt 92b's, of the
+module written per direction, in ``results/builder92b/``.
 ``--check`` also fails when one of the report's marker pairs is missing.
 """
 
@@ -20,6 +22,10 @@ ROOT = HERE.parents[2]
 TABLES = HERE / "tables92.md"
 REPORT = ROOT / "docs" / "reports" / "phase6_momentum.md"
 RESULTS = ROOT / "results" / "builder92"
+CURRENT = ROOT / "results" / "builder92b"
+# The sessions of the kernels' timing and the ratio above which one is slower.
+SESSIONS = (1, 2, 3)
+SLOWER = 1.05
 SPEED = 5.0
 CASES = {
     "product80": "80x30 product room",
@@ -49,9 +55,9 @@ def table(header: list[str], rows: list[list[object]]) -> list[str]:
     return lines
 
 
-def load(name: str) -> object:
-    """A JSON record of results/builder92/."""
-    return json.loads((RESULTS / name).read_text(encoding="utf-8"))
+def load(name: str, root: Path = RESULTS) -> object:
+    """A JSON record, of results/builder92/ unless another root is given."""
+    return json.loads((root / name).read_text(encoding="utf-8"))
 
 
 def junit_cases(path: Path) -> list[tuple[str, str, str]]:
@@ -82,7 +88,7 @@ def counts(outcomes: list[str]) -> list[object]:
 
 def tests_tables() -> tuple[list[str], list[str], dict[str, list[str]]]:
     """T1: the new parity cases by function; T1b: CTest and the whole suites."""
-    cases = junit_cases(RESULTS / "parity.xml")
+    cases = junit_cases(CURRENT / "parity.xml")
     by_function: dict[str, list[str]] = {}
     for cls, name, outcome in cases:
         if cls.endswith("test_core_momentum"):
@@ -96,7 +102,7 @@ def tests_tables() -> tuple[list[str], list[str], dict[str, list[str]]]:
     )
     functions = table(["Test", "Cases", "Passed", "Failed", "Skipped"], rows)
 
-    ctest = junit_cases(RESULTS / "ctest.xml")
+    ctest = junit_cases(CURRENT / "ctest.xml")
     suites: dict[str, list[str]] = {}
     for _cls, name, outcome in ctest:
         suites.setdefault(name.split(".")[0], []).append(outcome)
@@ -114,7 +120,7 @@ def tests_tables() -> tuple[list[str], list[str], dict[str, list[str]]]:
         ("the whole suite, WSL2, the core built", "suite_linux.xml"),
         ("the whole suite, Windows, the core not built", "suite_windows.xml"),
     ):
-        rows.append([label, *counts([c[2] for c in junit_cases(RESULTS / name)])])
+        rows.append([label, *counts([c[2] for c in junit_cases(CURRENT / name)])])
     return (
         functions,
         table(["Tests", "Cases", "Passed", "Failed", "Skipped"], rows),
@@ -160,7 +166,7 @@ def captures_table() -> list[str]:
 
 def replay_table() -> tuple[list[str], bool, int]:
     """T3: the captured calls replayed, by case and output."""
-    records = load("replay.json")
+    records = load("replay.json", CURRENT)
     rows = []
     clean = True
     total = 0
@@ -216,7 +222,7 @@ def plant_records() -> list[dict]:
     import variants92
 
     records: dict[str, dict] = {}
-    for path in sorted(RESULTS.glob("plants_s*.json")):
+    for path in sorted(CURRENT.glob("plants_s*.json")):
         for record in json.loads(path.read_text(encoding="utf-8")):
             records[record["name"]] = record
     return [records[name] for name, _what, _edits in variants92.PLANTS]
@@ -381,7 +387,7 @@ def forms_table() -> list[str]:
 
 def loops_table() -> list[str]:
     """T7: the blocks of momentum.cpp and whether GCC vectorises each."""
-    record = load("vecinfo.json")
+    record = load("vecinfo.json", CURRENT)
     rows = [
         [f"`{b['block']}`", "yes" if b["vectorised"] else "no"]
         for b in record["blocks"]
@@ -400,6 +406,55 @@ def loops_table() -> list[str]:
             if not b["vectorised"]
         )
         + ".",
+    ]
+
+
+def kernels_table() -> list[str]:
+    """T8: each kernel and pass before and after the restructure, by session."""
+    sessions = [load(f"kernels_{s}.json", CURRENT) for s in SESSIONS]
+    rows = []
+    slower = []
+    for key in sessions[0]["rounds"][0]["before"]:
+        ratios = []
+        times: dict[str, list[float]] = {"before": [], "after": []}
+        for session in sessions:
+            medians = {}
+            for build in times:
+                values = [r[build][key] for r in session["rounds"]]
+                times[build] += values
+                medians[build] = statistics.median(values)
+            ratios.append(medians["after"] / medians["before"])
+        if min(ratios) > SLOWER:
+            slower.append(key)
+        rows.append(
+            [
+                key,
+                f"{statistics.median(times['before']):.1f}",
+                f"{statistics.median(times['after']):.1f}",
+                ", ".join(f"{r:.3f}" for r in ratios),
+                f"{statistics.median(times['after']) / statistics.median(times['before']):.3f}",
+            ]
+        )
+    state = "; ".join(
+        f"session {s} started {session['started']} (Windows before: "
+        f"{load_text(session['windows_before'])})"
+        for s, session in zip(SESSIONS, sessions, strict=True)
+    )
+    return [
+        *table(
+            [
+                "Kernel or pass",
+                "6ca02d7, us",
+                "Per direction, us",
+                "Ratio by session",
+                "Ratio, all rounds",
+            ],
+            rows,
+        ),
+        "",
+        f"Above {SLOWER} in every session: "
+        + (", ".join(f"`{k}`" for k in slower) if slower else "none")
+        + f". {state}.",
     ]
 
 
@@ -430,7 +485,7 @@ def predictions_table(
         )
         for o in outcomes
     ]
-    records = load("replay.json")
+    records = load("replay.json", CURRENT)
     predicts = [r for r in records if r["what"] == "predict"]
     clean = [r for r in predicts if not any(r["differ"].values())]
     a_holds = replay_clean and planted.count("passed") == len(planted) > 0
@@ -509,6 +564,11 @@ def build() -> tuple[str, dict[str, str]]:
             forms_table(),
         ),
         ("loops", "T7. The blocks GCC vectorises", loops_table()),
+        (
+            "kernels",
+            "T8. Each kernel and pass, the build of 6ca02d7 against the per-direction one",
+            kernels_table(),
+        ),
     ]
     blocks = {
         name: "\n".join([f"### {title}", "", *lines]) for name, title, lines in sections

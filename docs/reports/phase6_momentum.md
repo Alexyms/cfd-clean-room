@@ -1,10 +1,15 @@
 # Phase 6 Step 4a: The Momentum Predictor (prompt 92)
 
 **Date:** 2026-11-23
-**Prompt:** 92 (`docs/prompts/cc-prompt-92-momentum.md`)
+**Prompt:** 92 (`docs/prompts/cc-prompt-92-momentum.md`), and its round 1, 92b
+(`docs/prompts/cc-prompt-92b-per-direction.md`)
 **Branch:** `phase6/momentum`
 **Status:** built. Predictions (a), (b) and (c) hold (T0). No stop condition of the prompt was
-met. Review and test 92 come before the pull request.
+met. Review 92 approved it and test 92 found no Bug; round 1 (prompt 92b) wrote the module per
+direction, on Alex's decision (section 7), and took the Suggestions of both.
+
+The tables T1, T1b, T3, T4, T7 and T8 are of the module as round 1 leaves it; T2, T5, T5b and T6
+are prompt 92's records, of 6ca02d7.
 
 This is the first half of Phase 6 step 4 (`docs/PROJECT_PLAN.md`, Phase 6, the steps table;
 ADR-017 B, C, F and G): `MomentumPredictor.predict` on the steady path in the core's `momentum`
@@ -71,7 +76,8 @@ full set is `docs/reports/probe92/tables92.md`.
 ## 1. The port
 
 `core/include/cfdcore/momentum.hpp` and `core/src/momentum.cpp` hold
-`momentum::predictor<2>`, constructed once on a grid with the mesh's widths, air's density and
+`momentum::predictor<D>`, instantiated at 1 and 2 (section 7) and described here for the two
+directions the reference has. It is constructed once on a grid with the mesh's widths, air's density and
 viscosity, the relaxation, the sweep count, each component's two transverse edge conditions and
 the vent faces. The binding exposes it as `_cfdcore.MomentumPredictor2`;
 `tests/core_mapping.py` builds one from the reference's own arguments. `predict` returns u*, v*
@@ -161,6 +167,7 @@ checks and the programming errors.
 | `test_one_predictor_through_many_calls_is_each_calls_own` | 1 | 1 | 0 | 0 |
 | `test_the_planted_inputs_reach_every_rule` | 1 | 1 | 0 | 0 |
 | `test_a_nan_lands_where_the_references_does` | 1 | 1 | 0 | 0 |
+| `test_a_face_without_a_flux_takes_the_references_stencil` | 32 | 32 | 0 | 0 |
 | `test_the_fixed_quantities_equal_the_references_per_call_values` | 18 | 18 | 0 | 0 |
 | `test_the_fixed_quantities_at_every_row_length` | 100 | 100 | 0 | 0 |
 | `test_the_coefficients_equal_the_references` | 20 | 20 | 0 | 0 |
@@ -169,17 +176,17 @@ checks and the programming errors.
 | `test_predict_refuses_what_the_reference_refuses` | 48 | 48 | 0 | 0 |
 | `test_predict_accepts_the_arguments_the_refusals_spoil` | 1 | 1 | 0 | 0 |
 | `test_stencil_viscosity_refuses_what_the_reference_refuses` | 14 | 14 | 0 | 0 |
-| `test_predict_refuses_a_transient_argument` | 2 | 2 | 0 | 0 |
+| `test_predict_refuses_a_transient_argument` | 8 | 8 | 0 | 0 |
 | `test_predict_refuses_a_field_it_cannot_read` | 12 | 12 | 0 | 0 |
 | `test_predict_refuses_a_viscosity_it_cannot_read` | 9 | 9 | 0 | 0 |
-| `test_the_constructor_refuses_wrong_arguments` | 42 | 42 | 0 | 0 |
+| `test_the_constructor_refuses_wrong_arguments` | 129 | 129 | 0 | 0 |
 | `test_the_constructor_accepts_the_arguments_the_refusals_spoil` | 1 | 1 | 0 | 0 |
 | `test_the_constructor_refuses_fewer_than_two_cells_as_the_reference_does` | 3 | 3 | 0 | 0 |
 | `test_fixed_and_coefficients_refuse_names_and_components_they_do_not_have` | 1 | 1 | 0 | 0 |
 | `test_the_binding_needs_nothing_from_src` | 1 | 1 | 0 | 0 |
 | `test_the_outputs_are_new_arrays_and_the_inputs_untouched` | 1 | 1 | 0 | 0 |
 | `test_the_meshes_hold_what_the_cases_need` | 1 | 1 | 0 | 0 |
-| `tests/test_core_momentum.py` | 1,069 | 1,069 | 0 | 0 |
+| `tests/test_core_momentum.py` | 1,194 | 1,194 | 0 | 0 |
 <!-- tables92 parity end -->
 
 <!-- tables92 tests begin -->
@@ -190,10 +197,12 @@ checks and the programming errors.
 | CTest, suite `MomentumPredict` | 5 | 5 | 0 | 0 |
 | CTest, suite `MomentumEquations` | 5 | 5 | 0 | 0 |
 | CTest, suite `MomentumViscosity` | 3 | 3 | 0 | 0 |
-| CTest, suite `MomentumSetup` | 1 | 1 | 0 | 0 |
-| CTest, all suites | 136 | 136 | 0 | 0 |
-| the three parity modules, WSL2, `CFD_CORE_REQUIRED=1` | 4,569 | 4,552 | 0 | 17 |
-| the whole suite, WSL2, the core built | 7,670 | 7,653 | 0 | 17 |
+| CTest, suite `MomentumOneDirection` | 4 | 4 | 0 | 0 |
+| CTest, suite `MomentumPairs` | 1 | 1 | 0 | 0 |
+| CTest, suite `MomentumSetup` | 2 | 2 | 0 | 0 |
+| CTest, all suites | 142 | 142 | 0 | 0 |
+| the three parity modules, WSL2, `CFD_CORE_REQUIRED=1` | 4,694 | 4,677 | 0 | 17 |
+| the whole suite, WSL2, the core built | 7,795 | 7,778 | 0 | 17 |
 | the whole suite, Windows, the core not built | 3,104 | 3,101 | 0 | 3 |
 <!-- tables92 tests end -->
 
@@ -204,8 +213,9 @@ in a struct the row's walker takes by value (or a few pointers, for the short on
 `CFDCORE_RESTRICT` parameters, the choices `select` and `keep` on masks of 64 bits, a row's end
 cells the same block on one cell with operands that hold the boundary (the missing far node, the
 zero beyond the row, the edge's value). Neighbours along the row are read either side of one
-pointer between a row's ends. A row of coefficients, whose first and last rows differ, has an
-instantiation per edge. No pass copies a field per sweep: the sweeps write the output and one
+pointer between a row's ends. The unknowns beside a domain edge, whose known neighbour enters the
+source or whose coefficient leaves the diagonal, are a block of their own after the diagonal's (in
+6ca02d7 they were instantiations of one block of every coefficient). No pass copies a field per sweep: the sweeps write the output and one
 scratch iterate in turn, the last always the output. Every array is allocated at construction.
 
 **Where it departs, and why.**
@@ -218,15 +228,16 @@ scratch iterate in turn, the last always the output. Every array is allocated at
   scalar (T6, `np_maximum`).
 - The two components take turns in one set of arrays. Arrays of their own were measured beside it
   (T6, `two_scratches`).
-- The module is `predictor<D>` for D = 2 only. The stencil has one transverse direction, as the
-  reference's has; a third would add terms to the diagonal and the source whose order no reference
-  fixes, and at D = 1 there is no transverse direction. The component is the template parameter
-  the kernels are written once over.
+- The coefficients of a row are written in a pass a direction and the diagonal in one more, where
+  6ca02d7 wrote them all in one block (T8, `coefficients`, whose time includes every one of these
+  passes): a block's outputs are parameters, so a block that wrote every direction's would have a
+  parameter list that changes with D.
 
 The QUICK face values of both directions are mostly choices, so both forms were timed under the
-project's flags, as the rules ask. There is no build of the commit before that has these kernels, so the
-comparison T6 makes is between forms built from this commit's source with the edits
-`variants92.FORMS` lists, timed in alternating order in one session on the same captured call.
+project's flags, as the rules ask. There was no build of the commit before 6ca02d7 that had these kernels, so
+the comparison T6 makes is between forms built from 6ca02d7's source with the edits
+`variants92.FORMS` listed, timed in alternating order in one session on the same captured call. T8
+(section 7) is the restructure's comparison with 6ca02d7.
 
 <!-- tables92 forms begin -->
 ### T6. The kernels' forms on the same call (the ratio to the head's over the three rounds)
@@ -265,12 +276,15 @@ only the first of these apart from the machine's noise.
 | `read_cells` | yes |
 | `cell_stress` | yes |
 | `corner_stress` | yes |
-| `coefficients` | yes |
+| `stream_neighbours` | yes |
+| `cross_neighbours` | yes |
+| `diagonals` | yes |
+| `edge_unknowns` | yes |
 | `sources` | yes |
 | `sweep_cells` | yes |
 | `verdict_cells` | yes |
 
-g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; -std=c++20 -O2 -ffp-contract=off -march=x86-64-v3 -DNDEBUG. 16 of 16 blocks vectorised, every one with vectors of 32 bytes. With `np_maximum` (T6) the blocks left scalar: `cell_flux`, `corner_flux`.
+g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; -std=c++20 -O2 -ffp-contract=off -march=x86-64-v3 -DNDEBUG. 19 of 19 blocks vectorised, every one with vectors of 32 bytes. With `np_maximum` (T6) the blocks left scalar: `cell_flux`, `corner_flux`.
 <!-- tables92 loops end -->
 
 ## 4. The captured calls
@@ -327,7 +341,10 @@ rest to its 400th outer iteration and starts from there, a state still moving (T
 ## 5. The planted defects
 
 Each is an edit of `core/` in a copy of the tree (`variants92.py`), built, and run through CTest,
-`tests/test_core_momentum.py` and the replay. The first eight are the prompt's.
+`tests/test_core_momentum.py` and the replay. The first eight are the prompt's. Round 1 ran the 101
+of prompt 92 again, each adapted where the line it edits moved, and 47 more: six on what the
+restructure adds (`kept_row_first` to `cross_pressure_below`), the tester's two on a face of zero
+flux and one on the transient refusal with a second beside it, and one for each check round 1 adds.
 
 <!-- tables92 plants begin -->
 ### T4. The planted defects: which nets fail on each
@@ -335,18 +352,18 @@ Each is an edit of `core/` in a copy of the tree (`variants92.py`), built, and r
 | Plant | What it changes | Fails |
 |---|---|---|
 | `control` | no edit: every test passes | nothing, as it must |
-| `deferred_sign` | the deferred correction added to the source, not subtracted | parity (775 cases of 8 tests); replay (product80, vents80, cavity40, annex216) |
-| `corner_means_swapped` | a corner's viscosity by the arithmetic mean across the flux and the harmonic along the face | CTest (1); parity (481 cases of 10 tests); replay (product80, vents80, annex216) |
-| `wall_missed_at_corner` | the wall stencil only where the neighbour face lies between two SOLID cells, not at a corner | CTest (3); parity (833 cases of 12 tests); replay (product80, vents80) |
+| `deferred_sign` | the deferred correction added to the source, not subtracted | CTest (1); parity (807 cases of 9 tests); replay (product80, vents80, cavity40, annex216) |
+| `corner_means_swapped` | a corner's viscosity by the arithmetic mean across the flux and the harmonic along the face | CTest (1); parity (497 cases of 11 tests); replay (product80, vents80, annex216) |
+| `wall_missed_at_corner` | the wall stencil only where the neighbour face lies between two SOLID cells, not at a corner | CTest (3); parity (865 cases of 13 tests); replay (product80, vents80) |
 | `vent_overwritten` | a vent's stored value overwritten by the sweep with zero | CTest (1); parity (391 cases of 6 tests); replay (vents80) |
-| `upwind_from_downstream` | the streamwise upwind coefficient taken from the downstream side | CTest (1); parity (795 cases of 9 tests); replay (product80, vents80, cavity40, annex216) |
-| `diagonal_without_mass_flux` | the diagonal's net mass flux dropped | CTest (1); parity (795 cases of 9 tests); replay (product80, vents80, cavity40, annex216) |
-| `relaxation_on_new_iterate` | the relaxation term of every sweep on that sweep's iterate, not on the call's input | CTest (1); parity (604 cases of 8 tests); replay (product80, vents80, annex216) |
-| `one_sweep_fewer` | one sweep fewer than asked, where more than one is | CTest (1); parity (628 cases of 8 tests); replay (product80, vents80, annex216) |
-| `upwind_from_downstream_t` | the transverse upwind coefficient taken from the downstream side | CTest (1); parity (795 cases of 9 tests); replay (product80, vents80, cavity40, annex216) |
-| `transverse_flux_by_mean` | the transverse mass flux from the mean of the two half cells, not width-weighted | parity (795 cases of 9 tests); replay (product80, vents80, cavity40, annex216) |
-| `diagonal_order` | the diagonal's neighbour sum added in another order | parity (795 cases of 9 tests); replay (product80, vents80, cavity40, annex216) |
-| `flux_order` | the diagonal's net flux added in another order | parity (795 cases of 9 tests); replay (product80, vents80, cavity40, annex216) |
+| `upwind_from_downstream` | the streamwise upwind coefficient taken from the downstream side | CTest (2); parity (827 cases of 10 tests); replay (product80, vents80, cavity40, annex216) |
+| `diagonal_without_mass_flux` | the diagonal's net mass flux dropped | CTest (2); parity (827 cases of 10 tests); replay (product80, vents80, cavity40, annex216) |
+| `relaxation_on_new_iterate` | the relaxation term of every sweep on that sweep's iterate, not on the call's input | CTest (3); parity (604 cases of 8 tests); replay (product80, vents80, annex216) |
+| `one_sweep_fewer` | one sweep fewer than asked, where more than one is | CTest (2); parity (628 cases of 8 tests); replay (product80, vents80, annex216) |
+| `upwind_from_downstream_t` | the transverse upwind coefficient taken from the downstream side | CTest (1); parity (827 cases of 10 tests); replay (product80, vents80, cavity40, annex216) |
+| `transverse_flux_by_mean` | the transverse mass flux from the mean of the two half cells, not width-weighted | parity (827 cases of 10 tests); replay (product80, vents80, cavity40, annex216) |
+| `diagonal_order` | the diagonal's neighbour sum added in another order | parity (827 cases of 10 tests); replay (product80, vents80, cavity40, annex216) |
+| `flux_order` | the diagonal's net flux added in another order | parity (827 cases of 10 tests); replay (product80, vents80, cavity40, annex216) |
 | `open_high_edge_kept` | a zero-gradient high edge's coefficient left in the diagonal | parity (201 cases of 4 tests) |
 | `open_low_edge_kept` | a zero-gradient low edge's coefficient left in the diagonal | parity (201 cases of 4 tests) |
 | `high_edge_value_dropped` | a Dirichlet high edge's value left out of the source | CTest (2); parity (181 cases of 3 tests); replay (cavity40) |
@@ -354,63 +371,102 @@ Each is an edit of `core/` in a copy of the tree (`variants92.py`), built, and r
 | `edges_swapped` | the high edge's condition read at the low one | CTest (2); parity (201 cases of 4 tests); replay (cavity40) |
 | `obstacle_neighbour_kept_high` | the coefficient toward an obstacle's face on the high side not zeroed | parity (164 cases of 3 tests) |
 | `obstacle_neighbour_kept_low` | the coefficient toward an obstacle's face on the low side not zeroed | parity (164 cases of 3 tests) |
-| `solid_faces_unmasked` | the diagonal of a SOLID cell's face left as formed | CTest (2); parity (701 cases of 9 tests); replay (product80, vents80) |
+| `solid_faces_unmasked` | the diagonal of a SOLID cell's face left as formed | CTest (2); parity (732 cases of 10 tests); replay (product80, vents80) |
 | `domain_edge_entries_kept` | the other component's entries left at a component's domain-edge faces | parity (20 cases of 1 tests) |
-| `unknown_by_not_zero` | a face taken for an unknown where its diagonal is not zero, not where it is positive | parity (181 cases of 4 tests) |
-| `half_rho_dropped` | the density's half in the mass flux dropped | CTest (2); parity (795 cases of 9 tests); replay (product80, vents80, cavity40, annex216) |
-| `takes_wall_not_at_obstacles` | wall_mu not read at the obstacle faces | CTest (1); parity (510 cases of 10 tests); replay (product80, vents80) |
-| `takes_wall_not_at_edges` | wall_mu not read at the domain edges | CTest (1); parity (561 cases of 10 tests); replay (product80, vents80, annex216) |
+| `unknown_by_not_zero` | a face taken for an unknown where its diagonal is not zero, not where it is positive | parity (213 cases of 5 tests) |
+| `half_rho_dropped` | the density's half in the mass flux dropped | CTest (3); parity (827 cases of 10 tests); replay (product80, vents80, cavity40, annex216) |
+| `takes_wall_not_at_obstacles` | wall_mu not read at the obstacle faces | CTest (1); parity (526 cases of 11 tests); replay (product80, vents80) |
+| `takes_wall_not_at_edges` | wall_mu not read at the domain edges | CTest (1); parity (577 cases of 11 tests); replay (product80, vents80, annex216) |
 | `open_edge_conducts` | a zero-gradient edge conducting as a wall does, with a viscosity field | parity (310 cases of 6 tests) |
-| `obstacle_wall_distance` | the obstacle wall taken a whole cell away, not half | CTest (2); parity (814 cases of 11 tests); replay (product80, vents80) |
-| `edge_wall_distance` | the high edge's wall distance read at the low edge | parity (779 cases of 11 tests); replay (product80, vents80, cavity40, annex216) |
-| `quick_order` | QUICK's three products added in another order | parity (768 cases of 8 tests); replay (product80, vents80, cavity40, annex216) |
-| `streamwise_blocked_pos` | the boundary form not taken beyond an obstacle's wall node, flow toward increasing s | parity (684 cases of 8 tests); replay (product80, vents80) |
-| `streamwise_blocked_neg` | the boundary form not taken beyond an obstacle's wall node, flow toward decreasing s | parity (684 cases of 8 tests); replay (product80, vents80) |
-| `transverse_wall_pos` | the obstacle's wall not the far node, flow toward increasing t | parity (683 cases of 8 tests); replay (product80, vents80) |
-| `transverse_wall_neg` | the obstacle's wall not the far node, flow toward decreasing t | parity (683 cases of 8 tests); replay (product80, vents80) |
-| `obstacle_face_corrected` | a deferred flux through an obstacle face | parity (674 cases of 8 tests); replay (product80, vents80) |
-| `edge_node_not_value` | the node beyond a Dirichlet edge of a u row the adjacent value, not the wall's | parity (775 cases of 8 tests); replay (product80, vents80, cavity40, annex216) |
-| `edge_node_not_value_v` | the node beyond a Dirichlet high edge of a v row the adjacent value, not the wall's | parity (765 cases of 8 tests); replay (product80, vents80, cavity40, annex216) |
-| `end_far_node` | the streamwise weights at the last face from the node before it as in the interior's other end | parity (775 cases of 8 tests); replay (product80, vents80, cavity40, annex216) |
-| `row_blocked_flags` | no row of cells marked as holding an obstacle | parity (684 cases of 8 tests); replay (product80, vents80) |
-| `row_wall_flags` | no row of corners marked as holding an obstacle | parity (685 cases of 8 tests); replay (product80, vents80) |
-| `edge_face_corrected_v` | a deferred flux through a v row's domain-edge faces | CTest (1); parity (775 cases of 8 tests); replay (product80, vents80, annex216) |
-| `harmonic_solid_low` | a SOLID cell on the low side of a harmonic mean not replaced by its neighbour | CTest (1); parity (429 cases of 10 tests); replay (product80, vents80) |
-| `harmonic_solid_high` | a SOLID cell on the high side of a harmonic mean not replaced by its neighbour | CTest (1); parity (429 cases of 10 tests); replay (product80, vents80) |
-| `harmonic_fraction_swapped` | the harmonic mean's two distances swapped | parity (599 cases of 12 tests); replay (product80, vents80, annex216) |
-| `mean_fraction_swapped` | the arithmetic mean's two widths swapped | parity (599 cases of 12 tests); replay (product80, vents80, annex216) |
-| `first_mean_row_skipped` | the first row of cells' harmonic means of v taken from an earlier call | CTest (1); parity (481 cases of 10 tests); replay (product80, vents80, annex216) |
-| `stress_dropped` | form b's stress source left out | parity (451 cases of 8 tests); replay (product80, vents80, annex216) |
-| `stress_sign_t` | the low transverse face's stress added, not subtracted | parity (451 cases of 8 tests); replay (product80, vents80, annex216) |
+| `obstacle_wall_distance` | the obstacle wall taken a whole cell away, not half | CTest (2); parity (846 cases of 12 tests); replay (product80, vents80) |
+| `edge_wall_distance` | the high edge's wall distance read at the low edge | parity (795 cases of 12 tests); replay (product80, vents80, cavity40, annex216) |
+| `quick_order` | QUICK's three products added in another order | parity (800 cases of 9 tests); replay (product80, vents80, cavity40, annex216) |
+| `streamwise_blocked_pos` | the boundary form not taken beyond an obstacle's wall node, flow toward increasing s | parity (716 cases of 9 tests); replay (product80, vents80) |
+| `streamwise_blocked_neg` | the boundary form not taken beyond an obstacle's wall node, flow toward decreasing s | parity (716 cases of 9 tests); replay (product80, vents80) |
+| `transverse_wall_pos` | the obstacle's wall not the far node, flow toward increasing t | parity (715 cases of 9 tests); replay (product80, vents80) |
+| `transverse_wall_neg` | the obstacle's wall not the far node, flow toward decreasing t | parity (715 cases of 9 tests); replay (product80, vents80) |
+| `obstacle_face_corrected` | a deferred flux through an obstacle face | parity (706 cases of 9 tests); replay (product80, vents80) |
+| `edge_node_not_value` | the node beyond a Dirichlet edge of a u row the adjacent value, not the wall's | parity (807 cases of 9 tests); replay (product80, vents80, cavity40, annex216) |
+| `edge_node_not_value_v` | the node beyond a Dirichlet high edge of a v row the adjacent value, not the wall's | parity (797 cases of 9 tests); replay (product80, vents80, cavity40, annex216) |
+| `end_far_node` | the streamwise weights at the last face from the node before it as in the interior's other end | CTest (1); parity (807 cases of 9 tests); replay (product80, vents80, cavity40, annex216) |
+| `row_blocked_flags` | no row of cells marked as holding an obstacle | parity (716 cases of 9 tests); replay (product80, vents80) |
+| `row_wall_flags` | no row of corners marked as holding an obstacle | parity (717 cases of 9 tests); replay (product80, vents80) |
+| `edge_face_corrected_v` | a deferred flux through a v row's domain-edge faces | CTest (1); parity (807 cases of 9 tests); replay (product80, vents80, annex216) |
+| `harmonic_solid_low` | a SOLID cell on the low side of a harmonic mean not replaced by its neighbour | CTest (1); parity (445 cases of 11 tests); replay (product80, vents80) |
+| `harmonic_solid_high` | a SOLID cell on the high side of a harmonic mean not replaced by its neighbour | CTest (1); parity (445 cases of 11 tests); replay (product80, vents80) |
+| `harmonic_fraction_swapped` | the harmonic mean's two distances swapped | parity (615 cases of 13 tests); replay (product80, vents80, annex216) |
+| `mean_fraction_swapped` | the arithmetic mean's two widths swapped | CTest (1); parity (615 cases of 13 tests); replay (product80, vents80, annex216) |
+| `first_mean_row_skipped` | the first row of cells' harmonic means of v taken from an earlier call | CTest (1); parity (497 cases of 11 tests); replay (product80, vents80, annex216) |
+| `stress_dropped` | form b's stress source left out | CTest (1); parity (467 cases of 9 tests); replay (product80, vents80, annex216) |
+| `stress_sign_t` | the low transverse face's stress added, not subtracted | parity (467 cases of 9 tests); replay (product80, vents80, annex216) |
 | `stress_width_cancelled` | the transverse stress flux without dividing and multiplying by the width | parity (179 cases of 6 tests); replay (product80, vents80, annex216) |
-| `pressure_sign` | the pressure source's sign | CTest (1); parity (775 cases of 8 tests); replay (product80, vents80, cavity40, annex216) |
+| `pressure_sign` | the pressure source's sign | CTest (2); parity (807 cases of 9 tests); replay (product80, vents80, cavity40, annex216) |
 | `relaxation_order` | the relaxation term's product in another order | parity (124 cases of 2 tests) |
 | `source_order` | the source's parts added in another order | parity (181 cases of 3 tests); replay (cavity40) |
-| `sweep_neighbours_swapped` | a sweep's transverse neighbours taken from the other sides | CTest (3); parity (775 cases of 8 tests); replay (product80, vents80, cavity40, annex216) |
-| `sweep_order` | a sweep's four products added in another order | CTest (1); parity (774 cases of 8 tests); replay (product80, vents80, cavity40, annex216) |
-| `gauss_seidel` | each sweep reading the rows the same sweep has written | CTest (2); parity (775 cases of 8 tests); replay (product80, vents80, cavity40, annex216) |
-| `sweep_targets` | the last sweep written to the scratch iterate, not to the output | CTest (3); parity (775 cases of 8 tests); replay (product80, vents80, cavity40, annex216) |
-| `iterate_edges_not_kept` | the scratch iterate's domain-edge faces left as the last call's | CTest (4); parity (628 cases of 8 tests); replay (product80, vents80, annex216) |
-| `star_edges_not_kept` | the output's domain-edge faces not set to the input | CTest (4); parity (775 cases of 8 tests); replay (product80, vents80, cavity40, annex216) |
-| `alpha_ignored` | the sweeps dividing by the un-relaxed diagonal | CTest (4); parity (751 cases of 8 tests); replay (product80, vents80, cavity40, annex216) |
+| `sweep_neighbours_swapped` | a sweep's transverse neighbours taken from the other sides | CTest (3); parity (807 cases of 9 tests); replay (product80, vents80, cavity40, annex216) |
+| `sweep_order` | a sweep's four products added in another order | CTest (1); parity (799 cases of 9 tests); replay (product80, vents80, cavity40, annex216) |
+| `gauss_seidel` | each sweep reading the rows the same sweep has written | CTest (2); parity (807 cases of 9 tests); replay (product80, vents80, cavity40, annex216) |
+| `sweep_targets` | the last sweep written to the scratch iterate, not to the output | CTest (4); parity (807 cases of 9 tests); replay (product80, vents80, cavity40, annex216) |
+| `iterate_edges_not_kept` | the scratch iterate's domain-edge faces left as the last call's | CTest (6); parity (628 cases of 8 tests); replay (product80, vents80, annex216) |
+| `star_edges_not_kept` | the output's domain-edge faces not set to the input | CTest (6); parity (807 cases of 9 tests); replay (product80, vents80, cavity40, annex216) |
+| `alpha_ignored` | the sweeps dividing by the un-relaxed diagonal | CTest (6); parity (783 cases of 9 tests); replay (product80, vents80, cavity40, annex216) |
 | `held_reads_iterate` | a vent's faces set to the sweep's iterate, whose rows the last sweep wrote | CTest (1); parity (391 cases of 6 tests); replay (vents80) |
+| `kept_row_first` | every kept row of fluxes the same one, not the last two along the direction | CTest (5); parity (847 cases of 11 tests); replay (product80, vents80, cavity40, annex216) |
+| `area_without_width` | a streamwise face's area without the transverse width | CTest (5); parity (827 cases of 10 tests); replay (product80, vents80, cavity40, annex216) |
+| `edge_relaxed_kept` | the relaxed diagonal beside a domain edge the one from before the edge's part left it | parity (181 cases of 3 tests) |
+| `edge_neighbour_kept` | the coefficient toward a domain edge not zeroed | parity (20 cases of 1 tests) |
+| `edge_at_every_face` | an edge's condition read at the row's first face along an edge that crosses the rows | parity (201 cases of 4 tests) |
+| `cross_pressure_below` | the pressure below a row of v taken from the row itself | CTest (1); parity (807 cases of 9 tests); replay (product80, vents80, cavity40, annex216) |
 | `stencil_everywhere` | stencil_viscosity's face rule at every face, read or not | CTest (1); parity (38 cases of 2 tests); replay (product80, vents80, annex216) |
 | `stencil_last_row_u` | stencil_viscosity's top row of u left at air's viscosity | CTest (1); parity (38 cases of 2 tests); replay (product80, vents80, annex216) |
+| `zero_flux_positive_s` | a streamwise face of exactly zero flux takes the positive direction's stencil | parity (16 cases of 1 tests) |
+| `zero_flux_positive_t` | a transverse face of exactly zero flux takes the positive direction's stencil | parity (16 cases of 1 tests) |
+| `number_zero` | the core's check: a zero taken for positive | CTest (1); parity (10 cases of 1 tests) |
+| `number_infinite` | the core's check: an infinity taken for finite | CTest (1); parity (10 cases of 1 tests) |
+| `number_last_width` | the core's check: the last width of a direction not checked | CTest (1); parity (16 cases of 1 tests) |
+| `number_cell_widths` | the core's check: the cell widths' values removed | CTest (1); parity (8 cases of 1 tests) |
+| `number_face_widths` | the core's check: the face widths' values removed | CTest (1); parity (8 cases of 1 tests) |
+| `number_wall_distance` | the core's check: the wall distances removed | CTest (1); parity (16 cases of 1 tests) |
+| `number_wall_distance_high` | the core's check: the high edges' wall distances not checked | CTest (1); parity (8 cases of 1 tests) |
+| `number_rho` | the core's check: rho removed | CTest (1); parity (4 cases of 1 tests) |
+| `number_mu` | the core's check: mu removed | CTest (1); parity (4 cases of 1 tests) |
+| `number_alpha` | the core's check: alpha's lower end removed | CTest (1); parity (2 cases of 1 tests) |
+| `number_alpha_zero` | the core's check: an alpha of zero accepted | CTest (1); parity (1 cases of 1 tests) |
+| `number_alpha_above` | the core's check: alpha's upper end removed | CTest (1); parity (1 cases of 1 tests) |
+| `number_alpha_one` | the core's check: an alpha of one refused | CTest (6); parity (25 cases of 2 tests) |
+| `length_longer` | the core's check removed: a longer array accepted | CTest (1) |
+| `length_pressure` | the core's check removed: the pressure's length | CTest (1) |
+| `length_mu_eff` | the core's check removed: mu_eff's length in predict and equations | CTest (1) |
+| `length_velocity` | the core's check removed: the velocities' lengths | CTest (1) |
+| `length_velocity_first` | the core's check removed: the velocities' lengths but the first | CTest (1) |
+| `length_wall_mu` | the core's check removed: wall_mu's lengths in predict and equations | CTest (1) |
+| `length_fields_of_predict` | the core's check removed: the inputs' lengths in predict | CTest (1) |
+| `length_fields_of_equations` | the core's check removed: the inputs' lengths in equations | CTest (1) |
+| `length_star` | the core's check removed: star's lengths | CTest (1) |
+| `length_diagonal` | the core's check removed: the diagonals' lengths in predict | CTest (1) |
+| `length_equations_diagonal` | the core's check removed: the diagonal's length in equations | CTest (1) |
+| `length_equations_component` | the core's check removed: the component of equations | CTest (1) |
+| `length_stencil_mu` | the core's check removed: mu_eff's length in stencil_viscosity | CTest (1) |
+| `length_stencil_out` | the core's check removed: the outputs' lengths in stencil_viscosity | CTest (1) |
+| `length_check_viscosity` | the core's check removed: mu_eff's length in check_viscosity | CTest (1) |
+| `length_check_wall` | the core's check removed: wall_mu's length in check_wall_viscosity | CTest (1) |
+| `length_check_wall_component` | the core's check removed: the component of check_wall_viscosity | CTest (1) |
+| `length_check_wall_slot` | the core's check removed: the slot of check_wall_viscosity | CTest (1) |
 | `check_not_finite` | a viscosity that is not finite accepted | CTest (1); parity (14 cases of 2 tests) |
 | `check_not_positive` | a viscosity of zero accepted | CTest (1); parity (4 cases of 2 tests) |
 | `check_infinity` | an infinite viscosity taken for a finite one | CTest (1); parity (6 cases of 2 tests) |
-| `check_solid_too` | a SOLID cell's viscosity checked | CTest (1); parity (470 cases of 15 tests) |
-| `check_wall_everywhere` | a wall viscosity checked where no unknown reads it | parity (560 cases of 16 tests); replay (product80, vents80) |
-| `check_first_cell_only` | the checks stopping before the cells after the whole blocks | CTest (1); parity (18 cases of 2 tests) |
-| `check_two_cells` | the core's check removed: two cells per axis | CTest (1); parity (3 cases of 1 tests) |
+| `check_solid_too` | a SOLID cell's viscosity checked | CTest (2); parity (490 cases of 17 tests) |
+| `check_wall_everywhere` | a wall viscosity checked where no unknown reads it | parity (580 cases of 18 tests); replay (product80, vents80) |
+| `check_first_cell_only` | the checks stopping before the cells after the whole blocks | CTest (2); parity (18 cases of 2 tests) |
+| `check_two_cells` | the core's check removed: two cells per axis | CTest (2); parity (3 cases of 1 tests) |
 | `check_cell_widths` | the core's check removed: the cell widths' lengths | CTest (1); parity (4 cases of 1 tests) |
 | `check_face_widths` | the core's check removed: the face widths' lengths | CTest (1); parity (4 cases of 1 tests) |
 | `check_edge_lengths` | the core's check removed: the edges' lengths | CTest (1) |
 | `check_held_length` | the core's check removed: the held masks' lengths | CTest (1) |
 | `check_sweeps` | the core's check removed: at least one sweep | CTest (1); parity (1 cases of 1 tests) |
-| `check_throws` | the core's check removed: the constructor's throw | CTest (1); parity (12 cases of 2 tests) |
-| `binding_edges_swapped` | the binding: bottom and top handed over swapped | parity (771 cases of 13 tests); replay (product80, vents80, cavity40, annex216) |
-| `binding_left_right` | the binding: left's condition read from the right's | parity (789 cases of 13 tests); replay (product80, vents80, cavity40, annex216) |
+| `check_throws` | the core's check removed: the constructor's throw | CTest (2); parity (58 cases of 2 tests) |
+| `binding_edges_swapped` | the binding: bottom and top handed over swapped | parity (803 cases of 14 tests); replay (product80, vents80, cavity40, annex216) |
+| `binding_left_right` | the binding: left's condition read from the right's | parity (821 cases of 14 tests); replay (product80, vents80, cavity40, annex216) |
 | `binding_held_v_dropped` | the binding: the vents of v not handed over | parity (392 cases of 7 tests); replay (vents80) |
 | `binding_held_shape` | the binding: the vents' shape not checked | parity (2 cases of 1 tests) |
 | `binding_edge_count` | the binding: the number of edges not checked | parity (1 cases of 1 tests) |
@@ -432,12 +488,20 @@ Each is an edit of `core/` in a copy of the tree (`variants92.py`), built, and r
 | `binding_wall_keys` | the binding: wall_mu's keys not checked | parity (4 cases of 1 tests) |
 | `binding_wall_extra_key` | the binding: an extra key of wall_mu accepted | parity (1 cases of 1 tests) |
 | `binding_wall_check` | the binding: wall_mu's values not checked | parity (9 cases of 1 tests) |
-| `binding_wall_swapped` | the binding: v's wall viscosity handed to u | parity (483 cases of 13 tests); replay (product80, vents80, annex216) |
-| `binding_transient` | the binding: a transient argument ignored | parity (2 cases of 1 tests) |
-| `binding_wall_ignored` | the binding: wall_mu not handed to predict | parity (433 cases of 7 tests); replay (product80, vents80, annex216) |
+| `binding_wall_swapped` | the binding: v's wall viscosity handed to u | parity (503 cases of 15 tests); replay (product80, vents80, annex216) |
+| `binding_transient` | the binding: a transient argument ignored | parity (8 cases of 1 tests) |
+| `binding_transient_with_a_field` | the binding: a transient argument ignored with a viscosity field (test 92 S1) | parity (4 cases of 1 tests) |
+| `binding_transient_with_a_wall` | the binding: a transient argument ignored with a wall viscosity (test 92 S1) | parity (4 cases of 1 tests) |
+| `binding_rho_bool` | the binding: a bool rho accepted | parity (3 cases of 1 tests) |
+| `binding_mu_bool` | the binding: a bool mu accepted | parity (3 cases of 1 tests) |
+| `binding_alpha_bool` | the binding: a bool alpha accepted | parity (3 cases of 1 tests) |
+| `binding_sweeps_bool` | the binding: a bool or a float sweeps accepted | parity (4 cases of 1 tests) |
+| `binding_distance_bool` | the binding: a bool wall distance accepted | parity (16 cases of 1 tests) |
+| `binding_edge_parts` | the binding: an edge of another number of parts accepted | parity (8 cases of 1 tests) |
+| `binding_wall_ignored` | the binding: wall_mu not handed to predict | parity (449 cases of 8 tests); replay (product80, vents80, annex216) |
 | `binding_fixed_name` | the binding: an unknown name's refusal | parity (1 cases of 1 tests) |
 
-101 of 101 plants fail at least one net.
+148 of 148 plants fail at least one net.
 <!-- tables92 plants end -->
 
 No plant passes every net. The first run of the list had three that did, and each pointed at code
@@ -481,12 +545,166 @@ viscosity given, ten sweeps, in one process after the two were checked equal on 
 
 Prediction (c) holds in every run. The sessions record what else ran (the last columns): a browser
 overlay and the virus scanner, no game, with the processor below its nominal frequency, so the
-absolute times are slow and the ratio is what to read. They are the last of three sets: the first,
-before `stencil_viscosity`'s last pass became a block, had a game running beside it and gave 9.8 to
-10.3; the second, whose first run overlapped the end of the plants' last stream, is kept in
+absolute times are slow and the ratio is what to read. One record of an earlier set is kept,
+`results/builder92/timing_0.json`, of before `stencil_viscosity`'s last pass became a block: 10.33.
+A second set, whose first run overlapped the end of the plants' last stream, is kept in
 `results/builder92/timing_first/` and gave 10.0 to 12.7. `predict` with one sweep is the assembly
-and one sweep of each component; the difference to ten is nine sweeps of both. The core's `predict`
-allocates its four outputs at every call, which the run object of step 5 will not.
+and one sweep of each component; the difference to ten is nine sweeps of both. The binding's
+`predict` allocates the four output arrays at every call, which the run object of step 5 will not;
+the core allocates nothing in a call.
+
+## 7. Round 1: the module per direction
+
+**Alex's decision (2026-11-23).** The momentum module takes the number of directions as a
+parameter, as the core's other modules do (ADR-017 decision 4), so that it is ready to generalise
+to the true 3D model. In this report's words of prompt 92 the module was built for two directions
+only "because the stencil has one transverse direction"; in 3D each component has two.
+
+**The form.** `predictor<D>` is a template on D like `grid`, `layout` and `scalar`, instantiated at
+2 for the binding and at 1 for its own tests (a straight duct: one component, no transverse
+direction, its equations written out by hand in `core/tests/test_momentum.cpp`). Component c moves
+along direction c. What needs one direction (the streamwise fluxes, QUICK's streamwise values, the
+pressure) is held and formed per component. What needs two (the corner's viscosity, form b's
+transverse stress, the obstacle's transverse rule, the wall stencil across a transverse face, the
+domain edges' conditions, `wall_mu`) is held in a `pair_setup` and formed by functions of `<C, T>`,
+one for each ordered pair of a component and a direction transverse to it. The assembly walks a
+component's rows by their positions and, at each row, the component's pairs; a block that sums over
+directions (the diagonal, the source, a sweep) folds over the transverse ones at compile time, so
+that for two directions it is the expression it was, and a row of fluxes is kept for as long as the
+walk needs the last along the direction it crosses.
+
+A direction lies along the rows or crosses them; a block is written for both and knows nothing
+else of which direction it is given. `for_each_row` walks positions, not (j, i).
+
+**The values.** Every one is as it was, bit for bit: CTest, the parity module, the 40 captured
+`predict` and 30 `stencil_viscosity` calls (T3, and the tester's own replay of them, which maps the
+arguments by a route of its own), and the tester's two solves driven by the core's `predict` in the
+reference's place, the 40x40 cavity (3,435 outer iterations) and the 80x30 product room (1,021),
+whose stops, residual histories and fields are the reference's
+(`results/builder92b/tester_final/`).
+
+**The speed.** `probe92.py kernels` builds 6ca02d7 and the checkout side by side and times each
+block and each pass alone on 320x120 rows (`kernels92b.cpp`), the two builds in alternating order,
+eight placements of the arrays on the heap, three sessions.
+
+<!-- tables92 kernels begin -->
+### T8. Each kernel and pass, the build of 6ca02d7 against the per-direction one
+
+| Kernel or pass | 6ca02d7, us | Per direction, us | Ratio by session | Ratio, all rounds |
+|---|---|---|---|---|
+| cell_conductance u | 8.5 | 8.7 | 1.060, 1.004, 1.041 | 1.024 |
+| cell_flux u | 13.1 | 12.8 | 0.995, 0.966, 0.944 | 0.979 |
+| cell_stress u | 8.5 | 8.7 | 1.060, 1.004, 1.041 | 1.024 |
+| cell_deferred u | 19.6 | 20.0 | 1.067, 1.020, 1.046 | 1.020 |
+| corner_deferred u | 12.9 | 12.6 | 0.938, 0.952, 1.030 | 0.973 |
+| cell_deferred obstacles u | 38.5 | 39.9 | 1.036, 1.034, 1.027 | 1.034 |
+| corner_deferred obstacles u | 22.6 | 23.4 | 1.052, 1.011, 1.042 | 1.036 |
+| corner_flux u | 17.1 | 17.1 | 1.009, 0.979, 1.010 | 1.005 |
+| corner_stress u | 8.4 | 8.7 | 1.045, 1.018, 1.059 | 1.029 |
+| corner_conductance field u | 10.6 | 10.9 | 1.046, 1.015, 1.058 | 1.027 |
+| corner_conductance wall u | 13.4 | 14.1 | 1.072, 0.997, 1.080 | 1.048 |
+| corner_conductance field wall u | 15.9 | 16.3 | 1.032, 1.012, 1.094 | 1.024 |
+| harmonic_cells u | 11.2 | 12.0 | 1.109, 1.009, 1.043 | 1.068 |
+| mean_cells u | 6.9 | 7.1 | 1.058, 1.023, 1.051 | 1.029 |
+| coefficients u | 49.8 | 49.0 | 0.996, 0.981, 1.003 | 0.984 |
+| sources field u | 50.9 | 52.9 | 1.071, 1.019, 1.051 | 1.038 |
+| sources air u | 22.0 | 22.5 | 1.069, 1.020, 1.038 | 1.023 |
+| sweep_cells u | 34.5 | 34.4 | 0.990, 1.009, 0.953 | 0.997 |
+| sweep_cells held u | 36.7 | 37.4 | 0.893, 1.023, 1.163 | 1.019 |
+| cell_conductance v | 8.5 | 8.7 | 1.039, 1.012, 1.043 | 1.022 |
+| cell_flux v | 15.2 | 14.9 | 0.963, 0.957, 0.978 | 0.978 |
+| cell_stress v | 8.5 | 8.7 | 1.048, 1.018, 1.043 | 1.026 |
+| cell_deferred v | 13.5 | 12.7 | 0.952, 0.937, 0.963 | 0.939 |
+| corner_deferred v | 19.2 | 19.9 | 1.063, 1.038, 1.041 | 1.037 |
+| cell_deferred obstacles v | 24.3 | 25.2 | 1.045, 1.013, 1.031 | 1.036 |
+| corner_deferred obstacles v | 35.1 | 36.3 | 1.025, 1.024, 1.030 | 1.035 |
+| corner_flux v | 13.3 | 13.8 | 1.039, 1.007, 1.060 | 1.036 |
+| corner_stress v | 8.4 | 8.7 | 1.057, 1.017, 1.042 | 1.031 |
+| corner_conductance field v | 10.4 | 10.6 | 1.050, 1.016, 1.051 | 1.028 |
+| corner_conductance wall v | 12.4 | 12.8 | 1.073, 1.006, 1.031 | 1.031 |
+| corner_conductance field wall v | 14.9 | 15.4 | 1.037, 1.033, 1.058 | 1.030 |
+| harmonic_cells v | 13.5 | 15.8 | 1.226, 1.132, 1.146 | 1.169 |
+| mean_cells v | 5.0 | 5.1 | 1.057, 1.007, 1.038 | 1.018 |
+| coefficients v | 49.4 | 50.0 | 1.026, 1.002, 1.033 | 1.012 |
+| sources field v | 50.3 | 51.7 | 1.064, 1.019, 1.038 | 1.029 |
+| sources air v | 21.8 | 22.3 | 1.052, 1.022, 1.031 | 1.022 |
+| sweep_cells v | 35.5 | 35.6 | 1.015, 1.004, 1.024 | 1.003 |
+| sweep_cells held v | 37.0 | 36.2 | 1.017, 0.979, 0.826 | 0.979 |
+| edge_nodes | 6.8 | 7.1 | 1.026, 1.032, 1.045 | 1.043 |
+| read_cells | 6.2 | 6.3 | 1.060, 1.049, 1.050 | 1.028 |
+| equations field wall u | 230.5 | 235.0 | 1.059, 1.025, 1.045 | 1.019 |
+| equations air u | 141.3 | 147.0 | 1.052, 1.031, 1.052 | 1.040 |
+| equations field wall v | 220.7 | 225.6 | 1.060, 1.008, 1.038 | 1.022 |
+| equations air v | 142.0 | 144.1 | 1.049, 1.002, 1.030 | 1.015 |
+| cell_row u field | 58.0 | 58.9 | 1.026, 1.000, 1.033 | 1.016 |
+| cell_row v field | 42.8 | 42.9 | 1.016, 0.988, 1.008 | 1.001 |
+| corner_row u field | 78.2 | 76.0 | 0.988, 0.969, 0.992 | 0.972 |
+| corner_viscosity u | 16.1 | 17.2 | 1.087, 1.045, 1.111 | 1.067 |
+| corner_viscosity v | 17.8 | 17.7 | 1.031, 0.944, 1.020 | 0.993 |
+| corner_row v field | 87.5 | 89.0 | 1.032, 0.999, 1.042 | 1.017 |
+| unknown_row u field | 91.3 | 96.0 | 1.052, 1.022, 1.062 | 1.051 |
+| unknown_row v field | 88.9 | 92.1 | 1.026, 1.016, 1.065 | 1.036 |
+| cell_row u air | 42.0 | 42.4 | 0.988, 0.988, 1.033 | 1.009 |
+| cell_row v air | 26.2 | 25.7 | 0.960, 1.001, 1.015 | 0.981 |
+| corner_row u air | 28.6 | 25.7 | 0.909, 0.889, 0.941 | 0.901 |
+| corner_row v air | 40.8 | 42.1 | 1.032, 1.022, 1.068 | 1.032 |
+| unknown_row u air | 65.8 | 66.2 | 0.989, 1.000, 1.033 | 1.006 |
+| unknown_row v air | 67.1 | 65.6 | 0.955, 0.974, 1.011 | 0.977 |
+| sweep u | 25.5 | 25.8 | 0.991, 1.009, 0.972 | 1.009 |
+| sweep v | 32.6 | 32.1 | 0.999, 0.978, 0.968 | 0.986 |
+| predict one sweep field wall | 536.3 | 554.9 | 1.019, 0.994, 1.081 | 1.035 |
+| sweep held u | 28.3 | 28.8 | 0.993, 0.995, 1.033 | 1.015 |
+| sweep held v | 31.7 | 32.2 | 1.029, 0.896, 1.018 | 1.018 |
+| predict ten sweeps field wall | 1090.4 | 1097.6 | 0.991, 0.974, 1.030 | 1.007 |
+| predict ten sweeps air | 904.7 | 887.7 | 0.995, 0.969, 1.006 | 0.981 |
+| stencil_viscosity | 54.7 | 56.4 | 1.083, 0.992, 1.025 | 1.030 |
+| verdict_cells | 7.2 | 7.4 | 1.056, 1.001, 0.989 | 1.024 |
+
+Above 1.05 in every session: `harmonic_cells v`. session 1 started 2026-11-23 18:06:26 (Windows before: wow 175, msmpeng 30, system 22, on mains True, processor performance 154); session 2 started 2026-11-23 18:07:18 (Windows before: wow 172, memory compression 61, msmpeng 33, on mains True, processor performance 162); session 3 started 2026-11-23 18:08:12 (Windows before: wow 199, msmpeng 44, wmiprvse 20, on mains True, processor performance 150).
+<!-- tables92 kernels end -->
+
+A whole call is level with 6ca02d7's: `predict` with ten sweeps, on a viscosity field and on the
+scalar path. A game ran beside the sessions, and the machine's noise is about a twentieth: blocks
+whose source did not change (`corner_stress`, `edge_nodes`, `verdict_cells`) read above 1.04 in one
+session and nearer 1 in another. Read against that:
+
+- `harmonic_cells v` is above a twentieth in every session and is not slower in the module. Its
+  source is unchanged and the pass that calls it, `corner_viscosity v`, is level; the block alone,
+  inlined in the timing program, is what differs.
+- `corner_viscosity u` costs about 1 us of its 16 in 120 rows, some 10 ns a row: finding a row's
+  place from its position, the pair's set-up and the kept row. `corner_row u`, which calls it and is
+  what a step pays, is no slower.
+- `unknown_row u` with a viscosity field sits at the twentieth. The coefficients' block is one
+  pass a direction (section 3) and each pass's operands are its own copy. The passes themselves are
+  no slower (`coefficients u`).
+
+Every block is vectorised (T7). The first form of the restructure had the streamwise conductance
+and stress behind walkers of their own, 14 and 18% slower for the copy of three pointers; they are
+called in place again.
+
+**What the 3D model would add to this module, and where.** Nothing of it is built.
+
+| What | Where |
+|---|---|
+| The instantiations `layout<3>`, `grid<3>` and `predictor<3>` | one line each in the three sources and headers |
+| A transverse face's area gains the cell width along each direction that is neither c nor t | `corner_flux`, `corner_conductance` and `corner_stress`, and `conductance_t` in `make_pair_setup`. A streamwise face's area is already a product over the component's transverse directions (`times_area`) |
+| The order of a third direction's terms in the diagonal, the source and a sweep | the folds over `directions<T...>`, which take the slots in ascending order. No reference fixes it: a Python reference in 3D would, or the parity is REQ-N03's 1e-12 |
+| The edges' conditions and `wall_mu` of six pairs in place of two, an edge's condition a field over a face of the box | `predictor_input` and `predict` hold them per pair and by position already; the binding's `MomentumPredictor2`, which names four edges and the keys "u" and "v", would have a counterpart |
+| Walls with two tangential components | the wall functions' module, which hands `wall_mu` per pair |
+| Two transverse sets of rows kept, one of them a plane | `kept_row` and the constructor's sizes, already by position |
+| Timings | a pass whose two directions both cross the rows exists in 3D only; the sweep reads two streams more |
+| Tests | a 3D reference, or analytical cases, per pair |
+
+**The claim, checked.** A scratch program (`results/builder92b/d3check.cpp`, not committed, built
+with the address and undefined-behaviour sanitizers) instantiates the module at three directions
+from the sources as they are, extrudes 60 random 2D rooms (stretched widths, SOLID cells, edges part
+Dirichlet and part open, air's viscosity, a field, a wall viscosity) over three cells of unit width
+along each direction in turn, the room's two axes on the other two in both orders, and compares
+with the 2D predictor on every plane: the neighbour coefficients, the source without relaxation and
+`stencil_viscosity` are equal in every bit, the diagonal less the extruded direction's two
+coefficients is the 2D one's to 5.2e-14, and the component along the extrusion is at rest. Of
+138,961 values compared none differs. The unit width is what hides the missing area factors above;
+of the rest of the list only the instantiations were needed for it to run.
 
 ## Findings
 
@@ -514,8 +732,8 @@ allocates its four outputs at every call, which the run object of step 5 will no
 
 - **The timings are of this machine in the state T5 and T6 record**, the processor below its nominal
   frequency.
-- **`predict` has no build of the commit before to be timed against**; T6 compares forms of it. The
-  kernels of the steps before are in other files, which this pass does not touch
+- **Prompt 92's `predict` had no build of the commit before to be timed against**; T6 compares forms
+  of it, and T8 round 1's with prompt 92's. The kernels of the steps before are in other files, which this pass does not touch
   (`core/python/bindings.cpp` gains a class and changes none).
 - **Compiled with GCC 13.3 only**, with warnings as errors (`scripts/build_core.sh`). CI's core job
   uses the runner's GCC; its result on the pull request is the check of that compiler, and nothing
@@ -525,9 +743,19 @@ allocates its four outputs at every call, which the run object of step 5 will no
   core.
 - **The predictor does not bring the flow state into the run.** Its arguments and outputs cross the
   binding at each call; the resident flow state is step 5's.
+- **The constructor refuses more than the reference's.** It refuses a width, a wall distance, rho or mu that
+  is not finite and positive and an alpha outside (0, 1] (round 1, review 92 S3); the reference does
+  not, since `SimConfig` has refused them by then. Every public call of the core refuses an array of
+  another length (S4).
 - **`stencil_viscosity` forms the corner viscosities that `predict` forms again.** The reference does
   the same. `flow` (step 5), which calls both with one field, could form them once.
-- **The module is built for D = 2 only** (section 3), a departure from the core's other modules.
+- **The module is instantiated at D = 1 and 2 only** (section 7). At three directions it has been
+  run in a scratch program on extruded 2D rooms and on nothing else, and a transverse face's area
+  there lacks the third width.
+- **The plants of prompt 92 were run again on round 1's code, and three are other edits for the same
+  defect** where the line they edited is gone: `diagonal_order` and `flux_order` group a transverse
+  direction's two terms in place of moving them to the front, since the order is now the fold's;
+  `sweep_order` likewise.
 - **The captured calls are ten outer iterations a room.** The product and vents rooms start from
   converged states, so their calls differ in the last digits only (T2's last column); the Annex 20
   room's field moves by tens of centimetres per second over its ten. The planted cases carry the
@@ -543,6 +771,10 @@ allocates its four outputs at every call, which the run object of step 5 will no
   `core/python/bindings.cpp` (`MomentumPredictor2`), `core/CMakeLists.txt`.
 - `tests/test_core_momentum.py`, `tests/core_mapping.py` (`momentum_predictor`),
   `.github/workflows/ci.yml` (the module in the core job).
-- `docs/reports/probe92/`: `probe92.py`, `variants92.py`, `tables92.py`, `tables92.md`.
+- `docs/reports/probe92/`: `probe92.py`, `variants92.py`, `kernels92b.cpp` (round 1), `tables92.py`,
+  `tables92.md`.
 - `results/builder92/` (untracked): the captures, `replay.json`, `plants_s*.json`,
   `timing_*.json`, `forms_1.json`, `vecinfo.json`, the JUnit files, the scripts and logs.
+- `results/builder92b/` (untracked): round 1's `replay.json`, `plants_s*.json`, `kernels_*.json`,
+  `vecinfo.json`, the JUnit files, the tester's replay and driven solves (`tester_final/`), the
+  scratch check at three directions (`d3check.cpp`, `d3.txt`), the scripts and logs.
