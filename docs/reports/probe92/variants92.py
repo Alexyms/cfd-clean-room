@@ -28,18 +28,18 @@ def binding(old: str, new: str) -> Edit:
 
 _CELL_BLOCK = """        const double f = in.flux[i];
         const mask positive = lanes::mask_of(f > 0.0);
-        const double q_pos = s_at<C>(in.std_pos[0], i) * below +
-                             s_at<C>(in.std_pos[1], i) * lo + s_at<C>(in.std_pos[2], i) * hi;
-        const double q_neg = s_at<C>(in.std_neg[0], i) * above +
-                             s_at<C>(in.std_neg[1], i) * hi + s_at<C>(in.std_neg[2], i) * lo;
+        const double q_pos = along<C>(in.std_pos[0], i) * below +
+                             along<C>(in.std_pos[1], i) * lo + along<C>(in.std_pos[2], i) * hi;
+        const double q_neg = along<C>(in.std_neg[0], i) * above +
+                             along<C>(in.std_neg[1], i) * hi + along<C>(in.std_neg[2], i) * lo;
         double q = lanes::select(positive, q_pos, q_neg);
         if constexpr (Obstacles) {
-            const double alt_pos = s_at<C>(in.alt_pos[0], i) * above +
-                                   s_at<C>(in.alt_pos[1], i) * lo +
-                                   s_at<C>(in.alt_pos[2], i) * hi;
-            const double alt_neg = s_at<C>(in.alt_neg[0], i) * below +
-                                   s_at<C>(in.alt_neg[1], i) * hi +
-                                   s_at<C>(in.alt_neg[2], i) * lo;
+            const double alt_pos = along<C>(in.alt_pos[0], i) * above +
+                                   along<C>(in.alt_pos[1], i) * lo +
+                                   along<C>(in.alt_pos[2], i) * hi;
+            const double alt_neg = along<C>(in.alt_neg[0], i) * below +
+                                   along<C>(in.alt_neg[1], i) * hi +
+                                   along<C>(in.alt_neg[2], i) * lo;
             q = lanes::select(positive & in.blocked_pos[i], alt_pos, q);
             q = lanes::select(~positive & in.blocked_neg[i], alt_neg, q);
         }
@@ -51,36 +51,36 @@ _CELL_LOOP = """        const double f = in.flux[i];
         if (f > 0.0) {
             up = lo;
             if (Obstacles && in.blocked_pos[i] != lanes::none) {
-                q = s_at<C>(in.alt_pos[0], i) * above + s_at<C>(in.alt_pos[1], i) * lo +
-                    s_at<C>(in.alt_pos[2], i) * hi;
+                q = along<C>(in.alt_pos[0], i) * above + along<C>(in.alt_pos[1], i) * lo +
+                    along<C>(in.alt_pos[2], i) * hi;
             } else {
-                q = s_at<C>(in.std_pos[0], i) * below + s_at<C>(in.std_pos[1], i) * lo +
-                    s_at<C>(in.std_pos[2], i) * hi;
+                q = along<C>(in.std_pos[0], i) * below + along<C>(in.std_pos[1], i) * lo +
+                    along<C>(in.std_pos[2], i) * hi;
             }
         } else {
             up = hi;
             if (Obstacles && in.blocked_neg[i] != lanes::none) {
-                q = s_at<C>(in.alt_neg[0], i) * below + s_at<C>(in.alt_neg[1], i) * hi +
-                    s_at<C>(in.alt_neg[2], i) * lo;
+                q = along<C>(in.alt_neg[0], i) * below + along<C>(in.alt_neg[1], i) * hi +
+                    along<C>(in.alt_neg[2], i) * lo;
             } else {
-                q = s_at<C>(in.std_neg[0], i) * above + s_at<C>(in.std_neg[1], i) * hi +
-                    s_at<C>(in.std_neg[2], i) * lo;
+                q = along<C>(in.std_neg[0], i) * above + along<C>(in.std_neg[1], i) * hi +
+                    along<C>(in.std_neg[2], i) * lo;
             }
         }
         out[i] = (q - up) * f;
 """
 _CORNER_BLOCK = """        const double f = in.flux[i];
         const mask positive = lanes::mask_of(f > 0.0);
-        const double q_pos = t_at<C>(in.pos[0], i) * below + t_at<C>(in.pos[1], i) * lo +
-                             t_at<C>(in.pos[2], i) * hi;
-        const double q_neg = t_at<C>(in.neg[0], i) * above + t_at<C>(in.neg[1], i) * hi +
-                             t_at<C>(in.neg[2], i) * lo;
+        const double q_pos = along<T>(in.pos[0], i) * below + along<T>(in.pos[1], i) * lo +
+                             along<T>(in.pos[2], i) * hi;
+        const double q_neg = along<T>(in.neg[0], i) * above + along<T>(in.neg[1], i) * hi +
+                             along<T>(in.neg[2], i) * lo;
         double q = lanes::select(positive, q_pos, q_neg);
         if constexpr (Obstacles) {
             const double wall_pos =
-                t_at<C>(in.wall_pos[0], i) * lo + t_at<C>(in.wall_pos[1], i) * hi;
+                along<T>(in.wall_pos[0], i) * lo + along<T>(in.wall_pos[1], i) * hi;
             const double wall_neg =
-                t_at<C>(in.wall_neg[0], i) * hi + t_at<C>(in.wall_neg[1], i) * lo;
+                along<T>(in.wall_neg[0], i) * hi + along<T>(in.wall_neg[1], i) * lo;
             q = lanes::select(positive & in.far_wall_low[i], wall_pos, q);
             q = lanes::select(~positive & in.far_wall_high[i], wall_neg, q);
         }
@@ -100,18 +100,18 @@ _CORNER_LOOP = """        const double f = in.flux[i];
         if (f > 0.0) {
             up = lo;
             if (Obstacles && in.far_wall_low[i] != lanes::none) {
-                q = t_at<C>(in.wall_pos[0], i) * lo + t_at<C>(in.wall_pos[1], i) * hi;
+                q = along<T>(in.wall_pos[0], i) * lo + along<T>(in.wall_pos[1], i) * hi;
             } else {
-                q = t_at<C>(in.pos[0], i) * below + t_at<C>(in.pos[1], i) * lo +
-                    t_at<C>(in.pos[2], i) * hi;
+                q = along<T>(in.pos[0], i) * below + along<T>(in.pos[1], i) * lo +
+                    along<T>(in.pos[2], i) * hi;
             }
         } else {
             up = hi;
             if (Obstacles && in.far_wall_high[i] != lanes::none) {
-                q = t_at<C>(in.wall_neg[0], i) * hi + t_at<C>(in.wall_neg[1], i) * lo;
+                q = along<T>(in.wall_neg[0], i) * hi + along<T>(in.wall_neg[1], i) * lo;
             } else {
-                q = t_at<C>(in.neg[0], i) * above + t_at<C>(in.neg[1], i) * hi +
-                    t_at<C>(in.neg[2], i) * lo;
+                q = along<T>(in.neg[0], i) * above + along<T>(in.neg[1], i) * hi +
+                    along<T>(in.neg[2], i) * lo;
             }
         }
         out[i] = (q - up) * f;
@@ -136,8 +136,8 @@ _STREAM_LOOP = """    for (std::size_t m = first; m < last; ++m) {
         }
     }
 """
-_CROSS_WALK = _STREAM_WALK.replace("cell_deferred", "corner_deferred")
-_CROSS_LOOP = _STREAM_LOOP.replace("cell_deferred", "corner_deferred")
+_CROSS_WALK = _STREAM_WALK.replace("cell_deferred<C", "corner_deferred<T")
+_CROSS_LOOP = _STREAM_LOOP.replace("cell_deferred<C", "corner_deferred<T")
 
 FORMS: list[tuple[str, str, list[Edit]]] = [
     ("head", "the kernels as they are", []),
@@ -156,11 +156,11 @@ FORMS: list[tuple[str, str, list[Edit]]] = [
         "the obstacle forms formed on every row, not on the rows that hold one",
         [
             momentum(
-                "    const bool obstacles = o.row_blocked[j] != 0;",
+                "    const bool obstacles = o.row_blocked[cell / nx] != 0;",
                 "    const bool obstacles = true;",
             ),
             momentum(
-                "    const bool obstacles = o.row_walls[j] != 0;",
+                "    const bool obstacles = w.row_walls[corner / w.corners.cells(0)] != 0;",
                 "    const bool obstacles = true;",
             ),
         ],
@@ -181,15 +181,15 @@ FORMS: list[tuple[str, str, list[Edit]]] = [
         [
             (
                 "include/cfdcore/momentum.hpp",
-                "    std::array<std::vector<double>, 4> coefficient_;\n"
+                "    std::array<std::vector<double>, 2 * D> coefficient_;\n"
                 "    std::vector<double> source_;\n"
                 "    std::vector<double> relaxed_;\n"
                 "    std::vector<double> iterate_;\n",
-                "    std::array<std::vector<double>, 4> coefficient_;\n"
+                "    std::array<std::vector<double>, 2 * D> coefficient_;\n"
                 "    std::vector<double> source_;\n"
                 "    std::vector<double> relaxed_;\n"
                 "    std::vector<double> iterate_;\n"
-                "    std::array<std::vector<double>, 4> coefficient2_;\n"
+                "    std::array<std::vector<double>, 2 * D> coefficient2_;\n"
                 "    std::vector<double> source2_;\n"
                 "    std::vector<double> relaxed2_;\n"
                 "    std::vector<double> iterate2_;\n"
@@ -201,20 +201,17 @@ FORMS: list[tuple[str, str, list[Edit]]] = [
                 "    }\n",
             ),
             momentum(
-                "    for (auto* a : {&coefficient_[0], &coefficient_[1], &coefficient_[2], &coefficient_[3],\n"
-                "                    &source_, &relaxed_, &iterate_}) {\n",
-                "    for (auto* a : {&coefficient_[0], &coefficient_[1], &coefficient_[2], &coefficient_[3],\n"
-                "                    &source_, &relaxed_, &iterate_, &coefficient2_[0], &coefficient2_[1],\n"
-                "                    &coefficient2_[2], &coefficient2_[3], &source2_, &relaxed2_,\n"
-                "                    &iterate2_}) {\n",
+                "    for (auto* a : {&source_, &relaxed_, &iterate_}) {\n",
+                "    for (auto& a : coefficient2_) {\n        a.assign(faces, 0.0);\n    }\n"
+                "    for (auto* a : {&source_, &relaxed_, &iterate_, &source2_, &relaxed2_, &iterate2_}) {\n",
             ),
             momentum(
-                "    assemble<1>(velocity, p, mu_eff, wall_mu, diagonal[1].data());\n"
-                "    sweep<1>(velocity[1].data(), diagonal[1].data(), star[1].data());\n",
-                "    swap_scratch();\n"
-                "    assemble<1>(velocity, p, mu_eff, wall_mu, diagonal[1].data());\n"
-                "    sweep<1>(velocity[1].data(), diagonal[1].data(), star[1].data());\n"
-                "    swap_scratch();\n",
+                "        assemble<C>(velocity, p, mu_eff, wall_mu, diagonal[C].data());\n"
+                "        sweep<C>(velocity[C].data(), diagonal[C].data(), star[C].data());\n",
+                "        if (C == 1) {\n            swap_scratch();\n        }\n"
+                "        assemble<C>(velocity, p, mu_eff, wall_mu, diagonal[C].data());\n"
+                "        sweep<C>(velocity[C].data(), diagonal[C].data(), star[C].data());\n"
+                "        if (C == 1) {\n            swap_scratch();\n        }\n",
             ),
         ],
     ),
@@ -232,8 +229,8 @@ PLANTS: list[tuple[str, str, list[Edit]]] = [
         "the deferred correction added to the source, not subtracted",
         [
             momentum(
-                "double deferred = -(in.cell_deferred[i] -",
-                "double deferred = (in.cell_deferred[i] -",
+                "double deferred = -net;",
+                "double deferred = net;",
             )
         ],
     ),
@@ -246,8 +243,8 @@ PLANTS: list[tuple[str, str, list[Edit]]] = [
                 "        out[i] = a + (b - a) * frac_b + 0.0 * frac_a;",
             ),
             momentum(
-                "        out[i] = a + (b - a) * s_at<C>(frac_high, i);",
-                "        const double frac_b = s_at<C>(frac_high, i);\n"
+                "        out[i] = a + (b - a) * along<C>(frac_high, i);",
+                "        const double frac_b = along<C>(frac_high, i);\n"
                 "        const double frac_a = 1.0 - frac_b;\n"
                 "        out[i] = a + (b - a) * (a * frac_b) / (frac_a * b + frac_b * a);",
             ),
@@ -258,12 +255,14 @@ PLANTS: list[tuple[str, str, list[Edit]]] = [
         "the wall stencil only where the neighbour face lies between two SOLID cells, not at a corner",
         [
             momentum(
-                "if (t + 1 < nt && solid_face(t + 1, s)) {",
-                "if (t + 1 < nt && solid(t + 1, s - 1) && solid(t + 1, s)) {",
+                "if (r + 1 < nt && solid_face(g, c, after(at, t))) {",
+                "if (r + 1 < nt && g.solid(index_of(g.fields(), after(before(at, c), t))) &&\n"
+                "            g.solid(index_of(g.fields(), after(at, t)))) {",
             ),
             momentum(
-                "if (t > 0 && solid_face(t - 1, s)) {",
-                "if (t > 0 && solid(t - 1, s - 1) && solid(t - 1, s)) {",
+                "if (r > 0 && solid_face(g, c, before(at, t))) {",
+                "if (r > 0 && g.solid(index_of(g.fields(), before(before(at, c), t))) &&\n"
+                "            g.solid(index_of(g.fields(), before(at, t)))) {",
             ),
         ],
     ),
@@ -282,11 +281,11 @@ PLANTS: list[tuple[str, str, list[Edit]]] = [
         "the streamwise upwind coefficient taken from the downstream side",
         [
             momentum(
-                "        const double f = in.half_rho * (in.low[i] + in.high[i]) * t_at<C>(in.width_t, i);\n"
+                "            times_area<C>(across, in.half_rho * (in.low[i] + in.high[i]), in.width_t, i);\n"
                 "        flux[i] = f;\n"
                 "        plus[i] = in.conductance[i] + positive_part(-f);\n"
                 "        minus[i] = in.conductance[i] + positive_part(f);\n",
-                "        const double f = in.half_rho * (in.low[i] + in.high[i]) * t_at<C>(in.width_t, i);\n"
+                "            times_area<C>(across, in.half_rho * (in.low[i] + in.high[i]), in.width_t, i);\n"
                 "        flux[i] = f;\n"
                 "        plus[i] = in.conductance[i] + positive_part(f);\n"
                 "        minus[i] = in.conductance[i] + positive_part(-f);\n",
@@ -298,8 +297,8 @@ PLANTS: list[tuple[str, str, list[Edit]]] = [
         "the diagonal's net mass flux dropped",
         [
             momentum(
-                "double p = a_e + a_w + a_n + a_s + (f_e - f_w + f_n - f_s);",
-                "double p = a_e + a_w + a_n + a_s + 0.0 * (f_e - f_w + f_n - f_s);",
+                "lanes::keep(in.unknown[i], sum + net);",
+                "lanes::keep(in.unknown[i], sum + 0.0 * net);",
             )
         ],
     ),
@@ -312,17 +311,17 @@ PLANTS: list[tuple[str, str, list[Edit]]] = [
                 "b[i] = b[i] + deferred + pressure + 0.0 * (in.relaxation * in.a_p[i] * in.own[i]);",
             ),
             momentum(
-                "    const double* a_p;\n    const mask* held;\n    const double* own;\n};\n\n// One Jacobi sweep",
+                "    const double* a_p;\n    const mask* held;\n    const double* own;\n};\n\n// The iterate",
                 "    const double* a_p;\n    const mask* held;\n    const double* own;\n"
-                "    double relaxation;\n};\n\n// One Jacobi sweep",
+                "    double relaxation;\n};\n\n// The iterate",
             ),
             momentum(
-                "in.a_tm[i] * tm + in.b[i];",
-                "in.a_tm[i] * tm + (in.b[i] + in.relaxation * in.a_p[i] * in.x[i]);",
+                "numerator = numerator + in.b[i];",
+                "numerator = numerator + (in.b[i] + in.relaxation * in.a_p[i] * in.x[i]);",
             ),
             momentum(
-                "            run.a_p = diagonal + at;\n",
-                "            run.a_p = diagonal + at;\n            run.relaxation = relaxation_;\n",
+                "            run.a_p = diagonal + row;\n",
+                "            run.a_p = diagonal + row;\n            run.relaxation = relaxation_;\n",
             ),
         ],
     ),
@@ -342,11 +341,11 @@ PLANTS: list[tuple[str, str, list[Edit]]] = [
         "the transverse upwind coefficient taken from the downstream side",
         [
             momentum(
-                "                                        in.high[i] * s_at<C>(in.width_high, i));\n"
+                "                                        in.high[i] * along<C>(in.width_high, i));\n"
                 "        flux[i] = f;\n"
                 "        plus[i] = in.conductance[i] + positive_part(-f);\n"
                 "        minus[i] = in.conductance[i] + positive_part(f);\n",
-                "                                        in.high[i] * s_at<C>(in.width_high, i));\n"
+                "                                        in.high[i] * along<C>(in.width_high, i));\n"
                 "        flux[i] = f;\n"
                 "        plus[i] = in.conductance[i] + positive_part(f);\n"
                 "        minus[i] = in.conductance[i] + positive_part(-f);\n",
@@ -358,10 +357,10 @@ PLANTS: list[tuple[str, str, list[Edit]]] = [
         "the transverse mass flux from the mean of the two half cells, not width-weighted",
         [
             momentum(
-                "in.half_rho * (in.low[i] * s_at<C>(in.width_low, i) +\n"
-                "                                        in.high[i] * s_at<C>(in.width_high, i));",
-                "in.half_rho * ((in.low[i] + in.high[i]) * 0.5 * (s_at<C>(in.width_low, i) +\n"
-                "                                        s_at<C>(in.width_high, i)));",
+                "in.half_rho * (in.low[i] * along<C>(in.width_low, i) +\n"
+                "                                        in.high[i] * along<C>(in.width_high, i));",
+                "in.half_rho * ((in.low[i] + in.high[i]) * 0.5 * (along<C>(in.width_low, i) +\n"
+                "                                        along<C>(in.width_high, i)));",
             )
         ],
     ),
@@ -370,34 +369,73 @@ PLANTS: list[tuple[str, str, list[Edit]]] = [
         "the diagonal's neighbour sum added in another order",
         [
             momentum(
-                "double p = a_e + a_w + a_n + a_s +",
-                "double p = a_n + a_s + a_e + a_w +",
+                "high_side<T>(in.cross[slot_of(C, T)].plus, in.cross[slot_of(C, T)].plus_above, i) +\n"
+                "                in.cross[slot_of(C, T)].minus[i]),",
+                "(high_side<T>(in.cross[slot_of(C, T)].plus, in.cross[slot_of(C, T)].plus_above, i) +\n"
+                "                in.cross[slot_of(C, T)].minus[i])),",
             )
         ],
     ),
     (
         "flux_order",
         "the diagonal's net flux added in another order",
-        [momentum("(f_e - f_w + f_n - f_s)", "(f_n - f_s + f_e - f_w)")],
+        [
+            momentum(
+                "high_side<T>(in.cross[slot_of(C, T)].flux, in.cross[slot_of(C, T)].flux_above, i) -\n"
+                "                in.cross[slot_of(C, T)].flux[i]),",
+                "(high_side<T>(in.cross[slot_of(C, T)].flux, in.cross[slot_of(C, T)].flux_above, i) -\n"
+                "                in.cross[slot_of(C, T)].flux[i])),",
+            )
+        ],
     ),
     (
         "open_high_edge_kept",
         "a zero-gradient high edge's coefficient left in the diagonal",
-        [momentum("            p = p - lanes::keep(~is_known, a_n);\n", "")],
+        [
+            momentum(
+                "        beside(corners.low->plus.data() + 1, w.high_known, w.high_value, toward_high, nx - 1, nx);",
+                "        beside(corners.low->plus.data() + 1, std::vector<mask>(w.high_known.size(), lanes::all),\n"
+                "               w.high_value, toward_high, nx - 1, nx);",
+            ),
+            momentum(
+                "            beside(corners.high->plus.data(), w.high_known, w.high_value, toward_high, first,",
+                "            beside(corners.high->plus.data(), std::vector<mask>(w.high_known.size(), lanes::all),\n"
+                "                   w.high_value, toward_high, first,",
+            ),
+        ],
     ),
     (
         "open_low_edge_kept",
         "a zero-gradient low edge's coefficient left in the diagonal",
-        [momentum("            p = p - lanes::keep(~is_known, a_s);\n", "")],
+        [
+            momentum(
+                "        beside(corners.low->minus.data(), w.low_known, w.low_value, toward_low, 0, 1);",
+                "        beside(corners.low->minus.data(), std::vector<mask>(w.low_known.size(), lanes::all),\n"
+                "               w.low_value, toward_low, 0, 1);",
+            ),
+            momentum(
+                "            beside(corners.low->minus.data(), w.low_known, w.low_value, toward_low, first, nx_);",
+                "            beside(corners.low->minus.data(), std::vector<mask>(w.low_known.size(), lanes::all),\n"
+                "                   w.low_value, toward_low, first, nx_);",
+            ),
+        ],
     ),
     (
         "high_edge_value_dropped",
         "a Dirichlet high edge's value left out of the source",
         [
             momentum(
-                "            b = b + lanes::keep(is_known, a_n * s_at<C>(in.edge_value, i));\n",
-                "",
-            )
+                "        beside(corners.low->plus.data() + 1, w.high_known, w.high_value, toward_high, nx - 1, nx);",
+                "        beside(corners.low->plus.data() + 1, w.high_known, zeros_, toward_high, nx - 1, nx);",
+            ),
+            momentum(
+                "            beside(corners.high->plus.data(), w.high_known, w.high_value, toward_high, first,",
+                "            beside(corners.high->plus.data(), w.high_known, zeros_, toward_high, first,",
+            ),
+            momentum(
+                "    zeros_.assign(nx_ + 1, 0.0);",
+                "    zeros_.assign(nx_ + g.fields().cell_count() + 1, 0.0);",
+            ),
         ],
     ),
     (
@@ -405,9 +443,17 @@ PLANTS: list[tuple[str, str, list[Edit]]] = [
         "a Dirichlet low edge's value left out of the source",
         [
             momentum(
-                "            b = b + lanes::keep(is_known, a_s * s_at<C>(in.edge_value, i));\n",
-                "",
-            )
+                "        beside(corners.low->minus.data(), w.low_known, w.low_value, toward_low, 0, 1);",
+                "        beside(corners.low->minus.data(), w.low_known, zeros_, toward_low, 0, 1);",
+            ),
+            momentum(
+                "            beside(corners.low->minus.data(), w.low_known, w.low_value, toward_low, first, nx_);",
+                "            beside(corners.low->minus.data(), w.low_known, zeros_, toward_low, first, nx_);",
+            ),
+            momentum(
+                "    zeros_.assign(nx_ + 1, 0.0);",
+                "    zeros_.assign(nx_ + g.fields().cell_count() + 1, 0.0);",
+            ),
         ],
     ),
     (
@@ -415,27 +461,34 @@ PLANTS: list[tuple[str, str, list[Edit]]] = [
         "the high edge's condition read at the low one",
         [
             momentum(
-                "        run.edge_known = o.low_known.data() + (own_along_row<C> ? 0 : j);\n"
-                "        run.edge_value = o.low_value.data()",
-                "        run.edge_known = o.high_known.data() + (own_along_row<C> ? 0 : j);\n"
-                "        run.edge_value = o.high_value.data()",
-            )
+                "        beside(corners.low->minus.data(), w.low_known, w.low_value, toward_low, 0, 1);",
+                "        beside(corners.low->minus.data(), w.high_known, w.high_value, toward_low, 0, 1);",
+            ),
+            momentum(
+                "            beside(corners.low->minus.data(), w.low_known, w.low_value, toward_low, first, nx_);",
+                "            beside(corners.low->minus.data(), w.high_known, w.high_value, toward_low, first, nx_);",
+            ),
         ],
     ),
     (
         "obstacle_neighbour_kept_high",
         "the coefficient toward an obstacle's face on the high side not zeroed",
-        [momentum("here & in.couples_high[i], a_n", "here, a_n")],
+        [momentum("unknown[i] & couples_high[i], a_n", "unknown[i], a_n")],
     ),
     (
         "obstacle_neighbour_kept_low",
         "the coefficient toward an obstacle's face on the low side not zeroed",
-        [momentum("here & in.couples_low[i], a_s", "here, a_s")],
+        [momentum("unknown[i] & couples_low[i], a_s", "unknown[i], a_s")],
     ),
     (
         "solid_faces_unmasked",
         "the diagonal of a SOLID cell's face left as formed",
-        [momentum("        p = lanes::keep(here, p);\n", "")],
+        [
+            momentum(
+                "lanes::keep(in.unknown[i], sum + net);",
+                "lanes::keep(in.unknown[i] | lanes::all, sum + net);",
+            )
+        ],
     ),
     (
         "domain_edge_entries_kept",
@@ -443,13 +496,11 @@ PLANTS: list[tuple[str, str, list[Edit]]] = [
         [
             momentum(
                 "            a[row] = 0.0;\n            a[row + nx] = 0.0;\n",
-                "            if (a == diagonal) {\n                a[row] = 0.0;\n"
-                "                a[row + nx] = 0.0;\n            }\n",
+                "            a[row] = a[row] + 0.0;\n",
             ),
             momentum(
-                "            std::fill(a, a + nx_, 0.0);\n",
-                "            if (a != diagonal) {\n                continue;\n            }\n"
-                "            std::fill(a, a + nx_, 0.0);\n",
+                "                    std::fill(a.data() + row, a.data() + row + nx_, 0.0);\n",
+                "                    std::fill(a.data() + row, a.data() + row, 0.0);\n",
             ),
         ],
     ),
@@ -458,8 +509,8 @@ PLANTS: list[tuple[str, str, list[Edit]]] = [
         "a face taken for an unknown where its diagonal is not zero, not where it is positive",
         [
             momentum(
-                "lanes::mask_of(p > 0.0), p / in.alpha",
-                "lanes::mask_of(p != 0.0), p / in.alpha",
+                "lanes::mask_of(a_p > 0.0), a_p / alpha",
+                "lanes::mask_of(a_p != 0.0), a_p / alpha",
             ),
             momentum(
                 "lanes::mask_of(in.a_p[i] > 0.0)", "lanes::mask_of(in.a_p[i] != 0.0)"
@@ -477,22 +528,22 @@ PLANTS: list[tuple[str, str, list[Edit]]] = [
         "wall_mu not read at the obstacle faces",
         [
             momentum(
-                "                o.reach[i] = wall_distance[i];\n                o.takes_wall[i] = lanes::all;\n",
-                "                o.reach[i] = wall_distance[i];\n",
+                "            w.reach[i] = wall_distance[i];\n            w.takes_wall[i] = lanes::all;\n",
+                "            w.reach[i] = wall_distance[i];\n",
             )
         ],
     ),
     (
         "takes_wall_not_at_edges",
         "wall_mu not read at the domain edges",
-        [momentum("                o.takes_wall[i] = known;\n", "")],
+        [momentum("            w.takes_wall[i] = known;\n", "")],
     ),
     (
         "open_edge_conducts",
         "a zero-gradient edge conducting as a wall does, with a viscosity field",
         [
             momentum(
-                "                o.conducts[i] = known;\n",
+                "            w.conducts[i] = known;\n",
                 "",
             )
         ],
@@ -502,8 +553,8 @@ PLANTS: list[tuple[str, str, list[Edit]]] = [
         "the obstacle wall taken a whole cell away, not half",
         [
             momentum(
-                "                o.reach[i] = wall_distance[i];\n",
-                "                o.reach[i] = 2.0 * wall_distance[i];\n",
+                "            w.reach[i] = wall_distance[i];\n",
+                "            w.reach[i] = 2.0 * wall_distance[i];\n",
             )
         ],
     ),
@@ -512,8 +563,8 @@ PLANTS: list[tuple[str, str, list[Edit]]] = [
         "the high edge's wall distance read at the low edge",
         [
             momentum(
-                "o.reach[i] = t == 0 ? low.wall_distance : high.wall_distance;",
-                "o.reach[i] = high.wall_distance;",
+                "w.reach[i] = r == 0 ? low.wall_distance : high.wall_distance;",
+                "w.reach[i] = high.wall_distance;",
             )
         ],
     ),
@@ -523,10 +574,10 @@ PLANTS: list[tuple[str, str, list[Edit]]] = [
         "QUICK's three products added in another order",
         [
             momentum(
-                "        const double q_pos = s_at<C>(in.std_pos[0], i) * below +\n"
-                "                             s_at<C>(in.std_pos[1], i) * lo + s_at<C>(in.std_pos[2], i) * hi;",
-                "        const double q_pos = s_at<C>(in.std_pos[2], i) * hi +\n"
-                "                             s_at<C>(in.std_pos[1], i) * lo + s_at<C>(in.std_pos[0], i) * below;",
+                "        const double q_pos = along<C>(in.std_pos[0], i) * below +\n"
+                "                             along<C>(in.std_pos[1], i) * lo + along<C>(in.std_pos[2], i) * hi;",
+                "        const double q_pos = along<C>(in.std_pos[2], i) * hi +\n"
+                "                             along<C>(in.std_pos[1], i) * lo + along<C>(in.std_pos[0], i) * below;",
             )
         ],
     ),
@@ -590,7 +641,7 @@ PLANTS: list[tuple[str, str, list[Edit]]] = [
         "the node beyond a Dirichlet high edge of a v row the adjacent value, not the wall's",
         [
             momentum(
-                "lanes::select(o.high_known[j], o.high_value[j], row[nx - 1]);",
+                "lanes::select(w.high_known[edge_at], w.high_value[edge_at], row[nx - 1]);",
                 "row[nx - 1];",
             )
         ],
@@ -600,8 +651,8 @@ PLANTS: list[tuple[str, str, list[Edit]]] = [
         "the streamwise weights at the last face from the node before it as in the interior's other end",
         [
             momentum(
-                "run.far_high = position + 1 < o.ns ? high + first + stride : low + first - stride;",
-                "run.far_high = position + 1 < o.ns ? high + first + stride : low + first;",
+                "run.far_high = s + 1 < o.ns ? high + first + stride : low + first - stride;",
+                "run.far_high = s + 1 < o.ns ? high + first + stride : low + first;",
             )
         ],
     ),
@@ -620,8 +671,8 @@ PLANTS: list[tuple[str, str, list[Edit]]] = [
         "no row of corners marked as holding an obstacle",
         [
             momentum(
-                "            o.row_walls[i / (nx + 1)] = 1;",
-                "            o.row_walls[i / (nx + 1)] = 0;",
+                "            w.row_walls[i / row] = 1;",
+                "            w.row_walls[i / row] = 0;",
             )
         ],
     ),
@@ -661,8 +712,8 @@ PLANTS: list[tuple[str, str, list[Edit]]] = [
         "the harmonic mean's two distances swapped",
         [
             momentum(
-                "o.harmonic_low[r] = d_lo / (d_lo + d_hi);",
-                "o.harmonic_low[r] = d_hi / (d_lo + d_hi);",
+                "w.harmonic_low[r] = d_lo / (d_lo + d_hi);",
+                "w.harmonic_low[r] = d_hi / (d_lo + d_hi);",
             )
         ],
     ),
@@ -679,7 +730,12 @@ PLANTS: list[tuple[str, str, list[Edit]]] = [
     (
         "first_mean_row_skipped",
         "the first row of cells' harmonic means of v taken from an earlier call",
-        [momentum("        if (j == 1) {\n            mean_row(0);\n        }\n", "")],
+        [
+            momentum(
+                "harmonic_row<C, T>(before(at, C), mu, s == 1);",
+                "harmonic_row<C, T>(before(at, C), mu, false);",
+            )
+        ],
     ),
     (
         "stress_dropped",
@@ -696,8 +752,8 @@ PLANTS: list[tuple[str, str, list[Edit]]] = [
         "the low transverse face's stress added, not subtracted",
         [
             momentum(
-                "                    corner_high<C>(in.corner_stress, in.corner_stress_above, i) -\n",
-                "                    corner_high<C>(in.corner_stress, in.corner_stress_above, i) +\n",
+                "               high_side<T>(in.stress, in.stress_above, i) -\n",
+                "               high_side<T>(in.stress, in.stress_above, i) +\n",
             )
         ],
     ),
@@ -717,8 +773,8 @@ PLANTS: list[tuple[str, str, list[Edit]]] = [
         "the pressure source's sign",
         [
             momentum(
-                "            -(in.p[i] - cell_low<C>(in.p_below, in.p, i))",
-                "            (in.p[i] - cell_low<C>(in.p_below, in.p, i))",
+                "across, -(in.p[i] - low_side<C>(in.p_below, in.p, i))",
+                "across, (in.p[i] - low_side<C>(in.p_below, in.p, i))",
             )
         ],
     ),
@@ -747,12 +803,10 @@ PLANTS: list[tuple[str, str, list[Edit]]] = [
         "a sweep's transverse neighbours taken from the other sides",
         [
             momentum(
-                "const double tp = own_along_row<C> ? in.above[i] : east;",
-                "const double tp = own_along_row<C> ? in.below[i] : west;",
-            ),
-            momentum(
-                "const double tm = own_along_row<C> ? in.below[i] : west;",
-                "const double tm = own_along_row<C> ? in.above[i] : east;",
+                "    return sum + in.plus[Part][i] * high_neighbour<d, Inner>(in, i) +\n"
+                "           in.minus[Part][i] * low_neighbour<d, Inner>(in, i);",
+                "    return sum + in.plus[Part][i] * low_neighbour<d, Inner>(in, i) +\n"
+                "           in.minus[Part][i] * high_neighbour<d, Inner>(in, i);",
             ),
         ],
     ),
@@ -761,8 +815,10 @@ PLANTS: list[tuple[str, str, list[Edit]]] = [
         "a sweep's four products added in another order",
         [
             momentum(
-                "in.a_sp[i] * sp + in.a_sm[i] * sm + in.a_tp[i] * tp +\n                                 in.a_tm[i] * tm + in.b[i];",
-                "in.a_tp[i] * tp + in.a_tm[i] * tm + in.a_sp[i] * sp +\n                                 in.a_sm[i] * sm + in.b[i];",
+                "    return sum + in.plus[Part][i] * high_neighbour<d, Inner>(in, i) +\n"
+                "           in.minus[Part][i] * low_neighbour<d, Inner>(in, i);",
+                "    return sum + (in.plus[Part][i] * high_neighbour<d, Inner>(in, i) +\n"
+                "                  in.minus[Part][i] * low_neighbour<d, Inner>(in, i));",
             )
         ],
     ),
@@ -771,8 +827,8 @@ PLANTS: list[tuple[str, str, list[Edit]]] = [
         "each sweep reading the rows the same sweep has written",
         [
             momentum(
-                "            run.below = j > 0 ? run.x - width : zeros_.data();",
-                "            run.below = j > 0 ? next + at - width : zeros_.data();",
+                "run.below[d] = at[d] > 0 ? run.x - stride : zeros_.data();",
+                "run.below[d] = at[d] > 0 ? next + row - stride : zeros_.data();",
             )
         ],
     ),
@@ -796,7 +852,8 @@ PLANTS: list[tuple[str, str, list[Edit]]] = [
         "the sweeps dividing by the un-relaxed diagonal",
         [
             momentum(
-                "lanes::mask_of(p > 0.0), p / in.alpha", "lanes::mask_of(p > 0.0), p"
+                "lanes::mask_of(a_p > 0.0), a_p / alpha",
+                "lanes::mask_of(a_p > 0.0), a_p + 0.0 * alpha",
             )
         ],
     ),
@@ -808,6 +865,57 @@ PLANTS: list[tuple[str, str, list[Edit]]] = [
                 "lanes::keep(in.held[i], in.own[i])", "lanes::keep(in.held[i], in.b[i])"
             )
         ],
+    ),
+    # What the restructure adds (prompt 92b).
+    (
+        "kept_row_first",
+        "every kept row of fluxes the same one, not the last two along the direction",
+        [momentum("row + (at[d] % 2) * stride;", "row + (at[d] % 1) * stride;")],
+    ),
+    (
+        "area_without_width",
+        "a streamwise face's area without the transverse width",
+        [
+            momentum(
+                "((x = x * along<T>(widths[slot_of(C, T)], i)), ...);",
+                "((x = x * (0.0 * along<T>(widths[slot_of(C, T)], i) + 1.0)), ...);",
+            )
+        ],
+    ),
+    (
+        "edge_relaxed_kept",
+        "the relaxed diagonal beside a domain edge the one from before the edge's part left it",
+        [
+            momentum(
+                "        relaxed[i] = relaxed_diagonal(p, in.alpha);\n        neighbour[i] = 0.0;\n",
+                "        relaxed[i] = relaxed[i] + 0.0;\n        neighbour[i] = 0.0;\n",
+            )
+        ],
+    ),
+    (
+        "edge_neighbour_kept",
+        "the coefficient toward a domain edge not zeroed",
+        [
+            momentum(
+                "        neighbour[i] = 0.0;\n",
+                "        neighbour[i] = neighbour[i] + 0.0;\n",
+            )
+        ],
+    ),
+    (
+        "edge_at_every_face",
+        "an edge's condition read at the row's first face along an edge that crosses the rows",
+        [
+            momentum(
+                "    const std::size_t edge_at = edge_index(o.faces, T, at);\n    double* toward_high",
+                "    const std::size_t edge_at = 0 * edge_index(o.faces, T, at);\n    double* toward_high",
+            )
+        ],
+    ),
+    (
+        "cross_pressure_below",
+        "the pressure below a row of v taken from the row itself",
+        [momentum("    rhs.p_below = p + cell_below;", "    rhs.p_below = p + cell;")],
     ),
     # stencil_viscosity.
     (
@@ -825,8 +933,8 @@ PLANTS: list[tuple[str, str, list[Edit]]] = [
         "stencil_viscosity's top row of u left at air's viscosity",
         [
             momentum(
-                "    rows.template operator()<0>(0, ny_ + 1);",
-                "    rows.template operator()<0>(0, ny_);",
+                "        last[C] = w.corners.cells(C) - 1;\n",
+                "        last[C] = w.corners.cells(C) - 1;\n        last[T] = last[T] - (C == 0 ? 1 : 0);\n",
             )
         ],
     ),
@@ -876,8 +984,8 @@ PLANTS: list[tuple[str, str, list[Edit]]] = [
         "a wall viscosity checked where no unknown reads it",
         [
             momentum(
-                "                    o.wall_read[i] = known & o.unknown[at.face(t == 0 ? 0 : nt - 1, s)];",
-                "                    o.wall_read[i] = known;",
+                "                w.wall_read[i] = known & o.unknown[index_of(o.faces, face)];",
+                "                w.wall_read[i] = known | (o.unknown[index_of(o.faces, face)] & lanes::none);",
             )
         ],
     ),
@@ -919,8 +1027,8 @@ PLANTS: list[tuple[str, str, list[Edit]]] = [
             (
                 "edge_lengths",
                 "the edges' lengths",
-                "e->is_dirichlet.size() != g.cells(d) + 1 || e->value.size() != g.cells(d) + 1",
-                "e->is_dirichlet.empty()",
+                "e->is_dirichlet.size() != faces || e->value.size() != faces",
+                "e->is_dirichlet.empty() || faces == 0",
             ),
             (
                 "held_length",
@@ -949,8 +1057,8 @@ PLANTS: list[tuple[str, str, list[Edit]]] = [
             (
                 "edges_swapped",
                 "bottom and top handed over swapped",
-                'input.low = {read_edge(tangential[0], along_x, "bottom"',
-                'input.low = {read_edge(tangential[1], along_x, "bottom"',
+                'input.low[0][0] = read_edge(tangential[0], along_x, "bottom"',
+                'input.low[0][0] = read_edge(tangential[1], along_x, "bottom"',
             ),
             (
                 "left_right",
@@ -1081,7 +1189,7 @@ PLANTS: list[tuple[str, str, list[Edit]]] = [
             (
                 "wall_check",
                 "wall_mu's values not checked",
-                "        switch (m.check_wall_viscosity(c, spans[c])) {",
+                "        switch (m.check_wall_viscosity(c, 0, spans[c][0])) {",
                 "        switch (viscosity_status::ok) {",
             ),
             (

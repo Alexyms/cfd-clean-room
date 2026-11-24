@@ -1483,6 +1483,7 @@ nb::object march_recovery(const March2& m) {
 
 using Predictor2 = cfdcore::momentum::predictor<2>;
 using cfdcore::momentum::component_setup;
+using cfdcore::momentum::pair_setup;
 using cfdcore::momentum::viscosity_status;
 
 // A read-only, C-contiguous, one-dimensional bool array on the CPU.
@@ -1580,10 +1581,11 @@ void momentum_init(Predictor2* self, const Grid2& g, const Vector& dx_cell, cons
     input.face_widths = {as_span(dx_face), as_span(dy_face)};
     const std::size_t along_x = g.cells(0) + 1;
     const std::size_t along_y = g.cells(1) + 1;
-    input.low = {read_edge(tangential[0], along_x, "bottom", flags, values),
-                 read_edge(tangential[2], along_y, "left", flags, values)};
-    input.high = {read_edge(tangential[1], along_x, "top", flags, values),
-                  read_edge(tangential[3], along_y, "right", flags, values)};
+    // Each component's one pair, with the other direction.
+    input.low[0][0] = read_edge(tangential[0], along_x, "bottom", flags, values);
+    input.low[1][0] = read_edge(tangential[2], along_y, "left", flags, values);
+    input.high[0][0] = read_edge(tangential[1], along_x, "top", flags, values);
+    input.high[1][0] = read_edge(tangential[3], along_y, "right", flags, values);
     const std::array<const std::optional<BoolMatrix>*, 2> held{&held_u, &held_v};
     for (int c = 0; c < 2; ++c) {
         if (*held[c]) {
@@ -1616,8 +1618,8 @@ std::span<const double> read_mu_eff(const Predictor2& m, nb::handle value, Array
 }
 
 // `wall_mu`'s refusals in the reference's order (`_check_wall_mu`), or its spans.
-std::array<std::span<const double>, 2> read_wall_mu(const Predictor2& m, nb::handle value,
-                                                    std::array<Array, 2>& keep) {
+cfdcore::momentum::per_pair<std::span<const double>, 2> read_wall_mu(
+    const Predictor2& m, nb::handle value, std::array<Array, 2>& keep) {
     if (!nb::isinstance<nb::dict>(value)) {
         refuse_type("wall_mu must be a dict with keys 'u' and 'v', got " +
                     python_type_name(value));
@@ -1629,13 +1631,13 @@ std::array<std::span<const double>, 2> read_wall_mu(const Predictor2& m, nb::han
                      nb::cast<std::string>(nb::str(names)));
     }
     const Grid2& g = m.mesh();
-    std::array<std::span<const double>, 2> spans;
+    cfdcore::momentum::per_pair<std::span<const double>, 2> spans;
     for (int c = 0; c < 2; ++c) {
         const char* key = c == 0 ? "u" : "v";
         const std::string name = std::string("wall_mu['") + key + "']";
         keep[c] = read_viscosity(fields[key], name, {g.cells(1) + 1, g.cells(0) + 1});
-        spans[c] = span_of_array(keep[c]);
-        switch (m.check_wall_viscosity(c, spans[c])) {
+        spans[c][0] = span_of_array(keep[c]);
+        switch (m.check_wall_viscosity(c, 0, spans[c][0])) {
             case viscosity_status::not_finite:
                 refuse_value(name + " must be finite at every wall face");
             case viscosity_status::not_positive:
@@ -1655,7 +1657,7 @@ struct viscosity_arrays {
 };
 struct viscosities {
     std::span<const double> field;
-    std::array<std::span<const double>, 2> walls;
+    cfdcore::momentum::per_pair<std::span<const double>, 2> walls;
 };
 
 viscosities read_viscosities(const Predictor2& m, nb::handle mu_eff, nb::handle wall_mu,
@@ -1727,8 +1729,8 @@ nb::dict momentum_stencil_viscosity(Predictor2& m, nb::handle mu_eff) {
     const Grid2& g = m.mesh();
     auto u = new_matrix({g.cells(1) + 1, g.cells(0) + 1});
     auto v = new_matrix({g.cells(1) + 1, g.cells(0) + 1});
-    m.stencil_viscosity(field, {std::span<double>(u.data(), u.size()),
-                                std::span<double>(v.data(), v.size())});
+    m.stencil_viscosity(field, {{{std::span<double>(u.data(), u.size())},
+                                 {std::span<double>(v.data(), v.size())}}});
     nb::dict out;
     out["u"] = u;
     out["v"] = v;
@@ -1781,11 +1783,12 @@ auto found(const Table& table, const std::string& name) -> decltype(table[0].sec
     return nullptr;
 }
 
-// A quantity of one component's set-up by its name in `component_setup`: a set of
-// weights as a list of 1-D arrays, a field as a matrix.
+// A quantity of one component's set-up by its name in `component_setup` or in its
+// one pair's: a set of weights as a list of 1-D arrays, a field as a matrix.
 nb::object momentum_fixed(const Predictor2& m, const std::string& name, int component) {
     const int c = direction(component);
-    const component_setup& o = m.setup(c);
+    const component_setup<2>& o = m.setup(c);
+    const pair_setup<2>& w = o.pairs[0];
     const Grid2& g = m.mesh();
     const std::vector<std::size_t> cells{g.cells(1), g.cells(0)};
     const std::vector<std::size_t> corners{g.cells(1) + 1, g.cells(0) + 1};
@@ -1807,31 +1810,31 @@ nb::object momentum_fixed(const Predictor2& m, const std::string& name, int comp
          {"std_neg", &o.std_neg},
          {"alt_pos", &o.alt_pos},
          {"alt_neg", &o.alt_neg},
-         {"t_pos", &o.t_pos},
-         {"t_neg", &o.t_neg}}};
+         {"t_pos", &w.t_pos},
+         {"t_neg", &w.t_neg}}};
     const std::array<std::pair<const char*, const two*>, 2> twos{
-        {{"wall_pos", &o.wall_pos}, {"wall_neg", &o.wall_neg}}};
+        {{"wall_pos", &w.wall_pos}, {"wall_neg", &w.wall_neg}}};
     const std::array<std::pair<const char*, const line*>, 3> lines{
-        {{"harmonic_low", &o.harmonic_low},
-         {"harmonic_high", &o.harmonic_high},
+        {{"harmonic_low", &w.harmonic_low},
+         {"harmonic_high", &w.harmonic_high},
          {"mean_high", &o.mean_high}}};
     const std::array<std::pair<const char*, const line*>, 1> cell_fields{
         {{"conductance_s", &o.conductance_s}}};
     const std::array<std::pair<const char*, const line*>, 2> corner_fields{
-        {{"conductance_t", &o.conductance_t}, {"reach", &o.reach}}};
+        {{"conductance_t", &w.conductance_t}, {"reach", &w.reach}}};
     const std::array<std::pair<const char*, const masks*>, 2> cell_masks{
         {{"blocked_pos", &o.blocked_pos}, {"blocked_neg", &o.blocked_neg}}};
     const std::array<std::pair<const char*, const masks*>, 6> corner_masks{
-        {{"wall_face", &o.wall_face},
-         {"takes_wall", &o.takes_wall},
-         {"conducts", &o.conducts},
-         {"far_wall_low", &o.far_wall_low},
-         {"far_wall_high", &o.far_wall_high},
-         {"wall_read", &o.wall_read}}};
+        {{"wall_face", &w.wall_face},
+         {"takes_wall", &w.takes_wall},
+         {"conducts", &w.conducts},
+         {"far_wall_low", &w.far_wall_low},
+         {"far_wall_high", &w.far_wall_high},
+         {"wall_read", &w.wall_read}}};
     const std::array<std::pair<const char*, const masks*>, 3> face_masks{
         {{"unknown", &o.unknown},
-         {"couples_high", &o.couples_high},
-         {"couples_low", &o.couples_low}}};
+         {"couples_high", &w.couples_high},
+         {"couples_low", &w.couples_low}}};
     if (const auto* a = found(threes, name)) {
         return list_of(*a);
     }

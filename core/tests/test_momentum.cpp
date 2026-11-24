@@ -113,8 +113,10 @@ struct box {
         input = predictor_input<2>{};
         input.cell_widths = {dx, dy};
         input.face_widths = {dx_face, dy_face};
-        input.low = {bottom.condition(), left.condition()};
-        input.high = {top.condition(), right.condition()};
+        input.low[0][0] = bottom.condition();
+        input.low[1][0] = left.condition();
+        input.high[0][0] = top.condition();
+        input.high[1][0] = right.condition();
         if (with_held) {
             input.held = {held_u.span(), held_v.span()};
         }
@@ -130,7 +132,7 @@ struct box {
     }
 
     void predict(std::span<const double> mu_eff = {},
-                 std::array<std::span<const double>, 2> wall = {}) {
+                 cfdcore::momentum::per_pair<std::span<const double>, 2> wall = {}) {
         made->predict({u, v}, p, mu_eff, wall, {star[0], star[1]}, {a_p[0], a_p[1]});
     }
 
@@ -340,7 +342,7 @@ TEST(MomentumEquations, AWallViscosityReplacesAirsAtTheWallsOnly) {
     b.types[2 * b.nx + 2] = solid_type;
     b.build(1.0, 1);
     std::vector<double> wall((b.nx + 1) * (b.ny + 1), 3.0 * b.mu);
-    b.predict({}, {wall, wall});
+    b.predict({}, {{{wall}, {wall}}});
     EXPECT_DOUBLE_EQ(b.a_p[0][b.uf(2, 1)], 4.0 * b.mu);
     EXPECT_DOUBLE_EQ(b.a_p[0][b.uf(0, 2)], 9.0 * b.mu);
     EXPECT_DOUBLE_EQ(b.a_p[0][b.uf(3, 2)], 9.0 * b.mu);
@@ -488,7 +490,7 @@ TEST(MomentumViscosity, TheStencilTakesTheFaceRulesValueAtTheWalls) {
     for (auto& a : out) {
         a.assign((b.nx + 1) * (b.ny + 1), 0.0);
     }
-    b.made->stencil_viscosity(mu, {out[0], out[1]});
+    b.made->stencil_viscosity(mu, {{{out[0]}, {out[1]}}});
     // u's bottom wall between cells of 3 and 1: their width-weighted mean.
     EXPECT_EQ(out[0][b.corner(0, 1)], 2.0);
     EXPECT_EQ(out[0][b.corner(0, 2)], 1.0);
@@ -535,7 +537,7 @@ TEST(MomentumViscosity, TheChecksReadWhatTheEquationsReadAndNothingElse) {
     std::vector<double> wall((b.nx + 1) * (b.ny + 1), std::nan(""));
     for (int c = 0; c < 2; ++c) {
         auto read = wall;
-        const auto& marked = b.made->setup(c).wall_read;
+        const auto& marked = b.made->setup(c).pairs[0].wall_read;
         std::size_t last = 0;
         for (std::size_t i = 0; i < read.size(); ++i) {
             if (marked[i] != cfdcore::lanes::none) {
@@ -543,11 +545,218 @@ TEST(MomentumViscosity, TheChecksReadWhatTheEquationsReadAndNothingElse) {
                 last = i;
             }
         }
-        EXPECT_EQ(b.made->check_wall_viscosity(c, read), viscosity_status::ok);
+        EXPECT_EQ(b.made->check_wall_viscosity(c, 0, read), viscosity_status::ok);
         read[last] = std::nan("");
-        EXPECT_EQ(b.made->check_wall_viscosity(c, read), viscosity_status::not_finite);
+        EXPECT_EQ(b.made->check_wall_viscosity(c, 0, read), viscosity_status::not_finite);
         read[last] = 0.0;
-        EXPECT_EQ(b.made->check_wall_viscosity(c, read), viscosity_status::not_positive);
+        EXPECT_EQ(b.made->check_wall_viscosity(c, 0, read), viscosity_status::not_positive);
+    }
+}
+
+// A straight duct of n cells along one direction, which has no transverse one:
+// one component, no wall stencil and no pair.
+struct duct {
+    explicit duct(std::size_t n)
+        : x(n + 1), xc(n), types(n, fluid_type), u(n + 1, 0.0), p(n, 0.0) {
+        // Widths that differ, so a weight or a distance read from the wrong
+        // cell shows.
+        for (std::size_t i = 0; i < n; ++i) {
+            x[i + 1] = x[i] + 0.5 + hashed(i);
+        }
+        for (std::size_t i = 0; i < n; ++i) {
+            xc[i] = 0.5 * (x[i] + x[i + 1]);
+            dx.push_back(x[i + 1] - x[i]);
+        }
+        dx_face.push_back(xc.front() - x.front());
+        for (std::size_t i = 1; i < n; ++i) {
+            dx_face.push_back(xc[i] - xc[i - 1]);
+        }
+        dx_face.push_back(x.back() - xc.back());
+    }
+
+    void build(double alpha, std::int64_t sweeps) {
+        mesh = std::make_unique<cfdcore::grid::grid<1>>(cfdcore::grid::grid_input<1>{
+            .faces = {x}, .centres = {xc}, .cell_type = types, .solid = solid_type});
+        input = predictor_input<1>{};
+        input.cell_widths = {dx};
+        input.face_widths = {dx_face};
+        input.rho = rho;
+        input.mu = mu;
+        input.alpha = alpha;
+        input.sweeps = sweeps;
+        made = std::make_unique<predictor<1>>(*mesh, input);
+        star.assign(u.size(), std::nan(""));
+        a_p.assign(u.size(), std::nan(""));
+    }
+
+    void predict(std::span<const double> mu_eff = {}) {
+        made->predict({u}, p, mu_eff, {}, {star}, {a_p});
+    }
+
+    double rho = 1.2;
+    double mu = 0.05;
+    std::vector<double> x, xc, dx, dx_face;
+    std::vector<std::int32_t> types;
+    std::vector<double> u, p;
+    predictor_input<1> input;
+    std::unique_ptr<cfdcore::grid::grid<1>> mesh;
+    std::unique_ptr<predictor<1>> made;
+    std::vector<double> star, a_p;
+};
+
+// QUICK's value at point f: the quadratic through the far-upstream, upstream
+// and downstream nodes, by Lagrange's basis.
+double quick(double far_x, double up_x, double down_x, double far, double up, double down,
+             double f) {
+    return far * (f - up_x) * (f - down_x) / ((far_x - up_x) * (far_x - down_x)) +
+           up * (f - far_x) * (f - down_x) / ((up_x - far_x) * (up_x - down_x)) +
+           down * (f - far_x) * (f - up_x) / ((down_x - far_x) * (down_x - up_x));
+}
+
+TEST(MomentumOneDirection, AUniformFlowWithNoPressureGradientIsUnchanged) {
+    for (const double speed : {0.7, -0.7}) {
+        for (const bool field : {false, true}) {
+            duct d(11);
+            std::fill(d.u.begin(), d.u.end(), speed);
+            d.build(0.5, 3);
+            std::vector<double> mu(d.p.size());
+            for (std::size_t i = 0; i < mu.size(); ++i) {
+                mu[i] = 0.01 + hashed(i);
+            }
+            d.predict(field ? std::span<const double>(mu) : std::span<const double>());
+            for (const double value : d.star) {
+                EXPECT_NEAR(value, speed, 1e-14);
+            }
+        }
+    }
+}
+
+TEST(MomentumOneDirection, TheEquationsAreTheStreamwisePartAlone) {
+    // Written out by hand at every face, with and without a viscosity field,
+    // for a flow of both signs: two neighbours, the net flux between them, the
+    // QUICK correction, form b's stress and the pressure.
+    for (const bool field : {false, true}) {
+        const std::size_t n = 9;
+        duct d(n);
+        for (std::size_t i = 0; i <= n; ++i) {
+            d.u[i] = hashed(100 + i) - 0.5;
+        }
+        for (std::size_t i = 0; i < n; ++i) {
+            d.p[i] = hashed(200 + i);
+        }
+        std::vector<double> mu(n, d.mu);
+        if (field) {
+            for (std::size_t i = 0; i < n; ++i) {
+                mu[i] = 0.02 + hashed(300 + i);
+            }
+        }
+        d.build(0.6, 1);
+        d.made->equations(0, {d.u}, d.p,
+                          field ? std::span<const double>(mu) : std::span<const double>(), {},
+                          d.a_p);
+        // The flux through cell i and what it gives the faces on either side.
+        std::vector<double> flux(n), correction(n), diffusion(n);
+        for (std::size_t i = 0; i < n; ++i) {
+            flux[i] = d.rho * 0.5 * (d.u[i] + d.u[i + 1]);
+            diffusion[i] = mu[i] / d.dx[i];
+            const bool positive = flux[i] > 0.0;
+            const std::size_t up = positive ? i : i + 1;
+            const std::size_t down = positive ? i + 1 : i;
+            // The far-upstream node, or the next one downstream at an end.
+            std::size_t far = 0;
+            if (positive) {
+                far = i >= 1 ? i - 1 : i + 2;
+            } else {
+                far = i + 2 <= n ? i + 2 : i - 1;
+            }
+            const double face = quick(d.x[far], d.x[up], d.x[down], d.u[far], d.u[up], d.u[down],
+                                      d.xc[i]);
+            correction[i] = (face - d.u[up]) * flux[i];
+        }
+        for (std::size_t i = 1; i < n; ++i) {
+            const double east = diffusion[i] + std::max(-flux[i], 0.0);
+            const double west = diffusion[i - 1] + std::max(flux[i - 1], 0.0);
+            const double diagonal = east + west + flux[i] - flux[i - 1];
+            EXPECT_NEAR(d.made->neighbour(0)[i], east, 1e-13);
+            EXPECT_NEAR(d.made->neighbour(1)[i], west, 1e-13);
+            EXPECT_NEAR(d.a_p[i], diagonal, 1e-13);
+            double source = -(correction[i] - correction[i - 1]) - (d.p[i] - d.p[i - 1]) +
+                            (1.0 - 0.6) / 0.6 * diagonal * d.u[i];
+            if (field) {
+                const double low = d.x[i] - d.xc[i - 1];
+                const double high = d.xc[i] - d.x[i];
+                const double mean = mu[i - 1] + (mu[i] - mu[i - 1]) * high / (low + high);
+                source += (mu[i] - mean) * (d.u[i + 1] - d.u[i]) / d.dx[i] -
+                          (mu[i - 1] - mean) * (d.u[i] - d.u[i - 1]) / d.dx[i - 1];
+            }
+            EXPECT_NEAR(d.made->source()[i], source, 1e-13);
+        }
+        for (const std::size_t end : {std::size_t{0}, n}) {
+            EXPECT_EQ(bits(d.a_p[end]), bits(0.0));
+            EXPECT_EQ(bits(d.made->neighbour(0)[end]), bits(0.0));
+            EXPECT_EQ(bits(d.made->neighbour(1)[end]), bits(0.0));
+        }
+    }
+}
+
+TEST(MomentumOneDirection, TheSweepsAreJacobiSweepsAndTheEndsKeepTheInput) {
+    for (const std::size_t n : {2, 3, 4, 9, 10, 21}) {
+        for (const std::int64_t sweeps : {1, 2, 5}) {
+            duct d(n);
+            for (std::size_t i = 0; i <= n; ++i) {
+                d.u[i] = hashed(i) - 0.25;
+            }
+            if (n >= 9) {
+                d.types[4] = solid_type;
+                d.u[4] = d.u[5] = 0.0;
+            }
+            d.build(0.6, sweeps);
+            d.predict();
+            std::vector<double> diagonal(n + 1);
+            d.made->equations(0, {d.u}, d.p, {}, {}, diagonal);
+            std::vector<double> current = d.u;
+            for (std::int64_t k = 0; k < sweeps; ++k) {
+                std::vector<double> next = d.u;
+                for (std::size_t i = 1; i < n; ++i) {
+                    const double sum = d.made->neighbour(0)[i] * current[i + 1] +
+                                       d.made->neighbour(1)[i] * current[i - 1] +
+                                       d.made->source()[i];
+                    next[i] = diagonal[i] > 0.0 ? sum / (diagonal[i] / 0.6) : 0.0;
+                }
+                current = next;
+            }
+            for (std::size_t i = 0; i <= n; ++i) {
+                EXPECT_EQ(bits(d.star[i]), bits(current[i])) << n << " " << i;
+                EXPECT_EQ(bits(d.a_p[i]), bits(diagonal[i])) << n << " " << i;
+            }
+        }
+    }
+}
+
+TEST(MomentumOneDirection, ItHasNoPairAndRefusesOneCell) {
+    duct d(4);
+    d.build(0.5, 1);
+    EXPECT_TRUE(d.made->setup(0).pairs.empty());
+    // No pair, so nothing to write and nothing to read.
+    std::vector<double> mu(d.p.size(), 1.0);
+    d.made->stencil_viscosity(mu, {});
+    EXPECT_EQ(d.made->check_viscosity(mu), viscosity_status::ok);
+    mu.back() = -1.0;
+    EXPECT_EQ(d.made->check_viscosity(mu), viscosity_status::not_positive);
+    duct thin(1);
+    EXPECT_THROW(thin.build(0.5, 1), std::invalid_argument);
+}
+
+TEST(MomentumPairs, ASlotsDirectionAndADirectionsSlotAreInverse) {
+    for (int c = 0; c < 4; ++c) {
+        int last = -1;
+        for (int q = 0; q < 3; ++q) {
+            const int t = cfdcore::momentum::transverse(c, q);
+            EXPECT_NE(t, c);
+            EXPECT_GT(t, last);
+            EXPECT_EQ(cfdcore::momentum::slot_of(c, t), q);
+            last = t;
+        }
     }
 }
 
@@ -566,10 +775,10 @@ TEST(MomentumSetup, ProgrammingErrorsThrow) {
     for (int d = 0; d < 2; ++d) {
         refused([&](auto& in) { in.cell_widths[d] = three; });
         refused([&](auto& in) { in.face_widths[d] = three; });
-        refused([&](auto& in) { in.low[d].is_dirichlet = three_flags.span(); });
-        refused([&](auto& in) { in.low[d].value = three; });
-        refused([&](auto& in) { in.high[d].is_dirichlet = three_flags.span(); });
-        refused([&](auto& in) { in.high[d].value = three; });
+        refused([&](auto& in) { in.low[d][0].is_dirichlet = three_flags.span(); });
+        refused([&](auto& in) { in.low[d][0].value = three; });
+        refused([&](auto& in) { in.high[d][0].is_dirichlet = three_flags.span(); });
+        refused([&](auto& in) { in.high[d][0].value = three; });
         refused([&](auto& in) { in.held[d] = three_flags.span(); });
     }
     refused([](auto& in) { in.sweeps = 0; });

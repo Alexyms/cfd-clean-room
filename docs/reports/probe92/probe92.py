@@ -9,6 +9,7 @@
     python docs/reports/probe92/probe92.py forms --run 1
     python docs/reports/probe92/probe92.py vecinfo
     python docs/reports/probe92/probe92.py plants
+    python docs/reports/probe92/probe92.py kernels
 
 Run under WSL2 with the Linux environment (``~/.venvs/cfd_clean_room``) from
 the checkout's root, one BLAS thread, through ``results/builder92/probe.sh``.
@@ -30,10 +31,15 @@ keeps a copy of what it was handed and what it returned.
   reference in one process, with the machine's state.
 - ``forms``: the kernels' forms built side by side and timed on the same
   arguments, in one session.
+- ``kernels`` (prompt 92b): each kernel and each pass of ``momentum.cpp``, timed
+  alone by ``kernels92b.cpp`` in the build of the commit before the restructure
+  (6ca02d7, its ``core/`` in ``results/builder92b/head_core.tar``) and in this one.
 - ``plants``: each planted defect of ``variants92.py`` built in turn, with
   CTest, the parity module and the replay run against it.
 
-The captures stay in ``results/builder92/captures/`` (not committed).
+The captures stay in ``results/builder92/captures/`` (not committed). What ``replay``,
+``vecinfo``, ``plants`` and ``kernels`` record is of the per-direction module and goes to
+``results/builder92b/``.
 """
 
 import argparse
@@ -75,6 +81,9 @@ from validation.cases import load_annex20, load_case  # noqa: E402 -- after sys.
 
 RESULTS = ROOT / "results" / "builder92"
 CAPTURES = RESULTS / "captures"
+# Prompt 92b's records, of the module written per direction.
+CURRENT = ROOT / "results" / "builder92b"
+BEFORE = CURRENT / "head_core.tar"
 STORED = ROOT / "results" / "builder81"
 VENTS_FLOW = ROOT / "results" / "builder90" / "vents80_flow.npz"
 PRODUCT320 = STORED / "product" / "equipment_dust.h5"
@@ -353,9 +362,9 @@ def replay(out_name: str = "replay") -> None:
         print(
             name, len(mine), "calls,", len(bad), "differ,", len(wrong), "not reproduced"
         )
-    target = RESULTS / f"{out_name}.json"
+    target = CURRENT / f"{out_name}.json"
     if out_name != "replay":
-        target = RESULTS / "plants" / f"{out_name}.json"
+        target = CURRENT / "plants" / f"{out_name}.json"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(rows, indent=1) + "\n", encoding="utf-8")
 
@@ -670,7 +679,7 @@ def vecinfo() -> None:
         **vec_report(sources_of([])["src/momentum.cpp"]),
         "np_maximum": vec_report(sources_of(edits)["src/momentum.cpp"]),
     }
-    (RESULTS / "vecinfo.json").write_text(
+    (CURRENT / "vecinfo.json").write_text(
         json.dumps(record, indent=1) + "\n", encoding="utf-8"
     )
     for block in record["blocks"]:
@@ -678,6 +687,69 @@ def vecinfo() -> None:
     print(record["report_lines"], "report lines", record["widths"])
     left = [b["block"] for b in record["np_maximum"]["blocks"] if not b["vectorised"]]
     print("np_maximum leaves scalar:", left)
+
+
+# ---------------------------------------------------------------------------
+# The kernels of two commits (prompt 92b)
+
+KERNEL_WORK = Path.home() / "scratch92" / "kernels"
+# Where the passes' arrays fall on the heap, one placement a round.
+PLACEMENTS = range(8)
+
+
+def kernels() -> None:
+    """Each kernel and pass timed in the commit before the restructure and in this one."""
+    before = KERNEL_WORK / "before"
+    before.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["tar", "-x", "-C", str(before), "-f", str(BEFORE)], check=True)
+    for name, core, flag in (
+        ("before", before / "core", ["-DHEAD_FORM"]),
+        ("after", ROOT / "core", []),
+    ):
+        subprocess.run(
+            [
+                "g++",
+                *VEC_FLAGS,
+                "-w",
+                *flag,
+                f"-I{core / 'include'}",
+                f"-I{core / 'src'}",
+                str(HERE / "kernels92b.cpp"),
+                *(
+                    str(ROOT / "core" / "src" / f"{part}.cpp")
+                    for part in ("grid", "layout", "scalar", "reduce")
+                ),
+                "-o",
+                str(KERNEL_WORK / f"kernels_{name}"),
+            ],
+            check=True,
+        )
+    record: dict[str, object] = {
+        "started": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "windows_before": probe90.windows_load(),
+        "flags": VEC_FLAGS,
+        "rounds": [],
+    }
+    for place in PLACEMENTS:
+        row = {}
+        order = ("before", "after") if place % 2 == 0 else ("after", "before")
+        for name in order:
+            done = subprocess.run(
+                [str(KERNEL_WORK / f"kernels_{name}"), str(place)],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            row[name] = json.loads(done.stdout)
+        record["rounds"].append(row)
+    record["windows_after"] = probe90.windows_load()
+    (CURRENT / "kernels.json").write_text(
+        json.dumps(record, indent=1) + "\n", encoding="utf-8"
+    )
+    for key in record["rounds"][0]["before"]:
+        old = statistics.median(r["before"][key] for r in record["rounds"])
+        new = statistics.median(r["after"][key] for r in record["rounds"])
+        print(f"{key:34s} {old:9.2f} {new:9.2f} {new / old:.3f}")
 
 
 # ---------------------------------------------------------------------------
@@ -782,7 +854,7 @@ def plants(stream: int, streams: int) -> None:
             "; ".join(record["replay"]),
             flush=True,
         )
-        (RESULTS / f"plants_s{stream}.json").write_text(
+        (CURRENT / f"plants_s{stream}.json").write_text(
             json.dumps(records, indent=1) + "\n", encoding="utf-8"
         )
 
@@ -802,6 +874,7 @@ def main(argv: list[str] | None = None) -> int:
     former.add_argument("--only", nargs="*", default=[])
     commands.add_parser("time-form")
     commands.add_parser("vecinfo")
+    commands.add_parser("kernels")
     planter = commands.add_parser("plants")
     planter.add_argument("--stream", type=int, default=0)
     planter.add_argument("--streams", type=int, default=1)
@@ -813,6 +886,7 @@ def main(argv: list[str] | None = None) -> int:
         "forms": lambda: forms(args.run, args.only),
         "time-form": time_form,
         "vecinfo": vecinfo,
+        "kernels": kernels,
         "plants": lambda: plants(args.stream, args.streams),
     }
     commands_run[args.command]()
