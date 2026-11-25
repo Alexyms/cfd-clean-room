@@ -359,6 +359,30 @@ T3d, each captured correction, is in `tables93.md` and below.
 | backstep | 9 | 29 | 29 | 4.0e-16 | 1.1e-15 | 7.7e-15 | 7.7e-14 | 2.1e-14 |
 <!-- tables93 each end -->
 
+### The corrected velocity: the criterion and its measurement, set 2026-11-24 before either
+
+Alex's decision 3 of 2026-11-24 (prompt 93b), on test 93's D1: a corrected velocity is judged against
+the fields it is formed from, if a measurement made first confirms the mechanism. The measure and the
+rule are committed here alone, before any run of them.
+
+- **The hypothesis.** On the first correction from rest the predicted velocity v* and the correction
+  v' are large and nearly cancel, so that a difference at the rounding of v* and v' is large against
+  the corrected v.
+- **The measure.** For each corrected component, its largest difference between the core and the
+  reference over the larger of its predicted field's and its correction's largest magnitudes, both the
+  reference's: `max|core - ref| / max(max|star|, max|prime|)`. The correction is what the reference
+  subtracts from the predicted field on each face, its d times the difference of its p' across the
+  face, formed again from the reference's own `_face_d` and p' by its own expression. Beside it, the
+  measure as (c) states it, `max|core - ref| / max|ref|`, and the largest magnitudes of the predicted
+  field, the correction and the corrected field. p and p' are read as (c) reads them.
+- **The corrections.** The 1,600 from rest of test 93's 19 solves (`results/tester93/solve.jsonl`: the
+  cases and caps of `solves.sh` and `firsts.sh`), each solve run again by the tester's `own.py` with
+  the measure added, the five of D1 among them; and the 50 captured.
+- **The rule.** If every component of every correction is within 1e-12 by the measure, it is adopted
+  as level 1's rule for a corrected field, and D1's five are recorded with both measures. If any is
+  not, the work on this criterion stops and is reported with both measures and its largest v*, v' and
+  v: the mechanism would then be another.
+
 ## 4. The pseudo-inverse against the exact one
 
 Each coarsest system's pseudo-inverse was also formed in extended precision (two-sided Jacobi
