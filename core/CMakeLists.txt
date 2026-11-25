@@ -52,10 +52,13 @@ endif()
 add_library(cfdcore STATIC
     src/arrival.cpp
     src/channels.cpp
+    src/dense.cpp
     src/grid.cpp
     src/layout.cpp
     src/march.cpp
     src/momentum.cpp
+    src/multigrid.cpp
+    src/pressure.cpp
     src/recovery.cpp
     src/reduce.cpp
     src/scalar.cpp
@@ -78,15 +81,26 @@ if(CFD_CORE_TESTS)
     enable_testing()
     include(GoogleTest)
     add_executable(cfdcore_tests
+        tests/test_dense.cpp
         tests/test_grid.cpp
         tests/test_lanes.cpp
         tests/test_march.cpp
         tests/test_momentum.cpp
+        tests/test_multigrid.cpp
+        tests/test_pressure.cpp
         tests/test_reduce.cpp
         tests/test_scalar.cpp
         tests/test_transport.cpp)
     target_link_libraries(cfdcore_tests PRIVATE cfdcore cfdcore_flags GTest::gtest_main)
     gtest_discover_tests(cfdcore_tests)
+    # The modules at three directions, which no library build instantiates: the
+    # program compiles their sources itself (review 92 S4).
+    add_executable(cfdcore_three_directions_tests tests/test_three_directions.cpp)
+    target_link_libraries(
+        cfdcore_three_directions_tests PRIVATE cfdcore cfdcore_flags GTest::gtest_main)
+    # GCC warns of an included file's anonymous namespace as it would of a header's.
+    target_compile_options(cfdcore_three_directions_tests PRIVATE -Wno-subobject-linkage)
+    gtest_discover_tests(cfdcore_three_directions_tests)
 endif()
 
 if(CFD_CORE_PYTHON)

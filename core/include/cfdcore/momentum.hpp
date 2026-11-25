@@ -32,8 +32,10 @@
 //            and [ny + 1, nx] for v
 //
 // Instantiated for D = 2, which the reference fixes, and for D = 1, whose one
-// component has no transverse direction, in the core's own tests. What D = 3
-// would add is listed in docs/reports/phase6_momentum.md.
+// component has no transverse direction, in the core's own tests. D = 3 is
+// instantiated by core/tests/test_three_directions.cpp alone, on rooms extruded
+// from D = 2, and what the module would still need for it is listed in
+// docs/reports/phase6_momentum.md.
 
 #pragma once
 
@@ -232,8 +234,10 @@ public:
     // Builds the predictor from an input `check` accepts, copying every array.
     // Throws std::invalid_argument for one it does not.
     //
-    // Every call below throws std::invalid_argument for an array whose length
-    // is not the grid's and for a component or slot there is not.
+    // Every call below that takes an array throws std::invalid_argument for one
+    // whose length is not the grid's and for a component or slot there is not.
+    // The accessors `neighbour` and `setup` check nothing: an index there is not
+    // is the caller's error.
     predictor(const grid::grid<D>& g, const predictor_input<D>& input);
 
     // The checks of `predict`'s viscosities. `mu_eff`: cells, Pa s, finite and

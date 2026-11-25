@@ -30,6 +30,15 @@ namespace cfdcore::reduce {
 // The leading 0.0 turns a sum of negative zeros into 0.0, as NumPy's does.
 double pairwise_sum(std::span<const double> values);
 
+// The sum `np.sum` gives for the contiguous array of some of an array's values,
+// `values[mask]` in NumPy: `pairwise_sum` of them in the indices' order, without
+// the copy.
+//
+// values:  an array, in any unit; the sum is in the same unit
+// indices: the terms' indices into it, each below its length
+double pairwise_sum_at(std::span<const double> values,
+                       std::span<const std::size_t> indices);
+
 // The sum `np.sum` gives for a two-dimensional array that is not contiguous: a
 // slice of whole rows' parts, such as the interior faces `a[:, 1:-1]` of a face
 // field, its rows laid out one after another in `values`.

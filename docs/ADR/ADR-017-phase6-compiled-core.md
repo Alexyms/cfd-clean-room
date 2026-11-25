@@ -363,7 +363,8 @@ instantiation built in Phase 6 (decision 4).
 | `reduce` | nothing | arrays | sums, dot products, max-norms in a fixed order (section G) | NumPy's reductions | (in every stage) |
 | `momentum` | the predictor's coefficients and sweep scratch | faces, p, the effective viscosity, the velocity boundary data, the keys (sweeps, relaxation) | u*, v*, the diagonals the pressure correction needs | `momentum.py` | momentum predictor |
 | `pressure` | the p' system, its scratch, the CG vectors | u*, v*, the diagonals, the outlet and closed-domain data | corrected faces and p, the CG count, whether the cap was reached | `pressure.py` | pressure correction |
-| `multigrid` | the hierarchy and its coarsest pseudo-inverse | the p' system's five-point coefficients | one V-cycle as the preconditioner | `multigrid.py` | pressure correction |
+| `multigrid` | the hierarchy | the p' system's five-point coefficients | one V-cycle as the preconditioner | `multigrid.py` | pressure correction |
+| `dense` (added 2026-11-24, step 4b) | the factor and its rotations' scratch | a symmetric positive semi-definite matrix, the cutoff | its pseudo-inverse, which solves `multigrid`'s coarsest level | `multigrid.py` (`_dense_pseudo_inverse`, `np.linalg.pinv`) | pressure correction |
 | `turbulence` | k, eps scratch, the CG and Jacobi scratch | faces, k, eps, the conditions built by `walls` | k, eps, nu_t (relaxed), the positivity verdict | `turbulence.py` (`KEpsilonModel.step`) | turbulence update |
 | `walls` | the wall functions' per-face data | faces, k, the wall faces and distances | the wall viscosity at momentum wall faces, k and eps wall conditions, outlet extrapolation | `turbulence.py` (`TurbulenceBoundary`), `boundary_staggered.py` (the per-iteration writes) | boundary updates |
 | `stopping` | the rule's window | the steps and readings of an outer iteration | stop or go, the reason, the readings | `stopping.py` | stopping rule |
@@ -498,6 +499,18 @@ itself because the leftover is a cancelling sum, small beside its terms. Level 1
 compares a sum relative to the sum of its terms' magnitudes (section I), and every other output
 relative to its largest magnitude. A missing or doubled term moves a sum by that term, decades
 above 1e-12 of the magnitudes, so the comparison stays sharp.
+
+**A pseudo-inverse, and a chain of blocks (Alex, 2026-11-25, after prompt 93b).** Inverting a
+matrix of condition kappa turns rounding at eps into errors of about kappa eps for any correct
+method, LAPACK's included, so a fixed 1e-12 asks an ill-conditioned coarsest system for digits
+neither answer has. Level 1 judges a pseudo-inverse against its condition on the operator's
+range: the core's and NumPy's matrices each within `4 n kappa eps max|X|` of an
+extended-precision referee X, and within twice that of each other (prompt 93b, set before its
+runs). And a chain of blocks, a whole pressure correction say, is judged block by block, each
+given the same inputs: the corrected velocity given p' is a block of the first kind, bit for
+bit, and p' is judged by the CG rule; the chain's own differences, which a block downstream can
+amplify (a velocity formed from a difference of nearby p' values), are reported and judged at
+level 2. Amended in `docs/SYSTEM.md`'s REQ-N03 the same day.
 
 **ADR-016's "exactly".** ADR-016 asks the port to reproduce the implicit stop exactly. At level 1
 it does: given the reference's inputs, the copied order gives the same leftover and the same

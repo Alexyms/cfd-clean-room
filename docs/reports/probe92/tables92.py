@@ -482,6 +482,7 @@ def predictions_table(
             "test_predict_is_bit_for_bit_at_every_row_length",
             "test_one_predictor_through_many_calls_is_each_calls_own",
             "test_a_nan_lands_where_the_references_does",
+            "test_a_face_without_a_flux_takes_the_references_stencil",
         )
         for o in outcomes
     ]
