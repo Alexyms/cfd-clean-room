@@ -4,8 +4,9 @@
 against ``Multigrid``, given the same inputs, by the kind of each block (ADR-017
 G). Bit for bit: the coefficients, the imbalance, the right-hand side and its
 projection, the operator, every level's arrays, a sweep, the group sums, the
-coarsest matrix and the correction given p'. To 1e-12: the coarsest level's
-pseudo-inverse and a whole V-cycle. At the reference's iteration count, the
+coarsest matrix and the correction given p'. The coarsest level's pseudo-inverse
+against one in 60-digit decimals, on the scale of its condition, as NumPy's is; a
+whole V-cycle to 1e-12. At the reference's iteration count, the
 fields to 1e-12: the conjugate gradients under both preconditioners, and bit for
 bit against the reference's own loop handed the core's dot product and cycle.
 On prompt 87's meshes, the vents', the cavity's and small rooms of every row
@@ -32,7 +33,7 @@ from src.mesh import BOUNDARY, FLUID, SOLID, Mesh
 from src.momentum import MomentumPrediction
 from src.multigrid import Multigrid
 from src.pressure import PressureCoefficients, PressureCorrector
-from tests import core_mapping
+from tests import core_mapping, decimal_inverse
 from validation.cases import load_case
 
 if os.environ.get("CFD_CORE_REQUIRED") == "1":
@@ -595,12 +596,10 @@ COARSEST = [
     *((1, 12), (12, 1), (2, 2), (2, 9), (3, 5), (4, 10), (8, 8), (7, 9)),
     *((10, 13), (16, 16), (33, 33), (3, 40), (40, 3), (30, 80)),
 ]
-# Beyond this condition NumPy's own rounding, which grows with the condition as
-# eps times it, reaches 1e-12 of the matrix's largest magnitude: there the two
-# are held to a few times that, and docs/reports/probe93 (``conditioning``)
-# measures each against the exact one.
-CONDITION = 500.0
-NUMPY_ROUNDING = 8.0 * np.finfo(np.float64).eps
+# The criterion (docs/reports/phase6_pressure.md, section 4): each pseudo-inverse
+# within this many n kappa eps max|X| of the referee's X, and the two within twice
+# that of each other.
+REFEREE_FACTOR = 4.0
 
 
 def planted_coarsest(
@@ -627,7 +626,7 @@ def planted_coarsest(
 @pytest.mark.parametrize("shape", COARSEST, ids=lambda s: f"{s[0]}x{s[1]}")
 def test_the_pseudo_inverse_of_singular_systems(shape: tuple[int, int]) -> None:
     """Closed systems, one null vector a component and one a SOLID cell (prediction (b))."""
-    within = 0
+    rcond = core_mapping.PINV_RCOND
     for _case, five in planted_coarsest(shape):
         core = _cfdcore.Multigrid2(*five, LEVELS)
         expected = Multigrid(PressureCoefficients(*five), pressure.apply_operator)
@@ -635,14 +634,16 @@ def test_the_pseudo_inverse_of_singular_systems(shape: tuple[int, int]) -> None:
         lapack = np.sort(np.abs(np.linalg.eigvalsh(core.coarsest_matrix())))
         assert np.abs(values - lapack).max() <= TOLERANCE * lapack[-1]
         # The rank is NumPy's, with no value near the cutoff on either side.
-        kept = lapack > core_mapping.PINV_RCOND * lapack[-1]
-        assert np.array_equal(values > core_mapping.PINV_RCOND * values[-1], kept)
-        assert (values[~kept] < 0.1 * core_mapping.PINV_RCOND * values[-1]).all()
-        condition = lapack[-1] / lapack[kept][0]
-        bound = TOLERANCE if condition <= CONDITION else NUMPY_ROUNDING * condition
-        assert _largest(core.coarsest_inverse(), expected.coarsest_inverse) <= bound
-        within += condition <= CONDITION
-    assert within >= 6
+        kept = lapack > rcond * lapack[-1]
+        assert np.array_equal(values > rcond * values[-1], kept)
+        assert (values[~kept] < 0.1 * rcond * values[-1]).all()
+        judged = decimal_inverse.referee(core.coarsest_matrix(), rcond)
+        assert judged.dropped == np.count_nonzero(~kept)
+        own, theirs = core.coarsest_inverse(), expected.coarsest_inverse
+        bound = judged.bound(REFEREE_FACTOR)
+        assert np.abs(own - judged.inverse).max() <= bound
+        assert np.abs(theirs - judged.inverse).max() <= bound
+        assert np.abs(own - theirs).max() <= judged.bound(2.0 * REFEREE_FACTOR)
 
 
 def test_the_pseudo_inverses_cutoff_is_numpys() -> None:
