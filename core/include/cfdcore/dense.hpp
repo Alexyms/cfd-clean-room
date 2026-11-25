@@ -5,8 +5,9 @@
 // The reference forms it with `np.linalg.pinv(matrix, hermitian=True)`, whose
 // eigenvalues come from LAPACK's symmetric eigensolver. The core has no LAPACK
 // and could not copy its order of operations, so it forms the eigenvalues by
-// Jacobi's rotations and is compared with NumPy's matrix to 1e-12 of its
-// largest magnitude (ADR-017 G, the second kind).
+// Jacobi's rotations, and it and NumPy's matrix are each judged against one formed
+// in 60 digits, on the scale of the system's condition (ADR-017 G, the second kind;
+// docs/reports/phase6_pressure.md, section 4).
 //
 // The rotations are one-sided: the matrix is factored by Cholesky's method with
 // pivoting, A = G^T G, and the rows of G are rotated in pairs until they are
@@ -56,7 +57,7 @@ public:
     //
     // matrix: as `decompose` reads it
     // rcond:  the cutoff relative to the largest (`pinv`'s default is 1e-15). Below
-    //         the machine's epsilon it is as epsilon, where the factor stops
+    //         the machine's epsilon it is as epsilon, about where the factor stops
     // out:    output, n * n values, row-major, symmetric bit for bit; may be
     //         `matrix` itself. Not written after `not_converged`
     //

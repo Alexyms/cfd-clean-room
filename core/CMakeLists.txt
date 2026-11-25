@@ -81,6 +81,7 @@ if(CFD_CORE_TESTS)
     enable_testing()
     include(GoogleTest)
     add_executable(cfdcore_tests
+        tests/test_dense.cpp
         tests/test_grid.cpp
         tests/test_lanes.cpp
         tests/test_march.cpp

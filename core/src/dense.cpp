@@ -80,10 +80,13 @@ semidefinite::semidefinite(std::size_t n)
 
 // Cholesky with the largest remaining diagonal as each step's pivot:
 // A = sum over k of factor_k^T factor_k, with factor_k the rows of `factor_`, for
-// as long as the pivots stand clear of the rounding of the largest diagonal. What
-// is left then is that rounding's, and so is whether a cutoff would keep it: an
-// eigenvalue the pseudo-inverse's keeps (above 1e-15 of the largest) is several
-// times the pivot the factor stops at.
+// as long as the pivots stand clear of the rounding of the largest diagonal. With m
+// rows left where it stops, the m smallest eigenvalues are at most what is left's,
+// and so at most m epsilon times the largest diagonal: with up to four rows left
+// none of them is above the pseudo-inverse's cutoff (1e-15 of the largest). With
+// more, an eigenvalue of up to 64 epsilon could be dropped that NumPy keeps, though
+// only where the rest of the m are smaller by as much; no system planted or captured
+// has one (docs/reports/phase6_pressure.md, T6).
 void semidefinite::factorise(std::span<const double> matrix) {
     const std::size_t n = n_;
     for (std::size_t i = 0; i < n; ++i) {

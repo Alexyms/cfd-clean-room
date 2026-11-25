@@ -18,6 +18,7 @@ reason when ``_cfdcore`` cannot be imported, an error instead with
 import contextlib
 import dataclasses
 import functools
+import itertools
 import os
 import warnings
 from collections.abc import Callable, Iterator
@@ -74,13 +75,17 @@ SPREADS = {"decade": 1.0, "decades": 3.0}
 
 # ---- The two correctors ------------------------------------------------------
 
+# A named room's own, or what a corrector reads of one, planted.
+AnyMesh = Mesh | SimpleNamespace
+AnyConfig = SimConfig | SimpleNamespace
+
 
 @dataclasses.dataclass(frozen=True, eq=False)
 class Room:
     """A mesh with its outlets, and the two correctors built on it."""
 
-    mesh: object
-    config: object
+    mesh: AnyMesh
+    config: AnyConfig
     reference: PressureCorrector
     core: "_cfdcore.PressureCorrector2"
 
@@ -117,18 +122,22 @@ class PlantedBoundary:
         return 1.0
 
 
-def _room(mesh: object, config: object, boundary: object) -> Room:
+def _room(
+    mesh: AnyMesh,
+    config: AnyConfig,
+    boundary: "StaggeredBoundary | PlantedBoundary",
+) -> Room:
     reference = PressureCorrector(mesh, config, boundary)
     core = core_mapping.pressure_corrector(mesh, config, boundary, reference)
     return Room(mesh, config, reference, core)
 
 
-def _edge_lengths(mesh: object) -> dict[str, int]:
+def _edge_lengths(mesh: AnyMesh) -> dict[str, int]:
     ny, nx = mesh.cell_type.shape
     return {"left": ny, "right": ny, "bottom": nx, "top": nx}
 
 
-def _no_outlets(mesh: object) -> dict[str, np.ndarray]:
+def _no_outlets(mesh: AnyMesh) -> dict[str, np.ndarray]:
     return {e: np.zeros(n, dtype=bool) for e, n in _edge_lengths(mesh).items()}
 
 
@@ -423,6 +432,22 @@ def test_the_equation_and_the_correction_are_bit_for_bit(
         _assert_correction(room, inputs, rng)
 
 
+def _pinned_mesh(pin: tuple[int, int]) -> SimpleNamespace:
+    """A grid of 7 by 9 cells whose first FLUID cell is ``pin``."""
+    cell_type = np.full((7, 9), FLUID, dtype=np.int32)
+    cell_type.ravel()[: pin[0] * 9 + pin[1]] = BOUNDARY
+    x, y = np.arange(10.0), np.arange(8.0)
+    return SimpleNamespace(
+        x=x,
+        y=y,
+        xc=x[:-1] + 0.5,
+        yc=y[:-1] + 0.5,
+        dx_cell=np.diff(x),
+        dy_cell=np.diff(y),
+        cell_type=cell_type,
+    )
+
+
 def test_the_planted_rooms_are_closed_and_open() -> None:
     """The closed rooms have a pin and the open ones do not, as the core reads them too."""
     for name in NAMES:
@@ -433,6 +458,12 @@ def test_the_planted_rooms_are_closed_and_open() -> None:
             if room.reference.needs_pin:
                 assert room.core.pin_cell == room.reference.pin_cell
     # A pin that is not the first cell, and an outlet on every edge.
+    # Rooms whose pin is off the diagonal, on either side of it.
+    for pin in ((1, 4), (5, 0)):
+        mesh = _pinned_mesh(pin)
+        config = _solver_config("80x30")
+        room = _room(mesh, config, PlantedBoundary(_no_outlets(mesh)))
+        assert room.reference.pin_cell == pin == room.core.pin_cell
     assert _closed("80x30").reference.pin_cell != (0, 0)
     outlets = _open("80x30").reference
     assert all(
@@ -572,6 +603,42 @@ def test_the_pseudo_inverse_and_a_cycle_are_within_rounding(name: str) -> None:
                         *five, r, MULTIGRID, project, LEVELS
                     )
                     assert _largest(got, want) <= TOLERANCE
+
+
+class _CoreInverse:
+    """The core's coarsest inverse, its product the core's: a block a row."""
+
+    def __init__(self, inverse: np.ndarray) -> None:
+        self._inverse = inverse
+
+    def __matmul__(self, r: np.ndarray) -> np.ndarray:
+        wide = r.reshape(1, -1)
+        rows = (_cfdcore.row_dot(row.reshape(1, -1), wide) for row in self._inverse)
+        return np.array(list(rows))
+
+
+@pytest.mark.parametrize("sweeps", [1, 2, 3])
+@pytest.mark.parametrize("name", NAMES)
+def test_a_cycle_of_any_sweeps_is_the_references_bit_for_bit(
+    name: str, sweeps: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The reference's cycle handed the core's coarsest inverse and product, one sweep to three."""
+    monkeypatch.setattr(multigrid, "SMOOTHING_SWEEPS", sweeps)
+    levels = (LEVELS[0], sweeps, *LEVELS[2:])
+    rng = np.random.default_rng([SEED, NAMES.index(name), sweeps, 14])
+    for room in _rooms(name):
+        c, five = _system(room, _planted(room, rng))
+        expected = Multigrid(c, pressure.apply_operator)
+        core = _cfdcore.Multigrid2(*five, levels)
+        assert _largest(core.coarsest_inverse(), expected.coarsest_inverse) <= TOLERANCE
+        expected.coarsest_inverse = _CoreInverse(core.coarsest_inverse())
+        one = _cfdcore.Multigrid2(*five, LEVELS)
+        for _ in range(2):
+            r = np.where(c.a_p > 0.0, rng.standard_normal(c.a_p.shape), 0.0)
+            z = core.cycle(r)
+            assert _differ(expected.cycle(r), z) == 0
+            # The key reaches the cycle: another count, another field.
+            assert (sweeps == 1) == (_differ(one.cycle(r), z) == 0)
 
 
 def _neumann(
@@ -1012,7 +1079,7 @@ def test_the_solves_numbers_that_are_accepted() -> None:
 
 
 def _corrector(
-    mesh: object,
+    mesh: AnyMesh,
     outlets: object = None,
     rtol: object = 1e-4,
     floor: object = 0.0,
@@ -1038,7 +1105,9 @@ def _corrector(
     return _cfdcore.PressureCorrector2(grid, **{**arguments, **keys})
 
 
-def _walled(opened: dict[str, np.ndarray] | None) -> tuple[object, PlantedBoundary]:
+def _walled(
+    opened: dict[str, np.ndarray] | None,
+) -> tuple[SimpleNamespace, PlantedBoundary]:
     """A room of two halves with a wall between, and its boundary."""
     mesh = _named_mesh(CAVITY)
     cell_type = mesh.cell_type.copy()
@@ -1151,6 +1220,25 @@ def test_shapes_are_refused_as_the_reference_refuses_them() -> None:
                     room.core.right_hand_side(*inputs.stars, *inputs.diagonals)
     with pytest.raises(ValueError, match="expected p_prime of shape"):
         room.core.apply(*good.arguments, np.zeros((6, 8)))
+
+
+def test_two_wrong_shapes_are_refused_in_the_references_order() -> None:
+    """The velocities, then p, then the diagonals: the first wrong one is the one named."""
+    rng = np.random.default_rng([SEED, 15])
+    room = _small_room(6, 9, rng, opened=False)
+    good = _planted(room, rng)
+    messages = set()
+    for pair in itertools.combinations(("u_star", "v_star", "a_p_u", "a_p_v", "p"), 2):
+        wrong = {field: np.zeros((2, 3 + at)) for at, field in enumerate(pair)}
+        inputs = dataclasses.replace(good, **wrong)
+        with pytest.raises(ValueError) as expected:
+            room.reference.correct(inputs.prediction, inputs.p)
+        with pytest.raises(ValueError) as got:
+            room.core.correct(*inputs.arguments)
+        assert str(got.value) == str(expected.value)
+        messages.add(str(got.value))
+    # u* alone, v* alone, both, p, and the diagonals, which are named together.
+    assert len(messages) == 5
 
 
 def test_arrays_the_core_does_not_read_are_refused() -> None:
@@ -1298,6 +1386,30 @@ def test_a_division_by_zero_is_the_references_error() -> None:
     assert isinstance(core_mapping.breakdown_error(other), np.linalg.LinAlgError)
 
 
+def test_a_zero_product_with_the_preconditioned_residual_is_the_references_error() -> (
+    None
+):
+    """r . z underflows where r . r and p . A p do not: the reference divides by it."""
+    a_p = np.full((1, 2), 1e150)
+    a_e, a_w = np.array([[1e300, 0.0]]), np.array([[0.0, 1e300]])
+    five = [a_p, a_e, a_w, np.zeros((1, 2)), np.zeros((1, 2))]
+    f = np.full((1, 2), 1e-100)
+    c = PressureCoefficients(*five)
+    with pytest.raises(ZeroDivisionError):
+        pressure.conjugate_gradient(
+            lambda x: pressure.apply_operator(c, x),
+            pressure.jacobi_preconditioner(c),
+            f,
+            0.0,
+            0.0,
+            3,
+        )
+    with pytest.raises(_cfdcore.PressureBreakdown) as got:
+        _cfdcore.pressure_cg(*five, f, 0.0, 0.0, 3, PRESSURE_JACOBI, False, LEVELS)
+    # One iteration taken: the denominator is the second direction's.
+    assert got.value.reason == "division_by_zero" and got.value.iterations == 1
+
+
 def test_the_constructors_refusals() -> None:
     """What the core's constructor refuses that the reference's configuration has refused."""
     mesh = _closed("80x30").mesh
@@ -1343,21 +1455,32 @@ def test_the_constructors_refusals() -> None:
 @pytest.mark.parametrize(
     ("at", "bad", "error"),
     [
-        (0, 0, ValueError),
-        (0, 1.5, TypeError),
-        (0, True, TypeError),
-        (1, 0, ValueError),
-        (1, 1.0, TypeError),
+        # The two counts, each refused the same values.
+        *itertools.chain.from_iterable(
+            (
+                (at, 0, ValueError),
+                (at, -1, ValueError),
+                (at, 1.0, TypeError),
+                (at, np.nan, TypeError),
+                (at, True, TypeError),
+                (at, "x", TypeError),
+                (at, None, TypeError),
+            )
+            for at in (0, 1)
+        ),
+        # The three numbers; the weight alone refuses a zero.
+        *itertools.chain.from_iterable(
+            (
+                (at, -1e-15, ValueError),
+                (at, np.inf, ValueError),
+                (at, np.nan, ValueError),
+                (at, True, TypeError),
+                (at, "x", TypeError),
+                (at, None, TypeError),
+            )
+            for at in (2, 3, 4)
+        ),
         (2, 0.0, ValueError),
-        (2, np.inf, ValueError),
-        (2, np.nan, ValueError),
-        (2, True, TypeError),
-        (3, -1e-12, ValueError),
-        (3, np.inf, ValueError),
-        (3, "x", TypeError),
-        (4, -1e-15, ValueError),
-        (4, np.nan, ValueError),
-        (4, None, TypeError),
     ],
 )
 def test_the_multigrids_keys_are_checked(

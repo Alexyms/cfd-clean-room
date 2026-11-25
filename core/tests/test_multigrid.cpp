@@ -1,7 +1,6 @@
-// The dense and multigrid modules' own tests (ADR-017 D): results known without
-// the reference. The comparison with multigrid.py is tests/test_core_pressure.py's.
+// The multigrid module's own tests (ADR-017 D): results known without the
+// reference. The comparison with multigrid.py is tests/test_core_pressure.py's.
 
-#include "cfdcore/dense.hpp"
 #include "cfdcore/multigrid.hpp"
 
 #include <gtest/gtest.h>
@@ -20,8 +19,6 @@
 
 namespace {
 
-using cfdcore::dense::eigen_status;
-using cfdcore::dense::semidefinite;
 using cfdcore::layout::layout;
 using cfdcore::multigrid::build_status;
 using cfdcore::multigrid::hierarchy;
@@ -129,170 +126,12 @@ std::vector<double> field(std::size_t n, std::size_t seed) {
     return out;
 }
 
-// ---------------------------------------------------------------------------
-// The pseudo-inverse
-
 void expect_matrix(const std::vector<double>& got, const std::vector<double>& expected,
                    double tolerance) {
     ASSERT_EQ(got.size(), expected.size());
     for (std::size_t i = 0; i < got.size(); ++i) {
         EXPECT_NEAR(got[i], expected[i], tolerance) << i;
     }
-}
-
-TEST(PseudoInverse, OfAnInvertibleMatrixIsItsInverse) {
-    semidefinite eigen(2);
-    std::vector<double> out(4);
-    ASSERT_EQ(eigen.pseudo_inverse(std::vector<double>{2.0, -1.0, -1.0, 2.0}, rcond, out),
-              eigen_status::ok);
-    expect_matrix(out, {2.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0, 2.0 / 3.0}, 1e-15);
-    std::vector<double> values(eigen.eigenvalues().begin(), eigen.eigenvalues().end());
-    std::sort(values.begin(), values.end());
-    EXPECT_NEAR(values[0], 1.0, 1e-15);
-    EXPECT_NEAR(values[1], 3.0, 1e-15);
-}
-
-TEST(PseudoInverse, OfASingularMatrixDropsItsNullVector) {
-    // Two cells joined by one coupling, and three in a row: the minimum-norm
-    // solutions, by hand.
-    semidefinite two(2);
-    std::vector<double> out(4);
-    ASSERT_EQ(two.pseudo_inverse(std::vector<double>{1.0, -1.0, -1.0, 1.0}, rcond, out),
-              eigen_status::ok);
-    expect_matrix(out, {0.25, -0.25, -0.25, 0.25}, 1e-15);
-    semidefinite three(3);
-    out.assign(9, 0.0);
-    const std::vector<double> path{1.0, -1.0, 0.0, -1.0, 2.0, -1.0, 0.0, -1.0, 1.0};
-    ASSERT_EQ(three.pseudo_inverse(path, rcond, out), eigen_status::ok);
-    expect_matrix(out,
-                  {5.0 / 9.0, -1.0 / 9.0, -4.0 / 9.0, -1.0 / 9.0, 2.0 / 9.0, -1.0 / 9.0,
-                   -4.0 / 9.0, -1.0 / 9.0, 5.0 / 9.0},
-                  1e-15);
-}
-
-TEST(PseudoInverse, ZeroRowsStayZeroAndAZeroMatrixIsItsOwn) {
-    semidefinite eigen(3);
-    std::vector<double> out(9, 1.0);
-    ASSERT_EQ(eigen.pseudo_inverse(
-                  std::vector<double>{2.0, 0.0, -2.0, 0.0, 0.0, 0.0, -2.0, 0.0, 4.0}, rcond, out),
-              eigen_status::ok);
-    expect_matrix(out, {1.0, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5, 0.0, 0.5}, 1e-15);
-    for (const std::size_t zero : {1u, 3u, 4u, 5u, 7u}) {
-        EXPECT_EQ(out[zero], 0.0);
-    }
-    out.assign(9, 1.0);
-    ASSERT_EQ(eigen.pseudo_inverse(std::vector<double>(9, 0.0), rcond, out), eigen_status::ok);
-    EXPECT_EQ(out, std::vector<double>(9, 0.0));
-}
-
-TEST(PseudoInverse, TheCutoffIsAgainstTheLargestAndExclusive) {
-    // diag(8, small): the small one is kept above 1e-15 of 8 and dropped at it
-    // and below; what is kept is inverted whatever its size.
-    semidefinite eigen(2);
-    std::vector<double> out(4);
-    for (const double small : {1.0e-14, 8.1e-15}) {
-        ASSERT_EQ(eigen.pseudo_inverse(std::vector<double>{8.0, 0.0, 0.0, small}, rcond, out),
-                  eigen_status::ok);
-        EXPECT_NEAR(out[3] * small, 1.0, 1e-14) << small;
-        EXPECT_NEAR(out[0], 0.125, 1e-16);
-    }
-    for (const double small : {0x1.0p-37, 7.9e-15, 2.0e-15, 1.0e-18}) {
-        // With a cutoff that is a power of two the smallest lands on it exactly.
-        const double cut = small == 0x1.0p-37 ? 0x1.0p-40 : rcond;
-        ASSERT_EQ(eigen.pseudo_inverse(std::vector<double>{8.0, 0.0, 0.0, small}, cut, out),
-                  eigen_status::ok);
-        EXPECT_EQ(out[3], 0.0) << small;
-        EXPECT_NEAR(out[0], 0.125, 1e-16);
-    }
-}
-
-TEST(PseudoInverse, ReadsTheLowerTriangleAndIsSymmetricBitForBit) {
-    const std::size_t n = 9;
-    layout<2> fields({3, 3});
-    system<2> s(fields);
-    fill(s, 3, true);
-    std::vector<double> a = dense_of(s);
-    semidefinite eigen(n);
-    std::vector<double> out(n * n);
-    ASSERT_EQ(eigen.pseudo_inverse(a, rcond, out), eigen_status::ok);
-    std::vector<double> upper_spoilt = a;
-    for (std::size_t i = 0; i < n; ++i) {
-        for (std::size_t j = i + 1; j < n; ++j) {
-            upper_spoilt[i * n + j] = nan_value;
-            EXPECT_EQ(bits(out[i * n + j]), bits(out[j * n + i]));
-        }
-    }
-    std::vector<double> again(n * n);
-    ASSERT_EQ(eigen.pseudo_inverse(upper_spoilt, rcond, again), eigen_status::ok);
-    for (std::size_t i = 0; i < n * n; ++i) {
-        EXPECT_EQ(bits(again[i]), bits(out[i]));
-    }
-    // The output may be the input.
-    ASSERT_EQ(eigen.pseudo_inverse(a, rcond, a), eigen_status::ok);
-    EXPECT_EQ(a, out);
-}
-
-// The four conditions of Moore and Penrose, A X A = A among them, on systems
-// open and closed and as large as the coarsest level.
-TEST(PseudoInverse, MeetsMooreAndPenrosesConditions) {
-    for (const bool open : {true, false}) {
-        for (const std::size_t nx : {1u, 2u, 5u, 8u}) {
-            layout<2> fields({nx, 8});
-            const std::size_t n = fields.cell_count();
-            system<2> s(fields);
-            fill(s, 17 * nx, open);
-            const std::vector<double> a = dense_of(s);
-            semidefinite eigen(n);
-            std::vector<double> x(n * n);
-            ASSERT_EQ(eigen.pseudo_inverse(a, rcond, x), eigen_status::ok);
-            const auto times = [n](const std::vector<double>& p, const std::vector<double>& q) {
-                std::vector<double> out(n * n, 0.0);
-                for (std::size_t i = 0; i < n; ++i) {
-                    for (std::size_t k = 0; k < n; ++k) {
-                        for (std::size_t j = 0; j < n; ++j) {
-                            out[i * n + j] += p[i * n + k] * q[k * n + j];
-                        }
-                    }
-                }
-                return out;
-            };
-            const std::vector<double> ax = times(a, x);
-            const double largest = *std::max_element(x.begin(), x.end());
-            expect_matrix(times(ax, a), a, 1e-12);
-            expect_matrix(times(x, ax), x, 1e-12 * largest);
-            for (std::size_t i = 0; i < n; ++i) {
-                for (std::size_t j = 0; j < i; ++j) {
-                    EXPECT_NEAR(ax[i * n + j], ax[j * n + i], 1e-12);
-                }
-            }
-        }
-    }
-}
-
-TEST(PseudoInverse, AValueThatIsNotFiniteGivesNaNs) {
-    semidefinite eigen(2);
-    for (const double bad : {nan_value, std::numeric_limits<double>::infinity()}) {
-        for (const std::size_t at : {0u, 2u, 3u}) {
-            std::vector<double> a{2.0, -1.0, -1.0, 2.0};
-            a[at] = bad;
-            std::vector<double> out(4, 1.0);
-            ASSERT_EQ(eigen.pseudo_inverse(a, rcond, out), eigen_status::ok);
-            for (const double value : out) {
-                EXPECT_TRUE(std::isnan(value));
-            }
-        }
-    }
-    EXPECT_EQ(semidefinite(2).decompose(std::vector<double>{nan_value, 1.0, 1.0, nan_value}),
-              eigen_status::not_converged);
-}
-
-TEST(PseudoInverse, ProgrammingErrorsThrow) {
-    semidefinite eigen(2);
-    std::vector<double> four(4, 0.0);
-    std::vector<double> three(3, 0.0);
-    EXPECT_THROW((void)eigen.decompose(three), std::invalid_argument);
-    EXPECT_THROW((void)eigen.pseudo_inverse(three, rcond, four), std::invalid_argument);
-    EXPECT_THROW((void)eigen.pseudo_inverse(four, rcond, three), std::invalid_argument);
 }
 
 // ---------------------------------------------------------------------------

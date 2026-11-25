@@ -535,6 +535,24 @@ TEST(PressureConjugateGradient, ADivisionByZeroIsAStatus) {
     EXPECT_EQ(result.status, solve_status::division_by_zero);
 }
 
+// A residual whose product with the preconditioned one underflows to zero, though
+// neither does, and whose p . A p does not: the second iteration would divide by it.
+TEST(PressureConjugateGradient, AZeroProductWithThePreconditionedResidualIsAStatus) {
+    const layout<1> fields({2});
+    system<1> s(fields);
+    s.centre = {1.0e150, 1.0e150};
+    s.high[0] = {1.0e300, 0.0};
+    s.low[0] = {0.0, 1.0e300};
+    solver<1> cg(fields, false, level_keys());
+    std::vector<double> x(2);
+    auto k = cg_keys(preconditioner::jacobi);
+    k.rtol = 0.0;
+    k.floor = 0.0;
+    const solve_result result = cg.solve(s, std::vector<double>{1.0e-100, 1.0e-100}, k, x);
+    EXPECT_EQ(result.status, solve_status::division_by_zero);
+    EXPECT_EQ(result.iterations, 1);
+}
+
 TEST(PressureConjugateGradient, ProjectsThePreconditionedVector) {
     // A closed line with a SOLID cell in its corner.
     const layout<2> fields({7, 4});

@@ -298,8 +298,9 @@ struct centre_row {
 // This block and `along_cells` read one of each two cells along the row, a load
 // with gaps, which GCC at -O2 does not vectorise (it would have to read past
 // the row); they stay loops of one group at a time. All of a correction's
-// coarsening, them included, is about a fiftieth of it at 320x120, so no form
-// that reads the other cells to throw them away was worth its arithmetic.
+// coarsening, them included, was a small share of it at 320x120 when it was timed in
+// scratch (not recorded), so no form that reads the other cells to throw them away
+// was worth its arithmetic.
 template <std::size_t N, int D>
 inline void centre_cells(lanes::cells<N>, const centre_row<D>& in, std::size_t first,
                          double* CFDCORE_RESTRICT out) {
