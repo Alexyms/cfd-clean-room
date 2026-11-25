@@ -588,7 +588,9 @@ def predictions_table(
             "planted and captured input",
             f"as NumPy runs by default on this machine: {len(differ)} blocks of "
             f"{len(BLOCKS)} differ on the captured steps ({names}; "
-            f"{sum(differ.values()):,} values, T3b). Where NumPy calls the C library's "
+            f"{sum(differ.values()):,} values, T3b), and the planted cases of a block that "
+            "calls one of the two functions are skipped (T1; what it does to the functions "
+            "is T6). Where NumPy calls the C library's "
             f"log and pow (Alex, 2026-11-25): {bad} of {len(BLOCKS) * len(records)} block "
             f"comparisons of the captured steps differ (T3), and {passed} of "
             f"{len(planted)} planted cases pass (T1)",
