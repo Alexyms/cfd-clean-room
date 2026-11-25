@@ -1462,10 +1462,71 @@ THREE: list[Plant] = [
     ),
 ]
 
+# Against round 1's tests (prompt 93b): each passed the parity module before them.
+ROUND_1: list[Plant] = [
+    one(
+        "two_sweeps_descend",
+        "two sweeps: the second pre-sweep's result lost",
+        MULTIGRID,
+        "        smooth_field<false>(s, zeros_.data(), l.smoother.data(), l.x.data(), r, l.other.data());\n        std::swap(l.x, l.other);",
+        "        smooth_field<false>(s, zeros_.data(), l.smoother.data(), l.x.data(), r, l.other.data());",
+    ),
+    one(
+        "two_sweeps_one_fewer",
+        "two sweeps: one sweep fewer",
+        MULTIGRID,
+        "    for (std::int64_t sweep = 1; sweep < keys_.sweeps; ++sweep) {",
+        "    for (std::int64_t sweep = 2; sweep < keys_.sweeps; ++sweep) {",
+    ),
+    one(
+        "binding_pin_cell",
+        "the binding: the pin's two indices in the other order",
+        BINDING,
+        "                         return nb::make_tuple(c.pin_cell() / nx, c.pin_cell() % nx);",
+        "                         return nb::make_tuple(c.pin_cell() % nx, c.pin_cell() / nx);",
+    ),
+    one(
+        "binding_refusal_order",
+        "the binding: the diagonals' shapes refused before the velocities'",
+        BINDING,
+        '    check_velocities(c, u_star, v_star);\n    const auto pressure = read_field(p, c.mesh().fields(), "p");\n    check_diagonals(c, a_p_u, a_p_v);\n    corrected out(c.mesh());\n    const solve_result result =',
+        '    check_diagonals(c, a_p_u, a_p_v);\n    check_velocities(c, u_star, v_star);\n    const auto pressure = read_field(p, c.mesh().fields(), "p");\n    check_diagonals(c, a_p_u, a_p_v);\n    corrected out(c.mesh());\n    const solve_result result =',
+    ),
+    one(
+        "binding_p_after_diagonals",
+        "the binding: the diagonals' shapes refused before p's",
+        BINDING,
+        '    check_velocities(c, u_star, v_star);\n    const auto pressure = read_field(p, c.mesh().fields(), "p");\n    check_diagonals(c, a_p_u, a_p_v);\n    corrected out(c.mesh());\n    const solve_result result =',
+        '    check_velocities(c, u_star, v_star);\n    check_diagonals(c, a_p_u, a_p_v);\n    check_velocities(c, u_star, v_star);\n    const auto pressure = read_field(p, c.mesh().fields(), "p");\n    check_diagonals(c, a_p_u, a_p_v);\n    corrected out(c.mesh());\n    const solve_result result =',
+    ),
+    one(
+        "division_rz",
+        "a zero r . z divided by",
+        PRESSURE,
+        "        if (rz == 0.0) {\n            result.status = solve_status::division_by_zero;\n            return result;\n        }\n        const double beta",
+        "        const double beta",
+    ),
+    one(
+        "factor_stops_early",
+        "the factor stopped at 16 roundings of its first pivot",
+        DENSE,
+        "            smallest = std::numeric_limits<double>::epsilon() * pivot;",
+        "            smallest = 16.0 * std::numeric_limits<double>::epsilon() * pivot;",
+    ),
+    one(
+        "factor_reads_the_matrix",
+        "the factor's stop read off the matrix's diagonal, not off what is left of it",
+        DENSE,
+        "        if (pivot <= smallest) {",
+        "        if (matrix[p * (n + 1)] <= smallest) {",
+    ),
+]
+
 # Plants no net can tell from the code, with the reason.
 EQUIVALENT: dict[str, str] = {
     "pinned_stale": (
-        "p' is pinned before p is updated, so the reference cell's update adds alpha times zero"
+        "for a finite p': it is pinned before p is updated, so the reference cell's update adds "
+        "alpha times zero (not finite at the reference cell, the two differ: test 93 S2)"
     ),
 }
 
@@ -1479,4 +1540,5 @@ PLANTS: list[Plant] = [
     *DENSES,
     *CHECKS,
     *THREE,
+    *ROUND_1,
 ]

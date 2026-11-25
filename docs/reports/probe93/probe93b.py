@@ -272,7 +272,7 @@ def rotations() -> None:
     import own
 
     before = json.loads(
-        (probe93.RESULTS / "conditioning.json").read_text(encoding="utf-8")
+        (probe93.FIRST / "conditioning.json").read_text(encoding="utf-8")
     )
     names = {r["name"] for r in before if r["between"] > 1e-12}
     rcond = core_mapping.PINV_RCOND

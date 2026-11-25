@@ -201,6 +201,42 @@ TEST(PseudoInverse, TheFactorsStopKeepsWhatTheCutoffKeepsOffTheDiagonal) {
     }
 }
 
+// The same where the last pivot is as small as an eigenvalue the cutoff keeps allows:
+// blocks [1, 1/2; 1/2, 1/4 + delta], whose second pivot is delta in every bit, whose
+// eigenvalues are 5/4 and 4/5 delta to first order, and whose inverse is known. A stop
+// a few times larger than the rounding of the first pivot would drop them.
+TEST(PseudoInverse, TheFactorsStopIsBelowTheSmallestPivotTheCutoffKeeps) {
+    for (const std::size_t parts : {1u, 2u, 4u, 8u}) {
+        const std::size_t n = 2 * parts;
+        semidefinite eigen(n);
+        std::vector<double> x(n * n);
+        // Multiples of 2^-54, so that 1/4 + delta is exact; the eigenvalues' ratio is
+        // delta / 1.5625: 1.07e-15, 2.8e-15, 0.92e-15 and 0.14e-15.
+        for (const double units : {30.0, 80.0, 26.0, 4.0}) {
+            const double delta = units * 0x1.0p-54;
+            const bool kept = units >= 30.0;
+            std::vector<double> a(n * n, 0.0);
+            for (std::size_t i = 0; i < n; i += 2) {
+                a[i * n + i] = 1.0;
+                a[i * n + i + 1] = 0.5;
+                a[(i + 1) * n + i] = 0.5;
+                a[(i + 1) * n + i + 1] = 0.25 + delta;
+            }
+            ASSERT_EQ(eigen.pseudo_inverse(a, rcond, x), eigen_status::ok);
+            for (std::size_t i = 0; i < n; i += 2) {
+                const double entry = x[(i + 1) * n + i + 1];
+                if (kept) {
+                    EXPECT_NEAR(entry * delta, 1.0, 1e-13) << parts << " " << units;
+                    EXPECT_NEAR(x[(i + 1) * n + i] * delta, -0.5, 1e-13) << parts << " " << units;
+                } else {
+                    // The pseudo-inverse of u u^T with u = (1, 1/2): u u^T / |u|^4.
+                    EXPECT_NEAR(entry, 0.16, 1e-13) << parts << " " << units;
+                }
+            }
+        }
+    }
+}
+
 TEST(PseudoInverse, ReadsTheLowerTriangleAndIsSymmetricBitForBit) {
     const std::size_t n = 9;
     std::vector<double> a = five_point(3, 3, 3, true);

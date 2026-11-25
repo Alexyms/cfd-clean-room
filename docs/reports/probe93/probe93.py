@@ -12,7 +12,7 @@
     python docs/reports/probe93/probe93.py plants
 
 Run under WSL2 with the Linux environment (``~/.venvs/cfd_clean_room``) from
-the checkout's root, one BLAS thread, through ``results/builder93/probe.sh``.
+the checkout's root, one BLAS thread, through ``results/builder93b/probe.sh``.
 Nothing in ``src/`` changes: the probe wraps ``PressureCorrector.correct`` on
 the class, and the wrapper calls the reference and keeps a copy of what it was
 handed and what it returned.
@@ -40,7 +40,9 @@ handed and what it returned.
 - ``plants``: each planted defect of ``variants93.py`` built in turn, with
   CTest, the parity module and the replay run against it.
 
-Everything is kept in ``results/builder93/`` (not committed).
+The captures and the extended inverses are kept in ``results/builder93/``, and what
+prompt 93b ran again at the head (replay, timing, vecinfo, plants) in
+``results/builder93b/`` (neither is committed).
 """
 
 import argparse
@@ -79,8 +81,9 @@ from src.solver_staggered import FlowState  # noqa: E402 -- after sys.path
 from tests import core_mapping  # noqa: E402 -- after sys.path
 from validation.cases import load_backstep  # noqa: E402 -- after sys.path
 
-RESULTS = ROOT / "results" / "builder93"
-CAPTURES = RESULTS / "captures"
+FIRST = ROOT / "results" / "builder93"
+RESULTS = ROOT / "results" / "builder93b"
+CAPTURES = FIRST / "captures"
 CASES = ("product80", "cavity40", "vents80", "annex216", "backstep")
 # The outer iterations captured after the warm start, and those of the solves
 # from rest that make the cavity's state and the rooms'.
@@ -730,7 +733,7 @@ def conditioning() -> None:
                 }
             )
         print(name, "done", flush=True)
-    (RESULTS / "conditioning.json").write_text(
+    (FIRST / "conditioning.json").write_text(
         json.dumps(rows, indent=1) + "\n", encoding="utf-8"
     )
     for kind in ("planted", "worse", "captured"):
