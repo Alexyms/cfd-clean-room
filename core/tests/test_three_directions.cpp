@@ -15,6 +15,9 @@
 #include "../src/momentum.cpp"
 #include "../src/multigrid.cpp"
 #include "../src/pressure.cpp"
+#include "../src/scalar.cpp"
+#include "../src/turbulence.cpp"
+#include "../src/walls.cpp"
 
 #include <gtest/gtest.h>
 
@@ -36,6 +39,8 @@ template class cfdcore::momentum::predictor<3>;
 template struct cfdcore::multigrid::system<3>;
 template class cfdcore::multigrid::hierarchy<3>;
 template class cfdcore::pressure::corrector<3>;
+template class cfdcore::turbulence::model<3>;
+template class cfdcore::walls::boundary<3>;
 
 // In the module's namespace, so the position helpers of momentum.cpp are in scope.
 namespace cfdcore::momentum {
@@ -680,3 +685,559 @@ TEST(PressureThreeDirections, ACorrectionLeavesNoImbalance) {
 
 }  // namespace
 }  // namespace cfdcore::pressure
+
+// The turbulence model and the wall functions at three directions: a 2D room
+// extruded along each direction in turn, its own two axes on the other two in
+// their order (a sum over the directions is taken in their order, so the room's
+// own transpose is another room), must have the 2D room's conditions, terms and
+// explicit fields bit for bit on every plane.
+namespace cfdcore::turbulence {
+namespace {
+
+using momentum::bits;
+using momentum::draws;
+using momentum::edge_index;
+using momentum::for_each_cell;
+using momentum::index_of;
+using momentum::position3;
+using momentum::room2;
+using momentum::room3;
+using momentum::slot_of;
+using momentum::transverse;
+
+constexpr int turbulence_rooms = 48;
+
+// A bool array a span can view.
+struct flags {
+    explicit flags(std::size_t n) : size(n), data(new bool[n]) {
+        std::fill(data.get(), data.get() + n, false);
+    }
+    std::span<const bool> span() const { return {data.get(), size}; }
+    std::size_t size;
+    std::unique_ptr<bool[]> data;
+};
+
+constants variant_of(bool has_r) {
+    return has_r ? constants{0.0845, 1.42, 1.68, 0.7194, 0.7194, true, 4.38, 0.012}
+                 : constants{0.09, 1.44, 1.92, 1.0, 1.3, false, 0.0, 0.0};
+}
+
+// The 2D room's and the extruded room's models and boundaries, and the arguments
+// of a step on each.
+struct pair_of_rooms {
+    explicit pair_of_rooms(int trial_)
+        : trial(trial_),
+          draw(static_cast<std::size_t>(trial_) * 7919 + 11),
+          flat(trial_, draw),
+          solid(flat, orders[trial_ % 3][0], orders[trial_ % 3][1], orders[trial_ % 3][2]),
+          grid2(momentum::grid_of(flat)),
+          grid3(solid.make_grid()) {
+        const std::size_t cells2 = flat.types.size();
+        k = draw.field(cells2, 0.1);
+        eps = draw.field(cells2, 0.1);
+        nu_t = draw.field(cells2, 0.0);
+        for (std::size_t i = 0; i < cells2; ++i) {
+            if (flat.types[i] == 1) {
+                k[i] = eps[i] = nu_t[i] = 0.0;
+            }
+        }
+        k3 = planes(k);
+        eps3 = planes(eps);
+        nu_t3 = planes(nu_t);
+        build_vents();
+        build_model();
+        build_boundary();
+    }
+    pair_of_rooms(const pair_of_rooms&) = delete;
+
+    // A 2D cell field on every plane.
+    std::vector<double> planes(const std::vector<double>& field) const {
+        std::vector<double> out(solid.cells.cell_count());
+        for_each_cell(solid.cells, [&](const position3& at) {
+            out[index_of(solid.cells, at)] = field[at[solid.b] * flat.n[0] + at[solid.a]];
+        });
+        return out;
+    }
+
+    // A share of the faces between a SOLID and an open cell are vents.
+    void build_vents() {
+        for (int c = 0; c < 2; ++c) {
+            vents2.emplace_back(flat.velocity[c].size());
+            const std::size_t row = flat.n[0] + (c == 0 ? 1 : 0);
+            for (std::size_t f = 0; f < vents2.back().size; ++f) {
+                const std::size_t i = f % row;
+                const std::size_t j = f / row;
+                const std::size_t at = c == 0 ? i : j;
+                if (at == 0 || at == flat.n[c]) {
+                    continue;
+                }
+                const std::size_t high = j * flat.n[0] + i;
+                const std::size_t low = high - (c == 0 ? 1 : flat.n[0]);
+                vents2.back().data[f] =
+                    flat.types[low] != flat.types[high] && draw() < 0.4;
+            }
+        }
+        for (int c = 0; c < 3; ++c) {
+            vents3.emplace_back(solid.velocity[c].size());
+            const int m = solid.component(c);
+            if (m >= 0) {
+                for_each_cell(solid.faces[c], [&](const position3& at) {
+                    vents3.back().data[index_of(solid.faces[c], at)] =
+                        vents2[m].data[solid.plane(m, at)];
+                });
+            }
+        }
+    }
+
+    void build_model() {
+        model_input<2> in2{};
+        model_input<3> in3{};
+        in2.cell_widths = {flat.axes[0].widths, flat.axes[1].widths};
+        in2.face_widths = {flat.axes[0].between, flat.axes[1].between};
+        in2.vents = {vents2[0].span(), vents2[1].span()};
+        for (int d = 0; d < 3; ++d) {
+            in3.cell_widths[d] = solid.axis_of(d).widths;
+            in3.face_widths[d] = solid.axis_of(d).between;
+            in3.vents[d] = vents3[d].span();
+        }
+        in2.variant = in3.variant = variant_of(trial % 2 == 1);
+        in2.cfl = in3.cfl = 0.25;
+        in2.upwind = in3.upwind = (trial / 2) % 2 == 0;
+        in2.max_iter = in3.max_iter = 500;
+        in2.tol = in3.tol = 1e-13;
+        in2.nu = in3.nu = 1e-3;
+        model2 = std::make_unique<model<2>>(grid2, in2);
+        model3 = std::make_unique<model<3>>(grid3, in3);
+    }
+
+    void build_boundary() {
+        walls::boundary_input<2> in2{};
+        walls::boundary_input<3> in3{};
+        // The 2D edges' wall cells per direction and side, and the wall corners
+        // and the conditions of the component along the edge.
+        for (int d = 0; d < 2; ++d) {
+            const int c = 1 - d;
+            for (int side = 0; side < 2; ++side) {
+                auto& cells = flat_cells.emplace_back(flat.n[c]);
+                auto& corners = flat_corners.emplace_back(flat.n[c] + 1);
+                for (std::size_t i = 0; i < cells.size; ++i) {
+                    cells.data[i] = draw() < 0.6;
+                }
+                for (std::size_t i = 0; i < corners.size; ++i) {
+                    corners.data[i] = draw() < 0.6;
+                }
+            }
+        }
+        for (int d = 0; d < 2; ++d) {
+            const int c = 1 - d;
+            in2.wall_cells_low[d] = flat_cells[2 * d].span();
+            in2.wall_cells_high[d] = flat_cells[2 * d + 1].span();
+            in2.wall_corners_low[c][0] = flat_corners[2 * d].span();
+            in2.wall_corners_high[c][0] = flat_corners[2 * d + 1].span();
+            in2.low[c][0] = flat.edge_of(c, 0).condition();
+            in2.high[c][0] = flat.edge_of(c, 1).condition();
+        }
+        for (int d = 0; d < 3; ++d) {
+            const int m = solid.component(d);
+            for (int side = 0; side < 2; ++side) {
+                auto& cells = deep_cells.emplace_back(solid.cells.cell_count() / solid.n[d]);
+                if (m >= 0) {
+                    const int other = m == 0 ? solid.b : solid.a;
+                    for_each_cell(solid.cells, [&](const position3& at) {
+                        if (at[d] == 0) {
+                            cells.data[edge_index(solid.cells, d, at)] =
+                                flat_cells[2 * m + side].data[at[other]];
+                        }
+                    });
+                }
+                (side == 0 ? in3.wall_cells_low : in3.wall_cells_high)[d] = cells.span();
+            }
+        }
+        for (int c = 0; c < 3; ++c) {
+            const int m = solid.component(c);
+            for (int q = 0; q < 2; ++q) {
+                const int t = transverse(c, q);
+                for (int side = 0; side < 2; ++side) {
+                    auto& corners =
+                        deep_corners.emplace_back(solid.faces[c].cell_count() / solid.n[t]);
+                    if (m >= 0 && t != solid.e) {
+                        for_each_cell(solid.faces[c], [&](const position3& at) {
+                            if (at[t] == 0) {
+                                corners.data[edge_index(solid.faces[c], t, at)] =
+                                    flat_corners[2 * (1 - m) + side].data[at[c]];
+                            }
+                        });
+                    }
+                    (side == 0 ? in3.wall_corners_low : in3.wall_corners_high)[c][q] =
+                        corners.span();
+                }
+                in3.low[c][q] = solid.low[c][q];
+                in3.high[c][q] = solid.high[c][q];
+                auto& over = deep_vents.emplace_back(solid.corners[c][q].front().cell_count());
+                if (m >= 0 && t != solid.e) {
+                    over_vents(m, t, solid.corners[c][q].front(), over);
+                }
+                in3.vent_corners[c][q] = over.span();
+            }
+        }
+        for (int m = 0; m < 2; ++m) {
+            in2.vent_corners[m][0] = flat_vents[m].span();
+            in2.vents[m] = vents2[m].span();
+        }
+        for (int d = 0; d < 3; ++d) {
+            in3.vents[d] = vents3[d].span();
+        }
+        in2.c_mu = in3.c_mu = 0.09;
+        in2.rho = in3.rho = 1.2;
+        in2.nu = in3.nu = 1e-3;
+        in2.law = in3.law = {0.41, 9.793, walls::log_law_floor(0.41, 9.793).y};
+        walls2 = std::make_unique<walls::boundary<2>>(grid2, in2);
+        walls3 = std::make_unique<walls::boundary<3>>(grid3, in3);
+    }
+
+    // The stencil's corners over a vent's span: some of the 2D room's corners, on
+    // every plane.
+    void over_vents(int m, int, const layout::layout<3>& corners, flags& out) {
+        if (flat_vents.empty()) {
+            for (int c = 0; c < 2; ++c) {
+                flat_vents.emplace_back((flat.n[0] + 1) * (flat.n[1] + 1));
+                for (std::size_t i = 0; i < flat_vents.back().size; ++i) {
+                    flat_vents.back().data[i] = draw() < 0.1;
+                }
+            }
+        }
+        for_each_cell(corners, [&](const position3& at) {
+            out.data[index_of(corners, at)] = flat_vents[m].data[solid.corner(at)];
+        });
+    }
+
+    std::array<std::span<const double>, 2> u2() const {
+        return {flat.velocity[0], flat.velocity[1]};
+    }
+    std::array<std::span<const double>, 3> u3() const {
+        return {solid.velocity[0], solid.velocity[1], solid.velocity[2]};
+    }
+    state s2() const { return {k, eps, nu_t}; }
+    state s3() const { return {k3, eps3, nu_t3}; }
+
+    // Whether every plane of a 3D cell field is the 2D one, bit for bit.
+    void expect_planes(std::span<const double> deep, std::span<const double> plane) const {
+        for_each_cell(solid.cells, [&](const position3& at) {
+            EXPECT_EQ(bits(deep[index_of(solid.cells, at)]),
+                      bits(plane[at[solid.b] * flat.n[0] + at[solid.a]]));
+        });
+    }
+    // And of the face fields normal to the 2D room's component m.
+    void expect_faces(int m, std::span<const double> deep, std::span<const double> plane) const {
+        const int c = m == 0 ? solid.a : solid.b;
+        for_each_cell(solid.faces[c], [&](const position3& at) {
+            EXPECT_EQ(bits(deep[index_of(solid.faces[c], at)]), bits(plane[solid.plane(m, at)]));
+        });
+    }
+
+    static constexpr int orders[3][3] = {{0, 1, 2}, {0, 2, 1}, {1, 2, 0}};
+    int trial;
+    draws draw;
+    room2 flat;
+    room3 solid;
+    grid::grid<2> grid2;
+    grid::grid<3> grid3;
+    std::vector<double> k, eps, nu_t, k3, eps3, nu_t3;
+    std::deque<flags> vents2, vents3, flat_cells, flat_corners, deep_cells, deep_corners;
+    std::deque<flags> flat_vents, deep_vents;
+    std::unique_ptr<model<2>> model2;
+    std::unique_ptr<model<3>> model3;
+    std::unique_ptr<walls::boundary<2>> walls2;
+    std::unique_ptr<walls::boundary<3>> walls3;
+};
+
+TEST(TurbulenceThreeDirections, AnExtrudedRoomHasThe2DRoomsConditions) {
+    std::size_t walls_found = 0;
+    for (int trial = 0; trial < turbulence_rooms; ++trial) {
+        SCOPED_TRACE(trial);
+        pair_of_rooms x(trial);
+        const auto c2 = x.walls2->conditions(x.u2(), x.k, x.eps);
+        const auto c3 = x.walls3->conditions(x.u3(), x.k3, x.eps3);
+        x.expect_planes(c3.eps_wall, c2.eps_wall);
+        x.expect_planes(c3.production, c2.production);
+        for (std::size_t i = 0; i < x.k3.size(); ++i) {
+            walls_found += c3.eps_held[i];
+        }
+        for (int m = 0; m < 2; ++m) {
+            const int c = m == 0 ? x.solid.a : x.solid.b;
+            const int t = m == 0 ? x.solid.b : x.solid.a;
+            x.expect_faces(m, c3.inflow_k[c], c2.inflow_k[m]);
+            x.expect_faces(m, c3.inflow_eps[c], c2.inflow_eps[m]);
+            const int q = slot_of(c, t);
+            for_each_cell(x.solid.faces[c], [&](const position3& at) {
+                if (at[t] == 0) {
+                    const std::size_t i = edge_index(x.solid.faces[c], t, at);
+                    EXPECT_EQ(bits(c3.low[c][q][i]), bits(c2.low[m][0][at[c]]));
+                    EXPECT_EQ(bits(c3.high[c][q][i]), bits(c2.high[m][0][at[c]]));
+                }
+            });
+        }
+    }
+    EXPECT_GT(walls_found, 1000u);
+}
+
+TEST(TurbulenceThreeDirections, AnExtrudedRoomHasThe2DRoomsWallViscosity) {
+    std::size_t compared = 0;
+    for (int trial = 0; trial < turbulence_rooms; ++trial) {
+        SCOPED_TRACE(trial);
+        pair_of_rooms x(trial);
+        std::array<std::vector<double>, 2> out2{x.flat.wall[0], x.flat.wall[1]};
+        x.walls2->wall_viscosity(x.k, {{{x.flat.wall[0]}, {x.flat.wall[1]}}},
+                                 {{{out2[0]}, {out2[1]}}});
+        momentum::per_pair<std::vector<double>, 3> out3 = x.solid.wall;
+        momentum::per_pair<std::span<const double>, 3> from{};
+        momentum::per_pair<std::span<double>, 3> to{};
+        for (int c = 0; c < 3; ++c) {
+            for (int q = 0; q < 2; ++q) {
+                from[c][q] = x.solid.wall[c][q];
+                to[c][q] = out3[c][q];
+            }
+        }
+        x.walls3->wall_viscosity(x.k3, from, to);
+        for (int m = 0; m < 2; ++m) {
+            const int c = m == 0 ? x.solid.a : x.solid.b;
+            const int q = slot_of(c, m == 0 ? x.solid.b : x.solid.a);
+            const auto& corners = x.solid.corners[c][q].front();
+            compared += x.walls2->stencil(m, 0).corner.size();
+            for_each_cell(corners, [&](const position3& at) {
+                EXPECT_EQ(bits(out3[c][q][index_of(corners, at)]),
+                          bits(out2[m][x.solid.corner(at)]));
+            });
+        }
+    }
+    EXPECT_GT(compared, 500u);
+}
+
+TEST(TurbulenceThreeDirections, AnExtrudedRoomHasThe2DRoomsBlocks) {
+    for (int trial = 0; trial < turbulence_rooms; ++trial) {
+        SCOPED_TRACE(trial);
+        pair_of_rooms x(trial);
+        const auto c2 = x.walls2->conditions(x.u2(), x.k, x.eps);
+        const auto c3 = x.walls3->conditions(x.u3(), x.k3, x.eps3);
+        const std::size_t n2 = x.k.size();
+        const std::size_t n3 = x.k3.size();
+        std::vector<double> a2(n2), a3(n3), b2(n2), b3(n3);
+        x.model2->strain_squared(x.u2(), c2, a2);
+        x.model3->strain_squared(x.u3(), c3, a3);
+        x.expect_planes(a3, a2);
+        ASSERT_TRUE(x.model2->pseudo_time_step(x.u2()));
+        ASSERT_TRUE(x.model3->pseudo_time_step(x.u3()));
+        x.expect_planes(x.model3->time_step(), x.model2->time_step());
+        x.model2->terms(x.s2(), x.u2(), c2);
+        x.model3->terms(x.s3(), x.u3(), c3);
+        x.expect_planes(x.model3->production(), x.model2->production());
+        x.expect_planes(x.model3->rng_r(), x.model2->rng_r());
+        x.expect_planes(x.model3->growth_eps(), x.model2->growth_eps());
+        x.expect_planes(x.model3->decay_k(), x.model2->decay_k());
+        x.expect_planes(x.model3->decay_eps(), x.model2->decay_eps());
+        x.model2->explicit_fields(x.s2(), c2, a2, b2);
+        x.model3->explicit_fields(x.s3(), c3, a3, b3);
+        x.expect_planes(a3, a2);
+        x.expect_planes(b3, b2);
+        std::array<std::vector<double>, 2> g2{x.flat.velocity[0], x.flat.velocity[1]};
+        std::array<std::vector<double>, 3> g3{x.solid.velocity[0], x.solid.velocity[1],
+                                              x.solid.velocity[2]};
+        for (const auto which : {quantity::k, quantity::eps}) {
+            x.model2->conductances(which, x.nu_t, {g2[0], g2[1]});
+            x.model3->conductances(which, x.nu_t3, {g3[0], g3[1], g3[2]});
+            for (int m = 0; m < 2; ++m) {
+                x.expect_faces(m, g3[m == 0 ? x.solid.a : x.solid.b], g2[m]);
+            }
+        }
+    }
+}
+
+TEST(TurbulenceThreeDirections, AnExtrudedRoomsStepIsThe2DRoomsOnEveryPlane) {
+    std::size_t steps = 0;
+    for (int trial = 0; trial < turbulence_rooms; ++trial) {
+        SCOPED_TRACE(trial);
+        pair_of_rooms x(trial);
+        const auto c2 = x.walls2->conditions(x.u2(), x.k, x.eps);
+        const auto c3 = x.walls3->conditions(x.u3(), x.k3, x.eps3);
+        const std::size_t n2 = x.k.size();
+        const std::size_t n3 = x.k3.size();
+        std::array<std::vector<double>, 3> out2, out3;
+        out2.fill(std::vector<double>(n2));
+        out3.fill(std::vector<double>(n3));
+        const auto r2 = x.model2->step(x.s2(), x.u2(), c2, out2[0], out2[1], out2[2]);
+        const auto r3 = x.model3->step(x.s3(), x.u3(), c3, out3[0], out3[1], out3[2]);
+        ASSERT_EQ(r2.status, r3.status);
+        if (r2.status != step_status::ok) {
+            continue;
+        }
+        ++steps;
+        // The extruded direction's diffusion crosses faces between equal values,
+        // so the solution is the 2D one; the solves stop where they stop.
+        for (std::size_t f = 0; f < 3; ++f) {
+            for_each_cell(x.solid.cells, [&](const position3& at) {
+                const double plane = out2[f][at[x.solid.b] * x.flat.n[0] + at[x.solid.a]];
+                EXPECT_NEAR(out3[f][index_of(x.solid.cells, at)], plane,
+                            1e-8 * std::fabs(plane));
+            });
+        }
+    }
+    EXPECT_GT(steps, 30u);
+}
+
+// A box of unequal widths along its three directions, every edge open.
+struct box3 {
+    box3() : grid(make()) {
+        input.cell_widths = {axes[0].widths, axes[1].widths, axes[2].widths};
+        input.face_widths = {axes[0].between, axes[1].between, axes[2].between};
+        input.variant = variant_of(false);
+        input.cfl = 0.25;
+        input.max_iter = 100;
+        input.tol = 1e-12;
+        input.nu = 0.5;
+        for (int c = 0; c < 3; ++c) {
+            faces.push_back(positions::faces_layout(grid.fields(), c, c));
+            velocity[c].assign(faces[c].cell_count(), 0.0);
+        }
+    }
+    grid::grid<3> make() {
+        types.assign(3 * 2 * 4, 0);
+        return grid::grid<3>(grid::grid_input<3>{
+            .faces = {axes[0].faces, axes[1].faces, axes[2].faces},
+            .centres = {axes[0].centres, axes[1].centres, axes[2].centres},
+            .cell_type = types,
+            .solid = 1});
+    }
+    std::array<momentum::axis, 3> axes{momentum::make_axis({0.5, 0.25, 0.75}),
+                                       momentum::make_axis({0.2, 0.4}),
+                                       momentum::make_axis({1.0, 2.0, 0.5, 1.5})};
+    std::vector<std::int32_t> types;
+    grid::grid<3> grid;
+    model_input<3> input{};
+    std::deque<layout::layout<3>> faces;
+    std::array<std::vector<double>, 3> velocity;
+};
+
+TEST(TurbulenceThreeDirections, ALinearFlowHasItsStrain) {
+    const double a[3][3] = {{1.0, 2.0, -3.0}, {0.5, -4.0, 1.5}, {2.5, -1.0, 3.0}};
+    box3 b;
+    model<3> m(b.grid, b.input);
+    // Component c at a point, and the edges' own velocities the same flow's.
+    const auto flow = [&](int c, const std::array<double, 3>& p) {
+        return a[c][0] * p[0] + a[c][1] * p[1] + a[c][2] * p[2];
+    };
+    conditions<3> c;
+    momentum::per_pair<std::vector<double>, 3> low, high;
+    for (int d = 0; d < 3; ++d) {
+        const auto place = [&](const position3& at) {
+            std::array<double, 3> p{};
+            for (int e = 0; e < 3; ++e) {
+                p[e] = e == d ? b.axes[e].faces[at[e]] : b.axes[e].centres[at[e]];
+            }
+            return p;
+        };
+        for_each_cell(b.faces[d], [&](const position3& at) {
+            b.velocity[d][index_of(b.faces[d], at)] = flow(d, place(at));
+        });
+        for (int q = 0; q < 2; ++q) {
+            const int t = transverse(d, q);
+            low[d][q].assign(b.faces[d].cell_count() / b.faces[d].cells(t), 0.0);
+            high[d][q] = low[d][q];
+            for_each_cell(b.faces[d], [&](const position3& at) {
+                if (at[t] == 0) {
+                    auto p = place(at);
+                    const std::size_t i = edge_index(b.faces[d], t, at);
+                    p[t] = b.axes[t].faces.front();
+                    low[d][q][i] = flow(d, p);
+                    p[t] = b.axes[t].faces.back();
+                    high[d][q][i] = flow(d, p);
+                }
+            });
+            c.low[d][q] = low[d][q];
+            c.high[d][q] = high[d][q];
+        }
+        c.inflow_k[d] = b.velocity[d];
+        c.inflow_eps[d] = b.velocity[d];
+    }
+    const std::vector<double> zero(24, 0.0);
+    const flags none(24);
+    c.eps_wall = c.production = zero;
+    c.eps_held = c.production_given = none.span();
+    std::vector<double> s2(24);
+    m.strain_squared({b.velocity[0], b.velocity[1], b.velocity[2]}, c, s2);
+    double expected = 0.0;
+    for (int d = 0; d < 3; ++d) {
+        expected += 2.0 * a[d][d] * a[d][d];
+        for (int e = d + 1; e < 3; ++e) {
+            expected += (a[d][e] + a[e][d]) * (a[d][e] + a[e][d]);
+        }
+    }
+    for (const double value : s2) {
+        EXPECT_NEAR(value, expected, 1e-11);
+    }
+}
+
+TEST(TurbulenceThreeDirections, AFacesAreaAndACellsVolumeAreTheProductsOfTheirWidths) {
+    box3 b;
+    model<3> m(b.grid, b.input);
+    const std::vector<double> nu_t(24, 0.0);
+    std::array<std::vector<double>, 3> g = b.velocity;
+    m.conductances(quantity::k, nu_t, {g[0], g[1], g[2]});
+    for (int d = 0; d < 3; ++d) {
+        for_each_cell(b.faces[d], [&](const position3& at) {
+            double expected = 0.5 / b.axes[d].between[at[d]];
+            for (int e = 0; e < 3; ++e) {
+                expected *= e == d ? 1.0 : b.axes[e].widths[at[e]];
+            }
+            const bool edge = at[d] == 0 || at[d] + 1 == b.faces[d].cells(d);
+            EXPECT_NEAR(g[d][index_of(b.faces[d], at)], edge ? 0.0 : expected, 1e-14);
+        });
+    }
+    for_each_cell(b.grid.fields(), [&](const position3& at) {
+        EXPECT_NEAR(m.volume()[index_of(b.grid.fields(), at)],
+                    b.axes[0].widths[at[0]] * b.axes[1].widths[at[1]] * b.axes[2].widths[at[2]],
+                    1e-15);
+    });
+}
+
+TEST(TurbulenceThreeDirections, TheSlipIsTheMagnitudeOfBothComponentsAlongTheWall) {
+    box3 b;
+    walls::boundary_input<3> in{};
+    std::deque<flags> made;
+    std::deque<std::vector<double>> values;
+    for (int d = 0; d < 3; ++d) {
+        const std::size_t edge = b.grid.fields().cell_count() / b.grid.cells(d);
+        // The low edge along y is the one wall.
+        auto& low = made.emplace_back(edge);
+        std::fill_n(low.data.get(), edge, d == 1);
+        in.wall_cells_low[d] = low.span();
+        in.wall_cells_high[d] = made.emplace_back(edge).span();
+        for (int q = 0; q < 2; ++q) {
+            const std::size_t n =
+                b.faces[d].cell_count() / b.faces[d].cells(transverse(d, q));
+            in.wall_corners_low[d][q] = in.wall_corners_high[d][q] = made.emplace_back(n).span();
+            in.low[d][q] = {made.emplace_back(n).span(), values.emplace_back(n, 0.0), 0.5};
+            in.high[d][q] = in.low[d][q];
+        }
+    }
+    in.c_mu = 0.09;
+    in.rho = 1.2;
+    in.nu = 1.5e-5;
+    in.law = {0.41, 9.793, walls::log_law_floor(0.41, 9.793).y};
+    walls::boundary<3> w(b.grid, in);
+    b.velocity[0].assign(b.velocity[0].size(), 3.0);
+    b.velocity[1].assign(b.velocity[1].size(), 100.0);
+    b.velocity[2].assign(b.velocity[2].size(), -4.0);
+    const std::vector<double> k(24, 0.04), eps(24, 0.5);
+    const auto c = w.conditions({b.velocity[0], b.velocity[1], b.velocity[2]}, k, eps);
+    const double u_k = std::pow(0.09, 0.25) * 0.2;
+    const double y = 0.1;
+    const double log_term = std::log(9.793 * std::max(u_k * y / 1.5e-5, in.law.floor));
+    for_each_cell(b.grid.fields(), [&](const position3& at) {
+        const std::size_t i = index_of(b.grid.fields(), at);
+        EXPECT_EQ(c.eps_held[i], at[1] == 0);
+        EXPECT_NEAR(c.production[i], at[1] == 0 ? u_k * u_k * 5.0 / (y * log_term) : 0.0, 1e-14);
+    });
+}
+
+}  // namespace
+}  // namespace cfdcore::turbulence

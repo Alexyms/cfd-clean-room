@@ -16,7 +16,11 @@ set from the core's maps and recovery fields (``ArrivalTracker.restore`` and
 ``RecoveryTracker.restore``, whose checks then read the core's state). Prompt 92
 adds the momentum predictor's construction, and prompt 93 the pressure correction's:
 its construction, the multigrid's keys, its result as ``PressureCorrection`` and its
-breakdown as the error the reference's own arithmetic raises.
+breakdown as the error the reference's own arithmetic raises. Prompt 94 adds the turbulence
+model's and the wall functions': their construction (which face admits air, read from the
+shared coverage as ``TurbulenceBoundary`` reads it, with its refusal of a segment that states
+no turbulence), their results as ``TurbulenceState`` and ``TurbulenceConditions``, and a
+positivity failure as ``PositivityError``.
 """
 
 from collections.abc import Mapping, Sequence
@@ -30,8 +34,9 @@ from src.boundary_concentration import (
     SURFACE_WALL,
     ConcentrationBoundary,
 )
+from src.boundary_registry import VELOCITY_INLET, BoundaryRegistry
 from src.boundary_staggered import StaggeredBoundary
-from src.config import UPWIND, SimConfig
+from src.config import UPWIND, BoundarySpec, SimConfig
 from src.mesh import FLUID, SOLID, Mesh
 from src.monitor import COUNTING_STATE, ArrivalTracker
 from src.multigrid import (
@@ -43,12 +48,21 @@ from src.multigrid import (
 from src.particles import ParticlePhysics
 from src.pressure import RESIDUAL_FLOOR, PressureCorrection, PressureCorrector
 from src.solver_transport import DEPOSIT_SURFACES, ConservationBreachError, MassBudget
-from src.staggered import FaceVelocities
+from src.staggered import FaceVelocities, edge_cell_inputs
 from src.time_integration import (
     DEFINED_RTOL,
     HUNDRED_TO_ONE,
     IntervalPlan,
     RecoveryTracker,
+)
+from src.turbulence import (
+    E_WALL,
+    KAPPA,
+    VARIANTS,
+    Y_STAR_FLOOR,
+    PositivityError,
+    TurbulenceConditions,
+    TurbulenceState,
 )
 
 if TYPE_CHECKING:
@@ -663,3 +677,241 @@ def breakdown_error(breakdown: "_cfdcore.PressureBreakdown") -> Exception:
     if breakdown.reason == "division_by_zero":
         return ZeroDivisionError("division by zero in the conjugate gradients")
     return np.linalg.LinAlgError("Eigenvalues did not converge")
+
+
+# The law of the wall as the core reads it: kappa, E and the scalable form's floor.
+WALL_LAW = (KAPPA, E_WALL, Y_STAR_FLOOR)
+
+# The domain's edges in the order the core's wall functions take them.
+WALL_EDGES = ("bottom", "top", "left", "right")
+
+
+def core_grid(mesh: Mesh) -> "_cfdcore.Grid2":
+    """The core's grid of a mesh; two modules built on one share it."""
+    import _cfdcore
+
+    return _cfdcore.Grid2(mesh.x, mesh.xc, mesh.y, mesh.yc, mesh.cell_type, SOLID)
+
+
+def k_epsilon(
+    mesh: Mesh,
+    config: SimConfig,
+    boundary: StaggeredBoundary,
+    grid: "_cfdcore.Grid2 | None" = None,
+) -> "_cfdcore.KEpsilon2":
+    """The core's k-epsilon model from ``KEpsilonModel``'s own arguments (prompt 94).
+
+    Parameters
+    ----------
+    mesh : Mesh
+        The mesh.
+    config : SimConfig
+        Supplies the turbulence section, rho and mu.
+    boundary : StaggeredBoundary
+        Supplies the vent faces, the runs the reference derives itself, handed
+        over only where there are any.
+    grid : _cfdcore.Grid2, optional
+        The mesh's grid where the caller has one, else a new one.
+
+    Returns
+    -------
+    _cfdcore.KEpsilon2
+        The model; its grid lives as long.
+    """
+    import _cfdcore
+
+    spec = config.turbulence
+    assert spec is not None
+    constants = VARIANTS[spec.variant]
+    vents = boundary.vent_faces()
+    return _cfdcore.KEpsilon2(
+        core_grid(mesh) if grid is None else grid,
+        mesh.dx_cell,
+        mesh.dy_cell,
+        mesh.dx_face,
+        mesh.dy_face,
+        (
+            constants.c_mu,
+            constants.c_1,
+            constants.c_2,
+            constants.sigma_k,
+            constants.sigma_e,
+            constants.eta_0,
+            constants.beta,
+        ),
+        spec.cfl_number,
+        spec.advection_scheme == UPWIND,
+        spec.max_iter,
+        spec.tol,
+        config.mu / config.rho,
+        vents.normal_u if vents.any else None,
+        vents.normal_v if vents.any else None,
+    )
+
+
+# One inlet face as the core takes it: direction, row, column, intensity, normal
+# speed, dissipation length and width.
+InletFace = tuple[int, int, int, float, float, float, float]
+
+
+def inlet_faces(
+    mesh: Mesh, config: SimConfig, boundary: StaggeredBoundary
+) -> tuple[list[InletFace], list[InletFace], list[tuple[int, int, int]]]:
+    """The faces that admit air and the exhausts', in ``TurbulenceBoundary``'s order.
+
+    Parameters
+    ----------
+    mesh : Mesh
+        The mesh.
+    config : SimConfig
+        Supplies the segments.
+    boundary : StaggeredBoundary
+        Supplies the vents.
+
+    Returns
+    -------
+    tuple
+        The domain faces that admit air, the discharge vents' faces, and the
+        exhausts' faces as (direction, row, column).
+
+    Raises
+    ------
+    ValueError
+        If a segment that admits air states no turbulence, as the reference.
+    """
+    registry = BoundaryRegistry(config)
+    ny, nx = mesh.cell_type.shape
+    domain: list[InletFace] = []
+    for edge in WALL_EDGES:
+        horizontal = edge in ("bottom", "top")
+        widths = mesh.dx_cell if horizontal else mesh.dy_cell
+        coverage = registry.coverage_along(edge, *edge_cell_inputs(mesh, edge))
+        for index, point in enumerate(coverage):
+            if point.spec is None or point.condition.bc_type != VELOCITY_INLET:
+                continue
+            c = point.condition
+            normal = c.v_prescribed if horizontal else c.u_prescribed
+            if normal == 0.0:
+                continue
+            intensity, length = _turbulence_of(point.name, point.spec)
+            face = {
+                "bottom": (1, 0, index),
+                "top": (1, ny, index),
+                "left": (0, index, 0),
+                "right": (0, index, nx),
+            }[edge]
+            domain.append((*face, intensity, normal, length, float(widths[index])))
+    discharges: list[InletFace] = []
+    exhausts: list[tuple[int, int, int]] = []
+    for run in boundary.vent_runs():
+        direction = 0 if run.component == "u" else 1
+        faces = [
+            (direction, int(j), int(i)) for j, i in zip(run.rows, run.cols, strict=True)
+        ]
+        if not run.is_inlet:
+            exhausts.extend(faces)
+            continue
+        intensity, length = _turbulence_of(run.name, run.spec)
+        discharges.extend(
+            (*face, intensity, run.normal, length, float(width))
+            for face, width in zip(faces, run.widths, strict=True)
+        )
+    return domain, discharges, exhausts
+
+
+def _turbulence_of(name: str | None, spec: BoundarySpec) -> tuple[float, float]:
+    """A segment's turbulence intensity and dissipation length, or the reference's refusal."""
+    intensity, length = spec.turbulence_intensity, spec.dissipation_length
+    if intensity is None or length is None:
+        raise ValueError(
+            f"boundary '{name}' admits air but states no "
+            "turbulence_intensity or dissipation_length"
+        )
+    return intensity, length
+
+
+def turbulence_boundary(
+    mesh: Mesh,
+    config: SimConfig,
+    boundary: StaggeredBoundary,
+    grid: "_cfdcore.Grid2 | None" = None,
+) -> "_cfdcore.TurbulenceBoundary2":
+    """The core's wall functions from ``TurbulenceBoundary``'s own arguments (prompt 94).
+
+    Parameters
+    ----------
+    mesh : Mesh
+        The mesh.
+    config : SimConfig
+        Supplies the variant, rho, mu and the segments' turbulence keys.
+    boundary : StaggeredBoundary
+        Supplies the wall faces, the tangential conditions and the vents.
+    grid : _cfdcore.Grid2, optional
+        The mesh's grid where the caller has one, else a new one.
+
+    Returns
+    -------
+    _cfdcore.TurbulenceBoundary2
+        The boundary; its grid lives as long.
+    """
+    import _cfdcore
+
+    assert config.turbulence is not None
+    walls = boundary.wall_faces()
+    edges = boundary.tangential_conditions()
+    vents = boundary.vent_faces()
+    domain, discharges, exhausts = inlet_faces(mesh, config, boundary)
+    return _cfdcore.TurbulenceBoundary2(
+        core_grid(mesh) if grid is None else grid,
+        [walls[e].cells for e in WALL_EDGES],
+        [walls[e].corners for e in WALL_EDGES],
+        [
+            (edges[e].is_dirichlet, edges[e].value, edges[e].wall_distance)
+            for e in WALL_EDGES
+        ],
+        (vents.normal_u, vents.normal_v, vents.tangential_u, vents.tangential_v)
+        if vents.any
+        else None,
+        domain,
+        discharges,
+        exhausts,
+        VARIANTS[config.turbulence.variant].c_mu,
+        config.rho,
+        config.mu / config.rho,
+        WALL_LAW,
+    )
+
+
+def turbulence_state(core: Mapping[str, np.ndarray]) -> TurbulenceState:
+    """A step of the core's, by name, as the reference's state, its arrays read-only."""
+    arrays = {name: core[name] for name in ("k", "eps", "nu_t")}
+    for array in arrays.values():
+        array.setflags(write=False)
+    return TurbulenceState(**arrays)
+
+
+def turbulence_conditions(core: Mapping[str, np.ndarray]) -> TurbulenceConditions:
+    """The core's conditions, by name, as the reference's."""
+    return TurbulenceConditions(**core)
+
+
+def positivity_error(failure: "_cfdcore.PositivityFailure") -> PositivityError:
+    """The reference's error for a step that left k or eps not positive (REQ-S15).
+
+    Parameters
+    ----------
+    failure : _cfdcore.PositivityFailure
+        What the core raised.
+
+    Returns
+    -------
+    PositivityError
+        With the reference's message and its ``minimum``.
+    """
+    minimum = float(failure.minimum)
+    return PositivityError(
+        f"{failure.quantity} is not positive and finite at {failure.count} "
+        f"non-SOLID cell(s), first at row {failure.row}, column {failure.column} "
+        f"({np.float64(failure.value)!r}); least {minimum!r}",
+        minimum,
+    )

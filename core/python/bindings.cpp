@@ -25,6 +25,8 @@
 #include "cfdcore/reduce.hpp"
 #include "cfdcore/scalar.hpp"
 #include "cfdcore/transport.hpp"
+#include "cfdcore/turbulence.hpp"
+#include "cfdcore/walls.hpp"
 
 #include <algorithm>
 #include <array>
@@ -1542,10 +1544,10 @@ Array read_viscosity(nb::handle value, const std::string& name,
 }
 
 // One edge's tangential condition: (is_dirichlet, value, wall_distance).
-cfdcore::momentum::edge_condition read_edge(nb::handle edge, std::size_t n, const char* name,
+cfdcore::momentum::edge_condition read_edge(nb::handle edge, std::size_t n,
+                                            const std::string& who,
                                             std::vector<BoolVector>& flags,
                                             std::vector<Vector>& values) {
-    const std::string who = std::string("MomentumPredictor2: ") + name;
     BoolVector known;
     Vector value;
     cfdcore::momentum::edge_condition condition;
@@ -1587,10 +1589,10 @@ void momentum_init(Predictor2* self, const Grid2& g, const Vector& dx_cell, cons
     const std::size_t along_x = g.cells(0) + 1;
     const std::size_t along_y = g.cells(1) + 1;
     // Each component's one pair, with the other direction.
-    input.low[0][0] = read_edge(tangential[0], along_x, "bottom", flags, values);
-    input.low[1][0] = read_edge(tangential[2], along_y, "left", flags, values);
-    input.high[0][0] = read_edge(tangential[1], along_x, "top", flags, values);
-    input.high[1][0] = read_edge(tangential[3], along_y, "right", flags, values);
+    input.low[0][0] = read_edge(tangential[0], along_x, "MomentumPredictor2: bottom", flags, values);
+    input.low[1][0] = read_edge(tangential[2], along_y, "MomentumPredictor2: left", flags, values);
+    input.high[0][0] = read_edge(tangential[1], along_x, "MomentumPredictor2: top", flags, values);
+    input.high[1][0] = read_edge(tangential[3], along_y, "MomentumPredictor2: right", flags, values);
     const std::array<const std::optional<BoolMatrix>*, 2> held{&held_u, &held_v};
     for (int c = 0; c < 2; ++c) {
         if (*held[c]) {
@@ -2434,6 +2436,778 @@ nb::dict corrector_apply(Corrector2& c, const Array& u_star, const Array& v_star
     return out.named();
 }
 
+// ---------------------------------------------------------------------------
+// The turbulence model and the wall functions (prompt 94)
+
+using Model2 = cfdcore::turbulence::model<2>;
+using Boundary2 = cfdcore::walls::boundary<2>;
+using cfdcore::turbulence::step_status;
+
+// The last step's records beside the model, as `KEpsilonModel` holds them.
+struct KEpsilon2 {
+    KEpsilon2(const Grid2& g, const cfdcore::turbulence::model_input<2>& input)
+        : model(g, input) {
+        for (int d = 0; d < 2; ++d) {
+            const std::size_t stride = g.fields().face_stride(d);
+            const std::size_t n = g.cells(d);
+            for (std::size_t f = 0; f < g.fields().face_count(d); ++f) {
+                const std::size_t at = (f / stride) % (n + 1);
+                if (at == 0 || at == n) {
+                    edges[d].push_back(f);
+                } else if (model.live_faces(d)[f] != model.inner_faces(d)[f]) {
+                    // An interior face with a flux that diffusion does not cross.
+                    vents[d].push_back(f);
+                }
+            }
+        }
+    }
+    Model2 model;
+    cfdcore::turbulence::step_result last{};
+    // The domain's faces and the vents' normal to each direction, whose inflow
+    // values the checks read.
+    std::array<std::vector<std::size_t>, 2> edges;
+    std::array<std::vector<std::size_t>, 2> vents;
+};
+
+// A quantity is not positive and finite at a non-SOLID cell after a step
+// (REQ-S15). The module raises it as `_cfdcore.PositivityFailure`, carrying the
+// numbers the reference's error states; the Python side makes that error of it.
+struct positivity_failure : std::exception {
+    positivity_failure(const char* name, const cfdcore::turbulence::bad_cells& cells,
+                       std::size_t columns)
+        : quantity(name), bad(cells), nx(columns) {}
+    const char* what() const noexcept override { return quantity; }
+    const char* quantity;
+    cfdcore::turbulence::bad_cells bad;
+    std::size_t nx;
+};
+
+void translate_positivity(const std::exception_ptr& pending, void* payload) {
+    try {
+        std::rethrow_exception(pending);
+    } catch (const positivity_failure& failure) {
+        const nb::object type = nb::borrow(static_cast<PyObject*>(payload));
+        nb::object error = type((std::string(failure.quantity) +
+                                 " is not positive and finite at " +
+                                 std::to_string(failure.bad.count) + " non-SOLID cell(s)")
+                                    .c_str());
+        error.attr("quantity") = failure.quantity;
+        error.attr("count") = failure.bad.count;
+        error.attr("row") = failure.bad.first / failure.nx;
+        error.attr("column") = failure.bad.first % failure.nx;
+        error.attr("value") = failure.bad.value;
+        error.attr("minimum") = failure.bad.least;
+        PyErr_SetObject(type.ptr(), error.ptr());
+    }
+}
+
+// The str() of an attribute of an object: a shape as Python prints it, a dtype's name.
+std::string text_of(nb::handle value, const char* attribute) {
+    return nb::cast<std::string>(nb::str(nb::getattr(value, attribute)));
+}
+
+// An attribute of an object as a C-contiguous float64 array of the [rows, columns]
+// the caller has checked, which must not be unaligned.
+Array float_array(nb::handle value, const std::string& name) {
+    Array array;
+    if (!nb::try_cast<Array>(value, array, false)) {
+        refuse_type(name + " must be a C-contiguous float64 ndarray");
+    }
+    require_aligned(array.data(), alignof(double), name);
+    return array;
+}
+
+std::array<std::size_t, 2> cell_shape(const Grid2& g) { return {g.cells(1), g.cells(0)}; }
+
+// The state's refusals (`_check_state`), or its arrays.
+struct state_arrays {
+    Array k;
+    Array eps;
+    Array nu_t;
+    cfdcore::turbulence::state spans() const {
+        return {span_of_array(k), span_of_array(eps), span_of_array(nu_t)};
+    }
+};
+
+state_arrays read_state(const Model2& m, nb::handle state) {
+    const auto shape = cell_shape(m.mesh());
+    const std::array<const char*, 3> names{"k", "eps", "nu_t"};
+    state_arrays arrays;
+    const std::array<Array*, 3> fields{&arrays.k, &arrays.eps, &arrays.nu_t};
+    for (std::size_t i = 0; i < 3; ++i) {
+        const nb::object value = nb::getattr(state, names[i]);
+        if (text_of(value, "shape") != shape_text(shape)) {
+            refuse_value(std::string("state.") + names[i] + " must have shape " +
+                         shape_text(shape) + ", got " + text_of(value, "shape"));
+        }
+        *fields[i] = float_array(value, std::string("state.") + names[i]);
+    }
+    for (std::size_t i = 0; i < 2; ++i) {
+        if (!m.in_range(span_of_array(*fields[i]), true)) {
+            refuse_value(std::string("state.") + names[i] +
+                         " must be positive and finite in every non-SOLID cell");
+        }
+    }
+    if (!m.in_range(span_of_array(arrays.nu_t), false)) {
+        refuse_value("state.nu_t must be non-negative and finite in every non-SOLID cell");
+    }
+    for (std::size_t i = 0; i < 3; ++i) {
+        if (!m.zero_in_solid(span_of_array(*fields[i]))) {
+            refuse_value(std::string("state.") + names[i] + " must be zero in SOLID cells");
+        }
+    }
+    return arrays;
+}
+
+// The faces' refusals (`_check_faces`), or their arrays.
+struct face_arrays {
+    Array u;
+    Array v;
+    std::array<std::span<const double>, 2> spans() const {
+        return {span_of_array(u), span_of_array(v)};
+    }
+};
+
+face_arrays read_faces(const Model2& m, nb::handle faces) {
+    const auto u_shape = face_shape(m.mesh(), 0);
+    const auto v_shape = face_shape(m.mesh(), 1);
+    const nb::object u = nb::getattr(faces, "u");
+    const nb::object v = nb::getattr(faces, "v");
+    if (text_of(u, "shape") != shape_text(u_shape) || text_of(v, "shape") != shape_text(v_shape)) {
+        refuse_value("faces must have shapes u " + shape_text(u_shape) + " and v " +
+                     shape_text(v_shape) + ", got u " + text_of(u, "shape") + " and v " +
+                     text_of(v, "shape"));
+    }
+    face_arrays arrays{float_array(u, "faces.u"), float_array(v, "faces.v")};
+    if (!cfdcore::turbulence::all_finite(span_of_array(arrays.u)) ||
+        !cfdcore::turbulence::all_finite(span_of_array(arrays.v))) {
+        refuse_value("faces must be finite");
+    }
+    return arrays;
+}
+
+// The conditions' refusals (`_check_conditions`), in the reference's order, or
+// their arrays.
+struct condition_arrays {
+    std::array<Array, 10> floats;
+    std::array<BoolMatrix, 2> flags;
+    cfdcore::turbulence::conditions<2> spans() const {
+        cfdcore::turbulence::conditions<2> c;
+        c.inflow_k = {span_of_array(floats[0]), span_of_array(floats[2])};
+        c.inflow_eps = {span_of_array(floats[1]), span_of_array(floats[3])};
+        c.low[0][0] = span_of_array(floats[4]);
+        c.high[0][0] = span_of_array(floats[5]);
+        c.low[1][0] = span_of_array(floats[6]);
+        c.high[1][0] = span_of_array(floats[7]);
+        c.eps_wall = span_of_array(floats[8]);
+        c.production = span_of_array(floats[9]);
+        c.eps_held = span_of(flags[0]);
+        c.production_given = span_of(flags[1]);
+        return c;
+    }
+};
+
+condition_arrays read_conditions(const KEpsilon2& self, nb::handle conditions) {
+    const Grid2& g = self.model.mesh();
+    const std::string u_shape = shape_text(face_shape(g, 0));
+    const std::string v_shape = shape_text(face_shape(g, 1));
+    const std::string p_shape = shape_text(cell_shape(g));
+    const std::string along_x = "(" + std::to_string(g.cells(0) + 1) + ",)";
+    const std::string along_y = "(" + std::to_string(g.cells(1) + 1) + ",)";
+    const std::array<std::pair<const char*, std::string>, 10> named{{
+        {"inflow_k_u", u_shape},
+        {"inflow_eps_u", u_shape},
+        {"inflow_k_v", v_shape},
+        {"inflow_eps_v", v_shape},
+        {"tangential_bottom", along_x},
+        {"tangential_top", along_x},
+        {"tangential_left", along_y},
+        {"tangential_right", along_y},
+        {"eps_wall", p_shape},
+        {"production", p_shape},
+    }};
+    condition_arrays arrays;
+    for (std::size_t i = 0; i < named.size(); ++i) {
+        const auto& [name, shape] = named[i];
+        const nb::object value = nb::getattr(conditions, name);
+        if (text_of(value, "shape") != shape || text_of(value, "dtype") != "float64") {
+            refuse_value(std::string("conditions.") + name + " must be float64 of shape " +
+                         shape + ", got " + text_of(value, "dtype") + " " +
+                         text_of(value, "shape"));
+        }
+        arrays.floats[i] = float_array(value, std::string("conditions.") + name);
+        if (!cfdcore::turbulence::all_finite(span_of_array(arrays.floats[i]))) {
+            refuse_value(std::string("conditions.") + name + " must be finite");
+        }
+    }
+    const std::array<const char*, 2> flags{"eps_held", "production_given"};
+    for (std::size_t i = 0; i < flags.size(); ++i) {
+        const std::string name = std::string("conditions.") + flags[i];
+        const nb::object value = nb::getattr(conditions, flags[i]);
+        if (text_of(value, "shape") != p_shape || text_of(value, "dtype") != "bool") {
+            refuse_value(name + " must be bool of shape " + p_shape);
+        }
+        if (!nb::try_cast<BoolMatrix>(value, arrays.flags[i], false)) {
+            refuse_type(name + " must be a C-contiguous bool ndarray");
+        }
+        bool in_solid = false;
+        for (std::size_t cell = 0; cell < arrays.flags[i].size(); ++cell) {
+            in_solid |= arrays.flags[i].data()[cell] & g.solid(cell);
+        }
+        if (in_solid) {
+            refuse_value(name + " names a SOLID cell");
+        }
+    }
+    const auto c = arrays.spans();
+    const auto positive_at = [&](const std::array<std::vector<std::size_t>, 2>& faces) {
+        for (std::size_t d = 0; d < 2; ++d) {
+            for (const std::size_t f : faces[d]) {
+                if (!(c.inflow_k[d][f] > 0.0 && c.inflow_eps[d][f] > 0.0)) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    };
+    if (!positive_at(self.edges)) {
+        refuse_value("conditions' inflow k and eps must be positive on the domain faces");
+    }
+    if (!positive_at(self.vents)) {
+        refuse_value("conditions' inflow k and eps must be positive on the vent faces");
+    }
+    bool held = true;
+    bool given = true;
+    for (std::size_t i = 0; i < c.eps_held.size(); ++i) {
+        held &= !c.eps_held[i] | (c.eps_wall[i] > 0.0);
+        given &= !c.production_given[i] | (c.production[i] >= 0.0);
+    }
+    if (!held) {
+        refuse_value("conditions.eps_wall must be positive where eps is held");
+    }
+    if (!given) {
+        refuse_value("conditions.production must be non-negative where it is given");
+    }
+    return arrays;
+}
+
+constexpr const char* nothing_moves_message =
+    "no cell moves, so the pseudo-time step has no value; pass a true-time dt";
+
+void model_init(KEpsilon2* self, const Grid2& g, const Vector& dx_cell, const Vector& dy_cell,
+                const Vector& dx_face, const Vector& dy_face, nb::handle variant, nb::handle cfl,
+                bool upwind, nb::handle max_iter, nb::handle tol, nb::handle nu,
+                const std::optional<BoolMatrix>& vent_u, const std::optional<BoolMatrix>& vent_v) {
+    constexpr std::string_view who = "KEpsilon2";
+    for (const Vector* v : {&dx_cell, &dy_cell, &dx_face, &dy_face}) {
+        require_aligned(v->data(), alignof(double), who);
+    }
+    if (nb::len(variant) != 7) {
+        refuse_type("KEpsilon2: variant is (c_mu, c_1, c_2, sigma_k, sigma_e, eta_0, beta)");
+    }
+    cfdcore::turbulence::model_input<2> input;
+    input.cell_widths = {as_span(dx_cell), as_span(dy_cell)};
+    input.face_widths = {as_span(dx_face), as_span(dy_face)};
+    input.variant.c_mu = read_number(variant[0], "c_mu");
+    input.variant.c_1 = read_number(variant[1], "c_1");
+    input.variant.c_2 = read_number(variant[2], "c_2");
+    input.variant.sigma_k = read_number(variant[3], "sigma_k");
+    input.variant.sigma_e = read_number(variant[4], "sigma_e");
+    // The reference has R where both constants are there.
+    input.variant.has_r = !nb::handle(variant[5]).is_none() && !nb::handle(variant[6]).is_none();
+    if (input.variant.has_r) {
+        input.variant.eta_0 = read_number(variant[5], "eta_0");
+        input.variant.beta = read_number(variant[6], "beta");
+    }
+    input.cfl = read_number(cfl, "cfl");
+    input.upwind = upwind;
+    input.max_iter = read_count(max_iter, "max_iter");
+    input.tol = read_number(tol, "tol");
+    input.nu = read_number(nu, "nu");
+    const std::array<const std::optional<BoolMatrix>*, 2> vents{&vent_u, &vent_v};
+    for (int d = 0; d < 2; ++d) {
+        if (*vents[d]) {
+            require_shape(**vents[d], face_shape(g, d), who, d == 0 ? "vent_u" : "vent_v");
+            input.vents[d] = span_of(**vents[d]);
+        }
+    }
+    const std::string_view reason = Model2::check(g, input);
+    if (!reason.empty()) {
+        refuse_value(std::string(who) + ": " + std::string(reason));
+    }
+    new (self) KEpsilon2(g, input);
+}
+
+NewArray copy_field(std::span<const double> values, std::array<std::size_t, 2> shape) {
+    NewArray out = new_matrix(shape);
+    std::copy(values.begin(), values.end(), out.data());
+    return out;
+}
+
+NewArray model_eddy_viscosity(const KEpsilon2& self, const Matrix& k, const Matrix& eps) {
+    const auto shape = cell_shape(self.model.mesh());
+    require_shape(k, shape, "KEpsilon2", "k");
+    require_shape(eps, shape, "KEpsilon2", "eps");
+    NewArray out = new_matrix(shape);
+    self.model.eddy_viscosity(span_of(k), span_of(eps), out_span(out));
+    return out;
+}
+
+// `KEpsilonModel.state`: checked copies, zero in SOLID cells, and their viscosity.
+nb::dict model_state(const KEpsilon2& self, nb::handle k, nb::handle eps) {
+    const Model2& m = self.model;
+    const auto shape = cell_shape(m.mesh());
+    const std::array<const char*, 2> names{"k", "eps"};
+    const std::array<nb::handle, 2> values{k, eps};
+    std::array<NewArray, 2> copies;
+    for (std::size_t i = 0; i < 2; ++i) {
+        const Array given = float_array(values[i], names[i]);
+        if (!has_shape(given, shape)) {
+            refuse_value(std::string("expected ") + names[i] + " of shape " + shape_text(shape) +
+                         ", got " + shape_text(given));
+        }
+        if (!m.in_range(span_of_array(given), true)) {
+            refuse_value(std::string(names[i]) +
+                         " must be positive and finite in every non-SOLID cell");
+        }
+        copies[i] = copy_field(span_of_array(given), shape);
+        for (std::size_t cell = 0; cell < copies[i].size(); ++cell) {
+            if (m.mesh().solid(cell)) {
+                copies[i].data()[cell] = 0.0;
+            }
+        }
+    }
+    NewArray nu_t = new_matrix(shape);
+    m.eddy_viscosity(out_span(copies[0]), out_span(copies[1]), out_span(nu_t));
+    nb::dict out;
+    out["k"] = copies[0];
+    out["eps"] = copies[1];
+    out["nu_t"] = nu_t;
+    return out;
+}
+
+NewArray model_corner_gradient(KEpsilon2& self, int component, const Matrix& velocity,
+                               const Vector& low, const Vector& high) {
+    const int c = direction(component);
+    const Grid2& g = self.model.mesh();
+    require_shape(velocity, face_shape(g, c), "KEpsilon2", "velocity");
+    for (const Vector* v : {&low, &high}) {
+        if (v->shape(0) != g.cells(c) + 1) {
+            refuse_type("KEpsilon2: an edge's tangential velocity is not one value per face");
+        }
+        require_aligned(v->data(), alignof(double), "KEpsilon2");
+    }
+    NewArray out = new_matrix({g.cells(1) + 1, g.cells(0) + 1});
+    self.model.corner_gradient(c, 0, span_of(velocity), as_span(low), as_span(high),
+                               out_span(out));
+    return out;
+}
+
+NewArray model_strain(KEpsilon2& self, nb::handle faces, nb::handle conditions) {
+    const face_arrays u = read_faces(self.model, faces);
+    const condition_arrays c = read_conditions(self, conditions);
+    NewArray out = new_matrix(cell_shape(self.model.mesh()));
+    self.model.strain_squared(u.spans(), c.spans(), out_span(out));
+    return out;
+}
+
+nb::dict model_terms(KEpsilon2& self, nb::handle state, nb::handle faces, nb::handle conditions) {
+    Model2& m = self.model;
+    const state_arrays s = read_state(m, state);
+    const face_arrays u = read_faces(m, faces);
+    const condition_arrays c = read_conditions(self, conditions);
+    m.terms(s.spans(), u.spans(), c.spans());
+    const auto shape = cell_shape(m.mesh());
+    nb::dict out;
+    out["production"] = copy_field(m.production(), shape);
+    out["rng_r"] = copy_field(m.rng_r(), shape);
+    out["growth_k"] = copy_field(m.production(), shape);
+    out["growth_eps"] = copy_field(m.growth_eps(), shape);
+    out["decay_k"] = copy_field(m.decay_k(), shape);
+    out["decay_eps"] = copy_field(m.decay_eps(), shape);
+    return out;
+}
+
+NewArray model_time_step(KEpsilon2& self, nb::handle faces) {
+    const face_arrays u = read_faces(self.model, faces);
+    if (!self.model.pseudo_time_step(u.spans())) {
+        refuse_value(nothing_moves_message);
+    }
+    return copy_field(self.model.time_step(), cell_shape(self.model.mesh()));
+}
+
+NewArray model_advected(KEpsilon2& self, nb::handle faces, const Matrix& q, const Matrix& inflow_u,
+                        const Matrix& inflow_v) {
+    Model2& m = self.model;
+    const face_arrays u = read_faces(m, faces);
+    require_shape(q, cell_shape(m.mesh()), "KEpsilon2", "q");
+    require_shape(inflow_u, face_shape(m.mesh(), 0), "KEpsilon2", "inflow_u");
+    require_shape(inflow_v, face_shape(m.mesh(), 1), "KEpsilon2", "inflow_v");
+    if (!m.pseudo_time_step(u.spans())) {
+        refuse_value(nothing_moves_message);
+    }
+    NewArray out = new_matrix(cell_shape(m.mesh()));
+    m.advected(span_of(q), {span_of(inflow_u), span_of(inflow_v)}, out_span(out));
+    return out;
+}
+
+nb::tuple model_explicit_fields(KEpsilon2& self, nb::handle state, nb::handle faces,
+                                nb::handle conditions) {
+    Model2& m = self.model;
+    const state_arrays s = read_state(m, state);
+    const face_arrays u = read_faces(m, faces);
+    const condition_arrays c = read_conditions(self, conditions);
+    if (!m.pseudo_time_step(u.spans())) {
+        refuse_value(nothing_moves_message);
+    }
+    m.terms(s.spans(), u.spans(), c.spans());
+    NewArray k_star = new_matrix(cell_shape(m.mesh()));
+    NewArray eps_star = new_matrix(cell_shape(m.mesh()));
+    m.explicit_fields(s.spans(), c.spans(), out_span(k_star), out_span(eps_star));
+    return nb::make_tuple(k_star, eps_star);
+}
+
+cfdcore::turbulence::quantity read_quantity(const std::string& name) {
+    if (name == "k") {
+        return cfdcore::turbulence::quantity::k;
+    }
+    if (name != "eps") {
+        refuse_value("the quantity is 'k' or 'eps'");
+    }
+    return cfdcore::turbulence::quantity::eps;
+}
+
+nb::tuple model_conductances(KEpsilon2& self, const std::string& quantity, const Matrix& nu_t) {
+    const Grid2& g = self.model.mesh();
+    require_shape(nu_t, cell_shape(g), "KEpsilon2", "nu_t");
+    NewArray g_u = new_matrix(face_shape(g, 0));
+    NewArray g_v = new_matrix(face_shape(g, 1));
+    self.model.conductances(read_quantity(quantity), span_of(nu_t),
+                            {out_span(g_u), out_span(g_v)});
+    return nb::make_tuple(g_u, g_v);
+}
+
+// A step on checked arrays: its fields by name, or the refusal its status names.
+nb::dict run_step(KEpsilon2& self, const cfdcore::turbulence::state& s,
+                  const std::array<std::span<const double>, 2>& velocity,
+                  const cfdcore::turbulence::conditions<2>& c) {
+    const Grid2& g = self.model.mesh();
+    NewArray k = new_matrix(cell_shape(g));
+    NewArray eps = new_matrix(cell_shape(g));
+    NewArray nu_t = new_matrix(cell_shape(g));
+    const auto result = self.model.step(s, velocity, c, out_span(k), out_span(eps),
+                                        out_span(nu_t));
+    if (result.status == step_status::nothing_moves) {
+        refuse_value(nothing_moves_message);
+    }
+    self.last = result;
+    if (result.status == step_status::k_not_positive) {
+        throw positivity_failure("k", result.bad, g.cells(0));
+    }
+    if (result.status == step_status::eps_not_positive) {
+        throw positivity_failure("eps", result.bad, g.cells(0));
+    }
+    nb::dict out;
+    out["k"] = k;
+    out["eps"] = eps;
+    out["nu_t"] = nu_t;
+    return out;
+}
+
+nb::dict model_step(KEpsilon2& self, nb::handle state, nb::handle faces, nb::handle conditions,
+                    nb::handle dt) {
+    const state_arrays s = read_state(self.model, state);
+    const face_arrays u = read_faces(self.model, faces);
+    const condition_arrays c = read_conditions(self, conditions);
+    if (!dt.is_none()) {
+        PyErr_SetString(PyExc_NotImplementedError,
+                        "the core's k-epsilon step is the local pseudo-time step: a true-time dt "
+                        "stays on the reference (ADR-017 F)");
+        throw nb::python_error();
+    }
+    return run_step(self, s.spans(), u.spans(), c.spans());
+}
+
+// A step with the conditions the boundary forms of the same state and faces.
+nb::dict model_advance(KEpsilon2& self, Boundary2& walls, nb::handle state, nb::handle faces) {
+    if (&walls.mesh() != &self.model.mesh()) {
+        refuse_value("KEpsilon2: the boundary is on another grid");
+    }
+    const state_arrays s = read_state(self.model, state);
+    const face_arrays u = read_faces(self.model, faces);
+    const auto c = walls.conditions(u.spans(), span_of_array(s.k), span_of_array(s.eps));
+    return run_step(self, s.spans(), u.spans(), c);
+}
+
+nb::object masks_matrix(std::span<const cfdcore::lanes::mask> masks,
+                        std::array<std::size_t, 2> shape) {
+    std::vector<std::uint8_t> bytes(masks.size());
+    for (std::size_t i = 0; i < masks.size(); ++i) {
+        bytes[i] = masks[i] == cfdcore::lanes::all ? 1 : 2;
+        if (masks[i] == cfdcore::lanes::none) {
+            bytes[i] = 0;
+        }
+    }
+    return nb::cast(shaped_copy<std::uint8_t>(bytes, {shape[0], shape[1]}));
+}
+
+// A (direction, row, column) triple's face in its direction's face field.
+std::size_t read_face(const Grid2& g, nb::handle item, int& d, const char* what) {
+    d = static_cast<int>(read_count(item[0], what));
+    direction(d);
+    const auto shape = face_shape(g, d);
+    const std::int64_t row = read_count(item[1], what);
+    const std::int64_t column = read_count(item[2], what);
+    if (row < 0 || column < 0 || static_cast<std::size_t>(row) >= shape[0] ||
+        static_cast<std::size_t>(column) >= shape[1]) {
+        refuse_value(std::string("TurbulenceBoundary2: ") + what + " is not on the grid");
+    }
+    return static_cast<std::size_t>(row) * shape[1] + static_cast<std::size_t>(column);
+}
+
+std::vector<cfdcore::walls::inlet_face> read_inlets(const Grid2& g, nb::handle items) {
+    std::vector<cfdcore::walls::inlet_face> out;
+    for (nb::handle item : items) {
+        if (nb::len(item) != 7) {
+            refuse_type(
+                "TurbulenceBoundary2: an inlet's face is (direction, row, column, intensity, "
+                "normal speed, dissipation length, width)");
+        }
+        cfdcore::walls::inlet_face face;
+        face.face = read_face(g, item, face.direction, "an inlet's face");
+        face.intensity = read_number(item[3], "an inlet's intensity");
+        face.normal_speed = read_number(item[4], "an inlet's normal speed");
+        face.dissipation_length = read_number(item[5], "an inlet's dissipation length");
+        face.width = read_number(item[6], "an inlet's width");
+        out.push_back(face);
+    }
+    return out;
+}
+
+cfdcore::walls::wall_law read_law(nb::handle law) {
+    if (nb::len(law) != 3) {
+        refuse_type("the law of the wall is (kappa, E, floor)");
+    }
+    return {read_number(law[0], "kappa"), read_number(law[1], "E"), read_number(law[2], "floor")};
+}
+
+void boundary_init(Boundary2* self, const Grid2& g, nb::handle wall_cells, nb::handle wall_corners,
+                   nb::handle tangential, nb::handle vents, nb::handle edge_inlets,
+                   nb::handle vent_inlets, nb::handle exhausts, nb::handle c_mu, nb::handle rho,
+                   nb::handle nu, nb::handle law) {
+    const std::string who = "TurbulenceBoundary2";
+    if (nb::len(wall_cells) != 4 || nb::len(wall_corners) != 4 || nb::len(tangential) != 4) {
+        refuse_type(who + ": the edges are the bottom, top, left and right ones");
+    }
+    const std::array<const char*, 4> edges{"bottom", "top", "left", "right"};
+    cfdcore::walls::boundary_input<2> input;
+    std::array<BoolVector, 4> cells;
+    std::array<BoolVector, 4> corners;
+    std::vector<BoolVector> flags;
+    std::vector<Vector> values;
+    flags.reserve(4);
+    values.reserve(4);
+    for (std::size_t e = 0; e < 4; ++e) {
+        // The bottom and top edges lie along x (component u), the others along y.
+        const int c = e < 2 ? 0 : 1;
+        const std::size_t n = g.cells(c);
+        const std::string name = who + ": " + edges[e];
+        if (!nb::try_cast<BoolVector>(wall_cells[e], cells[e], false) || cells[e].shape(0) != n) {
+            refuse_type(name + " wall cells are not a bool array of " + std::to_string(n) +
+                        " entries");
+        }
+        if (!nb::try_cast<BoolVector>(wall_corners[e], corners[e], false) ||
+            corners[e].shape(0) != n + 1) {
+            refuse_type(name + " wall corners are not a bool array of " + std::to_string(n + 1) +
+                        " entries");
+        }
+        const bool high = e % 2 == 1;
+        const std::span<const bool> edge_cells(cells[e].data(), n);
+        const std::span<const bool> edge_corners(corners[e].data(), n + 1);
+        (high ? input.wall_cells_high : input.wall_cells_low)[1 - c] = edge_cells;
+        (high ? input.wall_corners_high : input.wall_corners_low)[c][0] = edge_corners;
+        (high ? input.high : input.low)[c][0] = read_edge(tangential[e], n + 1, name, flags, values);
+    }
+    std::array<BoolMatrix, 4> masks;
+    if (!vents.is_none()) {
+        const std::array<std::size_t, 2> corner_shape{g.cells(1) + 1, g.cells(0) + 1};
+        const std::array<std::array<std::size_t, 2>, 4> shapes{face_shape(g, 0), face_shape(g, 1),
+                                                               corner_shape, corner_shape};
+        if (nb::len(vents) != 4) {
+            refuse_type(who + ": vents is (normal_u, normal_v, tangential_u, tangential_v)");
+        }
+        for (std::size_t i = 0; i < 4; ++i) {
+            if (!nb::try_cast<BoolMatrix>(vents[i], masks[i], false)) {
+                refuse_type(who + ": a vent mask is not a C-contiguous bool ndarray");
+            }
+            require_shape(masks[i], shapes[i], who, "a vent mask");
+        }
+        input.vents = {span_of(masks[0]), span_of(masks[1])};
+        input.vent_corners[0][0] = span_of(masks[2]);
+        input.vent_corners[1][0] = span_of(masks[3]);
+    }
+    const auto edge_faces = read_inlets(g, edge_inlets);
+    const auto vent_faces = read_inlets(g, vent_inlets);
+    std::vector<cfdcore::walls::exhaust_face> exhaust_faces;
+    for (nb::handle item : exhausts) {
+        if (nb::len(item) != 3) {
+            refuse_type(who + ": an exhaust's face is (direction, row, column)");
+        }
+        cfdcore::walls::exhaust_face face;
+        face.face = read_face(g, item, face.direction, "an exhaust's face");
+        exhaust_faces.push_back(face);
+    }
+    input.edge_inlets = edge_faces;
+    input.vent_inlets = vent_faces;
+    input.exhausts = exhaust_faces;
+    input.c_mu = read_number(c_mu, "c_mu");
+    input.rho = read_number(rho, "rho");
+    input.nu = read_number(nu, "nu");
+    input.law = read_law(law);
+    const std::string_view reason = Boundary2::check(g, input);
+    if (!reason.empty()) {
+        refuse_value(who + ": " + std::string(reason));
+    }
+    new (self) Boundary2(g, input);
+}
+
+nb::dict boundary_wall_viscosity(Boundary2& self, const Matrix& k, nb::handle elsewhere) {
+    const Grid2& g = self.mesh();
+    const std::array<std::size_t, 2> shape{g.cells(1) + 1, g.cells(0) + 1};
+    require_shape(k, cell_shape(g), "TurbulenceBoundary2", "k");
+    const std::array<const char*, 2> keys{"u", "v"};
+    std::array<Matrix, 2> kept;
+    nb::dict out;
+    std::array<NewArray, 2> fields;
+    for (std::size_t c = 0; c < 2; ++c) {
+        const nb::object value = nb::borrow(elsewhere[keys[c]]);
+        if (!nb::try_cast<Matrix>(value, kept[c], false)) {
+            refuse_type(std::string("TurbulenceBoundary2: elsewhere['") + keys[c] +
+                        "'] must be a C-contiguous float64 ndarray");
+        }
+        require_shape(kept[c], shape, "TurbulenceBoundary2", "elsewhere");
+        fields[c] = new_matrix(shape);
+        out[keys[c]] = fields[c];
+    }
+    self.wall_viscosity(span_of(k), {{{span_of(kept[0])}, {span_of(kept[1])}}},
+                        {{{out_span(fields[0])}, {out_span(fields[1])}}});
+    return out;
+}
+
+// Refuses faces of another shape; the reference makes no check of its own here.
+face_arrays boundary_faces(const Boundary2& self, nb::handle faces) {
+    face_arrays arrays{float_array(nb::getattr(faces, "u"), "faces.u"),
+                       float_array(nb::getattr(faces, "v"), "faces.v")};
+    if (!has_shape(arrays.u, face_shape(self.mesh(), 0)) ||
+        !has_shape(arrays.v, face_shape(self.mesh(), 1))) {
+        refuse_type("TurbulenceBoundary2: the faces are not the grid's");
+    }
+    return arrays;
+}
+
+nb::dict boundary_conditions(Boundary2& self, nb::handle state, nb::handle faces) {
+    const Grid2& g = self.mesh();
+    const Array k = float_array(nb::getattr(state, "k"), "state.k");
+    const Array eps = float_array(nb::getattr(state, "eps"), "state.eps");
+    if (!has_shape(k, cell_shape(g)) || !has_shape(eps, cell_shape(g))) {
+        refuse_type("TurbulenceBoundary2: k or eps is not the grid's");
+    }
+    const face_arrays u = boundary_faces(self, faces);
+    const auto c = self.conditions(u.spans(), span_of_array(k), span_of_array(eps));
+    const auto u_shape = face_shape(g, 0);
+    const auto v_shape = face_shape(g, 1);
+    const auto shape = cell_shape(g);
+    const auto flags = [&](std::span<const bool> values) {
+        return nb::cast(shaped_copy<bool>(values, {shape[0], shape[1]}));
+    };
+    nb::dict out;
+    out["inflow_k_u"] = copy_field(c.inflow_k[0], u_shape);
+    out["inflow_k_v"] = copy_field(c.inflow_k[1], v_shape);
+    out["inflow_eps_u"] = copy_field(c.inflow_eps[0], u_shape);
+    out["inflow_eps_v"] = copy_field(c.inflow_eps[1], v_shape);
+    out["tangential_bottom"] = to_numpy(c.low[0][0]);
+    out["tangential_top"] = to_numpy(c.high[0][0]);
+    out["tangential_left"] = to_numpy(c.low[1][0]);
+    out["tangential_right"] = to_numpy(c.high[1][0]);
+    out["eps_held"] = flags(c.eps_held);
+    out["eps_wall"] = copy_field(c.eps_wall, shape);
+    out["production_given"] = flags(c.production_given);
+    out["production"] = copy_field(c.production, shape);
+    return out;
+}
+
+nb::tuple boundary_initial_values(const Boundary2& self) {
+    const auto values = self.initial_values();
+    if (!values) {
+        refuse_value(
+            "no velocity inlet admits air, so nothing sets the supply's k and eps: the coupled "
+            "solve takes its initial state and condition (e)'s scale from the inlets");
+    }
+    return nb::make_tuple(values->k, values->eps);
+}
+
+// What a stencil's wall faces are, for the parity tests: the mask, and per face
+// its corner, its two cells and the distance, in the core's order.
+nb::dict boundary_stencil(const Boundary2& self, int component) {
+    const Grid2& g = self.mesh();
+    const auto& walls = self.stencil(direction(component), 0);
+    const auto indices = [](const std::vector<std::size_t>& values) {
+        std::vector<std::int64_t> copy(values.begin(), values.end());
+        return nb::cast(shaped_copy<std::int64_t>(copy, {copy.size()}));
+    };
+    nb::dict out;
+    out["mask"] = masks_matrix(walls.mask, {g.cells(1) + 1, g.cells(0) + 1});
+    out["corner"] = indices(walls.corner);
+    out["cell_low"] = indices(walls.cell_low);
+    out["cell_high"] = indices(walls.cell_high);
+    out["distance"] = to_numpy(walls.distance);
+    return out;
+}
+
+nb::list boundary_inlet_values(const Boundary2& self) {
+    nb::list out;
+    for (const auto& value : self.inlet_values()) {
+        out.append(nb::make_tuple(value.k, value.eps));
+    }
+    return out;
+}
+
+double log_law_floor(nb::handle kappa, nb::handle e) {
+    const double k = read_number(kappa, "kappa");
+    const double big_e = read_number(e, "e");
+    const auto result = cfdcore::walls::log_law_floor(k, big_e);
+    switch (result.status) {
+        case cfdcore::walls::floor_status::no_meeting:
+            refuse_value("u+ = y+ and u+ = ln(" + float_str(big_e) + " y+) / " + float_str(k) +
+                         " do not meet");
+        case cfdcore::walls::floor_status::not_settled:
+            refuse_value("Newton's method did not settle on the log-law floor");
+        case cfdcore::walls::floor_status::ok:
+            break;
+    }
+    return result.y;
+}
+
+OutVector wall_viscosity_values(const Vector& k_p, const Vector& y_p, nb::handle c_mu,
+                                nb::handle rho, nb::handle nu, nb::handle law) {
+    if (k_p.shape(0) != y_p.shape(0)) {
+        refuse_type("wall_viscosity: k_p and y_p differ in length");
+    }
+    require_aligned(k_p.data(), alignof(double), "wall_viscosity");
+    require_aligned(y_p.data(), alignof(double), "wall_viscosity");
+    std::vector<double> out(k_p.shape(0));
+    cfdcore::walls::wall_viscosity(as_span(k_p), as_span(y_p), read_number(c_mu, "c_mu"),
+                                   read_number(rho, "rho"), read_number(nu, "nu"), read_law(law),
+                                   out);
+    return to_numpy(out);
+}
+
+nb::tuple inflow_values(nb::handle intensity, nb::handle normal_speed, nb::handle length) {
+    const auto values = cfdcore::walls::inflow_values(
+        read_number(intensity, "intensity"), read_number(normal_speed, "normal_speed"),
+        read_number(length, "dissipation_length"));
+    return nb::make_tuple(values.k, values.eps);
+}
+
 }  // namespace
 
 NB_MODULE(_cfdcore, m) {
@@ -2963,6 +3737,139 @@ NB_MODULE(_cfdcore, m) {
              nb::arg("p_prime").noconvert(),
              "The correction by a given solution of the equation, bit for bit: u, v, p and the\n"
              "pinned p_prime by name.");
+
+    // A step that left k or eps at a value that is not positive and finite, whose
+    // PositivityError the Python side makes.
+    PyObject* positivity_type = PyErr_NewExceptionWithDoc(
+        "_cfdcore.PositivityFailure",
+        "k or eps is not positive and finite at a non-SOLID cell after a step (REQ-S15).\n\n"
+        "Attributes: quantity (\"k\" or \"eps\"), count, the first cell's row and column and its\n"
+        "value, and minimum, the least value over the non-SOLID cells (NaN where one is).",
+        PyExc_RuntimeError, nullptr);
+    if (positivity_type == nullptr) {
+        throw nb::python_error();
+    }
+    m.attr("PositivityFailure") = nb::steal(positivity_type);
+    nb::register_exception_translator(translate_positivity, positivity_type);
+
+    m.def("log_law_floor", &log_law_floor, nb::arg("kappa"), nb::arg("e"),
+          "turbulence.log_law_floor, bit for bit, with its refusals.");
+    m.def("wall_viscosity", &wall_viscosity_values, nb::arg("k_p").noconvert(),
+          nb::arg("y_p").noconvert(), nb::arg("c_mu"), nb::arg("rho"), nb::arg("nu"),
+          nb::arg("law"),
+          "turbulence.wall_viscosity on 1-D arrays, with (kappa, E, floor): a new array. Its\n"
+          "logarithm is the C library's, NumPy's own where NumPy calls it.");
+    m.def("inflow_values", &inflow_values, nb::arg("intensity"), nb::arg("normal_speed"),
+          nb::arg("dissipation_length"), "turbulence.inflow_values, bit for bit: (k, eps).");
+
+    nb::class_<Boundary2>(
+        m, "TurbulenceBoundary2",
+        "The coupled solve's boundary data for k, eps and the walls (TurbulenceBoundary).\n\n"
+        "TurbulenceBoundary2(grid, wall_cells, wall_corners, tangential, vents, edge_inlets,\n"
+        "vent_inlets, exhausts, c_mu, rho, nu, law): per edge (bottom, top, left, right) the\n"
+        "wall cells and corners (wall_faces()[edge].cells, .corners) and the tangential\n"
+        "condition as (is_dirichlet, value, wall_distance); the vents' four masks as\n"
+        "(normal_u, normal_v, tangential_u, tangential_v) or None; the domain faces that admit\n"
+        "air, then the discharge vents', each (direction, row, column, intensity, normal speed,\n"
+        "dissipation length, width); the exhausts' (direction, row, column); the variant's\n"
+        "C_mu, air's density and kinematic viscosity and the law of the wall's (kappa, E,\n"
+        "floor). An array of another shape or dtype, and a bool or another type where a number\n"
+        "is read, is a TypeError; a face off the grid or a constant that is not finite and\n"
+        "positive a ValueError.")
+        .def("__init__", &boundary_init, nb::arg("grid"), nb::arg("wall_cells"),
+             nb::arg("wall_corners"), nb::arg("tangential"), nb::arg("vents").none(),
+             nb::arg("edge_inlets"), nb::arg("vent_inlets"), nb::arg("exhausts"), nb::arg("c_mu"),
+             nb::arg("rho"), nb::arg("nu"), nb::arg("law"), nb::keep_alive<1, 2>())
+        .def("wall_viscosity", &boundary_wall_viscosity, nb::arg("k").noconvert(),
+             nb::arg("elsewhere"),
+             "TurbulenceBoundary.wall_viscosity: new arrays by \"u\" and \"v\".")
+        .def("conditions", &boundary_conditions, nb::arg("state"), nb::arg("faces"),
+             "TurbulenceBoundary.conditions: TurbulenceConditions' arrays by name, new ones.")
+        .def("initial_values", &boundary_initial_values,
+             "TurbulenceBoundary.initial_values, bit for bit, with its refusal.")
+        .def("stencil", &boundary_stencil, nb::arg("component"),
+             "The wall-function faces of component 0 (u) or 1 (v), for the parity tests.")
+        .def("inlet_values", &boundary_inlet_values,
+             "Each inlet face's (k, eps), in the order handed in.")
+        .def_prop_ro("wall_cells", [](const Boundary2& self) {
+            const auto shape = cell_shape(self.mesh());
+            return nb::cast(shaped_copy<bool>(self.wall_cells(), {shape[0], shape[1]}));
+        });
+
+    nb::class_<KEpsilon2>(
+        m, "KEpsilon2",
+        "k-epsilon on prescribed face velocities (KEpsilonModel's steady path).\n\n"
+        "KEpsilon2(grid, dx_cell, dy_cell, dx_face, dy_face, variant, cfl, upwind, max_iter,\n"
+        "tol, nu, vent_u=None, vent_v=None): the mesh's widths, the variant's (c_mu, c_1, c_2,\n"
+        "sigma_k, sigma_e, eta_0, beta) with None for the last two where it has no R, the\n"
+        "configuration's turbulence keys, air's kinematic viscosity and the vent faces\n"
+        "(VentFaces.normal_u, normal_v). A state, faces and conditions are any objects with the\n"
+        "attributes of TurbulenceState, FaceVelocities and TurbulenceConditions. The\n"
+        "reference's refusals are raised with its types and messages; an array that is not\n"
+        "C-contiguous float64, or a bool where a number is read, is a TypeError.")
+        .def("__init__", &model_init, nb::arg("grid"), nb::arg("dx_cell").noconvert(),
+             nb::arg("dy_cell").noconvert(), nb::arg("dx_face").noconvert(),
+             nb::arg("dy_face").noconvert(), nb::arg("variant"), nb::arg("cfl"),
+             nb::arg("upwind").noconvert(), nb::arg("max_iter"), nb::arg("tol"), nb::arg("nu"),
+             nb::arg("vent_u").noconvert() = nb::none(),
+             nb::arg("vent_v").noconvert() = nb::none(), nb::keep_alive<1, 2>())
+        .def("eddy_viscosity", &model_eddy_viscosity, nb::arg("k").noconvert(),
+             nb::arg("eps").noconvert(), "KEpsilonModel.eddy_viscosity, bit for bit.")
+        .def("state", &model_state, nb::arg("k"), nb::arg("eps"),
+             "KEpsilonModel.state, bit for bit: k, eps and nu_t by name.")
+        .def("corner_gradient", &model_corner_gradient, nb::arg("component"),
+             nb::arg("velocity").noconvert(), nb::arg("low").noconvert(),
+             nb::arg("high").noconvert(),
+             "du/dy (component 0) or dv/dx (1) at the corners [ny+1, nx+1], bit for bit.")
+        .def("strain_squared", &model_strain, nb::arg("faces"), nb::arg("conditions"),
+             "KEpsilonModel.strain_squared, bit for bit.")
+        .def("terms", &model_terms, nb::arg("state"), nb::arg("faces"), nb::arg("conditions"),
+             "KEpsilonModel.terms: StepTerms' arrays by name. RNG's cube is the C library's.")
+        .def("pseudo_time_step", &model_time_step, nb::arg("faces"),
+             "KEpsilonModel.pseudo_time_step, bit for bit.")
+        .def("advected", &model_advected, nb::arg("faces"), nb::arg("q").noconvert(),
+             nb::arg("inflow_u").noconvert(), nb::arg("inflow_v").noconvert(),
+             "Step 1 of a quantity at the pseudo-time step of the faces, bit for bit.")
+        .def("explicit_fields", &model_explicit_fields, nb::arg("state"), nb::arg("faces"),
+             nb::arg("conditions"), "Steps 1 and 2: (k*, eps*).")
+        .def("conductances", &model_conductances, nb::arg("quantity"),
+             nb::arg("nu_t").noconvert(),
+             "The face conductances of \"k\" or \"eps\" from nu_t, bit for bit: (g_u, g_v).")
+        .def("step", &model_step, nb::arg("state"), nb::arg("faces"), nb::arg("conditions"),
+             nb::arg("dt") = nb::none(),
+             "KEpsilonModel.step: k, eps and nu_t by name, new arrays. The refusals are the\n"
+             "reference's; a true-time dt is a NotImplementedError (ADR-017 F), and a quantity\n"
+             "that is not positive and finite after the step raises PositivityFailure.")
+        .def("advance", &model_advance, nb::arg("boundary"), nb::arg("state"), nb::arg("faces"),
+             "step with the conditions the boundary, on the same grid, forms of the state and\n"
+             "the faces.")
+        .def_prop_ro("last_iterations",
+                     [](const KEpsilon2& self) {
+                         return nb::make_tuple(self.last.solves[0].iterations,
+                                               self.last.solves[1].iterations);
+                     })
+        .def_prop_ro("last_fallbacks",
+                     [](const KEpsilon2& self) {
+                         return nb::make_tuple(self.last.solves[0].fallbacks,
+                                               self.last.solves[1].fallbacks);
+                     })
+        .def_prop_ro("solves_converged",
+                     [](const KEpsilon2& self) {
+                         return self.last.solves[0].converged && self.last.solves[1].converged;
+                     })
+        .def_prop_ro("volume",
+                     [](const KEpsilon2& self) {
+                         return nb::cast(
+                             copy_field(self.model.volume(), cell_shape(self.model.mesh())));
+                     })
+        .def("live_faces", [](const KEpsilon2& self, int d) {
+            return masks_matrix(self.model.live_faces(direction(d)),
+                                face_shape(self.model.mesh(), d));
+        }, nb::arg("direction"), "The faces that carry an advective flux, 0 or 1.")
+        .def("inner_faces", [](const KEpsilon2& self, int d) {
+            return masks_matrix(self.model.inner_faces(direction(d)),
+                                face_shape(self.model.mesh(), d));
+        }, nb::arg("direction"), "The faces diffusion crosses, 0 or 1.");
 
     m.attr("budget_terms") = [] {
         nb::list names;
