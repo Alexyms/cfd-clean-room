@@ -7,7 +7,7 @@
 | (a) every block of the first kind equals the reference bit for bit on every planted and captured input | 15 blocks on 50 captured corrections, no differing bit (T3); 297 of 297 planted cases pass, each of several blocks (T1) | holds |
 | (b) the pseudo-inverse within 1e-12 of NumPy's on every planted and captured coarsest system | captured: 0 of 50 beyond it; the parity module's planted systems: 3 of 168; worse conditioned planted ones: 14 of 32 (T6). Of the 17 beyond it 15 are singular, and NumPy's matrix is the one further from the exact inverse on 16 (T6b) | fails as stated |
 | (c) every captured correction at the reference's count, u, v and p within 1e-12 | 50 of 50 at the reference's count; 50 of 50 inside, the largest difference 2.5e-14 (T3c) | holds |
-| (d) a correction on the 320x120 state at least five times faster | 4.32 times in session 1 (session 2: 4.64; session 3: 4.81) (T5) | fails |
+| (d) a correction on the 320x120 state at least five times faster | 4.32 times in session 1 (session 2: 4.64; session 3: 4.81); round 1's sessions, beside them: 4.64, 4.62, 4.93 (T5) | fails |
 
 ### T1. The parity cases by function
 
@@ -18,6 +18,7 @@
 | `test_the_multigrids_blocks_are_bit_for_bit` | 60 | 60 | 0 | 0 |
 | `test_every_block_is_bit_for_bit_at_every_row_length` | 175 | 175 | 0 | 0 |
 | `test_the_pseudo_inverse_and_a_cycle_are_within_rounding` | 10 | 10 | 0 | 0 |
+| `test_a_cycle_of_any_sweeps_is_the_references_bit_for_bit` | 30 | 30 | 0 | 0 |
 | `test_the_pseudo_inverse_of_singular_systems` | 14 | 14 | 0 | 0 |
 | `test_the_pseudo_inverses_cutoff_is_numpys` | 1 | 1 | 0 | 0 |
 | `test_a_value_that_is_not_finite_makes_a_pseudo_inverse_of_nans` | 1 | 1 | 0 | 0 |
@@ -36,20 +37,22 @@
 | `test_the_components_are_refused_as_the_reference_refuses_them` | 3 | 3 | 0 | 0 |
 | `test_components_on_random_grids_are_the_references` | 1 | 1 | 0 | 0 |
 | `test_shapes_are_refused_as_the_reference_refuses_them` | 1 | 1 | 0 | 0 |
+| `test_two_wrong_shapes_are_refused_in_the_references_order` | 1 | 1 | 0 | 0 |
 | `test_arrays_the_core_does_not_read_are_refused` | 1 | 1 | 0 | 0 |
 | `test_fields_of_another_shape_are_refused` | 1 | 1 | 0 | 0 |
 | `test_the_multigrids_refusals_are_the_references` | 1 | 1 | 0 | 0 |
 | `test_a_division_by_zero_is_the_references_error` | 1 | 1 | 0 | 0 |
+| `test_a_zero_product_with_the_preconditioned_residual_is_the_references_error` | 1 | 1 | 0 | 0 |
 | `test_the_constructors_refusals` | 1 | 1 | 0 | 0 |
-| `test_the_multigrids_keys_are_checked` | 15 | 15 | 0 | 0 |
+| `test_the_multigrids_keys_are_checked` | 33 | 33 | 0 | 0 |
 | `test_the_mappings_keys_are_the_references` | 1 | 1 | 0 | 0 |
-| `tests/test_core_pressure.py` | 451 | 451 | 0 | 0 |
+| `tests/test_core_pressure.py` | 501 | 501 | 0 | 0 |
 
 ### T1b. CTest, the parity modules and the suites
 
 | Tests | Cases | Passed | Failed | Skipped |
 |---|---|---|---|---|
-| CTest, suite `PseudoInverse` | 8 | 8 | 0 | 0 |
+| CTest, suite `PseudoInverse` | 10 | 10 | 0 | 0 |
 | CTest, suite `MultigridOperator` | 1 | 1 | 0 | 0 |
 | CTest, suite `MultigridGroups` | 1 | 1 | 0 | 0 |
 | CTest, suite `MultigridGalerkin` | 1 | 1 | 0 | 0 |
@@ -58,17 +61,17 @@
 | CTest, suite `PressureEquation` | 4 | 4 | 0 | 0 |
 | CTest, suite `PressureClosed` | 2 | 2 | 0 | 0 |
 | CTest, suite `PressureCorrection` | 1 | 1 | 0 | 0 |
-| CTest, suite `PressureConjugateGradient` | 7 | 7 | 0 | 0 |
+| CTest, suite `PressureConjugateGradient` | 8 | 8 | 0 | 0 |
 | CTest, suite `PressureMean` | 1 | 1 | 0 | 0 |
 | CTest, suite `PressureComponents` | 2 | 2 | 0 | 0 |
 | CTest, suite `PressureCorrector` | 1 | 1 | 0 | 0 |
 | CTest, suite `PressureOneDirection` | 1 | 1 | 0 | 0 |
 | CTest, suite `MomentumThreeDirections` | 3 | 3 | 0 | 0 |
 | CTest, suite `PressureThreeDirections` | 4 | 4 | 0 | 0 |
-| CTest, all suites | 185 | 185 | 0 | 0 |
-| the four parity modules, WSL2, `CFD_CORE_REQUIRED=1` | 5,145 | 5,128 | 0 | 17 |
-| the whole suite, WSL2, the core built | 8,246 | 8,229 | 0 | 17 |
-| the whole suite, Windows, the core not built | 3,105 | 3,101 | 0 | 4 |
+| CTest, all suites | 188 | 188 | 0 | 0 |
+| the four parity modules, WSL2, `CFD_CORE_REQUIRED=1` | 5,195 | 5,178 | 0 | 17 |
+| the whole suite, WSL2, the core built | 8,305 | 8,288 | 0 | 17 |
+| the whole suite, Windows, the core not built | 3,114 | 3,110 | 0 | 4 |
 
 ### T2. The captured corrections
 
@@ -182,15 +185,15 @@
 |---|---|---|
 | `control` | nothing | nothing, as it must |
 | `outlet_dropped` | the prompt's: an outlet's coefficient dropped (the high edge across the rows) | CTest (1); parity (253 cases of 4 tests) |
-| `galerkin_twice_inside` | the prompt's: a Galerkin diagonal without the twice-the-inner-couplings term | CTest (3); parity (274 cases of 7 tests); replay (product80, cavity40, vents80, annex216, backstep) |
+| `galerkin_twice_inside` | the prompt's: a Galerkin diagonal without the twice-the-inner-couplings term | CTest (3); parity (304 cases of 8 tests); replay (product80, cavity40, vents80, annex216, backstep) |
 | `odd_side_widened` | the prompt's: an odd side's last group widened (its only cell counted twice) | CTest (3); parity (99 cases of 4 tests); replay (annex216, backstep) |
-| `smoothing_weight` | the prompt's: the smoothing weight changed | CTest (1); parity (162 cases of 6 tests); replay (product80, cavity40, vents80, annex216, backstep) |
-| `pre_post_unequal` | the prompt's: the pre- and post-smoothing counts unequal | CTest (3); parity (33 cases of 4 tests); replay (annex216, backstep) |
-| `cutoff_smallest` | the prompt's: the cutoff taken against the smallest magnitude | CTest (1); parity (32 cases of 5 tests); replay (cavity40, annex216) |
+| `smoothing_weight` | the prompt's: the smoothing weight changed | CTest (1); parity (192 cases of 7 tests); replay (product80, cavity40, vents80, annex216, backstep) |
+| `pre_post_unequal` | the prompt's: the pre- and post-smoothing counts unequal | CTest (3); parity (63 cases of 5 tests); replay (annex216, backstep) |
+| `cutoff_smallest` | the prompt's: the cutoff taken against the smallest magnitude | CTest (3); parity (39 cases of 6 tests); replay (cavity40, annex216) |
 | `projection_every_cell` | the prompt's: the projection's mean over every cell | CTest (3); parity (280 cases of 7 tests); replay (product80, vents80, backstep) |
 | `pin_another_cell` | the prompt's: the pin at another cell | CTest (1); parity (261 cases of 7 tests); replay (product80, cavity40, vents80, annex216) |
-| `restart_skipped` | the prompt's: the restart skipped (a failed confirmation goes on with its old direction) | parity (10 cases of 1 tests) |
-| `old_alpha` | the prompt's: r -= alpha q written from the old alpha | CTest (5); parity (74 cases of 5 tests); replay (product80, cavity40, vents80, annex216, backstep) |
+| `restart_skipped` | the prompt's: the restart skipped (a failed confirmation goes on with its old direction) | parity (12 cases of 2 tests) |
+| `old_alpha` | the prompt's: r -= alpha q written from the old alpha | CTest (5); parity (76 cases of 6 tests); replay (product80, cavity40, vents80, annex216, backstep) |
 | `face_d_negative` | a negative diagonal gives a face a d | CTest (1); parity (193 cases of 2 tests) |
 | `outlet_low_row` | an outlet's coefficient dropped (the low edge across the rows) | CTest (1); parity (249 cases of 4 tests) |
 | `outlet_low_cell` | an outlet's coefficient dropped (the low edge along the rows) | CTest (2); parity (245 cases of 4 tests) |
@@ -212,12 +215,12 @@
 | `source_sign` | the right-hand side's sign | CTest (5); parity (280 cases of 5 tests); replay (product80, cavity40, vents80, annex216, backstep) |
 | `source_inactive` | the right-hand side of a cell with no equation kept | CTest (1); parity (241 cases of 7 tests); replay (product80) |
 | `source_unprojected` | the right-hand side's projection left out | CTest (1); parity (258 cases of 5 tests); replay (product80, cavity40, vents80, annex216) |
-| `shift_inactive` | a shift moves the cells with no equation too | CTest (2); parity (229 cases of 7 tests); replay (product80, vents80) |
+| `shift_inactive` | a shift moves the cells with no equation too | CTest (2); parity (230 cases of 8 tests); replay (product80, vents80) |
 | `mean_plain_order` | the mean over some cells summed from left to right | CTest (1); parity (240 cases of 3 tests); replay (product80, vents80, backstep) |
-| `list_order` | the cells with an equation listed but the last | CTest (4); parity (276 cases of 8 tests); replay (product80, cavity40, vents80, annex216) |
+| `list_order` | the cells with an equation listed but the last | CTest (4); parity (277 cases of 9 tests); replay (product80, cavity40, vents80, annex216) |
 | `pin_open` | a room with outlets pinned | CTest (5); parity (260 cases of 6 tests); replay (backstep) |
 | `pin_type` | the pin at the first cell that is not SOLID | CTest (1); parity (240 cases of 7 tests); replay (product80, cavity40, vents80, annex216) |
-| `area_swapped` | a face's area read along its own direction | CTest (2); parity (238 cases of 5 tests); replay (product80, vents80, annex216, backstep) |
+| `area_swapped` | a face's area read along its own direction | CTest (3); parity (238 cases of 5 tests); replay (product80, vents80, annex216, backstep) |
 | `correction_sign` | the velocity correction's sign | CTest (4); parity (280 cases of 5 tests); replay (product80, cavity40, vents80, annex216, backstep) |
 | `correction_split` | the velocity correction as two products | parity (235 cases of 2 tests); replay (cavity40, annex216, backstep) |
 | `correction_left_face` | the left edge's faces not corrected | parity (258 cases of 5 tests) |
@@ -227,79 +230,79 @@
 | `pressure_inactive` | p of a cell with no equation updated | CTest (1); parity (224 cases of 7 tests) |
 | `p_prime_unpinned` | p' not pinned | CTest (1); parity (258 cases of 5 tests); replay (product80, cavity40, vents80, annex216) |
 | `p_unpinned` | p not pinned after its update | CTest (1); parity (260 cases of 6 tests) |
-| `pinned_stale` | p pinned by the reference cell's value before its update | nothing: p' is pinned before p is updated, so the reference cell's update adds alpha times zero |
+| `pinned_stale` | p pinned by the reference cell's value before its update | nothing: for a finite p': it is pinned before p is updated, so the reference cell's update adds alpha times zero (not finite at the reference cell, the two differ: test 93 S2) |
 | `pinned_inactive` | a reference cell with no equation read as updated | parity (10 cases of 1 tests) |
-| `stop_floor_ignored` | the stop's floor ignored | CTest (1); parity (25 cases of 2 tests); replay (product80, vents80) |
-| `stop_floor_smaller` | the stop the smaller of the two levels | CTest (5); parity (73 cases of 4 tests); replay (product80, vents80, annex216, backstep) |
-| `stop_unconfirmed` | the stop taken on the recursion's residual | CTest (1); parity (11 cases of 2 tests) |
-| `stop_strict` | the recursion's stop strict | parity (3 cases of 2 tests) |
+| `stop_floor_ignored` | the stop's floor ignored | CTest (1); parity (27 cases of 3 tests); replay (product80, vents80) |
+| `stop_floor_smaller` | the stop the smaller of the two levels | CTest (5); parity (75 cases of 5 tests); replay (product80, vents80, annex216, backstep) |
+| `stop_unconfirmed` | the stop taken on the recursion's residual | CTest (1); parity (13 cases of 3 tests) |
+| `stop_strict` | the recursion's stop strict | parity (5 cases of 3 tests) |
 | `confirmed_residual_not_kept` | a restart from the recursion's residual | parity (12 cases of 2 tests) |
-| `checks_not_counted` | a confirmation's product not counted | CTest (3); parity (73 cases of 4 tests) |
+| `checks_not_counted` | a confirmation's product not counted | CTest (3); parity (75 cases of 5 tests) |
 | `cap_product_not_counted` | the cap's product not counted | CTest (1); parity (29 cases of 2 tests) |
 | `cap_not_reported` | the cap not reported | CTest (1); parity (31 cases of 4 tests) |
 | `cap_residual_recursive` | the cap's residual norm the recursion's | parity (28 cases of 1 tests) |
 | `cap_one_more` | an iteration beyond the cap | CTest (1); parity (30 cases of 3 tests) |
-| `beta_inverted` | beta the other way up | CTest (4); parity (74 cases of 5 tests); replay (product80, cavity40, vents80, annex216, backstep) |
-| `rz_stale` | r . z not kept for the next iteration | CTest (5); parity (74 cases of 5 tests); replay (product80, cavity40, vents80, annex216, backstep) |
+| `beta_inverted` | beta the other way up | CTest (4); parity (76 cases of 6 tests); replay (product80, cavity40, vents80, annex216, backstep) |
+| `rz_stale` | r . z not kept for the next iteration | CTest (5); parity (76 cases of 6 tests); replay (product80, cavity40, vents80, annex216, backstep) |
 | `dots_one_block` | the dot product of the whole field in one block | parity (2 cases of 1 tests) |
-| `pq_one_block` | p . q of the whole field in one block | parity (28 cases of 1 tests) |
-| `rz_last_row` | r . z without its last row | CTest (7); parity (74 cases of 5 tests); replay (cavity40, annex216, backstep) |
+| `pq_one_block` | p . q of the whole field in one block | parity (30 cases of 2 tests) |
+| `rz_last_row` | r . z without its last row | CTest (7); parity (76 cases of 6 tests); replay (cavity40, annex216, backstep) |
 | `zero_rhs` | a zero right-hand side not returned at once | CTest (1); parity (5 cases of 4 tests) |
-| `x_not_zeroed` | the solve started from what its output holds | CTest (4); parity (76 cases of 6 tests); replay (product80, cavity40, vents80, annex216, backstep) |
+| `x_not_zeroed` | the solve started from what its output holds | CTest (4); parity (79 cases of 8 tests); replay (product80, cavity40, vents80, annex216, backstep) |
 | `division_pq` | a zero p . q divided by | CTest (1); parity (1 cases of 1 tests) |
 | `jacobi_negative` | the diagonal preconditioner of a cell with no equation kept | parity (201 cases of 2 tests) |
-| `projection_dropped` | the preconditioned vector not projected | CTest (1); parity (17 cases of 2 tests) |
+| `projection_dropped` | the preconditioned vector not projected | CTest (1); parity (18 cases of 3 tests) |
 | `projection_open` | an open room's preconditioned vector projected too | CTest (3); parity (11 cases of 2 tests); replay (backstep) |
 | `precondition_before_prepare` | the core's check removed: a preconditioner before a system | CTest (1) |
-| `operator_order` | the operator's low term subtracted before its high one | parity (220 cases of 3 tests); replay (product80, cavity40, vents80, annex216, backstep) |
-| `operator_order_row` | the operator's west term subtracted before its east one | CTest (1); parity (247 cases of 3 tests); replay (product80, cavity40, vents80, annex216, backstep) |
-| `operator_summed` | the couplings' terms summed before they are subtracted | CTest (1); parity (248 cases of 3 tests); replay (product80, cavity40, vents80, annex216, backstep) |
+| `operator_order` | the operator's low term subtracted before its high one | parity (252 cases of 5 tests); replay (product80, cavity40, vents80, annex216, backstep) |
+| `operator_order_row` | the operator's west term subtracted before its east one | CTest (1); parity (279 cases of 5 tests); replay (product80, cavity40, vents80, annex216, backstep) |
+| `operator_summed` | the couplings' terms summed before they are subtracted | CTest (1); parity (280 cases of 5 tests); replay (product80, cavity40, vents80, annex216, backstep) |
 | `operator_first_cell` | a row's first cell reads the cell before it | parity (58 cases of 2 tests) |
 | `operator_last_cell` | a row's last cell reads its own value as its neighbour's | parity (59 cases of 2 tests) |
 | `operator_first_row` | the first row reads its own values as its neighbour's | parity (118 cases of 2 tests) |
 | `operator_last_row` | the last row reads its own values as its neighbour's | parity (78 cases of 2 tests) |
-| `smooth_order` | a sweep as x + s r - s A x | parity (235 cases of 2 tests); replay (product80, cavity40, vents80, annex216, backstep) |
-| `result_unmasked` | the cycle's result kept where there is no equation | CTest (2); parity (27 cases of 4 tests) |
+| `smooth_order` | a sweep as x + s r - s A x | parity (265 cases of 3 tests); replay (product80, cavity40, vents80, annex216, backstep) |
+| `result_unmasked` | the cycle's result kept where there is no equation | CTest (2); parity (51 cases of 5 tests) |
 | `result_unmasked_one_level` | the one-level cycle's result kept where there is no equation | CTest (1); parity (2 cases of 1 tests) |
-| `restrict_order` | the group sums' second row added after the pair along the row | parity (168 cases of 2 tests); replay (product80, cavity40, vents80, annex216, backstep) |
+| `restrict_order` | the group sums' second row added after the pair along the row | parity (198 cases of 3 tests); replay (product80, cavity40, vents80, annex216, backstep) |
 | `restrict_odd_dropped` | an odd row's last cell left out of the group sums | CTest (6); parity (90 cases of 3 tests); replay (annex216) |
 | `restrict_odd_padded` | an odd row's last cell padded with a zero (a negative zero becomes a zero) | parity (85 cases of 1 tests) |
 | `prolong_odd_dropped` | an odd row's last cell not corrected | CTest (6); parity (90 cases of 3 tests); replay (annex216) |
-| `prolong_second` | a group's second cell not corrected | CTest (8); parity (262 cases of 7 tests); replay (product80, cavity40, vents80, annex216, backstep) |
-| `prolong_row_absent` | a group's second row not corrected | CTest (5); parity (248 cases of 7 tests); replay (product80, cavity40, vents80, annex216, backstep) |
-| `group_present` | a row beyond an odd side taken as present in the Galerkin sums | CTest (3); parity (195 cases of 6 tests); replay (product80, vents80, annex216, backstep) |
-| `galerkin_inside_along` | the inner couplings along the rows read from the groups' high cells | CTest (4); parity (267 cases of 7 tests); replay (product80, cavity40, vents80, annex216, backstep) |
-| `galerkin_inside_across` | the inner couplings across the rows left out | CTest (2); parity (253 cases of 7 tests); replay (product80, cavity40, vents80, annex216, backstep) |
-| `galerkin_order` | a coarse diagonal's sum down the columns first | parity (206 cases of 2 tests); replay (product80, cavity40, vents80, annex216, backstep) |
-| `galerkin_east` | the coarse east couplings from the groups' low cells | CTest (5); parity (264 cases of 8 tests); replay (product80, cavity40, vents80, annex216, backstep) |
-| `galerkin_west` | the coarse west couplings from the groups' high cells | CTest (8); parity (268 cases of 8 tests); replay (product80, cavity40, vents80, annex216, backstep) |
-| `galerkin_north` | the coarse north couplings from the groups' low rows | CTest (5); parity (250 cases of 8 tests); replay (product80, cavity40, vents80, annex216, backstep) |
-| `galerkin_south` | the coarse south couplings from the groups' high rows | CTest (6); parity (254 cases of 8 tests); replay (product80, cavity40, vents80, annex216, backstep) |
-| `smoother_one_rounding` | the smoother as the weight over the diagonal, one rounding | parity (129 cases of 2 tests); replay (product80, cavity40, vents80, annex216, backstep) |
-| `smoother_inactive` | the smoother of a cell with no diagonal kept | CTest (6); parity (163 cases of 8 tests); replay (product80, vents80, backstep) |
-| `descend_short` | the group sums read a layer the first sweep has not formed | CTest (5); parity (49 cases of 7 tests); replay (product80, cavity40, vents80, annex216, backstep) |
-| `ascend_short` | the last sweep reads a layer the correction has not reached | CTest (4); parity (34 cases of 5 tests); replay (product80, cavity40, vents80, annex216, backstep) |
-| `coarsest_larger` | the coarsening stopped a level early | CTest (2); parity (168 cases of 7 tests); replay (raises) |
-| `coarsest_exclusive` | the coarsening goes on at exactly the cells asked | CTest (3); parity (6 cases of 3 tests) |
+| `prolong_second` | a group's second cell not corrected | CTest (8); parity (292 cases of 8 tests); replay (product80, cavity40, vents80, annex216, backstep) |
+| `prolong_row_absent` | a group's second row not corrected | CTest (5); parity (278 cases of 8 tests); replay (product80, cavity40, vents80, annex216, backstep) |
+| `group_present` | a row beyond an odd side taken as present in the Galerkin sums | CTest (3); parity (222 cases of 7 tests); replay (product80, vents80, annex216, backstep) |
+| `galerkin_inside_along` | the inner couplings along the rows read from the groups' high cells | CTest (4); parity (297 cases of 8 tests); replay (product80, cavity40, vents80, annex216, backstep) |
+| `galerkin_inside_across` | the inner couplings across the rows left out | CTest (2); parity (283 cases of 8 tests); replay (product80, cavity40, vents80, annex216, backstep) |
+| `galerkin_order` | a coarse diagonal's sum down the columns first | parity (236 cases of 3 tests); replay (product80, cavity40, vents80, annex216, backstep) |
+| `galerkin_east` | the coarse east couplings from the groups' low cells | CTest (5); parity (294 cases of 9 tests); replay (product80, cavity40, vents80, annex216, backstep) |
+| `galerkin_west` | the coarse west couplings from the groups' high cells | CTest (8); parity (298 cases of 9 tests); replay (product80, cavity40, vents80, annex216, backstep) |
+| `galerkin_north` | the coarse north couplings from the groups' low rows | CTest (5); parity (280 cases of 9 tests); replay (product80, cavity40, vents80, annex216, backstep) |
+| `galerkin_south` | the coarse south couplings from the groups' high rows | CTest (6); parity (284 cases of 9 tests); replay (product80, cavity40, vents80, annex216, backstep) |
+| `smoother_one_rounding` | the smoother as the weight over the diagonal, one rounding | parity (159 cases of 3 tests); replay (product80, cavity40, vents80, annex216, backstep) |
+| `smoother_inactive` | the smoother of a cell with no diagonal kept | CTest (6); parity (188 cases of 10 tests); replay (product80, vents80, backstep) |
+| `descend_short` | the group sums read a layer the first sweep has not formed | CTest (5); parity (60 cases of 9 tests); replay (product80, cavity40, vents80, annex216, backstep) |
+| `ascend_short` | the last sweep reads a layer the correction has not reached | CTest (4); parity (64 cases of 6 tests); replay (product80, cavity40, vents80, annex216, backstep) |
+| `coarsest_larger` | the coarsening stopped a level early | CTest (2); parity (198 cases of 8 tests); replay (raises) |
+| `coarsest_exclusive` | the coarsening goes on at exactly the cells asked | CTest (4); parity (6 cases of 3 tests) |
 | `coarsest_side` | the coarsening stopped at a side of two | CTest (1); parity (2 cases of 1 tests) |
 | `matrix_transposed` | the coarsest matrix's couplings swapped | parity (235 cases of 2 tests); replay (product80, cavity40, vents80, annex216, backstep) |
-| `matrix_sign` | the coarsest matrix's low couplings added | CTest (2); parity (282 cases of 7 tests); replay (product80, cavity40, vents80, annex216, backstep) |
-| `coarsest_solve_row` | the coarsest solve leaves its last value out | CTest (7); parity (33 cases of 4 tests); replay (product80, cavity40, annex216) |
+| `matrix_sign` | the coarsest matrix's low couplings added | CTest (2); parity (312 cases of 8 tests); replay (product80, cavity40, vents80, annex216, backstep) |
+| `coarsest_solve_row` | the coarsest solve leaves its last value out | CTest (7); parity (63 cases of 5 tests); replay (product80, cavity40, annex216) |
 | `dominance_dropped` | the dominance not asked for | CTest (2); parity (1 cases of 1 tests) |
-| `dominance_tolerance` | the dominance asked for without its tolerance | CTest (5); parity (245 cases of 14 tests); replay (raises) |
+| `dominance_tolerance` | the dominance asked for without its tolerance | CTest (5); parity (276 cases of 16 tests); replay (raises) |
 | `dominance_last_cells` | the dominance asked of a row's whole blocks alone | CTest (1); parity (1 cases of 1 tests) |
 | `dominance_one_level` | the dominance not asked of a system of one level | CTest (1) |
 | `refused_still_cycled` | a refused system's hierarchy cycled all the same | CTest (1) |
 | `upper_triangle` | the upper triangle read | CTest (1) |
-| `rank_one_short` | the last pivot dropped | CTest (6); parity (22 cases of 5 tests); replay (backstep) |
-| `pivots_in_order` | the Cholesky factor without pivoting | CTest (2); parity (36 cases of 5 tests); replay (product80) |
-| `rotation_once` | one sweep of rotations | CTest (3); parity (48 cases of 6 tests); replay (annex216, backstep) |
-| `orthogonal_loose` | rows taken as orthogonal at 1e-9 | CTest (2); parity (45 cases of 5 tests) |
+| `rank_one_short` | the last pivot dropped | CTest (8); parity (31 cases of 6 tests); replay (backstep) |
+| `pivots_in_order` | the Cholesky factor without pivoting | CTest (3); parity (57 cases of 6 tests); replay (product80) |
+| `rotation_once` | one sweep of rotations | CTest (3); parity (78 cases of 7 tests); replay (annex216, backstep) |
+| `orthogonal_loose` | rows taken as orthogonal at 1e-9 | CTest (2); parity (75 cases of 6 tests) |
 | `cutoff_inclusive` | a value at the cutoff kept | CTest (1) |
-| `cutoff_absolute` | the cutoff absolute | CTest (1); parity (10 cases of 5 tests); replay (annex216) |
-| `cutoff_none` | no cutoff | CTest (1); parity (32 cases of 5 tests); replay (cavity40, annex216) |
-| `eigenvalue_once` | an eigenvalue divided by once | CTest (7); parity (48 cases of 6 tests); replay (product80, cavity40, annex216, backstep) |
-| `mirror_dropped` | the inverse's upper triangle left zero | CTest (11); parity (48 cases of 6 tests); replay (product80, cavity40, vents80, annex216, backstep) |
+| `cutoff_absolute` | the cutoff absolute | CTest (2); parity (11 cases of 6 tests); replay (annex216) |
+| `cutoff_none` | no cutoff | CTest (3); parity (39 cases of 6 tests); replay (cavity40, annex216) |
+| `eigenvalue_once` | an eigenvalue divided by once | CTest (9); parity (78 cases of 7 tests); replay (product80, cavity40, annex216, backstep) |
+| `mirror_dropped` | the inverse's upper triangle left zero | CTest (11); parity (78 cases of 7 tests); replay (product80, cavity40, vents80, annex216, backstep) |
 | `not_finite` | a matrix that is not finite factored | CTest (1); parity (1 cases of 1 tests) |
 | `check_widths_length` | the core's check removed: widths of another length | CTest (1) |
 | `check_width_value` | the core's check removed: a width that is not positive | CTest (1); parity (1 cases of 1 tests) |
@@ -358,34 +361,42 @@
 | `check_coarsen_zeros` | the core's check removed: the Galerkin sums' row of zeros' length | CTest (1) |
 | `check_square` | the core's check removed: a matrix of another size | CTest (1) |
 | `binding_outlets_swapped` | the binding: the left and right outlets swapped | parity (255 cases of 5 tests); replay (backstep) |
-| `binding_outlets_axes` | the binding: the bottom and top outlets read as the left and right | parity (394 cases of 19 tests); replay (raises) |
+| `binding_outlets_axes` | the binding: the bottom and top outlets read as the left and right | parity (429 cases of 22 tests); replay (raises) |
 | `binding_closed_components` | the binding: a closed domain of several components accepted | parity (2 cases of 2 tests) |
 | `binding_stranded` | the binding: an open domain's stranded component accepted | parity (2 cases of 2 tests) |
 | `binding_bool_number` | the binding: a bool rtol, floor or cap accepted | parity (1 cases of 1 tests) |
 | `binding_bool_cap` | the binding: a bool cap accepted | parity (1 cases of 1 tests) |
 | `binding_cap_overflow` | the binding: a cap beyond 64 bits refused | parity (1 cases of 1 tests) |
 | `binding_floor_overflow` | the binding: a floor too large for a float named infinite | parity (1 cases of 1 tests) |
-| `binding_velocity_shapes` | the binding: the velocities' shapes not checked | parity (1 cases of 1 tests) |
-| `binding_diagonal_shapes` | the binding: the diagonals' shapes not checked | parity (1 cases of 1 tests) |
+| `binding_velocity_shapes` | the binding: the velocities' shapes not checked | parity (2 cases of 2 tests) |
+| `binding_diagonal_shapes` | the binding: the diagonals' shapes not checked | parity (2 cases of 2 tests) |
 | `binding_diagonals_unaligned` | the binding: an unaligned diagonal accepted | parity (1 cases of 1 tests) |
 | `binding_velocity_unaligned` | the binding: an unaligned velocity accepted | parity (1 cases of 1 tests) |
 | `binding_field_shape` | the binding: a field's shape not checked | parity (1 cases of 1 tests) |
 | `binding_field_unaligned` | the binding: an unaligned field accepted | parity (1 cases of 1 tests) |
-| `binding_five_shapes` | the binding: five arrays of different shapes accepted | parity (exit -11) |
+| `binding_five_shapes` | the binding: five arrays of different shapes accepted | parity (exit -6) |
 | `binding_five_unaligned` | the binding: an unaligned coefficient array accepted | parity (1 cases of 1 tests) |
 | `binding_square` | the binding: a matrix that is not square accepted | parity (1 cases of 1 tests) |
 | `binding_prolong_apart` | the binding: a correction inside the corrected field accepted | parity (1 cases of 1 tests) |
 | `binding_preconditioner_name` | the binding: another preconditioner's name taken as multigrid | parity (1 cases of 1 tests) |
-| `binding_levels_count` | the binding: keys of another number accepted | parity (15 cases of 1 tests) |
-| `binding_weight_bool` | the binding: a bool weight accepted | parity (1 cases of 1 tests) |
+| `binding_levels_count` | the binding: keys of another number accepted | parity (33 cases of 1 tests) |
+| `binding_weight_bool` | the binding: a bool weight accepted | parity (3 cases of 1 tests) |
 | `binding_not_dominant_silent` | the binding: a solve's refused system ended in silence | parity (1 cases of 1 tests) |
-| `binding_division_silent` | the binding: a division by zero ended in silence | parity (1 cases of 1 tests) |
-| `binding_project_ignored` | the binding: a solve's projection not asked for | parity (7 cases of 1 tests) |
+| `binding_division_silent` | the binding: a division by zero ended in silence | parity (2 cases of 2 tests) |
+| `binding_project_ignored` | the binding: a solve's projection not asked for | parity (8 cases of 2 tests) |
 | `three_momentum_area` | section 0: a streamwise area in three directions from the first transverse width alone | CTest (1) |
 | `three_group_rows` | three directions: a group's rows along the third direction left out | CTest (3) |
 | `three_area` | three directions: a face's area from one width alone | CTest (1) |
+| `two_sweeps_descend` | two sweeps: the second pre-sweep's result lost | CTest (1); parity (20 cases of 1 tests) |
+| `two_sweeps_one_fewer` | two sweeps: one sweep fewer | CTest (1); parity (20 cases of 1 tests) |
+| `binding_pin_cell` | the binding: the pin's two indices in the other order | parity (1 cases of 1 tests) |
+| `binding_refusal_order` | the binding: the diagonals' shapes refused before the velocities' | parity (1 cases of 1 tests) |
+| `binding_p_after_diagonals` | the binding: the diagonals' shapes refused before p's | parity (1 cases of 1 tests) |
+| `division_rz` | a zero r . z divided by | CTest (1); parity (1 cases of 1 tests) |
+| `factor_stops_early` | the factor stopped at 16 roundings of its first pivot | CTest (2); parity (1 cases of 1 tests) |
+| `factor_reads_the_matrix` | the factor's stop read off the matrix's diagonal, not off what is left of it | CTest (9); parity (152 cases of 15 tests); replay (raises) |
 
-202 of 203 plants fail at least one net; every other is an equivalent mutant, as its row says.
+210 of 211 plants fail at least one net; every other is an equivalent mutant, as its row says.
 
 ### T5. A correction on the 320x120 product state, one thread
 
@@ -394,6 +405,9 @@
 | 1 | 2026-11-24 08:26:13 | 5 and 5 | 13.225 (12.63 to 13.92) | 3.058 (2.84 to 3.36) | 4.32 | 8.65, 8.54 | msmpeng 37, code 22, code 13, on mains True, processor performance 91 | searchindexer 76, code 46, msmpeng 36, on mains True, processor performance 100 |
 | 2 | 2026-11-24 08:26:28 | 5 and 5 | 13.531 (12.77 to 14.24) | 2.915 (2.80 to 3.18) | 4.64 | 8.66, 8.32 | searchindexer 80, msmpeng 39, code 25, on mains True, processor performance 97 | msmpeng 41, code 28, system 21, on mains True, processor performance 90 |
 | 3 | 2026-11-24 08:26:44 | 5 and 5 | 13.605 (12.82 to 15.55) | 2.828 (2.72 to 3.02) | 4.81 | 8.36, 8.30 | msmpeng 40, code 15, msedge 10, on mains True, processor performance 97 | searchindexer 70, msmpeng 33, searchprotocolhost 19, on mains True, processor performance 100 |
+| 4 | 2026-11-24 18:45:35 | 5 and 5 | 14.215 (13.56 to 14.80) | 3.065 (2.92 to 3.45) | 4.64 | 9.08, 8.73 | vmmemwsl 39, msmpeng 34, system 25, on mains True, processor performance 90 | msedge 32, msmpeng 27, system 21, on mains True, processor performance 86 |
+| 5 | 2026-11-24 18:45:51 | 5 and 5 | 14.116 (13.22 to 15.21) | 3.057 (2.96 to 3.32) | 4.62 | 8.84, 9.11 | msmpeng 39, code 15, system 13, on mains True, processor performance 97 | msmpeng 40, code 19, system 13, on mains True, processor performance 87 |
+| 6 | 2026-11-24 18:46:07 | 5 and 5 | 14.505 (13.85 to 15.27) | 2.944 (2.83 to 3.20) | 4.93 | 8.77, 9.04 | code 95, msmpeng 33, msedge 28, on mains True, processor performance 101 | msmpeng 34, msedge 29, code 24, on mains True, processor performance 82 |
 
 ### T5b. The parts, the same sessions
 
@@ -414,6 +428,21 @@
 | 3 | of it, the pseudo-inverse | 0.257 | 0.344 | 0.75 |
 | 3 | one V-cycle | 1.421 | 0.253 | 5.62 |
 | 3 | one CG iteration (a correction capped at 4 less one at 1, over 3) | 1.835 | 0.377 | 4.87 |
+| 4 | the coefficients | 1.439 | 0.160 | 8.97 |
+| 4 | the hierarchy's build | 1.862 | 0.499 | 3.73 |
+| 4 | of it, the pseudo-inverse | 0.268 | 0.383 | 0.70 |
+| 4 | one V-cycle | 1.224 | 0.247 | 4.95 |
+| 4 | one CG iteration (a correction capped at 4 less one at 1, over 3) | 1.931 | 0.477 | 4.05 |
+| 5 | the coefficients | 1.546 | 0.162 | 9.52 |
+| 5 | the hierarchy's build | 1.917 | 0.530 | 3.62 |
+| 5 | of it, the pseudo-inverse | 0.373 | 0.392 | 0.95 |
+| 5 | one V-cycle | 1.449 | 0.261 | 5.54 |
+| 5 | one CG iteration (a correction capped at 4 less one at 1, over 3) | 2.372 | 0.506 | 4.69 |
+| 6 | the coefficients | 1.608 | 0.158 | 10.18 |
+| 6 | the hierarchy's build | 1.764 | 0.529 | 3.33 |
+| 6 | of it, the pseudo-inverse | 0.292 | 0.361 | 0.81 |
+| 6 | one V-cycle | 1.291 | 0.264 | 4.89 |
+| 6 | one CG iteration (a correction capped at 4 less one at 1, over 3) | 1.961 | 0.432 | 4.54 |
 
 ### T6. The pseudo-inverses against the exact ones
 
@@ -444,6 +473,27 @@
 | worse 1x64 0.0 4.0 | yes | 892,692 | 2.1e-11 | 2.4e-11 | 3.6e-12 | 4.8e-19, 1.7e-17, 0 |
 | worse 1x64 0.0 5.0 | yes | 7,367,850 | 9.4e-11 | 9.1e-11 | 2.0e-11 | 1.5e-18, 8.3e-18, 6.0e-18 |
 | worse 1x64 0.2 5.0 | yes | 138,060 | 6.2e-12 | 4.5e-12 | 1.7e-12 | 7.3e-18, 1.2e-16, 0 |
+
+### T6c. The pseudo-inverses by their criterion
+
+| Systems | Count | With dropped values | kappa | The core beyond 4 n kappa eps max X | NumPy beyond it | The two beyond 8 n kappa eps max X | The core's largest share of its bound | NumPy's | The two's | The two beyond 1e-12 of NumPy's largest | The referee's largest residual of Moore and Penrose's conditions |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| the parity module's planted systems | 168 | 117 | 1.0 to 10,058 | 0 | 0 | 0 | 0.12 | 0.1 | 0.056 | 3 | 4.6e-57 |
+| planted, worse conditioned | 32 | 32 | 284.0 to 7,367,850 | 0 | 0 | 0 | 0.0021 | 0.0027 | 0.0018 | 14 | 2.3e-54 |
+| the captured corrections' systems | 50 | 40 | 19.4 to 1,449 | 0 | 0 | 0 | 0.016 | 0.0098 | 0.0053 | 0 | 9.1e-58 |
+| the first corrections' from rest | 19 | 11 | 19.0 to 1,884 | 0 | 0 | 0 | 0.049 | 0.012 | 0.023 | 0 | 7.7e-58 |
+
+### T6d. The five systems nearest the core's bound
+
+| System | n | kappa | max X | Bound | The core's error | NumPy's | Between the two, over NumPy's largest |
+|---|---|---|---|---|---|---|---|
+| planted: 2x2 0.0 0.5 0.0 | 4 | 2.81 | 0.424 | 4.2e-15 | 5.0e-16 | 2.2e-16 | 1.0e-15 |
+| planted: 2x2 0.0 0.0 0.0 | 4 | 2.00 | 0.312 | 2.2e-15 | 1.1e-16 | 2.2e-16 | 6.4e-16 |
+| rest: product320 | 40 | 172.90 | 0.205 | 1.3e-12 | 6.2e-14 | 4.2e-15 | 2.8e-13 |
+| rest: val018_320x120 | 40 | 172.90 | 0.205 | 1.3e-12 | 6.2e-14 | 4.2e-15 | 2.8e-13 |
+| rest: annex216 | 21 | 45.61 | 0.00608 | 5.2e-15 | 2.5e-16 | 3.9e-17 | 3.5e-14 |
+
+The referee against the tester's 50-digit rotations on the 17 systems of T6b: the largest difference 1.7e-61 of the largest magnitude.
 
 ### T7. The blocks GCC vectorises
 
@@ -476,3 +526,45 @@
 | `dense.cpp` | `add_scaled_cells` | yes |
 
 g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; -std=c++20 -O2 -ffp-contract=off -march=x86-64-v3 -DNDEBUG. 23 of 25 blocks vectorised, with vectors of 32 bytes.
+
+### T8. The corrected fields by both measures
+
+| Corrections | Case and cap | Count | Same CG count | u over the corrected u | u by the measure | v over the corrected v | v by the measure | p over p | Either component over both components' terms (after the fact) |
+|---|---|---|---|---|---|---|---|---|---|
+| from rest | `annex216_150` | 150 | 150 | 5.5e-15 | 1.2e-15 | 3.7e-15 | 3.7e-15 | 1.9e-15 | 1.2e-15 |
+| from rest | `backstep_100` | 100 | 100 | 7.3e-13 | 3.2e-14 | 1.3e-12 | 1.3e-12 | 2.6e-13 | 3.4e-14 |
+| from rest | `cavity40_400` | 400 | 400 | 1.1e-15 | 1.0e-15 | 2.8e-15 | 2.8e-15 | 1.3e-15 | 1.4e-15 |
+| from rest | `product320_25` | 25 | 25 | 4.4e-14 | 4.4e-14 | 4.0e-14 | 4.0e-14 | 5.7e-14 | 4.1e-14 |
+| from rest | `product80_300` | 300 | 300 | 4.8e-14 | 5.3e-14 | 3.7e-14 | 3.7e-14 | 7.2e-14 | 4.2e-14 |
+| from rest | `val001_80x40_25` | 25 | 25 | 8.5e-14 | 8.5e-14 | 8.9e-13 | 8.9e-13 | 1.2e-14 | 8.5e-14 |
+| from rest | `val001_80x40_stretched_25` | 25 | 25 | 7.2e-14 | 7.2e-14 | 1.0e-13 | 1.0e-13 | 1.3e-14 | 7.2e-14 |
+| from rest | `val002_20x20_25` | 25 | 25 | 4.5e-16 | 4.2e-16 | 8.4e-16 | 1.2e-15 | 4.7e-16 | 4.2e-16 |
+| from rest | `val002_80x80_25` | 25 | 25 | 1.1e-15 | 1.1e-15 | 2.4e-15 | 2.4e-15 | 1.4e-15 | 1.2e-15 |
+| from rest | `val017_216x72_25` | 25 | 25 | 5.5e-15 | 1.2e-15 | 3.7e-15 | 3.7e-15 | 1.9e-15 | 1.2e-15 |
+| from rest | `val018_320x120_25` | 25 | 25 | 4.4e-14 | 4.4e-14 | 4.0e-14 | 4.0e-14 | 5.7e-14 | 4.1e-14 |
+| from rest | `val019_410x40_25` | 25 | 25 | 3.8e-13 | 1.4e-14 | 4.3e-13 | 4.3e-13 | 4.0e-13 | 1.4e-14 |
+| from rest | `val019_656x60_25` | 25 | 25 | 7.3e-13 | 3.2e-14 | 1.3e-12 | 1.3e-12 | 2.6e-13 | 3.4e-14 |
+| from rest | `val019_984x90_25` | 25 | 25 | 1.4e-12 | 8.0e-14 | 3.0e-12 | 3.0e-12 | 3.3e-13 | 8.2e-14 |
+| from rest | `val020_272x90_25` | 25 | 25 | 1.3e-15 | 1.3e-15 | 2.2e-15 | 5.5e-16 | 1.6e-15 | 5.5e-16 |
+| from rest | `val022_re100_25` | 25 | 25 | 8.7e-13 | 7.1e-13 | 1.1e-12 | 1.1e-12 | 1.7e-13 | 7.1e-13 |
+| from rest | `val022_re100_uniform_25` | 25 | 25 | 6.2e-13 | 6.2e-13 | 7.7e-13 | 7.7e-13 | 1.4e-13 | 6.2e-13 |
+| from rest | `val024_280x50_25` | 25 | 25 | 2.1e-13 | 4.1e-14 | 1.1e-12 | 1.1e-12 | 1.8e-14 | 4.1e-14 |
+| from rest | `vents80_300` | 300 | 300 | 3.4e-14 | 3.7e-14 | 4.3e-14 | 4.4e-14 | 8.4e-14 | 4.4e-14 |
+| captured | `annex216` | 10 | 10 | 2.1e-16 | 2.1e-16 | 7.9e-16 | 7.9e-16 | 1.7e-16 | 3.4e-16 |
+| captured | `backstep` | 10 | 10 | 4.0e-16 | 4.0e-16 | 1.6e-15 | 1.6e-15 | 2.5e-14 | 4.0e-16 |
+| captured | `cavity40` | 10 | 10 | 6.1e-17 | 6.1e-17 | 1.1e-16 | 1.1e-16 | 4.3e-17 | 6.1e-17 |
+| captured | `product80` | 10 | 10 | 0 | 0 | 0 | 0 | 0 | 0 |
+| captured | `vents80` | 10 | 10 | 0 | 0 | 0 | 0 | 0 | 0 |
+
+1,645 of 1,650 corrections within 1e-12 by the measure.
+
+### T8b. Every corrected component beyond 1e-12 by either measure
+
+| Case and cap | Correction | CG count, both | Component | Largest difference | Predicted (largest) | Correction (largest) | Corrected (largest) | Over the corrected | By the measure | Over both components' terms (after the fact) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `backstep_100` | 1 | 26 | v | 8.0e-11 | 0 | 61.68 | 61.68 | 1.3e-12 | 1.3e-12 | 3.4e-14 |
+| `val019_656x60_25` | 1 | 26 | v | 8.0e-11 | 0 | 61.68 | 61.68 | 1.3e-12 | 1.3e-12 | 3.4e-14 |
+| `val019_984x90_25` | 1 | 37 | u | 1.3e-10 | 1575 | 1536 | 89.54 | 1.4e-12 | 8.0e-14 | 8.2e-14 |
+| `val019_984x90_25` | 1 | 37 | v | 1.3e-10 | 0 | 42.94 | 42.94 | 3.0e-12 | 3.0e-12 | 8.2e-14 |
+| `val022_re100_25` | 1 | 48 | v | 1.4e-12 | 0 | 1.178 | 1.178 | 1.1e-12 | 1.1e-12 | 7.1e-13 |
+| `val024_280x50_25` | 1 | 26 | v | 1.5e-12 | 0 | 1.296 | 1.296 | 1.1e-12 | 1.1e-12 | 4.1e-14 |

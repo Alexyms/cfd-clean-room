@@ -1,4 +1,4 @@
-"""The tables of prompt 93's pressure report, from results/builder93/.
+"""The tables of prompt 93's pressure report, from results/builder93/ and builder93b/.
 
     python docs/reports/probe93/tables93.py           # write tables93.md, splice the report
     python docs/reports/probe93/tables93.py --check   # regenerate and compare, write nothing
@@ -19,10 +19,14 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
 TABLES = HERE / "tables93.md"
 REPORT = ROOT / "docs" / "reports" / "phase6_pressure.md"
-RESULTS = ROOT / "results" / "builder93"
+# Prompt 93's records, and those prompt 93b made again at its head.
+FIRST = ROOT / "results" / "builder93"
+RESULTS = ROOT / "results" / "builder93b"
 TOLERANCE = 1e-12
 SPEED = 5.0
 RUNS = (1, 2, 3)
+# Round 1's sessions, kept in builder93b/.
+QUIET_RUNS = (4, 5, 6)
 CAPS = (1, 4)
 CASES = {
     "product80": "80x30 product room",
@@ -75,9 +79,9 @@ def table(header: list[str], rows: Iterable[list[object]]) -> list[str]:
     return lines
 
 
-def load(name: str) -> object:
-    """A JSON record of results/builder93/."""
-    return json.loads((RESULTS / name).read_text(encoding="utf-8"))
+def load(name: str, folder: Path = RESULTS) -> object:
+    """A JSON record of results/builder93b/, or of another folder."""
+    return json.loads((folder / name).read_text(encoding="utf-8"))
 
 
 def junit_cases(path: Path) -> list[tuple[str, str, str]]:
@@ -156,7 +160,7 @@ def captures_table() -> list[str]:
     """T2: the captured cases."""
     rows = []
     for case, label in CASES.items():
-        c = load(f"captures/{case}.json")
+        c = load(f"captures/{case}.json", FIRST)
         start = c["start"]
         source = f"`{start['from']}`" if "/" in start["from"] else start["from"]
         if "outer" in start:
@@ -415,8 +419,8 @@ def milliseconds(t: dict[str, float]) -> str:
 def timing_tables() -> tuple[list[str], list[str], dict[int, float]]:
     """T5: a correction; T5b: the parts; the ratios by run."""
     rows, parts, ratios = [], [], {}
-    for run in RUNS:
-        t = load(f"timing_{run}.json")
+    for run in (*RUNS, *QUIET_RUNS):
+        t = load(f"timing_{run}.json", FIRST if run in RUNS else RESULTS)
         ratios[run] = t["ratio"]
         rows.append(
             [
@@ -480,7 +484,7 @@ def timing_tables() -> tuple[list[str], list[str], dict[int, float]]:
 
 def conditioning_tables() -> tuple[list[str], list[str], list[dict]]:
     """T6: the inverses against the exact ones by kind; T6b: those beyond 1e-12 of NumPy's."""
-    records = load("conditioning.json")
+    records = load("conditioning.json", FIRST)
     rows = []
     for kind, label in KINDS.items():
         mine = [r for r in records if r["kind"] == kind]
@@ -545,6 +549,174 @@ def conditioning_tables() -> tuple[list[str], list[str], list[dict]]:
         ),
     )
     return summary, each, records
+
+
+def criterion_tables() -> tuple[list[str], list[str]]:
+    """T6c: the pseudo-inverses by their criterion; T6d: the systems nearest its bounds."""
+    records = load("inverses.json")
+    rows = []
+    for kind, label in {**KINDS, "rest": "the first corrections' from rest"}.items():
+        mine = [r for r in records if r["kind"] == kind]
+        rows.append(
+            [
+                label,
+                len(mine),
+                sum(1 for r in mine if r["dropped"]),
+                f"{min(r['condition'] for r in mine):.1f} to {max(r['condition'] for r in mine):,.0f}",
+                sum(r["core_error"] > r["bound"] for r in mine),
+                sum(r["numpy_error"] > r["bound"] for r in mine),
+                sum(r["between"] > r["between_bound"] for r in mine),
+                *(
+                    f"{max(r[e] / r[b] for r in mine):.2g}"
+                    for e, b in (
+                        ("core_error", "bound"),
+                        ("numpy_error", "bound"),
+                        ("between", "between_bound"),
+                    )
+                ),
+                sum(r["between_over_numpy"] > TOLERANCE for r in mine),
+                power(max(max(r["residuals"]) for r in mine)),
+            ]
+        )
+    summary = table(
+        [
+            "Systems",
+            "Count",
+            "With dropped values",
+            "kappa",
+            "The core beyond 4 n kappa eps max X",
+            "NumPy beyond it",
+            "The two beyond 8 n kappa eps max X",
+            "The core's largest share of its bound",
+            "NumPy's",
+            "The two's",
+            "The two beyond 1e-12 of NumPy's largest",
+            "The referee's largest residual of Moore and Penrose's conditions",
+        ],
+        rows,
+    )
+    rotations = load("rotations.json")
+    nearest = sorted(records, key=lambda r: -r["core_error"] / r["bound"])[:5]
+    each = table(
+        [
+            "System",
+            "n",
+            "kappa",
+            "max X",
+            "Bound",
+            "The core's error",
+            "NumPy's",
+            "Between the two, over NumPy's largest",
+        ],
+        (
+            [
+                f"{r['kind']}: {r['name']}",
+                r["cells"],
+                f"{r['condition']:,.2f}",
+                f"{r['largest']:.3g}",
+                *(
+                    power(r[k])
+                    for k in (
+                        "bound",
+                        "core_error",
+                        "numpy_error",
+                        "between_over_numpy",
+                    )
+                ),
+            ]
+            for r in nearest
+        ),
+    )
+    each += [
+        "",
+        f"The referee against the tester's 50-digit rotations on the {len(rotations)} systems of T6b: "
+        f"the largest difference {power(max(r['apart'] for r in rotations))} of the largest magnitude.",
+    ]
+    return summary, each
+
+
+def field_records() -> list[dict]:
+    """The corrected fields' records, a case each."""
+    paths = sorted((RESULTS / "fields").glob("*.json"))
+    return [json.loads(path.read_text(encoding="utf-8")) for path in paths]
+
+
+def both_components(row: dict) -> float:
+    """The largest difference over the largest magnitude of either component's terms."""
+    terms = max(max(row[c]["star"], row[c]["correction"]) for c in "uv")
+    return max(row[c]["difference"] for c in "uv") / terms
+
+
+def field_tables() -> tuple[list[str], list[str]]:
+    """T8: the corrected fields by both measures; T8b: those beyond 1e-12 by the measure."""
+    cases = field_records()
+    rows, beyond = [], []
+    for kind, label in (("rest", "from rest"), ("captured", "captured")):
+        for case in (c for c in cases if c["kind"] == kind):
+            mine = case["rows"]
+            cells: list[object] = [label, f"`{case['case']}`", len(mine)]
+            cells.append(sum(r["iterations"][0] == r["iterations"][1] for r in mine))
+            for c in "uv":
+                for measure in ("by_field", "by_terms"):
+                    cells.append(power(max(r[c][measure] for r in mine)))
+            cells.append(power(max(r["p"]["by_field"] for r in mine)))
+            cells.append(power(max(both_components(r) for r in mine)))
+            rows.append(cells)
+            for r in mine:
+                for c in "uv":
+                    if max(r[c]["by_terms"], r[c]["by_field"]) > TOLERANCE:
+                        beyond.append((case["case"], r, c))
+    totals = [r for case in cases for r in case["rows"]]
+    inside = [r for r in totals if max(r[c]["by_terms"] for c in "uv") <= TOLERANCE]
+    summary = table(
+        [
+            "Corrections",
+            "Case and cap",
+            "Count",
+            "Same CG count",
+            "u over the corrected u",
+            "u by the measure",
+            "v over the corrected v",
+            "v by the measure",
+            "p over p",
+            "Either component over both components' terms (after the fact)",
+        ],
+        rows,
+    )
+    summary += [
+        "",
+        f"{len(inside):,} of {len(totals):,} corrections within 1e-12 by the measure.",
+    ]
+    each = table(
+        [
+            "Case and cap",
+            "Correction",
+            "CG count, both",
+            "Component",
+            "Largest difference",
+            "Predicted (largest)",
+            "Correction (largest)",
+            "Corrected (largest)",
+            "Over the corrected",
+            "By the measure",
+            "Over both components' terms (after the fact)",
+        ],
+        (
+            [
+                f"`{case}`",
+                r["call"],
+                r["iterations"][1],
+                c,
+                power(r[c]["difference"]),
+                *(f"{r[c][k]:.4g}" for k in ("star", "correction", "corrected")),
+                power(r[c]["by_field"]),
+                power(r[c]["by_terms"]),
+                power(both_components(r)),
+            ]
+            for case, r, c in beyond
+        ),
+    )
+    return summary, each
 
 
 def loops_table() -> list[str]:
@@ -619,7 +791,8 @@ def predictions_table(
             ],
             [
                 "(d) a correction on the 320x120 state at least five times faster",
-                f"{ratios[1]:.2f} times in session 1 (session 2: {ratios[2]:.2f}; session 3: {ratios[3]:.2f}) (T5)",
+                f"{ratios[1]:.2f} times in session 1 (session 2: {ratios[2]:.2f}; session 3: {ratios[3]:.2f}); "
+                f"round 1's sessions, beside them: {', '.join(f'{ratios[run]:.2f}' for run in QUIET_RUNS)} (T5)",
                 "holds" if d_holds else "fails",
             ],
         ],
@@ -638,6 +811,8 @@ def build() -> tuple[str, dict[str, str]]:
     plants, planted, caught, survivors = plants_table()
     timing, parts, ratios = timing_tables()
     summary, beyond, conditioning = conditioning_tables()
+    judged, nearest = criterion_tables()
+    fields, fields_beyond = field_tables()
     count = [
         "",
         f"{caught} of {planted} plants fail at least one net"
@@ -693,7 +868,19 @@ def build() -> tuple[str, dict[str, str]]:
             "T6b. Every system on which the core and NumPy are further apart than 1e-12",
             beyond,
         ),
+        ("criterion", "T6c. The pseudo-inverses by their criterion", judged),
+        (
+            "nearest",
+            "T6d. The five systems nearest the core's bound",
+            nearest,
+        ),
         ("loops", "T7. The blocks GCC vectorises", loops_table()),
+        ("fields", "T8. The corrected fields by both measures", fields),
+        (
+            "beyond_fields",
+            "T8b. Every corrected component beyond 1e-12 by either measure",
+            fields_beyond,
+        ),
     ]
     blocks = {
         name: "\n".join([f"### {title}", "", *lines]) for name, title, lines in sections

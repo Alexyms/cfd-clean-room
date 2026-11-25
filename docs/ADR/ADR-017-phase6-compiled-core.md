@@ -363,7 +363,8 @@ instantiation built in Phase 6 (decision 4).
 | `reduce` | nothing | arrays | sums, dot products, max-norms in a fixed order (section G) | NumPy's reductions | (in every stage) |
 | `momentum` | the predictor's coefficients and sweep scratch | faces, p, the effective viscosity, the velocity boundary data, the keys (sweeps, relaxation) | u*, v*, the diagonals the pressure correction needs | `momentum.py` | momentum predictor |
 | `pressure` | the p' system, its scratch, the CG vectors | u*, v*, the diagonals, the outlet and closed-domain data | corrected faces and p, the CG count, whether the cap was reached | `pressure.py` | pressure correction |
-| `multigrid` | the hierarchy and its coarsest pseudo-inverse | the p' system's five-point coefficients | one V-cycle as the preconditioner | `multigrid.py` | pressure correction |
+| `multigrid` | the hierarchy | the p' system's five-point coefficients | one V-cycle as the preconditioner | `multigrid.py` | pressure correction |
+| `dense` (added 2026-11-24, step 4b) | the factor and its rotations' scratch | a symmetric positive semi-definite matrix, the cutoff | its pseudo-inverse, which solves `multigrid`'s coarsest level | `multigrid.py` (`_dense_pseudo_inverse`, `np.linalg.pinv`) | pressure correction |
 | `turbulence` | k, eps scratch, the CG and Jacobi scratch | faces, k, eps, the conditions built by `walls` | k, eps, nu_t (relaxed), the positivity verdict | `turbulence.py` (`KEpsilonModel.step`) | turbulence update |
 | `walls` | the wall functions' per-face data | faces, k, the wall faces and distances | the wall viscosity at momentum wall faces, k and eps wall conditions, outlet extrapolation | `turbulence.py` (`TurbulenceBoundary`), `boundary_staggered.py` (the per-iteration writes) | boundary updates |
 | `stopping` | the rule's window | the steps and readings of an outer iteration | stop or go, the reason, the readings | `stopping.py` | stopping rule |
