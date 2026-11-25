@@ -400,6 +400,38 @@ and those of the captured corrections.
 | worse 1x64 0.2 5.0 | yes | 138,060 | 6.2e-12 | 4.5e-12 | 1.7e-12 | 7.3e-18, 1.2e-16, 0 |
 <!-- tables93 beyond end -->
 
+### The criterion, set 2026-11-24 before any run of it
+
+Alex's decision 2 of 2026-11-24 (prompt 93b): the pseudo-inverse is judged against its conditioning
+and not a fixed 1e-12. The rule below replaces the parity test's bound fitted after its first run
+(section 2). The orchestrator fixed it and its factor 4 in prompt 93b, before any run; it is committed
+here alone, before any run.
+
+- For each coarsest system: n its cells, at most 64, those with no equation included (the matrix is n
+  by n); the kept eigenvalues those NumPy keeps, above 1e-15 of the largest magnitude; kappa the
+  largest kept magnitude over the smallest kept magnitude, the condition on the operator's range; eps
+  2^-52.
+- The referee X is the pseudo-inverse formed in 60-digit decimal arithmetic. The route: the count of
+  dropped eigenvalues is LAPACK's; the dropped invariant subspace is refined from LAPACK's vectors by
+  subspace inverse iteration at 60 digits, with LU factors of the matrix shifted by 1e-25 of its
+  largest diagonal; the matrix with that subspace deflated, and a multiple of the subspace's projector
+  added, is inverted at 60 digits; the projector's part is taken off. The referee refuses a system
+  whose refined dropped values are not all below the cutoff, or whose smallest kept magnitude is not
+  above it. Its conditions (X A X = X, A X A = A on the kept range, X symmetric) are checked to 1e-40,
+  and it is compared with the tester's 50-digit two-sided Jacobi rotations
+  (`results/tester93/own.py`, `decimal_inverse`) on the 17 systems of T6b, where the two must round
+  to the same doubles to within 1e-15 of the largest.
+- Holds when, elementwise, the core's matrix C and NumPy's N are each within `4 n kappa eps max|X|` of
+  X, and C is within `8 n kappa eps max|X|` of N.
+- On every captured coarsest system the plain criterion also holds: C within 1e-12 of N's largest
+  magnitude.
+- The systems: the 200 planted ones of T6 (168 of the parity module, 32 worse conditioned), the 50
+  captured corrections', and the 19 first corrections' from rest kept by the tester
+  (`results/tester93/matrices/`).
+- **The stop.** If a system meets the referee's bound for N and not for C, the work stops and the
+  system is reported: the core's method would then be the less accurate one. A system N misses is
+  reported as NumPy's.
+
 ## 5. Planted defects
 
 Each defect is planted in a copy of `core/`, built, and run against CTest, the parity module and the
