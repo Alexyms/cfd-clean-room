@@ -7,7 +7,13 @@
 **Status:** built. Predictions (a) and (c) hold; (b) fails as stated, on planted systems where
 all but one of the disagreements are NumPy's error; (d) fails (T0). Round 1: the pseudo-inverse's
 criterion holds (T6c); the corrected field's criterion failed its measurement and is not adopted (T8,
-T8b; "Round 1" below). The choice of one is Alex's.
+T8b; "Round 1" below). Alex decided on 2026-11-25 (the orchestrator's records commit after this pass): no scale is
+adopted for a corrected velocity. REQ-N03 is applied block by block, each given the same
+inputs: p' by the CG rule, and the correction given p' bit for bit, both of which hold; the whole
+correction's field differences (T3c, T8) are reported and judged at level 2 in step 5. The likely
+mechanism of D1's five, not measured: on the first correction from rest v* is zero and v is d
+times the difference of two nearby p' values, so the rounding of p' is large against that difference.
+REQ-N03 and ADR-017 G are amended for the pseudo-inverse and for a chain of blocks.
 
 This is the second half of Phase 6 step 4 (`docs/PROJECT_PLAN.md`, Phase 6, the steps table;
 ADR-017 C, F and G; ADR-013 as amended 2026-10-14): `PressureCorrector` and `Multigrid` in the

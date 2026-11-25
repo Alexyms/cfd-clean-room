@@ -500,6 +500,18 @@ compares a sum relative to the sum of its terms' magnitudes (section I), and eve
 relative to its largest magnitude. A missing or doubled term moves a sum by that term, decades
 above 1e-12 of the magnitudes, so the comparison stays sharp.
 
+**A pseudo-inverse, and a chain of blocks (Alex, 2026-11-25, after prompt 93b).** Inverting a
+matrix of condition kappa turns rounding at eps into errors of about kappa eps for any correct
+method, LAPACK's included, so a fixed 1e-12 asks an ill-conditioned coarsest system for digits
+neither answer has. Level 1 judges a pseudo-inverse against its condition on the operator's
+range: the core's and NumPy's matrices each within `4 n kappa eps max|X|` of an
+extended-precision referee X, and within twice that of each other (prompt 93b, set before its
+runs). And a chain of blocks, a whole pressure correction say, is judged block by block, each
+given the same inputs: the corrected velocity given p' is a block of the first kind, bit for
+bit, and p' is judged by the CG rule; the chain's own differences, which a block downstream can
+amplify (a velocity formed from a difference of nearby p' values), are reported and judged at
+level 2. Amended in `docs/SYSTEM.md`'s REQ-N03 the same day.
+
 **ADR-016's "exactly".** ADR-016 asks the port to reproduce the implicit stop exactly. At level 1
 it does: given the reference's inputs, the copied order gives the same leftover and the same
 sweep, bit for bit. In a whole run the stop's inputs carry the upstream blocks' rounding, so the
