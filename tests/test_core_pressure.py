@@ -662,11 +662,10 @@ def test_the_pseudo_inverses_cutoff_is_numpys() -> None:
 
 
 def test_a_value_that_is_not_finite_makes_a_pseudo_inverse_of_nans() -> None:
-    """As NumPy's is where LAPACK converges, so that a diverged field stays one."""
+    """The core's own rule, so that a diverged field stays one; NumPy's result varies with its LAPACK."""
     for bad in (np.nan, np.inf):
         matrix = np.eye(6) * 2.0
         matrix[0, 0] = bad
-        assert np.isnan(np.linalg.pinv(matrix, hermitian=True)).all()
         assert np.isnan(_cfdcore.pseudo_inverse(matrix, core_mapping.PINV_RCOND)).all()
 
 

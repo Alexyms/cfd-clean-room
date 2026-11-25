@@ -727,8 +727,10 @@ g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; -std=c++20 -O2 -ffp-contract=off -m
 - **The pseudo-inverse needs a positive semi-definite matrix.** A symmetric indefinite one is not
   refused and its negative part is dropped. The hierarchy hands it only Galerkin sums of a weakly
   dominant system.
-- **A coarsest matrix with a value that is not finite gives NaNs**, as NumPy's does in most cases. In
-  some LAPACK does not converge and NumPy raises `LinAlgError`, which the core does not copy.
+- **A coarsest matrix with a value that is not finite gives NaNs, by the core's own rule.** NumPy's
+  answer there is not fixed: it depends on the LAPACK NumPy is built with (NaNs under NumPy 2.4.4, zeros
+  under the 2.5.5 that CI installed before the pin, `LinAlgError` where LAPACK does not converge), so
+  there is no reference result to copy. It is reached only by a field that has already diverged.
 - **The core's corrector refuses a width, rho or alpha that is not finite and positive**, which the
   reference leaves to `SimConfig`.
 - **The reference's coarse mask of the cells with an equation is not formed.** Nothing reads it.

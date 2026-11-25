@@ -60,9 +60,10 @@ public:
     // out:    output, n * n values, row-major, symmetric bit for bit; may be
     //         `matrix` itself. Not written after `not_converged`
     //
-    // A matrix with a value that is not finite has a pseudo-inverse of NaNs, as
-    // NumPy's has in most cases (in a few LAPACK does not converge and NumPy
-    // raises), so that a field that has diverged stays one.
+    // A matrix with a value that is not finite has a pseudo-inverse of NaNs, so that
+    // a field that has diverged stays one. This is the core's own rule and not
+    // parity: NumPy's result there depends on the LAPACK it is built with (NaNs
+    // under 2.4.4, zeros under 2.5.5, and in some cases it raises).
     //
     // Throws std::invalid_argument for an array of another length.
     eigen_status pseudo_inverse(std::span<const double> matrix, double rcond,

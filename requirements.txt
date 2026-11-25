@@ -1,4 +1,8 @@
-numpy>=1.26
+# Pinned to the minor: the reference's exact results depend on NumPy's order of
+# operations (the pairwise and buffered sums the core copies, the pseudo-inverse),
+# so an unbounded NumPy would compare the core with another reference than the one
+# of record. An upgrade is its own pull request with a parity run (Alex, 2026-11-24).
+numpy~=2.4.4
 pyyaml>=6.0
 matplotlib>=3.8
 h5py>=3.10
