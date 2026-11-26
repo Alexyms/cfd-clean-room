@@ -1459,7 +1459,9 @@ TEST(FlowThreeDirections, AnExtrudedClosedRoomsOuterIterationsLeaveNoImbalance) 
                   .iteration_error_tol = 1e-300,
                   .mass_imbalance_tol = 1e-300,
                   .viscosity_condition = false,
-                  .window = 2};
+                  .window = 2,
+                  .version_without_e = 3,
+                  .version_with_e = 5};
         const modules<3> m{.predictor = &x.predictor3, .corrector = &corrector,
                            .outlets = &outlets};
         ASSERT_TRUE(solver<3>::check(x.grid3, m, f).empty());

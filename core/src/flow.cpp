@@ -198,6 +198,18 @@ std::string_view solver<D>::check(const grid::grid<D>& g, const modules<D>& m,
         !positive_and_finite(input.nu) || !positive_and_finite(input.residual_scale)) {
         return "a viscosity, the density or the residual's scale is not finite and positive";
     }
+    // The field is fixed for the solve, so it is read once, as the coupled path
+    // reads its own each iteration before `predict` does (`_check_mu_eff`).
+    if (input.mode == viscosity_mode::fixed) {
+        switch (m.predictor->check_viscosity(input.mu_eff)) {
+            case momentum::viscosity_status::not_finite:
+                return "mu_eff must be finite in every non-SOLID cell";
+            case momentum::viscosity_status::not_positive:
+                return "mu_eff must be positive in every non-SOLID cell";
+            case momentum::viscosity_status::ok:
+                break;
+        }
+    }
     if (coupled && !(input.alpha_turbulence > 0.0 && input.alpha_turbulence <= 1.0)) {
         return "the eddy viscosity's relaxation is outside (0, 1]";
     }
@@ -314,7 +326,7 @@ stopping::restore_status solver<D>::restore(std::span<const double> steps,
                                             std::span<const double> viscosity_steps) {
     if (!rule_) {
         return steps.empty() && viscosity_steps.empty() ? stopping::restore_status::ok
-                                                        : stopping::restore_status::too_long;
+                                                        : stopping::restore_status::no_rule;
     }
     return rule_->restore(steps, viscosity_steps);
 }
@@ -450,6 +462,11 @@ bool solver<D>::turbulence_step(iteration_record& record, chunk_failure& failure
     }
     const turbulence::step_result result = modules_.model->step(
         {k_, eps_, nu_t_}, velocity, conditions, k_next_, eps_next_, nu_t_step_);
+    // The reference logs its two warnings before it tests the signs, so a step that
+    // fails the test hands them back too; a step that moved nothing ran no solve.
+    record.k_fallbacks = result.solves[0].fallbacks;
+    record.eps_fallbacks = result.solves[1].fallbacks;
+    record.solves_converged = result.solves[0].converged && result.solves[1].converged;
     switch (result.status) {
         case turbulence::step_status::nothing_moves:
             failure.kind = failure::nothing_moves;

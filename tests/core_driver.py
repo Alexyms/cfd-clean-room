@@ -57,6 +57,7 @@ from src.time_integration import (
     _Run,
 )
 from src.turbulence import TurbulenceState
+from src.turbulence import logger as turbulence_logger
 from tests import core_mapping
 
 if TYPE_CHECKING:
@@ -530,18 +531,13 @@ class CoreSolver(StaggeredSolver):
                 stop = stopped and r == rows - 1
                 self._record(chunk, r, at)
                 if on_iteration is not None:
-                    fields = core.flow_fields()
-                    u_c, v_c = to_cell_centers(fields["u"], fields["v"])
-                    on_iteration(
-                        IterationState(
-                            iteration=at,
-                            residual=float(chunk["residual"][r]),
-                            pressure_iterations=int(chunk["pressure_iterations"][r]),
-                            u=u_c,
-                            v=v_c,
-                            p=fields["p"],
-                            pressure_products=int(chunk["pressure_products"][r]),
-                        )
+                    self._notify(
+                        on_iteration,
+                        core,
+                        at,
+                        float(chunk["residual"][r]),
+                        int(chunk["pressure_iterations"][r]),
+                        int(chunk["pressure_products"][r]),
                     )
                 residual = self.residual_history[-1]
                 if at % 50 == 0 or stop:
@@ -552,9 +548,9 @@ class CoreSolver(StaggeredSolver):
                     solver_logger.info("Converged at iteration %d", at)
             failure = chunk["failure"]
             if failure is not None:
-                failing = chunk["failing_correction"]
+                failing = chunk["failing_record"]
                 if failing is not None:
-                    self._count_correction(int(failure["iteration"]), *failing)
+                    self._fail_after_correction(failure, failing, core, on_iteration)
                 raise core_mapping.flow_error(failure)
             iteration += rows
             if self.converged:
@@ -612,6 +608,102 @@ class CoreSolver(StaggeredSolver):
         self.flow_state = self.steady_checkpoint.state
         return u_c, v_c, p
 
+    def _fail_after_correction(
+        self,
+        failure: Mapping[str, object],
+        failing: Mapping[str, object],
+        core: "_cfdcore.Flow2",
+        on_iteration: Callable[[IterationState], None] | None,
+    ) -> None:
+        """What the reference has done by the time an iteration raises after its correction.
+
+        It has counted the correction and its cap, and logged the k-epsilon step's
+        warnings. A refused scale of condition (e) is raised by the rule, after the
+        residual is appended and ``on_iteration`` called, so those are done here.
+
+        Parameters
+        ----------
+        failure : Mapping[str, object]
+            The chunk's failure, naming the outer iteration.
+        failing : Mapping[str, object]
+            The chunk's record of that iteration: its correction's count, products
+            and cap, the step's fallbacks and convergence, and the residual when the
+            scale was refused (None otherwise).
+        core : _cfdcore.Flow2
+            The solve, whose fields are the failing iteration's.
+        on_iteration : Callable[[IterationState], None] or None
+            The caller's callback.
+        """
+        at = int(failure["iteration"])
+        iterations = int(failing["pressure_iterations"])
+        self._count_correction(at, iterations, bool(failing["reached_cap"]))
+        self._warn_of_the_step(
+            int(failing["k_fallbacks"]),
+            int(failing["eps_fallbacks"]),
+            bool(failing["solves_converged"]),
+        )
+        residual = failing["residual"]
+        if residual is None:
+            return
+        self.residual_history.append(float(residual))
+        if on_iteration is not None:
+            self._notify(
+                on_iteration,
+                core,
+                at,
+                float(residual),
+                iterations,
+                int(failing["pressure_products"]),
+            )
+
+    def _notify(
+        self,
+        on_iteration: Callable[[IterationState], None],
+        core: "_cfdcore.Flow2",
+        iteration: int,
+        residual: float,
+        pressure_iterations: int,
+        pressure_products: int,
+    ) -> None:
+        """Call ``on_iteration`` with the core's fields as the reference's loop does."""
+        fields = core.flow_fields()
+        u_c, v_c = to_cell_centers(fields["u"], fields["v"])
+        on_iteration(
+            IterationState(
+                iteration=iteration,
+                residual=residual,
+                pressure_iterations=pressure_iterations,
+                u=u_c,
+                v=v_c,
+                p=fields["p"],
+                pressure_products=pressure_products,
+            )
+        )
+
+    def _warn_of_the_step(
+        self, k_fallbacks: int, eps_fallbacks: int, converged: bool
+    ) -> None:
+        """The k-epsilon step's two warnings, as ``KEpsilonModel.step`` logs them.
+
+        The reference logs them before it tests the step's signs, so an iteration
+        that then fails the test has logged them too. A laminar solve and an
+        iteration that ended before its step hand in no fallback and a converged
+        pair of solves, which log nothing.
+        """
+        if k_fallbacks or eps_fallbacks:
+            turbulence_logger.warning(
+                "CG k or eps solve fell back to Jacobi (k %d, eps %d)",
+                k_fallbacks,
+                eps_fallbacks,
+            )
+        if not converged:
+            spec = self._config.turbulence
+            assert spec is not None
+            turbulence_logger.warning(
+                "implicit k or eps solve stopped at max_iter %d CG iterations",
+                spec.max_iter,
+            )
+
     def _count_correction(self, iteration: int, iterations: int, capped: bool) -> None:
         """A correction's count and cap, with the reference's warning at the first cap."""
         self.last_pressure_iterations = iterations
@@ -631,6 +723,11 @@ class CoreSolver(StaggeredSolver):
             iteration,
             int(chunk["pressure_iterations"][r]),
             bool(chunk["reached_cap"][r]),
+        )
+        self._warn_of_the_step(
+            int(chunk["k_fallbacks"][r]),
+            int(chunk["eps_fallbacks"][r]),
+            bool(chunk["solves_converged"][r]),
         )
         self.residual_history.append(float(chunk["residual"][r]))
         for name in _READINGS:

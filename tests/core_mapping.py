@@ -59,7 +59,7 @@ from src.pressure import (
 )
 from src.solver_transport import DEPOSIT_SURFACES, ConservationBreachError, MassBudget
 from src.staggered import FaceVelocities, edge_cell_inputs
-from src.stopping import RATE_WINDOW
+from src.stopping import RATE_WINDOW, RULE_VERSION_WITH_E, RULE_VERSION_WITHOUT_E
 from src.time_integration import (
     DEFINED_RTOL,
     HUNDRED_TO_ONE,
@@ -975,11 +975,17 @@ def error_estimate_rule(
     *,
     viscosity_condition: bool = False,
 ) -> "_cfdcore.StoppingRule2":
-    """The core's rule from ``ErrorEstimateRule``'s own arguments, its window RATE_WINDOW."""
+    """The core's rule from ``ErrorEstimateRule``'s own arguments.
+
+    The window is RATE_WINDOW and the two versions are the reference's, handed in
+    so that the core holds no copy of any of them.
+    """
     import _cfdcore
 
     return _cfdcore.StoppingRule2(
         RATE_WINDOW,
+        RULE_VERSION_WITHOUT_E,
+        RULE_VERSION_WITH_E,
         velocity_scale,
         flux_scale,
         iteration_error_tol,
@@ -1071,6 +1077,8 @@ def flow_solver(
         rule: tuple = (
             "error_estimate",
             RATE_WINDOW,
+            RULE_VERSION_WITHOUT_E,
+            RULE_VERSION_WITH_E,
             boundary.get_max_boundary_velocity(),
             flux_scale,
             config.iteration_error_tol,

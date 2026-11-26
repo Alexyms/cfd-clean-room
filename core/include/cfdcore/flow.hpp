@@ -100,7 +100,9 @@ enum class stop_rule { velocity_step, error_estimate };
 // rule:             the stop; `convergence_tol` the velocity step's bound, `keys`
 //                   the error estimate's
 // mode:             the viscosity; `mu_eff` the field held for a fixed one, Pa s,
-//                   `mu + rho nu_t` as the reference forms it once per solve
+//                   `mu + rho nu_t` as the reference forms it once per solve, which
+//                   `solver::check` reads once (finite and positive in every
+//                   non-SOLID cell, as `predict` reads it each iteration)
 template <int D>
 struct flow_input {
     std::int32_t fluid = 0;
@@ -167,7 +169,10 @@ struct chunk_failure {
 // One outer iteration as the reference records it: the residual, the velocity step
 // `max(du, dv)` (m/s) and with the model the viscosity step (m^2/s; NaN without),
 // the correction's iterations and products and whether it reached its cap, and the
-// rule's readings (NaN under velocity_step).
+// rule's readings (NaN under velocity_step). With the model, the k-epsilon step's
+// two solves too, which the reference logs a warning for: the conjugate gradients
+// of k and of eps that fell back to Jacobi, and whether both solves converged.
+// Laminar, and an iteration that ended before the step ran, read 0, 0 and true.
 struct iteration_record {
     double residual = 0.0;
     double step = 0.0;
@@ -176,6 +181,9 @@ struct iteration_record {
     std::int64_t pressure_products = 0;
     bool reached_cap = false;
     stopping::reading rule{};
+    int k_fallbacks = 0;
+    int eps_fallbacks = 0;
+    bool solves_converged = true;
 };
 
 // The wall time of a chunk's stages, s: "momentum" (the outlets and the
@@ -209,10 +217,11 @@ class solver {
 public:
     // Why the modules and the input cannot make a solver on `g`, or an empty view
     // when they can: a module missing for the mode or on another grid, a fixed
-    // viscosity of another length, a density, viscosity or scale that is not finite
-    // and positive, a relaxation outside (0, 1], a velocity step's bound that is not
-    // finite and positive, error-estimate keys `stopping::rule::check` refuses, or no
-    // FLUID cell.
+    // viscosity of another length or one that is not finite or not positive in a
+    // non-SOLID cell, a density, viscosity or scale that is not finite and
+    // positive, a relaxation outside (0, 1], a velocity step's bound that is not
+    // finite and positive, error-estimate keys `stopping::rule::check` refuses, or
+    // no FLUID cell.
     static std::string_view check(const grid::grid<D>& g, const modules<D>& m,
                                   const flow_input<D>& input);
 
@@ -229,7 +238,8 @@ public:
                std::span<const double> eps, std::span<const double> nu_t);
 
     // Seeds the fresh rule with a checkpoint's window (`ErrorEstimateRule.restore`);
-    // ok, and nothing seeded, under velocity_step with both windows empty.
+    // under velocity_step, which has no rule, ok with both windows empty and
+    // `no_rule` with either holding a step.
     stopping::restore_status restore(std::span<const double> steps,
                                      std::span<const double> viscosity_steps);
 

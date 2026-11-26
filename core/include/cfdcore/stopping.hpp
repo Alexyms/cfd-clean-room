@@ -32,6 +32,10 @@ namespace cfdcore::stopping {
 // mass_imbalance_tol:  the bound of (b) and (d), kg/s per unit depth
 // viscosity_condition: whether (e) is applied
 // window:              the steps the rate fit reads, at least two
+// version_without_e,
+// version_with_e:      the numbers `version` returns with (e) off and on, at least one:
+//                      the reference's `RULE_VERSION_WITHOUT_E` and `RULE_VERSION_WITH_E`,
+//                      handed in as the window is, so that the core holds no copy
 struct rule_keys {
     double velocity_scale = 0.0;
     double flux_scale = 0.0;
@@ -39,6 +43,8 @@ struct rule_keys {
     double mass_imbalance_tol = 0.0;
     bool viscosity_condition = false;
     std::size_t window = 0;
+    int version_without_e = 0;
+    int version_with_e = 0;
 };
 
 // One field's per-cell mass imbalance read three ways (`ImbalanceSummary`), kg/s
@@ -73,8 +79,9 @@ imbalance_summary summarise(std::span<const double> imbalance, std::span<double>
 double viscosity_scale(double nu, std::span<const double> nu_t,
                        std::span<const std::size_t> fluid, std::span<double> scratch);
 
-// Why `restore` refuses a window, in the reference's order.
-enum class restore_status { ok, already_stepped, too_long, not_finite, viscosity_count };
+// Why `restore` refuses a window, in the reference's order. `no_rule` is a window
+// handed to a solve that has no rule (the velocity step's), which seeds nothing.
+enum class restore_status { ok, already_stepped, too_long, not_finite, viscosity_count, no_rule };
 
 // The rule's readings of one outer iteration: (a)'s estimate, (e)'s and its scale.
 // The two of (e) are NaN with it off; an estimate is +inf where it has none.
@@ -89,14 +96,16 @@ struct reading {
 class rule {
 public:
     // Why `keys` cannot make a rule, or an empty view when they can: a scale or a
-    // tolerance that is not finite and positive, or a window below two.
+    // tolerance that is not finite and positive, a window below two, or a version
+    // below one.
     static std::string_view check(const rule_keys& keys);
 
     // Builds the rule from keys `check` accepts. Throws std::invalid_argument for
     // keys it does not.
     explicit rule(const rule_keys& keys);
 
-    // 3 without (e) and 5 with it (`ErrorEstimateRule.version`).
+    // The version of the conditions applied (`ErrorEstimateRule.version`): the
+    // keys' `version_with_e` with (e) on, their `version_without_e` with it off.
     int version() const;
 
     // The window, oldest first (`window`): the velocity steps, m/s, and with (e)

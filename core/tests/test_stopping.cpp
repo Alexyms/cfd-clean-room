@@ -29,7 +29,9 @@ rule_keys keys(bool e = false, std::size_t window = 5) {
             .iteration_error_tol = 1e-6,
             .mass_imbalance_tol = 1e-9,
             .viscosity_condition = e,
-            .window = window};
+            .window = window,
+            .version_without_e = 3,
+            .version_with_e = 5};
 }
 
 TEST(Rule, RefusesKeysThatAreNotFiniteAndPositiveOrAWindowBelowTwo) {
@@ -50,8 +52,28 @@ TEST(Rule, RefusesKeysThatAreNotFiniteAndPositiveOrAWindowBelowTwo) {
         EXPECT_THROW(rule{k}, std::invalid_argument);
     }
     EXPECT_FALSE(rule::check(keys(false, 1)).empty());
+}
+
+TEST(Rule, TheVersionsAreTheOnesHandedInAndEachIsAtLeastOne) {
     EXPECT_EQ(rule(keys()).version(), 3);
     EXPECT_EQ(rule(keys(true)).version(), 5);
+    // Neither number is the core's own: the pair is whatever the keys carry.
+    rule_keys k = keys();
+    k.version_without_e = 7;
+    k.version_with_e = 11;
+    EXPECT_EQ(rule(k).version(), 7);
+    k.viscosity_condition = true;
+    EXPECT_EQ(rule(k).version(), 11);
+    for (const int bad : {0, -1}) {
+        k = keys();
+        k.version_without_e = bad;
+        EXPECT_FALSE(rule::check(k).empty());
+        EXPECT_THROW(rule{k}, std::invalid_argument);
+        k = keys();
+        k.version_with_e = bad;
+        EXPECT_FALSE(rule::check(k).empty());
+        EXPECT_THROW(rule{k}, std::invalid_argument);
+    }
 }
 
 TEST(Rule, TheWindowKeepsTheLastStepsOldestFirst) {

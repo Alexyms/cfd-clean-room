@@ -3327,7 +3327,8 @@ double python_float(nb::handle value) { return nb::cast<double>(nb::float_(value
 
 // The rule's keys from the reference's arguments, refused as `ErrorEstimateRule`
 // refuses them.
-cfdcore::stopping::rule_keys read_rule_keys(nb::handle window, nb::handle velocity_scale,
+cfdcore::stopping::rule_keys read_rule_keys(nb::handle window, nb::handle version_without_e,
+                                            nb::handle version_with_e, nb::handle velocity_scale,
                                             nb::handle flux_scale,
                                             nb::handle iteration_error_tol,
                                             nb::handle mass_imbalance_tol,
@@ -3347,6 +3348,19 @@ cfdcore::stopping::rule_keys read_rule_keys(nb::handle window, nb::handle veloci
         refuse_value("window must hold at least two steps, got " + std::to_string(length));
     }
     keys.window = static_cast<std::size_t>(length);
+    // The reference's `RULE_VERSION_WITHOUT_E` and `RULE_VERSION_WITH_E`, handed in
+    // with the window so that the core holds no copy of either.
+    const std::array<std::pair<const char*, nb::handle>, 2> versions{
+        {{"version_without_e", version_without_e}, {"version_with_e", version_with_e}}};
+    int* const targets[2] = {&keys.version_without_e, &keys.version_with_e};
+    for (std::size_t i = 0; i < versions.size(); ++i) {
+        const std::int64_t number = read_count(versions[i].second, versions[i].first);
+        if (number < 1 || number > std::numeric_limits<int>::max()) {
+            refuse_value(std::string(versions[i].first) + " must be at least one, got " +
+                         std::to_string(number));
+        }
+        *targets[i] = static_cast<int>(number);
+    }
     return keys;
 }
 
@@ -3359,12 +3373,13 @@ struct StoppingRule2 {
     std::vector<double> viscosity_scales;
 };
 
-void rule_init(StoppingRule2* self, nb::handle window, nb::handle velocity_scale,
-               nb::handle flux_scale, nb::handle iteration_error_tol,
-               nb::handle mass_imbalance_tol, nb::handle viscosity_condition) {
-    new (self) StoppingRule2(read_rule_keys(window, velocity_scale, flux_scale,
-                                            iteration_error_tol, mass_imbalance_tol,
-                                            viscosity_condition));
+void rule_init(StoppingRule2* self, nb::handle window, nb::handle version_without_e,
+               nb::handle version_with_e, nb::handle velocity_scale, nb::handle flux_scale,
+               nb::handle iteration_error_tol, nb::handle mass_imbalance_tol,
+               nb::handle viscosity_condition) {
+    new (self) StoppingRule2(read_rule_keys(window, version_without_e, version_with_e,
+                                            velocity_scale, flux_scale, iteration_error_tol,
+                                            mass_imbalance_tol, viscosity_condition));
 }
 
 nb::tuple window_of(const Rule& r) {
@@ -3606,14 +3621,15 @@ void flow_init(Flow2* self, const Grid2& g, Predictor2& predictor, Corrector2& c
         input.rule = cfdcore::flow::stop_rule::velocity_step;
         input.convergence_tol = read_number(rule[1], "convergence_tol");
     } else if (kind == "error_estimate") {
-        if (nb::len(rule) != 6) {
+        if (nb::len(rule) != 8) {
             refuse_type(
-                "Flow2: rule is ('error_estimate', window, velocity_scale, flux_scale, "
-                "iteration_error_tol, mass_imbalance_tol)");
+                "Flow2: rule is ('error_estimate', window, version_without_e, "
+                "version_with_e, velocity_scale, flux_scale, iteration_error_tol, "
+                "mass_imbalance_tol)");
         }
         input.rule = cfdcore::flow::stop_rule::error_estimate;
-        input.keys = read_rule_keys(rule[1], rule[2], rule[3], rule[4], rule[5],
-                                    nb::bool_(model != nullptr));
+        input.keys = read_rule_keys(rule[1], rule[2], rule[3], rule[4], rule[5], rule[6],
+                                    rule[7], nb::bool_(model != nullptr));
     } else {
         refuse_value("Flow2: the rule is 'velocity_step' or 'error_estimate'");
     }
@@ -3648,13 +3664,6 @@ void flow_state(Flow2& self, const Matrix& u, const Matrix& v, const Matrix& p,
 }
 
 void flow_restore(Flow2& self, nb::handle steps, nb::handle viscosity_steps) {
-    const Rule* r = self.solver.rule();
-    if (r == nullptr) {
-        if (nb::len(steps) != 0 || nb::len(viscosity_steps) != 0) {
-            refuse_value("Flow2: a window restored under velocity_step");
-        }
-        return;
-    }
     std::vector<double> velocity;
     std::vector<double> viscosity;
     for (nb::handle s : steps) {
@@ -3663,7 +3672,11 @@ void flow_restore(Flow2& self, nb::handle steps, nb::handle viscosity_steps) {
     for (nb::handle s : viscosity_steps) {
         viscosity.push_back(python_float(s));
     }
-    if (self.solver.restore(velocity, viscosity) != cfdcore::stopping::restore_status::ok) {
+    const cfdcore::stopping::restore_status status = self.solver.restore(velocity, viscosity);
+    if (status == cfdcore::stopping::restore_status::no_rule) {
+        refuse_value("Flow2: a window restored under velocity_step");
+    }
+    if (status != cfdcore::stopping::restore_status::ok) {
         refuse_value("Flow2: the window is not one the rule restores");
     }
 }
@@ -3787,9 +3800,17 @@ nb::dict flow_solve(Flow2& self, nb::handle max_outer, nb::handle first) {
     out["pressure_products"] =
         column<std::int64_t>(records, n, [](const record& r) { return r.pressure_products; });
     out["reached_cap"] = column<bool>(records, n, [](const record& r) { return r.reached_cap; });
+    out["k_fallbacks"] = column<std::int64_t>(
+        records, n, [](const record& r) { return static_cast<std::int64_t>(r.k_fallbacks); });
+    out["eps_fallbacks"] = column<std::int64_t>(
+        records, n, [](const record& r) { return static_cast<std::int64_t>(r.eps_fallbacks); });
+    out["solves_converged"] =
+        column<bool>(records, n, [](const record& r) { return r.solves_converged; });
     out["failure"] = failure_of(self, result.failure);
-    // A failing iteration whose correction finished: the reference counts its cap
-    // before it raises.
+    // A failing iteration whose correction finished: the reference has recorded its
+    // correction's count and cap, and logged the k-epsilon step's warnings, before
+    // it raises; under a refused scale (condition (e)) it has also appended the
+    // residual and called on_iteration.
     nb::object failing = nb::none();
     using cfdcore::flow::failure;
     const failure kind = result.failure.kind;
@@ -3798,9 +3819,19 @@ nb::dict flow_solve(Flow2& self, nb::handle max_outer, nb::handle first) {
                                   kind == failure::k_not_positive ||
                                   kind == failure::eps_not_positive || kind == failure::nu_scale;
     if (after_correction) {
-        failing = nb::make_tuple(records[n].pressure_iterations, records[n].reached_cap);
+        const record& r = records[n];
+        nb::dict held;
+        held["pressure_iterations"] = r.pressure_iterations;
+        held["pressure_products"] = r.pressure_products;
+        held["reached_cap"] = r.reached_cap;
+        held["k_fallbacks"] = r.k_fallbacks;
+        held["eps_fallbacks"] = r.eps_fallbacks;
+        held["solves_converged"] = r.solves_converged;
+        held["residual"] = kind == failure::nu_scale ? nb::object(nb::float_(r.residual))
+                                                     : nb::none();
+        failing = held;
     }
-    out["failing_correction"] = failing;
+    out["failing_record"] = failing;
     nb::dict seconds;
     seconds["momentum"] = result.seconds.momentum;
     seconds["pressure"] = result.seconds.pressure;
@@ -4511,11 +4542,13 @@ NB_MODULE(_cfdcore, m) {
     nb::class_<StoppingRule2>(
         m, "StoppingRule2",
         "The error_estimate rule (ErrorEstimateRule), its window and readings, with\n"
-        "RATE_WINDOW handed in as the window.")
-        .def("__init__", &rule_init, nb::arg("window"), nb::arg("velocity_scale"),
-             nb::arg("flux_scale"), nb::arg("iteration_error_tol"),
-             nb::arg("mass_imbalance_tol"), nb::arg("viscosity_condition") = false,
-             "Refused as ErrorEstimateRule refuses its arguments.")
+        "RATE_WINDOW handed in as the window and the two rule versions beside it.")
+        .def("__init__", &rule_init, nb::arg("window"), nb::arg("version_without_e"),
+             nb::arg("version_with_e"), nb::arg("velocity_scale"), nb::arg("flux_scale"),
+             nb::arg("iteration_error_tol"), nb::arg("mass_imbalance_tol"),
+             nb::arg("viscosity_condition") = false,
+             "Refused as ErrorEstimateRule refuses its arguments; the versions are\n"
+             "RULE_VERSION_WITHOUT_E and RULE_VERSION_WITH_E, each at least one.")
         .def_prop_ro("version", [](const StoppingRule2& self) { return self.rule.version(); })
         .def("window", [](const StoppingRule2& self) { return window_of(self.rule); },
              "The velocity and the viscosity steps, oldest first, as two tuples.")
@@ -4562,8 +4595,10 @@ NB_MODULE(_cfdcore, m) {
              nb::keep_alive<1, 3>(), nb::keep_alive<1, 4>(), nb::keep_alive<1, 5>(),
              nb::keep_alive<1, 6>(), nb::keep_alive<1, 7>(),
              "rule: ('velocity_step', convergence_tol) or ('error_estimate', window,\n"
-             "velocity_scale, flux_scale, iteration_error_tol, mass_imbalance_tol).\n"
-             "The model and its boundary make the solve coupled; mu_eff a fixed one.")
+             "version_without_e, version_with_e, velocity_scale, flux_scale,\n"
+             "iteration_error_tol, mass_imbalance_tol). The model and its boundary make\n"
+             "the solve coupled; mu_eff a fixed one, refused where it is not finite or\n"
+             "not positive in a non-SOLID cell.")
         .def("flow_state", &flow_state, nb::arg("u").noconvert(), nb::arg("v").noconvert(),
              nb::arg("p").noconvert(), nb::arg("k").noconvert().none() = nb::none(),
              nb::arg("eps").noconvert().none() = nb::none(),

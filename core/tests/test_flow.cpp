@@ -117,7 +117,9 @@ struct box {
                    .iteration_error_tol = 1e-6,
                    .mass_imbalance_tol = 1e-9,
                    .viscosity_condition = false,
-                   .window = 20};
+                   .window = 20,
+                   .version_without_e = 3,
+                   .version_with_e = 5};
         return in;
     }
 
@@ -190,10 +192,42 @@ TEST(Solver, RefusesModulesAndNumbersItCannotUse) {
     in = b.laminar(stop_rule::error_estimate);
     in.keys.window = 1;
     EXPECT_FALSE(solver<2>::check(b.g, b.parts(), in).empty());
+    in = b.laminar(stop_rule::error_estimate);
+    in.keys.version_with_e = 0;
+    EXPECT_FALSE(solver<2>::check(b.g, b.parts(), in).empty());
     in = b.laminar();
     in.fluid = 7;
     EXPECT_FALSE(solver<2>::check(b.g, b.parts(), in).empty());
     EXPECT_THROW(solver<2>(b.g, missing, b.laminar()), std::invalid_argument);
+}
+
+// A fixed viscosity is read once, as the predictor reads it: the reason names
+// which of the two refusals it is, a value that is not finite before one that is
+// not positive.
+TEST(Solver, ReadsAFixedViscosityOnceAndRefusesWhatThePredictorRefuses) {
+    box b;
+    std::vector<double> mu_eff(box::nx * box::ny, 0.05);
+    flow_input<2> in = b.laminar();
+    in.mode = viscosity_mode::fixed;
+    in.mu_eff = mu_eff;
+    EXPECT_TRUE(solver<2>::check(b.g, b.parts(), in).empty());
+    EXPECT_NO_THROW(solver<2>(b.g, b.parts(), in));
+    for (const double bad : {nan_value, std::numeric_limits<double>::infinity(),
+                             -std::numeric_limits<double>::infinity()}) {
+        mu_eff[7] = bad;
+        EXPECT_NE(solver<2>::check(b.g, b.parts(), in).find("finite"), std::string_view::npos);
+        EXPECT_THROW(solver<2>(b.g, b.parts(), in), std::invalid_argument);
+    }
+    for (const double bad : {0.0, -0.05}) {
+        mu_eff[7] = bad;
+        EXPECT_NE(solver<2>::check(b.g, b.parts(), in).find("positive"),
+                  std::string_view::npos);
+        EXPECT_THROW(solver<2>(b.g, b.parts(), in), std::invalid_argument);
+    }
+    // Both at once: the value that is not finite is named first, as the reference does.
+    mu_eff[7] = nan_value;
+    mu_eff[8] = -1.0;
+    EXPECT_NE(solver<2>::check(b.g, b.parts(), in).find("finite"), std::string_view::npos);
 }
 
 // The box's faces at rest; the lid's velocity is its edge's tangential condition.
@@ -276,6 +310,18 @@ TEST(Solver, ChunksOfAnySizeMakeTheSameSolve) {
     std::vector<double> kept(one.rule()->steps().begin(), one.rule()->steps().end());
     EXPECT_EQ(two.restore(kept, {}), stopping::restore_status::ok);
     EXPECT_EQ(two.restore(kept, {}), stopping::restore_status::already_stepped);
+}
+
+// A solve under the velocity step has no rule: an empty window restores nothing and
+// a window with a step is refused as what it is, a window for no rule.
+TEST(Solver, AWindowRestoredUnderTheVelocityStepIsRefusedAsHavingNoRule) {
+    box b;
+    solver<2> s(b.g, b.parts(), b.laminar());
+    EXPECT_EQ(s.restore({}, {}), stopping::restore_status::ok);
+    const std::vector<double> steps{1e-3};
+    EXPECT_EQ(s.restore(steps, {}), stopping::restore_status::no_rule);
+    EXPECT_EQ(s.restore({}, steps), stopping::restore_status::no_rule);
+    EXPECT_EQ(s.rule(), nullptr);
 }
 
 TEST(Solver, StopsUnderTheVelocityStepOnlyBelowItsBound) {

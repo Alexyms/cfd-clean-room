@@ -22,10 +22,6 @@ void require(bool condition, const char* what) {
 
 bool positive_and_finite(double x) { return std::isfinite(x) && x > 0.0; }
 
-// The two versions (`RULE_VERSION_WITHOUT_E`, `RULE_VERSION_WITH_E`).
-constexpr int version_without_e = 3;
-constexpr int version_with_e = 5;
-
 // The operands of the summary's block: the imbalances.
 struct imbalance_operands {
     const double* imbalance;
@@ -106,6 +102,9 @@ std::string_view rule::check(const rule_keys& keys) {
     if (keys.window < 2) {
         return "the window holds fewer than two steps";
     }
+    if (keys.version_without_e < 1 || keys.version_with_e < 1) {
+        return "a version of the rule is below one";
+    }
     return {};
 }
 
@@ -138,7 +137,7 @@ void rule::reset() {
 }
 
 int rule::version() const {
-    return keys_.viscosity_condition ? version_with_e : version_without_e;
+    return keys_.viscosity_condition ? keys_.version_with_e : keys_.version_without_e;
 }
 
 void rule::push(std::vector<double>& window, std::size_t length, double value) {
