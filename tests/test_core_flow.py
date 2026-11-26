@@ -1549,22 +1549,23 @@ def _resumed(
     return start
 
 
-def _spiked(seed: int, plant: str) -> Callable[[Mesh], dict[str, object]]:
-    """A warm start with k or eps spoilt at cells drawn from SEED (the positivity tests)."""
+def _eps_spiked(seed: int) -> Callable[[Mesh], dict[str, object]]:
+    """A warm start with eps set to a tiny value at one to three cells drawn from SEED.
+
+    The step's eps goes negative in the first outer iteration, so the failure does
+    not wait on a growth that another BLAS or NumPy could take elsewhere.
+    """
 
     def start(_mesh: Mesh) -> dict[str, object]:
-        rng = _rng("pos", seed, plant)
+        rng = _rng("pos", seed, "eps_spike")
         initial = _planted(ROOM, "coupled", rng)
         fields = {name: np.array(getattr(initial, name)) for name in FIELDS}
-        j, i = int(rng.integers(1, 14)), int(rng.integers(1, 39))
-        if plant == "eps_spike":
-            for _ in range(int(rng.integers(1, 4))):
-                value = 10.0 ** rng.uniform(-300.0, -5.0)
-                fields["eps"][int(rng.integers(1, 14)), int(rng.integers(1, 39))] = (
-                    value
-                )
-        else:
-            fields["k"][j, i] *= 1e6
+        # The draws of a first cell are the reference's: its row and column are
+        # drawn after the cell's value, as the right-hand side is evaluated first.
+        rng.integers(1, 14), rng.integers(1, 39)
+        for _ in range(int(rng.integers(1, 4))):
+            value = 10.0 ** rng.uniform(-300.0, -5.0)
+            fields["eps"][int(rng.integers(1, 14)), int(rng.integers(1, 39))] = value
         return {"initial": FlowState(**fields)}
 
     return start
@@ -1662,18 +1663,18 @@ PLANTED = [
     ),
     pytest.param(
         "coupled",
-        {"max_simple_iter": 14},
-        _spiked(11, "k_big"),
+        {"max_simple_iter": 8},
+        _resumed(k=([(7, 11)], 1e-100)),
         None,
         PositivityError,
-        POSITIVITY.format("k"),
+        POSITIVITY.format("eps"),
         _after_a_checkpoint_off_the_diagonal,
-        id="k-after-a-checkpoint-off-the-diagonal",
+        id="eps-after-a-resume-off-the-diagonal",
     ),
     pytest.param(
         "coupled",
         {"max_simple_iter": 14},
-        _spiked(14, "eps_spike"),
+        _eps_spiked(14),
         5.0,
         PositivityError,
         POSITIVITY.format("eps"),
@@ -1971,15 +1972,16 @@ def test_the_k_epsilon_steps_warnings_are_the_references(
 
     A conjugate-gradient cap of one to three leaves both solves capped, so each step
     falls back to Jacobi and stops at the cap, and the reference logs both warnings
-    every iteration, before the iteration's own lines. The last case spoils k so
-    that the step then fails its signs: the warnings were logged before it raised,
-    and the core's must have been too.
+    every iteration, before the iteration's own lines. The last case resumes a
+    state whose k is tiny in one cell, so that the step then fails its signs at
+    the first iteration: the warnings were logged before it raised, and the
+    core's must have been too.
     """
-    raw = _raw(ROOM, "coupled", pressure_preconditioner="jacobi", max_simple_iter=14)
+    raw = _raw(ROOM, "coupled", pressure_preconditioner="jacobi", max_simple_iter=8)
     raw["turbulence"]["max_iter"] = max_iter
     mesh, config = _configured(raw)
     if spiked:
-        keys = _spiked(1, "k_big")(mesh)
+        keys = _resumed(k=([(7, 11)], 1e-100))(mesh)
     else:
         keys = {"initial": _planted(ROOM, "coupled", _rng("warnings", max_iter))}
     outcomes = []
