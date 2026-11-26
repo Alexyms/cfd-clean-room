@@ -86,6 +86,15 @@ jobs:
         with:
           python-version: "3.12"
 
+      # The bitwise target is the reference on the same machine with the same C
+      # library (ADR-017 G, 2026-11-26), so the job records which it ran on.
+      - name: Record the runner's image, C library and processor
+        run: |
+          echo "image: ${ImageOS:-unknown} ${ImageVersion:-unknown}"
+          grep PRETTY_NAME /etc/os-release
+          ldd --version | head -n 1
+          grep -m 1 "model name" /proc/cpuinfo
+
       - name: Install Ninja
         run: sudo apt-get update && sudo apt-get install -y ninja-build
 
