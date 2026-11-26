@@ -20,9 +20,14 @@ breakdown as the error the reference's own arithmetic raises. Prompt 94 adds the
 model's and the wall functions': their construction (which face admits air, read from the
 shared coverage as ``TurbulenceBoundary`` reads it, with its refusal of a segment that states
 no turbulence), their results as ``TurbulenceState`` and ``TurbulenceConditions``, and a
-positivity failure as ``PositivityError``.
+positivity failure as ``PositivityError``. Prompt 95 adds the stopping rule's and the
+outer iteration's: a ``_cfdcore.StoppingRule2`` from ``ErrorEstimateRule``'s own
+arguments, the modules of a steady solve on one grid, a ``_cfdcore.Flow2`` from a
+``StaggeredSolver``'s set-up, and a chunk's failure as the exception the reference's
+solve raises there.
 """
 
+import dataclasses
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING
 
@@ -36,7 +41,7 @@ from src.boundary_concentration import (
 )
 from src.boundary_registry import VELOCITY_INLET, BoundaryRegistry
 from src.boundary_staggered import StaggeredBoundary
-from src.config import UPWIND, BoundarySpec, SimConfig
+from src.config import ERROR_ESTIMATE, UPWIND, BoundarySpec, SimConfig
 from src.mesh import FLUID, SOLID, Mesh
 from src.monitor import COUNTING_STATE, ArrivalTracker
 from src.multigrid import (
@@ -46,9 +51,15 @@ from src.multigrid import (
     SMOOTHING_SWEEPS,
 )
 from src.particles import ParticlePhysics
-from src.pressure import RESIDUAL_FLOOR, PressureCorrection, PressureCorrector
+from src.pressure import (
+    RESIDUAL_FLOOR,
+    ZERO_SCALE,
+    PressureCorrection,
+    PressureCorrector,
+)
 from src.solver_transport import DEPOSIT_SURFACES, ConservationBreachError, MassBudget
 from src.staggered import FaceVelocities, edge_cell_inputs
+from src.stopping import RATE_WINDOW
 from src.time_integration import (
     DEFINED_RTOL,
     HUNDRED_TO_ONE,
@@ -543,7 +554,10 @@ def sync_trackers(
 
 
 def momentum_predictor(
-    mesh: Mesh, config: SimConfig, boundary: StaggeredBoundary
+    mesh: Mesh,
+    config: SimConfig,
+    boundary: StaggeredBoundary,
+    grid: "_cfdcore.Grid2 | None" = None,
 ) -> "_cfdcore.MomentumPredictor2":
     """The core's momentum predictor from ``MomentumPredictor``'s own arguments (prompt 92).
 
@@ -556,6 +570,8 @@ def momentum_predictor(
     boundary : StaggeredBoundary
         Supplies the edges' tangential conditions and the vent faces, which
         are handed over only where there are any, as the reference holds them.
+    grid : _cfdcore.Grid2, optional
+        The mesh's grid where the caller has one, else a new one.
 
     Returns
     -------
@@ -567,7 +583,7 @@ def momentum_predictor(
     edges = boundary.tangential_conditions()
     vents = boundary.vent_faces()
     return _cfdcore.MomentumPredictor2(
-        _cfdcore.Grid2(mesh.x, mesh.xc, mesh.y, mesh.yc, mesh.cell_type, SOLID),
+        core_grid(mesh) if grid is None else grid,
         mesh.dx_cell,
         mesh.dy_cell,
         mesh.dx_face,
@@ -605,6 +621,7 @@ def pressure_corrector(
     config: SimConfig,
     boundary: StaggeredBoundary,
     reference: PressureCorrector,
+    grid: "_cfdcore.Grid2 | None" = None,
 ) -> "_cfdcore.PressureCorrector2":
     """The core's pressure correction from ``PressureCorrector``'s own arguments (prompt 93).
 
@@ -620,6 +637,8 @@ def pressure_corrector(
     reference : PressureCorrector
         Supplies the flux scale, which the boundary's inflow makes and which
         stays in Python (ADR-017 E).
+    grid : _cfdcore.Grid2, optional
+        The mesh's grid where the caller has one, else a new one.
 
     Returns
     -------
@@ -630,7 +649,7 @@ def pressure_corrector(
 
     outlets = boundary.pressure_outlets()
     return _cfdcore.PressureCorrector2(
-        _cfdcore.Grid2(mesh.x, mesh.xc, mesh.y, mesh.yc, mesh.cell_type, SOLID),
+        core_grid(mesh) if grid is None else grid,
         mesh.dx_cell,
         mesh.dy_cell,
         [outlets[edge].is_outlet for edge in ("left", "right", "bottom", "top")],
@@ -943,3 +962,170 @@ def positivity_error(failure: "_cfdcore.PositivityFailure") -> PositivityError:
         f"({np.float64(failure.value)!r}); least {minimum!r}",
         minimum,
     )
+
+
+# ---- The stopping rule and the outer iteration (prompt 95) --------------------
+
+
+def error_estimate_rule(
+    velocity_scale: float,
+    flux_scale: float,
+    iteration_error_tol: float,
+    mass_imbalance_tol: float,
+    *,
+    viscosity_condition: bool = False,
+) -> "_cfdcore.StoppingRule2":
+    """The core's rule from ``ErrorEstimateRule``'s own arguments, its window RATE_WINDOW."""
+    import _cfdcore
+
+    return _cfdcore.StoppingRule2(
+        RATE_WINDOW,
+        velocity_scale,
+        flux_scale,
+        iteration_error_tol,
+        mass_imbalance_tol,
+        viscosity_condition,
+    )
+
+
+@dataclasses.dataclass(frozen=True, eq=False)
+class FlowModules:
+    """The core's modules of a steady solve, built on one grid, which a ``Flow2`` calls."""
+
+    grid: "_cfdcore.Grid2"
+    predictor: "_cfdcore.MomentumPredictor2"
+    corrector: "_cfdcore.PressureCorrector2"
+    outlets: "_cfdcore.OutletFaces2"
+    model: "_cfdcore.KEpsilon2 | None"
+    walls: "_cfdcore.TurbulenceBoundary2 | None"
+
+
+def flow_modules(
+    mesh: Mesh,
+    config: SimConfig,
+    boundary: StaggeredBoundary,
+    corrector: PressureCorrector,
+) -> FlowModules:
+    """The modules ``StaggeredSolver`` builds, the core's, on one grid (prompt 95).
+
+    Parameters
+    ----------
+    mesh, config, boundary
+        The solver's own arguments.
+    corrector : PressureCorrector
+        The reference solver's corrector, which holds the flux scale.
+
+    Returns
+    -------
+    FlowModules
+        The predictor, the corrector, the outlets and, with the turbulence
+        section, the model and its boundary.
+    """
+    grid = core_grid(mesh)
+    turbulent = config.turbulence is not None
+    return FlowModules(
+        grid,
+        momentum_predictor(mesh, config, boundary, grid),
+        pressure_corrector(mesh, config, boundary, corrector, grid),
+        outlet_faces(mesh, boundary, grid),
+        k_epsilon(mesh, config, boundary, grid) if turbulent else None,
+        turbulence_boundary(mesh, config, boundary, grid) if turbulent else None,
+    )
+
+
+def flow_solver(
+    modules: FlowModules,
+    config: SimConfig,
+    boundary: StaggeredBoundary,
+    reference_velocity: float,
+    flux_scale: float | None,
+    mu_eff: np.ndarray | None = None,
+) -> "_cfdcore.Flow2":
+    """A ``_cfdcore.Flow2`` with the numbers ``StaggeredSolver`` forms (prompt 95).
+
+    Parameters
+    ----------
+    modules : FlowModules
+        The core's modules.
+    config : SimConfig
+        Supplies rho, mu, the turbulence section and the stopping keys.
+    boundary : StaggeredBoundary
+        Supplies the rule's velocity scale, the largest prescribed velocity.
+    reference_velocity : float
+        The solver's ``reference_velocity``.
+    flux_scale : float or None
+        The solver's ``flux_scale``; None under velocity_step.
+    mu_eff : np.ndarray, optional
+        The effective viscosity a fixed eddy viscosity makes
+        (``_effective_viscosity``), held for the solve.
+
+    Returns
+    -------
+    _cfdcore.Flow2
+        The solve, its modules kept alive.
+    """
+    import _cfdcore
+
+    if config.stopping_rule == ERROR_ESTIMATE:
+        assert flux_scale is not None
+        rule: tuple = (
+            "error_estimate",
+            RATE_WINDOW,
+            boundary.get_max_boundary_velocity(),
+            flux_scale,
+            config.iteration_error_tol,
+            config.mass_imbalance_tol,
+        )
+    else:
+        rule = ("velocity_step", config.convergence_tol)
+    spec = config.turbulence
+    return _cfdcore.Flow2(
+        modules.grid,
+        modules.predictor,
+        modules.corrector,
+        modules.outlets,
+        modules.model,
+        modules.walls,
+        FLUID,
+        config.mu,
+        config.rho,
+        config.mu / config.rho,
+        1.0 if spec is None else spec.alpha_turbulence,
+        max(reference_velocity, ZERO_SCALE),
+        rule,
+        mu_eff,
+    )
+
+
+def flow_error(failure: Mapping[str, object]) -> Exception:
+    """The exception the reference's solve raises where a core chunk failed.
+
+    Parameters
+    ----------
+    failure : Mapping[str, object]
+        A chunk's ``failure``: its type's name, its message and, for k or eps
+        not positive, the bad cells' numbers.
+
+    Returns
+    -------
+    Exception
+        A PositivityError naming the outer iteration, as ``_turbulence_step``
+        raises it; the pressure solve's breakdown as ``breakdown_error`` makes
+        it; otherwise the ValueError of the reference's message.
+    """
+    kind = failure["type"]
+    if kind == "PositivityError":
+        minimum = float(failure["minimum"])  # type: ignore[arg-type]
+        base = (
+            f"{failure['quantity']} is not positive and finite at {failure['count']} "
+            f"non-SOLID cell(s), first at row {failure['row']}, column "
+            f"{failure['column']} ({np.float64(failure['value'])!r}); least {minimum!r}"
+        )
+        return PositivityError(
+            f"outer iteration {failure['iteration']}: {base}", minimum
+        )
+    if kind == "ZeroDivisionError":
+        return ZeroDivisionError("division by zero in the conjugate gradients")
+    if kind == "LinAlgError":
+        return np.linalg.LinAlgError("Eigenvalues did not converge")
+    return ValueError(str(failure["message"]))

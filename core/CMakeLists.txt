@@ -54,6 +54,7 @@ add_library(cfdcore STATIC
     src/channels.cpp
     src/dense.cpp
     src/elementary.cpp
+    src/flow.cpp
     src/grid.cpp
     src/layout.cpp
     src/march.cpp
@@ -63,6 +64,7 @@ add_library(cfdcore STATIC
     src/recovery.cpp
     src/reduce.cpp
     src/scalar.cpp
+    src/stopping.cpp
     src/transport.cpp
     src/turbulence.cpp
     src/walls.cpp)
@@ -86,6 +88,7 @@ if(CFD_CORE_TESTS)
     add_executable(cfdcore_tests
         tests/test_dense.cpp
         tests/test_elementary.cpp
+        tests/test_flow.cpp
         tests/test_grid.cpp
         tests/test_lanes.cpp
         tests/test_march.cpp
@@ -95,6 +98,7 @@ if(CFD_CORE_TESTS)
         tests/test_pressure.cpp
         tests/test_reduce.cpp
         tests/test_scalar.cpp
+        tests/test_stopping.cpp
         tests/test_transport.cpp
         tests/test_turbulence.cpp
         tests/test_walls.cpp)

@@ -16,6 +16,7 @@
 #include "cfdcore/arrival.hpp"
 #include "cfdcore/channels.hpp"
 #include "cfdcore/dense.hpp"
+#include "cfdcore/flow.hpp"
 #include "cfdcore/grid.hpp"
 #include "cfdcore/march.hpp"
 #include "cfdcore/momentum.hpp"
@@ -24,6 +25,7 @@
 #include "cfdcore/recovery.hpp"
 #include "cfdcore/reduce.hpp"
 #include "cfdcore/scalar.hpp"
+#include "cfdcore/stopping.hpp"
 #include "cfdcore/transport.hpp"
 #include "cfdcore/turbulence.hpp"
 #include "cfdcore/walls.hpp"
@@ -2446,27 +2448,9 @@ using cfdcore::turbulence::step_status;
 // The last step's records beside the model, as `KEpsilonModel` holds them.
 struct KEpsilon2 {
     KEpsilon2(const Grid2& g, const cfdcore::turbulence::model_input<2>& input)
-        : model(g, input) {
-        for (int d = 0; d < 2; ++d) {
-            const std::size_t stride = g.fields().face_stride(d);
-            const std::size_t n = g.cells(d);
-            for (std::size_t f = 0; f < g.fields().face_count(d); ++f) {
-                const std::size_t at = (f / stride) % (n + 1);
-                if (at == 0 || at == n) {
-                    edges[d].push_back(f);
-                } else if (model.live_faces(d)[f] != model.inner_faces(d)[f]) {
-                    // An interior face with a flux that diffusion does not cross.
-                    vents[d].push_back(f);
-                }
-            }
-        }
-    }
+        : model(g, input) {}
     Model2 model;
     cfdcore::turbulence::step_result last{};
-    // The domain's faces and the vents' normal to each direction, whose inflow
-    // values the checks read.
-    std::array<std::vector<std::size_t>, 2> edges;
-    std::array<std::vector<std::size_t>, 2> vents;
 };
 
 // A quantity is not positive and finite at a non-SOLID cell after a step
@@ -2623,38 +2607,39 @@ constexpr std::array<const char*, 10> condition_names{
     "production",
 };
 
+// A step's refusal of its conditions (`_check_conditions`), from the core's check,
+// in the reference's words; empty where the check passed.
+std::string condition_message(const cfdcore::turbulence::condition_check& check) {
+    using cfdcore::turbulence::condition_status;
+    switch (check.status) {
+        case condition_status::ok:
+            return {};
+        case condition_status::not_finite:
+            return std::string("conditions.") + condition_names[check.array] + " must be finite";
+        case condition_status::inflow_on_domain:
+            return "conditions' inflow k and eps must be positive on the domain faces";
+        case condition_status::inflow_on_vents:
+            return "conditions' inflow k and eps must be positive on the vent faces";
+        case condition_status::eps_wall:
+            return "conditions.eps_wall must be positive where eps is held";
+        case condition_status::production:
+            return "conditions.production must be non-negative where it is given";
+    }
+    return {};
+}
+
+void refuse_condition(const cfdcore::turbulence::condition_check& check) {
+    const std::string message = condition_message(check);
+    if (!message.empty()) {
+        refuse_value(message);
+    }
+}
+
 // The conditions' range checks, from the inflow's positivity down, in the
 // reference's order: what a step refuses of conditions whose arrays are of the
 // right shapes and finite.
 void refuse_out_of_range(const KEpsilon2& self, const cfdcore::turbulence::conditions<2>& c) {
-    const auto positive_at = [&](const std::array<std::vector<std::size_t>, 2>& faces) {
-        for (std::size_t d = 0; d < 2; ++d) {
-            for (const std::size_t f : faces[d]) {
-                if (!(c.inflow_k[d][f] > 0.0 && c.inflow_eps[d][f] > 0.0)) {
-                    return false;
-                }
-            }
-        }
-        return true;
-    };
-    if (!positive_at(self.edges)) {
-        refuse_value("conditions' inflow k and eps must be positive on the domain faces");
-    }
-    if (!positive_at(self.vents)) {
-        refuse_value("conditions' inflow k and eps must be positive on the vent faces");
-    }
-    bool held = true;
-    bool given = true;
-    for (std::size_t i = 0; i < c.eps_held.size(); ++i) {
-        held &= !c.eps_held[i] | (c.eps_wall[i] > 0.0);
-        given &= !c.production_given[i] | (c.production[i] >= 0.0);
-    }
-    if (!held) {
-        refuse_value("conditions.eps_wall must be positive where eps is held");
-    }
-    if (!given) {
-        refuse_value("conditions.production must be non-negative where it is given");
-    }
+    refuse_condition(self.model.check_ranges(c));
 }
 
 // The refusals of `_check_conditions` that conditions the boundary formed can meet
@@ -2663,16 +2648,7 @@ void refuse_out_of_range(const KEpsilon2& self, const cfdcore::turbulence::condi
 // builds its wall cells from the non-SOLID ones.
 void refuse_formed_conditions(const KEpsilon2& self,
                               const cfdcore::turbulence::conditions<2>& c) {
-    const std::array<std::span<const double>, 10> floats{
-        c.inflow_k[0], c.inflow_eps[0], c.inflow_k[1], c.inflow_eps[1], c.low[0][0],
-        c.high[0][0],  c.low[1][0],     c.high[1][0],  c.eps_wall,      c.production,
-    };
-    for (std::size_t i = 0; i < floats.size(); ++i) {
-        if (!cfdcore::turbulence::all_finite(floats[i])) {
-            refuse_value(std::string("conditions.") + condition_names[i] + " must be finite");
-        }
-    }
-    refuse_out_of_range(self, c);
+    refuse_condition(self.model.check_formed(c));
 }
 
 condition_arrays read_conditions(const KEpsilon2& self, nb::handle conditions) {
@@ -3321,6 +3297,525 @@ nb::tuple inflow_values(nb::handle intensity, nb::handle normal_speed, nb::handl
 }
 
 }  // namespace
+
+// ---------------------------------------------------------------------------
+// The stopping rule and the outer iteration (prompt 95)
+
+using Rule = cfdcore::stopping::rule;
+
+// `_check_positive(name, value)`: a bool, a value that is not finite or not
+// positive is a ValueError naming it as Python prints it; a value `math.isfinite`
+// cannot read is its TypeError.
+double read_positive(nb::handle value, const char* name) {
+    const std::string shown = nb::cast<std::string>(nb::str(value));
+    if (nb::isinstance<bool>(value)) {
+        refuse_value(std::string(name) + " must be positive and finite, got " + shown);
+    }
+    const double number = PyFloat_AsDouble(value.ptr());
+    if (number == -1.0 && PyErr_Occurred() != nullptr) {
+        PyErr_Clear();
+        refuse_type("must be real number, not " + python_type_name(value));
+    }
+    if (!(std::isfinite(number) && number > 0.0)) {
+        refuse_value(std::string(name) + " must be positive and finite, got " + shown);
+    }
+    return number;
+}
+
+// `float(value)`, as the reference converts a step.
+double python_float(nb::handle value) { return nb::cast<double>(nb::float_(value)); }
+
+// The rule's keys from the reference's arguments, refused as `ErrorEstimateRule`
+// refuses them.
+cfdcore::stopping::rule_keys read_rule_keys(nb::handle window, nb::handle velocity_scale,
+                                            nb::handle flux_scale,
+                                            nb::handle iteration_error_tol,
+                                            nb::handle mass_imbalance_tol,
+                                            nb::handle viscosity_condition) {
+    cfdcore::stopping::rule_keys keys;
+    keys.velocity_scale = read_positive(velocity_scale, "velocity_scale");
+    keys.flux_scale = read_positive(flux_scale, "flux_scale");
+    keys.iteration_error_tol = read_positive(iteration_error_tol, "iteration_error_tol");
+    keys.mass_imbalance_tol = read_positive(mass_imbalance_tol, "mass_imbalance_tol");
+    if (!nb::isinstance<bool>(viscosity_condition)) {
+        refuse_type("viscosity_condition must be a bool, got " +
+                    python_type_name(viscosity_condition));
+    }
+    keys.viscosity_condition = nb::cast<bool>(viscosity_condition);
+    const std::int64_t length = read_count(window, "window");
+    if (length < 2) {
+        refuse_value("window must hold at least two steps, got " + std::to_string(length));
+    }
+    keys.window = static_cast<std::size_t>(length);
+    return keys;
+}
+
+// The rule with the readings' histories, as `ErrorEstimateRule` keeps them.
+struct StoppingRule2 {
+    explicit StoppingRule2(const cfdcore::stopping::rule_keys& keys) : rule(keys) {}
+    Rule rule;
+    std::vector<double> estimates;
+    std::vector<double> viscosity_estimates;
+    std::vector<double> viscosity_scales;
+};
+
+void rule_init(StoppingRule2* self, nb::handle window, nb::handle velocity_scale,
+               nb::handle flux_scale, nb::handle iteration_error_tol,
+               nb::handle mass_imbalance_tol, nb::handle viscosity_condition) {
+    new (self) StoppingRule2(read_rule_keys(window, velocity_scale, flux_scale,
+                                            iteration_error_tol, mass_imbalance_tol,
+                                            viscosity_condition));
+}
+
+nb::tuple window_of(const Rule& r) {
+    nb::list steps;
+    nb::list viscosity;
+    for (const double s : r.steps()) {
+        steps.append(nb::float_(s));
+    }
+    for (const double s : r.viscosity_steps()) {
+        viscosity.append(nb::float_(s));
+    }
+    return nb::make_tuple(nb::tuple(steps), nb::tuple(viscosity));
+}
+
+// A window's steps as `restore` reads them, refused in its order: the length, then
+// each value's type and range.
+std::vector<double> read_window(nb::handle values, const char* name, std::size_t window) {
+    const std::size_t n = nb::len(values);
+    if (n > window) {
+        refuse_value(std::string(name) + " holds " + std::to_string(n) +
+                     " steps, more than RATE_WINDOW (" + std::to_string(window) + ")");
+    }
+    std::vector<double> out;
+    out.reserve(n);
+    for (nb::handle value : values) {
+        if (nb::isinstance<bool>(value) || !PyFloat_Check(value.ptr())) {
+            refuse_value(std::string(name) + " must hold floats, got " +
+                         nb::cast<std::string>(nb::repr(value)));
+        }
+        const double x = PyFloat_AsDouble(value.ptr());
+        if (!(std::isfinite(x) && x >= 0.0)) {
+            refuse_value(std::string(name) + " must be finite and non-negative");
+        }
+        out.push_back(x);
+    }
+    return out;
+}
+
+// `restore`'s refusals in its order, then the core's seeding.
+void restore_rule(Rule& r, bool histories, nb::handle steps, nb::handle viscosity_steps) {
+    if (r.stepped() || histories) {
+        refuse_value("restore seeds a new rule; this one has taken steps");
+    }
+    const std::size_t window = r.keys().window;
+    const std::vector<double> velocity = read_window(steps, "steps", window);
+    const std::vector<double> viscosity = read_window(viscosity_steps, "viscosity_steps", window);
+    const bool on = r.keys().viscosity_condition;
+    const std::size_t expected = on ? velocity.size() : 0;
+    if (viscosity.size() != expected) {
+        refuse_value("viscosity_steps must hold " + std::to_string(expected) +
+                     " steps with condition (e) " + (on ? "on" : "off") + ", got " +
+                     std::to_string(viscosity.size()));
+    }
+    if (r.restore(velocity, viscosity) != cfdcore::stopping::restore_status::ok) {
+        refuse_value("restore: the core refused a window the checks accepted");
+    }
+}
+
+void rule_restore(StoppingRule2& self, nb::handle steps, nb::handle viscosity_steps) {
+    restore_rule(self.rule, !self.estimates.empty(), steps, viscosity_steps);
+}
+
+bool rule_update(StoppingRule2& self, nb::handle step, nb::handle imbalance,
+                 nb::handle viscosity_step, nb::handle nu_scale) {
+    const bool on = self.rule.keys().viscosity_condition;
+    if (viscosity_step.is_none() == on || nu_scale.is_none() == on) {
+        refuse_value(
+            "viscosity_step and nu_scale are given exactly when the rule applies condition (e) "
+            "(ADR-012 E)");
+    }
+    double scale = 0.0;
+    if (!nu_scale.is_none()) {
+        // Checked before anything is recorded, so a refused step leaves no trace.
+        scale = read_positive(nu_scale, "nu_scale");
+    }
+    const double velocity = python_float(step);
+    const double viscosity = on ? python_float(viscosity_step) : 0.0;
+    const bool estimates = self.rule.record(velocity, viscosity, scale);
+    const auto& last = self.rule.last();
+    self.estimates.push_back(last.estimate);
+    if (on) {
+        self.viscosity_scales.push_back(last.nu_scale);
+        self.viscosity_estimates.push_back(last.viscosity_estimate);
+    }
+    if (!estimates) {
+        return false;
+    }
+    const nb::object found = imbalance();
+    return self.rule.accept({python_float(found.attr("worst")),
+                             python_float(found.attr("absolute_sum")),
+                             python_float(found.attr("signed_sum"))});
+}
+
+double rule_estimate_of(StoppingRule2& self, nb::handle values, nb::handle scale) {
+    std::vector<double> steps;
+    for (nb::handle value : values) {
+        steps.push_back(python_float(value));
+    }
+    return self.rule.estimate_of(steps, python_float(scale));
+}
+
+nb::list list_of(const std::vector<double>& values) {
+    nb::list out;
+    for (const double x : values) {
+        out.append(nb::float_(x));
+    }
+    return out;
+}
+
+// The imbalance summary of a cell field (`_imbalance_summary`'s three readings).
+nb::tuple imbalance_summary(const Matrix& imbalance) {
+    std::vector<double> magnitude(imbalance.size());
+    const auto found = cfdcore::stopping::summarise(span_of(imbalance), magnitude);
+    return nb::make_tuple(found.worst, found.absolute_sum, found.signed_sum);
+}
+
+// The FLUID cells' indices of a bool mask, ascending.
+std::vector<std::size_t> cells_of(const BoolMatrix& mask) {
+    std::vector<std::size_t> cells;
+    for (std::size_t i = 0; i < mask.size(); ++i) {
+        if (mask.data()[i]) {
+            cells.push_back(i);
+        }
+    }
+    return cells;
+}
+
+double viscosity_scale_of(nb::handle nu, const Matrix& nu_t, const BoolMatrix& fluid) {
+    if (nu_t.shape(0) != fluid.shape(0) || nu_t.shape(1) != fluid.shape(1)) {
+        refuse_type("viscosity_scale: nu_t and fluid differ in shape");
+    }
+    const std::vector<std::size_t> cells = cells_of(fluid);
+    if (cells.empty()) {
+        refuse_value("viscosity_scale: no FLUID cell");
+    }
+    std::vector<double> scratch(cells.size());
+    return cfdcore::stopping::viscosity_scale(read_number(nu, "nu"), span_of(nu_t), cells,
+                                              scratch);
+}
+
+nb::tuple cell_centres_of(const Grid2& g, const Matrix& u, const Matrix& v) {
+    require_shape(u, face_shape(g, 0), "cell_centres", "u");
+    require_shape(v, face_shape(g, 1), "cell_centres", "v");
+    NewArray u_c = new_matrix(cell_shape(g));
+    NewArray v_c = new_matrix(cell_shape(g));
+    cfdcore::flow::cell_centres<2>(g.fields(), 0, span_of(u), out_span(u_c));
+    cfdcore::flow::cell_centres<2>(g.fields(), 1, span_of(v), out_span(v_c));
+    return nb::make_tuple(u_c, v_c);
+}
+
+double largest_change_of(const Matrix& now, const Matrix& before, const BoolMatrix& cells) {
+    if (now.shape(0) != before.shape(0) || now.shape(1) != before.shape(1) ||
+        cells.shape(0) != now.shape(0) || cells.shape(1) != now.shape(1)) {
+        refuse_type("largest_change: the arrays differ in shape");
+    }
+    std::vector<cfdcore::lanes::mask> masks(cells.size());
+    for (std::size_t i = 0; i < masks.size(); ++i) {
+        masks[i] = cfdcore::lanes::mask_of(cells.data()[i]);
+    }
+    return cfdcore::flow::largest_change(span_of(now), span_of(before), masks);
+}
+
+// The coupled prediction's effective viscosity, refused in the reference's words.
+NewArray effective_viscosity_of(const Matrix& nu_t, const BoolMatrix& live, nb::handle mu,
+                                nb::handle rho) {
+    if (nu_t.shape(0) != live.shape(0) || nu_t.shape(1) != live.shape(1)) {
+        refuse_type("effective_viscosity: nu_t and live differ in shape");
+    }
+    std::vector<cfdcore::lanes::mask> masks(live.size());
+    for (std::size_t i = 0; i < masks.size(); ++i) {
+        masks[i] = cfdcore::lanes::mask_of(live.data()[i]);
+    }
+    NewArray out = new_matrix({nu_t.shape(0), nu_t.shape(1)});
+    bool not_finite = false;
+    if (!cfdcore::flow::effective_viscosity(span_of(nu_t), masks, read_number(mu, "mu"),
+                                            read_number(rho, "rho"), out_span(out),
+                                            not_finite)) {
+        refuse_value(not_finite ? "eddy_viscosity must be finite in every non-SOLID cell"
+                                : "eddy_viscosity must be non-negative (ADR-012 D)");
+    }
+    return out;
+}
+
+// The solve with its modules, which it keeps alive.
+using FlowSolver2 = cfdcore::flow::solver<2>;
+
+struct Flow2 {
+    Flow2(const Grid2& g, const cfdcore::flow::modules<2>& m,
+          const cfdcore::flow::flow_input<2>& input)
+        : grid(&g), coupled(input.mode == cfdcore::flow::viscosity_mode::coupled),
+          solver(g, m, input) {}
+    const Grid2* grid;
+    bool coupled;
+    FlowSolver2 solver;
+};
+
+void flow_init(Flow2* self, const Grid2& g, Predictor2& predictor, Corrector2& corrector,
+               const OutletFaces2& outlets, KEpsilon2* model, Boundary2* walls,
+               nb::handle fluid, nb::handle mu, nb::handle rho, nb::handle nu,
+               nb::handle alpha_turbulence, nb::handle residual_scale, nb::handle rule,
+               const std::optional<Matrix>& mu_eff) {
+    constexpr std::string_view who = "Flow2";
+    if (outlets.grid != &g) {
+        refuse_value("Flow2: the outlets are on another grid");
+    }
+    cfdcore::flow::modules<2> m;
+    m.predictor = &predictor;
+    m.corrector = &corrector;
+    m.outlets = &outlets.outlets;
+    m.model = model == nullptr ? nullptr : &model->model;
+    m.walls = walls;
+    cfdcore::flow::flow_input<2> input;
+    input.fluid = static_cast<std::int32_t>(read_count(fluid, "fluid"));
+    input.mu = read_number(mu, "mu");
+    input.rho = read_number(rho, "rho");
+    input.nu = read_number(nu, "nu");
+    input.alpha_turbulence = read_number(alpha_turbulence, "alpha_turbulence");
+    input.residual_scale = read_number(residual_scale, "residual_scale");
+    input.mode = model != nullptr ? cfdcore::flow::viscosity_mode::coupled
+                 : mu_eff        ? cfdcore::flow::viscosity_mode::fixed
+                                 : cfdcore::flow::viscosity_mode::laminar;
+    if (mu_eff) {
+        require_shape(*mu_eff, cell_shape(g), who, "mu_eff");
+        input.mu_eff = span_of(*mu_eff);
+    }
+    const std::string kind = nb::cast<std::string>(nb::str(rule[0]));
+    if (kind == "velocity_step") {
+        if (nb::len(rule) != 2) {
+            refuse_type("Flow2: rule is ('velocity_step', convergence_tol)");
+        }
+        input.rule = cfdcore::flow::stop_rule::velocity_step;
+        input.convergence_tol = read_number(rule[1], "convergence_tol");
+    } else if (kind == "error_estimate") {
+        if (nb::len(rule) != 6) {
+            refuse_type(
+                "Flow2: rule is ('error_estimate', window, velocity_scale, flux_scale, "
+                "iteration_error_tol, mass_imbalance_tol)");
+        }
+        input.rule = cfdcore::flow::stop_rule::error_estimate;
+        input.keys = read_rule_keys(rule[1], rule[2], rule[3], rule[4], rule[5],
+                                    nb::bool_(model != nullptr));
+    } else {
+        refuse_value("Flow2: the rule is 'velocity_step' or 'error_estimate'");
+    }
+    const std::string_view reason = FlowSolver2::check(g, m, input);
+    if (!reason.empty()) {
+        refuse_value(std::string(who) + ": " + std::string(reason));
+    }
+    new (self) Flow2(g, m, input);
+}
+
+void flow_state(Flow2& self, const Matrix& u, const Matrix& v, const Matrix& p,
+                const std::optional<Matrix>& k, const std::optional<Matrix>& eps,
+                const std::optional<Matrix>& nu_t) {
+    const Grid2& g = *self.grid;
+    require_shape(u, face_shape(g, 0), "Flow2", "u");
+    require_shape(v, face_shape(g, 1), "Flow2", "v");
+    require_shape(p, cell_shape(g), "Flow2", "p");
+    if (k.has_value() != self.coupled || eps.has_value() != self.coupled ||
+        nu_t.has_value() != self.coupled) {
+        refuse_value("Flow2: k, eps and nu_t are given exactly when the solve is coupled");
+    }
+    std::span<const double> turbulence[3];
+    const std::array<const std::optional<Matrix>*, 3> fields{&k, &eps, &nu_t};
+    for (std::size_t i = 0; i < 3; ++i) {
+        if (*fields[i]) {
+            require_shape(**fields[i], cell_shape(g), "Flow2", "a turbulence field");
+            turbulence[i] = span_of(**fields[i]);
+        }
+    }
+    self.solver.start({span_of(u), span_of(v)}, span_of(p), turbulence[0], turbulence[1],
+                      turbulence[2]);
+}
+
+void flow_restore(Flow2& self, nb::handle steps, nb::handle viscosity_steps) {
+    const Rule* r = self.solver.rule();
+    if (r == nullptr) {
+        if (nb::len(steps) != 0 || nb::len(viscosity_steps) != 0) {
+            refuse_value("Flow2: a window restored under velocity_step");
+        }
+        return;
+    }
+    std::vector<double> velocity;
+    std::vector<double> viscosity;
+    for (nb::handle s : steps) {
+        velocity.push_back(python_float(s));
+    }
+    for (nb::handle s : viscosity_steps) {
+        viscosity.push_back(python_float(s));
+    }
+    if (self.solver.restore(velocity, viscosity) != cfdcore::stopping::restore_status::ok) {
+        refuse_value("Flow2: the window is not one the rule restores");
+    }
+}
+
+// A chunk's failure by name, with the message the reference's raise carries and
+// the type it raises.
+nb::object failure_of(const Flow2& self, const cfdcore::flow::chunk_failure& f) {
+    using cfdcore::flow::failure;
+    if (f.kind == failure::none) {
+        return nb::none();
+    }
+    nb::dict out;
+    out["iteration"] = f.iteration;
+    std::string type = "ValueError";
+    std::string message;
+    const std::string component = f.component == 0 ? "u" : "v";
+    switch (f.kind) {
+        case failure::none:
+            break;
+        case failure::eddy_viscosity_not_finite:
+            message = "eddy_viscosity must be finite in every non-SOLID cell";
+            break;
+        case failure::eddy_viscosity_negative:
+            message = "eddy_viscosity must be non-negative (ADR-012 D)";
+            break;
+        case failure::mu_eff_not_finite:
+            message = "mu_eff must be finite in every non-SOLID cell";
+            break;
+        case failure::mu_eff_not_positive:
+            message = "mu_eff must be positive in every non-SOLID cell";
+            break;
+        case failure::wall_mu_not_finite:
+            message = "wall_mu['" + component + "'] must be finite at every wall face";
+            break;
+        case failure::wall_mu_not_positive:
+            message = "wall_mu['" + component + "'] must be positive at every wall face";
+            break;
+        case failure::pressure:
+            switch (f.pressure) {
+                case solve_status::not_dominant:
+                    message = not_dominant_message;
+                    break;
+                case solve_status::division_by_zero:
+                    type = "ZeroDivisionError";
+                    message = "division_by_zero";
+                    break;
+                case solve_status::not_converged:
+                case solve_status::ok:
+                    type = "LinAlgError";
+                    message = "not_converged";
+                    break;
+            }
+            break;
+        case failure::faces_not_finite:
+            message = "faces must be finite";
+            break;
+        case failure::conditions:
+            message = condition_message(f.conditions);
+            break;
+        case failure::nothing_moves:
+            message = nothing_moves_message;
+            break;
+        case failure::k_not_positive:
+        case failure::eps_not_positive: {
+            type = "PositivityError";
+            const bool is_k = f.kind == failure::k_not_positive;
+            out["quantity"] = is_k ? "k" : "eps";
+            out["count"] = f.bad.count;
+            out["row"] = f.bad.first / self.grid->cells(0);
+            out["column"] = f.bad.first % self.grid->cells(0);
+            out["value"] = f.bad.value;
+            out["minimum"] = f.bad.least;
+            break;
+        }
+        case failure::nu_scale:
+            message = "nu_scale must be positive and finite, got " + float_str(f.nu_scale);
+            break;
+    }
+    out["type"] = type;
+    out["message"] = message;
+    return out;
+}
+
+template <typename T, typename Field>
+nb::ndarray<nb::numpy, T> column(const std::vector<cfdcore::flow::iteration_record>& records,
+                                 std::size_t n, Field field) {
+    std::vector<T> values(n);
+    for (std::size_t i = 0; i < n; ++i) {
+        values[i] = field(records[i]);
+    }
+    auto* data = new T[n > 0 ? n : 1];
+    std::copy(values.begin(), values.end(), data);
+    nb::capsule owner(data, [](void* p) noexcept { delete[] static_cast<T*>(p); });
+    const std::size_t shape[1] = {n};
+    return nb::ndarray<nb::numpy, T>(data, 1, shape, owner);
+}
+
+nb::dict flow_solve(Flow2& self, nb::handle max_outer, nb::handle first) {
+    const std::int64_t count = read_count(max_outer, "max_outer");
+    const std::int64_t start = read_count(first, "first");
+    if (count < 1 || start < 0) {
+        refuse_value("Flow2: a chunk takes at least one outer iteration, from one at or after 0");
+    }
+    std::vector<cfdcore::flow::iteration_record> records(static_cast<std::size_t>(count));
+    const cfdcore::flow::chunk_result result = self.solver.run(start, records);
+    const auto n = static_cast<std::size_t>(result.outer);
+    using record = cfdcore::flow::iteration_record;
+    nb::dict out;
+    out["stopped"] = result.stopped;
+    out["outer"] = result.outer;
+    out["residual"] = column<double>(records, n, [](const record& r) { return r.residual; });
+    out["step"] = column<double>(records, n, [](const record& r) { return r.step; });
+    out["viscosity_step"] =
+        column<double>(records, n, [](const record& r) { return r.viscosity_step; });
+    out["estimate"] = column<double>(records, n, [](const record& r) { return r.rule.estimate; });
+    out["viscosity_estimate"] =
+        column<double>(records, n, [](const record& r) { return r.rule.viscosity_estimate; });
+    out["nu_scale"] = column<double>(records, n, [](const record& r) { return r.rule.nu_scale; });
+    out["pressure_iterations"] =
+        column<std::int64_t>(records, n, [](const record& r) { return r.pressure_iterations; });
+    out["pressure_products"] =
+        column<std::int64_t>(records, n, [](const record& r) { return r.pressure_products; });
+    out["reached_cap"] = column<bool>(records, n, [](const record& r) { return r.reached_cap; });
+    out["failure"] = failure_of(self, result.failure);
+    // A failing iteration whose correction finished: the reference counts its cap
+    // before it raises.
+    nb::object failing = nb::none();
+    using cfdcore::flow::failure;
+    const failure kind = result.failure.kind;
+    const bool after_correction = kind == failure::faces_not_finite ||
+                                  kind == failure::conditions || kind == failure::nothing_moves ||
+                                  kind == failure::k_not_positive ||
+                                  kind == failure::eps_not_positive || kind == failure::nu_scale;
+    if (after_correction) {
+        failing = nb::make_tuple(records[n].pressure_iterations, records[n].reached_cap);
+    }
+    out["failing_correction"] = failing;
+    nb::dict seconds;
+    seconds["momentum"] = result.seconds.momentum;
+    seconds["pressure"] = result.seconds.pressure;
+    seconds["turbulence"] = result.seconds.turbulence;
+    seconds["correct"] = result.seconds.correct;
+    seconds["stopping"] = result.seconds.stopping;
+    out["stage_seconds"] = seconds;
+    return out;
+}
+
+nb::dict flow_fields(const Flow2& self) {
+    const Grid2& g = *self.grid;
+    nb::dict out;
+    out["u"] = copy_field(self.solver.velocity(0), face_shape(g, 0));
+    out["v"] = copy_field(self.solver.velocity(1), face_shape(g, 1));
+    out["p"] = copy_field(self.solver.pressure(), cell_shape(g));
+    if (self.coupled) {
+        out["k"] = copy_field(self.solver.k(), cell_shape(g));
+        out["eps"] = copy_field(self.solver.eps(), cell_shape(g));
+        out["nu_t"] = copy_field(self.solver.nu_t(), cell_shape(g));
+    }
+    return out;
+}
 
 NB_MODULE(_cfdcore, m) {
     m.doc() = "The compiled core of the clean room simulation (ADR-017).";
@@ -4004,6 +4499,98 @@ NB_MODULE(_cfdcore, m) {
         .def_prop_ro(
             "count", [](const OutletFaces2& self) { return self.outlets.count(); },
             "The outlet faces held.");
+
+    nb::class_<StoppingRule2>(
+        m, "StoppingRule2",
+        "The error_estimate rule (ErrorEstimateRule), its window and readings, with\n"
+        "RATE_WINDOW handed in as the window.")
+        .def("__init__", &rule_init, nb::arg("window"), nb::arg("velocity_scale"),
+             nb::arg("flux_scale"), nb::arg("iteration_error_tol"),
+             nb::arg("mass_imbalance_tol"), nb::arg("viscosity_condition") = false,
+             "Refused as ErrorEstimateRule refuses its arguments.")
+        .def_prop_ro("version", [](const StoppingRule2& self) { return self.rule.version(); })
+        .def("window", [](const StoppingRule2& self) { return window_of(self.rule); },
+             "The velocity and the viscosity steps, oldest first, as two tuples.")
+        .def("restore", &rule_restore, nb::arg("steps"),
+             nb::arg("viscosity_steps") = nb::tuple(),
+             "ErrorEstimateRule.restore, with its refusals.")
+        .def("update", &rule_update, nb::arg("step"), nb::arg("imbalance"),
+             nb::arg("viscosity_step") = nb::none(), nb::arg("nu_scale") = nb::none(),
+             "ErrorEstimateRule.update: imbalance a callable returning the three readings,\n"
+             "called only when (a) and, with it on, (e) hold.")
+        .def("estimate_of", &rule_estimate_of, nb::arg("steps"), nb::arg("scale"),
+             "_estimate_of on the steps given, oldest first.")
+        .def_prop_ro("estimate_history",
+                     [](const StoppingRule2& self) { return list_of(self.estimates); })
+        .def_prop_ro("viscosity_estimate_history",
+                     [](const StoppingRule2& self) { return list_of(self.viscosity_estimates); })
+        .def_prop_ro("viscosity_scale_history",
+                     [](const StoppingRule2& self) { return list_of(self.viscosity_scales); });
+
+    m.def("imbalance_summary", &imbalance_summary, nb::arg("imbalance").noconvert(),
+          "_imbalance_summary's (worst, absolute_sum, signed_sum) of a cell field, bit for bit.");
+    m.def("viscosity_scale", &viscosity_scale_of, nb::arg("nu"), nb::arg("nu_t").noconvert(),
+          nb::arg("fluid").noconvert(), "nu plus the median of nu_t over the FLUID cells.");
+    m.def("cell_centres", &cell_centres_of, nb::arg("grid"), nb::arg("u").noconvert(),
+          nb::arg("v").noconvert(), "to_cell_centers' (u_c, v_c), bit for bit.");
+    m.def("effective_viscosity", &effective_viscosity_of, nb::arg("nu_t").noconvert(),
+          nb::arg("live").noconvert(), nb::arg("mu"), nb::arg("rho"),
+          "_effective_viscosity's mu + rho nu_t over the live cells, bit for bit.");
+    m.def("largest_change", &largest_change_of, nb::arg("now").noconvert(),
+          nb::arg("before").noconvert(), nb::arg("cells").noconvert(),
+          "np.max(np.abs(now[cells] - before[cells])), NaN propagated.");
+
+    nb::class_<Flow2>(
+        m, "Flow2",
+        "The steady solve's outer iteration with the fields resident (ADR-017 B): the\n"
+        "modules it calls, which it keeps alive, and the solver's numbers.")
+        .def("__init__", &flow_init, nb::arg("grid"), nb::arg("predictor"),
+             nb::arg("corrector"), nb::arg("outlets"), nb::arg("model").none(),
+             nb::arg("walls").none(), nb::arg("fluid"), nb::arg("mu"), nb::arg("rho"),
+             nb::arg("nu"), nb::arg("alpha_turbulence"), nb::arg("residual_scale"),
+             nb::arg("rule"), nb::arg("mu_eff").none(), nb::keep_alive<1, 2>(),
+             nb::keep_alive<1, 3>(), nb::keep_alive<1, 4>(), nb::keep_alive<1, 5>(),
+             nb::keep_alive<1, 6>(), nb::keep_alive<1, 7>(),
+             "rule: ('velocity_step', convergence_tol) or ('error_estimate', window,\n"
+             "velocity_scale, flux_scale, iteration_error_tol, mass_imbalance_tol).\n"
+             "The model and its boundary make the solve coupled; mu_eff a fixed one.")
+        .def("flow_state", &flow_state, nb::arg("u").noconvert(), nb::arg("v").noconvert(),
+             nb::arg("p").noconvert(), nb::arg("k").noconvert().none() = nb::none(),
+             nb::arg("eps").noconvert().none() = nb::none(),
+             nb::arg("nu_t").noconvert().none() = nb::none(),
+             "Begins a solve from these fields, the rule fresh.")
+        .def("restore", &flow_restore, nb::arg("steps"), nb::arg("viscosity_steps"),
+             "Seeds the fresh rule with a checkpoint's window.")
+        .def("solve_steady", &flow_solve, nb::arg("max_outer"), nb::arg("first"),
+             "At most max_outer outer iterations, the first numbered first: the stop's\n"
+             "state, the readings and the records by name.")
+        .def("flow_fields", &flow_fields, "u, v, p and, when coupled, k, eps, nu_t: copies.")
+        .def("window",
+             [](const Flow2& self) {
+                 const Rule* r = self.solver.rule();
+                 return r == nullptr ? nb::make_tuple(nb::tuple(), nb::tuple()) : window_of(*r);
+             })
+        .def_prop_ro(
+            "rule_keys",
+            [](const Flow2& self) -> nb::object {
+                const Rule* r = self.solver.rule();
+                if (r == nullptr) {
+                    return nb::none();
+                }
+                const auto& k = r->keys();
+                return nb::make_tuple(k.window, k.velocity_scale, k.flux_scale,
+                                      k.iteration_error_tol, k.mass_imbalance_tol,
+                                      k.viscosity_condition);
+            },
+            "(window, velocity_scale, flux_scale, iteration_error_tol, mass_imbalance_tol,\n"
+            "viscosity_condition) of the rule; None under velocity_step.")
+        .def_prop_ro("rule_version", [](const Flow2& self) -> nb::object {
+            const Rule* r = self.solver.rule();
+            if (r == nullptr) {
+                return nb::none();
+            }
+            return nb::int_(r->version());
+        });
 
     m.attr("budget_terms") = [] {
         nb::list names;

@@ -133,6 +133,25 @@ struct step_result {
 // The quantity a block is asked about.
 enum class quantity { k, eps };
 
+// Why a step refuses its conditions (`_check_conditions`), in the reference's
+// order: an array that is not finite (`array` its place in that order: the inflow
+// k and eps per direction, x first; the tangential velocities per ordered pair,
+// low edge then high; eps_wall; production), an inflow k or eps not positive on a
+// domain face or on a vent's, eps_wall not positive where eps is held, or the
+// production negative where it is given.
+enum class condition_status {
+    ok,
+    not_finite,
+    inflow_on_domain,
+    inflow_on_vents,
+    eps_wall,
+    production
+};
+struct condition_check {
+    condition_status status = condition_status::ok;
+    int array = 0;
+};
+
 // Whether every value of an array is finite.
 bool all_finite(std::span<const double> values);
 
@@ -251,6 +270,12 @@ public:
                      const conditions<D>& c, std::span<double> k, std::span<double> eps,
                      std::span<double> nu_t);
 
+    // The checks of a step's conditions whose arrays are of the grid's lengths:
+    // their ranges alone (`ranges`), or every value finite first and then the
+    // ranges (`formed`), what conditions a boundary formed can meet.
+    condition_check check_ranges(const conditions<D>& c) const;
+    condition_check check_formed(const conditions<D>& c) const;
+
     // The positivity test of a step's field (`_check_positive`): false where the
     // quantity is positive and finite in every non-SOLID cell; true otherwise, with
     // the bad cells counted, the first one's index and value, and the least value
@@ -325,6 +350,10 @@ private:
     std::array<std::vector<lanes::mask>, D> inner_;
     std::array<std::unique_ptr<bool[]>, D> vents_;
     bool vented_ = false;
+    // Per direction, the domain's faces and the vents' (interior faces with a flux
+    // that diffusion does not cross), whose inflow values the checks read.
+    std::array<std::vector<std::size_t>, D> domain_faces_;
+    std::array<std::vector<std::size_t>, D> vent_faces_;
 
     // A step's fields.
     std::array<std::vector<double>, D> carried_;  // the velocities of the live faces

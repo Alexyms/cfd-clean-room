@@ -115,4 +115,4 @@ jobs:
           NPY_DISABLE_CPU_FEATURES: X86_V4
         run: |
           source .venv/bin/activate
-          pytest tests/test_core_parity.py tests/test_core_march.py tests/test_core_momentum.py tests/test_core_pressure.py tests/test_core_turbulence.py -v -m parity
+          pytest tests/test_core_parity.py tests/test_core_march.py tests/test_core_momentum.py tests/test_core_pressure.py tests/test_core_turbulence.py tests/test_core_flow.py -v -m parity
