@@ -1069,6 +1069,13 @@ def flow_solver(
     -------
     _cfdcore.Flow2
         The solve, its modules kept alive.
+
+    Raises
+    ------
+    ValueError
+        A fixed viscosity that is not finite or not positive in a non-SOLID cell,
+        in ``predict``'s words (``mu_eff must be finite in every non-SOLID cell``),
+        and the core's own refusal of what it cannot build from.
     """
     import _cfdcore
 
@@ -1087,22 +1094,30 @@ def flow_solver(
     else:
         rule = ("velocity_step", config.convergence_tol)
     spec = config.turbulence
-    return _cfdcore.Flow2(
-        modules.grid,
-        modules.predictor,
-        modules.corrector,
-        modules.outlets,
-        modules.model,
-        modules.walls,
-        FLUID,
-        config.mu,
-        config.rho,
-        config.mu / config.rho,
-        1.0 if spec is None else spec.alpha_turbulence,
-        max(reference_velocity, ZERO_SCALE),
-        rule,
-        mu_eff,
-    )
+    try:
+        return _cfdcore.Flow2(
+            modules.grid,
+            modules.predictor,
+            modules.corrector,
+            modules.outlets,
+            modules.model,
+            modules.walls,
+            FLUID,
+            config.mu,
+            config.rho,
+            config.mu / config.rho,
+            1.0 if spec is None else spec.alpha_turbulence,
+            max(reference_velocity, ZERO_SCALE),
+            rule,
+            mu_eff,
+        )
+    except ValueError as error:
+        # The core reads a fixed viscosity when the solver is built; the reference
+        # reads it at its first prediction, in the same words.
+        text = str(error)
+        if text.startswith("Flow2: mu_eff must be "):
+            raise ValueError(text.removeprefix("Flow2: ")) from None
+        raise
 
 
 def flow_error(failure: Mapping[str, object]) -> Exception:

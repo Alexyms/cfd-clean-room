@@ -615,11 +615,12 @@ class CoreSolver(StaggeredSolver):
         core: "_cfdcore.Flow2",
         on_iteration: Callable[[IterationState], None] | None,
     ) -> None:
-        """What the reference has done by the time an iteration raises after its correction.
+        """Record a failing iteration as the reference has by the time it raises.
 
-        It has counted the correction and its cap, and logged the k-epsilon step's
-        warnings. A refused scale of condition (e) is raised by the rule, after the
-        residual is appended and ``on_iteration`` called, so those are done here.
+        The reference has counted the correction and its cap, and logged the
+        k-epsilon step's warnings. A refused scale of condition (e) is raised by
+        the rule, after the residual is appended and ``on_iteration`` called, so
+        those are done here.
 
         Parameters
         ----------

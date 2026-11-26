@@ -7,13 +7,16 @@ for bit, and each estimate to 1e-12 of the reference's, since its rate fit's
 second kind). ``viscosity_scale``'s median, the imbalance summary, the cell
 centres and the max-norms bit for bit. Then ``tests/core_driver.CoreSolver``,
 whose outer iterations run in a ``_cfdcore.Flow2``, against ``StaggeredSolver``:
-outer iterations from planted fields on prompt 87's meshes and the cavity's,
-laminar, under a fixed eddy viscosity and coupled, bit for bit with the
-reference's conjugate gradients given the core's dot product (the chain judged
-block by block, each block handed what the other side's was), and within level
-one's 1e-12 as the reference runs; the core's own restarts, callbacks, divergence
-and positivity failure; and checkpoints that cross between the sides, judged at
-level 2 (ADR-017 H).
+outer iterations from planted fields on prompt 87's meshes, the cavity's and a
+small room open on every edge, laminar, under a fixed eddy viscosity and coupled,
+bit for bit with the reference's conjugate gradients given the core's dot product
+(the chain judged block by block, each block handed what the other side's was), and
+within level one's 1e-12 as the reference runs; the core's own restarts, callbacks
+and divergence; whole solves at which the stop waits for continuity or falls between
+the velocity step's bound and twice it, and the channel with its pressure outlet; the
+failures a planted state reaches, compared with the reference's by type, message,
+records, callbacks and log lines; and checkpoints that cross between the sides,
+judged at level 2 (ADR-017 H).
 
 The coupled blocks call the C library's logarithm and powers, so the tests that
 compare them bit for bit ask for ``libm_numpy`` (prompt 94). Skipped with its
@@ -23,26 +26,33 @@ reason when ``_cfdcore`` cannot be imported, an error instead with
 
 import contextlib
 import copy
+import dataclasses
+import functools
 import logging
 import math
 import os
-from collections.abc import Iterator
+import re
+from collections.abc import Callable, Iterator
 from fractions import Fraction
+from pathlib import Path
 
 import numpy as np
 import pytest
 import yaml
 
+import src.time_integration as time_integration
 from src import pressure, scalar_scheme
 from src.boundary_staggered import StaggeredBoundary
-from src.config import SimConfig
+from src.config import STANDARD, UPWIND, SimConfig
+from src.io_manager import RunFile
 from src.mesh import FLUID, SOLID, Mesh
 from src.solver_staggered import CAP_STOP, FlowState, StaggeredSolver, SteadyCheckpoint
-from src.staggered import to_cell_centers
+from src.staggered import allocate_fields, to_cell_centers
 from src.stopping import (
     RATE_WINDOW,
     ErrorEstimateRule,
     ImbalanceSummary,
+    IterationState,
     viscosity_scale,
 )
 from src.turbulence import PositivityError
@@ -60,10 +70,11 @@ else:
     )
 
 # After the skip above: these modules need the core too.
-from tests.core_driver import CoreSolver
+from tests.core_driver import CoreSolver, steady_solves_in_the_core
 from tests.test_core_parity import MESHES, _raw_config
 from tests.test_core_turbulence import _raw as _turbulence_raw
 from tests.test_core_turbulence import (
+    _small_raw,
     libm_numpy,  # noqa: F401 -- a fixture, used by name
 )
 
@@ -77,6 +88,10 @@ FLOW_LIMIT = 1e-8
 MODES = ["laminar", "fixed", "coupled"]
 ROOM = "40x15-uniform-open"
 CAVITY = 16
+# The small room of the turbulence tests, a pressure outlet on every edge, on 12 by 7
+# cells: the one room of the outer-iteration cases whose outlets are read inside it.
+SMALL = "small-outlets"
+SMALL_SIZE = (12, 7)
 
 
 def _bits(a: object) -> np.ndarray:
@@ -576,7 +591,12 @@ def _cavity_raw(mode: str) -> dict:
 
 def _raw(name: str, mode: str, **solver: object) -> dict:
     """A mesh's configuration: laminar or fixed without the turbulence section."""
-    raw = _cavity_raw(mode) if name == "cavity" else copy.deepcopy(_raw_config(name))
+    if name == "cavity":
+        raw = _cavity_raw(mode)
+    elif name == SMALL:
+        raw = _small_raw(*SMALL_SIZE, 1.05, STANDARD, UPWIND)
+    else:
+        raw = copy.deepcopy(_raw_config(name))
     if mode != "coupled":
         # The inlets' turbulence keys are refused without the section that reads them.
         raw.pop("turbulence", None)
@@ -663,6 +683,7 @@ class _RuleInputs:
 
     @contextlib.contextmanager
     def watching(self) -> Iterator[None]:
+        """Keep the arguments of each ``ErrorEstimateRule.update`` while the block runs."""
         original = ErrorEstimateRule.update
         kept = self.kept
 
@@ -722,7 +743,7 @@ def _pair_of_solves(
 FIELDS = ("u", "v", "p", "k", "eps", "nu_t")
 OUTER_CASES = [
     (name, mode)
-    for name in [*MESHES, "cavity"]
+    for name in [*MESHES, "cavity", SMALL]
     for mode in MODES
     # The cavity's walls admit no air, which the coupled solve starts from.
     if not (name == "320x120" and mode != "coupled")
@@ -767,8 +788,11 @@ def test_outer_iterations_are_the_references_block_by_block(
     assert _same(core.last_mass_imbalance, ref.last_mass_imbalance)
 
 
+# The small room's flow grows without bound over its iterations (its fields reach
+# 1e30 in three), where a difference of a part in 1e12 at the first is no
+# comparison; its block-by-block cases are bit for bit.
 @pytest.mark.parametrize(
-    ("name", "mode"), [(n, m) for n, m in OUTER_CASES if n != "320x120"]
+    ("name", "mode"), [(n, m) for n, m in OUTER_CASES if n not in ("320x120", SMALL)]
 )
 def test_outer_iterations_are_within_level_one_as_the_reference_runs(
     name: str, mode: str
@@ -1031,9 +1055,11 @@ def test_formed_conditions_the_step_refuses_end_the_solve_as_the_reference() -> 
     ``SimConfig`` allows no intensity of zero, so the segments are changed after it
     has validated them (prompt 94's room). The supply's own is positive, so the
     solve starts; its first k-epsilon step refuses the conditions it is handed, on
-    the vent faces, and so does the core's outer iteration.
+    the vent faces, and so does the core's outer iteration. The correction is
+    capped at two, so that the failing iteration's own correction, which the
+    reference has counted before it raises, is a cap hit on both sides.
     """
-    raw = _raw("80x30-vents-shelf", "coupled", max_simple_iter=3)
+    raw = _raw("80x30-vents-shelf", "coupled", max_simple_iter=3, max_pressure_iter=2)
     mesh, config = _configured(raw)
     vents = [
         run.name for run in StaggeredBoundary(mesh, config).vent_runs() if run.is_inlet
@@ -1046,16 +1072,24 @@ def test_formed_conditions_the_step_refuses_end_the_solve_as_the_reference() -> 
         solver = _solver(kind, mesh, config)
         with np.errstate(all="ignore"), pytest.raises(ValueError) as refused:
             solver.solve_steady()
-        messages.append((str(refused.value), len(solver.residual_history)))
+        messages.append(
+            (
+                str(refused.value),
+                len(solver.residual_history),
+                solver.pressure_cap_hits,
+            )
+        )
     assert messages[1] == messages[0]
     assert "vent faces" in messages[0][0]
+    assert messages[0][2] == 1
 
 
 def _log_lines(records: list[logging.LogRecord]) -> list[tuple[str, str]]:
+    """The solver's and the turbulence model's lines, the residual of each cut off."""
     return [
         (r.levelname, r.getMessage().split(" = ")[0])
         for r in records
-        if r.name == "src.solver_staggered"
+        if r.name in ("src.solver_staggered", "src.turbulence")
     ]
 
 
@@ -1242,3 +1276,888 @@ def test_a_chunks_failure_maps_to_the_references_exception() -> None:
         core_mapping.flow_error({"type": "LinAlgError", "message": ""}),
         np.linalg.LinAlgError,
     )
+
+
+# ---- Where the stop binds --------------------------------------------------------
+#
+# Each solve above stops where the estimates (a) and (e) first hold and continuity
+# holds with them, so a stop that read only (a) and (e), or one that read the wrong
+# imbalance, would stop where the reference does. These solves make continuity the
+# condition that binds: the estimates hold a hundred outer iterations before the
+# stop, and the solve either stops later on (b), (c) and (d) or runs to its cap.
+
+
+def _whole_pair(
+    raw: dict, caplog: pytest.LogCaptureFixture, **keys: object
+) -> tuple[
+    list[StaggeredSolver], list[list[tuple[str, str]]], list[list[SteadyCheckpoint]]
+]:
+    """A solve to its stop on each side from the same keys, given the core's dot product.
+
+    The raw configuration names the diagonal preconditioner, so both chains are the
+    same bits and a stop is compared exactly. Returns the solvers (the reference's
+    first), their log lines and their checkpoints.
+    """
+    solvers, lines, kept = [], [], []
+    for kind in (StaggeredSolver, CoreSolver):
+        caplog.clear()
+        with (
+            caplog.at_level(logging.INFO, logger="src.solver_staggered"),
+            _core_dots(),
+        ):
+            solver, checkpoints = _whole(kind, raw, **keys)
+        solvers.append(solver)
+        lines.append(_log_lines(caplog.records))
+        kept.append(checkpoints)
+    return solvers, lines, kept
+
+
+def _estimates_first_hold(solver: CoreSolver, bound: float) -> int | None:
+    """The outer iteration, counted from one, where (a) and with it on (e) first hold."""
+    readings = solver.rule_readings
+    for n, estimate in enumerate(readings["estimate"]):
+        viscosity = readings["viscosity_estimate"][n]
+        if estimate < bound and (math.isnan(viscosity) or viscosity < bound):
+            return n + 1
+    return None
+
+
+@pytest.mark.parametrize(
+    ("name", "mode", "cap", "tolerance", "stop"),
+    [
+        pytest.param(
+            "cavity",
+            "laminar",
+            2,
+            1e-5,
+            "error_estimate_and_continuity",
+            id="cavity-later",
+        ),
+        pytest.param("cavity", "laminar", 2, 1e-12, CAP_STOP, id="cavity-to-the-cap"),
+        pytest.param(
+            ROOM, "coupled", 4, 1e-5, "error_estimate_and_continuity", id="room-later"
+        ),
+        pytest.param(ROOM, "coupled", 4, 1e-8, CAP_STOP, id="room-to-the-cap"),
+    ],
+)
+def test_the_stop_waits_for_continuity_as_the_reference_waits(
+    request: pytest.FixtureRequest,
+    caplog: pytest.LogCaptureFixture,
+    name: str,
+    mode: str,
+    cap: int,
+    tolerance: float,
+    stop: str,
+) -> None:
+    """(a) and (e) hold long before the stop, and (b), (c) and (d) put it off.
+
+    The correction is capped at a few conjugate-gradient iterations and
+    ``iteration_error_tol`` is 1, so that the estimates hold about a hundred outer
+    iterations in while the imbalance is still above ``mass_imbalance_tol``. With the
+    tolerance at 1e-5 it falls below it later and the solve stops there, on both
+    sides at the same outer iteration; at 1e-8 or 1e-12 it never does and both run to
+    their cap. A stop that dropped one of the conditions, or read the imbalance of
+    another iterate, would stop where the estimates first hold. The log lines are
+    compared too, the last two at a stop among them.
+    """
+    if mode == "coupled":
+        request.getfixturevalue("libm_numpy")
+    raw = _raw(
+        name,
+        mode,
+        pressure_preconditioner="jacobi",
+        max_pressure_iter=cap,
+        max_simple_iter=260,
+        iteration_error_tol=1.0,
+        mass_imbalance_tol=tolerance,
+    )
+    (ref, core), lines, _ = _whole_pair(raw, caplog)
+    assert ref.stop_reason == core.stop_reason == stop
+    _assert_same_solve(ref, core)
+    held = _estimates_first_hold(core, 1.0)
+    assert held is not None
+    assert held + 20 <= len(core.residual_history)
+    assert lines[1] == lines[0]
+    at = len(core.residual_history) - 1
+    if stop == CAP_STOP:
+        assert lines[1][-1] == ("WARNING", "Not converged: stopped at max_simple_iter")
+    else:
+        assert lines[1][-2:] == [
+            ("INFO", f"SIMPLE iter {at:4d}: residual"),
+            ("INFO", f"Converged at iteration {at}"),
+        ]
+
+
+def test_a_velocity_step_stops_between_its_bound_and_twice_it(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The first step below the bound is later than the first below twice the bound.
+
+    The cavity's own residuals, from a solve that cannot stop, give the two: the
+    bound is 0.9 of the residual at outer iteration 60, which is the lowest so far,
+    so the stop under the bound comes after 60 and the stop under twice the bound
+    at or before it. A bound doubled in the core's set-up stops at the second.
+    """
+    keys = {
+        "pressure_preconditioner": "jacobi",
+        "stopping_rule": "velocity_step",
+        "max_simple_iter": 200,
+    }
+    probe = _raw("cavity", "laminar", convergence_tol=1e-300, **keys)
+    with _core_dots():
+        history = _whole(StaggeredSolver, probe)[0].residual_history
+    at = 60
+    assert history[at] <= min(history[:at])
+    bound = 0.9 * history[at]
+    first_below = next(n for n, r in enumerate(history) if r < bound)
+    first_below_twice = next(n for n, r in enumerate(history) if r < 2.0 * bound)
+    assert first_below_twice <= at < first_below
+    raw = _raw("cavity", "laminar", convergence_tol=bound, **keys)
+    (ref, core), lines, _ = _whole_pair(raw, caplog)
+    assert ref.stop_reason == core.stop_reason == "velocity_step_below_tol"
+    assert ref.pressure_cap_hits == 0
+    assert len(core.residual_history) == len(ref.residual_history) == first_below + 1
+    _assert_same_solve(ref, core)
+    assert lines[1] == lines[0]
+
+
+# ---- The outlets inside the outer iteration --------------------------------------
+#
+# No room above has a pressure outlet but the small room's, in the cases that name
+# it: the stage that copies each outlet face's interior neighbour before a
+# prediction is read by nothing else, so a solve that left it out, or one edge of
+# it, would pass every other case.
+
+
+def test_the_small_room_is_open_on_every_edge() -> None:
+    """The small room has a pressure outlet on each of its four edges."""
+    mesh, config = _configured(_raw(SMALL, "coupled"))
+    outlets = StaggeredBoundary(mesh, config).pressure_outlets()
+    assert {
+        edge: bool(outlets[edge].is_outlet.any()) for edge in core_mapping.WALL_EDGES
+    } == {edge: True for edge in core_mapping.WALL_EDGES}
+
+
+def test_the_poiseuille_flow_solved_whole_is_the_references_at_level_two() -> None:
+    """The channel's pressure outlet, read in every outer iteration of a whole solve.
+
+    VAL-001's room at 40 by 20 cells: an inlet on the left, a pressure outlet on the
+    right, and walls. Both sides stop for the same reason within one outer
+    iteration, with every field inside level 2's limit (ADR-017 H).
+    """
+    with open("configs/validation_poiseuille.yaml", encoding="utf-8") as stream:
+        raw = yaml.safe_load(stream)
+    raw["domain"].update(nx=40, ny=20)
+    mesh, config = _configured(copy.deepcopy(raw))
+    outlets = StaggeredBoundary(mesh, config).pressure_outlets()
+    assert outlets["right"].is_outlet.all()
+    ref, _ = _whole(StaggeredSolver, raw)
+    core, _ = _whole(CoreSolver, raw)
+    assert ref.converged and core.converged
+    _assert_level_two(core, ref)
+
+
+# ---- The solve's failure paths ---------------------------------------------------
+#
+# Each failure a planted state reaches through the core is compared with the
+# reference's: the exception's type and message, the records the solve leaves, what
+# the callbacks were handed before it raised, the log lines. Both sides take the
+# core's dot product and the diagonal preconditioner, so the chains are the same
+# bits and the iteration a failure falls at is the same.
+#
+# Failure kinds of ``flow.hpp`` that no state reaches, and why:
+#
+# - ``eddy_viscosity_negative``: the iterate is the step's ``C_mu k^2 / eps`` under
+#   the relaxation, a mean of two values that are not negative; a warm start
+#   rebuilds it from k and eps, and a resume refuses a negative one.
+# - ``mu_eff_not_positive``: ``mu + rho nu_t`` is at least ``mu``, which is positive.
+# - ``wall_mu_not_positive``: the wall function is a product of positive numbers over
+#   a logarithm of at least ``ln(E y*_0)``, above one, and the smallest positive k
+#   leaves its square root positive.
+# - ``nothing_moves``: the faces after a correction are all zero only where no
+#   boundary prescribes a velocity, and the rule that the turbulent configuration
+#   needs refuses a velocity scale of zero when the solver is built.
+# - ``pressure``: ``not_dominant`` and ``division_by_zero`` need a system built by
+#   hand (tests/test_core_pressure.py); from a planted state they come only under the
+#   multigrid preconditioner and an extreme field (u of 1e30), where the reference's
+#   dot product and the core's part and the two sides do not fail together.
+#   ``not_converged`` needs a coefficient that is NaN, whose answer NumPy gives
+#   differently from one version to the next.
+
+
+def _solver_at(
+    kind: type, mesh: Mesh, config: SimConfig, cfl: float | None
+) -> StaggeredSolver:
+    """A solver whose Courant number is CFL, above what the configuration allows."""
+    solver = _solver(kind, mesh, config)
+    if cfl is None:
+        return solver
+    object.__setattr__(config.turbulence, "cfl_number", cfl)
+    assert solver._model is not None
+    solver._model._cfl = cfl
+    if isinstance(solver, CoreSolver):
+        solver._modules = core_mapping.flow_modules(
+            mesh, config, solver._boundary, solver._corrector
+        )
+    return solver
+
+
+def _warm(
+    **spikes: tuple[tuple[int, int], float],
+) -> Callable[[Mesh], dict[str, object]]:
+    """A warm start from the room's planted state with each field's cell set to a value."""
+
+    def start(_mesh: Mesh) -> dict[str, object]:
+        initial = _planted(ROOM, "coupled", _rng("failures", "warm"))
+        fields = {name: np.array(getattr(initial, name)) for name in FIELDS}
+        for name, (cell, value) in spikes.items():
+            fields[name][cell] = value
+        return {"initial": FlowState(**fields)}
+
+    return start
+
+
+@functools.cache
+def _checkpoint() -> SteadyCheckpoint:
+    """A checkpoint of four outer iterations of the coupled room, the reference's."""
+    mesh, config = _configured(
+        _raw(ROOM, "coupled", pressure_preconditioner="jacobi", max_simple_iter=4)
+    )
+    solver = _solver(StaggeredSolver, mesh, config)
+    with _core_dots(), np.errstate(all="ignore"):
+        solver.solve_steady()
+    assert solver.steady_checkpoint is not None
+    return solver.steady_checkpoint
+
+
+def _resumed(
+    **spikes: tuple[list[tuple[int, int]], float],
+) -> Callable[[Mesh], dict[str, object]]:
+    """A resume of that checkpoint with each field's cells set to a value."""
+
+    def start(_mesh: Mesh) -> dict[str, object]:
+        base = _checkpoint()
+        fields = {
+            name: np.array(getattr(base.state, name)) for name in ("k", "eps", "nu_t")
+        }
+        for name, (cells, value) in spikes.items():
+            for cell in cells:
+                fields[name][cell] = value
+        state = dataclasses.replace(base.state, stop_reason=None, **fields)
+        return {"resume": dataclasses.replace(base, state=state)}
+
+    return start
+
+
+def _spiked(seed: int, plant: str) -> Callable[[Mesh], dict[str, object]]:
+    """A warm start with k or eps spoilt at cells drawn from SEED (the positivity tests)."""
+
+    def start(_mesh: Mesh) -> dict[str, object]:
+        rng = _rng("pos", seed, plant)
+        initial = _planted(ROOM, "coupled", rng)
+        fields = {name: np.array(getattr(initial, name)) for name in FIELDS}
+        j, i = int(rng.integers(1, 14)), int(rng.integers(1, 39))
+        if plant == "eps_spike":
+            for _ in range(int(rng.integers(1, 4))):
+                value = 10.0 ** rng.uniform(-300.0, -5.0)
+                fields["eps"][int(rng.integers(1, 14)), int(rng.integers(1, 39))] = (
+                    value
+                )
+        else:
+            fields["k"][j, i] *= 1e6
+        return {"initial": FlowState(**fields)}
+
+    return start
+
+
+def _fixed_overflow(mesh: Mesh) -> dict[str, object]:
+    """A fixed eddy viscosity whose ``mu + rho nu_t`` overflows in one cell."""
+    eddy = _eddy_viscosity(mesh, _rng("failures", "fixed"))
+    eddy[3, 4] = 1.7e308
+    return {"eddy_viscosity": eddy}
+
+
+def _after_a_checkpoint_off_the_diagonal(found: re.Match[str], _ref: dict) -> None:
+    """The failure falls after the first checkpoint, at a cell whose row and column differ."""
+    assert int(found[1]) >= 4
+    assert found[2] != found[3]
+
+
+def _off_the_diagonal(found: re.Match[str], _ref: dict) -> None:
+    """The failing cell's row and column differ."""
+    assert found[2] != found[3]
+
+
+def _records_the_failing_iteration(found: re.Match[str], ref: dict) -> None:
+    """The reference has appended the failing iteration's residual and called back."""
+    assert len(ref["history"]) == 1
+    if ref["called_back"]:
+        assert [event[0] for event in ref["events"]].count("iteration") == 1
+
+
+POSITIVITY = (
+    r"^outer iteration (\d+): {} is not positive and finite at \d+ non-SOLID cell\(s\), "
+    r"first at row (\d+), column (\d+)"
+)
+PLANTED = [
+    pytest.param(
+        "coupled",
+        {},
+        _warm(eps=((7, 11), 1e-300)),
+        None,
+        ValueError,
+        r"^nu_scale must be positive and finite, got inf$",
+        _records_the_failing_iteration,
+        id="nu-scale",
+    ),
+    pytest.param(
+        "coupled",
+        {},
+        _warm(u=((5, 7), 1e80)),
+        None,
+        ValueError,
+        r"^eddy_viscosity must be finite in every non-SOLID cell$",
+        None,
+        id="eddy-viscosity-not-finite",
+    ),
+    pytest.param(
+        "coupled",
+        {},
+        _warm(u=((5, 7), 1e50)),
+        None,
+        ValueError,
+        r"^faces must be finite$",
+        None,
+        id="faces-not-finite",
+    ),
+    pytest.param(
+        "coupled",
+        {"max_simple_iter": 8},
+        _resumed(nu_t=([(7, 11)], 1.7e308)),
+        None,
+        ValueError,
+        r"^mu_eff must be finite in every non-SOLID cell$",
+        None,
+        id="effective-viscosity-overflows",
+    ),
+    pytest.param(
+        "coupled",
+        {"max_simple_iter": 8},
+        _resumed(k=([(0, 20), (0, 21)], 1.7e308)),
+        None,
+        ValueError,
+        r"^wall_mu\['u'\] must be finite at every wall face$",
+        None,
+        id="wall-viscosity-of-u-not-finite",
+    ),
+    pytest.param(
+        "coupled",
+        {"max_simple_iter": 8},
+        _resumed(k=([(5, 0), (6, 0)], 1.7e308)),
+        None,
+        ValueError,
+        r"^wall_mu\['v'\] must be finite at every wall face$",
+        None,
+        id="wall-viscosity-of-v-not-finite",
+    ),
+    pytest.param(
+        "coupled",
+        {"max_simple_iter": 14},
+        _spiked(11, "k_big"),
+        None,
+        PositivityError,
+        POSITIVITY.format("k"),
+        _after_a_checkpoint_off_the_diagonal,
+        id="k-after-a-checkpoint-off-the-diagonal",
+    ),
+    pytest.param(
+        "coupled",
+        {"max_simple_iter": 14},
+        _spiked(14, "eps_spike"),
+        5.0,
+        PositivityError,
+        POSITIVITY.format("eps"),
+        _off_the_diagonal,
+        id="eps-off-the-diagonal",
+    ),
+    pytest.param(
+        "fixed",
+        {},
+        _fixed_overflow,
+        None,
+        ValueError,
+        r"^mu_eff must be finite in every non-SOLID cell$",
+        None,
+        id="fixed-viscosity-overflows",
+    ),
+]
+
+
+def _planted_outcome(
+    kind: type,
+    raw: dict,
+    start: Callable[[Mesh], dict[str, object]],
+    cfl: float | None,
+    caplog: pytest.LogCaptureFixture,
+    *,
+    called_back: bool,
+) -> dict:
+    """What a solve from a planted state leaves: its error, records, events and log lines."""
+    mesh, config = _configured(copy.deepcopy(raw))
+    solver = _solver_at(kind, mesh, config, cfl)
+    keys = start(mesh)
+    events: list[tuple] = []
+
+    def on_checkpoint(checkpoint: SteadyCheckpoint) -> None:
+        events.append(
+            (
+                "checkpoint",
+                checkpoint.state.outer,
+                checkpoint.pressure_cap_hits,
+                _bits(checkpoint.residual_history).tolist(),
+                _bits(checkpoint.velocity_steps).tolist(),
+            )
+        )
+
+    def on_iteration(state: IterationState) -> None:
+        events.append(
+            (
+                "iteration",
+                state.iteration,
+                _bits(state.residual).item(),
+                state.pressure_iterations,
+                state.pressure_products,
+                _bits(state.p).tobytes(),
+            )
+        )
+
+    if called_back:
+        keys["on_iteration"] = on_iteration
+    caplog.clear()
+    error = None
+    with (
+        caplog.at_level(logging.INFO, logger="src.solver_staggered"),
+        _core_dots(),
+        np.errstate(all="ignore"),
+    ):
+        try:
+            solver.solve_steady(on_checkpoint=on_checkpoint, **keys)
+        except Exception as raised:
+            error = raised
+    return {
+        "error": None if error is None else (type(error).__name__, str(error)),
+        "minimum": None
+        if not hasattr(error, "minimum")
+        else _bits(error.minimum).item(),
+        "history": _bits(solver.residual_history).tolist(),
+        "cap_hits": solver.pressure_cap_hits,
+        "last_pressure_iterations": solver.last_pressure_iterations,
+        "stop_reason": solver.stop_reason,
+        "state": None if solver.flow_state is None else solver.flow_state.outer,
+        "turbulence": solver.turbulence_state is None,
+        "events": events,
+        "called_back": called_back,
+        "lines": _log_lines(caplog.records),
+    }
+
+
+@pytest.mark.parametrize(
+    "called_back", [False, True], ids=["checkpoints", "on-iteration"]
+)
+@pytest.mark.parametrize(
+    ("mode", "keys", "start", "cfl", "error", "message", "extra"), PLANTED
+)
+def test_a_failure_the_core_reaches_is_the_references(
+    request: pytest.FixtureRequest,
+    caplog: pytest.LogCaptureFixture,
+    mode: str,
+    keys: dict,
+    start: Callable[[Mesh], dict[str, object]],
+    cfl: float | None,
+    error: type[Exception],
+    message: str,
+    extra: Callable[[re.Match[str], dict], None] | None,
+    called_back: bool,
+) -> None:
+    """The same exception, records, callbacks and log lines, from a state that fails.
+
+    Each case is run with checkpoints every three outer iterations, and again with
+    ``on_iteration`` too, which cuts the core's chunks to one iteration. The failure
+    kinds are the plan's: a refused scale of condition (e) (which has recorded its
+    iteration and called back before it raises), an eddy viscosity that is not
+    finite, faces that are not finite, an effective viscosity that overflows, a wall
+    viscosity that is not finite on each component, k and eps not positive (one
+    after a checkpoint, both off the diagonal) and a fixed viscosity that overflows.
+    """
+    if mode == "coupled":
+        request.getfixturevalue("libm_numpy")
+    raw = _raw(
+        ROOM,
+        mode,
+        **{
+            "pressure_preconditioner": "jacobi",
+            "max_simple_iter": 6,
+            "checkpoint_interval": 3,
+            **keys,
+        },
+    )
+    if cfl is not None:
+        raw["turbulence"]["cfl_number"] = 0.5
+    ref, core = (
+        _planted_outcome(kind, raw, start, cfl, caplog, called_back=called_back)
+        for kind in (StaggeredSolver, CoreSolver)
+    )
+    assert ref["error"] is not None
+    assert ref["error"][0] == error.__name__
+    found = re.search(message, ref["error"][1])
+    assert found is not None, ref["error"]
+    if extra is not None:
+        extra(found, ref)
+    assert core == ref
+
+
+def test_the_core_drivers_set_up_refusals_are_the_references() -> None:
+    """Eddy viscosity beside the turbulence section, and a warm start beside a resume."""
+    mesh, config = _configured(_raw(ROOM, "coupled", max_simple_iter=2))
+    eddy = _eddy_viscosity(mesh, _rng("refusals"))
+    messages = []
+    for kind in (StaggeredSolver, CoreSolver):
+        with pytest.raises(ValueError) as refused:
+            _solver(kind, mesh, config).solve_steady(eddy_viscosity=eddy)
+        messages.append(str(refused.value))
+    assert messages[1] == messages[0]
+    assert "refused with the turbulence section present" in messages[0]
+    mesh, config = _configured(
+        _raw("cavity", "laminar", max_simple_iter=2, checkpoint_interval=1)
+    )
+    first = _solver(StaggeredSolver, mesh, config)
+    kept: list[SteadyCheckpoint] = []
+    first.solve_steady(on_checkpoint=kept.append)
+    assert first.flow_state is not None and kept
+    messages = []
+    for kind in (StaggeredSolver, CoreSolver):
+        with pytest.raises(ValueError) as refused:
+            _solver(kind, mesh, config).solve_steady(
+                initial=first.flow_state, resume=kept[0]
+            )
+        messages.append(str(refused.value))
+    assert messages[1] == messages[0]
+    assert "initial and resume are exclusive" in messages[0]
+
+
+# ---- Callbacks, checkpoints, records and warnings --------------------------------
+
+
+@pytest.mark.parametrize(("name", "mode"), CASES)
+def test_each_iterations_state_and_each_checkpoint_is_the_references(
+    request: pytest.FixtureRequest, name: str, mode: str
+) -> None:
+    """``on_iteration``'s fields and the checkpoints written beside it, bit for bit.
+
+    Five outer iterations from a planted state with a checkpoint every two: the
+    callback is handed the iteration, the residual, the correction's iterations and
+    products and the cell-centred velocities and pressure; the checkpoints at 2 and
+    4 carry the window, the history, the cap hits and the fields.
+    """
+    if mode == "coupled":
+        request.getfixturevalue("libm_numpy")
+    initial = _planted(name, mode, _rng("states", name, mode))
+    mesh, config = _configured(
+        _raw(
+            name,
+            mode,
+            pressure_preconditioner="jacobi",
+            max_simple_iter=5,
+            checkpoint_interval=2,
+        )
+    )
+    states: list[list[IterationState]] = [[], []]
+    kept: list[list[SteadyCheckpoint]] = [[], []]
+    for side, kind in enumerate((StaggeredSolver, CoreSolver)):
+        with _core_dots(), np.errstate(all="ignore"):
+            _solver(kind, mesh, config).solve_steady(
+                states[side].append, initial=initial, on_checkpoint=kept[side].append
+            )
+    ref_states, core_states = states
+    assert [s.iteration for s in core_states] == list(range(5))
+    for a, b in zip(core_states, ref_states, strict=True):
+        assert (a.iteration, a.pressure_iterations, a.pressure_products) == (
+            b.iteration,
+            b.pressure_iterations,
+            b.pressure_products,
+        )
+        assert _same(a.residual, b.residual)
+        for field in ("u", "v", "p"):
+            assert _same(getattr(a, field), getattr(b, field)), field
+    # The correction's products and its iterations are two counts, so that one given
+    # for the other is seen.
+    assert any(s.pressure_products != s.pressure_iterations for s in ref_states)
+    assert (
+        [c.state.outer for c in kept[1]] == [c.state.outer for c in kept[0]] == [2, 4]
+    )
+    for a, b in zip(kept[1], kept[0], strict=True):
+        assert a.pressure_cap_hits == b.pressure_cap_hits
+        assert a.velocity_steps == b.velocity_steps
+        assert a.viscosity_steps == b.viscosity_steps
+        assert _same(a.residual_history, b.residual_history)
+        for field in FIELDS:
+            x, y = getattr(a.state, field), getattr(b.state, field)
+            assert (x is None) == (y is None)
+            if x is not None:
+                assert _same(x, y), field
+
+
+def test_a_resumed_solve_carries_its_cap_hits_on(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Every correction reaches its cap of two, so the hits a resume carries are not zero.
+
+    The three checkpoints hold three, six and nine hits; the solve resumed from each
+    reaches the cap on all eleven of its corrections, counted from the checkpoint's.
+    """
+    raw = _raw(
+        "cavity",
+        "laminar",
+        pressure_preconditioner="jacobi",
+        max_pressure_iter=2,
+        max_simple_iter=11,
+        checkpoint_interval=3,
+    )
+    with _core_dots():
+        first, kept = _whole(StaggeredSolver, raw)
+    assert first.pressure_cap_hits == 11
+    assert [c.pressure_cap_hits for c in kept] == [3, 6, 9]
+    for checkpoint in kept:
+        (ref, core), lines, _ = _whole_pair(raw, caplog, resume=checkpoint)
+        assert ref.pressure_cap_hits == core.pressure_cap_hits == 11
+        _assert_same_solve(ref, core)
+        assert lines[1] == lines[0]
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_the_solver_leaves_the_references_faces_and_turbulence_state(
+    request: pytest.FixtureRequest, mode: str
+) -> None:
+    """``face_velocities`` and ``turbulence_state`` after a solve, for the transport and the march."""
+    if mode == "coupled":
+        request.getfixturevalue("libm_numpy")
+    ref, core = _pair_of_solves(ROOM, mode, 3, dots=True)
+    assert ref.face_velocities is not None and core.face_velocities is not None
+    assert _same(core.face_velocities.u, ref.face_velocities.u)
+    assert _same(core.face_velocities.v, ref.face_velocities.v)
+    assert (core.turbulence_state is None) == (ref.turbulence_state is None)
+    assert (ref.turbulence_state is None) == (mode != "coupled")
+    if ref.turbulence_state is not None:
+        for field in ("k", "eps", "nu_t"):
+            assert _same(
+                getattr(core.turbulence_state, field),
+                getattr(ref.turbulence_state, field),
+            ), field
+
+
+@pytest.mark.usefixtures("libm_numpy")
+@pytest.mark.parametrize(
+    ("max_iter", "spiked"),
+    [
+        pytest.param(1, False, id="a-cap-of-one"),
+        pytest.param(3, False, id="a-cap-of-three"),
+        pytest.param(2, True, id="a-step-that-then-fails-its-signs"),
+    ],
+)
+def test_the_k_epsilon_steps_warnings_are_the_references(
+    caplog: pytest.LogCaptureFixture, max_iter: int, spiked: bool
+) -> None:
+    """The two warnings of ``KEpsilonModel.step``, from what each chunk returns.
+
+    A conjugate-gradient cap of one to three leaves both solves capped, so each step
+    falls back to Jacobi and stops at the cap, and the reference logs both warnings
+    every iteration, before the iteration's own lines. The last case spoils k so
+    that the step then fails its signs: the warnings were logged before it raised,
+    and the core's must have been too.
+    """
+    raw = _raw(ROOM, "coupled", pressure_preconditioner="jacobi", max_simple_iter=14)
+    raw["turbulence"]["max_iter"] = max_iter
+    mesh, config = _configured(raw)
+    if spiked:
+        keys = _spiked(1, "k_big")(mesh)
+    else:
+        keys = {"initial": _planted(ROOM, "coupled", _rng("warnings", max_iter))}
+    outcomes = []
+    for kind in (StaggeredSolver, CoreSolver):
+        solver = _solver(kind, mesh, config)
+        caplog.clear()
+        error = None
+        with caplog.at_level(logging.INFO), _core_dots(), np.errstate(all="ignore"):
+            try:
+                solver.solve_steady(**keys)
+            except PositivityError as raised:
+                error = str(raised)
+        outcomes.append((_log_lines(caplog.records), error))
+    assert outcomes[1] == outcomes[0]
+    lines = [text for _, text in outcomes[0][0]]
+    fell_back = [t for t in lines if t.startswith("CG k or eps solve fell back")]
+    stopped = [t for t in lines if t.startswith("implicit k or eps solve stopped")]
+    assert fell_back and stopped
+    assert all(f"max_iter {max_iter} " in t for t in stopped)
+    assert (outcomes[0][1] is not None) == spiked
+    if spiked:
+        # The failing iteration's warnings come before the exception, after its cap's.
+        assert lines[-1].startswith("implicit k or eps solve stopped")
+
+
+def test_steady_solves_in_the_core_builds_the_core_solver_in_a_scenario_run(
+    tmp_path: Path,
+) -> None:
+    """A scenario's steady solve, run inside the patch, is the core's and is kept.
+
+    The product room at 80 by 30 cells, its first interval's flow state: solved by a
+    ``CoreSolver`` (counted by its ``solve_steady``), stopped by the rule, and
+    written to the run file. The patch is undone on leaving, also by an exception.
+    Step 6 of ADR-017 replaces the patch with the ``solver.backend`` key; until then
+    the probe and the parity tests share it, and this is its only test.
+    """
+
+    class StopError(Exception):
+        """Ends the run once its flow states are solved."""
+
+    def stop(_step: object) -> None:
+        raise StopError
+
+    source = Path("configs/scenario_equipment_dust.yaml")
+    raw = yaml.safe_load(source.read_text(encoding="utf-8"))
+    raw["scenario"]["base"] = str((source.parent / raw["scenario"]["base"]).resolve())
+    raw["domain"] = {"nx": 80, "ny": 30}
+    cell = (8.0 / 80) * (3.0 / 30)
+    raw.setdefault("solver", {})["mass_imbalance_tol"] = 1.0e-4 * 1.2 * cell / 60.0
+    config = SimConfig.from_dict(raw, "configs")
+    reference = time_integration.StaggeredSolver
+    calls: list[CoreSolver] = []
+    original = CoreSolver.solve_steady
+
+    def counted(solver: CoreSolver, *args: object, **keys: object) -> object:
+        calls.append(solver)
+        return original(solver, *args, **keys)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(CoreSolver, "solve_steady", counted)
+        with steady_solves_in_the_core(), pytest.raises(StopError):
+            assert time_integration.StaggeredSolver is CoreSolver
+            time_integration.run(config, tmp_path / "run.h5", on_step=stop)
+    assert time_integration.StaggeredSolver is reference
+    assert len(calls) == 1 and all(isinstance(s, CoreSolver) for s in calls)
+    assert calls[0].converged
+    assert calls[0].stop_reason == "error_estimate_and_continuity"
+    run = RunFile(tmp_path / "run.h5")
+    (fingerprint,) = run.flow_fingerprints()
+    record = run.read_flow_state(fingerprint)
+    assert record.state.stop_reason == calls[0].stop_reason
+    assert record.state.outer == len(calls[0].residual_history)
+    with (
+        pytest.raises(RuntimeError, match="raised inside"),
+        steady_solves_in_the_core(),
+    ):
+        raise RuntimeError("raised inside")
+    assert time_integration.StaggeredSolver is reference
+
+
+# ---- The binding's refusals, continued -------------------------------------------
+
+
+def test_flow2_refuses_a_fixed_viscosity_as_the_predictor_refuses_it() -> None:
+    """A fixed ``mu_eff`` that is not finite or not positive in a non-SOLID cell.
+
+    The core reads it when the solver is built, and the mapping hands the refusal
+    on in the words of ``predict``'s own (``_check_mu_eff``). A SOLID cell is not
+    read, so a NaN there builds a solver.
+    """
+    mesh, config = _configured(_raw("80x30", "laminar", max_simple_iter=2))
+    solver = _solver(StaggeredSolver, mesh, config)
+    modules = core_mapping.flow_modules(
+        mesh, config, solver._boundary, solver._corrector
+    )
+    good = solver._effective_viscosity(_eddy_viscosity(mesh, _rng("fixed viscosity")))
+
+    def built(mu_eff: np.ndarray) -> object:
+        return core_mapping.flow_solver(
+            modules,
+            config,
+            solver._boundary,
+            solver.reference_velocity,
+            solver.flux_scale,
+            mu_eff,
+        )
+
+    built(good)
+    solid = np.argwhere(mesh.cell_type == SOLID)
+    live = np.argwhere(mesh.cell_type != SOLID)
+    assert len(solid) and len(live)
+    spoilt = np.array(good)
+    spoilt[tuple(solid[0])] = math.nan
+    built(spoilt)
+    u, v, p = allocate_fields(mesh)
+    for bad in (math.nan, math.inf, -math.inf, 0.0, -1e-3):
+        spoilt = np.array(good)
+        spoilt[tuple(live[len(live) // 2])] = bad
+        with pytest.raises(ValueError) as expected:
+            solver._predictor.predict(u, v, p, mu_eff=spoilt)
+        with pytest.raises(ValueError) as got:
+            built(spoilt)
+        assert str(got.value) == str(expected.value)
+
+
+def test_the_rule_versions_are_handed_in_and_each_refused_below_one() -> None:
+    """The core holds no copy of the reference's two rule versions.
+
+    A rule given 7 and 11 reports 7 with (e) off and 11 with it on; a version
+    below one, not an int or a bool is refused at the binding, naming it.
+    """
+    arguments = [RATE_WINDOW, 7, 11, 0.45, 1.3, 1e-6, 1e-9]
+    assert _cfdcore.StoppingRule2(*arguments).version == 7
+    assert _cfdcore.StoppingRule2(*arguments, True).version == 11
+    for position, name in ((1, "version_without_e"), (2, "version_with_e")):
+        for bad, error in (
+            (0, ValueError),
+            (-3, ValueError),
+            (True, TypeError),
+            (3.0, TypeError),
+        ):
+            spoilt = list(arguments)
+            spoilt[position] = bad
+            with pytest.raises(error, match=name):
+                _cfdcore.StoppingRule2(*spoilt)
+    _, config, solver, modules = _flow_parts()
+    with pytest.raises(TypeError, match="version_without_e"):
+        _cfdcore.Flow2(
+            modules.grid,
+            modules.predictor,
+            modules.corrector,
+            modules.outlets,
+            None,
+            None,
+            FLUID,
+            config.mu,
+            config.rho,
+            config.mu / config.rho,
+            1.0,
+            solver.reference_velocity,
+            ("error_estimate", RATE_WINDOW, 0.45, 1.3, 1e-6, 1e-9),
+            None,
+        )
+
+
+def test_a_window_restored_under_the_velocity_step_is_refused_as_no_rule() -> None:
+    """The velocity step has no window: an empty one restores nothing, another is refused."""
+    raw = _raw("cavity", "laminar", stopping_rule="velocity_step", max_simple_iter=5)
+    mesh, config = _configured(raw)
+    solver = _solver(StaggeredSolver, mesh, config)
+    modules = core_mapping.flow_modules(
+        mesh, config, solver._boundary, solver._corrector
+    )
+    core = core_mapping.flow_solver(
+        modules, config, solver._boundary, solver.reference_velocity, None
+    )
+    assert core.rule_version is None and core.rule_keys is None
+    core.restore((), ())
+    for steps, viscosity in (((1e-3,), ()), ((), (1e-6,))):
+        with pytest.raises(ValueError, match="restored under velocity_step"):
+            core.restore(steps, viscosity)
