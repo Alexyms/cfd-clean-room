@@ -105,7 +105,7 @@ from time import perf_counter
 import numpy as np
 
 from src.boundary_staggered import StaggeredBoundary
-from src.config import Initial, SimConfig
+from src.config import CORE_BACKEND, Initial, SimConfig
 from src.forces import ForceGauge, StrouhalReading, strouhal
 from src.io_manager import (
     CUMULATIVE,
@@ -154,6 +154,8 @@ DEFINED_RTOL = 1.0e-9
 # The sections and solver keys a steady flow solve does not read, so a state
 # kept in another run file is this run's state when every other key agrees
 # and the fingerprint does. The boundaries are compared by the fingerprint.
+# solver.backend is not among them: a state solved on one backend is not
+# copied into a run on the other (ADR-017 E).
 FLOW_FREE_SECTIONS: tuple[str, ...] = (
     "scenario",
     "boundaries",
@@ -1047,8 +1049,14 @@ class _Run:
         """Solve an interval's state: resumed, warm from the one before it, or from rest."""
         key = interval.fingerprint
         config = interval.config
-        solver = StaggeredSolver(
-            self.mesh, config, StaggeredBoundary(self.mesh, config)
+        # Imported here: core_backend builds on this module (ADR-017 E).
+        from src.core_backend import steady_solver
+
+        solver = steady_solver(
+            self.mesh,
+            config,
+            StaggeredBoundary(self.mesh, config),
+            reference=StaggeredSolver,
         )
         writer = None
         if config.checkpoint_interval is not None:
@@ -1133,7 +1141,20 @@ class _Run:
         """
         if self.monitor is None:
             return ()
-        alerts = self.monitor.update(step, t, fields)
+        return self.noted(self.monitor.update(step, t, fields), step, t, pending)
+
+    def noted(
+        self,
+        alerts: tuple[Alert, ...],
+        step: int,
+        t: float,
+        pending: list[tuple[int, float, np.ndarray, np.ndarray]],
+    ) -> tuple[Alert, ...]:
+        """The monitor's readings after an update join PENDING, its new alerts the log.
+
+        Returns ALERTS.
+        """
+        assert self.monitor is not None
         pending.append((step, t, self.monitor.readings, self.monitor.channel_readings))
         for alert in alerts:
             if alert.is_open:
@@ -1306,6 +1327,24 @@ class _Run:
         raise AssertionError(f"the checkpoint's t = {t!r} s lies in no interval")
 
 
+def _run_state(
+    config: SimConfig,
+    run: RunFile,
+    on_step: Callable[[MarchStep], None] | None,
+) -> _Run:
+    """The state of one call of ``run`` on the configuration's backend (ADR-017 E).
+
+    Under ``reference`` the march is ``_Run.march``; under ``core`` it is the
+    compiled core's (``core_backend.CoreRun``), the rest of the run the same code.
+    """
+    if config.backend == CORE_BACKEND:
+        # Imported here: core_backend builds on this module.
+        from src.core_backend import CoreRun
+
+        return CoreRun(config, run, on_step)
+    return _Run(config, run, on_step)
+
+
 def run(
     config: SimConfig,
     run_file: str | os.PathLike[str] | None = None,
@@ -1476,7 +1515,7 @@ def run(
                 f"flows_from: {difference} differs from the configuration "
                 f"{kept.path} was run with, so its flow states are not this run's"
             )
-    state = _Run(config, run_path, on_step)
+    state = _run_state(config, run_path, on_step)
     if restart is None:
         given = provenance if provenance is not None else Provenance.here()
         run_path.write_config(

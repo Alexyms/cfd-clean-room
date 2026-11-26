@@ -29,6 +29,7 @@ VAL-009's own tests (the alert step against the crossing step, the march's
 every step, the fields' bytes, the restart) are tests/test_alert_latency.py.
 """
 
+import math
 from pathlib import Path
 
 import numpy as np
@@ -49,6 +50,7 @@ from src.monitor import (
     AlertMonitor,
     ArrivalTracker,
     carries_contamination,
+    channel_sums,
     contaminating_events,
     sensor_cells,
 )
@@ -1184,3 +1186,126 @@ class TestArrivalTracker:
         assert np.isfinite(latency).any() and np.isinf(latency).any()
         assert (latency == 0.0).any() and (latency > 0.0).any()
         assert mapped.tobytes() == latency.tobytes()
+
+
+def _random_series(seed: int, steps: int, thresholds: np.ndarray) -> list[np.ndarray]:
+    """[classes, sensors] readings a step, each class around its threshold, some zero."""
+    rng = np.random.default_rng(seed)
+    out = []
+    for _ in range(steps):
+        values = thresholds[:, None] * rng.uniform(0.0, 1.6, (5, 4))
+        values[rng.uniform(size=(5, 4)) < 0.2] = 0.0
+        out.append(values)
+    return out
+
+
+@pytest.mark.unit
+class TestUpdateFromReadings:
+    """``update_from_readings`` (ADR-017 E, prompt 96): the core's readings and channels."""
+
+    def test_it_gives_the_update_from_fields_bit_for_bit(self, product: tuple) -> None:
+        """The same series fed both ways: the alerts, states and latencies equal.
+
+        The channels handed in are those the update from fields sums
+        (``channel_sums``), as the core's march returns them. Defects caught:
+        the readings taken one step late (the alerts move), a channel read from
+        another class's row.
+        """
+        config, mesh = product
+        cells = sensor_cells(config, mesh)
+        fields, readings = AlertMonitor(config, mesh), AlertMonitor(config, mesh)
+        series = _random_series(96, 60, fields.thresholds)
+        for n, values in enumerate(series):
+            from_fields = fields.update(n, 0.1 * n, fields_of(mesh, values, cells))
+            sums = channel_sums({k: values[k] for k in range(5)}, fields.channels)
+            channels = np.array([sums[k] for k in range(5)])
+            from_readings = readings.update_from_readings(n, 0.1 * n, values, channels)
+            assert from_readings == from_fields
+            assert readings.readings.tobytes() == fields.readings.tobytes()
+            assert readings.channel_readings.tobytes() == channels.tobytes()
+        assert len(fields.alerts) > 10
+        assert readings.alerts == fields.alerts
+        for name, array in fields.state().items():
+            assert readings.state()[name].tobytes() == array.tobytes(), name
+        onsets = [0.0, 1.5, 3.0]
+        assert (
+            readings.latencies(onsets).tobytes() == fields.latencies(onsets).tobytes()
+        )
+
+    def test_the_alerts_read_the_channels_handed_in(self, product: tuple) -> None:
+        """A channel at its threshold opens an alert whatever the readings sum to.
+
+        The update reads the channels it is handed (the core's sum), not a sum
+        of its own. Defect caught: the channels summed again from the readings,
+        or read from the readings' rows.
+        """
+        config, mesh = product
+        monitor = AlertMonitor(config, mesh)
+        readings = np.zeros((5, 4))
+        channels = np.zeros((5, 4))
+        channels[2, 3] = monitor.thresholds[2]
+        (alert,) = monitor.update_from_readings(0, 0.0, readings, channels)
+        assert (alert.size_class, alert.sensor, alert.reading_on) == (
+            2,
+            "hood_entry",
+            monitor.thresholds[2],
+        )
+        assert monitor.readings.tobytes() == readings.tobytes()
+
+    def test_it_takes_copies(self, product: tuple) -> None:
+        """Changing the arrays after the update changes nothing the monitor holds."""
+        config, mesh = product
+        monitor = AlertMonitor(config, mesh)
+        readings, channels = np.ones((5, 4)), np.ones((5, 4))
+        monitor.update_from_readings(0, 0.0, readings, channels)
+        readings[:], channels[:] = 7.0, 7.0
+        assert (monitor.readings == 1.0).all()
+        assert (monitor.channel_readings == 1.0).all()
+
+    @pytest.mark.parametrize(
+        ("readings", "channels", "match"),
+        [
+            (np.zeros((5, 3)), np.zeros((5, 4)), "readings at step 0 have shape"),
+            (np.zeros((5, 4)), np.zeros((4, 4)), "channels at step 0 have shape"),
+            (np.full((5, 4), np.nan), np.zeros((5, 4)), "a reading at step 0"),
+            (np.zeros((5, 4)), np.full((5, 4), np.inf), "a channel at step 0"),
+        ],
+    )
+    def test_a_wrong_shape_or_a_value_not_finite_is_refused(
+        self,
+        product: tuple,
+        readings: np.ndarray,
+        channels: np.ndarray,
+        match: str,
+    ) -> None:
+        """Each array [classes, sensors] and finite, as the fields' readings are."""
+        config, mesh = product
+        monitor = AlertMonitor(config, mesh)
+        with pytest.raises(ValueError, match=match):
+            monitor.update_from_readings(0, 0.0, readings, channels)
+        assert monitor.alerts == () and np.isnan(monitor.readings).all()
+
+    def test_its_step_and_time_are_checked_as_the_fields_update_checks_them(
+        self, product: tuple
+    ) -> None:
+        """Not above the last update's, a bool step or a time not finite: refused.
+
+        The two updates share one sequence: a step taken from fields is the last
+        update the next one from readings is checked against.
+        """
+        config, mesh = product
+        monitor = AlertMonitor(config, mesh)
+        zero = np.zeros((5, 4))
+        cells = sensor_cells(config, mesh)
+        monitor.update(3, 0.3, fields_of(mesh, zero, cells))
+        with pytest.raises(ValueError, match="not above the last update"):
+            monitor.update_from_readings(3, 0.4, zero, zero)
+        with pytest.raises(ValueError, match="is not above the last update"):
+            monitor.update_from_readings(4, 0.3, zero, zero)
+        with pytest.raises(TypeError, match="step must be an int"):
+            monitor.update_from_readings(True, 0.5, zero, zero)
+        with pytest.raises(ValueError, match="t must be finite"):
+            monitor.update_from_readings(5, math.inf, zero, zero)
+        monitor.update_from_readings(4, 0.4, zero, zero)
+        with pytest.raises(ValueError, match="not above the last update"):
+            monitor.update(4, 0.5, fields_of(mesh, zero, cells))

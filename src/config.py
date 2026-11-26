@@ -5,6 +5,7 @@ load time, and provides typed attribute access. Satisfies REQ-C01
 (single source of truth) and REQ-C02 (fail-fast validation).
 """
 
+import importlib
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -936,7 +937,17 @@ PRESSURE_JACOBI = "jacobi"
 MULTIGRID = "multigrid"
 PRESSURE_PRECONDITIONERS: tuple[str, ...] = (PRESSURE_JACOBI, MULTIGRID)
 DEFAULT_PRESSURE_PRECONDITIONER = MULTIGRID
-# Every key the solver block accepts, nine required and six optional, in the
+# Which solver a run builds (ADR-017 E): the NumPy reference, the default, or
+# the compiled core (src/core_backend.py). The core carries tier 1's scenario
+# runs and every steady solve of record, not tier 2's true-time step (ADR-017
+# F, option 1), and exists only where its module _cfdcore imports (under Linux,
+# built by scripts/build_core.sh; ADR-017 A).
+REFERENCE_BACKEND = "reference"
+CORE_BACKEND = "core"
+BACKENDS: tuple[str, ...] = (REFERENCE_BACKEND, CORE_BACKEND)
+DEFAULT_BACKEND = REFERENCE_BACKEND
+CORE_MODULE = "_cfdcore"
+# Every key the solver block accepts, nine required and seven optional, in the
 # order the harness records them: it reads this tuple, so a key added here is
 # in every harness row (GitHub issue 38). With optional keys a misspelt one
 # would otherwise fall back to its default.
@@ -956,6 +967,7 @@ SOLVER_KEYS: tuple[str, ...] = (
     "mass_imbalance_tol",
     "pressure_preconditioner",
     "checkpoint_interval",
+    "backend",
 )
 
 # Transport section (ADR-011 I), optional: the velocity-only validation cases
@@ -1389,6 +1401,11 @@ class SimConfig:
             self.checkpoint_interval = self._require_positive_int(
                 solver, "checkpoint_interval", "solver"
             )
+        # The solver a run builds (ADR-017 E); the core's refusals follow the
+        # transient section, which it reads.
+        self.backend: str = DEFAULT_BACKEND
+        if "backend" in solver:
+            self.backend = self._require_choice(solver, "backend", "solver", BACKENDS)
 
         # Transport (optional). Unknown keys raise as they do in the solver
         # block, so a misspelt key cannot fall back to a default.
@@ -1699,6 +1716,7 @@ class SimConfig:
         self.transient: TransientSpec | None = None
         if TRANSIENT_KEY in raw:
             self.transient = self._parse_transient(raw[TRANSIENT_KEY])
+        self.check_backend()
 
         # Sensors
         sensors_raw = self._require_section(raw, "sensors")
@@ -2992,6 +3010,38 @@ class SimConfig:
             max_iter=cls._require_positive_int(section, "max_iter", "turbulence"),
             tol=cls._require_positive_float(section, "tol", "turbulence"),
         )
+
+    def check_backend(self) -> None:
+        """Refuse ``solver.backend: core`` where the core cannot run this configuration.
+
+        Called at load, and by a copy that names another backend
+        (``validation.cases.with_backend``). The reference runs everything.
+
+        Raises
+        ------
+        ValueError
+            With a transient section: tier 2's true-time step stays on the
+            reference (ADR-017 F, option 1). Where the compiled module
+            ``_cfdcore`` cannot be imported: it is built under Linux by
+            ``scripts/build_core.sh`` (ADR-017 A), and Windows has no build.
+        """
+        if self.backend != CORE_BACKEND:
+            return
+        if self.transient is not None:
+            raise ValueError(
+                f"solver.backend '{CORE_BACKEND}' is refused with a transient "
+                "section: the core carries tier 1's scenario runs and the steady "
+                "solves, and tier 2's true-time step stays on the reference "
+                f"(ADR-017 F); run it with solver.backend '{REFERENCE_BACKEND}'"
+            )
+        try:
+            importlib.import_module(CORE_MODULE)
+        except ImportError as error:
+            raise ValueError(
+                f"solver.backend '{CORE_BACKEND}' needs the compiled core, but "
+                f"{CORE_MODULE} cannot be imported here ({error}); it is built under "
+                "Linux by scripts/build_core.sh (ADR-017 A), and Windows has no build"
+            ) from None
 
     @classmethod
     def _require_choice(

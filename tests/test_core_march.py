@@ -2,7 +2,7 @@
 
 The step loop's blocks (``channels``, ``arrival``, ``recovery``) against the
 reference's functions on planted fields, and the march itself (``_cfdcore.March2``
-driven by ``tests.core_driver.CoreRun``) against ``time_integration._Run.march``
+driven by ``tests.core_backend.CoreRun``) against ``time_integration._Run.march``
 on the 80x30 product mesh with planted flows, every output compared bit for bit
 after every step: the steps, a restore from the middle of a march (a clean-out
 before and inside its within-spec stretch among them), and the stops a march
@@ -23,6 +23,7 @@ import numpy as np
 import pytest
 import yaml
 
+from src import core_backend
 from src.config import SimConfig
 from src.io_manager import RunFile
 from src.mesh import SOLID, Mesh
@@ -36,7 +37,6 @@ from src.time_integration import (
     RecoveryTracker,
     _Run,
 )
-from tests import core_driver, core_mapping
 
 if os.environ.get("CFD_CORE_REQUIRED") == "1":
     import _cfdcore
@@ -273,7 +273,7 @@ def _recovery_pair(
     reference = RecoveryTracker(
         thresholds, initial, cells, live, hold, channels=channels
     )
-    keys = core_mapping.recovery_keys(thresholds, initial, hold)
+    keys = core_backend.recovery_keys(thresholds, initial, hold)
     core = _cfdcore.Recovery2(_grid(mesh), list(thresholds), keys, cells, channels)
     return reference, core, config, mesh, thresholds
 
@@ -296,7 +296,7 @@ def test_recovery_equals_the_tracker(room: str) -> None:
     rng = np.random.default_rng([SEED, 3, len(room)])
     # The tracker's own targets: class 3's is a hundredth of its threshold, which
     # its readings and means sit above unless a plant puts them there.
-    target = core_mapping.recovery_keys(thresholds, _initial_levels(thresholds), None)[
+    target = core_backend.recovery_keys(thresholds, _initial_levels(thresholds), None)[
         "target"
     ]
     held = []
@@ -341,7 +341,7 @@ def test_recovery_equals_the_tracker(room: str) -> None:
     again = _cfdcore.Recovery2(
         _grid(mesh),
         list(thresholds),
-        core_mapping.recovery_keys(thresholds, _initial_levels(thresholds), hold),
+        core_backend.recovery_keys(thresholds, _initial_levels(thresholds), hold),
         cells,
         [list(m) for m in config.channel_classes()],
     )
@@ -516,7 +516,7 @@ class Taken:
 
 
 def _budget_bits(b: MassBudget) -> tuple[object, ...]:
-    terms = core_mapping.terms_of(b)
+    terms = core_backend.terms_of(b)
     return tuple(None if v is None else _bits(v) for v in terms.values())
 
 
@@ -543,7 +543,7 @@ def _reference_march(case: Case, tmp: Path) -> Taken:
 
     def on_step(s: MarchStep) -> None:
         taken.steps.append((s.step, s.t))
-        taken.fields.append(_bits(core_mapping.stacked(s.fields)))
+        taken.fields.append(_bits(core_backend.stacked(s.fields)))
         taken.budgets.append([_budget_bits(b) for b in s.budgets])
         taken.maps.append(_bits(state.arrival.first_above))
         taken.recovery.append(
@@ -564,7 +564,7 @@ def _reference_march(case: Case, tmp: Path) -> Taken:
     fields, budgets, step, t = _start(state, case)
     out = state.march(case.plans, case.start, fields, budgets, step, t)
     taken.end = (
-        _bits(core_mapping.stacked(out[0])),
+        _bits(core_backend.stacked(out[0])),
         [_budget_bits(b) for b in out[1]],
         out[2],
         out[3],
@@ -593,9 +593,9 @@ class _Recorder:
 
 def _core_march(
     case: Case, tmp: Path, every_step: bool = True
-) -> tuple[Taken, core_driver.CoreRun]:
-    state = _world(case, tmp, core_driver.CoreRun, "core" if every_step else "batched")
-    assert isinstance(state, core_driver.CoreRun)
+) -> tuple[Taken, core_backend.CoreRun]:
+    state = _world(case, tmp, core_backend.CoreRun, "core" if every_step else "batched")
+    assert isinstance(state, core_backend.CoreRun)
     recorder = _Recorder(state.core)
     state.core = recorder  # type: ignore[assignment]
     taken = Taken()
@@ -603,7 +603,7 @@ def _core_march(
     def on_step(s: MarchStep) -> None:
         result = recorder.results[-1]
         taken.steps.append((s.step, s.t))
-        taken.fields.append(_bits(core_mapping.stacked(s.fields)))
+        taken.fields.append(_bits(core_backend.stacked(s.fields)))
         taken.budgets.append([_budget_bits(b) for b in s.budgets])
         taken.maps.append(_bits(recorder.arrival()["first_above"]))
         recovery = recorder.recovery()
@@ -620,7 +620,7 @@ def _core_march(
     fields, budgets, step, t = _start(state, case)
     out = state.march(case.plans, case.start, fields, budgets, step, t)
     taken.end = (
-        _bits(core_mapping.stacked(out[0])),
+        _bits(core_backend.stacked(out[0])),
         [_budget_bits(b) for b in out[1]],
         out[2],
         out[3],
@@ -703,7 +703,7 @@ def test_march_in_batches_equals_run_march(name: str, tmp_path: Path) -> None:
     """
     case = _case(name, tmp_path)
     reference = _reference_march(case, tmp_path)
-    driver = type("Batched", (core_driver.CoreRun,), {"monitor_reads_fields": False})
+    driver = type("Batched", (core_backend.CoreRun,), {"monitor_reads_fields": False})
     core, state = _core_march_with(driver, case, tmp_path)
     assert core.end == reference.end
     assert state.core_calls < len(reference.steps)
@@ -711,13 +711,13 @@ def test_march_in_batches_equals_run_march(name: str, tmp_path: Path) -> None:
 
 def _core_march_with(
     kind: type, case: Case, tmp: Path
-) -> tuple[Taken, core_driver.CoreRun]:
+) -> tuple[Taken, core_backend.CoreRun]:
     state = _world(case, tmp, kind, "batched")
     taken = Taken()
     fields, budgets, step, t = _start(state, case)
     out = state.march(case.plans, case.start, fields, budgets, step, t)
     taken.end = (
-        _bits(core_mapping.stacked(out[0])),
+        _bits(core_backend.stacked(out[0])),
         [_budget_bits(b) for b in out[1]],
         out[2],
         out[3],
@@ -751,11 +751,11 @@ def _same(a: dict[str, object], b: dict[str, object]) -> bool:
     )
 
 
-def _hand(state: core_driver.CoreRun, plan: IntervalPlan, at: int) -> None:
+def _hand(state: core_backend.CoreRun, plan: IntervalPlan, at: int) -> None:
     """Hand a core run the plan's interval, to march from step AT within it."""
     interval = state.intervals[plan.index]
     rates = state.manager.sources_at(interval.t_start)
-    core_mapping.set_interval(
+    core_backend.set_interval(
         state.core,
         state.manager.conditions_for(interval),
         state.faces(plan.fingerprint),
@@ -776,13 +776,13 @@ def test_march_restored_mid_interval_continues_bit_for_bit(
     leave through the binding as plain data and return through restore.
     """
     case = _case(name, tmp_path)
-    first = _world(case, tmp_path, core_driver.CoreRun, "first")
-    second = _world(case, tmp_path, core_driver.CoreRun, "second")
-    assert isinstance(first, core_driver.CoreRun) and isinstance(
-        second, core_driver.CoreRun
+    first = _world(case, tmp_path, core_backend.CoreRun, "first")
+    second = _world(case, tmp_path, core_backend.CoreRun, "second")
+    assert isinstance(first, core_backend.CoreRun) and isinstance(
+        second, core_backend.CoreRun
     )
     fields, budgets, step, t = _start(first, case)
-    core_mapping.restore_march(
+    core_backend.restore_march(
         first.core, fields, budgets, step, t, first.arrival, first.tracker
     )
     plan = case.plans[-1]
@@ -812,15 +812,15 @@ def test_march_takes_the_steps_asked_for_and_stops_at_the_hold(tmp_path: Path) -
     """march(n) takes n steps; the held clean-out stops at the reference's step and then takes none."""
     case = _case("held", tmp_path)
     reference = _reference_march(case, tmp_path)
-    state = _world(case, tmp_path, core_driver.CoreRun, "direct")
-    assert isinstance(state, core_driver.CoreRun)
+    state = _world(case, tmp_path, core_backend.CoreRun, "direct")
+    assert isinstance(state, core_backend.CoreRun)
     fields, budgets, step, t = _start(state, case)
-    core_mapping.restore_march(
+    core_backend.restore_march(
         state.core, fields, budgets, step, t, state.arrival, state.tracker
     )
     plan = case.plans[0]
     interval = state.intervals[plan.index]
-    core_mapping.set_interval(
+    core_backend.set_interval(
         state.core,
         state.manager.conditions_for(interval),
         state.faces(plan.fingerprint),
@@ -844,12 +844,12 @@ def test_march_takes_the_steps_asked_for_and_stops_at_the_hold(tmp_path: Path) -
 def test_march_refuses_what_it_cannot_read(tmp_path: Path) -> None:
     """The binding's own refusals: shapes, a missing recovery state, a plan, a step count."""
     case = _case("clean", tmp_path)
-    state = _world(case, tmp_path, core_driver.CoreRun, "refusals")
-    assert isinstance(state, core_driver.CoreRun)
+    state = _world(case, tmp_path, core_backend.CoreRun, "refusals")
+    assert isinstance(state, core_backend.CoreRun)
     core = state.core
     fields, budgets, _step, _t = _start(state, case)
-    cube = core_mapping.stacked(fields)
-    terms = [core_mapping.terms_of(b) for b in budgets]
+    cube = core_backend.stacked(fields)
+    terms = [core_backend.terms_of(b) for b in budgets]
     maps = state.arrival.state()["first_above"]
     recovery = {k: np.ascontiguousarray(v) for k, v in state.tracker.state().items()}
     with pytest.raises(TypeError):
@@ -874,7 +874,7 @@ def test_march_refuses_what_it_cannot_read(tmp_path: Path) -> None:
     plan = case.plans[0]
     interval = state.intervals[plan.index]
     with pytest.raises(ValueError, match=r"March2\.interval: the first step is not in"):
-        core_mapping.set_interval(
+        core_backend.set_interval(
             core,
             state.manager.conditions_for(interval),
             state.faces(plan.fingerprint),
@@ -904,7 +904,7 @@ def test_march_refuses_what_it_cannot_read(tmp_path: Path) -> None:
             [(30, 0)],
             [[k] for k in range(5)],
         )
-    core_mapping.set_interval(
+    core_backend.set_interval(
         core,
         state.manager.conditions_for(interval),
         state.faces(plan.fingerprint),
@@ -930,12 +930,12 @@ def test_march_restored_recovery_continues_bit_for_bit(at: int, tmp_path: Path) 
     means' times and the sensors' 100:1 times, each different from the others.
     """
     case = _case("decay", tmp_path)
-    first = _world(case, tmp_path, core_driver.CoreRun, "first")
-    second = _world(case, tmp_path, core_driver.CoreRun, "second")
-    assert isinstance(first, core_driver.CoreRun)
-    assert isinstance(second, core_driver.CoreRun)
+    first = _world(case, tmp_path, core_backend.CoreRun, "first")
+    second = _world(case, tmp_path, core_backend.CoreRun, "second")
+    assert isinstance(first, core_backend.CoreRun)
+    assert isinstance(second, core_backend.CoreRun)
     fields, budgets, step, t = _start(first, case)
-    core_mapping.restore_march(
+    core_backend.restore_march(
         first.core, fields, budgets, step, t, first.arrival, first.tracker
     )
     plan = case.plans[0]
@@ -1125,7 +1125,7 @@ def _outcome(
             (
                 s.step,
                 float(s.t).hex(),
-                _bits(core_mapping.stacked(s.fields)),
+                _bits(core_backend.stacked(s.fields)),
                 tuple(_budget_bits(b) for b in s.budgets),
             )
         )
@@ -1159,9 +1159,9 @@ def _outcomes(case: Case, tmp: Path) -> tuple[Outcome, Outcome, Outcome]:
     file. Returns the three.
     """
     reference = _outcome(_Run, case, tmp, "reference", True)
-    core = _outcome(core_driver.CoreRun, case, tmp, "core", True)
+    core = _outcome(core_backend.CoreRun, case, tmp, "core", True)
     batched_kind = type(
-        "Batched", (core_driver.CoreRun,), {"monitor_reads_fields": False}
+        "Batched", (core_backend.CoreRun,), {"monitor_reads_fields": False}
     )
     batched = _outcome(batched_kind, case, tmp, "batched", False)
     assert core.error == reference.error
@@ -1260,8 +1260,8 @@ def test_driver_refuses_a_march_that_returns_no_step_without_holding(
 ) -> None:
     """A march of no step that neither held nor breached is an error, not a loop."""
     case = _case("clean", tmp_path)
-    state = _world(case, tmp_path, core_driver.CoreRun, "empty")
-    assert isinstance(state, core_driver.CoreRun)
+    state = _world(case, tmp_path, core_backend.CoreRun, "empty")
+    assert isinstance(state, core_backend.CoreRun)
     state.core = _Stub(state.core, _empty)  # type: ignore[assignment]
     fields, budgets, step, t = _start(state, case)
     with pytest.raises(AssertionError, match="no step"):
@@ -1284,11 +1284,14 @@ def test_driver_refuses_a_stop_reason_the_cores_state_does_not_bear_out(
     """The driver reads the core's stop reason and refuses one the core's own state contradicts.
 
     After the first step of a march the interval has steps left, the run does
-    not hold and there is no breach record; the core's reason is a count.
+    not hold and there is no breach record; the core's reason is a count. The
+    monitor is on the fields, so the march goes to the core one step at a time,
+    as prompt 91's default had it (prompt 96 put it on the readings).
     """
     case = _case("clean", tmp_path)
-    state = _world(case, tmp_path, core_driver.CoreRun, "claims")
-    assert isinstance(state, core_driver.CoreRun)
+    state = _world(case, tmp_path, core_backend.CoreRun, "claims")
+    assert isinstance(state, core_backend.CoreRun)
+    state.monitor_reads_fields = True
 
     def lie(core: "_cfdcore.March2", n: int) -> dict:
         result = core.march(n)
@@ -1303,8 +1306,8 @@ def test_driver_refuses_a_stop_reason_the_cores_state_does_not_bear_out(
 def test_driver_refuses_a_count_at_the_intervals_end(tmp_path: Path) -> None:
     """A march that reaches the interval's last step and reports a count is refused."""
     case = _case("clean", tmp_path)
-    state = _world(case, tmp_path, core_driver.CoreRun, "count")
-    assert isinstance(state, core_driver.CoreRun)
+    state = _world(case, tmp_path, core_backend.CoreRun, "count")
+    assert isinstance(state, core_backend.CoreRun)
 
     def count(core: "_cfdcore.March2", n: int) -> dict:
         result = core.march(core.remaining)
@@ -1324,8 +1327,8 @@ def test_driver_refuses_an_interval_the_core_was_not_built_for(tmp_path: Path) -
     builds a solver per interval, so every whole-run claim rests on this check.
     """
     case = _case("clean", tmp_path)
-    state = _world(case, tmp_path, core_driver.CoreRun, "built")
-    assert isinstance(state, core_driver.CoreRun)
+    state = _world(case, tmp_path, core_backend.CoreRun, "built")
+    assert isinstance(state, core_backend.CoreRun)
     other = _scenario("dust")
     assert other.t_end != case.config.t_end
     state.config = other
@@ -1355,7 +1358,7 @@ def _unaligned(a: np.ndarray) -> np.ndarray:
 class Ready:
     """A clean-out core run with everything its restore and interval take, to change one thing at a time."""
 
-    state: core_driver.CoreRun
+    state: core_backend.CoreRun
     plan: IntervalPlan
     cube: np.ndarray
     terms: list[dict[str, float | None]]
@@ -1400,15 +1403,15 @@ class Ready:
 
 def _ready(tmp: Path) -> Ready:
     case = _case("clean", tmp)
-    state = _world(case, tmp, core_driver.CoreRun, "ready")
-    assert isinstance(state, core_driver.CoreRun)
+    state = _world(case, tmp, core_backend.CoreRun, "ready")
+    assert isinstance(state, core_backend.CoreRun)
     fields, budgets, _step, _t = _start(state, case)
     assert state.tracker is not None
     return Ready(
         state,
         case.plans[0],
-        core_mapping.stacked(fields),
-        [core_mapping.terms_of(b) for b in budgets],
+        core_backend.stacked(fields),
+        [core_backend.terms_of(b) for b in budgets],
         np.ascontiguousarray(state.arrival.state()["first_above"]),
         {k: np.ascontiguousarray(v) for k, v in state.tracker.state().items()},
     )
@@ -1593,8 +1596,8 @@ def _march_args(**changes: object) -> dict[str, object]:
     """March2's arguments for the 80x30 clean-out, some changed."""
     config, mesh = _clean_room()
     thresholds = np.array(config.class_thresholds("the test"), dtype=np.float64)
-    keys = core_mapping.recovery_keys(thresholds, _initial_levels(thresholds), None)
-    args = core_mapping.march_arguments(
+    keys = core_backend.recovery_keys(thresholds, _initial_levels(thresholds), None)
+    args = core_backend.march_arguments(
         config, mesh, list(core_mapping_cells(config, mesh)), [0.0], keys
     )
     args.update(changes)
@@ -1707,7 +1710,7 @@ def test_march_restore_refuses_a_recovery_state_it_has_no_recovery_for(
     """A run built without a recovery refuses a recovery state; with one it takes it."""
     ready = _ready(tmp_path)
     config = ready.state.config
-    bare = core_mapping.core_march(
+    bare = core_backend.core_march(
         config,
         ready.state.mesh,
         ready.state.cells,
@@ -1753,7 +1756,7 @@ def _blocks() -> dict[str, object]:
     config, mesh = _clean_room()
     thresholds = list(config.class_thresholds("the test"))
     levels = _initial_levels(np.array(thresholds))
-    keys = core_mapping.recovery_keys(np.array(thresholds), levels, None)
+    keys = core_backend.recovery_keys(np.array(thresholds), levels, None)
     return {
         "grid": _grid(mesh),
         "thresholds": thresholds,
@@ -1955,12 +1958,12 @@ def test_march_binding_imports_nothing_from_src(
 ) -> None:
     """A restore, an interval's march and every read go through with every src module unimportable."""
     case = _case("clean", tmp_path)
-    state = _world(case, tmp_path, core_driver.CoreRun, "plain")
-    assert isinstance(state, core_driver.CoreRun)
+    state = _world(case, tmp_path, core_backend.CoreRun, "plain")
+    assert isinstance(state, core_backend.CoreRun)
     fields, budgets, _step, _t = _start(state, case)
     core = state.core
-    cube = core_mapping.stacked(fields)
-    terms = [core_mapping.terms_of(b) for b in budgets]
+    cube = core_backend.stacked(fields)
+    terms = [core_backend.terms_of(b) for b in budgets]
     maps = np.ascontiguousarray(state.arrival.state()["first_above"])
     recovery = {k: np.ascontiguousarray(v) for k, v in state.tracker.state().items()}
     plan = case.plans[0]

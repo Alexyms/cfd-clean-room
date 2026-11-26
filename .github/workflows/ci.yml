@@ -117,11 +117,19 @@ jobs:
       # The parity tests skip when _cfdcore cannot be imported; here a missing
       # module is an error instead (CFD_CORE_REQUIRED). NumPy's AVX-512 loops are
       # off, so that its logarithm and powers are the C library's, as the core's
-      # are, on every runner (prompt 94; Alex, 2026-11-25).
+      # are, on every runner (prompt 94; Alex, 2026-11-25). Every parity module
+      # is named here, one a line, so that a module added is added to the job.
       - name: Run the parity tests
         env:
           CFD_CORE_REQUIRED: "1"
           NPY_DISABLE_CPU_FEATURES: X86_V4
         run: |
           source .venv/bin/activate
-          pytest tests/test_core_parity.py tests/test_core_march.py tests/test_core_momentum.py tests/test_core_pressure.py tests/test_core_turbulence.py tests/test_core_flow.py -v -m parity
+          pytest -v -m parity \
+            tests/test_core_parity.py \
+            tests/test_core_march.py \
+            tests/test_core_momentum.py \
+            tests/test_core_pressure.py \
+            tests/test_core_turbulence.py \
+            tests/test_core_flow.py \
+            tests/test_core_backend.py

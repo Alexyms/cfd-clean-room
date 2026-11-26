@@ -43,6 +43,7 @@ the suite marches seconds, not minutes; their segments, sources and initial
 fields are the reference files'.
 """
 
+import copy
 import math
 import re
 import sys
@@ -59,7 +60,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 import run_scenario
 
-from src import time_integration
+from src import core_backend, time_integration
 from src.boundary_concentration import (
     ConcentrationBoundary,
 )
@@ -2721,3 +2722,70 @@ class TestConservationBudget:
         last = {k: fields[-1] for k, fields in new_frames.fields.items()}
         with pytest.raises(ValueError, match="written before"):
             RunFile(old).write_frame(10_000, 9.0, last, new_frames.budgets[-1])
+
+
+@pytest.mark.unit
+class TestBackendKeyInTheRun:
+    """solver.backend in a run (ADR-017 E, prompt 96), checked without the core."""
+
+    def _mappings(self) -> tuple[dict, dict]:
+        mapping = SimConfig.from_dict(
+            coarse_raw("scenario_equipment_dust.yaml")
+        ).merged_mapping()
+        core = copy.deepcopy(mapping)
+        core["solver"]["backend"] = "core"
+        return mapping, core
+
+    def test_a_run_file_refuses_a_restart_on_the_other_backend(
+        self, tmp_path: Path
+    ) -> None:
+        """The key is in the restart hash, both ways: a run continues on its own.
+
+        Defect caught: the key among the keys a restart may change.
+        """
+        reference, core = self._mappings()
+        for name, written, restarted in (
+            ("r", reference, core),
+            ("c", core, reference),
+        ):
+            file = RunFile(tmp_path / f"{name}.h5")
+            file.write_config(
+                written, commit="test", started="now", machine="here", concurrent=0
+            )
+            with pytest.raises(ValueError, match=r"solver\.backend differs"):
+                file.check_restart(restarted)
+            file.check_restart(written)
+
+    def test_a_kept_flow_state_of_the_other_backend_is_refused(self) -> None:
+        """flows_from compares the key: a state is not copied across backends."""
+        reference, core = self._mappings()
+        assert _first_flow_difference(flow_inputs(core), flow_inputs(reference)) == (
+            "solver.backend"
+        )
+        assert (
+            _first_flow_difference(flow_inputs(reference), flow_inputs(reference))
+            is None
+        )
+
+    def test_the_reference_builds_the_references_run_and_solver(
+        self, tmp_path: Path
+    ) -> None:
+        """Under ``reference``: ``_Run`` itself and the class the caller names.
+
+        Defect caught: the default key building the core's (which a Windows
+        suite would see as an import of the core).
+        """
+        config = SimConfig.from_dict(coarse_raw("scenario_equipment_dust.yaml"))
+        state = time_integration._run_state(config, RunFile(tmp_path / "r.h5"), None)
+        assert type(state) is _Run
+        mesh = Mesh(config)
+        boundary = StaggeredBoundary(mesh, config)
+        assert type(core_backend.steady_solver(mesh, config, boundary)) is (
+            StaggeredSolver
+        )
+
+        class Named(StaggeredSolver):
+            pass
+
+        built = core_backend.steady_solver(mesh, config, boundary, reference=Named)
+        assert type(built) is Named

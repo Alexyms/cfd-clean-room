@@ -27,14 +27,14 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from src import multigrid, pressure
+from src import core_backend, multigrid, pressure
 from src.boundary_staggered import StaggeredBoundary
 from src.config import MULTIGRID, PRESSURE_JACOBI, SimConfig
 from src.mesh import BOUNDARY, FLUID, SOLID, Mesh
 from src.momentum import MomentumPrediction
 from src.multigrid import Multigrid
 from src.pressure import PressureCoefficients, PressureCorrector
-from tests import core_mapping, decimal_inverse
+from tests import decimal_inverse
 from validation.cases import load_case
 
 if os.environ.get("CFD_CORE_REQUIRED") == "1":
@@ -67,7 +67,7 @@ FIELDS = ("u", "v", "p", "p_prime")
 CAVITY = "cavity40"
 NAMES = [*ALL_MESHES, CAVITY]
 EDGES = ("left", "right", "bottom", "top")
-LEVELS = core_mapping.MULTIGRID_LEVELS
+LEVELS = core_backend.MULTIGRID_LEVELS
 # What a planted momentum diagonal is at the faces it is an unknown's: values
 # within a decade of one another as a room's are, or over a range of decades.
 SPREADS = {"decade": 1.0, "decades": 3.0}
@@ -128,7 +128,7 @@ def _room(
     boundary: "StaggeredBoundary | PlantedBoundary",
 ) -> Room:
     reference = PressureCorrector(mesh, config, boundary)
-    core = core_mapping.pressure_corrector(mesh, config, boundary, reference)
+    core = core_backend.pressure_corrector(mesh, config, boundary, reference)
     return Room(mesh, config, reference, core)
 
 
@@ -693,7 +693,7 @@ def planted_coarsest(
 @pytest.mark.parametrize("shape", COARSEST, ids=lambda s: f"{s[0]}x{s[1]}")
 def test_the_pseudo_inverse_of_singular_systems(shape: tuple[int, int]) -> None:
     """Closed systems, one null vector a component and one a SOLID cell (prediction (b))."""
-    rcond = core_mapping.PINV_RCOND
+    rcond = core_backend.PINV_RCOND
     for _case, five in planted_coarsest(shape):
         core = _cfdcore.Multigrid2(*five, LEVELS)
         expected = Multigrid(PressureCoefficients(*five), pressure.apply_operator)
@@ -715,7 +715,7 @@ def test_the_pseudo_inverse_of_singular_systems(shape: tuple[int, int]) -> None:
 
 def test_the_pseudo_inverses_cutoff_is_numpys() -> None:
     """Diagonal matrices with a value either side of the cutoff, kept and dropped as NumPy does."""
-    rcond = core_mapping.PINV_RCOND
+    rcond = core_backend.PINV_RCOND
     for factor in (0.0, 1e-3, 0.5, 0.99, 1.01, 2.0, 1e3):
         small = factor * rcond * 7.0
         matrix = np.diag([7.0, small, 2.0])
@@ -734,7 +734,7 @@ def test_a_value_that_is_not_finite_makes_a_pseudo_inverse_of_nans() -> None:
     for bad in (np.nan, np.inf):
         matrix = np.eye(6) * 2.0
         matrix[0, 0] = bad
-        assert np.isnan(_cfdcore.pseudo_inverse(matrix, core_mapping.PINV_RCOND)).all()
+        assert np.isnan(_cfdcore.pseudo_inverse(matrix, core_backend.PINV_RCOND)).all()
 
 
 # ---- The conjugate gradients -------------------------------------------------
@@ -743,7 +743,7 @@ def test_a_value_that_is_not_finite_makes_a_pseudo_inverse_of_nans() -> None:
 def _assert_solved(room: Room, inputs: Inputs) -> tuple[int, int]:
     """A correction at the reference's count with its fields to 1e-12; returns both counts."""
     expected = room.reference.correct(inputs.prediction, inputs.p)
-    got = core_mapping.correction_from(room.core.correct(*inputs.arguments))
+    got = core_backend.correction_from(room.core.correct(*inputs.arguments))
     counts = expected.iterations, got.iterations
     if counts[0] == counts[1]:
         assert (got.reached_cap, got.products) == (
@@ -1381,9 +1381,9 @@ def test_a_division_by_zero_is_the_references_error() -> None:
     with pytest.raises(_cfdcore.PressureBreakdown) as got:
         _cfdcore.pressure_cg(*five, f, 0.1, 0.0, 3, PRESSURE_JACOBI, False, LEVELS)
     assert got.value.reason == "division_by_zero" and got.value.iterations == 0
-    assert isinstance(core_mapping.breakdown_error(got.value), ZeroDivisionError)
+    assert isinstance(core_backend.breakdown_error(got.value), ZeroDivisionError)
     other = SimpleNamespace(reason="not_converged", iterations=0)
-    assert isinstance(core_mapping.breakdown_error(other), np.linalg.LinAlgError)
+    assert isinstance(core_backend.breakdown_error(other), np.linalg.LinAlgError)
 
 
 def test_a_zero_product_with_the_preconditioned_residual_is_the_references_error() -> (

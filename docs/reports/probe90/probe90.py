@@ -60,6 +60,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
 sys.path.insert(0, str(ROOT))
 
+from src import core_backend as core_mapping  # noqa: E402 -- after sys.path
 from src.config import SimConfig  # noqa: E402 -- after sys.path
 from src.io_manager import RunFile  # noqa: E402 -- after sys.path
 from src.solver_transport import (  # noqa: E402 -- after sys.path
@@ -69,7 +70,6 @@ from src.solver_transport import (  # noqa: E402 -- after sys.path
     TransportSolver,
 )
 from src.time_integration import MarchStep, run  # noqa: E402 -- after sys.path
-from tests import core_mapping  # noqa: E402 -- after sys.path
 
 RESULTS = ROOT / "results" / "builder90"
 CAPTURES = RESULTS / "captures"

@@ -1,34 +1,44 @@
-"""The mapping between the compiled core's plain data and the reference's types (ADR-017 B).
+"""The compiled core behind ``solver.backend: core`` (ADR-017 B and E).
 
-The binding is handed data and returns data: a class's budget as its ten terms
-by name, and a breach as ``_cfdcore.ConservationBreach`` carrying the class, the
-leftover, the particles supplied and the limit. The reference's types for the
-same things are ``MassBudget`` and ``ConservationBreachError``. Step 6's
-``src/core_backend.py`` will hold this mapping; until it exists the parity tests
-and prompt 90's probe share it here, so that every comparison is made on the
-reference's own types and the binding imports nothing from ``src``.
+A run under ``solver.backend: core`` (``SimConfig.backend``) is
+``time_integration.run`` with two parts in the core: every steady flow solve is a
+``CoreSolver``, ``StaggeredSolver`` with ``solve_steady``'s outer iterations in a
+``_cfdcore.Flow2``, and the march is a ``CoreRun``, ``time_integration._Run``
+with its march stepped by a ``_cfdcore.March2``. The plans, the events, the flow
+states' bookkeeping, the alert monitor, the frames, the checkpoints, the restart
+and the end records stay the reference's own code (ADR-017 E). ``steady_solver``
+is the one factory both ``time_integration`` and ``scripts/benchmark.py`` build a
+steady solver with, so a harness row runs on either backend.
 
-Prompt 91 adds the march's: a ``_cfdcore.March2`` built from a configuration and
-its mesh, its resident state set from the reference's fields, budgets and
-trackers, an interval handed over from the reference's plan and boundary, a
-step's budget row read as ``MassBudget`` objects, and the reference's trackers
-set from the core's maps and recovery fields (``ArrivalTracker.restore`` and
-``RecoveryTracker.restore``, whose checks then read the core's state). Prompt 92
-adds the momentum predictor's construction, and prompt 93 the pressure correction's:
-its construction, the multigrid's keys, its result as ``PressureCorrection`` and its
-breakdown as the error the reference's own arithmetic raises. Prompt 94 adds the turbulence
-model's and the wall functions': their construction (which face admits air, read from the
-shared coverage as ``TurbulenceBoundary`` reads it, with its refusal of a segment that states
-no turbulence), their results as ``TurbulenceState`` and ``TurbulenceConditions``, and a
-positivity failure as ``PositivityError``. Prompt 95 adds the stopping rule's and the
-outer iteration's: a ``_cfdcore.StoppingRule2`` from ``ErrorEstimateRule``'s own
-arguments, the modules of a steady solve on one grid, a ``_cfdcore.Flow2`` from a
-``StaggeredSolver``'s set-up, and a chunk's failure as the exception the reference's
-solve raises there.
+The binding is handed data and returns data, and imports nothing from ``src``;
+this module maps between the two. A class's budget crosses as its ten terms by
+name and returns as ``MassBudget``; a condition a run can meet returns as a status
+or a record, raised here as the reference's exception (``ConservationBreachError``,
+``PositivityError``, the pressure solve's ``ZeroDivisionError`` and
+``LinAlgError``, ``FlowNotConvergedError`` through ``time_integration``), so
+``scripts/run_scenario.py`` exits as it does on the reference. The modules' set-ups
+are built from the reference's own arguments: the momentum predictor (prompt 92),
+the pressure correction and its multigrid (prompt 93), the k-epsilon model and the
+wall functions (prompt 94), the stopping rule and the outer iteration (prompt 95),
+and the march's run, its intervals and its trackers (prompt 91). The parity tests
+build the same set-ups through these functions, so every comparison is made on
+the reference's own types.
+
+``_cfdcore`` is imported inside the functions that call it, so this module loads
+where the core is not built (on Windows, say) and nothing imports the core unless
+the key asks for it; ``SimConfig`` refuses ``core`` at load where it cannot be
+imported. The march's monitor reads the readings and channels the core returns
+per step (``AlertMonitor.update_from_readings``), so the march goes to the core in
+batches to the next frame, checkpoint or interval end; ``CoreRun.monitor_reads_fields``
+puts the monitor on the fields instead, copied out of the core after every step,
+which the parity tests and the probe use to show that the two give the same alerts.
+
+Moved here from ``tests/core_mapping.py`` and ``tests/core_driver.py`` (prompt 96),
+where prompts 90 to 95 built them.
 """
 
 import dataclasses
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -41,9 +51,16 @@ from src.boundary_concentration import (
 )
 from src.boundary_registry import VELOCITY_INLET, BoundaryRegistry
 from src.boundary_staggered import StaggeredBoundary
-from src.config import ERROR_ESTIMATE, UPWIND, BoundarySpec, SimConfig
+from src.config import (
+    CORE_BACKEND,
+    ERROR_ESTIMATE,
+    UPWIND,
+    BoundarySpec,
+    SimConfig,
+)
+from src.io_manager import RunFile
 from src.mesh import FLUID, SOLID, Mesh
-from src.monitor import COUNTING_STATE, ArrivalTracker
+from src.monitor import COUNTING_STATE, Alert, ArrivalTracker
 from src.multigrid import (
     COARSEST_CELLS,
     DOMINANCE_TOLERANCE,
@@ -57,14 +74,36 @@ from src.pressure import (
     PressureCorrection,
     PressureCorrector,
 )
+from src.solver_staggered import (
+    _STOP_REASONS,
+    CAP_STOP,
+    FlowState,
+    StaggeredSolver,
+    SteadyCheckpoint,
+    _digest,
+)
+from src.solver_staggered import logger as solver_logger
 from src.solver_transport import DEPOSIT_SURFACES, ConservationBreachError, MassBudget
-from src.staggered import FaceVelocities, edge_cell_inputs
-from src.stopping import RATE_WINDOW, RULE_VERSION_WITH_E, RULE_VERSION_WITHOUT_E
+from src.staggered import (
+    FaceVelocities,
+    allocate_fields,
+    edge_cell_inputs,
+    to_cell_centers,
+)
+from src.stopping import (
+    RATE_WINDOW,
+    RULE_VERSION_WITH_E,
+    RULE_VERSION_WITHOUT_E,
+    IterationState,
+)
 from src.time_integration import (
     DEFINED_RTOL,
     HUNDRED_TO_ONE,
     IntervalPlan,
+    MarchStep,
     RecoveryTracker,
+    _copies,
+    _Run,
 )
 from src.turbulence import (
     E_WALL,
@@ -75,6 +114,7 @@ from src.turbulence import (
     TurbulenceConditions,
     TurbulenceState,
 )
+from src.turbulence import logger as turbulence_logger
 
 if TYPE_CHECKING:
     import _cfdcore
@@ -1152,3 +1192,693 @@ def flow_error(failure: Mapping[str, object]) -> Exception:
     if kind == "LinAlgError":
         return np.linalg.LinAlgError("Eigenvalues did not converge")
     return ValueError(str(failure["message"]))
+
+
+# ---- The scenario run and the steady solve on the core (prompts 91, 95, 96) ----
+
+
+class CoreRun(_Run):
+    """``_Run`` with the march stepped through the core (``solver.backend: core``).
+
+    Parameters
+    ----------
+    config : SimConfig
+        The run's configuration (a scenario section and a transport section).
+    run : RunFile
+        The run file.
+    on_step : Callable[[MarchStep], None] or None
+        Called after every step's writes, as the reference calls it.
+
+    Notes
+    -----
+    ``monitor_reads_fields`` (class attribute, False) puts the monitor on the
+    readings and channels the core returns per step
+    (``AlertMonitor.update_from_readings``), so the march goes to the core in
+    batches to the next frame, checkpoint or interval end, or one step at a
+    time when ``on_step`` is given. True keeps it on the fields, as the
+    reference hands them: they are read from the core after every step and
+    handed to ``AlertMonitor.update``, and the core's readings and channels are
+    checked against the monitor's bit for bit. ``core_calls`` counts the core's
+    ``march`` calls.
+    """
+
+    monitor_reads_fields: bool = False
+
+    def __init__(
+        self,
+        config: SimConfig,
+        run: RunFile,
+        on_step: Callable[[MarchStep], None] | None,
+    ) -> None:
+        super().__init__(config, run, on_step)
+        recovery = None
+        if self.tracker is not None:
+            spec = config.scenario
+            assert spec is not None
+            initial = self.manager.initial_fields()
+            recovery = recovery_keys(
+                config.class_thresholds("the clean-out's recovery"),
+                [float(initial[k][self.live][0]) for k in range(self.n_classes)],
+                spec.hold_time,
+            )
+        self.core = core_march(
+            config, self.mesh, self.cells, [onset for _, onset in self.events], recovery
+        )
+        self.core_calls = 0
+
+    def _check_interval(self, plan: IntervalPlan) -> None:
+        """Refuse an interval whose transport inputs the core was not built with."""
+        theirs = self.intervals[plan.index].config
+        if (
+            theirs.transport != self.config.transport
+            or theirs.particle_sizes != self.config.particle_sizes
+            or theirs.t_end != self.config.t_end
+        ):
+            raise ValueError(
+                f"interval {plan.index}'s transport keys, particles or t_end are not "
+                "the run's, which the core was built with"
+            )
+
+    @staticmethod
+    def _stop_of(
+        core: "_cfdcore.March2", result: Mapping[str, object], rows: int
+    ) -> str:
+        """The reason a core march returned, checked against the core's own state.
+
+        The reason is the core's claim, so the driver reads it and refuses one
+        the state does not bear out: the interval's end when no step is left and
+        a count when some are, a hold the core holds, a breach that carries its
+        record. A march that took no step must have held or breached, or the
+        driver would ask it again for the same.
+
+        Parameters
+        ----------
+        core : _cfdcore.March2
+            The run, after the march.
+        result : Mapping[str, object]
+            The march's returned dict.
+        rows : int
+            The steps it returned.
+
+        Returns
+        -------
+        str
+            ``result["stopped"]``.
+
+        Raises
+        ------
+        AssertionError
+            If the reason is not one the core's state allows.
+        """
+        stopped = result["stopped"]
+        bears_out = {
+            "interval": core.remaining == 0,
+            "count": core.remaining > 0,
+            "held": core.held(),
+            "breach": result["breach"] is not None,
+        }
+        if not isinstance(stopped, str) or not bears_out.get(stopped, False):
+            raise AssertionError(
+                f"the core's march stopped as {stopped!r} with {core.remaining} "
+                f"steps left, held {core.held()}"
+            )
+        if (result["breach"] is not None) != (stopped == "breach"):
+            raise AssertionError(f"a breach record with the stop {stopped!r}")
+        if rows == 0 and stopped not in ("held", "breach"):
+            raise AssertionError(
+                f"a march that returned no step stopped as {stopped!r}, "
+                "neither held nor breached"
+            )
+        return stopped
+
+    def _observe_row(
+        self,
+        step: int,
+        t: float,
+        result: Mapping[str, np.ndarray],
+        r: int,
+        fields: Mapping[int, np.ndarray] | None,
+        pending: list[tuple[int, float, np.ndarray, np.ndarray]],
+    ) -> tuple[Alert, ...]:
+        """The monitor's update after row R of a march, on the fields or the readings."""
+        if self.monitor is None:
+            return ()
+        if fields is None:
+            alerts = self.monitor.update_from_readings(
+                step, t, result["readings"][r], result["channels"][r]
+            )
+            return self.noted(alerts, step, t, pending)
+        alerts = self.observe(step, t, fields, pending)
+        # The core's readings are the monitor's, read from the same fields.
+        if (
+            self.monitor.readings.tobytes() != result["readings"][r].tobytes()
+            or self.monitor.channel_readings.tobytes()
+            != result["channels"][r].tobytes()
+        ):
+            raise AssertionError(
+                f"the core's readings at step {step} are not the monitor's"
+            )
+        return alerts
+
+    def march(
+        self,
+        plans: list[IntervalPlan],
+        start: tuple[int, int],
+        fields: dict[int, np.ndarray],
+        budgets: Sequence[MassBudget],
+        step: int,
+        t: float,
+    ) -> tuple[dict[int, np.ndarray], tuple[MassBudget, ...], int, float, bool]:
+        """Step every class from (plan, step within it) to the end or the hold, in the core.
+
+        Returns the fields, budgets, step count and time at the end, and
+        whether the hold stopped it, as ``_Run.march`` does.
+        """
+        core = self.core
+        config = self.config
+        output, cadence = config.output_interval, config.checkpoint_interval
+        restore_march(core, fields, budgets, step, t, self.arrival, self.tracker)
+        pending: list[tuple[int, float, np.ndarray, np.ndarray]] = []
+        held = core.held()
+        current = tuple(budgets)
+        every_step = self.on_step is not None or (
+            self.monitor is not None and self.monitor_reads_fields
+        )
+        first_plan, first_i = start
+        for p in range(first_plan, len(plans)):
+            if held:
+                break
+            plan = plans[p]
+            self._check_interval(plan)
+            interval = self.intervals[plan.index]
+            rates = self.manager.sources_at(interval.t_start)
+            set_interval(
+                core,
+                self.manager.conditions_for(interval),
+                self.faces(plan.fingerprint),
+                self.states[plan.fingerprint].nu_t,
+                [rates[k] if rates[k].any() else None for k in range(self.n_classes)],
+                plan,
+                first_i if p == first_plan else 0,
+            )
+            while core.remaining > 0 and not held:
+                n = core.remaining
+                if every_step:
+                    n = 1
+                else:
+                    n = min(n, output - step % output)
+                    if cadence is not None:
+                        n = min(n, cadence - step % cadence)
+                result = core.march(n)
+                self.core_calls += 1
+                rows = len(result["step"])
+                stopped = self._stop_of(core, result, rows)
+                for r in range(rows):
+                    step, t = int(result["step"][r]), float(result["t"][r])
+                    current = tuple(budgets_of_row(result["budgets"][r]))
+                    held = stopped == "held" and r == rows - 1
+                    last = held or (
+                        p == len(plans) - 1 and core.remaining == 0 and r == rows - 1
+                    )
+                    frame = step % output == 0 or last
+                    checkpoint = cadence is not None and (step % cadence == 0 or last)
+                    end_of_call = r == rows - 1
+                    if (frame or checkpoint or every_step) and not end_of_call:
+                        raise AssertionError(
+                            f"step {step} needs the fields but is not a march's last"
+                        )
+                    fields_now = None
+                    if end_of_call and (frame or checkpoint or every_step):
+                        fields_now = unstacked(core.class_fields())
+                        fields = fields_now
+                    monitor_fields = fields_now if self.monitor_reads_fields else None
+                    alerts = self._observe_row(
+                        step, t, result, r, monitor_fields, pending
+                    )
+                    if frame or checkpoint:
+                        sync_trackers(core, self.arrival, self.tracker)
+                    if frame:
+                        self.run.write_frame(step, t, fields, current)
+                        self._flush(pending)
+                    if checkpoint:
+                        self._flush(pending)
+                        self.run.write_arrival(self.arrival_record(t))
+                        self.run.checkpoint(
+                            step,
+                            t,
+                            fields,
+                            current,
+                            plan.fingerprint,
+                            recovery=self.carried(),
+                            plan_start=plan.t_start,
+                        )
+                    if self.on_step is not None:
+                        self.on_step(
+                            MarchStep(
+                                step,
+                                t,
+                                plan.dt,
+                                plan.index,
+                                fields,
+                                _copies(current),
+                                alerts,
+                            )
+                        )
+                error = breach_error(result)
+                if error is not None:
+                    raise error
+                # Read once per call: a march that took no step and held ends the loop.
+                held = stopped == "held"
+        fields = unstacked(core.class_fields())
+        current = tuple(budgets_of(core))
+        sync_trackers(core, self.arrival, self.tracker)
+        self._flush(pending)
+        return fields, _copies(current), int(core.step), float(core.t), held
+
+
+# ---- The steady solve (prompt 95) ---------------------------------------------
+
+
+class _CoreWindow:
+    """The core's window as ``StaggeredSolver._checkpoint`` reads a rule's."""
+
+    def __init__(self, core: "_cfdcore.Flow2") -> None:
+        self._core = core
+
+    def window(self) -> tuple[tuple[float, ...], tuple[float, ...]]:
+        """The velocity and the viscosity steps, oldest first."""
+        return self._core.window()
+
+
+def _state_of(fields: Mapping[str, np.ndarray]) -> TurbulenceState | None:
+    """The core's k, eps and nu_t as the reference's state, read-only; None when laminar."""
+    if "k" not in fields:
+        return None
+    arrays = {name: fields[name] for name in ("k", "eps", "nu_t")}
+    for array in arrays.values():
+        array.setflags(write=False)
+    return TurbulenceState(**arrays)
+
+
+class CoreSolver(StaggeredSolver):
+    """``StaggeredSolver`` with ``solve_steady``'s outer iteration in the core.
+
+    The set-up, the refusals, the warm start's and the resume's checks, the
+    checkpoints, the log lines and the end of a solve are the reference's own code:
+    the reference's methods where they are separate (``_effective_viscosity``,
+    ``_warm``, ``_resumed``, ``_new_rule``, ``_checkpoint``, ``_finite``) and the
+    loop's lines here otherwise. The outer iterations run in a ``_cfdcore.Flow2``
+    in chunks: to the next checkpoint (an outer iteration whose
+    ``(iteration + 1) % checkpoint_interval == 0``) when ``on_checkpoint`` is given,
+    one at a time when ``on_iteration`` is, else to the cap.
+
+    Parameters
+    ----------
+    mesh, config, boundary
+        As ``StaggeredSolver`` takes them.
+
+    Attributes
+    ----------
+    rule_readings : dict[str, list]
+        The last solve's records per outer iteration, the resumed solve's from its
+        resume: the velocity and the viscosity steps, the rule's estimates and
+        scales, and the corrections' iterations and products.
+    core_seconds : dict[str, float]
+        The last solve's seconds by the core's stages, the rule's among them.
+    core_calls : int
+        The last solve's chunks.
+    """
+
+    def __init__(
+        self, mesh: Mesh, config: SimConfig, boundary: StaggeredBoundary
+    ) -> None:
+        super().__init__(mesh, config, boundary)
+        self._config = config
+        self._modules = flow_modules(mesh, config, boundary, self._corrector)
+        self.rule_readings: dict[str, list] = {}
+        self.core_seconds: dict[str, float] = {}
+        self.core_calls = 0
+
+    def solve_transient(self, *args: object, **kwargs: object) -> object:
+        """Refused: tier 2's true-time step stays on the reference (ADR-017 F).
+
+        Raises
+        ------
+        NotImplementedError
+            Always. ``SimConfig`` refuses ``solver.backend: core`` with a
+            transient section, so a run never reaches this; a direct call would
+            otherwise run the reference's own loop under the core's name.
+        """
+        raise NotImplementedError(
+            "the core carries the steady solve; tier 2's true-time step "
+            "(solve_transient) stays on the reference (ADR-017 F)"
+        )
+
+    def solve_steady(
+        self,
+        on_iteration: Callable[[IterationState], None] | None = None,
+        *,
+        eddy_viscosity: np.ndarray | None = None,
+        initial: FlowState | None = None,
+        resume: SteadyCheckpoint | None = None,
+        on_checkpoint: Callable[[SteadyCheckpoint], None] | None = None,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """``StaggeredSolver.solve_steady``, its outer iterations in the core.
+
+        Parameters and returns as the reference's; so are its refusals, which are
+        its own code.
+        """
+        model = self._model
+        if model is not None and eddy_viscosity is not None:
+            raise ValueError(
+                "eddy_viscosity is refused with the turbulence section present: the "
+                "k-epsilon model is the solve's one source of nu_t"
+            )
+        if initial is not None and resume is not None:
+            raise ValueError(
+                "initial and resume are exclusive: a warm start begins a solve, a "
+                "resume continues one"
+            )
+        mu_eff = (
+            None
+            if eddy_viscosity is None
+            else self._effective_viscosity(eddy_viscosity)
+        )
+        digest = None if eddy_viscosity is None else _digest(eddy_viscosity)
+        start = 0
+        state: TurbulenceState | None = None
+        if resume is not None:
+            u, v, p, state = self._resumed(resume, digest)
+            start = resume.state.outer
+        elif initial is not None:
+            u, v, p, state = self._warm(initial)
+        else:
+            if model is not None:
+                state = model.initial(*self._initial_turbulence)
+            u, v, p = allocate_fields(self._mesh)
+        self.turbulence_state = None
+        self._boundary.apply_normal_velocity(u, v)
+
+        self.residual_history = [] if resume is None else list(resume.residual_history)
+        self.stage_seconds = self._zero_stage_seconds()
+        self.last_pressure_iterations = 0
+        self.pressure_cap_hits = 0 if resume is None else resume.pressure_cap_hits
+        self.converged, self.stop_reason = False, None
+        rule = self._new_rule()
+        if rule is not None and resume is not None:
+            # The reference's refusals of the window, before the core is seeded.
+            rule.restore(resume.velocity_steps, resume.viscosity_steps)
+
+        core = flow_solver(
+            self._modules,
+            self._config,
+            self._boundary,
+            self.reference_velocity,
+            self.flux_scale,
+            mu_eff,
+        )
+        if state is None:
+            core.flow_state(u, v, p)
+        else:
+            core.flow_state(u, v, p, state.k, state.eps, state.nu_t)
+        if resume is not None:
+            core.restore(resume.velocity_steps, resume.viscosity_steps)
+        window = _CoreWindow(core)
+        self.rule_readings = {name: [] for name in _READINGS}
+        self.core_seconds = dict.fromkeys(_CORE_STAGES, 0.0)
+        self.core_calls = 0
+
+        interval = self._checkpoint_interval
+        cadence = interval if on_checkpoint is not None else None
+        iteration = start
+        while iteration < self._max_simple_iter:
+            n = self._max_simple_iter - iteration
+            if on_iteration is not None:
+                n = 1
+            elif cadence is not None:
+                n = min(n, cadence - iteration % cadence)
+            chunk = core.solve_steady(n, iteration)
+            self.core_calls += 1
+            self._add_seconds(chunk["stage_seconds"])
+            rows = int(chunk["outer"])
+            stopped = bool(chunk["stopped"])
+            for r in range(rows):
+                at = iteration + r
+                stop = stopped and r == rows - 1
+                self._record(chunk, r, at)
+                if on_iteration is not None:
+                    self._notify(
+                        on_iteration,
+                        core,
+                        at,
+                        float(chunk["residual"][r]),
+                        int(chunk["pressure_iterations"][r]),
+                        int(chunk["pressure_products"][r]),
+                    )
+                residual = self.residual_history[-1]
+                if at % 50 == 0 or stop:
+                    solver_logger.info("SIMPLE iter %4d: residual = %.6e", at, residual)
+                if stop:
+                    self.converged = True
+                    self.stop_reason = _STOP_REASONS[self._stopping_rule]
+                    solver_logger.info("Converged at iteration %d", at)
+            failure = chunk["failure"]
+            if failure is not None:
+                failing = chunk["failing_record"]
+                if failing is not None:
+                    self._fail_after_correction(failure, failing, core, on_iteration)
+                raise flow_error(failure)
+            iteration += rows
+            if self.converged:
+                break
+            if (
+                cadence is not None
+                and interval is not None
+                and rows > 0
+                and iteration % interval == 0
+            ):
+                fields = core.flow_fields()
+                now = _state_of(fields)
+                if self._finite(fields["u"], fields["v"], fields["p"], now):
+                    kept = window if rule is not None else None
+                    on_checkpoint(
+                        self._checkpoint(
+                            fields["u"],
+                            fields["v"],
+                            fields["p"],
+                            now,
+                            kept,
+                            digest,
+                            None,
+                        )
+                    )
+
+        if not self.converged:
+            self.stop_reason = CAP_STOP
+            solver_logger.warning("Not converged: stopped at max_simple_iter")
+        fields = core.flow_fields()
+        u, v, p = fields["u"], fields["v"], fields["p"]
+        state = _state_of(fields)
+        u_c, v_c = to_cell_centers(u, v)
+        self.last_mass_imbalance = self._corrector.mass_imbalance(u, v)
+        self.face_velocities = FaceVelocities.copy_of(u, v)
+        self.turbulence_state = state
+        p = np.ascontiguousarray(p)
+        self.flow_state = self.steady_checkpoint = None
+        if not self._finite(u, v, p, state):
+            solver_logger.warning(
+                "Fields are not finite after %d outer iterations: no flow_state "
+                "or steady_checkpoint is kept",
+                len(self.residual_history),
+            )
+            return u_c, v_c, p
+        self.steady_checkpoint = self._checkpoint(
+            u,
+            v,
+            p,
+            state,
+            window if rule is not None else None,
+            digest,
+            self.stop_reason,
+        )
+        self.flow_state = self.steady_checkpoint.state
+        return u_c, v_c, p
+
+    def _fail_after_correction(
+        self,
+        failure: Mapping[str, object],
+        failing: Mapping[str, object],
+        core: "_cfdcore.Flow2",
+        on_iteration: Callable[[IterationState], None] | None,
+    ) -> None:
+        """Record a failing iteration as the reference has by the time it raises.
+
+        The reference has counted the correction and its cap, and logged the
+        k-epsilon step's warnings. A refused scale of condition (e) is raised by
+        the rule, after the residual is appended and ``on_iteration`` called, so
+        those are done here.
+
+        Parameters
+        ----------
+        failure : Mapping[str, object]
+            The chunk's failure, naming the outer iteration.
+        failing : Mapping[str, object]
+            The chunk's record of that iteration: its correction's count, products
+            and cap, the step's fallbacks and convergence, and the residual when the
+            scale was refused (None otherwise).
+        core : _cfdcore.Flow2
+            The solve, whose fields are the failing iteration's.
+        on_iteration : Callable[[IterationState], None] or None
+            The caller's callback.
+        """
+        at = int(failure["iteration"])
+        iterations = int(failing["pressure_iterations"])
+        self._count_correction(at, iterations, bool(failing["reached_cap"]))
+        self._warn_of_the_step(
+            int(failing["k_fallbacks"]),
+            int(failing["eps_fallbacks"]),
+            bool(failing["solves_converged"]),
+        )
+        residual = failing["residual"]
+        if residual is None:
+            return
+        self.residual_history.append(float(residual))
+        if on_iteration is not None:
+            self._notify(
+                on_iteration,
+                core,
+                at,
+                float(residual),
+                iterations,
+                int(failing["pressure_products"]),
+            )
+
+    def _notify(
+        self,
+        on_iteration: Callable[[IterationState], None],
+        core: "_cfdcore.Flow2",
+        iteration: int,
+        residual: float,
+        pressure_iterations: int,
+        pressure_products: int,
+    ) -> None:
+        """Call ``on_iteration`` with the core's fields as the reference's loop does."""
+        fields = core.flow_fields()
+        u_c, v_c = to_cell_centers(fields["u"], fields["v"])
+        on_iteration(
+            IterationState(
+                iteration=iteration,
+                residual=residual,
+                pressure_iterations=pressure_iterations,
+                u=u_c,
+                v=v_c,
+                p=fields["p"],
+                pressure_products=pressure_products,
+            )
+        )
+
+    def _warn_of_the_step(
+        self, k_fallbacks: int, eps_fallbacks: int, converged: bool
+    ) -> None:
+        """The k-epsilon step's two warnings, as ``KEpsilonModel.step`` logs them.
+
+        The reference logs them before it tests the step's signs, so an iteration
+        that then fails the test has logged them too. A laminar solve and an
+        iteration that ended before its step hand in no fallback and a converged
+        pair of solves, which log nothing.
+        """
+        if k_fallbacks or eps_fallbacks:
+            turbulence_logger.warning(
+                "CG k or eps solve fell back to Jacobi (k %d, eps %d)",
+                k_fallbacks,
+                eps_fallbacks,
+            )
+        if not converged:
+            spec = self._config.turbulence
+            assert spec is not None
+            turbulence_logger.warning(
+                "implicit k or eps solve stopped at max_iter %d CG iterations",
+                spec.max_iter,
+            )
+
+    def _count_correction(self, iteration: int, iterations: int, capped: bool) -> None:
+        """A correction's count and cap, with the reference's warning at the first cap."""
+        self.last_pressure_iterations = iterations
+        if capped:
+            self.pressure_cap_hits += 1
+            if self.pressure_cap_hits == 1:
+                solver_logger.warning(
+                    "SIMPLE iter %d: pressure correction stopped at "
+                    "max_pressure_iter (%d) before its residual met the stop",
+                    iteration,
+                    iterations,
+                )
+
+    def _record(self, chunk: Mapping[str, np.ndarray], r: int, iteration: int) -> None:
+        """Row R of a chunk into the solver's records, in the reference's order."""
+        self._count_correction(
+            iteration,
+            int(chunk["pressure_iterations"][r]),
+            bool(chunk["reached_cap"][r]),
+        )
+        self._warn_of_the_step(
+            int(chunk["k_fallbacks"][r]),
+            int(chunk["eps_fallbacks"][r]),
+            bool(chunk["solves_converged"][r]),
+        )
+        self.residual_history.append(float(chunk["residual"][r]))
+        for name in _READINGS:
+            self.rule_readings[name].append(chunk[name][r].item())
+
+    def _add_seconds(self, seconds: Mapping[str, float]) -> None:
+        """A chunk's seconds into the reference's stages and the core's."""
+        for name, value in seconds.items():
+            self.core_seconds[name] += value
+            if name in self.stage_seconds:
+                self.stage_seconds[name] += value
+
+
+# The records a chunk returns per outer iteration, kept in ``rule_readings``.
+_READINGS = (
+    "step",
+    "viscosity_step",
+    "estimate",
+    "viscosity_estimate",
+    "nu_scale",
+    "pressure_iterations",
+    "pressure_products",
+)
+# The core's stages, the reference's four and the rule's.
+_CORE_STAGES = ("momentum", "pressure", "turbulence", "correct", "stopping")
+
+
+def steady_solver(
+    mesh: Mesh,
+    config: SimConfig,
+    boundary: StaggeredBoundary,
+    *,
+    reference: type[StaggeredSolver] = StaggeredSolver,
+) -> StaggeredSolver:
+    """The steady solver of a configuration's backend (ADR-017 E).
+
+    The one factory ``time_integration`` and ``scripts/benchmark.py`` build a
+    steady solver with, so a scenario run and a harness row run on the backend
+    ``solver.backend`` names.
+
+    Parameters
+    ----------
+    mesh, config, boundary
+        As ``StaggeredSolver`` takes them.
+    reference : type[StaggeredSolver]
+        The class built under ``reference``: ``StaggeredSolver`` unless the
+        caller names its own, which ``time_integration`` does with the name its
+        module holds, so that a test's substitute for it is built.
+
+    Returns
+    -------
+    StaggeredSolver
+        A ``CoreSolver`` under ``core``, else ``reference``'s instance.
+    """
+    if config.backend == CORE_BACKEND:
+        return CoreSolver(mesh, config, boundary)
+    return reference(mesh, config, boundary)

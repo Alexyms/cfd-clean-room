@@ -24,6 +24,7 @@ import pytest
 import yaml
 
 import src.scalar_scheme as scalar_scheme
+from src import core_backend
 from src.boundary_concentration import (
     SURFACE_CEILING,
     SURFACE_FLOOR,
@@ -53,7 +54,6 @@ from src.solver_transport import (
     TransportSolver,
 )
 from src.staggered import FaceVelocities
-from tests import core_mapping
 
 if os.environ.get("CFD_CORE_REQUIRED") == "1":
     import _cfdcore
@@ -3052,7 +3052,7 @@ def _compare_step(inputs: StepInputs, k: int) -> StepComparison:
         )
     )
     out = np.full(c.shape, np.nan)
-    core = _outcome(lambda: core_mapping.step(inputs.core, k, c, out))
+    core = _outcome(lambda: core_backend.step(inputs.core, k, c, out))
     differences = []
     if ref[0] != core[0] or (ref[0] != "ok" and ref[1] != core[1]):
         differences.append(f"outcome {ref} != {core}")
@@ -3076,7 +3076,7 @@ def _compare_step(inputs: StepInputs, k: int) -> StepComparison:
             differences.append(f"records {expected} != {got}")
         inputs.fields[k] = np.array(ref[1])
     for j, (a, b) in enumerate(
-        zip(inputs.reference.budget, core_mapping.budgets_of(inputs.core), strict=True)
+        zip(inputs.reference.budget, core_backend.budgets_of(inputs.core), strict=True)
     ):
         if _budget_bits(a) != _budget_bits(b):
             differences.append(
@@ -3211,7 +3211,7 @@ def test_class_step_continues_a_restored_budget_bit_for_bit(name: str) -> None:
             )
         )
     inputs.reference.restore_budgets(restored)
-    core_mapping.restore_budgets(inputs.core, restored)
+    core_backend.restore_budgets(inputs.core, restored)
     for budget in restored:
         budget.inflow = -99.0  # a later change to an argument reaches neither
     for _ in range(2):
@@ -3243,7 +3243,7 @@ def test_class_step_hands_out_its_budgets_as_plain_data() -> None:
     assert all(type(terms) is dict for terms in fresh)
     # The core's slot names are the reference's DEPOSIT_SURFACES, in its order.
     assert [list(terms) for terms in fresh] == [names] * STEP_CLASSES
-    assert [_budget_bits(core_mapping.budget_from_terms(t)) for t in fresh] == [
+    assert [_budget_bits(core_backend.budget_from_terms(t)) for t in fresh] == [
         _budget_bits(MassBudget())
     ] * STEP_CLASSES
     assert inputs.core.budgets()[0] is not fresh[0]
@@ -3268,13 +3268,13 @@ def test_class_step_restores_budgets_as_the_reference_does() -> None:
         [*good[:2], unknown],
     ):
         expected = _outcome(lambda b=budgets: inputs.reference.restore_budgets(b))
-        got = _outcome(lambda b=budgets: core_mapping.restore_budgets(inputs.core, b))
+        got = _outcome(lambda b=budgets: core_backend.restore_budgets(inputs.core, b))
         assert expected[0] != "ok"
         assert got == expected
     # A budget with no field yet (initial and current None) is set whole, Nones kept.
     assert _compare_step(inputs, 0).differences == []
-    core_mapping.restore_budgets(inputs.core, good)
-    assert [_budget_bits(b) for b in core_mapping.budgets_of(inputs.core)] == [
+    core_backend.restore_budgets(inputs.core, good)
+    assert [_budget_bits(b) for b in core_backend.budgets_of(inputs.core)] == [
         _budget_bits(MassBudget())
     ] * STEP_CLASSES
 
@@ -4058,7 +4058,7 @@ def test_class_step_one_solver_through_intervals_equals_the_reference(
         else:
             inputs = _next_interval(inputs, conditions, faces, v_ext, nu_t, sources)
             # The budgets are what the last interval left, and the step is the new one's own.
-            assert [_budget_bits(b) for b in core_mapping.budgets_of(inputs.core)] == [
+            assert [_budget_bits(b) for b in core_backend.budgets_of(inputs.core)] == [
                 _budget_bits(b) for b in inputs.reference.budget
             ], plan.label
             with pytest.raises(ValueError, match="before set_step"):
@@ -4261,7 +4261,7 @@ def test_class_step_refuses_what_the_reference_refuses(kind: str) -> None:
         try:
             return solver.step(k, c, out)
         finally:
-            assert [_budget_bits(b) for b in core_mapping.budgets_of(solver)] == [
+            assert [_budget_bits(b) for b in core_backend.budgets_of(solver)] == [
                 _budget_bits(MassBudget())
             ] * STEP_CLASSES
 
@@ -4309,7 +4309,7 @@ def test_class_step_dt_in_every_form_is_read_as_the_reference_reads_it(
     out = np.full(c.shape, np.nan)
     inputs.core.step(0, c, out)
     assert _same_bits(expected[1], out)
-    assert [_budget_bits(b) for b in core_mapping.budgets_of(inputs.core)] == [
+    assert [_budget_bits(b) for b in core_backend.budgets_of(inputs.core)] == [
         _budget_bits(b) for b in inputs.reference.budget
     ]
 
