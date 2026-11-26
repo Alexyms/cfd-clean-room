@@ -1083,15 +1083,15 @@ WALL: list[Plant] = [
         "inflow_stand_in_least",
         "beside a SOLID edge cell a half of the largest value",
         WALLS,
-        "cell > 0.0 ? cell : stand_in;",
-        "cell > 0.0 ? cell : 0.5 * stand_in;",
+        "lanes::select(lanes::mask_of(cell > 0.0), cell, stand_in);",
+        "lanes::select(lanes::mask_of(cell > 0.0), cell, 0.5 * stand_in);",
     ),
     one(
         "inflow_zero",
         "beside a SOLID edge cell the cell's zero",
         WALLS,
-        "cell > 0.0 ? cell : stand_in;",
-        "cell >= 0.0 ? cell : stand_in;",
+        "lanes::select(lanes::mask_of(cell > 0.0), cell, stand_in);",
+        "lanes::select(lanes::mask_of(cell >= 0.0), cell, stand_in);",
     ),
     one(
         "inflow_stand_in_in_solid",
@@ -1342,8 +1342,8 @@ CHECKS: list[Plant] = [
         "check_conditions_solid",
         "a condition naming a SOLID cell",
         BINDING,
-        "        if (in_solid) {",
-        "        if (false) {",
+        '        if (in_solid) {\n            refuse_value(name + " names a SOLID cell");',
+        '        if (false) {\n            refuse_value(name + " names a SOLID cell");',
     ),
     removed(
         "check_inflow_edges",
@@ -1466,8 +1466,141 @@ CHECKS: list[Plant] = [
     ),
 ]
 
+# Round 1 (prompt 94b): the tester's plants that no net caught, now caught, a
+# plant for each check the round added, and the tester's equivalent ones.
+BOUNDARY_READ = "    std::array<BoolMatrix, 4> masks;\n    if (!vents.is_none()) {"
+PLANTED_KNOWN = (
+    "    static std::array<bool, 8192> planted_known;\n    planted_known.fill(true);\n"
+)
+ADVANCE_FACES = (
+    "    const state_arrays s = read_state(self.model, state);\n"
+    "    const face_arrays u = read_faces(self.model, faces);\n"
+    "    const auto c = walls.conditions("
+)
+RECORDS = (
+    "    if (result.status == step_status::nothing_moves) {\n"
+    "        refuse_value(nothing_moves_message);\n"
+    "    }\n"
+    "    self.last = result;"
+)
+
+
+def known(name: str, edge: str, slot: str, size: str) -> Plant:
+    """An edge's flags read as all known where the binding hands them to the core."""
+    return one(
+        name,
+        f"the {edge} edge's flags all known where the binding reads them",
+        BINDING,
+        BOUNDARY_READ,
+        PLANTED_KNOWN
+        + f"    input.{slot}.is_dirichlet = "
+        + f"std::span<const bool>(planted_known.data(), g.cells({size}) + 1);\n"
+        + BOUNDARY_READ,
+    )
+
+
+ROUND1: list[Plant] = [
+    known("bind_top_known", "top", "high[0][0]", "0"),
+    known("bind_bottom_known", "bottom", "low[0][0]", "0"),
+    known("bind_left_known", "left", "low[1][0]", "1"),
+    known("bind_right_known", "right", "high[1][0]", "1"),
+    one(
+        "bind_advance_unchecked_faces",
+        "the faces of `advance` read without the reference's check",
+        BINDING,
+        ADVANCE_FACES,
+        "    const state_arrays s = read_state(self.model, state);\n"
+        '    const face_arrays u{float_array(nb::getattr(faces, "u"), "faces.u"),\n'
+        '                        float_array(nb::getattr(faces, "v"), "faces.v")};\n'
+        "    const auto c = walls.conditions(",
+    ),
+    one(
+        "bind_advance_unchecked_conditions",
+        "the conditions `advance` forms not checked",
+        BINDING,
+        "    refuse_formed_conditions(self, c);\n    return run_step(",
+        "    return run_step(",
+    ),
+    removed(
+        "check_formed_finite",
+        "a formed condition finite",
+        BINDING,
+        "        if (!cfdcore::turbulence::all_finite(floats[i])) {",
+        "        if (false) {",
+    ),
+    removed(
+        "check_model_tol",
+        "the solves' tolerance finite and positive",
+        TURBULENCE,
+        "    if (!positive_and_finite(input.tol)) {",
+        "    if (false) {",
+    ),
+    removed(
+        "check_model_max_iter",
+        "the solves' cap at least one",
+        TURBULENCE,
+        "    if (input.max_iter < 1) {",
+        "    if (false) {",
+    ),
+    one(
+        "last_reset_on_nothing_moves",
+        "a field at rest refused after the records are set",
+        BINDING,
+        RECORDS,
+        "    self.last = result;\n"
+        "    if (result.status == step_status::nothing_moves) {\n"
+        "        refuse_value(nothing_moves_message);\n"
+        "    }",
+    ),
+    one(
+        "stand_in_nan_dropped",
+        "a NaN in the state not the stand-in beside a SOLID edge cell",
+        WALLS,
+        "    if (nan != lanes::none) {\n"
+        "        stand_in = std::numeric_limits<double>::quiet_NaN();\n"
+        "    }",
+        "    (void)nan;",
+    ),
+    one(
+        "least_over_solid_too",
+        "the least value of a failure read over the SOLID cells too",
+        TURBULENCE,
+        "        if (solid_[i]) {\n            continue;\n        }\n"
+        "        if (!positive_and_finite(q[i])) {",
+        "        if (!solid_[i] && !positive_and_finite(q[i])) {",
+    ),
+    one(
+        "clear_solid_k_dropped",
+        "k not cleared in SOLID cells after the solve",
+        TURBULENCE,
+        "        clear_solid_cells(cells, fluid_.data(), m, k.data());\n",
+        "",
+    ),
+    one(
+        "clear_solid_eps_dropped",
+        "eps not cleared in SOLID cells after the solve",
+        TURBULENCE,
+        "        clear_solid_cells(cells, fluid_.data(), m, eps.data());\n",
+        "",
+    ),
+]
+
 # Plants no net can tell from the code, with the reason.
 EQUIVALENT: dict[str, str] = {
+    "least_over_solid_too": (
+        "no failing step reached has a least value above zero: a failure is a value "
+        "at or below zero or NaN, and an infinity from an overflow came with a NaN "
+        "beside it (the tester's 52 failures by overflow), so the zeros of the SOLID "
+        "cells change nothing"
+    ),
+    "clear_solid_k_dropped": (
+        "the solves leave a SOLID cell at the zero they start from, so clearing it "
+        "again changes no bit"
+    ),
+    "clear_solid_eps_dropped": (
+        "the solves leave a SOLID cell at the zero they start from, so clearing it "
+        "again changes no bit"
+    ),
     "rng_r_in_solid": "eta and eps are zero in a SOLID cell, so R is zero there unmasked",
     "eta_in_solid": (
         "in a SOLID cell it makes eta, its cube and the coefficient NaN, and R, the one value "
@@ -1485,4 +1618,5 @@ PLANTS: list[Plant] = [
     *WALL,
     *THREE,
     *CHECKS,
+    *ROUND1,
 ]

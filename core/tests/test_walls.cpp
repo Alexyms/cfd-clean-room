@@ -2,7 +2,6 @@
 // hand results: what needs no reference (ADR-017 D). Their parity is
 // tests/test_core_turbulence.py's.
 
-#include "cfdcore/elementary.hpp"
 #include "cfdcore/walls.hpp"
 
 #include <gtest/gtest.h>
@@ -116,15 +115,6 @@ struct room {
 double u_k_of(double k) { return std::pow(0.09, 0.25) * std::sqrt(k); }
 double log_term(double k, double y) {
     return std::log(e_wall * std::max(u_k_of(k) * y / 1.5e-5, law().floor));
-}
-
-TEST(Elementary, TheFunctionsAreTheCLibrarys) {
-    for (const double x : {0.3, 1.0, 7.5, 1e-9, 3e8}) {
-        EXPECT_EQ(elementary::log(x), std::log(x));
-        for (volatile double y : {0.25, 1.5, 2.0, 3.0}) {
-            EXPECT_EQ(elementary::power(x, y), std::pow(x, y));
-        }
-    }
 }
 
 TEST(Walls, TheFloorIsWhereTheTwoLawsMeet) {
@@ -277,9 +267,14 @@ TEST(Walls, AFaceOfASolidCellHasNoSpeedAndAVentsHasItsOwn) {
 
 TEST(Walls, TheTangentialVelocityIsTheConditionsOrTheAdjacentFaces) {
     room r;
+    // Each edge's values lie beyond every face velocity below (u is 0 to 14, v is
+    // 100 to 115), so an edge that read the wrong one of the two shows on every
+    // edge: the top edge's own value once equalled the face beside it.
+    const std::array<double, 4> edge_value{1000.0, 1001.0, 1002.0, 1003.0};
     for (int e = 0; e < 4; ++e) {
-        r.value[static_cast<std::size_t>(e)].assign(e < 2 ? 5 : 4, 10.0 + e);
-        r.known[static_cast<std::size_t>(e)].data[1] = false;
+        const auto edge = static_cast<std::size_t>(e);
+        r.value[edge].assign(e < 2 ? 5 : 4, edge_value[edge]);
+        r.known[edge].data[1] = false;
     }
     for (std::size_t i = 0; i < r.u.size(); ++i) {
         r.u[i] = static_cast<double>(i);
@@ -289,14 +284,20 @@ TEST(Walls, TheTangentialVelocityIsTheConditionsOrTheAdjacentFaces) {
     }
     auto b = r.build();
     const auto c = b.conditions(r.velocity(), r.k, r.eps);
-    EXPECT_EQ(c.low[0][0][0], 10.0);
+    // The open face of each edge takes the face of the room beside it.
     EXPECT_EQ(c.low[0][0][1], r.u[1]);
     EXPECT_EQ(c.high[0][0][1], r.u[2 * 5 + 1]);
-    EXPECT_EQ(c.high[0][0][4], 11.0);
     EXPECT_EQ(c.low[1][0][1], r.v[1 * 4]);
-    EXPECT_EQ(c.low[1][0][3], 12.0);
     EXPECT_EQ(c.high[1][0][1], r.v[1 * 4 + 3]);
-    EXPECT_EQ(c.high[1][0][2], 13.0);
+    // Every other face of an edge, the ends among them, takes the edge's value.
+    for (const std::size_t i : {0u, 2u, 3u, 4u}) {
+        EXPECT_EQ(c.low[0][0][i], edge_value[0]) << i;
+        EXPECT_EQ(c.high[0][0][i], edge_value[1]) << i;
+    }
+    for (const std::size_t i : {0u, 2u, 3u}) {
+        EXPECT_EQ(c.low[1][0][i], edge_value[2]) << i;
+        EXPECT_EQ(c.high[1][0][i], edge_value[3]) << i;
+    }
 }
 
 TEST(Walls, AnInflowIsTheInletsOrTheCellsOrTheLargest) {

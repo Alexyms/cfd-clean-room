@@ -19,6 +19,8 @@
 #include "../src/turbulence.cpp"
 #include "../src/walls.cpp"
 
+#include "cfdcore/positions.hpp"
+
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -30,6 +32,7 @@
 #include <deque>
 #include <limits>
 #include <memory>
+#include <set>
 #include <span>
 #include <vector>
 
@@ -1241,3 +1244,55 @@ TEST(TurbulenceThreeDirections, TheSlipIsTheMagnitudeOfBothComponentsAlongTheWal
 
 }  // namespace
 }  // namespace cfdcore::turbulence
+
+// The position helpers at three directions: the two-direction program
+// (test_positions.cpp) has the rest of their tests.
+namespace cfdcore::positions {
+namespace {
+
+TEST(PositionsThreeDirections, AnIndexAndItsPositionAreEachOthersInverse) {
+    const layout::layout<3> cells({4, 3, 2});
+    std::set<std::size_t> seen;
+    for (std::size_t i = 0; i < cells.cell_count(); ++i) {
+        const position<3> at = position_of(cells, i);
+        EXPECT_LT(at[0], 4u);
+        EXPECT_LT(at[1], 3u);
+        EXPECT_LT(at[2], 2u);
+        EXPECT_EQ(index_of(cells, at), i);
+        seen.insert(index_of(cells, at));
+    }
+    EXPECT_EQ(seen.size(), cells.cell_count());
+}
+
+TEST(PositionsThreeDirections, AnEdgesEntryIsIndexedWithoutItsNormalDirection) {
+    const layout::layout<3> cells({4, 3, 2});
+    // The others in their order, the lower direction fastest.
+    EXPECT_EQ(index_without(cells, position<3>{{3, 2, 1}}, 0), 2u + 1u * 3u);
+    EXPECT_EQ(index_without(cells, position<3>{{3, 2, 1}}, 1), 3u + 1u * 4u);
+    EXPECT_EQ(index_without(cells, position<3>{{3, 2, 1}}, 2), 3u + 2u * 4u);
+    // Every entry of an edge is reached once.
+    std::set<std::size_t> seen;
+    for (std::size_t i = 0; i < cells.cell_count(); ++i) {
+        const position<3> at = position_of(cells, i);
+        if (at[1] == 0) {
+            seen.insert(index_without(cells, at, 1));
+        }
+    }
+    EXPECT_EQ(seen.size(), 4u * 2u);
+    EXPECT_EQ(*seen.rbegin(), 4u * 2u - 1u);
+}
+
+TEST(PositionsThreeDirections, AFaceLayoutHasOneMoreAlongItsDirectionsOnly) {
+    const layout::layout<3> room({4, 3, 2});
+    const layout::layout<3> w_faces = faces_layout(room, 2, 2);
+    EXPECT_EQ(w_faces.cells(0), 4u);
+    EXPECT_EQ(w_faces.cells(1), 3u);
+    EXPECT_EQ(w_faces.cells(2), 3u);
+    const layout::layout<3> corners = faces_layout(room, 0, 2);
+    EXPECT_EQ(corners.cells(0), 5u);
+    EXPECT_EQ(corners.cells(1), 3u);
+    EXPECT_EQ(corners.cells(2), 3u);
+}
+
+}  // namespace
+}  // namespace cfdcore::positions

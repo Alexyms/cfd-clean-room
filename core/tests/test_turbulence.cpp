@@ -534,6 +534,12 @@ TEST(Turbulence, AnInputItCannotBeBuiltFromIsRefused) {
     refused([&](auto& in) { in.vents[1] = vents.span(); });
     refused([&](auto& in) { in.cfl = 0.0; });
     refused([&](auto& in) { in.nu = nan_value; });
+    refused([&](auto& in) { in.tol = 0.0; });
+    refused([&](auto& in) { in.tol = -1.0e-10; });
+    refused([&](auto& in) { in.tol = nan_value; });
+    refused([&](auto& in) { in.tol = std::numeric_limits<double>::infinity(); });
+    refused([&](auto& in) { in.max_iter = 0; });
+    refused([&](auto& in) { in.max_iter = -5; });
     refused([&](auto& in) { in.variant.sigma_e = -1.3; });
     refused([&](auto& in) { in.variant.has_r = true; });
 }

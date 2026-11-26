@@ -206,7 +206,9 @@ def _room(name: str, variant: str = STANDARD, scheme: str = UPWIND) -> Room:
 
 
 # The small rooms' boundary: an inlet on every edge, one of them oblique, a moving
-# wall, pressure outlets and walls between, on a room 8 m by 3 m.
+# wall, a pressure outlet on every edge and walls between, on a room 8 m by 3 m. An
+# open edge takes the adjacent face's velocity for its tangential velocity, so each
+# edge needs one for the rule to be tested on it (review 94, test B1).
 def _small_raw(nx: int, ny: int, stretch: float, variant: str, scheme: str) -> dict:
     raw = copy.deepcopy(_raw_config("40x15-uniform-open"))
     raw["domain"].update(nx=nx, ny=ny)
@@ -261,6 +263,18 @@ def _small_raw(nx: int, ny: int, stretch: float, variant: str, scheme: str) -> d
             "location": "bottom",
             "x_start": 0.0,
             "x_end": 2.0,
+        },
+        "roof_exit": {
+            "type": "pressure_outlet",
+            "location": "top",
+            "x_start": 3.2,
+            "x_end": 4.8,
+        },
+        "side_exit": {
+            "type": "pressure_outlet",
+            "location": "left",
+            "y_start": 1.9,
+            "y_end": 2.9,
         },
     }
     raw["obstacles"] = []
@@ -361,6 +375,25 @@ class PlantedVents:
 
 
 SIZES = [(3, 3), (4, 3), (3, 9), (7, 5), (8, 8), (9, 4), (16, 5), (17, 6), (23, 11)]
+
+
+@pytest.mark.parametrize("edge", core_mapping.WALL_EDGES)
+def test_the_small_rooms_are_open_on_every_edge(edge: str) -> None:
+    """Most small rooms have a pressure outlet on each edge, so none goes untested.
+
+    An edge's tangential velocity is the adjacent face's where the edge is open and
+    the condition's value where it is not. A binding that read one edge's flags as
+    all known passed every test while only the bottom and the right edge had an
+    outlet (test 94, B1).
+    """
+    open_rooms = 0
+    for nx, ny in SIZES:
+        config = SimConfig.from_dict(
+            _small_raw(nx, ny, 1.05, STANDARD, UPWIND), "configs"
+        )
+        edges = StaggeredBoundary(Mesh(config), config).tangential_conditions()
+        open_rooms += not edges[edge].is_dirichlet.all()
+    assert open_rooms >= 6
 
 
 # ---- The planted inputs ------------------------------------------------------
@@ -860,6 +893,34 @@ def test_the_largest_value_is_read_over_the_non_solid_cells() -> None:
     _assert_same({n: getattr(expected, n) for n in names}, {n: got[n] for n in names})
     assert got["inflow_k_v"][0, solid[0][1]] == 1.0e3
     assert got["inflow_k_v"][0, solid[0][1] + 1] < 1.0e3
+
+
+@pytest.mark.parametrize("quantity", ["k", "eps"])
+def test_a_nan_in_the_state_is_the_stand_in_beside_a_solid_edge_cell(
+    quantity: str,
+) -> None:
+    """The boundary does not check the state: a NaN in it stands in where nothing enters.
+
+    The reference's largest value over the cells is NaN when one is, and a SOLID
+    edge cell takes it. A run's state is checked before the boundary reads it, so
+    only a planted one shows the rule.
+    """
+    room = _room("80x30")
+    inputs = _planted(room, "smooth", _rng("nan stand in", quantity))
+    spoiled = _state_with(
+        inputs,
+        **{quantity: _spoiled(getattr(inputs.state, quantity), np.nan, ~room.solid)},
+    )
+    with np.errstate(all="ignore"):
+        expected = room.walls.conditions(spoiled.state, spoiled.faces)
+        got = room.core_walls.conditions(spoiled.state, spoiled.faces)
+    names = [n for n in CONDITIONS if n.startswith("inflow")]
+    _assert_same({n: getattr(expected, n) for n in names}, {n: got[n] for n in names})
+    solid_bottom = room.solid[0, :]
+    assert solid_bottom.any()
+    assert np.isnan(got[f"inflow_{quantity}_v"][0, solid_bottom]).all()
+    other = "eps" if quantity == "k" else "k"
+    assert np.isfinite(got[f"inflow_{other}_v"][0, solid_bottom]).all()
 
 
 @pytest.mark.parametrize("name", [n for n in ROOMS if n != "cavity"])
@@ -1441,6 +1502,174 @@ def test_the_refusals_of_two_arguments_come_in_the_references_order() -> None:
         assert str(got.value) == str(expected.value)
 
 
+ADVANCE_CASES = [
+    case
+    for case in REFUSALS
+    if case.startswith(("state-", "faces-")) or case == "nothing-moves"
+]
+
+
+@pytest.mark.parametrize("case", ADVANCE_CASES)
+def test_advance_refuses_the_state_and_the_faces_as_the_reference_does(
+    case: str,
+) -> None:
+    """`advance` reads its state and its faces as `step` does, with the same types and messages."""
+    room = _room("80x30-vents-shelf")
+    inputs = REFUSALS[case](room, _planted(room, "smooth", _rng("advance", case)))
+    with pytest.raises(ValueError) as expected:
+        room.model.step(inputs.state, inputs.faces, inputs.conditions)
+    with pytest.raises(ValueError) as got:
+        room.core.advance(room.core_walls, inputs.state, inputs.faces)
+    assert type(got.value) is type(expected.value)
+    assert str(got.value) == str(expected.value)
+
+
+def test_advance_refuses_the_state_before_the_faces() -> None:
+    """The reference's order: a state that is refused is named, not the faces beside it."""
+    room = _room("80x30-vents-shelf")
+    inputs = _planted(room, "smooth", _rng("advance order"))
+    bad = REFUSALS["faces-u-nan"](room, REFUSALS["state-nu_t-negative"](room, inputs))
+    with pytest.raises(ValueError) as expected:
+        room.model.step(bad.state, bad.faces, bad.conditions)
+    with pytest.raises(ValueError) as got:
+        room.core.advance(room.core_walls, bad.state, bad.faces)
+    assert "state.nu_t" in str(got.value)
+    assert str(got.value) == str(expected.value)
+
+
+def _uniform_state(room: Room, k: float, eps: float) -> TurbulenceState:
+    """A state of one k and one eps in every non-SOLID cell and no eddy viscosity."""
+    shape = room.mesh.cell_type.shape
+    return TurbulenceState(
+        k=np.where(room.solid, 0.0, k),
+        eps=np.where(room.solid, 0.0, eps),
+        nu_t=np.zeros(shape),
+    )
+
+
+FORMED = {
+    # The wall cells' eps is a cube of the friction velocity: it underflows to zero.
+    "eps-wall-underflows": (1.0e-220, 1.0e-10),
+    # And overflows to infinity, which the reference's boundary does not check either.
+    "eps-wall-overflows": (1.0e208, 1.0e-10),
+}
+
+
+@pytest.mark.parametrize("case", list(FORMED))
+def test_advance_refuses_the_conditions_it_forms_as_the_reference_does(
+    case: str,
+) -> None:
+    """The step's check of its conditions, made whoever formed them (review 94, S4).
+
+    Without it a state whose wall values underflow is a ``PositivityFailure`` of a
+    step the reference refuses with a ``ValueError`` before any arithmetic.
+    """
+    room = _room("80x30")
+    inputs = _planted(room, "smooth", _rng("formed", case))
+    state = _uniform_state(room, *FORMED[case])
+    with np.errstate(all="ignore"):
+        formed = room.walls.conditions(state, inputs.faces)
+        with pytest.raises(ValueError) as expected:
+            room.model.step(state, inputs.faces, formed)
+        with pytest.raises(ValueError) as got:
+            room.core.advance(room.core_walls, state, inputs.faces)
+    assert type(got.value) is type(expected.value)
+    assert str(got.value) == str(expected.value)
+    assert "eps_wall" in str(got.value)
+
+
+def _zero_intensity_room(name: str, vent: bool) -> Room:
+    """A room whose inlets, or whose discharge vents, carry in k and eps of zero.
+
+    ``SimConfig`` allows no turbulence intensity of zero, so the segments are
+    changed after it has validated them; the core's boundary accepts the number.
+    """
+    config = SimConfig.from_dict(copy.deepcopy(_raw(name)), "configs")
+    mesh = Mesh(config)
+    if vent:
+        segments = [
+            run.name
+            for run in StaggeredBoundary(mesh, config).vent_runs()
+            if run.is_inlet
+        ]
+    else:
+        segments = ["hepa_supply"]
+    assert segments
+    for segment in segments:
+        object.__setattr__(config.boundaries[segment], "turbulence_intensity", 0.0)
+    return _build(mesh, config, StaggeredBoundary(mesh, config))
+
+
+@pytest.mark.parametrize("vent", [False, True])
+def test_advance_refuses_an_inflow_that_is_not_positive_as_step_does(
+    vent: bool,
+) -> None:
+    """An inlet of no turbulence intensity carries in k and eps of zero.
+
+    The core's boundary accepts the intensity, as ``SimConfig`` does not; the
+    reference's step refuses the conditions it forms, on a domain face or on a
+    vent's, and so does ``advance`` (review 94, S4).
+    """
+    room = _zero_intensity_room("80x30-vents-shelf" if vent else "80x30", vent)
+    inputs = _planted(room, "smooth", _rng("no intensity", vent))
+    formed = core_mapping.turbulence_conditions(
+        room.core_walls.conditions(inputs.state, inputs.faces)
+    )
+    args = (inputs.state, inputs.faces, formed)
+    with pytest.raises(ValueError) as expected:
+        room.model.step(*args)
+    with pytest.raises(ValueError) as stepped:
+        room.core.step(*args)
+    with pytest.raises(ValueError) as advanced:
+        room.core.advance(room.core_walls, inputs.state, inputs.faces)
+    where = "vent" if vent else "domain"
+    message = f"conditions' inflow k and eps must be positive on the {where} faces"
+    assert str(expected.value) == str(stepped.value) == message
+    assert type(advanced.value) is type(expected.value)
+    assert str(advanced.value) == message
+
+
+def _records(
+    model: "KEpsilonModel | _cfdcore.KEpsilon2",
+) -> tuple[tuple[int, int], tuple[int, int], bool]:
+    """The counts and the verdict a step leaves on a model, the reference's or the core's."""
+    return model.last_iterations, model.last_fallbacks, model.solves_converged
+
+
+def test_a_refused_call_leaves_the_records_of_the_step_before() -> None:
+    """The counts stand through a call that is refused, as the reference's do.
+
+    The refusals here are the ones made before the solves: of the state, of the
+    faces, of the conditions and of a field at rest. A step that fails its
+    positivity check, by contrast, has set them (the reference does as well).
+    """
+    room = _with_solver("40x15-uniform-open", 1.0e-10, 500)
+    inputs = _planted(room, "smooth", _rng("records"))
+    args = (inputs.state, inputs.faces, inputs.conditions)
+    room.model.step(*args)
+    room.core.step(*args)
+    kept = _records(room.core)
+    assert kept == _records(room.model)
+    assert kept[0] != (0, 0)
+    rest = REFUSALS["nothing-moves"](room, inputs)
+    calls = {
+        "step at rest": lambda: room.core.step(rest.state, rest.faces, rest.conditions),
+        "advance at rest": lambda: room.core.advance(
+            room.core_walls, rest.state, rest.faces
+        ),
+    }
+    for case in ("state-k-negative", "faces-u-nan", "conditions-eps-wall"):
+        bad = REFUSALS[case](room, inputs)
+        calls[case] = lambda b=bad: room.core.step(b.state, b.faces, b.conditions)
+    for name, call in calls.items():
+        with pytest.raises(ValueError):
+            call()
+        assert _records(room.core) == kept, name
+    with pytest.raises(ValueError):
+        room.model.step(rest.state, rest.faces, rest.conditions)
+    assert _records(room.model) == kept
+
+
 @pytest.mark.parametrize("dt", [1.0e-3, 1, True, np.float64(0.1), "a"])
 def test_a_true_time_step_is_refused(dt: object) -> None:
     """The true-time step of VAL-015 stays on the reference (ADR-017 F)."""
@@ -1543,7 +1772,14 @@ def _model_arguments(**changes: object) -> list[object]:
         ({"upwind": 1}, TypeError, "incompatible function arguments"),
         ({"max_iter": 2.5}, TypeError, "max_iter must be an int"),
         ({"max_iter": True}, TypeError, "max_iter must be an int"),
+        ({"max_iter": 0}, ValueError, "max_iter is not positive"),
+        ({"max_iter": -3}, ValueError, "max_iter is not positive"),
         ({"tol": "a"}, TypeError, "tol must be a number"),
+        ({"tol": True}, TypeError, "tol must be a number"),
+        ({"tol": 0.0}, ValueError, "tol is not finite and positive"),
+        ({"tol": -1.0e-10}, ValueError, "tol is not finite and positive"),
+        ({"tol": math.nan}, ValueError, "tol is not finite and positive"),
+        ({"tol": math.inf}, ValueError, "tol is not finite and positive"),
         ({"nu": math.inf}, ValueError, "cfl or nu"),
         (
             {"vent_u": np.zeros((15, 41), dtype=bool)},
