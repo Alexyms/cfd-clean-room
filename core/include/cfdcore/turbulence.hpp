@@ -145,7 +145,8 @@ public:
     // Why `input` cannot make a model on `g`, or an empty view when it can: an
     // array whose length is not the grid's, a width that is not finite and
     // positive, vents given for some directions and not for others, or a cfl, a
-    // nu, a variant constant that is not finite and positive.
+    // nu, a tol, a variant constant that is not finite and positive, or a
+    // max_iter below one.
     static std::string_view check(const grid::grid<D>& g, const model_input<D>& input);
 
     // Builds the model from an input `check` accepts, copying every array. Throws
@@ -159,6 +160,8 @@ public:
     bool zero_in_solid(std::span<const double> field) const;
 
     // `C_mu k^2 / eps` per cell, m^2/s, zero in SOLID cells (`eddy_viscosity`).
+    //
+    // k, eps: cell fields; out: a cell field, overlapping no input
     void eddy_viscosity(std::span<const double> k, std::span<const double> eps,
                         std::span<double> out) const;
 
@@ -177,6 +180,9 @@ public:
     // `S^2 = 2 S_ij S_ij` per cell, 1/s^2, zero in SOLID cells
     // (`strain_squared`), from the component's faces and the edges' tangential
     // velocities of `c`.
+    //
+    // velocity: the components' faces, m/s; out: a cell field, overlapping no
+    // input
     void strain_squared(const std::array<std::span<const double>, D>& velocity,
                         const conditions<D>& c, std::span<double> out);
 
@@ -210,12 +216,17 @@ public:
     // Steps 1 and 2: the explicit fields of k and eps, zero in SOLID cells and
     // eps held where the conditions hold it, from the last `pseudo_time_step`
     // and `terms`.
+    //
+    // k_star, eps_star: cell fields, each overlapping no input and the other
     void explicit_fields(const state& s, const conditions<D>& c, std::span<double> k_star,
                          std::span<double> eps_star);
 
     // `(nu + nu_t / sigma) A / d` on the faces normal to each direction between
     // two non-SOLID cells, m^2/s, zero elsewhere (`_conductances`), of the
     // quantity's sigma.
+    //
+    // nu_t: a cell field, m^2/s; out: per direction, the faces normal to it,
+    // each overlapping no input and the others
     void conductances(quantity which, std::span<const double> nu_t,
                       const std::array<std::span<double>, D>& out);
 
@@ -227,7 +238,7 @@ public:
                      const conditions<D>& c, std::span<double> k, std::span<double> eps,
                      std::span<double> nu_t);
 
-    // The numbers of the model's two solves, for a caller that solves apart.
+    // The cells' volumes, m^2 per unit depth, one per cell (`_volume`).
     const std::vector<double>& volume() const { return volume_; }
 
     // Face masks: the faces normal to direction d that carry an advective flux

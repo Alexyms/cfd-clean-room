@@ -76,6 +76,11 @@ inline mask largest_cells(lanes::cells<N>, const double* q, const mask* fluid,
         const std::size_t i = first + k;
         const double value = lanes::select(fluid[i], q[i], lowest);
         nan |= lanes::mask_of(value != value);
+        // Not `lanes::select`, which the Kernels rule names for a choice: GCC 13.3 turns
+        // this ternary into a maximum and vectorises the block, and the select form
+        // into control flow, which it does not (38 against 90 microseconds over
+        // 320 x 120 cells, docs/reports/probe94/bench_max.cpp). Time it again after a
+        // change of flags.
         largest[k] = value > largest[k] ? value : largest[k];
     }
     return nan;
@@ -491,9 +496,13 @@ void boundary<D>::inflow(std::span<const double> q, std::array<std::vector<doubl
     if (nan != lanes::none) {
         stand_in = std::numeric_limits<double>::quiet_NaN();
     }
+    // A loop of one entry at a time, not a block: the entries are the few faces
+    // along the domain's edge and its exhausts, each at a place of its own in
+    // two arrays, so there is no row to walk.
     for (const outflow_entry& entry : outflow_) {
         const double cell = q[entry.cell];
-        out[entry.direction][entry.face] = cell > 0.0 ? cell : stand_in;
+        out[entry.direction][entry.face] =
+            lanes::select(lanes::mask_of(cell > 0.0), cell, stand_in);
     }
 }
 

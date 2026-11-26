@@ -2607,6 +2607,74 @@ struct condition_arrays {
     }
 };
 
+// The conditions' float arrays by name, in the reference's order of checks
+// (`_check_conditions`); `condition_arrays::floats` and the spans of
+// `refuse_formed_conditions` are indexed alike.
+constexpr std::array<const char*, 10> condition_names{
+    "inflow_k_u",
+    "inflow_eps_u",
+    "inflow_k_v",
+    "inflow_eps_v",
+    "tangential_bottom",
+    "tangential_top",
+    "tangential_left",
+    "tangential_right",
+    "eps_wall",
+    "production",
+};
+
+// The conditions' range checks, from the inflow's positivity down, in the
+// reference's order: what a step refuses of conditions whose arrays are of the
+// right shapes and finite.
+void refuse_out_of_range(const KEpsilon2& self, const cfdcore::turbulence::conditions<2>& c) {
+    const auto positive_at = [&](const std::array<std::vector<std::size_t>, 2>& faces) {
+        for (std::size_t d = 0; d < 2; ++d) {
+            for (const std::size_t f : faces[d]) {
+                if (!(c.inflow_k[d][f] > 0.0 && c.inflow_eps[d][f] > 0.0)) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    };
+    if (!positive_at(self.edges)) {
+        refuse_value("conditions' inflow k and eps must be positive on the domain faces");
+    }
+    if (!positive_at(self.vents)) {
+        refuse_value("conditions' inflow k and eps must be positive on the vent faces");
+    }
+    bool held = true;
+    bool given = true;
+    for (std::size_t i = 0; i < c.eps_held.size(); ++i) {
+        held &= !c.eps_held[i] | (c.eps_wall[i] > 0.0);
+        given &= !c.production_given[i] | (c.production[i] >= 0.0);
+    }
+    if (!held) {
+        refuse_value("conditions.eps_wall must be positive where eps is held");
+    }
+    if (!given) {
+        refuse_value("conditions.production must be non-negative where it is given");
+    }
+}
+
+// The refusals of `_check_conditions` that conditions the boundary formed can meet
+// (`advance`): a value that is not finite, then the ranges. The arrays' shapes and
+// dtypes are the boundary's own, and so are its flags, which name no SOLID cell: it
+// builds its wall cells from the non-SOLID ones.
+void refuse_formed_conditions(const KEpsilon2& self,
+                              const cfdcore::turbulence::conditions<2>& c) {
+    const std::array<std::span<const double>, 10> floats{
+        c.inflow_k[0], c.inflow_eps[0], c.inflow_k[1], c.inflow_eps[1], c.low[0][0],
+        c.high[0][0],  c.low[1][0],     c.high[1][0],  c.eps_wall,      c.production,
+    };
+    for (std::size_t i = 0; i < floats.size(); ++i) {
+        if (!cfdcore::turbulence::all_finite(floats[i])) {
+            refuse_value(std::string("conditions.") + condition_names[i] + " must be finite");
+        }
+    }
+    refuse_out_of_range(self, c);
+}
+
 condition_arrays read_conditions(const KEpsilon2& self, nb::handle conditions) {
     const Grid2& g = self.model.mesh();
     const std::string u_shape = shape_text(face_shape(g, 0));
@@ -2614,21 +2682,12 @@ condition_arrays read_conditions(const KEpsilon2& self, nb::handle conditions) {
     const std::string p_shape = shape_text(cell_shape(g));
     const std::string along_x = "(" + std::to_string(g.cells(0) + 1) + ",)";
     const std::string along_y = "(" + std::to_string(g.cells(1) + 1) + ",)";
-    const std::array<std::pair<const char*, std::string>, 10> named{{
-        {"inflow_k_u", u_shape},
-        {"inflow_eps_u", u_shape},
-        {"inflow_k_v", v_shape},
-        {"inflow_eps_v", v_shape},
-        {"tangential_bottom", along_x},
-        {"tangential_top", along_x},
-        {"tangential_left", along_y},
-        {"tangential_right", along_y},
-        {"eps_wall", p_shape},
-        {"production", p_shape},
-    }};
+    const std::array<std::string, 10> shapes{u_shape, u_shape, v_shape, v_shape, along_x,
+                                             along_x, along_y, along_y, p_shape, p_shape};
     condition_arrays arrays;
-    for (std::size_t i = 0; i < named.size(); ++i) {
-        const auto& [name, shape] = named[i];
+    for (std::size_t i = 0; i < shapes.size(); ++i) {
+        const char* const name = condition_names[i];
+        const std::string& shape = shapes[i];
         const nb::object value = nb::getattr(conditions, name);
         if (text_of(value, "shape") != shape || text_of(value, "dtype") != "float64") {
             refuse_value(std::string("conditions.") + name + " must be float64 of shape " +
@@ -2658,35 +2717,7 @@ condition_arrays read_conditions(const KEpsilon2& self, nb::handle conditions) {
             refuse_value(name + " names a SOLID cell");
         }
     }
-    const auto c = arrays.spans();
-    const auto positive_at = [&](const std::array<std::vector<std::size_t>, 2>& faces) {
-        for (std::size_t d = 0; d < 2; ++d) {
-            for (const std::size_t f : faces[d]) {
-                if (!(c.inflow_k[d][f] > 0.0 && c.inflow_eps[d][f] > 0.0)) {
-                    return false;
-                }
-            }
-        }
-        return true;
-    };
-    if (!positive_at(self.edges)) {
-        refuse_value("conditions' inflow k and eps must be positive on the domain faces");
-    }
-    if (!positive_at(self.vents)) {
-        refuse_value("conditions' inflow k and eps must be positive on the vent faces");
-    }
-    bool held = true;
-    bool given = true;
-    for (std::size_t i = 0; i < c.eps_held.size(); ++i) {
-        held &= !c.eps_held[i] | (c.eps_wall[i] > 0.0);
-        given &= !c.production_given[i] | (c.production[i] >= 0.0);
-    }
-    if (!held) {
-        refuse_value("conditions.eps_wall must be positive where eps is held");
-    }
-    if (!given) {
-        refuse_value("conditions.production must be non-negative where it is given");
-    }
+    refuse_out_of_range(self, arrays.spans());
     return arrays;
 }
 
@@ -2935,6 +2966,9 @@ nb::dict model_advance(KEpsilon2& self, Boundary2& walls, nb::handle state, nb::
     const state_arrays s = read_state(self.model, state);
     const face_arrays u = read_faces(self.model, faces);
     const auto c = walls.conditions(u.spans(), span_of_array(s.k), span_of_array(s.eps));
+    // The step makes the check of its conditions whoever formed them, so a state
+    // whose wall values underflow is refused as the reference refuses it.
+    refuse_formed_conditions(self, c);
     return run_step(self, s.spans(), u.spans(), c);
 }
 
@@ -3842,7 +3876,8 @@ NB_MODULE(_cfdcore, m) {
              "that is not positive and finite after the step raises PositivityFailure.")
         .def("advance", &model_advance, nb::arg("boundary"), nb::arg("state"), nb::arg("faces"),
              "step with the conditions the boundary, on the same grid, forms of the state and\n"
-             "the faces.")
+             "the faces. The state, the faces and the formed conditions are refused as step\n"
+             "refuses them: a ValueError of the reference's message, before any arithmetic.")
         .def_prop_ro("last_iterations",
                      [](const KEpsilon2& self) {
                          return nb::make_tuple(self.last.solves[0].iterations,

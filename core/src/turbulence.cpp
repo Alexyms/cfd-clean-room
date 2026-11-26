@@ -274,7 +274,7 @@ inline mask step_cells(lanes::cells<N>, const rate_row<D>& in, double cfl, std::
         any |= moving;
         const double step = lanes::select(moving, cfl / rate, -1.0);
         dt[i] = step;
-        largest[k] = step > largest[k] ? step : largest[k];
+        largest[k] = lanes::select(lanes::mask_of(step > largest[k]), step, largest[k]);
     }
     return any;
 }
@@ -506,6 +506,16 @@ std::string_view model<D>::check(const grid::grid<D>& g, const model_input<D>& i
     }
     if (v.has_r && !(positive_and_finite(v.eta_0) && positive_and_finite(v.beta))) {
         return "eta_0 or beta is not finite and positive";
+    }
+    // The configuration's own range (`turbulence.tol` positive and finite,
+    // `turbulence.max_iter` a positive integer): a cap below one would let a
+    // solve return its start as converged, and a tolerance that is zero, negative
+    // or NaN has no residual that meets it.
+    if (!positive_and_finite(input.tol)) {
+        return "tol is not finite and positive";
+    }
+    if (input.max_iter < 1) {
+        return "max_iter is not positive";
     }
     return {};
 }
