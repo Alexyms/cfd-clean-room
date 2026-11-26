@@ -432,5 +432,48 @@ TEST(Walls, OneDirectionHasNoStencil) {
     EXPECT_EQ(c.inflow_k[0][0], 0.04);
 }
 
+// The outlets on a room of 4 by 3 cells: an outlet face on each edge, each taking
+// its interior neighbour's value, the other faces untouched.
+TEST(Outlets, EachOutletFaceTakesItsInteriorNeighbour) {
+    room r;
+    flags left(room::ny), right(room::ny), bottom(room::nx), top(room::nx);
+    left.data[1] = true;
+    right.data[0] = right.data[2] = true;
+    bottom.data[3] = true;
+    top.data[0] = true;
+    const outlets<2> o(*r.g, {left.span(), bottom.span()}, {right.span(), top.span()});
+    EXPECT_EQ(o.count(), 5u);
+    std::vector<double> u((room::nx + 1) * room::ny);
+    std::vector<double> v(room::nx * (room::ny + 1));
+    for (std::size_t i = 0; i < u.size(); ++i) {
+        u[i] = 1.0 + static_cast<double>(i);
+    }
+    for (std::size_t i = 0; i < v.size(); ++i) {
+        v[i] = -1.0 - static_cast<double>(i);
+    }
+    std::vector<double> u_expected = u;
+    std::vector<double> v_expected = v;
+    const std::size_t row = room::nx + 1;
+    u_expected[1 * row + 0] = u[1 * row + 1];
+    u_expected[0 * row + 4] = u[0 * row + 3];
+    u_expected[2 * row + 4] = u[2 * row + 3];
+    v_expected[0 * room::nx + 3] = v[1 * room::nx + 3];
+    v_expected[3 * room::nx + 0] = v[2 * room::nx + 0];
+    o.extrapolate({std::span<double>(u), std::span<double>(v)});
+    EXPECT_EQ(u, u_expected);
+    EXPECT_EQ(v, v_expected);
+    std::vector<double> short_u(u.size() - 1);
+    EXPECT_THROW(o.extrapolate({std::span<double>(short_u), std::span<double>(v)}),
+                 std::invalid_argument);
+}
+
+TEST(Outlets, RefusesAnEdgeOfAnotherLength) {
+    room r;
+    flags left(room::ny), right(room::ny), bottom(room::nx), top(room::nx - 1);
+    EXPECT_THROW(
+        (outlets<2>(*r.g, {left.span(), bottom.span()}, {right.span(), top.span()})),
+        std::invalid_argument);
+}
+
 }  // namespace
 }  // namespace cfdcore::walls

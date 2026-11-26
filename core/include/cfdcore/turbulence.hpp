@@ -133,8 +133,40 @@ struct step_result {
 // The quantity a block is asked about.
 enum class quantity { k, eps };
 
+// Why a step refuses its conditions (`_check_conditions`), in the reference's
+// order: an array that is not finite (`array` its place in that order: the inflow
+// k and eps per direction, x first; the tangential velocities per ordered pair,
+// low edge then high; eps_wall; production), an inflow k or eps not positive on a
+// domain face or on a vent's, eps_wall not positive where eps is held, or the
+// production negative where it is given.
+enum class condition_status {
+    ok,
+    not_finite,
+    inflow_on_domain,
+    inflow_on_vents,
+    eps_wall,
+    production
+};
+struct condition_check {
+    condition_status status = condition_status::ok;
+    int array = 0;
+};
+
 // Whether every value of an array is finite.
 bool all_finite(std::span<const double> values);
+
+// The eddy viscosity under-relaxed (`StaggeredSolver._turbulence_step`):
+// `(1 - alpha) old + alpha stepped` per cell, with `1 - alpha` formed once, as the
+// reference forms it from a Python float.
+//
+// old:     the relaxed nu_t the step read, m^2/s, a cell field
+// stepped: the step's own nu_t, m^2/s, as long
+// alpha:   `turbulence.alpha_turbulence`, dimensionless
+// out:     output, as long, overlapping no input
+//
+// Throws std::invalid_argument for arrays of different lengths.
+void relax(std::span<const double> old, std::span<const double> stepped, double alpha,
+           std::span<double> out);
 
 // The model on one grid, which must outlive it. Every array is allocated at
 // construction; a call allocates nothing.
@@ -238,6 +270,21 @@ public:
                      const conditions<D>& c, std::span<double> k, std::span<double> eps,
                      std::span<double> nu_t);
 
+    // The checks of a step's conditions whose arrays are of the grid's lengths:
+    // their ranges alone (`ranges`), or every value finite first and then the
+    // ranges (`formed`), what conditions a boundary formed can meet.
+    condition_check check_ranges(const conditions<D>& c) const;
+    condition_check check_formed(const conditions<D>& c) const;
+
+    // The positivity test of a step's field (`_check_positive`): false where the
+    // quantity is positive and finite in every non-SOLID cell; true otherwise, with
+    // the bad cells counted, the first one's index and value, and the least value
+    // read over the non-SOLID cells alone (NaN where one of them is), as the
+    // reference's `np.min(q[live])`.
+    //
+    // q: a cell field; bad: output
+    bool find_bad(std::span<const double> q, bad_cells& bad) const;
+
     // The cells' volumes, m^2 per unit depth, one per cell (`_volume`).
     const std::vector<double>& volume() const { return volume_; }
 
@@ -277,7 +324,6 @@ private:
                         double* out);
     scalar::implicit_result solve(std::span<const double> star, std::span<const double> decay,
                                   std::span<const bool> held, std::span<double> out);
-    bool find_bad(std::span<const double> q, bad_cells& bad) const;
 
     const grid::grid<D>* grid_;
     scalar::scheme<D> scheme_;
@@ -304,6 +350,10 @@ private:
     std::array<std::vector<lanes::mask>, D> inner_;
     std::array<std::unique_ptr<bool[]>, D> vents_;
     bool vented_ = false;
+    // Per direction, the domain's faces and the vents' (interior faces with a flux
+    // that diffusion does not cross), whose inflow values the checks read.
+    std::array<std::vector<std::size_t>, D> domain_faces_;
+    std::array<std::vector<std::size_t>, D> vent_faces_;
 
     // A step's fields.
     std::array<std::vector<double>, D> carried_;  // the velocities of the live faces

@@ -1928,3 +1928,82 @@ def test_the_references_vents_are_the_boundarys() -> None:
     derived = vent_face_masks(room.mesh, runs)
     assert _differ(derived.normal_u, faces.normal_u) == 0
     assert _differ(derived.normal_v, faces.normal_v) == 0
+
+
+# ---- The solver's writes and the positivity test (prompt 95, section 0) -------
+
+
+def test_the_least_value_of_a_failure_is_read_over_the_non_solid_cells() -> None:
+    """One infinity and no NaN: the least value is the smallest positive one, not a zero.
+
+    A step reaches no such field (prompt 95, section 0: an overflow in a step came
+    with a NaN beside it, so the least value is NaN whichever cells are read), so
+    the test is the check given the field, the reference's ``_check_positive``. The
+    SOLID cells hold the zeros a step leaves there, which a least value read over
+    them too would return.
+    """
+    room = _room("80x30-vents-shelf")
+    assert room.solid.any()
+    rng = _rng("least over the non-SOLID cells")
+    q = np.where(room.solid, 0.0, 0.5 + rng.random(room.solid.shape))
+    j, i = map(int, np.argwhere(~room.solid)[17])
+    q[j, i] = math.inf
+    for name in ("k", "eps"):
+        with pytest.raises(PositivityError) as expected:
+            room.model._check_positive(q, name)
+        with pytest.raises(_cfdcore.PositivityFailure) as got:
+            room.core.check_positive(name, q)
+        error = core_mapping.positivity_error(got.value)
+        assert str(error) == str(expected.value)
+        assert error.minimum == expected.value.minimum
+        assert 0.5 <= error.minimum < 1.5
+    q[j, i] = 2.0
+    room.model._check_positive(q, "k")
+    assert room.core.check_positive("k", q) is None
+
+
+@pytest.mark.parametrize("name", ["80x30", "80x30-vents-shelf", "annex20"])
+def test_the_relaxation_is_the_solvers_bit_for_bit(name: str) -> None:
+    """``_turbulence_step``'s relaxed nu_t, from the step's own nu_t and the old one."""
+    from src.solver_staggered import StaggeredSolver
+
+    room = _room(name)
+    solver = StaggeredSolver(room.mesh, room.config, room.boundary)
+    alpha = room.config.turbulence.alpha_turbulence
+    assert alpha not in (0.5, 1.0)
+    inputs = _gentle(room, _rng("relaxation", name))
+    stepped = room.model.step(
+        inputs.state, inputs.faces, room.walls.conditions(inputs.state, inputs.faces)
+    )
+    relaxed = solver._turbulence_step(
+        inputs.state, np.array(inputs.faces.u), np.array(inputs.faces.v), 0
+    )
+    got = _cfdcore.relax_eddy_viscosity(inputs.state.nu_t, stepped.nu_t, alpha)
+    assert _differ(got, relaxed.nu_t) == 0
+    assert _differ(got, stepped.nu_t) > 0 and _differ(got, inputs.state.nu_t) > 0
+
+
+def test_the_outlets_extrapolation_is_the_solvers_on_every_edge() -> None:
+    """``_extrapolate_outlets`` on the small rooms, which hold a pressure outlet on each edge."""
+    from src.solver_staggered import StaggeredSolver
+
+    held = dict.fromkeys(("left", "right", "bottom", "top"), 0)
+    for nx, ny in SIZES:
+        config = SimConfig.from_dict(
+            _small_raw(nx, ny, 1.05, STANDARD, UPWIND), "configs"
+        )
+        mesh = Mesh(config)
+        boundary = StaggeredBoundary(mesh, config)
+        solver = StaggeredSolver(mesh, config, boundary)
+        rng = _rng("outlets", nx, ny)
+        u = rng.standard_normal((ny, nx + 1))
+        v = rng.standard_normal((ny + 1, nx))
+        core = core_mapping.outlet_faces(mesh, boundary)
+        got_u, got_v = core.extrapolate(u, v)
+        solver._extrapolate_outlets(u, v)
+        assert _differ(got_u, u) == 0 and _differ(got_v, v) == 0
+        outlets = boundary.pressure_outlets()
+        for edge in held:
+            held[edge] += int(outlets[edge].is_outlet.sum())
+        assert core.count == sum(int(o.is_outlet.sum()) for o in outlets.values())
+    assert all(count > 0 for count in held.values())

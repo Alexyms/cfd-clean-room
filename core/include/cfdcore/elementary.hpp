@@ -22,4 +22,8 @@ double log(double x);
 // base to the exponent, as the C library's pow gives it.
 double power(double base, double exponent);
 
+// e to the x, as the C library's exp gives it: Python's `math.exp`, which the
+// stopping rule's rate fit calls (prompt 95).
+double exp(double x);
+
 }  // namespace cfdcore::elementary

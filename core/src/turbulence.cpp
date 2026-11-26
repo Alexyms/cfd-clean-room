@@ -595,6 +595,12 @@ model<D>::model(const grid::grid<D>& g, const model_input<D>& input)
             if (vented_) {
                 vents_[d][f] = vent;
             }
+            if (!has_low || !has_high) {
+                domain_faces_[d].push_back(f);
+            } else if (live_[d][f] != inner_[d][f]) {
+                // An interior face with a flux that diffusion does not cross.
+                vent_faces_[d].push_back(f);
+            }
         }
         carried_[d].assign(count, 0.0);
         flux_[d].assign(count, 0.0);
@@ -709,6 +715,38 @@ bool model<D>::zero_in_solid(std::span<const double> field) const {
 
 // ---------------------------------------------------------------------------
 // The parts
+
+namespace {
+
+// The operands of the relaxation's block.
+struct relax_operands {
+    const double* old;
+    const double* stepped;
+    double keep;
+    double alpha;
+};
+
+// N cells of the relaxed eddy viscosity, each the reference's two products and
+// their sum, in its order.
+template <std::size_t N>
+void relaxed_cells(lanes::cells<N>, relax_operands in, std::size_t m,
+                   double* CFDCORE_RESTRICT out) {
+    for (std::size_t i = m; i < m + N; ++i) {
+        out[i] = in.keep * in.old[i] + in.alpha * in.stepped[i];
+    }
+}
+
+}  // namespace
+
+void relax(std::span<const double> old, std::span<const double> stepped, double alpha,
+           std::span<double> out) {
+    require(old.size() == stepped.size() && out.size() == old.size(),
+            "turbulence: the fields of a relaxation differ in length");
+    const relax_operands in{old.data(), stepped.data(), 1.0 - alpha, alpha};
+    lanes::for_each_block(0, out.size(), [&](auto cells, std::size_t m) {
+        relaxed_cells(cells, in, m, out.data());
+    });
+}
 
 template <int D>
     requires(D >= 1)
@@ -1162,6 +1200,72 @@ bool model<D>::find_bad(std::span<const double> q, bad_cells& bad) const {
         started = true;
     }
     return true;
+}
+
+template <int D>
+    requires(D >= 1)
+condition_check model<D>::check_ranges(const conditions<D>& c) const {
+    require_conditions(c);
+    const auto positive_at = [&](const std::array<std::vector<std::size_t>, D>& faces) {
+        for (int d = 0; d < D; ++d) {
+            for (const std::size_t f : faces[d]) {
+                if (!(c.inflow_k[d][f] > 0.0 && c.inflow_eps[d][f] > 0.0)) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    };
+    if (!positive_at(domain_faces_)) {
+        return {condition_status::inflow_on_domain, 0};
+    }
+    if (!positive_at(vent_faces_)) {
+        return {condition_status::inflow_on_vents, 0};
+    }
+    // Every cell read, as the reference's whole-array tests read them.
+    bool held = true;
+    bool given = true;
+    for (std::size_t i = 0; i < c.eps_held.size(); ++i) {
+        held &= !c.eps_held[i] | (c.eps_wall[i] > 0.0);
+        given &= !c.production_given[i] | (c.production[i] >= 0.0);
+    }
+    if (!held) {
+        return {condition_status::eps_wall, 0};
+    }
+    if (!given) {
+        return {condition_status::production, 0};
+    }
+    return {};
+}
+
+template <int D>
+    requires(D >= 1)
+condition_check model<D>::check_formed(const conditions<D>& c) const {
+    require_conditions(c);
+    int array = 0;
+    const auto finite = [&](std::span<const double> values) {
+        if (!all_finite(values)) {
+            return false;
+        }
+        ++array;
+        return true;
+    };
+    for (int d = 0; d < D; ++d) {
+        if (!finite(c.inflow_k[d]) || !finite(c.inflow_eps[d])) {
+            return {condition_status::not_finite, array};
+        }
+    }
+    for (int p = 0; p < D; ++p) {
+        for (int q = 0; q < D - 1; ++q) {
+            if (!finite(c.low[p][q]) || !finite(c.high[p][q])) {
+                return {condition_status::not_finite, array};
+            }
+        }
+    }
+    if (!finite(c.eps_wall) || !finite(c.production)) {
+        return {condition_status::not_finite, array};
+    }
+    return check_ranges(c);
 }
 
 template <int D>

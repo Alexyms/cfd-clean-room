@@ -619,6 +619,69 @@ std::optional<carried_in> boundary<D>::initial_values() const {
     return carried_in{k.value() / total.value(), eps.value() / total.value()};
 }
 
+template <int D>
+    requires(D >= 1)
+outlets<D>::outlets(const grid::grid<D>& g,
+                    const std::array<std::span<const bool>, D>& outlet_low,
+                    const std::array<std::span<const bool>, D>& outlet_high) {
+    const layout::layout<D>& cells = g.fields();
+    for (int d = 0; d < D; ++d) {
+        const std::size_t n = cells.cells(d);
+        require(n >= 2, "walls: an outlet's direction has one cell");
+        const std::size_t entries = edge_count(cells, d);
+        require(outlet_low[d].size() == entries && outlet_high[d].size() == entries,
+                "walls: an outlet array is not one entry per face of its edge");
+        // The faces normal to d: n + 1 along d, the cells' counts along the others.
+        std::array<std::size_t, D> along{};
+        for (int e = 0; e < D; ++e) {
+            along[e] = cells.cells(e) + (e == d ? 1 : 0);
+        }
+        const layout::layout<D> faces(along);
+        face_counts_[d] = faces.cell_count();
+        const std::size_t stride = faces.cell_stride(d);
+        for (int side = 0; side < 2; ++side) {
+            const std::span<const bool> flags = side == 0 ? outlet_low[d] : outlet_high[d];
+            std::size_t entry = 0;
+            for (std::size_t f = 0; f < faces.cell_count(); ++f) {
+                const std::size_t at = (f / stride) % (n + 1);
+                if (at != (side == 0 ? 0 : n)) {
+                    continue;
+                }
+                if (flags[entry]) {
+                    copies_[d].push_back({f, side == 0 ? f + stride : f - stride});
+                }
+                ++entry;
+            }
+        }
+    }
+}
+
+template <int D>
+    requires(D >= 1)
+void outlets<D>::extrapolate(const std::array<std::span<double>, D>& velocity) const {
+    for (int d = 0; d < D; ++d) {
+        require(velocity[d].size() == face_counts_[d],
+                "walls: a velocity is not one value per face");
+        double* faces = velocity[d].data();
+        for (const copy& c : copies_[d]) {
+            faces[c.to] = faces[c.from];
+        }
+    }
+}
+
+template <int D>
+    requires(D >= 1)
+std::size_t outlets<D>::count() const {
+    std::size_t n = 0;
+    for (const auto& c : copies_) {
+        n += c.size();
+    }
+    return n;
+}
+
+template class outlets<1>;
+template class outlets<2>;
+
 template class boundary<1>;
 template class boundary<2>;
 

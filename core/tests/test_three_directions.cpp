@@ -10,6 +10,7 @@
 // transverse face's area does not carry the width along a third direction yet
 // (docs/reports/phase6_momentum.md, section 7).
 
+#include "../src/flow.cpp"
 #include "../src/grid.cpp"
 #include "../src/layout.cpp"
 #include "../src/momentum.cpp"
@@ -44,6 +45,10 @@ template class cfdcore::multigrid::hierarchy<3>;
 template class cfdcore::pressure::corrector<3>;
 template class cfdcore::turbulence::model<3>;
 template class cfdcore::walls::boundary<3>;
+template class cfdcore::walls::outlets<3>;
+template class cfdcore::flow::solver<3>;
+template void cfdcore::flow::cell_centres<3>(const cfdcore::layout::layout<3>&, int,
+                                             std::span<const double>, std::span<double>);
 
 // In the module's namespace, so the position helpers of momentum.cpp are in scope.
 namespace cfdcore::momentum {
@@ -1296,3 +1301,204 @@ TEST(PositionsThreeDirections, AFaceLayoutHasOneMoreAlongItsDirectionsOnly) {
 
 }  // namespace
 }  // namespace cfdcore::positions
+
+// The outer iteration at three directions (prompt 95): an extruded room's cell
+// centres are the 2D room's on every plane bit for bit, the outlets copy along
+// each direction, and a solve on an extruded closed room runs its outer
+// iterations, its corrections leaving no imbalance, its rule reading the steps as
+// the rule alone reads them. The stopping rule has no direction; it is
+// instantiated here through the solve.
+namespace cfdcore::flow {
+namespace {
+
+using momentum::bits;
+using momentum::extruded;
+using momentum::for_each_cell;
+using momentum::index_of;
+using momentum::position3;
+
+TEST(FlowThreeDirections, AnExtrudedRoomsCellCentresAreThe2DRoomsOnEveryPlane) {
+    std::size_t compared = 0;
+    for (int trial = 0; trial < momentum::rooms; ++trial) {
+        SCOPED_TRACE(trial);
+        extruded x(trial);
+        const layout::layout<3>& cells3 = x.grid3.fields();
+        const layout::layout<2>& cells2 = x.grid2.fields();
+        for (int c = 0; c < 3; ++c) {
+            std::vector<double> centres3(cells3.cell_count());
+            cell_centres<3>(cells3, c, x.velocity3[c], centres3);
+            const int m = x.solid.component(c);
+            if (m < 0) {
+                for (const double value : centres3) {
+                    EXPECT_EQ(value, 0.0);
+                }
+                continue;
+            }
+            std::vector<double> centres2(cells2.cell_count());
+            cell_centres<2>(cells2, m, x.velocity2[m], centres2);
+            for_each_cell(cells3, [&](const position3& at) {
+                const std::size_t k = at[x.solid.b] * x.flat.n[0] + at[x.solid.a];
+                EXPECT_EQ(bits(centres3[index_of(cells3, at)]), bits(centres2[k]));
+                ++compared;
+            });
+        }
+    }
+    EXPECT_GT(compared, 5000u);
+}
+
+// A grid of unit cells of the counts given.
+grid::grid<3> unit_grid(const std::array<std::size_t, 3>& n, std::array<momentum::axis, 3>& axes,
+                        std::vector<std::int32_t>& types) {
+    grid::grid_input<3> in{};
+    for (int d = 0; d < 3; ++d) {
+        axes[d] = momentum::make_axis(std::vector<double>(n[d], 1.0));
+        in.faces[d] = axes[d].faces;
+        in.centres[d] = axes[d].centres;
+    }
+    types.assign(n[0] * n[1] * n[2], 0);
+    in.cell_type = types;
+    in.solid = 1;
+    return grid::grid<3>(in);
+}
+
+TEST(FlowThreeDirections, OutletsTakeTheirInteriorNeighbourAlongEachDirection) {
+    momentum::draws draw(95);
+    for (const std::array<std::size_t, 3>& n :
+         {std::array<std::size_t, 3>{4, 3, 5}, std::array<std::size_t, 3>{3, 5, 2},
+          std::array<std::size_t, 3>{2, 2, 2}}) {
+        std::array<momentum::axis, 3> axes;
+        std::vector<std::int32_t> types;
+        const grid::grid<3> g = unit_grid(n, axes, types);
+        const layout::layout<3>& cells = g.fields();
+        std::array<std::unique_ptr<bool[]>, 6> flags;
+        std::array<std::span<const bool>, 3> low;
+        std::array<std::span<const bool>, 3> high;
+        for (int d = 0; d < 3; ++d) {
+            const std::size_t entries = cells.cell_count() / n[d];
+            for (int side = 0; side < 2; ++side) {
+                auto& kept = flags[static_cast<std::size_t>(2 * d + side)];
+                kept = std::make_unique<bool[]>(entries);
+                for (std::size_t i = 0; i < entries; ++i) {
+                    kept[i] = draw() < 0.5;
+                }
+                (side == 0 ? low : high)[d] = std::span<const bool>(kept.get(), entries);
+            }
+        }
+        const walls::outlets<3> o(g, low, high);
+        std::array<std::vector<double>, 3> velocity;
+        std::array<std::vector<double>, 3> expected;
+        std::size_t outlets = 0;
+        for (int c = 0; c < 3; ++c) {
+            const layout::layout<3> faces = positions::faces_layout(cells, c, c);
+            velocity[c] = draw.field(faces.cell_count(), -0.5);
+            expected[c] = velocity[c];
+            const std::size_t stride = faces.cell_stride(c);
+            for_each_cell(faces, [&](const position3& at) {
+                if (at[c] != 0 && at[c] != n[c]) {
+                    return;
+                }
+                const bool is_low = at[c] == 0;
+                positions::position<3> cell{{at[0], at[1], at[2]}};
+                const std::size_t entry = positions::index_without(cells, cell, c);
+                if ((is_low ? low : high)[c][entry]) {
+                    const std::size_t f = index_of(faces, at);
+                    expected[c][f] = velocity[c][is_low ? f + stride : f - stride];
+                    ++outlets;
+                }
+            });
+        }
+        EXPECT_EQ(o.count(), outlets);
+        o.extrapolate({velocity[0], velocity[1], velocity[2]});
+        for (int c = 0; c < 3; ++c) {
+            EXPECT_EQ(velocity[c], expected[c]);
+        }
+    }
+}
+
+TEST(FlowThreeDirections, AnExtrudedClosedRoomsOuterIterationsLeaveNoImbalance) {
+    int solved = 0;
+    for (int trial = 0; trial < 24; ++trial) {
+        SCOPED_TRACE(trial);
+        extruded x(trial);
+        const layout::layout<3>& cells = x.grid3.fields();
+        pressure::corrector_input<3> in{};
+        std::array<std::unique_ptr<bool[]>, 3> closed;
+        for (int d = 0; d < 3; ++d) {
+            const std::size_t entries = cells.cell_count() / cells.cells(d);
+            closed[d] = std::make_unique<bool[]>(entries);
+            std::fill(closed[d].get(), closed[d].get() + entries, false);
+            in.cell_widths[d] = x.solid.axis_of(d).widths;
+            in.outlet_low[d] = std::span<const bool>(closed[d].get(), entries);
+            in.outlet_high[d] = in.outlet_low[d];
+        }
+        in.fluid = 0;
+        in.rho = 1.2;
+        in.alpha = 0.3;
+        in.rtol = 1e-12;
+        in.max_iter = 300;
+        in.method = pressure::preconditioner::multigrid;
+        in.levels = {.coarsest_cells = 8,
+                     .sweeps = 1,
+                     .weight = 2.0 / 3.0,
+                     .dominance_tolerance = 1e-12,
+                     .rcond = 1e-15};
+        if (pressure::corrector<3>::count_components(x.grid3, in).components != 1) {
+            continue;
+        }
+        pressure::corrector<3> corrector(x.grid3, in);
+        const walls::outlets<3> outlets(x.grid3, in.outlet_low, in.outlet_high);
+        flow_input<3> f{};
+        f.mu = 0.02;
+        f.rho = 1.2;
+        f.nu = 0.02 / 1.2;
+        f.alpha_turbulence = 1.0;
+        f.residual_scale = 0.7;
+        f.rule = stop_rule::error_estimate;
+        f.keys = {.velocity_scale = 1.0,
+                  .flux_scale = 1.0,
+                  .iteration_error_tol = 1e-300,
+                  .mass_imbalance_tol = 1e-300,
+                  .viscosity_condition = false,
+                  .window = 2,
+                  .version_without_e = 3,
+                  .version_with_e = 5};
+        const modules<3> m{.predictor = &x.predictor3, .corrector = &corrector,
+                           .outlets = &outlets};
+        ASSERT_TRUE(solver<3>::check(x.grid3, m, f).empty());
+        solver<3> s(x.grid3, m, f);
+        // A closed domain: no flux through its edges.
+        std::array<std::vector<double>, 3> start;
+        for (int c = 0; c < 3; ++c) {
+            const layout::layout<3> faces = positions::faces_layout(cells, c, c);
+            start[c].assign(x.velocity3[c].begin(), x.velocity3[c].end());
+            for_each_cell(faces, [&](const position3& at) {
+                if (at[c] == 0 || at[c] == cells.cells(c)) {
+                    start[c][index_of(faces, at)] = 0.0;
+                }
+            });
+        }
+        s.start({start[0], start[1], start[2]}, x.solid.pressure, {}, {}, {});
+        std::vector<iteration_record> records(3);
+        const chunk_result result = s.run(0, records);
+        ASSERT_EQ(result.failure.kind, failure::none);
+        ASSERT_EQ(result.outer, 3);
+        std::vector<double> imbalance(cells.cell_count());
+        corrector.mass_imbalance({s.velocity(0), s.velocity(1), s.velocity(2)}, imbalance);
+        for (const double value : imbalance) {
+            EXPECT_NEAR(value, 0.0, 1e-9);
+        }
+        stopping::rule alone(f.keys);
+        for (const iteration_record& r : records) {
+            EXPECT_EQ(r.residual, r.step / 0.7);
+            alone.record(r.step, 0.0, 0.0);
+            EXPECT_EQ(bits(alone.last().estimate), bits(r.rule.estimate));
+        }
+        EXPECT_TRUE(std::isfinite(records[2].rule.estimate) ||
+                    !(records[2].step < records[1].step));
+        ++solved;
+    }
+    EXPECT_GT(solved, 4);
+}
+
+}  // namespace
+}  // namespace cfdcore::flow
