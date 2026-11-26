@@ -103,9 +103,10 @@ CFDCORE_INLINE void check_cells(lanes::cells<N>, check_operands in, std::size_t 
     }
 }
 
-// Python's `max(a, b)` of two floats, folded left: the later one where it is
-// larger, so a NaN first is kept and a NaN later is not.
+}  // namespace
+
 double python_max(std::span<const double> values) {
+    require(!values.empty(), "flow: the max of no value");
     double m = values[0];
     for (std::size_t i = 1; i < values.size(); ++i) {
         if (values[i] > m) {
@@ -114,8 +115,6 @@ double python_max(std::span<const double> values) {
     }
     return m;
 }
-
-}  // namespace
 
 template <int D>
 void cell_centres(const layout::layout<D>& fields, int c, std::span<const double> velocity,

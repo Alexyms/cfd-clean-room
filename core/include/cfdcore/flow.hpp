@@ -75,6 +75,11 @@ double largest_change(std::span<const double> now, std::span<const double> befor
 bool effective_viscosity(std::span<const double> nu_t, std::span<const lanes::mask> live,
                          double mu, double rho, std::span<double> out, bool& not_finite);
 
+// Python's `max` of the D components' changes, folded left as `max(du, dv)` folds
+// them: a later value replaces the one held where it is larger, so a NaN first is
+// kept and a NaN later is not. values: at least one.
+double python_max(std::span<const double> values);
+
 // How the prediction takes its viscosity: air's (laminar), a field held for the
 // solve (`eddy_viscosity=`), or the k-epsilon model's iterate with the wall
 // functions (the turbulence section).

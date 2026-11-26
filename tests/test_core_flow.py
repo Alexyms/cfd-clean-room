@@ -540,6 +540,25 @@ def test_the_cell_centres_and_their_changes_are_the_references(name: str) -> Non
         assert _same(_cfdcore.largest_change(now, before, fluid), reference)
 
 
+@pytest.mark.parametrize(
+    "values",
+    [
+        [1.0, 2.0],
+        [2.0, 1.0],
+        [math.nan, 1.0],
+        [1.0, math.nan],
+        [math.nan, math.nan],
+        [-0.0, 0.0],
+        [0.0, -0.0],
+        [3.0, math.nan, 4.0],
+        [math.inf, math.nan],
+    ],
+)
+def test_the_velocity_steps_max_is_pythons(values: list[float]) -> None:
+    """``max(du, dv)``: a NaN first is kept and a NaN later is not, a tie keeps the first."""
+    assert _same(_cfdcore.python_max(values), max(values))
+
+
 # ---- Outer iterations from planted fields ----------------------------------------
 
 
@@ -821,8 +840,14 @@ def test_the_rule_is_built_with_the_solvers_scales(name: str, mode: str) -> None
     assert core.rule_version == solver.rule_version
 
 
-def test_a_capped_correction_does_not_stop_the_velocity_step() -> None:
-    """Under velocity_step a step below the bound with its correction at the cap goes on."""
+def test_a_capped_correction_does_not_stop_the_velocity_step(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Under velocity_step a step below the bound with its correction at the cap goes on.
+
+    Every correction stops at its cap: the warning is logged at the first alone, as
+    the reference logs it.
+    """
     raw = _raw(
         "cavity",
         "laminar",
@@ -831,7 +856,21 @@ def test_a_capped_correction_does_not_stop_the_velocity_step() -> None:
         max_pressure_iter=2,
         max_simple_iter=40,
     )
-    solved = [_whole(kind, raw)[0] for kind in (StaggeredSolver, CoreSolver)]
+    solved = []
+    lines = []
+    for kind in (StaggeredSolver, CoreSolver):
+        caplog.clear()
+        with caplog.at_level(logging.INFO, logger="src.solver_staggered"):
+            solved.append(_whole(kind, raw)[0])
+        lines.append(_log_lines(caplog.records))
+    assert lines[1] == lines[0]
+    assert (
+        sum(
+            level == "WARNING" and "max_pressure_iter (" in text
+            for level, text in lines[1]
+        )
+        == 1
+    )
     ref, core = solved
     assert ref.stop_reason == core.stop_reason == CAP_STOP
     assert len(core.residual_history) == len(ref.residual_history) == 40
@@ -882,17 +921,26 @@ CASES = [(ROOM, "coupled"), ("cavity", "laminar")]
 def test_a_core_solve_resumed_from_its_checkpoint_is_the_uninterrupted_one(
     name: str, mode: str
 ) -> None:
-    """Interrupted at a checkpoint and resumed by the core: the same solve, bit for bit."""
+    """Interrupted at a checkpoint and resumed by the core: the same solve, bit for bit.
+
+    Resumed from the second checkpoint and from the last before the stop. A solve
+    resumed more than a window before its stop refills its window with the same
+    steps by then, so a resume that dropped the window would stop where the
+    uninterrupted solve stops; from the last checkpoint the stop falls inside the
+    first window, which the checkpoint's own steps fill (prompt 95's plants).
+    """
     raw = _solve_raw(name, mode, checkpoint_interval=150)
     whole, kept = _whole(CoreSolver, raw)
     assert whole.converged and len(kept) >= 2
     assert [c.state.outer for c in kept] == [150 * (i + 1) for i in range(len(kept))]
-    resumed, _ = _whole(CoreSolver, raw, resume=kept[1])
-    _assert_same_solve(resumed, whole)
-    assert (
-        resumed.steady_checkpoint.velocity_steps
-        == whole.steady_checkpoint.velocity_steps
-    )
+    assert whole.flow_state.outer - kept[-1].state.outer < RATE_WINDOW
+    for checkpoint in (kept[1], kept[-1]):
+        resumed, _ = _whole(CoreSolver, raw, resume=checkpoint)
+        _assert_same_solve(resumed, whole)
+        assert (
+            resumed.steady_checkpoint.velocity_steps
+            == whole.steady_checkpoint.velocity_steps
+        )
 
 
 @pytest.mark.parametrize(("name", "mode"), CASES)
@@ -946,7 +994,7 @@ def test_a_positivity_failure_in_the_coupled_solve_raises_as_the_reference() -> 
     The reference's message names the outer iteration and the first bad cell; with
     the core's dots the two sides' fields are the same bits, so the messages are.
     """
-    raws = _raw(ROOM, "coupled", pressure_preconditioner="jacobi")
+    raws = _raw(ROOM, "coupled", pressure_preconditioner="jacobi", max_pressure_iter=2)
     raws["turbulence"]["cfl_number"] = 0.5
     mesh, config = _configured(raws)
     raised = []
@@ -971,7 +1019,36 @@ def test_a_positivity_failure_in_the_coupled_solve_raises_as_the_reference() -> 
     assert str(raised[1]) == str(raised[0])
     assert str(raised[0]).startswith("outer iteration ")
     assert _same(raised[1].minimum, raised[0].minimum)
+    # Every correction reaches its cap of two, the failing iteration's among them,
+    # which the reference counts before it raises.
     assert histories[1] == histories[0]
+    assert histories[0][1] == len(histories[0][0]) + 1
+
+
+def test_formed_conditions_the_step_refuses_end_the_solve_as_the_reference() -> None:
+    """A discharge vent of no turbulence intensity carries in k and eps of zero.
+
+    ``SimConfig`` allows no intensity of zero, so the segments are changed after it
+    has validated them (prompt 94's room). The supply's own is positive, so the
+    solve starts; its first k-epsilon step refuses the conditions it is handed, on
+    the vent faces, and so does the core's outer iteration.
+    """
+    raw = _raw("80x30-vents-shelf", "coupled", max_simple_iter=3)
+    mesh, config = _configured(raw)
+    vents = [
+        run.name for run in StaggeredBoundary(mesh, config).vent_runs() if run.is_inlet
+    ]
+    assert vents
+    for segment in vents:
+        object.__setattr__(config.boundaries[segment], "turbulence_intensity", 0.0)
+    messages = []
+    for kind in (StaggeredSolver, CoreSolver):
+        solver = _solver(kind, mesh, config)
+        with np.errstate(all="ignore"), pytest.raises(ValueError) as refused:
+            solver.solve_steady()
+        messages.append((str(refused.value), len(solver.residual_history)))
+    assert messages[1] == messages[0]
+    assert "vent faces" in messages[0][0]
 
 
 def _log_lines(records: list[logging.LogRecord]) -> list[tuple[str, str]]:
@@ -1033,15 +1110,21 @@ def _assert_level_two(got: StaggeredSolver, expected: StaggeredSolver) -> None:
 def test_a_checkpoint_of_either_side_resumed_by_the_other_reaches_its_stop(
     name: str, mode: str, taken_by: str
 ) -> None:
-    """A reference checkpoint resumed by the core, and a core one by the reference: level 2."""
+    """A reference checkpoint resumed by the core, and a core one by the reference: level 2.
+
+    From the last checkpoint before the stop, so that the stop reads the window the
+    checkpoint carried across from the other side.
+    """
     raw = _solve_raw(name, mode, checkpoint_interval=150)
     sides = {"reference": StaggeredSolver, "core": CoreSolver}
     other = "core" if taken_by == "reference" else "reference"
     whole, kept = _whole(sides[taken_by], raw)
     reference, _ = _whole(StaggeredSolver, raw) if taken_by == "core" else (whole, None)
-    resumed, _ = _whole(sides[other], raw, resume=kept[1])
+    last = kept[-1]
+    assert reference.flow_state.outer - last.state.outer < RATE_WINDOW
+    resumed, _ = _whole(sides[other], raw, resume=last)
     _assert_level_two(resumed, reference)
-    assert resumed.flow_state.outer > kept[1].state.outer
+    assert resumed.flow_state.outer > last.state.outer
 
 
 def test_a_warm_start_is_the_references_at_level_two() -> None:

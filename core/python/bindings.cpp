@@ -3527,6 +3527,14 @@ double largest_change_of(const Matrix& now, const Matrix& before, const BoolMatr
     return cfdcore::flow::largest_change(span_of(now), span_of(before), masks);
 }
 
+// Python's `max` of the components' changes, as the outer iteration folds them.
+double python_max_of(const std::vector<double>& values) {
+    if (values.empty()) {
+        refuse_value("python_max: no value");
+    }
+    return cfdcore::flow::python_max(values);
+}
+
 // The coupled prediction's effective viscosity, refused in the reference's words.
 NewArray effective_viscosity_of(const Matrix& nu_t, const BoolMatrix& live, nb::handle mu,
                                 nb::handle rho) {
@@ -4533,6 +4541,8 @@ NB_MODULE(_cfdcore, m) {
           nb::arg("fluid").noconvert(), "nu plus the median of nu_t over the FLUID cells.");
     m.def("cell_centres", &cell_centres_of, nb::arg("grid"), nb::arg("u").noconvert(),
           nb::arg("v").noconvert(), "to_cell_centers' (u_c, v_c), bit for bit.");
+    m.def("python_max", &python_max_of, nb::arg("values"),
+          "max(du, dv) as the outer iteration folds the components' changes.");
     m.def("effective_viscosity", &effective_viscosity_of, nb::arg("nu_t").noconvert(),
           nb::arg("live").noconvert(), nb::arg("mu"), nb::arg("rho"),
           "_effective_viscosity's mu + rho nu_t over the live cells, bit for bit.");
