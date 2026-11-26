@@ -53,6 +53,7 @@ add_library(cfdcore STATIC
     src/arrival.cpp
     src/channels.cpp
     src/dense.cpp
+    src/elementary.cpp
     src/grid.cpp
     src/layout.cpp
     src/march.cpp
@@ -62,7 +63,9 @@ add_library(cfdcore STATIC
     src/recovery.cpp
     src/reduce.cpp
     src/scalar.cpp
-    src/transport.cpp)
+    src/transport.cpp
+    src/turbulence.cpp
+    src/walls.cpp)
 target_include_directories(cfdcore PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
 target_link_libraries(cfdcore PRIVATE cfdcore_flags)
@@ -82,15 +85,19 @@ if(CFD_CORE_TESTS)
     include(GoogleTest)
     add_executable(cfdcore_tests
         tests/test_dense.cpp
+        tests/test_elementary.cpp
         tests/test_grid.cpp
         tests/test_lanes.cpp
         tests/test_march.cpp
         tests/test_momentum.cpp
         tests/test_multigrid.cpp
+        tests/test_positions.cpp
         tests/test_pressure.cpp
         tests/test_reduce.cpp
         tests/test_scalar.cpp
-        tests/test_transport.cpp)
+        tests/test_transport.cpp
+        tests/test_turbulence.cpp
+        tests/test_walls.cpp)
     target_link_libraries(cfdcore_tests PRIVATE cfdcore cfdcore_flags GTest::gtest_main)
     gtest_discover_tests(cfdcore_tests)
     # The modules at three directions, which no library build instantiates: the

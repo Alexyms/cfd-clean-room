@@ -106,8 +106,13 @@ jobs:
           CFD_CORE_BUILD="$RUNNER_TEMP/cfd-core" bash scripts/build_core.sh "$(command -v python)"
 
       # The parity tests skip when _cfdcore cannot be imported; here a missing
-      # module is an error instead (CFD_CORE_REQUIRED).
+      # module is an error instead (CFD_CORE_REQUIRED). NumPy's AVX-512 loops are
+      # off, so that its logarithm and powers are the C library's, as the core's
+      # are, on every runner (prompt 94; Alex, 2026-11-25).
       - name: Run the parity tests
+        env:
+          CFD_CORE_REQUIRED: "1"
+          NPY_DISABLE_CPU_FEATURES: X86_V4
         run: |
           source .venv/bin/activate
-          CFD_CORE_REQUIRED=1 pytest tests/test_core_parity.py tests/test_core_march.py tests/test_core_momentum.py tests/test_core_pressure.py -v -m parity
+          pytest tests/test_core_parity.py tests/test_core_march.py tests/test_core_momentum.py tests/test_core_pressure.py tests/test_core_turbulence.py -v -m parity
