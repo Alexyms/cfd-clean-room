@@ -8,6 +8,7 @@
     python docs/reports/probe95/probe95.py solve product160
     python docs/reports/probe95/probe95.py solve cavity40
     python docs/reports/probe95/probe95.py solve door80
+    python docs/reports/probe95/probe95.py solve poiseuille40
     python docs/reports/probe95/probe95.py timing --run 1
     python docs/reports/probe95/probe95.py vecinfo
 
@@ -41,7 +42,10 @@ The cases: the 80x30 and 160x60 product room (``configs/clean_room_default.yaml`
 at those grids through the dust release's scenario file, its tolerance by the
 base file's rule, as prompt 85's probe builds them), the 40x40 cavity
 (``configs/validation_cavity.yaml``), and the door leak's two states on 80x30.
-The records are in ``results/builder95/`` (not committed).
+Round 1 (prompt 95b) adds a case that is solved and not captured: VAL-001's
+channel at 40x20 (``configs/validation_poiseuille.yaml``), the one whole solve here
+with a pressure outlet, which no other case has. The records are in
+``results/builder95/`` (not committed).
 """
 
 import argparse
@@ -85,6 +89,8 @@ RESULTS = ROOT / "results" / "builder95"
 CAPTURES = RESULTS / "captures"
 SOLVES = RESULTS / "solves"
 CASES = ("product80", "product160", "cavity40", "door80")
+# Solved and compared, not captured: the channel's pressure outlet (prompt 95b).
+SOLVE_ONLY = ("poiseuille40",)
 # The iterations the prompt names: the first FIRST and the LAST before the stop.
 FIRST = 50
 LAST = 300
@@ -95,6 +101,30 @@ FLOW_LIMIT = 1e-8
 
 # ---------------------------------------------------------------------------
 # The cases
+
+
+def head_commit() -> str:
+    """HEAD's hash read from the checkout's files, or "unknown".
+
+    Git runs from Windows only (ADR-017 A), so the Linux side reads the hash
+    instead of asking git for it. Each record carries it, so that the tables
+    can refuse records of two commits.
+    """
+    git = ROOT / ".git"
+    try:
+        head = (git / "HEAD").read_text().strip()
+        if not head.startswith("ref: "):
+            return head
+        ref = head[len("ref: ") :]
+        loose = git / ref
+        if loose.exists():
+            return loose.read_text().strip()
+        for line in (git / "packed-refs").read_text().splitlines():
+            if line.endswith(" " + ref):
+                return line.split()[0]
+    except OSError:
+        pass
+    return "unknown"
 
 
 def scenario_config(scenario: str, grid: str) -> SimConfig:
@@ -108,6 +138,11 @@ def flow_configs(name: str) -> list[SimConfig]:
     if name == "cavity40":
         path = ROOT / "configs" / "validation_cavity.yaml"
         raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+        return [SimConfig.from_dict(raw, path.parent)]
+    if name == "poiseuille40":
+        path = ROOT / "configs" / "validation_poiseuille.yaml"
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+        raw["domain"].update(nx=40, ny=20)
         return [SimConfig.from_dict(raw, path.parent)]
     scenario, grid = {
         "product80": ("dust", "80x30"),
@@ -430,7 +465,11 @@ def estimate_rows(rows: list[dict[str, object]], key: str) -> dict[str, object]:
 def capture(name: str) -> None:
     """The reference's own solves of a case, every first-kind block replayed through the core."""
     CAPTURES.mkdir(parents=True, exist_ok=True)
-    record: dict[str, object] = {"case": name, "states": []}
+    record: dict[str, object] = {
+        "case": name,
+        "commit": head_commit(),
+        "states": [],
+    }
     started = time.perf_counter()
     previous: FlowState | None = None
     for index, config in enumerate(flow_configs(name)):
@@ -620,7 +659,12 @@ def solve(name: str) -> None:
             len(differ),
             flush=True,
         )
-    record = {"case": name, "loops": numpy_loops(), "states": states}
+    record = {
+        "case": name,
+        "commit": head_commit(),
+        "loops": numpy_loops(),
+        "states": states,
+    }
     (SOLVES / f"{name}.json").write_text(
         json.dumps(record, indent=1) + "\n", encoding="utf-8"
     )
@@ -639,6 +683,7 @@ def timing(run_number: int) -> None:
     mesh = Mesh(config)
     record: dict[str, object] = {
         "run": run_number,
+        "commit": head_commit(),
         "started": started,
         "loops": numpy_loops(),
     }
@@ -729,7 +774,8 @@ def vecinfo() -> None:
         }
         print(label, out[label])
     (RESULTS / "vecinfo.json").write_text(
-        json.dumps(out, indent=1) + "\n", encoding="utf-8"
+        json.dumps({"commit": head_commit(), "blocks": out}, indent=1) + "\n",
+        encoding="utf-8",
     )
 
 
@@ -756,7 +802,9 @@ def failed_tests(output: str) -> list[str]:
     return names
 
 
-def plants(stream: int, streams: int, only: list[str] | None = None) -> None:
+def plants(
+    stream: int, streams: int, only: list[str] | None = None, reverse: bool = False
+) -> None:
     """Each planted defect of variants95.py built in this stream's tree, the nets run on it."""
     import variants95
 
@@ -790,6 +838,9 @@ def plants(stream: int, streams: int, only: list[str] | None = None) -> None:
     share = [p for i, p in enumerate(variants95.PLANTS) if i % streams == stream]
     if only:
         share = [p for p in variants95.PLANTS if p[0] in only]
+    if reverse:
+        # Round 1's plants come last in the list and are the ones to learn of first.
+        share = share[::-1]
     records = []
     for name, description, path, pairs in share:
         source = tree / path
@@ -804,6 +855,7 @@ def plants(stream: int, streams: int, only: list[str] | None = None) -> None:
             built, build_text = run_command(["cmake", "--build", str(build)], tree, env)
             record: dict[str, object] = {
                 "plant": name,
+                "commit": head_commit(),
                 "description": description,
                 "built": built == 0,
             }
@@ -875,15 +927,17 @@ def plants(stream: int, streams: int, only: list[str] | None = None) -> None:
 
 
 def main() -> None:
+    """Run the command named on the command line."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
         "command", choices=["capture", "solve", "timing", "vecinfo", "plants"]
     )
-    parser.add_argument("case", nargs="?", choices=CASES)
+    parser.add_argument("case", nargs="?", choices=(*CASES, *SOLVE_ONLY))
     parser.add_argument("--run", type=int, default=1)
     parser.add_argument("--stream", type=int, default=0)
     parser.add_argument("--streams", type=int, default=3)
     parser.add_argument("--only", nargs="*", default=None)
+    parser.add_argument("--reverse", action="store_true")
     args = parser.parse_args()
     if args.command == "capture":
         capture(args.case)
@@ -893,7 +947,7 @@ def main() -> None:
         timing(args.run)
     elif args.command == "plants":
         sys.path.insert(0, str(HERE))
-        plants(args.stream, args.streams, args.only)
+        plants(args.stream, args.streams, args.only, args.reverse)
     else:
         vecinfo()
 

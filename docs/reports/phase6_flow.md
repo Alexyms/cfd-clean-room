@@ -1,13 +1,16 @@
 # Phase 6 Step 5b: The Stopping Rule and the Outer Iteration (prompt 95)
 
-**Date:** 2026-11-25
-**Prompt:** 95 (`docs/prompts/cc-prompt-95-outer-iteration.md`)
+**Date:** 2026-11-25; round 1 (prompt 95b) 2026-11-26
+**Prompt:** 95 (`docs/prompts/cc-prompt-95-outer-iteration.md`), round 1 `cc-prompt-95b-round1-fixes.md`
 **Branch:** `phase6/flow`
 **Status:** built. All five predictions hold (T0), and the step's gate is met: every whole solve
 stops for the reference's reason at the reference's outer count, not one apart, every flow field
 inside its measured spread (T3). The first run of the planted defects left five alive, each a rule no
-test read; a test commit catches them (section 4). The tables are
-`docs/reports/probe95/tables95.md`, generated from the records by `tables95.py` (`--check`).
+test read; a test commit catches them (section 4). Round 1 (section 6) answers review 95 and test 95:
+the stop is pinned where continuity binds it, the outlets inside a solve, the failure paths and the
+callbacks are tested, and every record of the tables was taken again at one commit, which
+`tables95.md` names at its head. The tables are `docs/reports/probe95/tables95.md`, generated from
+the records by `tables95.py` (`--check`).
 
 This is the second half of Phase 6 step 5 (`docs/PROJECT_PLAN.md`, Phase 6, the steps table;
 ADR-011 G and ADR-012 D and E as built and amended; ADR-014 A and D; ADR-017 B, C, F, G and H):
@@ -90,8 +93,9 @@ opposite sides of the tolerance (T2), no positivity failure fell on one side onl
 **`stopping`** (`core/include/cfdcore/stopping.hpp`, `core/src/stopping.cpp`). `rule` is
 `ErrorEstimateRule`: its window held oldest first, `record` (the update up to its call of the imbalance:
 the velocity step and, with condition (e), the viscosity step and its scale, then each estimate), `accept`
-(conditions (b), (c) and (d) on a summary), `restore`, `reset` and `version`. The window's length is handed
-in (`RATE_WINDOW`, from Python), so the core holds no copy of the constant. `estimate_of` is
+(conditions (b), (c) and (d) on a summary), `restore`, `reset` and `version`. The window's length
+(`RATE_WINDOW`) and the two version numbers (`RULE_VERSION_WITHOUT_E`, `RULE_VERSION_WITH_E`) are handed in
+from Python with the other keys, so the core holds no copy of any of them. `estimate_of` is
 `_estimate_of`: infinite below a full window, at a step that is zero or not finite, and at a fitted rate
 not strictly between 0 and 1. Its abscissa `k - (n - 1) / 2` is exact, and so is `x @ x` (a sum of whole
 quarters, every partial sum below 2^51 at the window's length, checked with fractions by the parity module);
@@ -127,10 +131,10 @@ and `walls::outlets<D>`.
 
 | Call | Python hands in | The core returns |
 |---|---|---|
-| `Flow2(grid, predictor, corrector, outlets, model, walls, ...)` | the modules on one grid (it keeps them alive), FLUID's code, mu, rho, nu, the relaxation, the residual's scale, the rule (`('velocity_step', tol)` or `('error_estimate', window, velocity_scale, flux_scale, iteration_error_tol, mass_imbalance_tol)`), a fixed `mu_eff` | a handle |
+| `Flow2(grid, predictor, corrector, outlets, model, walls, ...)` | the modules on one grid (it keeps them alive), FLUID's code, mu, rho, nu, the relaxation, the residual's scale, the rule (`('velocity_step', tol)` or `('error_estimate', window, version_without_e, version_with_e, velocity_scale, flux_scale, iteration_error_tol, mass_imbalance_tol)`), a fixed `mu_eff`, read once here and refused where it is not finite or not positive in a non-SOLID cell | a handle |
 | `flow_state(u, v, p, k, eps, nu_t)` | the start's fields, their normal velocities already written (ADR-017 E) | nothing; the fields are resident, the rule fresh |
 | `restore(steps, viscosity_steps)` | a checkpoint's window | nothing; the rule is seeded |
-| `solve_steady(max_outer, first)` | the chunk's outer count and its first iteration's number | the stop (`stopped`, `outer`), per outer iteration the residual, the velocity and viscosity steps, both estimates and the scale, the correction's iterations and products and whether it reached its cap, the failure (its type's name and the reference's message, with a positivity failure's cells and the iteration), a failing iteration's correction, the stages' seconds |
+| `solve_steady(max_outer, first)` | the chunk's outer count and its first iteration's number | the stop (`stopped`, `outer`), per outer iteration the residual, the velocity and viscosity steps, both estimates and the scale, the correction's iterations and products and whether it reached its cap, the k-epsilon step's fall-backs to Jacobi (k, eps) and whether both solves converged, the failure (its type's name and the reference's message, with a positivity failure's cells and the iteration), the failing iteration's record (its correction's count, products and cap, the step's fall-backs and convergence, and with a refused scale its residual), the stages' seconds |
 | `flow_fields()` | | u, v, p and, when coupled, k, eps, nu_t, copies |
 | `window()`, `rule_keys`, `rule_version` | | the rule's window, its keys and its version |
 
@@ -141,16 +145,23 @@ refusals the reference's, with its histories; `imbalance_summary`, `viscosity_sc
 `KEpsilon2.check_positive` are the blocks for the parity tests.
 
 **The driver** (`tests/core_driver.CoreSolver`). `StaggeredSolver` with `solve_steady` stepped through a
-`Flow2`: its refusals, `_effective_viscosity`, `_warm`, `_resumed`, `_new_rule` (the reference's rule
-refuses a checkpoint's window before the core is seeded), `apply_normal_velocity`, `_checkpoint`,
-`_finite` and the end of a solve are the reference's own, and the loop's lines around the chunks are the
-reference's: the cap hits and the first one's warning, the log lines at every fiftieth iteration and at the
-stop, `IterationState` from the core's fields, the checkpoint where `(iteration + 1) % interval == 0`
+`Flow2`. The methods it calls are the reference's own: `_effective_viscosity`, `_warm`, `_resumed`,
+`_new_rule` (the reference's rule refuses a checkpoint's window before the core is seeded),
+`apply_normal_velocity`, `_checkpoint` and `_finite`. The two set-up refusals of `solve_steady` (an eddy
+viscosity beside the turbulence section, `initial` beside `resume`) are copied lines, tested against the
+reference's (section 2). The loop's lines around the chunks are the reference's: the cap hits and the
+first one's warning, the k-epsilon step's two warnings, the log lines at every fiftieth iteration and at
+the stop, `IterationState` from the core's fields, the checkpoint where `(iteration + 1) % interval == 0`
 falls, built from the core's fields and window. A chunk runs to the next checkpoint when `on_checkpoint` is
 given, one outer iteration when `on_iteration` is, and to the cap otherwise. A failure is raised as the
 reference raises it (`core_mapping.flow_error`): a positivity failure as `PositivityError` with the
 reference's outer-iteration message, after the failing iteration's correction is counted as the reference
-counts it. `steady_solves_in_the_core` has `time_integration` build `CoreSolver`.
+counts it, its step's warnings logged, and with a refused scale of condition (e) its residual appended and
+`on_iteration` called, as the reference has done before its rule raises. A fixed viscosity the core refuses
+when it is built is raised in the reference's words (`predict`'s own), since the reference reads it at its
+first prediction. `steady_solves_in_the_core` has `time_integration` build `CoreSolver`; it is kept
+because step 6 starts from it (it moves into the `solver.backend` key), and a scenario run tests it
+(section 2).
 
 **Where a part does not fit the Kernels rules, and why.**
 
@@ -172,7 +183,7 @@ values are the same.
 
 ## 2. The tests
 
-`tests/test_core_flow.py` (CI's core job, `-m parity`; about 45 s here):
+`tests/test_core_flow.py` (CI's core job, `-m parity`; T7 gives the module's time):
 
 - **The rule on synthetic histories**, `StoppingRule2` against `ErrorEstimateRule`: geometric histories at
   six rates (the window filling, the estimate of each, a rate at 1 and beyond inf), a constant history, a
@@ -191,14 +202,17 @@ values are the same.
   relaxation against `_turbulence_step` on three rooms, the outlets against `_extrapolate_outlets` on the
   small rooms with an outlet on every edge, and the least value of a failure.
 - **Outer iterations from planted fields**: three outer iterations warm-started from a planted state on
-  prompt 87's five meshes and the cavity, laminar, under a fixed eddy viscosity and coupled (the 320x120 mesh
-  coupled only; the cavity not coupled, its walls admitting no air), compared bit for bit in every field,
+  prompt 87's five meshes, the cavity and (round 1) a small room with a pressure outlet on every edge, laminar,
+  under a fixed eddy viscosity and coupled (the 320x120 mesh coupled only; the cavity not coupled, its walls
+  admitting no air; the small room in the bit-for-bit comparison alone, since its flow grows without bound
+  and a part in 1e12 at the first iteration is no comparison later), compared bit for bit in every field,
   the residuals, the corrections' counts and cap hits, the final imbalance and the rule's inputs (the
   velocity step, the viscosity step and its scale). The reference's conjugate gradients take the core's dot
   product (`_cfdcore.row_dot`, the trick of prompts 88 and 93) and both sides the diagonal preconditioner, so
   that each block of the chain is handed what the other side's was: the chain judged block by block (ADR-017
   G). The same iterations as the reference runs them, its dots OpenBLAS's and the multigrid its own, are
-  within 1e-12 of each field's largest magnitude with the counts equal.
+  within 1e-12 of each field's largest magnitude with the counts equal. After a solve, `face_velocities`
+  and `turbulence_state` are the reference's bit for bit too (round 1).
 - **The core's own**: a solve interrupted at a checkpoint and resumed by the core is the uninterrupted one
   bit for bit (the coupled 40x15 room, 451 outer iterations, and the laminar 16x16 cavity, 653), resumed
   from the second checkpoint and from the last before the stop; a solve with
@@ -210,21 +224,49 @@ values are the same.
   reference's step refuses them; a capped correction does not stop the velocity step and an uncapped one
   does, its log lines the reference's with one warning in all; the checkpoints and the log lines fall where
   the reference's fall.
+- **Where the stop binds** (round 1): four whole solves in which (a) and (e) hold a hundred outer
+  iterations before the stop, so that only continuity, conditions (b) to (d), puts it off: on the 16x16
+  cavity and the 40x15 room, each once with a tolerance the imbalance falls below later (both sides stop
+  at the same outer iteration, `error_estimate_and_continuity`) and once with one it never reaches (both
+  run to the cap), the log lines compared down to the last two at a stop. One `velocity_step` solve whose
+  stop falls after the residual's lowest point so far and not before twice its bound, against the
+  reference's. These stops are read by no other solve, whose estimates first hold at the iteration they
+  stop at (F2).
+- **The outlets inside the solve** (round 1): the small room's outer iterations in all three modes, each
+  edge's outlet faces read, and VAL-001's channel at 40x20 solved whole at level 2, its pressure outlet
+  read in every outer iteration (T3 has its row).
+- **The failures a planted state reaches** (round 1), each against the reference's type, message,
+  residual history, cap hits, last correction, callbacks and log lines, once with checkpoints every three
+  outer iterations and once with `on_iteration` too: a refused scale of condition (e) (the reference has
+  recorded the iteration and called back before its rule raises), an eddy viscosity and faces that are not
+  finite, an effective viscosity that overflows, a wall viscosity that is not finite on each component, k
+  not positive after a checkpoint and off the diagonal, eps not positive off the diagonal, and a fixed
+  viscosity that overflows. The kinds no state reaches are listed with the reason in the module (section 6).
+  The driver's two set-up refusals are tested against the reference's.
+- **Callbacks, records and warnings** (round 1): every field of each `IterationState` and of the
+  checkpoints written beside it, the cap hits a resume carries (every correction at a cap of two), the
+  k-epsilon step's two warnings, also for a step that then fails its signs, and `steady_solves_in_the_core`
+  on a scenario run (the product room at 80x30 solved by a `CoreSolver`, written to the run file, the patch
+  undone also by an exception).
 - **Across the two sides**: a reference checkpoint resumed by the core and a core checkpoint resumed by the
   reference, from the last checkpoint before the stop so that the stop reads the window carried across,
   each to its stop, against the reference's uninterrupted solve at level 2; a converged state
   warm-started under its own boundaries stops when the window fills on both sides.
 - **The binding's refusals**: `Flow2`'s modules on another grid, a rule of no name, a bound that is not
   finite and positive, no FLUID cell; `flow_state`'s shapes and its turbulence fields for a laminar solve;
-  a chunk of no iteration; a window the rule does not restore; and each failure's mapping to the
-  reference's exception.
+  a chunk of no iteration; a window the rule does not restore, and one handed to a solve with no rule (its
+  own status, `no_rule`); a fixed viscosity that is not finite or not positive in a non-SOLID cell, a NaN
+  in a SOLID cell not read; the rule's versions, which the core takes from the keys (7 and 11 are given
+  back) and refuses below one; and each failure's mapping to the reference's exception.
 
 CTest gains `test_stopping.cpp`, `test_flow.cpp` (a lid-driven box by hand: an outer iteration is the
 prediction and the correction in turn, chunks of any size make the same solve, the velocity step's stop),
 the relaxation's and the outlets' tests, and three tests of the three-direction program: an extruded room's
 cell centres are the 2D room's on every plane bit for bit, the outlets copy along each direction, and
 `solver<3>` runs three outer iterations on extruded closed rooms with the corrections leaving no imbalance
-and its rule reading the steps as the rule alone reads them. The counts are T7.
+and its rule reading the steps as the rule alone reads them. Round 1 adds three: the versions the keys
+carry (7 and 11 are given back, below one is refused), a fixed viscosity's two refusals, and a window handed
+to a solve with no rule. The counts are T7.
 
 ## 3. Parity by kind
 
@@ -237,21 +279,27 @@ solves first happens at the outer iteration it stops at.
 
 **The second kind.** Each captured estimate, formed by the core from the reference's steps, is within
 1.5e-13 of the reference's, relative (T2), and no iteration has the two on opposite sides of the tolerance.
-At the stop the binding condition sits close to its bound, (e) at 0.9949 to 0.9991 of the tolerance in the
-coupled solves and (a) at 0.9985 in the cavity, and the two sides agree there to the six digits shown.
+At the stop the binding condition sits close to its bound, (e) at 0.9948 to 0.9991 of the tolerance in the
+coupled solves (the smallest is the door leak's open state, 0.994804) and (a) at 0.9985 in the cavity, and
+the two sides agree there to the six digits shown.
 
 **Whole solves.** T3: every state stops for the reference's reason at the reference's outer count, every
 flow field within a few units in the fifteenth digit of the reference's, inside its measured spread by four
 decades or more, and no outer iteration's correction takes another CG count than the reference's. The door
-leak's open state is warm-started on each side from that side's closed state.
+leak's open state is warm-started on each side from that side's closed state, and its closed state is the
+80x30 product room's solve again (the same configuration, solved twice), so the five rows of the four cases
+are four distinct solves. Round 1 adds the channel at 40x20 (VAL-001's room): the one whole solve with a
+pressure outlet, which the stage that extrapolates the outlets' faces is read by. It is outside the
+predictions, and T3 gives its row.
 
 ## 4. Planted defects
 
-T6: the prompt's eleven, prompt 94's carried survivor and the builder's fifteen, each built in a scratch
-tree with CTest, `tests/test_core_flow.py` and section 0's tests run against it, and a control. The first
-run, at the port's commit, caught 21 of the 26 that built; one did not build (the abscissa plant left its
-centre unused, which `-Werror` refuses; mended by keeping the variable read). The five survivors each
-named a rule no test read:
+T6 lists every plant at the head, each built in a scratch tree with CTest, `tests/test_core_flow.py` and
+section 0's tests run against it, and a control: the prompt's eleven, prompt 94's carried survivor, the
+builder's fifteen, and round 1's, which are test 95's survivors and one on each piece round 1 added
+(section 6). The first run, at the port's commit, caught 21 of the 26 that built; one did not build (the
+abscissa plant left its centre unused, which `-Werror` refuses; mended by keeping the variable read). The
+five survivors each named a rule no test read:
 
 - `resume_restarts_window`: the resume tests resumed from the checkpoint at 300 outer iterations, more
   than a window before the stop, so a window dropped at the resume had refilled with the same steps by
@@ -268,11 +316,16 @@ named a rule no test read:
   planted divergences took both NaN in the same outer iteration. The fold is now a public block of `flow`
   with its own parity test against Python's `max`.
 
-The test commit (aa92c9d) adds those tests, and the five with the mended plant are caught after it (T6):
-27 of 27. One plant of the first run was caught for the wrong reason: `chunks_with_on_iteration` removed
+The test commit (aa92c9d) adds those tests, and the five with the mended plant were caught after it: 27 of
+27 then. One plant of the first run was caught for the wrong reason: `chunks_with_on_iteration` removed
 the `if` of the driver's chunk choice and left its `elif` without one, so the module failed to import. It
 was mended to keep the branch and do nothing in it, and is caught after the test commit by the
 `on_iteration` test.
+
+One plant is reached by a check and not by a step: `least_over_solid_too` reads the least value of a
+failure over the SOLID cells as well, and a step's own k and eps are zero in a SOLID cell, so no solve
+reaches it. Section 0's test plants one infinity in a field and no NaN and says so in its docstring; it is
+caught there alone.
 
 ## 5. The timing
 
@@ -280,6 +333,72 @@ T4: the 160x60 product room's solve from rest, the reference then the core in on
 on mains power with no model server or game running (Windows' busiest processes recorded with each). The
 core's stages are the modules of steps 2 to 5a; the pressure correction and the turbulence step are most of
 its time, as they were in prompts 93 and 94, and the rule's share is negligible.
+
+## 6. Round 1 (prompt 95b)
+
+Review 95 approved the branch with seven suggestions; test 95 found two missing-test Bugs and five
+suggestions, with the tester's own plants and fuzz in `results/tester95/`. Round 1 answers each. Its
+numbers are the tables'; every record in them was taken again at one commit, which `tables95.md` names at
+its head (T0 to T7 are of that commit, the plants' included).
+
+- **The stop where it binds (test B1).** A stop that read only (a) and (e), one that read the imbalance of
+  the prediction's faces in place of the correction's, and a velocity-step bound doubled in the core's
+  set-up each passed every test, since no whole solve had (a) and (e) holding while continuity did not
+  (F2). Section 2 lists the solves that do. The tester's three plants are in T6, caught.
+- **The outlets inside the solve (test B2).** No room of the module had a pressure outlet, so the stage
+  that gives each outlet face its interior neighbour's value before a prediction was read by section 0's
+  block test alone, and none of the four one-edge plants nor the stage's removal was caught by a solve. The
+  small room has an outlet on each edge and is a case of the block-by-block outer iterations in all three
+  modes, and the channel at 40x20 is solved whole (T3 has its row, outside the five predictions). The
+  tester's five plants are in T6, caught.
+- **The failure paths (review S1, test S1).** Section 2 lists the failures a planted state reaches, each
+  compared with the reference's. Three of them need a state built for the kind: an effective viscosity that
+  overflows (a resumed nu_t of 1.7e308, which `rho nu_t` takes past the largest double), a wall viscosity
+  that is not finite on each component (k of 1.7e308 in two neighbouring wall cells of a resumed state,
+  whose mean overflows) and a fixed viscosity that overflows in the same way. The positivity failures fall
+  after the first checkpoint (k) and off the diagonal (k and eps), which a failure at outer iteration 0
+  and cell (0, 0) cannot tell. The failure kinds of `flow.hpp` that no state reaches:
+  - `eddy_viscosity_negative`: the iterate is the step's `C_mu k^2 / eps` under the relaxation, a mean of
+    two values that are not negative; a warm start rebuilds it from k and eps, and a resume refuses a
+    negative one.
+  - `mu_eff_not_positive`: `mu + rho nu_t` is at least `mu`, which is positive.
+  - `wall_mu_not_positive`: the wall function is a product of positive numbers over a logarithm of at
+    least `ln(E y*_0)`, above one, and the smallest positive k leaves its square root positive.
+  - `nothing_moves`: the faces after a correction are all zero only where no boundary prescribes a
+    velocity, and the rule the turbulent configuration needs refuses a velocity scale of zero when the
+    solver is built.
+  - `pressure`: `not_dominant` and `division_by_zero` need a system built by hand
+    (`tests/test_core_pressure.py` reaches them); from a planted state they come only under the multigrid
+    preconditioner and an extreme field, where the reference's dot product and the core's part, so that the
+    two sides do not fail together (a probe of u spikes of 1e30, not kept as a record) and no test can
+    compare them. `not_converged` is the dense solve's own failure, reached only from a NaN coefficient,
+    where the reference's answer is whatever NumPy's `pinv` returns and no rule of the reference's own, so
+    no test pins it.
+  The tester's eight plants of S1 are in T6, caught.
+- **A refused scale (test S3).** The core's chunk now returns the failing iteration's record: its
+  correction's count, products and cap, the k-epsilon step's fall-backs and convergence and, where the
+  rule refuses condition (e)'s scale, the residual. The driver appends the residual and calls
+  `on_iteration` before it raises, as the reference does.
+- **The step's warnings (test S4).** The chunk returns, per outer iteration, the fall-backs of k's and
+  eps's conjugate gradients to Jacobi and whether both solves converged, and the driver logs the
+  reference's two warnings from them, in its words and order, also for a step that then fails its signs.
+- **A fixed viscosity (review S2).** `solver::check` reads it once with the predictor's own check, so a NaN
+  or a non-positive entry in a non-SOLID cell is refused when the solver is built. The reference reads it
+  at its first prediction, in `_check_mu_eff`'s words, which the mapping hands on.
+- **The rule's versions (review S3).** `rule_keys` carries `version_without_e` and `version_with_e` beside
+  the window, the binding takes them and the mapping passes the reference's `RULE_VERSION_WITHOUT_E` and
+  `RULE_VERSION_WITH_E`. The core holds no copy of either; a rule given 7 and 11 reports them.
+- **A window under velocity_step (review S4).** `restore` returns its own status, `no_rule`, which the
+  binding names as what it is; it no longer reports a window as too long.
+- **Callbacks, records and attributes (test S2).** Section 2 lists the tests. The tester's plants of S2 are
+  in T6, caught, but for `t_stage_seconds_dropped`, which times what nothing can compare and is left out.
+  The tester's one equivalent mutant, `t_rate_at_one_allowed`, is a row of T6 with its reason.
+- **`steady_solves_in_the_core` (test S5).** Kept, and tested by one scenario run: step 6 builds its
+  `solver.backend` key from it, and the probe and the parity tests share it until then.
+- **Text and records (review S5 and S6, test S6).** The statements of the report that its records did not
+  carry are corrected (sections 1 to 3 and the deviations); the timing, captures, whole solves,
+  vectorisation, plants and every JUnit record were taken again at the head; `tables95.py` refuses an
+  absent record and records of two commits; and `flow.xml` is a record.
 
 ## Findings
 
@@ -317,6 +436,15 @@ its time, as they were in prompts 93 and 94, and the rule's share is negligible.
 - The door leak's open state is warm-started on each side from that side's closed state, as a run on that
   side would; the two closed states are inside the spread of each other (T3).
 - The binding returns the first cap's iteration and count inside the records, not apart.
+- The built exchange departs from ADR-017 B's table in three ways. `flow_state(u, v, p, k, eps, nu_t)`
+  takes the fields with their normal velocities already written, not `(boundary, initial)`: the boundary's
+  layers stay in Python (ADR-017 E). `solve_steady(max_outer, first)` takes the number of the chunk's first
+  outer iteration, which a failure's message and its records name, since a solve runs in chunks (to a
+  checkpoint, or one iteration for `on_iteration`). It returns no reason: the driver maps the stop to the
+  reference's name. ADR-017 B's rows are not edited here; step 6 records them with prompt 91's departures.
+- The log lines of a chunk are written when it returns, so a solve with no checkpoint and no callback logs
+  nothing until it ends, and its lines carry the end's time, not the iteration's. Read from the code, not
+  measured; step 6 decides whether a progress line matters before the end.
 - Whole solves are judged here on WSL2 with NumPy's AVX-512 loops off, as Alex set for this step; the
   reference with them on is not a row.
 
@@ -329,8 +457,11 @@ its time, as they were in prompts 93 and 94, and the rule's share is negligible.
   `test_walls.cpp` and `test_three_directions.cpp`.
 - `tests/test_core_flow.py`, additions to `tests/test_core_turbulence.py`, `tests/core_mapping.py` and
   `tests/core_driver.py`; `.github/workflows/ci.yml` runs the new module in the core job.
-- `docs/reports/probe95/probe95.py` (capture, solve, timing, vecinfo, plants), `variants95.py`,
-  `tables95.py` and `tables95.md` (`python docs/reports/probe95/tables95.py --check`).
-- Records in `results/builder95/` (not committed): `captures/`, `solves/`, `timing_1.json` to
-  `timing_3.json`, `vecinfo.json`, `plants_s0.json` to `plants_s2.json`, `ctest.xml`, `parity.xml`,
-  `flow.xml`, `linux.xml`, `windows.xml`.
+- `docs/reports/probe95/probe95.py` (capture, solve with the channel as round 1's case, timing, vecinfo,
+  plants), `variants95.py`, `tables95.py` and `tables95.md` (`python docs/reports/probe95/tables95.py
+  --check`, which refuses an absent record and records of two commits).
+- Records in `results/builder95/` (not committed), each of the commit `tables95.md` names: `captures/`,
+  `solves/`, `timing_1.json` to `timing_3.json`, `vecinfo.json`, `plants_s0.json` to `plants_s2.json`, and
+  the JUnit records `ctest.xml`, `parity.xml`, `flow.xml` (`tests/test_core_flow.py` alone), `linux.xml` and
+  `windows.xml`, each with a `.commit` file beside it. The records of the first round are in
+  `results/builder95_round0/`.
