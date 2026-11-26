@@ -239,9 +239,9 @@ values are the same.
   residual history, cap hits, last correction, callbacks and log lines, once with checkpoints every three
   outer iterations and once with `on_iteration` too: a refused scale of condition (e) (the reference has
   recorded the iteration and called back before its rule raises), an eddy viscosity and faces that are not
-  finite, an effective viscosity that overflows, a wall viscosity that is not finite on each component, k
-  not positive after a checkpoint and off the diagonal, eps not positive off the diagonal, and a fixed
-  viscosity that overflows. The kinds no state reaches are listed with the reason in the module (section 6).
+  finite, an effective viscosity that overflows, a wall viscosity that is not finite on each component,
+  eps not positive in the first iteration of a resume (after a checkpoint, off the diagonal), eps not
+  positive off the diagonal in a warm start, and a fixed viscosity that overflows. The kinds no state reaches are listed with the reason in the module (section 6).
   The driver's two set-up refusals are tested against the reference's.
 - **Callbacks, records and warnings** (round 1): every field of each `IterationState` and of the
   checkpoints written beside it, the cap hits a resume carries (every correction at a cap of two), the
@@ -338,8 +338,10 @@ its time, as they were in prompts 93 and 94, and the rule's share is negligible.
 
 Review 95 approved the branch with seven suggestions; test 95 found two missing-test Bugs and five
 suggestions, with the tester's own plants and fuzz in `results/tester95/`. Round 1 answers each. Its
-numbers are the tables'; every record in them was taken again at one commit, which `tables95.md` names at
-its head (T0 to T7 are of that commit, the plants' included).
+numbers are the tables'; every record in them was taken again at one commit, 56a9c4b, which `tables95.md`
+names at its head (T0 to T7 are of that commit, the plants' included). The records were first taken at
+b5acbd3; CI's core job then failed two cases of the failure test (the k failure at outer iteration 11,
+below), the commit after it fixed them, and every record was taken again at that commit.
 
 - **The stop where it binds (test B1).** A stop that read only (a) and (e), one that read the imbalance of
   the prediction's faces in place of the correction's, and a velocity-step bound doubled in the core's
@@ -355,9 +357,14 @@ its head (T0 to T7 are of that commit, the plants' included).
   compared with the reference's. Three of them need a state built for the kind: an effective viscosity that
   overflows (a resumed nu_t of 1.7e308, which `rho nu_t` takes past the largest double), a wall viscosity
   that is not finite on each component (k of 1.7e308 in two neighbouring wall cells of a resumed state,
-  whose mean overflows) and a fixed viscosity that overflows in the same way. The positivity failures fall
-  after the first checkpoint (k) and off the diagonal (k and eps), which a failure at outer iteration 0
-  and cell (0, 0) cannot tell. The failure kinds of `flow.hpp` that no state reaches:
+  whose mean overflows) and a fixed viscosity that overflows in the same way. The positivity failures are
+  eps's: one in the first iteration of a resume, after the checkpoint it resumes from and off the
+  diagonal, and one in a warm start off the diagonal. The k failure at outer iteration 0 and cell (0, 0)
+  cannot tell apart a row and column swapped, an eps reported as k, or an iteration counted from the
+  chunk's start; these can. A k failure that waits on a spike's growth over eleven iterations did not
+  fail in CI's NumPy, which takes a growth elsewhere that this machine's does not, so the late failure
+  starts from a resume, where a tiny k fails the step at once. The failure kinds of `flow.hpp` that no
+  state reaches:
   - `eddy_viscosity_negative`: the iterate is the step's `C_mu k^2 / eps` under the relaxation, a mean of
     two values that are not negative; a warm start rebuilds it from k and eps, and a resume refuses a
     negative one.
