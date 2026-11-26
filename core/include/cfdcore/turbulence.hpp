@@ -136,6 +136,19 @@ enum class quantity { k, eps };
 // Whether every value of an array is finite.
 bool all_finite(std::span<const double> values);
 
+// The eddy viscosity under-relaxed (`StaggeredSolver._turbulence_step`):
+// `(1 - alpha) old + alpha stepped` per cell, with `1 - alpha` formed once, as the
+// reference forms it from a Python float.
+//
+// old:     the relaxed nu_t the step read, m^2/s, a cell field
+// stepped: the step's own nu_t, m^2/s, as long
+// alpha:   `turbulence.alpha_turbulence`, dimensionless
+// out:     output, as long, overlapping no input
+//
+// Throws std::invalid_argument for arrays of different lengths.
+void relax(std::span<const double> old, std::span<const double> stepped, double alpha,
+           std::span<double> out);
+
 // The model on one grid, which must outlive it. Every array is allocated at
 // construction; a call allocates nothing.
 template <int D>
@@ -238,6 +251,15 @@ public:
                      const conditions<D>& c, std::span<double> k, std::span<double> eps,
                      std::span<double> nu_t);
 
+    // The positivity test of a step's field (`_check_positive`): false where the
+    // quantity is positive and finite in every non-SOLID cell; true otherwise, with
+    // the bad cells counted, the first one's index and value, and the least value
+    // read over the non-SOLID cells alone (NaN where one of them is), as the
+    // reference's `np.min(q[live])`.
+    //
+    // q: a cell field; bad: output
+    bool find_bad(std::span<const double> q, bad_cells& bad) const;
+
     // The cells' volumes, m^2 per unit depth, one per cell (`_volume`).
     const std::vector<double>& volume() const { return volume_; }
 
@@ -277,7 +299,6 @@ private:
                         double* out);
     scalar::implicit_result solve(std::span<const double> star, std::span<const double> decay,
                                   std::span<const bool> held, std::span<double> out);
-    bool find_bad(std::span<const double> q, bad_cells& bad) const;
 
     const grid::grid<D>* grid_;
     scalar::scheme<D> scheme_;

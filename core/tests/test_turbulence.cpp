@@ -615,5 +615,21 @@ TEST(Turbulence, OneDirectionHasNoShear) {
     EXPECT_EQ(m.time_step()[0], 0.5 / (1.0 / 0.5));
 }
 
+// The relaxation's two products and their sum, against the hand result of a
+// weight whose complement is exact.
+TEST(Relax, IsTheWeightedSumOfTheOldAndTheStepped) {
+    const std::vector<double> old{1.0, 2.0, 0.0, 4.0, 8.0, 0.5, 3.0, 1.0, 6.0, 7.0};
+    const std::vector<double> stepped{3.0, 2.0, 4.0, 0.0, 0.0, 1.5, 1.0, 5.0, 2.0, 9.0};
+    std::vector<double> out(old.size());
+    relax(old, stepped, 0.75, out);
+    for (std::size_t i = 0; i < old.size(); ++i) {
+        EXPECT_EQ(out[i], 0.25 * old[i] + 0.75 * stepped[i]);
+    }
+    EXPECT_EQ(out[0], 2.5);
+    EXPECT_EQ(out[3], 1.0);
+    std::vector<double> short_out(old.size() - 1);
+    EXPECT_THROW(relax(old, stepped, 0.75, short_out), std::invalid_argument);
+}
+
 }  // namespace
 }  // namespace cfdcore::turbulence

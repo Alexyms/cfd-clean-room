@@ -263,4 +263,48 @@ private:
 extern template class boundary<1>;
 extern template class boundary<2>;
 
+// The pressure outlets' faces, each given its interior neighbour's value before a
+// prediction (`StaggeredSolver._extrapolate_outlets`): the face at the low edge
+// along direction d takes the next face's value along d, the face at the high edge
+// the one before it, direction by direction and the low edge first, as the
+// reference writes u's left and right, then v's bottom and top.
+//
+// Not a kernel's block (CLAUDE.md, Kernels): a copy along an edge's faces, which
+// reads and writes one array, so its output overlaps its input. A face is copied
+// once per call, and the faces are listed at construction.
+template <int D>
+    requires(D >= 1)
+class outlets {
+public:
+    // outlet_low, outlet_high: per direction, whether each face of the low and
+    // the high domain edge normal to it is a pressure outlet, one per face in the
+    // cell layout without that direction, as `pressure::corrector_input` takes
+    // them. Throws std::invalid_argument for an array whose length is not the
+    // grid's, or a direction of one cell (the face beside the edge face is the
+    // other edge's).
+    outlets(const grid::grid<D>& g, const std::array<std::span<const bool>, D>& outlet_low,
+            const std::array<std::span<const bool>, D>& outlet_high);
+
+    // Writes the outlet faces of each component in place.
+    //
+    // velocity: per component, its faces, m/s
+    void extrapolate(const std::array<std::span<double>, D>& velocity) const;
+
+    // How many faces the outlets hold.
+    std::size_t count() const;
+
+private:
+    // Per direction, the low edge's pairs then the high edge's: each face and the
+    // face it takes its value from.
+    struct copy {
+        std::size_t to = 0;
+        std::size_t from = 0;
+    };
+    std::array<std::vector<copy>, D> copies_;
+    std::array<std::size_t, D> face_counts_{};
+};
+
+extern template class outlets<1>;
+extern template class outlets<2>;
+
 }  // namespace cfdcore::walls

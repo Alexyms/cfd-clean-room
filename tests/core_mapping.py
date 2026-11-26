@@ -645,6 +645,34 @@ def pressure_corrector(
     )
 
 
+def outlet_faces(
+    mesh: Mesh, boundary: StaggeredBoundary, grid: "_cfdcore.Grid2 | None" = None
+) -> "_cfdcore.OutletFaces2":
+    """The core's outlet faces from the boundary's pressure outlets (prompt 95).
+
+    Parameters
+    ----------
+    mesh : Mesh
+        The mesh.
+    boundary : StaggeredBoundary
+        Supplies the pressure outlets, as ``StaggeredSolver`` reads them.
+    grid : _cfdcore.Grid2, optional
+        The mesh's grid where the caller has one, else a new one.
+
+    Returns
+    -------
+    _cfdcore.OutletFaces2
+        The faces ``StaggeredSolver._extrapolate_outlets`` writes.
+    """
+    import _cfdcore
+
+    outlets = boundary.pressure_outlets()
+    return _cfdcore.OutletFaces2(
+        core_grid(mesh) if grid is None else grid,
+        [outlets[edge].is_outlet for edge in ("left", "right", "bottom", "top")],
+    )
+
+
 def correction_from(
     core: Mapping[str, np.ndarray | int | bool | float],
 ) -> PressureCorrection:

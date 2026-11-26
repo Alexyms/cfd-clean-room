@@ -710,6 +710,38 @@ bool model<D>::zero_in_solid(std::span<const double> field) const {
 // ---------------------------------------------------------------------------
 // The parts
 
+namespace {
+
+// The operands of the relaxation's block.
+struct relax_operands {
+    const double* old;
+    const double* stepped;
+    double keep;
+    double alpha;
+};
+
+// N cells of the relaxed eddy viscosity, each the reference's two products and
+// their sum, in its order.
+template <std::size_t N>
+void relaxed_cells(lanes::cells<N>, relax_operands in, std::size_t m,
+                   double* CFDCORE_RESTRICT out) {
+    for (std::size_t i = m; i < m + N; ++i) {
+        out[i] = in.keep * in.old[i] + in.alpha * in.stepped[i];
+    }
+}
+
+}  // namespace
+
+void relax(std::span<const double> old, std::span<const double> stepped, double alpha,
+           std::span<double> out) {
+    require(old.size() == stepped.size() && out.size() == old.size(),
+            "turbulence: the fields of a relaxation differ in length");
+    const relax_operands in{old.data(), stepped.data(), 1.0 - alpha, alpha};
+    lanes::for_each_block(0, out.size(), [&](auto cells, std::size_t m) {
+        relaxed_cells(cells, in, m, out.data());
+    });
+}
+
 template <int D>
     requires(D >= 1)
 void model<D>::eddy_viscosity(std::span<const double> k, std::span<const double> eps,

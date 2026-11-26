@@ -2972,6 +2972,84 @@ nb::dict model_advance(KEpsilon2& self, Boundary2& walls, nb::handle state, nb::
     return run_step(self, s.spans(), u.spans(), c);
 }
 
+// The positivity test of a step's field alone (`_check_positive`): None, or the
+// PositivityFailure a step raises for it.
+void model_check_positive(const KEpsilon2& self, const std::string& quantity, const Matrix& q) {
+    require_shape(q, cell_shape(self.model.mesh()), "KEpsilon2", "q");
+    const char* const name = read_quantity(quantity) == cfdcore::turbulence::quantity::k
+                                 ? "k"
+                                 : "eps";
+    cfdcore::turbulence::bad_cells bad;
+    if (self.model.find_bad(span_of(q), bad)) {
+        throw positivity_failure(name, bad, self.model.mesh().cells(0));
+    }
+}
+
+// The eddy viscosity's relaxation (`_turbulence_step`), a new array.
+NewArray relax_eddy_viscosity(const Matrix& old, const Matrix& stepped, nb::handle alpha) {
+    if (old.shape(0) != stepped.shape(0) || old.shape(1) != stepped.shape(1)) {
+        refuse_type("relax_eddy_viscosity: the two fields differ in shape");
+    }
+    NewArray out = new_matrix({old.shape(0), old.shape(1)});
+    cfdcore::turbulence::relax(span_of(old), span_of(stepped), read_number(alpha, "alpha"),
+                               out_span(out));
+    return out;
+}
+
+// The outlets' extrapolation (`_extrapolate_outlets`) on one grid.
+using Outlets2 = cfdcore::walls::outlets<2>;
+
+// The outlets beside the grid they were built on.
+struct OutletFaces2 {
+    OutletFaces2(const Grid2& g, const std::array<std::span<const bool>, 4>& edges)
+        : grid(&g), outlets(g, {edges[0], edges[2]}, {edges[1], edges[3]}) {}
+    const Grid2* grid;
+    Outlets2 outlets;
+};
+
+// The four edges' outlet flags, left, right, bottom and top, as the corrector takes
+// them, in the order of an outlets' input.
+std::array<std::span<const bool>, 4> read_outlet_edges(const Grid2& g, nb::handle outlets,
+                                                       std::array<BoolVector, 4>& flags,
+                                                       std::string_view who) {
+    if (nb::len(outlets) != 4) {
+        refuse_type(std::string(who) + ": outlets holds the left, right, bottom and top edges");
+    }
+    const std::array<const char*, 4> names{"left", "right", "bottom", "top"};
+    std::array<std::span<const bool>, 4> edges;
+    for (std::size_t e = 0; e < 4; ++e) {
+        const std::size_t n = g.cells(e < 2 ? 1 : 0);
+        if (!nb::try_cast<BoolVector>(outlets[e], flags[e], false) || flags[e].shape(0) != n) {
+            refuse_type(std::string(who) + ": " + names[e] +
+                        " outlets are not a bool array of " + std::to_string(n) + " entries");
+        }
+        edges[e] = std::span<const bool>(flags[e].data(), n);
+    }
+    return edges;
+}
+
+void outlets_init(OutletFaces2* self, const Grid2& g, nb::handle outlets) {
+    std::array<BoolVector, 4> flags;
+    const auto edges = read_outlet_edges(g, outlets, flags, "OutletFaces2");
+    if (g.cells(0) < 2 || g.cells(1) < 2) {
+        refuse_value("OutletFaces2: the grid needs two cells along each direction");
+    }
+    new (self) OutletFaces2(g, edges);
+}
+
+// Copies of u and v with their outlet faces written.
+nb::tuple outlets_extrapolate(const OutletFaces2& self, const Matrix& u, const Matrix& v) {
+    const Grid2& g = *self.grid;
+    require_shape(u, face_shape(g, 0), "OutletFaces2", "u");
+    require_shape(v, face_shape(g, 1), "OutletFaces2", "v");
+    NewArray u_out = new_matrix(face_shape(g, 0));
+    NewArray v_out = new_matrix(face_shape(g, 1));
+    std::copy(u.data(), u.data() + u.size(), u_out.data());
+    std::copy(v.data(), v.data() + v.size(), v_out.data());
+    self.outlets.extrapolate({out_span(u_out), out_span(v_out)});
+    return nb::make_tuple(u_out, v_out);
+}
+
 nb::object masks_matrix(std::span<const cfdcore::lanes::mask> masks,
                         std::array<std::size_t, 2> shape) {
     std::vector<std::uint8_t> bytes(masks.size());
@@ -3897,6 +3975,10 @@ NB_MODULE(_cfdcore, m) {
                          return nb::cast(
                              copy_field(self.model.volume(), cell_shape(self.model.mesh())));
                      })
+        .def("check_positive", &model_check_positive, nb::arg("quantity"),
+             nb::arg("q").noconvert(),
+             "The positivity test a step makes of its field (`_check_positive`), given the\n"
+             "field: None, or the PositivityFailure the step raises.")
         .def("live_faces", [](const KEpsilon2& self, int d) {
             return masks_matrix(self.model.live_faces(direction(d)),
                                 face_shape(self.model.mesh(), d));
@@ -3905,6 +3987,23 @@ NB_MODULE(_cfdcore, m) {
             return masks_matrix(self.model.inner_faces(direction(d)),
                                 face_shape(self.model.mesh(), d));
         }, nb::arg("direction"), "The faces diffusion crosses, 0 or 1.");
+
+    m.def("relax_eddy_viscosity", &relax_eddy_viscosity, nb::arg("old").noconvert(),
+          nb::arg("stepped").noconvert(), nb::arg("alpha"),
+          "(1 - alpha) old + alpha stepped, the solver's relaxation of nu_t, bit for bit.");
+
+    nb::class_<OutletFaces2>(m, "OutletFaces2",
+                         "The pressure outlets' faces of a grid, each given its interior\n"
+                         "neighbour's value before a prediction (`_extrapolate_outlets`).")
+        .def("__init__", &outlets_init, nb::arg("grid"), nb::arg("outlets"),
+             nb::keep_alive<1, 2>(),
+             "outlets: the left, right, bottom and top edges' bool arrays, as\n"
+             "PressureCorrector2 takes them.")
+        .def("extrapolate", &outlets_extrapolate, nb::arg("u").noconvert(),
+             nb::arg("v").noconvert(), "Copies of u and v with the outlet faces written.")
+        .def_prop_ro(
+            "count", [](const OutletFaces2& self) { return self.outlets.count(); },
+            "The outlet faces held.");
 
     m.attr("budget_terms") = [] {
         nb::list names;
