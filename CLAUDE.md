@@ -358,6 +358,8 @@ Tests are organized into three tiers. All three tiers must pass before a PR is m
 
 A test never asserts a hash or bitwise value recorded on another machine (BLAS and the platform change the last bits); a bitwise claim compares two computations made in the same process, and the hashes of record are checked by the harness.
 
+The parity tests of the blocks that call `log` or `pow` (the turbulence model and the wall functions) run with `NPY_DISABLE_CPU_FEATURES=X86_V4`, as CI's core job sets it, so that NumPy calls the C library as the core does; without it they skip, or fail under `CFD_CORE_REQUIRED=1` (ADR-017 G).
+
 ### Tier 1: Unit Tests
 
 Every module gets unit tests that verify individual functions and classes in isolation. These test correctness of logic, error handling, edge cases, and interface compliance. They do not require a running simulation or interaction between modules.

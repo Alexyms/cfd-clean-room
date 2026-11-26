@@ -6,7 +6,8 @@
 **Status:** built. Predictions (b) and (c) hold; (a) fails as stated, on blocks whose logarithm or cube
 NumPy forms with its own AVX-512 loops on this machine, and holds where NumPy calls the C library; (d)
 fails (T0). A stop condition was met before the port and Alex decided it on 2026-11-25 ("The result"
-below).
+below). Round 1 (prompt 94b) answered review and test 94, which found no wrong result and one rule
+untested (section 7).
 
 This is the first half of Phase 6 step 5 (`docs/PROJECT_PLAN.md`, Phase 6, the steps table;
 ADR-012 A to D as built and amended; ADR-014 J; ADR-017 C, F and G): `KEpsilonModel.step` on the
@@ -88,12 +89,14 @@ the C library's in the last bit on some values (T6). Where those loops are off
 (`NPY_DISABLE_CPU_FEATURES=X86_V4`) NumPy calls the C library, as it does on a processor without
 AVX-512. The work stopped there with the measurement, and Alex chose between calling the C library and
 comparing at that level, judging the three blocks by 1e-12, porting NumPy's loops, and ending the pass.
-His answer: the core calls the C library's `log` and `pow`; the parity tests and the captures of these
-blocks run the reference with NumPy's AVX-512 loops off, the x86-64-v3 level the core itself builds for,
-and require equality in every bit; and what the loops change is measured and reported. Prediction (a) is
-scored by the rule committed before any run, as the reference runs by default, beside its score at that
-level (T0). The decision has no place in ADR-017 yet: section G speaks of sums, not of elementary
-functions (F1).
+His answer, recorded as his in ADR-017 G: the core calls the C library's `log` and `pow`. Its
+bit-for-bit target is the Python reference at the x86-64-v3 level the core builds for, which is NumPy with
+its AVX-512 loops off (`NPY_DISABLE_CPU_FEATURES=X86_V4`), where NumPy calls the C library too; the parity
+tests and the captures of these blocks run the reference there and require equality in every bit. With
+those loops on, NumPy's `log` and cube differ from the C library's by one unit in the last place on some
+values, so the reference's own results depend on the processor (F2); those differences are measured and
+reported, and judged at level 2. Prediction (a) is scored by the rule committed before any run, as the
+reference runs by default, beside its score at that level (T0).
 
 ## 1. The port
 
@@ -138,16 +141,29 @@ new arrays.
 **The refusals.** `KEpsilon2` reads a state, faces and conditions by attribute and makes the reference's
 checks in its order with its types and messages; a true-time step is a `NotImplementedError` (ADR-017 F);
 a quantity that is not positive and finite raises `_cfdcore.PositivityFailure` with the numbers, of which
-the mapping makes `PositivityError`. `TurbulenceBoundary2` makes no check of a call's values, as the
-reference makes none. An array that is not C-contiguous float64 is a `TypeError`.
+the mapping makes `PositivityError`. `KEpsilon2.advance` makes the same checks of the state and the faces
+it reads and, since round 1, of the conditions its boundary forms (finite, then the ranges), so that a
+state whose wall values underflow is the reference's `ValueError` and not a positivity failure. The
+model's construction bounds `tol` (finite and positive) and `max_iter` (at least one), as `SimConfig`
+does. `TurbulenceBoundary2` makes no check of a call's values, as the reference makes none. An array that
+is not C-contiguous float64 is a `TypeError`.
 
 **Where the Kernels rules are not followed, and why.** Every pass over a field is a block function walked
-by rows, or over the whole field where no neighbour is read. Four loops are not blocks: the walk over the
+by rows, or over the whole field where no neighbour is read. Five loops are not blocks: the walk over the
 wall faces and the one over the wall cells, whose elements are few and scattered and whose arithmetic is
 a logarithm or a power, a call of the C library a cell at a time; RNG's eta and its cube, for the call and
 because a square root that may set `errno` is a branch under the project's flags, so its array of cubes
-is formed first and the rest of R is a block; and the list of a failed step's bad cells, formed only on a
-failure. `flag_cells`, which turns the conditions' bools into masks, is a block GCC 13 leaves scalar (T9).
+is formed first and the rest of R is a block; the list of a failed step's bad cells, formed only on a
+failure; and the loop that gives the inflow arrays' outlet entries their cell's value, a few elements,
+each at a place of its own in two arrays, with no row to walk. `flag_cells`, which turns the conditions'
+bools into masks, is a block GCC 13 leaves scalar (T9).
+
+Two blocks take a maximum. The pseudo-time step's is written with `lanes::select`, as the Kernels rule
+names for a choice, and GCC vectorises it as it did the ternary it replaced. The maximum of
+`largest_cells`, the value that stands in beside a SOLID edge cell, stays a ternary: GCC 13.3 makes a
+maximum of it and vectorises the block, and makes control flow of the select form, which it does not, so
+the block runs 2.4 times as long (`docs/reports/probe94/bench_max.cpp`; T10 has the loops and the
+kernels' times against the commit before).
 
 ## 2. The tests
 
@@ -156,6 +172,7 @@ failure. `flag_cells`, which turns the conditions' bools into masks, is a block 
 
 | Test | Cases | Passed | Failed | Skipped | Skipped where NumPy runs its AVX-512 loops |
 |---|---|---|---|---|---|
+| `test_the_small_rooms_are_open_on_every_edge` | 4 | 4 | 0 | 0 | 0 |
 | `test_the_blocks_equal_the_reference_bit_for_bit` | 88 | 88 | 0 | 0 | 0 |
 | `test_the_standard_terms_equal_the_reference_bit_for_bit` | 44 | 44 | 0 | 0 | 0 |
 | `test_the_rng_terms_equal_the_reference_bit_for_bit` | 44 | 44 | 0 | 0 | 44 |
@@ -171,6 +188,7 @@ failure. `flag_cells`, which turns the conditions' bools into masks, is a block 
 | `test_a_boundary_used_again_holds_nothing_of_the_call_before` | 1 | 1 | 0 | 0 | 0 |
 | `test_a_solid_edge_cell_takes_the_fields_largest_value` | 1 | 1 | 0 | 0 | 0 |
 | `test_the_largest_value_is_read_over_the_non_solid_cells` | 1 | 1 | 0 | 0 | 0 |
+| `test_a_nan_in_the_state_is_the_stand_in_beside_a_solid_edge_cell` | 2 | 2 | 0 | 0 | 0 |
 | `test_the_initial_values_equal_the_reference` | 10 | 10 | 0 | 0 | 0 |
 | `test_a_room_without_an_inlet_has_no_initial_values` | 1 | 1 | 0 | 0 | 0 |
 | `test_the_initial_values_are_summed_as_python_sums_floats` | 1 | 1 | 0 | 0 | 0 |
@@ -187,14 +205,19 @@ failure. `flag_cells`, which turns the conditions' bools into masks, is a block 
 | `test_a_positivity_failure_by_infinity_is_the_references` | 1 | 1 | 0 | 0 | 0 |
 | `test_a_step_refuses_what_the_reference_refuses` | 74 | 74 | 0 | 0 | 0 |
 | `test_the_refusals_of_two_arguments_come_in_the_references_order` | 1 | 1 | 0 | 0 | 0 |
+| `test_advance_refuses_the_state_and_the_faces_as_the_reference_does` | 24 | 24 | 0 | 0 | 0 |
+| `test_advance_refuses_the_state_before_the_faces` | 1 | 1 | 0 | 0 | 0 |
+| `test_advance_refuses_the_conditions_it_forms_as_the_reference_does` | 2 | 2 | 0 | 0 | 0 |
+| `test_advance_refuses_an_inflow_that_is_not_positive_as_step_does` | 2 | 2 | 0 | 0 | 0 |
+| `test_a_refused_call_leaves_the_records_of_the_step_before` | 1 | 1 | 0 | 0 | 0 |
 | `test_a_true_time_step_is_refused` | 5 | 5 | 0 | 0 | 0 |
 | `test_an_array_the_core_cannot_read_is_a_type_error` | 12 | 12 | 0 | 0 | 0 |
 | `test_the_state_is_the_references` | 1 | 1 | 0 | 0 | 0 |
-| `test_the_models_construction_refuses` | 16 | 16 | 0 | 0 | 0 |
+| `test_the_models_construction_refuses` | 23 | 23 | 0 | 0 | 0 |
 | `test_the_boundarys_construction_refuses` | 21 | 21 | 0 | 0 | 0 |
 | `test_an_inlet_without_turbulence_is_refused_as_the_reference_refuses_it` | 1 | 1 | 0 | 0 | 0 |
 | `test_the_references_vents_are_the_boundarys` | 1 | 1 | 0 | 0 | 0 |
-| `tests/test_core_turbulence.py` | 619 | 619 | 0 | 0 | 267 |
+| `tests/test_core_turbulence.py` | 662 | 662 | 0 | 0 | 267 |
 <!-- tables94 parity end -->
 
 <!-- tables94 tests begin -->
@@ -202,22 +225,24 @@ failure. `flag_cells`, which turns the conditions' bools into masks, is a block 
 
 | Tests | Cases | Passed | Failed | Skipped |
 |---|---|---|---|---|
+| CTest, suite `Elementary` | 4 | 4 | 0 | 0 |
+| CTest, suite `Positions` | 5 | 5 | 0 | 0 |
 | CTest, suite `Turbulence` | 22 | 22 | 0 | 0 |
-| CTest, suite `Elementary` | 1 | 1 | 0 | 0 |
 | CTest, suite `Walls` | 15 | 15 | 0 | 0 |
 | CTest, suite `MomentumThreeDirections` | 3 | 3 | 0 | 0 |
 | CTest, suite `PressureThreeDirections` | 4 | 4 | 0 | 0 |
 | CTest, suite `TurbulenceThreeDirections` | 7 | 7 | 0 | 0 |
-| CTest, all suites | 233 | 233 | 0 | 0 |
-| the five parity modules, WSL2, `CFD_CORE_REQUIRED=1`, `NPY_DISABLE_CPU_FEATURES=X86_V4` | 5,814 | 5,797 | 0 | 17 |
-| the whole suite, WSL2, the core built | 8,924 | 8,640 | 0 | 284 |
+| CTest, suite `PositionsThreeDirections` | 3 | 3 | 0 | 0 |
+| CTest, all suites | 244 | 244 | 0 | 0 |
+| the five parity modules, WSL2, `CFD_CORE_REQUIRED=1`, `NPY_DISABLE_CPU_FEATURES=X86_V4` | 5,857 | 5,840 | 0 | 17 |
+| the whole suite, WSL2, the core built | 8,967 | 8,683 | 0 | 284 |
 | the whole suite, Windows, the core not built | 3,115 | 3,110 | 0 | 5 |
 <!-- tables94 tests end -->
 
 `tests/test_core_turbulence.py` (in CI's core job, which sets `NPY_DISABLE_CPU_FEATURES=X86_V4`) runs
 prompt 87's meshes, the vents' and the shelf's, the Annex 20 mesh, a cavity whose four walls move, and small
 rooms of every row length with random widths, planted SOLID cells, inlets on three edges (one oblique),
-a moving lid, pressure outlets and planted vents, discharges and exhausts. The planted states span
+a moving lid, a pressure outlet on every edge, planted vents, discharges and exhausts. The planted states span
 decades with an eddy viscosity of their own, zero in places; the flows hold both signs, zeros of both
 signs, values on the faces of SOLID cells and rooms mostly at rest. The tests of a block that calls an
 elementary function ask for a NumPy that calls the C library, and skip with the reason elsewhere (an
@@ -361,11 +386,11 @@ give different ones (F2). And a run of the core is the same on both.
 |---|---|---|
 | `control` | nothing | nothing, as it must |
 | `r_not_split` | the prompt's: RNG's R not split by sign (all of it in the growth) | CTest (1); parity (99 cases of 4 tests) |
-| `decay_explicit` | the prompt's: the decay taken explicitly | CTest (2); parity (48 cases of 7 tests) |
+| `decay_explicit` | the prompt's: the decay taken explicitly | CTest (2); parity (49 cases of 8 tests) |
 | `buried_not_at_the_corner` | the prompt's: a corner gradient read from the stored zero beyond an obstacle | CTest (3); parity (258 cases of 8 tests); replay (product80, vents80, backstep, product80_umist) |
 | `edge_tangential_dropped` | the prompt's: the edge's tangential velocity dropped (the adjacent face's in its place) | CTest (6); parity (334 cases of 10 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
 | `step_uncapped` | the prompt's: the pseudo-time step uncapped at a cell at rest | CTest (1); parity (160 cases of 3 tests); replay (product80, vents80, backstep, product80_umist) |
-| `production_given_ignored` | the prompt's: the production given ignored in a wall cell | CTest (2); parity (206 cases of 10 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
+| `production_given_ignored` | the prompt's: the production given ignored in a wall cell | CTest (2); parity (207 cases of 11 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
 | `eps_not_held` | the prompt's: eps not held | CTest (2); parity (43 cases of 4 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
 | `vent_as_wall` | the prompt's: a vent face treated as a wall | CTest (2); parity (81 cases of 5 tests); replay (vents80) |
 | `floor_wrong_constants` | the prompt's: the scalable floor from the wrong constants | CTest (2); parity (1 cases of 1 tests) |
@@ -388,9 +413,9 @@ give different ones (F2). And a run of the core is the same on both.
 | `span_zero_defined` | a gradient over no distance taken over one | CTest (2); parity (257 cases of 7 tests) |
 | `pair_low_swapped` | the first component's edges swapped, low for high | CTest (2); parity (289 cases of 8 tests) |
 | `pair_high_swapped` | the second component's edges swapped, low for high | CTest (1); parity (289 cases of 8 tests); replay (backstep) |
-| `production_without_viscosity` | the production without the eddy viscosity | CTest (1); parity (204 cases of 8 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
+| `production_without_viscosity` | the production without the eddy viscosity | CTest (1); parity (205 cases of 9 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
 | `ratio_in_solid` | eps / k formed in SOLID cells | CTest (1); parity (137 cases of 4 tests); replay (product80, vents80, backstep, product80_umist) |
-| `ratio_inverted` | k / eps in the place of eps / k | CTest (2); parity (208 cases of 11 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
+| `ratio_inverted` | k / eps in the place of eps / k | CTest (2); parity (209 cases of 12 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
 | `growth_c_2` | the growth of eps with C_2 | CTest (2); parity (105 cases of 6 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
 | `growth_association` | the growth's products taken in another order | CTest (1); parity (105 cases of 6 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
 | `decay_c_1` | the decay of eps with C_1 | CTest (2); parity (107 cases of 8 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
@@ -406,52 +431,52 @@ give different ones (F2). And a run of the core is the same on both.
 | `eta_order` | eta as sqrt(S^2) times k / eps | parity (98 cases of 3 tests) |
 | `eta_cube_products` | the cube of eta by products | parity (98 cases of 3 tests) |
 | `eta_in_solid` | eta formed in SOLID cells | nothing: in a SOLID cell it makes eta, its cube and the coefficient NaN, and R, the one value formed from them, is masked |
-| `r_for_every_variant` | R formed for the standard variant | CTest (7); parity (110 cases of 9 tests); replay (raises) |
-| `has_r_by_one` | R where only one of its constants is given (the binding) | parity (457 cases of 31 tests); replay (raises) |
+| `r_for_every_variant` | R formed for the standard variant | CTest (7); parity (111 cases of 10 tests); replay (raises) |
+| `has_r_by_one` | R where only one of its constants is given (the binding) | parity (497 cases of 38 tests); replay (raises) |
 | `rate_of_one_face` | the rate from a cell's low faces alone | CTest (3); parity (203 cases of 6 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
 | `rate_across_of_one_face` | the rate across the rows from a cell's high faces alone | CTest (3); parity (203 cases of 6 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
-| `rate_larger_of_two` | the larger of the directions' rates in the place of their sum | CTest (10); parity (207 cases of 9 tests); replay (product80, vents80) |
-| `rate_signed` | the rate from a signed velocity | CTest (2); parity (206 cases of 8 tests); replay (product80, vents80) |
+| `rate_larger_of_two` | the larger of the directions' rates in the place of their sum | CTest (10); parity (208 cases of 10 tests); replay (product80, vents80) |
+| `rate_signed` | the rate from a signed velocity | CTest (2); parity (207 cases of 9 tests); replay (product80, vents80) |
 | `solid_moves` | a SOLID cell counted among those that move | parity (69 cases of 3 tests); replay (vents80) |
 | `cap_smallest` | a cell at rest takes the smallest step | CTest (1); parity (160 cases of 3 tests); replay (product80, vents80, backstep, product80_umist) |
-| `cfl_squared` | the Courant number squared | CTest (4); parity (206 cases of 8 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
+| `cfl_squared` | the Courant number squared | CTest (4); parity (207 cases of 9 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
 | `flux_without_area` | the volume flux without the face's area | CTest (1); parity (207 cases of 8 tests); replay (raises) |
-| `nothing_moves_goes_on` | a step where nothing moves not refused | CTest (1); parity (1 cases of 1 tests) |
+| `nothing_moves_goes_on` | a step where nothing moves not refused | CTest (1); parity (3 cases of 3 tests) |
 | `advection_scheme_swapped` | upwind where UMIST is asked and the reverse | parity (205 cases of 7 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
 | `vents_not_advected` | the vents' rule left out of the advection | parity (80 cases of 3 tests); replay (vents80) |
-| `vents_closed` | a vent's face carries nothing | CTest (1); parity (137 cases of 9 tests); replay (vents80) |
-| `vents_diffuse` | diffusion crosses a vent's face | CTest (1); parity (89 cases of 6 tests); replay (vents80) |
+| `vents_closed` | a vent's face carries nothing | CTest (1); parity (138 cases of 10 tests); replay (vents80) |
+| `vents_diffuse` | diffusion crosses a vent's face | CTest (1); parity (90 cases of 7 tests); replay (vents80) |
 | `edges_diffuse` | diffusion's mask open on the domain's faces | CTest (1); parity (12 cases of 2 tests) |
-| `solid_low_open` | a face open whose low cell is SOLID | CTest (3); parity (269 cases of 11 tests); replay (product80, vents80, backstep, product80_umist) |
+| `solid_low_open` | a face open whose low cell is SOLID | CTest (3); parity (270 cases of 12 tests); replay (product80, vents80, backstep, product80_umist) |
 | `solid_high_open` | a face open whose high cell is SOLID | CTest (4); parity (267 cases of 10 tests); replay (product80, vents80, backstep, product80_umist) |
-| `divergence_sign` | the divergence's sign along the rows | CTest (4); parity (207 cases of 8 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
+| `divergence_sign` | the divergence's sign along the rows | CTest (4); parity (208 cases of 9 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
 | `divergence_order` | the divergence across the rows taken as one difference | parity (203 cases of 6 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
 | `advection_order` | the step over the volume taken first | parity (203 cases of 6 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
-| `growth_without_step` | the growth not times the step | CTest (1); parity (43 cases of 4 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
-| `growth_of_k_for_eps` | eps grown by k's production | CTest (1); parity (42 cases of 3 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
+| `growth_without_step` | the growth not times the step | CTest (1); parity (44 cases of 5 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
+| `growth_of_k_for_eps` | eps grown by k's production | CTest (1); parity (43 cases of 4 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
 | `inflow_of_k_for_eps` | eps carried in with k's values | CTest (1); parity (43 cases of 5 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
 | `k_advected_as_eps` | k's explicit field from eps | parity (45 cases of 5 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
 | `explicit_in_solid` | the explicit field kept in SOLID cells | parity (12 cases of 1 tests); replay (vents80) |
 | `held_explicit_only` | eps held in the explicit field and not in the solve | CTest (1); parity (43 cases of 4 tests) |
 | `held_solve_only` | eps held in the solve at its advected value | CTest (2); parity (43 cases of 4 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
-| `held_by_given` | the held cells those whose production is given | CTest (3); parity (41 cases of 4 tests) |
+| `held_by_given` | the held cells those whose production is given | CTest (3); parity (42 cases of 5 tests) |
 | `k_held_too` | k held where eps is | parity (44 cases of 5 tests) |
 | `sigma_swapped` | k diffused with eps's sigma | CTest (1); parity (149 cases of 6 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
 | `eps_solved_with_ks_conductances` | eps's solve on k's conductances | parity (25 cases of 4 tests) |
-| `diffusivity_without_air` | the diffusivity without air's viscosity | CTest (6); parity (208 cases of 9 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
+| `diffusivity_without_air` | the diffusivity without air's viscosity | CTest (6); parity (209 cases of 10 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
 | `harmonic_share` | the near cell's share in the place of the far one's | CTest (1); parity (203 cases of 6 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
-| `harmonic_arithmetic` | the arithmetic mean | CTest (1); parity (203 cases of 6 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
-| `conductance_area` | the conductance without the face's area | CTest (2); parity (205 cases of 7 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
+| `harmonic_arithmetic` | the arithmetic mean | CTest (1); parity (204 cases of 7 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
+| `conductance_area` | the conductance without the face's area | CTest (2); parity (206 cases of 8 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
 | `conductance_distance` | the conductance's quotient taken first | parity (203 cases of 6 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
 | `conductance_unmasked` | the conductance beside a SOLID cell kept | CTest (1); parity (161 cases of 4 tests); replay (product80, vents80, backstep, product80_umist) |
-| `sink_without_volume` | the sink without the volume | CTest (1); parity (46 cases of 6 tests) |
+| `sink_without_volume` | the sink without the volume | CTest (1); parity (47 cases of 7 tests) |
 | `eps_decays_as_k` | eps's decay k's | CTest (1); parity (44 cases of 5 tests) |
 | `k_decays_as_eps` | k's decay eps's | CTest (1); parity (45 cases of 6 tests) |
 | `solve_by_jacobi` | the solves by Jacobi | CTest (1); parity (45 cases of 5 tests) |
-| `solve_tolerance` | the solves' tolerance ten times the configuration's | parity (41 cases of 5 tests) |
+| `solve_tolerance` | the solves' tolerance ten times the configuration's | parity (42 cases of 6 tests) |
 | `solve_cap` | the solves' cap one above the configuration's | CTest (1); parity (4 cases of 2 tests) |
-| `solve_one_step` | the solves at one step for every cell | parity (44 cases of 5 tests) |
-| `volume_of_one_width` | a cell's volume one of its widths | CTest (4); parity (217 cases of 9 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
+| `solve_one_step` | the solves at one step for every cell | parity (45 cases of 6 tests) |
+| `volume_of_one_width` | a cell's volume one of its widths | CTest (4); parity (218 cases of 10 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
 | `area_of_its_own_width` | a face's area with the width along its own direction | CTest (5); parity (205 cases of 7 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
 | `nu_t_linear` | the eddy viscosity with k in the place of k^2 | CTest (2); parity (161 cases of 3 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
 | `nu_t_association` | the eddy viscosity's products taken in another order | CTest (1); parity (161 cases of 3 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
@@ -459,11 +484,11 @@ give different ones (F2). And a run of the core is the same on both.
 | `k_positivity` | k not checked after the solves | CTest (1); parity (2 cases of 2 tests) |
 | `eps_positivity` | eps not checked after the solves | CTest (1); parity (1 cases of 1 tests) |
 | `eps_checked_first` | eps checked before k | parity (1 cases of 1 tests) |
-| `bad_infinity_passes` | an infinite value passes | CTest (1); parity (4 cases of 2 tests) |
+| `bad_infinity_passes` | an infinite value passes | CTest (1); parity (7 cases of 3 tests) |
 | `bad_last` | the last bad cell named, not the first | parity (3 cases of 2 tests) |
 | `bad_count` | the bad cells counted one too many | CTest (1); parity (3 cases of 2 tests) |
 | `bad_least_of_bad` | the least value read off the first cell alone | CTest (1); parity (2 cases of 1 tests) |
-| `records_not_kept` | the step's counts not kept (the binding) | parity (45 cases of 5 tests) |
+| `records_not_kept` | the step's counts not kept (the binding) | parity (46 cases of 6 tests) |
 | `records_after_failure` | the counts kept only where the step succeeds (the binding) | parity (2 cases of 1 tests) |
 | `converged_either` | converged where either solve is (the binding) | parity (1 cases of 1 tests) |
 | `wall_floor_dropped` | the wall viscosity's log law not floored | CTest (1); parity (57 cases of 4 tests); replay (product80, vents80, annex216, product80_umist) |
@@ -479,66 +504,66 @@ give different ones (F2). And a run of the core is the same on both.
 | `stencil_distance_swapped` | the distance to the other face | parity (99 cases of 3 tests); replay (product80, vents80, backstep, product80_umist) |
 | `cells_vents` | the cell beside a vent a wall cell | CTest (1); parity (73 cases of 4 tests); replay (vents80) |
 | `cells_edges_swapped` | the low edge's wall cells for the high one's | CTest (1); parity (163 cases of 4 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
-| `cells_order` | a corner cell's walls summed in another order | parity (60 cases of 1 tests) |
-| `cells_solid_included` | SOLID cells counted among the wall cells | parity (143 cases of 4 tests); replay (product80, vents80, backstep, product80_umist) |
+| `cells_order` | a corner cell's walls summed in another order | parity (58 cases of 1 tests) |
+| `cells_solid_included` | SOLID cells counted among the wall cells | parity (146 cases of 6 tests); replay (raises) |
 | `cells_mean_dropped` | a corner cell's walls summed, not averaged | CTest (1); parity (161 cases of 3 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
 | `production_mean_dropped` | a corner cell's productions summed, not averaged | CTest (1); parity (161 cases of 3 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
-| `speed_of_one_corner` | the edge's own velocity at a cell one corner's | parity (72 cases of 1 tests) |
+| `speed_of_one_corner` | the edge's own velocity at a cell one corner's | parity (71 cases of 1 tests) |
 | `speed_dropped` | a moving wall at rest | CTest (1); parity (80 cases of 2 tests) |
 | `speed_of_the_other_edge` | a wall's velocity the opposite edge's | CTest (1); parity (80 cases of 2 tests) |
 | `speed_on_obstacles` | an obstacle's wall moves with the edge | parity (67 cases of 1 tests) |
 | `held_cube_products` | the cube of u_k by products | parity (160 cases of 2 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
 | `held_kappa` | the held eps without kappa | CTest (2); parity (161 cases of 3 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
-| `slip_signed` | the slip with its sign | CTest (4); parity (163 cases of 4 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
+| `slip_signed` | the slip with its sign | CTest (4); parity (163 cases of 4 tests); replay (raises) |
 | `slip_of_one_component` | in three directions the slip of one component | CTest (4) |
-| `slip_unmasked` | the slip from a face of a SOLID cell as it is stored | parity (137 cases of 3 tests) |
-| `slip_vents_masked` | a vent's face read as zero in the slip | parity (36 cases of 1 tests) |
+| `slip_unmasked` | the slip from a face of a SOLID cell as it is stored | parity (135 cases of 3 tests) |
+| `slip_vents_masked` | a vent's face read as zero in the slip | parity (35 cases of 1 tests) |
 | `slip_of_one_face` | the velocity along the wall one face's | parity (161 cases of 3 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
-| `production_floor` | the production's log law not floored | parity (133 cases of 3 tests); replay (product80, vents80, annex216, product80_umist) |
+| `production_floor` | the production's log law not floored | parity (131 cases of 3 tests); replay (product80, vents80, annex216, product80_umist) |
 | `production_association` | the production's quotient taken in another order | parity (160 cases of 2 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
 | `root_c_mu` | C_mu^(1/4) by two square roots | CTest (5); parity (183 cases of 4 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
 | `tangential_always_known` | an open edge's tangential velocity its condition's zero | CTest (3); parity (72 cases of 1 tests); replay (backstep) |
 | `tangential_never_known` | a wall's tangential velocity the adjacent face's | CTest (1); parity (160 cases of 2 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
 | `tangential_far_row` | the adjacent faces those of the other edge | CTest (1); parity (72 cases of 1 tests); replay (backstep) |
-| `inflow_stand_in_least` | beside a SOLID edge cell a half of the largest value | CTest (1); parity (138 cases of 4 tests); replay (product80, vents80, backstep, product80_umist) |
-| `inflow_zero` | beside a SOLID edge cell the cell's zero | CTest (1); parity (140 cases of 5 tests); replay (product80, vents80, backstep, product80_umist) |
+| `inflow_stand_in_least` | beside a SOLID edge cell a half of the largest value | CTest (1); parity (141 cases of 6 tests); replay (product80, vents80, backstep, product80_umist) |
+| `inflow_zero` | beside a SOLID edge cell the cell's zero | CTest (1); parity (146 cases of 10 tests); replay (raises) |
 | `inflow_stand_in_in_solid` | the largest value read over every cell | parity (1 cases of 1 tests) |
-| `inflow_inlets_overwritten` | an inlet's value the adjacent cell's | CTest (1); parity (153 cases of 3 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
-| `inflow_of_k_twice` | eps carried in with k's inlet value | CTest (1); parity (153 cases of 3 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
-| `inflow_high_cell` | a high edge's value from one cell further in | CTest (1); parity (161 cases of 3 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
+| `inflow_inlets_overwritten` | an inlet's value the adjacent cell's | CTest (1); parity (157 cases of 6 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
+| `inflow_of_k_twice` | eps carried in with k's inlet value | CTest (1); parity (156 cases of 5 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
+| `inflow_high_cell` | a high edge's value from one cell further in | CTest (1); parity (164 cases of 5 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
 | `exhaust_high_cell` | an exhaust's room cell always the one on its high side | parity (68 cases of 3 tests); replay (vents80) |
 | `exhaust_low_cell` | an exhaust's room cell always the one on its low side | CTest (1); parity (69 cases of 3 tests); replay (vents80) |
-| `exhausts_dropped` | an exhaust's faces left without a value | CTest (1); parity (70 cases of 4 tests); replay (vents80) |
-| `vent_inlets_dropped` | the discharge vents left out | CTest (2); parity (78 cases of 6 tests); replay (vents80) |
+| `exhausts_dropped` | an exhaust's faces left without a value | CTest (1); parity (71 cases of 5 tests); replay (raises) |
+| `vent_inlets_dropped` | the discharge vents left out | CTest (2); parity (79 cases of 7 tests); replay (raises) |
 | `initial_unweighted` | the initial values' means not weighted | CTest (1); parity (9 cases of 2 tests) |
 | `initial_signed` | the initial values weighted by the signed speed | CTest (1); parity (5 cases of 2 tests) |
 | `initial_plain_sum` | the initial values summed without the compensation | parity (10 cases of 2 tests) |
 | `initial_kahan` | the compensation of the smaller sum only (Kahan's) | parity (1 cases of 1 tests) |
 | `inflow_values_signed` | the inlet's k from a signed speed's square's exponent | parity (36 cases of 3 tests) |
-| `inflow_values_factor` | the inlet's k without its factor | CTest (1); parity (175 cases of 7 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
-| `inflow_values_c_mu` | the inlet's eps with C_mu^(3/4) | CTest (1); parity (175 cases of 7 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
+| `inflow_values_factor` | the inlet's k without its factor | CTest (1); parity (178 cases of 9 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
+| `inflow_values_c_mu` | the inlet's eps with C_mu^(3/4) | CTest (1); parity (178 cases of 9 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
 | `floor_loose` | Newton's method stopped a step early | CTest (1); parity (1 cases of 1 tests) |
 | `floor_meeting_dropped` | laws that do not meet not refused | CTest (1); parity (3 cases of 1 tests) |
 | `floor_meeting_at_one` | laws that touch not refused | parity (1 cases of 1 tests) |
-| `square_by_product` | Python's square of a float by a product | parity (2 cases of 2 tests) |
-| `cube_by_product` | every cube by products | CTest (1); parity (222 cases of 4 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
-| `log_single` | the logarithm one bit off | CTest (1); parity (186 cases of 6 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
+| `square_by_product` | Python's square of a float by a product | CTest (1); parity (2 cases of 2 tests) |
+| `cube_by_product` | every cube by products | CTest (2); parity (222 cases of 4 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
+| `log_single` | the logarithm one bit off | CTest (3); parity (186 cases of 6 tests); replay (product80, vents80, annex216, backstep, product80_umist) |
 | `three_pairs` | in three directions the last pair's shear left out | CTest (3) |
 | `three_corner_stride` | the corners of a pair that crosses the rows read along the other direction | CTest (3) |
 | `three_area` | a face's area the last other width alone | CTest (3) |
 | `three_volume` | a cell's volume without its last width in three directions | CTest (3) |
 | `three_divergence` | in three directions the last direction's divergence left out | CTest (2) |
-| `check_state_shape` | the refusal removed: a state's shape | parity (6 cases of 1 tests) |
-| `check_state_positive` | the refusal removed: a state's k and eps in range | parity (8 cases of 1 tests) |
-| `check_state_nu_t` | the refusal removed: a state's nu_t in range | parity (4 cases of 2 tests) |
-| `check_state_nu_t_zero` | the refusal removed: a state's nu_t of zero refused too | parity (269 cases of 13 tests) |
-| `check_state_solid` | the refusal removed: a state's zero in SOLID cells | parity (3 cases of 1 tests) |
-| `check_faces_finite` | the refusal removed: the faces finite | parity (2 cases of 2 tests) |
+| `check_state_shape` | the refusal removed: a state's shape | parity (12 cases of 2 tests) |
+| `check_state_positive` | the refusal removed: a state's k and eps in range | parity (17 cases of 3 tests) |
+| `check_state_nu_t` | the refusal removed: a state's nu_t in range | parity (8 cases of 4 tests) |
+| `check_state_nu_t_zero` | the refusal removed: a state's nu_t of zero refused too | parity (281 cases of 17 tests) |
+| `check_state_solid` | the refusal removed: a state's zero in SOLID cells | parity (6 cases of 2 tests) |
+| `check_faces_finite` | the refusal removed: the faces finite | parity (4 cases of 4 tests) |
 | `check_conditions_finite` | the refusal removed: a condition finite | parity (11 cases of 2 tests) |
 | `check_conditions_solid` | the refusal removed: a condition naming a SOLID cell | parity (2 cases of 1 tests) |
-| `check_inflow_edges` | the refusal removed: an inflow value on the domain's faces positive | parity (8 cases of 1 tests) |
-| `check_inflow_vents` | the refusal removed: an inflow value on the vents' faces positive | parity (4 cases of 1 tests) |
-| `check_eps_wall` | the refusal removed: the held eps positive | parity (1 cases of 1 tests) |
+| `check_inflow_edges` | the refusal removed: an inflow value on the domain's faces positive | parity (9 cases of 2 tests) |
+| `check_inflow_vents` | the refusal removed: an inflow value on the vents' faces positive | parity (5 cases of 2 tests) |
+| `check_eps_wall` | the refusal removed: the held eps positive | parity (3 cases of 3 tests) |
 | `check_production` | the refusal removed: the given production not negative | parity (1 cases of 1 tests) |
 | `check_true_time` | the refusal removed: a true-time step | parity (5 cases of 1 tests) |
 | `check_other_grid` | the refusal removed: a boundary on another grid | parity (2 cases of 1 tests) |
@@ -553,17 +578,35 @@ give different ones (F2). And a run of the core is the same on both.
 | `check_model_vents` | the refusal removed: vents in some directions | CTest (1); parity (exit -11) |
 | `check_walls_conditions_length` | the refusal removed: the lengths of the conditions' arguments | CTest (1) |
 | `check_model_tangential_length` | the refusal removed: the lengths of the tangential velocities | CTest (1) |
+| `bind_top_known` | the top edge's flags all known where the binding reads them | parity (55 cases of 1 tests) |
+| `bind_bottom_known` | the bottom edge's flags all known where the binding reads them | parity (72 cases of 1 tests) |
+| `bind_left_known` | the left edge's flags all known where the binding reads them | parity (70 cases of 1 tests) |
+| `bind_right_known` | the right edge's flags all known where the binding reads them | parity (71 cases of 1 tests); replay (backstep) |
+| `bind_advance_unchecked_faces` | the faces of `advance` read without the reference's check | parity (3 cases of 1 tests) |
+| `bind_advance_unchecked_conditions` | the conditions `advance` forms not checked | parity (4 cases of 2 tests) |
+| `check_formed_finite` | the refusal removed: a formed condition finite | parity (1 cases of 1 tests) |
+| `check_model_tol` | the refusal removed: the solves' tolerance finite and positive | CTest (1); parity (4 cases of 1 tests) |
+| `check_model_max_iter` | the refusal removed: the solves' cap at least one | CTest (1); parity (2 cases of 1 tests) |
+| `last_reset_on_nothing_moves` | a field at rest refused after the records are set | parity (1 cases of 1 tests) |
+| `stand_in_nan_dropped` | a NaN in the state not the stand-in beside a SOLID edge cell | parity (2 cases of 1 tests) |
+| `least_over_solid_too` | the least value of a failure read over the SOLID cells too | nothing: no failing step reached has a least value above zero: a failure is a value at or below zero or NaN, and an infinity from an overflow came with a NaN beside it (the tester's 52 failures by overflow), so the zeros of the SOLID cells change nothing |
+| `clear_solid_k_dropped` | k not cleared in SOLID cells after the solve | nothing: the solves leave a SOLID cell at the zero they start from, so clearing it again changes no bit |
+| `clear_solid_eps_dropped` | eps not cleared in SOLID cells after the solve | nothing: the solves leave a SOLID cell at the zero they start from, so clearing it again changes no bit |
 
-191 of 193 plants caught; not caught and not equivalent: none.
+202 of 207 plants caught; not caught and not equivalent: none.
 <!-- tables94 plants end -->
 
-The plants were built and run in three streams, each beginning with the unchanged source; the
-replay runs with NumPy's AVX-512 loops off. The first run left one plant that is not equivalent
+The plants were built and run in six streams at round 1's head, each beginning with the unchanged
+source; the replay runs with NumPy's AVX-512 loops off. Round 1 adds the tester's plants that no net
+caught (an edge's flags forced to all known where the binding hands them to the core, on each of the four
+edges; `advance`'s faces unchecked; the records reset by a call refused for a field at rest; the stand-in
+beside a SOLID cell not NaN where the state holds one), a plant for each check the round added (the
+conditions `advance` forms, the model's `tol` and `max_iter`), and the tester's three equivalent plants
+with their reasons. Before it, the first run left one plant that is not equivalent
 uncaught: the largest value that stands in beside a SOLID edge cell read over every cell
 (`inflow_stand_in_in_solid`), which a run's state, zero in SOLID cells, cannot show. The
 reference's boundary makes no check of the state, so a planted one that is not zero there tells the
-two apart, and `test_the_largest_value_is_read_over_the_non_solid_cells` holds it; T7's row is that
-plant's run after the test was added. A plant in the last bit alone (`square_by_product`, for
+two apart, and `test_the_largest_value_is_read_over_the_non_solid_cells` holds it. A plant in the last bit alone (`square_by_product`, for
 Python's square of a float) is caught by the draws of `test_inflow_values_equal_the_reference`,
 which are many for that reason. `floor_wrong_constants` fails the floor's own tests and no other: the
 floor the boundary reads is handed in from the reference's constants.
@@ -640,10 +683,12 @@ conditions in place and hands the step its own arrays.
 Prediction (d) fails in every session, scored and beside (T8). T8b says where the time is: the two
 solves are about four fifths of the core's step and are prompt 88's and 89's kernels, unchanged here,
 and run between three and four times as fast as the reference's; everything else in the step is more
-than five times as fast in every session, in the core's two calls and more so in its one, which neither
-copies the conditions' twelve arrays out nor reads and checks them again. Sessions 1 to 3 are the
-reference as NumPy runs by default, the state the scoring rule names; sessions 4 to 6, timed a minute
-before them, have the AVX-512 loops off, and the reference's conditions are slower in them.
+than five times as fast in every session, in the core's two calls and more so in its one, which does not
+copy the conditions' twelve arrays out. Sessions 1 to 3 are the reference as NumPy runs by default, the
+state the scoring rule names; sessions 4 to 6, timed a minute before them, have the AVX-512 loops off, and
+the reference's conditions are slower in them. T8's one-call columns were timed at 9b356e5, before round 1
+made `advance` check the conditions it forms, as `step` does; T10 times the two builds against each other
+and the check shows no cost beside the timings' own spread.
 
 <!-- tables94 loops begin -->
 ### T9. The blocks GCC vectorises
@@ -674,13 +719,55 @@ before them, have the AVX-512 loops off, and the reference's conditions are slow
 g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; -std=c++20 -O2 -ffp-contract=off -march=x86-64-v3 -DNDEBUG. 19 of 20 blocks vectorised, with vectors of 32 bytes.
 <!-- tables94 loops end -->
 
+## 7. Round 1 (prompt 94b)
+
+Review 94 (APPROVE, eight suggestions) and test 94 (a missing-test Bug and three suggestions) found no
+wrong result in the port. This pass pins what they found unpinned, and changes what they named.
+
+- **An open top or left edge (test B1).** The small rooms had a pressure outlet on the bottom and the
+  right edge only, so a binding that read the top or the left edge's flags as all known passed every test.
+  They have one on every edge now, `test_the_small_rooms_are_open_on_every_edge` says so, and the hand
+  test's edge values differ from every face beside them. The plants of the four edges at the binding are
+  caught (T7).
+- **`advance`'s checks (review S4, test S1).** It now makes the checks `step` makes of the conditions its
+  boundary forms, so a state whose wall values underflow is the reference's `ValueError` (the message
+  included) and not a positivity failure; its refusals of the state and the faces are tested against
+  the reference's, and so is their order.
+- **The model's numbers (review S5).** `tol` and `max_iter` are bounded where the model is built, as
+  `SimConfig` bounds them, with tests of each refusal.
+- **The records and the stand-in (test S2).** Tests hold the counts through a refused call, and a NaN in
+  the state as the stand-in beside a SOLID edge cell.
+- **Kernels (review S2, S3).** The list of loops that are not blocks is complete and the maxima are
+  written as the Kernels rule names, one of them not, with its measure (section 1; T10). Four writers'
+  headers say that their output overlaps no input, and the comment of `volume()` says what it returns.
+- **GoogleTest files (review S7)** for `elementary` and `positions`; `positions` at three directions is
+  in the three-directions program, where the layout is built.
+
+<!-- tables94 kernels begin -->
+### T10. Round 1's kernels against the commit before
+
+| File | Loops GCC vectorises at 9b356e5 | Now |
+|---|---|---|
+| `turbulence.cpp` | 46 | 46 |
+| `walls.cpp` | 3 | 3 |
+
+| Call | 9b356e5, ms, by round | Now, ms, by round |
+|---|---|---|
+| `pseudo_time_step` | 0.206, 0.192, 0.202 | 0.191, 0.178, 0.185 |
+| `conditions` | 0.904, 1.160, 0.903 | 0.823, 0.808, 0.815 |
+| `step` | 11.373, 11.979, 11.955 | 10.757, 9.273, 10.585 |
+| `advance` | 10.791, 11.354, 11.414 | 10.106, 10.087, 10.294 |
+
+320x120 product state, one thread, NumPy's AVX-512 loops off, builds alternated; head is 9b356e5's core, now is the working tree's.
+<!-- tables94 kernels end -->
+
 ## Findings
 
 - **F1, the reference's logarithm and cube are NumPy's own on a processor with AVX-512.** No earlier
   module called one: the flux, the solves, the predictor and the correction are arithmetic, which is the
-  same everywhere. ADR-017 G fixes the order of sums and says nothing of elementary functions; Alex's
-  decision (above) is recorded here and in `docs/SYSTEM.md`, and its text in ADR-017 is the
-  orchestrator's.
+  same everywhere. ADR-017 G fixed the order of sums and said nothing of elementary functions until
+  round 1; Alex's decision (above) is recorded here, in `docs/SYSTEM.md` and in ADR-017 G. ADR-017 C's
+  table does not list `elementary` and `positions` yet, which is the orchestrator's.
 - **F2, the reference's runs of record depend on the machine's vector level.** A coupled solve's eps in
   the wall cells and, under RNG, its R carry NumPy's rounding, so the same NumPy gives other last bits
   without AVX-512. The size is T6's, at rounding; level 2's band is what judges it. NumPy under
@@ -692,7 +779,11 @@ g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; -std=c++20 -O2 -ffp-contract=off -m
 - **F4, the CG rule holds on every captured step and from rest, and not on states planted over decades**
   (T4, T4b, T5). Where a field is beyond 1e-12 there the two sides' systems are the same bits, so the
   difference is the dot products' order alone, amplified by the system; no fallback was taken on one side
-  only.
+  only in T5's solves. Test 94's fuzz of random rooms (900 rooms, `docs/prompts/test-94.md`) found eight
+  one-sided fallbacks, all on inputs over decades or at a cap of three, and at equal counts fields beyond
+  1e-12 (the largest 2.1e-09); on each the core's result is still its own solve of the system the
+  reference handed its solver. The rule is asserted on the states a run produces (its 21,616 solves of 19
+  real solves, the 100 captured), and reported, not asserted, on the rest.
 - **F5, (d)'s limit is the conjugate gradient iteration**, as it was for the pressure correction
   (`phase6_pressure.md`, section 6). A faster step 5 would come from that kernel.
 
@@ -700,19 +791,23 @@ g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; -std=c++20 -O2 -ffp-contract=off -m
 
 - **RNG is compared on planted inputs only.** The captured cases the prompt names are the standard
   variant's, and no product run uses RNG.
-- **On planted systems over decades the CG rule does not hold everywhere** (T5). A count that differs
-  there is recorded; every captured solve keeps it.
+- **On planted systems over decades the CG rule does not hold everywhere** (T5, and F4's fuzz). A count
+  that differs there is recorded; every captured solve keeps it.
 - **A step's counts and fallbacks are the binding's attributes** (`last_iterations`, `last_fallbacks`,
-  `solves_converged`), as the reference's, and are left as they were by a call that is refused.
+  `solves_converged`), as the reference's, and are left as they were by a call that is refused before
+  its solves (a test holds it); a positivity failure leaves them as the failed step set them, as the
+  reference's do.
 - **A least value of zero in a positivity failure's message may print with the other sign** where a field
   holds both zeros: `np.min`'s tie across its vector lanes is not copied.
 - **The core's model and boundary refuse a width, a constant or an inlet's length or width that is not
-  finite and positive**, which the reference leaves to `SimConfig`; a limiter's or a solve's number is
-  read as the binding reads numbers (a bool is a `TypeError`).
+  finite and positive**, and a `tol` that is not, or a `max_iter` below one, which the reference leaves
+  to `SimConfig`; a limiter's or a solve's number is read as the binding reads numbers (a bool is a
+  `TypeError`).
 - **`walls` does not hold the outlets' extrapolation**, which ADR-017 C's table lists under it: it is
   `boundary_staggered.py`'s and the outer iteration's, step 5's second half.
 - **The timings are of this machine in the state T8 records**, with the local model server's process open
-  and idle, not closed by the builder; no game. NumPy's AVX-512 loops are off in them.
+  and idle, not closed by the builder; no game. NumPy's AVX-512 loops are on in sessions 1 to 3 and off
+  in sessions 4 to 6 (T8).
 - **The binding's calls allocate their outputs**, which the run object of step 5's second half will not;
   the core allocates nothing in a call.
 - **Compiled with GCC 13.3 only.** CI's runner is the check of its own GCC, and says nothing of which
@@ -722,12 +817,14 @@ g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; -std=c++20 -O2 -ffp-contract=off -m
 ## Files
 
 - `core/include/cfdcore/turbulence.hpp`, `walls.hpp`, `elementary.hpp`, `positions.hpp` and their
-  sources; `core/tests/test_turbulence.cpp`, `test_walls.cpp`, `test_three_directions.cpp`;
+  sources; `core/tests/test_turbulence.cpp`, `test_walls.cpp`, `test_elementary.cpp`,
+  `test_positions.cpp`, `test_three_directions.cpp`;
   `core/python/bindings.cpp` (`KEpsilon2`, `TurbulenceBoundary2`, `PositivityFailure`, `log_law_floor`,
   `wall_viscosity`, `inflow_values`); `core/CMakeLists.txt`.
 - `tests/test_core_turbulence.py`, `tests/core_mapping.py` (the model's and the boundary's construction,
   the inlet faces, the results and the positivity failure), `.github/workflows/ci.yml`.
-- `docs/reports/probe94/`: `probe94.py`, `variants94.py`, `tables94.py`, `tables94.md`.
+- `docs/reports/probe94/`: `probe94.py`, `variants94.py`, `tables94.py`, `tables94.md`,
+  `bench_max.cpp`.
 - `results/builder94/` (untracked): the captures, `replay.json`, `replay_default.json`,
-  `elementary*.json`, `planted.json`, `timing_1.json` to `timing_3.json`, `plants_s*.json`,
-  `vecinfo.json`, `product80_umist.yaml`, the JUnit files, the scripts and logs.
+  `elementary*.json`, `planted.json`, `timing_1.json` to `timing_6.json`, `plants_s*.json`,
+  `round1_kernels.json`, `vecinfo.json`, `product80_umist.yaml`, the JUnit files, the scripts and logs.

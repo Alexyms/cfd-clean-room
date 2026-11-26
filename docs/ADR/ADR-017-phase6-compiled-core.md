@@ -512,6 +512,24 @@ bit, and p' is judged by the CG rule; the chain's own differences, which a block
 amplify (a velocity formed from a difference of nearby p' values), are reported and judged at
 level 2. Amended in `docs/SYSTEM.md`'s REQ-N03 the same day.
 
+**The elementary functions (Alex, 2026-11-25, after prompt 94).** The turbulence model and the wall
+functions are the first modules whose elementwise blocks call a logarithm or a power: the reference's
+`np.log` and its cubes `x**3` on arrays, and `c_mu**0.25`, `k**1.5` and `x**2` on Python's floats. The
+core calls the C library's `log` and `pow`, behind two functions of the module `elementary` in a source
+file of their own, so that the compiler does not replace a power of a known exponent by the products it
+expands one to. NumPy calls the C library for both too, except on a processor with AVX-512, where it
+forms `np.log` and the cube with loops of its own (an assembly routine of Intel's SVML for the cube) that
+differ from the C library's by one unit in the last place on some values
+(`docs/reports/phase6_turbulence.md`, T6). The core's bit-for-bit target for these blocks is the Python
+reference at the x86-64-v3 level the core builds for (`-march=x86-64-v3`, CLAUDE.md): NumPy with its
+AVX-512 loops off (`NPY_DISABLE_CPU_FEATURES=X86_V4`), where NumPy calls the C library too. The parity
+tests of those blocks ask for that level (the fixture `libm_numpy`; CI's core job sets the variable;
+elsewhere they skip, or fail under `CFD_CORE_REQUIRED=1`). With the loops on, the reference's own results
+depend on the processor (the report's F2: a coupled solve's eps in the wall cells and, under RNG, its R
+carry NumPy's rounding); those differences are measured and reported, and judged at level 2, and a test
+of level 1's bound of 1e-12 runs in every environment. Amended in `docs/SYSTEM.md`'s contract row the
+same day.
+
 **ADR-016's "exactly".** ADR-016 asks the port to reproduce the implicit stop exactly. At level 1
 it does: given the reference's inputs, the copied order gives the same leftover and the same
 sweep, bit for bit. In a whole run the stop's inputs carry the upstream blocks' rounding, so the
