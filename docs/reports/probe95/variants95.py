@@ -194,7 +194,7 @@ OWN: list[Plant] = [
         "the chunks not cut to one outer iteration while on_iteration is given",
         DRIVER,
         "            if on_iteration is not None:\n                n = 1\n",
-        "",
+        "            if on_iteration is not None:\n                pass\n",
     ),
     one(
         "diverged_state_kept",

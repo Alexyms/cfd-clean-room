@@ -287,7 +287,7 @@ def planted() -> list[str]:
     lines = [
         "### T6. Planted defects",
         "",
-        "Each built in a scratch tree from the branch: the first run at the port's commit (775353c), and the five plants it left alive with the one that did not build there again after the test commit (aa92c9d), whose rows these are. Caught where CTest, `tests/test_core_flow.py` or the turbulence module's section 0 tests fail; the first failing tests are named.",
+        "Each built in a scratch tree from the branch: the first run at the port's commit (775353c), and again after the test commit (aa92c9d) the five plants it left alive, the one that did not build there and the one whose first form left the driver unable to import (both mended), whose rows these are. Caught where CTest, `tests/test_core_flow.py` or the turbulence module's section 0 tests fail; the first failing tests are named.",
         "",
         "| plant | what it changes | caught | first failing tests |",
         "|---|---|---|---|",
