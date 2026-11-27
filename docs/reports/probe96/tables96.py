@@ -229,15 +229,18 @@ def decisions_table(r: Records) -> tuple[list[str], bool]:
         for i in items(r.pair(name, "backends"), "decision"):
             d = i["detail"]
             equal = equal and i["passed"]
+            reach = "-"
             if "compared" in d:
                 text = f"{d['compared']:,}"
                 moves = f"{d['moved one']} / {d['moved more']} / {d['one only']}"
+                if "reached, ref" in d:
+                    reach = f"{d['reached, ref']:,} / {d['reached, other']:,}"
             else:
                 ref, other = (
                     ("ref", "other") if "ref" in d else ("ref steps", "other steps")
                 )
                 text, moves = f"{d[ref]} / {d[other]}", "-"
-            rows.append([LABELS[name], i["name"], text, moves, yes(i["passed"])])
+            rows.append([LABELS[name], i["name"], text, moves, reach, yes(i["passed"])])
     return (
         [
             "### T3. Every decision, the core against the reference",
@@ -248,12 +251,13 @@ def decisions_table(r: Records) -> tuple[list[str], bool]:
                     "decision",
                     "compared, or ref / core",
                     "moved 1 / > 1 / one only",
+                    "reached, ref / core",
                     "equal",
                 ],
                 rows,
             ),
             "",
-            "`scripts/compare_runs.py`: a time moves by its difference over the step of the reference's run at the later of the two (the arrival maps per event, channel and cell; the file's sensors' latencies per event, channel and sensor, by `AlertMonitor.latencies` on the alert table; the clean-out's recovery times), a clear time over its unit's frame spacing, an alert's opening and closing step by the step; one only is a time reached in one run and never in the other. The budget verdict is each class's residual and leftover against REQ-T05 at the end.",
+            "`scripts/compare_runs.py`: a decision is equal only when it falls at the same step or the same frame, so a time moves by the difference of the indexes of the steps it falls on (the arrival maps per event, channel and cell; the file's sensors' latencies per event, channel and sensor, by `AlertMonitor.latencies` on the alert table; the clean-out's recovery times), a clear time by that of the stored frames, an alert's opening and closing step by the step; one only is a time reached in one run and never in the other. The budget verdict is each class's residual and leftover against REQ-T05 at the end. Reached is how many of the compared entries each run reaches: the finite arrival times, latencies and recovery times, the alerts, and the cells and channels read at or above a threshold after t_e (a clear time of t_e itself is a cell nothing reached). A decision no run reaches compares as no move, so the column says what \"every decision equal\" covers.",
         ],
         equal,
     )
@@ -359,7 +363,7 @@ def bitwise_table(
             [
                 names.get(label, label),
                 *[yes(flags.get(f, True)) for f in BITWISE],
-                yes(flags.get("recovery", True)),
+                yes(flags["recovery"]) if "recovery" in flags else "n/a",
                 pair["verdict"],
             ]
         )

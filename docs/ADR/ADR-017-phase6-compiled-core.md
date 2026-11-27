@@ -610,6 +610,16 @@ the reference's when:
 3. *every stop is within one of the reference's*: the outer count of each flow state, and the
    CG and Jacobi counts are reported beside, not judged.
 
+**The comparator as built** (`scripts/compare_runs.py`, prompts 96 and 96b). The outer count
+one apart explains a flow field only. An outer count one apart moved the class fields (the
+concentration per frame and pointwise, the sensor channels, the leftover's change) by 2.7e-11 at
+most in the probe, inside their first tier, and what moved them further was a Jacobi sweep, whose
+count a run file does not record; so a class field between its spread and its limit is read as
+beyond the limit, its line says so, and it goes to the step's report. A decision is equal only
+when it falls at the same step or the same frame: a time in steps and a clear time are compared
+by the index of the step or frame each falls on, and a move across the last two frames, which lie
+closer together than the rest, is one.
+
 The factor of ten is a choice, not a measurement. Each variant changed one thing; a port
 changes all its reductions at once, and the stops that sit within rounding of their thresholds
 may flip together. The probe scaled the thresholds of two of the five stops by 1% (the pressure
