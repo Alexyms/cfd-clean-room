@@ -3,7 +3,8 @@
 **Date:** 2026-11-26
 **Prompt:** 97 (`docs/prompts/cc-prompt-97-end-to-end.md`)
 **Branch:** `phase6/end-to-end`
-**Status:** predictions committed; no run made yet.
+**Status:** prompt 97 stopped at item 1 (a 320x120 spread beyond its limit); prompt 97b's
+predictions committed; the sweep-count probe not run yet.
 
 This is the second half of Phase 6 step 6 (`docs/PROJECT_PLAN.md`, Phase 6, the steps table;
 ADR-017 F and H): the noise band measured on the product grid, REQ-N03 level 2 on the five
@@ -85,3 +86,56 @@ from another run's file (`--flows-from`) is named in the report's table of runs,
   Holds when the reference's wall time over the core's is at least 8.
 
 A failed prediction is a finding, recorded and scored as such.
+
+## Prompt 97b: the sweep counts behind the 320x120 spread
+
+**Date:** 2026-11-27
+**Prompt:** 97b (`docs/prompts/cc-prompt-97b-sweep-counts.md`)
+
+Prompt 97 stopped at item 1. On the 320x120 dust release, `diffusion_tol` times 0.99 moved the
+pointwise concentration by 4.8e-6 (limit 1e-6) and the leftover's change by 7.6e-8 of the supply
+(limit 1e-8); on the probe's grids the same variant moved them by 5.8e-8 and 3.6e-10.
+
+**Alex's decision (2026-11-27).** The 320x120 limits are not set until the mechanism behind the
+spread is measured. The hypothesis (H1, the orchestrator's): a tolerance 1% tighter makes some
+steps' implicit solves take one more Jacobi sweep; a finer grid's sweep contracts less, so more
+steps land inside that 1% and more stops flip, and the spread grows with the number flipped. A
+port's rounding flips a stop only within rounding of the tolerance, so the variant may overstate
+what a port does; the measurement says by how much.
+
+### Prompt 97b's predictions
+
+Set by the orchestrator in prompt 97b, and committed alone before the probe runs.
+
+- (f) Each instrumented run that has a run of record on this machine is that run bit for bit (the
+  160x60 variant has none; its base does).
+- (g) Every class field's first difference falls at or after a step whose sweep count differs, on
+  both grids (H1; refuted if a field differs before any count does).
+- (h) The share of class-steps whose count differs is larger on 320x120 than on 160x60.
+
+If (f) or (g) fails, the probe records it and stops: the spread then has another cause, and it
+goes to Alex.
+
+### How they are scored (the builder, before the probe runs)
+
+The probe is `docs/reports/probe97/sweeps97.py`. It runs the reference's dust release, as it is
+and with `diffusion_tol` times 0.99, on 320x120 and on 160x60, and the door leak as it is on
+320x120, each through `run_scenario.main` in one process with the run's flow states from its run
+of record (`--flows-from`), so that only the march is computed. The instrument wraps the Jacobi
+solve's acceptance object in the probe's process and records, for every step and class, the
+sweeps, what stopped the solve (the max-norm test with the leftover within its bound at the first
+sweep that met it, the leftover's bound at a later sweep, or the cap), the stopping residual over
+`diffusion_tol` times the largest right-hand side, and the leftover over its bound. It reads the
+arrays the solve forms and computes nothing the solve returns.
+
+- **(f).** Each instrumented run's file against its run of record in `results/builder97/runs/`
+  (the reference's dust release and door leak on 320x120, the variant's dust release on 320x120,
+  the reference's dust release on 160x60): every stored frame of every class field, every sensor
+  channel and every budget term equal bit for bit. Holds when all four are.
+- **(g).** Per grid and class, the first step whose sweep count differs between base and
+  variant, and the first stored frame at which the class field differs (the probe's runs, each
+  frame against the other side's). Holds when, on both grids and for every class whose field
+  differs, the first differing count's step is at or before the step of the first differing
+  frame. A class whose field never differs is reported and does not count against it.
+- **(h).** The class-steps whose sweep count differs over all class-steps of the run, per grid.
+  Holds when the 320x120 share is larger than the 160x60 share.
