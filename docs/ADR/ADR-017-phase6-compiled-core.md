@@ -643,6 +643,24 @@ warm-started flow state, so the band holds no flow switch (review 85 S13). The e
 320x120 dust release and door leak, the door leak for its two flow states (both converge on
 320x120, `docs/reports/rerun79.md`), before it scores the core against the band there.
 
+**On 320x120, as built (2026-11-27, prompts 97 and 97b; `docs/reports/phase6_end_to_end.md`,
+tables T2 and T15 to T22).** The limits above are unchanged. The four variant runs measured the
+320x120 spread, which the comparator reads as the first tier on that grid. The flow fields'
+spread is below the probe's, and so are the sensor channels'. Under `diffusion_tol` times 0.99
+the dust release moved the class fields pointwise and the leftover's change beyond their
+limits, with no decision moved. The sweep counts show the cause. In every flipped class-step
+the variant took one Jacobi sweep more. Each class field first differs at the step whose count
+first differs. The leftover's change at the end is the sum of the flips' one-step changes. The
+flips fall after the release, where the stopping residual sits at nearly the same fraction of
+its threshold at every step: on 320x120 that fraction lies just outside the 1% the variant
+moves, on 160x60 far from it. One flipped stop moves the class fields by about what review 85
+S2 read the 2.7e-8 as, so the current class limits are ten times one flip, rounded up. No stop
+of the 320x120 base runs lies within 1e-6 of its threshold, and the core's five 320x120 runs
+stay inside the first tier with fields near 1e-13. The 320x120 limits, ADR-017 H's rule on
+that spread (pointwise 1e-4, the leftover 1e-6), are proposed to Alex with a limit per flipped
+stop as the other reading. Neither is applied here, and neither changes any verdict of the
+seven pairs of the backends.
+
 **What a result outside the band means.**
 
 - *A decision differs and its reading is not marginal*: the port computes something the
