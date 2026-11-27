@@ -15,10 +15,10 @@ items are its three criteria:
    so each sensor's latency (``AlertMonitor.latencies`` on the table), each
    clear time of the all-clear units at its frame (``placement.clear_units``),
    the clean-out's recovery times, the run's end (steps, time, the hold), and
-   every class's verdict against REQ-T05; a time moves by its difference over
-   the step of the reference's run at the later of the two, a clear time by
-   its difference over the unit's frame spacing, and a time reached in one run
-   only is a move of infinity;
+   every class's verdict against REQ-T05; a decision is equal only when it
+   falls at the same step or the same frame, so a time in steps moves by the
+   difference of the indexes of the steps it falls on, a clear time by that of
+   the stored frames, and a time reached in one run only is a move of infinity;
 2. *every field inside its limit*, read in the three tiers: each flow field of
    each flow state, the class fields over every stored frame (and pointwise
    where the reference reads at least a hundredth of the class's threshold),
@@ -29,11 +29,13 @@ items are its three criteria:
 3. *every stop within one*: each flow state's outer count and stop reason.
 
 A field between its measured spread and its limit passes only when the stop
-counts explain it (ADR-017 H): here, when some flow state's outer count differs
-by one and none by more, the kind of change that moved the probe's fields that
-far. The CG and Jacobi counts are not in a run file, so no class field's middle
-tier is explained by them; such a field is read as beyond the limit, and goes to
-the step's report.
+counts explain it (ADR-017 H). A flow field is explained when some flow state's
+outer count differs by one and none by more, the kind of change that moved the
+probe's flow fields that far. A class field (the concentration, the sensor
+channels, the leftover's change) is not: an outer count one apart moved them by
+2.7e-11 at most in the probe, inside their first tier, and what moved them
+further was a Jacobi sweep, whose count a run file does not record. Such a field
+is read as beyond the limit, its line says so, and it goes to the step's report.
 
 ``compare_placement`` gives the decisions that read several scenarios at once:
 the searched layouts' cells under each rule and pool, their order, and every
@@ -42,7 +44,8 @@ unit's latency of the file's four sensors and of each searched layout.
 The measures and their tests come from prompt 85's probe
 (``docs/reports/probe85/tables85.py``), with what test 85 S1 found unpinned
 pinned in ``tests/test_compare_runs.py``: the signs, a move that straddles a
-threshold, a field in each tier and a failing verdict of each kind. Prompt 96
+threshold, a field in each tier and a failing verdict of each kind, and (test 96
+B2) a planted run-file test for every item the comparator reports. Prompt 96
 built it; step 6b scores 320x120 with it.
 """
 
@@ -67,10 +70,16 @@ from src.config import (  # noqa: E402 -- follows sys.path.insert
     WORST_CASE,
     SimConfig,
 )
-from src.io_manager import OPEN_STEP, RunFile  # noqa: E402 -- follows sys.path.insert
+from src.io_manager import (  # noqa: E402 -- follows sys.path.insert
+    OPEN_STEP,
+    AlertTable,
+    RecoveryRecord,
+    RunFile,
+)
 from src.mesh import Mesh  # noqa: E402 -- follows sys.path.insert
-from src.monitor import ALERT_COLUMNS, AlertMonitor  # noqa: E402
+from src.monitor import ALERT_COLUMNS, AlertMonitor, sensor_cells  # noqa: E402
 from src.placement import (  # noqa: E402 -- follows sys.path.insert
+    ClearUnits,
     RunArrival,
     arrival_from_run,
     candidates,
@@ -83,6 +92,7 @@ from src.placement import (  # noqa: E402 -- follows sys.path.insert
     search,
 )
 from src.solver_staggered import FlowState  # noqa: E402 -- follows sys.path.insert
+from src.solver_transport import MassBudget  # noqa: E402 -- follows sys.path.insert
 
 # ADR-017 H: (the measured spread, the limit) per field. The spreads are the
 # largest prompt 85's probe measured (its P8; the sensor channels P2's, as
@@ -121,6 +131,8 @@ DECISION, FIELD, STOP, CLOSED, BUDGET = (
     "a budget that does not close",
     "a budget verdict differs",
 )
+# Why a class field between its spread and its limit fails.
+MIDDLE_TIER_NOTE = "middle tier, not explained by the run file: for the step's report"
 RULES = (WORST_CASE, MEAN)
 FILE_LAYOUT, SURFACE, STAND, FREE = "the file's four", "surface", "product", "free"
 
@@ -191,30 +203,38 @@ def tier(value: float, name: str) -> str:
     return BEYOND
 
 
-def step_of(times: np.ndarray, t: np.ndarray) -> np.ndarray:
-    """The step that ends at each time T: its length in the run whose step TIMES are given.
+def grid_index(grid: np.ndarray, t: np.ndarray) -> np.ndarray:
+    """The index of the grid time each time T falls on (a step or a stored frame).
 
     Parameters
     ----------
-    times : np.ndarray
-        [n] the run's step times, increasing, its first the time before the
-        first step (0, or a restart's checkpoint).
+    grid : np.ndarray
+        [n] increasing times: a run's step times, or the stored frames' times
+        from a clear time's unit on. Its first entry may lie a little after a
+        time that is read as the first (a clear time of ``t_e`` itself).
     t : np.ndarray
-        Times to place, any shape; each in (times[0], times[-1]] reads the
-        step from the time before it to the first step time at or after it, a
-        time at or before times[0] the first step's.
+        Times to place, any shape; finite, inf for never, NaN where there is
+        none.
 
     Returns
     -------
     np.ndarray
-        The steps' lengths, of t's shape.
+        The index of the nearest grid time, as float, of t's shape; inf and
+        NaN as given. The nearest, not the first at or after, so that a time
+        that was added to and subtracted from (``latency + onset``) and so is
+        a rounding off its step still falls on that step.
     """
-    times = np.asarray(times, dtype=np.float64)
-    if times.size < 2:
-        raise ValueError("a run's step times need at least two entries")
-    lengths = np.diff(times)
-    index = np.searchsorted(times, np.asarray(t, dtype=np.float64), side="left") - 1
-    return lengths[np.clip(index, 0, lengths.size - 1)]
+    grid = np.asarray(grid, dtype=np.float64)
+    if grid.size < 1:
+        raise ValueError("a grid of times needs at least one entry")
+    t = np.asarray(t, dtype=np.float64)
+    out = np.array(t, copy=True)
+    finite = np.isfinite(t)
+    above = np.clip(np.searchsorted(grid, t[finite]), 0, grid.size - 1)
+    below = np.maximum(above - 1, 0)
+    nearer_below = np.abs(t[finite] - grid[below]) < np.abs(t[finite] - grid[above])
+    out[finite] = np.where(nearer_below, below, above)
+    return out
 
 
 def moved(
@@ -251,13 +271,35 @@ def moved(
     return out
 
 
-def step_moves(ref: np.ndarray, other: np.ndarray, times: np.ndarray) -> np.ndarray:
-    """Times moved in steps of the reference's run at the later of the two (``moved``)."""
-    ref = np.asarray(ref, dtype=np.float64)
-    other = np.asarray(other, dtype=np.float64)
-    later = np.where(np.isfinite(other) & (other > ref), other, ref)
-    later = np.where(np.isfinite(later), later, times[-1])
-    return moved(ref, other, step_of(times, later))
+def index_moves(
+    ref: np.ndarray,
+    other: np.ndarray,
+    grid_ref: np.ndarray,
+    grid_other: np.ndarray | None = None,
+) -> np.ndarray:
+    """How many steps or frames each time moved, by the index each falls on.
+
+    A decision is equal only when it falls at the same step or the same frame
+    (ADR-017 H, item 1), so a move is the difference of the two indexes, a
+    whole number, and never a fraction of a unit that rounds to none.
+
+    Parameters
+    ----------
+    ref, other : np.ndarray
+        Times of one shape, as ``moved`` reads them.
+    grid_ref : np.ndarray
+        [n] the reference's step times, or the frames' times of a clear time's
+        unit.
+    grid_other : np.ndarray, optional
+        The other run's; ``grid_ref`` when None.
+
+    Returns
+    -------
+    np.ndarray
+        ``moved`` of the two indexes with a unit of 1.
+    """
+    other_grid = grid_ref if grid_other is None else grid_other
+    return moved(grid_index(grid_ref, ref), grid_index(other_grid, other), 1.0)
 
 
 @dataclass(frozen=True)
@@ -269,7 +311,7 @@ class Moves:
     compared : int
         The decisions compared (NaN entries left out).
     one, more : int
-        Moved by one unit, and by more, rounded to the nearest.
+        Moved by one step or frame, and by more.
     only : int
         Reached in one run only.
     largest : float
@@ -289,15 +331,18 @@ class Moves:
 
     @classmethod
     def of(cls, steps: np.ndarray) -> "Moves":
-        """The counts of an array of moves (``moved``'s units)."""
+        """The counts of an array of moves (``index_moves``'s whole numbers).
+
+        A move of any size up to one counts as one, so that a fraction of a
+        unit never reads as no move.
+        """
         s = np.asarray(steps, dtype=np.float64).ravel()
         s = s[~np.isnan(s)]
         finite = s[np.isfinite(s)]
-        whole = np.rint(finite)
         return cls(
             compared=int(s.size),
-            one=int((whole == 1).sum()),
-            more=int((whole > 1).sum()),
+            one=int(((finite > 0.0) & (finite <= 1.0)).sum()),
+            more=int((finite > 1.0).sum()),
             only=int(np.isinf(s).sum()),
             largest=float(finite.max()) if finite.size else 0.0,
         )
@@ -600,24 +645,53 @@ def _explained(stops: Sequence[Item]) -> bool:
     return bool(aparts) and max(aparts) == 1
 
 
-def _field(name: str, value: float, band: str, explained: bool, where: str) -> Item:
-    """A field item read in its tiers."""
+def _field(
+    name: str,
+    value: float,
+    band: str,
+    explained: bool,
+    where: str,
+    *,
+    explainable: bool = True,
+) -> Item:
+    """A field item read in its tiers.
+
+    Parameters
+    ----------
+    name : str
+        The field's name.
+    value : float
+        Its largest difference over the reference's largest magnitude.
+    band : str
+        The key of ``BAND`` it is read against.
+    explained : bool
+        Whether the flow states' outer counts explain a middle-tier value
+        (``_explained``).
+    where : str
+        Text added to the item's name.
+    explainable : bool
+        False for a class field and the sensor channels, whose middle tier
+        the outer counts never explain: an outer count one apart moved the
+        probe's class fields by 2.7e-11 at most (docs/reports/phase6_design.md,
+        the outer-stop variant), and what moved them further was a Jacobi
+        sweep, which a run file does not record (ADR-017 H). Such a value
+        between its spread and its limit fails and says why.
+    """
     level = tier(value, band)
-    passed = level == INSIDE or (level == BETWEEN and explained)
+    passed = level == INSIDE or (level == BETWEEN and explained and explainable)
     spread, limit = BAND[band]
-    return Item(
-        "field",
-        f"{name}{where}",
-        passed,
-        {
-            "kind": FIELD,
-            "difference": value,
-            "spread": spread,
-            "limit": limit,
-            "tier": level,
-            "explained by the stops": explained if level == BETWEEN else None,
-        },
-    )
+    detail: dict[str, object] = {
+        "kind": FIELD,
+        "difference": value,
+        "spread": spread,
+        "limit": limit,
+        "tier": level,
+        "explained by the stops": explained if level == BETWEEN else None,
+    }
+    if level == BETWEEN and not explainable:
+        detail["explained by the stops"] = False
+        detail["note"] = MIDDLE_TIER_NOTE
+    return Item("field", f"{name}{where}", passed, detail)
 
 
 def compare_flows(ref: Run, other: Run, explained: bool) -> tuple[list[Item], bool]:
@@ -638,17 +712,19 @@ def compare_flows(ref: Run, other: Run, explained: bool) -> tuple[list[Item], bo
     return items, bitwise
 
 
-def compare_march(
-    ref: Run, other: Run, explained: bool
-) -> tuple[list[Item], dict[str, bool]]:
-    """The march's decisions, fields and closure; the records' bitwise flags."""
+def compare_march(ref: Run, other: Run) -> tuple[list[Item], dict[str, bool]]:
+    """The march's decisions, fields and closure; the records' bitwise flags.
+
+    Every field here is a class field, whose middle tier the flow states' outer
+    counts do not explain (``_field``).
+    """
     items: list[Item] = []
     flags: dict[str, bool] = {}
     if not (ref.marched and other.marched):
         items.append(_same("the march ran", ref.marched, other.marched))
         return items, flags
-    times = ref.step_times
-    flags["step times"] = same_bytes(times, other.step_times)
+    times, times_other = ref.step_times, other.step_times
+    flags["step times"] = same_bytes(times, times_other)
     items.append(
         Item(
             "decision",
@@ -657,7 +733,7 @@ def compare_march(
             {
                 "kind": DECISION,
                 "ref steps": int(times.size),
-                "other steps": int(other.step_times.size),
+                "other steps": int(times_other.size),
             },
         )
     )
@@ -680,7 +756,7 @@ def compare_march(
     items.append(
         _decision(
             "arrival times (events x channels x cells)",
-            Moves.of(step_moves(ar.maps, ao.maps, times)),
+            Moves.of(index_moves(ar.maps, ao.maps, times, times_other)),
         )
     )
     alerts_r, alerts_o = ref.alerts, other.alerts
@@ -699,18 +775,17 @@ def compare_march(
     items.append(
         _decision(
             "the file's sensors' latencies (events x channels x sensors)",
-            Moves.of(step_moves(lr + onsets, lo + onsets, times)),
+            Moves.of(index_moves(lr + onsets, lo + onsets, times, times_other)),
         )
     )
     # Clear times, and the clean-out's recovery times.
     if scenario_end(ref.config) is not None:
         cr = clear_units({"run": ref.path})
         co = clear_units({"run": other.path})
-        spacing = cr.spacing[:, None, None]
         items.append(
             _decision(
                 "cells' clear times (channels x cells)",
-                Moves.of(moved(cr.clear, co.clear, spacing)),
+                Moves.of(_frame_moves(cr, co, cr.clear, co.clear)),
             )
         )
         room_r, _ = room_clear(cr)
@@ -718,7 +793,7 @@ def compare_march(
         items.append(
             _decision(
                 "room clear times (channels)",
-                Moves.of(moved(room_r, room_o, cr.spacing)),
+                Moves.of(_frame_moves(cr, co, room_r, room_o)),
             )
         )
     if rr is not None and ro is not None:
@@ -727,7 +802,7 @@ def compare_march(
         items.append(
             _decision(
                 "recovery times (room, channels, sensors, means)",
-                Moves.of(step_moves(recovery_r, recovery_o, times)),
+                Moves.of(index_moves(recovery_r, recovery_o, times, times_other)),
             )
         )
         flags["recovery"] = same_bytes(recovery_r, recovery_o) and same_bytes(
@@ -771,7 +846,12 @@ def compare_march(
     change = _leftover_change(end_r, end_o)
     items.append(
         _field(
-            "leftover / supplied, change at the end", change, LEFTOVER, explained, ""
+            "leftover / supplied, change at the end",
+            change,
+            LEFTOVER,
+            False,
+            "",
+            explainable=False,
         )
     )
     # The class fields and the sensor channels.
@@ -793,11 +873,23 @@ def compare_march(
         flags["frames"] = flags["frames"] and same_bytes(a, b)
     items.append(
         _field(
-            "concentration, every stored frame", max(conc), CONCENTRATION, explained, ""
+            "concentration, every stored frame",
+            max(conc),
+            CONCENTRATION,
+            False,
+            "",
+            explainable=False,
         )
     )
     items.append(
-        _field("concentration, pointwise", max(point), POINTWISE, explained, "")
+        _field(
+            "concentration, pointwise",
+            max(point),
+            POINTWISE,
+            False,
+            "",
+            explainable=False,
+        )
     )
     sr, so = ref.sensors, other.sensors
     assert sr is not None and so is not None
@@ -809,17 +901,55 @@ def compare_march(
             "sensor channels, every step",
             relative(sr.channels, so.channels),
             SENSORS,
-            explained,
+            False,
             "",
+            explainable=False,
         )
     )
     return items, flags
 
 
-def _alerts_item(ref: object, other: object) -> Item:
+def _frame_moves(
+    ref: ClearUnits, other: ClearUnits, clear_ref: np.ndarray, clear_other: np.ndarray
+) -> np.ndarray:
+    """How many stored frames each unit's clear times moved.
+
+    Parameters
+    ----------
+    ref, other : ClearUnits
+        The two runs' units, one per channel in the same order; each unit's
+        ``times`` are the frames its clear times fall on.
+    clear_ref, clear_other : np.ndarray
+        [units, ...] clear times, one row per unit (a unit's cells, or one
+        value per unit).
+
+    Returns
+    -------
+    np.ndarray
+        The moves of every unit, flattened (``index_moves`` on each unit's
+        frames, so a move between the last two frames is one even when the
+        last frame is closer than the others); one infinity where the two
+        runs hold a different number of units.
+    """
+    if len(ref.times) != len(other.times):
+        return np.array([math.inf])
+    return np.concatenate(
+        [
+            index_moves(
+                np.asarray(clear_ref[u]),
+                np.asarray(clear_other[u]),
+                ref.times[u],
+                other.times[u],
+            ).ravel()
+            for u in range(len(ref.times))
+        ]
+    )
+
+
+def _alerts_item(ref: AlertTable, other: AlertTable) -> Item:
     """Every alert's opening and closing step, matched by sensor and channel in order."""
 
-    def keyed(table: object) -> dict[tuple[int, int], list[tuple[float, float]]]:
+    def keyed(table: AlertTable) -> dict[tuple[int, int], list[tuple[float, float]]]:
         out: dict[tuple[int, int], list[tuple[float, float]]] = {}
         for i in range(len(table.step_on)):
             key = (int(table.sensor[i]), int(table.size_class[i]))
@@ -842,7 +972,7 @@ def _alerts_item(ref: object, other: object) -> Item:
     return _decision("alerts' opening and closing steps", Moves.of(np.array(moves)))
 
 
-def _recovery_times(record: object) -> np.ndarray:
+def _recovery_times(record: RecoveryRecord) -> np.ndarray:
     """The clean-out's recovery times, one flat array: room, channels, sensors, means."""
     return np.concatenate(
         [
@@ -854,7 +984,7 @@ def _recovery_times(record: object) -> np.ndarray:
     )
 
 
-def _budget_end(b: object) -> tuple[float, float]:
+def _budget_end(b: MassBudget) -> tuple[float, float]:
     """(residual over supply, leftover over supply) of a class's budget; NaN if nothing.
 
     A class nothing supplied (a release of other sizes) has no ratio to read.
@@ -896,10 +1026,12 @@ def _closure(run: Run) -> float:
     for budgets in run.frames.budgets:
         for b in budgets:
             try:
-                largest = max(largest, abs(float(b.relative())))
+                residual = abs(float(b.relative()))
             except ValueError:
                 # Nothing supplied yet: nothing to close against.
                 continue
+            # max() skips a NaN, which would read an open budget as closed.
+            largest = math.inf if math.isnan(residual) else max(largest, residual)
     return largest
 
 
@@ -918,9 +1050,8 @@ def compare(ref_path: str | Path, other_path: str | Path) -> Comparison:
     """
     ref, other = Run(Path(ref_path)), Run(Path(other_path))
     stops = compare_stops(ref, other)
-    explained = _explained(stops)
-    flows, flow_bitwise = compare_flows(ref, other, explained)
-    march, flags = compare_march(ref, other, explained)
+    flows, flow_bitwise = compare_flows(ref, other, _explained(stops))
+    march, flags = compare_march(ref, other)
     return Comparison(
         items=[*stops, *flows, *march], bitwise={"flow states": flow_bitwise, **flags}
     )
@@ -963,8 +1094,6 @@ def compare_placement(pairs: Mapping[str, tuple[str | Path, str | Path]]) -> lis
         ),
         FREE: candidates(mesh, configs, (MOUNT_FREE,), spec.standoff),
     }
-    from src.monitor import sensor_cells
-
     sensors = tuple(sensor_cells(config, mesh))
     results = []
     for runs in sides:
@@ -1003,14 +1132,31 @@ def compare_placement(pairs: Mapping[str, tuple[str | Path, str | Path]]) -> lis
                 )
             )
         items.append(_same(f"{rule}: the layouts' order", r["order"], o["order"]))
-        moves = []
-        for name in r["cells"]:
-            for u, (scenario, _event, _k) in enumerate(units_r.labels):
-                run = sides[0][scenario]
-                onset = float(run.arrival.onsets[0])
-                a = np.array([r["per_unit"][name][u] + onset])
-                b = np.array([o["per_unit"][name][u] + onset])
-                moves.append(step_moves(a, b, run.step_times)[0])
+        moves: list[float] = []
+        if units_r.labels != units_o.labels:
+            # The units differ: no unit's latency can be read against another's.
+            moves.append(math.inf)
+        else:
+            for name in r["cells"]:
+                for u, (scenario, event, _k) in enumerate(units_r.labels):
+                    # A latency is read from its own event's onset, in the step
+                    # of that time: a later event's step is not the first's.
+                    times = []
+                    for side, per_rule_side in ((0, r), (1, o)):
+                        run = sides[side][scenario]
+                        e = list(run.arrival.event_names).index(event)
+                        onset = float(run.arrival.onsets[e])
+                        times.append(
+                            np.array([per_rule_side["per_unit"][name][u] + onset])
+                        )
+                    moves.extend(
+                        index_moves(
+                            times[0],
+                            times[1],
+                            sides[0][scenario].step_times,
+                            sides[1][scenario].step_times,
+                        ).tolist()
+                    )
         items.append(
             _decision(f"{rule}: the layouts' unit latencies", Moves.of(np.array(moves)))
         )

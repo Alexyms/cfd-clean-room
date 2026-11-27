@@ -15,6 +15,7 @@ verdict and the closure), and the unchanged copy as a pass, bit for bit.
 import math
 import shutil
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 import h5py
@@ -40,15 +41,16 @@ from compare_runs import (  # noqa: E402 -- follows sys.path.insert
     Item,
     Moves,
     compare,
+    grid_index,
+    index_moves,
     moved,
     pointwise,
     relative,
-    step_moves,
-    step_of,
     tier,
 )
 
 from src.config import SimConfig  # noqa: E402 -- follows sys.path.insert
+from src.placement import clear_units  # noqa: E402 -- follows sys.path.insert
 from src.time_integration import Provenance, run  # noqa: E402
 from validation.transport_cases import conservation_keys  # noqa: E402
 
@@ -131,28 +133,50 @@ TIMES = np.concatenate([np.linspace(0.0, 1.0, 11), np.linspace(1.2, 2.0, 5)])
 
 
 @pytest.mark.unit
-def test_step_of_puts_an_interval_end_in_the_interval_it_ends() -> None:
-    """A time at the first interval's end is that interval's last step, 0.1 s.
+def test_grid_index_is_the_nearest_time_and_keeps_never_and_none() -> None:
+    """A time falls on the grid time nearest it; inf and NaN stay as given.
 
-    Defect caught: a time read in the step after it, which puts a switch
-    time in the next interval and halves its moves.
+    A time that was added to and subtracted from (latency plus onset) is a
+    rounding off its step and still falls on that step. Defect caught: the first
+    time at or after it, which puts a time a rounding above its step on the
+    next one, and so reads a decision that did not move as moved by one.
     """
-    steps = step_of(TIMES, np.array([0.5, 1.0, 1.2, 2.0, 0.0]))
-    np.testing.assert_allclose(steps, [0.1, 0.1, 0.2, 0.2, 0.1], rtol=1e-12)
+    wobble = 1.0 + 4.0e-16
+    times = np.array([0.0, 0.1 * wobble, 1.0, 1.0 / wobble, 1.2, 2.0, np.inf, np.nan])
+    index = grid_index(TIMES, times)
+    np.testing.assert_array_equal(index[:6], [0, 1, 10, 10, 11, 15])
+    assert index[6] == math.inf and math.isnan(index[7])
+    # A time before the first grid time, or past the last, falls on the end one.
+    np.testing.assert_array_equal(grid_index(TIMES, np.array([-1.0, 5.0])), [0, 15])
+    assert grid_index(TIMES, np.array([0.45]))[0] in (4, 5)
+    with pytest.raises(ValueError, match="at least one"):
+        grid_index(np.array([]), np.array([1.0]))
 
 
 @pytest.mark.unit
-def test_step_moves_read_each_move_in_the_later_times_step() -> None:
+def test_index_moves_count_the_steps_between_the_indexes_across_a_switch() -> None:
     """Across the switch a time moved from 1.0 s to 1.2 s is one step, either way.
 
-    The later of the two is 1.2 s, whose step is 0.2 s. Defect caught: the move
-    read in the earlier time's step (two steps), or as signed (minus one).
+    The two are steps 10 and 11 of the run, whatever their lengths. Defect
+    caught: the move read in a step's length (two steps from the earlier time's
+    0.1 s, or half a step), or as signed (minus one).
     """
     ref = np.array([1.0, 1.2, 0.5, 0.5])
     other = np.array([1.2, 1.0, 0.7, 0.3])
-    np.testing.assert_allclose(
-        step_moves(ref, other, TIMES), [1.0, 1.0, 2.0, 2.0], rtol=1e-9
-    )
+    np.testing.assert_array_equal(index_moves(ref, other, TIMES), [1.0, 1.0, 2.0, 2.0])
+
+
+@pytest.mark.unit
+def test_index_moves_read_each_run_on_its_own_grid() -> None:
+    """Two runs whose steps differ: a time is a step of its own run.
+
+    The other run's steps are twice as long, so its step 5 is at 1.0 s where
+    the reference's step 10 is: the index differs by five, not zero.
+    """
+    other_grid = np.linspace(0.0, 2.0, 11)
+    moves = index_moves(np.array([1.0]), np.array([1.0]), TIMES, other_grid)
+    assert moves[0] == 5.0
+    assert index_moves(np.array([1.0]), np.array([1.0]), TIMES, TIMES)[0] == 0.0
 
 
 @pytest.mark.unit
@@ -174,12 +198,17 @@ def test_a_threshold_crossed_in_one_run_only_is_a_move_of_infinity() -> None:
 
 @pytest.mark.unit
 def test_moves_count_one_step_more_and_the_largest() -> None:
-    """Rounded to the nearest step: 0.6 and 1.4 are one, 1.6 is more."""
-    counts = Moves.of(np.array([0.0, 0.6, 1.4, 1.6, 3.0, np.nan]))
+    """One is any move up to a step, more is above it; a fraction is not no move.
+
+    Defect caught: a move rounded to the nearest step, which reads 0.4 of a
+    step as none (test 96 B1).
+    """
+    counts = Moves.of(np.array([0.0, 0.4, 1.0, 2.0, 3.0, np.nan]))
     assert (counts.compared, counts.one, counts.more, counts.only) == (5, 2, 2, 0)
     assert counts.largest == 3.0
     assert Moves.of(np.zeros(4)).equal
-    assert not Moves.of(np.array([0.0, 0.6])).equal
+    assert not Moves.of(np.array([0.0, 0.4])).equal
+    assert not Moves.of(np.array([0.0, 2.0])).equal
 
 
 def _stop(apart: int) -> Item:
@@ -231,9 +260,11 @@ def test_the_verdict_names_each_failing_kind_once() -> None:
 def dust(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """A short dust release on 80x30 from rest, on the reference.
 
-    The release from 2 s to 6 s and the run to 12 s, so that its maps and the
-    clear times have entries; the grid and the tolerance are the suite's
-    coarse ones (``tests/test_time_integration.py``).
+    The release from 2 s to 6 s and the run to 10.6 s, so that its maps and the
+    clear times have entries and its last stored frame lies close to the one
+    before it (the last gap is 0.02 of the spacing, as in every product run,
+    whose last step ends between two frames); the grid and the tolerance are
+    the suite's coarse ones (``tests/test_time_integration.py``).
     """
     raw = yaml.safe_load(
         (CONFIGS / "scenario_equipment_dust.yaml").read_text(encoding="utf-8")
@@ -243,7 +274,7 @@ def dust(tmp_path_factory: pytest.TempPathFactory) -> Path:
     raw["solver"]["mass_imbalance_tol"] = (
         conservation_keys()["conservation_limit"] * 1.2 * (0.1 * 0.1) / 60.0
     )
-    raw["solver"]["t_end"] = 12.0
+    raw["solver"]["t_end"] = 10.6
     raw["scenario"]["events"][0]["start"] = 2.0
     raw["scenario"]["events"][0]["duration"] = 4.0
     path = tmp_path_factory.mktemp("dust") / "dust.h5"
@@ -329,6 +360,96 @@ def test_a_flow_field_in_the_middle_tier_needs_an_outer_stop_one_apart(
         assert comparison.failures[0] == STOP
     if outer == 0:
         assert comparison.failures == [FIELD]
+
+
+def _scaled_class_frames(handle: h5py.File, factor: float) -> None:
+    """Every class's frames scaled by 1 + factor: the concentration's two items move."""
+    for name in handle["transport"]:
+        if name.startswith("C_"):
+            data = handle["transport"][name]
+            data[...] = data[...] * (1.0 + factor)
+
+
+def _scaled_sensor_channels(handle: h5py.File, factor: float) -> None:
+    """The sensor channels scaled by 1 + factor."""
+    data = handle["transport/sensors/channels"]
+    data[...] = data[...] * (1.0 + factor)
+
+
+def _moved_leftover(handle: h5py.File, factor: float) -> None:
+    """Class 0's leftover raised by factor of its supply, the content lowered by as much.
+
+    The budget still closes (the residual is unchanged), so only the leftover's
+    change and, past REQ-T05's limit, the verdict move.
+    """
+    budgets = handle["transport/budgets"]
+    values = budgets[...]
+    supplied = values[-1, 0, 0] + values[-1, 0, 1] + values[-1, 0, 3]
+    values[-1, 0, -1] += factor * supplied
+    values[-1, 0, -2] -= factor * supplied
+    budgets[...] = values
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    ("plant", "prefix"),
+    [
+        (_scaled_class_frames, "concentration, every"),
+        (_scaled_class_frames, "concentration, pointwise"),
+        (_scaled_sensor_channels, "sensor channels"),
+        (_moved_leftover, "leftover / supplied"),
+    ],
+    ids=["frames", "pointwise", "sensors", "leftover"],
+)
+@pytest.mark.parametrize("outer", [0, 1])
+def test_a_class_field_in_the_middle_tier_is_not_explained_by_the_outer_count(
+    dust: Path,
+    tmp_path: Path,
+    plant: Callable[[h5py.File, float], None],
+    prefix: str,
+    outer: int,
+) -> None:
+    """A class field between its spread and its limit fails, one outer count apart or not.
+
+    ADR-017 H lets the stop counts explain a middle-tier field only when they
+    are of the kind that moved it that far in the probe: an outer count one
+    apart moved the class fields by 2.7e-11 at most, inside their first tier,
+    and a Jacobi sweep, which a run file does not record, moved them further.
+    So the comparator reads the field as beyond the limit and says why, where
+    the same count explains a flow field. The leftover moves by 3e-9 of the
+    supply, the others by 3e-7.
+
+    Defect caught: the flag that explains a flow field handed to a class field
+    (test 96 B1), at each of the four items that read it.
+    """
+    other = _copy(dust, tmp_path, "middle")
+    factor = 3.0e-9 if plant is _moved_leftover else 3.0e-7
+    with h5py.File(other, "r+") as handle:
+        plant(handle, factor)
+        group = _flow_group(handle)
+        group.attrs["outer"] = int(group.attrs["outer"]) + outer
+    comparison = compare(dust, other)
+    item = next(i for i in comparison.items if i.name.startswith(prefix))
+    assert item.detail["tier"] == BETWEEN
+    assert not item.passed
+    assert item.detail["explained by the stops"] is False
+    assert item.detail["note"] == compare_runs.MIDDLE_TIER_NOTE
+    assert FIELD in comparison.failures
+    # The stop is within one: it is the field that fails, not the stop.
+    assert STOP not in comparison.failures
+
+
+@pytest.mark.integration
+def test_a_class_field_inside_its_spread_passes_with_the_outer_count_one_apart(
+    dust: Path, tmp_path: Path
+) -> None:
+    """The control: the same plant at a hundredth of the size is inside and passes."""
+    other = _copy(dust, tmp_path, "inside")
+    with h5py.File(other, "r+") as handle:
+        _scaled_class_frames(handle, 3.0e-9)
+        group = _flow_group(handle)
+        group.attrs["outer"] = int(group.attrs["outer"]) + 1
+    assert compare(dust, other).verdict == "PASS"
 
 
 @pytest.mark.integration
@@ -444,3 +565,53 @@ def test_a_budget_that_does_not_close_fails_the_closure(
         budgets[...] = values
     comparison = compare(dust, other)
     assert comparison.failures == [CLOSED]
+
+
+def _quiet_cell(path: Path) -> tuple[int, int, int, float, np.ndarray]:
+    """A cell of the last channel that the run never reads above after the release.
+
+    Returns its class (the channel's), its (j, i), the class's threshold and the
+    stored frames' times.
+    """
+    units = clear_units({"run": path})
+    with h5py.File(path, "r") as handle:
+        thresholds = handle["arrival/thresholds"][()]
+        times = handle["transport/times"][()]
+    k = len(thresholds) - 1
+    quiet = np.argwhere(units.clear[k] == units.ends[k])
+    j, i = (int(v) for v in quiet[len(quiet) // 2])
+    return k, j, i, float(thresholds[k]), times
+
+
+@pytest.mark.integration
+def test_a_clear_time_that_moves_onto_the_last_frame_is_a_move_of_one(
+    dust: Path, tmp_path: Path
+) -> None:
+    """A cell's clear time from the second-to-last frame to the last fails the item.
+
+    One cell is put at twice its threshold on the third-to-last frame in both
+    files and on the second-to-last in one, so its clear time is the
+    second-to-last frame's in the first and the last frame's in the second. The
+    last stored frame is the run's last step, 0.02 of the spacing after the one
+    before it, so the move is a fiftieth of the unit the old reading used (the
+    largest gap) and rounded to none (test 96 B1, ``own_clear2.py``). A decision
+    is equal only when it falls at the same frame (ADR-017 H, item 1).
+
+    Defect caught: a clear time's move counted in the largest gap between
+    frames.
+    """
+    k, j, i, threshold, times = _quiet_cell(dust)
+    gap = float(times[-1] - times[-2])
+    assert gap < 0.1 * float(np.diff(times).max()), "the premise: a short last gap"
+    first = _copy(dust, tmp_path, "clear_a")
+    second = _copy(dust, tmp_path, "clear_b")
+    for path, frames in ((first, (-3,)), (second, (-3, -2))):
+        with h5py.File(path, "r+") as handle:
+            for frame in frames:
+                handle[f"transport/C_{k}"][frame, j, i] = 2.0 * threshold
+    comparison = compare(first, second)
+    cells = next(x for x in comparison.items if x.name.startswith("cells' clear"))
+    assert (cells.detail["moved one"], cells.detail["moved more"]) == (1, 0)
+    assert cells.detail["one only"] == 0
+    assert not cells.passed
+    assert DECISION in comparison.failures
