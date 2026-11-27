@@ -38,12 +38,12 @@ sys.path.insert(0, str(HERE))
 
 import probe93  # noqa: E402 -- after sys.path
 
+from src import core_backend as core_mapping  # noqa: E402 -- after sys.path
 from src import multigrid, pressure  # noqa: E402 -- after sys.path
 from src.pressure import (  # noqa: E402 -- after sys.path
     PressureCorrection,
     PressureCorrector,
 )
-from tests import core_mapping  # noqa: E402 -- after sys.path
 from tests.decimal_inverse import referee, residuals  # noqa: E402 -- after sys.path
 
 RESULTS = ROOT / "results" / "builder93b"

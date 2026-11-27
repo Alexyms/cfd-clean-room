@@ -80,6 +80,7 @@ import probe90  # noqa: E402 -- after sys.path
 import probe92  # noqa: E402 -- after sys.path
 import probe93  # noqa: E402 -- after sys.path
 
+from src import core_backend as core_mapping  # noqa: E402 -- after sys.path
 from src import turbulence  # noqa: E402 -- after sys.path
 from src.boundary_staggered import StaggeredBoundary  # noqa: E402 -- after sys.path
 from src.config import SimConfig  # noqa: E402 -- after sys.path
@@ -94,7 +95,6 @@ from src.turbulence import (  # noqa: E402 -- after sys.path
     TurbulenceConditions,
     TurbulenceState,
 )
-from tests import core_mapping  # noqa: E402 -- after sys.path
 
 RESULTS = ROOT / "results" / "builder94"
 CAPTURES = RESULTS / "captures"

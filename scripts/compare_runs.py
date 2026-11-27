@@ -1,0 +1,1245 @@
+#!/usr/bin/env python
+"""Compare a scenario run with the reference's run of it: ADR-017 H's verdict (REQ-N03 level 2).
+
+Run from the repository root with the project's interpreter, where the run
+files' scenario bases resolve (the machine the runs were made on):
+
+    python scripts/compare_runs.py REFERENCE.h5 OTHER.h5
+    python scripts/compare_runs.py REFERENCE.h5 OTHER.h5 --json out.json
+
+Two run files of one scenario in; ADR-017 H's verdict out, item by item. The
+items are its three criteria:
+
+1. *every decision equal*: each arrival time of the maps (per event, channel
+   and cell), each alert's opening and closing step at the file's sensors and
+   so each sensor's latency (``AlertMonitor.latencies`` on the table), each
+   clear time of the all-clear units at its frame (``placement.clear_units``),
+   the clean-out's recovery times, the run's end (steps, time, the hold), and
+   every class's verdict against REQ-T05; a decision is equal only when it
+   falls at the same step or the same frame, so a time in steps moves by the
+   difference of the indexes of the steps it falls on, a clear time by that of
+   the stored frames, and a time reached in one run only is a move of infinity;
+2. *every field inside its limit*, read in the three tiers: each flow field of
+   each flow state, the class fields over every stored frame (and pointwise
+   where the reference reads at least a hundredth of the class's threshold),
+   the sensor channels at every step, and the change in the accumulated
+   leftover over the supply at the end, each as its largest difference over
+   the reference's largest magnitude; and the budget closing to 1e-12 of the
+   supply on every stored frame, not tiered;
+3. *every stop within one*: each flow state's outer count and stop reason.
+
+A field between its measured spread and its limit passes only when the stop
+counts explain it (ADR-017 H). A flow field is explained when some flow state's
+outer count differs by one and none by more, the kind of change that moved the
+probe's flow fields that far. A class field (the concentration, the sensor
+channels, the leftover's change) is not: an outer count one apart moved them by
+2.7e-11 at most in the probe, inside their first tier, and what moved them
+further was a Jacobi sweep, whose count a run file does not record. Such a field
+is read as beyond the limit, its line says so, and it goes to the step's report.
+
+``compare_placement`` gives the decisions that read several scenarios at once:
+the searched layouts' cells under each rule and pool, their order, and every
+unit's latency of the file's four sensors and of each searched layout.
+
+The measures and their tests come from prompt 85's probe
+(``docs/reports/probe85/tables85.py``), with what test 85 S1 found unpinned
+pinned in ``tests/test_compare_runs.py``: the signs, a move that straddles a
+threshold, a field in each tier and a failing verdict of each kind, and (test 96
+B2) a planted run-file test for every item the comparator reports. Prompt 96
+built it; step 6b scores 320x120 with it.
+"""
+
+import argparse
+import json
+import math
+import sys
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import numpy as np
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from src.config import (  # noqa: E402 -- follows sys.path.insert
+    MEAN,
+    MOUNT_FREE,
+    MOUNT_STAND,
+    WORST_CASE,
+    SimConfig,
+)
+from src.io_manager import (  # noqa: E402 -- follows sys.path.insert
+    OPEN_STEP,
+    AlertTable,
+    RecoveryRecord,
+    RunFile,
+)
+from src.mesh import Mesh  # noqa: E402 -- follows sys.path.insert
+from src.monitor import ALERT_COLUMNS, AlertMonitor, sensor_cells  # noqa: E402
+from src.placement import (  # noqa: E402 -- follows sys.path.insert
+    ClearUnits,
+    RunArrival,
+    arrival_from_run,
+    candidates,
+    clear_units,
+    detection_units,
+    given_layout,
+    rank,
+    room_clear,
+    scenario_end,
+    search,
+)
+from src.solver_staggered import FlowState  # noqa: E402 -- follows sys.path.insert
+from src.solver_transport import MassBudget  # noqa: E402 -- follows sys.path.insert
+
+# ADR-017 H: (the measured spread, the limit) per field. The spreads are the
+# largest prompt 85's probe measured (its P8; the sensor channels P2's, as
+# ADR-017 H takes them); the limits ten times them rounded up to a decade.
+FLOW_FIELDS: tuple[str, ...] = ("u", "v", "p", "k", "eps", "nu_t")
+FLOW_SPREAD, FLOW_LIMIT = 7.8e-10, 1.0e-8
+CONCENTRATION = "concentration"
+POINTWISE = "concentration, pointwise"
+SENSORS = "sensor channels"
+LEFTOVER = "leftover / supplied, change"
+BAND: dict[str, tuple[float, float]] = {
+    **{name: (FLOW_SPREAD, FLOW_LIMIT) for name in FLOW_FIELDS},
+    CONCENTRATION: (2.7e-8, 1.0e-6),
+    POINTWISE: (5.8e-8, 1.0e-6),
+    SENSORS: (4.7e-8, 1.0e-6),
+    LEFTOVER: (3.6e-10, 1.0e-8),
+}
+# The budget's closure, the reference's own check, not tiered.
+CLOSURE = 1.0e-12
+# REQ-T05: the budget's residual and the accumulated leftover each below this
+# fraction of the particles supplied.
+REQ_T05 = 1.0e-4
+# The pointwise measure reads cells at or above this fraction of the threshold,
+# the decades the alerts and the maps read.
+POINTWISE_FLOOR = 0.01
+INSIDE, BETWEEN, BEYOND = (
+    "inside the spread",
+    "between the spread and the limit",
+    "beyond the limit",
+)
+# The kinds of a failing verdict.
+DECISION, FIELD, STOP, CLOSED, BUDGET = (
+    "a decision differs",
+    "a field outside its limit",
+    "a stop more than one apart",
+    "a budget that does not close",
+    "a budget verdict differs",
+)
+# Why a class field between its spread and its limit fails.
+MIDDLE_TIER_NOTE = "middle tier, not explained by the run file: for the step's report"
+RULES = (WORST_CASE, MEAN)
+FILE_LAYOUT, SURFACE, STAND, FREE = "file's four", "surface", "product", "free"
+
+
+# ---------------------------------------------------------------------------
+# The measures
+
+
+def relative(a: np.ndarray, b: np.ndarray) -> float:
+    """The largest |b - a| over the largest |a|; infinity where the two disagree in kind.
+
+    Parameters
+    ----------
+    a, b : np.ndarray
+        The reference's values and the other run's, of one shape.
+
+    Returns
+    -------
+    float
+        0 when equal (NaN where both are NaN, an infinity where both are the
+        same one); infinity when the shapes differ, one is finite where the
+        other is not, the two infinities differ, or a is zero everywhere and b
+        is not; otherwise max |b - a| over max |a| on the finite entries.
+    """
+    a = np.asarray(a, dtype=np.float64)
+    b = np.asarray(b, dtype=np.float64)
+    if a.shape != b.shape:
+        return math.inf
+    finite = np.isfinite(a)
+    if not np.array_equal(finite, np.isfinite(b)):
+        return math.inf
+    odd = ~finite
+    if not np.array_equal(a[odd], b[odd], equal_nan=True):
+        return math.inf
+    if not finite.any():
+        return 0.0
+    diff = float(np.abs(b[finite] - a[finite]).max())
+    if diff == 0.0:
+        return 0.0
+    scale = float(np.abs(a[finite]).max())
+    return diff / scale if scale > 0.0 else math.inf
+
+
+def pointwise(a: np.ndarray, b: np.ndarray, floor: float) -> float:
+    """The largest |b - a| / |a| over the entries where |a| is at least FLOOR.
+
+    Infinity when the shapes differ or b is not finite where a is read.
+    """
+    a = np.asarray(a, dtype=np.float64)
+    b = np.asarray(b, dtype=np.float64)
+    if a.shape != b.shape:
+        return math.inf
+    keep = np.isfinite(a) & (np.abs(a) >= floor)
+    if not keep.any():
+        return 0.0
+    if not np.isfinite(b[keep]).all():
+        return math.inf
+    return float((np.abs(b[keep] - a[keep]) / np.abs(a[keep])).max())
+
+
+def tier(value: float, name: str) -> str:
+    """Which of ADR-017 H's three tiers VALUE falls in for the field NAME."""
+    spread, limit = BAND[name]
+    if value <= spread:
+        return INSIDE
+    if value <= limit:
+        return BETWEEN
+    return BEYOND
+
+
+def grid_index(grid: np.ndarray, t: np.ndarray) -> np.ndarray:
+    """The index of the grid time each time T falls on (a step or a stored frame).
+
+    Parameters
+    ----------
+    grid : np.ndarray
+        [n] increasing times: a run's step times, or the stored frames' times
+        from a clear time's unit on. Its first entry may lie a little after a
+        time that is read as the first (a clear time of ``t_e`` itself).
+    t : np.ndarray
+        Times to place, any shape; finite, inf for never, NaN where there is
+        none.
+
+    Returns
+    -------
+    np.ndarray
+        The index of the nearest grid time, as float, of t's shape; inf and
+        NaN as given. The nearest, not the first at or after, so that a time
+        that was added to and subtracted from (``latency + onset``) and so is
+        a rounding off its step still falls on that step.
+    """
+    grid = np.asarray(grid, dtype=np.float64)
+    if grid.size < 1:
+        raise ValueError("a grid of times needs at least one entry")
+    t = np.asarray(t, dtype=np.float64)
+    out = np.array(t, copy=True)
+    finite = np.isfinite(t)
+    above = np.clip(np.searchsorted(grid, t[finite]), 0, grid.size - 1)
+    below = np.maximum(above - 1, 0)
+    nearer_below = np.abs(t[finite] - grid[below]) < np.abs(t[finite] - grid[above])
+    out[finite] = np.where(nearer_below, below, above)
+    return out
+
+
+def moved(
+    ref: np.ndarray, other: np.ndarray, spacing: np.ndarray | float
+) -> np.ndarray:
+    """How far each time moved, in units of SPACING.
+
+    Parameters
+    ----------
+    ref, other : np.ndarray
+        Times of one shape: finite, inf for never, NaN where there is none
+        (a SOLID cell).
+    spacing : np.ndarray or float
+        Each time's unit, broadcast to the shape.
+
+    Returns
+    -------
+    np.ndarray
+        |other - ref| / spacing where both are finite; 0 where both are never;
+        infinity where one is never and the other a time (a move across the
+        threshold that one run reaches and the other does not); NaN where both
+        are NaN; infinity where one is NaN and the other is not.
+    """
+    ref = np.asarray(ref, dtype=np.float64)
+    other = np.asarray(other, dtype=np.float64)
+    if ref.shape != other.shape:
+        raise ValueError(f"times of shapes {ref.shape} and {other.shape}")
+    unit = np.broadcast_to(np.asarray(spacing, dtype=np.float64), ref.shape)
+    out = np.full(ref.shape, math.inf)
+    both = np.isfinite(ref) & np.isfinite(other)
+    out[both] = np.abs(other[both] - ref[both]) / unit[both]
+    out[np.isinf(ref) & np.isinf(other)] = 0.0
+    out[np.isnan(ref) & np.isnan(other)] = math.nan
+    return out
+
+
+def index_moves(
+    ref: np.ndarray,
+    other: np.ndarray,
+    grid_ref: np.ndarray,
+    grid_other: np.ndarray | None = None,
+) -> np.ndarray:
+    """How many steps or frames each time moved, by the index each falls on.
+
+    A decision is equal only when it falls at the same step or the same frame
+    (ADR-017 H, item 1), so a move is the difference of the two indexes, a
+    whole number, and never a fraction of a unit that rounds to none.
+
+    Parameters
+    ----------
+    ref, other : np.ndarray
+        Times of one shape, as ``moved`` reads them.
+    grid_ref : np.ndarray
+        [n] the reference's step times, or the frames' times of a clear time's
+        unit.
+    grid_other : np.ndarray, optional
+        The other run's; ``grid_ref`` when None.
+
+    Returns
+    -------
+    np.ndarray
+        ``moved`` of the two indexes with a unit of 1.
+    """
+    other_grid = grid_ref if grid_other is None else grid_other
+    return moved(grid_index(grid_ref, ref), grid_index(other_grid, other), 1.0)
+
+
+@dataclass(frozen=True)
+class Moves:
+    """How a set of decisions moved.
+
+    Parameters
+    ----------
+    compared : int
+        The decisions compared (NaN entries left out).
+    one, more : int
+        Moved by one step or frame, and by more.
+    only : int
+        Reached in one run only.
+    largest : float
+        The largest finite move.
+    """
+
+    compared: int
+    one: int
+    more: int
+    only: int
+    largest: float
+
+    @property
+    def equal(self) -> bool:
+        """Whether no decision moved."""
+        return self.one == 0 and self.more == 0 and self.only == 0
+
+    @classmethod
+    def of(cls, steps: np.ndarray) -> "Moves":
+        """The counts of an array of moves (``index_moves``'s whole numbers).
+
+        A move of any size up to one counts as one, so that a fraction of a
+        unit never reads as no move.
+        """
+        s = np.asarray(steps, dtype=np.float64).ravel()
+        s = s[~np.isnan(s)]
+        finite = s[np.isfinite(s)]
+        return cls(
+            compared=int(s.size),
+            one=int(((finite > 0.0) & (finite <= 1.0)).sum()),
+            more=int((finite > 1.0).sum()),
+            only=int(np.isinf(s).sum()),
+            largest=float(finite.max()) if finite.size else 0.0,
+        )
+
+
+def same_bytes(a: object, b: object) -> bool:
+    """Equal shapes, dtypes and bytes, or both None."""
+    if a is None or b is None:
+        return a is None and b is None
+    x, y = np.asarray(a), np.asarray(b)
+    return x.shape == y.shape and x.dtype == y.dtype and x.tobytes() == y.tobytes()
+
+
+# ---------------------------------------------------------------------------
+# A run file, read
+
+
+BUDGET_TERMS = ("initial", "inflow", "outflow", "source", "current", "leftover")
+
+
+@dataclass
+class Run:
+    """A tier-1 run file's records, as the comparison reads them.
+
+    Parameters
+    ----------
+    path : Path
+        The run file.
+    """
+
+    path: Path
+    file: RunFile = field(init=False)
+    config: SimConfig = field(init=False)
+    flows: dict[str, tuple[FlowState, bool]] = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.path = Path(self.path)
+        self.file = RunFile(self.path)
+        self.config = SimConfig.from_dict(self.file.read_config().mapping)
+        self.flows = {}
+        for key in self.file.flow_fingerprints():
+            self.flows[key] = (self.file.read_flow_state(key).state, False)
+        try:
+            key, steady = self.file.read_steady_checkpoint()
+        except KeyError:
+            steady = None
+        if steady is not None and key not in self.flows:
+            self.flows[key] = (steady.state, True)
+        self.marched = True
+        try:
+            self.frames = self.file.read_frames()
+        except KeyError:
+            self.marched = False
+        self.sensors = self.file.read_sensor_readings() if self.marched else None
+        self.alerts = self.file.read_alerts() if self.marched else None
+        self.arrival: RunArrival | None = (
+            arrival_from_run(self.file) if self.marched else None
+        )
+        self.recovery = None
+        if self.marched:
+            try:
+                self.recovery = self.file.read_recovery()
+            except KeyError:
+                self.recovery = None
+
+    @property
+    def step_times(self) -> np.ndarray:
+        """Every step's time from the first update on, the sensor table's."""
+        assert self.sensors is not None
+        return np.asarray(self.sensors.times, dtype=np.float64)
+
+    def budget_rows(self) -> np.ndarray:
+        """[frames, classes, terms] of every stored budget, None read as NaN."""
+        rows = [
+            [
+                [
+                    *(
+                        math.nan if getattr(b, t) is None else float(getattr(b, t))
+                        for t in BUDGET_TERMS
+                    ),
+                    *(float(b.deposited[s]) for s in b.deposited),
+                ]
+                for b in budgets
+            ]
+            for budgets in self.frames.budgets
+        ]
+        return np.array(rows, dtype=np.float64)
+
+    def latencies(self) -> np.ndarray:
+        """[events, channels, sensors]: the monitor's latencies, from the alert table.
+
+        ``AlertMonitor.latencies`` on a monitor restored from the table and the
+        last update, so the rule is the monitor's own.
+        """
+        assert self.alerts is not None and self.sensors is not None
+        assert self.arrival is not None
+        table = self.alerts
+        rows = np.array(
+            [
+                [
+                    table.step_on[i],
+                    table.t_on[i],
+                    math.nan if table.t_off[i] != table.t_off[i] else table.step_off[i],
+                    table.t_off[i],
+                    table.size_class[i],
+                    table.sensor[i],
+                    table.reading_on[i],
+                    table.peak[i],
+                    table.peak_t[i],
+                ]
+                for i in range(len(table.step_on))
+            ],
+            dtype=np.float64,
+        ).reshape(len(table.step_on), len(ALERT_COLUMNS))
+        monitor = AlertMonitor(self.config, Mesh(self.config))
+        monitor.restore(
+            {
+                "alert_rows": rows,
+                "alert_step": np.array(float(self.sensors.steps[-1])),
+                "alert_t": np.array(float(self.sensors.times[-1])),
+                "alert_readings": np.array(self.sensors.readings[-1]),
+            }
+        )
+        return monitor.latencies(np.asarray(self.arrival.onsets).tolist())
+
+
+# ---------------------------------------------------------------------------
+# One pair
+
+
+@dataclass
+class Item:
+    """One item of the verdict.
+
+    Parameters
+    ----------
+    criterion : str
+        ``decision``, ``field``, ``stop`` or ``closure``.
+    name : str
+        What is compared.
+    passed : bool
+        Whether it meets ADR-017 H.
+    detail : dict
+        Its numbers.
+    """
+
+    criterion: str
+    name: str
+    passed: bool
+    detail: dict
+
+
+@dataclass
+class Comparison:
+    """ADR-017 H's verdict on a pair of runs, item by item.
+
+    Parameters
+    ----------
+    items : list[Item]
+        Every decision, field, stop and closure compared.
+    bitwise : dict[str, bool]
+        Per record (flow states, frames, budgets, sensors, alerts, arrival
+        maps, recovery), whether the two are equal bit for bit.
+    """
+
+    items: list[Item]
+    bitwise: dict[str, bool]
+
+    @property
+    def failures(self) -> list[str]:
+        """The kinds of failing verdict, each once, in the criteria's order."""
+        kinds = []
+        for item in self.items:
+            if item.passed:
+                continue
+            kind = item.detail.get("kind")
+            if kind not in kinds:
+                kinds.append(kind)
+        return kinds
+
+    @property
+    def verdict(self) -> str:
+        """PASS, or FAIL with the kinds that failed."""
+        return "PASS" if not self.failures else "FAIL: " + "; ".join(self.failures)
+
+    @property
+    def first_tier(self) -> bool:
+        """Whether every field is inside its measured spread."""
+        return all(
+            item.detail["tier"] == INSIDE
+            for item in self.items
+            if item.criterion == "field"
+        )
+
+    def as_dict(self) -> dict:
+        """The comparison as JSON can hold it."""
+        return {
+            "verdict": self.verdict,
+            "first_tier": self.first_tier,
+            "bitwise": self.bitwise,
+            "items": [
+                {
+                    "criterion": i.criterion,
+                    "name": i.name,
+                    "passed": i.passed,
+                    "detail": _plain(i.detail),
+                }
+                for i in self.items
+            ],
+        }
+
+
+def _plain(value: object) -> object:
+    """VALUE with numpy scalars and arrays as Python's, infinities and NaN as text."""
+    if isinstance(value, dict):
+        return {str(k): _plain(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_plain(v) for v in value]
+    if isinstance(value, np.ndarray):
+        return _plain(value.tolist())
+    if isinstance(value, (np.floating, np.integer, np.bool_)):
+        return _plain(value.item())
+    if isinstance(value, float) and not math.isfinite(value):
+        return str(value)
+    return value
+
+
+def _reached(ref: np.ndarray, other: np.ndarray) -> tuple[int, int]:
+    """How many decisions each run reached: the finite times (never is inf, none NaN)."""
+    return int(np.isfinite(ref).sum()), int(np.isfinite(other).sum())
+
+
+def _clear_reached(ref: ClearUnits, other: ClearUnits) -> tuple[int, int]:
+    """How many cells each run read at or above a threshold after t_e: not clear at once.
+
+    A clear time of ``t_e`` itself is a cell no frame from then on reads above,
+    a decision nothing was reached for; a later time or infinity (never clear)
+    is one a threshold was reached for.
+    """
+    return (
+        int((ref.clear > ref.ends[:, None, None]).sum()),
+        int((other.clear > other.ends[:, None, None]).sum()),
+    )
+
+
+def _decision(name: str, moves: Moves, reached: tuple[int, int] | None = None) -> Item:
+    """A decision item from its moves, and how many of them each run reached.
+
+    The reach says what ``compared`` covers: a decision never reached in either
+    run compares as no move, so "every decision equal" over a run that reaches
+    few of them is less than it reads (review 96 S7).
+    """
+    detail: dict[str, object] = {
+        "kind": DECISION,
+        "compared": moves.compared,
+        "moved one": moves.one,
+        "moved more": moves.more,
+        "one only": moves.only,
+        "largest": moves.largest,
+    }
+    if reached is not None:
+        detail["reached, ref"], detail["reached, other"] = reached
+    return Item("decision", name, moves.equal, detail)
+
+
+def _same(name: str, ref: object, other: object) -> Item:
+    """A decision item that is one value on each side."""
+    return Item(
+        "decision", name, ref == other, {"kind": DECISION, "ref": ref, "other": other}
+    )
+
+
+def compare_stops(ref: Run, other: Run) -> list[Item]:
+    """Each flow state's stop reason and outer count (ADR-017 H, item 3)."""
+    items = []
+    for key in sorted(set(ref.flows) | set(other.flows)):
+        a = ref.flows.get(key)
+        b = other.flows.get(key)
+        if a is None or b is None:
+            items.append(
+                Item(
+                    "stop",
+                    f"flow state {key[:12]}",
+                    False,
+                    {"kind": STOP, "ref": a is not None, "other": b is not None},
+                )
+            )
+            continue
+        (sa, capped_a), (sb, capped_b) = a, b
+        apart = abs(int(sb.outer) - int(sa.outer))
+        items.append(
+            Item(
+                "stop",
+                f"flow state {key[:12]}",
+                apart <= 1
+                and sa.stop_reason == sb.stop_reason
+                and capped_a == capped_b,
+                {
+                    "kind": STOP,
+                    "ref outer": int(sa.outer),
+                    "other outer": int(sb.outer),
+                    "apart": apart,
+                    "ref reason": sa.stop_reason,
+                    "other reason": sb.stop_reason,
+                    "ref capped": capped_a,
+                    "other capped": capped_b,
+                },
+            )
+        )
+    return items
+
+
+def _explained(stops: Sequence[Item]) -> bool:
+    """Whether the stops explain a field between the spread and the limit.
+
+    Some flow state's outer count is one apart and none more: the kind and
+    number of differing stops that moved the probe's fields that far
+    (ADR-017 H). The CG and Jacobi counts are not in a run file.
+    """
+    aparts = [item.detail.get("apart", math.inf) for item in stops]
+    return bool(aparts) and max(aparts) == 1
+
+
+def _field(
+    name: str,
+    value: float,
+    band: str,
+    explained: bool,
+    where: str,
+    *,
+    explainable: bool = True,
+) -> Item:
+    """A field item read in its tiers.
+
+    Parameters
+    ----------
+    name : str
+        The field's name.
+    value : float
+        Its largest difference over the reference's largest magnitude.
+    band : str
+        The key of ``BAND`` it is read against.
+    explained : bool
+        Whether the flow states' outer counts explain a middle-tier value
+        (``_explained``).
+    where : str
+        Text added to the item's name.
+    explainable : bool
+        False for a class field and the sensor channels, whose middle tier
+        the outer counts never explain: an outer count one apart moved the
+        probe's class fields by 2.7e-11 at most (docs/reports/phase6_design.md,
+        the outer-stop variant), and what moved them further was a Jacobi
+        sweep, which a run file does not record (ADR-017 H). Such a value
+        between its spread and its limit fails and says why.
+    """
+    level = tier(value, band)
+    passed = level == INSIDE or (level == BETWEEN and explained and explainable)
+    spread, limit = BAND[band]
+    detail: dict[str, object] = {
+        "kind": FIELD,
+        "difference": value,
+        "spread": spread,
+        "limit": limit,
+        "tier": level,
+        "explained by the stops": explained if level == BETWEEN else None,
+    }
+    if level == BETWEEN and not explainable:
+        detail["explained by the stops"] = False
+        detail["note"] = MIDDLE_TIER_NOTE
+    return Item("field", f"{name}{where}", passed, detail)
+
+
+def compare_flows(ref: Run, other: Run, explained: bool) -> tuple[list[Item], bool]:
+    """Each flow field of each flow state both runs hold, and whether all are bitwise."""
+    items, bitwise = [], set(ref.flows) == set(other.flows)
+    for key in sorted(set(ref.flows) & set(other.flows)):
+        a, b = ref.flows[key][0], other.flows[key][0]
+        for name in FLOW_FIELDS:
+            x, y = getattr(a, name), getattr(b, name)
+            if x is None and y is None:
+                continue
+            if x is None or y is None:
+                value = math.inf
+            else:
+                value = relative(x, y)
+                bitwise = bitwise and same_bytes(x, y)
+            items.append(_field(name, value, name, explained, f", state {key[:12]}"))
+    return items, bitwise
+
+
+def compare_march(ref: Run, other: Run) -> tuple[list[Item], dict[str, bool]]:
+    """The march's decisions, fields and closure; the records' bitwise flags.
+
+    Every field here is a class field, whose middle tier the flow states' outer
+    counts do not explain (``_field``).
+    """
+    items: list[Item] = []
+    flags: dict[str, bool] = {}
+    if not (ref.marched and other.marched):
+        items.append(_same("the march ran", ref.marched, other.marched))
+        return items, flags
+    times, times_other = ref.step_times, other.step_times
+    flags["step times"] = same_bytes(times, times_other)
+    items.append(
+        Item(
+            "decision",
+            "the step times",
+            flags["step times"],
+            {
+                "kind": DECISION,
+                "ref steps": int(times.size),
+                "other steps": int(times_other.size),
+            },
+        )
+    )
+    fr, fo = ref.frames, other.frames
+    items.append(_same("the run's last step", int(fr.steps[-1]), int(fo.steps[-1])))
+    items.append(_same("the run's last time", float(fr.times[-1]), float(fo.times[-1])))
+    rr, ro = ref.recovery, other.recovery
+    if rr is not None or ro is not None:
+        items.append(
+            _same(
+                "the hold",
+                None if rr is None else bool(rr.held),
+                None if ro is None else bool(ro.held),
+            )
+        )
+    # Arrival maps and the file's sensors.
+    ar, ao = ref.arrival, other.arrival
+    assert ar is not None and ao is not None
+    flags["arrival maps"] = same_bytes(ar.maps, ao.maps)
+    items.append(
+        _decision(
+            "arrival times (events x channels x cells)",
+            Moves.of(index_moves(ar.maps, ao.maps, times, times_other)),
+            _reached(ar.maps, ao.maps),
+        )
+    )
+    alerts_r, alerts_o = ref.alerts, other.alerts
+    assert alerts_r is not None and alerts_o is not None
+    flags["alerts"] = all(
+        same_bytes(getattr(alerts_r, c), getattr(alerts_o, c))
+        for c in ("step_on", "step_off", "size_class", "sensor", "t_on", "t_off")
+    ) and all(
+        same_bytes(getattr(alerts_r, c), getattr(alerts_o, c))
+        for c in ("reading_on", "peak", "peak_t")
+    )
+    items.append(_alerts_item(alerts_r, alerts_o))
+    lr, lo = ref.latencies(), other.latencies()
+    onsets = np.asarray(ar.onsets, dtype=np.float64)[:, None, None]
+    flags["latencies"] = same_bytes(lr, lo)
+    items.append(
+        _decision(
+            "the file's sensors' latencies (events x channels x sensors)",
+            Moves.of(index_moves(lr + onsets, lo + onsets, times, times_other)),
+            _reached(lr, lo),
+        )
+    )
+    # Clear times, and the clean-out's recovery times.
+    if scenario_end(ref.config) is not None:
+        cr = clear_units({"run": ref.path})
+        co = clear_units({"run": other.path})
+        items.append(
+            _decision(
+                "cells' clear times (channels x cells)",
+                Moves.of(_frame_moves(cr, co, cr.clear, co.clear)),
+                _clear_reached(cr, co),
+            )
+        )
+        room_r, _ = room_clear(cr)
+        room_o, _ = room_clear(co)
+        items.append(
+            _decision(
+                "room clear times (channels)",
+                Moves.of(_frame_moves(cr, co, room_r, room_o)),
+                (int((room_r > cr.ends).sum()), int((room_o > co.ends).sum())),
+            )
+        )
+    if rr is not None and ro is not None:
+        recovery_r = _recovery_times(rr)
+        recovery_o = _recovery_times(ro)
+        items.append(
+            _decision(
+                "recovery times (room, channels, sensors, means)",
+                Moves.of(index_moves(recovery_r, recovery_o, times, times_other)),
+                _reached(recovery_r, recovery_o),
+            )
+        )
+        flags["recovery"] = same_bytes(recovery_r, recovery_o) and same_bytes(
+            np.asarray(rr.local_recovery), np.asarray(ro.local_recovery)
+        )
+    # The budgets: the verdict against REQ-T05, the closure, the leftover.
+    end_r = [_budget_end(b) for b in fr.budgets[-1]]
+    end_o = [_budget_end(b) for b in fo.budgets[-1]]
+    verdict_r = [_verdict(r, lo_) for r, lo_ in end_r]
+    verdict_o = [_verdict(r, lo_) for r, lo_ in end_o]
+    items.append(
+        Item(
+            "decision",
+            "every class's budget verdict against REQ-T05",
+            verdict_r == verdict_o,
+            {
+                "kind": BUDGET,
+                "ref": verdict_r,
+                "other": verdict_o,
+                "ref leftover / supplied": [lo_ for _, lo_ in end_r],
+                "other leftover / supplied": [lo_ for _, lo_ in end_o],
+            },
+        )
+    )
+    closure = max(_closure(ref), _closure(other))
+    items.append(
+        Item(
+            "closure",
+            "the budget's closure, every stored frame",
+            closure <= CLOSURE,
+            {
+                "kind": CLOSED,
+                "ref": _closure(ref),
+                "other": _closure(other),
+                "limit": CLOSURE,
+            },
+        )
+    )
+    br, bo = ref.budget_rows(), other.budget_rows()
+    flags["budgets"] = same_bytes(br, bo)
+    change = _leftover_change(end_r, end_o)
+    items.append(
+        _field(
+            "leftover / supplied, change at the end",
+            change,
+            LEFTOVER,
+            False,
+            "",
+            explainable=False,
+        )
+    )
+    # The class fields and the sensor channels.
+    aligned = same_bytes(fr.steps, fo.steps) and same_bytes(fr.times, fo.times)
+    flags["frames"] = aligned
+    thresholds = np.array(
+        ref.config.class_thresholds("the comparison"), dtype=np.float64
+    )
+    conc, point = [], []
+    for k in sorted(fr.fields):
+        a, b = fr.fields[k], fo.fields.get(k)
+        if b is None or not aligned:
+            conc.append(math.inf)
+            point.append(math.inf)
+            flags["frames"] = False
+            continue
+        conc.append(relative(a, b))
+        point.append(pointwise(a, b, POINTWISE_FLOOR * thresholds[k]))
+        flags["frames"] = flags["frames"] and same_bytes(a, b)
+    items.append(
+        _field(
+            "concentration, every stored frame",
+            max(conc),
+            CONCENTRATION,
+            False,
+            "",
+            explainable=False,
+        )
+    )
+    items.append(
+        _field(
+            "concentration, pointwise",
+            max(point),
+            POINTWISE,
+            False,
+            "",
+            explainable=False,
+        )
+    )
+    sr, so = ref.sensors, other.sensors
+    assert sr is not None and so is not None
+    flags["sensors"] = same_bytes(sr.readings, so.readings) and same_bytes(
+        sr.channels, so.channels
+    )
+    items.append(
+        _field(
+            "sensor channels, every step",
+            relative(sr.channels, so.channels),
+            SENSORS,
+            False,
+            "",
+            explainable=False,
+        )
+    )
+    return items, flags
+
+
+def _frame_moves(
+    ref: ClearUnits, other: ClearUnits, clear_ref: np.ndarray, clear_other: np.ndarray
+) -> np.ndarray:
+    """How many stored frames each unit's clear times moved.
+
+    Parameters
+    ----------
+    ref, other : ClearUnits
+        The two runs' units, one per channel in the same order; each unit's
+        ``times`` are the frames its clear times fall on.
+    clear_ref, clear_other : np.ndarray
+        [units, ...] clear times, one row per unit (a unit's cells, or one
+        value per unit).
+
+    Returns
+    -------
+    np.ndarray
+        The moves of every unit, flattened (``index_moves`` on each unit's
+        frames, so a move between the last two frames is one even when the
+        last frame is closer than the others); one infinity where the two
+        runs hold a different number of units.
+    """
+    if len(ref.times) != len(other.times):
+        return np.array([math.inf])
+    return np.concatenate(
+        [
+            index_moves(
+                np.asarray(clear_ref[u]),
+                np.asarray(clear_other[u]),
+                ref.times[u],
+                other.times[u],
+            ).ravel()
+            for u in range(len(ref.times))
+        ]
+    )
+
+
+def _alerts_item(ref: AlertTable, other: AlertTable) -> Item:
+    """Every alert's opening and closing step, matched by sensor and channel in order."""
+
+    def keyed(table: AlertTable) -> dict[tuple[int, int], list[tuple[float, float]]]:
+        out: dict[tuple[int, int], list[tuple[float, float]]] = {}
+        for i in range(len(table.step_on)):
+            key = (int(table.sensor[i]), int(table.size_class[i]))
+            off = table.step_off[i]
+            closing = math.inf if int(off) == OPEN_STEP else float(off)
+            out.setdefault(key, []).append((float(table.step_on[i]), closing))
+        for value in out.values():
+            value.sort()
+        return out
+
+    a, b = keyed(ref), keyed(other)
+    moves: list[float] = []
+    for key in sorted(set(a) | set(b)):
+        xs, ys = a.get(key, []), b.get(key, [])
+        for x, y in zip(xs, ys, strict=False):
+            # A step's move; an alert open at the end in one run and closed in
+            # the other is a move across the threshold, of infinity.
+            moves.extend(moved(np.array(x), np.array(y), 1.0).tolist())
+        moves.extend([math.inf] * (2 * abs(len(xs) - len(ys))))
+    return _decision(
+        "alerts' opening and closing steps",
+        Moves.of(np.array(moves)),
+        (len(ref.step_on), len(other.step_on)),
+    )
+
+
+def _recovery_times(record: RecoveryRecord) -> np.ndarray:
+    """The clean-out's recovery times, one flat array: room, channels, sensors, means."""
+    return np.concatenate(
+        [
+            [float(record.room_recovery_time)],
+            np.asarray(record.recovery_time, dtype=np.float64).ravel(),
+            np.asarray(record.sensor_time, dtype=np.float64).ravel(),
+            np.asarray(record.mean_time, dtype=np.float64).ravel(),
+        ]
+    )
+
+
+def _budget_end(b: MassBudget) -> tuple[float, float]:
+    """(residual over supply, leftover over supply) of a class's budget; NaN if nothing.
+
+    A class nothing supplied (a release of other sizes) has no ratio to read.
+    """
+    try:
+        return float(b.relative()), float(b.leftover_relative())
+    except ValueError:
+        return math.nan, math.nan
+
+
+def _verdict(residual: float, leftover: float) -> bool | None:
+    """A class's verdict against REQ-T05: both ratios below it; None if undefined."""
+    if math.isnan(residual) or math.isnan(leftover):
+        return None
+    return abs(residual) < REQ_T05 and abs(leftover) < REQ_T05
+
+
+def _leftover_change(
+    ref: Sequence[tuple[float, float]], other: Sequence[tuple[float, float]]
+) -> float:
+    """The largest change of a class's leftover over its supply; infinity on a mismatch.
+
+    Classes undefined on both sides are left out; one defined on one side only
+    is a change of infinity.
+    """
+    largest = 0.0
+    for (_, a), (_, b) in zip(ref, other, strict=True):
+        if math.isnan(a) and math.isnan(b):
+            continue
+        if math.isnan(a) or math.isnan(b):
+            return math.inf
+        largest = max(largest, abs(b - a))
+    return largest
+
+
+def _closure(run: Run) -> float:
+    """The largest |residual| over the supply, every stored frame with a supply."""
+    largest = 0.0
+    for budgets in run.frames.budgets:
+        for b in budgets:
+            try:
+                residual = abs(float(b.relative()))
+            except ValueError:
+                # Nothing supplied yet: nothing to close against.
+                continue
+            # max() skips a NaN, which would read an open budget as closed.
+            largest = math.inf if math.isnan(residual) else max(largest, residual)
+    return largest
+
+
+def compare(ref_path: str | Path, other_path: str | Path) -> Comparison:
+    """ADR-017 H's verdict on OTHER against REF, two runs of one scenario.
+
+    Parameters
+    ----------
+    ref_path, other_path : str or Path
+        The reference's run file and the run compared with it.
+
+    Returns
+    -------
+    Comparison
+        Every stop, decision, field and closure, and the bitwise flags.
+    """
+    ref, other = Run(Path(ref_path)), Run(Path(other_path))
+    stops = compare_stops(ref, other)
+    flows, flow_bitwise = compare_flows(ref, other, _explained(stops))
+    march, flags = compare_march(ref, other)
+    return Comparison(
+        items=[*stops, *flows, *march], bitwise={"flow states": flow_bitwise, **flags}
+    )
+
+
+# ---------------------------------------------------------------------------
+# Several scenarios: the placement
+
+
+def compare_placement(pairs: Mapping[str, tuple[str | Path, str | Path]]) -> list[Item]:
+    """The searched layouts, their order and their units' latencies, both sides.
+
+    Parameters
+    ----------
+    pairs : Mapping[str, tuple]
+        Scenario name to its (reference, other) run files, all on one mesh,
+        the first's configuration holding the placement section.
+
+    Returns
+    -------
+    list[Item]
+        Per rule: the cells of the file's four and of each searched pool, the
+        layouts' order, and every unit's latency of each layout in steps.
+    """
+    sides = []
+    for side in (0, 1):
+        runs = {name: Run(Path(paths[side])) for name, paths in pairs.items()}
+        sides.append(runs)
+    first = next(iter(sides[0].values()))
+    config, mesh = first.config, Mesh(first.config)
+    spec = config.placement
+    if spec is None:
+        raise ValueError("the first run's configuration has no placement section")
+    configs = [r.config for r in sides[0].values()]
+    surfaces = tuple(m for m in spec.mount if m != MOUNT_STAND)
+    pools = {
+        SURFACE: candidates(mesh, configs, surfaces, spec.standoff),
+        STAND: candidates(
+            mesh, configs, spec.mount, spec.standoff, stand_height=spec.stand_height
+        ),
+        FREE: candidates(mesh, configs, (MOUNT_FREE,), spec.standoff),
+    }
+    sensors = tuple(sensor_cells(config, mesh))
+    results = []
+    for runs in sides:
+        units = detection_units({name: r.arrival for name, r in runs.items()})
+        per_rule = {}
+        for rule in RULES:
+            cells = {FILE_LAYOUT: sensors}
+            for name, pool in pools.items():
+                cells[name] = search(units, pool, spec.count, rule).cells
+            scored = {n: given_layout(units, c) for n, c in cells.items()}
+            name_of = {id(layout): n for n, layout in scored.items()}
+            per_rule[rule] = {
+                "cells": {n: tuple(sorted(c)) for n, c in cells.items()},
+                "order": [name_of[id(layout)] for layout in rank(scored.values())],
+                "per_unit": {
+                    n: np.array(
+                        [
+                            min(units.latencies[u, j, i] for j, i in c)
+                            for u in range(len(units.labels))
+                        ]
+                    )
+                    for n, c in cells.items()
+                },
+            }
+        results.append((units, per_rule))
+    (units_r, ref_rules), (units_o, other_rules) = results
+    items: list[Item] = [_same("the detection units", units_r.labels, units_o.labels)]
+    for rule in RULES:
+        r, o = ref_rules[rule], other_rules[rule]
+        for name in r["cells"]:
+            items.append(
+                _same(
+                    f"{rule}: the {name} layout's cells",
+                    r["cells"][name],
+                    o["cells"][name],
+                )
+            )
+        items.append(_same(f"{rule}: the layouts' order", r["order"], o["order"]))
+        moves: list[float] = []
+        if units_r.labels != units_o.labels:
+            # The units differ: no unit's latency can be read against another's.
+            moves.append(math.inf)
+        else:
+            for name in r["cells"]:
+                for u, (scenario, event, _k) in enumerate(units_r.labels):
+                    # A latency is read from its own event's onset, in the step
+                    # of that time: a later event's step is not the first's.
+                    times = []
+                    for side, per_rule_side in ((0, r), (1, o)):
+                        run = sides[side][scenario]
+                        e = list(run.arrival.event_names).index(event)
+                        onset = float(run.arrival.onsets[e])
+                        times.append(
+                            np.array([per_rule_side["per_unit"][name][u] + onset])
+                        )
+                    moves.extend(
+                        index_moves(
+                            times[0],
+                            times[1],
+                            sides[0][scenario].step_times,
+                            sides[1][scenario].step_times,
+                        ).tolist()
+                    )
+        items.append(
+            _decision(f"{rule}: the layouts' unit latencies", Moves.of(np.array(moves)))
+        )
+    return items
+
+
+# ---------------------------------------------------------------------------
+# The command line
+
+
+def report(comparison: Comparison) -> list[str]:
+    """The comparison's lines: the verdict, then one line per item."""
+    lines = [f"verdict: {comparison.verdict}"]
+    for item in comparison.items:
+        mark = "pass" if item.passed else "FAIL"
+        detail = {k: v for k, v in item.detail.items() if k != "kind"}
+        lines.append(f"  [{mark}] {item.criterion}: {item.name}: {_plain(detail)}")
+    lines.append(
+        "bitwise: "
+        + ", ".join(
+            f"{name} {'yes' if same else 'no'}"
+            for name, same in comparison.bitwise.items()
+        )
+    )
+    return lines
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Compare two run files and print the verdict; 0 on PASS, 1 on FAIL.
+
+    Parameters
+    ----------
+    argv : Sequence[str], optional
+        The arguments; ``sys.argv[1:]`` when None.
+
+    Returns
+    -------
+    int
+        0 when every item passes, 1 otherwise.
+    """
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("reference", type=Path, help="the reference's run file")
+    parser.add_argument("other", type=Path, help="the run compared with it")
+    parser.add_argument("--json", type=Path, help="write the comparison here as JSON")
+    args = parser.parse_args(argv)
+    comparison = compare(args.reference, args.other)
+    print("\n".join(report(comparison)))
+    if args.json is not None:
+        args.json.write_text(
+            json.dumps(comparison.as_dict(), indent=1) + "\n", encoding="utf-8"
+        )
+    return 0 if comparison.verdict == "PASS" else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

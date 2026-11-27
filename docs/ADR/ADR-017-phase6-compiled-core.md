@@ -350,6 +350,21 @@ sensor cells now; nothing they do feeds back into the march (REQ-A06), so a batc
 the same as one at a time. The clean-out's hold does feed back, so the recovery tracker is in
 the core and stops `march` at the hold step.
 
+**The exchange as built (recorded 2026-11-26, prompt 96).** Steps 3b and 5b built the exchange
+with six departures from the table above, each kept; the table above is the design, this one the
+calls of record (`docs/reports/phase6_march.md` and `docs/reports/phase6_flow.md`, their
+"Deviations and limits").
+
+| Call as built | Departs from the design by | Why | Step |
+|---|---|---|---|
+| `interval(conditions, u, v, v_ext, nu_t, sources, dt, steps, t_start, t_end, first)` | the flow state's faces and eddy viscosity cross with each interval | the march was built before the flow state was resident; the faces and nu_t are the interval's flow state's, read from Python's record of it | 3b (prompt 91) |
+| `restore(fields, budgets, step, t, first_above, arrival_t, recovery)` before every march | every march starts with a restore, at t = 0 as at a checkpoint | one path sets the resident state, so a new run and a restart are the same code | 3b (prompt 91) |
+| `march(n)` returning the breach's record | a breach is returned with the steps before it, and Python raises `ConservationBreachError` | the binding raises no exception for a condition a run can meet; the Python side maps it (section B) | 3b (prompt 91) |
+| `flow_state(u, v, p[, k, eps, nu_t])` | takes the fields, their normal velocities already written, not `(boundary, initial)` | the boundary's layers stay in Python (section E) | 5b (prompt 95) |
+| `solve_steady(max_outer, first)` | takes the number of the chunk's first outer iteration | a solve runs in chunks (to a checkpoint, or one iteration for a callback), and a failure's message and the records name the iteration | 5b (prompt 95) |
+| `solve_steady`'s chunk | returns no reason; Python maps the stop to the reference's name | the reasons are the reference's strings, which the core holds no copy of | 5b (prompt 95) |
+| the log lines of a chunk | written when the chunk returns, not as each iteration ends, so a solve with no checkpoint and no callback logs its lines at its end | the core writes no log (CLAUDE.md, the interface contract); kept by step 6: the lines are progress only, and nothing a run file or a decision records reads their times | 5b (prompt 95) |
+
 ## C. The core's modules
 
 Each module owns its arrays and its arithmetic, is handed its inputs, and returns its outputs;
@@ -532,6 +547,12 @@ carry NumPy's rounding); those differences are measured and reported, and judged
 of level 1's bound of 1e-12 runs in every environment. Amended in `docs/SYSTEM.md`'s contract row the
 same day.
 
+*The orchestrator, 2026-11-26 (prompt 96):* the bitwise target is the reference run on the same
+machine with the same C library. The core and NumPy at x86-64-v3 call the C library's `log`, `pow`
+and `exp`, so a newer C library can move both sides together; CI's runner (Ubuntu 26.04) and the
+WSL machine of record (Ubuntu 24.04) differ in it, and no test compares results taken on two
+machines.
+
 **ADR-016's "exactly".** ADR-016 asks the port to reproduce the implicit stop exactly. At level 1
 it does: given the reference's inputs, the copied order gives the same leftover and the same
 sweep, bit for bit. In a whole run the stop's inputs carry the upstream blocks' rounding, so the
@@ -588,6 +609,16 @@ the reference's when:
    The budget's closure is not tiered: it is the reference's own check, and it holds or fails;
 3. *every stop is within one of the reference's*: the outer count of each flow state, and the
    CG and Jacobi counts are reported beside, not judged.
+
+**The comparator as built** (`scripts/compare_runs.py`, prompts 96 and 96b). The outer count
+one apart explains a flow field only. An outer count one apart moved the class fields (the
+concentration per frame and pointwise, the sensor channels, the leftover's change) by 2.7e-11 at
+most in the probe, inside their first tier, and what moved them further was a Jacobi sweep, whose
+count a run file does not record; so a class field between its spread and its limit is read as
+beyond the limit, its line says so, and it goes to the step's report. A decision is equal only
+when it falls at the same step or the same frame: a time in steps and a clear time are compared
+by the index of the step or frame each falls on, and a move across the last two frames, which lie
+closer together than the rest, is one.
 
 The factor of ten is a choice, not a measurement. Each variant changed one thing; a port
 changes all its reductions at once, and the stops that sit within rounding of their thresholds

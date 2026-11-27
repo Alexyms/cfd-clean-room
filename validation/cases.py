@@ -28,7 +28,13 @@ import numpy as np
 import yaml
 
 from src.boundary_staggered import StaggeredBoundary
-from src.config import PRESSURE_PRECONDITIONERS, VELOCITY_STEP, SimConfig
+from src.config import (
+    CORE_BACKEND,
+    PRESSURE_PRECONDITIONERS,
+    VELOCITY_STEP,
+    SimConfig,
+    check_core_module,
+)
 from src.mesh import Mesh, geometric_faces, ratio_for_wall_spacing
 
 CONFIG_DIR = Path(__file__).resolve().parent.parent / "configs"
@@ -696,4 +702,37 @@ def with_pressure_preconditioner(config: SimConfig, preconditioner: str) -> SimC
         )
     out = copy.copy(config)
     out.pressure_preconditioner = preconditioner
+    return out
+
+
+def with_backend(config: SimConfig, backend: str) -> SimConfig:
+    """A copy of a case configuration that names the backend it runs on (ADR-017 E).
+
+    The harness runs a case on the backend its ``--backend`` names
+    (scripts/benchmark.py), whatever the case file says. Nothing else changes,
+    but the copy's mapping names the backend (``SimConfig.with_backend``), so a
+    run file written from it records it and refuses a restart on the other.
+
+    Parameters
+    ----------
+    config : SimConfig
+        A loaded case configuration. Not modified.
+    backend : str
+        One of ``BACKENDS``.
+
+    Returns
+    -------
+    SimConfig
+        A copy with ``backend`` set in its attributes and its mapping.
+
+    Raises
+    ------
+    ValueError
+        If the backend is not one of ``BACKENDS``, or is ``core`` where the
+        core cannot run the case (``SimConfig.check_backend``: a tier-2 case;
+        ``check_core_module``: no ``_cfdcore``, since the copy is made to run).
+    """
+    out = config.with_backend(backend)
+    if backend == CORE_BACKEND:
+        check_core_module()
     return out

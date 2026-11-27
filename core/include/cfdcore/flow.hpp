@@ -16,7 +16,7 @@
 // What stays in Python (ADR-017 E): the solver's set-up and its refusals, the
 // warm start's and the resume's checks, the normal velocities written before the
 // loop, the checkpoints built from the fields and the window at the reference's
-// iterations, and the log lines; `tests/core_driver.py` drives the chunks.
+// iterations, and the log lines; `src/core_backend.py` drives the chunks.
 //
 // Written per direction (ADR-017 decision 4): component c of the velocity lies on
 // the faces normal to direction c, and its cell centre is the mean of its two

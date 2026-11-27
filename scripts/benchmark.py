@@ -21,6 +21,11 @@ records the rule's version in its params, read from the solver
 condition (e) 4 until 2026-10-11 and 5 since (its scale, ADR-012 E). A row
 with the turbulence section records the section in its params as well.
 
+Each row records the backend it ran on, ``params.backend`` (``solver.backend``,
+ADR-017 E): the NumPy reference, or the compiled core under ``--backend core``,
+built by the one factory ``time_integration`` uses (``core_backend.steady_solver``).
+Rows of schema 2 and before carry no backend and ran on the reference.
+
 Seven case families. Poiseuille and the cavity are scored from the
 cell-centred field, every trajectory sample and the row alike. The Annex 20
 room (VAL-017, ``val017_216x72``) is scored from the final face velocities
@@ -107,6 +112,8 @@ from src.boundary_staggered import (  # noqa: E402 -- follows sys.path.insert
     StaggeredBoundary,
 )
 from src.config import (  # noqa: E402 -- follows sys.path.insert
+    BACKENDS,
+    DEFAULT_BACKEND,
     ERROR_ESTIMATE,
     MULTIGRID,
     PRESSURE_JACOBI,
@@ -114,6 +121,7 @@ from src.config import (  # noqa: E402 -- follows sys.path.insert
     VELOCITY_STEP,
     SimConfig,
 )
+from src.core_backend import steady_solver  # noqa: E402 -- follows sys.path.insert
 from src.io_manager import RunFile  # noqa: E402 -- follows sys.path.insert
 from src.mesh import FLUID, SOLID, Mesh  # noqa: E402 -- follows sys.path.insert
 from src.momentum import MomentumPredictor  # noqa: E402 -- follows sys.path.insert
@@ -150,6 +158,7 @@ from validation.cases import (  # noqa: E402 -- follows sys.path.insert
     CASE_GRIDS,
     CYLINDER_PRESETS,
     load_preset,
+    with_backend,
     with_pressure_preconditioner,
 )
 from validation.metrics import (  # noqa: E402 -- follows sys.path.insert
@@ -159,8 +168,10 @@ from validation.metrics import (  # noqa: E402 -- follows sys.path.insert
 
 # 2 since ECR-003 step 1: work.inner_sweeps became inner_iterations, and
 # work.inner_products and outcome.pressure_cap_hits were added. Rows of
-# schema 1 are read as before; nothing reads the renamed key back.
-SCHEMA_VERSION = 2
+# schema 1 are read as before; nothing reads the renamed key back. 3 since
+# Phase 6 step 6 (prompt 96): params.backend, the solver the row ran on; a
+# row of schema 2 or before has none and ran on the reference (row_backend).
+SCHEMA_VERSION = 3
 RESULTS_PATH = REPO_ROOT / "benchmarks" / "results.jsonl"
 # The method label selects the solver, so a row cannot claim one it did not run.
 # The solver of record's is src/pressure.py's, looked up there by
@@ -261,6 +272,24 @@ FACE_SCORED_FAMILIES = (
 # One stop_reason per rule. The velocity-step label is the one every row stored
 # before the staggered solver reported its own stop, and every collocated row has.
 STOP_LABELS = {"velocity_step_below_tol": "residual_below_tol"}
+
+
+def row_backend(row: dict) -> str:
+    """The backend a stored row ran on: its ``params.backend``, else the reference.
+
+    Rows of schema 2 and before predate the key and every one ran on the NumPy
+    reference.
+    """
+    return str(row.get("params", {}).get("backend", DEFAULT_BACKEND))
+
+
+def backend_mark(backend: str) -> str:
+    """What closes a summary row: nothing on the reference, else the backend.
+
+    A reference row prints as every row printed before the key, so a row's
+    columns and its last word, the reference, keep their places.
+    """
+    return "" if backend == DEFAULT_BACKEND else f" ({backend})"
 
 
 def solver_parameters(config: SimConfig) -> dict:
@@ -829,15 +858,25 @@ def product_accuracy(
     }
 
 
-def run_case(case_id: str, method: str, sample_every: int, concurrent: int) -> dict:
+def run_case(
+    case_id: str,
+    method: str,
+    sample_every: int,
+    concurrent: int,
+    backend: str = DEFAULT_BACKEND,
+) -> dict:
     """Run one case once with the solver the method names and return its record.
+
+    The case runs on BACKEND (``solver.backend``), whatever its file says, and
+    the row records it in ``params.backend``.
 
     Raises
     ------
     ValueError
         If the method is not one of METHODS. The two retired labels,
         collocated-jacobi and staggered-jacobi, are refused by name with
-        where each solver went.
+        where each solver went. ``with_backend``'s refusals of the core: a
+        tier-2 case, or where the core is not built.
     """
     if method in RETIRED_METHODS:
         raise ValueError(f"method {method!r} {RETIRED_METHODS[method]}")
@@ -845,9 +884,12 @@ def run_case(case_id: str, method: str, sample_every: int, concurrent: int) -> d
         raise ValueError(f"unknown method {method!r}; known: {list(METHODS)}")
     kind, nx, ny = CASES[case_id]
     if kind == CYLINDER_FAMILY:
-        return run_cylinder_case(case_id, method, concurrent)
-    config = with_pressure_preconditioner(
-        load_preset(case_id), METHOD_PRECONDITIONERS[method]
+        return run_cylinder_case(case_id, method, concurrent, backend)
+    config = with_backend(
+        with_pressure_preconditioner(
+            load_preset(case_id), METHOD_PRECONDITIONERS[method]
+        ),
+        backend,
     )
     solver_block = solver_parameters(config)
     mesh = Mesh(config)
@@ -855,7 +897,11 @@ def run_case(case_id: str, method: str, sample_every: int, concurrent: int) -> d
     # One cell update = one stencil evaluation at one unknown, counted per
     # method as CELL_UPDATE_DEFINITIONS states. Comparable across Jacobi,
     # Krylov, multigrid, CPU and GPU.
-    solver = StaggeredSolver(mesh, config, StaggeredBoundary(mesh, config))
+    # The reference's class is this module's name for it, so that a test's
+    # substitute is built under the reference; the core's is the factory's.
+    solver = steady_solver(
+        mesh, config, StaggeredBoundary(mesh, config), reference=StaggeredSolver
+    )
     momentum_updates, pressure_cells = staggered_updates(mesh, config)
     counter = WorkCounter(pressure_cells, momentum_updates)
 
@@ -1038,15 +1084,21 @@ def cylinder_accuracy(
     }
 
 
-def run_cylinder_case(case_id: str, method: str, concurrent: int) -> dict:
+def run_cylinder_case(
+    case_id: str, method: str, concurrent: int, backend: str = DEFAULT_BACKEND
+) -> dict:
     """Run one VAL-022 preset through tier 2 and return its row (ADR-014 F).
 
     The probe's perturbed start-up, then ``time_integration.run`` to the
     preset's end; the run file goes to results/val022/ and the per-step
-    series to docs/reports/val022/<preset>.json with the row's reading.
+    series to docs/reports/val022/<preset>.json with the row's reading. Tier 2
+    stays on the reference: ``with_backend`` refuses the core here.
     """
-    config = with_pressure_preconditioner(
-        load_preset(case_id), METHOD_PRECONDITIONERS[method]
+    config = with_backend(
+        with_pressure_preconditioner(
+            load_preset(case_id), METHOD_PRECONDITIONERS[method]
+        ),
+        backend,
     )
     mesh = Mesh(config)
     momentum_updates, pressure_cells = staggered_updates(mesh, config)
@@ -1209,10 +1261,13 @@ def print_summary(path: Path) -> None:
         metric = record["accuracy"].get("metric", "-")
         reference = record["accuracy"].get("reference", "-")
         params = record.get("params", {})
+        backend = row_backend(record)
         rule = params.get("stopping_rule", VELOCITY_STEP)
         # error_estimate rows from before rule_version (0ca4ace, f3561ba) ran version 2.
         version = str(params.get("rule_version", 2)) if rule == ERROR_ESTIMATE else "-"
-        rows.setdefault((*key, rule, version, metric, reference), []).append(record)
+        rows.setdefault((*key, rule, version, backend, metric, reference), []).append(
+            record
+        )
 
     header = (
         f"{'method':<20} {'case':<22} {'rule':<14} {'ver':>3} {'procs':>5} {'n':>2} "
@@ -1221,9 +1276,16 @@ def print_summary(path: Path) -> None:
     )
     print(header)
     print("-" * len(header))
-    for (method, case, procs, rule, version, metric, reference), runs in sorted(
-        rows.items()
-    ):
+    for (
+        method,
+        case,
+        procs,
+        rule,
+        version,
+        backend,
+        metric,
+        reference,
+    ), runs in sorted(rows.items()):
         outer = [r["work"]["outer_iterations"] for r in runs]
         wall = [r["time"]["wall_seconds"] for r in runs]
         updates = [r["work"]["cell_updates"] for r in runs]
@@ -1235,14 +1297,16 @@ def print_summary(path: Path) -> None:
             f"{min(wall):>7.1f}/{statistics.median(wall):>7.1f}/{max(wall):>7.1f} "
             f"{statistics.median(updates):>14.3e} "
             f"{min(error):>9.3e}..{max(error):<9.3e} {conv:>2}/{len(runs)} "
-            f"{metric:<34} {reference}"
+            f"{metric:<34} {reference}{backend_mark(backend)}"
         )
 
     references: dict[tuple[str, str], set[str]] = {}
     metrics: dict[tuple[str, str], set[str]] = {}
     rules: dict[tuple[str, str], set[str]] = {}
     versions: dict[tuple[str, str], set[str]] = {}
-    for method, case, _procs, rule, version, metric, reference in rows:
+    backends: dict[tuple[str, str], set[str]] = {}
+    for method, case, _procs, rule, version, backend, metric, reference in rows:
+        backends.setdefault((method, case), set()).add(backend)
         references.setdefault((method, case), set()).add(reference)
         metrics.setdefault((method, case), set()).add(metric)
         rules.setdefault((method, case), set()).add(rule)
@@ -1271,6 +1335,13 @@ def print_summary(path: Path) -> None:
             print(
                 f"note: {method} {case} has error_estimate rows under rule versions "
                 f"{sorted(seen)}; compare them only within one version"
+            )
+
+    for (method, case), seen in sorted(backends.items()):
+        if len(seen) > 1:
+            print(
+                f"note: {method} {case} has rows on the backends {sorted(seen)}; their "
+                "outer counts and errors agree within ADR-017 H's band, not bit for bit"
             )
 
     loads_seen = sorted({procs for _, _, procs in groups})
@@ -1336,6 +1407,12 @@ def main(argv: list[str] | None = None) -> int:
         default=1,
         help="Processes this run shared the machine with, itself included, at least 1",
     )
+    parser.add_argument(
+        "--backend",
+        choices=BACKENDS,
+        default=DEFAULT_BACKEND,
+        help="The solver to build (solver.backend, ADR-017 E); recorded with each row",
+    )
     parser.add_argument("--results", type=Path, default=RESULTS_PATH)
     parser.add_argument("--summary", action="store_true", help="Print stored results")
     args = parser.parse_args(argv)
@@ -1347,7 +1424,9 @@ def main(argv: list[str] | None = None) -> int:
     args.results.parent.mkdir(parents=True, exist_ok=True)
     for case_id in args.cases:
         for repeat in range(args.repeats):
-            record = run_case(case_id, args.method, args.sample_every, args.concurrent)
+            record = run_case(
+                case_id, args.method, args.sample_every, args.concurrent, args.backend
+            )
             with args.results.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(record) + "\n")
             print(

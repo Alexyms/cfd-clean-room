@@ -22,13 +22,12 @@ from types import CodeType, FrameType, SimpleNamespace
 import numpy as np
 import pytest
 
-from src import momentum
+from src import core_backend, momentum
 from src.boundary_staggered import StaggeredBoundary, TangentialCondition
 from src.boundary_vents import VentFaces
 from src.config import SimConfig
 from src.mesh import FLUID, SOLID, Mesh
 from src.momentum import MomentumPredictor
-from tests import core_mapping
 
 if os.environ.get("CFD_CORE_REQUIRED") == "1":
     import _cfdcore
@@ -82,7 +81,7 @@ def _core_predictor(
     mesh: object, config: object, boundary: object
 ) -> "_cfdcore.MomentumPredictor2":
     """The core's predictor on a mesh, as the reference's arguments make it."""
-    return core_mapping.momentum_predictor(mesh, config, boundary)
+    return core_backend.momentum_predictor(mesh, config, boundary)
 
 
 def _room(mesh: object, config: object, boundary: object) -> Room:

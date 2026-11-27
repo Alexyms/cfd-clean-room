@@ -550,6 +550,75 @@ class AlertMonitor:
             not finite, the classes are not 0 to n - 1, a field is not
             [ny, nx], or a reading is not finite.
         """
+        step, t = self._checked_time(step, t)
+        n_classes = self._thresholds.shape[0]
+        _check_fields(fields, n_classes, self._shape)
+        readings = np.array(
+            [np.asarray(fields[k])[self._rows, self._cols] for k in range(n_classes)],
+            dtype=np.float64,
+        )
+        if not np.isfinite(readings).all():
+            raise ValueError(f"a reading at step {step} is not finite")
+        return self._advance(step, t, readings, self._sums(readings))
+
+    def update_from_readings(
+        self, step: int, t: float, readings: np.ndarray, channels: np.ndarray
+    ) -> tuple[Alert, ...]:
+        """Take a step's readings as the compiled core's march returns them (ADR-017 E).
+
+        The update from fields reads each class at the sensors' cells and sums
+        the channels itself; this one is handed both, read from the fields by
+        the core and summed in ``channel_sums``' order (ADR-017 F), so the march
+        does not stop each step for the monitor. Given the readings and channels
+        the update from fields would form, it opens and closes the same alerts
+        and leaves the same state, bit for bit.
+
+        Parameters
+        ----------
+        step : int
+            The run's step count, non-negative and above the last update's.
+        t : float
+            The step's time, seconds, finite and above the last update's.
+        readings : np.ndarray
+            [classes, sensors], each class's concentration at each sensor's
+            cell, particles per cubic metre. Copied, never written.
+        channels : np.ndarray
+            [channels, sensors], each channel's reading at each sensor's cell,
+            the sum of its classes (``channel_sums``). Copied, never written.
+
+        Returns
+        -------
+        tuple[Alert, ...]
+            The alerts this step opened and closed, as ``update`` returns them.
+
+        Raises
+        ------
+        TypeError
+            If ``step`` is not an int (a bool is not one here) or ``t`` not a
+            real number.
+        ValueError
+            If ``step`` or ``t`` is not above the last update's, ``t`` is not
+            finite, an array is not [classes, sensors] or holds a value that is
+            not finite.
+        """
+        step, t = self._checked_time(step, t)
+        expected = self._readings.shape
+        arrays = {
+            "readings": np.array(readings, dtype=np.float64),
+            "channels": np.array(channels, dtype=np.float64),
+        }
+        for name, array in arrays.items():
+            if array.shape != expected:
+                raise ValueError(
+                    f"the {name} at step {step} have shape {array.shape}; the "
+                    f"monitor's are {expected} (classes, sensors)"
+                )
+            if not np.isfinite(array).all():
+                raise ValueError(f"a {name[:-1]} at step {step} is not finite")
+        return self._advance(step, t, arrays["readings"], arrays["channels"])
+
+    def _checked_time(self, step: int, t: float) -> tuple[int, float]:
+        """An update's step and time as int and float, or the update's refusal."""
         if isinstance(step, (bool, np.bool_)) or not isinstance(
             step, (int, np.integer)
         ):
@@ -569,15 +638,13 @@ class AlertMonitor:
             raise ValueError(
                 f"t = {t!r} s is not above the last update's {self._t!r} s"
             )
+        return step, t
+
+    def _advance(
+        self, step: int, t: float, readings: np.ndarray, sums: np.ndarray
+    ) -> tuple[Alert, ...]:
+        """Open, close and carry the alerts on a step's readings and channel SUMS."""
         n_classes = self._thresholds.shape[0]
-        _check_fields(fields, n_classes, self._shape)
-        readings = np.array(
-            [np.asarray(fields[k])[self._rows, self._cols] for k in range(n_classes)],
-            dtype=np.float64,
-        )
-        if not np.isfinite(readings).all():
-            raise ValueError(f"a reading at step {step} is not finite")
-        sums = self._sums(readings)
         changed = []
         above = sums >= self._thresholds[:, None]
         for k in range(n_classes):

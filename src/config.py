@@ -5,6 +5,8 @@ load time, and provides typed attribute access. Satisfies REQ-C01
 (single source of truth) and REQ-C02 (fail-fast validation).
 """
 
+import copy
+import importlib
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -936,7 +938,45 @@ PRESSURE_JACOBI = "jacobi"
 MULTIGRID = "multigrid"
 PRESSURE_PRECONDITIONERS: tuple[str, ...] = (PRESSURE_JACOBI, MULTIGRID)
 DEFAULT_PRESSURE_PRECONDITIONER = MULTIGRID
-# Every key the solver block accepts, nine required and six optional, in the
+# Which solver a run builds (ADR-017 E): the NumPy reference, the default, or
+# the compiled core (src/core_backend.py). The core carries tier 1's scenario
+# runs and every steady solve of record, not tier 2's true-time step (ADR-017
+# F, option 1), and exists only where its module _cfdcore imports (under Linux,
+# built by scripts/build_core.sh; ADR-017 A). A configuration that names the core
+# loads wherever it is read, so that a core run's file is read, analysed and
+# reported on Windows too; the module is looked for where a core solver or march is
+# built (``check_core_module``, called by src/core_backend.py).
+REFERENCE_BACKEND = "reference"
+CORE_BACKEND = "core"
+BACKENDS: tuple[str, ...] = (REFERENCE_BACKEND, CORE_BACKEND)
+DEFAULT_BACKEND = REFERENCE_BACKEND
+CORE_MODULE = "_cfdcore"
+
+
+def check_core_module() -> None:
+    """Refuse the core where its compiled module cannot be imported.
+
+    Called where a core solver or march is built (``src/core_backend.py``) and
+    by ``validation.cases.with_backend``, not where a configuration or a run
+    file is read.
+
+    Raises
+    ------
+    ValueError
+        Naming the build: ``_cfdcore`` is built under Linux by
+        ``scripts/build_core.sh`` (ADR-017 A), and Windows has no build.
+    """
+    try:
+        importlib.import_module(CORE_MODULE)
+    except ImportError as error:
+        raise ValueError(
+            f"solver.backend '{CORE_BACKEND}' needs the compiled core, but "
+            f"{CORE_MODULE} cannot be imported here ({error}); it is built under "
+            "Linux by scripts/build_core.sh (ADR-017 A), and Windows has no build"
+        ) from None
+
+
+# Every key the solver block accepts, nine required and seven optional, in the
 # order the harness records them: it reads this tuple, so a key added here is
 # in every harness row (GitHub issue 38). With optional keys a misspelt one
 # would otherwise fall back to its default.
@@ -956,6 +996,7 @@ SOLVER_KEYS: tuple[str, ...] = (
     "mass_imbalance_tol",
     "pressure_preconditioner",
     "checkpoint_interval",
+    "backend",
 )
 
 # Transport section (ADR-011 I), optional: the velocity-only validation cases
@@ -1205,7 +1246,8 @@ class SimConfig:
             the file as read, or for a scenario the merged base followed by
             the scenario section as the file states it. A copy made and
             changed after loading (``validation.cases.with_velocity_step``)
-            keeps the mapping it was copied from.
+            keeps the mapping it was copied from, except ``with_backend``'s,
+            which names the backend in its mapping.
         """
         return _thaw(self._mapping)
 
@@ -1389,6 +1431,11 @@ class SimConfig:
             self.checkpoint_interval = self._require_positive_int(
                 solver, "checkpoint_interval", "solver"
             )
+        # The solver a run builds (ADR-017 E); the core's refusals follow the
+        # transient section, which it reads.
+        self.backend: str = DEFAULT_BACKEND
+        if "backend" in solver:
+            self.backend = self._require_choice(solver, "backend", "solver", BACKENDS)
 
         # Transport (optional). Unknown keys raise as they do in the solver
         # block, so a misspelt key cannot fall back to a default.
@@ -1699,6 +1746,7 @@ class SimConfig:
         self.transient: TransientSpec | None = None
         if TRANSIENT_KEY in raw:
             self.transient = self._parse_transient(raw[TRANSIENT_KEY])
+        self.check_backend()
 
         # Sensors
         sensors_raw = self._require_section(raw, "sensors")
@@ -2992,6 +3040,69 @@ class SimConfig:
             max_iter=cls._require_positive_int(section, "max_iter", "turbulence"),
             tol=cls._require_positive_float(section, "tol", "turbulence"),
         )
+
+    def check_backend(self) -> None:
+        """Refuse ``solver.backend: core`` with a configuration the core cannot run.
+
+        Called at load. It does not look for the compiled module, so a run file
+        written under ``core`` is read where the core is not built
+        (``check_core_module`` is where a core solver or march is built). The
+        reference runs everything.
+
+        Raises
+        ------
+        ValueError
+            With a transient section: tier 2's true-time step stays on the
+            reference (ADR-017 F, option 1).
+        """
+        if self.backend == CORE_BACKEND and self.transient is not None:
+            raise ValueError(
+                f"solver.backend '{CORE_BACKEND}' is refused with a transient "
+                "section: the core carries tier 1's scenario runs and the steady "
+                "solves, and tier 2's true-time step stays on the reference "
+                f"(ADR-017 F); run it with solver.backend '{REFERENCE_BACKEND}'"
+            )
+
+    def with_backend(self, backend: str) -> "SimConfig":
+        """A copy that names ``backend``, in its attributes and in its mapping.
+
+        The mapping is what a run records in its run file and what a restart
+        and a kept flow state are checked against, so a run of the copy names
+        the backend it ran on and is refused a restart on the other. A scenario
+        configuration's interval configurations are built from the scenario's
+        merged base, which names it too.
+
+        Parameters
+        ----------
+        backend : str
+            One of ``BACKENDS``.
+
+        Returns
+        -------
+        SimConfig
+            A shallow copy; this configuration is not modified.
+
+        Raises
+        ------
+        ValueError
+            If ``backend`` is not one of ``BACKENDS``, or is ``core`` with a
+            transient section (``check_backend``).
+        """
+        if backend not in BACKENDS:
+            raise ValueError(
+                f"backend must be one of {list(BACKENDS)}, got {backend!r}"
+            )
+        out = copy.copy(self)
+        out.backend = backend
+        mapping = _thaw(self._mapping)
+        mapping.setdefault("solver", {})["backend"] = backend
+        out._mapping = _freeze(mapping)
+        if self.scenario is not None:
+            base = _thaw(self.scenario.base)
+            base.setdefault("solver", {})["backend"] = backend
+            out.scenario = replace(self.scenario, base=_freeze(base))
+        out.check_backend()
+        return out
 
     @classmethod
     def _require_choice(

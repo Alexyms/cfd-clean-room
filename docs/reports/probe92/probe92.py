@@ -67,6 +67,7 @@ sys.path.insert(0, str(HERE))
 # of the machine's state. Its commands are not used.
 import probe90  # noqa: E402 -- after sys.path
 
+from src import core_backend as core_mapping  # noqa: E402 -- after sys.path
 from src.boundary_staggered import StaggeredBoundary  # noqa: E402 -- after sys.path
 from src.config import SimConfig  # noqa: E402 -- after sys.path
 from src.io_manager import RunFile  # noqa: E402 -- after sys.path
@@ -76,7 +77,6 @@ from src.solver_staggered import (  # noqa: E402 -- after sys.path
     FlowState,
     StaggeredSolver,
 )
-from tests import core_mapping  # noqa: E402 -- after sys.path
 from validation.cases import load_annex20, load_case  # noqa: E402 -- after sys.path
 
 RESULTS = ROOT / "results" / "builder92"

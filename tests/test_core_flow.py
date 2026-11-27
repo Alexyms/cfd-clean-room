@@ -5,7 +5,7 @@ REQ-N03, ADR-017 D, G and H; prompt 95. ``_cfdcore.StoppingRule2`` against
 for bit, and each estimate to 1e-12 of the reference's, since its rate fit's
 ``x @ log(steps)`` is OpenBLAS's dot there and the core's fixed blocks here (the
 second kind). ``viscosity_scale``'s median, the imbalance summary, the cell
-centres and the max-norms bit for bit. Then ``tests/core_driver.CoreSolver``,
+centres and the max-norms bit for bit. Then ``core_backend.CoreSolver``,
 whose outer iterations run in a ``_cfdcore.Flow2``, against ``StaggeredSolver``:
 outer iterations from planted fields on prompt 87's meshes, the cavity's and a
 small room open on every edge, laminar, under a fixed eddy viscosity and coupled,
@@ -41,7 +41,7 @@ import pytest
 import yaml
 
 import src.time_integration as time_integration
-from src import pressure, scalar_scheme
+from src import core_backend, pressure, scalar_scheme
 from src.boundary_staggered import StaggeredBoundary
 from src.config import STANDARD, UPWIND, SimConfig
 from src.io_manager import RunFile
@@ -56,7 +56,6 @@ from src.stopping import (
     viscosity_scale,
 )
 from src.turbulence import PositivityError
-from tests import core_mapping
 
 if os.environ.get("CFD_CORE_REQUIRED") == "1":
     import _cfdcore
@@ -70,7 +69,7 @@ else:
     )
 
 # After the skip above: these modules need the core too.
-from tests.core_driver import CoreSolver, steady_solves_in_the_core
+from src.core_backend import CoreSolver
 from tests.test_core_parity import MESHES, _raw_config
 from tests.test_core_turbulence import _raw as _turbulence_raw
 from tests.test_core_turbulence import (
@@ -132,7 +131,7 @@ def _pair(
     keys = {"viscosity_condition": viscosity_condition}
     return (
         ErrorEstimateRule(*arguments, **keys),
-        core_mapping.error_estimate_rule(*arguments, **keys),
+        core_backend.error_estimate_rule(*arguments, **keys),
     )
 
 
@@ -385,7 +384,7 @@ def test_the_rules_construction_is_refused_as_the_reference_refuses_it(
     with pytest.raises(error) as expected:
         ErrorEstimateRule(*arguments, **keys)
     with pytest.raises(error) as got:
-        core_mapping.error_estimate_rule(*arguments, **keys)
+        core_backend.error_estimate_rule(*arguments, **keys)
     assert str(got.value) == str(expected.value)
 
 
@@ -537,7 +536,7 @@ def test_the_cell_centres_and_their_changes_are_the_references(name: str) -> Non
     """``to_cell_centers`` and ``np.max(np.abs(a[m] - b[m]))``, a NaN read and one not read."""
     config = SimConfig.from_dict(_raw_config(name), "configs")
     mesh = Mesh(config)
-    grid = core_mapping.core_grid(mesh)
+    grid = core_backend.core_grid(mesh)
     rng = _rng("centres", name)
     fluid = mesh.cell_type == FLUID
     u, v = _faces(mesh, rng)
@@ -846,7 +845,7 @@ def test_the_rule_is_built_with_the_solvers_scales(name: str, mode: str) -> None
     """The core's rule reads the solver's velocity scale and flux scale, and the window's length."""
     mesh, config = _configured(_raw(name, mode))
     solver = _solver(CoreSolver, mesh, config)
-    core = core_mapping.flow_solver(
+    core = core_backend.flow_solver(
         solver._modules,
         config,
         solver._boundary,
@@ -1029,7 +1028,7 @@ def test_a_positivity_failure_in_the_coupled_solve_raises_as_the_reference() -> 
         if solver._model is not None:
             solver._model._cfl = 40.0
         if isinstance(solver, CoreSolver):
-            solver._modules = core_mapping.flow_modules(
+            solver._modules = core_backend.flow_modules(
                 mesh, config, solver._boundary, solver._corrector
             )
         with (
@@ -1180,7 +1179,7 @@ def test_a_warm_start_is_the_references_at_level_two() -> None:
 def _flow_parts(mode: str = "laminar") -> tuple:
     mesh, config = _configured(_raw("cavity", mode, max_simple_iter=5))
     solver = _solver(StaggeredSolver, mesh, config)
-    modules = core_mapping.flow_modules(
+    modules = core_backend.flow_modules(
         mesh, config, solver._boundary, solver._corrector
     )
     return mesh, config, solver, modules
@@ -1189,7 +1188,7 @@ def _flow_parts(mode: str = "laminar") -> tuple:
 def test_flow2_refuses_modules_of_another_grid_or_mode() -> None:
     """Outlets of another grid, a model without its boundary, a rule of no name."""
     mesh, config, solver, modules = _flow_parts()
-    other = core_mapping.outlet_faces(mesh, solver._boundary)
+    other = core_backend.outlet_faces(mesh, solver._boundary)
     arguments = [
         modules.grid,
         modules.predictor,
@@ -1224,7 +1223,7 @@ def test_flow2_refuses_modules_of_another_grid_or_mode() -> None:
 def test_flow2s_state_and_chunks_are_refused_when_they_do_not_fit() -> None:
     """Fields of another shape, k for a laminar solve, a chunk of no iteration."""
     _, config, solver, modules = _flow_parts()
-    core = core_mapping.flow_solver(
+    core = core_backend.flow_solver(
         modules, config, solver._boundary, solver.reference_velocity, solver.flux_scale
     )
     n = CAVITY
@@ -1248,12 +1247,12 @@ def test_flow2s_state_and_chunks_are_refused_when_they_do_not_fit() -> None:
 def test_a_chunks_failure_maps_to_the_references_exception() -> None:
     """Each failure the core returns raises the type and the words the reference raises."""
     assert isinstance(
-        core_mapping.flow_error(
+        core_backend.flow_error(
             {"type": "ValueError", "message": "faces must be finite"}
         ),
         ValueError,
     )
-    error = core_mapping.flow_error(
+    error = core_backend.flow_error(
         {
             "type": "PositivityError",
             "iteration": 7,
@@ -1269,11 +1268,11 @@ def test_a_chunks_failure_maps_to_the_references_exception() -> None:
     assert str(error).startswith("outer iteration 7: k is not positive and finite at 2")
     assert error.minimum == -1.5
     assert isinstance(
-        core_mapping.flow_error({"type": "ZeroDivisionError", "message": ""}),
+        core_backend.flow_error({"type": "ZeroDivisionError", "message": ""}),
         ZeroDivisionError,
     )
     assert isinstance(
-        core_mapping.flow_error({"type": "LinAlgError", "message": ""}),
+        core_backend.flow_error({"type": "LinAlgError", "message": ""}),
         np.linalg.LinAlgError,
     )
 
@@ -1434,8 +1433,8 @@ def test_the_small_room_is_open_on_every_edge() -> None:
     mesh, config = _configured(_raw(SMALL, "coupled"))
     outlets = StaggeredBoundary(mesh, config).pressure_outlets()
     assert {
-        edge: bool(outlets[edge].is_outlet.any()) for edge in core_mapping.WALL_EDGES
-    } == {edge: True for edge in core_mapping.WALL_EDGES}
+        edge: bool(outlets[edge].is_outlet.any()) for edge in core_backend.WALL_EDGES
+    } == {edge: True for edge in core_backend.WALL_EDGES}
 
 
 def test_the_poiseuille_flow_solved_whole_is_the_references_at_level_two() -> None:
@@ -1496,7 +1495,7 @@ def _solver_at(
     assert solver._model is not None
     solver._model._cfl = cfl
     if isinstance(solver, CoreSolver):
-        solver._modules = core_mapping.flow_modules(
+        solver._modules = core_backend.flow_modules(
             mesh, config, solver._boundary, solver._corrector
         )
     return solver
@@ -2007,16 +2006,15 @@ def test_the_k_epsilon_steps_warnings_are_the_references(
         assert lines[-1].startswith("implicit k or eps solve stopped")
 
 
-def test_steady_solves_in_the_core_builds_the_core_solver_in_a_scenario_run(
+def test_the_core_key_builds_the_core_solver_in_a_scenario_run(
     tmp_path: Path,
 ) -> None:
-    """A scenario's steady solve, run inside the patch, is the core's and is kept.
+    """Under ``solver.backend: core`` a scenario's steady solve is the core's and is kept.
 
     The product room at 80 by 30 cells, its first interval's flow state: solved by a
     ``CoreSolver`` (counted by its ``solve_steady``), stopped by the rule, and
-    written to the run file. The patch is undone on leaving, also by an exception.
-    Step 6 of ADR-017 replaces the patch with the ``solver.backend`` key; until then
-    the probe and the parity tests share it, and this is its only test.
+    written to the run file. The key replaced prompt 95's patch of
+    ``time_integration.StaggeredSolver`` (prompt 96), which stays the reference's.
     """
 
     class StopError(Exception):
@@ -2031,6 +2029,7 @@ def test_steady_solves_in_the_core_builds_the_core_solver_in_a_scenario_run(
     raw["domain"] = {"nx": 80, "ny": 30}
     cell = (8.0 / 80) * (3.0 / 30)
     raw.setdefault("solver", {})["mass_imbalance_tol"] = 1.0e-4 * 1.2 * cell / 60.0
+    raw["solver"]["backend"] = "core"
     config = SimConfig.from_dict(raw, "configs")
     reference = time_integration.StaggeredSolver
     calls: list[CoreSolver] = []
@@ -2042,10 +2041,9 @@ def test_steady_solves_in_the_core_builds_the_core_solver_in_a_scenario_run(
 
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(CoreSolver, "solve_steady", counted)
-        with steady_solves_in_the_core(), pytest.raises(StopError):
-            assert time_integration.StaggeredSolver is CoreSolver
+        with pytest.raises(StopError):
             time_integration.run(config, tmp_path / "run.h5", on_step=stop)
-    assert time_integration.StaggeredSolver is reference
+    assert time_integration.StaggeredSolver is reference is StaggeredSolver
     assert len(calls) == 1 and all(isinstance(s, CoreSolver) for s in calls)
     assert calls[0].converged
     assert calls[0].stop_reason == "error_estimate_and_continuity"
@@ -2054,12 +2052,7 @@ def test_steady_solves_in_the_core_builds_the_core_solver_in_a_scenario_run(
     record = run.read_flow_state(fingerprint)
     assert record.state.stop_reason == calls[0].stop_reason
     assert record.state.outer == len(calls[0].residual_history)
-    with (
-        pytest.raises(RuntimeError, match="raised inside"),
-        steady_solves_in_the_core(),
-    ):
-        raise RuntimeError("raised inside")
-    assert time_integration.StaggeredSolver is reference
+    assert run.read_config().mapping["solver"]["backend"] == "core"
 
 
 # ---- The binding's refusals, continued -------------------------------------------
@@ -2074,13 +2067,13 @@ def test_flow2_refuses_a_fixed_viscosity_as_the_predictor_refuses_it() -> None:
     """
     mesh, config = _configured(_raw("80x30", "laminar", max_simple_iter=2))
     solver = _solver(StaggeredSolver, mesh, config)
-    modules = core_mapping.flow_modules(
+    modules = core_backend.flow_modules(
         mesh, config, solver._boundary, solver._corrector
     )
     good = solver._effective_viscosity(_eddy_viscosity(mesh, _rng("fixed viscosity")))
 
     def built(mu_eff: np.ndarray) -> object:
-        return core_mapping.flow_solver(
+        return core_backend.flow_solver(
             modules,
             config,
             solver._boundary,
@@ -2152,10 +2145,10 @@ def test_a_window_restored_under_the_velocity_step_is_refused_as_no_rule() -> No
     raw = _raw("cavity", "laminar", stopping_rule="velocity_step", max_simple_iter=5)
     mesh, config = _configured(raw)
     solver = _solver(StaggeredSolver, mesh, config)
-    modules = core_mapping.flow_modules(
+    modules = core_backend.flow_modules(
         mesh, config, solver._boundary, solver._corrector
     )
-    core = core_mapping.flow_solver(
+    core = core_backend.flow_solver(
         modules, config, solver._boundary, solver.reference_velocity, None
     )
     assert core.rule_version is None and core.rule_keys is None

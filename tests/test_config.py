@@ -9,6 +9,7 @@ import copy
 import dataclasses
 import math
 import re
+import sys
 from itertools import pairwise
 from pathlib import Path
 
@@ -16,8 +17,10 @@ import pytest
 import yaml
 
 from src.config import (
+    BACKENDS,
     BDF2,
     CFL_NUMBER_BOUND,
+    DEFAULT_BACKEND,
     DEFAULT_PRESSURE_PRECONDITIONER,
     EVENT_TIME_RTOL,
     MEAN,
@@ -39,8 +42,11 @@ from src.config import (
     TurbulenceSpec,
     _segment_widths,
     breakpoint_faces,
+    check_core_module,
 )
-from validation.cases import CONFIG_DIR, load_case
+from src.mesh import Mesh
+from src.scenarios import ScenarioManager
+from validation.cases import CONFIG_DIR, load_case, with_backend
 from validation.transport_cases import SOLVER_BLOCK, conservation_keys
 
 
@@ -1427,8 +1433,11 @@ class TestCheckpointIntervalKey:
         assert given.checkpoint_interval == 25
 
     def test_it_is_the_last_solver_key(self) -> None:
-        """The harness records it from SOLVER_KEYS, after the earlier optional keys."""
-        assert SOLVER_KEYS[-1] == "checkpoint_interval"
+        """The harness records it from SOLVER_KEYS, after the earlier optional keys.
+
+        Prompt 96 added solver.backend after it.
+        """
+        assert SOLVER_KEYS[-2:] == ("checkpoint_interval", "backend")
 
     @pytest.mark.parametrize(
         ("bad", "error"),
@@ -1577,16 +1586,17 @@ class TestPressureKeys:
         assert RETIRED_PRESSURE_TOL_KEY == "pressure_tol"
 
     def test_solver_keys_is_the_one_ordered_list(self) -> None:
-        """Fifteen keys, nine required then six optional, pressure_rtol among them."""
+        """Sixteen keys, nine required then seven optional, pressure_rtol among them."""
         assert isinstance(SOLVER_KEYS, tuple)
-        assert len(SOLVER_KEYS) == len(set(SOLVER_KEYS)) == 15
+        assert len(SOLVER_KEYS) == len(set(SOLVER_KEYS)) == 16
         assert "pressure_rtol" in SOLVER_KEYS
-        assert SOLVER_KEYS[-5:] == (
+        assert SOLVER_KEYS[-6:] == (
             "stopping_rule",
             "iteration_error_tol",
             "mass_imbalance_tol",
             "pressure_preconditioner",
             "checkpoint_interval",
+            "backend",
         )
 
     def test_pressure_preconditioner_defaults_to_multigrid_and_reads_either_choice(
@@ -4693,3 +4703,169 @@ class TestPlacementSection:
         }
         spec = SimConfig.from_dict(raw).placement
         assert spec.stand_height == (0.3, 1.2) and spec.all_clear == 1
+
+
+def _core_imports() -> bool:
+    """Whether the compiled core's module imports here."""
+    try:
+        import _cfdcore  # noqa: F401 -- the import is the test
+    except ImportError:
+        return False
+    return True
+
+
+@pytest.mark.unit
+class TestBackendKey:
+    """solver.backend (ADR-017 E, prompt 96): reference by default, or the core."""
+
+    def _raw(self, tmp_path: Path, **keys: object) -> dict:
+        with open(_write_config(tmp_path), encoding="utf-8") as handle:
+            raw = yaml.safe_load(handle)
+        raw["solver"].update(keys)
+        return raw
+
+    def test_absent_is_the_reference_and_reference_is_read(self, tmp_path) -> None:
+        """No key builds the reference. Defect caught: the default the core."""
+        assert BACKENDS == ("reference", "core")
+        assert DEFAULT_BACKEND == "reference"
+        assert SimConfig(_write_config(tmp_path)).backend == "reference"
+        given = SimConfig.from_dict(self._raw(tmp_path, backend="reference"))
+        assert given.backend == "reference"
+
+    @pytest.mark.parametrize(
+        ("bad", "error"),
+        [("cuda", ValueError), ("Core", ValueError), (1, TypeError), (True, TypeError)],
+    )
+    def test_another_value_is_refused(self, tmp_path, bad: object, error: type) -> None:
+        """Only the two names; the CUDA step adds its own."""
+        with pytest.raises(error, match="backend"):
+            SimConfig.from_dict(self._raw(tmp_path, backend=bad))
+
+    def test_core_loads_where_its_module_does_not_import(
+        self, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A configuration naming the core loads without ``_cfdcore``.
+
+        So a core run's file is read, analysed and reported on where the core is
+        not built (Windows): its stored configuration loads again. The module is
+        hidden (``sys.modules`` holds None for it, which makes its import
+        raise), so this is tested where the core is built as well.
+
+        Defect caught: the module looked for at load, which refuses to read a
+        finished run (test 96 S4, review 96 S5).
+        """
+        monkeypatch.setitem(sys.modules, "_cfdcore", None)
+        config = SimConfig.from_dict(self._raw(tmp_path, backend="core"))
+        assert config.backend == "core"
+        assert config.merged_mapping()["solver"]["backend"] == "core"
+        again = SimConfig.from_dict(config.merged_mapping())
+        assert again.backend == "core"
+
+    def test_core_is_refused_where_it_is_built_and_its_module_does_not_import(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``check_core_module`` names the build, as a solver or march builds it."""
+        monkeypatch.setitem(sys.modules, "_cfdcore", None)
+        with pytest.raises(ValueError, match="_cfdcore cannot be imported") as refused:
+            check_core_module()
+        assert "scripts/build_core.sh" in str(refused.value)
+
+    def test_core_is_refused_with_a_transient_section(self, tmp_path) -> None:
+        """Tier 2's true-time step stays on the reference (ADR-017 F, option 1).
+
+        Refused before the module is looked for, so the reason is the same
+        where the core is built and where it is not.
+        """
+        raw = self._raw(tmp_path, backend="core")
+        raw["transient"] = copy.deepcopy(TRANSIENT)
+        with pytest.raises(ValueError, match="transient section") as refused:
+            SimConfig.from_dict(raw)
+        assert "ADR-017 F" in str(refused.value)
+        raw["solver"]["backend"] = "reference"
+        assert SimConfig.from_dict(raw).transient is not None
+
+    @pytest.mark.skipif(not _core_imports(), reason="the compiled core is not built")
+    def test_core_is_read_where_its_module_imports(self, tmp_path) -> None:
+        """Under Linux with the core built, the key is read as given."""
+        assert SimConfig.from_dict(self._raw(tmp_path, backend="core")).backend == (
+            "core"
+        )
+
+    def test_a_case_copy_names_its_backend_and_is_checked(
+        self, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``with_backend`` sets the key on a copy, with the module's refusal.
+
+        The harness runs the copy, so it is refused where the core cannot be
+        built, as the run itself would be; ``SimConfig.with_backend`` is the
+        copy without that look.
+        """
+        config = SimConfig(_write_config(tmp_path))
+        same = with_backend(config, "reference")
+        assert same is not config and same.backend == "reference"
+        with pytest.raises(ValueError, match="must be one of"):
+            with_backend(config, "cuda")
+        monkeypatch.setitem(sys.modules, "_cfdcore", None)
+        with pytest.raises(ValueError, match="_cfdcore cannot be imported"):
+            with_backend(config, "core")
+        assert config.backend == "reference"
+        assert "backend" not in config.merged_mapping()["solver"]
+
+    def test_a_copy_writes_its_backend_into_its_mapping(
+        self, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The copy's mapping, the one a run file records, names the backend.
+
+        So a run of the copy is refused a restart on the other backend and its
+        flow state is not kept across them (ADR-017 E). The original is not
+        touched and the other keys are the same.
+
+        Defect caught: the attribute set and the mapping left as the file's
+        (test 96 S3), which wrote a run file that did not name its backend.
+        """
+        monkeypatch.setitem(sys.modules, "_cfdcore", None)
+        config = SimConfig(_write_config(tmp_path))
+        before = config.merged_mapping()
+        core = config.with_backend("core")
+        mapping = core.merged_mapping()
+        assert core.backend == "core" and mapping["solver"]["backend"] == "core"
+        assert config.backend == "reference" and config.merged_mapping() == before
+        mapping["solver"].pop("backend")
+        assert mapping == before
+        # And back: an explicit reference is written too, as any optional key is.
+        assert core.with_backend("reference").merged_mapping()["solver"]["backend"] == (
+            "reference"
+        )
+        with pytest.raises(ValueError, match="must be one of"):
+            config.with_backend("cuda")
+
+    def test_a_scenario_copy_names_its_backend_in_every_interval(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A scenario's interval configurations are built from its merged base.
+
+        So the copy's base names the backend as well as its own mapping, and
+        every interval's flow solve runs on it: the steady solves follow the
+        key, not only the march.
+
+        Defect caught: the key set on the run's attributes and not on the base the
+        intervals are built from, so a run's march ran on the core and its flow
+        solves on the reference (test 96 S3).
+        """
+        monkeypatch.setitem(sys.modules, "_cfdcore", None)
+        raw = yaml.safe_load(
+            (CONFIG_DIR / "scenario_door_leak.yaml").read_text(encoding="utf-8")
+        )
+        raw["scenario"]["base"] = str(CONFIG_DIR / "clean_room_default.yaml")
+        raw["domain"] = {"nx": 80, "ny": 30}
+        config = SimConfig.from_dict(raw)
+        core = config.with_backend("core")
+        assert core.scenario is not None and config.scenario is not None
+        assert core.scenario.base["solver"]["backend"] == "core"
+        assert "backend" not in config.scenario.base["solver"]
+        assert core.merged_mapping()["scenario"] == config.merged_mapping()["scenario"]
+        manager = ScenarioManager(core, Mesh(core))
+        assert {i.config.backend for i in manager.intervals()} == {"core"}
+        assert len({i.fingerprint for i in manager.intervals()}) == 2
+        reference = ScenarioManager(config, Mesh(config))
+        assert {i.config.backend for i in reference.intervals()} == {"reference"}

@@ -74,16 +74,16 @@ import probe85  # noqa: E402 -- after sys.path
 import probe90  # noqa: E402 -- after sys.path
 
 import src.solver_staggered as solver_module  # noqa: E402 -- after sys.path
+from src import core_backend as core_mapping  # noqa: E402
 from src.boundary_staggered import StaggeredBoundary  # noqa: E402
 from src.config import SimConfig  # noqa: E402
+from src.core_backend import CoreSolver  # noqa: E402
 from src.mesh import FLUID, SOLID, Mesh  # noqa: E402
 from src.pressure import ZERO_SCALE  # noqa: E402
 from src.scenarios import ScenarioManager  # noqa: E402
 from src.solver_staggered import FlowState, StaggeredSolver  # noqa: E402
 from src.stopping import ErrorEstimateRule  # noqa: E402
 from src.turbulence import KEpsilonModel  # noqa: E402
-from tests import core_mapping  # noqa: E402
-from tests.core_driver import CoreSolver  # noqa: E402
 
 RESULTS = ROOT / "results" / "builder95"
 CAPTURES = RESULTS / "captures"

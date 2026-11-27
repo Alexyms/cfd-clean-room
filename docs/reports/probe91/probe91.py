@@ -19,7 +19,7 @@ in ``src/`` changes.
 - ``run``: one scenario from its stored flow states (``flows_from``), on the
   reference's ``time_integration.run`` (side ``reference``) or on the same call
   with the march stepped through the core (side ``core``,
-  ``tests.core_driver.run``). The run file is written on the Linux file system
+  ``tests.core_driver.run``, since prompt 96 ``_core_run`` here). The run file is written on the Linux file system
   and copied into ``results/builder91/runs/<side>/`` with a summary in prompt
   85's form. A hook on ``RunFile.write_frame`` records, at every frame, a digest
   of the arrival maps and of each recovery array as the run's trackers hold them
@@ -90,7 +90,6 @@ from src.time_integration import (  # noqa: E402 -- follows sys.path.insert
     Provenance,
     RecoveryTracker,
 )
-from tests import core_driver  # noqa: E402 -- follows sys.path.insert
 
 RESULTS = ROOT / "results" / "builder91"
 CONFIGS = RESULTS / "configs"
@@ -170,6 +169,24 @@ PAIRS = [
         for name in ROUND0_RUNS
     ],
 ]
+
+
+def _core_run(
+    config: SimConfig, run_file: Path | None = None, **kwargs: object
+) -> object:
+    """``time_integration.run`` with the march through the core, as this probe ran it.
+
+    Prompt 91's ``tests.core_driver.run``, which prompt 96 replaced by the key
+    ``solver.backend``: ``_Run`` is replaced by ``time_integration.CoreRun`` for the
+    call, the monitor on the fields as prompt 91's default had it.
+    """
+    from unittest import mock
+
+    driver = type(
+        "CoreRunForCall", (time_integration.CoreRun,), {"monitor_reads_fields": True}
+    )
+    with mock.patch.object(time_integration, "_Run", driver):
+        return time_integration.run(config, run_file, **kwargs)
 
 
 def config_path(name: str) -> Path:
@@ -387,7 +404,7 @@ def run_one(name: str, side: str) -> None:
     if side == "reference":
         record = time_integration.run(config, path, **kwargs)
     else:
-        record = core_driver.run(config, path, **kwargs)
+        record = _core_run(config, path, **kwargs)
     wall = time.perf_counter() - started
     summary = summary_of(record, wall, side, name, {})
     finish(path, copy_to, summary, hook, name)
@@ -425,7 +442,7 @@ def restart(
 
     started = time.perf_counter()
     try:
-        core_driver.run(
+        _core_run(
             config,
             path,
             flows_from=SCENARIOS[scenario].flows_from,
@@ -446,7 +463,7 @@ def restart(
     }
     hook.frames.clear()
     started = time.perf_counter()
-    record = core_driver.run(config, restart=path)
+    record = _core_run(config, restart=path)
     wall = time.perf_counter() - started
     summary = summary_of(
         record,
@@ -761,10 +778,10 @@ def timing(run_number: int) -> None:
     kinds: dict[str, type] = {
         "reference": _Run,
         "core, monitor on the fields": type(
-            "Fields", (core_driver.CoreRun,), {"monitor_reads_fields": True}
+            "Fields", (time_integration.CoreRun,), {"monitor_reads_fields": True}
         ),
         "core, monitor on the readings": type(
-            "Readings", (core_driver.CoreRun,), {"monitor_reads_fields": False}
+            "Readings", (time_integration.CoreRun,), {"monitor_reads_fields": False}
         ),
     }
     rows = []
@@ -832,7 +849,7 @@ def whole_run_differences(name: str) -> str:
     fresh(path)
     config = SimConfig(config_path(name))
     try:
-        core_driver.run(config, path, flows_from=SCENARIOS[name].flows_from)
+        _core_run(config, path, flows_from=SCENARIOS[name].flows_from)
     except Exception as error:  # a plant may break the run in any way
         return f"raised {type(error).__name__}"
     ref = RunFile(RUNS / "reference" / f"{name}.h5")

@@ -96,7 +96,7 @@ import math
 import os
 import platform
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import datetime
 from functools import partial
 from pathlib import Path
@@ -105,7 +105,8 @@ from time import perf_counter
 import numpy as np
 
 from src.boundary_staggered import StaggeredBoundary
-from src.config import Initial, SimConfig
+from src.config import CORE_BACKEND, Initial, SimConfig
+from src.core_backend import CoreMarch, steady_solver
 from src.forces import ForceGauge, StrouhalReading, strouhal
 from src.io_manager import (
     CUMULATIVE,
@@ -115,6 +116,13 @@ from src.io_manager import (
     RecoveryRecord,
     RunFile,
     StepSeries,
+)
+from src.march_records import (
+    DEFINED_RTOL,
+    HUNDRED_TO_ONE,
+    IntervalPlan,
+    MarchStep,
+    copies_of,
 )
 from src.mesh import SOLID, Mesh
 from src.monitor import (
@@ -143,17 +151,11 @@ from src.staggered import FaceVelocities, allocate_fields
 
 logger = logging.getLogger(__name__)
 
-# ISO 14644-3's recovery challenge: the 100:1 time is the time a reading takes
-# to fall to a hundredth of its initial level (ADR-014 C).
-HUNDRED_TO_ONE = 100.0
-# The 100:1 time is defined where the initial level is at least 100 times the
-# threshold. The clean-out sets it to exactly that, and an initial stated as a
-# concentration can carry the rounding of the product (35.2 x 100 is
-# 3520.0000000000005), so the comparison is read to this relative tolerance.
-DEFINED_RTOL = 1.0e-9
 # The sections and solver keys a steady flow solve does not read, so a state
 # kept in another run file is this run's state when every other key agrees
 # and the fingerprint does. The boundaries are compared by the fingerprint.
+# solver.backend is not among them: a state solved on one backend is not
+# copied into a run on the other (ADR-017 E).
 FLOW_FREE_SECTIONS: tuple[str, ...] = (
     "scenario",
     "boundaries",
@@ -286,90 +288,6 @@ class FlowSolve:
     def solved(self) -> bool:
         """Whether this run solved the state rather than reading it."""
         return self.origin in SOLVED_ORIGINS
-
-
-@dataclass(frozen=True)
-class IntervalPlan:
-    """An interval as the march steps it.
-
-    Parameters
-    ----------
-    index : int
-        Its place in ``ScenarioManager.intervals()``.
-    t_start, t_end : float
-        Seconds. A restart whose checkpoint lies inside an interval it must
-        divide again starts that interval's plan at the checkpoint's time.
-    fingerprint : str
-        The flow state it steps on.
-    events : tuple[str, ...]
-        The events active over it.
-    steps : int
-        Equal steps from ``t_start`` to ``t_end``.
-    dt : float
-        ``(t_end - t_start) / steps``, at most ``stable_dt``.
-    stable_dt : float
-        The smallest ``stable_dt`` over the classes on its faces.
-    """
-
-    index: int
-    t_start: float
-    t_end: float
-    fingerprint: str
-    events: tuple[str, ...]
-    steps: int
-    dt: float
-    stable_dt: float
-
-    def time(self, i: int) -> float:
-        """The time of step i of this interval, its end exactly at i = steps.
-
-        Parameters
-        ----------
-        i : int
-            The step within the interval, 0 to ``steps``.
-
-        Returns
-        -------
-        float
-            ``t_start + i dt``, and ``t_end`` itself at ``i = steps``, so a
-            switch lands on the interval's end whatever the rounding of the
-            product.
-        """
-        if i == self.steps:
-            return self.t_end
-        return self.t_start + i * self.dt
-
-
-@dataclass(frozen=True, eq=False)
-class MarchStep:
-    """What ``on_step`` is handed after each step's writes.
-
-    Parameters
-    ----------
-    step : int
-        Steps taken, the run's count.
-    t : float
-        Simulated time after the step, seconds.
-    dt : float
-        The step just taken.
-    interval : int
-        The interval's index.
-    fields : Mapping[int, np.ndarray]
-        Class to its field after the step, read-only.
-    budgets : tuple[MassBudget, ...]
-        Copies of the transport solver's budgets after the step.
-    alerts : tuple[Alert, ...]
-        The alerts the step opened or closed (``AlertMonitor.update``);
-        empty without sensors.
-    """
-
-    step: int
-    t: float
-    dt: float
-    interval: int
-    fields: Mapping[int, np.ndarray]
-    budgets: tuple[MassBudget, ...]
-    alerts: tuple[Alert, ...] = ()
 
 
 @dataclass(frozen=True, eq=False)
@@ -918,11 +836,6 @@ def plan_interval(
     )
 
 
-def _copies(budgets: Sequence[MassBudget]) -> tuple[MassBudget, ...]:
-    """Copies of budgets that share nothing with them."""
-    return tuple(replace(b, deposited=dict(b.deposited)) for b in budgets)
-
-
 def _rule_readings(solver: StaggeredSolver, mesh: Mesh) -> dict[str, float]:
     """What the solver shows of its stop: the last residual and the continuity."""
     live = mesh.cell_type != SOLID
@@ -1047,8 +960,11 @@ class _Run:
         """Solve an interval's state: resumed, warm from the one before it, or from rest."""
         key = interval.fingerprint
         config = interval.config
-        solver = StaggeredSolver(
-            self.mesh, config, StaggeredBoundary(self.mesh, config)
+        solver = steady_solver(
+            self.mesh,
+            config,
+            StaggeredBoundary(self.mesh, config),
+            reference=StaggeredSolver,
         )
         writer = None
         if config.checkpoint_interval is not None:
@@ -1133,7 +1049,20 @@ class _Run:
         """
         if self.monitor is None:
             return ()
-        alerts = self.monitor.update(step, t, fields)
+        return self.noted(self.monitor.update(step, t, fields), step, t, pending)
+
+    def noted(
+        self,
+        alerts: tuple[Alert, ...],
+        step: int,
+        t: float,
+        pending: list[tuple[int, float, np.ndarray, np.ndarray]],
+    ) -> tuple[Alert, ...]:
+        """The monitor's readings after an update join PENDING, its new alerts the log.
+
+        Returns ALERTS.
+        """
+        assert self.monitor is not None
         pending.append((step, t, self.monitor.readings, self.monitor.channel_readings))
         for alert in alerts:
             if alert.is_open:
@@ -1221,9 +1150,9 @@ class _Run:
                 last = held or (p == len(plans) - 1 and i == plan.steps)
                 if step % output == 0 or last:
                     self.run.write_frame(step, t, fields, solver.budget)
-                    self._flush(pending)
+                    self.flush(pending)
                 if cadence is not None and (step % cadence == 0 or last):
-                    self._flush(pending)
+                    self.flush(pending)
                     self.run.write_arrival(self.arrival_record(t))
                     self.run.checkpoint(
                         step,
@@ -1242,17 +1171,17 @@ class _Run:
                             plan.dt,
                             plan.index,
                             fields,
-                            _copies(solver.budget),
+                            copies_of(solver.budget),
                             alerts,
                         )
                     )
                 if held:
                     break
             current = tuple(solver.budget)
-        self._flush(pending)
-        return fields, _copies(current), step, t, held
+        self.flush(pending)
+        return fields, copies_of(current), step, t, held
 
-    def _flush(self, pending: list[tuple[int, float, np.ndarray, np.ndarray]]) -> None:
+    def flush(self, pending: list[tuple[int, float, np.ndarray, np.ndarray]]) -> None:
         """Append the held readings and channels, replace the alert table, empty the list."""
         if pending and self.monitor is not None:
             self.run.write_sensor_readings(
@@ -1304,6 +1233,41 @@ class _Run:
             return [*plans[:p], again, *plans[p + 1 :]], (p, 0), again
         # run refuses a checkpoint at or past t_end, so t lies in some interval.
         raise AssertionError(f"the checkpoint's t = {t!r} s lies in no interval")
+
+
+class CoreRun(CoreMarch, _Run):
+    """``_Run`` with the march stepped through the compiled core (ADR-017 E).
+
+    The reference's run (``_Run``: the flow states, the plans, the monitor, the
+    frames, the checkpoints, the restart and the end records) with
+    ``core_backend.CoreMarch``'s march and set-up in front of it. Composed here,
+    on the reference's side, so that ``core_backend`` does not import this module
+    (prompt 96b).
+
+    Parameters
+    ----------
+    config : SimConfig
+        The run's configuration (a scenario section and a transport section).
+    run : RunFile
+        The run file.
+    on_step : Callable[[MarchStep], None] or None
+        Called after every step's writes, as the reference calls it.
+    """
+
+
+def _run_state(
+    config: SimConfig,
+    run: RunFile,
+    on_step: Callable[[MarchStep], None] | None,
+) -> _Run:
+    """The state of one call of ``run`` on the configuration's backend (ADR-017 E).
+
+    Under ``reference`` the march is ``_Run.march``; under ``core`` it is the
+    compiled core's (``CoreRun``), the rest of the run the same code.
+    """
+    if config.backend == CORE_BACKEND:
+        return CoreRun(config, run, on_step)
+    return _Run(config, run, on_step)
 
 
 def run(
@@ -1476,7 +1440,7 @@ def run(
                 f"flows_from: {difference} differs from the configuration "
                 f"{kept.path} was run with, so its flow states are not this run's"
             )
-    state = _Run(config, run_path, on_step)
+    state = _run_state(config, run_path, on_step)
     if restart is None:
         given = provenance if provenance is not None else Provenance.here()
         run_path.write_config(
@@ -1527,7 +1491,7 @@ def run(
         run_path.write_frame(0, 0.0, fields, budgets)
         pending: list[tuple[int, float, np.ndarray, np.ndarray]] = []
         state.observe(0, 0.0, fields, pending)
-        state._flush(pending)
+        state.flush(pending)
         state.arrival.update(0.0, fields)
         if state.tracker is not None:
             state.tracker.update(0.0, fields, state.means(fields))

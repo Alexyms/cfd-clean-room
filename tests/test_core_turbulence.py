@@ -35,7 +35,7 @@ import numpy as np
 import pytest
 from numpy.lib import introspect
 
-from src import turbulence
+from src import core_backend, turbulence
 from src.boundary_staggered import StaggeredBoundary
 from src.boundary_vents import VentFaces, vent_face_masks, vent_runs
 from src.config import RNG, STANDARD, UMIST, UPWIND, SimConfig
@@ -55,7 +55,6 @@ from src.turbulence import (
     log_law_floor,
     wall_viscosity,
 )
-from tests import core_mapping
 from validation.cases import _raw_case, load_annex20
 
 if os.environ.get("CFD_CORE_REQUIRED") == "1":
@@ -183,15 +182,15 @@ def load_annex20_raw() -> dict:
 
 
 def _build(mesh: Mesh, config: SimConfig, boundary: StaggeredBoundary) -> Room:
-    grid = core_mapping.core_grid(mesh)
+    grid = core_backend.core_grid(mesh)
     return Room(
         mesh,
         config,
         boundary,
         KEpsilonModel(mesh, config),
         TurbulenceBoundary(mesh, config, boundary),
-        core_mapping.k_epsilon(mesh, config, boundary, grid),
-        core_mapping.turbulence_boundary(mesh, config, boundary, grid),
+        core_backend.k_epsilon(mesh, config, boundary, grid),
+        core_backend.turbulence_boundary(mesh, config, boundary, grid),
     )
 
 
@@ -377,7 +376,7 @@ class PlantedVents:
 SIZES = [(3, 3), (4, 3), (3, 9), (7, 5), (8, 8), (9, 4), (16, 5), (17, 6), (23, 11)]
 
 
-@pytest.mark.parametrize("edge", core_mapping.WALL_EDGES)
+@pytest.mark.parametrize("edge", core_backend.WALL_EDGES)
 def test_the_small_rooms_are_open_on_every_edge(edge: str) -> None:
     """Most small rooms have a pressure outlet on each edge, so none goes untested.
 
@@ -747,7 +746,7 @@ def test_the_fixed_arrays_equal_the_reference(name: str) -> None:
     reference = [
         *(
             face
-            for edge in core_mapping.WALL_EDGES
+            for edge in core_backend.WALL_EDGES
             for face in room.walls._inlet_by_edge[edge].values()
         )
     ]
@@ -979,7 +978,7 @@ def _walls_with(mesh: Mesh, faces: list[tuple]) -> "_cfdcore.TurbulenceBoundary2
     ny, nx = mesh.cell_type.shape
     lengths = (nx, nx, ny, ny)
     return _cfdcore.TurbulenceBoundary2(
-        core_mapping.core_grid(mesh),
+        core_backend.core_grid(mesh),
         [np.zeros(n, dtype=bool) for n in lengths],
         [np.zeros(n + 1, dtype=bool) for n in lengths],
         [(np.ones(n + 1, dtype=bool), np.zeros(n + 1), 0.1) for n in lengths],
@@ -990,7 +989,7 @@ def _walls_with(mesh: Mesh, faces: list[tuple]) -> "_cfdcore.TurbulenceBoundary2
         0.09,
         1.2,
         1.5e-5,
-        core_mapping.WALL_LAW,
+        core_backend.WALL_LAW,
     )
 
 
@@ -1038,7 +1037,7 @@ def test_wall_viscosity_equals_the_reference_bit_for_bit(
     k = 10.0 ** rng.uniform(-9.0, 1.0, 50000)
     y = 10.0 ** rng.uniform(-4.0, -1.0, k.size)
     args = (c_mu, 1.2, 1.5e-5)
-    got = _cfdcore.wall_viscosity(k, y, *args, core_mapping.WALL_LAW)
+    got = _cfdcore.wall_viscosity(k, y, *args, core_backend.WALL_LAW)
     assert _differ(wall_viscosity(k, y, *args), got) == 0
     above = c_mu**0.25 * np.sqrt(k) * y / args[2] > Y_STAR_FLOOR
     assert above.any() and not above.all()
@@ -1077,7 +1076,7 @@ def _core_solve(
 ) -> tuple[np.ndarray, object]:
     """The core's implicit solve on the arguments the reference's step handed its own."""
     out = np.empty_like(args[0])
-    grid = core_mapping.core_grid(room.mesh)
+    grid = core_backend.core_grid(room.mesh)
     result = _cfdcore.implicit_step(
         _cfdcore.ImplicitScratch2(grid),
         args[0],
@@ -1176,7 +1175,7 @@ def test_advance_is_the_step_with_the_boundarys_conditions(name: str) -> None:
     """One call for the conditions and the step: the two calls' fields."""
     room = _room(name)
     inputs = _planted(room, "smooth", _rng(name))
-    conditions = core_mapping.turbulence_conditions(
+    conditions = core_backend.turbulence_conditions(
         room.core_walls.conditions(inputs.state, inputs.faces)
     )
     expected = room.core.step(inputs.state, inputs.faces, conditions)
@@ -1184,7 +1183,7 @@ def test_advance_is_the_step_with_the_boundarys_conditions(name: str) -> None:
     got = room.core.advance(room.core_walls, inputs.state, inputs.faces)
     _assert_same(expected, got)
     assert room.core.last_iterations == counts
-    other = core_mapping.turbulence_boundary(room.mesh, room.config, room.boundary)
+    other = core_backend.turbulence_boundary(room.mesh, room.config, room.boundary)
     with pytest.raises(ValueError, match="another grid"):
         room.core.advance(other, inputs.state, inputs.faces)
 
@@ -1204,7 +1203,7 @@ def _with_solver(
     # advection overshoots below zero.
     object.__setattr__(config.turbulence, "cfl_number", cfl)
     room.model._cfl = cfl
-    core = core_mapping.k_epsilon(mesh, config, room.boundary)
+    core = core_backend.k_epsilon(mesh, config, room.boundary)
     return dataclasses.replace(room, core=core)
 
 
@@ -1309,7 +1308,7 @@ def test_a_positivity_failure_is_the_references(quantity: str) -> None:
         room.model.step(state, inputs.faces, conditions)
     with pytest.raises(_cfdcore.PositivityFailure) as got:
         room.core.step(state, inputs.faces, conditions)
-    error = core_mapping.positivity_error(got.value)
+    error = core_backend.positivity_error(got.value)
     assert str(error).startswith(f"{quantity} is not positive")
     if room.model.last_fallbacks[0 if quantity == "k" else 1]:
         assert str(error) == str(expected.value)
@@ -1335,7 +1334,7 @@ def test_a_positivity_failure_by_infinity_is_the_references() -> None:
         room.model.step(inputs.state, inputs.faces, conditions)
     with pytest.raises(_cfdcore.PositivityFailure) as got:
         room.core.step(inputs.state, inputs.faces, conditions)
-    error = core_mapping.positivity_error(got.value)
+    error = core_backend.positivity_error(got.value)
     assert str(error) == str(expected.value)
     assert np.array_equal(error.minimum, expected.value.minimum, equal_nan=True)
 
@@ -1612,7 +1611,7 @@ def test_advance_refuses_an_inflow_that_is_not_positive_as_step_does(
     """
     room = _zero_intensity_room("80x30-vents-shelf" if vent else "80x30", vent)
     inputs = _planted(room, "smooth", _rng("no intensity", vent))
-    formed = core_mapping.turbulence_conditions(
+    formed = core_backend.turbulence_conditions(
         room.core_walls.conditions(inputs.state, inputs.faces)
     )
     args = (inputs.state, inputs.faces, formed)
@@ -1727,7 +1726,7 @@ def _model_arguments(**changes: object) -> list[object]:
     """KEpsilon2's arguments for a small room, some replaced."""
     mesh = _room("40x15-uniform-open").mesh
     args = {
-        "grid": core_mapping.core_grid(mesh),
+        "grid": core_backend.core_grid(mesh),
         "dx_cell": mesh.dx_cell,
         "dy_cell": mesh.dy_cell,
         "dx_face": mesh.dx_face,
@@ -1804,7 +1803,7 @@ def _walls_arguments(**changes: object) -> list[object]:
     ny, nx = mesh.cell_type.shape
     lengths = (nx, nx, ny, ny)
     args = {
-        "grid": core_mapping.core_grid(mesh),
+        "grid": core_backend.core_grid(mesh),
         "wall_cells": [np.zeros(n, dtype=bool) for n in lengths],
         "wall_corners": [np.zeros(n + 1, dtype=bool) for n in lengths],
         "tangential": [
@@ -1817,7 +1816,7 @@ def _walls_arguments(**changes: object) -> list[object]:
         "c_mu": 0.09,
         "rho": 1.2,
         "nu": 1.5e-5,
-        "law": core_mapping.WALL_LAW,
+        "law": core_backend.WALL_LAW,
     }
     args.update(changes)
     return list(args.values())
@@ -1916,7 +1915,7 @@ def test_an_inlet_without_turbulence_is_refused_as_the_reference_refuses_it() ->
     with pytest.raises(ValueError) as expected:
         TurbulenceBoundary(room.mesh, config, room.boundary)
     with pytest.raises(ValueError) as got:
-        core_mapping.turbulence_boundary(room.mesh, config, room.boundary)
+        core_backend.turbulence_boundary(room.mesh, config, room.boundary)
     assert str(got.value) == str(expected.value)
 
 
@@ -1953,7 +1952,7 @@ def test_the_least_value_of_a_failure_is_read_over_the_non_solid_cells() -> None
             room.model._check_positive(q, name)
         with pytest.raises(_cfdcore.PositivityFailure) as got:
             room.core.check_positive(name, q)
-        error = core_mapping.positivity_error(got.value)
+        error = core_backend.positivity_error(got.value)
         assert str(error) == str(expected.value)
         assert error.minimum == expected.value.minimum
         assert 0.5 <= error.minimum < 1.5
@@ -1998,7 +1997,7 @@ def test_the_outlets_extrapolation_is_the_solvers_on_every_edge() -> None:
         rng = _rng("outlets", nx, ny)
         u = rng.standard_normal((ny, nx + 1))
         v = rng.standard_normal((ny + 1, nx))
-        core = core_mapping.outlet_faces(mesh, boundary)
+        core = core_backend.outlet_faces(mesh, boundary)
         got_u, got_v = core.extrapolate(u, v)
         solver._extrapolate_outlets(u, v)
         assert _differ(got_u, u) == 0 and _differ(got_v, v) == 0

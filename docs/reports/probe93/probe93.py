@@ -71,6 +71,7 @@ sys.path.insert(0, str(HERE))
 import probe90  # noqa: E402 -- after sys.path
 import probe92  # noqa: E402 -- after sys.path
 
+from src import core_backend as core_mapping  # noqa: E402 -- after sys.path
 from src import multigrid, pressure  # noqa: E402 -- after sys.path
 from src.boundary_staggered import StaggeredBoundary  # noqa: E402 -- after sys.path
 from src.config import SimConfig  # noqa: E402 -- after sys.path
@@ -78,7 +79,6 @@ from src.mesh import Mesh  # noqa: E402 -- after sys.path
 from src.momentum import MomentumPrediction  # noqa: E402 -- after sys.path
 from src.pressure import PressureCorrector  # noqa: E402 -- after sys.path
 from src.solver_staggered import FlowState  # noqa: E402 -- after sys.path
-from tests import core_mapping  # noqa: E402 -- after sys.path
 from validation.cases import load_backstep  # noqa: E402 -- after sys.path
 
 FIRST = ROOT / "results" / "builder93"

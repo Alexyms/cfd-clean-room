@@ -6,6 +6,7 @@ import copy
 import json
 import math
 import sys
+import types
 from pathlib import Path
 
 import numpy as np
@@ -851,7 +852,9 @@ def test_staggered_velocity_step_stop_has_the_collocated_label(
     # the exit check (review 37 S5); the schema was raised with the keys.
     work = row["work"]
     assert work["inner_products"] >= work["inner_iterations"] + work["outer_iterations"]
-    assert row["schema_version"] == benchmark.SCHEMA_VERSION == 2
+    # Raised to 3 with params.backend (prompt 96).
+    assert row["schema_version"] == benchmark.SCHEMA_VERSION == 3
+    assert row["params"]["backend"] == "reference"
 
 
 @pytest.mark.unit
@@ -1036,3 +1039,113 @@ def test_the_product_row_reports_the_stop_from_the_solver(
     assert row["params"]["rule_version"] == rule_version(config) == 5
     assert row["params"]["turbulence"]["variant"] == "standard"
     assert row["params"]["turbulence"]["advection_scheme"] == "upwind"
+
+
+@pytest.mark.unit
+def test_a_row_names_its_backend_and_an_old_row_reads_as_the_reference(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``params.backend`` (schema 3, prompt 96); rows of schema 2 ran on the reference.
+
+    The summary keeps the backends apart and notes a case with rows on both.
+    Defect caught: an old row read as the core, or pooled with core rows.
+    """
+    old = _record("val002_40x40", 1, 84.0)
+    assert "backend" not in old.get("params", {})
+    assert benchmark.row_backend(old) == "reference"
+    new = copy.deepcopy(old)
+    new.setdefault("params", {})["backend"] = "core"
+    new["time"]["wall_seconds"] = 12.0
+    assert benchmark.row_backend(new) == "core"
+    benchmark.print_summary(_write(tmp_path / "results.jsonl", [old, new]))
+    out = capsys.readouterr().out
+    rows = [line for line in out.splitlines() if line.startswith("collocated-jacobi")]
+    assert len(rows) == 2
+    # A reference row prints as before the key; a core row is marked at its end.
+    reference_row = next(row for row in rows if "84.0" in row)
+    core_row = next(row for row in rows if "12.0" in row)
+    assert not reference_row.endswith(")") and core_row.endswith(" (core)")
+    assert "rows on the backends ['core', 'reference']" in out
+
+
+@pytest.mark.unit
+def test_the_harness_builds_the_solver_through_the_backend_factory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """run_case hands the case to ``core_backend.steady_solver`` with its backend.
+
+    The factory is replaced by a spy that stops the run at construction, so the
+    test reads what the harness asked for. Defect caught: the harness building
+    ``StaggeredSolver`` itself, which a ``--backend core`` row would not run.
+    """
+    seen: list[str] = []
+
+    class BuiltError(Exception):
+        pass
+
+    def spy(mesh: Mesh, config: SimConfig, boundary: object, **keys: object) -> None:
+        seen.append(config.backend)
+        assert keys["reference"] is benchmark.StaggeredSolver
+        raise BuiltError
+
+    monkeypatch.setattr(benchmark, "steady_solver", spy)
+    with pytest.raises(BuiltError):
+        benchmark.run_case("val002_20x20", "staggered-mgcg", 10, 1)
+    assert seen == ["reference"]
+
+
+@pytest.mark.unit
+def test_the_harness_asks_the_factory_for_the_core_under_backend_core(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """run_case under ``core`` hands the factory a configuration that names it.
+
+    The compiled module is replaced by an empty one so that the harness's own
+    look for it passes where the core is not built, and the factory by a spy that
+    stops the run at construction, as the test above does for the reference.
+    Defect caught: ``run_case`` building and recording the default backend
+    whatever it is asked (test 96 S1, review 96 S6).
+    """
+    monkeypatch.setitem(sys.modules, "_cfdcore", types.ModuleType("_cfdcore"))
+    seen: list[tuple[str, str]] = []
+
+    class BuiltError(Exception):
+        pass
+
+    def spy(mesh: Mesh, config: SimConfig, boundary: object, **keys: object) -> None:
+        seen.append((config.backend, config.merged_mapping()["solver"]["backend"]))
+        raise BuiltError
+
+    monkeypatch.setattr(benchmark, "steady_solver", spy)
+    with pytest.raises(BuiltError):
+        benchmark.run_case("val002_20x20", "staggered-mgcg", 10, 1, "core")
+    assert seen == [("core", "core")]
+
+
+@pytest.mark.unit
+def test_the_harness_hands_its_backend_option_to_run_case(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``main --backend core`` calls ``run_case`` with ``core`` as its backend.
+
+    Defect caught: the option parsed and not handed on, so that a ``--backend
+    core`` run built and recorded the reference (test 96 S1).
+    """
+    calls: list[tuple] = []
+    record = {
+        "work": {"outer_iterations": 3},
+        "time": {"wall_seconds": 0.5},
+        "accuracy": {"value": 0.25},
+    }
+
+    def spy(*arguments: object) -> dict:
+        calls.append(arguments)
+        return record
+
+    monkeypatch.setattr(benchmark, "run_case", spy)
+    results = tmp_path / "rows.jsonl"
+    for extra, backend in (([], "reference"), (["--backend", "core"], "core")):
+        calls.clear()
+        arguments = ["--cases", "val002_20x20", "--repeats", "1", "--results"]
+        assert benchmark.main([*arguments, str(results), *extra]) == 0
+        assert calls == [("val002_20x20", "staggered-mgcg", 10, 1, backend)]
