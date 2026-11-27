@@ -134,7 +134,7 @@ DECISION, FIELD, STOP, CLOSED, BUDGET = (
 # Why a class field between its spread and its limit fails.
 MIDDLE_TIER_NOTE = "middle tier, not explained by the run file: for the step's report"
 RULES = (WORST_CASE, MEAN)
-FILE_LAYOUT, SURFACE, STAND, FREE = "the file's four", "surface", "product", "free"
+FILE_LAYOUT, SURFACE, STAND, FREE = "file's four", "surface", "product", "free"
 
 
 # ---------------------------------------------------------------------------
@@ -570,21 +570,42 @@ def _plain(value: object) -> object:
     return value
 
 
-def _decision(name: str, moves: Moves) -> Item:
-    """A decision item from its moves."""
-    return Item(
-        "decision",
-        name,
-        moves.equal,
-        {
-            "kind": DECISION,
-            "compared": moves.compared,
-            "moved one": moves.one,
-            "moved more": moves.more,
-            "one only": moves.only,
-            "largest": moves.largest,
-        },
+def _reached(ref: np.ndarray, other: np.ndarray) -> tuple[int, int]:
+    """How many decisions each run reached: the finite times (never is inf, none NaN)."""
+    return int(np.isfinite(ref).sum()), int(np.isfinite(other).sum())
+
+
+def _clear_reached(ref: ClearUnits, other: ClearUnits) -> tuple[int, int]:
+    """How many cells each run read at or above a threshold after t_e: not clear at once.
+
+    A clear time of ``t_e`` itself is a cell no frame from then on reads above,
+    a decision nothing was reached for; a later time or infinity (never clear)
+    is one a threshold was reached for.
+    """
+    return (
+        int((ref.clear > ref.ends[:, None, None]).sum()),
+        int((other.clear > other.ends[:, None, None]).sum()),
     )
+
+
+def _decision(name: str, moves: Moves, reached: tuple[int, int] | None = None) -> Item:
+    """A decision item from its moves, and how many of them each run reached.
+
+    The reach says what ``compared`` covers: a decision never reached in either
+    run compares as no move, so "every decision equal" over a run that reaches
+    few of them is less than it reads (review 96 S7).
+    """
+    detail: dict[str, object] = {
+        "kind": DECISION,
+        "compared": moves.compared,
+        "moved one": moves.one,
+        "moved more": moves.more,
+        "one only": moves.only,
+        "largest": moves.largest,
+    }
+    if reached is not None:
+        detail["reached, ref"], detail["reached, other"] = reached
+    return Item("decision", name, moves.equal, detail)
 
 
 def _same(name: str, ref: object, other: object) -> Item:
@@ -757,6 +778,7 @@ def compare_march(ref: Run, other: Run) -> tuple[list[Item], dict[str, bool]]:
         _decision(
             "arrival times (events x channels x cells)",
             Moves.of(index_moves(ar.maps, ao.maps, times, times_other)),
+            _reached(ar.maps, ao.maps),
         )
     )
     alerts_r, alerts_o = ref.alerts, other.alerts
@@ -776,6 +798,7 @@ def compare_march(ref: Run, other: Run) -> tuple[list[Item], dict[str, bool]]:
         _decision(
             "the file's sensors' latencies (events x channels x sensors)",
             Moves.of(index_moves(lr + onsets, lo + onsets, times, times_other)),
+            _reached(lr, lo),
         )
     )
     # Clear times, and the clean-out's recovery times.
@@ -786,6 +809,7 @@ def compare_march(ref: Run, other: Run) -> tuple[list[Item], dict[str, bool]]:
             _decision(
                 "cells' clear times (channels x cells)",
                 Moves.of(_frame_moves(cr, co, cr.clear, co.clear)),
+                _clear_reached(cr, co),
             )
         )
         room_r, _ = room_clear(cr)
@@ -794,6 +818,7 @@ def compare_march(ref: Run, other: Run) -> tuple[list[Item], dict[str, bool]]:
             _decision(
                 "room clear times (channels)",
                 Moves.of(_frame_moves(cr, co, room_r, room_o)),
+                (int((room_r > cr.ends).sum()), int((room_o > co.ends).sum())),
             )
         )
     if rr is not None and ro is not None:
@@ -803,6 +828,7 @@ def compare_march(ref: Run, other: Run) -> tuple[list[Item], dict[str, bool]]:
             _decision(
                 "recovery times (room, channels, sensors, means)",
                 Moves.of(index_moves(recovery_r, recovery_o, times, times_other)),
+                _reached(recovery_r, recovery_o),
             )
         )
         flags["recovery"] = same_bytes(recovery_r, recovery_o) and same_bytes(
@@ -969,7 +995,11 @@ def _alerts_item(ref: AlertTable, other: AlertTable) -> Item:
             # the other is a move across the threshold, of infinity.
             moves.extend(moved(np.array(x), np.array(y), 1.0).tolist())
         moves.extend([math.inf] * (2 * abs(len(xs) - len(ys))))
-    return _decision("alerts' opening and closing steps", Moves.of(np.array(moves)))
+    return _decision(
+        "alerts' opening and closing steps",
+        Moves.of(np.array(moves)),
+        (len(ref.step_on), len(other.step_on)),
+    )
 
 
 def _recovery_times(record: RecoveryRecord) -> np.ndarray:

@@ -6,6 +6,7 @@ import copy
 import json
 import math
 import sys
+import types
 from pathlib import Path
 
 import numpy as np
@@ -1091,3 +1092,60 @@ def test_the_harness_builds_the_solver_through_the_backend_factory(
     with pytest.raises(BuiltError):
         benchmark.run_case("val002_20x20", "staggered-mgcg", 10, 1)
     assert seen == ["reference"]
+
+
+@pytest.mark.unit
+def test_the_harness_asks_the_factory_for_the_core_under_backend_core(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """run_case under ``core`` hands the factory a configuration that names it.
+
+    The compiled module is replaced by an empty one so that the harness's own
+    look for it passes where the core is not built, and the factory by a spy that
+    stops the run at construction, as the test above does for the reference.
+    Defect caught: ``run_case`` building and recording the default backend
+    whatever it is asked (test 96 S1, review 96 S6).
+    """
+    monkeypatch.setitem(sys.modules, "_cfdcore", types.ModuleType("_cfdcore"))
+    seen: list[tuple[str, str]] = []
+
+    class BuiltError(Exception):
+        pass
+
+    def spy(mesh: Mesh, config: SimConfig, boundary: object, **keys: object) -> None:
+        seen.append((config.backend, config.merged_mapping()["solver"]["backend"]))
+        raise BuiltError
+
+    monkeypatch.setattr(benchmark, "steady_solver", spy)
+    with pytest.raises(BuiltError):
+        benchmark.run_case("val002_20x20", "staggered-mgcg", 10, 1, "core")
+    assert seen == [("core", "core")]
+
+
+@pytest.mark.unit
+def test_the_harness_hands_its_backend_option_to_run_case(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``main --backend core`` calls ``run_case`` with ``core`` as its backend.
+
+    Defect caught: the option parsed and not handed on, so that a ``--backend
+    core`` run built and recorded the reference (test 96 S1).
+    """
+    calls: list[tuple] = []
+    record = {
+        "work": {"outer_iterations": 3},
+        "time": {"wall_seconds": 0.5},
+        "accuracy": {"value": 0.25},
+    }
+
+    def spy(*arguments: object) -> dict:
+        calls.append(arguments)
+        return record
+
+    monkeypatch.setattr(benchmark, "run_case", spy)
+    results = tmp_path / "rows.jsonl"
+    for extra, backend in (([], "reference"), (["--backend", "core"], "core")):
+        calls.clear()
+        arguments = ["--cases", "val002_20x20", "--repeats", "1", "--results"]
+        assert benchmark.main([*arguments, str(results), *extra]) == 0
+        assert calls == [("val002_20x20", "staggered-mgcg", 10, 1, backend)]

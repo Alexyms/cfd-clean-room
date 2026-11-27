@@ -13,9 +13,11 @@ Skipped with the other parity modules where ``_cfdcore`` cannot be imported (the
 Windows suite), and an error instead with ``CFD_CORE_REQUIRED=1``.
 """
 
+import contextlib
 import copy
 import os
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -27,6 +29,7 @@ from src.boundary_staggered import StaggeredBoundary
 from src.config import SimConfig
 from src.io_manager import RunFile
 from src.mesh import Mesh
+from src.monitor import AlertMonitor
 from src.time_integration import Provenance, run
 from validation.cases import with_backend
 from validation.transport_cases import conservation_keys
@@ -81,16 +84,60 @@ class _StopError(RuntimeError):
     """The crash a restart continues from."""
 
 
+# Per run, how often the monitor was updated from the fields and from the readings.
+UPDATES: dict[str, dict[str, int]] = {}
+
+
+@contextlib.contextmanager
+def _counting(name: str) -> Iterator[None]:
+    """Count the monitor's two updates over the calls made inside, under NAME."""
+    counts = UPDATES.setdefault(name, {"update": 0, "update_from_readings": 0})
+    with pytest.MonkeyPatch.context() as patch:
+        for method in counts:
+            inner = getattr(AlertMonitor, method)
+
+            def counted(self, *args, _inner=inner, _method=method, **keys):
+                counts[_method] += 1
+                return _inner(self, *args, **keys)
+
+            patch.setattr(AlertMonitor, method, counted)
+        yield
+
+
+def _stop_after_checkpoint(patch: pytest.MonkeyPatch, count: int) -> list[int]:
+    """Make the run raise ``_StopError`` once it has written COUNT march checkpoints.
+
+    Stopping from the file's write and not from ``on_step`` leaves the march
+    stepping in batches, to the next frame or checkpoint, as a run does. Returns
+    the steps each checkpoint was written at.
+    """
+    written: list[int] = []
+    inner = RunFile.checkpoint
+
+    def checkpoint(self, step, *args, **keys):
+        inner(self, step, *args, **keys)
+        written.append(step)
+        if len(written) == count:
+            raise _StopError
+
+    patch.setattr(RunFile, "checkpoint", checkpoint)
+    return written
+
+
 @pytest.fixture(scope="module")
 def runs(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
     """The reference's run, the core's, the core's with the monitor on the fields,
     and the core's stopped after STOP_AFTER steps and restarted."""
     out = tmp_path_factory.mktemp("backend")
-    paths = {name: out / f"{name}.h5" for name in ("ref", "core", "fields", "cut")}
-    run(SimConfig.from_dict(_raw("reference")), paths["ref"], provenance=PROVENANCE)
+    paths = {
+        name: out / f"{name}.h5" for name in ("ref", "core", "fields", "cut", "batched")
+    }
+    with _counting("ref"):
+        run(SimConfig.from_dict(_raw("reference")), paths["ref"], provenance=PROVENANCE)
     core = SimConfig.from_dict(_raw("core"))
-    run(core, paths["core"], provenance=PROVENANCE)
-    with pytest.MonkeyPatch.context() as patch:
+    with _counting("core"):
+        run(core, paths["core"], provenance=PROVENANCE)
+    with pytest.MonkeyPatch.context() as patch, _counting("fields"):
         patch.setattr(time_integration.CoreRun, "monitor_reads_fields", True)
         run(core, paths["fields"], provenance=PROVENANCE)
 
@@ -102,6 +149,24 @@ def runs(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
         run(core, paths["cut"], provenance=PROVENANCE, on_step=stop)
     restarted = run(core, restart=paths["cut"])
     assert restarted.restarted_from == CADENCE * (STOP_AFTER // CADENCE)
+    # And a run interrupted with no on_step, so the march steps in batches.
+    core_calls: list[int] = []
+    inner = core_backend.CoreMarch._stop_of
+
+    def counted(core_, result, rows):
+        core_calls.append(rows)
+        return inner(core_, result, rows)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(core_backend.CoreMarch, "_stop_of", staticmethod(counted))
+        written = _stop_after_checkpoint(patch, 2)
+        with pytest.raises(_StopError):
+            run(core, paths["batched"], provenance=PROVENANCE)
+    assert written == [CADENCE, 2 * CADENCE]
+    # Four batches reach step 400 (a call to the next frame or checkpoint), not 400.
+    assert sum(core_calls) == 2 * CADENCE and len(core_calls) <= 8
+    again = run(core, restart=paths["batched"])
+    assert again.restarted_from == 2 * CADENCE
     return paths
 
 
@@ -219,3 +284,65 @@ def test_a_with_backend_copy_runs_on_the_core_and_its_file_names_it(
     longer["solver"]["t_end"] = 14.0
     with pytest.raises(ValueError, match=r"solver\.backend differs"):
         run(SimConfig.from_dict(longer), restart=path)
+
+
+def test_the_monitor_is_updated_from_the_readings_or_from_the_fields_as_asked(
+    runs: dict[str, Path],
+) -> None:
+    """``monitor_reads_fields`` puts the monitor on the fields; by default it is not.
+
+    The reference updates from the fields every step; the core's batched march
+    updates from the readings every step and from the fields once, at step 0; with
+    ``monitor_reads_fields`` set it updates from the fields every step and never
+    from the readings. The runs' files are equal (``test_the_monitor_on_the_readings_is_the_monitor_on_the_fields``),
+    so only this tells the two routes apart.
+
+    Defect caught: the flag set and the monitor still on the readings (test 96 S2),
+    which would compare the readings with themselves.
+    """
+    steps = int(RunFile(runs["core"]).read_sensor_readings().steps[-1])
+    assert UPDATES["ref"]["update"] == steps + 1
+    assert UPDATES["ref"]["update_from_readings"] == 0
+    assert UPDATES["core"] == {"update": 1, "update_from_readings": steps}
+    assert UPDATES["fields"] == {"update": steps + 1, "update_from_readings": 0}
+
+
+def test_a_restart_from_a_checkpoint_of_the_batched_march_is_the_whole_run(
+    runs: dict[str, Path],
+) -> None:
+    """A batched march stopped after its second checkpoint, restarted: the core run.
+
+    ``test_a_restart_under_core_is_the_uninterrupted_run_bit_for_bit`` stops from
+    ``on_step``, which puts the march at one step a call; this one stops from the
+    checkpoint's write, in a march of batches (test 96 S7).
+    """
+    comparison = compare_runs.compare(runs["core"], runs["batched"])
+    assert all(comparison.bitwise.values()), comparison.bitwise
+    assert comparison.verdict == "PASS"
+
+
+def test_a_harness_row_on_the_core_has_the_references_verdict() -> None:
+    """``run_case`` on each backend: the row names its backend, the outcome is equal.
+
+    VAL-002 on 40x40 under the multigrid-preconditioned method, once on the
+    reference and once on the core: the same outer iterations, the same stop and the
+    error to the benchmark's digits. The core's row is the one the harness records
+    under ``--backend core`` (test 96 S1, review 96 S6).
+
+    Defect caught: the harness building the reference's solver whatever backend it
+    is asked for, and recording the other.
+    """
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import benchmark
+
+    rows = {
+        backend: benchmark.run_case("val002_40x40", "staggered-mgcg", 10, 1, backend)
+        for backend in ("reference", "core")
+    }
+    assert [rows[b]["params"]["backend"] for b in rows] == ["reference", "core"]
+    reference, core = rows["reference"], rows["core"]
+    assert core["work"]["outer_iterations"] == reference["work"]["outer_iterations"]
+    assert core["accuracy"]["value"] == pytest.approx(
+        reference["accuracy"]["value"], rel=1e-9
+    )
+    assert core["time"]["wall_seconds"] < reference["time"]["wall_seconds"]

@@ -1208,8 +1208,9 @@ class TestUpdateFromReadings:
 
         The channels handed in are those the update from fields sums
         (``channel_sums``), as the core's march returns them. Defects caught:
-        the readings taken one step late (the alerts move), a channel read from
-        another class's row.
+        a channel read from another class's row, and the update summing the
+        channels again where it is handed them. The readings taken one step
+        late is ``CoreRun``'s, caught by ``tests/test_core_backend.py``.
         """
         config, mesh = product
         cells = sensor_cells(config, mesh)
