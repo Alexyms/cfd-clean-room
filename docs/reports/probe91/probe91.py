@@ -82,7 +82,6 @@ import probe85  # noqa: E402 -- follows sys.path.insert
 import probe90  # noqa: E402 -- follows sys.path.insert; reads Windows base paths here
 
 import src.time_integration as time_integration  # noqa: E402 -- follows sys.path.insert
-from src import core_backend  # noqa: E402 -- follows sys.path.insert
 from src.config import SimConfig  # noqa: E402 -- follows sys.path.insert
 from src.io_manager import RunFile  # noqa: E402 -- follows sys.path.insert
 from src.monitor import ArrivalTracker  # noqa: E402 -- follows sys.path.insert
@@ -178,13 +177,13 @@ def _core_run(
     """``time_integration.run`` with the march through the core, as this probe ran it.
 
     Prompt 91's ``tests.core_driver.run``, which prompt 96 replaced by the key
-    ``solver.backend``: ``_Run`` is replaced by ``core_backend.CoreRun`` for the
+    ``solver.backend``: ``_Run`` is replaced by ``time_integration.CoreRun`` for the
     call, the monitor on the fields as prompt 91's default had it.
     """
     from unittest import mock
 
     driver = type(
-        "CoreRunForCall", (core_backend.CoreRun,), {"monitor_reads_fields": True}
+        "CoreRunForCall", (time_integration.CoreRun,), {"monitor_reads_fields": True}
     )
     with mock.patch.object(time_integration, "_Run", driver):
         return time_integration.run(config, run_file, **kwargs)
@@ -779,10 +778,10 @@ def timing(run_number: int) -> None:
     kinds: dict[str, type] = {
         "reference": _Run,
         "core, monitor on the fields": type(
-            "Fields", (core_backend.CoreRun,), {"monitor_reads_fields": True}
+            "Fields", (time_integration.CoreRun,), {"monitor_reads_fields": True}
         ),
         "core, monitor on the readings": type(
-            "Readings", (core_backend.CoreRun,), {"monitor_reads_fields": False}
+            "Readings", (time_integration.CoreRun,), {"monitor_reads_fields": False}
         ),
     }
     rows = []

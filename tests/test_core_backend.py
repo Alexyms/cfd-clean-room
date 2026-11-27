@@ -1,6 +1,6 @@
 """The backend switch end to end (prompt 96, ADR-017 E): a scenario run under ``core``.
 
-``solver.backend: core`` has ``time_integration.run`` build ``core_backend.CoreRun``
+``solver.backend: core`` has ``time_integration.run`` build ``time_integration.CoreRun``
 and every steady solve a ``CoreSolver``. Here a short dust release on 80x30 runs
 from rest under each backend: the core's run against the reference's by ADR-017
 H's comparator (``scripts/compare_runs.py``); its restart from a checkpoint in the
@@ -91,7 +91,7 @@ def runs(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
     core = SimConfig.from_dict(_raw("core"))
     run(core, paths["core"], provenance=PROVENANCE)
     with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(core_backend.CoreRun, "monitor_reads_fields", True)
+        patch.setattr(time_integration.CoreRun, "monitor_reads_fields", True)
         run(core, paths["fields"], provenance=PROVENANCE)
 
     def stop(step: object) -> None:
@@ -112,8 +112,8 @@ def test_the_key_builds_the_cores_run_and_solver(tmp_path: Path) -> None:
     """
     config = SimConfig.from_dict(_raw("core"))
     state = time_integration._run_state(config, RunFile(tmp_path / "c.h5"), None)
-    assert type(state) is core_backend.CoreRun
-    assert not core_backend.CoreRun.monitor_reads_fields
+    assert type(state) is time_integration.CoreRun
+    assert not time_integration.CoreRun.monitor_reads_fields
     mesh = Mesh(config)
     boundary = StaggeredBoundary(mesh, config)
     solver = core_backend.steady_solver(mesh, config, boundary)
@@ -201,7 +201,7 @@ def test_a_with_backend_copy_runs_on_the_core_and_its_file_names_it(
     seen: list[str] = []
     with pytest.MonkeyPatch.context() as patch:
         for owner, name in (
-            (core_backend.CoreRun, "march"),
+            (time_integration.CoreRun, "march"),
             (core_backend.CoreSolver, "solve_steady"),
         ):
             inner = getattr(owner, name)

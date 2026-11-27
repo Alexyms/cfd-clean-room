@@ -5,7 +5,7 @@ REQ-N03, ADR-017 D, G and H; prompt 95. ``_cfdcore.StoppingRule2`` against
 for bit, and each estimate to 1e-12 of the reference's, since its rate fit's
 ``x @ log(steps)`` is OpenBLAS's dot there and the core's fixed blocks here (the
 second kind). ``viscosity_scale``'s median, the imbalance summary, the cell
-centres and the max-norms bit for bit. Then ``tests/core_backend.CoreSolver``,
+centres and the max-norms bit for bit. Then ``core_backend.CoreSolver``,
 whose outer iterations run in a ``_cfdcore.Flow2``, against ``StaggeredSolver``:
 outer iterations from planted fields on prompt 87's meshes, the cavity's and a
 small room open on every edge, laminar, under a fixed eddy viscosity and coupled,

@@ -188,7 +188,7 @@ def rule_version(config: SimConfig) -> int | None:
     return RULE_VERSION_WITHOUT_E
 
 
-_STOP_REASONS = {
+STOP_REASONS = {
     VELOCITY_STEP: "velocity_step_below_tol",
     ERROR_ESTIMATE: "error_estimate_and_continuity",
 }
@@ -506,7 +506,7 @@ class TransientResume:
             )
 
 
-def _digest(field: np.ndarray) -> str:
+def field_digest(field: np.ndarray) -> str:
     """SHA-256 of a prescribed eddy viscosity's bytes, little-endian float64."""
     data = np.ascontiguousarray(field, dtype="<f8").tobytes()
     return hashlib.sha256(data).hexdigest()
@@ -857,7 +857,7 @@ class StaggeredSolver:
             if eddy_viscosity is None
             else self._effective_viscosity(eddy_viscosity)
         )
-        digest = None if eddy_viscosity is None else _digest(eddy_viscosity)
+        digest = None if eddy_viscosity is None else field_digest(eddy_viscosity)
         start = 0
         state: TurbulenceState | None = None
         if resume is not None:
@@ -978,7 +978,7 @@ class StaggeredSolver:
 
             if stop:
                 self.converged = True
-                self.stop_reason = _STOP_REASONS[self._stopping_rule]
+                self.stop_reason = STOP_REASONS[self._stopping_rule]
                 logger.info("Converged at iteration %d", iteration)
                 break
 
@@ -1358,7 +1358,7 @@ class StaggeredSolver:
                 f"the checkpoint's field has SHA-256 {resume.eddy_viscosity_sha256} "
                 f"and this solve's {digest} (None is no field)"
             )
-        if flow.stop_reason in _STOP_REASONS.values():
+        if flow.stop_reason in STOP_REASONS.values():
             raise ValueError(
                 "resume continues a solve, and this checkpoint's stopped converged "
                 f"({flow.stop_reason}); warm-start from its state with initial="

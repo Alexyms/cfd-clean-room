@@ -62,8 +62,16 @@ from src.config import (
     check_core_module,
 )
 from src.io_manager import RunFile
+from src.march_records import (
+    DEFINED_RTOL,
+    HUNDRED_TO_ONE,
+    IntervalPlan,
+    MarchStep,
+    RecoveryTrackerView,
+    copies_of,
+)
 from src.mesh import FLUID, SOLID, Mesh
-from src.monitor import COUNTING_STATE, Alert, ArrivalTracker
+from src.monitor import COUNTING_STATE, Alert, AlertMonitor, ArrivalTracker
 from src.multigrid import (
     COARSEST_CELLS,
     DOMINANCE_TOLERANCE,
@@ -77,13 +85,14 @@ from src.pressure import (
     PressureCorrection,
     PressureCorrector,
 )
+from src.scenarios import Interval, ScenarioManager
 from src.solver_staggered import (
-    _STOP_REASONS,
     CAP_STOP,
+    STOP_REASONS,
     FlowState,
     StaggeredSolver,
     SteadyCheckpoint,
-    _digest,
+    field_digest,
 )
 from src.solver_staggered import logger as solver_logger
 from src.solver_transport import DEPOSIT_SURFACES, ConservationBreachError, MassBudget
@@ -98,15 +107,6 @@ from src.stopping import (
     RULE_VERSION_WITH_E,
     RULE_VERSION_WITHOUT_E,
     IterationState,
-)
-from src.time_integration import (
-    DEFINED_RTOL,
-    HUNDRED_TO_ONE,
-    IntervalPlan,
-    MarchStep,
-    RecoveryTracker,
-    _copies,
-    _Run,
 )
 from src.turbulence import (
     E_WALL,
@@ -450,7 +450,7 @@ def restore_march(
     step: int,
     t: float,
     arrival: ArrivalTracker,
-    tracker: RecoveryTracker | None,
+    tracker: RecoveryTrackerView | None,
 ) -> None:
     """Set a core run's resident state from the reference's (ADR-017 B, ``restore``).
 
@@ -468,7 +468,7 @@ def restore_march(
         The time, s.
     arrival : ArrivalTracker
         The reference's maps, whose state is handed over.
-    tracker : RecoveryTracker or None
+    tracker : RecoveryTrackerView or None
         The reference's recovery tracker, whose state is handed over.
     """
     check_budgets(core.classes, budgets)
@@ -587,7 +587,9 @@ def arrival_state(core: "_cfdcore.March2", onsets: np.ndarray) -> dict[str, np.n
 
 
 def sync_trackers(
-    core: "_cfdcore.March2", arrival: ArrivalTracker, tracker: RecoveryTracker | None
+    core: "_cfdcore.March2",
+    arrival: ArrivalTracker,
+    tracker: RecoveryTrackerView | None,
 ) -> None:
     """Set the reference's trackers from the core's state, through their restores.
 
@@ -601,7 +603,7 @@ def sync_trackers(
         The run.
     arrival : ArrivalTracker
         The reference's maps, set from the core's.
-    tracker : RecoveryTracker or None
+    tracker : RecoveryTrackerView or None
         The reference's recovery tracker, set from the core's state.
     """
     arrival.restore(arrival_state(core, arrival.onsets))
@@ -1215,8 +1217,15 @@ def flow_error(failure: Mapping[str, object]) -> Exception:
 # ---- The scenario run and the steady solve on the core (prompts 91, 95, 96) ----
 
 
-class CoreRun(_Run):
-    """``_Run`` with the march stepped through the core (``solver.backend: core``).
+class CoreMarch:
+    """The march stepped through the core, to be mixed into the reference's run.
+
+    ``time_integration.CoreRun`` is ``CoreMarch`` and ``time_integration._Run``
+    together: the run's flow states, plans, monitor, frames, checkpoints, restart
+    and end records are the reference's own, and this class puts its march in the
+    core. It does not import ``time_integration`` (the reference's side asks this
+    module for it), so it reads the members it needs from the run it is mixed
+    into, declared below, and calls ``super().__init__`` for them.
 
     Parameters
     ----------
@@ -1229,6 +1238,12 @@ class CoreRun(_Run):
 
     Notes
     -----
+    The members of the run it is mixed into: ``config``, ``run``, ``on_step``,
+    ``mesh``, ``manager``, ``intervals``, ``n_classes``, ``live``, ``cells``,
+    ``events``, ``states``, ``arrival``, ``tracker``, ``monitor`` and the methods
+    ``faces``, ``observe``, ``noted``, ``carried``, ``arrival_record`` and
+    ``flush``.
+
     ``monitor_reads_fields`` (class attribute, False) puts the monitor on the
     readings and channels the core returns per step
     (``AlertMonitor.update_from_readings``), so the march goes to the core in
@@ -1241,6 +1256,22 @@ class CoreRun(_Run):
     """
 
     monitor_reads_fields: bool = False
+
+    # The run this is mixed into provides these (``_Run.__init__`` sets them).
+    config: SimConfig
+    run: RunFile
+    on_step: Callable[[MarchStep], None] | None
+    mesh: Mesh
+    manager: ScenarioManager
+    intervals: Sequence[Interval]
+    n_classes: int
+    live: np.ndarray
+    cells: tuple[tuple[int, int], ...]
+    events: tuple[tuple[str, float], ...]
+    states: dict[str, FlowState]
+    arrival: ArrivalTracker
+    tracker: RecoveryTrackerView | None
+    monitor: AlertMonitor | None
 
     def __init__(
         self,
@@ -1438,9 +1469,9 @@ class CoreRun(_Run):
                         sync_trackers(core, self.arrival, self.tracker)
                     if frame:
                         self.run.write_frame(step, t, fields, current)
-                        self._flush(pending)
+                        self.flush(pending)
                     if checkpoint:
-                        self._flush(pending)
+                        self.flush(pending)
                         self.run.write_arrival(self.arrival_record(t))
                         self.run.checkpoint(
                             step,
@@ -1459,7 +1490,7 @@ class CoreRun(_Run):
                                 plan.dt,
                                 plan.index,
                                 fields,
-                                _copies(current),
+                                copies_of(current),
                                 alerts,
                             )
                         )
@@ -1471,8 +1502,8 @@ class CoreRun(_Run):
         fields = unstacked(core.class_fields())
         current = tuple(budgets_of(core))
         sync_trackers(core, self.arrival, self.tracker)
-        self._flush(pending)
-        return fields, _copies(current), int(core.step), float(core.t), held
+        self.flush(pending)
+        return fields, copies_of(current), int(core.step), float(core.t), held
 
 
 # ---- The steady solve (prompt 95) ---------------------------------------------
@@ -1584,7 +1615,7 @@ class CoreSolver(StaggeredSolver):
             if eddy_viscosity is None
             else self._effective_viscosity(eddy_viscosity)
         )
-        digest = None if eddy_viscosity is None else _digest(eddy_viscosity)
+        digest = None if eddy_viscosity is None else field_digest(eddy_viscosity)
         start = 0
         state: TurbulenceState | None = None
         if resume is not None:
@@ -1660,7 +1691,7 @@ class CoreSolver(StaggeredSolver):
                     solver_logger.info("SIMPLE iter %4d: residual = %.6e", at, residual)
                 if stop:
                     self.converged = True
-                    self.stop_reason = _STOP_REASONS[self._stopping_rule]
+                    self.stop_reason = STOP_REASONS[self._stopping_rule]
                     solver_logger.info("Converged at iteration %d", at)
             failure = chunk["failure"]
             if failure is not None:

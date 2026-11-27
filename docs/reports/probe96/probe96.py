@@ -260,7 +260,7 @@ def in_process(args: list[str], log: Path) -> tuple[int, float]:
 
 def run_fields(name: str) -> None:
     """One scenario on the core with the monitor on the fields."""
-    from src.core_backend import CoreRun
+    from src.time_integration import CoreRun
 
     path, copy_to = paths("fields", name)
     fresh(path)
@@ -546,7 +546,7 @@ def windows_load() -> list[str]:
 def timing_one(side: str, out_path: Path) -> None:
     """One timed run of the dust release on SIDE in this process: its parts apart."""
     import src.time_integration as time_integration
-    from src.core_backend import CoreRun
+    from src.time_integration import CoreRun
 
     seconds = {"flow": 0.0, "march": 0.0}
 
