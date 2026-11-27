@@ -2789,3 +2789,34 @@ class TestBackendKeyInTheRun:
 
         built = core_backend.steady_solver(mesh, config, boundary, reference=Named)
         assert type(built) is Named
+
+    def test_the_core_is_refused_where_a_solver_or_a_march_is_built(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Where ``_cfdcore`` cannot be imported, building the core's parts refuses.
+
+        The configuration loads (a run file written on the core is read
+        anywhere); the solver, the march and the run each refuse where they are
+        built, naming the build, and the run before it writes a file.
+
+        Defect caught: the module looked for at load only, which would let a
+        core run start and fail in its first call, or not look at all.
+        """
+        monkeypatch.setitem(sys.modules, "_cfdcore", None)
+        config = SimConfig.from_dict(
+            coarse_raw("scenario_equipment_dust.yaml")
+        ).with_backend("core")
+        mesh = Mesh(config)
+        boundary = StaggeredBoundary(mesh, config)
+        path = tmp_path / "core.h5"
+        refused = [
+            lambda: core_backend.CoreSolver(mesh, config, boundary),
+            lambda: core_backend.steady_solver(mesh, config, boundary),
+            lambda: time_integration._run_state(config, RunFile(path), None),
+            lambda: time_integration.run(config, path),
+        ]
+        for build in refused:
+            with pytest.raises(ValueError, match="_cfdcore cannot be imported") as why:
+                build()
+            assert "scripts/build_core.sh" in str(why.value)
+        assert not path.exists() and not RunFile(path).checkpoint_path.exists()

@@ -50,7 +50,11 @@ from compare_runs import (  # noqa: E402 -- follows sys.path.insert
 )
 
 from src.config import SimConfig  # noqa: E402 -- follows sys.path.insert
-from src.placement import clear_units  # noqa: E402 -- follows sys.path.insert
+from src.io_manager import RunFile, config_text  # noqa: E402 -- follows sys.path.insert
+from src.placement import (  # noqa: E402 -- follows sys.path.insert
+    arrival_from_run,
+    clear_units,
+)
 from src.time_integration import Provenance, run  # noqa: E402
 from validation.transport_cases import conservation_keys  # noqa: E402
 
@@ -615,3 +619,37 @@ def test_a_clear_time_that_moves_onto_the_last_frame_is_a_move_of_one(
     assert cells.detail["one only"] == 0
     assert not cells.passed
     assert DECISION in comparison.failures
+
+
+def _named_core(path: Path) -> None:
+    """Rewrite the run file's stored configuration to name ``solver.backend: core``."""
+    mapping = RunFile(path).read_config().mapping
+    mapping["solver"]["backend"] = "core"
+    with h5py.File(path, "r+") as handle:
+        del handle["config/yaml"]
+        handle["config"].create_dataset("yaml", data=config_text(mapping))
+
+
+@pytest.mark.integration
+def test_a_core_run_file_is_read_where_the_core_is_not_built(
+    dust: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A file whose configuration names the core is compared and analysed without it.
+
+    The comparator, the arrival maps and the clear times each rebuild a
+    ``SimConfig`` from the stored mapping. Where ``_cfdcore`` cannot be imported
+    (Windows) they still read it; only building a core solver or march refuses
+    (test 96 S4, review 96 S5). The module is hidden, so this holds where the
+    core is built too.
+
+    Defect caught: the module looked for when a configuration loads.
+    """
+    other = _copy(dust, tmp_path, "core_named")
+    _named_core(other)
+    monkeypatch.setitem(sys.modules, "_cfdcore", None)
+    assert RunFile(other).read_config().mapping["solver"]["backend"] == "core"
+    assert compare_runs.Run(other).config.backend == "core"
+    assert arrival_from_run(other).maps.shape[0] == 1
+    assert clear_units({"run": other}).clear.shape[0] == 5
+    comparison = compare(dust, other)
+    assert comparison.verdict == "PASS"

@@ -42,7 +42,10 @@ from src.config import (
     TurbulenceSpec,
     _segment_widths,
     breakpoint_faces,
+    check_core_module,
 )
+from src.mesh import Mesh
+from src.scenarios import ScenarioManager
 from validation.cases import CONFIG_DIR, load_case, with_backend
 from validation.transport_cases import SOLVER_BLOCK, conservation_keys
 
@@ -4738,18 +4741,33 @@ class TestBackendKey:
         with pytest.raises(error, match="backend"):
             SimConfig.from_dict(self._raw(tmp_path, backend=bad))
 
-    def test_core_is_refused_where_its_module_does_not_import(
+    def test_core_loads_where_its_module_does_not_import(
         self, tmp_path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A missing _cfdcore refuses the core at load, naming the build.
+        """A configuration naming the core loads without ``_cfdcore``.
 
-        The module is hidden (``sys.modules`` holds None for it, which makes
-        its import raise), so the refusal is tested where the core is built as
-        well as on Windows, where it never is.
+        So a core run's file is read, analysed and reported on where the core is
+        not built (Windows): its stored configuration loads again. The module is
+        hidden (``sys.modules`` holds None for it, which makes its import
+        raise), so this is tested where the core is built as well.
+
+        Defect caught: the module looked for at load, which refuses to read a
+        finished run (test 96 S4, review 96 S5).
         """
         monkeypatch.setitem(sys.modules, "_cfdcore", None)
+        config = SimConfig.from_dict(self._raw(tmp_path, backend="core"))
+        assert config.backend == "core"
+        assert config.merged_mapping()["solver"]["backend"] == "core"
+        again = SimConfig.from_dict(config.merged_mapping())
+        assert again.backend == "core"
+
+    def test_core_is_refused_where_it_is_built_and_its_module_does_not_import(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``check_core_module`` names the build, as a solver or march builds it."""
+        monkeypatch.setitem(sys.modules, "_cfdcore", None)
         with pytest.raises(ValueError, match="_cfdcore cannot be imported") as refused:
-            SimConfig.from_dict(self._raw(tmp_path, backend="core"))
+            check_core_module()
         assert "scripts/build_core.sh" in str(refused.value)
 
     def test_core_is_refused_with_a_transient_section(self, tmp_path) -> None:
@@ -4776,7 +4794,12 @@ class TestBackendKey:
     def test_a_case_copy_names_its_backend_and_is_checked(
         self, tmp_path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """``with_backend`` sets the key on a copy, with the load's refusals."""
+        """``with_backend`` sets the key on a copy, with the module's refusal.
+
+        The harness runs the copy, so it is refused where the core cannot be
+        built, as the run itself would be; ``SimConfig.with_backend`` is the
+        copy without that look.
+        """
         config = SimConfig(_write_config(tmp_path))
         same = with_backend(config, "reference")
         assert same is not config and same.backend == "reference"
@@ -4786,3 +4809,63 @@ class TestBackendKey:
         with pytest.raises(ValueError, match="_cfdcore cannot be imported"):
             with_backend(config, "core")
         assert config.backend == "reference"
+        assert "backend" not in config.merged_mapping()["solver"]
+
+    def test_a_copy_writes_its_backend_into_its_mapping(
+        self, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The copy's mapping, the one a run file records, names the backend.
+
+        So a run of the copy is refused a restart on the other backend and its
+        flow state is not kept across them (ADR-017 E). The original is not
+        touched and the other keys are the same.
+
+        Defect caught: the attribute set and the mapping left as the file's
+        (test 96 S3), which wrote a run file that did not name its backend.
+        """
+        monkeypatch.setitem(sys.modules, "_cfdcore", None)
+        config = SimConfig(_write_config(tmp_path))
+        before = config.merged_mapping()
+        core = config.with_backend("core")
+        mapping = core.merged_mapping()
+        assert core.backend == "core" and mapping["solver"]["backend"] == "core"
+        assert config.backend == "reference" and config.merged_mapping() == before
+        mapping["solver"].pop("backend")
+        assert mapping == before
+        # And back: an explicit reference is written too, as any optional key is.
+        assert core.with_backend("reference").merged_mapping()["solver"]["backend"] == (
+            "reference"
+        )
+        with pytest.raises(ValueError, match="must be one of"):
+            config.with_backend("cuda")
+
+    def test_a_scenario_copy_names_its_backend_in_every_interval(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A scenario's interval configurations are built from its merged base.
+
+        So the copy's base names the backend as well as its own mapping, and
+        every interval's flow solve runs on it: the steady solves follow the
+        key, not only the march.
+
+        Defect caught: the key set on the run's attributes and not on the base the
+        intervals are built from, so a run's march ran on the core and its flow
+        solves on the reference (test 96 S3).
+        """
+        monkeypatch.setitem(sys.modules, "_cfdcore", None)
+        raw = yaml.safe_load(
+            (CONFIG_DIR / "scenario_door_leak.yaml").read_text(encoding="utf-8")
+        )
+        raw["scenario"]["base"] = str(CONFIG_DIR / "clean_room_default.yaml")
+        raw["domain"] = {"nx": 80, "ny": 30}
+        config = SimConfig.from_dict(raw)
+        core = config.with_backend("core")
+        assert core.scenario is not None and config.scenario is not None
+        assert core.scenario.base["solver"]["backend"] == "core"
+        assert "backend" not in config.scenario.base["solver"]
+        assert core.merged_mapping()["scenario"] == config.merged_mapping()["scenario"]
+        manager = ScenarioManager(core, Mesh(core))
+        assert {i.config.backend for i in manager.intervals()} == {"core"}
+        assert len({i.fingerprint for i in manager.intervals()}) == 2
+        reference = ScenarioManager(config, Mesh(config))
+        assert {i.config.backend for i in reference.intervals()} == {"reference"}

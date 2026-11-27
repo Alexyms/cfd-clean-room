@@ -28,6 +28,7 @@ from src.config import SimConfig
 from src.io_manager import RunFile
 from src.mesh import Mesh
 from src.time_integration import Provenance, run
+from validation.cases import with_backend
 from validation.transport_cases import conservation_keys
 
 if os.environ.get("CFD_CORE_REQUIRED") == "1":
@@ -178,3 +179,43 @@ def test_a_run_file_of_one_backend_is_refused_for_a_restart_on_the_other(
         raw["solver"]["t_end"] = 14.0
         with pytest.raises(ValueError, match=r"solver\.backend differs"):
             run(SimConfig.from_dict(raw), restart=cut)
+
+
+def test_a_with_backend_copy_runs_on_the_core_and_its_file_names_it(
+    tmp_path: Path,
+) -> None:
+    """A case copied by ``with_backend`` runs on the core and records that it did.
+
+    The march and every flow solve run on the core, the run file's stored
+    configuration names the backend, and a restart on the reference, whose
+    configuration does not, is refused (test 96 S3).
+
+    Defect caught: the key set on the copy's attribute and not in its mapping,
+    which ran on the core but wrote a file that a restart on the reference
+    accepted.
+    """
+    raw = _raw("reference")
+    del raw["solver"]["backend"]
+    reference = SimConfig.from_dict(raw)
+    core = with_backend(reference, "core")
+    seen: list[str] = []
+    with pytest.MonkeyPatch.context() as patch:
+        for owner, name in (
+            (core_backend.CoreRun, "march"),
+            (core_backend.CoreSolver, "solve_steady"),
+        ):
+            inner = getattr(owner, name)
+
+            def spy(self, *args, _inner=inner, _tag=f"{owner.__name__}.{name}", **kw):
+                seen.append(_tag)
+                return _inner(self, *args, **kw)
+
+            patch.setattr(owner, name, spy)
+        path = tmp_path / "named.h5"
+        run(core, path, provenance=PROVENANCE)
+    assert "CoreRun.march" in seen and "CoreSolver.solve_steady" in seen
+    assert RunFile(path).read_config().mapping["solver"]["backend"] == "core"
+    longer = copy.deepcopy(raw)
+    longer["solver"]["t_end"] = 14.0
+    with pytest.raises(ValueError, match=r"solver\.backend differs"):
+        run(SimConfig.from_dict(longer), restart=path)

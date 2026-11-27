@@ -26,8 +26,10 @@ the reference's own types.
 
 ``_cfdcore`` is imported inside the functions that call it, so this module loads
 where the core is not built (on Windows, say) and nothing imports the core unless
-the key asks for it; ``SimConfig`` refuses ``core`` at load where it cannot be
-imported. The march's monitor reads the readings and channels the core returns
+the key asks for it. A configuration that names ``core`` loads everywhere, so that
+a core run's file is read and reported on wherever it is; ``require_core`` refuses
+it where a core solver or march is built and the module cannot be imported. The
+march's monitor reads the readings and channels the core returns
 per step (``AlertMonitor.update_from_readings``), so the march goes to the core in
 batches to the next frame, checkpoint or interval end; ``CoreRun.monitor_reads_fields``
 puts the monitor on the fields instead, copied out of the core after every step,
@@ -57,6 +59,7 @@ from src.config import (
     UPWIND,
     BoundarySpec,
     SimConfig,
+    check_core_module,
 )
 from src.io_manager import RunFile
 from src.mesh import FLUID, SOLID, Mesh
@@ -118,6 +121,21 @@ from src.turbulence import logger as turbulence_logger
 
 if TYPE_CHECKING:
     import _cfdcore
+
+
+def require_core() -> None:
+    """Refuse to build a core solver or march where ``_cfdcore`` cannot be imported.
+
+    Called first by ``CoreSolver`` and ``CoreRun``, so a run that names the core
+    where it is not built is refused before it writes a file, with the reason
+    and where it is built.
+
+    Raises
+    ------
+    ValueError
+        Naming ``scripts/build_core.sh`` (ADR-017 A); Windows has no build.
+    """
+    check_core_module()
 
 
 def budget_from_terms(terms: Mapping[str, float | None]) -> MassBudget:
@@ -1230,6 +1248,7 @@ class CoreRun(_Run):
         run: RunFile,
         on_step: Callable[[MarchStep], None] | None,
     ) -> None:
+        require_core()
         super().__init__(config, run, on_step)
         recovery = None
         if self.tracker is not None:
@@ -1512,6 +1531,7 @@ class CoreSolver(StaggeredSolver):
     def __init__(
         self, mesh: Mesh, config: SimConfig, boundary: StaggeredBoundary
     ) -> None:
+        require_core()
         super().__init__(mesh, config, boundary)
         self._config = config
         self._modules = flow_modules(mesh, config, boundary, self._corrector)
