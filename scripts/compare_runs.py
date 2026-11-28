@@ -37,6 +37,10 @@ channels, the leftover's change) is not: an outer count one apart moved them by
 further was a Jacobi sweep, whose count a run file does not record. Such a field
 is read as beyond the limit, its line says so, and it goes to the step's report.
 
+A grid's own measured spreads may replace ``BAND``'s, as on 320x120, but no
+spread may exceed its limit: ``compare`` refuses such a band (``check_band``),
+since a field inside its spread passes and the limit would not bound it.
+
 ``compare_placement`` gives the decisions that read several scenarios at once:
 the searched layouts' cells under each rule and pool, their order, and every
 unit's latency of the file's four sensors and of each searched layout.
@@ -191,6 +195,35 @@ def pointwise(a: np.ndarray, b: np.ndarray, floor: float) -> float:
     if not np.isfinite(b[keep]).all():
         return math.inf
     return float((np.abs(b[keep] - a[keep]) / np.abs(a[keep])).max())
+
+
+def check_band(band: Mapping[str, tuple[float, float]] | None = None) -> None:
+    """Refuse a band whose measured spread exceeds its limit.
+
+    A spread is the first tier: a field inside it passes whatever its limit. A
+    spread above the limit would pass a field beyond the limit, so the limit
+    would no longer bound it (ADR-017 H). A caller that sets a grid's own
+    spreads, as prompt 97's probe does on 320x120, is refused here.
+
+    Parameters
+    ----------
+    band : Mapping[str, tuple[float, float]] or None
+        (the measured spread, the limit) per field; ``BAND`` when None.
+
+    Raises
+    ------
+    ValueError
+        Naming every field whose spread is negative, not finite or above its
+        limit, or whose limit is not finite.
+    """
+    band = BAND if band is None else band
+    wrong = [
+        f"{name} (spread {spread!r}, limit {limit!r})"
+        for name, (spread, limit) in band.items()
+        if not (math.isfinite(limit) and 0.0 <= spread <= limit)
+    ]
+    if wrong:
+        raise ValueError(f"a band's spread exceeds its limit: {'; '.join(wrong)}")
 
 
 def tier(value: float, name: str) -> str:
@@ -1077,7 +1110,14 @@ def compare(ref_path: str | Path, other_path: str | Path) -> Comparison:
     -------
     Comparison
         Every stop, decision, field and closure, and the bitwise flags.
+
+    Raises
+    ------
+    ValueError
+        When ``BAND`` holds a spread above its limit (``check_band``), before
+        either file is read.
     """
+    check_band()
     ref, other = Run(Path(ref_path)), Run(Path(other_path))
     stops = compare_stops(ref, other)
     flows, flow_bitwise = compare_flows(ref, other, _explained(stops))
