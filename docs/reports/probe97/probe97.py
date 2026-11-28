@@ -474,15 +474,40 @@ def band_key(item_name: str) -> str:
     raise ValueError(f"no band for the item {item_name!r}")
 
 
+# The fields a 320x120 pair of the backends reads against the probe's spread, as
+# on the coarser grids (Alex, 2026-11-27): their 320x120 spread lies above their
+# limits for the concentration pointwise and the leftover, and a first tier above
+# a limit would override it. The flow fields and the sensor channels take the
+# 320x120 spread.
+CLASS_ON_PROBE = (
+    compare_runs.CONCENTRATION,
+    compare_runs.POINTWISE,
+    compare_runs.LEFTOVER,
+)
+
+
+def band_320(measured: dict[str, float]) -> dict[str, tuple[float, float]]:
+    """The band a 320x120 pair of the backends is read against.
+
+    The 320x120 spread (``band320.json``) for the flow fields and the sensor
+    channels; the comparator's own (the probe's) for ``CLASS_ON_PROBE``; the
+    limits unchanged.
+    """
+    return {
+        key: (spread if key in CLASS_ON_PROBE else float(measured[key]), limit)
+        for key, (spread, limit) in compare_runs.BAND.items()
+    }
+
+
 def compare_one(label: str) -> int:
-    """One pair by the comparator; a 320x120 pair of the backends on the 320x120 spread."""
+    """One pair by the comparator; a 320x120 pair of the backends on ``band_320``."""
     pair = {p.label: p for p in pairs()}[label]
     saved = dict(compare_runs.BAND)
     band = None
     if pair.kind == "backends 320x120":
-        band = json.loads(BAND_RECORD.read_text())["band"]
-        for key, (_, limit) in saved.items():
-            compare_runs.BAND[key] = (float(band[key]), limit)
+        read = band_320(json.loads(BAND_RECORD.read_text())["band"])
+        band = {key: spread for key, (spread, _) in read.items()}
+        compare_runs.BAND.update(read)
     try:
         started = time.perf_counter()
         comparison = compare_runs.compare(run_file(*pair.ref), run_file(*pair.other))

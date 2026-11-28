@@ -19,6 +19,7 @@ the tables names every commit and the files that differ.
 """
 
 import argparse
+import ast
 import json
 import math
 import subprocess
@@ -53,10 +54,11 @@ LABELS = {
 INSIDE = "inside the spread"
 SPEEDUP = 8.0
 PROBE_FLOW_SPREAD = 7.8e-10
-# The paths a record's numbers depend on. Records of two commits are one set only
-# when none of these differs between the commits. The sweep records are computed
-# by sweeps97.py as well, which the later commit added; they must all name one
-# commit, so that file is not compared across commits.
+# The paths a record's numbers depend on. A record of an earlier commit belongs to
+# the set only when none of these differs between its commit and the comparisons'
+# (below), the definitions COMPARISON_ONLY names excepted. The instrumented runs are
+# computed by sweeps97.py as well, which a later commit added; they must name one
+# commit, and sweeps97.py must not differ between it and the comparisons'.
 COMPUTED_BY = (
     "src/",
     "scripts/",
@@ -69,6 +71,16 @@ COMPUTED_BY = (
 # a stray process held one logical processor through the first (Alex, 2026-11-27).
 SUPERSEDED = probe97.RESULTS / "timing_superseded"
 SUPERSEDED_SESSIONS = ((probe97.PRODUCT, 1),)
+# The top-level definitions only the comparisons run (each pair, the band, the
+# placement and the sweep analysis): every comparison was made again at one commit
+# after the 320x120 pairs' band was corrected and the comparator made to refuse a
+# spread above its limit (Alex, 2026-11-28). A record of an earlier commit belongs
+# to the set when nothing else it was computed by differs.
+COMPARISON_ONLY = {
+    "scripts/compare_runs.py": {"__doc__", "check_band", "compare"},
+    "docs/reports/probe97/probe97.py": {"CLASS_ON_PROBE", "band_320", "compare_one"},
+}
+SWEEPS97 = "docs/reports/probe97/sweeps97.py"
 RELEASE_END = 40.0
 FIELD_COLUMNS = (
     ("flow fields", None),
@@ -130,16 +142,17 @@ class Records:
     def __init__(self) -> None:
         self.missing: list[str] = []
         self.commits: dict[str, list[str]] = {}
+        self.compared: set[str] = set()
         self.runs = {
             key: self._load(probe97.run_record(*key), "commit")
             for key in probe97.plan()
         }
         self.pairs = {
-            p.label: self._load(probe97.compare_path(p.label), "commit")
+            p.label: self._compared(probe97.compare_path(p.label))
             for p in probe97.pairs()
         }
-        self.band = self._load(probe97.BAND_RECORD, "commit")
-        self.placement = self._load(probe97.PLACEMENT_RECORD, "commit")
+        self.band = self._compared(probe97.BAND_RECORD)
+        self.placement = self._compared(probe97.PLACEMENT_RECORD)
         self.rows = {}
         for case, method, stored in probe97.rows_of_record():
             path = probe97.row_path(case, method)
@@ -158,18 +171,35 @@ class Records:
         self.sweeps = {
             tag: self._load(SWEEPS / f"{tag}.json", "commit") for tag in SWEEP_TAGS
         }
-        self.analysis = self._load(SWEEPS / "analysis.json", "commit")
+        self.analysis = self._compared(SWEEPS / "analysis.json")
         if self.missing:
             raise SystemExit("absent records:\n  " + "\n  ".join(self.missing))
-        swept = {rec["commit"] for rec in [*self.sweeps.values(), self.analysis]}
-        if len(swept) != 1:
-            raise SystemExit(f"the sweep records name more than one commit: {swept}")
-        self.differing = differing_files(sorted(self.commits))
-        if self.differing:
-            lines = [f"{c[:12]}: {', '.join(n[:3])}" for c, n in self.commits.items()]
+        if len(self.compared) != 1:
             raise SystemExit(
-                "records of more than one commit, the code they were computed by "
-                f"differing in {self.differing}:\n  " + "\n  ".join(lines)
+                f"the comparisons name more than one commit: {self.compared}"
+            )
+        (self.newest,) = self.compared
+        swept = {rec["commit"] for rec in self.sweeps.values()}
+        if len(swept) != 1:
+            raise SystemExit(
+                f"the instrumented runs name more than one commit: {swept}"
+            )
+        refused = []
+        for commit in self.commits:
+            if commit == self.newest:
+                continue
+            if not is_ancestor(commit, self.newest):
+                refused.append(
+                    f"{commit[:12]} is not an ancestor of {self.newest[:12]}"
+                )
+                continue
+            extra = (SWEEPS97,) if commit in swept else ()
+            for name in changed_outside(commit, self.newest, extra):
+                refused.append(f"{commit[:12]}: {name}")
+        if refused:
+            raise SystemExit(
+                "records of an earlier commit whose code differs from the "
+                "comparisons' outside COMPARISON_ONLY:\n  " + "\n  ".join(refused)
             )
 
     def _session(self, folder: Path) -> tuple[dict | None, dict[str, dict | None]]:
@@ -180,6 +210,13 @@ class Records:
             for side in (probe97.REF, probe97.CORE)
         }
         return state, sides
+
+    def _compared(self, path: Path) -> dict | None:
+        """A comparison's record, its commit noted among the comparisons'."""
+        record = self._load(path, "commit")
+        if record is not None:
+            self.compared.add(record["commit"])
+        return record
 
     def _note(self, commit: str, name: str) -> None:
         self.commits.setdefault(commit, []).append(name)
@@ -203,6 +240,68 @@ def git_diff(first: str, other: str, paths: tuple[str, ...]) -> list[str]:
         text=True,
         check=True,
     ).stdout.split()
+
+
+def is_ancestor(commit: str, newest: str) -> bool:
+    """Whether COMMIT is NEWEST or one of its ancestors."""
+    done = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", commit, newest], cwd=ROOT
+    )
+    return done.returncode == 0
+
+
+def definitions(commit: str, path: str) -> dict[str, str] | None:
+    """PATH's top-level definitions at COMMIT, each by name, as its syntax tree.
+
+    The module docstring is ``__doc__``; a statement that names nothing (an
+    import, say) is keyed by its own tree. None when PATH is absent at COMMIT.
+    """
+    shown = subprocess.run(
+        ["git", "show", f"{commit}:{path}"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    if shown.returncode != 0:
+        return None
+    out: dict[str, str] = {}
+    for index, node in enumerate(ast.parse(shown.stdout).body):
+        tree = ast.dump(node)
+        if isinstance(node, ast.FunctionDef | ast.ClassDef):
+            out[node.name] = tree
+        elif isinstance(node, ast.Assign | ast.AnnAssign):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            out[", ".join(ast.unparse(target) for target in targets)] = tree
+        elif index == 0 and isinstance(node, ast.Expr):
+            out["__doc__"] = tree
+        else:
+            out[tree] = tree
+    return out
+
+
+def changed_outside(commit: str, newest: str, extra: tuple[str, ...]) -> list[str]:
+    """What differs between COMMIT and NEWEST that a record of COMMIT was computed by.
+
+    Every file under ``COMPUTED_BY`` and EXTRA that differs, except a file of
+    ``COMPARISON_ONLY`` whose differing top-level definitions are all among the
+    ones it names; such a file is listed with the definitions outside them.
+    """
+    out = []
+    for name in git_diff(commit, newest, COMPUTED_BY + extra):
+        allowed = COMPARISON_ONLY.get(name)
+        before, after = definitions(commit, name), definitions(newest, name)
+        if allowed is None or before is None or after is None:
+            out.append(name)
+            continue
+        changed = {
+            key
+            for key in before.keys() | after.keys()
+            if before.get(key) != after.get(key)
+        }
+        if changed - allowed:
+            out.append(f"{name} ({', '.join(sorted(changed - allowed))})")
+    return out
 
 
 def differing_files(
@@ -483,7 +582,7 @@ def fields_table(r: Records) -> tuple[list[str], bool, bool]:
         rows.append(
             [
                 label_of(pair.ref[1]),
-                "320x120's (T2)"
+                "320x120's (T2) for the flow and the sensors, the probe's for the class fields"
                 if pair.kind.endswith(probe97.PRODUCT)
                 else "the probe's",
                 *cells,
@@ -1380,12 +1479,18 @@ def build() -> str:
     others = differing_files(commits, ()) if len(commits) > 1 else []
     parts = [f"{c[:12]} ({len(r.commits[c])} records)" for c in commits]
     made = ", ".join(parts[:-1]) + " and " + parts[-1] if len(parts) > 1 else parts[0]
+    comparison_only = "; ".join(
+        f"`{name}`: {', '.join(sorted(defs))}" for name, defs in COMPARISON_ONLY.items()
+    )
     head = [
         "# Prompt 97's tables (generated by `tables97.py` from `results/builder97/`; do not edit)",
         "",
         f"The records were made at {made}."
         + (
-            f" Between the commits these files differ, none of them a file the records were computed by: {', '.join(others)}."
+            f" Between the commits these files differ: {', '.join(others)}."
+            f" Every comparison (each pair, the band, the placement and the sweep analysis) was made at {r.newest[:12]};"
+            " of the files the other records were computed by, only definitions that the comparisons alone run differ"
+            f" ({comparison_only})."
             if others
             else ""
         )
