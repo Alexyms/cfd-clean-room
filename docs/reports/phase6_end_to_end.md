@@ -4,8 +4,8 @@
 **Prompt:** 97 (`docs/prompts/cc-prompt-97-end-to-end.md`) and 97b
 (`docs/prompts/cc-prompt-97b-sweep-counts.md`)
 **Branch:** `phase6/end-to-end`
-**Status:** done. (a) and (e) fail, (b), (c), (d), (f), (g) and (h) hold. The 320x120 limits
-are proposed to Alex and not applied.
+**Status:** done. (a) and (e) fail, (b), (c), (d), (f), (g) and (h) hold. Alex kept the
+320x120 limits on 2026-11-27 (section 13), and step 6 is done.
 
 This is the second half of Phase 6 step 6 (`docs/PROJECT_PLAN.md`, Phase 6, the steps table;
 ADR-017 F and H): the noise band measured on the product grid, REQ-N03 level 2 on the five
@@ -98,7 +98,9 @@ at 77e9b3d after it. The tables accept the two only because no file the records 
 (`src/`, `scripts/`, `configs/`, `core/`, `docs/reports/probe85/`, `probe97.py`) differs between
 them, and they refuse sweep records of more than one commit. The head of the tables names both
 commits and the files that do differ. Prompt 97 asked for a check that fails on records of two
-commits; this reading of it is the builder's, and it is set out for Alex under "For Alex".
+commits; this reading of it is the builder's, and it is set out for Alex under "For Alex". The
+repeated 320x120 timing session (section 6) was made at 71d7c6d, a third commit, under the same
+check.
 
 ### The predictions scored (T0)
 
@@ -112,8 +114,9 @@ commits; this reading of it is the builder's, and it is set out for Alex under "
   the same order and no unit latency moved (T8).
 - **(d) HOLDS.** All sixteen steady rows keep their verdict and stop, at the stored outer count
   (T9).
-- **(e) FAILS.** The 320x120 dust release ran 6.58 times faster under `core`, below the 8 the
-  prediction asks (T11). One logical processor of the machine was busy throughout (section 6).
+- **(e) FAILS.** The 320x120 dust release ran 6.79 times faster under `core`, below the 8 the
+  prediction asks, on the session made again after a stray process was stopped; the first
+  session gave 6.58 (T11, section 6).
 - **(f), (g) and (h) HOLD** (T14, T15).
 
 ### 1. The runner and the runs (T1)
@@ -177,7 +180,8 @@ read against T2's 320x120 spread on 320x120 and against the probe's on 160x60. T
 to the reference's own check on both sides (T6). The core's fields lie several decades below the
 spread they are read against. T7 shows which records are bit for bit: the step times and the
 arrival maps on every pair, the frames and the budgets on none, as rounding gives. All seven
-pairs pass in ADR-017 H's first tier, and they pass under the proposed limits too (T12).
+pairs pass in ADR-017 H's first tier under the limits Alex kept, and under the rule's reading
+of section 13 too (T12).
 
 ### 4. The placement (T8)
 
@@ -198,22 +202,23 @@ That is a change of the configuration, not of the solve. The tier-2 rows stay on
 
 The timing ran last, each session alone, three sessions on 80x30 and on 160x60 with the order of
 the backends alternated, and the one session (e) asks for on 320x120. Every session was on mains
-power at the processor's full performance, with no model server running.
+power with no model server running.
 
 The ratio falls as the grid is refined: about thirteen on 80x30, about nine on 160x60, and on
 320x120 below the eight (e) asks, in the flow solve and in the march alike (T11). The sessions on
 each grid agree with each other to within about a tenth. Why the core gains less on the finer
 grids is not measured here: neither side was profiled on 320x120.
 
-The machine was not quiet. In every session's state, before and after, the busiest Windows
-process is `python3.13` at 93 to 98% of one logical processor (T11). It is a stray `python3 -`
-process left by a shell command of an earlier builder session on 2026-11-26 at 19:50, reading a
-standard input that never closes. It was found only when the timing's records were read, so it
-ran through every run of this step. It moves no result that is compared bit for bit or against a
-limit. The machine has 24 logical processors, and the process loads both sides of a session
-alike, so it is unlikely to account for a ratio of 6.58 against 8. Whether it does is not
-measured: this session was not permitted to stop the process, and the timing was not run again.
-Stopping it and running the 320x120 session again would settle it (For Alex).
+The first 320x120 session, and every session and run before it, ran with a stray `python3 -`
+process holding 93 to 98% of one of the machine's 24 logical processors (T11, the superseded
+row). It was left by a shell command of an earlier builder session on 2026-11-26 at 19:50,
+reading a standard input that never closed. It moves no result that is compared bit for bit or
+against a limit. Alex stopped it on 2026-11-27, and the 320x120 session was made again alone
+with the first session's record moved aside (`results/builder97/timing_superseded/`). (e) is
+scored on the new session. Its state before shows the builder session's own process (`claude`)
+busy at the launch, and the processor's performance at 95% before and 81% after (T11). Its
+ratio is within a few per cent of the first's, so the stray
+process does not account for the shortfall: the fall of the ratio with the grid does.
 
 ## Prompt 97b: the sweep counts behind the 320x120 spread
 
@@ -361,15 +366,15 @@ H1 holds in its mechanism and fails in its account of the grid:
   thousands of stops on 320x120, and a port's rounding could flip only stops within rounding of
   the threshold, of which the base runs have none (section 11).
 
-#### 13. The 320x120 limits, proposed and not applied (T19, T22, T12)
+#### 13. The 320x120 limits: Alex's decision (T19, T22, T12)
 
-ADR-017 H is not edited beyond a dated as-built note, and the comparator's limits are not
-changed. Three readings are set out for Alex:
+The builder set out three readings for Alex, changing neither ADR-017 H beyond a dated as-built
+note nor the comparator's limits:
 
 1. **ADR-017 H's rule on the 320x120 spread (T19).** The largest measured times ten, rounded up
    to a decade. The pointwise concentration's limit becomes 1e-4 and the leftover's 1e-6; the
    flow and the concentration keep theirs. On the sensor channels the rule gives less than the
-   current limit, and the proposal keeps the larger. This makes the band as wide as the
+   current limit, and the reading keeps the larger. This makes the band as wide as the
    variant's thousands of flips. A port that flipped no stop but carried a defect of that size
    would pass.
 2. **A limit per flipped stop (T22).** Ten times the largest effect of one flipped stop, rounded
@@ -378,7 +383,7 @@ changed. Three readings are set out for Alex:
    one flipped stop per class, and the variant's 320x120 run exceeds them because it flipped
    up to 1,385 per class (T15). A limit that scales with the flips needs the comparator to count them.
    A run file does not record the Jacobi counts (ADR-017 H, the comparator as built), and
-   recording them is a change under `src/` that this pass does not make. The leftover adds
+   recording them is a change under `src/` that this step does not make. The leftover adds
    exactly over its flips (T20), so a per-flip limit would be exact for it. The fields carry
    each flip's difference away, so the product is a loose upper bound for them (T22's sixth
    column).
@@ -387,25 +392,33 @@ changed. Three readings are set out for Alex:
    then measures how far a stop flipped by a 1% change moves the fields. It does not measure
    what a port does, and on 320x120 the two differ by orders of magnitude.
 
-The choice moves no verdict. Every pair of the backends passes under the current limits and
-under the proposed ones, each field in the first tier, read against the same spread (T12). The
-band pair that stopped prompt 97 is within the proposed limits and not within the current ones.
+The choice moved no verdict. Every pair of the backends passes under the current limits and
+under the rule's, each field in the first tier, read against the same spread (T12). The band
+pair that stopped prompt 97 is within the rule's limits and not within the current ones.
+
+**Alex's decision (2026-11-27): reading 2, a limit per flipped stop.** The limits stay as they
+are on every grid, 320x120 included, and their basis on 320x120 is one flipped Jacobi stop's
+measured effect there, the largest of one sweep more and one fewer, times ten and rounded up to
+a decade (T22). The 320x120 spread of the four variant runs (T2) is kept as a measured record
+dated 2026-11-27, which the comparator reads as the first tier on that grid; it is not a limit.
+The diffusion variant's spread lies beyond the limits because that variant flips up to 1,385
+stops per class, not one. Recording each step's Jacobi sweep counts in the run file, so that a
+spread can be read against the flips that made it, is carried to step 7 (`docs/PROJECT_PLAN.md`,
+Phase 6's steps). ADR-017 H's as-built note records the decision. With it, level 2 holds on
+every pair under the limits as they stand, and step 6 is done.
 
 ## For Alex
 
-1. **The 320x120 limits** (section 13). Three readings are set out, none applied, and none moves
-   a verdict of the seven pairs. Step 6's level 2 holds under each of them; the step closes
-   when one is chosen.
-2. **Records of two commits** (Results, the first paragraph). Prompt 97 asked for a check that
-   fails on records of two commits. `tables97.py` accepts the records of 69744ab and 77e9b3d
-   because no file that computed a record differs between them, names both commits and the
-   files that do differ, and refuses sweep records of more than one commit. If the check is to
-   refuse two commits outright, prompt 97's records have to be made again at one commit.
-3. **The wall time** (section 6). (e) fails at 6.58 on a machine with one logical processor
-   busy throughout. The stray process is the WindowsApps `python3.exe` reading standard input
-   (`python3 -`), started 2026-11-26 at 19:50. With it stopped and the session's folder moved
-   aside, `probe97.py timing 320x120 1` alone (about 50 minutes) would say whether the ratio
-   moves. If it stays below 8, the fall of the ratio with the grid is the finding, and a
-   profile of both sides on 320x120 would say where the core gains less.
-4. **VAL-018's value** (section 5) moved only because the base file's `max_simple_iter`
+Decided on 2026-11-27: the 320x120 limits (section 13) and the timing session made again
+(section 6). Open:
+
+1. **Records of three commits** (Results, the first paragraph). Prompt 97 asked for a check that
+   fails on records of two commits. `tables97.py` accepts the records of 69744ab, 77e9b3d and
+   71d7c6d because no file that computed a record differs between them, names the commits and
+   the files that do differ, and refuses sweep records of more than one commit. If the check is
+   to refuse more than one commit outright, the step's records have to be made again at one.
+2. **The wall time on 320x120** (section 6). (e) fails at 6.79 on the quiet machine. The ratio
+   falls with the grid in the flow solve and the march alike; a profile of both sides on
+   320x120 would say where the core gains less.
+3. **VAL-018's value** (section 5) moved only because the base file's `max_simple_iter`
    changed after the row of record. T9 gives both caps.

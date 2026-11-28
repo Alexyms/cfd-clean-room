@@ -65,6 +65,10 @@ COMPUTED_BY = (
     "docs/reports/probe85/",
     "docs/reports/probe97/probe97.py",
 )
+# A timing session made again, its first record kept beside it in T11 and not scored:
+# a stray process held one logical processor through the first (Alex, 2026-11-27).
+SUPERSEDED = probe97.RESULTS / "timing_superseded"
+SUPERSEDED_SESSIONS = ((probe97.PRODUCT, 1),)
 RELEASE_END = 40.0
 FIELD_COLUMNS = (
     ("flow fields", None),
@@ -143,15 +147,14 @@ class Records:
             if record is not None:
                 self._note(record["core"]["commit"], f"{path.name} (the row)")
             self.rows[(case, method)] = (stored, record)
-        self.timing = {}
-        for grid, session in probe97.TIMING_SESSIONS:
-            folder = probe97.timing_path(grid, session)
-            state = self._load(folder / "state.json", None)
-            sides = {
-                side: self._load(folder / f"{side}.json", "commit")
-                for side in (probe97.REF, probe97.CORE)
-            }
-            self.timing[(grid, session)] = (state, sides)
+        self.timing = {
+            key: self._session(probe97.timing_path(*key))
+            for key in probe97.TIMING_SESSIONS
+        }
+        self.superseded = {
+            key: self._session(SUPERSEDED / probe97.timing_path(*key).name)
+            for key in SUPERSEDED_SESSIONS
+        }
         self.sweeps = {
             tag: self._load(SWEEPS / f"{tag}.json", "commit") for tag in SWEEP_TAGS
         }
@@ -168,6 +171,15 @@ class Records:
                 "records of more than one commit, the code they were computed by "
                 f"differing in {self.differing}:\n  " + "\n  ".join(lines)
             )
+
+    def _session(self, folder: Path) -> tuple[dict | None, dict[str, dict | None]]:
+        """A timing session's machine state and its two sides' records."""
+        state = self._load(folder / "state.json", None)
+        sides = {
+            side: self._load(folder / f"{side}.json", "commit")
+            for side in (probe97.REF, probe97.CORE)
+        }
+        return state, sides
 
     def _note(self, commit: str, name: str) -> None:
         self.commits.setdefault(commit, []).append(name)
@@ -637,14 +649,19 @@ def transient_table() -> list[str]:
 def timing_table(r: Records) -> tuple[list[str], dict[str, list[float]]]:
     """T11: the dust release timed on each grid, its parts apart."""
     rows, ratios = [], {}
-    for (grid, session), (state, sides) in r.timing.items():
+    sessions = [(key, value, False) for key, value in r.timing.items()]
+    for key, value in r.superseded.items():
+        at = next(i for i, (k, _, _) in enumerate(sessions) if k == key)
+        sessions.insert(at, (key, value, True))
+    for (grid, session), (state, sides), superseded in sessions:
         ref, core = sides[probe97.REF], sides[probe97.CORE]
         ratio = ref["total"] / core["total"]
-        ratios.setdefault(grid, []).append(ratio)
+        if not superseded:
+            ratios.setdefault(grid, []).append(ratio)
         rows.append(
             [
                 grid,
-                str(session),
+                f"{session}, superseded, not scored" if superseded else str(session),
                 " then ".join(state["order"]),
                 *[
                     f"{ref[k]:,.1f} / {core[k]:,.1f}"
@@ -659,7 +676,7 @@ def timing_table(r: Records) -> tuple[list[str], dict[str, list[float]]]:
         )
     return (
         [
-            "### T11. The dust release from rest on each grid, reference / core, seconds: the whole run, the flow solve, the march and the rest; the machine's state before and after each session",
+            "### T11. The dust release from rest on each grid, reference / core, seconds: the whole run, the flow solve, the march and the rest; the machine's state before and after each session. The superseded session ran with a stray process holding one logical processor; it was made again alone after that process was stopped, and is kept here, not scored",
             "",
             *table(
                 [
@@ -784,10 +801,15 @@ def two_limits_table(r: Records) -> tuple[list[str], bool]:
         )
     return (
         [
-            "### T12. Every pair under the current limits (the record's) and under the proposed limits (T19), each field read against the same spread: a pair of the backends by its verdict, a band pair by whether every field is within its limit",
+            "### T12. Every pair under the current limits (the record's, kept by Alex on 2026-11-27) and under the rule's limits (T19, put to Alex and not adopted), each field read against the same spread: a pair of the backends by its verdict, a band pair by whether every field is within its limit",
             "",
             *table(
-                ["pair", "current limits", "proposed limits", "tiers that change"],
+                [
+                    "pair",
+                    "current limits",
+                    "the rule's limits (not adopted)",
+                    "tiers that change",
+                ],
                 rows,
             ),
         ],
@@ -1114,7 +1136,7 @@ def limits_table(r: Records) -> list[str]:
             ]
         )
     return [
-        "### T19. The 320x120 limits by ADR-017 H's rule (the largest measured times ten, rounded up to a decade), proposed for Alex and not applied; the largest effect of one sweep more at a flipped 320x120 step beside",
+        "### T19. The 320x120 limits by ADR-017 H's rule (the largest measured times ten, rounded up to a decade), put to Alex and not adopted; the largest effect of one sweep more at a flipped 320x120 step beside",
         "",
         *table(
             [
@@ -1123,7 +1145,7 @@ def limits_table(r: Records) -> list[str]:
                 "320x120 spread",
                 "current limit",
                 "the rule on the 320x120 spread",
-                "proposed (the larger of the two)",
+                "the rule's reading (the larger of the two)",
                 "one flip, largest (T17a)",
             ],
             rows,
@@ -1248,7 +1270,7 @@ def options_table(r: Records) -> list[str]:
             ]
         )
     return [
-        f"### T22. Readings of the {probe97.PRODUCT} band for Alex, none applied: ADR-017 H's rule on the variant's spread (T19), and a limit per flipped stop (ten times the largest effect of one sweep more or fewer, rounded up to a decade), times the variant's flips in its most-flipped class ({most:,})",
+        f"### T22. Readings of the {probe97.PRODUCT} band put to Alex: ADR-017 H's rule on the variant's spread (T19, not adopted), and a limit per flipped stop, Alex's decision of 2026-11-27, which keeps the current limits (ten times the largest effect of one sweep more or fewer, rounded up to a decade), times the variant's flips in its most-flipped class ({most:,})",
         "",
         *table(
             [
@@ -1356,7 +1378,8 @@ def build() -> str:
     )
     commits = sorted(r.commits, key=lambda c: -len(r.commits[c]))
     others = differing_files(commits, ()) if len(commits) > 1 else []
-    made = " and ".join(f"{c[:12]} ({len(r.commits[c])} records)" for c in commits)
+    parts = [f"{c[:12]} ({len(r.commits[c])} records)" for c in commits]
+    made = ", ".join(parts[:-1]) + " and " + parts[-1] if len(parts) > 1 else parts[0]
     head = [
         "# Prompt 97's tables (generated by `tables97.py` from `results/builder97/`; do not edit)",
         "",
@@ -1367,7 +1390,7 @@ def build() -> str:
             else ""
         )
         + f" Every pair of the backends passes the comparator: {yes(verdicts_pass)}."
-        + f" The proposed limits change no pair's verdict: {yes(proposal_same)} (T12).",
+        + f" The rule's limits (T19, not adopted) would change no pair's verdict: {yes(proposal_same)} (T12).",
         "",
     ]
     blocks = [

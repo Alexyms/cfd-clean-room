@@ -656,10 +656,21 @@ its threshold at every step: on 320x120 that fraction lies just outside the 1% t
 moves, on 160x60 far from it. One flipped stop moves the class fields by about what review 85
 S2 read the 2.7e-8 as, so the current class limits are ten times one flip, rounded up. No stop
 of the 320x120 base runs lies within 1e-6 of its threshold, and the core's five 320x120 runs
-stay inside the first tier with fields near 1e-13. The 320x120 limits, ADR-017 H's rule on
-that spread (pointwise 1e-4, the leftover 1e-6), are proposed to Alex with a limit per flipped
-stop as the other reading. Neither is applied here, and neither changes any verdict of the
-seven pairs of the backends.
+stay inside the first tier with every field at 1e-11 or below. Three readings went to Alex:
+this section's rule on the 320x120 spread (pointwise 1e-4, the leftover 1e-6), a limit per
+flipped stop, and the current limits kept with the spread recorded. None changes a verdict of
+the seven pairs of the backends.
+
+**Alex's decision (2026-11-27): a limit per flipped stop.** The limits stay as they are on
+every grid, 320x120 included. Their basis on 320x120 is one flipped Jacobi stop's measured
+effect there, the largest of one sweep more and one fewer, times ten and rounded up to a
+decade, which gives the current limits on the concentration, its pointwise reading and the
+leftover (T22). The measure scales with the stops a run flips, and the comparator cannot count
+them: a run file does not record the Jacobi sweep counts. Recording the per-step sweep counts,
+so that a spread can be read against the flips that made it, is carried to step 7. The 320x120
+spread of the four variant runs (T2) is a measured record dated 2026-11-27, not a limit: the
+comparator reads it as the first tier on that grid, and the diffusion variant's spread lies
+beyond the limits because that variant flips up to 1,385 stops per class (T15), not one.
 
 **What a result outside the band means.**
 
