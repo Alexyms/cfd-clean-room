@@ -1,6 +1,6 @@
 # Phase 6 Step 6b: The Band on 320x120 and the Product End to End (prompt 97)
 
-**Date:** 2026-11-27
+**Date:** 2026-11-28
 **Prompt:** 97 (`docs/prompts/cc-prompt-97-end-to-end.md`) and 97b
 (`docs/prompts/cc-prompt-97b-sweep-counts.md`)
 **Branch:** `phase6/end-to-end`
@@ -93,14 +93,19 @@ A failed prediction is a finding, recorded and scored as such.
 Every number is in `docs/reports/probe97/tables97.md` (T0 to T22), which
 `docs/reports/probe97/tables97.py` generates from the records in `results/builder97/`; its
 `--check` regenerates the tables and compares them, and both modes refuse an absent record. The
-records were made at two commits: prompt 97's runner at 69744ab until its stop, and prompt 97b's
-at 77e9b3d after it. The tables accept the two only because no file the records were computed by
-(`src/`, `scripts/`, `configs/`, `core/`, `docs/reports/probe85/`, `probe97.py`) differs between
-them, and they refuse sweep records of more than one commit. The head of the tables names both
-commits and the files that do differ. Prompt 97 asked for a check that fails on records of two
-commits; this reading of it is the builder's, and it is set out for Alex under "For Alex". The
-repeated 320x120 timing session (section 6) was made at 71d7c6d, a third commit, under the same
-check.
+records were made at four commits: prompt 97's runner at 69744ab until its stop, prompt 97b's at
+77e9b3d after it, the repeated 320x120 timing session (section 6) at 71d7c6d, and every
+comparison (each pair, the band, the placement and the sweep analysis) at fd24efb, made again
+when the 320x120 pairs' first tier was corrected (section 14). The tables require every
+comparison to name one commit and the instrumented runs to name one. A record of an earlier
+commit is accepted only when nothing it was computed by (`src/`, `scripts/`, `configs/`,
+`core/`, `docs/reports/probe85/`, `probe97.py`, and `sweeps97.py` for the instrumented runs)
+differs between its commit and the comparisons', except top-level definitions that the
+comparisons alone run (`COMPARISON_ONLY` in `tables97.py`: `check_band` and `compare` in
+`compare_runs.py`, `band_320` and `compare_one` in `probe97.py`); the definitions are compared
+by their syntax trees. The head of the tables names the commits and the files that differ.
+Prompt 97 asked for a check that fails on records of two commits; this reading of it is the
+builder's, and it is set out for Alex under "For Alex".
 
 ### The predictions scored (T0)
 
@@ -168,15 +173,17 @@ fields' 320x120 spread comes from `outer_one_later` on both scenarios, and the d
 diffusion variant is bit for bit the reference. Two fields are beyond their limits, both under
 the diffusion variant on the dust release: the concentration pointwise and the leftover's
 change. Under every variant no decision moved and every budget closed (T3). The 320x120 spread
-in T2 is what the comparator reads as the first tier on that grid (`band320.json`). The core's
-320x120 pairs are read against it, with the limits unchanged.
+in T2 (`band320.json`) is the first tier the core's 320x120 pairs read for the flow fields and
+the sensor channels. The class fields are read against the probe's spread, since their 320x120
+spread lies above two of their limits (section 14). The limits are unchanged.
 
 ### 3. REQ-N03 level 2 (T4 to T7)
 
 On all seven pairs the core stops each flow state at the reference's outer count, for the
 reference's reason and under the same cap (T4). Every decision the comparator reads is equal,
 item by item, with the same number reached on each side (T5). Every field is inside its spread,
-read against T2's 320x120 spread on 320x120 and against the probe's on 160x60. The budget closes
+read on 320x120 against T2's 320x120 spread for the flow fields and the sensor channels and
+against the probe's for the class fields, and on 160x60 against the probe's. The budget closes
 to the reference's own check on both sides (T6). The core's fields lie several decades below the
 spread they are read against. T7 shows which records are bit for bit: the step times and the
 arrival maps on every pair, the frames and the budgets on none, as rounding gives. All seven
@@ -326,8 +333,8 @@ variant when that ratio lies above 0.99, since from the same state the variant's
   a shape that changes less and less. The first residual over the threshold and the contraction
   per sweep are then nearly the same at every step, so nearly every solve stops after the same
   number of sweeps at nearly the same fraction of its threshold. That fraction is where the grid puts
-  it. On 320x120 the base's median is 0.9894, its 90th percentile 0.9895: a hair below the
-  variant's 1%. Between 41.8 and 60 s, while the shape still settles, the fraction moves above
+  it. On 320x120 the base's median is 0.9894, its 90th percentile 0.9895: just below 0.99, the
+  variant's threshold. Between 41.8 and 60 s, while the shape still settles, the fraction moves above
   0.99 in the class-steps T16 counts; after 60 s it stays just below, and no stop flips. On
   160x60 the fraction settles near a quarter of the threshold, and only the one step just after
   40 s lies above 0.99. The door leak's stops sit near a tenth of the threshold before and after
@@ -336,8 +343,8 @@ variant when that ratio lies above 0.99, since from the same state the variant's
 So H1's grid dependence is not the one H1 gave. The finer grid's sweep does contract less
 (T18's contraction per sweep), which widens the range one sweep spans. Alone, that would raise
 the share of flipped stops by a fraction, not by orders of magnitude. What decides the share is
-where the settled fraction falls against the variant's 1%. On 320x120 it falls in the margin,
-on 160x60 and on the door leak far from it. A grid between them, or a tolerance changed by 2%
+where the settled fraction falls against 0.99, the variant's threshold. On 320x120 it falls
+just below it, on 160x60 and on the door leak far below it. A grid between them, or a tolerance changed by 2%
 rather than 1%, could give either outcome.
 
 #### 11. How far the variant overstates a port (T21, T6)
@@ -360,8 +367,8 @@ H1 holds in its mechanism and fails in its account of the grid:
   sweep. The fields first differ at the first such step on both grids. The leftover's spread
   is the sum of the flips' effects. The spread grows with the number flipped.
 - **Fails.** The finer grid's slower contraction is not what puts more steps inside the 1%. The
-  320x120 dust release's settled stopping fraction happens to lie just outside the variant's
-  margin (section 10).
+  320x120 dust release's settled stopping fraction happens to lie just below 0.99, the
+  variant's threshold (section 10).
 - **The variant overstates a port.** As H1 expected, it does so by far: the variant flips
   thousands of stops on 320x120, and a port's rounding could flip only stops within rounding of
   the threshold, of which the base runs have none (section 11).
@@ -400,23 +407,45 @@ pair that stopped prompt 97 is within the rule's limits and not within the curre
 are on every grid, 320x120 included, and their basis on 320x120 is one flipped Jacobi stop's
 measured effect there, the largest of one sweep more and one fewer, times ten and rounded up to
 a decade (T22). The 320x120 spread of the four variant runs (T2) is kept as a measured record
-dated 2026-11-27, which the comparator reads as the first tier on that grid; it is not a limit.
+dated 2026-11-27; it is not a limit.
 The diffusion variant's spread lies beyond the limits because that variant flips up to 1,385
 stops per class, not one. Recording each step's Jacobi sweep counts in the run file, so that a
 spread can be read against the flips that made it, is carried to step 7 (`docs/PROJECT_PLAN.md`,
 Phase 6's steps). ADR-017 H's as-built note records the decision. With it, level 2 holds on
 every pair under the limits as they stand, and step 6 is done.
 
+#### 14. The first tier on 320x120, corrected (2026-11-28; T6, T12)
+
+Prompt 97's probe read the 320x120 pairs of the backends with every field's first tier set to
+the 320x120 spread. For the concentration pointwise (4.8e-6) and the leftover's change (7.6e-8)
+that spread lies above the limits Alex kept (1e-6 and 1e-8), and a field inside its first tier
+passes, so the first tier would have overridden those limits. On Alex's correction of
+2026-11-28 the 320x120 pairs read the class fields (the concentration, its pointwise reading
+and the leftover's change) against the probe's spread, as the 160x60 pairs do, and the flow
+fields and the sensor channels, whose 320x120 spread lies inside their limits, against the
+320x120 spread (`probe97.band_320`). `scripts/compare_runs.py` now refuses a band whose spread
+exceeds its limit, or is negative or not finite (`check_band`, called by `compare` before it
+reads either file; `tests/test_compare_runs.py`, with three planted defects in the refusal
+caught).
+
+Every comparison was made again at fd24efb, the old records kept in
+`results/builder97/superseded_band/`. No verdict moved. On each 320x120 pair of the backends
+only the three class fields' spread changed; every item's difference, tier and verdict is the
+one before, every other pair's record, the band, the placement and the sweep analysis equal the
+ones before apart from their provenance, and the core's class fields stay inside the probe's
+spread (T6). T12's verdicts are unchanged.
+
 ## For Alex
 
 Decided on 2026-11-27: the 320x120 limits (section 13) and the timing session made again
-(section 6). Open:
+(section 6); on 2026-11-28: the first tier on 320x120 (section 14). Open:
 
-1. **Records of three commits** (Results, the first paragraph). Prompt 97 asked for a check that
-   fails on records of two commits. `tables97.py` accepts the records of 69744ab, 77e9b3d and
-   71d7c6d because no file that computed a record differs between them, names the commits and
-   the files that do differ, and refuses sweep records of more than one commit. If the check is
-   to refuse more than one commit outright, the step's records have to be made again at one.
+1. **Records of four commits** (Results, the first paragraph). Prompt 97 asked for a check that
+   fails on records of two commits. `tables97.py` accepts the records of 69744ab, 77e9b3d,
+   71d7c6d and fd24efb because every comparison was made at the last and nothing else a record
+   was computed by differs between its commit and that one, apart from definitions the
+   comparisons alone run. If the check is to refuse more than one commit outright, the step's
+   runs have to be made again at one commit.
 2. **The wall time on 320x120** (section 6). (e) fails at 6.79 on the quiet machine. The ratio
    falls with the grid in the flow solve and the march alike; a profile of both sides on
    320x120 would say where the core gains less.
