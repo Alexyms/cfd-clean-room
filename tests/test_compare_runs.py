@@ -38,10 +38,12 @@ from compare_runs import (  # noqa: E402 -- follows sys.path.insert
     DECISION,
     FIELD,
     INSIDE,
+    POINTWISE,
     STOP,
     Comparison,
     Item,
     Moves,
+    check_band,
     compare,
     grid_index,
     index_moves,
@@ -139,6 +141,59 @@ def test_tier_reads_each_of_the_three(name: str) -> None:
     assert tier(limit, name) == BETWEEN
     assert tier(limit * 1.01, name) == BEYOND
     assert tier(math.inf, name) == BEYOND
+
+
+@pytest.mark.unit
+def test_check_band_accepts_the_band_and_a_spread_at_its_limit() -> None:
+    """The comparator's own band passes, and so does a spread equal to its limit."""
+    check_band()
+    check_band({name: (limit, limit) for name, (_, limit) in BAND.items()})
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("name", list(BAND))
+@pytest.mark.parametrize(
+    "spread", [1.01, math.nan, -1.0], ids=["above", "nan", "negative"]
+)
+def test_check_band_refuses_a_spread_above_its_limit(name: str, spread: float) -> None:
+    """A spread above its limit (or not a spread) on any field is refused by name.
+
+    Defect caught: prompt 97's probe set the 320x120 pointwise concentration's
+    first tier to 4.8e-6 and the leftover's to 7.6e-8, above their limits of
+    1e-6 and 1e-8, so a field beyond its limit read as inside its spread.
+    """
+    band = dict(BAND)
+    limit = band[name][1]
+    band[name] = (spread * limit, limit)
+    with pytest.raises(ValueError, match="spread exceeds its limit") as refused:
+        check_band(band)
+    message = str(refused.value)
+    assert f"{name} (spread" in message
+    assert message.count("(spread") == 1
+
+
+@pytest.mark.unit
+def test_check_band_refuses_a_limit_that_is_not_finite() -> None:
+    """An infinite limit bounds nothing and is refused."""
+    band = dict(BAND)
+    band[POINTWISE] = (band[POINTWISE][0], math.inf)
+    with pytest.raises(ValueError, match="spread exceeds its limit"):
+        check_band(band)
+
+
+@pytest.mark.unit
+def test_compare_refuses_a_band_beyond_its_limit_before_reading(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``compare`` checks the module's band before it opens either file.
+
+    Defect caught: the refusal left out of ``compare``, so a caller that patches
+    ``BAND`` with a grid's spreads, as prompt 97's probe did, is not refused.
+    """
+    monkeypatch.setitem(compare_runs.BAND, POINTWISE, (4.8e-6, 1.0e-6))
+    absent = tmp_path / "absent.h5"
+    with pytest.raises(ValueError, match="concentration, pointwise"):
+        compare(absent, absent)
 
 
 # Two intervals: ten steps of 0.1 s to 1.0 s, then five of 0.2 s to 2.0 s.

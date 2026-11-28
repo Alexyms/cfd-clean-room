@@ -643,6 +643,46 @@ warm-started flow state, so the band holds no flow switch (review 85 S13). The e
 320x120 dust release and door leak, the door leak for its two flow states (both converge on
 320x120, `docs/reports/rerun79.md`), before it scores the core against the band there.
 
+**On 320x120, as built (2026-11-27, prompts 97 and 97b; `docs/reports/phase6_end_to_end.md`,
+tables T2 and T15 to T22).** The limits above are unchanged. The four variant runs measured the
+320x120 spread. The flow fields' spread is below the probe's, and so are the sensor channels'.
+Under `diffusion_tol` times 0.99
+the dust release moved the class fields pointwise and the leftover's change beyond their
+limits, with no decision moved. The sweep counts show the cause. In every flipped class-step
+the variant took one Jacobi sweep more. Each class field first differs at the step whose count
+first differs. The leftover's change at the end is the sum of the flips' one-step changes. The
+flips fall after the release, where the stopping residual sits at nearly the same fraction of
+its threshold at every step: on 320x120 that fraction lies just below 0.99, the variant's
+threshold, and on 160x60 far below it. One flipped stop moves the class fields by about what review 85
+S2 read the 2.7e-8 as, so the current class limits are ten times one flip, rounded up. No stop
+of the 320x120 base runs lies within 1e-6 of its threshold, and the core's five 320x120 runs
+stay inside the first tier with every field at 1e-11 or below. Three readings went to Alex:
+this section's rule on the 320x120 spread (pointwise 1e-4, the leftover 1e-6), a limit per
+flipped stop, and the current limits kept with the spread recorded. None changes a verdict of
+the seven pairs of the backends.
+
+**Alex's decision (2026-11-27): a limit per flipped stop.** The limits stay as they are on
+every grid, 320x120 included. Their basis on 320x120 is one flipped Jacobi stop's measured
+effect there, the largest of one sweep more and one fewer, times ten and rounded up to a
+decade, which gives the current limits on the concentration, its pointwise reading and the
+leftover (T22). The measure scales with the stops a run flips, and the comparator cannot count
+them: a run file does not record the Jacobi sweep counts. Recording the per-step sweep counts,
+so that a spread can be read against the flips that made it, is carried to step 7. The 320x120
+spread of the four variant runs (T2) is a measured record dated 2026-11-27, not a limit. The
+diffusion variant's spread lies beyond the limits because that variant flips up to 1,385 stops
+per class (T15), not one.
+
+**The first tier on 320x120 (2026-11-28).** A spread is the first tier, and a field inside it
+passes whatever its limit, so a spread above its limit would override the limit. The 320x120
+spread of the concentration pointwise (4.8e-6) and of the leftover's change (7.6e-8) lies above
+their limits. On 320x120 the class fields (the concentration, its pointwise reading and the
+leftover's change) are therefore read against the probe's spread, as on the coarser grids; the
+flow fields and the sensor channels, whose 320x120 spread lies inside their limits, are read
+against the 320x120 spread. `scripts/compare_runs.py` refuses a band whose spread exceeds its
+limit (`check_band`, tested in `tests/test_compare_runs.py`). Every comparison of step 6b was
+made again on this reading, and no verdict moved (`docs/reports/phase6_end_to_end.md`, T6 and
+T12).
+
 **What a result outside the band means.**
 
 - *A decision differs and its reading is not marginal*: the port computes something the
